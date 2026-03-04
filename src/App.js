@@ -8,7 +8,7 @@ const C = {
   orange:"#f97316", teal:"#14b8a6", rough:"#3b82f6", finish:"#a78bfa",
 };
 
-const JOB_ID = "homestead-jobs-v1"; // single row key in supabase
+const JOB_ID = "homestead-jobs-v1";
 const ROUGH_STAGES  = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
 const FINISH_STAGES = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
 const WIRE_SIZES    = ["","14 AWG","12 AWG","10 AWG","8 AWG","6 AWG","4 AWG","2 AWG","1/0","2/0","3/0","4/0"];
@@ -40,11 +40,11 @@ const blankJob = () => ({
   id:uid(), name:"", address:"", gc:"", phone:"", simproNo:"", foreman:"Koy", flagged:false,
   planLink:"", redlineLink:"", lightingLink:"", panelLink:"", qcLink:"", matterportLink:"",
   uploadedFiles:[],
-  roughStage:"0%", roughQuestions:{ main:"", basement:"", upper:"" },
+  roughStage:"0%", roughQuestions:{ upper:[], main:[], basement:[] },
   roughPunch:emptyPunch(), roughMaterials:[], roughUpdates:[], roughNotes:"",
   finishStage:"0%",
   finishPunch:emptyPunch(), finishMaterials:[], finishUpdates:[], finishNotes:"",
-  finishQuestions:{ main:"", basement:"", upper:"" },
+  finishQuestions:{ upper:[], main:[], basement:[] },
   changeOrders:[], returnTrips:[],
   homeRuns:{
     main:    Array.from({length:10},(_,i)=>newHRRow(i+1)),
@@ -869,14 +869,10 @@ function JobDetail({job, onUpdate, onClose}) {
               </div>
               <div style={{marginTop:20}}>
                 <SectionHead label="Questions" color={C.rough}/>
-                {[["main","Main Level"],["basement","Basement"],["upper","Upper Level"]].map(([k,l])=>(
-                  <div key={k} style={{marginBottom:12}}>
-                    <div style={{fontSize:11,color:C.dim,marginBottom:4}}>{l}</div>
-                    <TA value={job.roughQuestions?.[k]||""} rows={2}
-                      onChange={e=>u({roughQuestions:{...job.roughQuestions,[k]:e.target.value}})}
-                      placeholder={`Questions for ${l}…`}/>
-                  </div>
-                ))}
+                <QASection
+                  questions={job.roughQuestions||{upper:[],main:[],basement:[]}}
+                  onChange={v=>u({roughQuestions:v})}
+                  color={C.rough}/>
               </div>
               <div style={{marginTop:20}}>
                 <SectionHead label="Notes (GC / Homeowner / Designer)" color={C.rough}/>
@@ -907,14 +903,10 @@ function JobDetail({job, onUpdate, onClose}) {
               </div>
               <div style={{marginTop:20}}>
                 <SectionHead label="Questions" color={C.finish}/>
-                {[["main","Main Level"],["basement","Basement"],["upper","Upper Level"]].map(([k,l])=>(
-                  <div key={k} style={{marginBottom:12}}>
-                    <div style={{fontSize:11,color:C.dim,marginBottom:4}}>{l}</div>
-                    <TA value={job.finishQuestions?.[k]||""} rows={2}
-                      onChange={e=>u({finishQuestions:{...job.finishQuestions,[k]:e.target.value}})}
-                      placeholder={`Questions for ${l}…`}/>
-                  </div>
-                ))}
+                <QASection
+                  questions={job.finishQuestions||{upper:[],main:[],basement:[]}}
+                  onChange={v=>u({finishQuestions:v})}
+                  color={C.finish}/>
               </div>
               <div style={{marginTop:20}}>
                 <SectionHead label="Finish Notes (GC / Homeowner / Designer)" color={C.finish}/>
@@ -1013,6 +1005,68 @@ function JobDetail({job, onUpdate, onClose}) {
 }
 
 
+
+// ── Q&A Punch List ────────────────────────────────────────────
+function QAList({questions, onChange, color}) {
+  const [draft, setDraft] = useState("");
+  const add = () => {
+    if(!draft.trim()) return;
+    onChange([...questions, {id:uid(), question:draft, answer:"", done:false}]);
+    setDraft("");
+  };
+  const upd = (id, p) => onChange(questions.map(q=>q.id===id?{...q,...p}:q));
+  const del = (id) => onChange(questions.filter(q=>q.id!==id));
+  return (
+    <div>
+      {questions.map((q,i)=>(
+        <div key={q.id} style={{background:C.surface,border:`1px solid ${color}33`,
+          borderRadius:10,padding:12,marginBottom:10}}>
+          <div style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:8}}>
+            <input type="checkbox" checked={q.done}
+              onChange={()=>upd(q.id,{done:!q.done})}
+              style={{accentColor:C.green,width:14,height:14,cursor:"pointer",flexShrink:0,marginTop:2}}/>
+            <span style={{flex:1,fontSize:12,fontWeight:600,
+              color:q.done?C.muted:C.text,
+              textDecoration:q.done?"line-through":"none",lineHeight:1.4}}>
+              Q{i+1}: {q.question}
+            </span>
+            <button onClick={()=>del(q.id)}
+              style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                fontSize:12,flexShrink:0,padding:"0 2px"}}>✕</button>
+          </div>
+          <div style={{marginLeft:22}}>
+            <div style={{fontSize:10,color:color,fontWeight:700,marginBottom:4,letterSpacing:"0.08em"}}>ANSWER</div>
+            <TA value={q.answer} rows={2}
+              onChange={e=>upd(q.id,{answer:e.target.value})}
+              placeholder="Type answer here…"/>
+          </div>
+        </div>
+      ))}
+      <div style={{display:"flex",gap:6,marginTop:4}}>
+        <Inp value={draft} onChange={e=>setDraft(e.target.value)}
+          placeholder="Add a question…" style={{flex:1}}/>
+        <Btn onClick={add} variant="primary">+</Btn>
+      </div>
+    </div>
+  );
+}
+
+function QASection({questions, onChange, color}) {
+  return (
+    <div>
+      {[["upper","Upper Level"],["main","Main Level"],["basement","Basement"]].map(([k,l])=>(
+        <div key={k} style={{marginBottom:18}}>
+          <div style={{fontSize:11,color:C.dim,fontWeight:600,marginBottom:8}}>{l}</div>
+          <QAList
+            questions={questions?.[k]||[]}
+            onChange={v=>onChange({...questions,[k]:v})}
+            color={color}/>
+        </div>
+      ))}
+    </div>
+  );
+}
+
 // ── Stage Sections ────────────────────────────────────────────
 const STAGE_SECTIONS = [
   { key:"rough",    label:"Rough In Progress",  color:"#3b82f6",
@@ -1081,17 +1135,13 @@ export default function App() {
   useEffect(()=>{
     (async()=>{
       try {
-        const { data, error } = await supabase
-          .from('jobs')
-          .select('data')
-          .eq('id', JOB_ID)
-          .single();
+        const { data } = await supabase
+          .from('jobs').select('data').eq('id', JOB_ID).single();
         if(data?.data) {
           const loaded = Array.isArray(data.data) ? data.data : [];
           const roughMap  = {"Pre-Wire":"0%","Rough-In":"25%","Rough Inspection":"75%","Rough Complete":"100%"};
           const finishMap = {"Fixtures Ordered":"0%","Finish Scheduled":"20%","Finish In Progress":"50%","Punch List":"75%","CO / Final":"90%","Complete":"100%"};
-          const migrated = loaded.map(j=>({
-            ...j,
+          const migrated = loaded.map(j=>({...j,
             roughStage:  roughMap[j.roughStage]  || (j.roughStage  || "0%"),
             finishStage: finishMap[j.finishStage] || (j.finishStage || "0%"),
           }));
@@ -1108,8 +1158,7 @@ export default function App() {
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async()=>{
       try {
-        await supabase
-          .from('jobs')
+        await supabase.from('jobs')
           .upsert({ id: JOB_ID, data: jobs, updated_at: new Date().toISOString() });
         setSyncStatus("saved");
         setTimeout(()=>setSyncStatus("idle"),2500);
