@@ -493,7 +493,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
 // ── Change Orders ─────────────────────────────────────────────
 function ChangeOrders({orders,onChange,jobName,onEmail}) {
-  const add = () => onChange([...orders,{id:uid(),date:"",desc:"",task:"",material:"",time:"",status:"Pending"}]);
+  const add = () => onChange([...orders,{id:uid(),date:"",desc:"",task:"",material:"",time:"",status:"Pending",sendTo:""}]);
   const upd = (id,p) => onChange(orders.map(o=>o.id===id?{...o,...p}:o));
   const del = (id)   => onChange(orders.filter(o=>o.id!==id));
   const sc  = {"Pending":C.accent,"CO Created":C.orange,"CO Sent (office)":C.blue,
@@ -501,7 +501,7 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
   const emailCO = (o, i) => {
     const subject = `${jobName} — Change Order #${i+1}`;
-    const body = `Hi,\n\nChange Order #${i+1} — ${jobName}\n\nDate: ${o.date||"—"}\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial Needed: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nStatus: ${o.status}\n\nPlease review and confirm.\n\nThanks`;
+    const body = `Hi,\n\nChange Order #${i+1} — ${jobName}\n\nDate: ${o.date||"—"}\nSend CO To: ${o.sendTo||"—"}\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial Needed: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nStatus: ${o.status}\n\nPlease review and confirm.\n\nThanks`;
     onEmail({subject, body});
   };
 
@@ -528,6 +528,11 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
               <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Status</div>
               <Sel value={o.status} onChange={e=>upd(o.id,{status:e.target.value})} options={CO_STATUSES}/>
             </div>
+          </div>
+          <div style={{marginBottom:8}}>
+            <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Send CO To</div>
+            <Inp value={o.sendTo||""} onChange={e=>upd(o.id,{sendTo:e.target.value})}
+              placeholder="e.g. John Smith / GC / Homeowner…"/>
           </div>
           <div style={{marginBottom:8}}>
             <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Description of Task</div>
