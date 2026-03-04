@@ -277,12 +277,11 @@ const StageBar = ({stages,current,color}) => {
 };
 
 // ── Punch List ────────────────────────────────────────────────
-function PunchLevel({items,onChange,label}) {
-  const [draft,setDraft] = useState("");
+function PunchItems({items, onChange}) {
+  const [draft, setDraft] = useState("");
   const add = () => { if(!draft.trim()) return; onChange([...items,{id:uid(),text:draft,done:false}]); setDraft(""); };
   return (
-    <div style={{marginBottom:14}}>
-      <div style={{fontSize:11,color:C.dim,fontWeight:600,marginBottom:6}}>{label}</div>
+    <div style={{paddingLeft:12}}>
       {items.map(item=>(
         <div key={item.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
           <input type="checkbox" checked={item.done}
@@ -302,29 +301,118 @@ function PunchLevel({items,onChange,label}) {
   );
 }
 
-function PunchSection({punch,onChange,jobName,phase,onEmail}) {
-  const openItems = [
-    ...punch.upper.filter(i=>!i.done).map(i=>`[Upper] ${i.text}`),
-    ...punch.main.filter(i=>!i.done).map(i=>`[Main] ${i.text}`),
-    ...punch.basement.filter(i=>!i.done).map(i=>`[Basement] ${i.text}`),
+function PunchFloor({floorData, onChange, floorLabel, floorColor}) {
+  // floorData: { general: [...items], rooms: [{id, name, items:[]}] }
+  const data = (floorData && typeof floorData === 'object' && !Array.isArray(floorData))
+    ? floorData
+    : { general: Array.isArray(floorData) ? floorData : [], rooms: [] };
+  const general = data.general || [];
+  const rooms   = data.rooms   || [];
+  const [collapsed, setCollapsed] = useState(false);
+  const [roomDraft, setRoomDraft] = useState("");
+
+  const addRoom = () => {
+    if(!roomDraft.trim()) return;
+    onChange({...data, rooms:[...rooms,{id:uid(),name:roomDraft,items:[]}]});
+    setRoomDraft("");
+  };
+  const updRoom = (id,p) => onChange({...data,rooms:rooms.map(r=>r.id===id?{...r,...p}:r)});
+  const delRoom = (id)   => onChange({...data,rooms:rooms.filter(r=>r.id!==id)});
+  const openCount = general.filter(i=>!i.done).length +
+    rooms.reduce((a,r)=>a+r.items.filter(i=>!i.done).length, 0);
+
+  return (
+    <div style={{marginBottom:16,border:`1px solid ${floorColor}33`,borderRadius:10,overflow:"hidden"}}>
+      {/* Floor header */}
+      <div onClick={()=>setCollapsed(c=>!c)}
+        style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",
+          background:`${floorColor}10`,cursor:"pointer",userSelect:"none"}}>
+        <div style={{width:8,height:8,borderRadius:"50%",background:floorColor,flexShrink:0}}/>
+        <span style={{fontWeight:700,fontSize:13,color:floorColor,flex:1}}>{floorLabel}</span>
+        {openCount>0&&<span style={{fontSize:10,background:`${C.red}22`,color:C.red,
+          borderRadius:99,padding:"2px 8px",fontWeight:700}}>{openCount} open</span>}
+        <span style={{color:floorColor,fontSize:12}}>{collapsed?"▸":"▾"}</span>
+      </div>
+
+      {!collapsed&&(
+        <div style={{padding:"12px 14px"}}>
+          {/* General items (no room) */}
+          <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>GENERAL</div>
+          <PunchItems items={general} onChange={v=>onChange({...data,general:v})}/>
+
+          {/* Rooms */}
+          {rooms.map(room=>(
+            <div key={room.id} style={{marginTop:14,background:C.surface,
+              border:`1px solid ${C.border}`,borderRadius:8,padding:10}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                <span style={{fontSize:12,fontWeight:700,color:C.text,flex:1}}>🚪 {room.name}</span>
+                {room.items.filter(i=>!i.done).length>0&&
+                  <span style={{fontSize:10,background:`${C.red}22`,color:C.red,
+                    borderRadius:99,padding:"2px 6px",fontWeight:700}}>
+                    {room.items.filter(i=>!i.done).length} open
+                  </span>}
+                <button onClick={()=>delRoom(room.id)}
+                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>✕</button>
+              </div>
+              <PunchItems items={room.items||[]}
+                onChange={v=>updRoom(room.id,{items:v})}/>
+            </div>
+          ))}
+
+          {/* Add room */}
+          <div style={{display:"flex",gap:6,marginTop:12}}>
+            <Inp value={roomDraft} onChange={e=>setRoomDraft(e.target.value)}
+              placeholder="Add room (e.g. Master Bath)…" style={{flex:1}}/>
+            <Btn onClick={addRoom} variant="add" style={{whiteSpace:"nowrap"}}>+ Room</Btn>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PunchSection({punch, onChange, jobName, phase, onEmail}) {
+  // normalize: floors can be old array format or new {general,rooms} format
+  const norm = (v) => (v && typeof v==='object' && !Array.isArray(v)) ? v : {general: Array.isArray(v)?v:[], rooms:[]};
+  const upper    = norm(punch.upper);
+  const main     = norm(punch.main);
+  const basement = norm(punch.basement);
+
+  const countOpen = (f) => (f.general||[]).filter(i=>!i.done).length +
+    (f.rooms||[]).reduce((a,r)=>a+r.items.filter(i=>!i.done).length,0);
+  const totalOpen = countOpen(upper)+countOpen(main)+countOpen(basement);
+
+  const flatItems = (f,label) => [
+    ...(f.general||[]).filter(i=>!i.done).map(i=>`[${label}] ${i.text}`),
+    ...(f.rooms||[]).flatMap(r=>r.items.filter(i=>!i.done).map(i=>`[${label} - ${r.name}] ${i.text}`)),
   ];
+
   const handleEmail = () => {
+    const all = [
+      ...flatItems(upper,"Upper"),
+      ...flatItems(main,"Main"),
+      ...flatItems(basement,"Basement"),
+    ];
     const subject = `${jobName} — ${phase} Punch List`;
-    const body = `Hi,\n\nHere are the open ${phase} punch list items for ${jobName}:\n\n${openItems.map(i=>`• ${i}`).join("\n")}\n\nPlease review and complete.\n\nThanks`;
+    const body = `Hi,\n\nOpen ${phase} punch list items for ${jobName}:\n\n${all.map(i=>`• ${i}`).join("\n")}\n\nPlease review and complete.\n\nThanks`;
     onEmail({subject, body});
   };
+
   return (
     <div>
       <div style={{display:"flex",justifyContent:"flex-end",marginBottom:8}}>
-        {openItems.length>0&&(
+        {totalOpen>0&&(
           <Btn onClick={handleEmail} variant="email" style={{fontSize:11,padding:"4px 10px"}}>
-            ✉ Email Punch List ({openItems.length} open)
+            ✉ Email Punch List ({totalOpen} open)
           </Btn>
         )}
       </div>
-      <PunchLevel items={punch.upper}    onChange={v=>onChange({...punch,upper:v})}    label="Upper Level"/>
-      <PunchLevel items={punch.main}     onChange={v=>onChange({...punch,main:v})}     label="Main Level"/>
-      <PunchLevel items={punch.basement} onChange={v=>onChange({...punch,basement:v})} label="Basement"/>
+      <PunchFloor floorData={upper}    onChange={v=>onChange({...punch,upper:v})}
+        floorLabel="Upper Level" floorColor={C.blue}/>
+      <PunchFloor floorData={main}     onChange={v=>onChange({...punch,main:v})}
+        floorLabel="Main Level"  floorColor={C.accent}/>
+      <PunchFloor floorData={basement} onChange={v=>onChange({...punch,basement:v})}
+        floorLabel="Basement"    floorColor={C.purple}/>
     </div>
   );
 }
@@ -462,15 +550,30 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
 // ── Return Trips ──────────────────────────────────────────────
 function ReturnTrips({trips,onChange,jobName,onEmail}) {
-  const add = () => onChange([...trips,{id:uid(),date:"",scope:"",material:"",punch:[]}]);
+  const add = () => onChange([...trips,{id:uid(),date:"",scope:"",material:"",punch:[],photos:[]}]);
   const upd = (id,p) => onChange(trips.map(t=>t.id===id?{...t,...p}:t));
   const del = (id)   => onChange(trips.filter(t=>t.id!==id));
 
   const emailTrip = (t,i) => {
-    const punchLines = t.punch.filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n") || "None";
+    const punchLines = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n") || "None";
     const subject = `${jobName} — Return Trip #${i+1}`;
     const body = `Hi,\n\nReturn Trip #${i+1} — ${jobName}\n\nDate: ${t.date||"—"}\nScope of Work:\n${t.scope||"—"}\n\nMaterial Needed:\n${t.material||"—"}\n\nPunch List:\n${punchLines}\n\nThanks`;
     onEmail({subject, body});
+  };
+
+  const addPhotos = (id, files) => {
+    const trip = trips.find(t=>t.id===id);
+    const existing = trip?.photos||[];
+    let done=0; const newPhotos=[];
+    Array.from(files).forEach(file=>{
+      const reader = new FileReader();
+      reader.onload = ev => {
+        newPhotos.push({id:uid(),name:file.name,dataUrl:ev.target.result});
+        done++;
+        if(done===files.length) upd(id,{photos:[...existing,...newPhotos]});
+      };
+      reader.readAsDataURL(file);
+    });
   };
 
   return (
@@ -499,7 +602,33 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
             <TA value={t.material} onChange={e=>upd(t.id,{material:e.target.value})} placeholder="List materials needed…" rows={2}/>
           </div>
           <div style={{fontSize:10,color:C.dim,fontWeight:700,marginBottom:6,letterSpacing:"0.08em"}}>PUNCH LIST</div>
-          <PunchLevel items={t.punch} onChange={v=>upd(t.id,{punch:v})} label="Items"/>
+          <PunchItems items={t.punch||[]} onChange={v=>upd(t.id,{punch:v})}/>
+          <div style={{marginTop:14}}>
+            <div style={{fontSize:10,color:C.dim,fontWeight:700,marginBottom:8,letterSpacing:"0.08em"}}>PHOTOS</div>
+            {(t.photos||[]).length>0&&(
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(90px,1fr))",gap:8,marginBottom:10}}>
+                {(t.photos||[]).map(p=>(
+                  <div key={p.id} style={{position:"relative"}}>
+                    <img src={p.dataUrl} alt={p.name}
+                      onClick={()=>{const w=window.open("","_blank");w.document.write(`<html><body style="margin:0;background:#000"><img src="${p.dataUrl}" style="max-width:100%;max-height:100vh;display:block;margin:auto"></body></html>`);}}
+                      style={{width:"100%",aspectRatio:"1",objectFit:"cover",borderRadius:8,
+                        border:`1px solid ${C.border}`,cursor:"pointer"}}/>
+                    <button onClick={()=>upd(t.id,{photos:(t.photos||[]).filter(x=>x.id!==p.id)})}
+                      style={{position:"absolute",top:3,right:3,background:"rgba(0,0,0,0.7)",
+                        border:"none",borderRadius:"50%",color:"#fff",width:20,height:20,
+                        cursor:"pointer",fontSize:11,display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <label style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",
+              background:`${C.purple}12`,border:`1px dashed ${C.purple}55`,borderRadius:8,
+              cursor:"pointer",fontSize:12,color:C.purple,fontWeight:600}}>
+              📷 Add Photos
+              <input type="file" accept="image/*" multiple style={{display:"none"}}
+                onChange={e=>{addPhotos(t.id,e.target.files);e.target.value="";}}/>
+            </label>
+          </div>
         </div>
       ))}
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed"}}>+ Add Return Trip</Btn>
@@ -1007,7 +1136,9 @@ function JobDetail({job, onUpdate, onClose}) {
 
 
 // ── Q&A Punch List ────────────────────────────────────────────
-function QAList({questions, onChange, color}) {
+function QAList({questions: _questions, onChange, color}) {
+  // guard: old data may be a string instead of array
+  const questions = Array.isArray(_questions) ? _questions : [];
   const [draft, setDraft] = useState("");
   const add = () => {
     if(!draft.trim()) return;
@@ -1051,14 +1182,17 @@ function QAList({questions, onChange, color}) {
   );
 }
 
-function QASection({questions, onChange, color}) {
+function QASection({questions: _questions, onChange, color}) {
+  // guard: normalize questions to always be object with array values
+  const questions = (_questions && typeof _questions === 'object' && !Array.isArray(_questions))
+    ? _questions : {upper:[], main:[], basement:[]};
   return (
     <div>
       {[["upper","Upper Level"],["main","Main Level"],["basement","Basement"]].map(([k,l])=>(
         <div key={k} style={{marginBottom:18}}>
           <div style={{fontSize:11,color:C.dim,fontWeight:600,marginBottom:8}}>{l}</div>
           <QAList
-            questions={questions?.[k]||[]}
+            questions={Array.isArray(questions[k]) ? questions[k] : []}
             onChange={v=>onChange({...questions,[k]:v})}
             color={color}/>
         </div>
