@@ -1320,13 +1320,7 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
             <div>
               <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Assign To</div>
-              <select value={a.person} onChange={e=>updA(a.id,{person:e.target.value})}
-                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
-                  color:a.person?C.text:C.dim,padding:"6px 10px",fontSize:12,
-                  fontFamily:"inherit",outline:"none",width:"100%"}}>
-                <option value="">— select person —</option>
-                {CREW.map(c=><option key={c} value={c}>{c}</option>)}
-              </select>
+              <Inp value={a.person||""} onChange={e=>updA(a.id,{person:e.target.value})} placeholder="Name…"/>
             </div>
             <div>
               <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Floor</div>
@@ -1365,13 +1359,7 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
             <div>
               <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Completed By</div>
-              <select value={s.person} onChange={e=>updS(s.id,{person:e.target.value})}
-                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
-                  color:s.person?C.text:C.dim,padding:"6px 10px",fontSize:12,
-                  fontFamily:"inherit",outline:"none",width:"100%"}}>
-                <option value="">— select person —</option>
-                {CREW.map(c=><option key={c} value={c}>{c}</option>)}
-              </select>
+              <Inp value={s.person||""} onChange={e=>updS(s.id,{person:e.target.value})} placeholder="Name…"/>
             </div>
             <div>
               <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Completed</div>
