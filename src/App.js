@@ -302,28 +302,38 @@ function PunchItems({items, onChange}) {
 }
 
 function PunchFloor({floorData, onChange, floorLabel, floorColor}) {
-  // floorData: { general: [...items], rooms: [{id, name, items:[]}] }
-  const data = (floorData && typeof floorData === 'object' && !Array.isArray(floorData))
-    ? floorData
-    : { general: Array.isArray(floorData) ? floorData : [], rooms: [] };
+  const norm = (v) => {
+    if(v && typeof v==='object' && !Array.isArray(v)) return v;
+    return { general: Array.isArray(v) ? v : [], rooms: [] };
+  };
+  const data    = norm(floorData);
   const general = data.general || [];
   const rooms   = data.rooms   || [];
+
   const [collapsed, setCollapsed] = useState(false);
   const [roomDraft, setRoomDraft] = useState("");
 
-  const addRoom = () => {
+  const updGeneral = (v) => onChange({...data, general:v});
+  const addRoom    = () => {
     if(!roomDraft.trim()) return;
-    onChange({...data, rooms:[...rooms,{id:uid(),name:roomDraft,items:[]}]});
+    const newData = {...data, rooms:[...rooms,{id:uid(),name:roomDraft,items:[]}]};
+    onChange(newData);
     setRoomDraft("");
   };
-  const updRoom = (id,p) => onChange({...data,rooms:rooms.map(r=>r.id===id?{...r,...p}:r)});
-  const delRoom = (id)   => onChange({...data,rooms:rooms.filter(r=>r.id!==id)});
+  const updRoom = (id, items) => {
+    const newData = {...data, rooms:rooms.map(r=>r.id===id?{...r,items}:r)};
+    onChange(newData);
+  };
+  const delRoom = (id) => {
+    const newData = {...data, rooms:rooms.filter(r=>r.id!==id)};
+    onChange(newData);
+  };
+
   const openCount = general.filter(i=>!i.done).length +
-    rooms.reduce((a,r)=>a+r.items.filter(i=>!i.done).length, 0);
+    rooms.reduce((a,r)=>a+(r.items||[]).filter(i=>!i.done).length, 0);
 
   return (
     <div style={{marginBottom:16,border:`1px solid ${floorColor}33`,borderRadius:10,overflow:"hidden"}}>
-      {/* Floor header */}
       <div onClick={()=>setCollapsed(c=>!c)}
         style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",
           background:`${floorColor}10`,cursor:"pointer",userSelect:"none"}}>
@@ -336,33 +346,30 @@ function PunchFloor({floorData, onChange, floorLabel, floorColor}) {
 
       {!collapsed&&(
         <div style={{padding:"12px 14px"}}>
-          {/* General items (no room) */}
           <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>GENERAL</div>
-          <PunchItems items={general} onChange={v=>onChange({...data,general:v})}/>
+          <PunchItems items={general} onChange={updGeneral}/>
 
-          {/* Rooms */}
           {rooms.map(room=>(
             <div key={room.id} style={{marginTop:14,background:C.surface,
               border:`1px solid ${C.border}`,borderRadius:8,padding:10}}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
                 <span style={{fontSize:12,fontWeight:700,color:C.text,flex:1}}>🚪 {room.name}</span>
-                {room.items.filter(i=>!i.done).length>0&&
+                {(room.items||[]).filter(i=>!i.done).length>0&&
                   <span style={{fontSize:10,background:`${C.red}22`,color:C.red,
                     borderRadius:99,padding:"2px 6px",fontWeight:700}}>
-                    {room.items.filter(i=>!i.done).length} open
+                    {(room.items||[]).filter(i=>!i.done).length} open
                   </span>}
                 <button onClick={()=>delRoom(room.id)}
                   style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>✕</button>
               </div>
-              <PunchItems items={room.items||[]}
-                onChange={v=>updRoom(room.id,{items:v})}/>
+              <PunchItems items={room.items||[]} onChange={v=>updRoom(room.id,v)}/>
             </div>
           ))}
 
-          {/* Add room */}
           <div style={{display:"flex",gap:6,marginTop:12}}>
             <Inp value={roomDraft} onChange={e=>setRoomDraft(e.target.value)}
-              placeholder="Add room (e.g. Master Bath)…" style={{flex:1}}/>
+              placeholder="Add room (e.g. Master Bath)…" style={{flex:1}}
+              onKeyDown={e=>e.key==="Enter"&&addRoom()}/>
             <Btn onClick={addRoom} variant="add" style={{whiteSpace:"nowrap"}}>+ Room</Btn>
           </div>
         </div>
@@ -1298,19 +1305,18 @@ export default function App() {
   useEffect(()=>{
     (async()=>{
       try {
-        const { data } = await supabase
-          .from('jobs').select('data').eq('id', JOB_ID).single();
+        const { data } = await supabase.from('jobs').select('data').eq('id', JOB_ID).single();
         if(data?.data) {
           const loaded = Array.isArray(data.data) ? data.data : [];
           const roughMap  = {"Pre-Wire":"0%","Rough-In":"25%","Rough Inspection":"75%","Rough Complete":"100%"};
           const finishMap = {"Fixtures Ordered":"0%","Finish Scheduled":"20%","Finish In Progress":"50%","Punch List":"75%","CO / Final":"90%","Complete":"100%"};
           const migrated = loaded.map(j=>({...j,
-            roughStage:  roughMap[j.roughStage]  || (j.roughStage  || "0%"),
-            finishStage: finishMap[j.finishStage] || (j.finishStage || "0%"),
+            roughStage:  roughMap[j.roughStage]||(j.roughStage||"0%"),
+            finishStage: finishMap[j.finishStage]||(j.finishStage||"0%"),
           }));
           setJobs(migrated);
         }
-      } catch(e) { console.error('Load error:', e); }
+      } catch(e){ console.error('Load error:',e); }
       initialLoad.current = false;
     })();
   },[]);
@@ -1321,11 +1327,10 @@ export default function App() {
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async()=>{
       try {
-        await supabase.from('jobs')
-          .upsert({ id: JOB_ID, data: jobs, updated_at: new Date().toISOString() });
+        await supabase.from('jobs').upsert({id:JOB_ID,data:jobs,updated_at:new Date().toISOString()});
         setSyncStatus("saved");
         setTimeout(()=>setSyncStatus("idle"),2500);
-      } catch(e){ console.error('Save error:', e); setSyncStatus("error"); }
+      } catch(e){ console.error('Save error:',e); setSyncStatus("error"); }
     },800);
   },[jobs]);
 
