@@ -1678,7 +1678,9 @@ export default function App() {
   useEffect(()=>{
     (async()=>{
       try {
-        const { data } = await supabase.from('jobs').select('data').eq('id', JOB_ID).single();
+        const { data, error } = await supabase
+          .from('jobs').select('data').eq('id', JOB_ID).single();
+        if(error && error.code !== 'PGRST116') throw error;
         if(data?.data) {
           const loaded = Array.isArray(data.data) ? data.data : [];
           const roughMap  = {"Pre-Wire":"0%","Rough-In":"25%","Rough Inspection":"75%","Rough Complete":"100%"};
@@ -1694,17 +1696,35 @@ export default function App() {
     })();
   },[]);
 
+  const jobsRef = useRef(jobs);
+  useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
+
   useEffect(()=>{
     if(initialLoad.current) return;
     setSyncStatus("saving");
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async()=>{
-      try {
-        await supabase.from('jobs').upsert({id:JOB_ID,data:jobs,updated_at:new Date().toISOString()});
-        setSyncStatus("saved");
-        setTimeout(()=>setSyncStatus("idle"),2500);
-      } catch(e){ console.error('Save error:',e); setSyncStatus("error"); }
-    },800);
+      const toSave = jobsRef.current;
+      let attempts = 0;
+      const trySave = async () => {
+        try {
+          const { error } = await supabase.from('jobs')
+            .upsert({id:JOB_ID, data:toSave, updated_at:new Date().toISOString()});
+          if(error) throw error;
+          setSyncStatus("saved");
+          setTimeout(()=>setSyncStatus("idle"),2500);
+        } catch(e) {
+          attempts++;
+          if(attempts < 3) {
+            setTimeout(trySave, 1000 * attempts);
+          } else {
+            console.error('Save failed after 3 attempts:', e);
+            setSyncStatus("error");
+          }
+        }
+      };
+      trySave();
+    },1200);
   },[jobs]);
 
   const updateJob = updated => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); };
