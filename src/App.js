@@ -2465,8 +2465,8 @@ function App() {
             ):(
               <StageSectionList jobs={filtered} JobRow={JobRow} fc={FOREMEN_COLORS[activeForeman]}/>
             )}
-          </div>
             </>
+          </div>
             }
             {homeTab==="Unassigned"&&(
               <div>
@@ -2511,6 +2511,7 @@ function App() {
             {homeTab==="QC Walks"&&(
               <QCWalkBoard jobs={jobs} onUpdateJob={updateJob}/>
             )}
+          </div>
         </div>
       )}
 
