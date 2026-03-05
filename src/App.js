@@ -379,26 +379,31 @@ function PunchFloor({floorData, onChange, floorLabel, floorColor}) {
 }
 
 function PunchSection({punch, onChange, jobName, phase, onEmail}) {
-  // normalize: floors can be old array format or new {general,rooms} format
-  const norm = (v) => (v && typeof v==='object' && !Array.isArray(v)) ? v : {general: Array.isArray(v)?v:[], rooms:[]};
-  const upper    = norm(punch.upper);
-  const main     = norm(punch.main);
-  const basement = norm(punch.basement);
+  const norm = (v) => (v && typeof v==='object' && !Array.isArray(v))
+    ? {general: v.general||[], rooms: v.rooms||[]}
+    : {general: Array.isArray(v)?v:[], rooms:[]};
+
+  // Always work from normalized punch so updates are consistent
+  const normPunch = {
+    upper:    norm(punch.upper),
+    main:     norm(punch.main),
+    basement: norm(punch.basement),
+  };
 
   const countOpen = (f) => (f.general||[]).filter(i=>!i.done).length +
-    (f.rooms||[]).reduce((a,r)=>a+r.items.filter(i=>!i.done).length,0);
-  const totalOpen = countOpen(upper)+countOpen(main)+countOpen(basement);
+    (f.rooms||[]).reduce((a,r)=>a+(r.items||[]).filter(i=>!i.done).length, 0);
+  const totalOpen = countOpen(normPunch.upper)+countOpen(normPunch.main)+countOpen(normPunch.basement);
 
   const flatItems = (f,label) => [
     ...(f.general||[]).filter(i=>!i.done).map(i=>`[${label}] ${i.text}`),
-    ...(f.rooms||[]).flatMap(r=>r.items.filter(i=>!i.done).map(i=>`[${label} - ${r.name}] ${i.text}`)),
+    ...(f.rooms||[]).flatMap(r=>(r.items||[]).filter(i=>!i.done).map(i=>`[${label} - ${r.name}] ${i.text}`)),
   ];
 
   const handleEmail = () => {
     const all = [
-      ...flatItems(upper,"Upper"),
-      ...flatItems(main,"Main"),
-      ...flatItems(basement,"Basement"),
+      ...flatItems(normPunch.upper,"Upper"),
+      ...flatItems(normPunch.main,"Main"),
+      ...flatItems(normPunch.basement,"Basement"),
     ];
     const subject = `${jobName} — ${phase} Punch List`;
     const body = `Hi,\n\nOpen ${phase} punch list items for ${jobName}:\n\n${all.map(i=>`• ${i}`).join("\n")}\n\nPlease review and complete.\n\nThanks`;
@@ -414,11 +419,14 @@ function PunchSection({punch, onChange, jobName, phase, onEmail}) {
           </Btn>
         )}
       </div>
-      <PunchFloor floorData={upper}    onChange={v=>onChange({...punch,upper:v})}
+      <PunchFloor floorData={normPunch.upper}
+        onChange={v=>onChange({...normPunch, upper:v})}
         floorLabel="Upper Level" floorColor={C.blue}/>
-      <PunchFloor floorData={main}     onChange={v=>onChange({...punch,main:v})}
+      <PunchFloor floorData={normPunch.main}
+        onChange={v=>onChange({...normPunch, main:v})}
         floorLabel="Main Level"  floorColor={C.accent}/>
-      <PunchFloor floorData={basement} onChange={v=>onChange({...punch,basement:v})}
+      <PunchFloor floorData={normPunch.basement}
+        onChange={v=>onChange({...normPunch, basement:v})}
         floorLabel="Basement"    floorColor={C.purple}/>
     </div>
   );
