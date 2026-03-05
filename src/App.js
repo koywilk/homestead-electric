@@ -1,4 +1,4 @@
-\import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 import { supabase } from "./supabase";
 
 const C = {
@@ -579,6 +579,98 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
   );
 }
 
+
+function ReturnTripExtras({trip, onUpd}) {
+  const [tab, setTab] = useState("Assign Work");
+  return (
+    <div style={{marginTop:14,borderTop:`1px solid ${C.border}`,paddingTop:14}}>
+      <div style={{display:"flex",gap:6,marginBottom:12}}>
+        {["Assign Work","Sign Off"].map(t=>(
+          <button key={t} onClick={()=>setTab(t)}
+            style={{padding:"5px 14px",borderRadius:7,fontSize:11,cursor:"pointer",
+              fontFamily:"inherit",fontWeight:tab===t?700:400,
+              background:tab===t?C.purple:`${C.purple}15`,
+              border:`1px solid ${tab===t?C.purple:`${C.purple}33`}`,
+              color:tab===t?"#fff":C.dim,transition:"all 0.15s"}}>
+            {t}
+          </button>
+        ))}
+      </div>
+
+      {tab==="Assign Work"&&(
+        <div>
+          {(trip.assignments||[]).map((a,i)=>(
+            <div key={a.id} style={{background:C.card,border:`1px solid ${a.done?C.green+"55":C.border}`,
+              borderRadius:10,padding:12,marginBottom:10,borderLeft:`3px solid ${a.done?C.green:C.purple}`}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                <input type="checkbox" checked={!!a.done}
+                  onChange={()=>onUpd({assignments:(trip.assignments||[]).map(x=>x.id===a.id?{...x,done:!x.done}:x)})}
+                  style={{accentColor:C.green,width:15,height:15,cursor:"pointer",flexShrink:0}}/>
+                <span style={{fontSize:11,fontWeight:700,color:a.done?C.green:C.purple,flex:1}}>
+                  Task #{i+1}{a.done?" ✓ Done":""}
+                </span>
+                <button onClick={()=>onUpd({assignments:(trip.assignments||[]).filter(x=>x.id!==a.id)})}
+                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
+              </div>
+              <div style={{marginBottom:8}}>
+                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Assign To</div>
+                <Inp value={a.person||""} placeholder="Name…"
+                  onChange={e=>onUpd({assignments:(trip.assignments||[]).map(x=>x.id===a.id?{...x,person:e.target.value}:x)})}/>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Task Description</div>
+                <TA value={a.task||""} rows={2} placeholder="Describe the work to be completed…"
+                  onChange={e=>onUpd({assignments:(trip.assignments||[]).map(x=>x.id===a.id?{...x,task:e.target.value}:x)})}/>
+              </div>
+            </div>
+          ))}
+          <Btn onClick={()=>onUpd({assignments:[...(trip.assignments||[]),{id:uid(),person:"",task:"",done:false}]})}
+            variant="add" style={{width:"100%",borderStyle:"dashed"}}>+ Add Assignment</Btn>
+        </div>
+      )}
+
+      {tab==="Sign Off"&&(
+        <div>
+          {(trip.signoffs||[]).map((s,i)=>(
+            <div key={s.id} style={{background:C.card,border:`1px solid ${C.green}33`,
+              borderRadius:10,padding:12,marginBottom:10,borderLeft:`3px solid ${C.green}`}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+                <span style={{fontSize:11,fontWeight:700,color:C.green}}>Sign-off #{i+1}</span>
+                <button onClick={()=>onUpd({signoffs:(trip.signoffs||[]).filter(x=>x.id!==s.id)})}
+                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
+              </div>
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+                <div>
+                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Technician Name</div>
+                  <Inp value={s.person||""} placeholder="Name…"
+                    onChange={e=>onUpd({signoffs:(trip.signoffs||[]).map(x=>x.id===s.id?{...x,person:e.target.value}:x)})}/>
+                </div>
+                <div>
+                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Completed</div>
+                  <Inp value={s.completedDate||""} placeholder="MM/DD/YY"
+                    onChange={e=>onUpd({signoffs:(trip.signoffs||[]).map(x=>x.id===s.id?{...x,completedDate:e.target.value}:x)})}/>
+                </div>
+              </div>
+              <div style={{marginBottom:8}}>
+                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Work Completed</div>
+                <TA value={s.task||""} rows={2} placeholder="Describe what was completed…"
+                  onChange={e=>onUpd({signoffs:(trip.signoffs||[]).map(x=>x.id===s.id?{...x,task:e.target.value}:x)})}/>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Initials</div>
+                <Inp value={s.initials||""} placeholder="e.g. KM" style={{width:80}}
+                  onChange={e=>onUpd({signoffs:(trip.signoffs||[]).map(x=>x.id===s.id?{...x,initials:e.target.value}:x)})}/>
+              </div>
+            </div>
+          ))}
+          <Btn onClick={()=>onUpd({signoffs:[...(trip.signoffs||[]),{id:uid(),person:"",task:"",completedDate:"",initials:""}]})}
+            variant="add" style={{width:"100%",borderStyle:"dashed"}}>+ Add Sign-off</Btn>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Return Trips ──────────────────────────────────────────────
 function ReturnTrips({trips,onChange,jobName,onEmail}) {
   const add = () => onChange([...trips,{id:uid(),date:"",scope:"",material:"",punch:[],photos:[]}]);
@@ -632,14 +724,11 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
             <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Material Needed</div>
             <TA value={t.material} onChange={e=>upd(t.id,{material:e.target.value})} placeholder="List materials needed…" rows={2}/>
           </div>
+          {/* Punch List */}
           <div style={{fontSize:10,color:C.dim,fontWeight:700,marginBottom:6,letterSpacing:"0.08em"}}>PUNCH LIST</div>
           <PunchItems items={t.punch||[]} onChange={v=>upd(t.id,{punch:v})}/>
-          <div style={{marginTop:14}}>
-            <div style={{fontSize:10,color:C.dim,fontWeight:700,marginBottom:8,letterSpacing:"0.08em"}}>ASSIGNMENTS & SIGN-OFFS</div>
-            <PunchAssignTab phase="Return Trip"
-              assignData={t.assign||{assignments:[],signoffs:[]}}
-              onChange={v=>upd(t.id,{assign:v})} color={C.purple}/>
-          </div>
+
+          {/* Photos */}
           <div style={{marginTop:14}}>
             <div style={{fontSize:10,color:C.dim,fontWeight:700,marginBottom:8,letterSpacing:"0.08em"}}>PHOTOS</div>
             {(t.photos||[]).length>0&&(
@@ -666,6 +755,9 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
                 onChange={e=>{addPhotos(t.id,e.target.files);e.target.value="";}}/>
             </label>
           </div>
+
+          {/* Assign Work & Sign Off tabs */}
+          <ReturnTripExtras trip={t} onUpd={(p)=>upd(t.id,p)}/>
         </div>
       ))}
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed"}}>+ Add Return Trip</Btn>
