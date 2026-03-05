@@ -673,7 +673,7 @@ function ReturnTripExtras({trip, onUpd}) {
 
 // ── Return Trips ──────────────────────────────────────────────
 function ReturnTrips({trips,onChange,jobName,onEmail}) {
-  const add = () => onChange([...trips,{id:uid(),date:"",scope:"",material:"",punch:[],photos:[],assignments:[{id:uid(),person:"",task:"",done:false}],signoffs:[{id:uid(),person:"",task:"",completedDate:"",initials:""}]}]);
+  const add = () => onChange([...trips,{id:uid(),date:"",scope:"",material:"",punch:[],photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:""}]);
   const upd = (id,p) => onChange(trips.map(t=>t.id===id?{...t,...p}:t));
   const del = (id)   => onChange(trips.filter(t=>t.id!==id));
 
@@ -756,8 +756,57 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
             </label>
           </div>
 
-          {/* Assign Work & Sign Off tabs */}
-          <ReturnTripExtras trip={t} onUpd={(p)=>upd(t.id,p)}/>
+          {/* Assigned To */}
+          <div style={{marginTop:12,padding:"10px 12px",background:`${C.purple}10`,
+            border:`1px solid ${C.purple}33`,borderRadius:8}}>
+            <div style={{fontSize:10,color:C.purple,fontWeight:700,marginBottom:6,letterSpacing:"0.08em"}}>ASSIGNED TO</div>
+            <Inp value={t.assignedTo||""} onChange={e=>upd(t.id,{assignedTo:e.target.value})}
+              placeholder="Technician name…"/>
+          </div>
+
+          {/* Sign Off */}
+          <div style={{marginTop:10,padding:"10px 12px",
+            background:t.signedOff?`${C.green}12`:`${C.surface}`,
+            border:`1px solid ${t.signedOff?C.green+"55":C.border}`,borderRadius:8}}>
+            <div style={{fontSize:10,color:t.signedOff?C.green:C.dim,fontWeight:700,
+              marginBottom:8,letterSpacing:"0.08em"}}>SIGN OFF</div>
+            {!t.signedOff?(
+              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr auto",gap:8,alignItems:"flex-end"}}>
+                <div>
+                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Name</div>
+                  <Inp value={t.signedOffBy||""} onChange={e=>upd(t.id,{signedOffBy:e.target.value})}
+                    placeholder="Your name…"/>
+                </div>
+                <div>
+                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date</div>
+                  <Inp value={t.signedOffDate||""} onChange={e=>upd(t.id,{signedOffDate:e.target.value})}
+                    placeholder="MM/DD/YY"/>
+                </div>
+                <button
+                  onClick={()=>upd(t.id,{signedOff:true})}
+                  disabled={!t.signedOffBy||!t.signedOffDate}
+                  style={{background:(!t.signedOffBy||!t.signedOffDate)?C.surface:C.green,
+                    border:`1px solid ${(!t.signedOffBy||!t.signedOffDate)?C.border:C.green}`,
+                    borderRadius:8,color:(!t.signedOffBy||!t.signedOffDate)?C.muted:"#000",
+                    padding:"7px 14px",fontSize:12,fontWeight:700,cursor:(!t.signedOffBy||!t.signedOffDate)?"not-allowed":"pointer",
+                    fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                  ✓ Sign Off
+                </button>
+              </div>
+            ):(
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+                <div>
+                  <span style={{fontSize:13,color:C.green,fontWeight:700}}>✓ Completed by {t.signedOffBy}</span>
+                  <span style={{fontSize:11,color:C.dim,marginLeft:10}}>{t.signedOffDate}</span>
+                </div>
+                <button onClick={()=>upd(t.id,{signedOff:false})}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                    color:C.muted,fontSize:11,padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>
+                  Undo
+                </button>
+              </div>
+            )}
+          </div>
         </div>
       ))}
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed"}}>+ Add Return Trip</Btn>
