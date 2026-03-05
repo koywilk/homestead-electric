@@ -11,7 +11,27 @@ const C = {
 const JOB_ID = "homestead-jobs-v1";
 const ROUGH_STAGES  = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
 const FINISH_STAGES = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
-const WIRE_SIZES    = ["","14 AWG","12 AWG","10 AWG","8 AWG","6 AWG","4 AWG","2 AWG","1/0","2/0","3/0","4/0"];
+const WIRE_SIZES = ["","14/2","14/3","12/2","12/3","10/2","10/3","8/2","8/3","6/2","6/3","4/2","4/3","2/2","2/3","1/0","2/0","3/0","4/0"];
+const WIRE_COLORS = {
+  "14/2": "#e8e8e8", "14/3": "#e8e8e8",
+  "12/2": "#f5d020", "12/3": "#9b59b6",
+  "10/2": "#f4820a", "10/3": "#f4a0c0",
+  "8/2":  "#444444", "8/3":  "#444444",
+  "6/2":  "#444444", "6/3":  "#444444",
+  "4/2":  "#444444", "4/3":  "#444444",
+  "2/2":  "#444444", "2/3":  "#444444",
+  "1/0":  "#444444", "2/0":  "#444444", "3/0": "#444444", "4/0": "#444444",
+};
+const WIRE_TEXT = {
+  "14/2": "#111", "14/3": "#111",
+  "12/2": "#111", "12/3": "#fff",
+  "10/2": "#111", "10/3": "#111",
+  "8/2":  "#fff", "8/3":  "#fff",
+  "6/2":  "#fff", "6/3":  "#fff",
+  "4/2":  "#fff", "4/3":  "#fff",
+  "2/2":  "#fff", "2/3":  "#fff",
+  "1/0":  "#fff", "2/0":  "#fff", "3/0": "#fff", "4/0": "#fff",
+};
 const CO_STATUSES   = ["Pending","CO Created","CO Sent (office)","Approved","Denied","Work Completed"];
 const PULLED_OPTS   = ["","Pulled"];
 const DRIVER_SIZES  = ["","20W","40W","60W","96W","192W","288W"];
@@ -649,7 +669,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
 // ── Home Runs ─────────────────────────────────────────────────
 function HomeRunLevel({rows,onChange,label}) {
-  const WIRE_ORDER = {"":0,"14 AWG":1,"12 AWG":2,"10 AWG":3,"8 AWG":4,"6 AWG":5,"4 AWG":6,"2 AWG":7,"1/0":8,"2/0":9,"3/0":10,"4/0":11};
+  const WIRE_ORDER = {"":0,"14/2":1,"14/3":2,"12/2":3,"12/3":4,"10/2":5,"10/3":6,"8/2":7,"8/3":8,"6/2":9,"6/3":10,"4/2":11,"4/3":12,"2/2":13,"2/3":14,"1/0":15,"2/0":16,"3/0":17,"4/0":18};
   const sortByWire = (arr) => [...arr].sort((a,b)=>(WIRE_ORDER[a.wire]||0)-(WIRE_ORDER[b.wire]||0)).map((r,i)=>({...r,num:i+1}));
   const upd    = (id,p) => { const updated = rows.map(r=>r.id===id?{...r,...p}:r); onChange('wire' in p ? sortByWire(updated) : updated); };
   const addRow = () => onChange([...rows, newHRRow(rows.length+1)]);
@@ -672,7 +692,19 @@ function HomeRunLevel({rows,onChange,label}) {
         <div key={r.id} style={{display:"grid",gridTemplateColumns:"36px 100px 1fr 90px 28px",
           gap:6,marginBottom:4,alignItems:"center"}}>
           <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:6}}>{r.num}.</span>
-          <Sel value={r.wire}   onChange={e=>upd(r.id,{wire:e.target.value})}   options={WIRE_SIZES}/>
+          <div style={{position:"relative"}}>
+            <select value={r.wire} onChange={e=>upd(r.id,{wire:e.target.value})}
+              style={{background:WIRE_COLORS[r.wire]||C.surface,
+                color:r.wire?(WIRE_TEXT[r.wire]||C.text):C.dim,
+                border:`1px solid ${WIRE_COLORS[r.wire]||C.border}`,
+                borderRadius:7,padding:"6px 10px",fontSize:12,fontFamily:"inherit",
+                outline:"none",width:"100%",fontWeight:r.wire?700:400}}>
+              {WIRE_SIZES.map(o=><option key={o} value={o}
+                style={{background:WIRE_COLORS[o]||"#1a1d2e",color:WIRE_TEXT[o]||"#fff"}}>
+                {o||"— select —"}
+              </option>)}
+            </select>
+          </div>
           <Inp value={r.name}   onChange={e=>upd(r.id,{name:e.target.value})}   placeholder="Load name…"/>
           <Sel value={r.status} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
             style={{color:r.status==="Pulled"?C.green:C.text}}/>
