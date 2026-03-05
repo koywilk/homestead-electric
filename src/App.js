@@ -643,7 +643,9 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
 // ── Home Runs ─────────────────────────────────────────────────
 function HomeRunLevel({rows,onChange,label}) {
-  const upd    = (id,p) => onChange(rows.map(r=>r.id===id?{...r,...p}:r));
+  const WIRE_ORDER = {"":0,"14 AWG":1,"12 AWG":2,"10 AWG":3,"8 AWG":4,"6 AWG":5,"4 AWG":6,"2 AWG":7,"1/0":8,"2/0":9,"3/0":10,"4/0":11};
+  const sortByWire = (arr) => [...arr].sort((a,b)=>(WIRE_ORDER[a.wire]||0)-(WIRE_ORDER[b.wire]||0)).map((r,i)=>({...r,num:i+1}));
+  const upd    = (id,p) => { const updated = rows.map(r=>r.id===id?{...r,...p}:r); onChange('wire' in p ? sortByWire(updated) : updated); };
   const addRow = () => onChange([...rows, newHRRow(rows.length+1)]);
   const delRow = (id) => {
     const filtered = rows.filter(r=>r.id!==id).map((r,i)=>({...r,num:i+1}));
@@ -1057,7 +1059,29 @@ function JobDetail({job, onUpdate, onClose}) {
 
           {tab==="Panelized Lighting"&&(
             <div>
-              <SectionHead label="Control 4 Keypads" color={C.purple}/>
+              {/* Lighting Control System Selector */}
+              <SectionHead label="Lighting Control System" color={C.purple}/>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
+                {["Control 4","Lutron","Savant","Crestron","Other"].map(sys=>(
+                  <button key={sys} onClick={()=>u({lightingSystem:sys})}
+                    style={{padding:"6px 14px",borderRadius:8,fontSize:12,cursor:"pointer",
+                      fontFamily:"inherit",transition:"all 0.15s",
+                      background:(job.lightingSystem||"Control 4")===sys?C.purple:`${C.purple}15`,
+                      border:`1px solid ${(job.lightingSystem||"Control 4")===sys?C.purple:`${C.purple}33`}`,
+                      color:(job.lightingSystem||"Control 4")===sys?"#fff":C.dim,
+                      fontWeight:(job.lightingSystem||"Control 4")===sys?700:400}}>
+                    {sys}
+                  </button>
+                ))}
+              </div>
+              {(job.lightingSystem||"Control 4")==="Other"&&(
+                <div style={{marginBottom:16}}>
+                  <div style={{fontSize:10,color:C.dim,marginBottom:4}}>System Name</div>
+                  <Inp value={job.lightingSystemOther||""} onChange={e=>u({lightingSystemOther:e.target.value})}
+                    placeholder="Enter lighting control system name…"/>
+                </div>
+              )}
+              <SectionHead label={`${job.lightingSystem||"Control 4"} Keypads`} color={C.purple}/>
               <KeypadSection label="Main Level Keypad Loads"
                 loads={job.panelizedLighting.mainKeypad}
                 onChange={v=>u({panelizedLighting:{...job.panelizedLighting,mainKeypad:v}})}/>
@@ -1067,7 +1091,7 @@ function JobDetail({job, onUpdate, onClose}) {
               <KeypadSection label="Upper Level Keypad Loads"
                 loads={job.panelizedLighting.upperKeypad}
                 onChange={v=>u({panelizedLighting:{...job.panelizedLighting,upperKeypad:v}})}/>
-              <SectionHead label="Control 4 Panel Loads" color={C.purple}/>
+              <SectionHead label={`${job.lightingSystem||"Control 4"} Panel Loads`} color={C.purple}/>
               <CP4LoadsSection loads={job.panelizedLighting.cp4Loads}
                 onChange={v=>u({panelizedLighting:{...job.panelizedLighting,cp4Loads:v}})}/>
             </div>
