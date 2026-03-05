@@ -13,7 +13,7 @@ const ROUGH_STAGES  = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40
 const FINISH_STAGES = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
 const WIRE_SIZES = ["","14/2","14/3","12/2","12/3","10/2","10/3","8/2","8/3","6/2","6/3","4/2","4/3","2/2","2/3","1/0","2/0","3/0","4/0"];
 const WIRE_COLORS = {
-  "14/2": "#e8e8e8", "14/3": "#e8e8e8",
+  "14/2": "#e8e8e8", "14/3": "#3b82f6",
   "12/2": "#f5d020", "12/3": "#9b59b6",
   "10/2": "#f4820a", "10/3": "#f4a0c0",
   "8/2":  "#444444", "8/3":  "#444444",
@@ -23,7 +23,7 @@ const WIRE_COLORS = {
   "1/0":  "#444444", "2/0":  "#444444", "3/0": "#444444", "4/0": "#444444",
 };
 const WIRE_TEXT = {
-  "14/2": "#111", "14/3": "#111",
+  "14/2": "#111", "14/3": "#fff",
   "12/2": "#111", "12/3": "#fff",
   "10/2": "#111", "10/3": "#111",
   "8/2":  "#fff", "8/3":  "#fff",
@@ -814,6 +814,51 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
   );
 }
 
+
+// ── Panel Feeds ───────────────────────────────────────────────
+function PanelFeeds({feeds, onChange}) {
+  const add = () => onChange([...feeds, {id:uid(), from:"", to:"", wire:"", amps:"", notes:""}]);
+  const upd = (id,p) => onChange(feeds.map(f=>f.id===id?{...f,...p}:f));
+  const del = (id)   => onChange(feeds.filter(f=>f.id!==id));
+  return (
+    <div>
+      {feeds.length>0&&(
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 110px 80px 1fr 28px",
+          gap:6,marginBottom:6,padding:"0 2px"}}>
+          {["From","To","Wire","Amps","Notes",""].map((h,i)=>(
+            <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
+          ))}
+        </div>
+      )}
+      {feeds.map(f=>(
+        <div key={f.id} style={{display:"grid",gridTemplateColumns:"1fr 1fr 110px 80px 1fr 28px",
+          gap:6,marginBottom:6,alignItems:"center"}}>
+          <Inp value={f.from} onChange={e=>upd(f.id,{from:e.target.value})} placeholder="e.g. Meter"/>
+          <Inp value={f.to}   onChange={e=>upd(f.id,{to:e.target.value})}   placeholder="e.g. Panel A"/>
+          <div style={{position:"relative"}}>
+            <select value={f.wire} onChange={e=>upd(f.id,{wire:e.target.value})}
+              style={{background:WIRE_COLORS[f.wire]||C.surface,
+                color:f.wire?(WIRE_TEXT[f.wire]||C.text):C.dim,
+                border:`1px solid ${WIRE_COLORS[f.wire]||C.border}`,
+                borderRadius:7,padding:"6px 10px",fontSize:12,fontFamily:"inherit",
+                outline:"none",width:"100%",fontWeight:f.wire?700:400}}>
+              {WIRE_SIZES.map(o=><option key={o} value={o}
+                style={{background:WIRE_COLORS[o]||"#1a1d2e",color:WIRE_TEXT[o]||"#fff"}}>
+                {o||"— wire —"}
+              </option>)}
+            </select>
+          </div>
+          <Inp value={f.amps}  onChange={e=>upd(f.id,{amps:e.target.value})}  placeholder="e.g. 200A"/>
+          <Inp value={f.notes} onChange={e=>upd(f.id,{notes:e.target.value})} placeholder="Notes…"/>
+          <button onClick={()=>del(f.id)}
+            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+        </div>
+      ))}
+      <Btn onClick={add} variant="add" style={{borderStyle:"dashed",marginTop:4}}>+ Add Panel Feed</Btn>
+    </div>
+  );
+}
+
 // ── Home Runs ─────────────────────────────────────────────────
 function HomeRunLevel({rows,onChange,label}) {
   const WIRE_ORDER = {"":0,"14/2":1,"14/3":2,"12/2":3,"12/3":4,"10/2":5,"10/3":6,"8/2":7,"8/3":8,"6/2":9,"6/3":10,"4/2":11,"4/3":12,"2/2":13,"2/3":14,"1/0":15,"2/0":16,"3/0":17,"4/0":18};
@@ -866,11 +911,16 @@ function HomeRunLevel({rows,onChange,label}) {
 function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange}) {
   return (
     <div>
+      <SectionHead label="Panel Feeds" color={C.blue}/>
+      <PanelFeeds feeds={homeRuns.panelFeeds||[]}
+        onChange={v=>onHRChange({...homeRuns,panelFeeds:v})}/>
+      <div style={{marginTop:24}}>
       <SectionHead label="Home Runs" color={C.blue}/>
       {[["main","Main Level Loads"],["basement","Basement Level Loads"],["upper","Upper Level Loads"]].map(([k,l])=>(
         <HomeRunLevel key={k} label={l} rows={homeRuns[k]||[]}
           onChange={v=>onHRChange({...homeRuns,[k]:v})}/>
       ))}
+      </div>
       <SectionHead label="Panel Breaker Counts" color={C.blue}/>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         {[["meter","Meter Breaker Count"],["panelA","Panel A Breaker Count"],
