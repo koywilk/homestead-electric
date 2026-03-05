@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+\import { useState, useEffect, useRef } from "react";
 import { supabase } from "./supabase";
 
 const C = {
@@ -635,6 +635,12 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
           <div style={{fontSize:10,color:C.dim,fontWeight:700,marginBottom:6,letterSpacing:"0.08em"}}>PUNCH LIST</div>
           <PunchItems items={t.punch||[]} onChange={v=>upd(t.id,{punch:v})}/>
           <div style={{marginTop:14}}>
+            <div style={{fontSize:10,color:C.dim,fontWeight:700,marginBottom:8,letterSpacing:"0.08em"}}>ASSIGNMENTS & SIGN-OFFS</div>
+            <PunchAssignTab phase="Return Trip"
+              assignData={t.assign||{assignments:[],signoffs:[]}}
+              onChange={v=>upd(t.id,{assign:v})} color={C.purple}/>
+          </div>
+          <div style={{marginTop:14}}>
             <div style={{fontSize:10,color:C.dim,fontWeight:700,marginBottom:8,letterSpacing:"0.08em"}}>PHOTOS</div>
             {(t.photos||[]).length>0&&(
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(90px,1fr))",gap:8,marginBottom:10}}>
@@ -1046,8 +1052,8 @@ function JobDetail({job, onUpdate, onClose}) {
                 <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough}/>
               </div>
               <SectionHead label="Punch List" color={C.rough}/>
-              <PunchTabWrapper job={job} u={u} phase="Rough"
-                punchKey="roughPunch" assignKey="roughAssign" color={C.rough} onEmail={setEmailData}/>
+              <PunchSection punch={job.roughPunch} onChange={v=>u({roughPunch:v})}
+                jobName={job.name||"This Job"} phase="Rough" onEmail={setEmailData}/>
               <div style={{marginTop:20}}>
                 <SectionHead label="Material Tracking — Purchase Orders → Simpro" color={C.rough}/>
                 <MaterialOrders orders={job.roughMaterials} onChange={v=>u({roughMaterials:v})}/>
@@ -1080,8 +1086,8 @@ function JobDetail({job, onUpdate, onClose}) {
                 <StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/>
               </div>
               <SectionHead label="Punch List" color={C.finish}/>
-              <PunchTabWrapper job={job} u={u} phase="Finish"
-                punchKey="finishPunch" assignKey="finishAssign" color={C.finish} onEmail={setEmailData}/>
+              <PunchSection punch={job.finishPunch} onChange={v=>u({finishPunch:v})}
+                jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}/>
               <div style={{marginTop:20}}>
                 <SectionHead label="Finish Material Tracking — Purchase Orders → Simpro" color={C.finish}/>
                 <MaterialOrders orders={job.finishMaterials} onChange={v=>u({finishMaterials:v})}/>
