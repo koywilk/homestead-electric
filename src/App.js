@@ -277,100 +277,104 @@ const StageBar = ({stages,current,color}) => {
 };
 
 // ── Punch List ────────────────────────────────────────────────
-function PunchItems({items, onChange}) {
-  const [draft, setDraft] = useState("");
-  const add = () => { if(!draft.trim()) return; onChange([...items,{id:uid(),text:draft,done:false}]); setDraft(""); };
+// Simple helpers to ensure data is always the right shape
+function normFloor(v) {
+  if (v && typeof v === 'object' && !Array.isArray(v) && ('general' in v || 'rooms' in v)) {
+    return { general: Array.isArray(v.general) ? v.general : [], rooms: Array.isArray(v.rooms) ? v.rooms : [] };
+  }
+  return { general: Array.isArray(v) ? v : [], rooms: [] };
+}
+
+function PunchItems({ items, onChange }) {
+  const safeItems = Array.isArray(items) ? items : [];
+  const [draft, setDraft] = useState('');
+  const add = () => {
+    if (!draft.trim()) return;
+    const next = [...safeItems, { id: uid(), text: draft, done: false }];
+    onChange(next);
+    setDraft('');
+  };
   return (
-    <div style={{paddingLeft:12}}>
-      {items.map(item=>(
-        <div key={item.id} style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
-          <input type="checkbox" checked={item.done}
-            onChange={()=>onChange(items.map(i=>i.id===item.id?{...i,done:!i.done}:i))}
-            style={{accentColor:C.green,width:14,height:14,cursor:"pointer",flexShrink:0}}/>
-          <span style={{flex:1,fontSize:12,color:item.done?C.muted:C.text,
-            textDecoration:item.done?"line-through":"none"}}>{item.text}</span>
-          <button onClick={()=>onChange(items.filter(i=>i.id!==item.id))}
-            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:12}}>✕</button>
+    <div style={{ paddingLeft: 8 }}>
+      {safeItems.map(item => (
+        <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+          <input type="checkbox" checked={!!item.done}
+            onChange={() => onChange(safeItems.map(i => i.id === item.id ? { ...i, done: !i.done } : i))}
+            style={{ accentColor: C.green, width: 14, height: 14, cursor: 'pointer', flexShrink: 0 }} />
+          <span style={{ flex: 1, fontSize: 12, color: item.done ? C.muted : C.text,
+            textDecoration: item.done ? 'line-through' : 'none' }}>{item.text}</span>
+          <button onClick={() => onChange(safeItems.filter(i => i.id !== item.id))}
+            style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12 }}>✕</button>
         </div>
       ))}
-      <div style={{display:"flex",gap:6,marginTop:4}}>
-        <Inp value={draft} onChange={e=>setDraft(e.target.value)} placeholder="Add item…" style={{flex:1}}/>
+      <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+        <Inp value={draft} onChange={e => setDraft(e.target.value)}
+          placeholder="Add item…" style={{ flex: 1 }}
+          onKeyDown={e => e.key === 'Enter' && add()} />
         <Btn onClick={add} variant="primary">+</Btn>
       </div>
     </div>
   );
 }
 
-function PunchFloor({floorData, onChange, floorLabel, floorColor}) {
-  const norm = (v) => {
-    if(v && typeof v==='object' && !Array.isArray(v)) return v;
-    return { general: Array.isArray(v) ? v : [], rooms: [] };
-  };
-  const data    = norm(floorData);
-  const general = data.general || [];
-  const rooms   = data.rooms   || [];
-
+function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor }) {
+  const data = normFloor(floorData);
   const [collapsed, setCollapsed] = useState(false);
-  const [roomDraft, setRoomDraft] = useState("");
+  const [roomDraft, setRoomDraft] = useState('');
 
-  const updGeneral = (v) => onChange({...data, general:v});
-  const addRoom    = () => {
-    if(!roomDraft.trim()) return;
-    const newData = {...data, rooms:[...rooms,{id:uid(),name:roomDraft,items:[]}]};
-    onChange(newData);
-    setRoomDraft("");
-  };
-  const updRoom = (id, items) => {
-    const newData = {...data, rooms:rooms.map(r=>r.id===id?{...r,items}:r)};
-    onChange(newData);
-  };
-  const delRoom = (id) => {
-    const newData = {...data, rooms:rooms.filter(r=>r.id!==id)};
-    onChange(newData);
-  };
+  const openCount = data.general.filter(i => !i.done).length +
+    data.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done).length : 0), 0);
 
-  const openCount = general.filter(i=>!i.done).length +
-    rooms.reduce((a,r)=>a+(r.items||[]).filter(i=>!i.done).length, 0);
+  const setGeneral = (general) => onFloorChange(floorKey, { ...data, general });
+  const addRoom = () => {
+    if (!roomDraft.trim()) return;
+    onFloorChange(floorKey, { ...data, rooms: [...data.rooms, { id: uid(), name: roomDraft, items: [] }] });
+    setRoomDraft('');
+  };
+  const setRoomItems = (roomId, items) => {
+    onFloorChange(floorKey, { ...data, rooms: data.rooms.map(r => r.id === roomId ? { ...r, items } : r) });
+  };
+  const delRoom = (roomId) => {
+    onFloorChange(floorKey, { ...data, rooms: data.rooms.filter(r => r.id !== roomId) });
+  };
 
   return (
-    <div style={{marginBottom:16,border:`1px solid ${floorColor}33`,borderRadius:10,overflow:"hidden"}}>
-      <div onClick={()=>setCollapsed(c=>!c)}
-        style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",
-          background:`${floorColor}10`,cursor:"pointer",userSelect:"none"}}>
-        <div style={{width:8,height:8,borderRadius:"50%",background:floorColor,flexShrink:0}}/>
-        <span style={{fontWeight:700,fontSize:13,color:floorColor,flex:1}}>{floorLabel}</span>
-        {openCount>0&&<span style={{fontSize:10,background:`${C.red}22`,color:C.red,
-          borderRadius:99,padding:"2px 8px",fontWeight:700}}>{openCount} open</span>}
-        <span style={{color:floorColor,fontSize:12}}>{collapsed?"▸":"▾"}</span>
+    <div style={{ marginBottom: 14, border: `1px solid ${floorColor}33`, borderRadius: 10, overflow: 'hidden' }}>
+      <div onClick={() => setCollapsed(c => !c)}
+        style={{ display: 'flex', alignItems: 'center', gap: 10, padding: '10px 14px',
+          background: `${floorColor}10`, cursor: 'pointer', userSelect: 'none' }}>
+        <div style={{ width: 8, height: 8, borderRadius: '50%', background: floorColor, flexShrink: 0 }} />
+        <span style={{ fontWeight: 700, fontSize: 13, color: floorColor, flex: 1 }}>{floorLabel}</span>
+        {openCount > 0 && <span style={{ fontSize: 10, background: `${C.red}22`, color: C.red,
+          borderRadius: 99, padding: '2px 8px', fontWeight: 700 }}>{openCount} open</span>}
+        <span style={{ color: floorColor, fontSize: 12 }}>{collapsed ? '▸' : '▾'}</span>
       </div>
-
-      {!collapsed&&(
-        <div style={{padding:"12px 14px"}}>
-          <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>GENERAL</div>
-          <PunchItems items={general} onChange={updGeneral}/>
-
-          {rooms.map(room=>(
-            <div key={room.id} style={{marginTop:14,background:C.surface,
-              border:`1px solid ${C.border}`,borderRadius:8,padding:10}}>
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
-                <span style={{fontSize:12,fontWeight:700,color:C.text,flex:1}}>🚪 {room.name}</span>
-                {(room.items||[]).filter(i=>!i.done).length>0&&
-                  <span style={{fontSize:10,background:`${C.red}22`,color:C.red,
-                    borderRadius:99,padding:"2px 6px",fontWeight:700}}>
-                    {(room.items||[]).filter(i=>!i.done).length} open
+      {!collapsed && (
+        <div style={{ padding: '12px 14px' }}>
+          <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: '0.08em', marginBottom: 6 }}>GENERAL</div>
+          <PunchItems items={data.general} onChange={setGeneral} />
+          {data.rooms.map(room => (
+            <div key={room.id} style={{ marginTop: 12, background: C.surface,
+              border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 12, fontWeight: 700, color: C.text, flex: 1 }}>🚪 {room.name}</span>
+                {(Array.isArray(room.items) ? room.items : []).filter(i => !i.done).length > 0 &&
+                  <span style={{ fontSize: 10, background: `${C.red}22`, color: C.red,
+                    borderRadius: 99, padding: '2px 6px', fontWeight: 700 }}>
+                    {room.items.filter(i => !i.done).length} open
                   </span>}
-                <button onClick={()=>delRoom(room.id)}
-                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>✕</button>
+                <button onClick={() => delRoom(room.id)}
+                  style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 11 }}>✕</button>
               </div>
-              <PunchItems items={room.items||[]} onChange={v=>updRoom(room.id,v)}/>
+              <PunchItems items={Array.isArray(room.items) ? room.items : []}
+                onChange={v => setRoomItems(room.id, v)} />
             </div>
           ))}
-
-          <div style={{display:"flex",gap:6,marginTop:12}}>
-            <Inp value={roomDraft} onChange={e=>setRoomDraft(e.target.value)}
-              placeholder="Add room (e.g. Master Bath)…" style={{flex:1}}
-              onKeyDown={e=>e.key==="Enter"&&addRoom()}/>
-            <Btn onClick={addRoom} variant="add" style={{whiteSpace:"nowrap"}}>+ Room</Btn>
+          <div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
+            <Inp value={roomDraft} onChange={e => setRoomDraft(e.target.value)}
+              placeholder="Add room (e.g. Master Bath)…" style={{ flex: 1 }}
+              onKeyDown={e => e.key === 'Enter' && addRoom()} />
+            <Btn onClick={addRoom} variant="add" style={{ whiteSpace: 'nowrap' }}>+ Room</Btn>
           </div>
         </div>
       )}
@@ -378,56 +382,43 @@ function PunchFloor({floorData, onChange, floorLabel, floorColor}) {
   );
 }
 
-function PunchSection({punch, onChange, jobName, phase, onEmail}) {
-  const norm = (v) => (v && typeof v==='object' && !Array.isArray(v))
-    ? {general: v.general||[], rooms: v.rooms||[]}
-    : {general: Array.isArray(v)?v:[], rooms:[]};
+function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
+  const upper    = normFloor(punch.upper);
+  const main     = normFloor(punch.main);
+  const basement = normFloor(punch.basement);
 
-  // Always work from normalized punch so updates are consistent
-  const normPunch = {
-    upper:    norm(punch.upper),
-    main:     norm(punch.main),
-    basement: norm(punch.basement),
+  const handleFloorChange = (floorKey, newFloorData) => {
+    onChange({ upper, main, basement, [floorKey]: newFloorData });
   };
 
-  const countOpen = (f) => (f.general||[]).filter(i=>!i.done).length +
-    (f.rooms||[]).reduce((a,r)=>a+(r.items||[]).filter(i=>!i.done).length, 0);
-  const totalOpen = countOpen(normPunch.upper)+countOpen(normPunch.main)+countOpen(normPunch.basement);
+  const countOpen = (f) => f.general.filter(i => !i.done).length +
+    f.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done).length : 0), 0);
+  const totalOpen = countOpen(upper) + countOpen(main) + countOpen(basement);
 
-  const flatItems = (f,label) => [
-    ...(f.general||[]).filter(i=>!i.done).map(i=>`[${label}] ${i.text}`),
-    ...(f.rooms||[]).flatMap(r=>(r.items||[]).filter(i=>!i.done).map(i=>`[${label} - ${r.name}] ${i.text}`)),
+  const flatItems = (f, label) => [
+    ...f.general.filter(i => !i.done).map(i => `[${label}] ${i.text}`),
+    ...f.rooms.flatMap(r => (r.items||[]).filter(i => !i.done).map(i => `[${label} - ${r.name}] ${i.text}`)),
   ];
 
   const handleEmail = () => {
-    const all = [
-      ...flatItems(normPunch.upper,"Upper"),
-      ...flatItems(normPunch.main,"Main"),
-      ...flatItems(normPunch.basement,"Basement"),
-    ];
+    const all = [...flatItems(upper,'Upper'), ...flatItems(main,'Main'), ...flatItems(basement,'Basement')];
     const subject = `${jobName} — ${phase} Punch List`;
-    const body = `Hi,\n\nOpen ${phase} punch list items for ${jobName}:\n\n${all.map(i=>`• ${i}`).join("\n")}\n\nPlease review and complete.\n\nThanks`;
-    onEmail({subject, body});
+    const body = `Hi,\n\nOpen ${phase} punch list items for ${jobName}:\n\n${all.map(i=>`• ${i}`).join('\n')}\n\nPlease review and complete.\n\nThanks`;
+    onEmail({ subject, body });
   };
 
   return (
     <div>
-      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:8}}>
-        {totalOpen>0&&(
-          <Btn onClick={handleEmail} variant="email" style={{fontSize:11,padding:"4px 10px"}}>
+      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+        {totalOpen > 0 && (
+          <Btn onClick={handleEmail} variant="email" style={{ fontSize: 11, padding: '4px 10px' }}>
             ✉ Email Punch List ({totalOpen} open)
           </Btn>
         )}
       </div>
-      <PunchFloor floorData={normPunch.upper}
-        onChange={v=>onChange({...normPunch, upper:v})}
-        floorLabel="Upper Level" floorColor={C.blue}/>
-      <PunchFloor floorData={normPunch.main}
-        onChange={v=>onChange({...normPunch, main:v})}
-        floorLabel="Main Level"  floorColor={C.accent}/>
-      <PunchFloor floorData={normPunch.basement}
-        onChange={v=>onChange({...normPunch, basement:v})}
-        floorLabel="Basement"    floorColor={C.purple}/>
+      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}/>
+      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}/>
+      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}/>
     </div>
   );
 }
