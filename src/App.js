@@ -2297,16 +2297,27 @@ function App() {
           <div style={{padding:"28px 26px"}}>
             {/* Home screen tab switcher */}
             <div style={{display:"flex",gap:8,marginBottom:24}}>
-              {["Jobs","QC Walks"].map(t=>(
-                <button key={t} onClick={()=>setHomeTab(t)}
-                  style={{padding:"7px 20px",borderRadius:8,fontSize:13,cursor:"pointer",
-                    fontFamily:"inherit",fontWeight:homeTab===t?700:400,
-                    background:homeTab===t?C.accent:"none",
-                    border:`1px solid ${homeTab===t?C.accent:C.border}`,
-                    color:homeTab===t?"#000":C.dim,transition:"all 0.15s"}}>
-                  {t}
-                </button>
-              ))}
+              {[["Jobs",null],["Unassigned",C.orange],["QC Walks",null]].map(([t,badgeColor])=>{
+                const isActive = homeTab===t;
+                const unassignedCount = t==="Unassigned" ? jobs.filter(j=>!j.foreman||j.foreman==="Unassigned").length : 0;
+                return (
+                  <button key={t} onClick={()=>setHomeTab(t)}
+                    style={{padding:"7px 20px",borderRadius:8,fontSize:13,cursor:"pointer",
+                      fontFamily:"inherit",fontWeight:isActive?700:400,
+                      background:isActive?C.accent:"none",
+                      border:`1px solid ${isActive?C.accent:C.border}`,
+                      color:isActive?"#000":C.dim,transition:"all 0.15s",
+                      display:"flex",alignItems:"center",gap:7}}>
+                    {t}
+                    {t==="Unassigned"&&unassignedCount>0&&(
+                      <span style={{background:C.orange,color:"#000",borderRadius:99,
+                        fontSize:10,fontWeight:700,padding:"1px 7px",lineHeight:"16px"}}>
+                        {unassignedCount}
+                      </span>
+                    )}
+                  </button>
+                );
+              })}
             </div>
             {homeTab==="Jobs"&&<>
             <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em",marginBottom:16}}>
@@ -2458,6 +2469,46 @@ function App() {
           </div>
             </>
             }
+            {homeTab==="Unassigned"&&(
+              <div>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+                  <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em"}}>
+                    UNASSIGNED JOBS
+                  </div>
+                  <Btn onClick={()=>{ const j=blankJob(); setJobs(js=>[j,...js]); setSelected(j); }}
+                    variant="primary" style={{padding:"7px 18px"}}>+ New Job</Btn>
+                </div>
+                {jobs.filter(j=>!j.foreman||j.foreman==="Unassigned").length===0?(
+                  <div style={{textAlign:"center",color:C.muted,fontSize:13,padding:"60px 0"}}>
+                    No unassigned jobs
+                  </div>
+                ):(
+                  jobs.filter(j=>!j.foreman||j.foreman==="Unassigned").map(j=>(
+                    <div key={j.id} className="job-row"
+                      onClick={()=>setSelected(j)}
+                      style={{background:C.surface,border:`1px solid ${C.border}`,
+                        borderRadius:12,padding:14,marginBottom:10,cursor:"pointer"}}>
+                      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                        <div style={{flex:1}}>
+                          <div style={{fontWeight:700,fontSize:13,color:C.text,marginBottom:3}}>
+                            {j.name||<span style={{color:C.muted}}>Unnamed Job</span>}
+                          </div>
+                          <div style={{fontSize:11,color:C.dim}}>
+                            {j.address||"No address"} · Added {j.id.slice(0,8)}
+                          </div>
+                        </div>
+                        <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                          <Pill label="Unassigned" color={C.orange}/>
+                          <StageBar stages={[]} current={j.roughStage} color={C.rough}/>
+                          <button onClick={e=>{e.stopPropagation();deleteJob(j.id);}}
+                            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:12}}>✕</button>
+                        </div>
+                      </div>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
             {homeTab==="QC Walks"&&(
               <QCWalkBoard jobs={jobs} onUpdateJob={updateJob}/>
             )}
