@@ -2294,9 +2294,9 @@ function App() {
           </div>
 
           <div style={{padding:"28px 26px"}}>
-            {/* Home screen tab switcher */}
+            {/* Home screen tabs */}
             <div style={{display:"flex",gap:8,marginBottom:24}}>
-              {[["Jobs",null],["Unassigned",C.orange],["QC Walks",null]].map(([t,badgeColor])=>{
+              {[["Jobs",null],["Unassigned",C.orange],["QC Walks",null]].map(([t])=>{
                 const isActive = homeTab===t;
                 const unassignedCount = t==="Unassigned" ? jobs.filter(j=>!j.foreman||j.foreman==="Unassigned").length : 0;
                 return (
@@ -2310,7 +2310,7 @@ function App() {
                     {t}
                     {t==="Unassigned"&&unassignedCount>0&&(
                       <span style={{background:C.orange,color:"#000",borderRadius:99,
-                        fontSize:10,fontWeight:700,padding:"1px 7px",lineHeight:"16px"}}>
+                        fontSize:10,fontWeight:700,padding:"1px 7px"}}>
                         {unassignedCount}
                       </span>
                     )}
@@ -2318,7 +2318,9 @@ function App() {
                 );
               })}
             </div>
-            {homeTab==="Jobs"&&<>
+
+            {homeTab==="Jobs"&&(
+              <div>
             <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em",marginBottom:16}}>
               TAP A FOREMAN TO VIEW THEIR JOBS
             </div>
@@ -2465,9 +2467,9 @@ function App() {
             ):(
               <StageSectionList jobs={filtered} JobRow={JobRow} fc={FOREMEN_COLORS[activeForeman]}/>
             )}
-            </>
-          </div>
-            }
+              </div>
+            )}
+
             {homeTab==="Unassigned"&&(
               <div>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
@@ -2508,11 +2510,11 @@ function App() {
                 )}
               </div>
             )}
+
             {homeTab==="QC Walks"&&(
               <QCWalkBoard jobs={jobs} onUpdateJob={updateJob}/>
             )}
           </div>
-        </div>
       )}
 
       {selected&&<JobDetail job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>}
