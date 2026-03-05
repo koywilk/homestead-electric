@@ -1046,8 +1046,8 @@ function JobDetail({job, onUpdate, onClose}) {
                 <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough}/>
               </div>
               <SectionHead label="Punch List" color={C.rough}/>
-              <PunchSection punch={job.roughPunch} onChange={v=>u({roughPunch:v})}
-                jobName={job.name||"This Job"} phase="Rough" onEmail={setEmailData}/>
+              <PunchTabWrapper job={job} u={u} phase="Rough"
+                punchKey="roughPunch" assignKey="roughAssign" color={C.rough} onEmail={setEmailData}/>
               <div style={{marginTop:20}}>
                 <SectionHead label="Material Tracking — Purchase Orders → Simpro" color={C.rough}/>
                 <MaterialOrders orders={job.roughMaterials} onChange={v=>u({roughMaterials:v})}/>
@@ -1080,8 +1080,8 @@ function JobDetail({job, onUpdate, onClose}) {
                 <StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/>
               </div>
               <SectionHead label="Punch List" color={C.finish}/>
-              <PunchSection punch={job.finishPunch} onChange={v=>u({finishPunch:v})}
-                jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}/>
+              <PunchTabWrapper job={job} u={u} phase="Finish"
+                punchKey="finishPunch" assignKey="finishAssign" color={C.finish} onEmail={setEmailData}/>
               <div style={{marginTop:20}}>
                 <SectionHead label="Finish Material Tracking — Purchase Orders → Simpro" color={C.finish}/>
                 <MaterialOrders orders={job.finishMaterials} onChange={v=>u({finishMaterials:v})}/>
@@ -1280,6 +1280,147 @@ function QASection({questions: _questions, onChange, color}) {
             color={color}/>
         </div>
       ))}
+    </div>
+  );
+}
+
+
+// ── Punch Assignment & Sign-off ───────────────────────────────
+const CREW = ["Koy","Vasa","Colby","Josh","Brady","Justin"];
+
+function PunchAssignTab({phase, assignData, onChange, color}) {
+  const data = assignData || { assignments:[], signoffs:[] };
+  const assignments = data.assignments || [];
+  const signoffs    = data.signoffs    || [];
+
+  const updA = (id, p) => onChange({...data, assignments: assignments.map(a=>a.id===id?{...a,...p}:a)});
+  const delA = (id)    => onChange({...data, assignments: assignments.filter(a=>a.id!==id)});
+  const addA = ()      => onChange({...data, assignments: [...assignments, {id:uid(), person:"", task:"", floor:"", room:"", done:false}]});
+
+  const updS = (id, p) => onChange({...data, signoffs: signoffs.map(s=>s.id===id?{...s,...p}:s)});
+  const delS = (id)    => onChange({...data, signoffs: signoffs.filter(s=>s.id!==id)});
+  const addS = ()      => onChange({...data, signoffs: [...signoffs, {id:uid(), person:"", task:"", completedDate:"", initials:""}]});
+
+  return (
+    <div>
+      {/* Assignments */}
+      <SectionHead label="Assign Work" color={color}/>
+      {assignments.map((a,i)=>(
+        <div key={a.id} style={{background:C.surface,border:`1px solid ${a.done?C.green+"55":C.border}`,
+          borderRadius:10,padding:12,marginBottom:10,borderLeft:`3px solid ${a.done?C.green:color}`}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+            <input type="checkbox" checked={!!a.done} onChange={()=>updA(a.id,{done:!a.done})}
+              style={{accentColor:C.green,width:15,height:15,cursor:"pointer",flexShrink:0}}/>
+            <span style={{fontSize:11,fontWeight:700,color:a.done?C.green:color,flex:1}}>
+              Task #{i+1} {a.done&&"✓ Done"}
+            </span>
+            <button onClick={()=>delA(a.id)}
+              style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+            <div>
+              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Assign To</div>
+              <select value={a.person} onChange={e=>updA(a.id,{person:e.target.value})}
+                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                  color:a.person?C.text:C.dim,padding:"6px 10px",fontSize:12,
+                  fontFamily:"inherit",outline:"none",width:"100%"}}>
+                <option value="">— select person —</option>
+                {CREW.map(c=><option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Floor</div>
+              <select value={a.floor} onChange={e=>updA(a.id,{floor:e.target.value})}
+                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                  color:a.floor?C.text:C.dim,padding:"6px 10px",fontSize:12,
+                  fontFamily:"inherit",outline:"none",width:"100%"}}>
+                <option value="">— select floor —</option>
+                {["Upper Level","Main Level","Basement","All Floors"].map(f=><option key={f} value={f}>{f}</option>)}
+              </select>
+            </div>
+          </div>
+          <div style={{marginBottom:8}}>
+            <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Room / Area <span style={{color:C.muted}}>(optional)</span></div>
+            <Inp value={a.room||""} onChange={e=>updA(a.id,{room:e.target.value})} placeholder="e.g. Master Bath, Kitchen…"/>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Task Description</div>
+            <TA value={a.task||""} onChange={e=>updA(a.id,{task:e.target.value})}
+              placeholder="Describe the work to be completed…" rows={2}/>
+          </div>
+        </div>
+      ))}
+      <Btn onClick={addA} variant="add" style={{width:"100%",borderStyle:"dashed",marginBottom:24}}>+ Add Assignment</Btn>
+
+      {/* Sign-offs */}
+      <SectionHead label="Sign Off — Work Completed By" color={color}/>
+      {signoffs.map((s,i)=>(
+        <div key={s.id} style={{background:C.surface,border:`1px solid ${C.green}33`,
+          borderRadius:10,padding:12,marginBottom:10,borderLeft:`3px solid ${C.green}`}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+            <span style={{fontSize:11,fontWeight:700,color:C.green}}>Sign-off #{i+1}</span>
+            <button onClick={()=>delS(s.id)}
+              style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
+            <div>
+              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Completed By</div>
+              <select value={s.person} onChange={e=>updS(s.id,{person:e.target.value})}
+                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                  color:s.person?C.text:C.dim,padding:"6px 10px",fontSize:12,
+                  fontFamily:"inherit",outline:"none",width:"100%"}}>
+                <option value="">— select person —</option>
+                {CREW.map(c=><option key={c} value={c}>{c}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Completed</div>
+              <Inp value={s.completedDate||""} onChange={e=>updS(s.id,{completedDate:e.target.value})} placeholder="MM/DD/YY"/>
+            </div>
+          </div>
+          <div style={{marginBottom:8}}>
+            <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Work Completed</div>
+            <TA value={s.task||""} onChange={e=>updS(s.id,{task:e.target.value})}
+              placeholder="Describe what was completed…" rows={2}/>
+          </div>
+          <div>
+            <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Initials</div>
+            <Inp value={s.initials||""} onChange={e=>updS(s.id,{initials:e.target.value})}
+              placeholder="e.g. KM" style={{width:80}}/>
+          </div>
+        </div>
+      ))}
+      <Btn onClick={addS} variant="add" style={{width:"100%",borderStyle:"dashed"}}>+ Add Sign-off</Btn>
+    </div>
+  );
+}
+
+
+function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
+  const [punchTab, setPunchTab] = useState("Items");
+  return (
+    <div>
+      <div style={{display:"flex",gap:6,marginBottom:14}}>
+        {["Items","Assignments & Sign-offs"].map(t=>(
+          <button key={t} onClick={()=>setPunchTab(t)}
+            style={{padding:"5px 14px",borderRadius:7,fontSize:11,cursor:"pointer",
+              fontFamily:"inherit",fontWeight:punchTab===t?700:400,
+              background:punchTab===t?color:`${color}15`,
+              border:`1px solid ${punchTab===t?color:`${color}33`}`,
+              color:punchTab===t?"#000":C.dim,transition:"all 0.15s"}}>
+            {t}
+          </button>
+        ))}
+      </div>
+      {punchTab==="Items"&&(
+        <PunchSection punch={job[punchKey]} onChange={v=>u({[punchKey]:v})}
+          jobName={job.name||"This Job"} phase={phase} onEmail={onEmail||(() =>{})}/>
+      )}
+      {punchTab==="Assignments & Sign-offs"&&(
+        <PunchAssignTab phase={phase}
+          assignData={job[assignKey]||{assignments:[],signoffs:[]}}
+          onChange={v=>u({[assignKey]:v})} color={color}/>
+      )}
     </div>
   );
 }
