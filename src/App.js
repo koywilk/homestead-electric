@@ -940,10 +940,16 @@ function JobDetail({job, onUpdate, onClose}) {
   const [emailData, setEmailData] = useState(null);
   const u = patch => onUpdate({...job,...patch});
 
-  const openCount =
-    [job.roughPunch,job.finishPunch]
-      .flatMap(p=>[...(p.upper||[]),...(p.main||[]),...(p.basement||[])])
-      .filter(i=>!i.done).length;
+  const countFloor = (f) => {
+    if (!f) return 0;
+    if (Array.isArray(f)) return f.filter(i=>!i.done).length;
+    return (f.general||[]).filter(i=>!i.done).length +
+      (f.rooms||[]).reduce((a,r)=>a+(Array.isArray(r.items)?r.items.filter(i=>!i.done).length:0),0);
+  };
+  const openCount = ['roughPunch','finishPunch'].reduce((total,key)=>{
+    const p = job[key]||{};
+    return total + countFloor(p.upper) + countFloor(p.main) + countFloor(p.basement);
+  },0);
   const pendingCOs = job.changeOrders.filter(c=>c.status==="Pending").length;
 
   return (
@@ -1341,10 +1347,18 @@ export default function App() {
     if(selected?.id===id) setSelected(null);
   };
 
-  const openCount = j =>
-    [j.roughPunch,j.finishPunch]
-      .flatMap(p=>[...(p.upper||[]),...(p.main||[]),...(p.basement||[])])
-      .filter(i=>!i.done).length;
+  const openCount = j => {
+    const countFloor = (f) => {
+      if (!f) return 0;
+      if (Array.isArray(f)) return f.filter(i=>!i.done).length;
+      return (f.general||[]).filter(i=>!i.done).length +
+        (f.rooms||[]).reduce((a,r)=>a+(Array.isArray(r.items)?r.items.filter(i=>!i.done).length:0),0);
+    };
+    return ['roughPunch','finishPunch'].reduce((total,key)=>{
+      const p = j[key]||{};
+      return total + countFloor(p.upper) + countFloor(p.main) + countFloor(p.basement);
+    },0);
+  };
 
   const totalOpen  = jobs.reduce((a,j)=>a+openCount(j),0);
   const flagged    = jobs.filter(j=>j.flagged).length;
