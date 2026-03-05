@@ -673,7 +673,7 @@ function ReturnTripExtras({trip, onUpd}) {
 
 // ── Return Trips ──────────────────────────────────────────────
 function ReturnTrips({trips,onChange,jobName,onEmail}) {
-  const add = () => onChange([...trips,{id:uid(),date:"",scope:"",material:"",punch:[],photos:[]}]);
+  const add = () => onChange([...trips,{id:uid(),date:"",scope:"",material:"",punch:[],photos:[],assignments:[{id:uid(),person:"",task:"",done:false}],signoffs:[{id:uid(),person:"",task:"",completedDate:"",initials:""}]}]);
   const upd = (id,p) => onChange(trips.map(t=>t.id===id?{...t,...p}:t));
   const del = (id)   => onChange(trips.filter(t=>t.id!==id));
 
