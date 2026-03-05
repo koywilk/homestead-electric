@@ -887,10 +887,20 @@ function PlansTab({job, onUpdate}) {
   const removeFile = (id) => onUpdate({uploadedFiles:(job.uploadedFiles||[]).filter(f=>f.id!==id)});
 
   const openPDF = (f) => {
-    const win = window.open("","_blank");
-    win.document.write(`<html><body style="margin:0;background:#111">
-      <iframe src="${f.dataUrl}" style="width:100vw;height:100vh;border:none"></iframe>
-      </body></html>`);
+    try {
+      // Convert base64 dataURL to blob URL so browser can render it properly
+      const [header, base64] = f.dataUrl.split(',');
+      const mime = header.match(/:(.*?);/)[1];
+      const bytes = atob(base64);
+      const arr = new Uint8Array(bytes.length);
+      for (let i = 0; i < bytes.length; i++) arr[i] = bytes.charCodeAt(i);
+      const blob = new Blob([arr], { type: mime });
+      const url = URL.createObjectURL(blob);
+      window.open(url, '_blank');
+    } catch(e) {
+      // fallback: just open dataUrl directly
+      window.open(f.dataUrl, '_blank');
+    }
   };
 
   const fmtSize = (bytes) => bytes>1048576?`${(bytes/1048576).toFixed(1)} MB`:`${(bytes/1024).toFixed(0)} KB`;
