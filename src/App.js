@@ -1665,7 +1665,6 @@ function StageSectionList({ jobs, JobRow, fc }) {
 // ── Main Dashboard ────────────────────────────────────────────
 const ALL_STAGES = ROUGH_STAGES;
 
-export default 
 // ── QC Walks ──────────────────────────────────────────────────
 
 const QC_ROUGH_ITEMS = [
@@ -2519,3 +2518,4 @@ function App() {
     </div>
   );
 }
+export default App;
