@@ -1,5 +1,18 @@
 import { useState, useEffect, useRef } from "react";
-import { supabase } from "./supabase";
+import { initializeApp } from "firebase/app";
+import { getFirestore, doc, setDoc, deleteDoc, collection, getDocs } from "firebase/firestore";
+
+const firebaseConfig = {
+  apiKey: "AIzaSyAQl6V74U502_ZHF3h_1W0yYDuKr2mLI5Q",
+  authDomain: "homestead-electric.firebaseapp.com",
+  projectId: "homestead-electric",
+  storageBucket: "homestead-electric.firebasestorage.app",
+  messagingSenderId: "318598172684",
+  appId: "1:318598172684:web:b2ef548d952faabccd9e29"
+};
+
+const firebaseApp = initializeApp(firebaseConfig);
+const db = getFirestore(firebaseApp);
 
 const C = {
   bg:"#09090f", surface:"#0f1018", card:"#13151f", border:"#1c1f2e",
@@ -1719,11 +1732,9 @@ function App() {
   useEffect(()=>{
     (async()=>{
       try {
-        const { data, error } = await supabase
-          .from('jobs').select('id,data').ilike('id','J-%');
-        if(error) throw error;
-        if(data?.length) {
-          const loaded = migrate(data.map(r=>r.data).filter(Boolean));
+        const snapshot = await getDocs(collection(db, "jobs"));
+        if(!snapshot.empty) {
+          const loaded = migrate(snapshot.docs.map(d=>d.data().data).filter(Boolean));
           setJobs(loaded);
           try { localStorage.setItem('hejobs_backup', JSON.stringify(loaded)); } catch(e){}
         } else {
@@ -1734,11 +1745,8 @@ function App() {
               const parsed = JSON.parse(backup);
               if(parsed?.length) {
                 setJobs(parsed);
-                // Re-save each job back
                 for(const job of parsed) {
-                  await supabase.from('jobs').upsert({
-                    id:`J-${job.id}`, data:job, updated_at:new Date().toISOString()
-                  });
+                  await setDoc(doc(db,"jobs",job.id), {data:job, updated_at:new Date().toISOString()});
                 }
               }
             }
@@ -1769,9 +1777,7 @@ function App() {
     // Save to Supabase
     (async()=>{
       try {
-        const { error } = await supabase.from('jobs')
-          .upsert({id:`J-${job.id}`, data:job, updated_at:new Date().toISOString()});
-        if(error) throw error;
+        await setDoc(doc(db,"jobs",job.id), {data:job, updated_at:new Date().toISOString()});
         isDirty.current = false;
         setSyncStatus("saved");
         setTimeout(()=>setSyncStatus("idle"), 2000);
@@ -1788,7 +1794,7 @@ function App() {
       const cur = JSON.parse(localStorage.getItem('hejobs_backup')||'[]');
       localStorage.setItem('hejobs_backup', JSON.stringify(cur.filter(j=>j.id!==jobId)));
     } catch(e){}
-    try { await supabase.from('jobs').delete().eq('id',`J-${jobId}`); } catch(e){}
+    try { await deleteDoc(doc(db,"jobs",jobId)); } catch(e){}
   };
 
   // Save on background/close
@@ -1802,9 +1808,7 @@ function App() {
               cur.filter(j=>j.id!==job.id).concat(job)
             ));
           } catch(e){}
-          supabase.from('jobs').upsert({
-            id:`J-${job.id}`, data:job, updated_at:new Date().toISOString()
-          }).catch(()=>{});
+          setDoc(doc(db,"jobs",job.id), {data:job, updated_at:new Date().toISOString()}).catch(()=>{});
         });
       }
     };
