@@ -1723,10 +1723,41 @@ function App() {
           .from('jobs').select('id,data').like('id','job-%');
         if(error) throw error;
         if(data?.length) {
-          const loaded = data.map(r=>r.data).filter(Boolean);
-          setJobs(migrate(loaded));
+          const loaded = migrate(data.map(r=>r.data).filter(Boolean));
+          setJobs(loaded);
+          // Keep localStorage in sync as backup
+          try { localStorage.setItem('hejobs_backup', JSON.stringify(loaded)); } catch(e){}
+        } else {
+          // Supabase returned nothing — check localStorage backup before showing empty
+          try {
+            const backup = localStorage.getItem('hejobs_backup');
+            if(backup) {
+              const parsed = JSON.parse(backup);
+              if(parsed?.length) {
+                console.warn('Supabase empty — restoring from localStorage backup');
+                setJobs(parsed);
+                // Re-save each job back to Supabase
+                parsed.forEach(async job => {
+                  try {
+                    await supabase.from('jobs')
+                      .upsert({id:`job-${job.id}`, data:job, updated_at:new Date().toISOString()});
+                  } catch(e){}
+                });
+              }
+            }
+          } catch(e){}
         }
-      } catch(e){ console.error('Load error:',e); }
+      } catch(e){
+        console.error('Load error:',e);
+        // Network/auth error — fall back to localStorage
+        try {
+          const backup = localStorage.getItem('hejobs_backup');
+          if(backup) {
+            const parsed = JSON.parse(backup);
+            if(parsed?.length) setJobs(parsed);
+          }
+        } catch(e2){}
+      }
       initialLoad.current = false;
     })();
   },[]);
@@ -1735,22 +1766,42 @@ function App() {
   const saveJob = (job) => {
     clearTimeout(saveQueue.current[job.id]);
     setSyncStatus("saving");
+    // Always write to localStorage immediately as backup
+    try {
+      const current = JSON.parse(localStorage.getItem('hejobs_backup')||'[]');
+      const updated = current.filter(j=>j.id!==job.id).concat(job);
+      localStorage.setItem('hejobs_backup', JSON.stringify(updated));
+    } catch(e){}
     saveQueue.current[job.id] = setTimeout(async () => {
-      try {
-        const { error } = await supabase.from('jobs')
-          .upsert({id:`job-${job.id}`, data:job, updated_at:new Date().toISOString()});
-        if(error) throw error;
-        setSyncStatus("saved");
-        setTimeout(()=>setSyncStatus("idle"), 2000);
-      } catch(e) {
-        console.error('Save error:',e);
-        setSyncStatus("error");
+      let attempts = 0;
+      while(attempts < 3) {
+        try {
+          const { error } = await supabase.from('jobs')
+            .upsert({id:`job-${job.id}`, data:job, updated_at:new Date().toISOString()});
+          if(error) throw error;
+          setSyncStatus("saved");
+          setTimeout(()=>setSyncStatus("idle"), 2000);
+          return;
+        } catch(e) {
+          attempts++;
+          if(attempts >= 3) {
+            console.error('Save error after 3 attempts:',e);
+            setSyncStatus("error");
+          } else {
+            await new Promise(r=>setTimeout(r, 600*attempts));
+          }
+        }
       }
     }, 400);
   };
 
   // Delete a single job row from Supabase
   const deleteJobRemote = async (jobId) => {
+    // Remove from localStorage backup too
+    try {
+      const current = JSON.parse(localStorage.getItem('hejobs_backup')||'[]');
+      localStorage.setItem('hejobs_backup', JSON.stringify(current.filter(j=>j.id!==jobId)));
+    } catch(e){}
     try {
       await supabase.from('jobs').delete().eq('id',`job-${jobId}`);
     } catch(e){ console.error('Delete error:',e); }
