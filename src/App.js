@@ -127,14 +127,8 @@ function EmailModal({ subject, body, onClose }) {
 
   const send = () => {
     if (!allRecipients.length) return;
-    const uri = `mailto:${allRecipients.join(",")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    const a = document.createElement("a");
-    a.href = uri;
-    a.setAttribute("target", "_blank");
-    a.setAttribute("rel", "noopener noreferrer");
-    document.body.appendChild(a);
-    a.click();
-    document.body.removeChild(a);
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&to=${encodeURIComponent(allRecipients.join(","))}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.open(gmailUrl, "_blank");
     onClose();
   };
 
