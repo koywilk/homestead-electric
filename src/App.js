@@ -1724,6 +1724,7 @@ function App() {
 
   const jobsRef   = useRef(jobs);
   const isDirty   = useRef(false);
+  const saveTimers = useRef({});
   useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
 
   const migrate = (loaded) => {
@@ -1735,25 +1736,24 @@ function App() {
     }));
   };
 
-  // Load all jobs — each stored as its own row with key "J-{id}"
+  // Load all jobs on start — each job is its own Firestore document
   useEffect(()=>{
     (async()=>{
       try {
-        const snapshot = await getDocs(collection(db, "jobs"));
-        if(!snapshot.empty) {
-          const loaded = migrate(snapshot.docs.map(d=>d.data().data).filter(Boolean));
+        const snap = await getDocs(collection(db,"jobs"));
+        if(!snap.empty) {
+          const loaded = migrate(snap.docs.map(d=>d.data().data).filter(Boolean));
           setJobs(loaded);
           try { localStorage.setItem('hejobs_backup', JSON.stringify(loaded)); } catch(e){}
         } else {
-          // Fall back to localStorage
           try {
-            const backup = localStorage.getItem('hejobs_backup');
-            if(backup) {
-              const parsed = JSON.parse(backup);
-              if(parsed?.length) {
-                setJobs(parsed);
-                for(const job of parsed) {
-                  await setDoc(doc(db,"jobs",job.id), {data:job, updated_at:new Date().toISOString()});
+            const b = localStorage.getItem('hejobs_backup');
+            if(b) {
+              const p = JSON.parse(b);
+              if(p?.length) {
+                setJobs(p);
+                for(const job of p) {
+                  await setDoc(doc(db,"jobs",job.id),{data:job,updated_at:new Date().toISOString()});
                 }
               }
             }
@@ -1762,55 +1762,41 @@ function App() {
       } catch(e){
         console.error('Load error:',e);
         try {
-          const backup = localStorage.getItem('hejobs_backup');
-          if(backup) { const p = JSON.parse(backup); if(p?.length) setJobs(p); }
+          const b = localStorage.getItem('hejobs_backup');
+          if(b) { const p=JSON.parse(b); if(p?.length) setJobs(p); }
         } catch(e2){}
       }
       initialLoad.current = false;
     })();
   },[]);
 
-  const saveTimers = useRef({});
-
-  const doFirebaseSave = async (job) => {
-    try {
-      await setDoc(doc(db,"jobs",job.id), {data:job, updated_at:new Date().toISOString()});
-      isDirty.current = false;
-      setSyncStatus("saved");
-      setTimeout(()=>setSyncStatus("idle"), 2000);
-    } catch(e){
-      const msg = e?.message || String(e);
-      console.error('Save error:', msg);
-      alert('Save failed: ' + msg);
-      setSyncStatus("error");
-    }
-  };
-
-  // Save a single job — writes localStorage instantly, Firebase after 600ms debounce
+  // Save a single job as its own Firestore document
   const saveJob = (job) => {
+    if(initialLoad.current) return;
     isDirty.current = true;
     setSyncStatus("saving");
-    // Write to localStorage instantly
+    // Always write to localStorage immediately
     try {
       const cur = JSON.parse(localStorage.getItem('hejobs_backup')||'[]');
       localStorage.setItem('hejobs_backup', JSON.stringify(
         cur.filter(j=>j.id!==job.id).concat(job)
       ));
     } catch(e){}
-    // Debounce Firebase
     clearTimeout(saveTimers.current[job.id]);
-    saveTimers.current[job.id] = setTimeout(()=>doFirebaseSave(job), 300);
+    saveTimers.current[job.id] = setTimeout(async()=>{
+      try {
+        await setDoc(doc(db,"jobs",job.id),{data:job,updated_at:new Date().toISOString()});
+        isDirty.current = false;
+        setSyncStatus("saved");
+        setTimeout(()=>setSyncStatus("idle"),2000);
+      } catch(e){
+        console.error('Save error:',e?.message||e);
+        setSyncStatus("error");
+      }
+    }, 500);
   };
 
-  // Flush all pending saves immediately (called on visibility change)
-  const flushSaves = () => {
-    jobsRef.current.forEach(job => {
-      clearTimeout(saveTimers.current[job.id]);
-      doFirebaseSave(job);
-    });
-  };
-
-  // Delete job row
+  // Delete job document
   const deleteJobRemote = async (jobId) => {
     try {
       const cur = JSON.parse(localStorage.getItem('hejobs_backup')||'[]');
@@ -1819,45 +1805,30 @@ function App() {
     try { await deleteDoc(doc(db,"jobs",jobId)); } catch(e){}
   };
 
+  // Flush all pending saves immediately
+  const flushSaves = () => {
+    jobsRef.current.forEach(job=>{
+      clearTimeout(saveTimers.current[job.id]);
+      setDoc(doc(db,"jobs",job.id),{data:job,updated_at:new Date().toISOString()}).catch(e=>console.error(e));
+      try {
+        const cur = JSON.parse(localStorage.getItem('hejobs_backup')||'[]');
+        localStorage.setItem('hejobs_backup', JSON.stringify(
+          cur.filter(j=>j.id!==job.id).concat(job)
+        ));
+      } catch(e){}
+    });
+  };
+
   // Save on background/close
   useEffect(()=>{
-    const handleVisibility = () => {
-      if(document.visibilityState === 'hidden' && isDirty.current) {
-        flushSaves();
-      }
-    };
+    const handleVisibility = ()=>{ if(document.visibilityState==='hidden' && isDirty.current) flushSaves(); };
     document.addEventListener('visibilitychange', handleVisibility);
     window.addEventListener('beforeunload', flushSaves);
-    return () => {
+    return ()=>{
       document.removeEventListener('visibilitychange', handleVisibility);
       window.removeEventListener('beforeunload', flushSaves);
     };
   },[]);
-
-  // Pull-to-refresh
-  useEffect(()=>{
-    const onTouchStart = e => { pullStart.current = e.touches[0].clientY; };
-    const onTouchMove  = e => {
-      if(pullStart.current===null) return;
-      const dist = e.touches[0].clientY - pullStart.current;
-      if(dist>0 && window.scrollY===0){
-        setPullDist(Math.min(dist,100));
-        setPulling(dist>120);
-      }
-    };
-    const onTouchEnd = () => {
-      if(pulling) window.location.reload();
-      setPullDist(0); setPulling(false); pullStart.current=null;
-    };
-    window.addEventListener('touchstart',onTouchStart,{passive:true});
-    window.addEventListener('touchmove', onTouchMove, {passive:true});
-    window.addEventListener('touchend',  onTouchEnd);
-    return ()=>{
-      window.removeEventListener('touchstart',onTouchStart);
-      window.removeEventListener('touchmove', onTouchMove);
-      window.removeEventListener('touchend',  onTouchEnd);
-    };
-  },[pulling]);
   const updateJob = updated => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); saveJob(updated); };
   const addJob    = () => { const j=blankJob(); setJobs(js=>[j,...js]); setSelected(j); saveJob(j); };
   const deleteJob = id => {
