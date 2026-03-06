@@ -1,7 +1,6 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, setDoc, deleteDoc, collection, getDocs } from "firebase/firestore";
-import { getStorage, ref as storageRef, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAQl6V74U502_ZHF3h_1W0yYDuKr2mLI5Q",
@@ -14,7 +13,6 @@ const firebaseConfig = {
 
 const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
-const storage = getStorage(firebaseApp);
 
 const C = {
   bg:"#09090f", surface:"#0f1018", card:"#13151f", border:"#1c1f2e",
@@ -1075,38 +1073,45 @@ function PlansTab({job, onUpdate}) {
   const fileRef = useRef();
   const [uploading, setUploading] = useState(false);
 
-  const handleFileUpload = async (e) => {
+  const handleFileUpload = (e) => {
     const files = Array.from(e.target.files);
     if(!files.length) return;
     setUploading(true);
+    let done = 0;
     const newFiles = [];
-    for(const file of files) {
-      try {
-        const fileId = uid();
-        const fileRef = storageRef(storage, `jobs/${job.id}/${fileId}-${file.name}`);
-        await uploadBytes(fileRef, file);
-        const url = await getDownloadURL(fileRef);
-        newFiles.push({ id:fileId, name:file.name, url, size:file.size, path:`jobs/${job.id}/${fileId}-${file.name}` });
-      } catch(err) {
-        console.error('Upload error:', err);
+    files.forEach(file => {
+      if(file.size > 500000) {
+        alert(`"${file.name}" is too large (max 500KB). Please compress the PDF first.`);
+        done++;
+        if(done===files.length){ setUploading(false); }
+        return;
       }
-    }
-    onUpdate({uploadedFiles:[...(job.uploadedFiles||[]),...newFiles]});
-    setUploading(false);
+      const reader = new FileReader();
+      reader.onload = (ev) => {
+        newFiles.push({ id:uid(), name:file.name, dataUrl:ev.target.result, size:file.size });
+        done++;
+        if(done===files.length) {
+          onUpdate({uploadedFiles:[...(job.uploadedFiles||[]),...newFiles]});
+          setUploading(false);
+        }
+      };
+      reader.readAsDataURL(file);
+    });
     e.target.value = "";
   };
 
-  const removeFile = async (id) => {
-    const file = (job.uploadedFiles||[]).find(f=>f.id===id);
-    if(file?.path) {
-      try { await deleteObject(storageRef(storage, file.path)); } catch(e){}
-    }
-    onUpdate({uploadedFiles:(job.uploadedFiles||[]).filter(f=>f.id!==id)});
-  };
+  const removeFile = (id) => onUpdate({uploadedFiles:(job.uploadedFiles||[]).filter(f=>f.id!==id)});
 
   const openPDF = (f) => {
-    const url = f.url || f.dataUrl;
-    if(url) window.open(url, '_blank');
+    try {
+      const [header, base64] = f.dataUrl.split(',');
+      const mime = header.match(/:(.*?);/)[1];
+      const bytes = atob(base64);
+      const arr = new Uint8Array(bytes.length);
+      for(let i=0;i<bytes.length;i++) arr[i]=bytes.charCodeAt(i);
+      const blob = new Blob([arr],{type:mime});
+      window.open(URL.createObjectURL(blob),'_blank');
+    } catch(e){ console.error(e); }
   };;
 
   const fmtSize = (bytes) => bytes>1048576?`${(bytes/1048576).toFixed(1)} MB`:`${(bytes/1024).toFixed(0)} KB`;
@@ -1771,7 +1776,9 @@ function App() {
       setSyncStatus("saved");
       setTimeout(()=>setSyncStatus("idle"), 2000);
     } catch(e){
-      console.error('Save error:',e);
+      const msg = e?.message || String(e);
+      console.error('Save error:', msg);
+      alert('Save failed: ' + msg);
       setSyncStatus("error");
     }
   };
