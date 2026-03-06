@@ -24,7 +24,7 @@ const C = {
 const JOB_ID = "homestead-jobs-v1";
 const ROUGH_STAGES  = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
 const FINISH_STAGES = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
-const WIRE_SIZES = ["","14/2","14/3","12/2","12/3","10/2","10/3","8/2","8/3","6/2","6/3","4/2","4/3","2/2","2/3","1/0","2/0","3/0","4/0"];
+const WIRE_SIZES = ["","14/2","14/3","12/2","12/3","10/2","10/3","8/2","8/3","6/2","6/3","4/2","4/3","2/2","2/3","1/0","2/0","3/0","4/0","Need Specs"];
 const WIRE_COLORS = {
   "14/2": "#e8e8e8", "14/3": "#3b82f6",
   "12/2": "#f5d020", "12/3": "#9b59b6",
@@ -46,7 +46,7 @@ const WIRE_TEXT = {
   "1/0":  "#fff", "2/0":  "#fff", "3/0": "#fff", "4/0": "#fff",
 };
 const CO_STATUSES   = ["Pending","CO Created","CO Sent (office)","Approved","Denied","Work Completed"];
-const PULLED_OPTS   = ["","Pulled","Need Specs"];
+const PULLED_OPTS   = ["","Pulled"];
 const DRIVER_SIZES  = ["","20W","40W","60W","96W","192W","288W"];
 
 const TEAM = [
@@ -912,7 +912,7 @@ function HomeRunLevel({rows,onChange,label}) {
           </div>
           <Inp value={r.name}   onChange={e=>upd(r.id,{name:e.target.value})}   placeholder="Load name…"/>
           <Sel value={r.status} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
-            style={{color:r.status==="Pulled"?C.green:r.status==="Need Specs"?C.orange:C.text}}/>
+            style={{color:r.status==="Pulled"?C.green:C.text}}/>
           <button onClick={()=>delRow(r.id)}
             style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
         </div>
@@ -998,7 +998,7 @@ function CP4LoadsSection({loads,onChange}) {
           <Inp value={r.name}   onChange={e=>upd(r.id,{name:e.target.value})}   placeholder="Load name…"/>
           <Inp value={r.module} onChange={e=>upd(r.id,{module:e.target.value})} placeholder="Module…"/>
           <Sel value={r.status} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
-            style={{color:r.status==="Pulled"?C.green:r.status==="Need Specs"?C.orange:C.text}}/>
+            style={{color:r.status==="Pulled"?C.green:C.text}}/>
           <button onClick={()=>delRow(r.id)}
             style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
         </div>
