@@ -33,7 +33,7 @@ const WIRE_TEXT = {
   "1/0":  "#fff", "2/0":  "#fff", "3/0": "#fff", "4/0": "#fff",
 };
 const CO_STATUSES   = ["Pending","CO Created","CO Sent (office)","Approved","Denied","Work Completed"];
-const PULLED_OPTS   = ["","Pulled"];
+const PULLED_OPTS   = ["","Pulled","Need Specs"];
 const DRIVER_SIZES  = ["","20W","40W","60W","96W","192W","288W"];
 
 const TEAM = [
@@ -899,7 +899,7 @@ function HomeRunLevel({rows,onChange,label}) {
           </div>
           <Inp value={r.name}   onChange={e=>upd(r.id,{name:e.target.value})}   placeholder="Load name…"/>
           <Sel value={r.status} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
-            style={{color:r.status==="Pulled"?C.green:C.text}}/>
+            style={{color:r.status==="Pulled"?C.green:r.status==="Need Specs"?C.orange:C.text}}/>
           <button onClick={()=>delRow(r.id)}
             style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
         </div>
@@ -985,7 +985,7 @@ function CP4LoadsSection({loads,onChange}) {
           <Inp value={r.name}   onChange={e=>upd(r.id,{name:e.target.value})}   placeholder="Load name…"/>
           <Inp value={r.module} onChange={e=>upd(r.id,{module:e.target.value})} placeholder="Module…"/>
           <Sel value={r.status} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
-            style={{color:r.status==="Pulled"?C.green:C.text}}/>
+            style={{color:r.status==="Pulled"?C.green:r.status==="Need Specs"?C.orange:C.text}}/>
           <button onClick={()=>delRow(r.id)}
             style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
         </div>
