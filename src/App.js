@@ -1277,6 +1277,14 @@ function JobDetail({job, onUpdate, onClose}) {
 
         {/* Body */}
         <div style={{flex:1,overflowY:"auto",padding:"20px 22px"}}>
+          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:12}}>
+            <button onClick={()=>{ onUpdate({...jobRef.current}); }}
+              style={{background:"#22c55e",border:"none",borderRadius:7,color:"#000",
+                fontSize:12,fontWeight:700,padding:"6px 18px",cursor:"pointer",
+                fontFamily:"inherit"}}>
+              💾 Save
+            </button>
+          </div>
 
           {tab==="Rough"&&(
             <div>
