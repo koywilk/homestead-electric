@@ -1676,9 +1676,8 @@ function App() {
   const saveTimer    = useRef(null);
   const initialLoad  = useRef(true);
 
-  const jobsRef     = useRef(jobs);
-  const isDirty     = useRef(false);
-  const saveQueue   = useRef(Promise.resolve());
+  const jobsRef   = useRef(jobs);
+  const saveQueue = useRef({});  // per-job save timers
   useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
 
   const migrate = (loaded) => {
@@ -1690,65 +1689,74 @@ function App() {
     }));
   };
 
-  // Initial load
+  // Load all jobs on start — each job is its own row keyed by job id
   useEffect(()=>{
     (async()=>{
       try {
         const { data, error } = await supabase
-          .from('jobs').select('data').eq('id', JOB_ID).single();
-        if(error && error.code !== 'PGRST116') throw error;
-        if(data?.data) setJobs(migrate(data.data));
+          .from('jobs').select('id,data').like('id','job-%');
+        if(error) throw error;
+        if(data?.length) {
+          const loaded = data.map(r=>r.data).filter(Boolean);
+          setJobs(migrate(loaded));
+        }
       } catch(e){ console.error('Load error:',e); }
       initialLoad.current = false;
     })();
   },[]);
 
-  // Queued save — serializes saves, always writes latest data
-  const enqueueSave = () => {
-    isDirty.current = true;
+  // Save a single job — each job saves independently so they never overwrite each other
+  const saveJob = (job) => {
+    clearTimeout(saveQueue.current[job.id]);
     setSyncStatus("saving");
-    saveQueue.current = saveQueue.current.then(async () => {
-      if(!isDirty.current) return;
-      const toSave = jobsRef.current;
-      isDirty.current = false;
+    saveQueue.current[job.id] = setTimeout(async () => {
       try {
         const { error } = await supabase.from('jobs')
-          .upsert({id:JOB_ID, data:toSave, updated_at:new Date().toISOString()});
+          .upsert({id:`job-${job.id}`, data:job, updated_at:new Date().toISOString()});
         if(error) throw error;
         setSyncStatus("saved");
         setTimeout(()=>setSyncStatus("idle"), 2000);
       } catch(e) {
-        isDirty.current = true;
-        setSyncStatus("error");
         console.error('Save error:',e);
+        setSyncStatus("error");
       }
-    });
+    }, 400);
   };
 
-  // Debounced save on every change — 400ms
-  useEffect(()=>{
-    if(initialLoad.current) return;
-    clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(enqueueSave, 400);
-  },[jobs]);
+  // Delete a single job row from Supabase
+  const deleteJobRemote = async (jobId) => {
+    try {
+      await supabase.from('jobs').delete().eq('id',`job-${jobId}`);
+    } catch(e){ console.error('Delete error:',e); }
+  };
 
-  // Immediate save when app goes to background
+  // Save when app goes to background — flush all pending saves immediately
   useEffect(()=>{
     const handleVisibility = () => {
       if(document.visibilityState === 'hidden' && !initialLoad.current) {
-        clearTimeout(saveTimer.current);
-        enqueueSave();
+        Object.keys(saveQueue.current).forEach(id => {
+          clearTimeout(saveQueue.current[id]);
+          delete saveQueue.current[id];
+        });
+        // Save all jobs immediately
+        jobsRef.current.forEach(async (job) => {
+          try {
+            await supabase.from('jobs')
+              .upsert({id:`job-${job.id}`, data:job, updated_at:new Date().toISOString()});
+          } catch(e){}
+        });
       }
     };
     document.addEventListener('visibilitychange', handleVisibility);
     return () => document.removeEventListener('visibilitychange', handleVisibility);
   },[]);
-  const updateJob = updated => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); };
-  const addJob    = () => { const j=blankJob(); setJobs(js=>[j,...js]); setSelected(j); };
+  const updateJob = updated => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); saveJob(updated); };
+  const addJob    = () => { const j=blankJob(); setJobs(js=>[j,...js]); setSelected(j); saveJob(j); };
   const deleteJob = id => {
     if(!confirm("Delete this job site?")) return;
     setJobs(js=>js.filter(j=>j.id!==id));
     if(selected?.id===id) setSelected(null);
+    deleteJobRemote(id);
   };
 
   const openCount = j => {
