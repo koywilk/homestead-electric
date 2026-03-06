@@ -1217,6 +1217,8 @@ function JobDetail({job, onUpdate, onClose}) {
   const [tab, setTab]       = useState("Rough");
   const [emailData, setEmailData] = useState(null);
   const u = patch => onUpdate({...job,...patch});
+  // saveNow forces an immediate Firebase save (bypasses debounce)
+  const saveNow = () => onUpdate({...job});
 
   const countFloor = (f) => {
     if (!f) return 0;
@@ -1763,29 +1765,42 @@ function App() {
     })();
   },[]);
 
-  // Save a single job as its own row
+  const saveTimers = useRef({});
+
+  const doFirebaseSave = async (job) => {
+    try {
+      await setDoc(doc(db,"jobs",job.id), {data:job, updated_at:new Date().toISOString()});
+      isDirty.current = false;
+      setSyncStatus("saved");
+      setTimeout(()=>setSyncStatus("idle"), 2000);
+    } catch(e){
+      console.error('Save error:',e);
+      setSyncStatus("error");
+    }
+  };
+
+  // Save a single job — writes localStorage instantly, Firebase after 600ms debounce
   const saveJob = (job) => {
     isDirty.current = true;
     setSyncStatus("saving");
-    // Save to localStorage immediately
+    // Write to localStorage instantly
     try {
       const cur = JSON.parse(localStorage.getItem('hejobs_backup')||'[]');
       localStorage.setItem('hejobs_backup', JSON.stringify(
         cur.filter(j=>j.id!==job.id).concat(job)
       ));
     } catch(e){}
-    // Save to Supabase
-    (async()=>{
-      try {
-        await setDoc(doc(db,"jobs",job.id), {data:job, updated_at:new Date().toISOString()});
-        isDirty.current = false;
-        setSyncStatus("saved");
-        setTimeout(()=>setSyncStatus("idle"), 2000);
-      } catch(e){
-        console.error('Save error:',e);
-        setSyncStatus("error");
-      }
-    })();
+    // Debounce Firebase
+    clearTimeout(saveTimers.current[job.id]);
+    saveTimers.current[job.id] = setTimeout(()=>doFirebaseSave(job), 300);
+  };
+
+  // Flush all pending saves immediately (called on visibility change)
+  const flushSaves = () => {
+    jobsRef.current.forEach(job => {
+      clearTimeout(saveTimers.current[job.id]);
+      doFirebaseSave(job);
+    });
   };
 
   // Delete job row
@@ -1800,20 +1815,16 @@ function App() {
   // Save on background/close
   useEffect(()=>{
     const handleVisibility = () => {
-      if(document.visibilityState === 'hidden') {
-        jobsRef.current.forEach(job => {
-          try {
-            const cur = JSON.parse(localStorage.getItem('hejobs_backup')||'[]');
-            localStorage.setItem('hejobs_backup', JSON.stringify(
-              cur.filter(j=>j.id!==job.id).concat(job)
-            ));
-          } catch(e){}
-          setDoc(doc(db,"jobs",job.id), {data:job, updated_at:new Date().toISOString()}).catch(()=>{});
-        });
+      if(document.visibilityState === 'hidden' && isDirty.current) {
+        flushSaves();
       }
     };
     document.addEventListener('visibilitychange', handleVisibility);
-    return () => document.removeEventListener('visibilitychange', handleVisibility);
+    window.addEventListener('beforeunload', flushSaves);
+    return () => {
+      document.removeEventListener('visibilitychange', handleVisibility);
+      window.removeEventListener('beforeunload', flushSaves);
+    };
   },[]);
   const updateJob = updated => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); saveJob(updated); };
   const addJob    = () => { const j=blankJob(); setJobs(js=>[j,...js]); setSelected(j); saveJob(j); };
