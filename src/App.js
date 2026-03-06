@@ -1216,9 +1216,10 @@ const TABS = ["Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
 function JobDetail({job, onUpdate, onClose}) {
   const [tab, setTab]       = useState("Rough");
   const [emailData, setEmailData] = useState(null);
-  const u = patch => onUpdate({...job,...patch});
-  // saveNow forces an immediate Firebase save (bypasses debounce)
-  const saveNow = () => onUpdate({...job});
+  const jobRef = useRef(job);
+  useEffect(()=>{ jobRef.current = job; },[job]);
+  const u = patch => onUpdate({...jobRef.current,...patch});
+  const saveNow = () => onUpdate({...jobRef.current});
 
   const countFloor = (f) => {
     if (!f) return 0;
