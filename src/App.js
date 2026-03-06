@@ -1676,56 +1676,88 @@ function App() {
   const saveTimer    = useRef(null);
   const initialLoad  = useRef(true);
 
+  const jobsRef      = useRef(jobs);
+  const isSaving     = useRef(false);
+  const pendingSave  = useRef(false);
+  useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
+
+  // Migrate old stage format
+  const migrate = (loaded) => {
+    const roughMap  = {"Pre-Wire":"0%","Rough-In":"25%","Rough Inspection":"75%","Rough Complete":"100%"};
+    const finishMap = {"Fixtures Ordered":"0%","Finish Scheduled":"20%","Finish In Progress":"50%","Punch List":"75%","CO / Final":"90%","Complete":"100%"};
+    return (Array.isArray(loaded)?loaded:[]).map(j=>({...j,
+      roughStage:  roughMap[j.roughStage]||(j.roughStage||"0%"),
+      finishStage: finishMap[j.finishStage]||(j.finishStage||"0%"),
+    }));
+  };
+
+  // Initial load
   useEffect(()=>{
     (async()=>{
       try {
         const { data, error } = await supabase
           .from('jobs').select('data').eq('id', JOB_ID).single();
         if(error && error.code !== 'PGRST116') throw error;
-        if(data?.data) {
-          const loaded = Array.isArray(data.data) ? data.data : [];
-          const roughMap  = {"Pre-Wire":"0%","Rough-In":"25%","Rough Inspection":"75%","Rough Complete":"100%"};
-          const finishMap = {"Fixtures Ordered":"0%","Finish Scheduled":"20%","Finish In Progress":"50%","Punch List":"75%","CO / Final":"90%","Complete":"100%"};
-          const migrated = loaded.map(j=>({...j,
-            roughStage:  roughMap[j.roughStage]||(j.roughStage||"0%"),
-            finishStage: finishMap[j.finishStage]||(j.finishStage||"0%"),
-          }));
-          setJobs(migrated);
-        }
+        if(data?.data) setJobs(migrate(data.data));
       } catch(e){ console.error('Load error:',e); }
       initialLoad.current = false;
     })();
   },[]);
 
-  const jobsRef = useRef(jobs);
-  useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
+  // Real-time subscription — updates from other devices come in here
+  useEffect(()=>{
+    const channel = supabase
+      .channel('jobs-sync')
+      .on('postgres_changes', {
+        event: 'UPDATE', schema: 'public', table: 'jobs', filter: `id=eq.${JOB_ID}`
+      }, payload => {
+        // Only apply remote update if we're not currently saving ourselves
+        if(isSaving.current) return;
+        const incoming = migrate(payload.new?.data);
+        if(incoming.length) {
+          setJobs(incoming);
+          // Also update selected job if it's open
+          setSelected(prev => {
+            if(!prev) return prev;
+            const updated = incoming.find(j=>j.id===prev.id);
+            return updated || prev;
+          });
+        }
+      })
+      .subscribe();
+    return () => supabase.removeChannel(channel);
+  },[]);
 
+  // Save with debounce — queues if already saving
   useEffect(()=>{
     if(initialLoad.current) return;
     setSyncStatus("saving");
     clearTimeout(saveTimer.current);
     saveTimer.current = setTimeout(async()=>{
-      const toSave = jobsRef.current;
-      let attempts = 0;
-      const trySave = async () => {
-        try {
-          const { error } = await supabase.from('jobs')
-            .upsert({id:JOB_ID, data:toSave, updated_at:new Date().toISOString()});
-          if(error) throw error;
-          setSyncStatus("saved");
-          setTimeout(()=>setSyncStatus("idle"),2500);
-        } catch(e) {
-          attempts++;
-          if(attempts < 3) {
-            setTimeout(trySave, 1000 * attempts);
-          } else {
-            console.error('Save failed after 3 attempts:', e);
-            setSyncStatus("error");
+      if(isSaving.current) { pendingSave.current = true; return; }
+      const doSave = async () => {
+        isSaving.current = true;
+        const toSave = jobsRef.current;
+        let attempts = 0;
+        while(attempts < 3) {
+          try {
+            const { error } = await supabase.from('jobs')
+              .upsert({id:JOB_ID, data:toSave, updated_at:new Date().toISOString()});
+            if(error) throw error;
+            setSyncStatus("saved");
+            setTimeout(()=>setSyncStatus("idle"), 2000);
+            break;
+          } catch(e) {
+            attempts++;
+            if(attempts >= 3) { setSyncStatus("error"); }
+            else await new Promise(r=>setTimeout(r, 800*attempts));
           }
         }
+        isSaving.current = false;
+        if(pendingSave.current) { pendingSave.current = false; doSave(); }
       };
-      trySave();
-    },1200);
+      doSave();
+    }, 1000);
   },[jobs]);
 
   const updateJob = updated => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); };
