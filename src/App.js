@@ -1676,10 +1676,9 @@ function App() {
   const saveTimer    = useRef(null);
   const initialLoad  = useRef(true);
 
-  const jobsRef    = useRef(jobs);
-  const isSaving   = useRef(false);
-  const isDirty    = useRef(false);  // true = we have changes not yet confirmed saved
-  const lastSavedAt = useRef(null);
+  const jobsRef     = useRef(jobs);
+  const isDirty     = useRef(false);
+  const saveQueue   = useRef(Promise.resolve());
   useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
 
   const migrate = (loaded) => {
@@ -1691,75 +1690,59 @@ function App() {
     }));
   };
 
-  const applyIncoming = (data, serverUpdatedAt) => {
-    const incoming = migrate(data);
-    if(!incoming.length) return;
-    setJobs(incoming);
-    setSelected(prev => {
-      if(!prev) return prev;
-      return incoming.find(j=>j.id===prev.id) || prev;
-    });
-    lastSavedAt.current = serverUpdatedAt;
-  };
-
   // Initial load
   useEffect(()=>{
     (async()=>{
       try {
         const { data, error } = await supabase
-          .from('jobs').select('data,updated_at').eq('id', JOB_ID).single();
+          .from('jobs').select('data').eq('id', JOB_ID).single();
         if(error && error.code !== 'PGRST116') throw error;
-        if(data?.data) applyIncoming(data.data, data.updated_at);
+        if(data?.data) setJobs(migrate(data.data));
       } catch(e){ console.error('Load error:',e); }
       initialLoad.current = false;
     })();
   },[]);
 
-  // Save function — marks dirty=false only after confirmed success
-  const saveNow = async () => {
-    if(isSaving.current) return;
-    isSaving.current = true;
-    const toSave = jobsRef.current;
-    try {
-      const now = new Date().toISOString();
-      const { error } = await supabase.from('jobs')
-        .upsert({id:JOB_ID, data:toSave, updated_at:now});
-      if(error) throw error;
-      lastSavedAt.current = now;
-      isDirty.current = false;
-      setSyncStatus("saved");
-      setTimeout(()=>setSyncStatus("idle"), 2000);
-    } catch(e) {
-      console.error('Save error:',e);
-      setSyncStatus("error");
-    }
-    isSaving.current = false;
-  };
-
-  // Mark dirty and debounce save on every change
-  useEffect(()=>{
-    if(initialLoad.current) return;
+  // Queued save — serializes saves, always writes latest data
+  const enqueueSave = () => {
     isDirty.current = true;
     setSyncStatus("saving");
+    saveQueue.current = saveQueue.current.then(async () => {
+      if(!isDirty.current) return;
+      const toSave = jobsRef.current;
+      isDirty.current = false;
+      try {
+        const { error } = await supabase.from('jobs')
+          .upsert({id:JOB_ID, data:toSave, updated_at:new Date().toISOString()});
+        if(error) throw error;
+        setSyncStatus("saved");
+        setTimeout(()=>setSyncStatus("idle"), 2000);
+      } catch(e) {
+        isDirty.current = true;
+        setSyncStatus("error");
+        console.error('Save error:',e);
+      }
+    });
+  };
+
+  // Debounced save on every change — 400ms
+  useEffect(()=>{
+    if(initialLoad.current) return;
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(saveNow, 300);
+    saveTimer.current = setTimeout(enqueueSave, 400);
   },[jobs]);
 
-  // No background polling — load on open, save on every change and on background
-  // Polling was causing remote data to overwrite local unsaved changes
-
-  // Save when app goes to background (phone switches apps, locks screen)
+  // Immediate save when app goes to background
   useEffect(()=>{
     const handleVisibility = () => {
-      if(document.visibilityState === 'hidden' && isDirty.current) {
+      if(document.visibilityState === 'hidden' && !initialLoad.current) {
         clearTimeout(saveTimer.current);
-        saveNow();
+        enqueueSave();
       }
     };
     document.addEventListener('visibilitychange', handleVisibility);
     return () => document.removeEventListener('visibilitychange', handleVisibility);
   },[]);
-
   const updateJob = updated => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); };
   const addJob    = () => { const j=blankJob(); setJobs(js=>[j,...js]); setSelected(j); };
   const deleteJob = id => {
