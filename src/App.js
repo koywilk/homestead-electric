@@ -1676,10 +1676,10 @@ function App() {
   const saveTimer    = useRef(null);
   const initialLoad  = useRef(true);
 
-  const jobsRef       = useRef(jobs);
-  const isSaving      = useRef(false);
-  const lastSavedAt   = useRef(null);
-  const pollTimer     = useRef(null);
+  const jobsRef    = useRef(jobs);
+  const isSaving   = useRef(false);
+  const isDirty    = useRef(false);  // true = we have changes not yet confirmed saved
+  const lastSavedAt = useRef(null);
   useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
 
   const migrate = (loaded) => {
@@ -1709,63 +1709,51 @@ function App() {
         const { data, error } = await supabase
           .from('jobs').select('data,updated_at').eq('id', JOB_ID).single();
         if(error && error.code !== 'PGRST116') throw error;
-        if(data?.data) {
-          applyIncoming(data.data, data.updated_at);
-        }
+        if(data?.data) applyIncoming(data.data, data.updated_at);
       } catch(e){ console.error('Load error:',e); }
       initialLoad.current = false;
     })();
   },[]);
 
-  // Poll every 5 seconds for changes from other devices
-  useEffect(()=>{
-    const poll = async () => {
-      if(isSaving.current) return; // don't poll while saving
-      try {
-        const { data, error } = await supabase
-          .from('jobs').select('data,updated_at').eq('id', JOB_ID).single();
-        if(error || !data?.data) return;
-        // Only apply if server has newer data than what we last saved
-        if(lastSavedAt.current && data.updated_at <= lastSavedAt.current) return;
-        applyIncoming(data.data, data.updated_at);
-      } catch(e){ /* silent */ }
-    };
-    pollTimer.current = setInterval(poll, 5000);
-    return () => clearInterval(pollTimer.current);
-  },[]);
-
-  // Save function
-  const saveNow = async (toSave) => {
+  // Save function — marks dirty=false only after confirmed success
+  const saveNow = async () => {
     if(isSaving.current) return;
     isSaving.current = true;
+    const toSave = jobsRef.current;
     try {
       const now = new Date().toISOString();
       const { error } = await supabase.from('jobs')
         .upsert({id:JOB_ID, data:toSave, updated_at:now});
       if(error) throw error;
       lastSavedAt.current = now;
+      isDirty.current = false;
       setSyncStatus("saved");
       setTimeout(()=>setSyncStatus("idle"), 2000);
     } catch(e) {
+      console.error('Save error:',e);
       setSyncStatus("error");
     }
     isSaving.current = false;
   };
 
-  // Save every change — debounced only 300ms so it fires fast
+  // Mark dirty and debounce save on every change
   useEffect(()=>{
     if(initialLoad.current) return;
+    isDirty.current = true;
     setSyncStatus("saving");
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(()=>saveNow(jobsRef.current), 300);
+    saveTimer.current = setTimeout(saveNow, 300);
   },[jobs]);
 
-  // Save whenever the app goes to background (phone switches apps, locks screen, etc)
+  // No background polling — load on open, save on every change and on background
+  // Polling was causing remote data to overwrite local unsaved changes
+
+  // Save when app goes to background (phone switches apps, locks screen)
   useEffect(()=>{
     const handleVisibility = () => {
-      if(document.visibilityState === 'hidden' && !initialLoad.current) {
+      if(document.visibilityState === 'hidden' && isDirty.current) {
         clearTimeout(saveTimer.current);
-        saveNow(jobsRef.current);
+        saveNow();
       }
     };
     document.addEventListener('visibilitychange', handleVisibility);
