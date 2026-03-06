@@ -1969,6 +1969,12 @@ function App() {
                 <div style={{fontSize:11,color:C.dim,marginTop:3,display:"flex",gap:16,alignItems:"center"}}>
                   <span>{jobs.length} total job sites</span>
                   <span style={{color:syncColor}}>{syncLabel}</span>
+                  <button onClick={()=>flushSaves()}
+                    style={{background:C.accent,border:"none",borderRadius:6,color:"#000",
+                      fontSize:11,fontWeight:700,padding:"3px 10px",cursor:"pointer",
+                      fontFamily:"inherit"}}>
+                    Save
+                  </button>
                 </div>
               </div>
             </div>
