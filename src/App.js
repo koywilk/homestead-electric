@@ -1734,62 +1734,42 @@ function App() {
     return () => clearInterval(pollTimer.current);
   },[]);
 
-  // Core save function — called by debounce and beforeunload
+  // Save function
   const saveNow = async (toSave) => {
+    if(isSaving.current) return;
     isSaving.current = true;
-    let attempts = 0;
-    while(attempts < 3) {
-      try {
-        const now = new Date().toISOString();
-        const { error } = await supabase.from('jobs')
-          .upsert({id:JOB_ID, data:toSave, updated_at:now});
-        if(error) throw error;
-        lastSavedAt.current = now;
-        setSyncStatus("saved");
-        setTimeout(()=>setSyncStatus("idle"), 2000);
-        isSaving.current = false;
-        return true;
-      } catch(e) {
-        attempts++;
-        if(attempts >= 3) { setSyncStatus("error"); isSaving.current = false; return false; }
-        await new Promise(r=>setTimeout(r, 500*attempts));
-      }
+    try {
+      const now = new Date().toISOString();
+      const { error } = await supabase.from('jobs')
+        .upsert({id:JOB_ID, data:toSave, updated_at:now});
+      if(error) throw error;
+      lastSavedAt.current = now;
+      setSyncStatus("saved");
+      setTimeout(()=>setSyncStatus("idle"), 2000);
+    } catch(e) {
+      setSyncStatus("error");
     }
+    isSaving.current = false;
   };
 
-  // Save on change — debounced 800ms
+  // Save every change — debounced only 300ms so it fires fast
   useEffect(()=>{
     if(initialLoad.current) return;
     setSyncStatus("saving");
     clearTimeout(saveTimer.current);
-    saveTimer.current = setTimeout(()=>saveNow(jobsRef.current), 800);
+    saveTimer.current = setTimeout(()=>saveNow(jobsRef.current), 300);
   },[jobs]);
 
-  // Save immediately if user closes tab or refreshes before debounce fires
+  // Save whenever the app goes to background (phone switches apps, locks screen, etc)
   useEffect(()=>{
-    const handleUnload = () => {
-      // Use sendBeacon for reliable fire-and-forget on page close
-      const payload = JSON.stringify({
-        id: JOB_ID,
-        data: jobsRef.current,
-        updated_at: new Date().toISOString()
-      });
-      const url = `https://yyazxermqqbkyliqmrmg.supabase.co/rest/v1/jobs?id=eq.${JOB_ID}`;
-      navigator.sendBeacon(url + '&on_conflict=id', new Blob([payload], {type:'application/json'}));
-    };
-    // Also save when tab becomes hidden (switching apps on phone)
-    const handleVisibilityChange = () => {
+    const handleVisibility = () => {
       if(document.visibilityState === 'hidden' && !initialLoad.current) {
         clearTimeout(saveTimer.current);
         saveNow(jobsRef.current);
       }
     };
-    window.addEventListener('beforeunload', handleUnload);
-    document.addEventListener('visibilitychange', handleVisibilityChange);
-    return () => {
-      window.removeEventListener('beforeunload', handleUnload);
-      document.removeEventListener('visibilitychange', handleVisibilityChange);
-    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
   },[]);
 
   const updateJob = updated => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); };
