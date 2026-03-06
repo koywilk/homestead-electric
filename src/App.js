@@ -1721,7 +1721,6 @@ function App() {
       try {
         const { data, error } = await supabase
           .from('jobs').select('id,data').ilike('id','J-%');
-        console.log('Load result:', JSON.stringify({count:data?.length, error}));
         if(error) throw error;
         if(data?.length) {
           const loaded = migrate(data.map(r=>r.data).filter(Boolean));
@@ -1772,7 +1771,6 @@ function App() {
       try {
         const { error } = await supabase.from('jobs')
           .upsert({id:`J-${job.id}`, data:job, updated_at:new Date().toISOString()});
-        console.log('Save result for J-'+job.id+':', JSON.stringify({error}));
         if(error) throw error;
         isDirty.current = false;
         setSyncStatus("saved");
