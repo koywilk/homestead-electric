@@ -1716,6 +1716,9 @@ function App() {
   const [stageF,   setStageF]   = useState("All");
   const [flagOnly, setFlagOnly] = useState(false);
   const [syncStatus, setSyncStatus] = useState("idle");
+  const [pullDist,   setPullDist]   = useState(0);
+  const [pulling,    setPulling]    = useState(false);
+  const pullStart = useRef(null);
   const saveTimer    = useRef(null);
   const initialLoad  = useRef(true);
 
@@ -1830,6 +1833,31 @@ function App() {
       window.removeEventListener('beforeunload', flushSaves);
     };
   },[]);
+
+  // Pull-to-refresh
+  useEffect(()=>{
+    const onTouchStart = e => { pullStart.current = e.touches[0].clientY; };
+    const onTouchMove  = e => {
+      if(pullStart.current===null) return;
+      const dist = e.touches[0].clientY - pullStart.current;
+      if(dist>0 && window.scrollY===0){
+        setPullDist(Math.min(dist,80));
+        setPulling(dist>60);
+      }
+    };
+    const onTouchEnd = () => {
+      if(pulling) window.location.reload();
+      setPullDist(0); setPulling(false); pullStart.current=null;
+    };
+    window.addEventListener('touchstart',onTouchStart,{passive:true});
+    window.addEventListener('touchmove', onTouchMove, {passive:true});
+    window.addEventListener('touchend',  onTouchEnd);
+    return ()=>{
+      window.removeEventListener('touchstart',onTouchStart);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend',  onTouchEnd);
+    };
+  },[pulling]);
   const updateJob = updated => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); saveJob(updated); };
   const addJob    = () => { const j=blankJob(); setJobs(js=>[j,...js]); setSelected(j); saveJob(j); };
   const deleteJob = id => {
@@ -1937,6 +1965,15 @@ function App() {
 
   return (
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text}}>
+      {pullDist>0&&(
+        <div style={{position:"fixed",top:0,left:0,right:0,zIndex:9999,
+          height:pullDist,display:"flex",alignItems:"center",justifyContent:"center",
+          background:C.surface,borderBottom:`1px solid ${C.border}`}}>
+          <span style={{fontSize:12,color:pulling?C.green:C.dim,fontWeight:600}}>
+            {pulling?"↑ Release to refresh":"↓ Pull to refresh"}
+          </span>
+        </div>
+      )}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Bebas+Neue&display=swap');
         *{box-sizing:border-box;margin:0;padding:0;}
