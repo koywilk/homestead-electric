@@ -1841,8 +1841,8 @@ function App() {
       if(pullStart.current===null) return;
       const dist = e.touches[0].clientY - pullStart.current;
       if(dist>0 && window.scrollY===0){
-        setPullDist(Math.min(dist,80));
-        setPulling(dist>60);
+        setPullDist(Math.min(dist,100));
+        setPulling(dist>120);
       }
     };
     const onTouchEnd = () => {
