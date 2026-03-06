@@ -1121,6 +1121,32 @@ function PlansTab({job, onUpdate}) {
         </div>
       ))}
 
+      {/* Custom named links */}
+      <div style={{marginTop:16,marginBottom:4}}>
+        <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:10}}>CUSTOM LINKS</div>
+        {(job.customLinks||[]).map((cl)=>(
+          <div key={cl.id} style={{marginBottom:10,background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:"10px 12px"}}>
+            <div style={{display:"flex",gap:8,marginBottom:7,alignItems:"center"}}>
+              <Inp value={cl.name||""} placeholder="Link name…" style={{flex:"0 0 160px"}}
+                onChange={e=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,name:e.target.value}:x)})}/>
+              <Inp value={cl.url||""} placeholder="Paste URL…" style={{flex:1}}
+                onChange={e=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,url:e.target.value}:x)})}/>
+              {cl.url&&(
+                <a href={cl.url} target="_blank" rel="noreferrer"
+                  style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                    color:C.blue,padding:"6px 12px",fontSize:12,textDecoration:"none",whiteSpace:"nowrap",flexShrink:0}}>
+                  Open ↗
+                </a>
+              )}
+              <button onClick={()=>onUpdate({customLinks:(job.customLinks||[]).filter(x=>x.id!==cl.id)})}
+                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
+            </div>
+          </div>
+        ))}
+        <Btn onClick={()=>onUpdate({customLinks:[...(job.customLinks||[]),{id:uid(),name:"",url:""}]})}
+          variant="add" style={{borderStyle:"dashed",width:"100%"}}>+ Add Custom Link</Btn>
+      </div>
+
       <div style={{marginTop:24}}>
         <SectionHead label="Uploaded PDFs & Files" color={C.green}/>
         <div
