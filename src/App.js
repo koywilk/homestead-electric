@@ -1703,7 +1703,7 @@ function App() {
   const initialLoad  = useRef(true);
 
   const jobsRef   = useRef(jobs);
-  const saveQueue = useRef({});  // per-job save timers
+  const isDirty   = useRef(false);
   useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
 
   const migrate = (loaded) => {
@@ -1715,106 +1715,98 @@ function App() {
     }));
   };
 
-  // Load all jobs on start — each job is its own row keyed by job id
+  // Load all jobs — each stored as its own row with key "J-{id}"
   useEffect(()=>{
     (async()=>{
       try {
         const { data, error } = await supabase
-          .from('jobs').select('id,data').like('id','job-%');
+          .from('jobs').select('id,data').ilike('id','J-%');
+        console.log('Load result:', JSON.stringify({count:data?.length, error}));
         if(error) throw error;
         if(data?.length) {
           const loaded = migrate(data.map(r=>r.data).filter(Boolean));
           setJobs(loaded);
-          // Keep localStorage in sync as backup
           try { localStorage.setItem('hejobs_backup', JSON.stringify(loaded)); } catch(e){}
         } else {
-          // Supabase returned nothing — check localStorage backup before showing empty
+          // Fall back to localStorage
           try {
             const backup = localStorage.getItem('hejobs_backup');
             if(backup) {
               const parsed = JSON.parse(backup);
               if(parsed?.length) {
-                console.warn('Supabase empty — restoring from localStorage backup');
                 setJobs(parsed);
-                // Re-save each job back to Supabase
-                parsed.forEach(async job => {
-                  try {
-                    await supabase.from('jobs')
-                      .upsert({id:`job-${job.id}`, data:job, updated_at:new Date().toISOString()});
-                  } catch(e){}
-                });
+                // Re-save each job back
+                for(const job of parsed) {
+                  await supabase.from('jobs').upsert({
+                    id:`J-${job.id}`, data:job, updated_at:new Date().toISOString()
+                  });
+                }
               }
             }
           } catch(e){}
         }
       } catch(e){
         console.error('Load error:',e);
-        // Network/auth error — fall back to localStorage
         try {
           const backup = localStorage.getItem('hejobs_backup');
-          if(backup) {
-            const parsed = JSON.parse(backup);
-            if(parsed?.length) setJobs(parsed);
-          }
+          if(backup) { const p = JSON.parse(backup); if(p?.length) setJobs(p); }
         } catch(e2){}
       }
       initialLoad.current = false;
     })();
   },[]);
 
-  // Save a single job
+  // Save a single job as its own row
   const saveJob = (job) => {
-    clearTimeout(saveQueue.current[job.id]);
-    // Write to localStorage immediately as backup
-    try {
-      const current = JSON.parse(localStorage.getItem('hejobs_backup')||'[]');
-      const updated = current.filter(j=>j.id!==job.id).concat(job);
-      localStorage.setItem('hejobs_backup', JSON.stringify(updated));
-    } catch(e){}
+    isDirty.current = true;
     setSyncStatus("saving");
-    saveQueue.current[job.id] = setTimeout(async () => {
+    // Save to localStorage immediately
+    try {
+      const cur = JSON.parse(localStorage.getItem('hejobs_backup')||'[]');
+      localStorage.setItem('hejobs_backup', JSON.stringify(
+        cur.filter(j=>j.id!==job.id).concat(job)
+      ));
+    } catch(e){}
+    // Save to Supabase
+    (async()=>{
       try {
-        // 8 second timeout so it never hangs forever
-        const timeout = new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),8000));
-        const save    = supabase.from('jobs')
-          .upsert({id:`job-${job.id}`, data:job, updated_at:new Date().toISOString()});
-        const { error } = await Promise.race([save, timeout]);
+        const { error } = await supabase.from('jobs')
+          .upsert({id:`J-${job.id}`, data:job, updated_at:new Date().toISOString()});
+        console.log('Save result for J-'+job.id+':', JSON.stringify({error}));
         if(error) throw error;
+        isDirty.current = false;
         setSyncStatus("saved");
         setTimeout(()=>setSyncStatus("idle"), 2000);
-      } catch(e) {
+      } catch(e){
         console.error('Save error:',e);
-        setSyncStatus("idle"); // show idle not error so UI doesn't stay red
+        setSyncStatus("error");
       }
-    }, 400);
+    })();
   };
 
-  // Delete a single job row from Supabase
+  // Delete job row
   const deleteJobRemote = async (jobId) => {
-    // Remove from localStorage backup too
     try {
-      const current = JSON.parse(localStorage.getItem('hejobs_backup')||'[]');
-      localStorage.setItem('hejobs_backup', JSON.stringify(current.filter(j=>j.id!==jobId)));
+      const cur = JSON.parse(localStorage.getItem('hejobs_backup')||'[]');
+      localStorage.setItem('hejobs_backup', JSON.stringify(cur.filter(j=>j.id!==jobId)));
     } catch(e){}
-    try {
-      await supabase.from('jobs').delete().eq('id',`job-${jobId}`);
-    } catch(e){ console.error('Delete error:',e); }
+    try { await supabase.from('jobs').delete().eq('id',`J-${jobId}`); } catch(e){}
   };
 
-  // Save when app goes to background — flush all pending saves immediately
+  // Save on background/close
   useEffect(()=>{
     const handleVisibility = () => {
-      if(document.visibilityState === 'hidden' && !initialLoad.current) {
-        Object.keys(saveQueue.current).forEach(id => {
-          clearTimeout(saveQueue.current[id]);
-          delete saveQueue.current[id];
-        });
-        // Save all jobs immediately
-        jobsRef.current.forEach(async (job) => {
+      if(document.visibilityState === 'hidden') {
+        jobsRef.current.forEach(job => {
           try {
-            await supabase.from('jobs')
-              .upsert({id:`job-${job.id}`, data:job, updated_at:new Date().toISOString()});
+            const cur = JSON.parse(localStorage.getItem('hejobs_backup')||'[]');
+            localStorage.setItem('hejobs_backup', JSON.stringify(
+              cur.filter(j=>j.id!==job.id).concat(job)
+            ));
           } catch(e){}
+          supabase.from('jobs').upsert({
+            id:`J-${job.id}`, data:job, updated_at:new Date().toISOString()
+          }).catch(()=>{});
         });
       }
     };
