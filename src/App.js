@@ -1762,35 +1762,26 @@ function App() {
     })();
   },[]);
 
-  // Save a single job — each job saves independently so they never overwrite each other
+  // Save a single job
   const saveJob = (job) => {
     clearTimeout(saveQueue.current[job.id]);
     setSyncStatus("saving");
-    // Always write to localStorage immediately as backup
+    // Write to localStorage immediately as backup
     try {
       const current = JSON.parse(localStorage.getItem('hejobs_backup')||'[]');
       const updated = current.filter(j=>j.id!==job.id).concat(job);
       localStorage.setItem('hejobs_backup', JSON.stringify(updated));
     } catch(e){}
     saveQueue.current[job.id] = setTimeout(async () => {
-      let attempts = 0;
-      while(attempts < 3) {
-        try {
-          const { error } = await supabase.from('jobs')
-            .upsert({id:`job-${job.id}`, data:job, updated_at:new Date().toISOString()});
-          if(error) throw error;
-          setSyncStatus("saved");
-          setTimeout(()=>setSyncStatus("idle"), 2000);
-          return;
-        } catch(e) {
-          attempts++;
-          if(attempts >= 3) {
-            console.error('Save error after 3 attempts:',e);
-            setSyncStatus("error");
-          } else {
-            await new Promise(r=>setTimeout(r, 600*attempts));
-          }
-        }
+      try {
+        const { error } = await supabase.from('jobs')
+          .upsert({id:`job-${job.id}`, data:job, updated_at:new Date().toISOString()});
+        if(error) throw error;
+        setSyncStatus("saved");
+        setTimeout(()=>setSyncStatus("idle"), 2000);
+      } catch(e) {
+        console.error('Save error:',e);
+        setSyncStatus("error");
       }
     }, 400);
   };
