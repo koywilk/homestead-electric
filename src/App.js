@@ -1957,7 +1957,8 @@ function App() {
               </div>
             )}
 
-            {homeTab==="Jobs"&&<>
+            {homeTab==="Jobs"&&(
+              <div>
             <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em",marginBottom:16}}>
               TAP A FOREMAN TO VIEW THEIR JOBS
             </div>
@@ -2105,7 +2106,8 @@ function App() {
               <StageSectionList jobs={filtered} JobRow={JobRow} fc={FOREMEN_COLORS[activeForeman]}/>
             )}
               </div>
-            </>}
+            </div>
+            )}
           </div>
       )}
 
