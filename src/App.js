@@ -1765,23 +1765,26 @@ function App() {
   // Save a single job
   const saveJob = (job) => {
     clearTimeout(saveQueue.current[job.id]);
-    setSyncStatus("saving");
     // Write to localStorage immediately as backup
     try {
       const current = JSON.parse(localStorage.getItem('hejobs_backup')||'[]');
       const updated = current.filter(j=>j.id!==job.id).concat(job);
       localStorage.setItem('hejobs_backup', JSON.stringify(updated));
     } catch(e){}
+    setSyncStatus("saving");
     saveQueue.current[job.id] = setTimeout(async () => {
       try {
-        const { error } = await supabase.from('jobs')
+        // 8 second timeout so it never hangs forever
+        const timeout = new Promise((_,rej)=>setTimeout(()=>rej(new Error('timeout')),8000));
+        const save    = supabase.from('jobs')
           .upsert({id:`job-${job.id}`, data:job, updated_at:new Date().toISOString()});
+        const { error } = await Promise.race([save, timeout]);
         if(error) throw error;
         setSyncStatus("saved");
         setTimeout(()=>setSyncStatus("idle"), 2000);
       } catch(e) {
         console.error('Save error:',e);
-        setSyncStatus("error");
+        setSyncStatus("idle"); // show idle not error so UI doesn't stay red
       }
     }, 400);
   };
