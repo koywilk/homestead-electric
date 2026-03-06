@@ -1698,7 +1698,6 @@ function App() {
   const [search,   setSearch]   = useState("");
   const [stageF,   setStageF]   = useState("All");
   const [flagOnly, setFlagOnly] = useState(false);
-  const [homeTab,  setHomeTab]  = useState("Jobs");
   const [syncStatus, setSyncStatus] = useState("idle");
   const saveTimer    = useRef(null);
   const initialLoad  = useRef(true);
@@ -1927,64 +1926,6 @@ function App() {
           </div>
 
           <div style={{padding:"28px 26px"}}>
-            <div style={{display:"flex",gap:8,marginBottom:24}}>
-              {["Jobs","Unassigned"].map(t=>{
-                const count = t==="Unassigned" ? jobs.filter(j=>!j.foreman||j.foreman==="Unassigned").length : 0;
-                return (
-                  <button key={t} onClick={()=>setHomeTab(t)}
-                    style={{display:"flex",alignItems:"center",gap:7,padding:"7px 20px",
-                      borderRadius:8,fontSize:13,cursor:"pointer",fontFamily:"inherit",
-                      fontWeight:homeTab===t?700:400,
-                      background:homeTab===t?C.accent:"none",
-                      border:`1px solid ${homeTab===t?C.accent:C.border}`,
-                      color:homeTab===t?"#000":C.dim,transition:"all 0.15s"}}>
-                    {t}
-                    {count>0&&<span style={{background:C.orange,color:"#000",borderRadius:99,
-                      fontSize:10,fontWeight:700,padding:"1px 7px"}}>{count}</span>}
-                  </button>
-                );
-              })}
-            </div>
-
-            {homeTab==="Unassigned"&&(
-              <div>
-                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
-                  <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em"}}>
-                    UNASSIGNED JOBS
-                  </div>
-                  <Btn onClick={()=>{ const j={...blankJob(),foreman:"Unassigned"}; setJobs(js=>[j,...js]); setSelected(j); saveJob(j); }}
-                    variant="primary">+ New Job</Btn>
-                </div>
-                {jobs.filter(j=>!j.foreman||j.foreman==="Unassigned").length===0?(
-                  <div style={{textAlign:"center",color:C.muted,fontSize:13,padding:"60px 0"}}>
-                    No unassigned jobs yet — hit "+ New Job" to create one
-                  </div>
-                ):(
-                  jobs.filter(j=>!j.foreman||j.foreman==="Unassigned").map(j=>(
-                    <div key={j.id} className="job-row" onClick={()=>setSelected(j)}
-                      style={{background:C.surface,border:`1px solid ${C.border}`,
-                        borderRadius:12,padding:14,marginBottom:10,cursor:"pointer"}}>
-                      <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-                        <div style={{flex:1}}>
-                          <div style={{fontWeight:700,fontSize:13,color:C.text,marginBottom:3}}>
-                            {j.name||<span style={{color:C.muted,fontStyle:"italic"}}>Unnamed Job</span>}
-                          </div>
-                          <div style={{fontSize:11,color:C.dim}}>{j.address||"No address"}</div>
-                        </div>
-                        <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                          <Pill label="Unassigned" color={C.orange}/>
-                          <button onClick={e=>{e.stopPropagation();deleteJob(j.id);}}
-                            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:12}}>✕</button>
-                        </div>
-                      </div>
-                    </div>
-                  ))
-                )}
-              </div>
-            )}
-
-            {homeTab==="Jobs"&&(
-              <div>
             <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em",marginBottom:16}}>
               TAP A FOREMAN TO VIEW THEIR JOBS
             </div>
@@ -2132,8 +2073,6 @@ function App() {
               <StageSectionList jobs={filtered} JobRow={JobRow} fc={FOREMEN_COLORS[activeForeman]}/>
             )}
               </div>
-            </div>
-            )}
           </div>
       )}
 
