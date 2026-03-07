@@ -1359,8 +1359,17 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                 loads={job.panelizedLighting.upperKeypad}
                 onChange={v=>u({panelizedLighting:{...job.panelizedLighting,upperKeypad:v}})}/>
               <SectionHead label={`${job.lightingSystem||"Control 4"} Panel Loads`} color={C.purple}/>
-              <CP4LoadsSection loads={job.panelizedLighting.cp4Loads}
-                onChange={v=>u({panelizedLighting:{...job.panelizedLighting,cp4Loads:v}})}/>
+              {["upper","main","basement"].map(floor=>(
+                <div key={floor} style={{marginBottom:16}}>
+                  <div style={{fontSize:11,color:C.dim,fontWeight:700,letterSpacing:"0.08em",
+                    textTransform:"uppercase",marginBottom:8,paddingBottom:4,
+                    borderBottom:`1px solid ${C.border}`}}>{floor}</div>
+                  <CP4LoadsSection
+                    loads={(job.panelizedLighting.cp4Loads?.[floor])||[]}
+                    onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
+                      cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}/>
+                </div>
+              ))}
             </div>
           )}
 
