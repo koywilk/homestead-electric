@@ -1113,46 +1113,88 @@ function PlansTab({job, onUpdate}) {
   return (
     <div>
       <SectionHead label="Plans + Job Links" color={C.green}/>
-      {LINK_FIELDS.map(([k,l])=>(
-        <div key={k} style={{marginBottom:12}}>
-          <div style={{fontSize:10,color:C.dim,marginBottom:3}}>{l}</div>
-          <div style={{display:"flex",gap:8}}>
-            <Inp value={job[k]||""} onChange={e=>onUpdate({[k]:e.target.value})} placeholder="Paste URL…"/>
-            {job[k]&&(
-              <a href={job[k]} target="_blank" rel="noreferrer"
-                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
-                  color:C.blue,padding:"6px 12px",fontSize:12,textDecoration:"none",whiteSpace:"nowrap"}}>
-                Open ↗
-              </a>
+      {LINK_FIELDS.map(([k,l])=>{
+        // Each section stores an array of links: job.linkSections[k] = [{id,url}]
+        const links = (job.linkSections?.[k]) || (job[k] ? [{id:k+"-0", url:job[k]}] : []);
+        const setLinks = (newLinks) => onUpdate({
+          linkSections:{...(job.linkSections||{}), [k]:newLinks},
+          [k]: newLinks[0]?.url || ""
+        });
+        return (
+          <div key={k} style={{marginBottom:16,background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:"10px 12px"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+              <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{l}</div>
+              <button onClick={()=>setLinks([...links,{id:uid(),url:""}])}
+                style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                  color:C.accent,fontSize:11,padding:"2px 8px",cursor:"pointer",fontFamily:"inherit"}}>
+                + Add
+              </button>
+            </div>
+            {links.length===0&&(
+              <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No links yet</div>
+            )}
+            {links.map((lnk,i)=>(
+              <div key={lnk.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
+                <Inp value={lnk.url||""} placeholder="Paste URL…"
+                  onChange={e=>setLinks(links.map((x,j)=>j===i?{...x,url:e.target.value}:x))}/>
+                {lnk.url&&(
+                  <a href={lnk.url} target="_blank" rel="noreferrer"
+                    style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:7,
+                      color:C.blue,padding:"6px 10px",fontSize:11,textDecoration:"none",whiteSpace:"nowrap",flexShrink:0}}>
+                    Open ↗
+                  </a>
+                )}
+                <button onClick={()=>setLinks(links.filter((_,j)=>j!==i))}
+                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
+              </div>
+            ))}
+          </div>
+        );
+      })}
+
+      {/* Custom named link sections */}
+      <div style={{marginTop:8}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+          <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>CUSTOM SECTIONS</div>
+          <button onClick={()=>onUpdate({customLinks:[...(job.customLinks||[]),{id:uid(),name:"New Section",urls:[]}]})}
+            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+              color:C.accent,fontSize:11,padding:"2px 8px",cursor:"pointer",fontFamily:"inherit"}}>
+            + Add Section
+          </button>
+        </div>
+        {(job.customLinks||[]).map((cl)=>(
+          <div key={cl.id} style={{marginBottom:12,background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:"10px 12px"}}>
+            <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:8}}>
+              <Inp value={cl.name||""} placeholder="Section name…"
+                onChange={e=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,name:e.target.value}:x)})}/>
+              <button onClick={()=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:[...(x.urls||[]),{id:uid(),url:""}]}:x)})}
+                style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                  color:C.accent,fontSize:11,padding:"2px 8px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                + Add
+              </button>
+              <button onClick={()=>onUpdate({customLinks:(job.customLinks||[]).filter(x=>x.id!==cl.id)})}
+                style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:13,flexShrink:0}}>🗑</button>
+            </div>
+            {(cl.urls||[]).map((lnk,i)=>(
+              <div key={lnk.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
+                <Inp value={lnk.url||""} placeholder="Paste URL…"
+                  onChange={e=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).map((u,j)=>j===i?{...u,url:e.target.value}:u)}:x)})}/>
+                {lnk.url&&(
+                  <a href={lnk.url} target="_blank" rel="noreferrer"
+                    style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:7,
+                      color:C.blue,padding:"6px 10px",fontSize:11,textDecoration:"none",whiteSpace:"nowrap",flexShrink:0}}>
+                    Open ↗
+                  </a>
+                )}
+                <button onClick={()=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).filter((_,j)=>j!==i)}:x)})}
+                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
+              </div>
+            ))}
+            {(!cl.urls||cl.urls.length===0)&&(
+              <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No links yet — hit "+ Add"</div>
             )}
           </div>
-        </div>
-      ))}
-
-      {/* Custom named links */}
-      <div style={{marginTop:16,marginBottom:4}}>
-        <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:10}}>CUSTOM LINKS</div>
-        {(job.customLinks||[]).map((cl)=>(
-          <div key={cl.id} style={{marginBottom:10,background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:"10px 12px"}}>
-            <div style={{display:"flex",gap:8,marginBottom:7,alignItems:"center"}}>
-              <Inp value={cl.name||""} placeholder="Link name…" style={{flex:"0 0 160px"}}
-                onChange={e=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,name:e.target.value}:x)})}/>
-              <Inp value={cl.url||""} placeholder="Paste URL…" style={{flex:1}}
-                onChange={e=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,url:e.target.value}:x)})}/>
-              {cl.url&&(
-                <a href={cl.url} target="_blank" rel="noreferrer"
-                  style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
-                    color:C.blue,padding:"6px 12px",fontSize:12,textDecoration:"none",whiteSpace:"nowrap",flexShrink:0}}>
-                  Open ↗
-                </a>
-              )}
-              <button onClick={()=>onUpdate({customLinks:(job.customLinks||[]).filter(x=>x.id!==cl.id)})}
-                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
-            </div>
-          </div>
         ))}
-        <Btn onClick={()=>onUpdate({customLinks:[...(job.customLinks||[]),{id:uid(),name:"",url:""}]})}
-          variant="add" style={{borderStyle:"dashed",width:"100%"}}>+ Add Custom Link</Btn>
       </div>
 
       <div style={{marginTop:24}}>
