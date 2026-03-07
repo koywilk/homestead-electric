@@ -831,6 +831,19 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
         </div>
       ))}
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed"}}>+ Add Return Trip</Btn>
+      {viewPhoto&&(
+        <div onClick={()=>setViewPhoto(null)}
+          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.95)",zIndex:1000,
+            display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <button onClick={()=>setViewPhoto(null)}
+            style={{position:"absolute",top:16,right:16,background:"rgba(255,255,255,0.15)",
+              border:"none",borderRadius:"50%",color:"#fff",fontSize:22,width:40,height:40,
+              cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+          <img src={viewPhoto} alt="photo"
+            style={{maxWidth:"100%",maxHeight:"100vh",objectFit:"contain",borderRadius:8}}
+            onClick={e=>e.stopPropagation()}/>
+        </div>
+      )}
     </div>
   );
 }
@@ -1605,19 +1618,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
       {emailData&&(
         <EmailModal subject={emailData.subject} body={emailData.body} onClose={()=>setEmailData(null)}/>
       )}
-      {viewPhoto&&(
-        <div onClick={()=>setViewPhoto(null)}
-          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.95)",zIndex:1000,
-            display:"flex",alignItems:"center",justifyContent:"center"}}>
-          <button onClick={()=>setViewPhoto(null)}
-            style={{position:"absolute",top:16,right:16,background:"rgba(255,255,255,0.15)",
-              border:"none",borderRadius:"50%",color:"#fff",fontSize:22,width:40,height:40,
-              cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
-          <img src={viewPhoto} alt="photo"
-            style={{maxWidth:"100%",maxHeight:"100vh",objectFit:"contain",borderRadius:8}}
-            onClick={e=>e.stopPropagation()}/>
-        </div>
-      )}
+
     </div>
   );
 }
