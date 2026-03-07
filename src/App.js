@@ -680,6 +680,7 @@ function ReturnTripExtras({trip, onUpd}) {
 
 // ── Return Trips ──────────────────────────────────────────────
 function ReturnTrips({trips,onChange,jobName,onEmail}) {
+  const [viewPhoto, setViewPhoto] = useState(null);
   const add = () => onChange([...trips,{id:uid(),date:"",scope:"",material:"",punch:[],photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:""}]);
   const upd = (id,p) => onChange(trips.map(t=>t.id===id?{...t,...p}:t));
   const del = (id)   => onChange(trips.filter(t=>t.id!==id));
@@ -756,7 +757,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
                 {(t.photos||[]).map(p=>(
                   <div key={p.id} style={{position:"relative"}}>
                     <img src={p.dataUrl} alt={p.name}
-                      onClick={()=>{const w=window.open("","_blank");w.document.write(`<html><body style="margin:0;background:#000"><img src="${p.dataUrl}" style="max-width:100%;max-height:100vh;display:block;margin:auto"></body></html>`);}}
+                      onClick={()=>setViewPhoto(p.dataUrl)}
                       style={{width:"100%",aspectRatio:"1",objectFit:"cover",borderRadius:8,
                         border:`1px solid ${C.border}`,cursor:"pointer"}}/>
                     <button onClick={()=>upd(t.id,{photos:(t.photos||[]).filter(x=>x.id!==p.id)})}
@@ -1603,6 +1604,19 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
       {emailData&&(
         <EmailModal subject={emailData.subject} body={emailData.body} onClose={()=>setEmailData(null)}/>
+      )}
+      {viewPhoto&&(
+        <div onClick={()=>setViewPhoto(null)}
+          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.95)",zIndex:1000,
+            display:"flex",alignItems:"center",justifyContent:"center"}}>
+          <button onClick={()=>setViewPhoto(null)}
+            style={{position:"absolute",top:16,right:16,background:"rgba(255,255,255,0.15)",
+              border:"none",borderRadius:"50%",color:"#fff",fontSize:22,width:40,height:40,
+              cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+          <img src={viewPhoto} alt="photo"
+            style={{maxWidth:"100%",maxHeight:"100vh",objectFit:"contain",borderRadius:8}}
+            onClick={e=>e.stopPropagation()}/>
+        </div>
       )}
     </div>
   );
