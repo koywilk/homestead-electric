@@ -918,32 +918,36 @@ function HomeRunLevel({rows,onChange,label}) {
   ];
 
   const renderRow = (r) => (
-    <div key={r.id} style={{display:"grid",gridTemplateColumns:"30px 90px 90px 1fr 80px 24px",
-      gap:5,marginBottom:4,alignItems:"center"}}>
-      <span style={{fontSize:10,color:C.muted,textAlign:"right",paddingRight:4}}>{r.num}.</span>
-      <select value={r.panel||""} onChange={e=>upd(r.id,{panel:e.target.value})}
-        style={{background:C.surface,color:r.panel?C.accent:C.dim,border:`1px solid ${C.border}`,
-          borderRadius:7,padding:"5px 6px",fontSize:11,fontFamily:"inherit",outline:"none",width:"100%"}}>
-        {PANEL_OPTS.map(o=><option key={o} value={o}>{o||"— panel —"}</option>)}
-      </select>
-      <div style={{position:"relative"}}>
+    <div key={r.id} style={{marginBottom:6,paddingBottom:6,borderBottom:`1px solid ${C.border}`}}>
+      {/* Row 1: number, panel, wire, delete */}
+      <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px 22px",gap:4,marginBottom:3,alignItems:"center"}}>
+        <span style={{fontSize:10,color:C.muted,textAlign:"right"}}>{r.num}.</span>
+        <select value={r.panel||""} onChange={e=>upd(r.id,{panel:e.target.value})}
+          style={{background:C.surface,color:r.panel?C.accent:C.dim,border:`1px solid ${C.border}`,
+            borderRadius:6,padding:"4px 5px",fontSize:10,fontFamily:"inherit",outline:"none",width:"100%"}}>
+          {PANEL_OPTS.map(o=><option key={o} value={o}>{o||"— panel —"}</option>)}
+        </select>
         <select value={r.wire} onChange={e=>upd(r.id,{wire:e.target.value})}
           style={{background:WIRE_COLORS[r.wire]||C.surface,
             color:r.wire?(WIRE_TEXT[r.wire]||C.text):C.dim,
             border:`1px solid ${WIRE_COLORS[r.wire]||C.border}`,
-            borderRadius:7,padding:"5px 6px",fontSize:11,fontFamily:"inherit",
+            borderRadius:6,padding:"4px 5px",fontSize:10,fontFamily:"inherit",
             outline:"none",width:"100%",fontWeight:r.wire?700:400}}>
           {WIRE_SIZES.map(o=><option key={o} value={o}
             style={{background:WIRE_COLORS[o]||"#1a1d2e",color:WIRE_TEXT[o]||"#fff"}}>
             {o||"— wire —"}
           </option>)}
         </select>
+        <button onClick={()=>delRow(r.id)}
+          style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:0}}>✕</button>
       </div>
-      <Inp value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"/>
-      <Sel value={r.status} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
-        style={{color:r.status==="Pulled"?C.green:C.text,fontSize:11}}/>
-      <button onClick={()=>delRow(r.id)}
-        style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+      {/* Row 2: load name + status */}
+      <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px",gap:4,alignItems:"center"}}>
+        <span/>
+        <Inp value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"/>
+        <Sel value={r.status} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
+          style={{color:r.status==="Pulled"?C.green:C.text,fontSize:10}}/>
+      </div>
     </div>
   );
 
@@ -953,9 +957,9 @@ function HomeRunLevel({rows,onChange,label}) {
         <div style={{fontSize:12,color:C.blue,fontWeight:700,letterSpacing:"0.06em"}}>{label}</div>
         <Btn onClick={addRow} variant="add" style={{fontSize:11,padding:"3px 10px"}}>+ Add Row</Btn>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"30px 90px 90px 1fr 80px 24px",gap:5,marginBottom:6,padding:"0 2px"}}>
-        {["#","Panel","Wire","Load Name","Status",""].map((h,i)=>(
-          <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
+      <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px 22px",gap:4,marginBottom:4,padding:"0 2px"}}>
+        {["#","Panel","Wire",""].map((h,i)=>(
+          <div key={i} style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
         ))}
       </div>
       {groups.map(g=>(
