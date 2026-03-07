@@ -1058,7 +1058,7 @@ function TapeLightSection({lights,onChange}) {
 
 // ── Plans & Links with PDF upload ────────────────────────────
 const LINK_FIELDS = [
-  ["planLink","Plans"],["redlineLink","Redline Walk / CO List"],
+  ["planLink","Plans"],
   ["lightingLink","Lighting Schedules"],["panelLink","Panel Schedules"],
   ["qcLink","QC Link"],["matterportLink","Matterport Link"],
 ];
