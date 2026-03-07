@@ -695,12 +695,25 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
     const trip = trips.find(t=>t.id===id);
     const existing = trip?.photos||[];
     let done=0; const newPhotos=[];
+    const total = files.length;
     Array.from(files).forEach(file=>{
+      const img = new Image();
       const reader = new FileReader();
       reader.onload = ev => {
-        newPhotos.push({id:uid(),name:file.name,dataUrl:ev.target.result});
-        done++;
-        if(done===files.length) upd(id,{photos:[...existing,...newPhotos]});
+        img.onload = () => {
+          // Resize to max 800px wide and compress
+          const MAX = 800;
+          const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+          const canvas = document.createElement('canvas');
+          canvas.width  = Math.round(img.width  * scale);
+          canvas.height = Math.round(img.height * scale);
+          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+          newPhotos.push({id:uid(), name:file.name, dataUrl});
+          done++;
+          if(done===total) upd(id,{photos:[...existing,...newPhotos]});
+        };
+        img.src = ev.target.result;
       };
       reader.readAsDataURL(file);
     });
