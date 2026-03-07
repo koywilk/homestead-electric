@@ -24,7 +24,7 @@ const C = {
 const JOB_ID = "homestead-jobs-v1";
 const ROUGH_STAGES  = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
 const FINISH_STAGES = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
-const WIRE_SIZES = ["","14/2","14/3","12/2","12/3","10/2","10/3","8/2","8/3","6/2","6/3","4/2","4/3","2/2","2/3","1/0","2/0","3/0","4/0","Need Specs"];
+const WIRE_SIZES = ["","14/2","14/3","12/2","12/3","10/2","10/3","8/2","8/3","6/2","6/3","4/2","4/3","2/2","2/3","1/0","2/0","3/0","4/0"];
 const WIRE_COLORS = {
   "14/2": "#e8e8e8", "14/3": "#3b82f6",
   "12/2": "#f5d020", "12/3": "#9b59b6",
@@ -46,7 +46,7 @@ const WIRE_TEXT = {
   "1/0":  "#fff", "2/0":  "#fff", "3/0": "#fff", "4/0": "#fff",
 };
 const CO_STATUSES   = ["Pending","CO Created","CO Sent (office)","Approved","Denied","Work Completed"];
-const PULLED_OPTS   = ["","Pulled"];
+const PULLED_OPTS   = ["","Pulled","Need Specs"];
 const DRIVER_SIZES  = ["","20W","40W","60W","96W","192W","288W"];
 
 const TEAM = [
@@ -894,7 +894,7 @@ function PanelFeeds({feeds, onChange}) {
 }
 
 // ── Home Runs ─────────────────────────────────────────────────
-const PANEL_OPTS = ["","Panel A","Panel B","Panel C","Panel D","Dedicated Loads"];
+const PANEL_OPTS = ["","Meter","Panel A","Panel B","Panel C","Panel D","Dedicated Loads"];
 const PANEL_ORDER = {"":0,"Panel A":1,"Panel B":2,"Panel C":3,"Panel D":4,"Dedicated Loads":5};
 const WIRE_ORDER  = {"":0,"14/2":1,"14/3":2,"12/2":3,"12/3":4,"10/2":5,"10/3":6,"8/2":7,"8/3":8,"6/2":9,"6/3":10,"4/2":11,"4/3":12,"2/2":13,"2/3":14,"1/0":15,"2/0":16,"3/0":17,"4/0":18};
 
@@ -918,7 +918,11 @@ function HomeRunLevel({rows,onChange,label}) {
   ];
 
   const renderRow = (r) => (
-    <div key={r.id} style={{marginBottom:6,paddingBottom:6,borderBottom:`1px solid ${C.border}`}}>
+    <div key={r.id} style={{marginBottom:6,paddingBottom:6,
+      borderBottom:`1px solid ${C.border}`,
+      borderRadius:7,padding:"6px 4px",
+      background:r.status==="Pulled"?"rgba(34,197,94,0.08)":r.status==="Need Specs"?"rgba(239,68,68,0.1)":"none",
+      border:r.status==="Pulled"?`1px solid rgba(34,197,94,0.3)`:r.status==="Need Specs"?`1px solid rgba(239,68,68,0.3)`:`1px solid transparent`}}>
       {/* Row 1: number, panel, wire, delete */}
       <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px 22px",gap:4,marginBottom:3,alignItems:"center"}}>
         <span style={{fontSize:10,color:C.muted,textAlign:"right"}}>{r.num}.</span>
@@ -946,7 +950,7 @@ function HomeRunLevel({rows,onChange,label}) {
         <span/>
         <Inp value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"/>
         <Sel value={r.status} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
-          style={{color:r.status==="Pulled"?C.green:C.text,fontSize:10}}/>
+          style={{color:r.status==="Pulled"?C.green:r.status==="Need Specs"?C.red:C.text,fontSize:10}}/>
       </div>
     </div>
   );
@@ -1111,12 +1115,6 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange}) {
       <SectionHead label="Load Mapping Notes" color={C.blue}/>
       <TA value={homeRuns.loadMappingNotes||""} onChange={e=>onHRChange({...homeRuns,loadMappingNotes:e.target.value})}
         placeholder="Load mapping notes…" rows={5}/>
-
-      <div style={{marginTop:24}}>
-      <SectionHead label="Meter Loads" color={C.blue}/>
-      <MeterLoads loads={homeRuns.meterLoads||[]}
-        onChange={v=>onHRChange({...homeRuns,meterLoads:v})}/>
-      </div>
 
       <SectionHead label="Panel Breaker Counts" color={C.blue}/>
       <BreakerCounts homeRuns={homeRuns} panelCounts={panelCounts} onCountChange={onCountChange}/>
