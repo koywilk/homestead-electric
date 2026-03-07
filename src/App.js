@@ -1972,6 +1972,20 @@ function App() {
   };
 
   // Flush all pending saves immediately
+  const backupByEmail = () => {
+    const data = JSON.stringify(jobsRef.current, null, 2);
+    const blob = new Blob([data], {type:"application/json"});
+    const url  = URL.createObjectURL(blob);
+    const a    = document.createElement("a");
+    a.href     = url;
+    a.download = `homestead-backup-${new Date().toISOString().slice(0,10)}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+    // Also open Gmail compose with instructions
+    const gmailUrl = `https://mail.google.com/mail/?view=cm&su=${encodeURIComponent("Homestead Electric — Daily Backup " + new Date().toLocaleDateString())}&body=${encodeURIComponent("Backup file downloaded. Attach the file from your downloads folder.\n\nView job board: https://homestead-electric.vercel.app/")}`;
+    setTimeout(()=>window.open(gmailUrl,"_blank"), 500);
+  };
+
   const flushSaves = () => {
     jobsRef.current.forEach(job=>{
       clearTimeout(saveTimers.current[job.id]);
@@ -2134,6 +2148,12 @@ function App() {
                       fontSize:11,fontWeight:700,padding:"3px 10px",cursor:"pointer",
                       fontFamily:"inherit"}}>
                     Save
+                  </button>
+                  <button onClick={backupByEmail}
+                    style={{background:"#7c3aed",border:"none",borderRadius:6,color:"#fff",
+                      fontSize:11,fontWeight:700,padding:"3px 10px",cursor:"pointer",
+                      fontFamily:"inherit"}}>
+                    💾 Backup
                   </button>
                 </div>
               </div>
