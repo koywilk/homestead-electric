@@ -915,6 +915,31 @@ function HomeRunLevel({rows,onChange,label}) {
   );
 }
 
+function MeterLoads({loads, onChange}) {
+  const add = () => onChange([...loads, {id:uid(), name:"", amps:"", notes:""}]);
+  const upd = (id,p) => onChange(loads.map(r=>r.id===id?{...r,...p}:r));
+  const del = (id) => onChange(loads.filter(r=>r.id!==id));
+  return (
+    <div style={{marginBottom:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 70px 1fr 24px",gap:6,marginBottom:6}}>
+        {["Load Name","Amps","Notes",""].map((h,i)=>(
+          <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
+        ))}
+      </div>
+      {loads.map(r=>(
+        <div key={r.id} style={{display:"grid",gridTemplateColumns:"1fr 70px 1fr 24px",gap:6,marginBottom:4,alignItems:"center"}}>
+          <Inp value={r.name}  onChange={e=>upd(r.id,{name:e.target.value})}  placeholder="Load name…"/>
+          <Inp value={r.amps}  onChange={e=>upd(r.id,{amps:e.target.value})}  placeholder="Amps…"/>
+          <Inp value={r.notes} onChange={e=>upd(r.id,{notes:e.target.value})} placeholder="Notes…"/>
+          <button onClick={()=>del(r.id)}
+            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+        </div>
+      ))}
+      <Btn onClick={add} variant="add" style={{fontSize:11,padding:"3px 10px",marginTop:6}}>+ Add Load</Btn>
+    </div>
+  );
+}
+
 function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange}) {
   return (
     <div>
@@ -928,6 +953,16 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange}) {
           onChange={v=>onHRChange({...homeRuns,[k]:v})}/>
       ))}
       </div>
+      <SectionHead label="Load Mapping Notes" color={C.blue}/>
+      <TA value={homeRuns.loadMappingNotes||""} onChange={e=>onHRChange({...homeRuns,loadMappingNotes:e.target.value})}
+        placeholder="Load mapping notes…" rows={5}/>
+
+      <div style={{marginTop:24}}>
+      <SectionHead label="Meter Loads" color={C.blue}/>
+      <MeterLoads loads={homeRuns.meterLoads||[]}
+        onChange={v=>onHRChange({...homeRuns,meterLoads:v})}/>
+      </div>
+
       <SectionHead label="Panel Breaker Counts" color={C.blue}/>
       <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
         {[["meter","Meter Breaker Count"],["panelA","Panel A Breaker Count"],
@@ -1087,18 +1122,23 @@ function PlansTab({job, onUpdate}) {
               <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No links yet</div>
             )}
             {links.map((lnk,i)=>(
-              <div key={lnk.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
-                <Inp value={lnk.url||""} placeholder="Paste URL…"
-                  onChange={e=>setLinks(links.map((x,j)=>j===i?{...x,url:e.target.value}:x))}/>
-                {lnk.url&&(
-                  <a href={lnk.url} target="_blank" rel="noreferrer"
-                    style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:7,
-                      color:C.blue,padding:"6px 10px",fontSize:11,textDecoration:"none",whiteSpace:"nowrap",flexShrink:0}}>
-                    Open ↗
-                  </a>
-                )}
-                <button onClick={()=>setLinks(links.filter((_,j)=>j!==i))}
-                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
+              <div key={lnk.id} style={{marginBottom:8}}>
+                <Inp value={lnk.label||""} placeholder="Label (optional)…"
+                  style={{marginBottom:4}}
+                  onChange={e=>setLinks(links.map((x,j)=>j===i?{...x,label:e.target.value}:x))}/>
+                <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                  <Inp value={lnk.url||""} placeholder="Paste URL…"
+                    onChange={e=>setLinks(links.map((x,j)=>j===i?{...x,url:e.target.value}:x))}/>
+                  {lnk.url&&(
+                    <a href={lnk.url} target="_blank" rel="noreferrer"
+                      style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:7,
+                        color:C.blue,padding:"6px 10px",fontSize:11,textDecoration:"none",whiteSpace:"nowrap",flexShrink:0}}>
+                      {lnk.label||"Open ↗"}
+                    </a>
+                  )}
+                  <button onClick={()=>setLinks(links.filter((_,j)=>j!==i))}
+                    style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
+                </div>
               </div>
             ))}
           </div>
@@ -1129,18 +1169,23 @@ function PlansTab({job, onUpdate}) {
                 style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:13,flexShrink:0}}>🗑</button>
             </div>
             {(cl.urls||[]).map((lnk,i)=>(
-              <div key={lnk.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
-                <Inp value={lnk.url||""} placeholder="Paste URL…"
-                  onChange={e=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).map((u,j)=>j===i?{...u,url:e.target.value}:u)}:x)})}/>
-                {lnk.url&&(
-                  <a href={lnk.url} target="_blank" rel="noreferrer"
-                    style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:7,
-                      color:C.blue,padding:"6px 10px",fontSize:11,textDecoration:"none",whiteSpace:"nowrap",flexShrink:0}}>
-                    Open ↗
-                  </a>
-                )}
-                <button onClick={()=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).filter((_,j)=>j!==i)}:x)})}
-                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
+              <div key={lnk.id} style={{marginBottom:8}}>
+                <Inp value={lnk.label||""} placeholder="Label (optional)…"
+                  style={{marginBottom:4}}
+                  onChange={e=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).map((u,j)=>j===i?{...u,label:e.target.value}:u)}:x)})}/>
+                <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                  <Inp value={lnk.url||""} placeholder="Paste URL…"
+                    onChange={e=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).map((u,j)=>j===i?{...u,url:e.target.value}:u)}:x)})}/>
+                  {lnk.url&&(
+                    <a href={lnk.url} target="_blank" rel="noreferrer"
+                      style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:7,
+                        color:C.blue,padding:"6px 10px",fontSize:11,textDecoration:"none",whiteSpace:"nowrap",flexShrink:0}}>
+                      {lnk.label||"Open ↗"}
+                    </a>
+                  )}
+                  <button onClick={()=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).filter((_,j)=>j!==i)}:x)})}
+                    style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
+                </div>
               </div>
             ))}
             {(!cl.urls||cl.urls.length===0)&&(
@@ -1377,11 +1422,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
             <div>
               <SectionHead label="Tape Light Locations" color={C.teal}/>
               <TapeLightSection lights={job.tapeLights||[]} onChange={v=>u({tapeLights:v})}/>
-              <div style={{marginTop:20}}>
-                <SectionHead label="Load Mapping Notes" color={C.teal}/>
-                <TA value={job.loadMappingNotes||""} onChange={e=>u({loadMappingNotes:e.target.value})}
-                  placeholder="Load mapping notes…" rows={5}/>
-              </div>
+
             </div>
           )}
 
