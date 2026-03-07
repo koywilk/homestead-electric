@@ -1064,57 +1064,10 @@ const LINK_FIELDS = [
 ];
 
 function PlansTab({job, onUpdate}) {
-  const fileRef = useRef();
-  const [uploading, setUploading] = useState(false);
-
-  const handleFileUpload = (e) => {
-    const files = Array.from(e.target.files);
-    if(!files.length) return;
-    setUploading(true);
-    let done = 0;
-    const newFiles = [];
-    files.forEach(file => {
-      if(file.size > 500000) {
-        alert(`"${file.name}" is too large (max 500KB). Please compress the PDF first.`);
-        done++;
-        if(done===files.length){ setUploading(false); }
-        return;
-      }
-      const reader = new FileReader();
-      reader.onload = (ev) => {
-        newFiles.push({ id:uid(), name:file.name, dataUrl:ev.target.result, size:file.size });
-        done++;
-        if(done===files.length) {
-          onUpdate({uploadedFiles:[...(job.uploadedFiles||[]),...newFiles]});
-          setUploading(false);
-        }
-      };
-      reader.readAsDataURL(file);
-    });
-    e.target.value = "";
-  };
-
-  const removeFile = (id) => onUpdate({uploadedFiles:(job.uploadedFiles||[]).filter(f=>f.id!==id)});
-
-  const openPDF = (f) => {
-    try {
-      const [header, base64] = f.dataUrl.split(',');
-      const mime = header.match(/:(.*?);/)[1];
-      const bytes = atob(base64);
-      const arr = new Uint8Array(bytes.length);
-      for(let i=0;i<bytes.length;i++) arr[i]=bytes.charCodeAt(i);
-      const blob = new Blob([arr],{type:mime});
-      window.open(URL.createObjectURL(blob),'_blank');
-    } catch(e){ console.error(e); }
-  };;
-
-  const fmtSize = (bytes) => bytes>1048576?`${(bytes/1048576).toFixed(1)} MB`:`${(bytes/1024).toFixed(0)} KB`;
-
   return (
     <div>
       <SectionHead label="Plans + Job Links" color={C.green}/>
       {LINK_FIELDS.map(([k,l])=>{
-        // Each section stores an array of links: job.linkSections[k] = [{id,url}]
         const links = (job.linkSections?.[k]) || (job[k] ? [{id:k+"-0", url:job[k]}] : []);
         const setLinks = (newLinks) => onUpdate({
           linkSections:{...(job.linkSections||{}), [k]:newLinks},
@@ -1196,59 +1149,10 @@ function PlansTab({job, onUpdate}) {
           </div>
         ))}
       </div>
-
-      <div style={{marginTop:24}}>
-        <SectionHead label="Uploaded PDFs & Files" color={C.green}/>
-        <div
-          onClick={()=>fileRef.current?.click()}
-          style={{border:`2px dashed ${C.muted}`,borderRadius:10,padding:"24px 16px",
-            textAlign:"center",cursor:"pointer",marginBottom:16,transition:"border-color 0.2s",
-            background:C.surface}}
-          onMouseEnter={e=>e.currentTarget.style.borderColor=C.green}
-          onMouseLeave={e=>e.currentTarget.style.borderColor=C.muted}>
-          <div style={{fontSize:24,marginBottom:6}}>📄</div>
-          <div style={{fontSize:13,color:C.text,fontWeight:600}}>
-            {uploading?"Uploading…":"Click to upload PDFs or files"}
-          </div>
-          <div style={{fontSize:11,color:C.dim,marginTop:4}}>Plans, schedules, specs — any file type</div>
-        </div>
-        <input ref={fileRef} type="file" accept=".pdf,.png,.jpg,.jpeg,.dwg,.xlsx,.docx"
-          multiple style={{display:"none"}} onChange={handleFileUpload}/>
-
-        {(job.uploadedFiles||[]).length===0&&(
-          <div style={{textAlign:"center",color:C.muted,fontSize:12,padding:"12px 0"}}>
-            No files uploaded yet
-          </div>
-        )}
-
-        {(job.uploadedFiles||[]).map(f=>(
-          <div key={f.id} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 12px",
-            background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,marginBottom:8}}>
-            <span style={{fontSize:20,flexShrink:0}}>
-              {f.name.endsWith(".pdf")?"📕":f.name.match(/\.(png|jpg|jpeg)$/i)?"🖼️":"📎"}
-            </span>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:12,fontWeight:600,color:C.text,overflow:"hidden",
-                textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{f.name}</div>
-              {f.size&&<div style={{fontSize:10,color:C.dim,marginTop:1}}>{fmtSize(f.size)}</div>}
-            </div>
-            <button onClick={()=>openPDF(f)}
-              style={{background:"none",border:`1px solid ${C.blue}55`,borderRadius:6,
-                color:C.blue,cursor:"pointer",padding:"4px 10px",fontSize:11,fontFamily:"inherit"}}>
-              View
-            </button>
-            <button onClick={()=>removeFile(f.id)}
-              style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:14,padding:"0 4px"}}>✕</button>
-          </div>
-        ))}
-      </div>
     </div>
   );
 }
 
-// ── Job Detail Modal ──────────────────────────────────────────
-const TABS = ["Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
-              "Change Orders","Return Trips","Plans & Links","Job Info"];
 
 function JobDetail({job, onUpdate, onClose}) {
   const [tab, setTab]       = useState("Rough");
