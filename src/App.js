@@ -1154,6 +1154,9 @@ function PlansTab({job, onUpdate}) {
 }
 
 
+const TABS = ["Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
+              "Change Orders","Return Trips","Plans & Links","Job Info"];
+
 function JobDetail({job: rawJob, onUpdate, onClose}) {
   // Defensive normalization — prevents crashes on old jobs missing fields
   const job = {
