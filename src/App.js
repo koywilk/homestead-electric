@@ -1169,10 +1169,10 @@ function JobDetail({job, onUpdate, onClose}) {
       (f.rooms||[]).reduce((a,r)=>a+(Array.isArray(r.items)?r.items.filter(i=>!i.done).length:0),0);
   };
   const openCount = ['roughPunch','finishPunch'].reduce((total,key)=>{
-    const p = job[key]||{};
+    const p = job?.[key]||{};
     return total + countFloor(p.upper) + countFloor(p.main) + countFloor(p.basement);
   },0);
-  const pendingCOs = job.changeOrders.filter(c=>c.status==="Pending").length;
+  const pendingCOs = (job.changeOrders||[]).filter(c=>c.status==="Pending").length;
 
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.82)",zIndex:200,
@@ -1777,6 +1777,31 @@ function App() {
       window.removeEventListener('beforeunload', flushSaves);
     };
   },[]);
+
+  // Pull-to-refresh
+  useEffect(()=>{
+    const onTouchStart = e => { pullStart.current = e.touches[0].clientY; };
+    const onTouchMove  = e => {
+      if(pullStart.current===null) return;
+      const dist = e.touches[0].clientY - pullStart.current;
+      if(dist>0 && window.scrollY===0){
+        setPullDist(Math.min(dist,100));
+        setPulling(dist>120);
+      }
+    };
+    const onTouchEnd = () => {
+      if(pulling) window.location.reload();
+      setPullDist(0); setPulling(false); pullStart.current=null;
+    };
+    window.addEventListener('touchstart',onTouchStart,{passive:true});
+    window.addEventListener('touchmove', onTouchMove, {passive:true});
+    window.addEventListener('touchend',  onTouchEnd);
+    return ()=>{
+      window.removeEventListener('touchstart',onTouchStart);
+      window.removeEventListener('touchmove', onTouchMove);
+      window.removeEventListener('touchend',  onTouchEnd);
+    };
+  },[pulling]);
   const updateJob = updated => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); saveJob(updated); };
   const addJob    = () => { const j=blankJob(); setJobs(js=>[j,...js]); setSelected(j); saveJob(j); };
   const deleteJob = id => {
@@ -1831,7 +1856,7 @@ function App() {
 
   const JobRow = ({job, fc, showForeman=false}) => {
     const open   = openCount(job);
-    const pendCO = job.changeOrders.filter(c=>c.status==="Pending").length;
+    const pendCO = (job.changeOrders||[]).filter(c=>c.status==="Pending").length;
     const foreman = job.foreman||"Koy";
     const rowFc = fc || FOREMEN_COLORS[foreman];
     return (
