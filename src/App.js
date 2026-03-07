@@ -61,7 +61,7 @@ const TEAM = [
 let _uid = Date.now();
 const uid = () => String(++_uid);
 
-const newHRRow     = (num) => ({ id:uid(), num, wire:"", name:"", status:"" });
+const newHRRow     = (num) => ({ id:uid(), num, wire:"", name:"", status:"", panel:"" });
 const newCP4Row    = (num) => ({ id:uid(), num, name:"", module:"", status:"" });
 const newKPRow     = (num) => ({ id:uid(), num, name:"" });
 const emptyPunch   = ()    => ({ upper:[], main:[], basement:[] });
@@ -880,50 +880,83 @@ function PanelFeeds({feeds, onChange}) {
 }
 
 // ── Home Runs ─────────────────────────────────────────────────
+const PANEL_OPTS = ["","Panel A","Panel B","Panel C","Panel D","Dedicated Loads"];
+const PANEL_ORDER = {"":0,"Panel A":1,"Panel B":2,"Panel C":3,"Panel D":4,"Dedicated Loads":5};
+const WIRE_ORDER  = {"":0,"14/2":1,"14/3":2,"12/2":3,"12/3":4,"10/2":5,"10/3":6,"8/2":7,"8/3":8,"6/2":9,"6/3":10,"4/2":11,"4/3":12,"2/2":13,"2/3":14,"1/0":15,"2/0":16,"3/0":17,"4/0":18};
+
 function HomeRunLevel({rows,onChange,label}) {
-  const WIRE_ORDER = {"":0,"14/2":1,"14/3":2,"12/2":3,"12/3":4,"10/2":5,"10/3":6,"8/2":7,"8/3":8,"6/2":9,"6/3":10,"4/2":11,"4/3":12,"2/2":13,"2/3":14,"1/0":15,"2/0":16,"3/0":17,"4/0":18};
-  const sortByWire = (arr) => [...arr].sort((a,b)=>(WIRE_ORDER[a.wire]||0)-(WIRE_ORDER[b.wire]||0)).map((r,i)=>({...r,num:i+1}));
-  const upd    = (id,p) => { const updated = rows.map(r=>r.id===id?{...r,...p}:r); onChange('wire' in p ? sortByWire(updated) : updated); };
+  const sortRows = (arr) => [...arr].sort((a,b)=>{
+    const pd = (PANEL_ORDER[a.panel]||0)-(PANEL_ORDER[b.panel]||0);
+    if(pd!==0) return pd;
+    return (WIRE_ORDER[a.wire]||0)-(WIRE_ORDER[b.wire]||0);
+  }).map((r,i)=>({...r,num:i+1}));
+
+  const upd    = (id,p) => { const updated = rows.map(r=>r.id===id?{...r,...p}:r); onChange(('wire' in p||'panel' in p) ? sortRows(updated) : updated); };
   const addRow = () => onChange([...rows, newHRRow(rows.length+1)]);
-  const delRow = (id) => {
-    const filtered = rows.filter(r=>r.id!==id).map((r,i)=>({...r,num:i+1}));
-    onChange(filtered);
-  };
+  const delRow = (id) => onChange(sortRows(rows.filter(r=>r.id!==id)));
+
+  // Group by panel for display
+  const panels = PANEL_OPTS.filter(p=>p&&rows.some(r=>r.panel===p));
+  const unassigned = rows.filter(r=>!r.panel);
+  const groups = [
+    ...panels.map(p=>({panel:p, rows:rows.filter(r=>r.panel===p)})),
+    ...(unassigned.length?[{panel:"", rows:unassigned}]:[])
+  ];
+
+  const renderRow = (r) => (
+    <div key={r.id} style={{display:"grid",gridTemplateColumns:"30px 90px 90px 1fr 80px 24px",
+      gap:5,marginBottom:4,alignItems:"center"}}>
+      <span style={{fontSize:10,color:C.muted,textAlign:"right",paddingRight:4}}>{r.num}.</span>
+      <select value={r.panel||""} onChange={e=>upd(r.id,{panel:e.target.value})}
+        style={{background:C.surface,color:r.panel?C.accent:C.dim,border:`1px solid ${C.border}`,
+          borderRadius:7,padding:"5px 6px",fontSize:11,fontFamily:"inherit",outline:"none",width:"100%"}}>
+        {PANEL_OPTS.map(o=><option key={o} value={o}>{o||"— panel —"}</option>)}
+      </select>
+      <div style={{position:"relative"}}>
+        <select value={r.wire} onChange={e=>upd(r.id,{wire:e.target.value})}
+          style={{background:WIRE_COLORS[r.wire]||C.surface,
+            color:r.wire?(WIRE_TEXT[r.wire]||C.text):C.dim,
+            border:`1px solid ${WIRE_COLORS[r.wire]||C.border}`,
+            borderRadius:7,padding:"5px 6px",fontSize:11,fontFamily:"inherit",
+            outline:"none",width:"100%",fontWeight:r.wire?700:400}}>
+          {WIRE_SIZES.map(o=><option key={o} value={o}
+            style={{background:WIRE_COLORS[o]||"#1a1d2e",color:WIRE_TEXT[o]||"#fff"}}>
+            {o||"— wire —"}
+          </option>)}
+        </select>
+      </div>
+      <Inp value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"/>
+      <Sel value={r.status} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
+        style={{color:r.status==="Pulled"?C.green:C.text,fontSize:11}}/>
+      <button onClick={()=>delRow(r.id)}
+        style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+    </div>
+  );
+
   return (
     <div style={{marginBottom:24}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
         <div style={{fontSize:12,color:C.blue,fontWeight:700,letterSpacing:"0.06em"}}>{label}</div>
         <Btn onClick={addRow} variant="add" style={{fontSize:11,padding:"3px 10px"}}>+ Add Row</Btn>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"36px 100px 1fr 90px 28px",gap:6,marginBottom:6,padding:"0 2px"}}>
-        {["#","Wire Size","Load Name","Status",""].map((h,i)=>(
+      <div style={{display:"grid",gridTemplateColumns:"30px 90px 90px 1fr 80px 24px",gap:5,marginBottom:6,padding:"0 2px"}}>
+        {["#","Panel","Wire","Load Name","Status",""].map((h,i)=>(
           <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
         ))}
       </div>
-      {rows.map(r=>(
-        <div key={r.id} style={{display:"grid",gridTemplateColumns:"36px 100px 1fr 90px 28px",
-          gap:6,marginBottom:4,alignItems:"center"}}>
-          <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:6}}>{r.num}.</span>
-          <div style={{position:"relative"}}>
-            <select value={r.wire} onChange={e=>upd(r.id,{wire:e.target.value})}
-              style={{background:WIRE_COLORS[r.wire]||C.surface,
-                color:r.wire?(WIRE_TEXT[r.wire]||C.text):C.dim,
-                border:`1px solid ${WIRE_COLORS[r.wire]||C.border}`,
-                borderRadius:7,padding:"6px 10px",fontSize:12,fontFamily:"inherit",
-                outline:"none",width:"100%",fontWeight:r.wire?700:400}}>
-              {WIRE_SIZES.map(o=><option key={o} value={o}
-                style={{background:WIRE_COLORS[o]||"#1a1d2e",color:WIRE_TEXT[o]||"#fff"}}>
-                {o||"— select —"}
-              </option>)}
-            </select>
-          </div>
-          <Inp value={r.name}   onChange={e=>upd(r.id,{name:e.target.value})}   placeholder="Load name…"/>
-          <Sel value={r.status} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
-            style={{color:r.status==="Pulled"?C.green:C.text}}/>
-          <button onClick={()=>delRow(r.id)}
-            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+      {groups.map(g=>(
+        <div key={g.panel||"unassigned"}>
+          {g.panel&&(
+            <div style={{fontSize:10,color:C.accent,fontWeight:700,letterSpacing:"0.1em",
+              textTransform:"uppercase",padding:"6px 0 4px",marginTop:4,
+              borderBottom:`1px solid ${C.border}`,marginBottom:4}}>
+              {g.panel}
+            </div>
+          )}
+          {g.rows.map(renderRow)}
         </div>
       ))}
+      {rows.length===0&&<div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No rows yet</div>}
     </div>
   );
 }
@@ -953,6 +986,56 @@ function MeterLoads({loads, onChange}) {
   );
 }
 
+function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
+  // Gather all home run rows across all levels
+  const allRows = [
+    ...(homeRuns.main||[]),
+    ...(homeRuns.upper||[]),
+    ...(homeRuns.basement||[]),
+  ];
+
+  // Count breakers per panel based on wire size
+  // 14/2, 12/2 etc = 1 breaker; 14/3, 12/3 etc = 2 breakers; larger wire = 2 breakers
+  const breakerCount = (wire) => {
+    if(!wire || wire==="Need Specs") return 0;
+    if(wire.endsWith("/3")) return 2;
+    if(["1/0","2/0","3/0","4/0","8/2","8/3","6/2","6/3","4/2","4/3","2/2","2/3"].includes(wire)) return 2;
+    return 1;
+  };
+
+  const panels = ["Panel A","Panel B","Panel C","Panel D","Dedicated Loads"];
+  const autoCounts = {};
+  panels.forEach(p=>{
+    autoCounts[p] = allRows.filter(r=>r.panel===p).reduce((sum,r)=>sum+breakerCount(r.wire),0);
+  });
+
+  return (
+    <div style={{marginBottom:16}}>
+      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+        {panels.map(p=>(
+          <div key={p} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:"10px 12px"}}>
+            <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>{p.toUpperCase()}</div>
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{fontSize:22,fontWeight:700,color:autoCounts[p]>0?C.accent:C.muted,minWidth:32}}>
+                {autoCounts[p]}
+              </div>
+              <div style={{fontSize:10,color:C.dim}}>auto-counted</div>
+            </div>
+            <div style={{fontSize:10,color:C.dim,marginTop:8,marginBottom:3}}>Override</div>
+            <Inp value={panelCounts?.[p]||""} placeholder="Manual override…"
+              onChange={e=>onCountChange({...panelCounts,[p]:e.target.value})}/>
+            {panelCounts?.[p]&&(
+              <div style={{fontSize:10,color:C.orange,marginTop:3}}>
+                ⚠ Manual: {panelCounts[p]} (auto: {autoCounts[p]})
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
 function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange}) {
   return (
     <div>
@@ -977,15 +1060,7 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange}) {
       </div>
 
       <SectionHead label="Panel Breaker Counts" color={C.blue}/>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12}}>
-        {[["meter","Meter Breaker Count"],["panelA","Panel A Breaker Count"],
-          ["panelB","Panel B Breaker Count"],["dedicated","Dedicated Loads Panel Breaker Count"]].map(([k,l])=>(
-          <div key={k}>
-            <div style={{fontSize:10,color:C.dim,marginBottom:4}}>{l}</div>
-            <Inp value={panelCounts[k]} onChange={e=>onCountChange({...panelCounts,[k]:e.target.value})} placeholder="Count…"/>
-          </div>
-        ))}
-      </div>
+      <BreakerCounts homeRuns={homeRuns} panelCounts={panelCounts} onCountChange={onCountChange}/>
     </div>
   );
 }
