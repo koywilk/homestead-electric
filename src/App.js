@@ -986,52 +986,93 @@ function MeterLoads({loads, onChange}) {
   );
 }
 
+// Wire → {amps, poles} mapping
+const WIRE_BREAKER = {
+  "14/2": {amps:15,  poles:1}, "14/3": {amps:15,  poles:2},
+  "12/2": {amps:20,  poles:1}, "12/3": {amps:20,  poles:2},
+  "10/2": {amps:30,  poles:1}, "10/3": {amps:30,  poles:2},
+  "8/2":  {amps:40,  poles:2}, "8/3":  {amps:40,  poles:2},
+  "6/2":  {amps:50,  poles:2}, "6/3":  {amps:50,  poles:2},
+  "4/2":  {amps:70,  poles:2}, "4/3":  {amps:70,  poles:2},
+  "2/2":  {amps:95,  poles:2}, "2/3":  {amps:95,  poles:2},
+  "1/0":  {amps:125, poles:2}, "2/0":  {amps:150, poles:2},
+  "3/0":  {amps:175, poles:2}, "4/0":  {amps:200, poles:2},
+};
+
 function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
-  // Gather all home run rows across all levels
   const allRows = [
     ...(homeRuns.main||[]),
     ...(homeRuns.upper||[]),
     ...(homeRuns.basement||[]),
   ];
 
-  // Count breakers per panel based on wire size
-  // 14/2, 12/2 etc = 1 breaker; 14/3, 12/3 etc = 2 breakers; larger wire = 2 breakers
-  const breakerCount = (wire) => {
-    if(!wire || wire==="Need Specs") return 0;
-    if(wire.endsWith("/3")) return 2;
-    if(["1/0","2/0","3/0","4/0","8/2","8/3","6/2","6/3","4/2","4/3","2/2","2/3"].includes(wire)) return 2;
-    return 1;
+  const panels = ["Panel A","Panel B","Panel C","Panel D","Dedicated Loads"];
+
+  // For each panel, group rows by breaker label and count poles
+  const getPanelBreakers = (panel) => {
+    const rows = allRows.filter(r=>r.panel===panel && WIRE_BREAKER[r.wire]);
+    const groups = {};
+    rows.forEach(r=>{
+      const {amps,poles} = WIRE_BREAKER[r.wire];
+      const label = `${amps}A ${poles===1?"Single Pole":"Double Pole"}`;
+      if(!groups[label]) groups[label] = {amps,poles,spaces:0,count:0};
+      groups[label].count++;
+      groups[label].spaces += poles;
+    });
+    return groups;
   };
 
-  const panels = ["Panel A","Panel B","Panel C","Panel D","Dedicated Loads"];
-  const autoCounts = {};
-  panels.forEach(p=>{
-    autoCounts[p] = allRows.filter(r=>r.panel===p).reduce((sum,r)=>sum+breakerCount(r.wire),0);
-  });
+  const totalSpaces = (panel) => {
+    const g = getPanelBreakers(panel);
+    return Object.values(g).reduce((s,v)=>s+v.spaces,0);
+  };
 
   return (
     <div style={{marginBottom:16}}>
-      <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-        {panels.map(p=>(
-          <div key={p} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,padding:"10px 12px"}}>
-            <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>{p.toUpperCase()}</div>
-            <div style={{display:"flex",alignItems:"center",gap:8}}>
-              <div style={{fontSize:22,fontWeight:700,color:autoCounts[p]>0?C.accent:C.muted,minWidth:32}}>
-                {autoCounts[p]}
+      {panels.map(p=>{
+        const groups = getPanelBreakers(p);
+        const entries = Object.entries(groups).sort((a,b)=>a[1].amps-b[1].amps);
+        const spaces = totalSpaces(p);
+        const hasRows = allRows.some(r=>r.panel===p);
+        return (
+          <div key={p} style={{background:C.surface,border:`1px solid ${C.border}`,
+            borderRadius:9,padding:"12px 14px",marginBottom:10}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+              <div style={{fontSize:11,color:C.accent,fontWeight:700,letterSpacing:"0.08em"}}>{p.toUpperCase()}</div>
+              <div style={{fontSize:11,color:C.dim}}>
+                <span style={{color:spaces>0?C.text:C.muted,fontWeight:700}}>{spaces}</span>
+                <span style={{color:C.dim}}> total spaces</span>
               </div>
-              <div style={{fontSize:10,color:C.dim}}>auto-counted</div>
             </div>
-            <div style={{fontSize:10,color:C.dim,marginTop:8,marginBottom:3}}>Override</div>
-            <Inp value={panelCounts?.[p]||""} placeholder="Manual override…"
+            {entries.length>0 ? (
+              <div style={{display:"grid",gridTemplateColumns:"1fr auto auto",gap:"4px 12px",marginBottom:8}}>
+                {["Breaker Type","Qty","Spaces"].map((h,i)=>(
+                  <div key={i} style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.08em",paddingBottom:3,borderBottom:`1px solid ${C.border}`}}>{h}</div>
+                ))}
+                {entries.map(([label,{count,spaces:sp}])=>(
+                  <>
+                    <div key={label+"l"} style={{fontSize:11,color:C.text}}>{label}</div>
+                    <div key={label+"c"} style={{fontSize:11,color:C.accent,fontWeight:700,textAlign:"center"}}>{count}</div>
+                    <div key={label+"s"} style={{fontSize:11,color:C.dim,textAlign:"center"}}>{sp}</div>
+                  </>
+                ))}
+              </div>
+            ) : (
+              <div style={{fontSize:11,color:C.muted,fontStyle:"italic",marginBottom:8}}>
+                {hasRows?"No wire sizes assigned":"No loads assigned to this panel"}
+              </div>
+            )}
+            <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Manual override (total spaces)</div>
+            <Inp value={panelCounts?.[p]||""} placeholder="Override…"
               onChange={e=>onCountChange({...panelCounts,[p]:e.target.value})}/>
             {panelCounts?.[p]&&(
               <div style={{fontSize:10,color:C.orange,marginTop:3}}>
-                ⚠ Manual: {panelCounts[p]} (auto: {autoCounts[p]})
+                ⚠ Manual: {panelCounts[p]} spaces (auto: {spaces})
               </div>
             )}
           </div>
-        ))}
-      </div>
+        );
+      })}
     </div>
   );
 }
