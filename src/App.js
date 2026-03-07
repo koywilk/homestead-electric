@@ -430,7 +430,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
   const handleEmail = () => {
     const all = [...flatItems(upper,'Upper'), ...flatItems(main,'Main'), ...flatItems(basement,'Basement')];
     const subject = `${jobName} — ${phase} Punch List`;
-    const body = `Hi,\n\nOpen ${phase} punch list items for ${jobName}:\n\n${all.map(i=>`• ${i}`).join('\n')}\n\nPlease review and complete.\n\nThanks`;
+    const body = `Hi,\n\nOpen ${phase} punch list items for ${jobName}:\n\n${all.map(i=>`• ${i}`).join('\n')}\n\nPlease review and complete.\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
     onEmail({ subject, body });
   };
 
@@ -489,7 +489,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
   const add = () => { if(!d.text.trim()) return; onChange([{id:uid(),...d},...updates]); setD({date:"",text:""}); };
   const handleEmail = () => {
     const recent = updates.slice(0,5);
-    const body = `Hi,\n\nJob Update — ${jobName}\n\n${recent.map(u=>`${u.date||"—"}: ${u.text}`).join("\n\n")}\n\nThanks`;
+    const body = `Hi,\n\nJob Update — ${jobName}\n\n${recent.map(u=>`${u.date||"—"}: ${u.text}`).join("\n\n")}\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
     onEmail({subject:`${jobName} — Job Update`, body});
   };
   return (
@@ -534,7 +534,7 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
   const emailCO = (o, i) => {
     const subject = `${jobName} — Change Order #${i+1}`;
-    const body = `Hi,\n\nChange Order #${i+1} — ${jobName}\n\nDate: ${o.date||"—"}\nSend CO To: ${o.sendTo||"—"}\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial Needed: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nStatus: ${o.status}\n\nPlease review and confirm.\n\nThanks`;
+    const body = `Hi,\n\nChange Order #${i+1} — ${jobName}\n\nDate: ${o.date||"—"}\nSend CO To: ${o.sendTo||"—"}\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial Needed: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nStatus: ${o.status}\n\nPlease review and confirm.\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
     onEmail({subject, body});
   };
 
@@ -688,7 +688,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
   const emailTrip = (t,i) => {
     const punchLines = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n") || "None";
     const subject = `${jobName} — Return Trip #${i+1}`;
-    const body = `Hi,\n\nReturn Trip #${i+1} — ${jobName}\n\nDate: ${t.date||"—"}\nScope of Work:\n${t.scope||"—"}\n\nMaterial Needed:\n${t.material||"—"}\n\nPunch List:\n${punchLines}\n\nThanks`;
+    const body = `Hi,\n\nReturn Trip #${i+1} — ${jobName}\n\nDate: ${t.date||"—"}\nScope of Work:\n${t.scope||"—"}\n\nMaterial Needed:\n${t.material||"—"}\n\nPunch List:\n${punchLines}\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
     onEmail({subject, body});
   };
 
