@@ -1154,7 +1154,29 @@ function PlansTab({job, onUpdate}) {
 }
 
 
-function JobDetail({job, onUpdate, onClose}) {
+function JobDetail({job: rawJob, onUpdate, onClose}) {
+  // Defensive normalization — prevents crashes on old jobs missing fields
+  const job = {
+    changeOrders:[], returnTrips:[], uploadedFiles:[], customLinks:[],
+    roughMaterials:[], roughUpdates:[], finishMaterials:[], finishUpdates:[],
+    homeRuns:{}, roughPunch:{}, finishPunch:{},
+    roughQuestions:{upper:[],main:[],basement:[]},
+    finishQuestions:{upper:[],main:[],basement:[]},
+    ...rawJob,
+    changeOrders: rawJob?.changeOrders || [],
+    returnTrips:  rawJob?.returnTrips  || [],
+    uploadedFiles:rawJob?.uploadedFiles|| [],
+    customLinks:  rawJob?.customLinks  || [],
+    roughMaterials: rawJob?.roughMaterials || [],
+    roughUpdates:   rawJob?.roughUpdates   || [],
+    finishMaterials:rawJob?.finishMaterials|| [],
+    finishUpdates:  rawJob?.finishUpdates  || [],
+    roughPunch:  rawJob?.roughPunch  || {},
+    finishPunch: rawJob?.finishPunch || {},
+    homeRuns:    rawJob?.homeRuns    || {},
+    roughQuestions: rawJob?.roughQuestions || {upper:[],main:[],basement:[]},
+    finishQuestions:rawJob?.finishQuestions|| {upper:[],main:[],basement:[]},
+  };
   const [tab, setTab]       = useState("Rough");
   const [emailData, setEmailData] = useState(null);
   const jobRef = useRef(job);
