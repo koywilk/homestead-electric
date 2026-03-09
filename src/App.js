@@ -2198,12 +2198,17 @@ function App() {
                       fontFamily:"inherit"}}>
                     💾 Backup
                   </button>
+                  <button onClick={()=>window.location.reload()}
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
+                      color:C.dim,fontSize:14,fontWeight:700,padding:"3px 10px",cursor:"pointer",
+                      fontFamily:"inherit"}}>
+                    ↻
+                  </button>
                 </div>
               </div>
             </div>
             <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-              {[[totalOpen,"Open Punch Items",totalOpen>0?C.red:C.green],
-                [flagged,"Flagged",flagged>0?C.accent:C.muted],
+              {[[flagged,"Flagged",flagged>0?C.accent:C.muted],
                 [pendingCOs,"Pending COs",pendingCOs>0?C.purple:C.muted],
                 [complete,"Complete",C.green],
                 [jobs.length,"Total Jobs",C.blue]].map(([v,l,c])=>(
