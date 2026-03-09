@@ -73,7 +73,7 @@ const newCP4Row    = (num) => ({ id:uid(), num, name:"", module:"", status:"" })
 const newKPRow     = (num) => ({ id:uid(), num, name:"" });
 const emptyPunch   = ()    => ({ upper:[], main:[], basement:[] });
 
-const FOREMEN = ["Koy", "Vasa", "Colby", "Unassigned"];
+const FOREMEN = ["Koy", "Vasa", "Colby"];
 const FOREMEN_COLORS = {"Koy":"#3b82f6","Vasa":"#eab308","Colby":"#22c55e"};
 
 const blankJob = () => ({
@@ -1626,7 +1626,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                 ))}
               <div>
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
-                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={FOREMEN}/>
+                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...FOREMEN,"Unassigned"]}/>
               </div>
               <div>
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Lead</div>
