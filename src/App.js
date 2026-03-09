@@ -222,6 +222,12 @@ function EmailModal({ subject, body, onClose }) {
         )}
 
         <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
+          <button onClick={refreshJob} disabled={refreshing}
+            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,
+              padding:"8px 10px",fontSize:14,cursor:"pointer",marginRight:4,
+              opacity:refreshing?0.5:1}}>
+            {refreshing?"…":"↻"}
+          </button>
           <button onClick={onClose}
             style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,
               padding:"8px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
@@ -1383,6 +1389,16 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
   useEffect(()=>{ jobRef.current = job; },[job]);
   const u = patch => onUpdate({...jobRef.current,...patch});
   const saveNow = () => onUpdate({...jobRef.current});
+  const [refreshing, setRefreshing] = useState(false);
+  const refreshJob = async () => {
+    setRefreshing(true);
+    try {
+      const snap = await getDocs(collection(db,"jobs"));
+      const found = snap.docs.find(d=>d.id===job.id);
+      if(found?.data()?.data) onUpdate(found.data().data);
+    } catch(e){ console.error(e); }
+    setRefreshing(false);
+  };
 
   const countFloor = (f) => {
     if (!f) return 0;
@@ -2054,7 +2070,7 @@ function App() {
   const openForeman = (f) => { setActiveForeman(f); setView("foreman"); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const goHome = () => { setView("home"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
 
-  const viewJobs = view==="foreman" ? jobs.filter(j=>(j.foreman||"Koy")===activeForeman) : jobs;
+  const viewJobs = view==="foreman" ? jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):(j.foreman||"Koy")===activeForeman) : jobs;
 
   const filtered = viewJobs.filter(j=>{
     const s  = search.toLowerCase();
@@ -2247,6 +2263,37 @@ function App() {
                   </div>
                 );
               })}
+              {/* Unassigned block */}
+              {(()=>{
+                const fc    = "#6b7280";
+                const uJobs = jobs.filter(j=>!j.foreman||j.foreman==="Unassigned");
+                const uOpen = uJobs.reduce((a,j)=>a+openCount(j),0);
+                const uCOs  = uJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.status==="Pending").length,0);
+                const uFlag = uJobs.filter(j=>j.flagged).length;
+                return (
+                  <div className="foreman-card" onClick={()=>openForeman("Unassigned")}
+                    style={{background:C.card,border:`1px solid ${fc}44`,borderRadius:16,padding:20,borderTop:`3px solid ${fc}`}}>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:fc}}>Unassigned</div>
+                      <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,
+                        padding:"3px 12px",fontSize:11,color:fc,fontWeight:700}}>
+                        {uJobs.length} job{uJobs.length!==1?"s":""}
+                      </div>
+                    </div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:14}}>
+                      {[[uOpen,"Open Items",uOpen>0?C.red:C.muted],
+                        [uCOs,"Pending COs",uCOs>0?C.purple:C.muted],
+                        [uFlag,"Flagged",uFlag>0?C.accent:C.muted]].map(([v,l,c])=>(
+                        <div key={l} style={{background:C.surface,borderRadius:8,padding:"8px 10px"}}>
+                          <div style={{fontFamily:"'Bebas Neue'",fontSize:20,color:c,lineHeight:1}}>{v}</div>
+                          <div style={{fontSize:10,color:C.dim,marginTop:2}}>{l}</div>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{marginTop:14,fontSize:11,color:fc,fontWeight:600,textAlign:"right"}}>View Jobs →</div>
+                  </div>
+                );
+              })()}
             </div>
 
             <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em",marginBottom:16}}>ALL JOBS</div>
@@ -2269,16 +2316,16 @@ function App() {
               <button onClick={goHome}
                 style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,
                   padding:"6px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>← Back</button>
-              <div style={{width:10,height:10,borderRadius:"50%",background:FOREMEN_COLORS[activeForeman],flexShrink:0}}/>
+              <div style={{width:10,height:10,borderRadius:"50%",background:FOREMEN_COLORS[activeForeman]||"#6b7280",flexShrink:0}}/>
               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",
-                color:FOREMEN_COLORS[activeForeman],lineHeight:1}}>{activeForeman}</div>
+                color:FOREMEN_COLORS[activeForeman]||"#6b7280",lineHeight:1}}>{activeForeman}</div>
               <div style={{fontSize:11,color:C.dim}}>
-                {jobs.filter(j=>(j.foreman||"Koy")===activeForeman).length} job sites
+                {jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):(j.foreman||"Koy")===activeForeman).length} job sites
               </div>
               <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
                 <span style={{fontSize:11,color:syncColor}}>{syncLabel}</span>
                 <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setJobs(js=>[j,...js]);setSelected(j);}}
-                  style={{background:FOREMEN_COLORS[activeForeman],border:"none",borderRadius:9,color:"#000",
+                  style={{background:FOREMEN_COLORS[activeForeman]||"#6b7280",border:"none",borderRadius:9,color:"#000",
                     fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
                   + New Job
                 </button>
@@ -2287,7 +2334,7 @@ function App() {
 
             <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}>
               {(()=>{
-                const fJobs = jobs.filter(j=>(j.foreman||"Koy")===activeForeman);
+                const fJobs = jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):(j.foreman||"Koy")===activeForeman);
                 const fOpen = fJobs.reduce((a,j)=>a+openCount(j),0);
                 const fCOs  = fJobs.reduce((a,j)=>a+j.changeOrders.filter(c=>c.status==="Pending").length,0);
                 const fFlag = fJobs.filter(j=>j.flagged).length;
@@ -2333,7 +2380,7 @@ function App() {
               <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
                 <div style={{fontSize:13,marginBottom:20}}>No jobs yet for {activeForeman}</div>
                 <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setJobs(js=>[j,...js]);setSelected(j);}}
-                  style={{background:FOREMEN_COLORS[activeForeman],border:"none",borderRadius:9,color:"#000",
+                  style={{background:FOREMEN_COLORS[activeForeman]||"#6b7280",border:"none",borderRadius:9,color:"#000",
                     fontWeight:700,padding:"10px 24px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
                   + Add First Job
                 </button>
