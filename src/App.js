@@ -222,12 +222,6 @@ function EmailModal({ subject, body, onClose }) {
         )}
 
         <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
-          <button onClick={refreshJob} disabled={refreshing}
-            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,
-              padding:"8px 10px",fontSize:14,cursor:"pointer",marginRight:4,
-              opacity:refreshing?0.5:1}}>
-            {refreshing?"…":"↻"}
-          </button>
           <button onClick={onClose}
             style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,
               padding:"8px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
@@ -1433,6 +1427,12 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
           <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
             {openCount>0  &&<Pill label={`${openCount} open punch`} color={C.red}/>}
             {pendingCOs>0 &&<Pill label={`${pendingCOs} CO pending`} color={C.purple}/>}
+            <button onClick={refreshJob} title="Refresh"
+              style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                color:C.dim,cursor:"pointer",padding:"5px 10px",fontSize:16,
+                opacity:refreshing?0.4:1}} disabled={refreshing}>
+              {refreshing?"…":"↻"}
+            </button>
             <button onClick={onClose}
               style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
                 color:C.dim,cursor:"pointer",padding:"5px 14px",fontSize:13}}>✕</button>
