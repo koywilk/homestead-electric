@@ -2208,18 +2208,7 @@ function App() {
                 </div>
               </div>
             </div>
-            <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-              {[[flagged,"Flagged",flagged>0?C.accent:C.muted],
-                [pendingCOs,"Pending COs",pendingCOs>0?C.purple:C.muted],
-                [complete,"Complete",C.green],
-                [jobs.length,"Total Jobs",C.blue]].map(([v,l,c])=>(
-                <div key={l} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
-                  padding:"8px 16px",display:"flex",gap:10,alignItems:"center"}}>
-                  <span style={{fontFamily:"'Bebas Neue'",fontSize:24,color:c,lineHeight:1}}>{v}</span>
-                  <span style={{fontSize:11,color:C.dim}}>{l}</span>
-                </div>
-              ))}
-            </div>
+
           </div>
 
           <div style={{padding:"28px 26px"}}>
@@ -2308,14 +2297,7 @@ function App() {
               })()}
             </div>
 
-            <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em",marginBottom:16}}>ALL JOBS</div>
-            {jobs.length===0?(
-              <div style={{textAlign:"center",padding:"40px 0",color:C.muted,fontSize:13}}>
-                No jobs yet — open a foreman to add jobs
-              </div>
-            ):(
-              <StageSectionList jobs={jobs} JobRow={JobRow} fc={null}/>
-            )}
+
           </div>
         </div>
       )}
