@@ -1428,6 +1428,11 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
           <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
             {openCount>0  &&<Pill label={`${openCount} open punch`} color={C.red}/>}
             {pendingCOs>0 &&<Pill label={`${pendingCOs} CO pending`} color={C.purple}/>}
+            <button onClick={saveNow}
+              style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                color:C.dim,cursor:"pointer",padding:"5px 14px",fontSize:12,fontFamily:"inherit"}}>
+              Save
+            </button>
             <button onClick={refreshJob} title="Refresh"
               style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
                 color:C.dim,cursor:"pointer",padding:"5px 10px",fontSize:16,
@@ -1456,14 +1461,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
         {/* Body */}
         <div style={{flex:1,overflowY:"auto",padding:"20px 22px"}}>
-          <div style={{display:"flex",justifyContent:"flex-end",marginBottom:12}}>
-            <button onClick={()=>{ onUpdate({...jobRef.current}); }}
-              style={{background:"#22c55e",border:"none",borderRadius:7,color:"#000",
-                fontSize:12,fontWeight:700,padding:"6px 18px",cursor:"pointer",
-                fontFamily:"inherit"}}>
-              💾 Save
-            </button>
-          </div>
+
 
           {tab==="Rough"&&(
             <div>
