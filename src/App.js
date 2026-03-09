@@ -1351,8 +1351,8 @@ function PlansTab({job, onUpdate}) {
 }
 
 
-const TABS = ["Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
-              "Change Orders","Return Trips","Plans & Links","Job Info"];
+const TABS = ["Job Info","Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
+              "Change Orders","Return Trips","Plans & Links"];
 
 function JobDetail({job: rawJob, onUpdate, onClose}) {
   // Defensive normalization — prevents crashes on old jobs missing fields
@@ -1377,7 +1377,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
     roughQuestions: rawJob?.roughQuestions || {upper:[],main:[],basement:[]},
     finishQuestions:rawJob?.finishQuestions|| {upper:[],main:[],basement:[]},
   };
-  const [tab, setTab]       = useState("Rough");
+  const [tab, setTab]       = useState("Job Info");
   const [emailData, setEmailData] = useState(null);
   const jobRef = useRef(job);
   useEffect(()=>{ jobRef.current = job; },[job]);
