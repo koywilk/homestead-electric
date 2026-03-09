@@ -2250,22 +2250,7 @@ function App() {
                         </div>
                       ))}
                     </div>
-                    <div style={{marginBottom:8}}>
-                      <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.dim,marginBottom:3}}>
-                        <span>Avg Rough</span><span style={{color:C.rough}}>{rAvg}%</span>
-                      </div>
-                      <div style={{height:4,background:C.border,borderRadius:99,overflow:"hidden"}}>
-                        <div style={{height:"100%",width:`${rAvg}%`,background:C.rough,borderRadius:99}}/>
-                      </div>
-                    </div>
-                    <div>
-                      <div style={{display:"flex",justifyContent:"space-between",fontSize:10,color:C.dim,marginBottom:3}}>
-                        <span>Avg Finish</span><span style={{color:C.finish}}>{fnAvg}%</span>
-                      </div>
-                      <div style={{height:4,background:C.border,borderRadius:99,overflow:"hidden"}}>
-                        <div style={{height:"100%",width:`${fnAvg}%`,background:C.finish,borderRadius:99}}/>
-                      </div>
-                    </div>
+
                     <div style={{marginTop:14,fontSize:11,color:fc,fontWeight:600,textAlign:"right"}}>View Jobs →</div>
                   </div>
                 );
