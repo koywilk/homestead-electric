@@ -2126,6 +2126,20 @@ function App() {
   return (
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text}}>
 
+      {/* iOS Chrome banner */}
+      {(()=>{
+        const isIOS = /iphone|ipad|ipod/i.test(navigator.userAgent);
+        const isChrome = /CriOS/i.test(navigator.userAgent);
+        return isIOS && isChrome ? (
+          <div style={{background:"#f59e0b",color:"#000",padding:"10px 16px",fontSize:12,
+            display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            <span>⚠️ For offline install, open in <strong>Safari</strong>:</span>
+            <span style={{fontFamily:"monospace",fontSize:11,wordBreak:"break-all"}}>
+              homestead-electric.vercel.app
+            </span>
+          </div>
+        ) : null;
+      })()}
       <style>{`
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Bebas+Neue&display=swap');
         *{box-sizing:border-box;margin:0;padding:0;}
