@@ -77,7 +77,7 @@ const FOREMEN = ["Koy", "Vasa", "Colby"];
 const FOREMEN_COLORS = {"Koy":"#3b82f6","Vasa":"#eab308","Colby":"#22c55e"};
 
 const blankJob = () => ({
-  id:uid(), name:"", address:"", gc:"", phone:"", simproNo:"", foreman:"Koy", flagged:false,
+  id:uid(), name:"", address:"", gc:"", phone:"", simproNo:"", foreman:"Koy", lead:"", flagged:false,
   planLink:"", redlineLink:"", lightingLink:"", panelLink:"", qcLink:"", matterportLink:"",
   uploadedFiles:[],
   roughStage:"0%", roughQuestions:{ upper:[], main:[], basement:[] },
@@ -902,6 +902,7 @@ function PanelFeeds({feeds, onChange}) {
 
 // ── Home Runs ─────────────────────────────────────────────────
 const PANEL_OPTS = ["","Meter","Panel A","Panel B","Panel C","Panel D","Dedicated Loads"];
+const LEADS = ["","Keegan","Daegan","Gage","Abe","Louis","Jonathan","Braden","Treycen"];
 const PANEL_ORDER = {"":0,"Panel A":1,"Panel B":2,"Panel C":3,"Panel D":4,"Dedicated Loads":5};
 const WIRE_ORDER  = {"":0,"14/2":1,"14/3":2,"12/2":3,"12/3":4,"10/2":5,"10/3":6,"8/2":7,"8/3":8,"6/2":9,"6/3":10,"4/2":11,"4/3":12,"2/2":13,"2/3":14,"1/0":15,"2/0":16,"3/0":17,"4/0":18};
 
@@ -1628,6 +1629,20 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
               <div>
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
                 <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={FOREMEN}/>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Lead</div>
+                <div style={{display:"flex",gap:6}}>
+                  <select value={LEADS.includes(job.lead||"")?(job.lead||""):"custom"}
+                    onChange={e=>{ if(e.target.value!=="custom") u({lead:e.target.value}); }}
+                    style={{background:C.surface,color:job.lead?C.text:C.dim,border:`1px solid ${C.border}`,
+                      borderRadius:7,padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",flex:1}}>
+                    {LEADS.map(o=><option key={o} value={o}>{o||"— select lead —"}</option>)}
+                    {job.lead && !LEADS.includes(job.lead) && <option value="custom">{job.lead}</option>}
+                  </select>
+                  <Inp value={job.lead||""} onChange={e=>u({lead:e.target.value})}
+                    placeholder="Or type name…" style={{flex:1}}/>
+                </div>
               </div>
               </div>
               <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
