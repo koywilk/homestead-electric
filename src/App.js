@@ -73,7 +73,7 @@ const newCP4Row    = (num) => ({ id:uid(), num, name:"", module:"", status:"" })
 const newKPRow     = (num) => ({ id:uid(), num, name:"" });
 const emptyPunch   = ()    => ({ upper:[], main:[], basement:[] });
 
-const FOREMEN = ["Koy", "Vasa", "Colby"];
+const FOREMEN = ["Koy", "Vasa", "Colby", "Unassigned"];
 const FOREMEN_COLORS = {"Koy":"#3b82f6","Vasa":"#eab308","Colby":"#22c55e"};
 
 const blankJob = () => ({
