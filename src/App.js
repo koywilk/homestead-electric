@@ -2196,10 +2196,10 @@ function App() {
                     Save
                   </button>
                   <button onClick={backupByEmail}
-                    style={{background:"#7c3aed",border:"none",borderRadius:6,color:"#fff",
-                      fontSize:11,fontWeight:700,padding:"3px 10px",cursor:"pointer",
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
+                      color:C.dim,fontSize:11,fontWeight:600,padding:"3px 10px",cursor:"pointer",
                       fontFamily:"inherit"}}>
-                    💾 Backup
+                    Backup
                   </button>
                   <button onClick={()=>window.location.reload()}
                     style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
