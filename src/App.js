@@ -22,10 +22,10 @@ const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 
 const C = {
-  bg:"#09090f", surface:"#0f1018", card:"#13151f", border:"#1c1f2e",
-  muted:"#2e3347", text:"#e0e6f5", dim:"#5a6480", accent:"#e8a020",
-  blue:"#3b82f6", green:"#22c55e", red:"#ef4444", purple:"#a78bfa",
-  orange:"#f97316", teal:"#14b8a6", rough:"#3b82f6", finish:"#a78bfa",
+  bg:"#f1f5f9", surface:"#ffffff", card:"#ffffff", border:"#e2e8f0",
+  muted:"#cbd5e1", text:"#0f172a", dim:"#64748b", accent:"#d97706",
+  blue:"#2563eb", green:"#16a34a", red:"#dc2626", purple:"#7c3aed",
+  orange:"#ea580c", teal:"#0d9488", rough:"#2563eb", finish:"#7c3aed",
 };
 
 const JOB_ID = "homestead-jobs-v1";
@@ -884,7 +884,7 @@ function PanelFeeds({feeds, onChange}) {
                 borderRadius:7,padding:"6px 10px",fontSize:12,fontFamily:"inherit",
                 outline:"none",width:"100%",fontWeight:f.wire?700:400}}>
               {WIRE_SIZES.map(o=><option key={o} value={o}
-                style={{background:WIRE_COLORS[o]||"#1a1d2e",color:WIRE_TEXT[o]||"#fff"}}>
+                style={{background:WIRE_COLORS[o]||"#f1f5f9",color:WIRE_TEXT[o]||"#0f172a"}}>
                 {o||"— wire —"}
               </option>)}
             </select>
@@ -946,7 +946,7 @@ function HomeRunLevel({rows,onChange,label}) {
             borderRadius:6,padding:"4px 5px",fontSize:10,fontFamily:"inherit",
             outline:"none",width:"100%",fontWeight:r.wire?700:400}}>
           {WIRE_SIZES.map(o=><option key={o} value={o}
-            style={{background:WIRE_COLORS[o]||"#1a1d2e",color:WIRE_TEXT[o]||"#fff"}}>
+            style={{background:WIRE_COLORS[o]||"#f1f5f9",color:WIRE_TEXT[o]||"#0f172a"}}>
             {o||"— wire —"}
           </option>)}
         </select>
@@ -2167,9 +2167,9 @@ function App() {
         *{box-sizing:border-box;margin:0;padding:0;}
         ::-webkit-scrollbar{width:4px;height:4px;}
         ::-webkit-scrollbar-track{background:transparent;}
-        ::-webkit-scrollbar-thumb{background:#252838;border-radius:4px;}
+        ::-webkit-scrollbar-thumb{background:#cbd5e1;border-radius:4px;}
         .job-row{transition:background 0.15s,border-color 0.15s;cursor:pointer;}
-        .job-row:hover{background:#161926!important;border-color:#252838!important;}
+        .job-row:hover{background:#f8fafc!important;border-color:#cbd5e1!important;}
         .foreman-card{transition:transform 0.15s,box-shadow 0.15s;cursor:pointer;}
         .foreman-card:hover{transform:translateY(-3px);box-shadow:0 12px 32px rgba(0,0,0,0.4);}
       `}</style>
