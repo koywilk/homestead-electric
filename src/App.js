@@ -1,4 +1,11 @@
 import { useState, useEffect, useRef } from "react";
+
+// Register service worker for offline support
+if("serviceWorker" in navigator) {
+  window.addEventListener("load", () => {
+    navigator.serviceWorker.register("/service-worker.js").catch(()=>{});
+  });
+}
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, setDoc, deleteDoc, collection, getDocs } from "firebase/firestore";
 
