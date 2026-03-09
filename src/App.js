@@ -2238,9 +2238,8 @@ function App() {
                         {fJobs.length} job{fJobs.length!==1?"s":""}
                       </div>
                     </div>
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:14}}>
-                      {[[fOpen,"Open Items",fOpen>0?C.red:C.muted],
-                        [fCOs,"Pending COs",fCOs>0?C.purple:C.muted],
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
+                      {[[fCOs,"Pending COs",fCOs>0?C.blue:C.muted],
                         [fFlag,"Flagged",fFlag>0?C.accent:C.muted]].map(([v,l,c])=>(
                         <div key={l} style={{background:C.surface,borderRadius:8,padding:"8px 10px"}}>
                           <div style={{fontFamily:"'Bebas Neue'",fontSize:20,color:c,lineHeight:1}}>{v}</div>
