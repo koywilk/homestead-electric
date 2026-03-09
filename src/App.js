@@ -1632,17 +1632,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
               </div>
               <div>
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Lead</div>
-                <div style={{display:"flex",gap:6}}>
-                  <select value={LEADS.includes(job.lead||"")?(job.lead||""):"custom"}
-                    onChange={e=>{ if(e.target.value!=="custom") u({lead:e.target.value}); }}
-                    style={{background:C.surface,color:job.lead?C.text:C.dim,border:`1px solid ${C.border}`,
-                      borderRadius:7,padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",flex:1}}>
-                    {LEADS.map(o=><option key={o} value={o}>{o||"— select lead —"}</option>)}
-                    {job.lead && !LEADS.includes(job.lead) && <option value="custom">{job.lead}</option>}
-                  </select>
-                  <Inp value={job.lead||""} onChange={e=>u({lead:e.target.value})}
-                    placeholder="Or type name…" style={{flex:1}}/>
-                </div>
+                <Inp value={job.lead||""} onChange={e=>u({lead:e.target.value})} placeholder="Lead name…"/>
               </div>
               </div>
               <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
