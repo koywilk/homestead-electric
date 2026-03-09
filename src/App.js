@@ -858,21 +858,21 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
 // ── Panel Feeds ───────────────────────────────────────────────
 function PanelFeeds({feeds, onChange}) {
-  const add = () => onChange([...feeds, {id:uid(), from:"", to:"", wire:"", amps:""}]);
+  const add = () => onChange([...feeds, {id:uid(), from:"", to:"", wire:""}]);
   const upd = (id,p) => onChange(feeds.map(f=>f.id===id?{...f,...p}:f));
   const del = (id)   => onChange(feeds.filter(f=>f.id!==id));
   return (
     <div>
       {feeds.length>0&&(
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 110px 80px 28px",
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 110px 28px",
           gap:6,marginBottom:6,padding:"0 2px"}}>
-          {["From","To","Wire","Amps",""].map((h,i)=>(
+          {["From","To","Wire",""].map((h,i)=>(
             <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
           ))}
         </div>
       )}
       {feeds.map(f=>(
-        <div key={f.id} style={{display:"grid",gridTemplateColumns:"1fr 1fr 110px 80px 28px",
+        <div key={f.id} style={{display:"grid",gridTemplateColumns:"1fr 1fr 110px 28px",
           gap:6,marginBottom:6,alignItems:"center"}}>
           <Inp value={f.from} onChange={e=>upd(f.id,{from:e.target.value})} placeholder="e.g. Meter"/>
           <Inp value={f.to}   onChange={e=>upd(f.id,{to:e.target.value})}   placeholder="e.g. Panel A"/>
@@ -889,7 +889,6 @@ function PanelFeeds({feeds, onChange}) {
               </option>)}
             </select>
           </div>
-          <Inp value={f.amps}  onChange={e=>upd(f.id,{amps:e.target.value})}  placeholder="e.g. 200A"/>
           <button onClick={()=>del(f.id)}
             style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
         </div>
