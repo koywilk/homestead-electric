@@ -24,8 +24,8 @@ const db = getFirestore(firebaseApp);
 const C = {
   bg:"#f1f5f9", surface:"#ffffff", card:"#ffffff", border:"#e2e8f0",
   muted:"#cbd5e1", text:"#0f172a", dim:"#64748b", accent:"#d97706",
-  blue:"#2563eb", green:"#16a34a", red:"#dc2626", purple:"#7c3aed",
-  orange:"#ea580c", teal:"#0d9488", rough:"#2563eb", finish:"#7c3aed",
+  blue:"#2563eb", green:"#16a34a", red:"#dc2626", purple:"#0ea5e9",
+  orange:"#ea580c", teal:"#0d9488", rough:"#2563eb", finish:"#0ea5e9",
 };
 
 const JOB_ID = "homestead-jobs-v1";
@@ -1854,7 +1854,7 @@ const STAGE_SECTIONS = [
     test: j => { const r=parseInt(j.roughStage)||0; const f=parseInt(j.finishStage)||0; return r>0 && r<100 && f===0; } },
   { key:"between",  label:"In Between",          color:"#e8a020",
     test: j => { const r=parseInt(j.roughStage)||0; const f=parseInt(j.finishStage)||0; return r===100 && f===0; } },
-  { key:"finish",   label:"Finish In Progress",  color:"#a78bfa",
+  { key:"finish",   label:"Finish In Progress",  color:"#0ea5e9",
     test: j => { const f=parseInt(j.finishStage)||0; return f>0 && f<100; } },
   { key:"complete", label:"Completed",           color:"#22c55e",
     test: j => parseInt(j.finishStage)===100 },
