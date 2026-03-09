@@ -2149,7 +2149,7 @@ function App() {
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
       <div style={{position:"fixed",inset:0,backgroundImage:"url(/icon-192.png)",
         backgroundRepeat:"no-repeat",backgroundPosition:"center center",
-        backgroundSize:"320px 320px",opacity:0.04,pointerEvents:"none",zIndex:0}}/>
+        backgroundSize:"320px 320px",opacity:0.15,pointerEvents:"none",zIndex:0}}/>
 
       {/* iOS Chrome banner */}
       {(()=>{
