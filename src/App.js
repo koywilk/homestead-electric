@@ -2108,6 +2108,7 @@ function App() {
             </div>
             <div style={{fontSize:11,color:C.dim,marginTop:1}}>
               {showForeman&&<span style={{color:rowFc,fontWeight:600,marginRight:6}}>{foreman}</span>}
+              {job.lead&&<span style={{color:C.accent,fontWeight:600,marginRight:6}}>· {job.lead}</span>}
               {job.gc||"No GC set"}
             </div>
           </div>
