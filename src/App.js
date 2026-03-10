@@ -82,6 +82,7 @@ const blankJob = () => ({
   uploadedFiles:[],
   roughStage:"0%", roughQuestions:{ upper:[], main:[], basement:[] },
   roughPunch:emptyPunch(), roughMaterials:[], roughUpdates:[], roughNotes:"",
+  qcPunch:emptyPunch(),
   finishStage:"0%",
   finishPunch:emptyPunch(), finishMaterials:[], finishUpdates:[], finishNotes:"",
   finishQuestions:{ upper:[], main:[], basement:[] },
@@ -1416,14 +1417,14 @@ function PlansTab({job, onUpdate}) {
 
 
 const TABS = ["Job Info","Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
-              "Change Orders","Return Trips","Plans & Links"];
+              "Change Orders","Return Trips","Plans & Links","QC"];
 
 function JobDetail({job: rawJob, onUpdate, onClose}) {
   // Defensive normalization — prevents crashes on old jobs missing fields
   const job = {
     changeOrders:[], returnTrips:[], uploadedFiles:[], customLinks:[],
     roughMaterials:[], roughUpdates:[], finishMaterials:[], finishUpdates:[],
-    homeRuns:{}, roughPunch:{}, finishPunch:{},
+    homeRuns:{}, roughPunch:{}, finishPunch:{}, qcPunch:{},
     roughQuestions:{upper:[],main:[],basement:[]},
     finishQuestions:{upper:[],main:[],basement:[]},
     ...rawJob,
@@ -1673,6 +1674,13 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
           {tab==="Plans & Links"&&(
             <PlansTab job={job} onUpdate={u}/>
+          )}
+
+          {tab==="QC"&&(
+            <div>
+              <SectionHead label="QC Walk Checklist" color={C.teal}/>
+              <PunchSection punch={job.qcPunch} onCh={v=>u({qcPunch:v})} color={C.teal}/>
+            </div>
           )}
 
           {tab==="Job Info"&&(
