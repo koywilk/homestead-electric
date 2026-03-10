@@ -1910,15 +1910,26 @@ function deepMergeJob(remote, local) {
     const lv = local[key];
     const rv = remote[key];
     if(lv === rv) continue;
-    // Arrays of objects with ids — merge by id, local wins on conflict
+    // Arrays of objects with ids — merge by id
     if(Array.isArray(lv) && Array.isArray(rv)) {
       const remoteMap = Object.fromEntries((rv||[]).filter(i=>i?.id).map(i=>[i.id,i]));
       const localMap  = Object.fromEntries((lv||[]).filter(i=>i?.id).map(i=>[i.id,i]));
-      // Include all remote items, override with local where ids match, add new local items
       const allIds = [...new Set([...Object.keys(remoteMap),...Object.keys(localMap)])];
-      merged[key] = allIds.map(id => localMap[id]||remoteMap[id]);
+      merged[key] = allIds.map(id => {
+        const r = remoteMap[id];
+        const l = localMap[id];
+        if(!l) return r; // only in remote, keep it
+        if(!r) return l; // only in local, keep it
+        // Both exist — merge field by field, remote status/pulled fields win
+        // (field crew changes win over office edits on status fields)
+        return {
+          ...l,
+          status: r.status || l.status,
+          pulled: r.pulled !== undefined ? r.pulled : l.pulled,
+        };
+      });
     }
-    // Nested objects (like homeRuns, panelizedLighting) — recurse one level
+    // Nested objects (like homeRuns, panelizedLighting) — recurse
     else if(lv && rv && typeof lv==="object" && typeof rv==="object" && !Array.isArray(lv)) {
       merged[key] = deepMergeJob(rv, lv);
     }
@@ -2003,20 +2014,17 @@ function App() {
     clearTimeout(saveTimers.current[job.id]);
     saveTimers.current[job.id] = setTimeout(async()=>{
       try {
-        // Fetch latest version from Firebase first, then merge our changes on top
-        // This prevents overwriting changes made by other users on other devices
+        // Always fetch latest from Firebase and merge before saving
+        // Local scalar changes win, but remote array items are preserved
         const snap = await getDoc(doc(db,"jobs",job.id));
         let merged = job;
         if(snap.exists()) {
           const remote = snap.data()?.data;
-          if(remote && remote.updated_at > (job.updated_at||"")) {
-            // Remote is newer — do a deep merge, our local changes win on conflict
-            merged = deepMergeJob(remote, job);
-          }
+          if(remote) merged = deepMergeJob(remote, job);
         }
         merged = {...merged, updated_at: new Date().toISOString()};
         await setDoc(doc(db,"jobs",job.id),{data:merged,updated_at:merged.updated_at});
-        // Update local state with merged result to reflect others' changes
+        // Update local state with merged result so UI reflects others' changes too
         setJobs(js=>js.map(j=>j.id===merged.id?merged:j));
         if(jobRef.current?.id===merged.id) jobRef.current = merged;
         isDirty.current = false;
