@@ -1326,19 +1326,27 @@ function PlansTab({job, onUpdate}) {
             )}
             {links.map((lnk,i)=>(
               <div key={lnk.id} style={{marginBottom:8}}>
-                <Inp value={lnk.label||""} placeholder="Label (optional)…"
-                  style={{marginBottom:4}}
-                  onChange={e=>setLinks(links.map((x,j)=>j===i?{...x,label:e.target.value}:x))}/>
                 <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                  <Inp value={lnk.url||""} placeholder="Paste URL…"
-                    onChange={e=>setLinks(links.map((x,j)=>j===i?{...x,url:e.target.value}:x))}/>
-                  {lnk.url&&(
+                  {lnk.url ? (
                     <a href={lnk.url} target="_blank" rel="noreferrer"
-                      style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:7,
-                        color:C.blue,padding:"6px 10px",fontSize:11,textDecoration:"none",whiteSpace:"nowrap",flexShrink:0}}>
+                      style={{flex:1,background:C.blue+"11",border:`1px solid ${C.blue}33`,borderRadius:7,
+                        color:C.blue,padding:"7px 12px",fontSize:12,fontWeight:600,
+                        textDecoration:"none",whiteSpace:"nowrap",overflow:"hidden",
+                        textOverflow:"ellipsis"}}>
                       {lnk.label||"Open ↗"}
                     </a>
+                  ) : (
+                    <Inp value={lnk.url||""} placeholder="Paste URL…" style={{flex:1}}
+                      onChange={e=>setLinks(links.map((x,j)=>j===i?{...x,url:e.target.value}:x))}/>
                   )}
+                  <button onClick={()=>setLinks(links.map((x,j)=>j===i?{...x,url:""}:x))}
+                    title="Edit URL"
+                    style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                      color:C.dim,cursor:"pointer",fontSize:11,padding:"4px 8px",flexShrink:0}}>
+                    ✎
+                  </button>
+                  <Inp value={lnk.label||""} placeholder="Label…" style={{width:100,flexShrink:0}}
+                    onChange={e=>setLinks(links.map((x,j)=>j===i?{...x,label:e.target.value}:x))}/>
                   <button onClick={()=>setLinks(links.filter((_,j)=>j!==i))}
                     style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
                 </div>
@@ -1373,19 +1381,24 @@ function PlansTab({job, onUpdate}) {
             </div>
             {(cl.urls||[]).map((lnk,i)=>(
               <div key={lnk.id} style={{marginBottom:8}}>
-                <Inp value={lnk.label||""} placeholder="Label (optional)…"
-                  style={{marginBottom:4}}
-                  onChange={e=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).map((u,j)=>j===i?{...u,label:e.target.value}:u)}:x)})}/>
                 <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                  <Inp value={lnk.url||""} placeholder="Paste URL…"
-                    onChange={e=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).map((u,j)=>j===i?{...u,url:e.target.value}:u)}:x)})}/>
-                  {lnk.url&&(
+                  {lnk.url ? (
                     <a href={lnk.url} target="_blank" rel="noreferrer"
-                      style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:7,
-                        color:C.blue,padding:"6px 10px",fontSize:11,textDecoration:"none",whiteSpace:"nowrap",flexShrink:0}}>
+                      style={{flex:1,background:C.blue+"11",border:`1px solid ${C.blue}33`,borderRadius:7,
+                        color:C.blue,padding:"7px 12px",fontSize:12,fontWeight:600,
+                        textDecoration:"none",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
                       {lnk.label||"Open ↗"}
                     </a>
+                  ) : (
+                    <Inp value={lnk.url||""} placeholder="Paste URL…" style={{flex:1}}
+                      onChange={e=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).map((u,j)=>j===i?{...u,url:e.target.value}:u)}:x)})}/> 
                   )}
+                  <button onClick={()=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).map((u,j)=>j===i?{...u,url:""}:u)}:x)})}
+                    title="Edit URL"
+                    style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                      color:C.dim,cursor:"pointer",fontSize:11,padding:"4px 8px",flexShrink:0}}>✎</button>
+                  <Inp value={lnk.label||""} placeholder="Label…" style={{width:100,flexShrink:0}}
+                    onChange={e=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).map((u,j)=>j===i?{...u,label:e.target.value}:u)}:x)})}/> 
                   <button onClick={()=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).filter((_,j)=>j!==i)}:x)})}
                     style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
                 </div>
