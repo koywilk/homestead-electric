@@ -74,7 +74,7 @@ const newKPRow     = (num) => ({ id:uid(), num, name:"" });
 const emptyPunch   = ()    => ({ upper:[], main:[], basement:[] });
 
 const FOREMEN = ["Koy", "Vasa", "Colby"];
-const FOREMEN_COLORS = {"Koy":"#3b82f6","Vasa":"#eab308","Colby":"#22c55e"};
+const FOREMEN_COLORS = {"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e"};
 
 const blankJob = () => ({
   id:uid(), name:"", address:"", gc:"", phone:"", simproNo:"", foreman:"Koy", lead:"", flagged:false,
