@@ -1464,7 +1464,9 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
           </div>
           <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
             {openCount>0  &&<Pill label={`${openCount} open punch`} color={C.red}/>}
-            {pendingCOs>0 &&<Pill label={`${pendingCOs} CO pending`} color={C.purple}/>}
+            {pendingCOs>0 &&<Pill label={`${pendingCOs} CO pending`} color={C.orange}/>}
+            {(job.returnTrips||[]).filter(r=>!r.signedOff).length>0&&
+              <Pill label={`${(job.returnTrips||[]).filter(r=>!r.signedOff).length} RT pending`} color={C.blue}/>}
             
             <button onClick={refreshJob} title="Refresh"
               style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
