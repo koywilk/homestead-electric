@@ -1106,8 +1106,27 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 }
 
 function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange}) {
+  const allRows = [...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[])];
+  const total   = allRows.length;
+  const pulled  = allRows.filter(r=>r.status==="Pulled").length;
+  const pct     = total > 0 ? Math.round((pulled/total)*100) : 0;
+
   return (
     <div>
+      {total > 0 && (
+        <div style={{marginBottom:20,padding:"14px 16px",background:C.surface,
+          border:`1px solid ${C.border}`,borderRadius:12}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
+            <span style={{fontSize:12,fontWeight:700,color:C.text}}>Home Runs Pulled</span>
+            <span style={{fontSize:13,fontWeight:700,color:pct===100?C.green:C.blue}}>{pulled} / {total} — {pct}%</span>
+          </div>
+          <div style={{height:8,background:C.border,borderRadius:99,overflow:"hidden"}}>
+            <div style={{height:"100%",width:`${pct}%`,
+              background:pct===100?C.green:C.blue,
+              borderRadius:99,transition:"width 0.4s ease"}}/>
+          </div>
+        </div>
+      )}
       <SectionHead label="Panel Feeds" color={C.blue}/>
       <PanelFeeds feeds={homeRuns.panelFeeds||[]}
         onChange={v=>onHRChange({...homeRuns,panelFeeds:v})}/>
@@ -1191,7 +1210,19 @@ function CP4LoadsSection({loads,onChange}) {
 function TapeLightSection({lights,onChange}) {
   const emptyTL  = () => ({id:uid(),loadName:"",driverLoc:"",length:"",trackLense:"",driverSize:""});
   const add      = () => onChange([...lights, emptyTL()]);
-  const upd      = (id,p) => onChange(lights.map(l=>l.id===id?{...l,...p}:l));
+  const DRIVER_OPTS = [20,40,60,96,192,288];
+  const calcDriver = (length) => {
+    const ft = parseFloat(length);
+    if(!ft || isNaN(ft)) return "";
+    const watts = ft * 1.5;
+    const driver = DRIVER_OPTS.find(d => d >= watts);
+    return driver ? `${driver}W` : "288W+";
+  };
+  const upd = (id,p) => {
+    const updated = {...p};
+    if(p.length !== undefined) updated.driverSize = calcDriver(p.length);
+    onChange(lights.map(l=>l.id===id?{...l,...updated}:l));
+  };
   const del      = (id)   => onChange(lights.filter(l=>l.id!==id));
   return (
     <div>
@@ -1232,7 +1263,14 @@ function TapeLightSection({lights,onChange}) {
             </div>
             <div>
               <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Driver Size Needed</div>
-              <Sel value={l.driverSize} onChange={e=>upd(l.id,{driverSize:e.target.value})} options={DRIVER_SIZES}/>
+              {l.driverSize ? (
+                <div style={{background:C.teal+"22",border:`1px solid ${C.teal}44`,borderRadius:7,
+                  padding:"7px 10px",fontSize:13,fontWeight:700,color:C.teal,textAlign:"center"}}>
+                  {l.driverSize}
+                </div>
+              ) : (
+                <Sel value={l.driverSize} onChange={e=>upd(l.id,{driverSize:e.target.value})} options={DRIVER_SIZES}/>
+              )}
             </div>
           </div>
         </div>
