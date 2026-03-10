@@ -135,8 +135,7 @@ function EmailModal({ subject, body, onClose }) {
 
   const send = () => {
     if (!allRecipients.length) return;
-    const gmailUrl = `https://mail.google.com/mail/?view=cm&to=${encodeURIComponent(allRecipients.join(","))}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
-    window.open(gmailUrl, "_blank");
+    openEmail(allRecipients.join(","), subject, body);
     onClose();
   };
 
@@ -1681,7 +1680,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
           {tab==="QC"&&(
             <div>
               <SectionHead label="QC Walk Checklist" color={C.teal}/>
-              <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ window.open(`https://mail.google.com/mail/?view=cm&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,"_blank"); }}/>
+              <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }}/>
             </div>
           )}
 
@@ -1976,6 +1975,19 @@ function StageSectionList({ jobs, JobRow, fc }) {
 const ALL_STAGES = ROUGH_STAGES;
 
 // ── QC Walks ──────────────────────────────────────────────────
+// Detect mobile device
+const isMobile = () => /iphone|ipad|ipod|android/i.test(navigator.userAgent);
+
+// Open email — uses mailto on mobile (opens native mail app), Gmail compose on desktop
+const openEmail = (to, subject, body) => {
+  if(isMobile()) {
+    window.location.href = `mailto:${encodeURIComponent(to||"")}?subject=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+  } else {
+    const url = `https://mail.google.com/mail/?view=cm&to=${encodeURIComponent(to||"")}&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`;
+    window.open(url, "_blank");
+  }
+};
+
 // Deep merge two job objects — arrays are merged by id, scalars prefer local
 function deepMergeJob(remote, local) {
   const merged = {...remote};
@@ -2127,8 +2139,9 @@ function App() {
     a.click();
     URL.revokeObjectURL(url);
     // Also open Gmail compose with instructions
-    const gmailUrl = `https://mail.google.com/mail/?view=cm&su=${encodeURIComponent("Homestead Electric — Daily Backup " + new Date().toLocaleDateString())}&body=${encodeURIComponent("Backup file downloaded. Attach the file from your downloads folder.\n\nView job board: https://homestead-electric.vercel.app/")}`;
-    setTimeout(()=>window.open(gmailUrl,"_blank"), 500);
+    const gmailSubject = "Homestead Electric — Daily Backup " + new Date().toLocaleDateString();
+    const gmailBody = "Backup file downloaded. Attach the file from your downloads folder.\n\nView job board: https://homestead-electric.vercel.app/";
+    setTimeout(()=>openEmail("", gmailSubject, gmailBody), 500);
   };
 
   const flushSaves = () => {
