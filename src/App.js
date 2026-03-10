@@ -2212,7 +2212,8 @@ function App() {
     const open      = openCount(job);
     const pendCO    = (job.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length;
     const pendRT    = (job.returnTrips||[]).filter(r=>!r.signedOff).length;
-    const qcItems   = countFloor(job.qcPunch?.upper||{}) + countFloor(job.qcPunch?.main||{}) + countFloor(job.qcPunch?.basement||{});
+    const countQCFloor = (f) => { if(!f) return 0; return (f.general||[]).filter(i=>!i.done).length + (f.rooms||[]).reduce((a,r)=>a+(r.items||[]).filter(i=>!i.done).length,0); };
+    const qcItems = countQCFloor(job.qcPunch?.upper) + countQCFloor(job.qcPunch?.main) + countQCFloor(job.qcPunch?.basement);
     const foreman = job.foreman||"Koy";
     const rowFc = fc || FOREMEN_COLORS[foreman];
     return (
