@@ -2370,8 +2370,8 @@ function App() {
             ):(
               <StageSectionList jobs={filtered} JobRow={JobRow} fc={FOREMEN_COLORS[activeForeman]}/>
             )}
-              </div>
           </div>
+        </div>
       )}
 
       {selected&&<JobDetail job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>}
