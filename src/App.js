@@ -1679,7 +1679,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
           {tab==="QC"&&(
             <div>
               <SectionHead label="QC Walk Checklist" color={C.teal}/>
-              <PunchSection punch={job.qcPunch} onCh={v=>u({qcPunch:v})} color={C.teal}/>
+              <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ window.open(`https://mail.google.com/mail/?view=cm&su=${encodeURIComponent(subject)}&body=${encodeURIComponent(body)}`,"_blank"); }}/>
             </div>
           )}
 
