@@ -391,7 +391,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
             <div key={room.id} style={{ marginTop: 12, background: C.surface,
               border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: C.text, flex: 1 }}>🚪 {room.name}</span>
+                <span style={{ fontSize: 12, fontWeight: 700, color: C.text, flex: 1 }}>{room.name}</span>
                 {(Array.isArray(room.items) ? room.items : []).filter(i => !i.done).length > 0 &&
                   <span style={{ fontSize: 10, background: `${C.red}22`, color: C.red,
                     borderRadius: 99, padding: '2px 6px', fontWeight: 700 }}>
@@ -1417,6 +1417,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
           justifyContent:"space-between",alignItems:"center",flexShrink:0,gap:12,flexWrap:"wrap"}}>
           <div>
             <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>
+              {job.simproNo&&<span style={{fontSize:13,color:C.dim,fontFamily:"'DM Sans',sans-serif",fontWeight:600,letterSpacing:"0.05em",marginRight:8}}>#{job.simproNo}</span>}
               {job.name||"New Job"}
             </div>
             <div style={{fontSize:11,color:C.dim,marginTop:2}}>
@@ -2317,15 +2318,17 @@ function App() {
             <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}>
               {(()=>{
                 const fJobs = jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):(j.foreman||"Koy")===activeForeman);
-                const fOpen = fJobs.reduce((a,j)=>a+openCount(j),0);
-                const fCOs  = fJobs.reduce((a,j)=>a+j.changeOrders.filter(c=>c.status==="Pending").length,0);
-                const fFlag = fJobs.filter(j=>j.flagged).length;
                 const fDone = fJobs.filter(j=>parseInt(j.finishStage)===100).length;
-                return [[fJobs.length,"Jobs",FOREMEN_COLORS[activeForeman]],
-                  [fOpen,"Open Items",fOpen>0?C.red:C.green],
-                  [fCOs,"Pending COs",fCOs>0?C.purple:C.muted],
-                  [fFlag,"Flagged",fFlag>0?C.accent:C.muted],
-                  [fDone,"Complete",C.green]].map(([v,l,c])=>(
+                const fRough   = fJobs.filter(j=>parseInt(j.roughStage)>0&&parseInt(j.roughStage)<100&&parseInt(j.finishStage)===0).length;
+                const fBetween = fJobs.filter(j=>parseInt(j.roughStage)===100&&parseInt(j.finishStage)===0).length;
+                const fFinish  = fJobs.filter(j=>parseInt(j.finishStage)>0&&parseInt(j.finishStage)<100).length;
+                const fNotStarted = fJobs.filter(j=>parseInt(j.roughStage)===0).length;
+                return [[fJobs.length,"Total Jobs",C.blue],
+                  [fNotStarted,"Not Started",C.dim],
+                  [fRough,"Rough",C.rough],
+                  [fBetween,"In Between",C.orange],
+                  [fFinish,"Finish",C.finish],
+                  [fDone,"Completed",C.green]].map(([v,l,c])=>(
                   <div key={l} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:10,
                     padding:"8px 16px",display:"flex",gap:10,alignItems:"center"}}>
                     <span style={{fontFamily:"'Bebas Neue'",fontSize:24,color:c,lineHeight:1}}>{v}</span>
