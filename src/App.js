@@ -2014,22 +2014,7 @@ function App() {
     clearTimeout(saveTimers.current[job.id]);
     saveTimers.current[job.id] = setTimeout(async()=>{
       try {
-        // Fetch latest from Firebase and merge before saving
-        let merged = job;
-        try {
-          const snap = await getDoc(doc(db,"jobs",job.id));
-          if(snap.exists()) {
-            const remote = snap.data()?.data;
-            if(remote) merged = deepMergeJob(remote, job);
-          }
-        } catch(fetchErr) {
-          // If fetch fails, just save what we have — better than losing data
-          console.warn('Merge fetch failed, saving without merge:', fetchErr?.message);
-        }
-        merged = {...merged, updated_at: new Date().toISOString()};
-        await setDoc(doc(db,"jobs",job.id),{data:merged,updated_at:merged.updated_at});
-        setJobs(js=>js.map(j=>j.id===merged.id?merged:j));
-        if(jobRef.current?.id===merged.id) jobRef.current = merged;
+        await setDoc(doc(db,"jobs",job.id),{data:job,updated_at:new Date().toISOString()});
         isDirty.current = false;
         setSyncStatus("saved");
         setTimeout(()=>setSyncStatus("idle"),2000);
