@@ -7,7 +7,7 @@ if("serviceWorker" in navigator) {
   });
 }
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs } from "firebase/firestore";
+import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAQl6V74U502_ZHF3h_1W0yYDuKr2mLI5Q",
@@ -1965,38 +1965,47 @@ function App() {
     }));
   };
 
-  // Load all jobs on start — each job is its own Firestore document
+  // Real-time listener — all devices stay in sync automatically
   useEffect(()=>{
-    (async()=>{
-      try {
-        const snap = await getDocs(collection(db,"jobs"));
+    // Seed from localStorage while Firebase loads
+    try {
+      const b = localStorage.getItem('hejobs_backup');
+      if(b) { const p=JSON.parse(b); if(p?.length) setJobs(migrate(p)); }
+    } catch(e){}
+
+    const unsub = onSnapshot(collection(db,"jobs"),
+      (snap) => {
         if(!snap.empty) {
           const loaded = migrate(snap.docs.map(d=>d.data().data).filter(Boolean));
           setJobs(loaded);
+          // Keep selected job in sync with latest data
+          setSelected(sel => {
+            if(!sel) return sel;
+            const updated = loaded.find(j=>j.id===sel.id);
+            return updated || sel;
+          });
           try { localStorage.setItem('hejobs_backup', JSON.stringify(loaded)); } catch(e){}
         } else {
+          // Firestore empty — restore from localStorage
           try {
             const b = localStorage.getItem('hejobs_backup');
             if(b) {
               const p = JSON.parse(b);
               if(p?.length) {
                 setJobs(p);
-                for(const job of p) {
-                  await setDoc(doc(db,"jobs",job.id),{data:job,updated_at:new Date().toISOString()});
-                }
+                p.forEach(job => setDoc(doc(db,"jobs",job.id),{data:job,updated_at:new Date().toISOString()}).catch(()=>{}));
               }
             }
           } catch(e){}
         }
-      } catch(e){
-        console.error('Load error:',e);
-        try {
-          const b = localStorage.getItem('hejobs_backup');
-          if(b) { const p=JSON.parse(b); if(p?.length) setJobs(p); }
-        } catch(e2){}
+        initialLoad.current = false;
+      },
+      (err) => {
+        console.error('Snapshot error:',err);
+        initialLoad.current = false;
       }
-      initialLoad.current = false;
-    })();
+    );
+    return () => unsub(); // cleanup on unmount
   },[]);
 
   // Save a single job as its own Firestore document
