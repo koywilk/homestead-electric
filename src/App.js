@@ -1427,11 +1427,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
           <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
             {openCount>0  &&<Pill label={`${openCount} open punch`} color={C.red}/>}
             {pendingCOs>0 &&<Pill label={`${pendingCOs} CO pending`} color={C.purple}/>}
-            <button onClick={saveNow}
-              style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
-                color:C.dim,cursor:"pointer",padding:"5px 14px",fontSize:12,fontFamily:"inherit"}}>
-              Save
-            </button>
+            
             <button onClick={refreshJob} title="Refresh"
               style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
                 color:C.dim,cursor:"pointer",padding:"5px 10px",fontSize:16,
@@ -2233,12 +2229,7 @@ function App() {
                 <div style={{fontSize:11,color:C.dim,marginTop:3,display:"flex",gap:16,alignItems:"center"}}>
                   <span>{jobs.length} total job sites</span>
                   <span style={{color:syncColor}}>{syncLabel}</span>
-                  <button onClick={()=>flushSaves()}
-                    style={{background:C.accent,border:"none",borderRadius:6,color:"#000",
-                      fontSize:11,fontWeight:700,padding:"3px 10px",cursor:"pointer",
-                      fontFamily:"inherit"}}>
-                    Save
-                  </button>
+
                   <button onClick={backupByEmail}
                     style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
                       color:C.dim,fontSize:11,fontWeight:600,padding:"3px 10px",cursor:"pointer",
