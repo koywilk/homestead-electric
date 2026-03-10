@@ -579,11 +579,18 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
             <Inp value={o.desc} onChange={e=>upd(o.id,{desc:e.target.value})} placeholder="Describe the change order…"/>
           </div>
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-            {[["task","Task (In Field)","Field task"],["time","Estimated Time","e.g. 3 hrs"]].map(([k,l,ph])=>(
+            {[["time","Estimated Time","e.g. 3 hrs"]].map(([k,l,ph])=>(
               <div key={k}>
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>{l}</div>
                 <Inp value={o[k]} onChange={e=>upd(o.id,{[k]:e.target.value})} placeholder={ph}/>
               </div>
+            ))}
+            <div>
+              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Task (In Field)</div>
+              <TA value={o.task} onChange={e=>upd(o.id,{task:e.target.value})} placeholder={"- Task 1\n- Task 2"} rows={3}/>
+            </div>
+            {[[]].map(()=>(
+              <div key="spacer2"/>
             ))}
             <div>
               <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Material Needed</div>
