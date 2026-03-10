@@ -2170,8 +2170,9 @@ function App() {
   });
 
   const JobRow = ({job, fc, showForeman=false}) => {
-    const open   = openCount(job);
-    const pendCO = (job.changeOrders||[]).filter(c=>c.status==="Pending").length;
+    const open      = openCount(job);
+    const pendCO    = (job.changeOrders||[]).filter(c=>c.status!=="Work Completed").length;
+    const pendRT    = (job.returnTrips||[]).filter(r=>!r.signedOff).length;
     const foreman = job.foreman||"Koy";
     const rowFc = fc || FOREMEN_COLORS[foreman];
     return (
@@ -2200,7 +2201,8 @@ function App() {
           </div>
           <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
             {open>0   &&<Pill label={`${open} open`} color={C.red}/>}
-            {pendCO>0 &&<Pill label={`${pendCO} CO`} color={C.purple}/>}
+            {pendCO>0 &&<Pill label={`${pendCO} CO`} color={C.orange}/>}
+            {pendRT>0 &&<Pill label={`${pendRT} RT`} color={C.blue}/>}
             {(job.uploadedFiles||[]).length>0&&<Pill label={`${job.uploadedFiles.length} files`} color={C.green}/>}
           </div>
           <div style={{display:"flex",alignItems:"center",gap:6,marginLeft:"auto",flexShrink:0}}>
