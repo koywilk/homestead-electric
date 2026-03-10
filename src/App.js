@@ -7,7 +7,7 @@ if("serviceWorker" in navigator) {
   });
 }
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, deleteDoc, collection, getDocs } from "firebase/firestore";
+import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs } from "firebase/firestore";
 
 const firebaseConfig = {
   apiKey: "AIzaSyAQl6V74U502_ZHF3h_1W0yYDuKr2mLI5Q",
@@ -2005,7 +2005,6 @@ function App() {
       try {
         // Fetch latest version from Firebase first, then merge our changes on top
         // This prevents overwriting changes made by other users on other devices
-        const { getDoc } = await import("firebase/firestore");
         const snap = await getDoc(doc(db,"jobs",job.id));
         let merged = job;
         if(snap.exists()) {
