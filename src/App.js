@@ -1441,7 +1441,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
     const p = job?.[key]||{};
     return total + countFloor(p.upper) + countFloor(p.main) + countFloor(p.basement);
   },0);
-  const pendingCOs = (job.changeOrders||[]).filter(c=>c.status==="Pending").length;
+  const pendingCOs = (job.changeOrders||[]).filter(c=>c.status!=="Work Completed").length;
 
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.82)",zIndex:200,
@@ -2144,7 +2144,7 @@ function App() {
   const totalOpen  = jobs.reduce((a,j)=>a+openCount(j),0);
   const flagged    = jobs.filter(j=>j.flagged).length;
   const complete   = jobs.filter(j=>parseInt(j.finishStage)===100).length;
-  const pendingCOs = jobs.reduce((a,j)=>a+j.changeOrders.filter(c=>c.status==="Pending").length,0);
+  const pendingCOs = jobs.reduce((a,j)=>a+j.changeOrders.filter(c=>c.status!=="Work Completed").length,0);
   const syncColor  = {idle:C.muted,saving:C.accent,saved:C.green,error:C.red}[syncStatus];
   const syncLabel  = {idle:"All changes saved",saving:"Saving…",saved:"✓ Saved",error:"Save failed"}[syncStatus];
 
@@ -2305,7 +2305,7 @@ function App() {
                 const fc    = FOREMEN_COLORS[f];
                 const fJobs = jobs.filter(j=>(j.foreman||"Koy")===f);
                 const fOpen = fJobs.reduce((a,j)=>a+openCount(j),0);
-                const fCOs  = fJobs.reduce((a,j)=>a+j.changeOrders.filter(c=>c.status==="Pending").length,0);
+                const fCOs  = fJobs.reduce((a,j)=>a+j.changeOrders.filter(c=>c.status!=="Work Completed").length,0);
                 const fFlag = fJobs.filter(j=>j.flagged).length;
                 const rAvg  = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+(parseInt(j.roughStage)||0),0)/fJobs.length) : 0;
                 const fnAvg = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+(parseInt(j.finishStage)||0),0)/fJobs.length) : 0;
@@ -2338,7 +2338,7 @@ function App() {
                 const fc    = "#6b7280";
                 const uJobs = jobs.filter(j=>!j.foreman||j.foreman==="Unassigned");
                 const uOpen = uJobs.reduce((a,j)=>a+openCount(j),0);
-                const uCOs  = uJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.status==="Pending").length,0);
+                const uCOs  = uJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.status!=="Work Completed").length,0);
                 const uFlag = uJobs.filter(j=>j.flagged).length;
                 return (
                   <div className="foreman-card" onClick={()=>openForeman("Unassigned")}
