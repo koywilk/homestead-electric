@@ -1470,6 +1470,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
     return total + countFloor(p.upper) + countFloor(p.main) + countFloor(p.basement);
   },0);
   const pendingCOs = (job.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length;
+  const qcCount = countFloor(job.qcPunch?.upper||{}) + countFloor(job.qcPunch?.main||{}) + countFloor(job.qcPunch?.basement||{});
 
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.82)",zIndex:200,
@@ -1495,6 +1496,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
             {pendingCOs>0 &&<Pill label={`${pendingCOs} CO pending`} color={C.orange}/>}
             {(job.returnTrips||[]).filter(r=>!r.signedOff).length>0&&
               <Pill label={`${(job.returnTrips||[]).filter(r=>!r.signedOff).length} RT pending`} color={C.blue}/>}
+            {qcCount>0&&<Pill label={`${qcCount} QC item${qcCount!==1?"s":""}`} color={C.red}/>}
             
             <button onClick={refreshJob} title="Refresh"
               style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
@@ -2210,6 +2212,7 @@ function App() {
     const open      = openCount(job);
     const pendCO    = (job.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length;
     const pendRT    = (job.returnTrips||[]).filter(r=>!r.signedOff).length;
+    const qcItems   = countFloor(job.qcPunch?.upper||{}) + countFloor(job.qcPunch?.main||{}) + countFloor(job.qcPunch?.basement||{});
     const foreman = job.foreman||"Koy";
     const rowFc = fc || FOREMEN_COLORS[foreman];
     return (
@@ -2240,6 +2243,7 @@ function App() {
             {open>0   &&<Pill label={`${open} open`} color={C.red}/>}
             {pendCO>0 &&<Pill label={`${pendCO} CO`} color={C.orange}/>}
             {pendRT>0 &&<Pill label={`${pendRT} RT`} color={C.blue}/>}
+            {qcItems>0&&<Pill label={`${qcItems} QC`} color={C.red}/>}
             {(job.uploadedFiles||[]).length>0&&<Pill label={`${job.uploadedFiles.length} files`} color={C.green}/>}
           </div>
           <div style={{display:"flex",alignItems:"center",gap:6,marginLeft:"auto",flexShrink:0}}>
