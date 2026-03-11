@@ -1372,9 +1372,10 @@ const LINK_FIELDS = [
 // Convert various share URLs to embeddable URLs
 function getEmbedUrl(url) {
   if(!url) return null;
-  // Google Drive file: /file/d/FILE_ID/view or /open?id=FILE_ID
+  // Google Drive file: /file/d/FILE_ID/...
   const driveFile = url.match(/drive\.google\.com\/file\/d\/([^/?\s]+)/);
   if(driveFile) return `https://drive.google.com/file/d/${driveFile[1]}/preview`;
+  // Google Drive open?id=
   const driveOpen = url.match(/[?&]id=([^&\s]+)/);
   if(url.includes('drive.google.com') && driveOpen) return `https://drive.google.com/file/d/${driveOpen[1]}/preview`;
   // Google Docs/Sheets/Slides
@@ -1385,6 +1386,10 @@ function getEmbedUrl(url) {
   // Direct image
   if(url.match(/\.(jpg|jpeg|png|gif|webp)(\?|$)/i)) return url;
   return null;
+}
+
+function canPreviewUrl(url) {
+  return !!getEmbedUrl(url) || isImageUrl(url);
 }
 
 function isImageUrl(url) {
@@ -1437,12 +1442,12 @@ function FilePreview({url, label, onClose}) {
 function PlansTab({job, onUpdate}) {
   const [preview, setPreview] = useState(null); // {url, label}
   const LinkRow = ({lnk, i, onEditUrl, onEditLabel, onDelete}) => {
-    const canPreview = !!getEmbedUrl(lnk.url) || isImageUrl(lnk.url);
+    const canPreview = canPreviewUrl(lnk.url);
     return (
       <div style={{marginBottom:8}}>
         <div style={{display:"flex",gap:6,alignItems:"center"}}>
           {lnk.url ? (
-            <button onClick={()=>canPreview?setPreview({url:lnk.url,label:lnk.label||lnk.url}):window.open(lnk.url,"_blank")}
+            <button onClick={()=>setPreview({url:lnk.url,label:lnk.label||lnk.url})}
               style={{flex:1,background:C.blue+"11",border:`1px solid ${C.blue}33`,borderRadius:7,
                 color:C.blue,padding:"7px 12px",fontSize:12,fontWeight:600,textAlign:"left",
                 whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",cursor:"pointer",
@@ -1453,7 +1458,7 @@ function PlansTab({job, onUpdate}) {
             <Inp value={lnk.url||""} placeholder="Paste URL…" style={{flex:1}}
               onChange={e=>onEditUrl(e.target.value)}/>
           )}
-          {lnk.url&&canPreview&&(
+          {lnk.url&&(
             <a href={lnk.url} target="_blank" rel="noreferrer" title="Open in new tab"
               style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
                 color:C.dim,fontSize:11,padding:"4px 8px",flexShrink:0,textDecoration:"none"}}>↗</a>
