@@ -2465,14 +2465,15 @@ function App() {
               TAP A FOREMAN TO VIEW THEIR JOBS
             </div>
             {(()=>{
-              const ns  = jobs.filter(j=>parseInt(j.roughStage)||0===0).length;
+              const ns  = jobs.filter(j=>(parseInt(j.roughStage)||0)===0).length;
               const ro  = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;const f=parseInt(j.finishStage)||0;return r>0&&r<100&&f===0;}).length;
               const btw = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;const f=parseInt(j.finishStage)||0;return r===100&&f===0;}).length;
               const fin = jobs.filter(j=>{const f=parseInt(j.finishStage)||0;return f>0&&f<100;}).length;
-              const don = jobs.filter(j=>parseInt(j.finishStage)===100).length;
+              const don = jobs.filter(j=>(parseInt(j.finishStage)||0)===100).length;
               return (
                 <div style={{display:"flex",gap:8,marginBottom:24,flexWrap:"wrap"}}>
                   {[
+                    [jobs.length,"Total",C.text],
                     [ns,"Not Started","#5a6480"],
                     [ro,"Rough",C.rough],
                     [btw,"In Between",C.orange],
