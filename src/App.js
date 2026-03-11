@@ -1369,114 +1369,9 @@ const LINK_FIELDS = [
   ["qcLink","QC Link"],["matterportLink","Matterport Link"],
 ];
 
-// Convert various share URLs to embeddable URLs
-function getEmbedUrl(url) {
-  if(!url) return null;
-  // Google Drive file: /file/d/FILE_ID/...
-  const driveFile = url.match(/drive\.google\.com\/file\/d\/([^/?\s]+)/);
-  if(driveFile) return `https://drive.google.com/file/d/${driveFile[1]}/preview`;
-  // Google Drive open?id=
-  const driveOpen = url.match(/[?&]id=([^&\s]+)/);
-  if(url.includes('drive.google.com') && driveOpen) return `https://drive.google.com/file/d/${driveOpen[1]}/preview`;
-  // Google Docs/Sheets/Slides
-  const docsMatch = url.match(/docs\.google\.com\/(document|spreadsheets|presentation)\/d\/([^/?\s]+)/);
-  if(docsMatch) return `https://docs.google.com/${docsMatch[1]}/d/${docsMatch[2]}/preview`;
-  // Direct PDF
-  if(url.match(/\.pdf(\?|$)/i)) return url;
-  // Direct image
-  if(url.match(/\.(jpg|jpeg|png|gif|webp)(\?|$)/i)) return url;
-  return null;
-}
-
-function canPreviewUrl(url) {
-  return !!getEmbedUrl(url) || isImageUrl(url);
-}
-
-function isImageUrl(url) {
-  return !!(url && url.match(/\.(jpg|jpeg|png|gif|webp)(\?|$)/i));
-}
-
-function FilePreview({url, label, onClose}) {
-  const embedUrl = getEmbedUrl(url);
-  const isImg = isImageUrl(url);
-  return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.85)",zIndex:1000,
-      display:"flex",flexDirection:"column"}}>
-      <div style={{display:"flex",alignItems:"center",gap:12,padding:"12px 16px",
-        background:C.surface,borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
-        <span style={{flex:1,fontSize:13,fontWeight:600,color:C.text,overflow:"hidden",
-          textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{label||"Preview"}</span>
-        <a href={url} target="_blank" rel="noreferrer"
-          style={{background:C.blue,color:"#fff",border:"none",borderRadius:7,
-            padding:"6px 14px",fontSize:12,fontWeight:600,textDecoration:"none",
-            whiteSpace:"nowrap",cursor:"pointer"}}>
-          Open in Drive ↗
-        </a>
-        <button onClick={onClose}
-          style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,
-            color:C.text,fontSize:18,width:34,height:34,cursor:"pointer",
-            display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
-      </div>
-      <div style={{flex:1,overflow:"hidden",position:"relative"}}>
-        {isImg ? (
-          <img src={url} alt={label||"preview"}
-            style={{width:"100%",height:"100%",objectFit:"contain"}}/>
-        ) : embedUrl ? (
-          <iframe src={embedUrl} style={{width:"100%",height:"100%",border:"none"}}
-            allow="autoplay" title={label||"preview"}/>
-        ) : (
-          <div style={{display:"flex",flexDirection:"column",alignItems:"center",
-            justifyContent:"center",height:"100%",gap:16,color:C.dim}}>
-            <div style={{fontSize:48}}>📄</div>
-            <div style={{fontSize:14}}>This file can't be previewed inline</div>
-            <a href={url} target="_blank" rel="noreferrer"
-              style={{background:C.blue,color:"#fff",borderRadius:8,padding:"10px 24px",
-                fontSize:13,fontWeight:600,textDecoration:"none"}}>Open in Browser ↗</a>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
 function PlansTab({job, onUpdate}) {
-  const [preview, setPreview] = useState(null); // {url, label}
-  const LinkRow = ({lnk, i, onEditUrl, onEditLabel, onDelete}) => {
-    const canPreview = canPreviewUrl(lnk.url);
-    return (
-      <div style={{marginBottom:8}}>
-        <div style={{display:"flex",gap:6,alignItems:"center"}}>
-          {lnk.url ? (
-            <button onClick={()=>setPreview({url:lnk.url,label:lnk.label||lnk.url})}
-              style={{flex:1,background:C.blue+"11",border:`1px solid ${C.blue}33`,borderRadius:7,
-                color:C.blue,padding:"7px 12px",fontSize:12,fontWeight:600,textAlign:"left",
-                whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",cursor:"pointer",
-                fontFamily:"inherit"}}>
-              {lnk.label||(canPreview?"Preview ↗":"Open ↗")}
-            </button>
-          ) : (
-            <Inp value={lnk.url||""} placeholder="Paste URL…" style={{flex:1}}
-              onChange={e=>onEditUrl(e.target.value)}/>
-          )}
-          {lnk.url&&(
-            <a href={lnk.url} target="_blank" rel="noreferrer" title="Open in new tab"
-              style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
-                color:C.dim,fontSize:11,padding:"4px 8px",flexShrink:0,textDecoration:"none"}}>↗</a>
-          )}
-          <button onClick={()=>onEditUrl("")} title="Edit URL"
-            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
-              color:C.dim,cursor:"pointer",fontSize:11,padding:"4px 8px",flexShrink:0}}>✎</button>
-          <Inp value={lnk.label||""} placeholder="Label…" style={{width:90,flexShrink:0}}
-            onChange={e=>onEditLabel(e.target.value)}/>
-          <button onClick={onDelete}
-            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
-        </div>
-      </div>
-    );
-  };
   return (
     <div>
-      {preview&&<FilePreview url={preview.url} label={preview.label} onClose={()=>setPreview(null)}/>}
       <SectionHead label="Plans + Job Links" color={C.green}/>
       {LINK_FIELDS.map(([k,l])=>{
         const links = (job.linkSections?.[k]) || (job[k] ? [{id:k+"-0", url:job[k]}] : []);
@@ -1498,10 +1393,32 @@ function PlansTab({job, onUpdate}) {
               <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No links yet</div>
             )}
             {links.map((lnk,i)=>(
-              <LinkRow key={lnk.id} lnk={lnk} i={i}
-                onEditUrl={v=>setLinks(links.map((x,j)=>j===i?{...x,url:v}:x))}
-                onEditLabel={v=>setLinks(links.map((x,j)=>j===i?{...x,label:v}:x))}
-                onDelete={()=>setLinks(links.filter((_,j)=>j!==i))}/>
+              <div key={lnk.id} style={{marginBottom:8}}>
+                <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                  {lnk.url ? (
+                    <a href={lnk.url} target="_blank" rel="noreferrer"
+                      style={{flex:1,background:C.blue+"11",border:`1px solid ${C.blue}33`,borderRadius:7,
+                        color:C.blue,padding:"7px 12px",fontSize:12,fontWeight:600,
+                        textDecoration:"none",whiteSpace:"nowrap",overflow:"hidden",
+                        textOverflow:"ellipsis"}}>
+                      {lnk.label||"Open ↗"}
+                    </a>
+                  ) : (
+                    <Inp value={lnk.url||""} placeholder="Paste URL…" style={{flex:1}}
+                      onChange={e=>setLinks(links.map((x,j)=>j===i?{...x,url:e.target.value}:x))}/>
+                  )}
+                  <button onClick={()=>setLinks(links.map((x,j)=>j===i?{...x,url:""}:x))}
+                    title="Edit URL"
+                    style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                      color:C.dim,cursor:"pointer",fontSize:11,padding:"4px 8px",flexShrink:0}}>
+                    ✎
+                  </button>
+                  <Inp value={lnk.label||""} placeholder="Label…" style={{width:100,flexShrink:0}}
+                    onChange={e=>setLinks(links.map((x,j)=>j===i?{...x,label:e.target.value}:x))}/>
+                  <button onClick={()=>setLinks(links.filter((_,j)=>j!==i))}
+                    style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
+                </div>
+              </div>
             ))}
           </div>
         );
@@ -1531,10 +1448,29 @@ function PlansTab({job, onUpdate}) {
                 style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:13,flexShrink:0}}>🗑</button>
             </div>
             {(cl.urls||[]).map((lnk,i)=>(
-              <LinkRow key={lnk.id} lnk={lnk} i={i}
-                onEditUrl={v=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).map((u,j)=>j===i?{...u,url:v}:u)}:x)})}
-                onEditLabel={v=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).map((u,j)=>j===i?{...u,label:v}:u)}:x)})}
-                onDelete={()=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).filter((_,j)=>j!==i)}:x)})}/> 
+              <div key={lnk.id} style={{marginBottom:8}}>
+                <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                  {lnk.url ? (
+                    <a href={lnk.url} target="_blank" rel="noreferrer"
+                      style={{flex:1,background:C.blue+"11",border:`1px solid ${C.blue}33`,borderRadius:7,
+                        color:C.blue,padding:"7px 12px",fontSize:12,fontWeight:600,
+                        textDecoration:"none",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                      {lnk.label||"Open ↗"}
+                    </a>
+                  ) : (
+                    <Inp value={lnk.url||""} placeholder="Paste URL…" style={{flex:1}}
+                      onChange={e=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).map((u,j)=>j===i?{...u,url:e.target.value}:u)}:x)})}/> 
+                  )}
+                  <button onClick={()=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).map((u,j)=>j===i?{...u,url:""}:u)}:x)})}
+                    title="Edit URL"
+                    style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                      color:C.dim,cursor:"pointer",fontSize:11,padding:"4px 8px",flexShrink:0}}>✎</button>
+                  <Inp value={lnk.label||""} placeholder="Label…" style={{width:100,flexShrink:0}}
+                    onChange={e=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).map((u,j)=>j===i?{...u,label:e.target.value}:u)}:x)})}/> 
+                  <button onClick={()=>onUpdate({customLinks:(job.customLinks||[]).map(x=>x.id===cl.id?{...x,urls:(x.urls||[]).filter((_,j)=>j!==i)}:x)})}
+                    style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,flexShrink:0}}>✕</button>
+                </div>
+              </div>
             ))}
             {(!cl.urls||cl.urls.length===0)&&(
               <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No links yet — hit "+ Add"</div>
