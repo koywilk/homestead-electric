@@ -2039,9 +2039,9 @@ function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
 // ── Stage Sections ────────────────────────────────────────────
 const STAGE_SECTIONS = [
   { key:"prep",       label:"Pre Job Prep",       color:"#0d9488",
-    test: j => { const p=parseInt(j.prepStage)||0; const r=parseInt(j.roughStage)||0; return p>0 && p<100 && r===0; } },
+    test: j => { const p=parseInt(j.prepStage)||0; const r=parseInt(j.roughStage)||0; return p<100 && r===0; } },
   { key:"notstarted", label:"Not Started",        color:"#5a6480",
-    test: j => { const p=parseInt(j.prepStage)||0; const r=parseInt(j.roughStage)||0; return r===0 && (p===0||p===100); } },
+    test: j => { const p=parseInt(j.prepStage)||0; const r=parseInt(j.roughStage)||0; return r===0 && p===100; } },
   { key:"rough",    label:"Rough In Progress",  color:"#2563eb",
     test: j => { const r=parseInt(j.roughStage)||0; const f=parseInt(j.finishStage)||0; return r>0 && r<100 && f===0; } },
   { key:"between",  label:"In Between",          color:"#e8a020",
@@ -2477,8 +2477,8 @@ function App() {
               TAP A FOREMAN TO VIEW THEIR JOBS
             </div>
             {(()=>{
-              const prep= jobs.filter(j=>{const p=parseInt(j.prepStage)||0;const r=parseInt(j.roughStage)||0;return p>0&&p<100&&r===0;}).length;
-              const ns  = jobs.filter(j=>{const p=parseInt(j.prepStage)||0;const r=parseInt(j.roughStage)||0;return r===0&&(p===0||p===100);}).length;
+              const prep= jobs.filter(j=>{const p=parseInt(j.prepStage)||0;const r=parseInt(j.roughStage)||0;return p<100&&r===0;}).length;
+              const ns  = jobs.filter(j=>{const p=parseInt(j.prepStage)||0;const r=parseInt(j.roughStage)||0;return r===0&&p===100;}).length;
               const ro  = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;const f=parseInt(j.finishStage)||0;return r>0&&r<100&&f===0;}).length;
               const btw = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;const f=parseInt(j.finishStage)||0;return r===100&&f===0;}).length;
               const fin = jobs.filter(j=>{const f=parseInt(j.finishStage)||0;return f>0&&f<100;}).length;
@@ -2602,11 +2602,11 @@ function App() {
               {(()=>{
                 const fJobs = jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):(j.foreman||"Koy")===activeForeman);
                 const fDone = fJobs.filter(j=>parseInt(j.finishStage)===100).length;
-                const fPrep    = fJobs.filter(j=>{const p=parseInt(j.prepStage)||0;const r=parseInt(j.roughStage)||0;return p>0&&p<100&&r===0;}).length;
+                const fPrep    = fJobs.filter(j=>{const p=parseInt(j.prepStage)||0;const r=parseInt(j.roughStage)||0;return p<100&&r===0;}).length;
                 const fRough   = fJobs.filter(j=>parseInt(j.roughStage)>0&&parseInt(j.roughStage)<100&&parseInt(j.finishStage)===0).length;
                 const fBetween = fJobs.filter(j=>parseInt(j.roughStage)===100&&parseInt(j.finishStage)===0).length;
                 const fFinish  = fJobs.filter(j=>parseInt(j.finishStage)>0&&parseInt(j.finishStage)<100).length;
-                const fNotStarted = fJobs.filter(j=>{const p=parseInt(j.prepStage)||0;const r=parseInt(j.roughStage)||0;return r===0&&(p===0||p===100);}).length;
+                const fNotStarted = fJobs.filter(j=>{const p=parseInt(j.prepStage)||0;const r=parseInt(j.roughStage)||0;return r===0&&p===100;}).length;
                 return [[fJobs.length,"Total Jobs",C.blue],
                   [fPrep,"Pre Job Prep",C.teal],
                   [fNotStarted,"Not Started",C.dim],
