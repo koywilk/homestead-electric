@@ -3675,7 +3675,7 @@ function QAList({questions: _questions, onChange, color}) {
 
     <div key={q.id} style={{background:C.surface,border:`1px solid ${q.done?C.border:color+"33"}`,
 
-      borderRadius:10,padding:12,marginBottom:10,opacity:q.done?0.7:1,transition:"opacity 0.2s"}}>
+      borderRadius:10,padding:12,marginBottom:10,transition:"opacity 0.2s"}}>
 
       <div style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:q.done?0:8}}>
 
