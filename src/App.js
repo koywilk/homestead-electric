@@ -2464,6 +2464,30 @@ function App() {
             <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em",marginBottom:16}}>
               TAP A FOREMAN TO VIEW THEIR JOBS
             </div>
+            {(()=>{
+              const ns  = jobs.filter(j=>parseInt(j.roughStage)||0===0).length;
+              const ro  = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;const f=parseInt(j.finishStage)||0;return r>0&&r<100&&f===0;}).length;
+              const btw = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;const f=parseInt(j.finishStage)||0;return r===100&&f===0;}).length;
+              const fin = jobs.filter(j=>{const f=parseInt(j.finishStage)||0;return f>0&&f<100;}).length;
+              const don = jobs.filter(j=>parseInt(j.finishStage)===100).length;
+              return (
+                <div style={{display:"flex",gap:8,marginBottom:24,flexWrap:"wrap"}}>
+                  {[
+                    [ns,"Not Started","#5a6480"],
+                    [ro,"Rough",C.rough],
+                    [btw,"In Between",C.orange],
+                    [fin,"Finish",C.finish],
+                    [don,"Completed",C.green],
+                  ].map(([v,l,c])=>(
+                    <div key={l} style={{background:C.card,border:`1px solid ${c}33`,borderRadius:10,
+                      padding:"10px 18px",display:"flex",gap:10,alignItems:"center",flex:"1 1 120px"}}>
+                      <span style={{fontFamily:"'Bebas Neue'",fontSize:28,color:c,lineHeight:1}}>{v}</span>
+                      <span style={{fontSize:11,color:C.dim,lineHeight:1.3}}>{l}</span>
+                    </div>
+                  ))}
+                </div>
+              );
+            })()}
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:16,marginBottom:40}}>
               {FOREMEN.map(f=>{
                 const fc    = FOREMEN_COLORS[f];
