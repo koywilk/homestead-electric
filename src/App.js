@@ -3114,7 +3114,9 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.82)",zIndex:200,
 
-      display:"flex",alignItems:"center",justifyContent:"center",padding:12}}>
+      display:"flex",alignItems:"center",justifyContent:"center",padding:12}}
+
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
 
       <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:18,width:"100%",
 
