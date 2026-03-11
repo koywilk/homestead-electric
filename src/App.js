@@ -245,8 +245,8 @@ const Pill = ({label,color}) => (
 
 const SectionHead = ({label,color=C.dim,action=null}) => (
   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
-    borderBottom:`1px solid ${color}33`,paddingBottom:5,marginBottom:12,marginTop:4}}>
-    <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.14em",color,textTransform:"uppercase"}}>{label}</div>
+    borderBottom:`2px solid ${color}44`,paddingBottom:7,marginBottom:14,marginTop:8}}>
+    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",color}}>{label}</div>
     {action&&<div style={{display:"flex",gap:6}}>{action}</div>}
   </div>
 );
@@ -1826,35 +1826,56 @@ function QAList({questions: _questions, onChange, color}) {
   };
   const upd = (id, p) => onChange(questions.map(q=>q.id===id?{...q,...p}:q));
   const del = (id) => onChange(questions.filter(q=>q.id!==id));
+  const open     = questions.filter(q=>!q.done);
+  const answered = questions.filter(q=>q.done);
+  const renderQ  = (q,i,globalIdx) => (
+    <div key={q.id} style={{background:C.surface,border:`1px solid ${q.done?C.border:color+"33"}`,
+      borderRadius:10,padding:12,marginBottom:10,opacity:q.done?0.7:1,transition:"opacity 0.2s"}}>
+      <div style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:q.done?0:8}}>
+        <input type="checkbox" checked={q.done}
+          onChange={()=>upd(q.id,{done:!q.done})}
+          style={{accentColor:C.green,width:14,height:14,cursor:"pointer",flexShrink:0,marginTop:2}}/>
+        <QAInlineEdit
+          value={q.question}
+          done={q.done}
+          label={`Q${globalIdx+1}: `}
+          onSave={v=>upd(q.id,{question:v})}/>
+        <button onClick={()=>del(q.id)}
+          style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+            fontSize:12,flexShrink:0,padding:"0 2px"}}>✕</button>
+      </div>
+      {!q.done&&(
+        <div style={{marginLeft:22}}>
+          <div style={{fontSize:10,color:color,fontWeight:700,marginBottom:4,letterSpacing:"0.08em"}}>ANSWER</div>
+          <TA value={q.answer} rows={2}
+            onChange={e=>upd(q.id,{answer:e.target.value})}
+            placeholder="Type answer here…"/>
+        </div>
+      )}
+      {q.done&&q.answer&&(
+        <div style={{marginLeft:22,marginTop:4,fontSize:11,color:C.dim,fontStyle:"italic"}}>{q.answer}</div>
+      )}
+    </div>
+  );
   return (
     <div>
-      {questions.map((q,i)=>(
-        <div key={q.id} style={{background:C.surface,border:`1px solid ${color}33`,
-          borderRadius:10,padding:12,marginBottom:10}}>
-          <div style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:8}}>
-            <input type="checkbox" checked={q.done}
-              onChange={()=>upd(q.id,{done:!q.done})}
-              style={{accentColor:C.green,width:14,height:14,cursor:"pointer",flexShrink:0,marginTop:2}}/>
-            <QAInlineEdit
-              value={q.question}
-              done={q.done}
-              label={`Q${i+1}: `}
-              onSave={v=>upd(q.id,{question:v})}/>
-            <button onClick={()=>del(q.id)}
-              style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
-                fontSize:12,flexShrink:0,padding:"0 2px"}}>✕</button>
+      {open.length===0&&answered.length===0&&(
+        <div style={{fontSize:11,color:C.muted,fontStyle:"italic",marginBottom:8}}>No questions yet</div>
+      )}
+      {open.map((q,i)=>renderQ(q,i,questions.indexOf(q)))}
+      {answered.length>0&&(
+        <div style={{marginTop:10}}>
+          <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.12em",color:C.green,
+            borderBottom:`1px solid ${C.green}33`,paddingBottom:4,marginBottom:8}}>
+            ✓ ANSWERED ({answered.length})
           </div>
-          <div style={{marginLeft:22}}>
-            <div style={{fontSize:10,color:color,fontWeight:700,marginBottom:4,letterSpacing:"0.08em"}}>ANSWER</div>
-            <TA value={q.answer} rows={2}
-              onChange={e=>upd(q.id,{answer:e.target.value})}
-              placeholder="Type answer here…"/>
-          </div>
+          {answered.map((q,i)=>renderQ(q,i,questions.indexOf(q)))}
         </div>
-      ))}
-      <div style={{display:"flex",gap:6,marginTop:4}}>
+      )}
+      <div style={{display:"flex",gap:6,marginTop:8}}>
         <Inp value={draft} onChange={e=>setDraft(e.target.value)}
-          placeholder="Add a question…" style={{flex:1}}/>
+          placeholder="Add a question…" style={{flex:1}}
+          onKeyDown={e=>e.key==='Enter'&&add()}/>
         <Btn onClick={add} variant="primary">+</Btn>
       </div>
     </div>
