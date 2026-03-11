@@ -492,18 +492,35 @@ function MaterialOrders({orders,onChange}) {
 
 // ── Daily Updates ─────────────────────────────────────────────
 function DailyUpdates({updates,onChange,jobName,onEmail}) {
-  const [d,setD] = useState({date:"",text:""});
+  const [d,setD]           = useState({date:"",text:""});
+  const [showPicker,setShowPicker] = useState(false);
+  const [selected,setSelected]     = useState([]);
   const add = () => { if(!d.text.trim()) return; onChange([{id:uid(),...d},...updates]); setD({date:"",text:""}); };
+  const toggleSelect = (id) => setSelected(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
   const handleEmail = () => {
-    const recent = updates.slice(0,5);
-    const body = `Hi,\n\nJob Update — ${jobName}\n\n${recent.map(u=>`${u.date||"—"}: ${u.text}`).join("\n\n")}\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
+    const toSend = selected.length>0 ? updates.filter(u=>selected.includes(u.id)) : updates.slice(0,5);
+    const body = `Hi,\n\nJob Update — ${jobName}\n\n${toSend.map(u=>`${u.date||"—"}: ${u.text}`).join("\n\n")}\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
     onEmail({subject:`${jobName} — Job Update`, body});
+    setShowPicker(false);
+    setSelected([]);
   };
   return (
     <div>
-      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:8}}>
+      <div style={{display:"flex",justifyContent:"flex-end",marginBottom:8,gap:8}}>
         {updates.length>0&&(
-          <Btn onClick={handleEmail} variant="email" style={{fontSize:11,padding:"4px 10px"}}>✉ Email Updates</Btn>
+          <Btn onClick={()=>setShowPicker(p=>!p)} variant="email" style={{fontSize:11,padding:"4px 10px"}}>
+            ✉ {showPicker?"Cancel":"Select Updates to Email"}
+          </Btn>
+        )}
+        {showPicker&&selected.length>0&&(
+          <Btn onClick={handleEmail} variant="primary" style={{fontSize:11,padding:"4px 10px"}}>
+            Send ({selected.length})
+          </Btn>
+        )}
+        {showPicker&&selected.length===0&&(
+          <Btn onClick={handleEmail} variant="primary" style={{fontSize:11,padding:"4px 10px"}}>
+            Send Last 5
+          </Btn>
         )}
       </div>
       <div style={{display:"grid",gridTemplateColumns:"130px 1fr auto",gap:8,marginBottom:12,alignItems:"flex-end"}}>
@@ -519,12 +536,21 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
         <Btn onClick={add} variant="primary">+ Log</Btn>
       </div>
       {updates.map(u=>(
-        <div key={u.id} style={{display:"flex",gap:10,padding:"8px 12px",background:C.surface,
-          borderRadius:8,marginBottom:6,border:`1px solid ${C.border}`}}>
+        <div key={u.id} onClick={()=>showPicker&&toggleSelect(u.id)}
+          style={{display:"flex",gap:10,padding:"8px 12px",background:showPicker&&selected.includes(u.id)?C.blue+"18":C.surface,
+            borderRadius:8,marginBottom:6,border:`1px solid ${showPicker&&selected.includes(u.id)?C.blue:C.border}`,
+            cursor:showPicker?"pointer":"default",transition:"all 0.15s"}}>
+          {showPicker&&(
+            <div style={{width:16,height:16,borderRadius:4,border:`2px solid ${selected.includes(u.id)?C.blue:C.border}`,
+              background:selected.includes(u.id)?C.blue:"transparent",flexShrink:0,marginTop:1,
+              display:"flex",alignItems:"center",justifyContent:"center"}}>
+              {selected.includes(u.id)&&<span style={{color:"#fff",fontSize:10,fontWeight:700}}>✓</span>}
+            </div>
+          )}
           <span style={{fontSize:11,color:C.accent,whiteSpace:"nowrap",fontWeight:600,flexShrink:0}}>{u.date||"—"}</span>
           <span style={{flex:1,fontSize:12,color:C.text,lineHeight:1.5}}>{u.text}</span>
-          <button onClick={()=>onChange(updates.filter(x=>x.id!==u.id))}
-            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>✕</button>
+          {!showPicker&&<button onClick={()=>onChange(updates.filter(x=>x.id!==u.id))}
+            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>✕</button>}
         </div>
       ))}
     </div>
@@ -1921,6 +1947,8 @@ function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
 
 // ── Stage Sections ────────────────────────────────────────────
 const STAGE_SECTIONS = [
+  { key:"notstarted", label:"Not Started",       color:"#5a6480",
+    test: j => { const r=parseInt(j.roughStage)||0; return r===0; } },
   { key:"rough",    label:"Rough In Progress",  color:"#3b82f6",
     test: j => { const r=parseInt(j.roughStage)||0; const f=parseInt(j.finishStage)||0; return r>0 && r<100 && f===0; } },
   { key:"between",  label:"In Between",          color:"#e8a020",
@@ -1929,8 +1957,6 @@ const STAGE_SECTIONS = [
     test: j => { const f=parseInt(j.finishStage)||0; return f>0 && f<100; } },
   { key:"complete", label:"Completed",           color:"#22c55e",
     test: j => parseInt(j.finishStage)===100 },
-  { key:"notstarted", label:"Not Started",       color:"#5a6480",
-    test: j => { const r=parseInt(j.roughStage)||0; return r===0; } },
 ];
 
 function StageSectionList({ jobs, JobRow, fc }) {
