@@ -1806,7 +1806,7 @@ function QAInlineEdit({value, done, label, onSave}) {
   return (
     <span onClick={()=>!done&&setEditing(true)}
       style={{flex:1,fontSize:12,fontWeight:600,color:done?C.muted:C.text,
-        textDecoration:done?'line-through':'none',lineHeight:1.4,
+        textDecoration:'none',lineHeight:1.4,
         cursor:done?'default':'text',borderRadius:4,padding:'2px 4px',transition:'background 0.1s'}}
       onMouseEnter={e=>{if(!done)e.target.style.background=C.border+'66'}}
       onMouseLeave={e=>e.target.style.background='transparent'}>
