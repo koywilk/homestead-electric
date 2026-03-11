@@ -29,6 +29,7 @@ const C = {
 };
 
 const JOB_ID = "homestead-jobs-v1";
+const PREP_STAGES   = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
 const ROUGH_STAGES  = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
 const FINISH_STAGES = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
 const WIRE_SIZES = ["","14/2","14/3","12/2","12/3","10/2","10/3","8/2","8/3","6/2","6/3","4/2","4/3","2/2","2/3","1/0","2/0","3/0","4/0"];
@@ -80,7 +81,7 @@ const blankJob = () => ({
   id:uid(), name:"", address:"", gc:"", phone:"", simproNo:"", foreman:"Koy", lead:"", flagged:false,
   planLink:"", redlineLink:"", lightingLink:"", panelLink:"", qcLink:"", matterportLink:"",
   uploadedFiles:[],
-  roughStage:"0%", roughQuestions:{ upper:[], main:[], basement:[] },
+  prepStage:"0%", roughStage:"0%", roughQuestions:{ upper:[], main:[], basement:[] },
   roughPunch:emptyPunch(), roughMaterials:[], roughUpdates:[], roughNotes:"",
   qcPunch:emptyPunch(),
   finishStage:"0%",
@@ -1597,6 +1598,11 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
           {tab==="Rough"&&(
             <div>
+              <SectionHead label="Pre Job Prep" color={C.teal}/>
+              <Sel value={job.prepStage||"0%"} onChange={e=>u({prepStage:e.target.value})} options={PREP_STAGES}/>
+              <div style={{marginTop:8,marginBottom:20}}>
+                <StageBar stages={PREP_STAGES} current={job.prepStage||"0%"} color={C.teal}/>
+              </div>
               <SectionHead label="Rough Stage" color={C.rough}/>
               <Sel value={job.roughStage} onChange={e=>u({roughStage:e.target.value})} options={ROUGH_STAGES}/>
               <div style={{marginTop:8,marginBottom:20}}>
@@ -2355,6 +2361,10 @@ function App() {
               {job.lead&&<span style={{color:C.accent,fontWeight:600,marginRight:6}}>· {job.lead}</span>}
               {job.gc||"No GC set"}
             </div>
+          </div>
+          <div style={{flex:"1 1 120px",minWidth:110}}>
+            <div style={{fontSize:9,color:C.teal,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>PREP</div>
+            <StageBar stages={PREP_STAGES} current={job.prepStage||"0%"} color={C.teal}/>
           </div>
           <div style={{flex:"1 1 150px",minWidth:130}}>
             <div style={{fontSize:9,color:C.rough,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>ROUGH</div>
