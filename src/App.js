@@ -2764,7 +2764,7 @@ const LINK_FIELDS = [
 
   ["lightingLink","Lighting Schedules"],["panelLink","Panel Schedules"],
 
-  ["qcLink","QC Link"],["matterportLink","Matterport Link"],
+["matterportLink","Matterport Link"],
 
 ];
 
