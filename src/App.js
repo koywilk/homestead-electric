@@ -2477,25 +2477,29 @@ function App() {
               TAP A FOREMAN TO VIEW THEIR JOBS
             </div>
             {(()=>{
-              const prep= jobs.filter(j=>{const p=parseInt(j.prepStage)||0;const r=parseInt(j.roughStage)||0;return p<100&&r===0;}).length;
-              const ns  = jobs.filter(j=>{const p=parseInt(j.prepStage)||0;const r=parseInt(j.roughStage)||0;return r===0&&p===100;}).length;
-              const ro  = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;const f=parseInt(j.finishStage)||0;return r>0&&r<100&&f===0;}).length;
-              const btw = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;const f=parseInt(j.finishStage)||0;return r===100&&f===0;}).length;
-              const fin = jobs.filter(j=>{const f=parseInt(j.finishStage)||0;return f>0&&f<100;}).length;
-              const don = jobs.filter(j=>(parseInt(j.finishStage)||0)===100).length;
+              const prepJobs = jobs.filter(j=>{const p=parseInt(j.prepStage)||0;const r=parseInt(j.roughStage)||0;return p<100&&r===0;});
+              const nsJobs   = jobs.filter(j=>{const p=parseInt(j.prepStage)||0;const r=parseInt(j.roughStage)||0;return r===0&&p===100;});
+              const roJobs   = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;const f=parseInt(j.finishStage)||0;return r>0&&r<100&&f===0;});
+              const btwJobs  = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;const f=parseInt(j.finishStage)||0;return r===100&&f===0;});
+              const finJobs  = jobs.filter(j=>{const f=parseInt(j.finishStage)||0;return f>0&&f<100;});
+              const donJobs  = jobs.filter(j=>(parseInt(j.finishStage)||0)===100);
               return (
                 <div style={{display:"flex",gap:8,marginBottom:24,flexWrap:"wrap"}}>
                   {[
-                    [jobs.length,"Total",C.text],
-                    [prep,"Pre Job Prep",C.teal],
-                    [ns,"Not Started","#5a6480"],
-                    [ro,"Rough",C.rough],
-                    [btw,"In Between",C.orange],
-                    [fin,"Finish",C.finish],
-                    [don,"Completed",C.green],
-                  ].map(([v,l,c])=>(
-                    <div key={l} style={{background:C.card,border:`1px solid ${c}33`,borderRadius:10,
-                      padding:"10px 18px",display:"flex",gap:10,alignItems:"center",flex:"1 1 120px"}}>
+                    [jobs.length,"Total",C.text,jobs],
+                    [prepJobs.length,"Pre Job Prep",C.teal,prepJobs],
+                    [nsJobs.length,"Not Started","#5a6480",nsJobs],
+                    [roJobs.length,"Rough",C.rough,roJobs],
+                    [btwJobs.length,"In Between",C.orange,btwJobs],
+                    [finJobs.length,"Finish",C.finish,finJobs],
+                    [donJobs.length,"Completed",C.green,donJobs],
+                  ].map(([v,l,c,filt])=>(
+                    <div key={l} onClick={()=>filt&&filt.length>0&&setStageModal({label:l,color:c,jobs:filt})}
+                      style={{background:C.card,border:`1px solid ${c}33`,borderRadius:10,
+                        padding:"10px 18px",display:"flex",gap:10,alignItems:"center",flex:"1 1 120px",
+                        cursor:filt&&filt.length>0?"pointer":"default",transition:"transform 0.1s,box-shadow 0.1s"}}
+                      onMouseEnter={e=>{if(filt&&filt.length>0){e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow=`0 6px 20px ${c}22`;}}}
+                      onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
                       <span style={{fontFamily:"'Bebas Neue'",fontSize:28,color:c,lineHeight:1}}>{v}</span>
                       <span style={{fontSize:11,color:C.dim,lineHeight:1.3}}>{l}</span>
                     </div>
@@ -2503,6 +2507,30 @@ function App() {
                 </div>
               );
             })()}
+            {stageModal&&(
+              <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:200,
+                display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"40px 16px",overflowY:"auto"}}
+                onClick={e=>{if(e.target===e.currentTarget)setStageModal(null);}}>
+                <div style={{background:C.bg,borderRadius:16,width:"100%",maxWidth:700,
+                  padding:24,boxShadow:"0 24px 64px rgba(0,0,0,0.4)"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:20}}>
+                    <div style={{width:10,height:10,borderRadius:"50%",background:stageModal.color}}/>
+                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,
+                      letterSpacing:"0.08em",color:stageModal.color}}>{stageModal.label}</div>
+                    <div style={{background:`${stageModal.color}18`,border:`1px solid ${stageModal.color}33`,
+                      borderRadius:99,padding:"2px 10px",fontSize:11,color:stageModal.color,fontWeight:700}}>
+                      {stageModal.jobs.length} job{stageModal.jobs.length!==1?"s":""}
+                    </div>
+                    <button onClick={()=>setStageModal(null)}
+                      style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,
+                        borderRadius:8,color:C.dim,fontSize:18,width:32,height:32,cursor:"pointer"}}>✕</button>
+                  </div>
+                  {stageModal.jobs.map(job=>(
+                    <JobRow key={job.id} job={job} showForeman={true}/>
+                  ))}
+                </div>
+              </div>
+            )}
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:16,marginBottom:40}}>
               {FOREMEN.map(f=>{
                 const fc    = FOREMEN_COLORS[f];
