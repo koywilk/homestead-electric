@@ -322,11 +322,17 @@ function normFloor(v) {
 function PunchItems({ items, onChange }) {
   const safeItems = Array.isArray(items) ? items : [];
   const [draft, setDraft] = useState('');
+  const [editingId, setEditingId] = useState(null);
+  const [editText, setEditText] = useState('');
   const add = () => {
     if (!draft.trim()) return;
-    const next = [...safeItems, { id: uid(), text: draft, done: false }];
-    onChange(next);
+    onChange([...safeItems, { id: uid(), text: draft, done: false }]);
     setDraft('');
+  };
+  const startEdit = (item) => { setEditingId(item.id); setEditText(item.text); };
+  const commitEdit = (id) => {
+    if (editText.trim()) onChange(safeItems.map(i => i.id === id ? { ...i, text: editText.trim() } : i));
+    setEditingId(null);
   };
   return (
     <div style={{ paddingLeft: 8 }}>
@@ -335,8 +341,23 @@ function PunchItems({ items, onChange }) {
           <input type="checkbox" checked={!!item.done}
             onChange={() => onChange(safeItems.map(i => i.id === item.id ? { ...i, done: !i.done } : i))}
             style={{ accentColor: C.green, width: 14, height: 14, cursor: 'pointer', flexShrink: 0 }} />
-          <span style={{ flex: 1, fontSize: 12, color: item.done ? C.muted : C.text,
-            textDecoration: item.done ? 'line-through' : 'none' }}>{item.text}</span>
+          {editingId === item.id ? (
+            <input autoFocus value={editText} onChange={e=>setEditText(e.target.value)}
+              onBlur={()=>commitEdit(item.id)} onKeyDown={e=>{if(e.key==='Enter')commitEdit(item.id);if(e.key==='Escape')setEditingId(null);}}
+              style={{flex:1,fontSize:12,background:C.surface,border:`1px solid ${C.blue}`,borderRadius:6,
+                padding:'3px 7px',color:C.text,fontFamily:'inherit',outline:'none'}}/>
+          ) : (
+            <span onClick={()=>!item.done&&startEdit(item)}
+              style={{ flex: 1, fontSize: 12, color: item.done ? C.muted : C.text,
+                textDecoration: item.done ? 'line-through' : 'none',
+                cursor: item.done ? 'default' : 'text',
+                borderRadius: 4, padding: '2px 4px',
+                transition: 'background 0.1s' }}
+              onMouseEnter={e=>{if(!item.done)e.target.style.background=C.border+'66'}}
+              onMouseLeave={e=>e.target.style.background='transparent'}>
+              {item.text}
+            </span>
+          )}
           <button onClick={() => onChange(safeItems.filter(i => i.id !== item.id))}
             style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12 }}>✕</button>
         </div>
@@ -348,6 +369,27 @@ function PunchItems({ items, onChange }) {
         <Btn onClick={add} variant="primary">+</Btn>
       </div>
     </div>
+  );
+}
+
+function RoomNameEdit({name, onSave}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(name);
+  const commit = () => { if(text.trim()) onSave(text.trim()); setEditing(false); };
+  if(editing) return (
+    <input autoFocus value={text} onChange={e=>setText(e.target.value)}
+      onBlur={commit} onKeyDown={e=>{if(e.key==='Enter')commit();if(e.key==='Escape')setEditing(false);}}
+      style={{flex:1,fontSize:12,fontWeight:700,background:C.surface,border:`1px solid ${C.blue}`,
+        borderRadius:6,padding:'3px 7px',color:C.text,fontFamily:'inherit',outline:'none'}}/>
+  );
+  return (
+    <span onClick={()=>setEditing(true)}
+      style={{fontSize:12,fontWeight:700,color:C.text,flex:1,cursor:'text',
+        borderRadius:4,padding:'2px 4px',transition:'background 0.1s'}}
+      onMouseEnter={e=>e.target.style.background=C.border+'66'}
+      onMouseLeave={e=>e.target.style.background='transparent'}>
+      {name}
+    </span>
   );
 }
 
@@ -391,7 +433,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
             <div key={room.id} style={{ marginTop: 12, background: C.surface,
               border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <span style={{ fontSize: 12, fontWeight: 700, color: C.text, flex: 1 }}>{room.name}</span>
+                <RoomNameEdit name={room.name} onSave={v=>onFloorChange(floorKey,{...data,rooms:data.rooms.map(r=>r.id===room.id?{...r,name:v}:r)})}/>
                 {(Array.isArray(room.items) ? room.items : []).filter(i => !i.done).length > 0 &&
                   <span style={{ fontSize: 10, background: `${C.red}22`, color: C.red,
                     borderRadius: 99, padding: '2px 6px', fontWeight: 700 }}>
@@ -1751,6 +1793,28 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
 
 // ── Q&A Punch List ────────────────────────────────────────────
+function QAInlineEdit({value, done, label, onSave}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(value);
+  const commit = () => { if(text.trim()) onSave(text.trim()); setEditing(false); };
+  if(editing) return (
+    <input autoFocus value={text} onChange={e=>setText(e.target.value)}
+      onBlur={commit} onKeyDown={e=>{if(e.key==='Enter')commit();if(e.key==='Escape')setEditing(false);}}
+      style={{flex:1,fontSize:12,fontWeight:600,background:C.surface,border:`1px solid ${C.blue}`,
+        borderRadius:6,padding:'3px 7px',color:C.text,fontFamily:'inherit',outline:'none'}}/>
+  );
+  return (
+    <span onClick={()=>!done&&setEditing(true)}
+      style={{flex:1,fontSize:12,fontWeight:600,color:done?C.muted:C.text,
+        textDecoration:done?'line-through':'none',lineHeight:1.4,
+        cursor:done?'default':'text',borderRadius:4,padding:'2px 4px',transition:'background 0.1s'}}
+      onMouseEnter={e=>{if(!done)e.target.style.background=C.border+'66'}}
+      onMouseLeave={e=>e.target.style.background='transparent'}>
+      {label}{value}
+    </span>
+  );
+}
+
 function QAList({questions: _questions, onChange, color}) {
   // guard: old data may be a string instead of array
   const questions = Array.isArray(_questions) ? _questions : [];
@@ -1771,11 +1835,11 @@ function QAList({questions: _questions, onChange, color}) {
             <input type="checkbox" checked={q.done}
               onChange={()=>upd(q.id,{done:!q.done})}
               style={{accentColor:C.green,width:14,height:14,cursor:"pointer",flexShrink:0,marginTop:2}}/>
-            <span style={{flex:1,fontSize:12,fontWeight:600,
-              color:q.done?C.muted:C.text,
-              textDecoration:q.done?"line-through":"none",lineHeight:1.4}}>
-              Q{i+1}: {q.question}
-            </span>
+            <QAInlineEdit
+              value={q.question}
+              done={q.done}
+              label={`Q${i+1}: `}
+              onSave={v=>upd(q.id,{question:v})}/>
             <button onClick={()=>del(q.id)}
               style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
                 fontSize:12,flexShrink:0,padding:"0 2px"}}>✕</button>
