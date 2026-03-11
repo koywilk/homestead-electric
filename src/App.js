@@ -2151,6 +2151,7 @@ function App() {
   const [search,   setSearch]   = useState("");
   const [stageF,   setStageF]   = useState("All");
   const [flagOnly, setFlagOnly] = useState(false);
+  const [stageModal, setStageModal] = useState(null);
   const [syncStatus, setSyncStatus] = useState("idle");
   const saveTimer    = useRef(null);
   const initialLoad  = useRef(true);
