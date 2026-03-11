@@ -3625,7 +3625,7 @@ function QAInlineEdit({value, done, label, onSave}) {
 
     <span onClick={()=>!done&&setEditing(true)}
 
-      style={{flex:1,fontSize:12,fontWeight:600,color:done?C.muted:C.text,
+      style={{flex:1,fontSize:12,fontWeight:600,color:C.text,
 
         textDecoration:'none',lineHeight:1.4,
 
