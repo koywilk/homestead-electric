@@ -3121,7 +3121,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
           {TABS.map(t=>(
 
-            <button key={t} onClick={()=>{flushJob(selected);setTab(t);}}
+            <button key={t} onClick={()=>setTab(t)}
 
               style={{background:tab===t?C.accent:"none",color:tab===t?"#000":C.dim,
 
