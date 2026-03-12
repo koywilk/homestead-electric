@@ -60,7 +60,7 @@ const C = {
 
 const JOB_ID = "homestead-jobs-v1";
 
-const PREP_STAGES   = ['Redline Walk Scheduled','Redline Walk Completed','Redline CO Sent','Final Redline Plan Made','Job Prep Complete'];
+const PREP_STAGES   = ['Redline Walk Scheduled','Redline Walk Completed','Redline CO Sent','Redline CO Signed','Final Redline Plan Made','Job Prep Complete'];
 
 const ROUGH_STAGES  = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
 
@@ -3045,7 +3045,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
       onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
 
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:18,width:"100%",
+      <div onClick={e=>e.stopPropagation()} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:18,width:"100%",
 
         maxWidth:940,maxHeight:"93vh",display:"flex",flexDirection:"column",overflow:"hidden",
 
