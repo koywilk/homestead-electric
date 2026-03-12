@@ -60,7 +60,7 @@ const C = {
 
 const JOB_ID = "homestead-jobs-v1";
 
-const PREP_STAGES   = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
+const PREP_STAGES   = ['Redline Walk Scheduled','Redline Walk Completed','Redline CO Sent','Final Redline Plan Made','Job Prep Complete'];
 
 const ROUGH_STAGES  = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
 
@@ -164,7 +164,7 @@ const blankJob = () => ({
 
   uploadedFiles:[],
 
-  prepStage:"0%", roughStage:"0%", roughQuestions:{ upper:[], main:[], basement:[] },
+  prepStage:"", roughStage:"0%", prepStartDate:"", roughQuestions:{ upper:[], main:[], basement:[] },
 
   roughPunch:emptyPunch(), roughMaterials:[], roughUpdates:[], roughNotes:"",
 
@@ -3229,15 +3229,24 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
             <div>
 
               <Section label="Pre Job Prep" color={C.teal} defaultOpen={true}>
-
-                <Sel value={job.prepStage||"0%"} onChange={e=>u({prepStage:e.target.value})} options={PREP_STAGES}/>
-
-                <div style={{marginTop:8,marginBottom:20}}>
-
-                  <StageBar stages={PREP_STAGES} current={job.prepStage||"0%"} color={C.teal}/>
-
+                <Sel value={job.prepStage||""} onChange={e=>u({prepStage:e.target.value})} options={["", ...PREP_STAGES]}/>
+                {job.prepStage&&(
+                  <div style={{marginTop:8,display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                    {PREP_STAGES.map((s,i)=>(
+                      <div key={s} style={{display:"flex",alignItems:"center",gap:4}}>
+                        <div style={{width:10,height:10,borderRadius:"50%",flexShrink:0,
+                          background:PREP_STAGES.indexOf(job.prepStage)>=i?C.teal:C.border}}/>
+                        <span style={{fontSize:10,color:PREP_STAGES.indexOf(job.prepStage)>=i?C.teal:C.dim,
+                          fontWeight:PREP_STAGES.indexOf(job.prepStage)===i?700:400}}>{s}</span>
+                        {i<PREP_STAGES.length-1&&<span style={{color:C.border,fontSize:10}}>›</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+                <div style={{marginTop:12,display:"flex",alignItems:"center",gap:8}}>
+                  <div style={{fontSize:11,color:C.dim,fontWeight:600,whiteSpace:"nowrap"}}>Est. Start Date</div>
+                  <Inp value={job.prepStartDate||""} onChange={e=>u({prepStartDate:e.target.value})} placeholder="MM/DD/YY" style={{width:110}}/>
                 </div>
-
               </Section>
 
               <Section label="Rough Stage" color={C.rough} defaultOpen={true}>
@@ -4735,13 +4744,12 @@ function App() {
 
           </div>
 
-          <div style={{flex:"1 1 120px",minWidth:110}}>
-
-            <div style={{fontSize:9,color:C.teal,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>PREP</div>
-
-            <StageBar stages={PREP_STAGES} current={job.prepStage||"0%"} color={C.teal}/>
-
-          </div>
+          {job.prepStage&&(parseInt(job.roughStage||"0")===0)&&(
+            <div style={{flex:"0 0 auto",maxWidth:160}}>
+              <div style={{fontSize:9,color:C.teal,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>PREP</div>
+              <div style={{fontSize:10,color:C.teal,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{job.prepStage}</div>
+            </div>
+          )}
 
           <div style={{flex:"1 1 150px",minWidth:130}}>
 
@@ -4961,9 +4969,9 @@ function App() {
 
             {(()=>{
 
-              const prepJobs = jobs.filter(j=>{const p=parseInt(j.prepStage)||0;const r=parseInt(j.roughStage)||0;return p<100&&r===0;});
+              const prepJobs = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;return j.prepStage!=='Job Prep Complete'&&r===0;});
 
-              const nsJobs   = jobs.filter(j=>{const p=parseInt(j.prepStage)||0;const r=parseInt(j.roughStage)||0;return r===0&&p===100;});
+              const nsJobs   = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;return r===0&&j.prepStage==='Job Prep Complete';});
 
               const roJobs   = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;const f=parseInt(j.finishStage)||0;return r>0&&r<100&&f===0;});
 
@@ -5267,7 +5275,7 @@ function App() {
 
                 const fDone = fJobs.filter(j=>parseInt(j.finishStage)===100).length;
 
-                const fPrep    = fJobs.filter(j=>{const p=parseInt(j.prepStage)||0;const r=parseInt(j.roughStage)||0;return p<100&&r===0;}).length;
+                const fPrep    = fJobs.filter(j=>{const r=parseInt(j.roughStage)||0;return j.prepStage!=='Job Prep Complete'&&r===0;}).length;
 
                 const fRough   = fJobs.filter(j=>parseInt(j.roughStage)>0&&parseInt(j.roughStage)<100&&parseInt(j.finishStage)===0).length;
 
@@ -5275,7 +5283,7 @@ function App() {
 
                 const fFinish  = fJobs.filter(j=>parseInt(j.finishStage)>0&&parseInt(j.finishStage)<100).length;
 
-                const fNotStarted = fJobs.filter(j=>{const p=parseInt(j.prepStage)||0;const r=parseInt(j.roughStage)||0;return r===0&&p===100;}).length;
+                const fNotStarted = fJobs.filter(j=>{const r=parseInt(j.roughStage)||0;return r===0&&j.prepStage==='Job Prep Complete';}).length;
 
                 return [[fJobs.length,"Total Jobs",C.blue],
 
