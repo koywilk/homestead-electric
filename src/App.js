@@ -2321,7 +2321,67 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
 
 
-function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange}) {
+function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobName,jobAddress}) {
+  const printPanelSchedule = (panelName, rows) => {
+    const slots = 40;
+    const circuits = Array.from({length:slots}, (_,i)=>({
+      num: i+1,
+      name: rows.find(r=>r.num===(i+1))?.name || "",
+      wire: rows.find(r=>r.num===(i+1))?.wire || "",
+    }));
+    const odd  = circuits.filter(c=>c.num%2!==0);
+    const even = circuits.filter(c=>c.num%2===0);
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Panel Schedule — ${panelName}</title>
+<style>
+  @page { size: letter portrait; margin: 0.5in; }
+  * { box-sizing: border-box; margin: 0; padding: 0; }
+  body { font-family: Arial, sans-serif; font-size: 11px; background: #fff; color: #000; }
+  .header { text-align: center; margin-bottom: 16px; }
+  .logo { font-family: 'Arial Black', sans-serif; font-size: 26px; font-weight: 900; letter-spacing: 4px; text-transform: uppercase; }
+  .logo-sub { font-size: 10px; letter-spacing: 8px; text-transform: uppercase; color: #333; }
+  .meta { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 10px; border-bottom: 2px solid #000; padding-bottom: 6px; }
+  .meta-field { display: flex; gap: 6px; align-items: center; }
+  .meta-label { font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
+  .grid { display: grid; grid-template-columns: 1fr 48px 48px 1fr; border: 1.5px solid #000; }
+  .cell { border: 0.5px solid #ccc; padding: 3px 6px; min-height: 22px; display: flex; align-items: center; }
+  .num { justify-content: center; font-weight: 700; background: #f0f0f0; font-size: 11px; border: 0.5px solid #bbb; }
+  .name-left { text-align: right; justify-content: flex-end; }
+  .name-right { text-align: left; }
+  .wire-tag { font-size: 8px; color: #555; margin-left: 4px; }
+  .col-header { background: #222; color: #fff; font-weight: 700; text-align: center; justify-content: center; font-size: 10px; letter-spacing: 0.1em; padding: 4px; }
+  @media print { button { display: none; } }
+</style>
+</head><body>
+<div class="header">
+  <div class="logo">Homestead</div>
+  <div class="logo-sub">Electric</div>
+</div>
+<div class="meta">
+  <div class="meta-field"><span class="meta-label">Job:</span> ${jobName}</div>
+  <div class="meta-field"><span class="meta-label">Panel:</span> ${panelName}</div>
+  <div class="meta-field"><span class="meta-label">Address:</span> ${jobAddress}</div>
+  <div class="meta-field"><span class="meta-label">Date:</span> ${new Date().toLocaleDateString()}</div>
+</div>
+<div class="grid">
+  <div class="cell col-header">CIRCUIT DESCRIPTION</div>
+  <div class="cell col-header">ODD</div>
+  <div class="cell col-header">EVEN</div>
+  <div class="cell col-header">CIRCUIT DESCRIPTION</div>
+  ${odd.map((o,i)=>{const e=even[i]||{num:'',name:'',wire:''};return `
+    <div class="cell name-left">${o.name}${o.wire?'<span class="wire-tag">'+o.wire+'</span>':''}</div>
+    <div class="cell num">${o.num}</div>
+    <div class="cell num">${e.num}</div>
+    <div class="cell name-right">${e.name}${e.wire?'<span class="wire-tag">'+e.wire+'</span>':''}</div>
+  `;}).join('')}
+</div>
+<br>
+<button onclick="window.print()" style="padding:8px 20px;font-size:13px;cursor:pointer;background:#222;color:#fff;border:none;border-radius:6px;">Print / Save as PDF</button>
+</body></html>`;
+    const w = window.open('','_blank','width=850,height=1100');
+    w.document.write(html);
+    w.document.close();
+  };
 
   const allRows = [...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[])];
 
@@ -2383,6 +2443,24 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange}) {
 
       <Section label="Panel Breaker Counts" color={C.blue}>
         <BreakerCounts homeRuns={homeRuns} panelCounts={panelCounts} onCountChange={onCountChange}/>
+      </Section>
+      <Section label="Print Panel Schedules" color={C.blue}>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
+          {["main","upper","basement"].map(floor=>{
+            const rows = homeRuns[floor]||[];
+            if(rows.length===0) return null;
+            const panels = [...new Set(rows.map(r=>r.panel).filter(Boolean))];
+            return panels.map(panel=>(
+              <Btn key={floor+panel} onClick={()=>printPanelSchedule(panel, rows.filter(r=>r.panel===panel))} variant="ghost"
+                style={{fontSize:11,padding:"6px 14px"}}>
+                Print {panel} — {floor.charAt(0).toUpperCase()+floor.slice(1)}
+              </Btn>
+            ));
+          })}
+          {["main","upper","basement"].every(f=>(homeRuns[f]||[]).length===0)&&(
+            <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>Add home runs first to generate panel schedules</div>
+          )}
+        </div>
       </Section>
 
     </div>
@@ -3240,7 +3318,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
           {tab==="Home Runs"&&(
 
-            <HomeRunsTab homeRuns={job.homeRuns} panelCounts={job.panelCounts}
+            <HomeRunsTab homeRuns={job.homeRuns} panelCounts={job.panelCounts} jobName={job.name||''} jobAddress={job.address||''}
 
               onHRChange={v=>u({homeRuns:v})} onCountChange={v=>u({panelCounts:v})}/>
 
