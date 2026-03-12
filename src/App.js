@@ -1,4 +1,4 @@
-\import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef } from "react";
 
 
 
@@ -2018,172 +2018,99 @@ const WIRE_ORDER  = {"":0,"14/2":1,"14/3":2,"12/2":3,"12/3":4,"10/2":5,"10/3":6,
 
 function HomeRunLevel({rows,onChange,label}) {
 
+  const [dragIdx, setDragIdx] = useState(null);
+  const [overIdx, setOverIdx] = useState(null);
+
   const sortRows = (arr) => [...arr].sort((a,b)=>{
-
     const pd = (PANEL_ORDER[a.panel]||0)-(PANEL_ORDER[b.panel]||0);
-
     if(pd!==0) return pd;
-
     return (WIRE_ORDER[a.wire]||0)-(WIRE_ORDER[b.wire]||0);
-
   }).map((r,i)=>({...r,num:i+1}));
 
-
-
-  const upd    = (id,p) => { const updated = rows.map(r=>r.id===id?{...r,...p}:r); onChange(('wire' in p||'panel' in p) ? sortRows(updated) : updated); };
-
+  const upd    = (id,p) => { const updated = rows.map(r=>r.id===id?{...r,...p}:r); onChange(('wire' in p||'panel' in p) ? sortRows(updated) : updated.map((r,i)=>({...r,num:i+1}))); };
   const addRow = () => onChange([...rows, newHRRow(rows.length+1)]);
-
   const delRow = (id) => onChange(sortRows(rows.filter(r=>r.id!==id)));
 
+  const onDragStart = (e, i) => { setDragIdx(i); e.dataTransfer.effectAllowed="move"; };
+  const onDragOver  = (e, i) => { e.preventDefault(); setOverIdx(i); };
+  const onDrop      = (e, i) => {
+    e.preventDefault();
+    if(dragIdx===null||dragIdx===i){setDragIdx(null);setOverIdx(null);return;}
+    const reordered = [...rows];
+    const [moved] = reordered.splice(dragIdx, 1);
+    reordered.splice(i, 0, moved);
+    onChange(reordered.map((r,idx)=>({...r,num:idx+1})));
+    setDragIdx(null); setOverIdx(null);
+  };
+  const onDragEnd = () => { setDragIdx(null); setOverIdx(null); };
 
-
-  // Group by panel for display
-
-  const panels = PANEL_OPTS.filter(p=>p&&rows.some(r=>r.panel===p));
-
-  const unassigned = rows.filter(r=>!r.panel);
-
-  const groups = [
-
-    ...panels.map(p=>({panel:p, rows:rows.filter(r=>r.panel===p)})),
-
-    ...(unassigned.length?[{panel:"", rows:unassigned}]:[])
-
-  ];
-
-
-
-  const renderRow = (r) => (
-
-    <div key={r.id} style={{marginBottom:6,paddingBottom:6,
-
-      borderBottom:`1px solid ${C.border}`,
-
-      borderRadius:7,padding:"6px 4px",
-
-      background:r.status==="Pulled"?"rgba(34,197,94,0.08)":r.status==="Need Specs"?"rgba(239,68,68,0.1)":"none",
-
-      border:r.status==="Pulled"?`1px solid rgba(34,197,94,0.3)`:r.status==="Need Specs"?`1px solid rgba(239,68,68,0.3)`:`1px solid transparent`}}>
-
-      {/* Row 1: number, panel, wire, delete */}
-
-      <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px 22px",gap:4,marginBottom:3,alignItems:"center"}}>
-
+  const renderRow = (r, flatIdx) => (
+    <div key={r.id}
+      draggable
+      onDragStart={e=>onDragStart(e,flatIdx)}
+      onDragOver={e=>onDragOver(e,flatIdx)}
+      onDrop={e=>onDrop(e,flatIdx)}
+      onDragEnd={onDragEnd}
+      style={{marginBottom:6,paddingBottom:6,
+        borderRadius:7,padding:"6px 4px",
+        opacity:dragIdx===flatIdx?0.4:1,
+        outline:overIdx===flatIdx&&dragIdx!==flatIdx?`2px dashed ${C.blue}`:"none",
+        background:r.status==="Pulled"?"rgba(34,197,94,0.08)":r.status==="Need Specs"?"rgba(239,68,68,0.1)":"none",
+        border:r.status==="Pulled"?`1px solid rgba(34,197,94,0.3)`:r.status==="Need Specs"?`1px solid rgba(239,68,68,0.3)`:`1px solid transparent`}}>
+      {/* Row 1: drag handle, number, panel, wire, delete */}
+      <div style={{display:"grid",gridTemplateColumns:"16px 22px 1fr 80px 22px",gap:4,marginBottom:3,alignItems:"center"}}>
+        <span style={{color:C.muted,cursor:"grab",fontSize:12,userSelect:"none",textAlign:"center"}}>⠿</span>
         <span style={{fontSize:10,color:C.muted,textAlign:"right"}}>{r.num}.</span>
-
         <select value={r.panel||""} onChange={e=>upd(r.id,{panel:e.target.value})}
-
           style={{background:C.surface,color:r.panel?C.accent:C.dim,border:`1px solid ${C.border}`,
-
             borderRadius:6,padding:"4px 5px",fontSize:10,fontFamily:"inherit",outline:"none",width:"100%"}}>
-
           {PANEL_OPTS.map(o=><option key={o} value={o}>{o||"— panel —"}</option>)}
-
         </select>
-
         <select value={r.wire} onChange={e=>upd(r.id,{wire:e.target.value})}
-
           style={{background:WIRE_COLORS[r.wire]||C.surface,
-
             color:r.wire?(WIRE_TEXT[r.wire]||C.text):C.dim,
-
             border:`1px solid ${WIRE_COLORS[r.wire]||C.border}`,
-
             borderRadius:6,padding:"4px 5px",fontSize:10,fontFamily:"inherit",
-
             outline:"none",width:"100%",fontWeight:r.wire?700:400}}>
-
           {WIRE_SIZES.map(o=><option key={o} value={o}
-
             style={{background:WIRE_COLORS[o]||"#f1f5f9",color:WIRE_TEXT[o]||"#0f172a"}}>
-
             {o||"— wire —"}
-
           </option>)}
-
         </select>
-
         <button onClick={()=>delRow(r.id)}
-
           style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:0}}>✕</button>
-
       </div>
-
       {/* Row 2: load name + status */}
-
-      <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px",gap:4,alignItems:"center"}}>
-
-        <span/>
-
+      <div style={{display:"grid",gridTemplateColumns:"16px 22px 1fr 80px",gap:4,alignItems:"center"}}>
+        <span/><span/>
         <Inp value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"/>
-
         <Sel value={r.status} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
-
           style={{color:r.status==="Pulled"?C.green:r.status==="Need Specs"?C.red:C.text,fontSize:10}}/>
-
       </div>
-
     </div>
-
   );
 
-
+  // Flat list with indices for drag tracking
+  const flatRows = rows.map((r,i)=>({r,i}));
 
   return (
-
     <div style={{marginBottom:24}}>
-
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-
         <div style={{fontSize:12,color:C.blue,fontWeight:700,letterSpacing:"0.06em"}}>{label}</div>
-
         <Btn onClick={addRow} variant="add" style={{fontSize:11,padding:"3px 10px"}}>+ Add Row</Btn>
-
       </div>
-
-      <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px 22px",gap:4,marginBottom:4,padding:"0 2px"}}>
-
-        {["#","Panel","Wire",""].map((h,i)=>(
-
+      <div style={{display:"grid",gridTemplateColumns:"16px 22px 1fr 80px 22px",gap:4,marginBottom:4,padding:"0 2px"}}>
+        {["","#","Panel","Wire",""].map((h,i)=>(
           <div key={i} style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
-
         ))}
-
       </div>
-
-      {groups.map(g=>(
-
-        <div key={g.panel||"unassigned"}>
-
-          {g.panel&&(
-
-            <div style={{fontSize:10,color:C.accent,fontWeight:700,letterSpacing:"0.1em",
-
-              textTransform:"uppercase",padding:"6px 0 4px",marginTop:4,
-
-              borderBottom:`1px solid ${C.border}`,marginBottom:4}}>
-
-              {g.panel}
-
-            </div>
-
-          )}
-
-          {g.rows.map(renderRow)}
-
-        </div>
-
-      ))}
-
+      {flatRows.map(({r,i})=>renderRow(r,i))}
       {rows.length===0&&<div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No rows yet</div>}
-
+      {rows.length>0&&<div style={{fontSize:9,color:C.muted,fontStyle:"italic",marginTop:4}}>Drag ⠿ to reorder rows</div>}
     </div>
-
   );
 
 }
-
 
 
 function MeterLoads({loads, onChange}) {
@@ -3196,7 +3123,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
           {TABS.map(t=>(
 
-            <button key={t} onClick={()=>setTab(t)}
+            <button key={t} onClick={()=>{flushJob(selected);setTab(t);}}
 
               style={{background:tab===t?C.accent:"none",color:tab===t?"#000":C.dim,
 
@@ -4493,6 +4420,12 @@ function App() {
 
 
   // Delete job document
+
+  const flushJob = async (job) => {
+    if(!job) return;
+    clearTimeout(saveTimers.current[job.id]);
+    try { await setDoc(doc(db,"jobs",job.id),{data:job,updated_at:new Date().toISOString()}); } catch(e){}
+  };
 
   const deleteJobRemote = async (jobId) => {
 
