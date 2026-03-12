@@ -1,4 +1,4 @@
-import { useState, useEffect, useRef } from "react";
+\import { useState, useEffect, useRef } from "react";
 
 
 
@@ -5207,6 +5207,76 @@ function App() {
 
               })()}
 
+            </div>
+
+            {/* ── Prep Dashboard ── */}
+            <div style={{marginTop:32}}>
+              <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em",marginBottom:16}}>
+                JOB PREP — KOY
+              </div>
+              {(()=>{
+                const prepJobs = jobs
+                  .filter(j=>{const r=parseInt(j.roughStage)||0;return j.prepStage!=='Job Prep Complete'&&r===0;})
+                  .sort((a,b)=>{
+                    const da=a.prepStartDate||"9999";const db=b.prepStartDate||"9999";
+                    return da.localeCompare(db);
+                  });
+                if(prepJobs.length===0) return (
+                  <div style={{fontSize:12,color:C.muted,fontStyle:"italic"}}>No jobs currently in prep</div>
+                );
+                return (
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:12}}>
+                    {prepJobs.map(job=>{
+                      const stageIdx = PREP_STAGES.indexOf(job.prepStage);
+                      const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
+                      return (
+                        <div key={job.id} onClick={()=>setSelected(job)}
+                          style={{background:C.card,border:`1px solid ${C.teal}33`,borderRadius:12,
+                            padding:14,cursor:"pointer",borderLeft:`3px solid ${C.teal}`,
+                            transition:"transform 0.1s,box-shadow 0.1s"}}
+                          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow=`0 6px 20px ${C.teal}22`;}}
+                          onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
+                          <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:8,gap:8}}>
+                            <div>
+                              <div style={{fontSize:13,fontWeight:700,color:C.text}}>{job.name||"Untitled"}</div>
+                              <div style={{fontSize:11,color:C.dim,marginTop:2}}>
+                                <span style={{color:fc,fontWeight:600}}>{job.foreman||"Koy"}</span>
+                                {job.gc&&<span> · {job.gc}</span>}
+                              </div>
+                            </div>
+                            {job.prepStartDate&&(
+                              <div style={{background:`${C.teal}18`,border:`1px solid ${C.teal}33`,
+                                borderRadius:8,padding:"4px 10px",fontSize:11,color:C.teal,
+                                fontWeight:700,whiteSpace:"nowrap",flexShrink:0}}>
+                                🗓 {job.prepStartDate}
+                              </div>
+                            )}
+                          </div>
+                          {/* Stage progress dots */}
+                          <div style={{display:"flex",alignItems:"center",gap:0,marginTop:6}}>
+                            {PREP_STAGES.map((s,i)=>(
+                              <div key={s} style={{display:"flex",alignItems:"center",flex:1}}>
+                                <div style={{display:"flex",flexDirection:"column",alignItems:"center",flex:1}}>
+                                  <div style={{width:10,height:10,borderRadius:"50%",flexShrink:0,
+                                    background:stageIdx>=i?C.teal:C.border,
+                                    boxShadow:stageIdx===i?`0 0 0 3px ${C.teal}33`:""}}/>
+                                  <div style={{fontSize:8,color:stageIdx>=i?C.teal:C.muted,
+                                    marginTop:3,textAlign:"center",lineHeight:1.2,fontWeight:stageIdx===i?700:400}}>
+                                    {s.replace("Redline ","").replace(" Made","").replace(" Scheduled","✓ Sched").replace(" Completed","✓ Done").replace(" Sent","✓ Sent").replace("Final ","Final ").replace("Job Prep Complete","✓ Ready")}
+                                  </div>
+                                </div>
+                                {i<PREP_STAGES.length-1&&(
+                                  <div style={{height:2,flex:0,width:8,background:stageIdx>i?C.teal:C.border,flexShrink:0}}/>
+                                )}
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
             </div>
 
 
