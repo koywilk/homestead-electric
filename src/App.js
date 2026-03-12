@@ -2984,6 +2984,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, tab, setTab}) {
 
   const saveNow = () => onUpdate({...jobRef.current});
 
+  const [emailData, setEmailData] = useState(null);
+
   const [refreshing, setRefreshing] = useState(false);
 
   const refreshJob = async () => {
