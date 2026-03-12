@@ -2323,7 +2323,6 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
 function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobName,jobAddress}) {
   const printPanelSchedule = (panelName, rows) => {
-    // Wire gauge -> breaker info
     const getInfo = (wire) => {
       if(!wire) return {amps:20, poles:1, order:7};
       if(wire.startsWith('12/3')) return {amps:20, poles:2, order:4};
@@ -2338,29 +2337,35 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobName,jobA
     // Sort biggest loads first
     const sorted = [...rows].sort((a,b) => getInfo(a.wire).order - getInfo(b.wire).order);
 
-    // Build 40 physical slots. Each slot has top + bottom (for tandems).
-    // slots[1..40] = { top: circuit|null, bottom: circuit|null }
+    // Each physical breaker slot 1-40 has:
+    //   top:    primary circuit (or null)
+    //   bottom: secondary circuit — used by 2-pole leg B, OR tandem overflow
+    // 2-pole: occupies top+bottom of ONE slot (odd) and top+bottom of next slot (even)
+    //   e.g. 50A 2-pole on slots 1&2: slot1.top=name, slot1.bottom=name, slot2.top=name, slot2.bottom=name
+    // 1-pole: uses top only; tandem fills bottom of existing slot
     const slots = {};
-    for(let i=1;i<=40;i++) slots[i] = {top:null, bottom:null};
+    for(let i=1;i<=40;i++) slots[i]={top:null, bottom:null};
 
     for(const r of sorted) {
       const info = getInfo(r.wire);
       const circ = {name: r.name||'', wire: r.wire||'', amps: info.amps, poles: info.poles};
 
       if(info.poles === 2) {
-        // 2-pole: needs two consecutive slots (odd+even), both tops free
+        // Find first pair of consecutive odd+even slots where BOTH tops are free
         let placed = false;
         for(let s=1; s<=39; s+=2) {
           if(!slots[s].top && !slots[s+1].top) {
-            slots[s].top   = {...circ, leg:'A'};
-            slots[s+1].top = {...circ, leg:'B'};
+            // Fill top AND bottom of both slots (the 2-pole spans both rows of both slots)
+            slots[s].top      = {...circ, label: circ.name};
+            slots[s].bottom   = {...circ, label: circ.name, cont: true};
+            slots[s+1].top    = {...circ, label: circ.name};
+            slots[s+1].bottom = {...circ, label: circ.name, cont: true};
             placed = true;
             break;
           }
         }
-        // overflow: just note it
       } else {
-        // 1-pole: fill tops first in order, then bottoms (tandems) as overflow
+        // Fill tops first (in slot order), then use bottoms as tandems
         let placed = false;
         for(let s=1; s<=40; s++) {
           if(!slots[s].top) { slots[s].top = circ; placed=true; break; }
@@ -2373,74 +2378,70 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobName,jobA
       }
     }
 
-    // Color per amps
-    const bg = (c) => {
-      if(!c) return '#ffffff';
-      if(c.amps>=50) return '#fce7f3';
-      if(c.amps>=40) return '#fef3c7';
-      if(c.amps>=30) return '#dbeafe';
-      return '#ffffff';
-    };
+    // Build the 20 pairs of rows
+    let gridHtml = '';
+    for(let i=0; i<20; i++) {
+      const odd  = i*2+1;
+      const even = i*2+2;
+      const ot = slots[odd].top,    ob = slots[odd].bottom;
+      const et = slots[even].top,   eb = slots[even].bottom;
 
-    // Build HTML rows — 20 pairs of (odd, even), each pair has 2 lines: top + bottom
-    let gridRows = '';
-    for(let i=0;i<20;i++){
-      const odd=i*2+1, even=i*2+2;
-      const ot=slots[odd].top,  ob=slots[odd].bottom;
-      const et=slots[even].top, eb=slots[even].bottom;
-
-      const is2poleOdd  = ot && ot.poles===2;
-      const is2poleEven = et && et.poles===2;
-
-      // helper: circuit cell content
-      const circHtml = (c, align) => {
-        if(!c) return '';
-        const tag = c.tandem ? '<span style="font-size:7px;color:#ea580c;font-weight:800;letter-spacing:0.05em;">TANDEM </span>' : '';
-        const legTag = c.leg ? '<span style="font-size:8px;color:#666;"> ('+c.leg+')</span>' : '';
-        const ampsTag = '<span style="font-size:8px;color:#888;"> '+c.amps+'A'+(c.poles===2?' 2P':'')+'</span>';
-        return tag + c.name + legTag + ampsTag;
+      const bgColor = (c) => {
+        if(!c) return '#ffffff';
+        if(c.tandem) return '#fff7ed';
+        if(c.amps>=50) return '#fce7f3';
+        if(c.amps>=40) return '#fef3c7';
+        if(c.amps>=30) return '#dbeafe';
+        if(c.poles===2) return '#ede9fe';
+        return '#ffffff';
       };
 
-      const topOddBg   = is2poleOdd  ? '#e0e7ff' : bg(ot);
-      const topEvenBg  = is2poleEven ? '#e0e7ff' : bg(et);
-      const botOddBg   = ob && ob.tandem ? '#fff7ed' : '#fafafa';
-      const botEvenBg  = eb && eb.tandem ? '#fff7ed' : '#fafafa';
-      const botOddBd   = ob ? '1px dashed #f97316' : '1px dashed #e2e8f0';
-      const botEvenBd  = eb ? '1px dashed #f97316' : '1px dashed #e2e8f0';
+      const topH = '24px', botH = '18px';
 
-      gridRows += `
-        <tr>
-          <td style="text-align:right;padding:3px 6px;background:${topOddBg};border-bottom:1px solid #ddd;font-size:10px;">${circHtml(ot,'right')}</td>
-          <td rowspan="2" style="text-align:center;font-weight:800;font-size:11px;background:#f0f0f0;border:1px solid #bbb;width:32px;vertical-align:middle;">${odd}</td>
-          <td rowspan="2" style="text-align:center;font-weight:800;font-size:11px;background:#f0f0f0;border:1px solid #bbb;width:32px;vertical-align:middle;">${even}</td>
-          <td style="padding:3px 6px;background:${topEvenBg};border-bottom:1px solid #ddd;font-size:10px;">${circHtml(et,'left')}</td>
-        </tr>
-        <tr>
-          <td style="text-align:right;padding:2px 6px;background:${botOddBg};border-bottom:${botOddBd};font-size:9px;min-height:14px;">${circHtml(ob,'right')}</td>
-          <td style="padding:2px 6px;background:${botEvenBg};border-bottom:${botEvenBd};font-size:9px;min-height:14px;">${circHtml(eb,'left')}</td>
-        </tr>`;
+      // Top row — has the breaker numbers
+      gridHtml += `<tr>`;
+      // Odd top label
+      gridHtml += `<td style="text-align:right;padding:2px 6px;font-size:10px;background:${bgColor(ot)};border-bottom:1px solid #e5e5e5;height:${topH};">${ot&&ot.name?ot.name+(ot.amps?'<span style="font-size:8px;color:#888;"> '+ot.amps+'A'+(ot.poles===2?' 2P':'')+'</span>':''):''}</td>`;
+      // Odd number — rowspan 2
+      gridHtml += `<td rowspan="2" style="text-align:center;font-size:11px;font-weight:800;background:#f0f0f0;border:1px solid #ccc;width:30px;vertical-align:middle;">${odd}</td>`;
+      // Even number — rowspan 2
+      gridHtml += `<td rowspan="2" style="text-align:center;font-size:11px;font-weight:800;background:#f0f0f0;border:1px solid #ccc;width:30px;vertical-align:middle;">${even}</td>`;
+      // Even top label
+      gridHtml += `<td style="padding:2px 6px;font-size:10px;background:${bgColor(et)};border-bottom:1px solid #e5e5e5;height:${topH};">${et&&et.name?et.name+(et.amps?'<span style="font-size:8px;color:#888;"> '+et.amps+'A'+(et.poles===2?' 2P':'')+'</span>':''):''}</td>`;
+      gridHtml += `</tr>`;
+
+      // Bottom row — tandem / 2-pole continuation / empty dotted
+      const botBdOdd  = ob ? (ob.tandem?'1px dashed #f97316':'1px dashed #c7c7c7') : '1px dashed #ddd';
+      const botBdEven = eb ? (eb.tandem?'1px dashed #f97316':'1px dashed #c7c7c7') : '1px dashed #ddd';
+      gridHtml += `<tr>`;
+      gridHtml += `<td style="text-align:right;padding:1px 6px;font-size:9px;background:${bgColor(ob)};border-bottom:${botBdOdd};height:${botH};color:${ob&&ob.tandem?'#ea580c':'#555'};">${ob&&ob.name&&!ob.cont?(ob.tandem?'<span style="font-size:7px;font-weight:800;color:#ea580c;">TANDEM </span>':'')+ob.name:''}</td>`;
+      gridHtml += `<td style="padding:1px 6px;font-size:9px;background:${bgColor(eb)};border-bottom:${botBdEven};height:${botH};color:${eb&&eb.tandem?'#ea580c':'#555'};">${eb&&eb.name&&!eb.cont?(eb.tandem?'<span style="font-size:7px;font-weight:800;color:#ea580c;">TANDEM </span>':'')+eb.name:''}</td>`;
+      gridHtml += `</tr>`;
     }
 
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
-<title>Panel Schedule — ${panelName}</title>
+<title>Panel Schedule - ${panelName}</title>
 <style>
-  @page{size:letter portrait;margin:0.4in}
-  *{box-sizing:border-box;margin:0;padding:0}
-  body{font-family:Arial,sans-serif;font-size:10px;color:#000;background:#fff}
-  .hdr{text-align:center;margin-bottom:12px}
-  .logo{font-family:'Arial Black',sans-serif;font-size:24px;font-weight:900;letter-spacing:4px;text-transform:uppercase}
-  .sub{font-size:9px;letter-spacing:8px;text-transform:uppercase;color:#444;margin-top:2px}
-  .meta{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;border-top:2px solid #000;border-bottom:1px solid #000;padding:5px 0;margin-bottom:10px}
-  .ml{font-weight:700;text-transform:uppercase;font-size:9px}
-  table{width:100%;border-collapse:collapse;border:1.5px solid #000}
-  thead th{background:#111;color:#fff;padding:4px;font-size:9px;letter-spacing:0.08em}
-  td{vertical-align:middle}
-  .legend{margin-top:8px;display:flex;gap:10px;flex-wrap:wrap;font-size:9px}
-  .ls{width:12px;height:12px;border:1px solid #ccc;display:inline-block;vertical-align:middle;margin-right:3px}
-  @media print{.pbtn{display:none}}
+@page{size:letter portrait;margin:0.4in}
+*{box-sizing:border-box;margin:0;padding:0}
+body{font-family:Arial,sans-serif;font-size:10px;color:#000;background:#fff}
+.hdr{text-align:center;margin-bottom:14px}
+.logo{font-family:'Arial Black',sans-serif;font-size:26px;font-weight:900;letter-spacing:4px;text-transform:uppercase}
+.sub{font-size:9px;letter-spacing:8px;text-transform:uppercase;color:#444;margin-top:2px}
+.meta{display:flex;justify-content:space-between;flex-wrap:wrap;gap:6px;border-top:2px solid #000;border-bottom:1px solid #000;padding:5px 0;margin-bottom:10px;font-size:10px}
+.ml{font-weight:700;text-transform:uppercase;font-size:9px;letter-spacing:0.04em}
+table{width:100%;border-collapse:collapse;border:1.5px solid #000}
+thead th{background:#111;color:#fff;padding:5px 6px;font-size:9px;letter-spacing:0.08em;font-weight:700}
+td{vertical-align:middle}
+.legend{margin-top:8px;display:flex;gap:10px;flex-wrap:wrap;font-size:9px;align-items:center}
+.ls{width:12px;height:12px;border:1px solid #ccc;display:inline-block;vertical-align:middle;margin-right:3px;flex-shrink:0}
+@media print{.pbtn{display:none}}
 </style>
 </head><body>
-<div class="hdr"><div class="logo">Homestead</div><div class="sub">Electric</div></div>
+<div class="hdr">
+  <div class="logo">Homestead</div>
+  <div class="sub">Electric</div>
+</div>
 <div class="meta">
   <span><span class="ml">Job: </span>${jobName}</span>
   <span><span class="ml">Panel: </span>${panelName}</span>
@@ -2451,26 +2452,28 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobName,jobA
   <thead>
     <tr>
       <th style="text-align:right">CIRCUIT DESCRIPTION</th>
-      <th style="width:32px">ODD</th>
-      <th style="width:32px">EVEN</th>
+      <th style="width:30px">ODD</th>
+      <th style="width:30px">EVEN</th>
       <th style="text-align:left">CIRCUIT DESCRIPTION</th>
     </tr>
   </thead>
-  <tbody>${gridRows}</tbody>
+  <tbody>${gridHtml}</tbody>
 </table>
 <div class="legend">
   <span><span class="ls" style="background:#fce7f3"></span>50A 2-pole</span>
   <span><span class="ls" style="background:#fef3c7"></span>40A 2-pole</span>
   <span><span class="ls" style="background:#dbeafe"></span>30A 2-pole</span>
-  <span><span class="ls" style="background:#e0e7ff"></span>20A 2-pole (12/3)</span>
-  <span><span class="ls" style="background:#fff7ed;border:1px dashed #f97316"></span>Tandem breaker</span>
+  <span><span class="ls" style="background:#ede9fe"></span>20A 2-pole (12/3)</span>
+  <span><span class="ls" style="background:#fff7ed;border:1px dashed #f97316"></span>Tandem</span>
 </div>
-<br><button class="pbtn" onclick="window.print()" style="padding:8px 20px;font-size:12px;background:#111;color:#fff;border:none;border-radius:6px;cursor:pointer">Print / Save as PDF</button>
+<br>
+<button class="pbtn" onclick="window.print()" style="padding:8px 20px;font-size:12px;background:#111;color:#fff;border:none;border-radius:6px;cursor:pointer">Print / Save as PDF</button>
 </body></html>`;
-    const w=window.open('','_blank','width=900,height=1100');
+
+    const w = window.open('','_blank','width=900,height=1100');
     w.document.write(html);
     w.document.close();
-  };
+  };;
 
     // Sort: bigger loads first
     const sorted = [...rows].sort((a,b) => getInfo(a.wire).order - getInfo(b.wire).order);
