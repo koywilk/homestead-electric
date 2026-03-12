@@ -4740,6 +4740,8 @@ function App() {
 
               {job.gc||"No GC set"}
 
+              {job.prepStartDate&&<span style={{color:C.teal,fontWeight:600,marginLeft:6}}>· 🗓 {job.prepStartDate}</span>}
+
             </div>
 
           </div>
