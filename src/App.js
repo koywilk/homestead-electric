@@ -2513,20 +2513,23 @@ ${needTandems ? '<div class="tandem-note">* Over 40 slots — tandem breakers (2
       </Section>
       <Section label="Print Panel Schedules" color={C.blue}>
         <div style={{display:"flex",gap:8,flexWrap:"wrap",marginTop:4}}>
-          {["main","upper","basement"].map(floor=>{
-            const rows = homeRuns[floor]||[];
-            if(rows.length===0) return null;
-            const panels = [...new Set(rows.map(r=>r.panel).filter(Boolean))];
+          {(()=>{
+            const allRows = [
+              ...(homeRuns.main||[]),
+              ...(homeRuns.upper||[]),
+              ...(homeRuns.basement||[]),
+            ];
+            const panels = [...new Set(allRows.map(r=>r.panel).filter(Boolean))];
+            if(panels.length===0) return (
+              <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>Add home runs with panels assigned to generate schedules</div>
+            );
             return panels.map(panel=>(
-              <Btn key={floor+panel} onClick={()=>printPanelSchedule(panel, rows.filter(r=>r.panel===panel))} variant="ghost"
+              <Btn key={panel} onClick={()=>printPanelSchedule(panel, allRows.filter(r=>r.panel===panel))} variant="ghost"
                 style={{fontSize:11,padding:"6px 14px"}}>
-                Print {panel} — {floor.charAt(0).toUpperCase()+floor.slice(1)}
+                Print {panel}
               </Btn>
             ));
-          })}
-          {["main","upper","basement"].every(f=>(homeRuns[f]||[]).length===0)&&(
-            <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>Add home runs first to generate panel schedules</div>
-          )}
+          })()}
         </div>
       </Section>
 
