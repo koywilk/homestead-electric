@@ -4673,7 +4673,7 @@ function App() {
 
               {job.gc||"No GC set"}
 
-              {job.prepStartDate&&<span style={{color:C.teal,fontWeight:600,marginLeft:6}}>· 🗓 {job.prepStartDate}</span>}
+              {job.prepStartDate&&<span style={{color:C.teal,fontWeight:600,marginLeft:6}}>· {job.prepStartDate}</span>}
 
             </div>
 
@@ -5181,7 +5181,7 @@ function App() {
                               <div style={{background:`${C.teal}18`,border:`1px solid ${C.teal}33`,
                                 borderRadius:8,padding:"4px 10px",fontSize:11,color:C.teal,
                                 fontWeight:700,whiteSpace:"nowrap",flexShrink:0}}>
-                                🗓 {job.prepStartDate}
+                                {job.prepStartDate}
                               </div>
                             )}
                           </div>
