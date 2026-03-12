@@ -3168,10 +3168,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                     ))}
                   </div>
                 )}
-                <div style={{marginTop:12,display:"flex",alignItems:"center",gap:8}}>
-                  <div style={{fontSize:11,color:C.dim,fontWeight:600,whiteSpace:"nowrap"}}>Est. Start Date</div>
-                  <Inp value={job.prepStartDate||""} onChange={e=>u({prepStartDate:e.target.value})} placeholder="MM/DD/YY" style={{width:110}}/>
-                </div>
+
               </Section>
 
               <Section label="Rough Stage" color={C.rough} defaultOpen={true}>
