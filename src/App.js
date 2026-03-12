@@ -1398,9 +1398,7 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
 function ReturnTripExtras({trip, onUpd}) {
 
-  const [tab, setTab] = useState("Assign Work");
-
-  return (
+    return (
 
     <div style={{marginTop:14,borderTop:`1px solid ${C.border}`,paddingTop:14}}>
 
@@ -2931,7 +2929,7 @@ const TABS = ["Job Info","Rough","Finish","Home Runs","Panelized Lighting","Tape
 
 
 
-function JobDetail({job: rawJob, onUpdate, onClose}) {
+function JobDetail({job: rawJob, onUpdate, onClose, tab, setTab}) {
 
   // Defensive normalization — prevents crashes on old jobs missing fields
 
@@ -2977,9 +2975,6 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
   };
 
-  const [tab, setTab]       = useState("Job Info");
-
-  const [emailData, setEmailData] = useState(null);
 
   const jobRef = useRef(job);
 
@@ -4244,6 +4239,7 @@ function App() {
   const [flagOnly, setFlagOnly] = useState(false);
 
   const [stageModal, setStageModal] = useState(null);
+  const [tab, setTab] = useState("Rough");
 
   const [syncStatus, setSyncStatus] = useState("idle");
 
@@ -5145,7 +5141,7 @@ function App() {
             {/* ── Prep Dashboard ── */}
             <div style={{marginTop:32}}>
               <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em",marginBottom:16}}>
-                JOB PREP — KOY
+                JOB PREP
               </div>
               {(()=>{
                 const prepJobs = jobs
@@ -5203,6 +5199,70 @@ function App() {
                                 )}
                               </div>
                             ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
+
+            {/* ── Upcoming Finishes Dashboard ── */}
+            <div style={{marginTop:32}}>
+              <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em",marginBottom:16}}>
+                UPCOMING FINISHES
+              </div>
+              {(()=>{
+                const finishJobs = jobs
+                  .filter(j=>{
+                    const r=parseInt(j.roughStage)||0;
+                    const f=parseInt(j.finishStage)||0;
+                    return r>0 && f<100 && j.finishStartDate;
+                  })
+                  .sort((a,b)=>(a.finishStartDate||"9999").localeCompare(b.finishStartDate||"9999"));
+                if(finishJobs.length===0) return (
+                  <div style={{fontSize:12,color:C.muted,fontStyle:"italic"}}>No upcoming finishes with dates set</div>
+                );
+                return (
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:12}}>
+                    {finishJobs.map(job=>{
+                      const r=parseInt(job.roughStage)||0;
+                      const f=parseInt(job.finishStage)||0;
+                      const fc=FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
+                      const inFinish=f>0;
+                      const stageColor=inFinish?C.finish:C.orange;
+                      const stageLabel=inFinish?`Finish ${f}%`:(r===100?"In Between":`Rough ${r}%`);
+                      return (
+                        <div key={job.id} onClick={()=>setSelected(job)}
+                          style={{background:C.card,border:`1px solid ${stageColor}33`,borderRadius:12,
+                            padding:14,cursor:"pointer",borderLeft:`3px solid ${stageColor}`,
+                            transition:"transform 0.1s,box-shadow 0.1s"}}
+                          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow=`0 6px 20px ${stageColor}22`;}}
+                          onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
+                          <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8}}>
+                            <div>
+                              <div style={{fontSize:13,fontWeight:700,color:C.text}}>{job.name||"Untitled"}</div>
+                              <div style={{fontSize:11,color:C.dim,marginTop:2}}>
+                                <span style={{color:fc,fontWeight:600}}>{job.foreman||"Koy"}</span>
+                                {job.gc&&<span> · {job.gc}</span>}
+                              </div>
+                            </div>
+                            <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
+                              <div style={{background:`${stageColor}18`,border:`1px solid ${stageColor}33`,
+                                borderRadius:8,padding:"4px 10px",fontSize:11,color:stageColor,fontWeight:700}}>
+                                {job.finishStartDate}
+                              </div>
+                              <div style={{fontSize:10,color:stageColor,fontWeight:600}}>{stageLabel}</div>
+                            </div>
+                          </div>
+                          {/* Finish progress bar */}
+                          <div style={{marginTop:10,height:4,background:C.border,borderRadius:99,overflow:"hidden"}}>
+                            <div style={{height:"100%",width:`${f}%`,background:stageColor,borderRadius:99,transition:"width 0.3s"}}/>
+                          </div>
+                          <div style={{display:"flex",justifyContent:"space-between",marginTop:3}}>
+                            <span style={{fontSize:9,color:C.muted}}>Rough {r}%</span>
+                            <span style={{fontSize:9,color:stageColor,fontWeight:700}}>Finish {f}%</span>
                           </div>
                         </div>
                       );
@@ -5400,7 +5460,7 @@ function App() {
 
 
 
-      {selected&&<JobDetail job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>}
+      {selected&&<JobDetail tab={tab} setTab={setTab} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>}
 
     </div>
 
