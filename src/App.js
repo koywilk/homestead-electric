@@ -2323,19 +2323,154 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
 function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobName,jobAddress}) {
   const printPanelSchedule = (panelName, rows) => {
-    // Wire -> {amps, poles, sortOrder (lower = bigger = top)}
-    const WIRE_INFO = {
-      "6/2":  {amps:50, poles:2, order:1}, "6/3": {amps:50, poles:2, order:1},
-      "8/2":  {amps:40, poles:2, order:2}, "8/3": {amps:40, poles:2, order:2},
-      "10/2": {amps:30, poles:2, order:3}, "10/3":{amps:30, poles:2, order:3},
-      "12/2": {amps:20, poles:1, order:4}, "12/3":{amps:20, poles:2, order:4},
-      "14/2": {amps:15, poles:1, order:5}, "14/3":{amps:15, poles:1, order:5},
-    };
+    // Wire gauge -> breaker info
     const getInfo = (wire) => {
-      if(!wire) return {amps:20, poles:1, order:6};
-      const key = Object.keys(WIRE_INFO).find(k=>wire.startsWith(k.split('/')[0]));
-      return WIRE_INFO[key] || {amps:20, poles:1, order:6};
+      if(!wire) return {amps:20, poles:1, order:7};
+      if(wire.startsWith('12/3')) return {amps:20, poles:2, order:4};
+      const g = parseInt(wire.split('/')[0]);
+      if(g<=6)  return {amps:50, poles:2, order:1};
+      if(g<=8)  return {amps:40, poles:2, order:2};
+      if(g<=10) return {amps:30, poles:2, order:3};
+      if(g<=12) return {amps:20, poles:1, order:5};
+      return      {amps:15, poles:1, order:6};
     };
+
+    // Sort biggest loads first
+    const sorted = [...rows].sort((a,b) => getInfo(a.wire).order - getInfo(b.wire).order);
+
+    // Build 40 physical slots. Each slot has top + bottom (for tandems).
+    // slots[1..40] = { top: circuit|null, bottom: circuit|null }
+    const slots = {};
+    for(let i=1;i<=40;i++) slots[i] = {top:null, bottom:null};
+
+    for(const r of sorted) {
+      const info = getInfo(r.wire);
+      const circ = {name: r.name||'', wire: r.wire||'', amps: info.amps, poles: info.poles};
+
+      if(info.poles === 2) {
+        // 2-pole: needs two consecutive slots (odd+even), both tops free
+        let placed = false;
+        for(let s=1; s<=39; s+=2) {
+          if(!slots[s].top && !slots[s+1].top) {
+            slots[s].top   = {...circ, leg:'A'};
+            slots[s+1].top = {...circ, leg:'B'};
+            placed = true;
+            break;
+          }
+        }
+        // overflow: just note it
+      } else {
+        // 1-pole: fill tops first in order, then bottoms (tandems) as overflow
+        let placed = false;
+        for(let s=1; s<=40; s++) {
+          if(!slots[s].top) { slots[s].top = circ; placed=true; break; }
+        }
+        if(!placed) {
+          for(let s=1; s<=40; s++) {
+            if(!slots[s].bottom) { slots[s].bottom = {...circ, tandem:true}; placed=true; break; }
+          }
+        }
+      }
+    }
+
+    // Color per amps
+    const bg = (c) => {
+      if(!c) return '#ffffff';
+      if(c.amps>=50) return '#fce7f3';
+      if(c.amps>=40) return '#fef3c7';
+      if(c.amps>=30) return '#dbeafe';
+      return '#ffffff';
+    };
+
+    // Build HTML rows — 20 pairs of (odd, even), each pair has 2 lines: top + bottom
+    let gridRows = '';
+    for(let i=0;i<20;i++){
+      const odd=i*2+1, even=i*2+2;
+      const ot=slots[odd].top,  ob=slots[odd].bottom;
+      const et=slots[even].top, eb=slots[even].bottom;
+
+      const is2poleOdd  = ot && ot.poles===2;
+      const is2poleEven = et && et.poles===2;
+
+      // helper: circuit cell content
+      const circHtml = (c, align) => {
+        if(!c) return '';
+        const tag = c.tandem ? '<span style="font-size:7px;color:#ea580c;font-weight:800;letter-spacing:0.05em;">TANDEM </span>' : '';
+        const legTag = c.leg ? '<span style="font-size:8px;color:#666;"> ('+c.leg+')</span>' : '';
+        const ampsTag = '<span style="font-size:8px;color:#888;"> '+c.amps+'A'+(c.poles===2?' 2P':'')+'</span>';
+        return tag + c.name + legTag + ampsTag;
+      };
+
+      const topOddBg   = is2poleOdd  ? '#e0e7ff' : bg(ot);
+      const topEvenBg  = is2poleEven ? '#e0e7ff' : bg(et);
+      const botOddBg   = ob && ob.tandem ? '#fff7ed' : '#fafafa';
+      const botEvenBg  = eb && eb.tandem ? '#fff7ed' : '#fafafa';
+      const botOddBd   = ob ? '1px dashed #f97316' : '1px dashed #e2e8f0';
+      const botEvenBd  = eb ? '1px dashed #f97316' : '1px dashed #e2e8f0';
+
+      gridRows += `
+        <tr>
+          <td style="text-align:right;padding:3px 6px;background:${topOddBg};border-bottom:1px solid #ddd;font-size:10px;">${circHtml(ot,'right')}</td>
+          <td rowspan="2" style="text-align:center;font-weight:800;font-size:11px;background:#f0f0f0;border:1px solid #bbb;width:32px;vertical-align:middle;">${odd}</td>
+          <td rowspan="2" style="text-align:center;font-weight:800;font-size:11px;background:#f0f0f0;border:1px solid #bbb;width:32px;vertical-align:middle;">${even}</td>
+          <td style="padding:3px 6px;background:${topEvenBg};border-bottom:1px solid #ddd;font-size:10px;">${circHtml(et,'left')}</td>
+        </tr>
+        <tr>
+          <td style="text-align:right;padding:2px 6px;background:${botOddBg};border-bottom:${botOddBd};font-size:9px;min-height:14px;">${circHtml(ob,'right')}</td>
+          <td style="padding:2px 6px;background:${botEvenBg};border-bottom:${botEvenBd};font-size:9px;min-height:14px;">${circHtml(eb,'left')}</td>
+        </tr>`;
+    }
+
+    const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
+<title>Panel Schedule — ${panelName}</title>
+<style>
+  @page{size:letter portrait;margin:0.4in}
+  *{box-sizing:border-box;margin:0;padding:0}
+  body{font-family:Arial,sans-serif;font-size:10px;color:#000;background:#fff}
+  .hdr{text-align:center;margin-bottom:12px}
+  .logo{font-family:'Arial Black',sans-serif;font-size:24px;font-weight:900;letter-spacing:4px;text-transform:uppercase}
+  .sub{font-size:9px;letter-spacing:8px;text-transform:uppercase;color:#444;margin-top:2px}
+  .meta{display:flex;justify-content:space-between;flex-wrap:wrap;gap:4px;border-top:2px solid #000;border-bottom:1px solid #000;padding:5px 0;margin-bottom:10px}
+  .ml{font-weight:700;text-transform:uppercase;font-size:9px}
+  table{width:100%;border-collapse:collapse;border:1.5px solid #000}
+  thead th{background:#111;color:#fff;padding:4px;font-size:9px;letter-spacing:0.08em}
+  td{vertical-align:middle}
+  .legend{margin-top:8px;display:flex;gap:10px;flex-wrap:wrap;font-size:9px}
+  .ls{width:12px;height:12px;border:1px solid #ccc;display:inline-block;vertical-align:middle;margin-right:3px}
+  @media print{.pbtn{display:none}}
+</style>
+</head><body>
+<div class="hdr"><div class="logo">Homestead</div><div class="sub">Electric</div></div>
+<div class="meta">
+  <span><span class="ml">Job: </span>${jobName}</span>
+  <span><span class="ml">Panel: </span>${panelName}</span>
+  <span><span class="ml">Address: </span>${jobAddress}</span>
+  <span><span class="ml">Date: </span>${new Date().toLocaleDateString()}</span>
+</div>
+<table>
+  <thead>
+    <tr>
+      <th style="text-align:right">CIRCUIT DESCRIPTION</th>
+      <th style="width:32px">ODD</th>
+      <th style="width:32px">EVEN</th>
+      <th style="text-align:left">CIRCUIT DESCRIPTION</th>
+    </tr>
+  </thead>
+  <tbody>${gridRows}</tbody>
+</table>
+<div class="legend">
+  <span><span class="ls" style="background:#fce7f3"></span>50A 2-pole</span>
+  <span><span class="ls" style="background:#fef3c7"></span>40A 2-pole</span>
+  <span><span class="ls" style="background:#dbeafe"></span>30A 2-pole</span>
+  <span><span class="ls" style="background:#e0e7ff"></span>20A 2-pole (12/3)</span>
+  <span><span class="ls" style="background:#fff7ed;border:1px dashed #f97316"></span>Tandem breaker</span>
+</div>
+<br><button class="pbtn" onclick="window.print()" style="padding:8px 20px;font-size:12px;background:#111;color:#fff;border:none;border-radius:6px;cursor:pointer">Print / Save as PDF</button>
+</body></html>`;
+    const w=window.open('','_blank','width=900,height=1100');
+    w.document.write(html);
+    w.document.close();
+  };
 
     // Sort: bigger loads first
     const sorted = [...rows].sort((a,b) => getInfo(a.wire).order - getInfo(b.wire).order);
