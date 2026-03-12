@@ -3153,24 +3153,6 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
             <div>
 
-              <Section label="Pre Job Prep" color={C.teal} defaultOpen={true}>
-                <Sel value={job.prepStage||""} onChange={e=>u({prepStage:e.target.value})} options={["", ...PREP_STAGES]}/>
-                {job.prepStage&&(
-                  <div style={{marginTop:8,display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-                    {PREP_STAGES.map((s,i)=>(
-                      <div key={s} style={{display:"flex",alignItems:"center",gap:4}}>
-                        <div style={{width:10,height:10,borderRadius:"50%",flexShrink:0,
-                          background:PREP_STAGES.indexOf(job.prepStage)>=i?C.teal:C.border}}/>
-                        <span style={{fontSize:10,color:PREP_STAGES.indexOf(job.prepStage)>=i?C.teal:C.dim,
-                          fontWeight:PREP_STAGES.indexOf(job.prepStage)===i?700:400}}>{s}</span>
-                        {i<PREP_STAGES.length-1&&<span style={{color:C.border,fontSize:10}}>›</span>}
-                      </div>
-                    ))}
-                  </div>
-                )}
-
-              </Section>
-
               <Section label="Rough Stage" color={C.rough} defaultOpen={true}>
 
                 <Sel value={job.roughStage} onChange={e=>u({roughStage:e.target.value})} options={ROUGH_STAGES}/>
@@ -3492,7 +3474,25 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
               </div>
 
-              <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+              <div style={{marginTop:16}}>
+                <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.1em",marginBottom:8}}>PRE JOB PREP STAGE</div>
+                <Sel value={job.prepStage||""} onChange={e=>u({prepStage:e.target.value})} options={["", ...PREP_STAGES]}/>
+                {job.prepStage&&(
+                  <div style={{marginTop:10,display:"flex",gap:6,alignItems:"flex-start",flexWrap:"wrap"}}>
+                    {PREP_STAGES.map((s,i)=>(
+                      <div key={s} style={{display:"flex",alignItems:"center",gap:4}}>
+                        <div style={{width:10,height:10,borderRadius:"50%",flexShrink:0,
+                          background:PREP_STAGES.indexOf(job.prepStage)>=i?C.teal:C.border}}/>
+                        <span style={{fontSize:10,color:PREP_STAGES.indexOf(job.prepStage)>=i?C.teal:C.dim,
+                          fontWeight:PREP_STAGES.indexOf(job.prepStage)===i?700:400}}>{s}</span>
+                        {i<PREP_STAGES.length-1&&<span style={{color:C.border,fontSize:10}}>›</span>}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+
+              <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",marginTop:16}}>
 
                 <input type="checkbox" checked={!!job.flagged} onChange={e=>u({flagged:e.target.checked})}
 
