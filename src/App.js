@@ -2397,6 +2397,9 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobName,jobA
   .amps { font-size:8px; color:#666; margin-left:3px; }
   .col-header { background: #111; color: #fff; font-weight: 700; text-align: center; justify-content: center; font-size: 9px; letter-spacing: 0.1em; padding: 4px 2px; border-bottom:1.5px solid #000; }
   .tandem-note { margin-top:8px; font-size:9px; color:#c00; font-style:italic; }
+  .tandem { background: repeating-linear-gradient(45deg, #fff7ed, #fff7ed 4px, #fed7aa 4px, #fed7aa 8px) !important; }
+  .tandem-num { background: #ea580c !important; color: #fff !important; font-weight:900; }
+  .tandem-label { font-size:8px; color:#ea580c; font-weight:700; letter-spacing:0.05em; display:block; }
   .legend { margin-top:8px; display:flex; gap:12px; font-size:9px; }
   .legend-item { display:flex; align-items:center; gap:4px; }
   .legend-swatch { width:12px; height:12px; border:1px solid #ccc; }
@@ -2426,18 +2429,22 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobName,jobA
     const es = slots[even] || null;
     const is2poleOdd  = os && os.poles===2 && os.paired===even;
     const is2poleEven = es && es.poles===2 && es.paired===odd;
+    const oddTandem  = odd  > 40;
+    const evenTandem = even > 40;
     return `
-    <div class="cell name-left ${is2poleOdd?'two-pole-left':''}" style="background:${cellBg(odd)}">
+    <div class="cell name-left ${is2poleOdd?'two-pole-left':''} ${oddTandem?'tandem':''}" style="${oddTandem?'':('background:'+cellBg(odd))}">
+      ${oddTandem?'<span class="tandem-label">TANDEM</span>':''}
       ${os ? os.name + '<span class="amps">'+os.amps+'A'+(os.poles===2?' 2P':'')+'</span>' : ''}
     </div>
-    <div class="cell num" style="background:${cellBg(odd)}">${odd}</div>
-    <div class="cell num" style="background:${cellBg(even)}">${even}</div>
-    <div class="cell name-right ${is2poleEven?'two-pole-right':''}" style="background:${cellBg(even)}">
+    <div class="cell num ${oddTandem?'tandem-num':''}" style="${oddTandem?'':'background:'+cellBg(odd)}">${odd}</div>
+    <div class="cell num ${evenTandem?'tandem-num':''}" style="${evenTandem?'':'background:'+cellBg(even)}">${even}</div>
+    <div class="cell name-right ${is2poleEven?'two-pole-right':''} ${evenTandem?'tandem':''}" style="${evenTandem?'':('background:'+cellBg(even))}">
+      ${evenTandem?'<span class="tandem-label">TANDEM</span>':''}
       ${es && !is2poleEven ? es.name + '<span class="amps">'+es.amps+'A'+(es.poles===2?' 2P':'')+'</span>' : (is2poleEven ? '<span style="color:#aaa;font-size:9px;">↑ 2-pole</span>' : '')}
     </div>`;
   }).join('')}
 </div>
-${needTandems ? '<div class="tandem-note">* Over 40 slots — tandem breakers (20A/15A) required for remaining circuits</div>' : ''}
+${needTandems ? '<div class="tandem-note">* Circuits below slot 40 require tandem breakers (20A or 15A) — two circuits share one physical breaker slot</div>' : ''}
 <div class="legend">
   <div class="legend-item"><div class="legend-swatch" style="background:#fce7f3"></div> 50A 2-pole</div>
   <div class="legend-item"><div class="legend-swatch" style="background:#fef3c7"></div> 40A 2-pole</div>
