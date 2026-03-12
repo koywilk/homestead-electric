@@ -2929,7 +2929,7 @@ const TABS = ["Job Info","Rough","Finish","Home Runs","Panelized Lighting","Tape
 
 
 
-function JobDetail({job: rawJob, onUpdate, onClose, tab, setTab}) {
+function JobDetail({job: rawJob, onUpdate, onClose}) {
 
   // Defensive normalization — prevents crashes on old jobs missing fields
 
@@ -2984,6 +2984,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, tab, setTab}) {
 
   const saveNow = () => onUpdate({...jobRef.current});
 
+  const [tab, setTab] = useState("Rough");
   const [emailData, setEmailData] = useState(null);
 
   const [refreshing, setRefreshing] = useState(false);
@@ -4241,7 +4242,6 @@ function App() {
   const [flagOnly, setFlagOnly] = useState(false);
 
   const [stageModal, setStageModal] = useState(null);
-  const [tab, setTab] = useState("Rough");
 
   const [syncStatus, setSyncStatus] = useState("idle");
 
@@ -5462,7 +5462,7 @@ function App() {
 
 
 
-      {selected&&<JobDetail tab={tab} setTab={setTab} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>}
+      {selected&&<JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>}
 
     </div>
 
