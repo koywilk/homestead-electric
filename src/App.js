@@ -5187,6 +5187,67 @@ function App() {
               })()}
             </div>
 
+
+            {/* ── Upcoming Rough Ins Dashboard ── */}
+            <div style={{marginTop:32}}>
+              <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em",marginBottom:16}}>
+                ROUGH INS
+              </div>
+              {(()=>{
+                const roughJobs = jobs
+                  .filter(j=>{
+                    const r=parseInt(j.roughStage)||0;
+                    const f=parseInt(j.finishStage)||0;
+                    return r<100 && f===0 && j.prepStage==='Job Prep Complete';
+                  })
+                  .sort((a,b)=>{
+                    const da=a.prepStartDate||"9999";const db=b.prepStartDate||"9999";
+                    return da.localeCompare(db);
+                  });
+                if(roughJobs.length===0) return (
+                  <div style={{fontSize:12,color:C.muted,fontStyle:"italic"}}>No rough ins scheduled</div>
+                );
+                return (
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12}}>
+                    {roughJobs.map(job=>{
+                      const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
+                      const pct = parseInt(job.roughStage)||0;
+                      return (
+                        <div key={job.id} onClick={()=>setSelected(job)}
+                          style={{background:C.card,border:`1px solid ${C.rough}33`,borderRadius:12,
+                            padding:14,cursor:"pointer",borderLeft:`3px solid ${C.rough}`,
+                            transition:"transform 0.1s,box-shadow 0.1s"}}
+                          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow=`0 6px 20px ${C.rough}22`;}}
+                          onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
+                          <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8,marginBottom:8}}>
+                            <div>
+                              <div style={{fontSize:13,fontWeight:700,color:C.text}}>{job.name||"Untitled"}</div>
+                              <div style={{fontSize:11,color:C.dim,marginTop:2}}>
+                                <span style={{color:fc,fontWeight:600}}>{job.foreman||"Koy"}</span>
+                                {job.gc&&<span> · {job.gc}</span>}
+                              </div>
+                            </div>
+                            {job.prepStartDate&&(
+                              <div style={{background:`${C.rough}18`,border:`1px solid ${C.rough}33`,
+                                borderRadius:8,padding:"4px 10px",fontSize:11,color:C.rough,
+                                fontWeight:700,whiteSpace:"nowrap",flexShrink:0}}>
+                                {job.prepStartDate}
+                              </div>
+                            )}
+                          </div>
+                          <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4}}>
+                            <div style={{flex:1,height:5,background:C.border,borderRadius:99,overflow:"hidden"}}>
+                              <div style={{height:"100%",width:`${pct}%`,background:C.rough,borderRadius:99}}/>
+                            </div>
+                            <span style={{fontSize:10,color:C.rough,fontWeight:700,minWidth:28}}>{pct}%</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })()}
+            </div>
             {/* ── Upcoming Finishes Dashboard ── */}
             <div style={{marginTop:32}}>
               <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em",marginBottom:16}}>
