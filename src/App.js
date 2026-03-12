@@ -2323,34 +2323,85 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
 function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobName,jobAddress}) {
   const printPanelSchedule = (panelName, rows) => {
-    const slots = 40;
-    const circuits = Array.from({length:slots}, (_,i)=>({
-      num: i+1,
-      name: rows.find(r=>r.num===(i+1))?.name || "",
-      wire: rows.find(r=>r.num===(i+1))?.wire || "",
-    }));
-    const odd  = circuits.filter(c=>c.num%2!==0);
-    const even = circuits.filter(c=>c.num%2===0);
+    // Wire -> {amps, poles, sortOrder (lower = bigger = top)}
+    const WIRE_INFO = {
+      "6/2":  {amps:50, poles:2, order:1}, "6/3": {amps:50, poles:2, order:1},
+      "8/2":  {amps:40, poles:2, order:2}, "8/3": {amps:40, poles:2, order:2},
+      "10/2": {amps:30, poles:2, order:3}, "10/3":{amps:30, poles:2, order:3},
+      "12/2": {amps:20, poles:1, order:4}, "12/3":{amps:20, poles:2, order:4},
+      "14/2": {amps:15, poles:1, order:5}, "14/3":{amps:15, poles:1, order:5},
+    };
+    const getInfo = (wire) => {
+      if(!wire) return {amps:20, poles:1, order:6};
+      const key = Object.keys(WIRE_INFO).find(k=>wire.startsWith(k.split('/')[0]));
+      return WIRE_INFO[key] || {amps:20, poles:1, order:6};
+    };
+
+    // Sort: bigger loads first
+    const sorted = [...rows].sort((a,b) => getInfo(a.wire).order - getInfo(b.wire).order);
+
+    // Assign breaker slots
+    const slots = {}; // slot# -> {name, wire, amps, poles}
+    let slot = 1;
+    for(const r of sorted) {
+      const info = getInfo(r.wire);
+      if(info.poles === 2) {
+        // 2-pole needs an odd slot start
+        if(slot % 2 === 0) slot++;
+        slots[slot]   = {name:r.name, wire:r.wire, amps:info.amps, poles:2, paired:slot+1};
+        slots[slot+1] = {name:r.name + " (2)", wire:r.wire, amps:info.amps, poles:2, paired:slot};
+        slot += 2;
+      } else {
+        slots[slot] = {name:r.name, wire:r.wire, amps:info.amps, poles:1};
+        slot++;
+      }
+    }
+
+    // Total slots used — if over 40, note tandems needed
+    const totalSlots = slot - 1;
+    const needTandems = totalSlots > 40;
+
+    // Build 40-slot grid (or more if needed, rounded to next even)
+    const gridSize = Math.max(40, totalSlots % 2 === 0 ? totalSlots : totalSlots + 1);
+    const oddNums  = Array.from({length: gridSize/2}, (_,i) => i*2+1);
+    const evenNums = Array.from({length: gridSize/2}, (_,i) => i*2+2);
+
+    const cellBg = (num) => {
+      const s = slots[num];
+      if(!s) return '#fff';
+      if(s.amps >= 50) return '#fce7f3';
+      if(s.amps >= 40) return '#fef3c7';
+      if(s.amps >= 30) return '#dbeafe';
+      return '#fff';
+    };
+
     const html = `<!DOCTYPE html><html><head><meta charset="utf-8">
 <title>Panel Schedule — ${panelName}</title>
 <style>
-  @page { size: letter portrait; margin: 0.5in; }
+  @page { size: letter portrait; margin: 0.4in; }
   * { box-sizing: border-box; margin: 0; padding: 0; }
-  body { font-family: Arial, sans-serif; font-size: 11px; background: #fff; color: #000; }
-  .header { text-align: center; margin-bottom: 16px; }
-  .logo { font-family: 'Arial Black', sans-serif; font-size: 26px; font-weight: 900; letter-spacing: 4px; text-transform: uppercase; }
-  .logo-sub { font-size: 10px; letter-spacing: 8px; text-transform: uppercase; color: #333; }
-  .meta { display: flex; justify-content: space-between; margin-bottom: 12px; font-size: 10px; border-bottom: 2px solid #000; padding-bottom: 6px; }
-  .meta-field { display: flex; gap: 6px; align-items: center; }
-  .meta-label { font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; }
-  .grid { display: grid; grid-template-columns: 1fr 48px 48px 1fr; border: 1.5px solid #000; }
-  .cell { border: 0.5px solid #ccc; padding: 3px 6px; min-height: 22px; display: flex; align-items: center; }
-  .num { justify-content: center; font-weight: 700; background: #f0f0f0; font-size: 11px; border: 0.5px solid #bbb; }
-  .name-left { text-align: right; justify-content: flex-end; }
-  .name-right { text-align: left; }
-  .wire-tag { font-size: 8px; color: #555; margin-left: 4px; }
-  .col-header { background: #222; color: #fff; font-weight: 700; text-align: center; justify-content: center; font-size: 10px; letter-spacing: 0.1em; padding: 4px; }
-  @media print { button { display: none; } }
+  body { font-family: Arial, sans-serif; font-size: 10px; background: #fff; color: #000; }
+  .header { text-align: center; margin-bottom: 14px; }
+  .logo { font-family: 'Arial Black', sans-serif; font-size: 24px; font-weight: 900; letter-spacing: 4px; text-transform: uppercase; }
+  .logo-sub { font-size: 9px; letter-spacing: 8px; text-transform: uppercase; color: #444; margin-top:2px; }
+  .meta { display: flex; justify-content: space-between; flex-wrap:wrap; gap:4px; margin-bottom: 10px; font-size: 10px; border-top:2px solid #000; border-bottom: 1px solid #000; padding: 5px 0; }
+  .meta-field { display: flex; gap: 5px; align-items: center; }
+  .meta-label { font-weight: 700; text-transform: uppercase; font-size:9px; letter-spacing:0.05em; }
+  .grid { display: grid; grid-template-columns: 1fr 36px 36px 1fr; border-top: 1.5px solid #000; border-left: 1.5px solid #000; }
+  .cell { border-right: 1.5px solid #000; border-bottom: 1px solid #ccc; padding: 2px 5px; min-height: 20px; display: flex; align-items: center; }
+  .num { justify-content: center; font-weight: 700; font-size: 10px; border-bottom-color: #999; }
+  .name-left { text-align: right; justify-content: flex-end; font-size:10px; }
+  .name-right { font-size:10px; }
+  .two-pole-left  { border-bottom: 1px dashed #bbb !important; font-style:italic; }
+  .two-pole-right { border-bottom: 1px dashed #bbb !important; font-style:italic; }
+  .amps { font-size:8px; color:#666; margin-left:3px; }
+  .col-header { background: #111; color: #fff; font-weight: 700; text-align: center; justify-content: center; font-size: 9px; letter-spacing: 0.1em; padding: 4px 2px; border-bottom:1.5px solid #000; }
+  .tandem-note { margin-top:8px; font-size:9px; color:#c00; font-style:italic; }
+  .legend { margin-top:8px; display:flex; gap:12px; font-size:9px; }
+  .legend-item { display:flex; align-items:center; gap:4px; }
+  .legend-swatch { width:12px; height:12px; border:1px solid #ccc; }
+  .print-btn { margin-top:12px; padding:8px 20px; font-size:12px; cursor:pointer; background:#111; color:#fff; border:none; border-radius:6px; }
+  @media print { .print-btn { display:none; } }
 </style>
 </head><body>
 <div class="header">
@@ -2362,23 +2413,39 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobName,jobA
   <div class="meta-field"><span class="meta-label">Panel:</span> ${panelName}</div>
   <div class="meta-field"><span class="meta-label">Address:</span> ${jobAddress}</div>
   <div class="meta-field"><span class="meta-label">Date:</span> ${new Date().toLocaleDateString()}</div>
+  <div class="meta-field"><span class="meta-label">Slots Used:</span> ${totalSlots} / 40${needTandems?' (tandems required)':''}</div>
 </div>
 <div class="grid">
   <div class="cell col-header">CIRCUIT DESCRIPTION</div>
   <div class="cell col-header">ODD</div>
   <div class="cell col-header">EVEN</div>
   <div class="cell col-header">CIRCUIT DESCRIPTION</div>
-  ${odd.map((o,i)=>{const e=even[i]||{num:'',name:'',wire:''};return `
-    <div class="cell name-left">${o.name}${o.wire?'<span class="wire-tag">'+o.wire+'</span>':''}</div>
-    <div class="cell num">${o.num}</div>
-    <div class="cell num">${e.num}</div>
-    <div class="cell name-right">${e.name}${e.wire?'<span class="wire-tag">'+e.wire+'</span>':''}</div>
-  `;}).join('')}
+  ${oddNums.map((odd,i)=>{
+    const even = evenNums[i];
+    const os = slots[odd]  || null;
+    const es = slots[even] || null;
+    const is2poleOdd  = os && os.poles===2 && os.paired===even;
+    const is2poleEven = es && es.poles===2 && es.paired===odd;
+    return `
+    <div class="cell name-left ${is2poleOdd?'two-pole-left':''}" style="background:${cellBg(odd)}">
+      ${os ? os.name + '<span class="amps">'+os.amps+'A'+(os.poles===2?' 2P':'')+'</span>' : ''}
+    </div>
+    <div class="cell num" style="background:${cellBg(odd)}">${odd}</div>
+    <div class="cell num" style="background:${cellBg(even)}">${even}</div>
+    <div class="cell name-right ${is2poleEven?'two-pole-right':''}" style="background:${cellBg(even)}">
+      ${es && !is2poleEven ? es.name + '<span class="amps">'+es.amps+'A'+(es.poles===2?' 2P':'')+'</span>' : (is2poleEven ? '<span style="color:#aaa;font-size:9px;">↑ 2-pole</span>' : '')}
+    </div>`;
+  }).join('')}
 </div>
-<br>
-<button onclick="window.print()" style="padding:8px 20px;font-size:13px;cursor:pointer;background:#222;color:#fff;border:none;border-radius:6px;">Print / Save as PDF</button>
+${needTandems ? '<div class="tandem-note">* Over 40 slots — tandem breakers (20A/15A) required for remaining circuits</div>' : ''}
+<div class="legend">
+  <div class="legend-item"><div class="legend-swatch" style="background:#fce7f3"></div> 50A 2-pole</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#fef3c7"></div> 40A 2-pole</div>
+  <div class="legend-item"><div class="legend-swatch" style="background:#dbeafe"></div> 30A 2-pole</div>
+</div>
+<button class="print-btn" onclick="window.print()">Print / Save as PDF</button>
 </body></html>`;
-    const w = window.open('','_blank','width=850,height=1100');
+    const w = window.open('','_blank','width=900,height=1100');
     w.document.write(html);
     w.document.close();
   };
