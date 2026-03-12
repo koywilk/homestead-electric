@@ -164,7 +164,7 @@ const blankJob = () => ({
 
   uploadedFiles:[],
 
-  prepStage:"", roughStage:"0%", prepStartDate:"", roughQuestions:{ upper:[], main:[], basement:[] },
+  prepStage:"", roughStage:"0%", prepStartDate:"", finishStartDate:"", roughQuestions:{ upper:[], main:[], basement:[] },
 
   roughPunch:emptyPunch(), roughMaterials:[], roughUpdates:[], roughNotes:"",
 
@@ -3465,7 +3465,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
                 {[["name","Job Name"],["address","Address"],["gc","General Contractor"],
 
-                  ["phone","GC Phone"],["simproNo","Simpro Job #"]].map(([k,l])=>(
+                  ["phone","GC Phone"],["simproNo","Simpro Job #"],["prepStartDate","Est. Rough Start"],["finishStartDate","Est. Finish Start"]].map(([k,l])=>(
 
                   <div key={k}>
 
@@ -4671,7 +4671,9 @@ function App() {
 
               {job.gc||"No GC set"}
 
-              {job.prepStartDate&&<span style={{color:C.teal,fontWeight:600,marginLeft:6}}>· {job.prepStartDate}</span>}
+              {job.prepStartDate&&<span style={{color:C.teal,fontWeight:600,marginLeft:6}}>· Rough: {job.prepStartDate}</span>}
+
+              {job.finishStartDate&&<span style={{color:C.finish,fontWeight:600,marginLeft:6}}>· Finish: {job.finishStartDate}</span>}
 
             </div>
 
