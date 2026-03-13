@@ -62,7 +62,8 @@ const C = {
 
 const JOB_ID = "homestead-jobs-v1";
 
-const PREP_STAGES   = ['Redline Walk Scheduled','Redline Walk Completed','Redline CO Sent','Redline CO Signed','Final Redline Plan Made','Job Prep Complete'];
+const PREP_STAGES   = ['Redline Walk Scheduled','Redline Walk Completed','Redline CO Doc Made','Redline Plans Made','Redline CO Sent','Redline CO Signed','Redline Plans Need to be Updated','Job Prep Complete'];
+const PREP_STAGE_ALERT = 'Redline Plans Need to be Updated';
 
 const ROUGH_STAGES  = ['Scheduled', '0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
 
@@ -3777,15 +3778,31 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
               <div style={{marginTop:16}}>
                 <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.1em",marginBottom:8}}>PRE JOB PREP STAGE</div>
-                <Sel value={job.prepStage||""} onChange={e=>u({prepStage:e.target.value})} options={["", ...PREP_STAGES]}/>
+                <select value={job.prepStage||""} onChange={e=>u({prepStage:e.target.value})}
+                  style={{background:job.prepStage===PREP_STAGE_ALERT?"#fef2f2":C.surface,
+                    color:job.prepStage===PREP_STAGE_ALERT?"#dc2626":job.prepStage?C.text:C.dim,
+                    border:`1px solid ${job.prepStage===PREP_STAGE_ALERT?"#dc2626":C.border}`,
+                    borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
+                    fontWeight:job.prepStage===PREP_STAGE_ALERT?700:400,
+                    outline:"none",width:"100%",cursor:"pointer"}}>
+                  <option value="">— select stage —</option>
+                  {PREP_STAGES.map(s=>(
+                    <option key={s} value={s}
+                      style={{color:s===PREP_STAGE_ALERT?"#dc2626":"inherit",
+                        fontWeight:s===PREP_STAGE_ALERT?700:400}}>
+                      {s===PREP_STAGE_ALERT?"⚠ "+s:s}
+                    </option>
+                  ))}
+                </select>
                 {job.prepStage&&(
                   <div style={{marginTop:10,display:"flex",gap:6,alignItems:"flex-start",flexWrap:"wrap"}}>
                     {PREP_STAGES.map((s,i)=>(
                       <div key={s} style={{display:"flex",alignItems:"center",gap:4}}>
                         <div style={{width:10,height:10,borderRadius:"50%",flexShrink:0,
-                          background:PREP_STAGES.indexOf(job.prepStage)>=i?C.teal:C.border}}/>
-                        <span style={{fontSize:10,color:PREP_STAGES.indexOf(job.prepStage)>=i?C.teal:C.dim,
-                          fontWeight:PREP_STAGES.indexOf(job.prepStage)===i?700:400}}>{s}</span>
+                          background:s===PREP_STAGE_ALERT&&job.prepStage===s?"#dc2626":PREP_STAGES.indexOf(job.prepStage)>=i?C.teal:C.border}}/>
+                        <span style={{fontSize:10,
+                          color:s===PREP_STAGE_ALERT&&job.prepStage===s?"#dc2626":PREP_STAGES.indexOf(job.prepStage)>=i?C.teal:C.dim,
+                          fontWeight:PREP_STAGES.indexOf(job.prepStage)===i?700:400}}>{s===PREP_STAGE_ALERT?"⚠ "+s:s}</span>
                         {i<PREP_STAGES.length-1&&<span style={{color:C.border,fontSize:10}}>›</span>}
                       </div>
                     ))}
