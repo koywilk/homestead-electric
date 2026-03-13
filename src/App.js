@@ -2051,7 +2051,7 @@ function PanelFeeds({feeds, onChange}) {
 
 // ── Home Runs ─────────────────────────────────────────────────
 
-const DEFAULT_PANELS = ["Panel A","Panel B","Panel C","Panel D","Dedicated Loads"];
+const DEFAULT_PANELS = ["Panel A","Panel B","Panel C","Panel D"];
 
 const LEADS = ["","Keegan","Daegan","Gage","Abe","Louis","Jonathan","Braden","Treycen"];
 
