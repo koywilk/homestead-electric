@@ -166,7 +166,7 @@ const FOREMEN_COLORS = {"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e"};
 
 const blankJob = () => ({
 
-  id:uid(), name:"", address:"", gc:"", phone:"", simproNo:"", foreman:"Koy", lead:"", flagged:false,
+  id:uid(), name:"", address:"", gc:"", phone:"", simproNo:"", foreman:"Koy", lead:"", flagged:false, flagNote:"",
 
   planLink:"", redlineLink:"", lightingLink:"", panelLink:"", qcLink:"", matterportLink:"",
 
@@ -1637,7 +1637,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
   const [viewPhoto, setViewPhoto] = useState(null);
 
-  const add = () => onChange([...trips,{id:uid(),date:"",scope:"",material:"",punch:[],photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:""}]);
+  const add = () => onChange([...trips,{id:uid(),date:"",scope:"",material:"",punch:[],photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",rtScheduled:false}]);
 
   const upd = (id,p) => onChange(trips.map(t=>t.id===id?{...t,...p}:t));
 
@@ -1727,7 +1727,17 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
 
-            <span style={{fontSize:12,color:C.purple,fontWeight:700}}>Return Trip #{i+1}</span>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              <span style={{fontSize:12,color:C.purple,fontWeight:700}}>Return Trip #{i+1}</span>
+              {!t.signedOff&&(
+                <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
+                  <input type="checkbox" checked={!!t.rtScheduled}
+                    onChange={e=>upd(t.id,{rtScheduled:e.target.checked})}
+                    style={{accentColor:"#8b5cf6",width:13,height:13}}/>
+                  <span style={{fontSize:11,color:t.rtScheduled?"#8b5cf6":C.dim,fontWeight:t.rtScheduled?700:400}}>Scheduled</span>
+                </label>
+              )}
+            </div>
 
             <div style={{display:"flex",gap:8}}>
 
@@ -3847,13 +3857,23 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                     {job.readyToInvoice&&<span style={{fontSize:11,color:"#ea580c",marginLeft:6}}>— job card highlighted orange</span>}
                   </span>
                 </label>
-                  <input type="checkbox" checked={!!job.flagged} onChange={e=>u({flagged:e.target.checked})}
-
-                  style={{accentColor:C.red,width:16,height:16}}/>
-
-                <span style={{fontSize:13,color:C.text}}>Flag this job — needs attention</span>
-
-              </label>
+                  <input type="checkbox" checked={!!job.flagged} onChange={e=>u({flagged:e.target.checked,flagNote:e.target.checked?job.flagNote:""})}
+                    style={{accentColor:C.accent,width:16,height:16}}/>
+                  <span style={{fontSize:13,color:job.flagged?C.accent:C.text,fontWeight:job.flagged?700:400}}>
+                    Flag this job — needs attention
+                  </span>
+                </label>
+                {job.flagged&&(
+                  <div style={{marginTop:6,marginLeft:26}}>
+                    <TA
+                      value={job.flagNote||""}
+                      onChange={e=>u({flagNote:e.target.value})}
+                      placeholder="Why is this job flagged? e.g. Waiting on GC, permit issue, homeowner unresponsive…"
+                      rows={2}
+                      style={{fontSize:12,borderColor:C.accent+"66",background:"#fffbeb"}}
+                    />
+                  </div>
+                )}
               </div>
 
             </div>
@@ -5262,13 +5282,14 @@ function App() {
 
     const rowFc = fc || FOREMEN_COLORS[foreman];
 
-    const hasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
+    const hasRT   = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
+    const hasRTSch = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
     const _r = parseStage(job.roughStage);
     const _f = parseStage(job.finishStage);
     const rts = job.readyToSchedule && (_r===0 || (_r===100 && _f===0));
-    const rowBg    = job.readyToInvoice?"rgba(234,88,12,0.10)":hasRT?"rgba(220,38,38,0.18)":rts?"rgba(234,179,8,0.18)":C.card;
-    const rowLbord = job.readyToInvoice?"#ea580c":hasRT?"#dc2626":rts?"#ca8a04":job.flagged?C.accent:rowFc;
-    const rowBord  = job.readyToInvoice?"2px solid #ea580c":hasRT?"2px solid #dc2626":rts?"2px solid #ca8a04":`1px solid ${job.flagged?C.accent+"66":C.border}`;
+    const rowBg    = job.readyToInvoice?"rgba(234,88,12,0.10)":hasRT?"rgba(220,38,38,0.18)":hasRTSch?"rgba(139,92,246,0.10)":rts?"rgba(234,179,8,0.18)":C.card;
+    const rowLbord = job.readyToInvoice?"#ea580c":hasRT?"#dc2626":hasRTSch?"#8b5cf6":rts?"#ca8a04":job.flagged?C.accent:rowFc;
+    const rowBord  = job.readyToInvoice?"2px solid #ea580c":hasRT?"2px solid #dc2626":hasRTSch?"2px solid #8b5cf6":rts?"2px solid #ca8a04":`1px solid ${job.flagged?C.accent+"66":C.border}`;
 
     return (
 
@@ -5287,6 +5308,13 @@ function App() {
 
             </div>
 
+            {job.flagged&&job.flagNote&&(
+              <div style={{fontSize:10,color:C.accent,marginTop:2,fontStyle:"italic",
+                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:200}}>
+                ⚑ {job.flagNote}
+              </div>
+            )}
+
             <div style={{fontSize:11,color:C.dim,marginTop:1}}>
 
               {showForeman&&<span style={{color:rowFc,fontWeight:600,marginRight:6}}>{foreman}</span>}
@@ -5300,6 +5328,14 @@ function App() {
               {job.finishStartDate&&<span style={{color:C.finish,fontWeight:600,marginLeft:6}}>· Finish: {job.finishStartDate}</span>}
 
             </div>
+
+            {job.flagged&&job.flagNote&&(
+              <div style={{fontSize:11,color:C.accent,marginTop:4,fontWeight:500,
+                background:"#fffbeb",border:`1px solid ${C.accent}44`,
+                borderRadius:6,padding:"4px 8px",display:"inline-block",maxWidth:"100%"}}>
+                ⚑ {job.flagNote}
+              </div>
+            )}
 
           </div>
 
@@ -5329,7 +5365,8 @@ function App() {
           <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
 
             {hasRT&&<Pill label="Return trip needed" color="#dc2626"/>}
-            {!hasRT&&rts&&<Pill label="Ready to schedule" color="#ca8a04"/>}
+            {hasRTSch&&!hasRT&&<Pill label="Return trip scheduled" color="#8b5cf6"/>}
+            {!hasRT&&!hasRTSch&&rts&&<Pill label="Ready to schedule" color="#ca8a04"/>}
             {open>0   &&<Pill label={`${open} open`} color={C.red}/>}
 
             {pendCO>0 &&<Pill label={`${pendCO} CO`} color={C.orange}/>}
@@ -5801,12 +5838,13 @@ function App() {
                     {prepJobs.map(job=>{
                       const stageIdx = PREP_STAGES.indexOf(job.prepStage);
                       const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
-                      const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
+                      const dHasRT   = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
+                      const dHasRTSch = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
                       const dRTS   = job.readyToSchedule&&(parseStage(job.roughStage))===0;
                       const dInv   = !!job.readyToInvoice;
-                      const dBg    = dInv?"rgba(234,88,12,0.12)":dHasRT?"rgba(220,38,38,0.15)":dRTS?"rgba(234,179,8,0.15)":C.card;
-                      const dBord  = dInv?"2px solid #ea580c":dHasRT?"2px solid #dc2626":dRTS?"2px solid #ca8a04":`1px solid ${C.teal}33`;
-                      const dLbord = dInv?"#ea580c":dHasRT?"#dc2626":dRTS?"#ca8a04":C.teal;
+                      const dBg    = dInv?"rgba(234,88,12,0.12)":dHasRT?"rgba(220,38,38,0.15)":dHasRTSch?"rgba(139,92,246,0.10)":dRTS?"rgba(234,179,8,0.15)":C.card;
+                      const dBord  = dInv?"2px solid #ea580c":dHasRT?"2px solid #dc2626":dHasRTSch?"2px solid #8b5cf6":dRTS?"2px solid #ca8a04":`1px solid ${C.teal}33`;
+                      const dLbord = dInv?"#ea580c":dHasRT?"#dc2626":dHasRTSch?"#8b5cf6":dRTS?"#ca8a04":C.teal;
                       return (
                         <div key={job.id} onClick={()=>setSelected(job)}
                           style={{background:dBg,border:dBord,borderRadius:12,
@@ -5824,6 +5862,7 @@ function App() {
                             </div>
                             <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
                               {dHasRT&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Return trip needed</span>}
+                              {dHasRTSch&&!dHasRT&&<span style={{background:"rgba(139,92,246,0.15)",border:"1px solid #8b5cf6",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#8b5cf6",fontWeight:700,whiteSpace:"nowrap"}}>Return trip scheduled</span>}
                               {!dHasRT&&dRTS&&<span style={{background:"rgba(234,179,8,0.2)",border:"1px solid #ca8a04",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ca8a04",fontWeight:700,whiteSpace:"nowrap"}}>Ready to schedule</span>}
                               {job.readyToInvoice&&<span style={{background:"rgba(234,88,12,0.15)",border:"1px solid #ea580c",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ea580c",fontWeight:700,whiteSpace:"nowrap"}}>Ready to invoice</span>}
                               {job.prepStartDate&&(
@@ -5887,11 +5926,12 @@ function App() {
                     {roughJobs.map(job=>{
                       const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
                       const pct = parseStage(job.roughStage);
-                      const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
+                      const dHasRT   = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
+                      const dHasRTSch = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
                       const dInv2  = !!job.readyToInvoice;
-                      const dBg    = dInv2?"rgba(234,88,12,0.12)":dHasRT?"rgba(220,38,38,0.15)":C.card;
-                      const dBord  = dInv2?"2px solid #ea580c":dHasRT?"2px solid #dc2626":`1px solid ${C.rough}33`;
-                      const dLbord = dHasRT?"#dc2626":C.rough;
+                      const dBg    = dInv2?"rgba(234,88,12,0.12)":dHasRT?"rgba(220,38,38,0.15)":dHasRTSch?"rgba(139,92,246,0.10)":C.card;
+                      const dBord  = dInv2?"2px solid #ea580c":dHasRT?"2px solid #dc2626":dHasRTSch?"2px solid #8b5cf6":`1px solid ${C.rough}33`;
+                      const dLbord = dHasRTSch&&!dHasRT?"#8b5cf6":dHasRT?"#dc2626":C.rough;
                       return (
                         <div key={job.id} onClick={()=>setSelected(job)}
                           style={{background:dBg,border:dBord,borderRadius:12,
@@ -5909,6 +5949,7 @@ function App() {
                             </div>
                             <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
                               {dHasRT&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Return trip needed</span>}
+                              {dHasRTSch&&!dHasRT&&<span style={{background:"rgba(139,92,246,0.15)",border:"1px solid #8b5cf6",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#8b5cf6",fontWeight:700,whiteSpace:"nowrap"}}>Return trip scheduled</span>}
                               {job.prepStartDate&&(
                                 <div style={{background:`${C.rough}18`,border:`1px solid ${C.rough}33`,
                                   borderRadius:8,padding:"4px 10px",fontSize:11,color:C.rough,
@@ -5956,12 +5997,13 @@ function App() {
                       const inFinish=f>0;
                       const stageColor=inFinish?C.finish:C.orange;
                       const stageLabel=inFinish?`Finish ${f}%`:(r===100?"In Between":`Rough ${r}%`);
-                      const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
+                      const dHasRT   = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
+                      const dHasRTSch = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
                       const dRTS   = job.readyToSchedule&&(parseStage(job.roughStage))===100&&(parseStage(job.finishStage))===0;
                       const dInv3  = !!job.readyToInvoice;
-                      const dBg    = dInv3?"rgba(234,88,12,0.12)":dHasRT?"rgba(220,38,38,0.15)":dRTS?"rgba(234,179,8,0.15)":C.card;
-                      const dBord  = dInv3?"2px solid #ea580c":dHasRT?"2px solid #dc2626":dRTS?"2px solid #ca8a04":`1px solid ${stageColor}33`;
-                      const dLbord = dInv3?"#ea580c":dHasRT?"#dc2626":dRTS?"#ca8a04":stageColor;
+                      const dBg    = dInv3?"rgba(234,88,12,0.12)":dHasRT?"rgba(220,38,38,0.15)":dHasRTSch?"rgba(139,92,246,0.10)":dRTS?"rgba(234,179,8,0.15)":C.card;
+                      const dBord  = dInv3?"2px solid #ea580c":dHasRT?"2px solid #dc2626":dHasRTSch?"2px solid #8b5cf6":dRTS?"2px solid #ca8a04":`1px solid ${stageColor}33`;
+                      const dLbord = dInv3?"#ea580c":dHasRT?"#dc2626":dHasRTSch?"#8b5cf6":dRTS?"#ca8a04":stageColor;
                       return (
                         <div key={job.id} onClick={()=>setSelected(job)}
                           style={{background:dBg,border:dBord,borderRadius:12,
@@ -5984,6 +6026,7 @@ function App() {
                               </div>
                               <div style={{fontSize:10,color:stageColor,fontWeight:600}}>{stageLabel}</div>
                               {dHasRT&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Return trip needed</span>}
+                              {dHasRTSch&&!dHasRT&&<span style={{background:"rgba(139,92,246,0.15)",border:"1px solid #8b5cf6",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#8b5cf6",fontWeight:700,whiteSpace:"nowrap"}}>Return trip scheduled</span>}
                               {!dHasRT&&dRTS&&<span style={{background:"rgba(234,179,8,0.2)",border:"1px solid #ca8a04",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ca8a04",fontWeight:700,whiteSpace:"nowrap"}}>Ready to schedule</span>}
                             </div>
                           </div>
