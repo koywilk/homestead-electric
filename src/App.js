@@ -5139,19 +5139,18 @@ function App() {
 
     const rowFc = fc || FOREMEN_COLORS[foreman];
 
+    const hasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
+    const _r = parseInt(job.roughStage)||0;
+    const _f = parseInt(job.finishStage)||0;
+    const rts = job.readyToSchedule && (_r===0 || (_r===100 && _f===0));
+    const rowBg    = hasRT?"rgba(220,38,38,0.06)":rts?"rgba(234,179,8,0.08)":C.card;
+    const rowLbord = hasRT?"#dc2626":rts?"#ca8a04":job.flagged?C.accent:rowFc;
+    const rowBord  = hasRT?"1px solid rgba(220,38,38,0.25)":rts?"1px solid rgba(202,138,4,0.25)":`1px solid ${job.flagged?C.accent+"66":C.border}`;
+
     return (
 
-      {(()=>{
-        const hasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
-        const r = parseInt(job.roughStage)||0;
-        const f = parseInt(job.finishStage)||0;
-        // RTS active when: rough not started yet, OR in between (rough=100, finish=0)
-        const rts = job.readyToSchedule && (r===0 || (r===100 && f===0));
-        const bg     = hasRT?"rgba(220,38,38,0.06)":rts?"rgba(234,179,8,0.08)":C.card;
-        const lbord  = hasRT?"#dc2626":rts?"#ca8a04":job.flagged?C.accent:rowFc;
-        const bord   = hasRT?"1px solid rgba(220,38,38,0.25)":rts?"1px solid rgba(202,138,4,0.25)":`1px solid ${job.flagged?C.accent+"66":C.border}`;
-        return <div className="job-row" onClick={()=>setSelected(job)}
-          style={{background:bg,border:bord,borderRadius:14,padding:"13px 16px",marginBottom:8,borderLeft:`3px solid ${lbord}`}}>
+      <div className="job-row" onClick={()=>setSelected(job)}
+        style={{background:rowBg,border:rowBord,borderRadius:14,padding:"13px 16px",marginBottom:8,borderLeft:`3px solid ${rowLbord}`}}>
 
         <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
 
@@ -5250,8 +5249,7 @@ function App() {
 
         </div>
 
-      </div>;
-      })()
+      </div>
     );
 
   };
