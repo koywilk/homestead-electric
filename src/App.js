@@ -2051,18 +2051,26 @@ function PanelFeeds({feeds, onChange}) {
 
 // ── Home Runs ─────────────────────────────────────────────────
 
-const PANEL_OPTS = ["","Meter","Panel A","Panel B","Panel C","Panel D","Dedicated Loads"];
+const DEFAULT_PANELS = ["Panel A","Panel B","Panel C","Panel D","Dedicated Loads"];
 
 const LEADS = ["","Keegan","Daegan","Gage","Abe","Louis","Jonathan","Braden","Treycen"];
 
-const PANEL_ORDER = {"":0,"Panel A":1,"Panel B":2,"Panel C":3,"Panel D":4,"Dedicated Loads":5};
+const PANEL_ORDER_BASE = {"":0,"Meter":0.5,"Dedicated Loads":999};
+const getPanelOpts = (customPanels) => ["","Meter",...(customPanels&&customPanels.length?customPanels:DEFAULT_PANELS),"Dedicated Loads"];
+const getPanelOrder = (customPanels) => {
+  const opts = getPanelOpts(customPanels);
+  const order = {};
+  opts.forEach((p,i)=>{ order[p]=i; });
+  return order;
+};
 
 const WIRE_ORDER  = {"":0,"14/2":1,"14/3":2,"12/2":3,"12/3":4,"10/2":5,"10/3":6,"8/2":7,"8/3":8,"6/2":9,"6/3":10,"4/2":11,"4/3":12,"2/2":13,"2/3":14,"1/0":15,"2/0":16,"3/0":17,"4/0":18};
 
 
 
-function HomeRunLevel({rows,onChange,label}) {
+function HomeRunLevel({rows,onChange,label,customPanels}) {
 
+  const panelOrder = getPanelOrder(customPanels);
   const sortRows = (arr) => [...arr].sort((a,b)=>{
     // Sort by wire size descending (larger wire first), then alphabetically by name
     const wd = (WIRE_ORDER[b.wire]||0)-(WIRE_ORDER[a.wire]||0);
@@ -2088,7 +2096,7 @@ function HomeRunLevel({rows,onChange,label}) {
         <select value={r.panel||""} onChange={e=>upd(r.id,{panel:e.target.value})}
           style={{background:C.surface,color:r.panel?C.accent:C.dim,border:`1px solid ${C.border}`,
             borderRadius:6,padding:"4px 5px",fontSize:10,fontFamily:"inherit",outline:"none",width:"100%"}}>
-          {PANEL_OPTS.map(o=><option key={o} value={o}>{o||"— panel —"}</option>)}
+          {getPanelOpts(customPanels).map(o=><option key={o} value={o}>{o||"— panel —"}</option>)}
         </select>
         <select value={r.wire} onChange={e=>upd(r.id,{wire:e.target.value})}
           style={{background:WIRE_COLORS[r.wire]||C.surface,
@@ -2227,7 +2235,7 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
 
 
-  const panels = ["Panel A","Panel B","Panel C","Panel D","Dedicated Loads"];
+  const panels = (homeRuns.customPanels||DEFAULT_PANELS).filter(p=>p!=="Meter");
 
 
 
@@ -2564,19 +2572,76 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
 
       )}
 
+      {/* ── Panel Manager ── */}
+      {(()=>{
+        const cPanels = homeRuns.customPanels || DEFAULT_PANELS;
+        const [newPanelName, setNewPanelName] = React.useState("");
+        const addPanel = () => {
+          const n = newPanelName.trim();
+          if(!n || cPanels.includes(n)) return;
+          onHRChange({...homeRuns, customPanels:[...cPanels, n]});
+          setNewPanelName("");
+        };
+        const removePanel = (p) => {
+          onHRChange({...homeRuns, customPanels: cPanels.filter(x=>x!==p)});
+        };
+        const resetPanels = () => onHRChange({...homeRuns, customPanels: DEFAULT_PANELS});
+        return (
+          <Section label="Panels" color={C.blue} defaultOpen={false}>
+            <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>
+              {cPanels.map(p=>(
+                <div key={p} style={{display:"flex",alignItems:"center",gap:4,
+                  background:`${C.blue}15`,border:`1px solid ${C.blue}44`,
+                  borderRadius:20,padding:"4px 10px 4px 12px",fontSize:12,color:C.blue,fontWeight:600}}>
+                  {p}
+                  <button onClick={()=>removePanel(p)}
+                    style={{background:"none",border:"none",cursor:"pointer",color:C.dim,
+                      fontSize:14,lineHeight:1,padding:"0 2px",fontWeight:700}}>×</button>
+                </div>
+              ))}
+            </div>
+            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+              <input
+                value={newPanelName}
+                onChange={e=>setNewPanelName(e.target.value)}
+                onKeyDown={e=>e.key==="Enter"&&addPanel()}
+                placeholder="e.g. Panel E, Sub Panel, Shed Panel…"
+                style={{flex:1,minWidth:180,background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",color:C.text}}/>
+              <button onClick={addPanel}
+                style={{background:C.blue,color:"#fff",border:"none",borderRadius:7,
+                  padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
+                + Add Panel
+              </button>
+              <button onClick={resetPanels}
+                style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,
+                  padding:"7px 12px",fontSize:11,color:C.dim,cursor:"pointer",whiteSpace:"nowrap"}}>
+                Reset to defaults
+              </button>
+            </div>
+            <div style={{fontSize:11,color:C.muted,marginTop:8}}>
+              "Meter" and "Dedicated Loads" are always available. Add as many panels as needed.
+            </div>
+          </Section>
+        );
+      })()}
+
       <Section label="Panel Feeds" color={C.blue} defaultOpen={true}>
         <PanelFeeds feeds={homeRuns.panelFeeds||[]} onChange={v=>onHRChange({...homeRuns,panelFeeds:v})}/>
       </Section>
 
       <Section label="Home Runs" color={C.blue} defaultOpen={true}>
+        {(()=>{ const cp = homeRuns.customPanels||DEFAULT_PANELS; return (
+        <>
         {[["main","Main Level Loads"],["basement","Basement Level Loads"],["upper","Upper Level Loads"]].map(([k,l])=>(
-          <HomeRunLevel key={k} label={l} rows={homeRuns[k]||[]} onChange={v=>onHRChange({...homeRuns,[k]:v})}/>
+          <HomeRunLevel key={k} label={l} rows={homeRuns[k]||[]} customPanels={cp} onChange={v=>onHRChange({...homeRuns,[k]:v})}/>
         ))}
         {(homeRuns.extraFloors||[]).map((ef,i)=>(
           <div key={ef.key} style={{position:"relative"}}>
             <HomeRunLevel
               label={ef.label}
               rows={homeRuns[ef.key]||[]}
+              customPanels={cp}
               onChange={v=>onHRChange({...homeRuns,[ef.key]:v})}/>
             <button onClick={()=>{
                 const newExtras=(homeRuns.extraFloors||[]).filter(e=>e.key!==ef.key);
@@ -2591,6 +2656,8 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
           </div>
         ))}
         <HRAddFloor homeRuns={homeRuns} onHRChange={onHRChange}/>
+        </>
+        ); })()}
       </Section>
 
       <Section label="Load Mapping Notes" color={C.blue}>
