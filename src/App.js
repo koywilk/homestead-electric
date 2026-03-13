@@ -64,9 +64,11 @@ const JOB_ID = "homestead-jobs-v1";
 
 const PREP_STAGES   = ['Redline Walk Scheduled','Redline Walk Completed','Redline CO Sent','Redline CO Signed','Final Redline Plan Made','Job Prep Complete'];
 
-const ROUGH_STAGES  = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
+const ROUGH_STAGES  = ['Scheduled', '0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
 
-const FINISH_STAGES = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
+const FINISH_STAGES = ['Scheduled', '0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
+// parseStage: 'Scheduled' counts as 1 (in-progress but 0%) for section logic
+const parseStage = (s) => s==='Scheduled' ? 1 : (parseInt(s)||0);
 
 const WIRE_SIZES = ["","14/2","14/3","12/2","12/3","10/2","10/3","8/2","8/3","6/2","6/3","4/2","4/3","2/2","2/3","1/0","2/0","3/0","4/0"];
 
@@ -634,7 +636,9 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
 
 const StageBar = ({stages,current,color}) => {
 
-  const pct = parseInt(current)||0;
+  const isScheduled = current === "Scheduled";
+
+  const pct = isScheduled ? 0 : (parseInt(current)||0);
 
   // interpolate red(0%) -> yellow(50%) -> green(100%)
 
@@ -644,7 +648,7 @@ const StageBar = ({stages,current,color}) => {
 
   const b = 40;
 
-  const barColor = `rgb(${r},${g},${b})`;
+  const barColor = isScheduled ? "#f97316" : `rgb(${r},${g},${b})`;
 
   return (
 
@@ -652,7 +656,7 @@ const StageBar = ({stages,current,color}) => {
 
       <div style={{flex:1,height:5,background:C.border,borderRadius:99,overflow:"hidden"}}>
 
-        <div style={{height:"100%",width:`${pct}%`,background:barColor,borderRadius:99,transition:"width 0.4s, background 0.4s"}}/>
+        <div style={{height:"100%",width:isScheduled?"100%":`${pct}%`,background:isScheduled?"rgba(249,115,22,0.25)":barColor,borderRadius:99,transition:"width 0.4s, background 0.4s"}}/>
 
       </div>
 
@@ -3436,7 +3440,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
               <Section label="Rough Stage" color={C.rough} defaultOpen={true}>
 
-                <Sel value={job.roughStage} onChange={e=>u({roughStage:e.target.value})} options={ROUGH_STAGES}/>
+                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;u({roughStage:v,...(v==="Scheduled"?{readyToSchedule:false}:{})});}} options={ROUGH_STAGES}/>
 
                 <div style={{marginTop:8,marginBottom:20}}>
 
@@ -3495,7 +3499,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
             <div>
 
               <Section label="Finish Stage" color={C.finish} defaultOpen={true}>
-                <Sel value={job.finishStage} onChange={e=>u({finishStage:e.target.value})} options={FINISH_STAGES}/>
+                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;u({finishStage:v,...(v==="Scheduled"?{readyToSchedule:false}:{})});}} options={FINISH_STAGES}/>
                 <div style={{marginTop:8,marginBottom:20}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
               </Section>
 
@@ -3810,8 +3814,8 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                 </div>
                 <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
                   {(()=>{
-                    const r2=parseInt(job.roughStage)||0;
-                    const f2=parseInt(job.finishStage)||0;
+                    const r2=parseStage(job.roughStage);
+                    const f2=parseStage(job.finishStage);
                     const rtsActive = job.readyToSchedule && (r2===0||(r2===100&&f2===0));
                     const rtsApplicable = r2===0||(r2===100&&f2===0);
                     return (<>
@@ -4350,23 +4354,23 @@ const STAGE_SECTIONS = [
 
   { key:"prep",       label:"Pre Job Prep",       color:"#0d9488",
 
-    test: j => { const r=parseInt(j.roughStage)||0; return r===0; } },
+    test: j => { const r=parseStage(j.roughStage); return r===0; } },
 
   { key:"rough",    label:"Rough In Progress",  color:"#2563eb",
 
-    test: j => { const r=parseInt(j.roughStage)||0; const f=parseInt(j.finishStage)||0; return r>0 && r<100 && f===0; } },
+    test: j => { const r=parseStage(j.roughStage); const f=parseStage(j.finishStage); return r>0 && r<100 && f===0; } },
 
   { key:"between",  label:"In Between",          color:"#e8a020",
 
-    test: j => { const r=parseInt(j.roughStage)||0; const f=parseInt(j.finishStage)||0; return r===100 && f===0; } },
+    test: j => { const r=parseStage(j.roughStage); const f=parseStage(j.finishStage); return r===100 && f===0; } },
 
   { key:"finish",   label:"Finish In Progress",  color:"#0ea5e9",
 
-    test: j => { const f=parseInt(j.finishStage)||0; return f>0 && f<100; } },
+    test: j => { const f=parseStage(j.finishStage); return f>0 && f<100; } },
 
   { key:"complete", label:"Completed",           color:"#22c55e",
 
-    test: j => parseInt(j.finishStage)===100 },
+    test: j => parseStage(j.finishStage)===100 },
 
 ];
 
@@ -5172,7 +5176,7 @@ function App() {
 
   const flagged    = jobs.filter(j=>j.flagged).length;
 
-  const complete   = jobs.filter(j=>parseInt(j.finishStage)===100).length;
+  const complete   = jobs.filter(j=>parseStage(j.finishStage)===100).length;
 
   const pendingCOs = jobs.reduce((a,j)=>a+j.changeOrders.filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
 
@@ -5208,9 +5212,9 @@ function App() {
 
     const mf = !flagOnly||j.flagged;
 
-    const rPct = parseInt(j.roughStage)||0;
+    const rPct = parseStage(j.roughStage);
 
-    const fPct = parseInt(j.finishStage)||0;
+    const fPct = parseStage(j.finishStage);
 
     const mt =
 
@@ -5245,8 +5249,8 @@ function App() {
     const rowFc = fc || FOREMEN_COLORS[foreman];
 
     const hasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
-    const _r = parseInt(job.roughStage)||0;
-    const _f = parseInt(job.finishStage)||0;
+    const _r = parseStage(job.roughStage);
+    const _f = parseStage(job.finishStage);
     const rts = job.readyToSchedule && (_r===0 || (_r===100 && _f===0));
     const rowBg    = hasRT?"rgba(220,38,38,0.18)":rts?"rgba(234,179,8,0.18)":C.card;
     const rowLbord = hasRT?"#dc2626":rts?"#ca8a04":job.flagged?C.accent:rowFc;
@@ -5285,7 +5289,7 @@ function App() {
 
           </div>
 
-          {job.prepStage&&(parseInt(job.roughStage||"0")===0)&&(
+          {job.prepStage&&(parseStage(job.roughStage)===0)&&(
             <div style={{flex:"0 0 auto",maxWidth:160}}>
               <div style={{fontSize:9,color:C.teal,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>PREP</div>
               <div style={{fontSize:10,color:C.teal,fontWeight:600,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{job.prepStage}</div>
@@ -5511,17 +5515,17 @@ function App() {
 
             {(()=>{
 
-              const prepJobs = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;return r===0;});
+              const prepJobs = jobs.filter(j=>{const r=parseStage(j.roughStage);return r===0;});
 
               const nsJobs   = [];
 
-              const roJobs   = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;const f=parseInt(j.finishStage)||0;return r>0&&r<100&&f===0;});
+              const roJobs   = jobs.filter(j=>{const r=parseStage(j.roughStage);const f=parseStage(j.finishStage);return r>0&&r<100&&f===0;});
 
-              const btwJobs  = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;const f=parseInt(j.finishStage)||0;return r===100&&f===0;});
+              const btwJobs  = jobs.filter(j=>{const r=parseStage(j.roughStage);const f=parseStage(j.finishStage);return r===100&&f===0;});
 
-              const finJobs  = jobs.filter(j=>{const f=parseInt(j.finishStage)||0;return f>0&&f<100;});
+              const finJobs  = jobs.filter(j=>{const f=parseStage(j.finishStage);return f>0&&f<100;});
 
-              const donJobs  = jobs.filter(j=>(parseInt(j.finishStage)||0)===100);
+              const donJobs  = jobs.filter(j=>(parseStage(j.finishStage))===100);
 
               return (
 
@@ -5633,11 +5637,11 @@ function App() {
 
                 const fFlag = fJobs.filter(j=>j.flagged).length;
                 const fRT   = fJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
-                const fRTS  = fJobs.filter(j=>{const r2=parseInt(j.roughStage)||0;const f2=parseInt(j.finishStage)||0;return j.readyToSchedule&&(r2===0||(r2===100&&f2===0));}).length;
+                const fRTS  = fJobs.filter(j=>{const r2=parseStage(j.roughStage);const f2=parseStage(j.finishStage);return j.readyToSchedule&&(r2===0||(r2===100&&f2===0));}).length;
 
-                const rAvg  = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+(parseInt(j.roughStage)||0),0)/fJobs.length) : 0;
+                const rAvg  = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+(parseStage(j.roughStage)),0)/fJobs.length) : 0;
 
-                const fnAvg = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+(parseInt(j.finishStage)||0),0)/fJobs.length) : 0;
+                const fnAvg = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+(parseStage(j.finishStage)),0)/fJobs.length) : 0;
 
                 return (
 
@@ -5770,7 +5774,7 @@ function App() {
               </div>
               {(()=>{
                 const prepJobs = jobs
-                  .filter(j=>{const r=parseInt(j.roughStage)||0;return r===0;})
+                  .filter(j=>{const r=parseStage(j.roughStage);return r===0;})
                   .sort((a,b)=>{
                     const da=a.prepStartDate||"9999";const db=b.prepStartDate||"9999";
                     return da.localeCompare(db);
@@ -5784,7 +5788,7 @@ function App() {
                       const stageIdx = PREP_STAGES.indexOf(job.prepStage);
                       const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
                       const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
-                      const dRTS   = job.readyToSchedule&&(parseInt(job.roughStage)||0)===0;
+                      const dRTS   = job.readyToSchedule&&(parseStage(job.roughStage))===0;
                       const dBg    = dHasRT?"rgba(220,38,38,0.15)":dRTS?"rgba(234,179,8,0.15)":C.card;
                       const dBord  = dHasRT?"2px solid #dc2626":dRTS?"2px solid #ca8a04":`1px solid ${C.teal}33`;
                       const dLbord = dHasRT?"#dc2626":dRTS?"#ca8a04":C.teal;
@@ -5851,8 +5855,8 @@ function App() {
               {(()=>{
                 const roughJobs = jobs
                   .filter(j=>{
-                    const r=parseInt(j.roughStage)||0;
-                    const f=parseInt(j.finishStage)||0;
+                    const r=parseStage(j.roughStage);
+                    const f=parseStage(j.finishStage);
                     return r>0 && r<100 && f===0;
                   })
                   .sort((a,b)=>{
@@ -5866,7 +5870,7 @@ function App() {
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(260px,1fr))",gap:12}}>
                     {roughJobs.map(job=>{
                       const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
-                      const pct = parseInt(job.roughStage)||0;
+                      const pct = parseStage(job.roughStage);
                       const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
                       const dBg    = dHasRT?"rgba(220,38,38,0.15)":C.card;
                       const dBord  = dHasRT?"2px solid #dc2626":`1px solid ${C.rough}33`;
@@ -5918,8 +5922,8 @@ function App() {
               {(()=>{
                 const finishJobs = jobs
                   .filter(j=>{
-                    const r=parseInt(j.roughStage)||0;
-                    const f=parseInt(j.finishStage)||0;
+                    const r=parseStage(j.roughStage);
+                    const f=parseStage(j.finishStage);
                     return r>0 && f<100 && j.finishStartDate;
                   })
                   .sort((a,b)=>(a.finishStartDate||"9999").localeCompare(b.finishStartDate||"9999"));
@@ -5929,14 +5933,14 @@ function App() {
                 return (
                   <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(300px,1fr))",gap:12}}>
                     {finishJobs.map(job=>{
-                      const r=parseInt(job.roughStage)||0;
-                      const f=parseInt(job.finishStage)||0;
+                      const r=parseStage(job.roughStage);
+                      const f=parseStage(job.finishStage);
                       const fc=FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
                       const inFinish=f>0;
                       const stageColor=inFinish?C.finish:C.orange;
                       const stageLabel=inFinish?`Finish ${f}%`:(r===100?"In Between":`Rough ${r}%`);
                       const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
-                      const dRTS   = job.readyToSchedule&&(parseInt(job.roughStage)||0)===100&&(parseInt(job.finishStage)||0)===0;
+                      const dRTS   = job.readyToSchedule&&(parseStage(job.roughStage))===100&&(parseStage(job.finishStage))===0;
                       const dBg    = dHasRT?"rgba(220,38,38,0.15)":dRTS?"rgba(234,179,8,0.15)":C.card;
                       const dBord  = dHasRT?"2px solid #dc2626":dRTS?"2px solid #ca8a04":`1px solid ${stageColor}33`;
                       const dLbord = dHasRT?"#dc2626":dRTS?"#ca8a04":stageColor;
@@ -6047,9 +6051,9 @@ function App() {
 
                 const fJobs = jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):(j.foreman||"Koy")===activeForeman);
 
-                const fDone = fJobs.filter(j=>parseInt(j.finishStage)===100).length;
+                const fDone = fJobs.filter(j=>parseStage(j.finishStage)===100).length;
 
-                const fPrep    = fJobs.filter(j=>{const r=parseInt(j.roughStage)||0;return r===0;}).length;
+                const fPrep    = fJobs.filter(j=>{const r=parseStage(j.roughStage);return r===0;}).length;
 
                 const fRough   = fJobs.filter(j=>parseInt(j.roughStage)>0&&parseInt(j.roughStage)<100&&parseInt(j.finishStage)===0).length;
 
