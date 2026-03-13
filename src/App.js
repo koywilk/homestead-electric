@@ -2422,6 +2422,18 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
     });
   };
 
+  const resetResponse = async () => {
+    if(!window.confirm("Clear the homeowner's response so they can redo it? This cannot be undone.")) return;
+    try {
+      await deleteDoc(doc(db,"homeowner_requests",jobId));
+      setHoResponse(null);
+      setShowHoModal(false);
+      alert("Response cleared. You can now resend the link to the homeowner.");
+    } catch(e) {
+      alert("Error clearing response: "+e.message);
+    }
+  };
+
   const checkResponse = async () => {
     try {
       const snap = await getDoc(doc(db,"homeowner_requests",jobId));
@@ -2490,9 +2502,15 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
               <button onClick={()=>setShowHoModal(false)}
                 style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:"#94a3b8",padding:0}}>✕</button>
             </div>
-            <div style={{fontSize:11,color:"#94a3b8",marginBottom:4}}>
+            <div style={{fontSize:11,color:"#94a3b8",marginBottom:10}}>
               Submitted {hoResponse.submittedAt?new Date(hoResponse.submittedAt).toLocaleString():""}
             </div>
+            <button onClick={resetResponse}
+              style={{width:"100%",marginBottom:14,background:"none",border:`1px solid ${C.border}`,
+                borderRadius:7,padding:"7px 12px",fontSize:11,fontWeight:500,color:C.dim,
+                cursor:"pointer",fontFamily:"inherit"}}>
+              🔄 Reset &amp; resend — let homeowner redo their selections
+            </button>
             {hoResponse.signature&&(
               <div style={{fontSize:12,color:"#64748b",marginBottom:14,padding:"8px 10px",
                 background:"#f8fafc",borderRadius:7,border:"0.5px solid #e2e8f0"}}>
