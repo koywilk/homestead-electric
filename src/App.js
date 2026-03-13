@@ -2411,6 +2411,7 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
   const [hoResponse, setHoResponse] = useState(null);
   const [showHoModal, setShowHoModal] = useState(false);
   const [linkCopied, setLinkCopied] = useState(false);
+  const [newPanelName, setNewPanelName] = useState("");
 
   const hoLink = `https://homestead-electric.vercel.app/?homeowner=${jobId}`;
 
@@ -2575,7 +2576,6 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
       {/* ── Panel Manager ── */}
       {(()=>{
         const cPanels = homeRuns.customPanels || DEFAULT_PANELS;
-        const [newPanelName, setNewPanelName] = React.useState("");
         const addPanel = () => {
           const n = newPanelName.trim();
           if(!n || cPanels.includes(n)) return;
