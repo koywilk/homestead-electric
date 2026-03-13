@@ -2321,7 +2321,32 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
 
 
-function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange}) {
+function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobName}) {
+
+  const [hoResponse, setHoResponse] = useState(null);
+  const [showHoModal, setShowHoModal] = useState(false);
+  const [linkCopied, setLinkCopied] = useState(false);
+
+  const hoLink = `https://homestead-electric.vercel.app/?homeowner=${jobId}`;
+
+  const copyLink = () => {
+    navigator.clipboard.writeText(hoLink).then(()=>{
+      setLinkCopied(true);
+      setTimeout(()=>setLinkCopied(false),2000);
+    });
+  };
+
+  const checkResponse = async () => {
+    try {
+      const snap = await getDoc(doc(db,"homeowner_requests",jobId));
+      if(snap.exists()&&snap.data().submitted) {
+        setHoResponse(snap.data());
+        setShowHoModal(true);
+      } else {
+        alert("No response submitted yet.");
+      }
+    } catch(e){ alert("Failed to check response."); }
+  };
 
 
   const allRows = [...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[])];
@@ -2337,6 +2362,80 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange}) {
   return (
 
     <div>
+
+      {/* Send to Homeowner */}
+      <div style={{marginBottom:16,padding:"14px 16px",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:12}}>
+        <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:8}}>🏠 Generator Load Selection</div>
+        <div style={{fontSize:11,color:"#78350f",marginBottom:10}}>
+          Send this link to the homeowner so they can select which circuits to put on the generator.
+        </div>
+        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+          <button onClick={copyLink}
+            style={{background:linkCopied?"#16a34a":"#d97706",border:"none",borderRadius:8,color:"#fff",
+              fontWeight:700,fontSize:11,padding:"7px 14px",cursor:"pointer",fontFamily:"inherit"}}>
+            {linkCopied?"✓ Copied!":"📋 Copy Link"}
+          </button>
+          <button onClick={()=>window.open(hoLink,"_blank")}
+            style={{background:"#fff",border:"1px solid #d97706",borderRadius:8,color:"#d97706",
+              fontWeight:700,fontSize:11,padding:"7px 14px",cursor:"pointer",fontFamily:"inherit"}}>
+            Preview
+          </button>
+          <button onClick={checkResponse}
+            style={{background:"#0f172a",border:"none",borderRadius:8,color:"#fff",
+              fontWeight:700,fontSize:11,padding:"7px 14px",cursor:"pointer",fontFamily:"inherit"}}>
+            View Response
+          </button>
+        </div>
+      </div>
+
+      {/* Homeowner Response Modal */}
+      {showHoModal&&hoResponse&&(
+        <div onClick={()=>setShowHoModal(false)}
+          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{background:"#fff",borderRadius:16,padding:24,maxWidth:460,width:"100%",maxHeight:"80vh",overflowY:"auto"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
+              <div style={{fontSize:15,fontWeight:700}}>Homeowner Selections</div>
+              <button onClick={()=>setShowHoModal(false)}
+                style={{background:"none",border:"none",fontSize:18,cursor:"pointer",color:"#64748b"}}>✕</button>
+            </div>
+            <div style={{fontSize:11,color:"#64748b",marginBottom:12}}>
+              Submitted {hoResponse.submittedAt?new Date(hoResponse.submittedAt).toLocaleString():""}
+            </div>
+            <div style={{fontSize:11,fontWeight:700,color:"#16a34a",letterSpacing:"0.08em",marginBottom:8}}>
+              ON GENERATOR ({(hoResponse.items||[]).filter(i=>i.included).length})
+            </div>
+            {(hoResponse.items||[]).filter(i=>i.included).map((it,i)=>(
+              <div key={it.id||i} style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:9,padding:"10px 12px",marginBottom:6}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <div style={{background:"#d97706",color:"#fff",borderRadius:99,width:20,height:20,
+                    display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,flexShrink:0}}>
+                    {it.priority||i+1}
+                  </div>
+                  <div>
+                    <div style={{fontWeight:600,fontSize:13}}>{it.name||"Unnamed"}</div>
+                    <div style={{fontSize:11,color:"#64748b"}}>{[it.panel,it.wire].filter(Boolean).join(" · ")}</div>
+                    {it.notes&&<div style={{fontSize:11,color:"#92400e",marginTop:2}}>📝 {it.notes}</div>}
+                  </div>
+                </div>
+              </div>
+            ))}
+            {(hoResponse.items||[]).filter(i=>!i.included).length>0&&(
+              <>
+                <div style={{fontSize:11,fontWeight:700,color:"#94a3b8",letterSpacing:"0.08em",margin:"14px 0 8px"}}>
+                  NOT ON GENERATOR ({(hoResponse.items||[]).filter(i=>!i.included).length})
+                </div>
+                {(hoResponse.items||[]).filter(i=>!i.included).map((it,i)=>(
+                  <div key={it.id||i} style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:9,padding:"8px 12px",marginBottom:4,opacity:0.7}}>
+                    <div style={{fontSize:12,color:"#64748b"}}>{it.name||"Unnamed"}</div>
+                    <div style={{fontSize:10,color:"#94a3b8"}}>{[it.panel,it.wire].filter(Boolean).join(" · ")}</div>
+                  </div>
+                ))}
+              </>
+            )}
+          </div>
+        </div>
+      )}
 
       {total > 0 && (
 
@@ -3242,7 +3341,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
           {tab==="Home Runs"&&(
 
-            <HomeRunsTab homeRuns={job.homeRuns} panelCounts={job.panelCounts}
+            <HomeRunsTab homeRuns={job.homeRuns} panelCounts={job.panelCounts} jobId={job.id} jobName={job.name}
 
               onHRChange={v=>u({homeRuns:v})} onCountChange={v=>u({panelCounts:v})}/>
 
@@ -4206,7 +4305,221 @@ function deepMergeJob(remote, local) {
 
 
 
+// ── Homeowner Generator Load Selection Page ───────────────────
+function HomeownerPage({ jobId }) {
+  const [job,       setJob]       = useState(null);
+  const [items,     setItems]     = useState([]);
+  const [submitted, setSubmitted] = useState(false);
+  const [loading,   setLoading]   = useState(true);
+  const [submitting,setSubmitting]= useState(false);
+  const [error,     setError]     = useState(null);
+  const dragIdx = useRef(null);
+
+  useEffect(()=>{
+    async function load() {
+      try {
+        const snap = await getDoc(doc(db,"jobs",jobId));
+        if(!snap.exists()) { setError("Job not found."); setLoading(false); return; }
+        const j = snap.data().data;
+        setJob(j);
+        // Flatten all home run rows into a prioritized list
+        const rows = [
+          ...(j.homeRuns?.main||[]),
+          ...(j.homeRuns?.upper||[]),
+          ...(j.homeRuns?.basement||[]),
+        ].filter(r=>r.name||r.panel).map((r,i)=>({
+          ...r,
+          priority: i+1,
+          included: true,
+          notes: "",
+        }));
+        setItems(rows);
+        // Check if already submitted
+        const reqSnap = await getDoc(doc(db,"homeowner_requests",jobId));
+        if(reqSnap.exists()&&reqSnap.data().submitted) {
+          setSubmitted(true);
+          const saved = reqSnap.data().items;
+          if(saved) setItems(saved);
+        }
+      } catch(e){ setError("Failed to load job data."); }
+      setLoading(false);
+    }
+    load();
+  },[jobId]);
+
+  const toggle = (id) => setItems(its=>its.map(it=>it.id===id?{...it,included:!it.included}:it));
+  const setNotes = (id,v) => setItems(its=>its.map(it=>it.id===id?{...it,notes:v}:it));
+
+  // Drag to reorder
+  const onDragStart = (i) => { dragIdx.current = i; };
+  const onDragOver  = (e,i) => {
+    e.preventDefault();
+    if(dragIdx.current===null||dragIdx.current===i) return;
+    setItems(its=>{
+      const arr=[...its];
+      const [moved]=arr.splice(dragIdx.current,1);
+      arr.splice(i,0,moved);
+      dragIdx.current=i;
+      return arr.map((it,idx)=>({...it,priority:idx+1}));
+    });
+  };
+  const onDragEnd = () => { dragIdx.current=null; };
+
+  const submit = async () => {
+    setSubmitting(true);
+    try {
+      await setDoc(doc(db,"homeowner_requests",jobId),{
+        jobId, jobName: job?.name||"", submitted:true,
+        submittedAt: new Date().toISOString(),
+        items: items.map((it,i)=>({...it,priority:i+1})),
+      });
+      setSubmitted(true);
+    } catch(e){ alert("Failed to submit. Please try again."); }
+    setSubmitting(false);
+  };
+
+  const HE_GOLD = "#d97706";
+  const base = {fontFamily:"system-ui,sans-serif",minHeight:"100vh",background:"#f8fafc",color:"#0f172a"};
+
+  if(loading) return (
+    <div style={{...base,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{fontSize:15,color:"#64748b"}}>Loading…</div>
+    </div>
+  );
+  if(error) return (
+    <div style={{...base,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{fontSize:15,color:"#dc2626"}}>{error}</div>
+    </div>
+  );
+
+  if(submitted) return (
+    <div style={{...base,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:32,textAlign:"center"}}>
+      <div style={{fontSize:48,marginBottom:16}}>✅</div>
+      <div style={{fontSize:22,fontWeight:700,marginBottom:8}}>Thanks!</div>
+      <div style={{fontSize:15,color:"#64748b",maxWidth:340}}>
+        Your generator load selections have been received. Homestead Electric will be in touch soon.
+      </div>
+      <div style={{marginTop:32,fontSize:13,color:"#94a3b8"}}>Homestead Electric · homestead-electric.vercel.app</div>
+    </div>
+  );
+
+  const included = items.filter(it=>it.included);
+  const excluded = items.filter(it=>!it.included);
+
+  return (
+    <div style={{...base,maxWidth:520,margin:"0 auto",padding:"0 0 60px 0"}}>
+      {/* Header */}
+      <div style={{background:"#0f172a",padding:"20px 24px 16px",marginBottom:0}}>
+        <div style={{fontSize:11,color:HE_GOLD,fontWeight:700,letterSpacing:"0.1em",marginBottom:4}}>HOMESTEAD ELECTRIC</div>
+        <div style={{fontSize:20,fontWeight:700,color:"#fff",marginBottom:2}}>{job?.name||"Generator Load Selection"}</div>
+        <div style={{fontSize:13,color:"#94a3b8"}}>Select which circuits you'd like on your generator and drag to prioritize.</div>
+      </div>
+
+      {/* Instructions */}
+      <div style={{background:"#fffbeb",borderBottom:"1px solid #fde68a",padding:"12px 24px"}}>
+        <div style={{fontSize:12,color:"#92400e",lineHeight:1.5}}>
+          <strong>How it works:</strong> Toggle circuits on/off, drag to rank by priority (most important at top), add notes if needed, then tap Submit.
+        </div>
+      </div>
+
+      <div style={{padding:"20px 16px 0"}}>
+        {/* Included circuits */}
+        <div style={{fontSize:11,fontWeight:700,color:"#64748b",letterSpacing:"0.08em",marginBottom:10,marginLeft:4}}>
+          ON GENERATOR ({included.length})
+        </div>
+
+        {items.map((it,i)=>(
+          it.included ? (
+            <div key={it.id}
+              draggable
+              onDragStart={()=>onDragStart(i)}
+              onDragOver={e=>onDragOver(e,i)}
+              onDragEnd={onDragEnd}
+              style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:12,
+                marginBottom:8,padding:"12px 14px",boxShadow:"0 1px 3px rgba(0,0,0,0.06)",
+                cursor:"grab",userSelect:"none"}}>
+              <div style={{display:"flex",alignItems:"center",gap:10}}>
+                {/* Drag handle */}
+                <div style={{color:"#cbd5e1",fontSize:16,flexShrink:0,cursor:"grab"}}>⠿</div>
+                {/* Priority badge */}
+                <div style={{background:HE_GOLD,color:"#fff",borderRadius:99,width:22,height:22,
+                  display:"flex",alignItems:"center",justifyContent:"center",
+                  fontSize:11,fontWeight:700,flexShrink:0}}>{i+1}</div>
+                {/* Load info */}
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontWeight:600,fontSize:14,marginBottom:1}}>{it.name||"Unnamed circuit"}</div>
+                  <div style={{fontSize:11,color:"#64748b"}}>{[it.panel,it.wire].filter(Boolean).join(" · ")}</div>
+                </div>
+                {/* Toggle off */}
+                <button onClick={()=>toggle(it.id)}
+                  style={{background:"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:8,
+                    padding:"4px 10px",fontSize:11,cursor:"pointer",color:"#64748b",flexShrink:0}}>
+                  Remove
+                </button>
+              </div>
+              {/* Notes */}
+              <div style={{marginTop:8,marginLeft:32}}>
+                <input value={it.notes||""} onChange={e=>setNotes(it.id,e.target.value)}
+                  placeholder="Add a note (optional)…"
+                  style={{width:"100%",boxSizing:"border-box",border:"1px solid #e2e8f0",borderRadius:7,
+                    padding:"6px 10px",fontSize:12,fontFamily:"inherit",color:"#0f172a",background:"#f8fafc",outline:"none"}}/>
+              </div>
+            </div>
+          ) : null
+        ))}
+
+        {included.length===0&&(
+          <div style={{textAlign:"center",padding:"20px 0",fontSize:13,color:"#94a3b8"}}>No circuits selected</div>
+        )}
+
+        {/* Excluded circuits */}
+        {excluded.length>0&&(
+          <>
+            <div style={{fontSize:11,fontWeight:700,color:"#94a3b8",letterSpacing:"0.08em",margin:"20px 4px 10px"}}>
+              NOT ON GENERATOR ({excluded.length})
+            </div>
+            {items.map((it,i)=>(
+              !it.included ? (
+                <div key={it.id}
+                  style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:12,
+                    marginBottom:6,padding:"12px 14px",opacity:0.6}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontWeight:600,fontSize:13,marginBottom:1,color:"#64748b"}}>{it.name||"Unnamed circuit"}</div>
+                      <div style={{fontSize:11,color:"#94a3b8"}}>{[it.panel,it.wire].filter(Boolean).join(" · ")}</div>
+                    </div>
+                    <button onClick={()=>toggle(it.id)}
+                      style={{background:"#fff",border:`1px solid ${HE_GOLD}`,borderRadius:8,
+                        padding:"4px 10px",fontSize:11,cursor:"pointer",color:HE_GOLD,flexShrink:0}}>
+                      Add back
+                    </button>
+                  </div>
+                </div>
+              ) : null
+            ))}
+          </>
+        )}
+
+        {/* Submit */}
+        <button onClick={submit} disabled={submitting}
+          style={{width:"100%",marginTop:24,padding:"16px",background:submitting?"#94a3b8":HE_GOLD,
+            border:"none",borderRadius:12,color:"#fff",fontSize:16,fontWeight:700,
+            cursor:submitting?"not-allowed":"pointer",fontFamily:"inherit",
+            boxShadow:"0 2px 8px rgba(217,119,6,0.3)"}}>
+          {submitting?"Submitting…":"Submit My Selections"}
+        </button>
+        <div style={{textAlign:"center",marginTop:12,fontSize:11,color:"#94a3b8"}}>
+          Homestead Electric · homestead-electric.vercel.app
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
+  // Homeowner page route — ?homeowner=JOB_ID
+  const hoParam = new URLSearchParams(window.location.search).get("homeowner");
+  if(hoParam) return <HomeownerPage jobId={hoParam}/>;
 
   const [jobs,     setJobs]     = useState([]);
 
