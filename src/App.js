@@ -178,7 +178,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], readyToSchedule:false,
+  changeOrders:[], returnTrips:[], readyToSchedule:false, tempPed:false, tempPedNumber:"",
 
   homeRuns:{
 
@@ -3699,6 +3699,30 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                     style={{accentColor:C.teal,width:16,height:16}}/>
                   <span style={{fontSize:13,color:C.text}}>Pre-lien filed</span>
                 </label>
+                <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                  <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+                    <input type="checkbox" checked={!!job.tempPed} onChange={e=>u({tempPed:e.target.checked,tempPedNumber:e.target.checked?job.tempPedNumber:""})}
+                      style={{accentColor:C.blue,width:16,height:16}}/>
+                    <span style={{fontSize:13,color:C.text}}>Temp pedestal installed</span>
+                  </label>
+                  {job.tempPed&&(
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <span style={{fontSize:12,color:C.dim}}>Ped #</span>
+                      <select value={job.tempPedNumber||""} onChange={e=>u({tempPedNumber:e.target.value})}
+                        style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                          padding:"4px 10px",fontSize:12,fontFamily:"inherit",color:job.tempPedNumber?C.blue:C.dim,
+                          fontWeight:job.tempPedNumber?700:400,outline:"none",cursor:"pointer"}}>
+                        <option value="">— select —</option>
+                        {Array.from({length:100},(_,i)=>String(i+1)).map(n=>(
+                          <option key={n} value={n}>Ped #{n}</option>
+                        ))}
+                      </select>
+                      {job.tempPedNumber&&(
+                        <span style={{fontSize:12,color:C.blue,fontWeight:700}}>#{job.tempPedNumber}</span>
+                      )}
+                    </div>
+                  )}
+                </div>
                 <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
                   {(()=>{
                     const r2=parseInt(job.roughStage)||0;
@@ -5143,9 +5167,9 @@ function App() {
     const _r = parseInt(job.roughStage)||0;
     const _f = parseInt(job.finishStage)||0;
     const rts = job.readyToSchedule && (_r===0 || (_r===100 && _f===0));
-    const rowBg    = hasRT?"rgba(220,38,38,0.06)":rts?"rgba(234,179,8,0.08)":C.card;
+    const rowBg    = hasRT?"rgba(220,38,38,0.18)":rts?"rgba(234,179,8,0.18)":C.card;
     const rowLbord = hasRT?"#dc2626":rts?"#ca8a04":job.flagged?C.accent:rowFc;
-    const rowBord  = hasRT?"1px solid rgba(220,38,38,0.25)":rts?"1px solid rgba(202,138,4,0.25)":`1px solid ${job.flagged?C.accent+"66":C.border}`;
+    const rowBord  = hasRT?"2px solid #dc2626":rts?"2px solid #ca8a04":`1px solid ${job.flagged?C.accent+"66":C.border}`;
 
     return (
 
@@ -5205,6 +5229,8 @@ function App() {
 
           <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
 
+            {hasRT&&<Pill label="Return trip needed" color="#dc2626"/>}
+            {!hasRT&&rts&&<Pill label="Ready to schedule" color="#ca8a04"/>}
             {open>0   &&<Pill label={`${open} open`} color={C.red}/>}
 
             {pendCO>0 &&<Pill label={`${pendCO} CO`} color={C.orange}/>}
@@ -5525,6 +5551,8 @@ function App() {
                 const fCOs  = fJobs.reduce((a,j)=>a+j.changeOrders.filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
 
                 const fFlag = fJobs.filter(j=>j.flagged).length;
+                const fRT   = fJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
+                const fRTS  = fJobs.filter(j=>{const r2=parseInt(j.roughStage)||0;const f2=parseInt(j.finishStage)||0;return j.readyToSchedule&&(r2===0||(r2===100&&f2===0));}).length;
 
                 const rAvg  = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+(parseInt(j.roughStage)||0),0)/fJobs.length) : 0;
 
@@ -5570,6 +5598,18 @@ function App() {
 
 
 
+                    {(fRT>0||fRTS>0)&&(
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+                        {fRT>0&&<span style={{background:"rgba(220,38,38,0.18)",border:"1.5px solid #dc2626",borderRadius:99,
+                          padding:"3px 10px",fontSize:10,color:"#dc2626",fontWeight:700}}>
+                          {fRT} return trip{fRT>1?"s":""} needed
+                        </span>}
+                        {fRTS>0&&<span style={{background:"rgba(234,179,8,0.18)",border:"1.5px solid #ca8a04",borderRadius:99,
+                          padding:"3px 10px",fontSize:10,color:"#ca8a04",fontWeight:700}}>
+                          {fRTS} ready to schedule
+                        </span>}
+                      </div>
+                    )}
                     <div style={{marginTop:14,fontSize:11,color:fc,fontWeight:600,textAlign:"right"}}>View Jobs →</div>
 
                   </div>
@@ -5663,13 +5703,20 @@ function App() {
                       const stageIdx = PREP_STAGES.indexOf(job.prepStage);
                       const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
                       return (
+                        {(()=>{
+                          const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
+                          const dRTS   = job.readyToSchedule&&(parseInt(job.roughStage)||0)===0;
+                          const dBg    = dHasRT?"rgba(220,38,38,0.15)":dRTS?"rgba(234,179,8,0.15)":C.card;
+                          const dBord  = dHasRT?"2px solid #dc2626":dRTS?"2px solid #ca8a04":`1px solid ${C.teal}33`;
+                          const dLbord = dHasRT?"#dc2626":dRTS?"#ca8a04":C.teal;
+                          return (
                         <div key={job.id} onClick={()=>setSelected(job)}
-                          style={{background:C.card,border:`1px solid ${C.teal}33`,borderRadius:12,
-                            padding:14,cursor:"pointer",borderLeft:`3px solid ${C.teal}`,
+                          style={{background:dBg,border:dBord,borderRadius:12,
+                            padding:14,cursor:"pointer",borderLeft:`3px solid ${dLbord}`,
                             transition:"transform 0.1s,box-shadow 0.1s"}}
-                          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow=`0 6px 20px ${C.teal}22`;}}
-                          onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
-                          <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:8,gap:8}}>
+                          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";}}
+                          onMouseLeave={e=>{e.currentTarget.style.transform="";}}>
+                          <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",marginBottom:6,gap:8}}>
                             <div>
                               <div style={{fontSize:13,fontWeight:700,color:C.text}}>{job.name||"Untitled"}</div>
                               <div style={{fontSize:11,color:C.dim,marginTop:2}}>
@@ -5677,13 +5724,17 @@ function App() {
                                 {job.gc&&<span> · {job.gc}</span>}
                               </div>
                             </div>
-                            {job.prepStartDate&&(
-                              <div style={{background:`${C.teal}18`,border:`1px solid ${C.teal}33`,
-                                borderRadius:8,padding:"4px 10px",fontSize:11,color:C.teal,
-                                fontWeight:700,whiteSpace:"nowrap",flexShrink:0}}>
-                                {job.prepStartDate}
-                              </div>
-                            )}
+                            <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
+                              {dHasRT&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Return trip needed</span>}
+                              {!dHasRT&&dRTS&&<span style={{background:"rgba(234,179,8,0.2)",border:"1px solid #ca8a04",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ca8a04",fontWeight:700,whiteSpace:"nowrap"}}>Ready to schedule</span>}
+                              {job.prepStartDate&&(
+                                <div style={{background:`${C.teal}18`,border:`1px solid ${C.teal}33`,
+                                  borderRadius:8,padding:"4px 10px",fontSize:11,color:C.teal,
+                                  fontWeight:700,whiteSpace:"nowrap"}}>
+                                  {job.prepStartDate}
+                                </div>
+                              )}
+                            </div>
                           </div>
                           {/* Stage progress dots */}
                           <div style={{display:"flex",alignItems:"center",gap:0,marginTop:6}}>
@@ -5705,6 +5756,8 @@ function App() {
                             ))}
                           </div>
                         </div>
+                          );
+                        })()}
                       );
                     })}
                   </div>
@@ -5738,13 +5791,19 @@ function App() {
                       const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
                       const pct = parseInt(job.roughStage)||0;
                       return (
+                        {(()=>{
+                          const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
+                          const dBg    = dHasRT?"rgba(220,38,38,0.15)":C.card;
+                          const dBord  = dHasRT?"2px solid #dc2626":`1px solid ${C.rough}33`;
+                          const dLbord = dHasRT?"#dc2626":C.rough;
+                          return (
                         <div key={job.id} onClick={()=>setSelected(job)}
-                          style={{background:C.card,border:`1px solid ${C.rough}33`,borderRadius:12,
-                            padding:14,cursor:"pointer",borderLeft:`3px solid ${C.rough}`,
-                            transition:"transform 0.1s,box-shadow 0.1s"}}
-                          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow=`0 6px 20px ${C.rough}22`;}}
-                          onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
-                          <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8,marginBottom:8}}>
+                          style={{background:dBg,border:dBord,borderRadius:12,
+                            padding:14,cursor:"pointer",borderLeft:`3px solid ${dLbord}`,
+                            transition:"transform 0.1s"}}
+                          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";}}
+                          onMouseLeave={e=>{e.currentTarget.style.transform="";}}>
+                          <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8,marginBottom:6}}>
                             <div>
                               <div style={{fontSize:13,fontWeight:700,color:C.text}}>{job.name||"Untitled"}</div>
                               <div style={{fontSize:11,color:C.dim,marginTop:2}}>
@@ -5752,13 +5811,16 @@ function App() {
                                 {job.gc&&<span> · {job.gc}</span>}
                               </div>
                             </div>
-                            {job.prepStartDate&&(
-                              <div style={{background:`${C.rough}18`,border:`1px solid ${C.rough}33`,
-                                borderRadius:8,padding:"4px 10px",fontSize:11,color:C.rough,
-                                fontWeight:700,whiteSpace:"nowrap",flexShrink:0}}>
-                                {job.prepStartDate}
-                              </div>
-                            )}
+                            <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
+                              {dHasRT&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Return trip needed</span>}
+                              {job.prepStartDate&&(
+                                <div style={{background:`${C.rough}18`,border:`1px solid ${C.rough}33`,
+                                  borderRadius:8,padding:"4px 10px",fontSize:11,color:C.rough,
+                                  fontWeight:700,whiteSpace:"nowrap"}}>
+                                  {job.prepStartDate}
+                                </div>
+                              )}
+                            </div>
                           </div>
                           <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4}}>
                             <div style={{flex:1,height:5,background:C.border,borderRadius:99,overflow:"hidden"}}>
@@ -5767,6 +5829,8 @@ function App() {
                             <span style={{fontSize:10,color:C.rough,fontWeight:700,minWidth:28}}>{pct}%</span>
                           </div>
                         </div>
+                          );
+                        })()}
                       );
                     })}
                   </div>
@@ -5799,12 +5863,19 @@ function App() {
                       const stageColor=inFinish?C.finish:C.orange;
                       const stageLabel=inFinish?`Finish ${f}%`:(r===100?"In Between":`Rough ${r}%`);
                       return (
+                        {(()=>{
+                          const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
+                          const dRTS   = job.readyToSchedule&&(parseInt(job.roughStage)||0)===100&&(parseInt(job.finishStage)||0)===0;
+                          const dBg    = dHasRT?"rgba(220,38,38,0.15)":dRTS?"rgba(234,179,8,0.15)":C.card;
+                          const dBord  = dHasRT?"2px solid #dc2626":dRTS?"2px solid #ca8a04":`1px solid ${stageColor}33`;
+                          const dLbord = dHasRT?"#dc2626":dRTS?"#ca8a04":stageColor;
+                          return (
                         <div key={job.id} onClick={()=>setSelected(job)}
-                          style={{background:C.card,border:`1px solid ${stageColor}33`,borderRadius:12,
-                            padding:14,cursor:"pointer",borderLeft:`3px solid ${stageColor}`,
-                            transition:"transform 0.1s,box-shadow 0.1s"}}
-                          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow=`0 6px 20px ${stageColor}22`;}}
-                          onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
+                          style={{background:dBg,border:dBord,borderRadius:12,
+                            padding:14,cursor:"pointer",borderLeft:`3px solid ${dLbord}`,
+                            transition:"transform 0.1s"}}
+                          onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-2px)";}}
+                          onMouseLeave={e=>{e.currentTarget.style.transform="";}}>
                           <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8}}>
                             <div>
                               <div style={{fontSize:13,fontWeight:700,color:C.text}}>{job.name||"Untitled"}</div>
@@ -5819,6 +5890,8 @@ function App() {
                                 {job.finishStartDate}
                               </div>
                               <div style={{fontSize:10,color:stageColor,fontWeight:600}}>{stageLabel}</div>
+                              {dHasRT&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Return trip needed</span>}
+                              {!dHasRT&&dRTS&&<span style={{background:"rgba(234,179,8,0.2)",border:"1px solid #ca8a04",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ca8a04",fontWeight:700,whiteSpace:"nowrap"}}>Ready to schedule</span>}
                             </div>
                           </div>
                           {/* Finish progress bar */}
@@ -5830,6 +5903,8 @@ function App() {
                             <span style={{fontSize:9,color:stageColor,fontWeight:700}}>Finish {f}%</span>
                           </div>
                         </div>
+                          );
+                        })()}
                       );
                     })}
                   </div>
