@@ -70,7 +70,7 @@ const FINISH_STAGES = ['Scheduled', '0%', '5%', '10%', '15%', '20%', '25%', '30%
 // parseStage: 'Scheduled' counts as 1 (in-progress but 0%) for section logic
 const parseStage = (s) => s==='Scheduled' ? 1 : (parseInt(s)||0);
 
-const WIRE_SIZES = ["","14/2","14/3","12/2","12/3","10/2","10/3","8/2","8/3","6/2","6/3","4/2","4/3","2/2","2/3","1/0","2/0","3/0","4/0"];
+const WIRE_SIZES = ["","14/2","14/3","12/2","12/3","10/2","10/3","8/2","8/3","6/2","6/3","4/2","4/3","2/2","2/3","1/0","2/0","3/0","4/0","#1","#2","#3","#4"];
 
 const WIRE_COLORS = {
 
@@ -89,6 +89,8 @@ const WIRE_COLORS = {
   "2/2":  "#444444", "2/3":  "#444444",
 
   "1/0":  "#444444", "2/0":  "#444444", "3/0": "#444444", "4/0": "#444444",
+
+  "#1": "#444444", "#2": "#444444", "#3": "#444444", "#4": "#444444",
 
 };
 
@@ -109,6 +111,8 @@ const WIRE_TEXT = {
   "2/2":  "#fff", "2/3":  "#fff",
 
   "1/0":  "#fff", "2/0":  "#fff", "3/0": "#fff", "4/0": "#fff",
+
+  "#1": "#fff", "#2": "#fff", "#3": "#fff", "#4": "#fff",
 
 };
 
@@ -180,7 +184,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], readyToSchedule:false, tempPed:false, tempPedNumber:"",
+  changeOrders:[], returnTrips:[], readyToSchedule:false, readyToInvoice:false, tempPed:false, tempPedNumber:"",
 
   homeRuns:{
 
@@ -1973,7 +1977,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
 function PanelFeeds({feeds, onChange}) {
 
-  const add = () => onChange([...feeds, {id:uid(), from:"", to:"", wire:""}]);
+  const add = () => onChange([...feeds, {id:uid(), from:"", to:"", wire:"", location:""}]);
 
   const upd = (id,p) => onChange(feeds.map(f=>f.id===id?{...f,...p}:f));
 
@@ -1985,11 +1989,11 @@ function PanelFeeds({feeds, onChange}) {
 
       {feeds.length>0&&(
 
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 110px 28px",
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 110px 28px",
 
           gap:6,marginBottom:6,padding:"0 2px"}}>
 
-          {["From","To","Wire",""].map((h,i)=>(
+          {["From","To","Location","Wire",""].map((h,i)=>(
 
             <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
 
@@ -2001,13 +2005,15 @@ function PanelFeeds({feeds, onChange}) {
 
       {feeds.map(f=>(
 
-        <div key={f.id} style={{display:"grid",gridTemplateColumns:"1fr 1fr 110px 28px",
+        <div key={f.id} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 110px 28px",
 
           gap:6,marginBottom:6,alignItems:"center"}}>
 
           <Inp value={f.from} onChange={e=>upd(f.id,{from:e.target.value})} placeholder="e.g. Meter"/>
 
           <Inp value={f.to}   onChange={e=>upd(f.id,{to:e.target.value})}   placeholder="e.g. Panel A"/>
+
+          <Inp value={f.location||""} onChange={e=>upd(f.id,{location:e.target.value})} placeholder="e.g. Basement, Garage…"/>
 
           <div style={{position:"relative"}}>
 
@@ -3833,6 +3839,14 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                   })()}
                 </label>
                 <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+                <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+                  <input type="checkbox" checked={!!job.readyToInvoice} onChange={e=>u({readyToInvoice:e.target.checked})}
+                    style={{accentColor:"#ea580c",width:16,height:16}}/>
+                  <span style={{fontSize:13,color:job.readyToInvoice?"#ea580c":C.text,fontWeight:job.readyToInvoice?700:400}}>
+                    Ready to invoice
+                    {job.readyToInvoice&&<span style={{fontSize:11,color:"#ea580c",marginLeft:6}}>— job card highlighted orange</span>}
+                  </span>
+                </label>
                   <input type="checkbox" checked={!!job.flagged} onChange={e=>u({flagged:e.target.checked})}
 
                   style={{accentColor:C.red,width:16,height:16}}/>
@@ -5252,9 +5266,9 @@ function App() {
     const _r = parseStage(job.roughStage);
     const _f = parseStage(job.finishStage);
     const rts = job.readyToSchedule && (_r===0 || (_r===100 && _f===0));
-    const rowBg    = hasRT?"rgba(220,38,38,0.18)":rts?"rgba(234,179,8,0.18)":C.card;
-    const rowLbord = hasRT?"#dc2626":rts?"#ca8a04":job.flagged?C.accent:rowFc;
-    const rowBord  = hasRT?"2px solid #dc2626":rts?"2px solid #ca8a04":`1px solid ${job.flagged?C.accent+"66":C.border}`;
+    const rowBg    = job.readyToInvoice?"rgba(234,88,12,0.10)":hasRT?"rgba(220,38,38,0.18)":rts?"rgba(234,179,8,0.18)":C.card;
+    const rowLbord = job.readyToInvoice?"#ea580c":hasRT?"#dc2626":rts?"#ca8a04":job.flagged?C.accent:rowFc;
+    const rowBord  = job.readyToInvoice?"2px solid #ea580c":hasRT?"2px solid #dc2626":rts?"2px solid #ca8a04":`1px solid ${job.flagged?C.accent+"66":C.border}`;
 
     return (
 
@@ -5789,9 +5803,10 @@ function App() {
                       const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
                       const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
                       const dRTS   = job.readyToSchedule&&(parseStage(job.roughStage))===0;
-                      const dBg    = dHasRT?"rgba(220,38,38,0.15)":dRTS?"rgba(234,179,8,0.15)":C.card;
-                      const dBord  = dHasRT?"2px solid #dc2626":dRTS?"2px solid #ca8a04":`1px solid ${C.teal}33`;
-                      const dLbord = dHasRT?"#dc2626":dRTS?"#ca8a04":C.teal;
+                      const dInv   = !!job.readyToInvoice;
+                      const dBg    = dInv?"rgba(234,88,12,0.12)":dHasRT?"rgba(220,38,38,0.15)":dRTS?"rgba(234,179,8,0.15)":C.card;
+                      const dBord  = dInv?"2px solid #ea580c":dHasRT?"2px solid #dc2626":dRTS?"2px solid #ca8a04":`1px solid ${C.teal}33`;
+                      const dLbord = dInv?"#ea580c":dHasRT?"#dc2626":dRTS?"#ca8a04":C.teal;
                       return (
                         <div key={job.id} onClick={()=>setSelected(job)}
                           style={{background:dBg,border:dBord,borderRadius:12,
@@ -5810,6 +5825,7 @@ function App() {
                             <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
                               {dHasRT&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Return trip needed</span>}
                               {!dHasRT&&dRTS&&<span style={{background:"rgba(234,179,8,0.2)",border:"1px solid #ca8a04",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ca8a04",fontWeight:700,whiteSpace:"nowrap"}}>Ready to schedule</span>}
+                              {job.readyToInvoice&&<span style={{background:"rgba(234,88,12,0.15)",border:"1px solid #ea580c",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ea580c",fontWeight:700,whiteSpace:"nowrap"}}>Ready to invoice</span>}
                               {job.prepStartDate&&(
                                 <div style={{background:`${C.teal}18`,border:`1px solid ${C.teal}33`,
                                   borderRadius:8,padding:"4px 10px",fontSize:11,color:C.teal,
@@ -5872,8 +5888,9 @@ function App() {
                       const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
                       const pct = parseStage(job.roughStage);
                       const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
-                      const dBg    = dHasRT?"rgba(220,38,38,0.15)":C.card;
-                      const dBord  = dHasRT?"2px solid #dc2626":`1px solid ${C.rough}33`;
+                      const dInv2  = !!job.readyToInvoice;
+                      const dBg    = dInv2?"rgba(234,88,12,0.12)":dHasRT?"rgba(220,38,38,0.15)":C.card;
+                      const dBord  = dInv2?"2px solid #ea580c":dHasRT?"2px solid #dc2626":`1px solid ${C.rough}33`;
                       const dLbord = dHasRT?"#dc2626":C.rough;
                       return (
                         <div key={job.id} onClick={()=>setSelected(job)}
@@ -5941,9 +5958,10 @@ function App() {
                       const stageLabel=inFinish?`Finish ${f}%`:(r===100?"In Between":`Rough ${r}%`);
                       const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
                       const dRTS   = job.readyToSchedule&&(parseStage(job.roughStage))===100&&(parseStage(job.finishStage))===0;
-                      const dBg    = dHasRT?"rgba(220,38,38,0.15)":dRTS?"rgba(234,179,8,0.15)":C.card;
-                      const dBord  = dHasRT?"2px solid #dc2626":dRTS?"2px solid #ca8a04":`1px solid ${stageColor}33`;
-                      const dLbord = dHasRT?"#dc2626":dRTS?"#ca8a04":stageColor;
+                      const dInv3  = !!job.readyToInvoice;
+                      const dBg    = dInv3?"rgba(234,88,12,0.12)":dHasRT?"rgba(220,38,38,0.15)":dRTS?"rgba(234,179,8,0.15)":C.card;
+                      const dBord  = dInv3?"2px solid #ea580c":dHasRT?"2px solid #dc2626":dRTS?"2px solid #ca8a04":`1px solid ${stageColor}33`;
+                      const dLbord = dInv3?"#ea580c":dHasRT?"#dc2626":dRTS?"#ca8a04":stageColor;
                       return (
                         <div key={job.id} onClick={()=>setSelected(job)}
                           style={{background:dBg,border:dBord,borderRadius:12,
@@ -6162,6 +6180,26 @@ function App() {
             ):(
 
               <StageSectionList jobs={filtered} JobRow={JobRow} fc={FOREMEN_COLORS[activeForeman]}/>
+              {(()=>{
+                const invoiceJobs = filtered.filter(j=>j.readyToInvoice);
+                return invoiceJobs.length>0?(
+                  <div style={{marginTop:8,marginBottom:20}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,padding:"10px 14px",
+                      background:"rgba(234,88,12,0.08)",border:"1px solid rgba(234,88,12,0.3)",
+                      borderRadius:10}}>
+                      <div style={{width:10,height:10,borderRadius:"50%",background:"#ea580c",flexShrink:0}}/>
+                      <div style={{fontSize:12,fontWeight:700,color:"#ea580c",letterSpacing:"0.04em",flex:1}}>
+                        READY TO INVOICE
+                      </div>
+                      <div style={{fontSize:11,color:"#ea580c",fontWeight:600,
+                        background:"rgba(234,88,12,0.15)",borderRadius:99,padding:"2px 8px"}}>
+                        {invoiceJobs.length}
+                      </div>
+                    </div>
+                    {invoiceJobs.map(job=><JobRow key={job.id} job={job}/>)}
+                  </div>
+                ):null;
+              })()}
 
             )}
 
