@@ -178,7 +178,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[],
+  changeOrders:[], returnTrips:[], readyToSchedule:false,
 
   homeRuns:{
 
@@ -3279,7 +3279,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
             {(job.returnTrips||[]).filter(r=>!r.signedOff).length>0&&
 
-              <Pill label={`${(job.returnTrips||[]).filter(r=>!r.signedOff).length} RT pending`} color={C.blue}/>}
+              <Pill label={`${(job.returnTrips||[]).filter(r=>!r.signedOff).length} return trip${(job.returnTrips||[]).filter(r=>!r.signedOff).length>1?"s":""} pending`} color={C.red}/>}
 
             {qcCount>0&&<Pill label={`${qcCount} QC item${qcCount!==1?"s":""}`} color={C.red}/>}
 
@@ -3698,6 +3698,26 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                   <input type="checkbox" checked={!!job.preLien} onChange={e=>u({preLien:e.target.checked})}
                     style={{accentColor:C.teal,width:16,height:16}}/>
                   <span style={{fontSize:13,color:C.text}}>Pre-lien filed</span>
+                </label>
+                <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+                  {(()=>{
+                    const r2=parseInt(job.roughStage)||0;
+                    const f2=parseInt(job.finishStage)||0;
+                    const rtsActive = job.readyToSchedule && (r2===0||(r2===100&&f2===0));
+                    const rtsApplicable = r2===0||(r2===100&&f2===0);
+                    return (<>
+                      <input type="checkbox"
+                        checked={!!job.readyToSchedule && rtsApplicable}
+                        disabled={!rtsApplicable}
+                        onChange={e=>u({readyToSchedule:e.target.checked})}
+                        style={{accentColor:"#ca8a04",width:16,height:16,opacity:rtsApplicable?1:0.35,cursor:rtsApplicable?"pointer":"not-allowed"}}/>
+                      <span style={{fontSize:13,color:rtsActive?"#ca8a04":rtsApplicable?C.text:C.muted,fontWeight:rtsActive?600:400}}>
+                        Ready to schedule
+                        {rtsActive&&<span style={{fontSize:11,color:"#ca8a04",marginLeft:6}}>— job card highlighted yellow</span>}
+                        {!rtsApplicable&&<span style={{fontSize:11,color:C.muted,marginLeft:6}}>— only available before rough or in between</span>}
+                      </span>
+                    </>);
+                  })()}
                 </label>
                 <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
                   <input type="checkbox" checked={!!job.flagged} onChange={e=>u({flagged:e.target.checked})}
@@ -5121,11 +5141,17 @@ function App() {
 
     return (
 
-      <div className="job-row" onClick={()=>setSelected(job)}
-
-        style={{background:C.card,border:`1px solid ${job.flagged?C.accent+"66":C.border}`,
-
-          borderRadius:14,padding:"13px 16px",marginBottom:8,borderLeft:`3px solid ${job.flagged?C.accent:rowFc}`}}>
+      {(()=>{
+        const hasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
+        const r = parseInt(job.roughStage)||0;
+        const f = parseInt(job.finishStage)||0;
+        // RTS active when: rough not started yet, OR in between (rough=100, finish=0)
+        const rts = job.readyToSchedule && (r===0 || (r===100 && f===0));
+        const bg     = hasRT?"rgba(220,38,38,0.06)":rts?"rgba(234,179,8,0.08)":C.card;
+        const lbord  = hasRT?"#dc2626":rts?"#ca8a04":job.flagged?C.accent:rowFc;
+        const bord   = hasRT?"1px solid rgba(220,38,38,0.25)":rts?"1px solid rgba(202,138,4,0.25)":`1px solid ${job.flagged?C.accent+"66":C.border}`;
+        return <div className="job-row" onClick={()=>setSelected(job)}
+          style={{background:bg,border:bord,borderRadius:14,padding:"13px 16px",marginBottom:8,borderLeft:`3px solid ${lbord}`}}>
 
         <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
 
@@ -5184,7 +5210,7 @@ function App() {
 
             {pendCO>0 &&<Pill label={`${pendCO} CO`} color={C.orange}/>}
 
-            {pendRT>0 &&<Pill label={`${pendRT} RT`} color={C.blue}/>}
+            {pendRT>0 &&<Pill label={`${pendRT} return trip${pendRT>1?'s':''}`} color={C.red}/>}
 
             {qcItems>0&&<Pill label={`${qcItems} QC`} color={C.red}/>}
 
@@ -5224,8 +5250,8 @@ function App() {
 
         </div>
 
-      </div>
-
+      </div>;
+      })()
     );
 
   };
