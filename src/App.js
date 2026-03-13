@@ -5702,14 +5702,12 @@ function App() {
                     {prepJobs.map(job=>{
                       const stageIdx = PREP_STAGES.indexOf(job.prepStage);
                       const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
+                      const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
+                      const dRTS   = job.readyToSchedule&&(parseInt(job.roughStage)||0)===0;
+                      const dBg    = dHasRT?"rgba(220,38,38,0.15)":dRTS?"rgba(234,179,8,0.15)":C.card;
+                      const dBord  = dHasRT?"2px solid #dc2626":dRTS?"2px solid #ca8a04":`1px solid ${C.teal}33`;
+                      const dLbord = dHasRT?"#dc2626":dRTS?"#ca8a04":C.teal;
                       return (
-                        {(()=>{
-                          const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
-                          const dRTS   = job.readyToSchedule&&(parseInt(job.roughStage)||0)===0;
-                          const dBg    = dHasRT?"rgba(220,38,38,0.15)":dRTS?"rgba(234,179,8,0.15)":C.card;
-                          const dBord  = dHasRT?"2px solid #dc2626":dRTS?"2px solid #ca8a04":`1px solid ${C.teal}33`;
-                          const dLbord = dHasRT?"#dc2626":dRTS?"#ca8a04":C.teal;
-                          return (
                         <div key={job.id} onClick={()=>setSelected(job)}
                           style={{background:dBg,border:dBord,borderRadius:12,
                             padding:14,cursor:"pointer",borderLeft:`3px solid ${dLbord}`,
@@ -5756,8 +5754,6 @@ function App() {
                             ))}
                           </div>
                         </div>
-                          );
-                        })()}
                       );
                     })}
                   </div>
@@ -5790,13 +5786,11 @@ function App() {
                     {roughJobs.map(job=>{
                       const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
                       const pct = parseInt(job.roughStage)||0;
+                      const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
+                      const dBg    = dHasRT?"rgba(220,38,38,0.15)":C.card;
+                      const dBord  = dHasRT?"2px solid #dc2626":`1px solid ${C.rough}33`;
+                      const dLbord = dHasRT?"#dc2626":C.rough;
                       return (
-                        {(()=>{
-                          const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
-                          const dBg    = dHasRT?"rgba(220,38,38,0.15)":C.card;
-                          const dBord  = dHasRT?"2px solid #dc2626":`1px solid ${C.rough}33`;
-                          const dLbord = dHasRT?"#dc2626":C.rough;
-                          return (
                         <div key={job.id} onClick={()=>setSelected(job)}
                           style={{background:dBg,border:dBord,borderRadius:12,
                             padding:14,cursor:"pointer",borderLeft:`3px solid ${dLbord}`,
@@ -5829,8 +5823,6 @@ function App() {
                             <span style={{fontSize:10,color:C.rough,fontWeight:700,minWidth:28}}>{pct}%</span>
                           </div>
                         </div>
-                          );
-                        })()}
                       );
                     })}
                   </div>
@@ -5862,14 +5854,12 @@ function App() {
                       const inFinish=f>0;
                       const stageColor=inFinish?C.finish:C.orange;
                       const stageLabel=inFinish?`Finish ${f}%`:(r===100?"In Between":`Rough ${r}%`);
+                      const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
+                      const dRTS   = job.readyToSchedule&&(parseInt(job.roughStage)||0)===100&&(parseInt(job.finishStage)||0)===0;
+                      const dBg    = dHasRT?"rgba(220,38,38,0.15)":dRTS?"rgba(234,179,8,0.15)":C.card;
+                      const dBord  = dHasRT?"2px solid #dc2626":dRTS?"2px solid #ca8a04":`1px solid ${stageColor}33`;
+                      const dLbord = dHasRT?"#dc2626":dRTS?"#ca8a04":stageColor;
                       return (
-                        {(()=>{
-                          const dHasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
-                          const dRTS   = job.readyToSchedule&&(parseInt(job.roughStage)||0)===100&&(parseInt(job.finishStage)||0)===0;
-                          const dBg    = dHasRT?"rgba(220,38,38,0.15)":dRTS?"rgba(234,179,8,0.15)":C.card;
-                          const dBord  = dHasRT?"2px solid #dc2626":dRTS?"2px solid #ca8a04":`1px solid ${stageColor}33`;
-                          const dLbord = dHasRT?"#dc2626":dRTS?"#ca8a04":stageColor;
-                          return (
                         <div key={job.id} onClick={()=>setSelected(job)}
                           style={{background:dBg,border:dBord,borderRadius:12,
                             padding:14,cursor:"pointer",borderLeft:`3px solid ${dLbord}`,
@@ -5903,8 +5893,6 @@ function App() {
                             <span style={{fontSize:9,color:stageColor,fontWeight:700}}>Finish {f}%</span>
                           </div>
                         </div>
-                          );
-                        })()}
                       );
                     })}
                   </div>
