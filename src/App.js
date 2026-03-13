@@ -3778,7 +3778,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
               <div style={{marginTop:16}}>
                 <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.1em",marginBottom:8}}>PRE JOB PREP STAGE</div>
-                <select value={job.prepStage||""} onChange={e=>u({prepStage:e.target.value})}
+                <select value={job.prepStage||""} onChange={e=>u({prepStage:e.target.value,...(e.target.value===PREP_STAGE_ALERT?{readyToSchedule:false}:{})})}
                   style={{background:job.prepStage===PREP_STAGE_ALERT?"#fef2f2":C.surface,
                     color:job.prepStage===PREP_STAGE_ALERT?"#dc2626":job.prepStage?C.text:C.dim,
                     border:`1px solid ${job.prepStage===PREP_STAGE_ALERT?"#dc2626":C.border}`,
