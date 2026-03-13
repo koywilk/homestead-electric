@@ -4265,11 +4265,7 @@ const STAGE_SECTIONS = [
 
   { key:"prep",       label:"Pre Job Prep",       color:"#0d9488",
 
-    test: j => { const p=parseInt(j.prepStage)||0; const r=parseInt(j.roughStage)||0; return p<100 && r===0; } },
-
-  { key:"notstarted", label:"Not Started",        color:"#5a6480",
-
-    test: j => { const p=parseInt(j.prepStage)||0; const r=parseInt(j.roughStage)||0; return r===0 && p===100; } },
+    test: j => { const r=parseInt(j.roughStage)||0; return r===0; } },
 
   { key:"rough",    label:"Rough In Progress",  color:"#2563eb",
 
@@ -5430,9 +5426,9 @@ function App() {
 
             {(()=>{
 
-              const prepJobs = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;return j.prepStage!=='Job Prep Complete'&&r===0;});
+              const prepJobs = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;return r===0;});
 
-              const nsJobs   = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;return r===0&&j.prepStage==='Job Prep Complete';});
+              const nsJobs   = [];
 
               const roJobs   = jobs.filter(j=>{const r=parseInt(j.roughStage)||0;const f=parseInt(j.finishStage)||0;return r>0&&r<100&&f===0;});
 
@@ -5689,7 +5685,7 @@ function App() {
               </div>
               {(()=>{
                 const prepJobs = jobs
-                  .filter(j=>{const r=parseInt(j.roughStage)||0;return j.prepStage!=='Job Prep Complete'&&r===0;})
+                  .filter(j=>{const r=parseInt(j.roughStage)||0;return r===0;})
                   .sort((a,b)=>{
                     const da=a.prepStartDate||"9999";const db=b.prepStartDate||"9999";
                     return da.localeCompare(db);
@@ -5772,7 +5768,7 @@ function App() {
                   .filter(j=>{
                     const r=parseInt(j.roughStage)||0;
                     const f=parseInt(j.finishStage)||0;
-                    return r<100 && f===0 && j.prepStage==='Job Prep Complete';
+                    return r>0 && r<100 && f===0;
                   })
                   .sort((a,b)=>{
                     const da=a.prepStartDate||"9999";const db=b.prepStartDate||"9999";
@@ -5968,7 +5964,7 @@ function App() {
 
                 const fDone = fJobs.filter(j=>parseInt(j.finishStage)===100).length;
 
-                const fPrep    = fJobs.filter(j=>{const r=parseInt(j.roughStage)||0;return j.prepStage!=='Job Prep Complete'&&r===0;}).length;
+                const fPrep    = fJobs.filter(j=>{const r=parseInt(j.roughStage)||0;return r===0;}).length;
 
                 const fRough   = fJobs.filter(j=>parseInt(j.roughStage)>0&&parseInt(j.roughStage)<100&&parseInt(j.finishStage)===0).length;
 
@@ -5976,7 +5972,7 @@ function App() {
 
                 const fFinish  = fJobs.filter(j=>parseInt(j.finishStage)>0&&parseInt(j.finishStage)<100).length;
 
-                const fNotStarted = fJobs.filter(j=>{const r=parseInt(j.roughStage)||0;return r===0&&j.prepStage==='Job Prep Complete';}).length;
+                const fNotStarted = 0;
 
                 return [[fJobs.length,"Total Jobs",C.blue],
 
