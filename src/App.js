@@ -2369,6 +2369,35 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
 
 
+function HRAddFloor({homeRuns, onHRChange}) {
+  const [adding, setAdding] = useState(false);
+  const [name,   setName]   = useState("");
+  const add = () => {
+    const label = name.trim();
+    if(!label) return;
+    const key = "hr_extra_" + label.toLowerCase().replace(/[^a-z0-9]/g,"_") + "_" + Date.now();
+    onHRChange({...homeRuns, extraFloors:[...(homeRuns.extraFloors||[]),{key,label}], [key]:[]});
+    setName(""); setAdding(false);
+  };
+  if(!adding) return (
+    <Btn onClick={()=>setAdding(true)} variant="add" style={{fontSize:11,padding:"4px 12px",marginTop:4}}>
+      + Add Floor / Area
+    </Btn>
+  );
+  return (
+    <div style={{display:"flex",gap:8,alignItems:"center",marginTop:8}}>
+      <input value={name} onChange={e=>setName(e.target.value)}
+        onKeyDown={e=>{if(e.key==="Enter")add();if(e.key==="Escape")setAdding(false);}}
+        placeholder="Floor or area name…" autoFocus
+        style={{flex:1,border:`1px solid ${C.border}`,borderRadius:7,padding:"6px 10px",
+          fontSize:12,fontFamily:"inherit",color:C.text,background:C.surface,outline:"none"}}/>
+      <Btn onClick={add} variant="add" style={{fontSize:11,padding:"5px 12px"}}>Add</Btn>
+      <button onClick={()=>setAdding(false)}
+        style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13}}>✕</button>
+    </div>
+  );
+}
+
 function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobName}) {
 
   const [hoResponse, setHoResponse] = useState(null);
@@ -2397,7 +2426,8 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
   };
 
 
-  const allRows = [...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[])];
+  const allRows = [...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[]),
+    ...(homeRuns.extraFloors||[]).flatMap(e=>homeRuns[e.key]||[])];
 
   const total   = allRows.length;
 
@@ -2542,6 +2572,25 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
         {[["main","Main Level Loads"],["basement","Basement Level Loads"],["upper","Upper Level Loads"]].map(([k,l])=>(
           <HomeRunLevel key={k} label={l} rows={homeRuns[k]||[]} onChange={v=>onHRChange({...homeRuns,[k]:v})}/>
         ))}
+        {(homeRuns.extraFloors||[]).map((ef,i)=>(
+          <div key={ef.key} style={{position:"relative"}}>
+            <HomeRunLevel
+              label={ef.label}
+              rows={homeRuns[ef.key]||[]}
+              onChange={v=>onHRChange({...homeRuns,[ef.key]:v})}/>
+            <button onClick={()=>{
+                const newExtras=(homeRuns.extraFloors||[]).filter(e=>e.key!==ef.key);
+                const updated={...homeRuns,extraFloors:newExtras};
+                delete updated[ef.key];
+                onHRChange(updated);
+              }}
+              style={{position:"absolute",top:0,right:0,background:"none",border:"none",
+                color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 6px",fontFamily:"inherit"}}>
+              Remove
+            </button>
+          </div>
+        ))}
+        <HRAddFloor homeRuns={homeRuns} onHRChange={onHRChange}/>
       </Section>
 
       <Section label="Load Mapping Notes" color={C.blue}>
@@ -4414,6 +4463,7 @@ function HomeownerPage({ jobId }) {
           ...(j.homeRuns?.main||[]),
           ...(j.homeRuns?.upper||[]),
           ...(j.homeRuns?.basement||[]),
+          ...(j.homeRuns?.extraFloors||[]).flatMap(e=>j.homeRuns?.[e.key]||[]),
         ].filter(r=>r.name||r.panel).map((r,i)=>({...r, priority:i+1, included:true, notes:""}));
         setItems(rows);
         const reqSnap = await getDoc(doc(db,"homeowner_requests",jobId));
