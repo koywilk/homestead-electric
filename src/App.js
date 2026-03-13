@@ -6179,6 +6179,7 @@ function App() {
 
             ):(
 
+              <>
               <StageSectionList jobs={filtered} JobRow={JobRow} fc={FOREMEN_COLORS[activeForeman]}/>
               {(()=>{
                 const invoiceJobs = filtered.filter(j=>j.readyToInvoice);
@@ -6200,6 +6201,7 @@ function App() {
                   </div>
                 ):null;
               })()}
+              </>
 
             )}
 
