@@ -965,52 +965,63 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
 
   const upper    = normFloor(punch.upper);
-
   const main     = normFloor(punch.main);
-
   const basement = normFloor(punch.basement);
 
+  // Extra custom floors stored as punch.extras = [{key, label}]
+  const extras = punch.extras || [];
+  const [newFloorName, setNewFloorName] = useState("");
+  const [addingFloor,  setAddingFloor]  = useState(false);
 
+  const FLOOR_COLORS = [C.teal, C.purple, C.blue, C.accent, C.green];
 
   const handleFloorChange = (floorKey, newFloorData) => {
-
-    onChange({ upper, main, basement, [floorKey]: newFloorData });
-
+    const extraData = {};
+    extras.forEach(e => { extraData[e.key] = normFloor(punch[e.key]); });
+    onChange({ upper, main, basement, extras, ...extraData, [floorKey]: newFloorData });
   };
 
+  const addFloor = () => {
+    const label = newFloorName.trim();
+    if(!label) return;
+    const key = "extra_" + label.toLowerCase().replace(/[^a-z0-9]/g,"_") + "_" + Date.now();
+    const newExtras = [...extras, {key, label}];
+    const extraData = {};
+    extras.forEach(e => { extraData[e.key] = normFloor(punch[e.key]); });
+    onChange({ upper, main, basement, extras: newExtras, ...extraData, [key]: normFloor(undefined) });
+    setNewFloorName("");
+    setAddingFloor(false);
+  };
 
+  const removeFloor = (key) => {
+    const newExtras = extras.filter(e=>e.key!==key);
+    const extraData = {};
+    newExtras.forEach(e => { extraData[e.key] = normFloor(punch[e.key]); });
+    const updated = { upper, main, basement, extras: newExtras, ...extraData };
+    delete updated[key];
+    onChange(updated);
+  };
 
   const countOpen = (f) => f.general.filter(i => !i.done).length +
-
     f.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done).length : 0), 0);
 
-  const totalOpen = countOpen(upper) + countOpen(main) + countOpen(basement);
-
-
+  const totalOpen = countOpen(upper) + countOpen(main) + countOpen(basement) +
+    extras.reduce((sum,e) => sum + countOpen(normFloor(punch[e.key])), 0);
 
   const flatItems = (f, label) => [
-
     ...f.general.filter(i => !i.done).map(i => `[${label}] ${i.text}`),
-
     ...f.rooms.flatMap(r => (r.items||[]).filter(i => !i.done).map(i => `[${label} - ${r.name}] ${i.text}`)),
-
   ];
 
-
-
   const handleEmail = () => {
-
-    const all = [...flatItems(upper,'Upper'), ...flatItems(main,'Main'), ...flatItems(basement,'Basement')];
-
+    const all = [
+      ...flatItems(upper,'Upper'), ...flatItems(main,'Main'), ...flatItems(basement,'Basement'),
+      ...extras.flatMap(e => flatItems(normFloor(punch[e.key]), e.label)),
+    ];
     const subject = `${jobName} — ${phase} Punch List`;
-
     const body = `Open ${phase} punch list items for ${jobName}:\n\n${all.map(i=>`• ${i}`).join('\n')}\n\nPlease review and complete.\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
-
     onEmail({ subject, body });
-
   };
-
-
 
   return (
 
@@ -1035,6 +1046,40 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
       <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}/>
 
       <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}/>
+
+      {extras.map((e,i)=>(
+        <div key={e.key} style={{position:"relative"}}>
+          <PunchFloor
+            floorKey={e.key}
+            floorData={normFloor(punch[e.key])}
+            onFloorChange={handleFloorChange}
+            floorLabel={e.label}
+            floorColor={FLOOR_COLORS[i % FLOOR_COLORS.length]}/>
+          <button onClick={()=>removeFloor(e.key)}
+            style={{position:"absolute",top:6,right:0,background:"none",border:"none",
+              color:C.muted,cursor:"pointer",fontSize:12,padding:"2px 6px",fontFamily:"inherit"}}>
+            Remove
+          </button>
+        </div>
+      ))}
+
+      {addingFloor ? (
+        <div style={{display:"flex",gap:8,alignItems:"center",marginTop:8}}>
+          <input value={newFloorName} onChange={e=>setNewFloorName(e.target.value)}
+            onKeyDown={e=>{ if(e.key==="Enter") addFloor(); if(e.key==="Escape") setAddingFloor(false); }}
+            placeholder="Floor / area name…" autoFocus
+            style={{flex:1,border:`1px solid ${C.border}`,borderRadius:7,padding:"6px 10px",
+              fontSize:12,fontFamily:"inherit",color:C.text,background:C.surface,outline:"none"}}/>
+          <Btn onClick={addFloor} variant="add" style={{fontSize:11,padding:"5px 12px"}}>Add</Btn>
+          <button onClick={()=>setAddingFloor(false)}
+            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13}}>✕</button>
+        </div>
+      ) : (
+        <Btn onClick={()=>setAddingFloor(true)} variant="add"
+          style={{fontSize:11,padding:"4px 12px",marginTop:8}}>
+          + Add Floor / Area
+        </Btn>
+      )}
 
     </div>
 
@@ -2019,9 +2064,10 @@ const WIRE_ORDER  = {"":0,"14/2":1,"14/3":2,"12/2":3,"12/3":4,"10/2":5,"10/3":6,
 function HomeRunLevel({rows,onChange,label}) {
 
   const sortRows = (arr) => [...arr].sort((a,b)=>{
-    const pd = (PANEL_ORDER[a.panel]||0)-(PANEL_ORDER[b.panel]||0);
-    if(pd!==0) return pd;
-    return (WIRE_ORDER[a.wire]||0)-(WIRE_ORDER[b.wire]||0);
+    // Sort by wire size descending (larger wire first), then alphabetically by name
+    const wd = (WIRE_ORDER[b.wire]||0)-(WIRE_ORDER[a.wire]||0);
+    if(wd!==0) return wd;
+    return (a.name||"").toLowerCase().localeCompare((b.name||"").toLowerCase());
   }).map((r,i)=>({...r,num:i+1}));
 
   const upd    = (id,p) => { const updated = rows.map(r=>r.id===id?{...r,...p}:r); onChange(('wire' in p||'panel' in p) ? sortRows(updated) : updated.map((r,i)=>({...r,num:i+1}))); };
@@ -3124,16 +3170,15 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
   };
 
   const openCount = ['roughPunch','finishPunch'].reduce((total,key)=>{
-
     const p = job?.[key]||{};
-
-    return total + countFloor(p.upper) + countFloor(p.main) + countFloor(p.basement);
-
+    const extraCount = (p.extras||[]).reduce((s,e)=>s+countFloor(p[e.key]||{}),0);
+    return total + countFloor(p.upper) + countFloor(p.main) + countFloor(p.basement) + extraCount;
   },0);
 
   const pendingCOs = (job.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length;
 
-  const qcCount = countFloor(job.qcPunch?.upper||{}) + countFloor(job.qcPunch?.main||{}) + countFloor(job.qcPunch?.basement||{});
+  const qcCount = countFloor(job.qcPunch?.upper||{}) + countFloor(job.qcPunch?.main||{}) + countFloor(job.qcPunch?.basement||{}) +
+    (job.qcPunch?.extras||[]).reduce((s,e)=>s+countFloor(job.qcPunch?.[e.key]||{}),0);
 
 
 
@@ -3594,15 +3639,26 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                 )}
               </div>
 
-              <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",marginTop:16}}>
-
-                <input type="checkbox" checked={!!job.flagged} onChange={e=>u({flagged:e.target.checked})}
+              <div style={{display:"flex",flexDirection:"column",gap:10,marginTop:16}}>
+                <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+                  <input type="checkbox" checked={!!job.jobAccount} onChange={e=>u({jobAccount:e.target.checked})}
+                    style={{accentColor:C.teal,width:16,height:16}}/>
+                  <span style={{fontSize:13,color:C.text}}>Job account created</span>
+                </label>
+                <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+                  <input type="checkbox" checked={!!job.preLien} onChange={e=>u({preLien:e.target.checked})}
+                    style={{accentColor:C.teal,width:16,height:16}}/>
+                  <span style={{fontSize:13,color:C.text}}>Pre-lien filed</span>
+                </label>
+                <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+                  <input type="checkbox" checked={!!job.flagged} onChange={e=>u({flagged:e.target.checked})}
 
                   style={{accentColor:C.red,width:16,height:16}}/>
 
                 <span style={{fontSize:13,color:C.text}}>Flag this job — needs attention</span>
 
               </label>
+              </div>
 
             </div>
 
