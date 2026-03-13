@@ -44,6 +44,8 @@ const db = getFirestore(firebaseApp);
 
 
 
+const HO_WIRE_AMPS = {"14/2":15,"14/3":15,"12/2":20,"12/3":20,"10/2":30,"10/3":30,"8/2":40,"8/3":40,"6/2":50,"6/3":50,"4/2":70,"4/3":70,"2/2":95,"2/3":95,"1/0":125,"2/0":150,"3/0":175,"4/0":200};
+
 const C = {
 
   bg:"#f1f5f9", surface:"#ffffff", card:"#ffffff", border:"#e2e8f0",
@@ -2364,71 +2366,92 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
     <div>
 
       {/* Send to Homeowner */}
-      <div style={{marginBottom:16,padding:"14px 16px",background:"#fffbeb",border:"1px solid #fde68a",borderRadius:12}}>
-        <div style={{fontSize:12,fontWeight:700,color:"#92400e",marginBottom:8}}>🏠 Generator Load Selection</div>
-        <div style={{fontSize:11,color:"#78350f",marginBottom:10}}>
-          Send this link to the homeowner so they can select which circuits to put on the generator.
-        </div>
-        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-          <button onClick={copyLink}
-            style={{background:linkCopied?"#16a34a":"#d97706",border:"none",borderRadius:8,color:"#fff",
-              fontWeight:700,fontSize:11,padding:"7px 14px",cursor:"pointer",fontFamily:"inherit"}}>
-            {linkCopied?"✓ Copied!":"📋 Copy Link"}
-          </button>
-          <button onClick={()=>window.open(hoLink,"_blank")}
-            style={{background:"#fff",border:"1px solid #d97706",borderRadius:8,color:"#d97706",
-              fontWeight:700,fontSize:11,padding:"7px 14px",cursor:"pointer",fontFamily:"inherit"}}>
-            Preview
-          </button>
-          <button onClick={checkResponse}
-            style={{background:"#0f172a",border:"none",borderRadius:8,color:"#fff",
-              fontWeight:700,fontSize:11,padding:"7px 14px",cursor:"pointer",fontFamily:"inherit"}}>
-            View Response
-          </button>
+      <div style={{marginBottom:16,padding:"12px 14px",background:C.surface,border:`0.5px solid ${C.border}`,borderRadius:10}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
+          <div>
+            <div style={{fontSize:12,fontWeight:500,color:C.text,marginBottom:2}}>Generator load selection</div>
+            <div style={{fontSize:11,color:C.dim}}>Share a link so the homeowner can choose &amp; prioritize circuits</div>
+          </div>
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            <button onClick={copyLink}
+              style={{background:linkCopied?"#16a34a":"#1e293b",border:"none",borderRadius:7,color:"#fff",
+                fontWeight:500,fontSize:11,padding:"6px 12px",cursor:"pointer",fontFamily:"inherit"}}>
+              {linkCopied?"✓ Copied":"Copy link"}
+            </button>
+            <button onClick={()=>window.open(hoLink,"_blank")}
+              style={{background:"none",border:`0.5px solid ${C.border}`,borderRadius:7,color:C.dim,
+                fontWeight:500,fontSize:11,padding:"6px 12px",cursor:"pointer",fontFamily:"inherit"}}>
+              Preview
+            </button>
+            <button onClick={checkResponse}
+              style={{background:"none",border:`0.5px solid ${C.border}`,borderRadius:7,color:C.dim,
+                fontWeight:500,fontSize:11,padding:"6px 12px",cursor:"pointer",fontFamily:"inherit"}}>
+              View response
+            </button>
+          </div>
         </div>
       </div>
 
       {/* Homeowner Response Modal */}
       {showHoModal&&hoResponse&&(
         <div onClick={()=>setShowHoModal(false)}
-          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.5)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:9999,
+            display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
           <div onClick={e=>e.stopPropagation()}
-            style={{background:"#fff",borderRadius:16,padding:24,maxWidth:460,width:"100%",maxHeight:"80vh",overflowY:"auto"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:16}}>
-              <div style={{fontSize:15,fontWeight:700}}>Homeowner Selections</div>
+            style={{background:"#fff",borderRadius:12,padding:22,maxWidth:440,width:"100%",
+              maxHeight:"82vh",overflowY:"auto",border:"0.5px solid #e2e8f0"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+              <div style={{fontSize:14,fontWeight:500,color:"#1e293b"}}>Homeowner selections</div>
               <button onClick={()=>setShowHoModal(false)}
-                style={{background:"none",border:"none",fontSize:18,cursor:"pointer",color:"#64748b"}}>✕</button>
+                style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:"#94a3b8",padding:0}}>✕</button>
             </div>
-            <div style={{fontSize:11,color:"#64748b",marginBottom:12}}>
+            <div style={{fontSize:11,color:"#94a3b8",marginBottom:4}}>
               Submitted {hoResponse.submittedAt?new Date(hoResponse.submittedAt).toLocaleString():""}
             </div>
-            <div style={{fontSize:11,fontWeight:700,color:"#16a34a",letterSpacing:"0.08em",marginBottom:8}}>
-              ON GENERATOR ({(hoResponse.items||[]).filter(i=>i.included).length})
+            {hoResponse.signature&&(
+              <div style={{fontSize:12,color:"#64748b",marginBottom:14,padding:"8px 10px",
+                background:"#f8fafc",borderRadius:7,border:"0.5px solid #e2e8f0"}}>
+                Signed by: <span style={{fontFamily:"Georgia,serif",color:"#1e293b"}}>{hoResponse.signature}</span>
+              </div>
+            )}
+            <div style={{fontSize:10,fontWeight:500,color:"#94a3b8",letterSpacing:"0.08em",marginBottom:8}}>
+              ON GENERATOR · {(hoResponse.items||[]).filter(i=>i.included).length}
             </div>
             {(hoResponse.items||[]).filter(i=>i.included).map((it,i)=>(
-              <div key={it.id||i} style={{background:"#f0fdf4",border:"1px solid #bbf7d0",borderRadius:9,padding:"10px 12px",marginBottom:6}}>
+              <div key={it.id||i} style={{background:"#f8fafc",border:"0.5px solid #e2e8f0",
+                borderRadius:8,padding:"9px 12px",marginBottom:5}}>
                 <div style={{display:"flex",alignItems:"center",gap:8}}>
-                  <div style={{background:"#d97706",color:"#fff",borderRadius:99,width:20,height:20,
-                    display:"flex",alignItems:"center",justifyContent:"center",fontSize:10,fontWeight:700,flexShrink:0}}>
+                  <div style={{width:20,height:20,borderRadius:"50%",background:"#fef3c7",
+                    border:"0.5px solid #fde68a",display:"flex",alignItems:"center",
+                    justifyContent:"center",fontSize:10,fontWeight:500,color:"#b45309",flexShrink:0}}>
                     {it.priority||i+1}
                   </div>
-                  <div>
-                    <div style={{fontWeight:600,fontSize:13}}>{it.name||"Unnamed"}</div>
-                    <div style={{fontSize:11,color:"#64748b"}}>{[it.panel,it.wire].filter(Boolean).join(" · ")}</div>
-                    {it.notes&&<div style={{fontSize:11,color:"#92400e",marginTop:2}}>📝 {it.notes}</div>}
+                  <div style={{flex:1}}>
+                    <div style={{fontSize:13,fontWeight:500,color:"#1e293b"}}>{it.name||"Unnamed"}</div>
+                    <div style={{fontSize:11,color:"#94a3b8",display:"flex",gap:6}}>
+                      {it.panel&&<span>{it.panel}</span>}
+                      {it.wire&&<span>{it.wire}</span>}
+                      {it.wire&&HO_WIRE_AMPS[it.wire]&&<span style={{color:"#b45309",fontWeight:500}}>{HO_WIRE_AMPS[it.wire]}A</span>}
+                    </div>
+                    {it.notes&&<div style={{fontSize:11,color:"#64748b",marginTop:2}}>"{it.notes}"</div>}
                   </div>
                 </div>
               </div>
             ))}
             {(hoResponse.items||[]).filter(i=>!i.included).length>0&&(
               <>
-                <div style={{fontSize:11,fontWeight:700,color:"#94a3b8",letterSpacing:"0.08em",margin:"14px 0 8px"}}>
-                  NOT ON GENERATOR ({(hoResponse.items||[]).filter(i=>!i.included).length})
+                <div style={{fontSize:10,fontWeight:500,color:"#cbd5e1",letterSpacing:"0.08em",margin:"12px 0 8px"}}>
+                  NOT ON GENERATOR · {(hoResponse.items||[]).filter(i=>!i.included).length}
                 </div>
                 {(hoResponse.items||[]).filter(i=>!i.included).map((it,i)=>(
-                  <div key={it.id||i} style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:9,padding:"8px 12px",marginBottom:4,opacity:0.7}}>
-                    <div style={{fontSize:12,color:"#64748b"}}>{it.name||"Unnamed"}</div>
-                    <div style={{fontSize:10,color:"#94a3b8"}}>{[it.panel,it.wire].filter(Boolean).join(" · ")}</div>
+                  <div key={it.id||i} style={{border:"0.5px solid #f1f5f9",borderRadius:8,
+                    padding:"8px 12px",marginBottom:4,opacity:0.55}}>
+                    <div style={{fontSize:12,color:"#94a3b8"}}>{it.name||"Unnamed"}</div>
+                    <div style={{fontSize:11,color:"#cbd5e1",display:"flex",gap:6}}>
+                      {it.panel&&<span>{it.panel}</span>}
+                      {it.wire&&<span>{it.wire}</span>}
+                      {it.wire&&HO_WIRE_AMPS[it.wire]&&<span>{HO_WIRE_AMPS[it.wire]}A</span>}
+                    </div>
                   </div>
                 ))}
               </>
@@ -4307,50 +4330,51 @@ function deepMergeJob(remote, local) {
 
 // ── Homeowner Generator Load Selection Page ───────────────────
 function HomeownerPage({ jobId }) {
-  const [job,       setJob]       = useState(null);
-  const [items,     setItems]     = useState([]);
-  const [submitted, setSubmitted] = useState(false);
-  const [loading,   setLoading]   = useState(true);
-  const [submitting,setSubmitting]= useState(false);
-  const [error,     setError]     = useState(null);
+  const [job,        setJob]        = useState(null);
+  const [items,      setItems]      = useState([]);
+  const [submitted,  setSubmitted]  = useState(false);
+  const [loading,    setLoading]    = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error,      setError]      = useState(null);
+  const [signature,  setSignature]  = useState("");
+  const [sigError,   setSigError]   = useState(false);
   const dragIdx = useRef(null);
+
+  // Wire size → amps lookup
+  const WIRE_AMPS = {
+    "14/2":15,"14/3":15,"12/2":20,"12/3":20,"10/2":30,"10/3":30,
+    "8/2":40,"8/3":40,"6/2":50,"6/3":50,"4/2":70,"4/3":70,
+    "2/2":95,"2/3":95,"1/0":125,"2/0":150,"3/0":175,"4/0":200,
+  };
 
   useEffect(()=>{
     async function load() {
       try {
         const snap = await getDoc(doc(db,"jobs",jobId));
-        if(!snap.exists()) { setError("Job not found."); setLoading(false); return; }
+        if(!snap.exists()){ setError("Job not found."); setLoading(false); return; }
         const j = snap.data().data;
         setJob(j);
-        // Flatten all home run rows into a prioritized list
         const rows = [
           ...(j.homeRuns?.main||[]),
           ...(j.homeRuns?.upper||[]),
           ...(j.homeRuns?.basement||[]),
-        ].filter(r=>r.name||r.panel).map((r,i)=>({
-          ...r,
-          priority: i+1,
-          included: true,
-          notes: "",
-        }));
+        ].filter(r=>r.name||r.panel).map((r,i)=>({...r, priority:i+1, included:true, notes:""}));
         setItems(rows);
-        // Check if already submitted
         const reqSnap = await getDoc(doc(db,"homeowner_requests",jobId));
-        if(reqSnap.exists()&&reqSnap.data().submitted) {
+        if(reqSnap.exists()&&reqSnap.data().submitted){
           setSubmitted(true);
           const saved = reqSnap.data().items;
           if(saved) setItems(saved);
         }
-      } catch(e){ setError("Failed to load job data."); }
+      } catch(e){ setError("Failed to load. Please try again."); }
       setLoading(false);
     }
     load();
   },[jobId]);
 
-  const toggle = (id) => setItems(its=>its.map(it=>it.id===id?{...it,included:!it.included}:it));
+  const toggle   = (id) => setItems(its=>its.map(it=>it.id===id?{...it,included:!it.included}:it));
   const setNotes = (id,v) => setItems(its=>its.map(it=>it.id===id?{...it,notes:v}:it));
 
-  // Drag to reorder
   const onDragStart = (i) => { dragIdx.current = i; };
   const onDragOver  = (e,i) => {
     e.preventDefault();
@@ -4366,11 +4390,14 @@ function HomeownerPage({ jobId }) {
   const onDragEnd = () => { dragIdx.current=null; };
 
   const submit = async () => {
+    if(!signature.trim()){ setSigError(true); return; }
+    setSigError(false);
     setSubmitting(true);
     try {
       await setDoc(doc(db,"homeowner_requests",jobId),{
         jobId, jobName: job?.name||"", submitted:true,
         submittedAt: new Date().toISOString(),
+        signature: signature.trim(),
         items: items.map((it,i)=>({...it,priority:i+1})),
       });
       setSubmitted(true);
@@ -4378,138 +4405,191 @@ function HomeownerPage({ jobId }) {
     setSubmitting(false);
   };
 
-  const HE_GOLD = "#d97706";
-  const base = {fontFamily:"system-ui,sans-serif",minHeight:"100vh",background:"#f8fafc",color:"#0f172a"};
-
-  if(loading) return (
-    <div style={{...base,display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <div style={{fontSize:15,color:"#64748b"}}>Loading…</div>
-    </div>
-  );
-  if(error) return (
-    <div style={{...base,display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <div style={{fontSize:15,color:"#dc2626"}}>{error}</div>
-    </div>
-  );
-
-  if(submitted) return (
-    <div style={{...base,display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",padding:32,textAlign:"center"}}>
-      <div style={{fontSize:48,marginBottom:16}}>✅</div>
-      <div style={{fontSize:22,fontWeight:700,marginBottom:8}}>Thanks!</div>
-      <div style={{fontSize:15,color:"#64748b",maxWidth:340}}>
-        Your generator load selections have been received. Homestead Electric will be in touch soon.
-      </div>
-      <div style={{marginTop:32,fontSize:13,color:"#94a3b8"}}>Homestead Electric · homestead-electric.vercel.app</div>
-    </div>
-  );
-
+  const A = "#b45309";  // amber text
+  const AB = "#fef3c7"; // amber bg light
   const included = items.filter(it=>it.included);
   const excluded = items.filter(it=>!it.included);
 
+  const base = {fontFamily:"system-ui,-apple-system,sans-serif",minHeight:"100vh",
+    background:"#f8fafc",color:"#1e293b"};
+
+  const cardStyle = {background:"#fff",border:"0.5px solid #e2e8f0",borderRadius:10,
+    marginBottom:6,padding:"12px 14px"};
+
+  if(loading) return (
+    <div style={{...base,display:"flex",alignItems:"center",justifyContent:"center"}}>
+      <div style={{fontSize:14,color:"#94a3b8"}}>Loading…</div>
+    </div>
+  );
+  if(error) return (
+    <div style={{...base,display:"flex",alignItems:"center",justifyContent:"center",padding:32,textAlign:"center"}}>
+      <div style={{fontSize:14,color:"#dc2626"}}>{error}</div>
+    </div>
+  );
+  if(submitted) return (
+    <div style={{...base,display:"flex",flexDirection:"column",alignItems:"center",
+      justifyContent:"center",padding:40,textAlign:"center"}}>
+      <div style={{width:56,height:56,borderRadius:"50%",background:"#f0fdf4",
+        border:"0.5px solid #bbf7d0",display:"flex",alignItems:"center",
+        justifyContent:"center",fontSize:24,marginBottom:20}}>✓</div>
+      <div style={{fontSize:20,fontWeight:500,color:"#1e293b",marginBottom:8}}>Selections received</div>
+      <div style={{fontSize:14,color:"#64748b",maxWidth:320,lineHeight:1.6}}>
+        Thank you, <strong>{items[0]?.signature||signature||"homeowner"}</strong>. Homestead Electric has received your generator load selections and will be in touch to confirm the final plan.
+      </div>
+      <div style={{marginTop:40,fontSize:11,color:"#cbd5e1",letterSpacing:"0.06em"}}>HOMESTEAD ELECTRIC</div>
+    </div>
+  );
+
   return (
-    <div style={{...base,maxWidth:520,margin:"0 auto",padding:"0 0 60px 0"}}>
+    <div style={{...base,maxWidth:500,margin:"0 auto",padding:"0 0 80px"}}>
+
       {/* Header */}
-      <div style={{background:"#0f172a",padding:"20px 24px 16px",marginBottom:0}}>
-        <div style={{fontSize:11,color:HE_GOLD,fontWeight:700,letterSpacing:"0.1em",marginBottom:4}}>HOMESTEAD ELECTRIC</div>
-        <div style={{fontSize:20,fontWeight:700,color:"#fff",marginBottom:2}}>{job?.name||"Generator Load Selection"}</div>
-        <div style={{fontSize:13,color:"#94a3b8"}}>Select which circuits you'd like on your generator and drag to prioritize.</div>
+      <div style={{padding:"24px 20px 20px",borderBottom:"0.5px solid #e2e8f0"}}>
+        <div style={{fontSize:10,fontWeight:500,color:"#94a3b8",letterSpacing:"0.1em",marginBottom:6}}>HOMESTEAD ELECTRIC</div>
+        <div style={{fontSize:20,fontWeight:500,color:"#1e293b",marginBottom:4}}>{job?.name||"Generator load selection"}</div>
+        <div style={{fontSize:13,color:"#64748b",lineHeight:1.55}}>
+          A standby generator powers select circuits in your home during an outage — but not everything can run at once due to capacity limits. Review the circuits below, choose which ones matter most to you, and rank them by priority. Homestead Electric will use your selections to finalize the generator plan.
+        </div>
       </div>
 
-      {/* Instructions */}
-      <div style={{background:"#fffbeb",borderBottom:"1px solid #fde68a",padding:"12px 24px"}}>
-        <div style={{fontSize:12,color:"#92400e",lineHeight:1.5}}>
-          <strong>How it works:</strong> Toggle circuits on/off, drag to rank by priority (most important at top), add notes if needed, then tap Submit.
+      {/* How it works */}
+      <div style={{margin:"0 16px",marginTop:16,padding:"12px 14px",
+        background:AB,border:`0.5px solid #fde68a`,borderRadius:10}}>
+        <div style={{fontSize:12,fontWeight:500,color:A,marginBottom:4}}>How to complete this form</div>
+        <div style={{fontSize:12,color:"#92400e",lineHeight:1.6}}>
+          1. Toggle circuits off if you don't want them on the generator.<br/>
+          2. Drag the handle on the left to reorder — most important at the top.<br/>
+          3. Add a note to any circuit if helpful.<br/>
+          4. Sign your name at the bottom and tap Submit.
         </div>
       </div>
 
       <div style={{padding:"20px 16px 0"}}>
-        {/* Included circuits */}
-        <div style={{fontSize:11,fontWeight:700,color:"#64748b",letterSpacing:"0.08em",marginBottom:10,marginLeft:4}}>
-          ON GENERATOR ({included.length})
+
+        {/* ON GENERATOR */}
+        <div style={{fontSize:10,fontWeight:500,color:"#94a3b8",letterSpacing:"0.08em",marginBottom:10}}>
+          ON GENERATOR · {included.length} circuit{included.length!==1?"s":""}
         </div>
 
-        {items.map((it,i)=>(
-          it.included ? (
-            <div key={it.id}
-              draggable
-              onDragStart={()=>onDragStart(i)}
-              onDragOver={e=>onDragOver(e,i)}
-              onDragEnd={onDragEnd}
-              style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:12,
-                marginBottom:8,padding:"12px 14px",boxShadow:"0 1px 3px rgba(0,0,0,0.06)",
-                cursor:"grab",userSelect:"none"}}>
-              <div style={{display:"flex",alignItems:"center",gap:10}}>
-                {/* Drag handle */}
-                <div style={{color:"#cbd5e1",fontSize:16,flexShrink:0,cursor:"grab"}}>⠿</div>
-                {/* Priority badge */}
-                <div style={{background:HE_GOLD,color:"#fff",borderRadius:99,width:22,height:22,
-                  display:"flex",alignItems:"center",justifyContent:"center",
-                  fontSize:11,fontWeight:700,flexShrink:0}}>{i+1}</div>
-                {/* Load info */}
-                <div style={{flex:1,minWidth:0}}>
-                  <div style={{fontWeight:600,fontSize:14,marginBottom:1}}>{it.name||"Unnamed circuit"}</div>
-                  <div style={{fontSize:11,color:"#64748b"}}>{[it.panel,it.wire].filter(Boolean).join(" · ")}</div>
-                </div>
-                {/* Toggle off */}
-                <button onClick={()=>toggle(it.id)}
-                  style={{background:"#f1f5f9",border:"1px solid #e2e8f0",borderRadius:8,
-                    padding:"4px 10px",fontSize:11,cursor:"pointer",color:"#64748b",flexShrink:0}}>
-                  Remove
-                </button>
-              </div>
-              {/* Notes */}
-              <div style={{marginTop:8,marginLeft:32}}>
-                <input value={it.notes||""} onChange={e=>setNotes(it.id,e.target.value)}
-                  placeholder="Add a note (optional)…"
-                  style={{width:"100%",boxSizing:"border-box",border:"1px solid #e2e8f0",borderRadius:7,
-                    padding:"6px 10px",fontSize:12,fontFamily:"inherit",color:"#0f172a",background:"#f8fafc",outline:"none"}}/>
-              </div>
-            </div>
-          ) : null
-        ))}
-
         {included.length===0&&(
-          <div style={{textAlign:"center",padding:"20px 0",fontSize:13,color:"#94a3b8"}}>No circuits selected</div>
+          <div style={{textAlign:"center",padding:"24px 0",fontSize:13,color:"#94a3b8",
+            border:"0.5px dashed #e2e8f0",borderRadius:10,marginBottom:12}}>
+            No circuits selected — add some back below
+          </div>
         )}
 
-        {/* Excluded circuits */}
+        {items.map((it,i)=> it.included ? (
+          <div key={it.id}
+            draggable
+            onDragStart={()=>onDragStart(i)}
+            onDragOver={e=>onDragOver(e,i)}
+            onDragEnd={onDragEnd}
+            style={{...cardStyle,cursor:"grab",userSelect:"none"}}>
+            <div style={{display:"flex",alignItems:"center",gap:10}}>
+              {/* Drag handle */}
+              <div style={{color:"#cbd5e1",fontSize:15,flexShrink:0,lineHeight:1}}>⠿</div>
+              {/* Priority badge */}
+              <div style={{width:22,height:22,borderRadius:"50%",background:"#fef3c7",
+                border:"0.5px solid #fde68a",display:"flex",alignItems:"center",
+                justifyContent:"center",fontSize:10,fontWeight:500,color:A,flexShrink:0}}>
+                {i+1}
+              </div>
+              {/* Info */}
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:500,color:"#1e293b",marginBottom:2}}>
+                  {it.name||"Unnamed circuit"}
+                </div>
+                <div style={{fontSize:11,color:"#94a3b8",display:"flex",gap:8}}>
+                  {it.panel&&<span>{it.panel}</span>}
+                  {it.wire&&<span>{it.wire}</span>}
+                  {it.wire&&WIRE_AMPS[it.wire]&&(
+                    <span style={{color:A,fontWeight:500}}>{WIRE_AMPS[it.wire]}A</span>
+                  )}
+                </div>
+              </div>
+              <button onClick={()=>toggle(it.id)}
+                style={{background:"none",border:"0.5px solid #e2e8f0",borderRadius:7,
+                  padding:"4px 10px",fontSize:11,cursor:"pointer",color:"#94a3b8",
+                  flexShrink:0,fontFamily:"inherit"}}>
+                Remove
+              </button>
+            </div>
+            <div style={{marginTop:8,paddingLeft:32}}>
+              <input value={it.notes||""} onChange={e=>setNotes(it.id,e.target.value)}
+                placeholder="Add a note (optional)…"
+                style={{width:"100%",boxSizing:"border-box",border:"0.5px solid #e2e8f0",
+                  borderRadius:7,padding:"6px 10px",fontSize:12,fontFamily:"inherit",
+                  color:"#1e293b",background:"#f8fafc",outline:"none"}}/>
+            </div>
+          </div>
+        ) : null)}
+
+        {/* NOT ON GENERATOR */}
         {excluded.length>0&&(
           <>
-            <div style={{fontSize:11,fontWeight:700,color:"#94a3b8",letterSpacing:"0.08em",margin:"20px 4px 10px"}}>
-              NOT ON GENERATOR ({excluded.length})
+            <div style={{fontSize:10,fontWeight:500,color:"#cbd5e1",letterSpacing:"0.08em",
+              margin:"20px 0 10px"}}>
+              NOT ON GENERATOR · {excluded.length}
             </div>
-            {items.map((it,i)=>(
-              !it.included ? (
-                <div key={it.id}
-                  style={{background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:12,
-                    marginBottom:6,padding:"12px 14px",opacity:0.6}}>
-                  <div style={{display:"flex",alignItems:"center",gap:10}}>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{fontWeight:600,fontSize:13,marginBottom:1,color:"#64748b"}}>{it.name||"Unnamed circuit"}</div>
-                      <div style={{fontSize:11,color:"#94a3b8"}}>{[it.panel,it.wire].filter(Boolean).join(" · ")}</div>
+            {items.map((it,i)=> !it.included ? (
+              <div key={it.id}
+                style={{...cardStyle,opacity:0.6}}>
+                <div style={{display:"flex",alignItems:"center",gap:10}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,color:"#64748b",marginBottom:2}}>
+                      {it.name||"Unnamed circuit"}
                     </div>
-                    <button onClick={()=>toggle(it.id)}
-                      style={{background:"#fff",border:`1px solid ${HE_GOLD}`,borderRadius:8,
-                        padding:"4px 10px",fontSize:11,cursor:"pointer",color:HE_GOLD,flexShrink:0}}>
-                      Add back
-                    </button>
+                    <div style={{fontSize:11,color:"#94a3b8",display:"flex",gap:8}}>
+                      {it.panel&&<span>{it.panel}</span>}
+                      {it.wire&&<span>{it.wire}</span>}
+                      {it.wire&&WIRE_AMPS[it.wire]&&<span>{WIRE_AMPS[it.wire]}A</span>}
+                    </div>
                   </div>
+                  <button onClick={()=>toggle(it.id)}
+                    style={{background:"none",border:`0.5px solid #fde68a`,borderRadius:7,
+                      padding:"4px 10px",fontSize:11,cursor:"pointer",color:A,
+                      flexShrink:0,fontFamily:"inherit"}}>
+                    Add back
+                  </button>
                 </div>
-              ) : null
-            ))}
+              </div>
+            ) : null)}
           </>
         )}
 
+        {/* Signature */}
+        <div style={{marginTop:28,padding:"16px",background:"#fff",
+          border:`0.5px solid ${sigError?"#fca5a5":"#e2e8f0"}`,borderRadius:10}}>
+          <div style={{fontSize:12,fontWeight:500,color:"#1e293b",marginBottom:4}}>
+            Sign off on your selections
+          </div>
+          <div style={{fontSize:12,color:"#64748b",marginBottom:12,lineHeight:1.5}}>
+            By typing your full name below, you confirm these are the circuits you'd like included on your generator. Homestead Electric will use this as authorization to proceed with the plan.
+          </div>
+          <input
+            value={signature}
+            onChange={e=>{ setSignature(e.target.value); if(e.target.value.trim()) setSigError(false); }}
+            placeholder="Type your full name…"
+            style={{width:"100%",boxSizing:"border-box",border:`0.5px solid ${sigError?"#fca5a5":"#e2e8f0"}`,
+              borderRadius:7,padding:"10px 12px",fontSize:14,fontFamily:"Georgia,serif",
+              color:"#1e293b",background:"#f8fafc",outline:"none"}}/>
+          {sigError&&(
+            <div style={{fontSize:11,color:"#dc2626",marginTop:6}}>Please sign your name to submit.</div>
+          )}
+        </div>
+
         {/* Submit */}
         <button onClick={submit} disabled={submitting}
-          style={{width:"100%",marginTop:24,padding:"16px",background:submitting?"#94a3b8":HE_GOLD,
-            border:"none",borderRadius:12,color:"#fff",fontSize:16,fontWeight:700,
-            cursor:submitting?"not-allowed":"pointer",fontFamily:"inherit",
-            boxShadow:"0 2px 8px rgba(217,119,6,0.3)"}}>
-          {submitting?"Submitting…":"Submit My Selections"}
+          style={{width:"100%",marginTop:12,padding:"14px",
+            background:submitting?"#e2e8f0":"#1e293b",
+            border:"none",borderRadius:10,
+            color:submitting?"#94a3b8":"#fff",
+            fontSize:14,fontWeight:500,cursor:submitting?"not-allowed":"pointer",
+            fontFamily:"inherit",letterSpacing:"0.01em"}}>
+          {submitting?"Submitting…":"Submit my selections"}
         </button>
-        <div style={{textAlign:"center",marginTop:12,fontSize:11,color:"#94a3b8"}}>
-          Homestead Electric · homestead-electric.vercel.app
+        <div style={{textAlign:"center",marginTop:14,fontSize:10,color:"#cbd5e1",letterSpacing:"0.08em"}}>
+          HOMESTEAD ELECTRIC
         </div>
       </div>
     </div>
