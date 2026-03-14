@@ -62,6 +62,37 @@ const C = {
 
 const JOB_ID = "homestead-jobs-v1";
 
+const ROUGH_STATUSES = [
+  {value:"",          label:"— set status —",       color:null},
+  {value:"ready",     label:"Ready to Start",        color:"#ca8a04"},
+  {value:"scheduled", label:"Scheduled",             color:"#2563eb", hasDate:true},
+  {value:"waiting",   label:"Waiting on Items",      color:"#ca8a04", dashed:true},
+  {value:"inprogress",label:"In Progress",           color:"#7dd3fc"},
+  {value:"invoice",   label:"Ready to Invoice",      color:"#ea580c"},
+  {value:"complete",  label:"Complete",              color:"#22c55e"},
+];
+const FINISH_STATUSES = ROUGH_STATUSES;
+const CO_STATUSES_NEW = [
+  {value:"pending",   label:"Pending",               color:"#ca8a04"},
+  {value:"scheduled", label:"Scheduled",             color:"#2563eb", hasDate:true},
+  {value:"completed", label:"Work Completed",        color:"#22c55e"},
+  {value:"denied",    label:"Denied",                color:"#dc2626"},
+];
+const RT_STATUSES = [
+  {value:"",          label:"— set status —",        color:null},
+  {value:"needs",     label:"Needs to be Scheduled", color:"#dc2626", hasDate:true},
+  {value:"scheduled", label:"Scheduled",             color:"#8b5cf6", hasDate:true},
+  {value:"complete",  label:"Complete",              color:"#22c55e"},
+];
+const QC_STATUSES = [
+  {value:"",          label:"— set status —",        color:null},
+  {value:"scheduled", label:"QC Scheduled",          color:"#2563eb", hasDate:true},
+  {value:"completed", label:"QC Completed",          color:"#8b5cf6", hasDate:true},
+  {value:"pass",      label:"QC Pass",               color:"#22c55e"},
+  {value:"fail",      label:"QC Fail",               color:"#dc2626"},
+];
+const getStatusDef = (arr, val) => arr.find(x=>x.value===val)||{};
+
 const PREP_STAGES   = ['Redline Walk Scheduled','Redline Walk Completed','Redline CO Doc Made','Redline Plans Made','Redline CO Sent','Redline CO Signed','Redline Plans Need to be Updated','Job Prep Complete'];
 const PREP_STAGE_ALERT = 'Redline Plans Need to be Updated';
 
@@ -173,7 +204,7 @@ const blankJob = () => ({
 
   uploadedFiles:[],
 
-  prepStage:"", roughStage:"0%", finishStage:"0%", roughScheduled:false, finishScheduled:false, prepStartDate:"", finishStartDate:"", roughQuestions:{ upper:[], main:[], basement:[] },
+  prepStage:"", roughStage:"0%", finishStage:"0%", roughScheduled:false, finishScheduled:false, roughScheduledDate:"", finishScheduledDate:"", prepStartDate:"", finishStartDate:"", roughQuestions:{ upper:[], main:[], basement:[] },
 
   roughPunch:emptyPunch(), roughMaterials:[], roughUpdates:[], roughNotes:"",
 
@@ -185,7 +216,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], readyToSchedule:false, readyToInvoice:false, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"",
+  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", finishStatus:"", finishStatusDate:"", qcStatus:"", qcStatusDate:"", readyToSchedule:false, readyToInvoice:false, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"",
 
   homeRuns:{
 
@@ -1758,32 +1789,28 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
               <span style={{fontSize:12,color:C.purple,fontWeight:700}}>Return Trip</span>
               {!t.signedOff&&(
                 <>
-                  <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                    <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
-                      <input type="checkbox" checked={!!t.needsSchedule}
-                        onChange={e=>upd(t.id,{needsSchedule:e.target.checked,rtScheduled:e.target.checked?false:t.rtScheduled})}
-                        style={{accentColor:"#dc2626",width:13,height:13}}/>
-                      <span style={{fontSize:11,color:t.needsSchedule?"#dc2626":C.dim,fontWeight:t.needsSchedule?700:400}}>Needs to be scheduled</span>
-                    </label>
-                    {t.needsSchedule&&(
-                      <Inp value={t.needsScheduleDate||""} onChange={e=>upd(t.id,{needsScheduleDate:e.target.value})}
-                        placeholder="By when? MM/DD/YY"
-                        style={{width:130,fontSize:11,borderColor:"#dc262655",background:"rgba(220,38,38,0.05)"}}/>
-                    )}
-                  </div>
-                  <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                    <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
-                      <input type="checkbox" checked={!!t.rtScheduled}
-                        onChange={e=>upd(t.id,{rtScheduled:e.target.checked,needsSchedule:e.target.checked?false:t.needsSchedule})}
-                        style={{accentColor:"#8b5cf6",width:13,height:13}}/>
-                      <span style={{fontSize:11,color:t.rtScheduled?"#8b5cf6":C.dim,fontWeight:t.rtScheduled?700:400}}>Scheduled</span>
-                    </label>
-                    {t.rtScheduled&&(
-                      <Inp value={t.scheduledDate||""} onChange={e=>upd(t.id,{scheduledDate:e.target.value})}
-                        placeholder="Date MM/DD/YY"
-                        style={{width:130,fontSize:11,borderColor:"#8b5cf655",background:"rgba(139,92,246,0.05)"}}/>
-                    )}
-                  </div>
+                  {(()=>{
+                    const rtDef = getStatusDef(RT_STATUSES, t.rtStatus||"");
+                    return (
+                      <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                        <select value={t.rtStatus||""} onChange={e=>{
+                          const v=e.target.value;
+                          upd(t.id,{rtStatus:v,rtScheduled:v==="scheduled",needsSchedule:v==="needs",
+                            rtStatusDate:getStatusDef(RT_STATUSES,v).hasDate?t.rtStatusDate:""});
+                        }} style={{background:rtDef.color?`${rtDef.color}18`:C.surface,
+                          color:rtDef.color||C.dim,border:`1px solid ${rtDef.color||C.border}`,
+                          borderRadius:7,padding:"5px 8px",fontSize:11,fontFamily:"inherit",
+                          fontWeight:rtDef.color?700:400,outline:"none",cursor:"pointer"}}>
+                          {RT_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+                        </select>
+                        {rtDef.hasDate&&(
+                          <Inp value={t.rtStatusDate||""} onChange={e=>upd(t.id,{rtStatusDate:e.target.value})}
+                            placeholder="Date MM/DD/YY"
+                            style={{width:120,fontSize:11,borderColor:rtDef.color+"55",background:`${rtDef.color}08`}}/>
+                        )}
+                      </div>
+                    );
+                  })()}
                 </>
               )}
             </div>
@@ -3498,32 +3525,35 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
             <div>
 
-              <div style={{marginBottom:12,padding:"10px 14px",
-                background:job.roughOnHold?"rgba(234,179,8,0.10)":"rgba(100,116,139,0.06)",
-                border:`1px solid ${job.roughOnHold?"#ca8a04":"#e2e8f0"}`,borderRadius:9}}>
-                <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
-                  <input type="checkbox" checked={!!job.roughOnHold}
-                    onChange={e=>u({roughOnHold:e.target.checked})}
-                    style={{accentColor:"#ca8a04",width:16,height:16}}/>
-                  <span style={{fontSize:13,color:job.roughOnHold?"#ca8a04":C.text,fontWeight:job.roughOnHold?700:400}}>
-                    Waiting on items before return
-                    {job.roughOnHold&&<span style={{fontSize:11,color:"#ca8a04",marginLeft:6}}>— job moved to On Hold section</span>}
-                  </span>
-                </label>
-              </div>
-
               <Section label="Rough Stage" color={C.rough} defaultOpen={true}>
-
-                <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",marginBottom:10}}>
-                  <input type="checkbox" checked={!!job.roughScheduled}
-                    onChange={e=>u({roughScheduled:e.target.checked,readyToSchedule:e.target.checked?false:job.readyToSchedule})}
-                    style={{accentColor:C.rough,width:15,height:15}}/>
-                  <span style={{fontSize:13,color:job.roughScheduled?C.rough:C.text,fontWeight:job.roughScheduled?700:400}}>
-                    Rough scheduled
-                    {job.roughScheduled&&<span style={{fontSize:11,color:C.rough,marginLeft:6}}>— moves job to Rough In Progress</span>}
-                  </span>
-                </label>
-                <Sel value={job.roughStage} onChange={e=>u({roughStage:e.target.value,roughScheduled:parseInt(e.target.value)>0?false:job.roughScheduled})} options={ROUGH_STAGES}/>
+                {(()=>{
+                  const rsDef = getStatusDef(ROUGH_STATUSES, job.roughStatus);
+                  return (
+                    <div style={{marginBottom:12}}>
+                      <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
+                      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                        <select value={job.roughStatus||""} onChange={e=>{
+                          const v=e.target.value;
+                          const def=getStatusDef(ROUGH_STATUSES,v);
+                          u({roughStatus:v, roughOnHold:v==="waiting", roughScheduled:v==="scheduled",
+                            roughStatusDate:def.hasDate?job.roughStatusDate:"",
+                            readyToInvoice:v==="invoice"?true:(job.roughStatus==="invoice"?false:job.readyToInvoice)});
+                        }} style={{background:rsDef.color?`${rsDef.color}18`:C.surface,
+                          color:rsDef.color||C.dim, border:`1px solid ${rsDef.color||C.border}`,
+                          borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
+                          fontWeight:rsDef.color?700:400,outline:"none",cursor:"pointer"}}>
+                          {ROUGH_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+                        </select>
+                        {rsDef.hasDate&&(
+                          <Inp value={job.roughStatusDate||""} onChange={e=>u({roughStatusDate:e.target.value})}
+                            placeholder="Date MM/DD/YY"
+                            style={{width:130,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+                <Sel value={job.roughStage} onChange={e=>u({roughStage:e.target.value})} options={ROUGH_STAGES}/>
 
                 <div style={{marginTop:8,marginBottom:20}}>
 
@@ -3581,32 +3611,35 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
             <div>
 
-              <div style={{marginBottom:12,padding:"10px 14px",
-                background:job.finishOnHold?"rgba(234,179,8,0.10)":"rgba(100,116,139,0.06)",
-                border:`1px solid ${job.finishOnHold?"#ca8a04":"#e2e8f0"}`,borderRadius:9}}>
-                <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
-                  <input type="checkbox" checked={!!job.finishOnHold}
-                    onChange={e=>u({finishOnHold:e.target.checked})}
-                    style={{accentColor:"#ca8a04",width:16,height:16}}/>
-                  <span style={{fontSize:13,color:job.finishOnHold?"#ca8a04":C.text,fontWeight:job.finishOnHold?700:400}}>
-                    Waiting on items before return
-                    {job.finishOnHold&&<span style={{fontSize:11,color:"#ca8a04",marginLeft:6}}>— job moved to On Hold section</span>}
-                  </span>
-                </label>
-              </div>
-
-
               <Section label="Finish Stage" color={C.finish} defaultOpen={true}>
-                <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",marginBottom:10}}>
-                  <input type="checkbox" checked={!!job.finishScheduled}
-                    onChange={e=>u({finishScheduled:e.target.checked,readyToSchedule:e.target.checked?false:job.readyToSchedule})}
-                    style={{accentColor:C.finish,width:15,height:15}}/>
-                  <span style={{fontSize:13,color:job.finishScheduled?C.finish:C.text,fontWeight:job.finishScheduled?700:400}}>
-                    Finish scheduled
-                    {job.finishScheduled&&<span style={{fontSize:11,color:C.finish,marginLeft:6}}>— moves job to Finish In Progress</span>}
-                  </span>
-                </label>
-                <Sel value={job.finishStage} onChange={e=>u({finishStage:e.target.value,finishScheduled:parseInt(e.target.value)>0?false:job.finishScheduled})} options={FINISH_STAGES}/>
+                {(()=>{
+                  const fsDef = getStatusDef(FINISH_STATUSES, job.finishStatus);
+                  return (
+                    <div style={{marginBottom:12}}>
+                      <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
+                      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                        <select value={job.finishStatus||""} onChange={e=>{
+                          const v=e.target.value;
+                          const def=getStatusDef(FINISH_STATUSES,v);
+                          u({finishStatus:v, finishOnHold:v==="waiting", finishScheduled:v==="scheduled",
+                            finishStatusDate:def.hasDate?job.finishStatusDate:"",
+                            readyToInvoice:v==="invoice"?true:(job.finishStatus==="invoice"?false:job.readyToInvoice)});
+                        }} style={{background:fsDef.color?`${fsDef.color}18`:C.surface,
+                          color:fsDef.color||C.dim, border:`1px solid ${fsDef.color||C.border}`,
+                          borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
+                          fontWeight:fsDef.color?700:400,outline:"none",cursor:"pointer"}}>
+                          {FINISH_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+                        </select>
+                        {fsDef.hasDate&&(
+                          <Inp value={job.finishStatusDate||""} onChange={e=>u({finishStatusDate:e.target.value})}
+                            placeholder="Date MM/DD/YY"
+                            style={{width:130,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })()}
+                <Sel value={job.finishStage} onChange={e=>u({finishStage:e.target.value})} options={FINISH_STAGES}/>
                 <div style={{marginTop:8,marginBottom:20}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
               </Section>
 
@@ -3851,6 +3884,30 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
           {tab==="QC"&&(
 
             <div>
+              {(()=>{
+                const qcDef = getStatusDef(QC_STATUSES, job.qcStatus||"");
+                return (
+                  <div style={{marginBottom:16,padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
+                    <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>QC STATUS</div>
+                    <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                      <select value={job.qcStatus||""} onChange={e=>{
+                        const v=e.target.value;
+                        u({qcStatus:v,qcStatusDate:getStatusDef(QC_STATUSES,v).hasDate?job.qcStatusDate:""});
+                      }} style={{background:qcDef.color?`${qcDef.color}18`:C.surface,
+                        color:qcDef.color||C.dim,border:`1px solid ${qcDef.color||C.border}`,
+                        borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
+                        fontWeight:qcDef.color?700:400,outline:"none",cursor:"pointer"}}>
+                        {QC_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+                      </select>
+                      {qcDef.hasDate&&(
+                        <Inp value={job.qcStatusDate||""} onChange={e=>u({qcStatusDate:e.target.value})}
+                          placeholder="Date MM/DD/YY"
+                          style={{width:130,fontSize:12,borderColor:qcDef.color+"55",background:`${qcDef.color}08`}}/>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
 
               <Section label="QC Walk Checklist" color={C.teal} defaultOpen={true}>
                 <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }}/>
@@ -3971,34 +4028,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                     </div>
                   )}
                 </div>
-                <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
-                  {(()=>{
-                    const r2=parseStage(job.roughStage);
-                    const f2=parseStage(job.finishStage);
-                    const rtsActive = job.readyToSchedule && (r2===0||(r2===100&&f2===0));
-                    const rtsApplicable = r2===0||(r2===100&&f2===0);
-                    return (<>
-                      <input type="checkbox"
-                        checked={!!job.readyToSchedule && rtsApplicable}
-                        disabled={!rtsApplicable}
-                        onChange={e=>u({readyToSchedule:e.target.checked})}
-                        style={{accentColor:"#ca8a04",width:16,height:16,opacity:rtsApplicable?1:0.35,cursor:rtsApplicable?"pointer":"not-allowed"}}/>
-                      <span style={{fontSize:13,color:rtsActive?"#ca8a04":rtsApplicable?C.text:C.muted,fontWeight:rtsActive?600:400}}>
-                        Ready to schedule
-                        {rtsActive&&<span style={{fontSize:11,color:"#ca8a04",marginLeft:6}}>— job card highlighted yellow</span>}
-                        {!rtsApplicable&&<span style={{fontSize:11,color:C.muted,marginLeft:6}}>— only available before rough or in between</span>}
-                      </span>
-                    </>);
-                  })()}
-                </label>
-                <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
-                  <input type="checkbox" checked={!!job.readyToInvoice} onChange={e=>u({readyToInvoice:e.target.checked})}
-                    style={{accentColor:"#ea580c",width:16,height:16}}/>
-                  <span style={{fontSize:13,color:job.readyToInvoice?"#ea580c":C.text,fontWeight:job.readyToInvoice?700:400}}>
-                    Ready to invoice
-                    {job.readyToInvoice&&<span style={{fontSize:11,color:"#ea580c",marginLeft:6}}>— job card highlighted orange</span>}
-                  </span>
-                </label>
+
 
               </div>
 
@@ -4512,33 +4542,35 @@ function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
 
 const STAGE_SECTIONS = [
 
-  { key:"prep",       label:"Pre Job Prep",       color:"#0d9488",
+  { key:"prep",         label:"Pre Job Prep",              color:"#0d9488",
+    test: j => j.prepStage !== "Job Prep Complete" },
 
-    test: j => { const r=parseStage(j.roughStage); return r===0; } },
+  { key:"roughNotStarted", label:"Rough — Not Started",   color:"#64748b",
+    test: j => j.prepStage === "Job Prep Complete" && (!j.roughStatus || j.roughStatus === "ready") },
 
-  { key:"roughHold", label:"Rough — On Hold",     color:"#ca8a04",
+  { key:"roughHold",    label:"Rough — On Hold",           color:"#ca8a04",
+    test: j => j.roughStatus === "waiting" },
 
-    test: j => { const r=parseInt(j.roughStage)||0; const f=parseInt(j.finishStage)||0; return (r>0||j.roughScheduled) && r<100 && f===0 && !j.finishScheduled && !!j.roughOnHold; } },
+  { key:"rough",        label:"Rough In Progress",         color:"#2563eb",
+    test: j => j.roughStatus === "scheduled" || j.roughStatus === "inprogress" },
 
-  { key:"rough",    label:"Rough In Progress",  color:"#2563eb",
+  { key:"roughInvoice", label:"Rough — Ready to Invoice",  color:"#ea580c",
+    test: j => j.roughStatus === "invoice" },
 
-    test: j => { const r=parseInt(j.roughStage)||0; const f=parseInt(j.finishStage)||0; return (r>0||j.roughScheduled) && r<100 && f===0 && !j.finishScheduled && !j.roughOnHold; } },
+  { key:"between",      label:"In Between",                color:"#e8a020",
+    test: j => j.roughStatus === "complete" && (!j.finishStatus || j.finishStatus === "ready") },
 
-  { key:"between",  label:"In Between",          color:"#e8a020",
+  { key:"finishHold",   label:"Finish — On Hold",          color:"#ca8a04",
+    test: j => j.finishStatus === "waiting" },
 
-    test: j => { const r=parseInt(j.roughStage)||0; const f=parseInt(j.finishStage)||0; return r===100 && f===0 && !j.finishScheduled; } },
+  { key:"finish",       label:"Finish In Progress",        color:"#0ea5e9",
+    test: j => j.finishStatus === "scheduled" || j.finishStatus === "inprogress" },
 
-  { key:"finishHold", label:"Finish — On Hold",     color:"#ca8a04",
+  { key:"finishInvoice",label:"Finish — Ready to Invoice", color:"#ea580c",
+    test: j => j.finishStatus === "invoice" },
 
-    test: j => { const f=parseInt(j.finishStage)||0; return (f>0||j.finishScheduled) && f<100 && !!j.finishOnHold; } },
-
-  { key:"finish",   label:"Finish In Progress",  color:"#0ea5e9",
-
-    test: j => { const f=parseStage(j.finishStage); return f>0 && f<100 && !j.finishOnHold; } },
-
-  { key:"complete", label:"Completed",           color:"#22c55e",
-
-    test: j => parseStage(j.finishStage)===100 },
+  { key:"complete",     label:"Completed",                 color:"#22c55e",
+    test: j => j.finishStatus === "complete" },
 
 ];
 
@@ -5416,18 +5448,23 @@ function App() {
 
     const rowFc = fc || FOREMEN_COLORS[foreman];
 
-    const hasRT     = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
-    const hasRTSch  = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
-    const prepAlert = job.prepStage===PREP_STAGE_ALERT;
-    const roughHold  = !!job.roughOnHold;
-    const finishHold = !!job.finishOnHold;
-    const _r = parseStage(job.roughStage);
-    const _f = parseStage(job.finishStage);
-    const rts = job.readyToSchedule && (_r===0 || (_r===100 && _f===0));
-    const onHold    = roughHold||finishHold;
-    const rowBg    = job.readyToInvoice?"rgba(234,88,12,0.10)":(hasRT||prepAlert)?"rgba(220,38,38,0.18)":hasRTSch?"rgba(139,92,246,0.10)":(roughHold||finishHold)?"rgba(234,179,8,0.12)":rts?"rgba(234,179,8,0.18)":C.card;
-    const rowLbord = job.readyToInvoice?"#ea580c":(hasRT||prepAlert)?"#dc2626":hasRTSch?"#8b5cf6":onHold?"#ca8a04":rts?"#ca8a04":rowFc;
-    const rowBord  = job.readyToInvoice?"2px solid #ea580c":(hasRT||prepAlert)?"2px solid #dc2626":hasRTSch?"2px solid #8b5cf6":onHold?"1px dashed #ca8a04":rts?"2px solid #ca8a04":`1px solid ${C.border}`;
+    const hasRT      = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
+    const hasRTSch   = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
+    const prepAlert  = job.prepStage===PREP_STAGE_ALERT;
+    const rs = job.roughStatus||"";
+    const fs = job.finishStatus||"";
+    const isInvoice  = rs==="invoice"||fs==="invoice";
+    const isWaiting  = rs==="waiting"||fs==="waiting";
+    const isSched    = rs==="scheduled"||fs==="scheduled";
+    const isReady    = rs==="ready"||fs==="ready";
+    // Priority: red alerts > RT scheduled > invoice > waiting > scheduled > ready
+    const priority = (hasRT||prepAlert)?"red":hasRTSch?"purple":isInvoice?"invoice":isWaiting?"hold":isSched?"sched":isReady?"ready":"none";
+    const BG    = {red:"rgba(220,38,38,0.18)",purple:"rgba(139,92,246,0.10)",invoice:"rgba(234,88,12,0.10)",hold:"rgba(234,179,8,0.12)",sched:"rgba(37,99,235,0.08)",ready:"rgba(202,138,4,0.08)",none:C.card};
+    const LBORD = {red:"#dc2626",purple:"#8b5cf6",invoice:"#ea580c",hold:"#ca8a04",sched:"#2563eb",ready:"#ca8a04",none:rowFc};
+    const BORD  = {red:"2px solid #dc2626",purple:"2px solid #8b5cf6",invoice:"2px solid #ea580c",hold:"1px dashed #ca8a04",sched:"1px dashed #2563eb",ready:"1px dashed #ca8a04",none:`1px solid ${C.border}`};
+    const rowBg    = BG[priority];
+    const rowLbord = LBORD[priority];
+    const rowBord  = BORD[priority];
 
     return (
 
@@ -5496,8 +5533,8 @@ function App() {
             {hasRT&&<Pill label="Return trip needed" color="#dc2626"/>}
             {prepAlert&&<Pill label="Redline plans need update" color="#dc2626"/>}
             {hasRTSch&&!hasRT&&<Pill label="Return trip scheduled" color="#8b5cf6"/>}
-            {onHold&&<Pill label="Waiting on items" color="#ca8a04"/>}
-            {!hasRT&&!hasRTSch&&rts&&<Pill label="Ready to schedule" color="#ca8a04"/>}
+            {rs&&<Pill label={rs==="scheduled"&&job.roughStatusDate?"Rough: "+job.roughStatusDate:("Rough: "+(getStatusDef(ROUGH_STATUSES,rs).label||rs))} color={getStatusDef(ROUGH_STATUSES,rs).color||C.dim}/>}
+            {fs&&<Pill label={fs==="scheduled"&&job.finishStatusDate?"Finish: "+job.finishStatusDate:("Finish: "+(getStatusDef(FINISH_STATUSES,fs).label||fs))} color={getStatusDef(FINISH_STATUSES,fs).color||C.dim}/>}
             {open>0   &&<Pill label={`${open} open`} color={C.red}/>}
 
             {pendCO>0 &&<Pill label={`${pendCO} CO`} color={C.orange}/>}
@@ -5969,11 +6006,15 @@ function App() {
                     {prepJobs.map(job=>{
                       const stageIdx = PREP_STAGES.indexOf(job.prepStage);
                       const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
-                      const dHasRT   = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
-                      const dHasRTSch = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
+                      const dHasRT    = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtStatus!=="complete"&&(r.scope||r.rtStatusDate));
+                      const dHasRTSch  = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtStatus==="scheduled");
                       const dPrepAlert = job.prepStage===PREP_STAGE_ALERT;
-                      const dRoughHold  = !!job.roughOnHold;
-                      const dFinishHold = !!job.finishOnHold;
+                      const dRS = job.roughStatus||"";
+                      const dFS = job.finishStatus||"";
+                      const dIsInvoice = dRS==="invoice"||dFS==="invoice";
+                      const dIsWaiting = dRS==="waiting"||dFS==="waiting";
+                      const dIsSched   = dRS==="scheduled"||dFS==="scheduled";
+                      const dIsReady   = dRS==="ready"||dFS==="ready";
                       const dOnHold     = dRoughHold||dFinishHold;
                       const dRTS   = job.readyToSchedule&&(parseStage(job.roughStage))===0;
                       const dInv   = !!job.readyToInvoice;
@@ -6002,6 +6043,8 @@ function App() {
                               {dOnHold&&<span style={{background:"rgba(234,179,8,0.15)",border:"1px dashed #ca8a04",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ca8a04",fontWeight:700,whiteSpace:"nowrap"}}>Waiting on items</span>}
                               {!dHasRT&&dRTS&&<span style={{background:"rgba(234,179,8,0.2)",border:"1px solid #ca8a04",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ca8a04",fontWeight:700,whiteSpace:"nowrap"}}>Ready to schedule</span>}
                               {job.readyToInvoice&&<span style={{background:"rgba(234,88,12,0.15)",border:"1px solid #ea580c",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ea580c",fontWeight:700,whiteSpace:"nowrap"}}>Ready to invoice</span>}
+                              {dRS&&<span style={{background:`${getStatusDef(ROUGH_STATUSES,dRS).color||"#888"}18`,border:`1px solid ${getStatusDef(ROUGH_STATUSES,dRS).color||"#888"}`,borderRadius:99,padding:"2px 8px",fontSize:9,color:getStatusDef(ROUGH_STATUSES,dRS).color||"#888",fontWeight:700,whiteSpace:"nowrap"}}>{"Rough: "+(dRS==="scheduled"&&job.roughStatusDate?job.roughStatusDate:getStatusDef(ROUGH_STATUSES,dRS).label||dRS)}</span>}
+                              {dFS&&<span style={{background:`${getStatusDef(FINISH_STATUSES,dFS).color||"#888"}18`,border:`1px solid ${getStatusDef(FINISH_STATUSES,dFS).color||"#888"}`,borderRadius:99,padding:"2px 8px",fontSize:9,color:getStatusDef(FINISH_STATUSES,dFS).color||"#888",fontWeight:700,whiteSpace:"nowrap"}}>{"Finish: "+(dFS==="scheduled"&&job.finishStatusDate?job.finishStatusDate:getStatusDef(FINISH_STATUSES,dFS).label||dFS)}</span>}
                               {job.prepStartDate&&(
                                 <div style={{background:`${C.teal}18`,border:`1px solid ${C.teal}33`,
                                   borderRadius:8,padding:"4px 10px",fontSize:11,color:C.teal,
@@ -6063,11 +6106,15 @@ function App() {
                     {roughJobs.map(job=>{
                       const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
                       const pct = parseStage(job.roughStage);
-                      const dHasRT   = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
-                      const dHasRTSch = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
+                      const dHasRT    = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtStatus!=="complete"&&(r.scope||r.rtStatusDate));
+                      const dHasRTSch  = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtStatus==="scheduled");
                       const dPrepAlert = job.prepStage===PREP_STAGE_ALERT;
-                      const dRoughHold  = !!job.roughOnHold;
-                      const dFinishHold = !!job.finishOnHold;
+                      const dRS = job.roughStatus||"";
+                      const dFS = job.finishStatus||"";
+                      const dIsInvoice = dRS==="invoice"||dFS==="invoice";
+                      const dIsWaiting = dRS==="waiting"||dFS==="waiting";
+                      const dIsSched   = dRS==="scheduled"||dFS==="scheduled";
+                      const dIsReady   = dRS==="ready"||dFS==="ready";
                       const dOnHold     = dRoughHold||dFinishHold;
                       const dInv2  = !!job.readyToInvoice;
                       const dBg    = dInv2?"rgba(234,88,12,0.12)":(dHasRT||dPrepAlert)?"rgba(220,38,38,0.15)":dHasRTSch?"rgba(139,92,246,0.10)":dOnHold?"rgba(234,179,8,0.12)":C.card;
@@ -6140,11 +6187,15 @@ function App() {
                       const inFinish=f>0;
                       const stageColor=inFinish?C.finish:C.orange;
                       const stageLabel=inFinish?`Finish ${f}%`:(r===100?"In Between":`Rough ${r}%`);
-                      const dHasRT   = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
-                      const dHasRTSch = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
+                      const dHasRT    = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtStatus!=="complete"&&(r.scope||r.rtStatusDate));
+                      const dHasRTSch  = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtStatus==="scheduled");
                       const dPrepAlert = job.prepStage===PREP_STAGE_ALERT;
-                      const dRoughHold  = !!job.roughOnHold;
-                      const dFinishHold = !!job.finishOnHold;
+                      const dRS = job.roughStatus||"";
+                      const dFS = job.finishStatus||"";
+                      const dIsInvoice = dRS==="invoice"||dFS==="invoice";
+                      const dIsWaiting = dRS==="waiting"||dFS==="waiting";
+                      const dIsSched   = dRS==="scheduled"||dFS==="scheduled";
+                      const dIsReady   = dRS==="ready"||dFS==="ready";
                       const dOnHold     = dRoughHold||dFinishHold;
                       const dRTS   = job.readyToSchedule&&(parseStage(job.roughStage))===100&&(parseStage(job.finishStage))===0;
                       const dInv3  = !!job.readyToInvoice;
@@ -6374,7 +6425,7 @@ function App() {
               <>
               <StageSectionList jobs={filtered} JobRow={JobRow} fc={FOREMEN_COLORS[activeForeman]}/>
               {(()=>{
-                const invoiceJobs = filtered.filter(j=>j.readyToInvoice);
+                const invoiceJobs = filtered.filter(j=>j.roughStatus==="invoice"||j.finishStatus==="invoice");
                 return invoiceJobs.length>0?(
                   <div style={{marginTop:8,marginBottom:20}}>
                     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,padding:"10px 14px",
