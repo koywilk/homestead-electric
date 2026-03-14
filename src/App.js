@@ -1379,8 +1379,6 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
             <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
 
-              <Pill label={o.status} color={sc[o.status]||C.dim}/>
-
               <Btn onClick={()=>emailCO(o,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>✉ Email CO</Btn>
 
               <button onClick={()=>del(o.id)}
@@ -1388,43 +1386,30 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
                 style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
 
             </div>
-            <div style={{display:"flex",gap:12,marginTop:8,flexWrap:"wrap"}}>
-              <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
-                  <input type="checkbox" checked={!!o.needsSchedule}
-                    onChange={e=>upd(o.id,{needsSchedule:e.target.checked,coScheduled:e.target.checked?false:o.coScheduled})}
-                    style={{accentColor:"#dc2626",width:13,height:13}}/>
-                  <span style={{fontSize:11,color:o.needsSchedule?"#dc2626":C.dim,fontWeight:o.needsSchedule?700:400}}>Needs to be scheduled</span>
-                </label>
-                {o.needsSchedule&&(
-                  <Inp value={o.needsScheduleDate||""} onChange={e=>upd(o.id,{needsScheduleDate:e.target.value})}
-                    placeholder="By when? MM/DD/YY"
-                    style={{width:130,fontSize:11,borderColor:"#dc262655",background:"rgba(220,38,38,0.05)"}}/>
-                )}
-              </div>
-              <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-                <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
-                  <input type="checkbox" checked={!!o.coScheduled}
-                    onChange={e=>upd(o.id,{coScheduled:e.target.checked,needsSchedule:e.target.checked?false:o.needsSchedule})}
-                    style={{accentColor:"#16a34a",width:13,height:13}}/>
-                  <span style={{fontSize:11,color:o.coScheduled?"#16a34a":C.dim,fontWeight:o.coScheduled?700:400}}>Scheduled</span>
-                </label>
-                {o.coScheduled&&(
-                  <Inp value={o.scheduledDate||""} onChange={e=>upd(o.id,{scheduledDate:e.target.value})}
-                    placeholder="Date MM/DD/YY"
-                    style={{width:130,fontSize:11,borderColor:"#16a34a55",background:"rgba(22,163,74,0.05)"}}/>
-                )}
-              </div>
-            </div>
-
           </div>
 
           <div style={{marginBottom:8}}>
-
-              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Status</div>
-
-              <Sel value={o.status} onChange={e=>upd(o.id,{status:e.target.value})} options={CO_STATUSES}/>
-
+            {(()=>{
+              const coDef = getStatusDef(CO_STATUSES_NEW, o.coStatus||"pending");
+              return (
+                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                  <select value={o.coStatus||"pending"} onChange={e=>{
+                    const v=e.target.value;
+                    upd(o.id,{coStatus:v,coStatusDate:getStatusDef(CO_STATUSES_NEW,v).hasDate?o.coStatusDate:""});
+                  }} style={{background:coDef.color?`${coDef.color}18`:C.surface,
+                    color:coDef.color||C.dim,border:`1px solid ${coDef.color||C.border}`,
+                    borderRadius:7,padding:"5px 8px",fontSize:11,fontFamily:"inherit",
+                    fontWeight:coDef.color?700:400,outline:"none",cursor:"pointer"}}>
+                    {CO_STATUSES_NEW.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+                  </select>
+                  {coDef.hasDate&&(
+                    <Inp value={o.coStatusDate||""} onChange={e=>upd(o.id,{coStatusDate:e.target.value})}
+                      placeholder="Date MM/DD/YY"
+                      style={{width:120,fontSize:11,borderColor:coDef.color+"55",background:`${coDef.color}08`}}/>
+                  )}
+                </div>
+              );
+            })()}
           </div>
 
           <div style={{marginBottom:8}}>
