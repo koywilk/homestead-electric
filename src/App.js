@@ -6015,12 +6015,13 @@ function App() {
                       const dIsWaiting = dRS==="waiting"||dFS==="waiting";
                       const dIsSched   = dRS==="scheduled"||dFS==="scheduled";
                       const dIsReady   = dRS==="ready"||dFS==="ready";
-                      const dOnHold     = dRoughHold||dFinishHold;
-                      const dRTS   = job.readyToSchedule&&(parseStage(job.roughStage))===0;
-                      const dInv   = !!job.readyToInvoice;
-                      const dBg    = dInv?"rgba(234,88,12,0.12)":(dHasRT||dPrepAlert)?"rgba(220,38,38,0.15)":dHasRTSch?"rgba(139,92,246,0.10)":dOnHold?"rgba(234,179,8,0.12)":dRTS?"rgba(234,179,8,0.15)":C.card;
-                      const dBord  = dInv?"2px solid #ea580c":(dHasRT||dPrepAlert)?"2px solid #dc2626":dHasRTSch?"2px solid #8b5cf6":dOnHold?"1px dashed #ca8a04":dRTS?"2px solid #ca8a04":`1px solid ${C.teal}33`;
-                      const dLbord = dInv?"#ea580c":(dHasRT||dPrepAlert)?"#dc2626":dHasRTSch?"#8b5cf6":dOnHold?"#ca8a04":dRTS?"#ca8a04":C.teal;
+                      const dPri   = (dHasRT||dPrepAlert)?"red":dHasRTSch?"purple":dIsInvoice?"invoice":dIsWaiting?"hold":dIsSched?"sched":dIsReady?"ready":"none";
+                      const dBgM   = {red:"rgba(220,38,38,0.15)",purple:"rgba(139,92,246,0.10)",invoice:"rgba(234,88,12,0.12)",hold:"rgba(234,179,8,0.12)",sched:"rgba(37,99,235,0.08)",ready:"rgba(202,138,4,0.08)",none:C.card};
+                      const dBordM = {red:"2px solid #dc2626",purple:"2px solid #8b5cf6",invoice:"2px solid #ea580c",hold:"1px dashed #ca8a04",sched:"1px dashed #2563eb",ready:"1px dashed #ca8a04",none:`1px solid ${C.teal}33`};
+                      const dLbordM= {red:"#dc2626",purple:"#8b5cf6",invoice:"#ea580c",hold:"#ca8a04",sched:"#2563eb",ready:"#ca8a04",none:C.teal};
+                      const dBg    = dBgM[dPri];
+                      const dBord  = dBordM[dPri];
+                      const dLbord = dLbordM[dPri];
                       return (
                         <div key={job.id} onClick={()=>setSelected(job)}
                           style={{background:dBg,border:dBord,borderRadius:12,
@@ -6040,9 +6041,7 @@ function App() {
                               {dHasRT&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Return trip needed</span>}
                               {dPrepAlert&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Redline plans need update</span>}
                               {dHasRTSch&&!(dHasRT||dPrepAlert)&&<span style={{background:"rgba(139,92,246,0.15)",border:"1px solid #8b5cf6",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#8b5cf6",fontWeight:700,whiteSpace:"nowrap"}}>Return trip scheduled</span>}
-                              {dOnHold&&<span style={{background:"rgba(234,179,8,0.15)",border:"1px dashed #ca8a04",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ca8a04",fontWeight:700,whiteSpace:"nowrap"}}>Waiting on items</span>}
-                              {!dHasRT&&dRTS&&<span style={{background:"rgba(234,179,8,0.2)",border:"1px solid #ca8a04",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ca8a04",fontWeight:700,whiteSpace:"nowrap"}}>Ready to schedule</span>}
-                              {job.readyToInvoice&&<span style={{background:"rgba(234,88,12,0.15)",border:"1px solid #ea580c",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ea580c",fontWeight:700,whiteSpace:"nowrap"}}>Ready to invoice</span>}
+
                               {dRS&&<span style={{background:`${getStatusDef(ROUGH_STATUSES,dRS).color||"#888"}18`,border:`1px solid ${getStatusDef(ROUGH_STATUSES,dRS).color||"#888"}`,borderRadius:99,padding:"2px 8px",fontSize:9,color:getStatusDef(ROUGH_STATUSES,dRS).color||"#888",fontWeight:700,whiteSpace:"nowrap"}}>{"Rough: "+(dRS==="scheduled"&&job.roughStatusDate?job.roughStatusDate:getStatusDef(ROUGH_STATUSES,dRS).label||dRS)}</span>}
                               {dFS&&<span style={{background:`${getStatusDef(FINISH_STATUSES,dFS).color||"#888"}18`,border:`1px solid ${getStatusDef(FINISH_STATUSES,dFS).color||"#888"}`,borderRadius:99,padding:"2px 8px",fontSize:9,color:getStatusDef(FINISH_STATUSES,dFS).color||"#888",fontWeight:700,whiteSpace:"nowrap"}}>{"Finish: "+(dFS==="scheduled"&&job.finishStatusDate?job.finishStatusDate:getStatusDef(FINISH_STATUSES,dFS).label||dFS)}</span>}
                               {job.prepStartDate&&(
@@ -6115,11 +6114,10 @@ function App() {
                       const dIsWaiting = dRS==="waiting"||dFS==="waiting";
                       const dIsSched   = dRS==="scheduled"||dFS==="scheduled";
                       const dIsReady   = dRS==="ready"||dFS==="ready";
-                      const dOnHold     = dRoughHold||dFinishHold;
-                      const dInv2  = !!job.readyToInvoice;
-                      const dBg    = dInv2?"rgba(234,88,12,0.12)":(dHasRT||dPrepAlert)?"rgba(220,38,38,0.15)":dHasRTSch?"rgba(139,92,246,0.10)":dOnHold?"rgba(234,179,8,0.12)":C.card;
-                      const dBord  = dInv2?"2px solid #ea580c":(dHasRT||dPrepAlert)?"2px solid #dc2626":dHasRTSch?"2px solid #8b5cf6":dOnHold?"1px dashed #ca8a04":`1px solid ${C.rough}33`;
-                      const dLbord = dHasRTSch&&!(dHasRT||dPrepAlert)?"#8b5cf6":(dHasRT||dPrepAlert)?"#dc2626":dOnHold?"#ca8a04":C.rough;
+                      const dPri2  = (dHasRT||dPrepAlert)?"red":dHasRTSch?"purple":dIsInvoice?"invoice":dIsWaiting?"hold":dIsSched?"sched":dIsReady?"ready":"none";
+                      const dBg    = {red:"rgba(220,38,38,0.15)",purple:"rgba(139,92,246,0.10)",invoice:"rgba(234,88,12,0.12)",hold:"rgba(234,179,8,0.12)",sched:"rgba(37,99,235,0.08)",ready:"rgba(202,138,4,0.08)",none:C.card}[dPri2];
+                      const dBord  = {red:"2px solid #dc2626",purple:"2px solid #8b5cf6",invoice:"2px solid #ea580c",hold:"1px dashed #ca8a04",sched:"1px dashed #2563eb",ready:"1px dashed #ca8a04",none:`1px solid ${C.rough}33`}[dPri2];
+                      const dLbord = {red:"#dc2626",purple:"#8b5cf6",invoice:"#ea580c",hold:"#ca8a04",sched:"#2563eb",ready:"#ca8a04",none:C.rough}[dPri2];
                       return (
                         <div key={job.id} onClick={()=>setSelected(job)}
                           style={{background:dBg,border:dBord,borderRadius:12,
@@ -6139,7 +6137,7 @@ function App() {
                               {dHasRT&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Return trip needed</span>}
                               {dPrepAlert&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Redline plans need update</span>}
                               {dHasRTSch&&!(dHasRT||dPrepAlert)&&<span style={{background:"rgba(139,92,246,0.15)",border:"1px solid #8b5cf6",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#8b5cf6",fontWeight:700,whiteSpace:"nowrap"}}>Return trip scheduled</span>}
-                              {dOnHold&&<span style={{background:"rgba(234,179,8,0.15)",border:"1px dashed #ca8a04",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ca8a04",fontWeight:700,whiteSpace:"nowrap"}}>Waiting on items</span>}
+                              {dIsWaiting&&<span style={{background:"rgba(234,179,8,0.15)",border:"1px dashed #ca8a04",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ca8a04",fontWeight:700,whiteSpace:"nowrap"}}>Waiting on items</span>}
                               {job.prepStartDate&&(
                                 <div style={{background:`${C.rough}18`,border:`1px solid ${C.rough}33`,
                                   borderRadius:8,padding:"4px 10px",fontSize:11,color:C.rough,
@@ -6196,12 +6194,10 @@ function App() {
                       const dIsWaiting = dRS==="waiting"||dFS==="waiting";
                       const dIsSched   = dRS==="scheduled"||dFS==="scheduled";
                       const dIsReady   = dRS==="ready"||dFS==="ready";
-                      const dOnHold     = dRoughHold||dFinishHold;
-                      const dRTS   = job.readyToSchedule&&(parseStage(job.roughStage))===100&&(parseStage(job.finishStage))===0;
-                      const dInv3  = !!job.readyToInvoice;
-                      const dBg    = dInv3?"rgba(234,88,12,0.12)":(dHasRT||dPrepAlert)?"rgba(220,38,38,0.15)":dHasRTSch?"rgba(139,92,246,0.10)":dOnHold?"rgba(234,179,8,0.12)":dRTS?"rgba(234,179,8,0.15)":C.card;
-                      const dBord  = dInv3?"2px solid #ea580c":(dHasRT||dPrepAlert)?"2px solid #dc2626":dHasRTSch?"2px solid #8b5cf6":dOnHold?"1px dashed #ca8a04":dRTS?"2px solid #ca8a04":`1px solid ${stageColor}33`;
-                      const dLbord = dInv3?"#ea580c":(dHasRT||dPrepAlert)?"#dc2626":dHasRTSch?"#8b5cf6":dOnHold?"#ca8a04":dRTS?"#ca8a04":stageColor;
+                      const dPri3  = (dHasRT||dPrepAlert)?"red":dHasRTSch?"purple":dIsInvoice?"invoice":dIsWaiting?"hold":dIsSched?"sched":dIsReady?"ready":"none";
+                      const dBg    = {red:"rgba(220,38,38,0.15)",purple:"rgba(139,92,246,0.10)",invoice:"rgba(234,88,12,0.12)",hold:"rgba(234,179,8,0.12)",sched:"rgba(37,99,235,0.08)",ready:"rgba(202,138,4,0.08)",none:C.card}[dPri3];
+                      const dBord  = {red:"2px solid #dc2626",purple:"2px solid #8b5cf6",invoice:"2px solid #ea580c",hold:"1px dashed #ca8a04",sched:"1px dashed #2563eb",ready:"1px dashed #ca8a04",none:`1px solid ${stageColor}33`}[dPri3];
+                      const dLbord = {red:"#dc2626",purple:"#8b5cf6",invoice:"#ea580c",hold:"#ca8a04",sched:"#2563eb",ready:"#ca8a04",none:stageColor}[dPri3];
                       return (
                         <div key={job.id} onClick={()=>setSelected(job)}
                           style={{background:dBg,border:dBord,borderRadius:12,
@@ -6226,8 +6222,7 @@ function App() {
                               {dHasRT&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Return trip needed</span>}
                               {dPrepAlert&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Redline plans need update</span>}
                               {dHasRTSch&&!(dHasRT||dPrepAlert)&&<span style={{background:"rgba(139,92,246,0.15)",border:"1px solid #8b5cf6",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#8b5cf6",fontWeight:700,whiteSpace:"nowrap"}}>Return trip scheduled</span>}
-                              {dOnHold&&<span style={{background:"rgba(234,179,8,0.15)",border:"1px dashed #ca8a04",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ca8a04",fontWeight:700,whiteSpace:"nowrap"}}>Waiting on items</span>}
-                              {!dHasRT&&dRTS&&<span style={{background:"rgba(234,179,8,0.2)",border:"1px solid #ca8a04",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ca8a04",fontWeight:700,whiteSpace:"nowrap"}}>Ready to schedule</span>}
+                              {dIsWaiting&&<span style={{background:"rgba(234,179,8,0.15)",border:"1px dashed #ca8a04",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ca8a04",fontWeight:700,whiteSpace:"nowrap"}}>Waiting on items</span>}
                             </div>
                           </div>
                           {/* Finish progress bar */}
