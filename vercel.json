@@ -1,0 +1,11 @@
+{
+  "rewrites": [
+    { "source": "/prep-dashboard.html", "destination": "/prep-dashboard.html" },
+    { "source": "/((?!prep-dashboard).*)", "destination": "/index.html" }
+  ]
+}
+```
+
+Commit it, wait 30 seconds, then try:
+```
+https://homestead-electric.vercel.app/prep-dashboard.html
