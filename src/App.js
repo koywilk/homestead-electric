@@ -5813,9 +5813,7 @@ function App() {
 
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
 
-                      {[[fCOs,"Pending COs",fCOs>0?C.blue:C.muted],
-
-                        [fFlag,"Flagged",fFlag>0?C.accent:C.muted]].map(([v,l,c])=>(
+                      {[[fCOs,"Pending COs",fCOs>0?C.blue:C.muted]].map(([v,l,c])=>(
 
                         <div key={l} style={{background:C.surface,borderRadius:8,padding:"8px 10px"}}>
 
@@ -5885,13 +5883,11 @@ function App() {
 
                     </div>
 
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:14}}>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
 
                       {[[uOpen,"Open Items",uOpen>0?C.red:C.muted],
 
-                        [uCOs,"Pending COs",uCOs>0?C.purple:C.muted],
-
-                        [uFlag,"Flagged",uFlag>0?C.accent:C.muted]].map(([v,l,c])=>(
+                        [uCOs,"Pending COs",uCOs>0?C.purple:C.muted]].map(([v,l,c])=>(
 
                         <div key={l} style={{background:C.surface,borderRadius:8,padding:"8px 10px"}}>
 
