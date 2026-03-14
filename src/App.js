@@ -3347,6 +3347,17 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
   };
 
+  // Auto-derive roughStatus/finishStatus from existing % if not already set
+  const deriveStatus = (status, stage) => {
+    if(status) return status;
+    const pct = parseInt(stage)||0;
+    if(pct===100) return "complete";
+    if(pct>0) return "inprogress";
+    return "";
+  };
+  job.roughStatus  = deriveStatus(job.roughStatus,  job.roughStage);
+  job.finishStatus = deriveStatus(job.finishStatus, job.finishStage);
+
 
   const jobRef = useRef(job);
 
