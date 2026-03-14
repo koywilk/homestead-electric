@@ -64,7 +64,7 @@ const JOB_ID = "homestead-jobs-v1";
 
 const ROUGH_STATUSES = [
   {value:"",          label:"— set status —",       color:null},
-  {value:"ready",     label:"Ready to Start",        color:"#ca8a04"},
+  {value:"ready",     label:"Ready to Start",        color:"#ca8a04", hasDate:true},
   {value:"scheduled", label:"Scheduled",             color:"#2563eb", hasDate:true},
   {value:"waiting",   label:"Waiting on Items",      color:"#ca8a04", dashed:true},
   {value:"inprogress",label:"In Progress",           color:"#7dd3fc"},
@@ -4476,25 +4476,25 @@ const STAGE_SECTIONS = [
     test: j => (j.prepStage||"") !== "Job Prep Complete" },
 
   { key:"roughNotStarted", label:"Rough — Not Started",   color:"#64748b",
-    test: j => { const rs=effRS(j); return (j.prepStage||"")==="Job Prep Complete" && (!rs||rs==="ready"); } },
+    test: j => { const rs=effRS(j); return (j.prepStage||"")==="Job Prep Complete" && (!rs||rs==="ready"||rs==="scheduled"); } },
 
   { key:"roughHold",    label:"Rough — On Hold",           color:"#ca8a04",
     test: j => effRS(j) === "waiting" },
 
   { key:"rough",        label:"Rough In Progress",         color:"#2563eb",
-    test: j => { const rs=effRS(j); return rs==="scheduled"||rs==="inprogress"; } },
+    test: j => effRS(j) === "inprogress" },
 
   { key:"roughInvoice", label:"Rough — Ready to Invoice",  color:"#ea580c",
     test: j => effRS(j) === "invoice" },
 
   { key:"between",      label:"In Between",                color:"#e8a020",
-    test: j => { const rs=effRS(j); const fs=effFS(j); return rs==="complete"&&(!fs||fs==="ready"); } },
+    test: j => { const rs=effRS(j); const fs=effFS(j); return rs==="complete"&&(!fs||fs==="ready"||fs==="scheduled"); } },
 
   { key:"finishHold",   label:"Finish — On Hold",          color:"#ca8a04",
     test: j => effFS(j) === "waiting" },
 
   { key:"finish",       label:"Finish In Progress",        color:"#0ea5e9",
-    test: j => { const fs=effFS(j); return fs==="scheduled"||fs==="inprogress"; } },
+    test: j => effFS(j) === "inprogress" },
 
   { key:"finishInvoice",label:"Finish — Ready to Invoice", color:"#ea580c",
     test: j => effFS(j) === "invoice" },
@@ -4520,7 +4520,23 @@ function StageSectionList({ jobs, JobRow, fc }) {
 
       {STAGE_SECTIONS.map(sec => {
 
-        const sJobs = jobs.filter(sec.test);
+        const sJobs = (() => {
+          const filtered = jobs.filter(sec.test);
+          // Get the most relevant date for a job in this section
+          const getDate = j => {
+            const rs = effRS(j), fs = effFS(j);
+            if(fs==="scheduled"||fs==="ready"||fs==="inprogress") return j.finishStatusDate||j.roughStatusDate||"";
+            if(rs==="scheduled"||rs==="ready"||rs==="inprogress") return j.roughStatusDate||"";
+            return j.roughStatusDate||j.finishStatusDate||"";
+          };
+          return filtered.sort((a,b)=>{
+            const da=getDate(a), db=getDate(b);
+            if(!da&&!db) return 0;
+            if(!da) return 1;
+            if(!db) return -1;
+            return new Date(da)-new Date(db);
+          });
+        })();
 
         if(sJobs.length===0) return null;
 
@@ -5461,7 +5477,7 @@ function App() {
             {hasRT&&<Pill label="Return trip needed" color="#dc2626"/>}
             {prepAlert&&<Pill label="Redline plans need update" color="#dc2626"/>}
             {hasRTSch&&!hasRT&&<Pill label="Return trip scheduled" color="#8b5cf6"/>}
-            {rs&&<Pill label={rs==="scheduled"&&job.roughStatusDate?"Rough: "+job.roughStatusDate:("Rough: "+(getStatusDef(ROUGH_STATUSES,rs).label||rs))} color={getStatusDef(ROUGH_STATUSES,rs).color||C.dim}/>}
+            {rs&&!(rs==="complete"&&fs&&fs!=="ready")&&<Pill label={rs==="scheduled"&&job.roughStatusDate?"Rough: "+job.roughStatusDate:rs==="ready"&&job.roughStatusDate?"Rough: "+job.roughStatusDate:("Rough: "+(getStatusDef(ROUGH_STATUSES,rs).label||rs))} color={getStatusDef(ROUGH_STATUSES,rs).color||C.dim}/>}
             {fs&&<Pill label={fs==="scheduled"&&job.finishStatusDate?"Finish: "+job.finishStatusDate:("Finish: "+(getStatusDef(FINISH_STATUSES,fs).label||fs))} color={getStatusDef(FINISH_STATUSES,fs).color||C.dim}/>}
             {open>0   &&<Pill label={`${open} open`} color={C.red}/>}
 
@@ -5970,7 +5986,7 @@ function App() {
                               {dPrepAlert&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Redline plans need update</span>}
                               {dHasRTSch&&!(dHasRT||dPrepAlert)&&<span style={{background:"rgba(139,92,246,0.15)",border:"1px solid #8b5cf6",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#8b5cf6",fontWeight:700,whiteSpace:"nowrap"}}>Return trip scheduled</span>}
 
-                              {dRS&&<span style={{background:`${getStatusDef(ROUGH_STATUSES,dRS).color||"#888"}18`,border:`1px solid ${getStatusDef(ROUGH_STATUSES,dRS).color||"#888"}`,borderRadius:99,padding:"2px 8px",fontSize:9,color:getStatusDef(ROUGH_STATUSES,dRS).color||"#888",fontWeight:700,whiteSpace:"nowrap"}}>{"Rough: "+(dRS==="scheduled"&&job.roughStatusDate?job.roughStatusDate:getStatusDef(ROUGH_STATUSES,dRS).label||dRS)}</span>}
+                              {dRS&&!(dRS==="complete"&&dFS&&dFS!=="ready")&&<span style={{background:`${getStatusDef(ROUGH_STATUSES,dRS).color||"#888"}18`,border:`1px solid ${getStatusDef(ROUGH_STATUSES,dRS).color||"#888"}`,borderRadius:99,padding:"2px 8px",fontSize:9,color:getStatusDef(ROUGH_STATUSES,dRS).color||"#888",fontWeight:700,whiteSpace:"nowrap"}}>{"Rough: "+(dRS==="scheduled"&&job.roughStatusDate?job.roughStatusDate:dRS==="ready"&&job.roughStatusDate?job.roughStatusDate:getStatusDef(ROUGH_STATUSES,dRS).label||dRS)}</span>}
                               {dFS&&<span style={{background:`${getStatusDef(FINISH_STATUSES,dFS).color||"#888"}18`,border:`1px solid ${getStatusDef(FINISH_STATUSES,dFS).color||"#888"}`,borderRadius:99,padding:"2px 8px",fontSize:9,color:getStatusDef(FINISH_STATUSES,dFS).color||"#888",fontWeight:700,whiteSpace:"nowrap"}}>{"Finish: "+(dFS==="scheduled"&&job.finishStatusDate?job.finishStatusDate:getStatusDef(FINISH_STATUSES,dFS).label||dFS)}</span>}
                               {job.prepStartDate&&(
                                 <div style={{background:`${C.teal}18`,border:`1px solid ${C.teal}33`,
