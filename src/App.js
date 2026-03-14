@@ -3201,40 +3201,51 @@ const TABS = ["Job Info","Rough","Finish","Home Runs","Panelized Lighting","Tape
 
 
 
+const sanitize = (obj) => {
+  if(Array.isArray(obj)) return obj.map(sanitize);
+  if(obj && typeof obj === "object") return Object.fromEntries(Object.entries(obj).filter(([,v])=>v!==undefined).map(([k,v])=>[k,sanitize(v)]));
+  return obj;
+};
+
+const normalizeJob = (raw) => ({
+  changeOrders:[], returnTrips:[], uploadedFiles:[], customLinks:[],
+  roughMaterials:[], roughUpdates:[], finishMaterials:[], finishUpdates:[],
+  homeRuns:{}, roughPunch:{}, finishPunch:{}, qcPunch:{},
+  roughQuestions:{upper:[],main:[],basement:[]},
+  finishQuestions:{upper:[],main:[],basement:[]},
+  ...raw,
+  changeOrders: raw?.changeOrders || [],
+  returnTrips:  raw?.returnTrips  || [],
+  uploadedFiles:raw?.uploadedFiles|| [],
+  customLinks:  raw?.customLinks  || [],
+  roughMaterials: raw?.roughMaterials || [],
+  roughUpdates:   raw?.roughUpdates   || [],
+  finishMaterials:raw?.finishMaterials|| [],
+  finishUpdates:  raw?.finishUpdates  || [],
+  roughPunch:  raw?.roughPunch  || {},
+  finishPunch: raw?.finishPunch || {},
+  homeRuns:    raw?.homeRuns    || {},
+  roughQuestions: raw?.roughQuestions || {upper:[],main:[],basement:[]},
+  finishQuestions:raw?.finishQuestions|| {upper:[],main:[],basement:[]},
+  roughStatus:     raw?.roughStatus     || (()=>{ const p=parseInt(raw?.roughStage)||0;  return p===100?"complete":p>0?"inprogress":""; })(),
+  finishStatus:    raw?.finishStatus    || (()=>{ const p=parseInt(raw?.finishStage)||0; return p===100?"complete":p>0?"inprogress":""; })(),
+  roughStatusDate:  raw?.roughStatusDate  || "",
+  finishStatusDate: raw?.finishStatusDate || "",
+  qcStatusDate:     raw?.qcStatusDate     || "",
+});
+
 function JobDetail({job: rawJob, onUpdate, onClose}) {
 
-  const normalize = (raw) => ({
-    changeOrders:[], returnTrips:[], uploadedFiles:[], customLinks:[],
-    roughMaterials:[], roughUpdates:[], finishMaterials:[], finishUpdates:[],
-    homeRuns:{}, roughPunch:{}, finishPunch:{}, qcPunch:{},
-    roughQuestions:{upper:[],main:[],basement:[]},
-    finishQuestions:{upper:[],main:[],basement:[]},
-    ...raw,
-    changeOrders: raw?.changeOrders || [],
-    returnTrips:  raw?.returnTrips  || [],
-    uploadedFiles:raw?.uploadedFiles|| [],
-    customLinks:  raw?.customLinks  || [],
-    roughMaterials: raw?.roughMaterials || [],
-    roughUpdates:   raw?.roughUpdates   || [],
-    finishMaterials:raw?.finishMaterials|| [],
-    finishUpdates:  raw?.finishUpdates  || [],
-    roughPunch:  raw?.roughPunch  || {},
-    finishPunch: raw?.finishPunch || {},
-    homeRuns:    raw?.homeRuns    || {},
-    roughQuestions: raw?.roughQuestions || {upper:[],main:[],basement:[]},
-    finishQuestions:raw?.finishQuestions|| {upper:[],main:[],basement:[]},
-    roughStatus:  raw?.roughStatus  || (()=>{ const p=parseInt(raw?.roughStage)||0;  return p===100?"complete":p>0?"inprogress":""; })(),
-    finishStatus: raw?.finishStatus || (()=>{ const p=parseInt(raw?.finishStage)||0; return p===100?"complete":p>0?"inprogress":""; })(),
-  });
+  const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
-  const [job, setJob] = useState(()=>normalize(rawJob));
+  const jobRef = useRef(job);
+  useEffect(()=>{ jobRef.current = job; }, [job]);
 
   const u = patch => {
-    setJob(prev => {
-      const updated = {...prev,...patch};
-      onUpdate(updated);
-      return updated;
-    });
+    const updated = {...jobRef.current, ...patch};
+    jobRef.current = updated;
+    setJob(updated);
+onUpdate(updated);
   };
 
   const saveNow = () => onUpdate({...job});
@@ -5070,7 +5081,7 @@ function App() {
 
   const saveJob = (job) => {
 
-    if(initialLoad.current) return;
+if(initialLoad.current) return;
 
     isDirty.current = true;
 
@@ -5098,7 +5109,7 @@ function App() {
 
       try {
 
-        await setDoc(doc(db,"jobs",job.id),{data:job,updated_at:new Date().toISOString()});
+        await setDoc(doc(db,"jobs",job.id),{data:sanitize(job),updated_at:new Date().toISOString()});
 
         isDirty.current = false;
 
@@ -5125,7 +5136,7 @@ function App() {
   const flushJob = async (job) => {
     if(!job) return;
     clearTimeout(saveTimers.current[job.id]);
-    try { await setDoc(doc(db,"jobs",job.id),{data:job,updated_at:new Date().toISOString()}); } catch(e){}
+    try { await setDoc(doc(db,"jobs",job.id),{data:sanitize(job),updated_at:new Date().toISOString()}); } catch(e){}
   };
 
   const deleteJobRemote = async (jobId) => {
@@ -5182,7 +5193,7 @@ function App() {
 
       clearTimeout(saveTimers.current[job.id]);
 
-      setDoc(doc(db,"jobs",job.id),{data:job,updated_at:new Date().toISOString()}).catch(e=>console.error(e));
+      setDoc(doc(db,"jobs",job.id),{data:sanitize(job),updated_at:new Date().toISOString()}).catch(e=>console.error(e));
 
       try {
 
