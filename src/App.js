@@ -2246,6 +2246,8 @@ const WIRE_BREAKER = {
 
 function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
+  const extraRows = (homeRuns.extraFloors||[]).flatMap(ef=>homeRuns[ef.key]||[]);
+
   const allRows = [
 
     ...(homeRuns.main||[]),
@@ -2254,11 +2256,13 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
     ...(homeRuns.basement||[]),
 
+    ...extraRows,
+
   ];
 
 
 
-  const panels = (homeRuns.customPanels||DEFAULT_PANELS).filter(p=>p!=="Meter");
+  const panels = getPanelOpts(homeRuns.customPanels||DEFAULT_PANELS).filter(p=>p!==""&&p!=="Meter");
 
 
 
