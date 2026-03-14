@@ -1,6 +1,0 @@
-{
-  "routes": [
-    { "src": "/prep-dashboard.html", "dest": "/prep-dashboard.html" },
-    { "src": "/(.*)", "dest": "/index.html" }
-  ]
-}
