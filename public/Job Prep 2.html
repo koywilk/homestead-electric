@@ -221,7 +221,7 @@ function matchSearch(j,s) {
 
 window.render = function() {
   var s = (document.getElementById('srch')||{value:''}).value.toLowerCase();
-  var prep = jobs.filter(function(j){ return (j.prepStage||')') !== 'Job Prep Complete'; });
+var prep = jobs.filter(function(j){ return (j.prepStage||'') !== 'Job Prep Complete'; });
   var done = jobs.filter(function(j){ return (j.prepStage||'') === 'Job Prep Complete'; });
   document.getElementById('tc-prep').textContent = prep.length;
   document.getElementById('tc-done').textContent = done.length;
