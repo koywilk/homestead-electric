@@ -3245,15 +3245,11 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
     finishQuestions:rawJob?.finishQuestions|| {upper:[],main:[],basement:[]},
 
-  };
+    // Auto-derive status from % if not already set
+    roughStatus:  rawJob?.roughStatus  || (()=>{ const p=parseInt(rawJob?.roughStage)||0;  return p===100?"complete":p>0?"inprogress":""; })(),
+    finishStatus: rawJob?.finishStatus || (()=>{ const p=parseInt(rawJob?.finishStage)||0; return p===100?"complete":p>0?"inprogress":""; })(),
 
-  // Auto-derive roughStatus/finishStatus from existing % if not already set (initial load only)
-  // This runs inside the object construction so it only affects the initial value
-  React.useMemo(()=>{
-    if(!job.roughStatus  && job.roughStage)  { const p=parseInt(job.roughStage)||0;  if(p===100) job.roughStatus="complete";  else if(p>0) job.roughStatus="inprogress"; }
-    if(!job.finishStatus && job.finishStage) { const p=parseInt(job.finishStage)||0; if(p===100) job.finishStatus="complete"; else if(p>0) job.finishStatus="inprogress"; }
-  // eslint-disable-next-line
-  },[]);
+  };
 
 
   const jobRef = useRef(job);
