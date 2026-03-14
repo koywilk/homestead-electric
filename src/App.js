@@ -2051,89 +2051,6 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
 
 
-// ── Panel Feeds ───────────────────────────────────────────────
-
-function PanelFeeds({feeds, onChange}) {
-
-  const add = () => onChange([...feeds, {id:uid(), from:"", to:"", wire:"", location:""}]);
-
-  const upd = (id,p) => onChange(feeds.map(f=>f.id===id?{...f,...p}:f));
-
-  const del = (id)   => onChange(feeds.filter(f=>f.id!==id));
-
-  return (
-
-    <div>
-
-      {feeds.length>0&&(
-
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 110px 28px",
-
-          gap:6,marginBottom:6,padding:"0 2px"}}>
-
-          {["From","To","Location","Wire",""].map((h,i)=>(
-
-            <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
-
-          ))}
-
-        </div>
-
-      )}
-
-      {feeds.map(f=>(
-
-        <div key={f.id} style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 110px 28px",
-
-          gap:6,marginBottom:6,alignItems:"center"}}>
-
-          <Inp value={f.from} onChange={e=>upd(f.id,{from:e.target.value})} placeholder="e.g. Meter"/>
-
-          <Inp value={f.to}   onChange={e=>upd(f.id,{to:e.target.value})}   placeholder="e.g. Panel A"/>
-
-          <Inp value={f.location||""} onChange={e=>upd(f.id,{location:e.target.value})} placeholder="e.g. Basement, Garage…"/>
-
-          <div style={{position:"relative"}}>
-
-            <select value={f.wire} onChange={e=>upd(f.id,{wire:e.target.value})}
-
-              style={{background:WIRE_COLORS[f.wire]||C.surface,
-
-                color:f.wire?(WIRE_TEXT[f.wire]||C.text):C.dim,
-
-                border:`1px solid ${WIRE_COLORS[f.wire]||C.border}`,
-
-                borderRadius:7,padding:"6px 10px",fontSize:12,fontFamily:"inherit",
-
-                outline:"none",width:"100%",fontWeight:f.wire?700:400}}>
-
-              {WIRE_SIZES.map(o=><option key={o} value={o}
-
-                style={{background:WIRE_COLORS[o]||"#f1f5f9",color:WIRE_TEXT[o]||"#0f172a"}}>
-
-                {o||"— wire —"}
-
-              </option>)}
-
-            </select>
-
-          </div>
-
-          <button onClick={()=>del(f.id)}
-
-            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
-
-        </div>
-
-      ))}
-
-      <Btn onClick={add} variant="add" style={{borderStyle:"dashed",marginTop:4}}>+ Add Panel Feed</Btn>
-
-    </div>
-
-  );
-
-}
 
 
 
@@ -2736,9 +2653,7 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
         );
       })()}
 
-      <Section label="Panel Feeds" color={C.blue} defaultOpen={true}>
-        <PanelFeeds feeds={homeRuns.panelFeeds||[]} onChange={v=>onHRChange({...homeRuns,panelFeeds:v})}/>
-      </Section>
+
 
       <Section label="Home Runs" color={C.blue} defaultOpen={true}>
         {(()=>{ const cp = homeRuns.customPanels||DEFAULT_PANELS; return (
@@ -4551,37 +4466,41 @@ function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
 
 // ── Stage Sections ────────────────────────────────────────────
 
+// Effective status — falls back to deriving from % if no status stored
+const effRS = j => { if(j.roughStatus) return j.roughStatus; const p=parseInt(j.roughStage)||0; return p===100?"complete":p>0?"inprogress":""; };
+const effFS = j => { if(j.finishStatus) return j.finishStatus; const p=parseInt(j.finishStage)||0; return p===100?"complete":p>0?"inprogress":""; };
+
 const STAGE_SECTIONS = [
 
   { key:"prep",         label:"Pre Job Prep",              color:"#0d9488",
     test: j => j.prepStage !== "Job Prep Complete" },
 
   { key:"roughNotStarted", label:"Rough — Not Started",   color:"#64748b",
-    test: j => j.prepStage === "Job Prep Complete" && (!j.roughStatus || j.roughStatus === "ready") },
+    test: j => { const rs=effRS(j); return j.prepStage==="Job Prep Complete" && (!rs||rs==="ready"); } },
 
   { key:"roughHold",    label:"Rough — On Hold",           color:"#ca8a04",
-    test: j => j.roughStatus === "waiting" },
+    test: j => effRS(j) === "waiting" },
 
   { key:"rough",        label:"Rough In Progress",         color:"#2563eb",
-    test: j => j.roughStatus === "scheduled" || j.roughStatus === "inprogress" },
+    test: j => { const rs=effRS(j); return rs==="scheduled"||rs==="inprogress"; } },
 
   { key:"roughInvoice", label:"Rough — Ready to Invoice",  color:"#ea580c",
-    test: j => j.roughStatus === "invoice" },
+    test: j => effRS(j) === "invoice" },
 
   { key:"between",      label:"In Between",                color:"#e8a020",
-    test: j => j.roughStatus === "complete" && (!j.finishStatus || j.finishStatus === "ready") },
+    test: j => { const rs=effRS(j); const fs=effFS(j); return rs==="complete"&&(!fs||fs==="ready"); } },
 
   { key:"finishHold",   label:"Finish — On Hold",          color:"#ca8a04",
-    test: j => j.finishStatus === "waiting" },
+    test: j => effFS(j) === "waiting" },
 
   { key:"finish",       label:"Finish In Progress",        color:"#0ea5e9",
-    test: j => j.finishStatus === "scheduled" || j.finishStatus === "inprogress" },
+    test: j => { const fs=effFS(j); return fs==="scheduled"||fs==="inprogress"; } },
 
   { key:"finishInvoice",label:"Finish — Ready to Invoice", color:"#ea580c",
-    test: j => j.finishStatus === "invoice" },
+    test: j => effFS(j) === "invoice" },
 
   { key:"complete",     label:"Completed",                 color:"#22c55e",
-    test: j => j.finishStatus === "complete" },
+    test: j => effFS(j) === "complete" },
 
 ];
 
@@ -5462,8 +5381,8 @@ function App() {
     const hasRT      = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
     const hasRTSch   = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
     const prepAlert  = job.prepStage===PREP_STAGE_ALERT;
-    const rs = job.roughStatus||"";
-    const fs = job.finishStatus||"";
+    const rs = effRS(job);
+    const fs = effFS(job);
     const isInvoice  = rs==="invoice"||fs==="invoice";
     const isWaiting  = rs==="waiting"||fs==="waiting";
     const isSched    = rs==="scheduled"||fs==="scheduled";
@@ -6018,8 +5937,8 @@ function App() {
                       const dHasRT    = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtStatus!=="complete"&&(r.scope||r.rtStatusDate));
                       const dHasRTSch  = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtStatus==="scheduled");
                       const dPrepAlert = job.prepStage===PREP_STAGE_ALERT;
-                      const dRS = job.roughStatus||"";
-                      const dFS = job.finishStatus||"";
+                      const dRS = effRS(job);
+                      const dFS = effFS(job);
                       const dIsInvoice = dRS==="invoice"||dFS==="invoice";
                       const dIsWaiting = dRS==="waiting"||dFS==="waiting";
                       const dIsSched   = dRS==="scheduled"||dFS==="scheduled";
@@ -6117,8 +6036,8 @@ function App() {
                       const dHasRT    = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtStatus!=="complete"&&(r.scope||r.rtStatusDate));
                       const dHasRTSch  = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtStatus==="scheduled");
                       const dPrepAlert = job.prepStage===PREP_STAGE_ALERT;
-                      const dRS = job.roughStatus||"";
-                      const dFS = job.finishStatus||"";
+                      const dRS = effRS(job);
+                      const dFS = effFS(job);
                       const dIsInvoice = dRS==="invoice"||dFS==="invoice";
                       const dIsWaiting = dRS==="waiting"||dFS==="waiting";
                       const dIsSched   = dRS==="scheduled"||dFS==="scheduled";
@@ -6197,8 +6116,8 @@ function App() {
                       const dHasRT    = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtStatus!=="complete"&&(r.scope||r.rtStatusDate));
                       const dHasRTSch  = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtStatus==="scheduled");
                       const dPrepAlert = job.prepStage===PREP_STAGE_ALERT;
-                      const dRS = job.roughStatus||"";
-                      const dFS = job.finishStatus||"";
+                      const dRS = effRS(job);
+                      const dFS = effFS(job);
                       const dIsInvoice = dRS==="invoice"||dFS==="invoice";
                       const dIsWaiting = dRS==="waiting"||dFS==="waiting";
                       const dIsSched   = dRS==="scheduled"||dFS==="scheduled";
