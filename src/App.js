@@ -4474,9 +4474,9 @@ const STAGE_SECTIONS = [
 
 
 
-function StageSectionList({ jobs, JobRow, fc }) {
+function StageSectionList({ jobs, JobRow, fc, startCollapsed=true }) {
 
-  const initCollapsed = () => Object.fromEntries(STAGE_SECTIONS.map(s=>[s.key,true]));
+  const initCollapsed = () => Object.fromEntries(STAGE_SECTIONS.map(s=>[s.key,startCollapsed]));
   const [collapsed, setCollapsed] = useState(initCollapsed);
 
   const toggle = key => setCollapsed(c=>({...c,[key]:!c[key]}));
@@ -6144,9 +6144,14 @@ if(initialLoad.current) return;
               })()}
             </div>
 
-
-
-
+            {/* ── ALL JOBS BY SECTION ── */}
+            <div style={{padding:"0 26px 32px"}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.08em",
+                color:C.dim,marginBottom:16,marginTop:32,paddingTop:24,borderTop:`1px solid ${C.border}`}}>
+                ALL JOBS
+              </div>
+              <StageSectionList jobs={jobs} JobRow={JobRow} startCollapsed={true}/>
+            </div>
 
           </div>
 
@@ -6321,7 +6326,7 @@ if(initialLoad.current) return;
             ):(
 
               <>
-              <StageSectionList jobs={filtered} JobRow={JobRow} fc={FOREMEN_COLORS[activeForeman]}/>
+              <StageSectionList jobs={filtered} JobRow={JobRow} fc={FOREMEN_COLORS[activeForeman]} startCollapsed={false}/>
               {(()=>{
                 const invoiceJobs = filtered.filter(j=>effRS(j)==="invoice"||effFS(j)==="invoice");
                 return invoiceJobs.length>0?(
