@@ -3203,62 +3203,49 @@ const TABS = ["Job Info","Rough","Finish","Home Runs","Panelized Lighting","Tape
 
 function JobDetail({job: rawJob, onUpdate, onClose}) {
 
-  // Defensive normalization — prevents crashes on old jobs missing fields
-
-  const job = {
-
+  const normalize = (raw) => ({
     changeOrders:[], returnTrips:[], uploadedFiles:[], customLinks:[],
-
     roughMaterials:[], roughUpdates:[], finishMaterials:[], finishUpdates:[],
-
     homeRuns:{}, roughPunch:{}, finishPunch:{}, qcPunch:{},
-
     roughQuestions:{upper:[],main:[],basement:[]},
-
     finishQuestions:{upper:[],main:[],basement:[]},
+    ...raw,
+    changeOrders: raw?.changeOrders || [],
+    returnTrips:  raw?.returnTrips  || [],
+    uploadedFiles:raw?.uploadedFiles|| [],
+    customLinks:  raw?.customLinks  || [],
+    roughMaterials: raw?.roughMaterials || [],
+    roughUpdates:   raw?.roughUpdates   || [],
+    finishMaterials:raw?.finishMaterials|| [],
+    finishUpdates:  raw?.finishUpdates  || [],
+    roughPunch:  raw?.roughPunch  || {},
+    finishPunch: raw?.finishPunch || {},
+    homeRuns:    raw?.homeRuns    || {},
+    roughQuestions: raw?.roughQuestions || {upper:[],main:[],basement:[]},
+    finishQuestions:raw?.finishQuestions|| {upper:[],main:[],basement:[]},
+    roughStatus:  raw?.roughStatus  || (()=>{ const p=parseInt(raw?.roughStage)||0;  return p===100?"complete":p>0?"inprogress":""; })(),
+    finishStatus: raw?.finishStatus || (()=>{ const p=parseInt(raw?.finishStage)||0; return p===100?"complete":p>0?"inprogress":""; })(),
+  });
 
-    ...rawJob,
+  const [job, setJob] = useState(()=>normalize(rawJob));
 
-    changeOrders: rawJob?.changeOrders || [],
+  // Only sync from parent if we don't have a pending local change
+  const pendingRef = useRef(false);
+  useEffect(()=>{
+    if(!pendingRef.current) {
+      setJob(normalize(rawJob));
+    }
+  },[rawJob?.updated_at]);
 
-    returnTrips:  rawJob?.returnTrips  || [],
-
-    uploadedFiles:rawJob?.uploadedFiles|| [],
-
-    customLinks:  rawJob?.customLinks  || [],
-
-    roughMaterials: rawJob?.roughMaterials || [],
-
-    roughUpdates:   rawJob?.roughUpdates   || [],
-
-    finishMaterials:rawJob?.finishMaterials|| [],
-
-    finishUpdates:  rawJob?.finishUpdates  || [],
-
-    roughPunch:  rawJob?.roughPunch  || {},
-
-    finishPunch: rawJob?.finishPunch || {},
-
-    homeRuns:    rawJob?.homeRuns    || {},
-
-    roughQuestions: rawJob?.roughQuestions || {upper:[],main:[],basement:[]},
-
-    finishQuestions:rawJob?.finishQuestions|| {upper:[],main:[],basement:[]},
-
-    // Auto-derive status from % if not already set
-    roughStatus:  rawJob?.roughStatus  || (()=>{ const p=parseInt(rawJob?.roughStage)||0;  return p===100?"complete":p>0?"inprogress":""; })(),
-    finishStatus: rawJob?.finishStatus || (()=>{ const p=parseInt(rawJob?.finishStage)||0; return p===100?"complete":p>0?"inprogress":""; })(),
-
+  const u = patch => {
+    pendingRef.current = true;
+    const updated = {...job,...patch};
+    setJob(updated);
+    onUpdate(updated);
+    setTimeout(()=>{ pendingRef.current = false; }, 1500);
   };
 
-
-  const jobRef = useRef(job);
-
-  useEffect(()=>{ jobRef.current = job; },[job]);
-
-  const u = patch => { const updated = {...jobRef.current,...patch}; jobRef.current = updated; onUpdate(updated); };
-
-  const saveNow = () => onUpdate({...jobRef.current});
+  const saveNow = () => onUpdate({...job});
 
   const [tab, setTab] = useState("Job Info");
   const [newLightingFloor, setNewLightingFloor] = useState("");
