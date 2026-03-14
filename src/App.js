@@ -3229,20 +3229,12 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
   const [job, setJob] = useState(()=>normalize(rawJob));
 
-  // Only sync from parent if we don't have a pending local change
-  const pendingRef = useRef(false);
-  useEffect(()=>{
-    if(!pendingRef.current) {
-      setJob(normalize(rawJob));
-    }
-  },[rawJob?.updated_at]);
-
   const u = patch => {
-    pendingRef.current = true;
-    const updated = {...job,...patch};
-    setJob(updated);
-    onUpdate(updated);
-    setTimeout(()=>{ pendingRef.current = false; }, 1500);
+    setJob(prev => {
+      const updated = {...prev,...patch};
+      onUpdate(updated);
+      return updated;
+    });
   };
 
   const saveNow = () => onUpdate({...job});
@@ -5022,19 +5014,9 @@ function App() {
 
           setJobs(loaded);
 
-          // Keep selected job in sync — but NEVER overwrite if there's a pending save timer
+          // Never overwrite the selected job from snapshot — JobDetail manages its own state
 
-          setSelected(sel => {
-
-            if(!sel) return sel;
-
-            const updated = loaded.find(j=>j.id===sel.id);
-
-            if(updated && !saveTimers.current[sel.id]) return updated;
-
-            return sel;
-
-          });
+          // Just keep the jobs list in sync for the home screen
 
           try { localStorage.setItem('hejobs_backup', JSON.stringify(loaded)); } catch(e){}
 
