@@ -9,7 +9,7 @@
 :root {
   --bg:#0a0f0d; --surface:#111a16; --card:#141f19; --border:#1e2e26; --b2:#243320;
   --teal:#0d9488; --green:#22c55e; --yellow:#eab308; --red:#ef4444;
-  --blue:#3b82f6; --orange:#f97316; --text:#e2f0e8; --dim:#6b8c7a; --muted:#2d4a3a;
+  --text:#e2f0e8; --dim:#6b8c7a; --muted:#2d4a3a;
 }
 * { box-sizing:border-box; margin:0; padding:0; }
 body { background:var(--bg); color:var(--text); font-family:'DM Sans',sans-serif; min-height:100vh; }
@@ -45,7 +45,7 @@ body::after {
 .grp { margin-bottom:24px; }
 .gh { display:flex; align-items:center; gap:10px; margin-bottom:10px; padding-bottom:8px; border-bottom:1px solid var(--b2); }
 .gl { font-family:'Bebas Neue',sans-serif; font-size:19px; letter-spacing:0.08em; }
-.gc { border-radius:99px; padding:2px 9px; font-size:11px; font-weight:700; border:1px solid; }
+.gcnt { border-radius:99px; padding:2px 9px; font-size:11px; font-weight:700; border:1px solid; }
 .gp { margin-left:auto; font-family:'DM Mono',monospace; font-size:10px; color:var(--dim); }
 .card { background:var(--card); border:1px solid var(--b2); border-left:3px solid var(--teal); border-radius:12px; margin-bottom:8px; overflow:hidden; }
 .card.al { border-color:var(--red); border-left-color:var(--red); background:rgba(239,68,68,0.04); }
@@ -89,7 +89,9 @@ body::after {
 .empty { text-align:center; padding:60px 0; }
 .etitle { font-family:'Bebas Neue',sans-serif; font-size:24px; letter-spacing:0.08em; }
 .esub { font-size:12px; color:var(--dim); margin-top:6px; }
-::-webkit-scrollbar { width:4px; } ::-webkit-scrollbar-track { background:transparent; } ::-webkit-scrollbar-thumb { background:var(--muted); border-radius:4px; }
+::-webkit-scrollbar { width:4px; }
+::-webkit-scrollbar-track { background:transparent; }
+::-webkit-scrollbar-thumb { background:var(--muted); border-radius:4px; }
 </style>
 </head>
 <body>
@@ -99,11 +101,11 @@ body::after {
       <div>
         <div class="brand">HOMESTEAD ELECTRIC</div>
         <div class="title"><div class="dot"></div>PRE JOB PREP</div>
-        <div class="meta" id="meta">Connecting…</div>
+        <div class="meta" id="meta">Connecting...</div>
       </div>
       <div class="actions">
-        <input class="srch" id="srch" placeholder="Search jobs…" oninput="render()"/>
-        <button class="btn" onclick="window.loadJobs()">
+        <input class="srch" id="srch" placeholder="Search jobs..." oninput="render()"/>
+        <button class="btn" onclick="loadJobs()">
           <span id="sdot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--dim);margin-right:4px;vertical-align:middle"></span>
           <span id="slbl">Refresh</span>
         </button>
@@ -118,7 +120,7 @@ body::after {
   <div class="body" id="body">
     <div class="loading">
       <div class="spin"></div>
-      <div style="font-size:11px;color:var(--dim);font-family:'DM Mono',monospace">Connecting to Firebase…</div>
+      <div style="font-size:11px;color:var(--dim);font-family:'DM Mono',monospace">Connecting to Firebase...</div>
     </div>
   </div>
 </div>
@@ -128,202 +130,414 @@ import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.0/firebas
 import { getFirestore, collection, onSnapshot, doc, setDoc } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
 
 const db = getFirestore(initializeApp({
-  apiKey:"AIzaSyAQl6V74U502_ZHF3h_1W0yYDuKr2mLI5Q",
-  authDomain:"homestead-electric.firebaseapp.com",
-  projectId:"homestead-electric",
-  storageBucket:"homestead-electric.firebasestorage.app",
-  messagingSenderId:"318598172684",
-  appId:"1:318598172684:web:b2ef548d952faabccd9e29"
+  apiKey: "AIzaSyAQl6V74U502_ZHF3h_1W0yYDuKr2mLI5Q",
+  authDomain: "homestead-electric.firebaseapp.com",
+  projectId: "homestead-electric",
+  storageBucket: "homestead-electric.firebasestorage.app",
+  messagingSenderId: "318598172684",
+  appId: "1:318598172684:web:b2ef548d952faabccd9e29"
 }));
 
 const STAGES = [
-  'Redline Walk Scheduled','Redline Walk Completed','Redline CO Doc Made',
-  'Redline Plans Made','Redline CO Sent','Redline CO Signed',
-  'Redline Plans Need to be Updated','Job Prep Complete'
+  "Redline Walk Scheduled",
+  "Redline Walk Completed",
+  "Redline CO Doc Made",
+  "Redline Plans Made",
+  "Redline CO Sent",
+  "Redline CO Signed",
+  "Redline Plans Need to be Updated",
+  "Job Prep Complete"
 ];
-const ALERT = 'Redline Plans Need to be Updated';
-const FC = { Koy:'#3b82f6', Vasa:'#f97316', Colby:'#22c55e' };
 
-let jobs = [], tab = 'prep', pill = null, openCards = {}, lastUp = null, timers = {}, unsub = null;
+const ALERT_STAGE = "Redline Plans Need to be Updated";
+const FC = { Koy: "#3b82f6", Vasa: "#f97316", Colby: "#22c55e" };
 
-window.loadJobs = function() {
-  setSyncing('loading');
-  if (unsub) unsub();
-  unsub = onSnapshot(collection(db, 'jobs'),
+var jobs = [];
+var currentTab = "prep";
+var activePill = null;
+var openCards = {};
+var lastUpdated = null;
+var saveTimers = {};
+var unsubscribe = null;
+
+function loadJobs() {
+  setSyncing("loading");
+  if (unsubscribe) unsubscribe();
+  unsubscribe = onSnapshot(
+    collection(db, "jobs"),
     function(snap) {
-      jobs = snap.docs.map(function(d) { return d.data() && d.data().data; }).filter(Boolean).map(migrate);
-      lastUp = new Date(); setSyncing('ok'); render();
+      jobs = snap.docs
+        .map(function(d) { return d.data() && d.data().data; })
+        .filter(Boolean)
+        .map(migrateJob);
+      lastUpdated = new Date();
+      setSyncing("ok");
+      render();
     },
-    function(err) { console.error(err); setSyncing('err'); }
+    function(err) {
+      console.error(err);
+      setSyncing("err");
+    }
   );
-};
+}
 
-function migrate(j) {
-  var rm = {"Pre-Wire":"0%","Rough-In":"25%","Rough Inspection":"75%","Rough Complete":"100%"};
-  var fm = {"Fixtures Ordered":"0%","Finish Scheduled":"20%","Finish In Progress":"50%","Punch List":"75%","CO / Final":"90%","Complete":"100%"};
-  return Object.assign({}, j, { roughStage: rm[j.roughStage]||j.roughStage||"0%", finishStage: fm[j.finishStage]||j.finishStage||"0%" });
+function migrateJob(j) {
+  var rm = {
+    "Pre-Wire": "0%", "Rough-In": "25%",
+    "Rough Inspection": "75%", "Rough Complete": "100%"
+  };
+  var fm = {
+    "Fixtures Ordered": "0%", "Finish Scheduled": "20%",
+    "Finish In Progress": "50%", "Punch List": "75%",
+    "CO / Final": "90%", "Complete": "100%"
+  };
+  return Object.assign({}, j, {
+    roughStage: rm[j.roughStage] || j.roughStage || "0%",
+    finishStage: fm[j.finishStage] || j.finishStage || "0%"
+  });
 }
 
 function saveJob(job) {
-  clearTimeout(timers[job.id]);
-  timers[job.id] = setTimeout(function() {
-    setDoc(doc(db, 'jobs', job.id), { data: job, updated_at: new Date().toISOString() })
-      .then(function() {
-        var el = document.getElementById('sf-' + job.id);
-        if (el) { el.classList.add('show'); setTimeout(function() { el.classList.remove('show'); }, 2000); }
-      })
-      .catch(function(e) { console.error('Save failed:', e); });
+  clearTimeout(saveTimers[job.id]);
+  saveTimers[job.id] = setTimeout(function() {
+    setDoc(doc(db, "jobs", job.id), {
+      data: job,
+      updated_at: new Date().toISOString()
+    }).then(function() {
+      var el = document.getElementById("sf-" + job.id);
+      if (el) {
+        el.classList.add("show");
+        setTimeout(function() { el.classList.remove("show"); }, 2000);
+      }
+    }).catch(function(e) {
+      console.error("Save failed:", e);
+    });
   }, 400);
 }
 
 function patchJob(id, fields) {
-  var idx = jobs.findIndex(function(j) { return j.id === id; });
+  var idx = -1;
+  for (var i = 0; i < jobs.length; i++) {
+    if (jobs[i].id === id) { idx = i; break; }
+  }
   if (idx < 0) return;
   jobs[idx] = Object.assign({}, jobs[idx], fields);
-  saveJob(jobs[idx]); render();
+  saveJob(jobs[idx]);
+  render();
 }
 
 function setSyncing(state) {
-  var dot = document.getElementById('sdot'), lbl = document.getElementById('slbl');
-  if (state === 'loading') { dot.style.background='#eab308'; lbl.textContent='Loading…'; }
-  else if (state === 'ok') { dot.style.background='#22c55e'; lbl.textContent='Live ●'; }
-  else { dot.style.background='#ef4444'; lbl.textContent='Error'; }
+  var dot = document.getElementById("sdot");
+  var lbl = document.getElementById("slbl");
+  if (state === "loading") { dot.style.background = "#eab308"; lbl.textContent = "Loading..."; }
+  else if (state === "ok") { dot.style.background = "#22c55e"; lbl.textContent = "Live"; }
+  else { dot.style.background = "#ef4444"; lbl.textContent = "Error"; }
 }
-
-window.setTab = function(t) {
-  tab = t; pill = null;
-  document.getElementById('t-prep').className = 'tab' + (t==='prep'?' on':'');
-  document.getElementById('t-done').className = 'tab' + (t==='done'?' on':'');
-  render();
-};
-window.setPill  = function(s) { pill = (pill===s)?null:s; render(); };
-window.togCard  = function(id) { openCards[id] = !openCards[id]; render(); };
-window.setStage = function(id, s) { patchJob(id, { prepStage: s }); };
-window.togField = function(id, f) {
-  var job = jobs.find(function(j) { return j.id===id; });
-  if (!job) return;
-  var p = {}; p[f] = !job[f]; patchJob(id, p);
-};
-window.saveNotes = function(id, v) { patchJob(id, { prepNotes: v }); };
 
 function stageColor(s) {
-  if (!s) return '#6b8c7a';
-  if (s===ALERT) return '#ef4444';
-  var i = STAGES.indexOf(s); if (i<0) return '#6b8c7a';
-  var p = i/(STAGES.length-1);
-  return p<0.25?'#6b8c7a':p<0.55?'#eab308':'#0d9488';
-}
-function esc(s) { return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;'); }
-function matchSearch(j,s) {
-  return (j.name||'').toLowerCase().includes(s)||(j.gc||'').toLowerCase().includes(s)||
-         (j.address||'').toLowerCase().includes(s)||(j.foreman||'').toLowerCase().includes(s);
+  if (!s) return "#6b8c7a";
+  if (s === ALERT_STAGE) return "#ef4444";
+  var i = STAGES.indexOf(s);
+  if (i < 0) return "#6b8c7a";
+  var p = i / (STAGES.length - 1);
+  if (p < 0.25) return "#6b8c7a";
+  if (p < 0.55) return "#eab308";
+  return "#0d9488";
 }
 
-window.render = function() {
-  var s = (document.getElementById('srch')||{value:''}).value.toLowerCase();
-var prep = jobs.filter(function(j){ return (j.prepStage||'') !== 'Job Prep Complete'; });
-  var done = jobs.filter(function(j){ return (j.prepStage||'') === 'Job Prep Complete'; });
-  document.getElementById('tc-prep').textContent = prep.length;
-  document.getElementById('tc-done').textContent = done.length;
-  var ts = lastUp ? lastUp.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}) : '';
-  document.getElementById('meta').textContent = prep.length+' in pipeline · '+done.length+' complete'+(ts?' · '+ts:'');
-  if (tab==='prep') renderPrep(prep,s); else renderDone(done,s);
+function escHtml(s) {
+  return String(s || "")
+    .replace(/&/g, "&amp;")
+    .replace(/</g, "&lt;")
+    .replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;");
+}
+
+function matchSearch(j, s) {
+  if (!s) return true;
+  return (
+    (j.name || "").toLowerCase().indexOf(s) >= 0 ||
+    (j.gc || "").toLowerCase().indexOf(s) >= 0 ||
+    (j.address || "").toLowerCase().indexOf(s) >= 0 ||
+    (j.foreman || "").toLowerCase().indexOf(s) >= 0
+  );
+}
+
+window.loadJobs = loadJobs;
+
+window.setTab = function(t) {
+  currentTab = t;
+  activePill = null;
+  document.getElementById("t-prep").className = "tab" + (t === "prep" ? " on" : "");
+  document.getElementById("t-done").className = "tab" + (t === "done" ? " on" : "");
+  render();
 };
 
-function renderPrep(prep,s) {
-  var order = ['— No Stage Set —'].concat(STAGES.filter(function(x){ return x!=='Job Prep Complete'; }));
+window.setPill = function(s) {
+  activePill = (activePill === s) ? null : s;
+  render();
+};
+
+window.togCard = function(id) {
+  openCards[id] = !openCards[id];
+  render();
+};
+
+window.setStage = function(id, s) {
+  patchJob(id, { prepStage: s });
+};
+
+window.togField = function(id, f) {
+  var job = null;
+  for (var i = 0; i < jobs.length; i++) {
+    if (jobs[i].id === id) { job = jobs[i]; break; }
+  }
+  if (!job) return;
+  var patch = {};
+  patch[f] = !job[f];
+  patchJob(id, patch);
+};
+
+window.saveNotes = function(id, v) {
+  patchJob(id, { prepNotes: v });
+};
+
+window.render = function render() {
+  var searchEl = document.getElementById("srch");
+  var s = searchEl ? searchEl.value.toLowerCase() : "";
+
+  var prep = jobs.filter(function(j) {
+    return (j.prepStage || "") !== "Job Prep Complete";
+  });
+  var done = jobs.filter(function(j) {
+    return (j.prepStage || "") === "Job Prep Complete";
+  });
+
+  document.getElementById("tc-prep").textContent = prep.length;
+  document.getElementById("tc-done").textContent = done.length;
+
+  var ts = lastUpdated
+    ? lastUpdated.toLocaleTimeString([], { hour: "2-digit", minute: "2-digit" })
+    : "";
+  document.getElementById("meta").textContent =
+    prep.length + " in pipeline · " + done.length + " complete" + (ts ? " · " + ts : "");
+
+  if (currentTab === "prep") {
+    renderPrep(prep, s);
+  } else {
+    renderDone(done, s);
+  }
+};
+
+function renderPrep(prep, s) {
+  var order = ["-- No Stage Set --"].concat(
+    STAGES.filter(function(x) { return x !== "Job Prep Complete"; })
+  );
+
   var grps = {};
-  prep.forEach(function(j){ var k=j.prepStage||'— No Stage Set —'; if(!grps[k])grps[k]=[]; grps[k].push(j); });
-  document.getElementById('pills').innerHTML = order.filter(function(k){ return grps[k]&&grps[k].length; }).map(function(k){
-    var c=stageColor(k==='— No Stage Set —'?'':k), on=pill===k?' on':'', lbl=k==='— No Stage Set —'?'No Stage':k;
-    return '<div class="pill'+on+'" style="color:'+c+';border-color:'+c+'44;background:'+c+'12" onclick="setPill('+JSON.stringify(k)+')">'
-      +'<span class="pn">'+grps[k].length+'</span><span>'+esc(lbl)+'</span></div>';
-  }).join('');
-  document.getElementById('pills').style.display='';
-  var disp={};
-  (pill?[pill]:order).forEach(function(k){ if(grps[k]&&grps[k].length)disp[k]=grps[k]; });
-  if(s) Object.keys(disp).forEach(function(k){ disp[k]=disp[k].filter(function(j){return matchSearch(j,s);}); if(!disp[k].length)delete disp[k]; });
-  var keys=order.filter(function(k){ return disp[k]&&disp[k].length; });
-  var body=document.getElementById('body');
-  if(!keys.length){
-    body.innerHTML=!prep.length&&!s
-      ?'<div class="empty"><div style="font-size:44px;margin-bottom:12px">✅</div><div class="etitle" style="color:#22c55e">ALL JOBS PREPPED</div><div class="esub">Nothing left in the pipeline</div></div>'
-      :'<div class="empty"><div style="font-size:36px;margin-bottom:12px">🔍</div><div class="etitle" style="color:var(--dim)">NO RESULTS</div><div class="esub">Try a different search or filter</div></div>';
+  for (var i = 0; i < prep.length; i++) {
+    var k = prep[i].prepStage || "-- No Stage Set --";
+    if (!grps[k]) grps[k] = [];
+    grps[k].push(prep[i]);
+  }
+
+  var pillsHtml = "";
+  for (var oi = 0; oi < order.length; oi++) {
+    var k = order[oi];
+    if (!grps[k] || !grps[k].length) continue;
+    var c = stageColor(k === "-- No Stage Set --" ? "" : k);
+    var onCls = activePill === k ? " on" : "";
+    var lbl = k === "-- No Stage Set --" ? "No Stage" : k;
+    pillsHtml += '<div class="pill' + onCls + '" style="color:' + c + ';border-color:' + c + '44;background:' + c + '12" onclick="setPill(' + JSON.stringify(k) + ')">'
+      + '<span class="pn">' + grps[k].length + '</span>'
+      + '<span>' + escHtml(lbl) + '</span></div>';
+  }
+  document.getElementById("pills").innerHTML = pillsHtml;
+  document.getElementById("pills").style.display = "";
+
+  var dispKeys = [];
+  var srcKeys = activePill ? [activePill] : order;
+  for (var si = 0; si < srcKeys.length; si++) {
+    var k = srcKeys[si];
+    if (!grps[k] || !grps[k].length) continue;
+    var filtered = grps[k].filter(function(j) { return matchSearch(j, s); });
+    if (filtered.length) {
+      grps[k] = filtered;
+      dispKeys.push(k);
+    }
+  }
+
+  var body = document.getElementById("body");
+
+  if (!dispKeys.length) {
+    if (!prep.length && !s) {
+      body.innerHTML = '<div class="empty"><div style="font-size:44px;margin-bottom:12px">&#x2705;</div><div class="etitle" style="color:#22c55e">ALL JOBS PREPPED</div><div class="esub">Nothing left in the pipeline</div></div>';
+    } else {
+      body.innerHTML = '<div class="empty"><div style="font-size:36px;margin-bottom:12px">&#x1F50D;</div><div class="etitle" style="color:var(--dim)">NO RESULTS</div><div class="esub">Try a different search or filter</div></div>';
+    }
     return;
   }
-  body.innerHTML=keys.map(function(k){
-    var isNone=k==='— No Stage Set —', c=stageColor(isNone?'':k), idx=STAGES.indexOf(k);
-    var pct=idx<0?0:Math.round((idx/(STAGES.length-1))*100);
-    return '<div class="grp"><div class="gh"><div class="gl" style="color:'+c+'">'+(k===ALERT?'⚠ ':'')+esc(isNone?'No Stage Set':k)+'</div>'
-      +'<div class="gc" style="color:'+c+';border-color:'+c+'33;background:'+c+'12">'+disp[k].length+' job'+(disp[k].length!==1?'s':'')+'</div>'
-      +(!isNone?'<span class="gp">'+pct+'% THROUGH PREP</span>':'')+'</div>'
-      +disp[k].map(function(j){return jobCard(j,c,false);}).join('')+'</div>';
-  }).join('');
+
+  var html = "";
+  for (var di = 0; di < dispKeys.length; di++) {
+    var k = dispKeys[di];
+    var isNone = k === "-- No Stage Set --";
+    var c = stageColor(isNone ? "" : k);
+    var idx = STAGES.indexOf(k);
+    var pct = idx < 0 ? 0 : Math.round((idx / (STAGES.length - 1)) * 100);
+    var groupLabel = k === ALERT_STAGE ? "&#9888; " + escHtml(k) : escHtml(isNone ? "No Stage Set" : k);
+
+    html += '<div class="grp">'
+      + '<div class="gh">'
+      + '<div class="gl" style="color:' + c + '">' + groupLabel + '</div>'
+      + '<div class="gcnt" style="color:' + c + ';border-color:' + c + '33;background:' + c + '12">'
+      + grps[k].length + ' job' + (grps[k].length !== 1 ? "s" : "") + '</div>'
+      + (!isNone ? '<span class="gp">' + pct + '% THROUGH PREP</span>' : '')
+      + '</div>';
+
+    for (var ji = 0; ji < grps[k].length; ji++) {
+      html += buildCard(grps[k][ji], c, false);
+    }
+    html += '</div>';
+  }
+  body.innerHTML = html;
 }
 
-function renderDone(done,s) {
-  document.getElementById('pills').innerHTML=''; document.getElementById('pills').style.display='none';
-  var jobs2=s?done.filter(function(j){return matchSearch(j,s);}):done;
-  var body=document.getElementById('body');
-  if(!jobs2.length){ body.innerHTML='<div class="empty"><div style="font-size:36px;margin-bottom:12px">📋</div><div class="etitle" style="color:var(--dim)">'+(s?'NO RESULTS':'NONE YET')+'</div><div class="esub">'+(s?'Try a different search':'No jobs have completed prep yet')+'</div></div>'; return; }
-  body.innerHTML='<div class="grp"><div class="gh"><div class="gl" style="color:#22c55e">JOB PREP COMPLETE</div>'
-    +'<div class="gc" style="color:#22c55e;border-color:#22c55e33;background:#22c55e12">'+jobs2.length+' job'+(jobs2.length!==1?'s':'')+'</div></div>'
-    +jobs2.map(function(j){return jobCard(j,'#22c55e',true);}).join('')+'</div>';
+function renderDone(done, s) {
+  document.getElementById("pills").innerHTML = "";
+  document.getElementById("pills").style.display = "none";
+
+  var list = done.filter(function(j) { return matchSearch(j, s); });
+  var body = document.getElementById("body");
+
+  if (!list.length) {
+    body.innerHTML = '<div class="empty"><div style="font-size:36px;margin-bottom:12px">&#x1F4CB;</div>'
+      + '<div class="etitle" style="color:var(--dim)">' + (s ? "NO RESULTS" : "NONE YET") + '</div>'
+      + '<div class="esub">' + (s ? "Try a different search" : "No jobs have completed prep yet") + '</div></div>';
+    return;
+  }
+
+  var html = '<div class="grp">'
+    + '<div class="gh">'
+    + '<div class="gl" style="color:#22c55e">JOB PREP COMPLETE</div>'
+    + '<div class="gcnt" style="color:#22c55e;border-color:#22c55e33;background:#22c55e12">'
+    + list.length + ' job' + (list.length !== 1 ? "s" : "") + '</div>'
+    + '</div>';
+
+  for (var i = 0; i < list.length; i++) {
+    html += buildCard(list[i], "#22c55e", true);
+  }
+  html += '</div>';
+  body.innerHTML = html;
 }
 
-function jobCard(job,gc,isDone) {
-  var fm=job.foreman||'Koy', fc=FC[fm]||'#6b8c7a';
-  var isAl=!isDone&&job.prepStage===ALERT, isOp=openCards[job.id], jid=JSON.stringify(job.id);
-  var dstages=STAGES.filter(function(s){return s!=='Job Prep Complete';}), ci=STAGES.indexOf(job.prepStage||'');
-  var dots=dstages.map(function(s,i){
-    var dn=isDone||ci>=i, isc=!isDone&&job.prepStage===s, ia=s===ALERT;
-    var dc=(ia&&isc)?'var(--red)':dn?gc:'#243320', sz=isc?11:7;
-    var bd=isc?'border:2px solid '+(ia?'var(--red)':gc)+';':'';
-    var line=i<dstages.length-1?'<div class="pl" style="background:'+(dn?gc:'#243320')+'"></div>':'';
-    return '<div class="pd" title="'+esc(s)+'" style="width:'+sz+'px;height:'+sz+'px;background:'+dc+';'+bd+'"></div>'+line;
-  }).join('');
-  var badges='';
-  if(job.readyToSchedule) badges+='<span class="badge" style="color:#22c55e;border-color:#22c55e33;background:#22c55e10">✓ Ready to Schedule</span> ';
-  if(isAl) badges+='<span class="badge" style="color:var(--red);border-color:#ef444433;background:#ef444410">⚠ Plans Need Update</span>';
-  var bl=isAl?'var(--red)':isDone?'#22c55e':fc;
-  var cls='card'+(isAl?' al':isDone?' dn':!job.prepStage?' ns':'');
-  var sgrid=STAGES.map(function(s){
-    var sel=job.prepStage===s, ia=s===ALERT, fin=s==='Job Prep Complete';
-    return '<button class="sb'+(ia?' ial':'')+(sel?' sel':'')+'" onclick="setStage('+jid+','+JSON.stringify(s)+')">'+(ia?'⚠ ':fin?'✓ ':'')+esc(s)+'</button>';
-  }).join('');
-  var checks=[['jobAccount','Job Account Created'],['preLien','Pre-lien Filed'],['readyToSchedule','Ready to Schedule']].map(function(pair){
-    var f=pair[0],lbl=pair[1],on=!!job[f];
-    return '<div class="ctog'+(on?' on':'')+'" onclick="togField('+jid+','+JSON.stringify(f)+')">'
-      +'<div class="cbox">'+(on?'<span style="color:#000;font-size:9px;font-weight:900">✓</span>':'')+'</div>'
-      +'<span>'+lbl+'</span></div>';
-  }).join('');
-  var stageLabel=isDone?'✓ Job Prep Complete':job.prepStage?(isAl?'⚠ ':'')+esc(job.prepStage):'<span style="color:var(--dim)">No stage set</span>';
-  return '<div class="'+cls+'" style="border-left-color:'+bl+'">'
-    +'<div class="ct" onclick="togCard('+jid+')">'
-    +'<div style="flex:0 0 200px;min-width:120px"><div style="font-weight:600;font-size:13px;color:var(--text)">'+esc(job.name||'Untitled Job')+'</div>'
-    +'<div style="font-size:11px;color:var(--dim);margin-top:2px"><span style="color:'+fc+';font-weight:600;margin-right:5px">'+esc(fm)+'</span>'+esc(job.gc||'No GC')+'</div>'
-    +(job.address?'<div style="font-size:10px;color:var(--muted);margin-top:1px">'+esc(job.address)+'</div>':'')+'</div>'
-    +'<div style="flex:1 1 160px;min-width:110px"><div style="font-size:9px;color:'+gc+';font-weight:700;letter-spacing:0.1em;margin-bottom:4px">PREP STAGE</div>'
-    +'<div class="pt">'+dots+'</div>'
-    +'<div style="font-size:10px;color:'+(isAl?'var(--red)':gc)+';margin-top:3px;font-weight:'+(isAl?700:500)+'">'+stageLabel+'</div></div>'
-    +'<div style="display:flex;gap:8px;flex-shrink:0">'
-    +'<div class="chip"><div class="cb'+(job.jobAccount?' dn':'')+'"></div><span style="color:'+(job.jobAccount?'#22c55e':'var(--dim)')+'">Acct</span></div>'
-    +'<div class="chip"><div class="cb'+(job.preLien?' dn':'')+'"></div><span style="color:'+(job.preLien?'#22c55e':'var(--dim)')+'">Lien</span></div>'
-    +'</div>'
-    +(badges?'<div style="display:flex;gap:5px;flex-wrap:wrap">'+badges+'</div>':'')
-    +'<div class="chev'+(isOp?' op':'')+'">▶</div></div>'
-    +'<div class="drw'+(isOp?' op':'')+'">'
-    +'<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
-    +'<div style="font-size:11px;color:var(--teal);font-weight:700;letter-spacing:0.06em">✎ '+esc(job.name||'Untitled Job')+'</div>'
-    +'<span class="sf" id="sf-'+job.id+'">✓ Saved</span></div>'
-    +'<div class="ds"><div class="dl">PREP STAGE</div><div class="sg">'+sgrid+'</div></div>'
-    +'<div class="ds"><div class="dl">CHECKLIST</div><div class="cr">'+checks+'</div></div>'
-    +'<div class="ds" style="margin-bottom:0"><div class="dl">PREP NOTES</div>'
-    +'<textarea class="ntxt" placeholder="Notes on this job…" onchange="saveNotes('+jid+',this.value)">'+esc(job.prepNotes||'')+'</textarea>'
-    +'</div></div></div>';
+function buildCard(job, gc, isDone) {
+  var fm = job.foreman || "Koy";
+  var fc = FC[fm] || "#6b8c7a";
+  var isAlert = !isDone && job.prepStage === ALERT_STAGE;
+  var isOpen = openCards[job.id];
+  var jid = JSON.stringify(job.id);
+
+  var dotStages = STAGES.filter(function(s) { return s !== "Job Prep Complete"; });
+  var curIdx = STAGES.indexOf(job.prepStage || "");
+  var dots = "";
+  for (var di = 0; di < dotStages.length; di++) {
+    var s = dotStages[di];
+    var done2 = isDone || curIdx >= di;
+    var isCur = !isDone && job.prepStage === s;
+    var isA = s === ALERT_STAGE;
+    var dotColor = (isA && isCur) ? "var(--red)" : done2 ? gc : "#243320";
+    var sz = isCur ? 11 : 7;
+    var bd = isCur ? "border:2px solid " + (isA ? "var(--red)" : gc) + ";" : "";
+    dots += '<div class="pd" title="' + escHtml(s) + '" style="width:' + sz + 'px;height:' + sz + 'px;background:' + dotColor + ';' + bd + '"></div>';
+    if (di < dotStages.length - 1) {
+      dots += '<div class="pl" style="background:' + (done2 ? gc : "#243320") + '"></div>';
+    }
+  }
+
+  var badges = "";
+  if (job.readyToSchedule) {
+    badges += '<span class="badge" style="color:#22c55e;border-color:#22c55e33;background:#22c55e10">&#x2713; Ready to Schedule</span> ';
+  }
+  if (isAlert) {
+    badges += '<span class="badge" style="color:var(--red);border-color:#ef444433;background:#ef444410">&#9888; Plans Need Update</span>';
+  }
+
+  var borderLeft = isAlert ? "var(--red)" : isDone ? "#22c55e" : fc;
+  var cardCls = "card" + (isAlert ? " al" : isDone ? " dn" : !job.prepStage ? " ns" : "");
+
+  var stageLabel = isDone
+    ? "&#x2713; Job Prep Complete"
+    : job.prepStage
+      ? (isAlert ? "&#9888; " : "") + escHtml(job.prepStage)
+      : '<span style="color:var(--dim)">No stage set</span>';
+
+  var sgrid = "";
+  for (var si = 0; si < STAGES.length; si++) {
+    var st = STAGES[si];
+    var isSel = job.prepStage === st;
+    var isAl2 = st === ALERT_STAGE;
+    var isFin = st === "Job Prep Complete";
+    var btnCls = "sb" + (isAl2 ? " ial" : "") + (isSel ? " sel" : "");
+    var prefix = isAl2 ? "&#9888; " : isFin ? "&#x2713; " : "";
+    sgrid += '<button class="' + btnCls + '" onclick="setStage(' + jid + ',' + JSON.stringify(st) + ')">'
+      + prefix + escHtml(st) + '</button>';
+  }
+
+  var checkFields = [
+    ["jobAccount", "Job Account Created"],
+    ["preLien", "Pre-lien Filed"],
+    ["readyToSchedule", "Ready to Schedule"]
+  ];
+  var checks = "";
+  for (var ci = 0; ci < checkFields.length; ci++) {
+    var f = checkFields[ci][0];
+    var lbl = checkFields[ci][1];
+    var on = !!job[f];
+    checks += '<div class="ctog' + (on ? " on" : "") + '" onclick="togField(' + jid + ',' + JSON.stringify(f) + ')">'
+      + '<div class="cbox">' + (on ? '<span style="color:#000;font-size:9px;font-weight:900">&#x2713;</span>' : '') + '</div>'
+      + '<span>' + lbl + '</span></div>';
+  }
+
+  return '<div class="' + cardCls + '" style="border-left-color:' + borderLeft + '">'
+
+    + '<div class="ct" onclick="togCard(' + jid + ')">'
+    + '<div style="flex:0 0 200px;min-width:120px">'
+    + '<div style="font-weight:600;font-size:13px;color:var(--text)">' + escHtml(job.name || "Untitled Job") + '</div>'
+    + '<div style="font-size:11px;color:var(--dim);margin-top:2px">'
+    + '<span style="color:' + fc + ';font-weight:600;margin-right:5px">' + escHtml(fm) + '</span>'
+    + escHtml(job.gc || "No GC") + '</div>'
+    + (job.address ? '<div style="font-size:10px;color:var(--muted);margin-top:1px">' + escHtml(job.address) + '</div>' : '')
+    + '</div>'
+
+    + '<div style="flex:1 1 160px;min-width:110px">'
+    + '<div style="font-size:9px;color:' + gc + ';font-weight:700;letter-spacing:0.1em;margin-bottom:4px">PREP STAGE</div>'
+    + '<div class="pt">' + dots + '</div>'
+    + '<div style="font-size:10px;color:' + (isAlert ? "var(--red)" : gc) + ';margin-top:3px;font-weight:' + (isAlert ? 700 : 500) + '">' + stageLabel + '</div>'
+    + '</div>'
+
+    + '<div style="display:flex;gap:8px;flex-shrink:0">'
+    + '<div class="chip"><div class="cb' + (job.jobAccount ? " dn" : "") + '"></div><span style="color:' + (job.jobAccount ? "#22c55e" : "var(--dim)") + '">Acct</span></div>'
+    + '<div class="chip"><div class="cb' + (job.preLien ? " dn" : "") + '"></div><span style="color:' + (job.preLien ? "#22c55e" : "var(--dim)") + '">Lien</span></div>'
+    + '</div>'
+
+    + (badges ? '<div style="display:flex;gap:5px;flex-wrap:wrap">' + badges + '</div>' : '')
+    + '<div class="chev' + (isOpen ? " op" : "") + '">&#9658;</div>'
+    + '</div>'
+
+    + '<div class="drw' + (isOpen ? " op" : "") + '">'
+    + '<div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:12px">'
+    + '<div style="font-size:11px;color:var(--teal);font-weight:700;letter-spacing:0.06em">&#9998; ' + escHtml(job.name || "Untitled Job") + '</div>'
+    + '<span class="sf" id="sf-' + job.id + '">&#x2713; Saved</span>'
+    + '</div>'
+    + '<div class="ds"><div class="dl">PREP STAGE</div><div class="sg">' + sgrid + '</div></div>'
+    + '<div class="ds"><div class="dl">CHECKLIST</div><div class="cr">' + checks + '</div></div>'
+    + '<div class="ds" style="margin-bottom:0"><div class="dl">PREP NOTES</div>'
+    + '<textarea class="ntxt" placeholder="Notes on this job..." onchange="saveNotes(' + jid + ',this.value)">' + escHtml(job.prepNotes || "") + '</textarea>'
+    + '</div></div></div>';
 }
 
-window.loadJobs();
+loadJobs();
 </script>
 </body>
 </html>
