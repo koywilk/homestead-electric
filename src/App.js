@@ -4486,7 +4486,8 @@ const STAGE_SECTIONS = [
 
 function StageSectionList({ jobs, JobRow, fc }) {
 
-  const [collapsed, setCollapsed] = useState({});
+  const initCollapsed = () => Object.fromEntries(STAGE_SECTIONS.map(s=>[s.key,true]));
+  const [collapsed, setCollapsed] = useState(initCollapsed);
 
   const toggle = key => setCollapsed(c=>({...c,[key]:!c[key]}));
 
