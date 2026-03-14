@@ -1,0 +1,461 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Pre Job Prep</title>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Sans:wght@400;500;600&display=swap" rel="stylesheet"/>
+<style>
+:root{--bg:#0a0f0d;--sur:#111a16;--card:#141f19;--b2:#243320;--teal:#0d9488;--green:#22c55e;--red:#ef4444;--yellow:#eab308;--text:#e2f0e8;--dim:#6b8c7a;--mut:#2d4a3a;}
+*{box-sizing:border-box;margin:0;padding:0;}
+body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;}
+.hdr{background:var(--sur);border-bottom:1px solid var(--b2);padding:16px 20px 0;position:sticky;top:0;z-index:100;}
+.hdr-row{display:flex;align-items:flex-start;justify-content:space-between;gap:12px;margin-bottom:12px;flex-wrap:wrap;}
+.brand{font-family:'Bebas Neue',sans-serif;font-size:10px;letter-spacing:0.3em;color:var(--teal);}
+.ttl{font-family:'Bebas Neue',sans-serif;font-size:30px;letter-spacing:0.06em;color:var(--text);line-height:1;display:flex;align-items:center;gap:10px;}
+.dot{width:8px;height:8px;border-radius:50%;background:var(--teal);box-shadow:0 0 8px var(--teal);flex-shrink:0;}
+.meta{font-size:11px;color:var(--dim);margin-top:2px;}
+.acts{display:flex;gap:8px;align-items:center;flex-wrap:wrap;}
+.btn{background:var(--card);border:1px solid var(--b2);border-radius:7px;color:var(--dim);font-size:11px;padding:6px 12px;cursor:pointer;white-space:nowrap;}
+.btn:hover{border-color:var(--teal);color:var(--teal);}
+.srch{background:var(--bg);border:1px solid var(--b2);border-radius:7px;color:var(--text);font-size:13px;padding:6px 12px;outline:none;min-width:160px;}
+.srch:focus{border-color:var(--teal);}
+.srch::placeholder{color:var(--dim);}
+.tabs{display:flex;}
+.tab{font-family:'Bebas Neue',sans-serif;font-size:13px;letter-spacing:0.08em;padding:8px 16px 10px;cursor:pointer;border-bottom:2px solid transparent;color:var(--dim);white-space:nowrap;}
+.tab.on{color:var(--teal);border-bottom-color:var(--teal);}
+.tc{font-size:10px;font-weight:700;background:var(--mut);border-radius:99px;padding:1px 6px;margin-left:4px;vertical-align:middle;}
+.tab.on .tc{background:rgba(13,148,136,0.25);color:var(--teal);}
+.pills{display:flex;gap:6px;flex-wrap:wrap;padding:8px 0 12px;}
+.pill{display:flex;align-items:center;gap:5px;border-radius:99px;padding:3px 10px 3px 6px;font-size:11px;font-weight:600;border:1px solid;cursor:pointer;white-space:nowrap;}
+.pill.on{filter:brightness(1.4);}
+.pn{font-family:'Bebas Neue',sans-serif;font-size:16px;line-height:1;}
+.body{padding:18px 20px 60px;max-width:1000px;}
+.grp{margin-bottom:22px;}
+.gh{display:flex;align-items:center;gap:10px;margin-bottom:10px;padding-bottom:8px;border-bottom:1px solid var(--b2);}
+.gl{font-family:'Bebas Neue',sans-serif;font-size:18px;letter-spacing:0.08em;}
+.gcnt{border-radius:99px;padding:2px 9px;font-size:11px;font-weight:700;border:1px solid;}
+.gp{margin-left:auto;font-size:10px;color:var(--dim);}
+.card{background:var(--card);border:1px solid var(--b2);border-left:3px solid var(--teal);border-radius:12px;margin-bottom:8px;overflow:hidden;}
+.card.al{border-color:var(--red);border-left-color:var(--red);background:rgba(239,68,68,0.04);}
+.card.dn{border-left-color:var(--green);border-color:rgba(34,197,94,0.2);}
+.ct{display:flex;align-items:center;gap:12px;flex-wrap:wrap;padding:12px 16px;cursor:pointer;-webkit-tap-highlight-color:transparent;}
+.ct:hover{background:var(--sur);}
+.chev{color:var(--dim);font-size:11px;margin-left:auto;flex-shrink:0;transition:transform 0.2s;display:inline-block;}
+.chev.op{transform:rotate(90deg);}
+.drw{border-top:1px solid var(--b2);background:rgba(0,0,0,0.2);padding:14px 16px;display:none;}
+.drw.op{display:block;}
+.dl{font-size:10px;font-weight:700;letter-spacing:0.1em;color:var(--dim);margin-bottom:7px;}
+.ds{margin-bottom:13px;}
+.sg{display:flex;flex-wrap:wrap;gap:5px;}
+.sb{padding:5px 11px;border-radius:7px;font-size:11px;font-weight:600;border:1px solid var(--b2);background:var(--card);color:var(--dim);cursor:pointer;white-space:nowrap;-webkit-tap-highlight-color:transparent;}
+.sb:hover{border-color:var(--teal);color:var(--teal);}
+.sb.sel{border-color:var(--teal);color:#000;background:var(--teal);}
+.sb.ial{border-color:rgba(239,68,68,0.35);color:var(--red);}
+.sb.ial.sel{background:var(--red);border-color:var(--red);color:#fff;}
+.cr{display:flex;gap:7px;flex-wrap:wrap;}
+.ctog{display:flex;align-items:center;gap:7px;cursor:pointer;padding:6px 11px;border-radius:8px;border:1px solid var(--b2);background:var(--card);font-size:12px;user-select:none;-webkit-tap-highlight-color:transparent;}
+.ctog:hover{border-color:var(--teal);}
+.ctog.on{border-color:var(--green);background:rgba(34,197,94,0.08);color:var(--green);}
+.cbox{width:13px;height:13px;border-radius:3px;border:1.5px solid var(--b2);flex-shrink:0;display:flex;align-items:center;justify-content:center;}
+.ctog.on .cbox{background:var(--green);border-color:var(--green);}
+.ntxt{width:100%;background:var(--bg);border:1px solid var(--b2);border-radius:7px;color:var(--text);font-size:12px;padding:8px 11px;outline:none;resize:vertical;min-height:54px;font-family:'DM Sans',sans-serif;}
+.ntxt:focus{border-color:var(--teal);}
+.ntxt::placeholder{color:var(--dim);}
+.sf{font-size:10px;color:var(--green);opacity:0;transition:opacity 0.3s;}
+.sf.show{opacity:1;}
+.pt{display:flex;align-items:center;}
+.pd{border-radius:50%;flex-shrink:0;}
+.pl{height:1px;flex:1;min-width:4px;}
+.badge{display:inline-flex;align-items:center;border-radius:99px;padding:2px 8px;font-size:10px;font-weight:700;border:1px solid;white-space:nowrap;}
+.chip{display:flex;align-items:center;gap:4px;font-size:10px;}
+.cb{width:10px;height:10px;border-radius:2px;border:1.5px solid var(--b2);flex-shrink:0;}
+.cb.dn{background:var(--green);border-color:var(--green);}
+.loading{display:flex;align-items:center;justify-content:center;min-height:50vh;flex-direction:column;gap:14px;}
+.spin{width:28px;height:28px;border:2px solid var(--b2);border-top-color:var(--teal);border-radius:50%;animation:spin 0.7s linear infinite;}
+@keyframes spin{to{transform:rotate(360deg);}}
+.empty{text-align:center;padding:60px 0;}
+.etitle{font-family:'Bebas Neue',sans-serif;font-size:22px;letter-spacing:0.08em;}
+.esub{font-size:12px;color:var(--dim);margin-top:6px;}
+</style>
+</head>
+<body>
+
+<div class="hdr">
+  <div class="hdr-row">
+    <div>
+      <div class="brand">HOMESTEAD ELECTRIC</div>
+      <div class="ttl"><div class="dot"></div>PRE JOB PREP</div>
+      <div class="meta" id="meta">Connecting...</div>
+    </div>
+    <div class="acts">
+      <input class="srch" id="srch" placeholder="Search jobs..." oninput="render()"/>
+      <button class="btn" onclick="loadJobs()">
+        <span id="sdot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--dim);margin-right:4px;vertical-align:middle;"></span>
+        <span id="slbl">Refresh</span>
+      </button>
+    </div>
+  </div>
+  <div class="tabs">
+    <div class="tab on" id="t-prep" onclick="setTab('prep')">PREP PIPELINE <span class="tc" id="tc-prep">0</span></div>
+    <div class="tab" id="t-done" onclick="setTab('done')">JOB PREP COMPLETE <span class="tc" id="tc-done">0</span></div>
+  </div>
+  <div class="pills" id="pills"></div>
+</div>
+
+<div class="body" id="body">
+  <div class="loading">
+    <div class="spin"></div>
+    <div style="font-size:11px;color:var(--dim);">Connecting to Firebase...</div>
+  </div>
+</div>
+
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/9.23.0/firebase-firestore-compat.js"></script>
+<script>
+firebase.initializeApp({
+  apiKey: "AIzaSyAQl6V74U502_ZHF3h_1W0yYDuKr2mLI5Q",
+  authDomain: "homestead-electric.firebaseapp.com",
+  projectId: "homestead-electric",
+  storageBucket: "homestead-electric.firebasestorage.app",
+  messagingSenderId: "318598172684",
+  appId: "1:318598172684:web:b2ef548d952faabccd9e29"
+});
+var db = firebase.firestore();
+
+var STAGES = [
+  "Redline Walk Scheduled",
+  "Redline Walk Completed",
+  "Redline CO Doc Made",
+  "Redline Plans Made",
+  "Redline CO Sent",
+  "Redline CO Signed",
+  "Redline Plans Need to be Updated",
+  "Job Prep Complete"
+];
+var ALERT_STAGE = "Redline Plans Need to be Updated";
+var FC = { Koy: "#3b82f6", Vasa: "#f97316", Colby: "#22c55e" };
+
+var jobs = [];
+var currentTab = "prep";
+var activePill = null;
+var openCards = {};
+var lastUpdated = null;
+var saveTimers = {};
+var unsubscribe = null;
+
+function loadJobs() {
+  setSyncing("loading");
+  if (unsubscribe) unsubscribe();
+  unsubscribe = db.collection("jobs").onSnapshot(function(snap) {
+    jobs = [];
+    snap.forEach(function(d) {
+      var data = d.data() && d.data().data;
+      if (data) jobs.push(migrateJob(data));
+    });
+    lastUpdated = new Date();
+    setSyncing("ok");
+    render();
+  }, function(err) {
+    console.error(err);
+    setSyncing("err");
+  });
+}
+
+function migrateJob(j) {
+  var rm = {"Pre-Wire":"0%","Rough-In":"25%","Rough Inspection":"75%","Rough Complete":"100%"};
+  var fm = {"Fixtures Ordered":"0%","Finish Scheduled":"20%","Finish In Progress":"50%","Punch List":"75%","CO / Final":"90%","Complete":"100%"};
+  var out = {};
+  for (var k in j) out[k] = j[k];
+  out.roughStage = rm[j.roughStage] || j.roughStage || "0%";
+  out.finishStage = fm[j.finishStage] || j.finishStage || "0%";
+  return out;
+}
+
+function saveJob(job) {
+  clearTimeout(saveTimers[job.id]);
+  saveTimers[job.id] = setTimeout(function() {
+    db.collection("jobs").doc(job.id).set({
+      data: job,
+      updated_at: new Date().toISOString()
+    }).then(function() {
+      var el = document.getElementById("sf-" + job.id);
+      if (el) {
+        el.classList.add("show");
+        setTimeout(function() { el.classList.remove("show"); }, 2000);
+      }
+    }).catch(function(e) { console.error("Save failed:", e); });
+  }, 400);
+}
+
+function patchJob(id, fields) {
+  for (var i = 0; i < jobs.length; i++) {
+    if (jobs[i].id === id) {
+      for (var f in fields) jobs[i][f] = fields[f];
+      saveJob(jobs[i]);
+      render();
+      return;
+    }
+  }
+}
+
+function setSyncing(state) {
+  var dot = document.getElementById("sdot");
+  var lbl = document.getElementById("slbl");
+  if (state === "loading") { dot.style.background = "#eab308"; lbl.textContent = "Loading..."; }
+  else if (state === "ok") { dot.style.background = "#22c55e"; lbl.textContent = "Live"; }
+  else { dot.style.background = "#ef4444"; lbl.textContent = "Error"; }
+}
+
+function stageColor(s) {
+  if (!s) return "#6b8c7a";
+  if (s === ALERT_STAGE) return "#ef4444";
+  var i = STAGES.indexOf(s);
+  if (i < 0) return "#6b8c7a";
+  var p = i / (STAGES.length - 1);
+  if (p < 0.25) return "#6b8c7a";
+  if (p < 0.55) return "#eab308";
+  return "#0d9488";
+}
+
+function esc(s) {
+  return String(s || "").replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;").replace(/"/g,"&quot;");
+}
+
+function matchSearch(j, s) {
+  if (!s) return true;
+  return (j.name||"").toLowerCase().indexOf(s) >= 0
+    || (j.gc||"").toLowerCase().indexOf(s) >= 0
+    || (j.address||"").toLowerCase().indexOf(s) >= 0
+    || (j.foreman||"").toLowerCase().indexOf(s) >= 0;
+}
+
+function setTab(t) {
+  currentTab = t;
+  activePill = null;
+  document.getElementById("t-prep").className = "tab" + (t === "prep" ? " on" : "");
+  document.getElementById("t-done").className = "tab" + (t === "done" ? " on" : "");
+  render();
+}
+
+function setPill(s) {
+  activePill = (activePill === s) ? null : s;
+  render();
+}
+
+function togCard(id) {
+  openCards[id] = !openCards[id];
+  render();
+}
+
+function setStage(id, s) {
+  patchJob(id, { prepStage: s });
+}
+
+function togField(id, f) {
+  for (var i = 0; i < jobs.length; i++) {
+    if (jobs[i].id === id) {
+      var patch = {};
+      patch[f] = !jobs[i][f];
+      patchJob(id, patch);
+      return;
+    }
+  }
+}
+
+function saveNotes(id, v) {
+  patchJob(id, { prepNotes: v });
+}
+
+function render() {
+  var s = (document.getElementById("srch") || {value:""}).value.toLowerCase();
+  var prep = [], done = [];
+  for (var i = 0; i < jobs.length; i++) {
+    if ((jobs[i].prepStage || "") === "Job Prep Complete") done.push(jobs[i]);
+    else prep.push(jobs[i]);
+  }
+  document.getElementById("tc-prep").textContent = prep.length;
+  document.getElementById("tc-done").textContent = done.length;
+  var ts = lastUpdated ? lastUpdated.toLocaleTimeString([], {hour:"2-digit",minute:"2-digit"}) : "";
+  document.getElementById("meta").textContent = prep.length + " in pipeline / " + done.length + " complete" + (ts ? " / " + ts : "");
+  if (currentTab === "prep") renderPrep(prep, s);
+  else renderDone(done, s);
+}
+
+function renderPrep(prep, s) {
+  var order = ["-- No Stage Set --"];
+  for (var i = 0; i < STAGES.length; i++) {
+    if (STAGES[i] !== "Job Prep Complete") order.push(STAGES[i]);
+  }
+
+  var grps = {};
+  for (var i = 0; i < prep.length; i++) {
+    var k = prep[i].prepStage || "-- No Stage Set --";
+    if (!grps[k]) grps[k] = [];
+    grps[k].push(prep[i]);
+  }
+
+  var pillsHtml = "";
+  for (var oi = 0; oi < order.length; oi++) {
+    var k = order[oi];
+    if (!grps[k] || !grps[k].length) continue;
+    var c = stageColor(k === "-- No Stage Set --" ? "" : k);
+    var onCls = activePill === k ? " on" : "";
+    var lbl = k === "-- No Stage Set --" ? "No Stage" : k;
+    pillsHtml += "<div class='pill" + onCls + "' style='color:" + c + ";border-color:" + c + "44;background:" + c + "12' onclick=\"setPill(" + JSON.stringify(k) + ")\">"
+      + "<span class='pn'>" + grps[k].length + "</span><span>" + esc(lbl) + "</span></div>";
+  }
+  document.getElementById("pills").innerHTML = pillsHtml;
+  document.getElementById("pills").style.display = "";
+
+  var srcKeys = activePill ? [activePill] : order;
+  var dispKeys = [];
+  var dispGrps = {};
+  for (var si = 0; si < srcKeys.length; si++) {
+    var k = srcKeys[si];
+    if (!grps[k] || !grps[k].length) continue;
+    var filtered = [];
+    for (var fi = 0; fi < grps[k].length; fi++) {
+      if (matchSearch(grps[k][fi], s)) filtered.push(grps[k][fi]);
+    }
+    if (filtered.length) { dispGrps[k] = filtered; dispKeys.push(k); }
+  }
+
+  var body = document.getElementById("body");
+  if (!dispKeys.length) {
+    if (!prep.length && !s) {
+      body.innerHTML = "<div class='empty'><div style='font-size:40px;margin-bottom:12px'>&#x2705;</div><div class='etitle' style='color:#22c55e'>ALL JOBS PREPPED</div><div class='esub'>Nothing left in the pipeline</div></div>";
+    } else {
+      body.innerHTML = "<div class='empty'><div style='font-size:36px;margin-bottom:12px'>&#x1F50D;</div><div class='etitle' style='color:var(--dim)'>NO RESULTS</div><div class='esub'>Try a different search</div></div>";
+    }
+    return;
+  }
+
+  var html = "";
+  for (var di = 0; di < dispKeys.length; di++) {
+    var k = dispKeys[di];
+    var isNone = k === "-- No Stage Set --";
+    var c = stageColor(isNone ? "" : k);
+    var idx = STAGES.indexOf(k);
+    var pct = idx < 0 ? 0 : Math.round((idx / (STAGES.length - 1)) * 100);
+    html += "<div class='grp'><div class='gh'>"
+      + "<div class='gl' style='color:" + c + "'>" + (k === ALERT_STAGE ? "&#9888; " : "") + esc(isNone ? "No Stage Set" : k) + "</div>"
+      + "<div class='gcnt' style='color:" + c + ";border-color:" + c + "33;background:" + c + "12'>" + dispGrps[k].length + " job" + (dispGrps[k].length !== 1 ? "s" : "") + "</div>"
+      + (!isNone ? "<span class='gp'>" + pct + "% THROUGH PREP</span>" : "")
+      + "</div>";
+    for (var ji = 0; ji < dispGrps[k].length; ji++) html += buildCard(dispGrps[k][ji], c, false);
+    html += "</div>";
+  }
+  body.innerHTML = html;
+}
+
+function renderDone(done, s) {
+  document.getElementById("pills").innerHTML = "";
+  document.getElementById("pills").style.display = "none";
+  var list = [];
+  for (var i = 0; i < done.length; i++) {
+    if (matchSearch(done[i], s)) list.push(done[i]);
+  }
+  var body = document.getElementById("body");
+  if (!list.length) {
+    body.innerHTML = "<div class='empty'><div style='font-size:36px;margin-bottom:12px'>&#x1F4CB;</div><div class='etitle' style='color:var(--dim)'>" + (s ? "NO RESULTS" : "NONE YET") + "</div><div class='esub'>" + (s ? "Try a different search" : "No jobs have completed prep yet") + "</div></div>";
+    return;
+  }
+  var html = "<div class='grp'><div class='gh'><div class='gl' style='color:#22c55e'>JOB PREP COMPLETE</div>"
+    + "<div class='gcnt' style='color:#22c55e;border-color:#22c55e33;background:#22c55e12'>" + list.length + " job" + (list.length !== 1 ? "s" : "") + "</div></div>";
+  for (var i = 0; i < list.length; i++) html += buildCard(list[i], "#22c55e", true);
+  html += "</div>";
+  body.innerHTML = html;
+}
+
+function buildCard(job, gc, isDone) {
+  var fm = job.foreman || "Koy";
+  var fc = FC[fm] || "#6b8c7a";
+  var isAlert = !isDone && job.prepStage === ALERT_STAGE;
+  var isOpen = openCards[job.id];
+  var jid = JSON.stringify(job.id);
+
+  var dotStages = [];
+  for (var i = 0; i < STAGES.length; i++) {
+    if (STAGES[i] !== "Job Prep Complete") dotStages.push(STAGES[i]);
+  }
+  var curIdx = STAGES.indexOf(job.prepStage || "");
+  var dots = "";
+  for (var di = 0; di < dotStages.length; di++) {
+    var done2 = isDone || curIdx >= di;
+    var isCur = !isDone && job.prepStage === dotStages[di];
+    var isA = dotStages[di] === ALERT_STAGE;
+    var dc = (isA && isCur) ? "var(--red)" : done2 ? gc : "#243320";
+    var sz = isCur ? 11 : 7;
+    var bd = isCur ? "border:2px solid " + (isA ? "var(--red)" : gc) + ";" : "";
+    dots += "<div class='pd' style='width:" + sz + "px;height:" + sz + "px;background:" + dc + ";" + bd + "'></div>";
+    if (di < dotStages.length - 1) dots += "<div class='pl' style='background:" + (done2 ? gc : "#243320") + "'></div>";
+  }
+
+  var badges = "";
+  if (job.readyToSchedule) badges += "<span class='badge' style='color:#22c55e;border-color:#22c55e33;background:#22c55e10'>&#x2713; Ready to Schedule</span> ";
+  if (isAlert) badges += "<span class='badge' style='color:var(--red);border-color:#ef444433;background:#ef444410'>&#9888; Plans Need Update</span>";
+
+  var bl = isAlert ? "var(--red)" : isDone ? "#22c55e" : fc;
+  var cardCls = "card" + (isAlert ? " al" : isDone ? " dn" : "");
+
+  var stageLabel = isDone ? "&#x2713; Job Prep Complete"
+    : job.prepStage ? (isAlert ? "&#9888; " : "") + esc(job.prepStage)
+    : "<span style='color:var(--dim)'>No stage set</span>";
+
+  var sgrid = "";
+  for (var si = 0; si < STAGES.length; si++) {
+    var st = STAGES[si];
+    var isSel = job.prepStage === st;
+    var isAl2 = st === ALERT_STAGE;
+    var isFin = st === "Job Prep Complete";
+    sgrid += "<button class='sb" + (isAl2 ? " ial" : "") + (isSel ? " sel" : "") + "' onclick=\"setStage(" + jid + "," + JSON.stringify(st) + ")\">"
+      + (isAl2 ? "&#9888; " : isFin ? "&#x2713; " : "") + esc(st) + "</button>";
+  }
+
+  var checkFields = [["jobAccount","Job Account Created"],["preLien","Pre-lien Filed"],["readyToSchedule","Ready to Schedule"]];
+  var checks = "";
+  for (var ci = 0; ci < checkFields.length; ci++) {
+    var f = checkFields[ci][0];
+    var lbl = checkFields[ci][1];
+    var on = !!job[f];
+    checks += "<div class='ctog" + (on ? " on" : "") + "' onclick=\"togField(" + jid + "," + JSON.stringify(f) + ")\">"
+      + "<div class='cbox'>" + (on ? "<span style='color:#000;font-size:9px;font-weight:900'>&#x2713;</span>" : "") + "</div>"
+      + "<span>" + lbl + "</span></div>";
+  }
+
+  return "<div class='" + cardCls + "' style='border-left-color:" + bl + "'>"
+    + "<div class='ct' onclick=\"togCard(" + jid + ")\">"
+    + "<div style='flex:0 0 190px;min-width:110px'>"
+    + "<div style='font-weight:600;font-size:13px;color:var(--text)'>" + esc(job.name || "Untitled Job") + "</div>"
+    + "<div style='font-size:11px;color:var(--dim);margin-top:2px'><span style='color:" + fc + ";font-weight:600;margin-right:4px'>" + esc(fm) + "</span>" + esc(job.gc || "No GC") + "</div>"
+    + (job.address ? "<div style='font-size:10px;color:var(--mut);margin-top:1px'>" + esc(job.address) + "</div>" : "")
+    + "</div>"
+    + "<div style='flex:1 1 150px;min-width:100px'>"
+    + "<div style='font-size:9px;color:" + gc + ";font-weight:700;letter-spacing:0.1em;margin-bottom:4px'>PREP STAGE</div>"
+    + "<div class='pt'>" + dots + "</div>"
+    + "<div style='font-size:10px;color:" + (isAlert ? "var(--red)" : gc) + ";margin-top:3px;font-weight:" + (isAlert ? 700 : 500) + "'>" + stageLabel + "</div>"
+    + "</div>"
+    + "<div style='display:flex;gap:8px;flex-shrink:0'>"
+    + "<div class='chip'><div class='cb" + (job.jobAccount ? " dn" : "") + "'></div><span style='color:" + (job.jobAccount ? "#22c55e" : "var(--dim)") + "'>Acct</span></div>"
+    + "<div class='chip'><div class='cb" + (job.preLien ? " dn" : "") + "'></div><span style='color:" + (job.preLien ? "#22c55e" : "var(--dim)") + "'>Lien</span></div>"
+    + "</div>"
+    + (badges ? "<div style='display:flex;gap:5px;flex-wrap:wrap'>" + badges + "</div>" : "")
+    + "<div class='chev" + (isOpen ? " op" : "") + "'>&#9658;</div>"
+    + "</div>"
+    + "<div class='drw" + (isOpen ? " op" : "") + "'>"
+    + "<div style='display:flex;align-items:center;justify-content:space-between;margin-bottom:11px'>"
+    + "<div style='font-size:11px;color:var(--teal);font-weight:700;letter-spacing:0.06em'>&#9998; " + esc(job.name || "Untitled Job") + "</div>"
+    + "<span class='sf' id='sf-" + job.id + "'>&#x2713; Saved</span>"
+    + "</div>"
+    + "<div class='ds'><div class='dl'>PREP STAGE</div><div class='sg'>" + sgrid + "</div></div>"
+    + "<div class='ds'><div class='dl'>CHECKLIST</div><div class='cr'>" + checks + "</div></div>"
+    + "<div class='ds' style='margin-bottom:0'><div class='dl'>PREP NOTES</div>"
+    + "<textarea class='ntxt' placeholder='Notes on this job...' onchange=\"saveNotes(" + jid + ",this.value)\">" + esc(job.prepNotes || "") + "</textarea>"
+    + "</div></div></div>";
+}
+
+loadJobs();
+</script>
+</body>
+</html>
