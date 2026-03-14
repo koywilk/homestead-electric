@@ -3553,7 +3553,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                     </div>
                   );
                 })()}
-                <Sel value={job.roughStage} onChange={e=>u({roughStage:e.target.value})} options={ROUGH_STAGES}/>
+                <Sel value={job.roughStage} onChange={e=>u({roughStage:e.target.value,...(e.target.value==="100%"?{roughStatus:"complete"}:{})})} options={ROUGH_STAGES}/>
 
                 <div style={{marginTop:8,marginBottom:20}}>
 
@@ -3639,7 +3639,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                     </div>
                   );
                 })()}
-                <Sel value={job.finishStage} onChange={e=>u({finishStage:e.target.value})} options={FINISH_STAGES}/>
+                <Sel value={job.finishStage} onChange={e=>u({finishStage:e.target.value,...(e.target.value==="100%"?{finishStatus:"complete"}:{})})} options={FINISH_STAGES}/>
                 <div style={{marginTop:8,marginBottom:20}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
               </Section>
 
