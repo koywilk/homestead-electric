@@ -1493,7 +1493,7 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
       ))}
 
-
+      <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginTop:4}}>+ Add Change Order</Btn>
 
     </div>
 
@@ -4473,10 +4473,10 @@ const effFS = j => { if(j.finishStatus) return j.finishStatus; const p=parseInt(
 const STAGE_SECTIONS = [
 
   { key:"prep",         label:"Pre Job Prep",              color:"#0d9488",
-    test: j => j.prepStage !== "Job Prep Complete" },
+    test: j => (j.prepStage||"") !== "Job Prep Complete" },
 
   { key:"roughNotStarted", label:"Rough — Not Started",   color:"#64748b",
-    test: j => { const rs=effRS(j); return j.prepStage==="Job Prep Complete" && (!rs||rs==="ready"); } },
+    test: j => { const rs=effRS(j); return (j.prepStage||"")==="Job Prep Complete" && (!rs||rs==="ready"); } },
 
   { key:"roughHold",    label:"Rough — On Hold",           color:"#ca8a04",
     test: j => effRS(j) === "waiting" },
