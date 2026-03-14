@@ -5442,7 +5442,7 @@ if(initialLoad.current) return;
             <div style={{fontSize:9,color:C.rough,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>ROUGH</div>
             <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough}/>
             {job.roughProjectedStart&&(
-              <div style={{marginTop:4,fontSize:10,color:C.rough,fontWeight:700}}>
+              <div style={{marginTop:4,fontSize:12,color:"#dc2626",fontWeight:700}}>
                 Projected Start - {job.roughProjectedStart}
               </div>
             )}
@@ -5452,7 +5452,7 @@ if(initialLoad.current) return;
             <div style={{fontSize:9,color:C.finish,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>FINISH</div>
             <StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/>
             {job.finishProjectedStart&&(
-              <div style={{marginTop:4,fontSize:10,color:C.finish,fontWeight:700}}>
+              <div style={{marginTop:4,fontSize:12,color:"#dc2626",fontWeight:700}}>
                 Projected Start - {job.finishProjectedStart}
               </div>
             )}
