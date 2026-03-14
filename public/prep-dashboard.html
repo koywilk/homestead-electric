@@ -1,0 +1,422 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8"/>
+<meta name="viewport" content="width=device-width, initial-scale=1.0"/>
+<title>Pre Job Prep — Homestead Electric</title>
+<link rel="preconnect" href="https://fonts.googleapis.com"/>
+<link href="https://fonts.googleapis.com/css2?family=Bebas+Neue&family=DM+Mono:wght@400;500&family=DM+Sans:wght@300;400;500;600&display=swap" rel="stylesheet"/>
+<style>
+  :root {
+    --bg:#0a0f0d; --surface:#111a16; --card:#141f19; --border:#1e2e26; --border2:#243320;
+    --teal:#0d9488; --green:#22c55e; --yellow:#eab308; --red:#ef4444;
+    --orange:#f97316; --blue:#3b82f6; --text:#e2f0e8; --dim:#6b8c7a; --muted:#2d4a3a;
+    --koy:#3b82f6; --vasa:#f97316; --colby:#22c55e;
+  }
+  *{box-sizing:border-box;margin:0;padding:0;}
+  body{background:var(--bg);color:var(--text);font-family:'DM Sans',sans-serif;min-height:100vh;}
+  body::before{content:'';position:fixed;inset:0;background:repeating-linear-gradient(0deg,transparent,transparent 2px,rgba(0,0,0,0.03) 2px,rgba(0,0,0,0.03) 4px);pointer-events:none;z-index:9999;}
+  body::after{content:'';position:fixed;inset:0;background-image:linear-gradient(var(--border) 1px,transparent 1px),linear-gradient(90deg,var(--border) 1px,transparent 1px);background-size:40px 40px;opacity:0.22;pointer-events:none;z-index:0;}
+  #root{position:relative;z-index:1;}
+
+
+
+<!-- App -->
+<div id="root"><div id="app">
+
+  /* Header */
+  .hdr{border-bottom:1px solid var(--border2);padding:20px 28px 0;background:var(--surface);position:sticky;top:0;z-index:100;}
+  .hdr-top{display:flex;align-items:flex-start;justify-content:space-between;gap:16px;margin-bottom:14px;flex-wrap:wrap;}
+  .hdr-brand{font-family:'Bebas Neue',sans-serif;font-size:11px;letter-spacing:0.3em;color:var(--teal);margin-bottom:3px;}
+  .hdr-title{font-family:'Bebas Neue',sans-serif;font-size:34px;letter-spacing:0.06em;color:var(--text);line-height:1;display:flex;align-items:center;gap:12px;}
+  .live-dot{width:10px;height:10px;border-radius:50%;background:var(--teal);box-shadow:0 0 10px var(--teal);flex-shrink:0;animation:lp 2s infinite;}
+  @keyframes lp{0%,100%{box-shadow:0 0 6px var(--teal)}50%{box-shadow:0 0 20px var(--teal)}}
+  .hdr-meta{font-size:11px;color:var(--dim);font-family:'DM Mono',monospace;margin-top:3px;}
+  .hdr-actions{display:flex;gap:8px;align-items:center;flex-shrink:0;flex-wrap:wrap;}
+  .bsm{background:var(--card);border:1px solid var(--border2);border-radius:7px;color:var(--dim);font-family:'DM Mono',monospace;font-size:11px;padding:6px 12px;cursor:pointer;transition:all 0.15s;white-space:nowrap;}
+  .bsm:hover{border-color:var(--teal);color:var(--teal);}
+
+  /* Tabs */
+  .tabs{display:flex;gap:2px;}
+  .tab{font-family:'Bebas Neue',sans-serif;font-size:15px;letter-spacing:0.08em;padding:10px 20px 12px;cursor:pointer;border-bottom:2px solid transparent;color:var(--dim);transition:all 0.15s;white-space:nowrap;}
+  .tab:hover{color:var(--text);}
+  .tab.on{color:var(--teal);border-bottom-color:var(--teal);}
+  .tc{font-family:'DM Sans',sans-serif;font-size:10px;font-weight:700;background:var(--muted);border-radius:99px;padding:1px 7px;margin-left:6px;vertical-align:middle;}
+  .tab.on .tc{background:rgba(13,148,136,0.25);color:var(--teal);}
+
+  /* Stage pills */
+  .pills{display:flex;gap:7px;flex-wrap:wrap;padding:10px 0 14px;scrollbar-width:none;}
+  .pill{display:flex;align-items:center;gap:6px;border-radius:99px;padding:4px 12px 4px 8px;font-size:11px;font-weight:600;border:1px solid;cursor:pointer;transition:all 0.15s;flex-shrink:0;white-space:nowrap;}
+  .pill:hover{filter:brightness(1.3);}
+  .pill.on{filter:brightness(1.4);}
+  .pill-n{font-family:'Bebas Neue',sans-serif;font-size:18px;line-height:1;}
+
+  /* Search */
+  .srch{background:var(--bg);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:13px;padding:7px 14px;outline:none;transition:border-color 0.2s;min-width:200px;}
+  .srch:focus{border-color:var(--teal);}
+  .srch::placeholder{color:var(--dim);}
+
+  /* Body */
+  .body{padding:24px 28px 60px;max-width:1100px;}
+
+  /* Group */
+  .grp{margin-bottom:28px;}
+  .grp-hdr{display:flex;align-items:center;gap:10px;margin-bottom:12px;padding-bottom:8px;border-bottom:1px solid var(--border2);}
+  .grp-lbl{font-family:'Bebas Neue',sans-serif;font-size:20px;letter-spacing:0.08em;}
+  .grp-cnt{border-radius:99px;padding:2px 10px;font-size:11px;font-weight:700;border:1px solid;}
+  .grp-pct{margin-left:auto;font-family:'DM Mono',monospace;font-size:10px;color:var(--dim);letter-spacing:0.06em;}
+
+  /* Progress */
+  .pt{display:flex;gap:0;align-items:center;}
+  .pd{border-radius:50%;flex-shrink:0;transition:all 0.25s;}
+  .pl{height:1px;flex:1;min-width:5px;transition:background 0.25s;}
+
+  /* Card */
+  .card{background:var(--card);border:1px solid var(--border2);border-left:3px solid var(--teal);border-radius:14px;margin-bottom:8px;overflow:hidden;transition:background 0.15s;}
+  .card.al{border-color:var(--red);background:rgba(239,68,68,0.05);}
+  .card.done{border-left-color:var(--green);border-color:rgba(34,197,94,0.2);}
+  .card.ns{border-left-color:var(--dim);border-left-style:solid;border-style:dashed;border-left-style:solid;}
+  .card-top{display:flex;align-items:center;gap:14px;flex-wrap:wrap;padding:14px 18px;cursor:pointer;transition:background 0.15s;}
+  .card-top:hover{background:var(--surface);}
+  .chev{color:var(--dim);font-size:11px;margin-left:auto;flex-shrink:0;transition:transform 0.2s;display:inline-block;}
+  .chev.op{transform:rotate(90deg);}
+
+  /* Drawer */
+  .drawer{border-top:1px solid var(--border2);background:rgba(0,0,0,0.25);padding:18px 20px;display:none;}
+  .drawer.op{display:block;}
+  .d-lbl{font-size:10px;font-weight:700;letter-spacing:0.1em;color:var(--dim);font-family:'DM Mono',monospace;margin-bottom:8px;}
+  .d-sec{margin-bottom:16px;}
+
+  /* Stage buttons */
+  .sgrid{display:flex;flex-wrap:wrap;gap:6px;}
+  .sbtn{padding:5px 12px;border-radius:7px;font-size:11px;font-weight:600;border:1px solid var(--border2);background:var(--card);color:var(--dim);cursor:pointer;transition:all 0.15s;font-family:'DM Sans',sans-serif;white-space:nowrap;}
+  .sbtn:hover{border-color:var(--teal);color:var(--teal);}
+  .sbtn.sel{border-color:var(--teal);color:#000;background:var(--teal);}
+  .sbtn.al{border-color:rgba(239,68,68,0.3);color:var(--red);}
+  .sbtn.al:hover{border-color:var(--red);background:rgba(239,68,68,0.12);}
+  .sbtn.al.sel{background:var(--red);border-color:var(--red);color:#fff;}
+
+  /* Toggles */
+  .cr{display:flex;gap:10px;flex-wrap:wrap;}
+  .ctog{display:flex;align-items:center;gap:7px;cursor:pointer;padding:7px 12px;border-radius:8px;border:1px solid var(--border2);background:var(--card);transition:all 0.15s;font-size:12px;user-select:none;}
+  .ctog:hover{border-color:var(--teal);}
+  .ctog.on{border-color:var(--green);background:rgba(34,197,94,0.08);color:var(--green);}
+  .cbox{width:14px;height:14px;border-radius:4px;border:1.5px solid var(--border2);flex-shrink:0;display:flex;align-items:center;justify-content:center;transition:all 0.15s;}
+  .ctog.on .cbox{background:var(--green);border-color:var(--green);}
+
+  /* Notes */
+  .ntxt{width:100%;background:var(--bg);border:1px solid var(--border2);border-radius:8px;color:var(--text);font-family:'DM Sans',sans-serif;font-size:12px;padding:9px 12px;outline:none;resize:vertical;min-height:60px;transition:border-color 0.2s;}
+  .ntxt:focus{border-color:var(--teal);}
+  .ntxt::placeholder{color:var(--dim);}
+
+  /* Save flash */
+  .sf{font-size:10px;font-family:'DM Mono',monospace;color:var(--green);opacity:0;transition:opacity 0.3s;}
+  .sf.show{opacity:1;}
+
+  /* Badges / chips */
+  .badge{display:inline-flex;align-items:center;gap:4px;border-radius:99px;padding:2px 9px;font-size:10px;font-weight:700;border:1px solid;white-space:nowrap;}
+  .chip{display:flex;align-items:center;gap:4px;font-size:10px;}
+  .cchip{width:12px;height:12px;border-radius:3px;border:1.5px solid var(--border2);flex-shrink:0;}
+  .cchip.dn{background:var(--green);border-color:var(--green);}
+
+  /* Foreman */
+  .fkoy{color:var(--koy);} .fvasa{color:var(--vasa);} .fcolby{color:var(--colby);} .foth{color:var(--dim);}
+
+  /* Empty / loading */
+  .loading{display:flex;align-items:center;justify-content:center;min-height:50vh;flex-direction:column;gap:14px;}
+  .spin{width:32px;height:32px;border:2px solid var(--border2);border-top-color:var(--teal);border-radius:50%;animation:spin 0.7s linear infinite;}
+  @keyframes spin{to{transform:rotate(360deg)}}
+  .empty{text-align:center;padding:60px 0;}
+  .eicon{font-size:48px;margin-bottom:14px;}
+  .etitle{font-family:'Bebas Neue',sans-serif;font-size:26px;letter-spacing:0.08em;}
+  .esub{font-size:12px;color:var(--dim);margin-top:6px;}
+
+  ::-webkit-scrollbar{width:4px;height:4px;}
+  ::-webkit-scrollbar-track{background:transparent;}
+  ::-webkit-scrollbar-thumb{background:var(--muted);border-radius:4px;}
+  @media(max-width:600px){.body{padding:14px 14px 40px;}.hdr{padding:16px 16px 0;}}
+</style>
+</head>
+<body>
+
+
+
+  <div class="hdr">
+    <div class="hdr-top">
+      <div>
+        <div class="hdr-brand">HOMESTEAD ELECTRIC</div>
+        <div class="hdr-title"><div class="live-dot"></div>PRE JOB PREP</div>
+        <div class="hdr-meta" id="meta">Connecting…</div>
+      </div>
+      <div class="hdr-actions">
+        <input class="srch" id="srch" placeholder="Search jobs, GC, address…" oninput="render()"/>
+        <button class="bsm" onclick="loadJobs()">
+          <span id="sdot" style="display:inline-block;width:6px;height:6px;border-radius:50%;background:var(--dim);margin-right:5px;vertical-align:middle;"></span>
+          <span id="slbl">Refresh</span>
+        </button>
+      </div>
+    </div>
+    <div class="tabs">
+      <div class="tab on" id="t-prep" onclick="setTab('prep')">PREP PIPELINE <span class="tc" id="tc-prep">0</span></div>
+      <div class="tab" id="t-done" onclick="setTab('done')">JOB PREP COMPLETE <span class="tc" id="tc-done">0</span></div>
+    </div>
+    <div class="pills" id="pills"></div>
+  </div>
+
+  <div class="body" id="body">
+    <div class="loading"><div class="spin"></div>
+      <div style="font-size:11px;color:var(--dim);font-family:'DM Mono',monospace">Connecting to Firebase…</div>
+    </div>
+  </div>
+
+</div></div>
+
+<script type="module">
+import { initializeApp } from "https://www.gstatic.com/firebasejs/10.7.0/firebase-app.js";
+import { getFirestore, collection, onSnapshot, doc, setDoc }
+  from "https://www.gstatic.com/firebasejs/10.7.0/firebase-firestore.js";
+
+const cfg = {
+  apiKey:"AIzaSyAQl6V74U502_ZHF3h_1W0yYDuKr2mLI5Q",
+  authDomain:"homestead-electric.firebaseapp.com",
+  projectId:"homestead-electric",
+  storageBucket:"homestead-electric.firebasestorage.app",
+  messagingSenderId:"318598172684",
+  appId:"1:318598172684:web:b2ef548d952faabccd9e29"
+};
+const db = getFirestore(initializeApp(cfg));
+
+const STAGES = [
+  'Redline Walk Scheduled','Redline Walk Completed','Redline CO Doc Made',
+  'Redline Plans Made','Redline CO Sent','Redline CO Signed',
+  'Redline Plans Need to be Updated','Job Prep Complete'
+];
+const ALERT = 'Redline Plans Need to be Updated';
+const FC = {Koy:'koy',Vasa:'vasa',Colby:'colby'};
+
+let jobs=[], tab='prep', pill=null, open={}, lastUp=null, timers={}, unsub=null;
+
+
+
+// ── Load
+window.loadJobs = function loadJobs() {
+  sync(true);
+  if(unsub) unsub();
+  unsub = onSnapshot(collection(db,'jobs'), snap=>{
+    const mig = j=>{
+      const rm={"Pre-Wire":"0%","Rough-In":"25%","Rough Inspection":"75%","Rough Complete":"100%"};
+      const fm={"Fixtures Ordered":"0%","Finish Scheduled":"20%","Finish In Progress":"50%","Punch List":"75%","CO / Final":"90%","Complete":"100%"};
+      return {...j, roughStage:rm[j.roughStage]||(j.roughStage||"0%"), finishStage:fm[j.finishStage]||(j.finishStage||"0%")};
+    };
+    jobs = snap.docs.map(d=>d.data()?.data).filter(Boolean).map(mig);
+    lastUp = new Date(); sync(false,true); render();
+  }, e=>{ console.error(e); sync(false,false,true); });
+};
+
+loadJobs();
+
+// ── Save (debounced, same pattern as main app)
+function save(job){
+  clearTimeout(timers[job.id]);
+  timers[job.id]=setTimeout(async()=>{
+    try{
+      await setDoc(doc(db,'jobs',job.id),{data:job,updated_at:new Date().toISOString()});
+      const el=document.getElementById('sf-'+job.id);
+      if(el){el.classList.add('show');setTimeout(()=>el.classList.remove('show'),1800);}
+    }catch(e){console.error('Save:',e);}
+  },400);
+}
+
+function patch(id,fields){
+  const i=jobs.findIndex(j=>j.id===id); if(i<0)return;
+  jobs[i]={...jobs[i],...fields}; save(jobs[i]); render();
+}
+
+// ── Exposed handlers
+window.setTab=t=>{
+  tab=t; pill=null;
+  document.getElementById('t-prep').classList.toggle('on',t==='prep');
+  document.getElementById('t-done').classList.toggle('on',t==='done');
+  document.getElementById('pills').style.display=t==='prep'?'':'none';
+  render();
+};
+window.setPill=s=>{ pill=pill===s?null:s; render(); };
+window.tog=id=>{ open[id]=!open[id]; render(); };
+window.setStage=(id,s)=>patch(id,{prepStage:s});
+window.togField=(id,f)=>{ const j=jobs.find(x=>x.id===id); if(j)patch(id,{[f]:!j[f]}); };
+window.saveNotes=(id,v)=>patch(id,{prepNotes:v});
+
+// ── Sync indicator
+function sync(loading,ok=false,err=false){
+  const d=document.getElementById('sdot'),l=document.getElementById('slbl');
+  if(loading){d.style.background='var(--yellow)';l.textContent='Loading…';}
+  else if(ok){d.style.background='var(--green)';l.textContent='Live ●';}
+  else{d.style.background='var(--red)';l.textContent='Error';}
+}
+
+// ── Helpers
+function sc(s){
+  if(!s)return'#6b8c7a'; if(s===ALERT)return'#ef4444';
+  const i=STAGES.indexOf(s); if(i<0)return'#6b8c7a';
+  const p=i/(STAGES.length-1);
+  return p<0.25?'#6b8c7a':p<0.55?'#eab308':'#0d9488';
+}
+function e(s){return String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+
+// ── Render
+window.render=()=>{
+  const s=(document.getElementById('srch')?.value||'').toLowerCase();
+  const prep=jobs.filter(j=>(j.prepStage||'')!=='Job Prep Complete');
+  const done=jobs.filter(j=>(j.prepStage||'')==='Job Prep Complete');
+  document.getElementById('tc-prep').textContent=prep.length;
+  document.getElementById('tc-done').textContent=done.length;
+  const ts=lastUp?lastUp.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'}):'';
+  document.getElementById('meta').textContent=`${prep.length} in pipeline · ${done.length} complete${ts?' · '+ts:''}`;
+  tab==='prep'?renderPrep(prep,s):renderDone(done,s);
+};
+
+function renderPrep(prep,s){
+  const order=['— No Stage Set —',...STAGES.filter(x=>x!=='Job Prep Complete')];
+  const grps={};
+  prep.forEach(j=>{ const k=j.prepStage||'— No Stage Set —'; if(!grps[k])grps[k]=[]; grps[k].push(j); });
+
+  // pills
+  document.getElementById('pills').innerHTML=order.filter(k=>grps[k]?.length).map(k=>{
+    const c=sc(k==='— No Stage Set —'?'':k);
+    return `<div class="pill${pill===k?' on':''}" style="color:${c};border-color:${c}44;background:${c}12" onclick="setPill(${JSON.stringify(k)})">
+      <span class="pill-n">${grps[k].length}</span><span>${e(k==='— No Stage Set —'?'No Stage':k)}</span></div>`;
+  }).join('');
+
+  let disp=pill?{[pill]:grps[pill]||{}}:{...grps};
+  if(s) Object.keys(disp).forEach(k=>{ disp[k]=(disp[k]||[]).filter(j=>filt(j,s)); if(!disp[k].length)delete disp[k]; });
+
+  const keys=order.filter(k=>disp[k]?.length);
+  const b=document.getElementById('body');
+  if(!keys.length){
+    b.innerHTML=!prep.length&&!s?`<div class="empty"><div class="eicon">✅</div><div class="etitle" style="color:var(--green)">ALL JOBS PREPPED</div><div class="esub">Nothing left in the pipeline</div></div>`
+      :`<div class="empty"><div class="eicon" style="font-size:36px">🔍</div><div class="etitle" style="color:var(--dim)">NO RESULTS</div><div class="esub">Try a different search or filter</div></div>`;
+    return;
+  }
+  b.innerHTML=keys.map(k=>{
+    const isNone=k==='— No Stage Set —';
+    const c=sc(isNone?'':k);
+    const idx=STAGES.indexOf(k);
+    const pct=idx<0?0:Math.round((idx/(STAGES.length-1))*100);
+    return `<div class="grp">
+      <div class="grp-hdr">
+        <div class="grp-lbl" style="color:${c}">${k===ALERT?'⚠ ':''}${e(isNone?'No Stage Set':k)}</div>
+        <div class="grp-cnt" style="color:${c};border-color:${c}33;background:${c}12">${disp[k].length} job${disp[k].length!==1?'s':''}</div>
+        ${!isNone?`<span class="grp-pct">${pct}% THROUGH PREP</span>`:''}
+      </div>
+      ${disp[k].map(j=>card(j,c,false)).join('')}
+    </div>`;
+  }).join('');
+}
+
+function renderDone(done,s){
+  document.getElementById('pills').innerHTML='';
+  let jobs2=done; if(s)jobs2=jobs2.filter(j=>filt(j,s));
+  const b=document.getElementById('body');
+  if(!jobs2.length){
+    b.innerHTML=`<div class="empty"><div class="eicon">📋</div><div class="etitle" style="color:var(--dim)">${s?'NO RESULTS':'NONE YET'}</div><div class="esub">${s?'Try a different search':'No jobs have completed prep yet'}</div></div>`;
+    return;
+  }
+  b.innerHTML=`<div class="grp">
+    <div class="grp-hdr">
+      <div class="grp-lbl" style="color:var(--green)">JOB PREP COMPLETE</div>
+      <div class="grp-cnt" style="color:var(--green);border-color:#22c55e33;background:#22c55e12">${jobs2.length} job${jobs2.length!==1?'s':''}</div>
+    </div>
+    ${jobs2.map(j=>card(j,'#22c55e',true)).join('')}
+  </div>`;
+}
+
+function filt(j,s){
+  return (j.name||'').toLowerCase().includes(s)||(j.gc||'').toLowerCase().includes(s)||
+    (j.address||'').toLowerCase().includes(s)||(j.foreman||'').toLowerCase().includes(s);
+}
+
+function card(job,gc,isDone){
+  const fm=job.foreman||'Koy';
+  const fcls='f'+(FC[fm]||'oth');
+  const isAl=job.prepStage===ALERT&&!isDone;
+  const isOp=open[job.id];
+  const jid=JSON.stringify(job.id);
+
+  // dots
+  const dstages=STAGES.filter(s=>s!=='Job Prep Complete');
+  const ci=STAGES.indexOf(job.prepStage||'');
+  const dots=dstages.map((s,i)=>{
+    const dn=isDone||ci>=i; const isc=!isDone&&job.prepStage===s; const ia=s===ALERT;
+    const dc=ia&&isc?'var(--red)':dn?gc:'var(--border2)';
+    const sz=isc?12:8; const bd=isc?`border:2px solid ${ia?'var(--red)':gc};`:'';
+    return `<div class="pd" title="${e(s)}" style="width:${sz}px;height:${sz}px;background:${dc};${bd}"></div>`
+      +(i<dstages.length-1?`<div class="pl" style="background:${dn?gc:'var(--border2)'}"></div>`:'');
+  }).join('');
+
+  const badges=[];
+  if(job.readyToSchedule)badges.push(`<span class="badge" style="color:var(--green);border-color:#22c55e33;background:#22c55e10">✓ Ready to Schedule</span>`);
+  if(isAl)badges.push(`<span class="badge" style="color:var(--red);border-color:#ef444433;background:#ef444410">⚠ Plans Need Update</span>`);
+
+  const bl=isAl?'var(--red)':isDone?'var(--green)':(FC[fm]?`var(--${FC[fm]})`:'var(--teal)');
+  const cls=isAl?'card al':isDone?'card done':!job.prepStage?'card ns':'card';
+
+  // drawer
+  const sgrid=STAGES.map(s=>{
+    const sel=job.prepStage===s; const ia2=s===ALERT; const fin=s==='Job Prep Complete';
+    return `<button class="sbtn${ia2?' al':''}${sel?' sel':''}" onclick="event.stopPropagation();setStage(${jid},${JSON.stringify(s)})">${ia2?'⚠ ':fin?'✓ ':''}${e(s)}</button>`;
+  }).join('');
+
+  const checks=[['jobAccount','Job Account Created'],['preLien','Pre-lien Filed'],['readyToSchedule','Ready to Schedule']].map(([f,lbl])=>{
+    const on=!!job[f];
+    return `<div class="ctog${on?' on':''}" onclick="event.stopPropagation();togField(${jid},${JSON.stringify(f)})">
+      <div class="cbox">${on?'<span style="color:#000;font-size:9px;font-weight:900">✓</span>':''}</div>
+      <span>${lbl}</span></div>`;
+  }).join('');
+
+  return `
+  <div class="${cls}" style="border-left-color:${bl}" id="c-${job.id}">
+    <div class="card-top" onclick="tog(${jid})">
+      <div style="flex:0 0 210px;min-width:130px">
+        <div style="font-weight:600;font-size:14px;color:var(--text)">${e(job.name||'Untitled Job')}</div>
+        <div style="font-size:11px;color:var(--dim);margin-top:2px"><span class="${fcls}" style="font-weight:600;margin-right:5px">${e(fm)}</span>${e(job.gc||'No GC')}</div>
+        ${job.address?`<div style="font-size:10px;color:var(--muted);font-family:'DM Mono',monospace;margin-top:2px">${e(job.address)}</div>`:''}
+      </div>
+      <div style="flex:1 1 170px;min-width:120px">
+        <div style="font-size:9px;color:${gc};font-weight:700;letter-spacing:0.1em;margin-bottom:5px;font-family:'DM Mono',monospace">PREP STAGE</div>
+        <div class="pt">${dots}</div>
+        <div style="font-size:10px;color:${isAl?'var(--red)':gc};margin-top:4px;font-weight:${isAl?700:500}">
+          ${isDone?'✓ Job Prep Complete':job.prepStage?(isAl?'⚠ ':'')+e(job.prepStage):`<span style="color:var(--dim)">No stage set</span>`}
+        </div>
+      </div>
+      <div style="display:flex;gap:10px;flex-shrink:0">
+        <div class="chip"><div class="cchip${job.jobAccount?' dn':''}"></div><span style="color:${job.jobAccount?'var(--green)':'var(--dim)'}">${job.jobAccount?'✓ ':''} Job Acct</span></div>
+        <div class="chip"><div class="cchip${job.preLien?' dn':''}"></div><span style="color:${job.preLien?'var(--green)':'var(--dim)'}">${job.preLien?'✓ ':''} Pre-lien</span></div>
+      </div>
+      ${badges.length?`<div style="display:flex;gap:6px;flex-wrap:wrap">${badges.join('')}</div>`:''}
+      <div class="chev${isOp?' op':''}">▶</div>
+    </div>
+    <div class="drawer${isOp?' op':''}" id="d-${job.id}">
+      <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:14px">
+        <div style="font-size:11px;color:var(--teal);font-weight:700;letter-spacing:0.08em;font-family:'DM Mono',monospace">✎ EDIT · ${e(job.name||'Untitled Job')}</div>
+        <span class="sf" id="sf-${job.id}">✓ Saved to main app</span>
+      </div>
+      <div class="d-sec">
+        <div class="d-lbl">PREP STAGE</div>
+        <div class="sgrid">${sgrid}</div>
+      </div>
+      <div class="d-sec">
+        <div class="d-lbl">CHECKLIST</div>
+        <div class="cr">${checks}</div>
+      </div>
+      <div class="d-sec" style="margin-bottom:0">
+        <div class="d-lbl">PREP NOTES</div>
+        <textarea class="ntxt" placeholder="Notes on this job's prep status…"
+          onchange="event.stopPropagation();saveNotes(${jid},this.value)"
+          onclick="event.stopPropagation()">${e(job.prepNotes||'')}</textarea>
+      </div>
+    </div>
+  </div>`;
+}
+</script>
+</body>
+</html>
