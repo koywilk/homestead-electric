@@ -1114,6 +1114,8 @@ function MaterialOrders({orders,onChange}) {
 
     <div>
 
+      <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add Change Order</Btn>
+
       {orders.map((o,i)=>(
 
         <div key={o.id} style={{background:o.needsSchedule?"rgba(220,38,38,0.06)":o.coScheduled?"rgba(22,163,74,0.06)":C.surface,
@@ -1306,7 +1308,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
 function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
-  const add = () => onChange([{id:uid(),date:"",desc:"",task:"",material:"",time:"",status:"Pending",sendTo:"",needsSchedule:false,coScheduled:false},...orders]);
+  const add = () => onChange([{id:uid(),date:"",desc:"",task:"",material:"",time:"",status:"Pending",sendTo:"",needsSchedule:false,needsScheduleDate:"",coScheduled:false,scheduledDate:""},...orders]);
 
   const upd = (id,p) => onChange(orders.map(o=>o.id===id?{...o,...p}:o));
 
@@ -1342,7 +1344,7 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
 
-            <span style={{fontSize:12,color:C.accent,fontWeight:700}}>CO #{i+1}</span>
+            <span style={{fontSize:12,color:C.accent,fontWeight:700}}>Change Order</span>
 
             <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
 
@@ -1356,43 +1358,41 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
             </div>
             <div style={{display:"flex",gap:12,marginTop:8,flexWrap:"wrap"}}>
-              <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
-                <input type="checkbox" checked={!!o.needsSchedule}
-                  onChange={e=>upd(o.id,{needsSchedule:e.target.checked,coScheduled:e.target.checked?false:o.coScheduled})}
-                  style={{accentColor:"#dc2626",width:13,height:13}}/>
-                <span style={{fontSize:11,color:o.needsSchedule?"#dc2626":C.dim,fontWeight:o.needsSchedule?700:400}}>
-                  Needs to be scheduled
-                </span>
-              </label>
-              <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
-                <input type="checkbox" checked={!!o.coScheduled}
-                  onChange={e=>upd(o.id,{coScheduled:e.target.checked,needsSchedule:e.target.checked?false:o.needsSchedule})}
-                  style={{accentColor:"#16a34a",width:13,height:13}}/>
-                <span style={{fontSize:11,color:o.coScheduled?"#16a34a":C.dim,fontWeight:o.coScheduled?700:400}}>
-                  Scheduled
-                </span>
-              </label>
+              <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
+                  <input type="checkbox" checked={!!o.needsSchedule}
+                    onChange={e=>upd(o.id,{needsSchedule:e.target.checked,coScheduled:e.target.checked?false:o.coScheduled})}
+                    style={{accentColor:"#dc2626",width:13,height:13}}/>
+                  <span style={{fontSize:11,color:o.needsSchedule?"#dc2626":C.dim,fontWeight:o.needsSchedule?700:400}}>Needs to be scheduled</span>
+                </label>
+                {o.needsSchedule&&(
+                  <Inp value={o.needsScheduleDate||""} onChange={e=>upd(o.id,{needsScheduleDate:e.target.value})}
+                    placeholder="By when? MM/DD/YY"
+                    style={{width:130,fontSize:11,borderColor:"#dc262655",background:"rgba(220,38,38,0.05)"}}/>
+                )}
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
+                  <input type="checkbox" checked={!!o.coScheduled}
+                    onChange={e=>upd(o.id,{coScheduled:e.target.checked,needsSchedule:e.target.checked?false:o.needsSchedule})}
+                    style={{accentColor:"#16a34a",width:13,height:13}}/>
+                  <span style={{fontSize:11,color:o.coScheduled?"#16a34a":C.dim,fontWeight:o.coScheduled?700:400}}>Scheduled</span>
+                </label>
+                {o.coScheduled&&(
+                  <Inp value={o.scheduledDate||""} onChange={e=>upd(o.id,{scheduledDate:e.target.value})}
+                    placeholder="Date MM/DD/YY"
+                    style={{width:130,fontSize:11,borderColor:"#16a34a55",background:"rgba(22,163,74,0.05)"}}/>
+                )}
+              </div>
             </div>
 
           </div>
 
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-
-            <div>
-
-              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Created</div>
-
-              <Inp value={o.date} onChange={e=>upd(o.id,{date:e.target.value})} placeholder="MM/DD/YY"/>
-
-            </div>
-
-            <div>
+          <div style={{marginBottom:8}}>
 
               <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Status</div>
 
               <Sel value={o.status} onChange={e=>upd(o.id,{status:e.target.value})} options={CO_STATUSES}/>
-
-            </div>
 
           </div>
 
@@ -1462,7 +1462,7 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
       ))}
 
-      <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed"}}>+ Add Change Order</Btn>
+
 
     </div>
 
@@ -1660,7 +1660,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
   const [viewPhoto, setViewPhoto] = useState(null);
 
-  const add = () => onChange([{id:uid(),date:"",scope:"",material:"",punch:[],photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:false,rtScheduled:false},...trips]);
+  const add = () => onChange([{id:uid(),date:"",scope:"",material:"",punch:[],photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:false,needsScheduleDate:"",rtScheduled:false,scheduledDate:""},...trips]);
 
   const upd = (id,p) => onChange(trips.map(t=>t.id===id?{...t,...p}:t));
 
@@ -1742,6 +1742,8 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
     <div>
 
+      <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add Return Trip</Btn>
+
       {trips.map((t,i)=>(
 
         <div key={t.id} style={{background:t.needsSchedule?"rgba(220,38,38,0.06)":t.rtScheduled?"rgba(139,92,246,0.06)":C.surface,
@@ -1753,21 +1755,35 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
 
             <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-              <span style={{fontSize:12,color:C.purple,fontWeight:700}}>Return Trip #{i+1}</span>
+              <span style={{fontSize:12,color:C.purple,fontWeight:700}}>Return Trip</span>
               {!t.signedOff&&(
                 <>
-                  <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
-                    <input type="checkbox" checked={!!t.needsSchedule}
-                      onChange={e=>upd(t.id,{needsSchedule:e.target.checked,rtScheduled:e.target.checked?false:t.rtScheduled})}
-                      style={{accentColor:"#dc2626",width:13,height:13}}/>
-                    <span style={{fontSize:11,color:t.needsSchedule?"#dc2626":C.dim,fontWeight:t.needsSchedule?700:400}}>Needs to be scheduled</span>
-                  </label>
-                  <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
-                    <input type="checkbox" checked={!!t.rtScheduled}
-                      onChange={e=>upd(t.id,{rtScheduled:e.target.checked,needsSchedule:e.target.checked?false:t.needsSchedule})}
-                      style={{accentColor:"#8b5cf6",width:13,height:13}}/>
-                    <span style={{fontSize:11,color:t.rtScheduled?"#8b5cf6":C.dim,fontWeight:t.rtScheduled?700:400}}>Scheduled</span>
-                  </label>
+                  <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                    <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
+                      <input type="checkbox" checked={!!t.needsSchedule}
+                        onChange={e=>upd(t.id,{needsSchedule:e.target.checked,rtScheduled:e.target.checked?false:t.rtScheduled})}
+                        style={{accentColor:"#dc2626",width:13,height:13}}/>
+                      <span style={{fontSize:11,color:t.needsSchedule?"#dc2626":C.dim,fontWeight:t.needsSchedule?700:400}}>Needs to be scheduled</span>
+                    </label>
+                    {t.needsSchedule&&(
+                      <Inp value={t.needsScheduleDate||""} onChange={e=>upd(t.id,{needsScheduleDate:e.target.value})}
+                        placeholder="By when? MM/DD/YY"
+                        style={{width:130,fontSize:11,borderColor:"#dc262655",background:"rgba(220,38,38,0.05)"}}/>
+                    )}
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                    <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
+                      <input type="checkbox" checked={!!t.rtScheduled}
+                        onChange={e=>upd(t.id,{rtScheduled:e.target.checked,needsSchedule:e.target.checked?false:t.needsSchedule})}
+                        style={{accentColor:"#8b5cf6",width:13,height:13}}/>
+                      <span style={{fontSize:11,color:t.rtScheduled?"#8b5cf6":C.dim,fontWeight:t.rtScheduled?700:400}}>Scheduled</span>
+                    </label>
+                    {t.rtScheduled&&(
+                      <Inp value={t.scheduledDate||""} onChange={e=>upd(t.id,{scheduledDate:e.target.value})}
+                        placeholder="Date MM/DD/YY"
+                        style={{width:130,fontSize:11,borderColor:"#8b5cf655",background:"rgba(139,92,246,0.05)"}}/>
+                    )}
+                  </div>
                 </>
               )}
             </div>
@@ -1781,14 +1797,6 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
                 style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
 
             </div>
-
-          </div>
-
-          <div style={{marginBottom:8}}>
-
-            <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date</div>
-
-            <Inp value={t.date} onChange={e=>upd(t.id,{date:e.target.value})} placeholder="MM/DD/YY"/>
 
           </div>
 
@@ -1978,7 +1986,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
       ))}
 
-      <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed"}}>+ Add Return Trip</Btn>
+
 
       {viewPhoto&&(
 
@@ -2182,7 +2190,6 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
     <div style={{marginBottom:24}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
         <div style={{fontSize:12,color:C.blue,fontWeight:700,letterSpacing:"0.06em"}}>{label}</div>
-        <Btn onClick={addRow} variant="add" style={{fontSize:11,padding:"3px 10px"}}>+ Add Row</Btn>
       </div>
       <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px 22px",gap:4,marginBottom:4,padding:"0 2px"}}>
         {["#","Panel","Wire",""].map((h,i)=>(
@@ -2191,6 +2198,7 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
       </div>
       {flatRows.map(({r,i})=>renderRow(r,i))}
       {rows.length===0&&<div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No rows yet</div>}
+      <Btn onClick={addRow} variant="add" style={{fontSize:11,padding:"3px 10px",marginTop:6}}>+ Add Row</Btn>
 
     </div>
   );
@@ -2771,8 +2779,6 @@ function KeypadSection({loads,onChange,label}) {
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
 
         <div style={{fontSize:12,color:C.purple,fontWeight:700}}>{label}</div>
-
-        <Btn onClick={addRow} variant="add" style={{fontSize:11,padding:"3px 10px"}}>+ Add Row</Btn>
 
       </div>
 
