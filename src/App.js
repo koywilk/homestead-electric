@@ -3553,7 +3553,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                     </div>
                   );
                 })()}
-                <Sel value={job.roughStage} onChange={e=>u({roughStage:e.target.value,...(e.target.value==="100%"?{roughStatus:"complete"}:{})})} options={ROUGH_STAGES}/>
+                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;u({roughStage:v,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
 
                 <div style={{marginTop:8,marginBottom:20}}>
 
@@ -3639,7 +3639,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                     </div>
                   );
                 })()}
-                <Sel value={job.finishStage} onChange={e=>u({finishStage:e.target.value,...(e.target.value==="100%"?{finishStatus:"complete"}:{})})} options={FINISH_STAGES}/>
+                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;u({finishStage:v,...(v==="100%"?{finishStatus:"complete"}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
                 <div style={{marginTop:8,marginBottom:20}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
               </Section>
 
@@ -3929,7 +3929,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
                 {[["name","Job Name"],["address","Address"],["gc","General Contractor"],
 
-                  ["phone","GC Phone"],["simproNo","Simpro Job #"],["prepStartDate","Est. Rough Start"],["finishStartDate","Est. Finish Start"]].map(([k,l])=>(
+                  ["phone","GC Phone"],["simproNo","Simpro Job #"]].map(([k,l])=>(
 
                   <div key={k}>
 
@@ -5489,9 +5489,7 @@ function App() {
 
               {job.gc||"No GC set"}
 
-              {job.prepStartDate&&<span style={{color:C.teal,fontWeight:600,marginLeft:6}}>· Rough: {job.prepStartDate}</span>}
 
-              {job.finishStartDate&&<span style={{color:C.finish,fontWeight:600,marginLeft:6}}>· Finish: {job.finishStartDate}</span>}
 
             </div>
 
