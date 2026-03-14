@@ -209,6 +209,8 @@ const blankJob = () => ({
 
     cp4Loads:       Array.from({length:10},(_,i)=>newCP4Row(i+1)),
 
+    extraFloors:    [],
+
   },
 
   tapeLights:[], loadMappingNotes:"",
@@ -3287,7 +3289,8 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
   const saveNow = () => onUpdate({...jobRef.current});
 
-  const [tab, setTab] = useState("Rough");
+  const [tab, setTab] = useState("Job Info");
+  const [newLightingFloor, setNewLightingFloor] = useState("");
   const [emailData, setEmailData] = useState(null);
 
   const [refreshing, setRefreshing] = useState(false);
@@ -3623,46 +3626,82 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
               <SectionHead label={`${job.lightingSystem||"Control 4"} Keypads`} color={C.purple}/>
 
               <KeypadSection label="Main Level Keypad Loads"
-
                 loads={job.panelizedLighting.mainKeypad}
-
                 onChange={v=>u({panelizedLighting:{...job.panelizedLighting,mainKeypad:v}})}/>
 
               <KeypadSection label="Basement Keypad Loads"
-
                 loads={job.panelizedLighting.basementKeypad}
-
                 onChange={v=>u({panelizedLighting:{...job.panelizedLighting,basementKeypad:v}})}/>
 
               <KeypadSection label="Upper Level Keypad Loads"
-
                 loads={job.panelizedLighting.upperKeypad}
-
                 onChange={v=>u({panelizedLighting:{...job.panelizedLighting,upperKeypad:v}})}/>
+
+              {(job.panelizedLighting.extraFloors||[]).map(ef=>(
+                <KeypadSection key={ef.key} label={`${ef.label} Keypad Loads`}
+                  loads={(job.panelizedLighting[ef.key+"_keypad"])||[]}
+                  onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key+"_keypad"]:v}})}/>
+              ))}
 
               <SectionHead label={`${job.lightingSystem||"Control 4"} Panel Loads`} color={C.purple}/>
 
               {["upper","main","basement"].map(floor=>(
-
                 <div key={floor} style={{marginBottom:16}}>
-
                   <div style={{fontSize:11,color:C.dim,fontWeight:700,letterSpacing:"0.08em",
-
                     textTransform:"uppercase",marginBottom:8,paddingBottom:4,
-
                     borderBottom:`1px solid ${C.border}`}}>{floor}</div>
-
                   <CP4LoadsSection
-
                     loads={(job.panelizedLighting.cp4Loads?.[floor])||[]}
-
                     onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
-
                       cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}/>
-
                 </div>
-
               ))}
+
+              {(job.panelizedLighting.extraFloors||[]).map(ef=>(
+                <div key={ef.key} style={{marginBottom:16}}>
+                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                    marginBottom:8,paddingBottom:4,borderBottom:`1px solid ${C.border}`}}>
+                    <div style={{fontSize:11,color:C.purple,fontWeight:700,letterSpacing:"0.08em",
+                      textTransform:"uppercase"}}>{ef.label}</div>
+                    <button onClick={()=>{
+                      const newExtras=(job.panelizedLighting.extraFloors||[]).filter(e=>e.key!==ef.key);
+                      const updated={...job.panelizedLighting,extraFloors:newExtras};
+                      delete updated[ef.key+"_keypad"];
+                      u({panelizedLighting:updated});
+                    }} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
+                  </div>
+                  <CP4LoadsSection
+                    loads={(job.panelizedLighting[ef.key])||[]}
+                    onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}/>
+                </div>
+              ))}
+
+              {(()=>{
+                const addFloor = () => {
+                  const label = newLightingFloor.trim();
+                  if(!label) return;
+                  const key = "pl_"+label.toLowerCase().replace(/[^a-z0-9]/g,"_")+"_"+Date.now();
+                  const newExtras=[...(job.panelizedLighting.extraFloors||[]),{key,label}];
+                  u({panelizedLighting:{...job.panelizedLighting,extraFloors:newExtras,[key]:[],[key+"_keypad"]:[]}});
+                  setNewLightingFloor("");
+                };
+                return (
+                  <div style={{display:"flex",gap:8,alignItems:"center",marginTop:8,flexWrap:"wrap"}}>
+                    <input value={newLightingFloor} onChange={e=>setNewLightingFloor(e.target.value)}
+                      onKeyDown={e=>e.key==="Enter"&&addFloor()}
+                      placeholder="Add floor / area…"
+                      style={{flex:1,minWidth:160,background:C.surface,border:`1px solid ${C.border}`,
+                        borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
+                        outline:"none",color:C.text}}/>
+                    <button onClick={addFloor}
+                      style={{background:C.purple,color:"#fff",border:"none",borderRadius:7,
+                        padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",
+                        fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                      + Add Floor / Area
+                    </button>
+                  </div>
+                );
+              })()}
 
             </div>
 
@@ -5299,14 +5338,15 @@ function App() {
 
     const rowFc = fc || FOREMEN_COLORS[foreman];
 
-    const hasRT   = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
-    const hasRTSch = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
+    const hasRT     = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
+    const hasRTSch  = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
+    const prepAlert = job.prepStage===PREP_STAGE_ALERT;
     const _r = parseStage(job.roughStage);
     const _f = parseStage(job.finishStage);
     const rts = job.readyToSchedule && (_r===0 || (_r===100 && _f===0));
-    const rowBg    = job.readyToInvoice?"rgba(234,88,12,0.10)":hasRT?"rgba(220,38,38,0.18)":hasRTSch?"rgba(139,92,246,0.10)":rts?"rgba(234,179,8,0.18)":C.card;
-    const rowLbord = job.readyToInvoice?"#ea580c":hasRT?"#dc2626":hasRTSch?"#8b5cf6":rts?"#ca8a04":job.flagged?C.accent:rowFc;
-    const rowBord  = job.readyToInvoice?"2px solid #ea580c":hasRT?"2px solid #dc2626":hasRTSch?"2px solid #8b5cf6":rts?"2px solid #ca8a04":`1px solid ${job.flagged?C.accent+"66":C.border}`;
+    const rowBg    = job.readyToInvoice?"rgba(234,88,12,0.10)":(hasRT||prepAlert)?"rgba(220,38,38,0.18)":hasRTSch?"rgba(139,92,246,0.10)":rts?"rgba(234,179,8,0.18)":C.card;
+    const rowLbord = job.readyToInvoice?"#ea580c":(hasRT||prepAlert)?"#dc2626":hasRTSch?"#8b5cf6":rts?"#ca8a04":job.flagged?C.accent:rowFc;
+    const rowBord  = job.readyToInvoice?"2px solid #ea580c":(hasRT||prepAlert)?"2px solid #dc2626":hasRTSch?"2px solid #8b5cf6":rts?"2px solid #ca8a04":`1px solid ${job.flagged?C.accent+"66":C.border}`;
 
     return (
 
@@ -5382,6 +5422,7 @@ function App() {
           <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
 
             {hasRT&&<Pill label="Return trip needed" color="#dc2626"/>}
+            {prepAlert&&<Pill label="Redline plans need update" color="#dc2626"/>}
             {hasRTSch&&!hasRT&&<Pill label="Return trip scheduled" color="#8b5cf6"/>}
             {!hasRT&&!hasRTSch&&rts&&<Pill label="Ready to schedule" color="#ca8a04"/>}
             {open>0   &&<Pill label={`${open} open`} color={C.red}/>}
@@ -5857,11 +5898,12 @@ function App() {
                       const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
                       const dHasRT   = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
                       const dHasRTSch = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
+                      const dPrepAlert = job.prepStage===PREP_STAGE_ALERT;
                       const dRTS   = job.readyToSchedule&&(parseStage(job.roughStage))===0;
                       const dInv   = !!job.readyToInvoice;
-                      const dBg    = dInv?"rgba(234,88,12,0.12)":dHasRT?"rgba(220,38,38,0.15)":dHasRTSch?"rgba(139,92,246,0.10)":dRTS?"rgba(234,179,8,0.15)":C.card;
-                      const dBord  = dInv?"2px solid #ea580c":dHasRT?"2px solid #dc2626":dHasRTSch?"2px solid #8b5cf6":dRTS?"2px solid #ca8a04":`1px solid ${C.teal}33`;
-                      const dLbord = dInv?"#ea580c":dHasRT?"#dc2626":dHasRTSch?"#8b5cf6":dRTS?"#ca8a04":C.teal;
+                      const dBg    = dInv?"rgba(234,88,12,0.12)":(dHasRT||dPrepAlert)?"rgba(220,38,38,0.15)":dHasRTSch?"rgba(139,92,246,0.10)":dRTS?"rgba(234,179,8,0.15)":C.card;
+                      const dBord  = dInv?"2px solid #ea580c":(dHasRT||dPrepAlert)?"2px solid #dc2626":dHasRTSch?"2px solid #8b5cf6":dRTS?"2px solid #ca8a04":`1px solid ${C.teal}33`;
+                      const dLbord = dInv?"#ea580c":(dHasRT||dPrepAlert)?"#dc2626":dHasRTSch?"#8b5cf6":dRTS?"#ca8a04":C.teal;
                       return (
                         <div key={job.id} onClick={()=>setSelected(job)}
                           style={{background:dBg,border:dBord,borderRadius:12,
@@ -5879,7 +5921,8 @@ function App() {
                             </div>
                             <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
                               {dHasRT&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Return trip needed</span>}
-                              {dHasRTSch&&!dHasRT&&<span style={{background:"rgba(139,92,246,0.15)",border:"1px solid #8b5cf6",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#8b5cf6",fontWeight:700,whiteSpace:"nowrap"}}>Return trip scheduled</span>}
+                              {dPrepAlert&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Redline plans need update</span>}
+                              {dHasRTSch&&!(dHasRT||dPrepAlert)&&<span style={{background:"rgba(139,92,246,0.15)",border:"1px solid #8b5cf6",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#8b5cf6",fontWeight:700,whiteSpace:"nowrap"}}>Return trip scheduled</span>}
                               {!dHasRT&&dRTS&&<span style={{background:"rgba(234,179,8,0.2)",border:"1px solid #ca8a04",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ca8a04",fontWeight:700,whiteSpace:"nowrap"}}>Ready to schedule</span>}
                               {job.readyToInvoice&&<span style={{background:"rgba(234,88,12,0.15)",border:"1px solid #ea580c",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ea580c",fontWeight:700,whiteSpace:"nowrap"}}>Ready to invoice</span>}
                               {job.prepStartDate&&(
@@ -5945,10 +5988,11 @@ function App() {
                       const pct = parseStage(job.roughStage);
                       const dHasRT   = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
                       const dHasRTSch = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
+                      const dPrepAlert = job.prepStage===PREP_STAGE_ALERT;
                       const dInv2  = !!job.readyToInvoice;
-                      const dBg    = dInv2?"rgba(234,88,12,0.12)":dHasRT?"rgba(220,38,38,0.15)":dHasRTSch?"rgba(139,92,246,0.10)":C.card;
-                      const dBord  = dInv2?"2px solid #ea580c":dHasRT?"2px solid #dc2626":dHasRTSch?"2px solid #8b5cf6":`1px solid ${C.rough}33`;
-                      const dLbord = dHasRTSch&&!dHasRT?"#8b5cf6":dHasRT?"#dc2626":C.rough;
+                      const dBg    = dInv2?"rgba(234,88,12,0.12)":(dHasRT||dPrepAlert)?"rgba(220,38,38,0.15)":dHasRTSch?"rgba(139,92,246,0.10)":C.card;
+                      const dBord  = dInv2?"2px solid #ea580c":(dHasRT||dPrepAlert)?"2px solid #dc2626":dHasRTSch?"2px solid #8b5cf6":`1px solid ${C.rough}33`;
+                      const dLbord = dHasRTSch&&!(dHasRT||dPrepAlert)?"#8b5cf6":(dHasRT||dPrepAlert)?"#dc2626":C.rough;
                       return (
                         <div key={job.id} onClick={()=>setSelected(job)}
                           style={{background:dBg,border:dBord,borderRadius:12,
@@ -5966,7 +6010,8 @@ function App() {
                             </div>
                             <div style={{display:"flex",flexDirection:"column",alignItems:"flex-end",gap:4,flexShrink:0}}>
                               {dHasRT&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Return trip needed</span>}
-                              {dHasRTSch&&!dHasRT&&<span style={{background:"rgba(139,92,246,0.15)",border:"1px solid #8b5cf6",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#8b5cf6",fontWeight:700,whiteSpace:"nowrap"}}>Return trip scheduled</span>}
+                              {dPrepAlert&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Redline plans need update</span>}
+                              {dHasRTSch&&!(dHasRT||dPrepAlert)&&<span style={{background:"rgba(139,92,246,0.15)",border:"1px solid #8b5cf6",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#8b5cf6",fontWeight:700,whiteSpace:"nowrap"}}>Return trip scheduled</span>}
                               {job.prepStartDate&&(
                                 <div style={{background:`${C.rough}18`,border:`1px solid ${C.rough}33`,
                                   borderRadius:8,padding:"4px 10px",fontSize:11,color:C.rough,
@@ -6016,11 +6061,12 @@ function App() {
                       const stageLabel=inFinish?`Finish ${f}%`:(r===100?"In Between":`Rough ${r}%`);
                       const dHasRT   = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
                       const dHasRTSch = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
+                      const dPrepAlert = job.prepStage===PREP_STAGE_ALERT;
                       const dRTS   = job.readyToSchedule&&(parseStage(job.roughStage))===100&&(parseStage(job.finishStage))===0;
                       const dInv3  = !!job.readyToInvoice;
-                      const dBg    = dInv3?"rgba(234,88,12,0.12)":dHasRT?"rgba(220,38,38,0.15)":dHasRTSch?"rgba(139,92,246,0.10)":dRTS?"rgba(234,179,8,0.15)":C.card;
-                      const dBord  = dInv3?"2px solid #ea580c":dHasRT?"2px solid #dc2626":dHasRTSch?"2px solid #8b5cf6":dRTS?"2px solid #ca8a04":`1px solid ${stageColor}33`;
-                      const dLbord = dInv3?"#ea580c":dHasRT?"#dc2626":dHasRTSch?"#8b5cf6":dRTS?"#ca8a04":stageColor;
+                      const dBg    = dInv3?"rgba(234,88,12,0.12)":(dHasRT||dPrepAlert)?"rgba(220,38,38,0.15)":dHasRTSch?"rgba(139,92,246,0.10)":dRTS?"rgba(234,179,8,0.15)":C.card;
+                      const dBord  = dInv3?"2px solid #ea580c":(dHasRT||dPrepAlert)?"2px solid #dc2626":dHasRTSch?"2px solid #8b5cf6":dRTS?"2px solid #ca8a04":`1px solid ${stageColor}33`;
+                      const dLbord = dInv3?"#ea580c":(dHasRT||dPrepAlert)?"#dc2626":dHasRTSch?"#8b5cf6":dRTS?"#ca8a04":stageColor;
                       return (
                         <div key={job.id} onClick={()=>setSelected(job)}
                           style={{background:dBg,border:dBord,borderRadius:12,
@@ -6043,7 +6089,8 @@ function App() {
                               </div>
                               <div style={{fontSize:10,color:stageColor,fontWeight:600}}>{stageLabel}</div>
                               {dHasRT&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Return trip needed</span>}
-                              {dHasRTSch&&!dHasRT&&<span style={{background:"rgba(139,92,246,0.15)",border:"1px solid #8b5cf6",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#8b5cf6",fontWeight:700,whiteSpace:"nowrap"}}>Return trip scheduled</span>}
+                              {dPrepAlert&&<span style={{background:"rgba(220,38,38,0.2)",border:"1px solid #dc2626",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#dc2626",fontWeight:700,whiteSpace:"nowrap"}}>Redline plans need update</span>}
+                              {dHasRTSch&&!(dHasRT||dPrepAlert)&&<span style={{background:"rgba(139,92,246,0.15)",border:"1px solid #8b5cf6",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#8b5cf6",fontWeight:700,whiteSpace:"nowrap"}}>Return trip scheduled</span>}
                               {!dHasRT&&dRTS&&<span style={{background:"rgba(234,179,8,0.2)",border:"1px solid #ca8a04",borderRadius:99,padding:"2px 8px",fontSize:9,color:"#ca8a04",fontWeight:700,whiteSpace:"nowrap"}}>Ready to schedule</span>}
                             </div>
                           </div>
