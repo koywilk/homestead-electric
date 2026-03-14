@@ -3256,7 +3256,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
   useEffect(()=>{ jobRef.current = job; },[job]);
 
-  const u = patch => onUpdate({...jobRef.current,...patch});
+  const u = patch => { const updated = {...jobRef.current,...patch}; jobRef.current = updated; onUpdate(updated); };
 
   const saveNow = () => onUpdate({...jobRef.current});
 
@@ -5124,6 +5124,8 @@ function App() {
     clearTimeout(saveTimers.current[job.id]);
 
     saveTimers.current[job.id] = setTimeout(async()=>{
+
+      saveTimers.current[job.id] = null;
 
       try {
 
