@@ -1116,7 +1116,9 @@ function MaterialOrders({orders,onChange}) {
 
       {orders.map((o,i)=>(
 
-        <div key={o.id} style={{background:C.surface,border:`1px solid ${C.border}`,
+        <div key={o.id} style={{background:o.needsSchedule?"rgba(220,38,38,0.06)":o.coScheduled?"rgba(22,163,74,0.06)":C.surface,
+
+          border:o.needsSchedule?"1px solid #dc262655":o.coScheduled?"1px solid #16a34a55":`1px solid ${C.border}`,
 
           borderRadius:10,padding:14,marginBottom:12}}>
 
@@ -1304,7 +1306,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
 function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
-  const add = () => onChange([...orders,{id:uid(),date:"",desc:"",task:"",material:"",time:"",status:"Pending",sendTo:""}]);
+  const add = () => onChange([{id:uid(),date:"",desc:"",task:"",material:"",time:"",status:"Pending",sendTo:"",needsSchedule:false,coScheduled:false},...orders]);
 
   const upd = (id,p) => onChange(orders.map(o=>o.id===id?{...o,...p}:o));
 
@@ -1352,6 +1354,24 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
                 style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
 
+            </div>
+            <div style={{display:"flex",gap:12,marginTop:8,flexWrap:"wrap"}}>
+              <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
+                <input type="checkbox" checked={!!o.needsSchedule}
+                  onChange={e=>upd(o.id,{needsSchedule:e.target.checked,coScheduled:e.target.checked?false:o.coScheduled})}
+                  style={{accentColor:"#dc2626",width:13,height:13}}/>
+                <span style={{fontSize:11,color:o.needsSchedule?"#dc2626":C.dim,fontWeight:o.needsSchedule?700:400}}>
+                  Needs to be scheduled
+                </span>
+              </label>
+              <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer"}}>
+                <input type="checkbox" checked={!!o.coScheduled}
+                  onChange={e=>upd(o.id,{coScheduled:e.target.checked,needsSchedule:e.target.checked?false:o.needsSchedule})}
+                  style={{accentColor:"#16a34a",width:13,height:13}}/>
+                <span style={{fontSize:11,color:o.coScheduled?"#16a34a":C.dim,fontWeight:o.coScheduled?700:400}}>
+                  Scheduled
+                </span>
+              </label>
             </div>
 
           </div>
@@ -1640,7 +1660,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
   const [viewPhoto, setViewPhoto] = useState(null);
 
-  const add = () => onChange([...trips,{id:uid(),date:"",scope:"",material:"",punch:[],photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",rtScheduled:false}]);
+  const add = () => onChange([{id:uid(),date:"",scope:"",material:"",punch:[],photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:false,rtScheduled:false},...trips]);
 
   const upd = (id,p) => onChange(trips.map(t=>t.id===id?{...t,...p}:t));
 
@@ -1724,21 +1744,31 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
       {trips.map((t,i)=>(
 
-        <div key={t.id} style={{background:C.surface,border:`1px solid ${C.border}`,
+        <div key={t.id} style={{background:t.needsSchedule?"rgba(220,38,38,0.06)":t.rtScheduled?"rgba(139,92,246,0.06)":C.surface,
+
+          border:t.needsSchedule?"1px solid #dc262655":t.rtScheduled?"1px solid #8b5cf655":`1px solid ${C.border}`,
 
           borderRadius:10,padding:14,marginBottom:14}}>
 
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
 
-            <div style={{display:"flex",alignItems:"center",gap:10}}>
+            <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
               <span style={{fontSize:12,color:C.purple,fontWeight:700}}>Return Trip #{i+1}</span>
               {!t.signedOff&&(
-                <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
-                  <input type="checkbox" checked={!!t.rtScheduled}
-                    onChange={e=>upd(t.id,{rtScheduled:e.target.checked})}
-                    style={{accentColor:"#8b5cf6",width:13,height:13}}/>
-                  <span style={{fontSize:11,color:t.rtScheduled?"#8b5cf6":C.dim,fontWeight:t.rtScheduled?700:400}}>Scheduled</span>
-                </label>
+                <>
+                  <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
+                    <input type="checkbox" checked={!!t.needsSchedule}
+                      onChange={e=>upd(t.id,{needsSchedule:e.target.checked,rtScheduled:e.target.checked?false:t.rtScheduled})}
+                      style={{accentColor:"#dc2626",width:13,height:13}}/>
+                    <span style={{fontSize:11,color:t.needsSchedule?"#dc2626":C.dim,fontWeight:t.needsSchedule?700:400}}>Needs to be scheduled</span>
+                  </label>
+                  <label style={{display:"flex",alignItems:"center",gap:5,cursor:"pointer"}}>
+                    <input type="checkbox" checked={!!t.rtScheduled}
+                      onChange={e=>upd(t.id,{rtScheduled:e.target.checked,needsSchedule:e.target.checked?false:t.needsSchedule})}
+                      style={{accentColor:"#8b5cf6",width:13,height:13}}/>
+                    <span style={{fontSize:11,color:t.rtScheduled?"#8b5cf6":C.dim,fontWeight:t.rtScheduled?700:400}}>Scheduled</span>
+                  </label>
+                </>
               )}
             </div>
 
