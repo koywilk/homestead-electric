@@ -216,7 +216,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", finishStatus:"", finishStatusDate:"", qcStatus:"", qcStatusDate:"", readyToSchedule:false, readyToInvoice:false, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"",
+  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", readyToSchedule:false, readyToInvoice:false, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"",
 
   homeRuns:{
 
@@ -3229,9 +3229,11 @@ const normalizeJob = (raw) => ({
   finishQuestions:raw?.finishQuestions|| {upper:[],main:[],basement:[]},
   roughStatus:     raw?.roughStatus     || (()=>{ const p=parseInt(raw?.roughStage)||0;  return p===100?"complete":p>0?"inprogress":""; })(),
   finishStatus:    raw?.finishStatus    || (()=>{ const p=parseInt(raw?.finishStage)||0; return p===100?"complete":p>0?"inprogress":""; })(),
-  roughStatusDate:  raw?.roughStatusDate  || "",
-  finishStatusDate: raw?.finishStatusDate || "",
-  qcStatusDate:     raw?.qcStatusDate     || "",
+  roughStatusDate:      raw?.roughStatusDate      || "",
+  roughProjectedStart:  raw?.roughProjectedStart  || "",
+  finishStatusDate:     raw?.finishStatusDate     || "",
+  finishProjectedStart: raw?.finishProjectedStart || "",
+  qcStatusDate:         raw?.qcStatusDate         || "",
 });
 
 function JobDetail({job: rawJob, onUpdate, onClose}) {
@@ -3424,6 +3426,14 @@ onUpdate(updated);
                   const rsDef = getStatusDef(ROUGH_STATUSES, job.roughStatus);
                   return (
                     <div style={{marginBottom:12}}>
+                      <div style={{display:"flex",gap:16,marginBottom:12,flexWrap:"wrap"}}>
+                        <div style={{flex:1,minWidth:140}}>
+                          <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>PROJECTED START</div>
+                          <Inp value={job.roughProjectedStart||""} onChange={e=>u({roughProjectedStart:e.target.value})}
+                            placeholder="MM/DD/YY"
+                            style={{fontSize:13,fontWeight:700,borderColor:C.rough+"55",background:`${C.rough}08`,color:C.rough}}/>
+                        </div>
+                      </div>
                       <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
                       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                         <select value={job.roughStatus||""} onChange={e=>{
@@ -3510,6 +3520,14 @@ onUpdate(updated);
                   const fsDef = getStatusDef(FINISH_STATUSES, job.finishStatus);
                   return (
                     <div style={{marginBottom:12}}>
+                      <div style={{display:"flex",gap:16,marginBottom:12,flexWrap:"wrap"}}>
+                        <div style={{flex:1,minWidth:140}}>
+                          <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>PROJECTED START</div>
+                          <Inp value={job.finishProjectedStart||""} onChange={e=>u({finishProjectedStart:e.target.value})}
+                            placeholder="MM/DD/YY"
+                            style={{fontSize:13,fontWeight:700,borderColor:C.finish+"55",background:`${C.finish}08`,color:C.finish}}/>
+                        </div>
+                      </div>
                       <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
                       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                         <select value={job.finishStatus||""} onChange={e=>{
@@ -4494,9 +4512,10 @@ function StageSectionList({ jobs, JobRow, fc, startCollapsed=true }) {
           // Get the most relevant date for a job in this section
           const getDate = j => {
             const rs = effRS(j), fs = effFS(j);
-            if(fs==="scheduled"||fs==="ready"||fs==="inprogress") return j.finishStatusDate||j.roughStatusDate||"";
-            if(rs==="scheduled"||rs==="ready"||rs==="inprogress") return j.roughStatusDate||"";
-            return j.roughStatusDate||j.finishStatusDate||"";
+            // Prefer projected start dates, fall back to status dates
+            if(fs==="scheduled"||fs==="ready"||fs==="inprogress") return j.finishProjectedStart||j.finishStatusDate||j.roughProjectedStart||j.roughStatusDate||"";
+            if(rs==="scheduled"||rs==="ready"||rs==="inprogress") return j.roughProjectedStart||j.roughStatusDate||"";
+            return j.roughProjectedStart||j.roughStatusDate||j.finishProjectedStart||j.finishStatusDate||"";
           };
           return filtered.sort((a,b)=>{
             const da=getDate(a), db=getDate(b);
@@ -5420,19 +5439,23 @@ if(initialLoad.current) return;
           )}
 
           <div style={{flex:"1 1 150px",minWidth:130}}>
-
             <div style={{fontSize:9,color:C.rough,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>ROUGH</div>
-
             <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough}/>
-
+            {job.roughProjectedStart&&(
+              <div style={{marginTop:4,fontSize:10,color:C.rough,fontWeight:700}}>
+                Projected Start - {job.roughProjectedStart}
+              </div>
+            )}
           </div>
 
           <div style={{flex:"1 1 190px",minWidth:150}}>
-
             <div style={{fontSize:9,color:C.finish,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>FINISH</div>
-
             <StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/>
-
+            {job.finishProjectedStart&&(
+              <div style={{marginTop:4,fontSize:10,color:C.finish,fontWeight:700}}>
+                Projected Start - {job.finishProjectedStart}
+              </div>
+            )}
           </div>
 
           <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
