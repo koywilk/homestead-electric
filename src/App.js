@@ -3247,16 +3247,13 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
   };
 
-  // Auto-derive roughStatus/finishStatus from existing % if not already set
-  const deriveStatus = (status, stage) => {
-    if(status) return status;
-    const pct = parseInt(stage)||0;
-    if(pct===100) return "complete";
-    if(pct>0) return "inprogress";
-    return "";
-  };
-  job.roughStatus  = deriveStatus(job.roughStatus,  job.roughStage);
-  job.finishStatus = deriveStatus(job.finishStatus, job.finishStage);
+  // Auto-derive roughStatus/finishStatus from existing % if not already set (initial load only)
+  // This runs inside the object construction so it only affects the initial value
+  React.useMemo(()=>{
+    if(!job.roughStatus  && job.roughStage)  { const p=parseInt(job.roughStage)||0;  if(p===100) job.roughStatus="complete";  else if(p>0) job.roughStatus="inprogress"; }
+    if(!job.finishStatus && job.finishStage) { const p=parseInt(job.finishStage)||0; if(p===100) job.finishStatus="complete"; else if(p>0) job.finishStatus="inprogress"; }
+  // eslint-disable-next-line
+  },[]);
 
 
   const jobRef = useRef(job);
@@ -5041,7 +5038,7 @@ function App() {
 
           setJobs(loaded);
 
-          // Keep selected job in sync with latest data
+          // Keep selected job in sync — but NEVER overwrite if there's a pending save timer
 
           setSelected(sel => {
 
@@ -5049,7 +5046,9 @@ function App() {
 
             const updated = loaded.find(j=>j.id===sel.id);
 
-            return updated || sel;
+            if(updated && !saveTimers.current[sel.id]) return updated;
+
+            return sel;
 
           });
 
@@ -6345,7 +6344,7 @@ function App() {
               <>
               <StageSectionList jobs={filtered} JobRow={JobRow} fc={FOREMEN_COLORS[activeForeman]}/>
               {(()=>{
-                const invoiceJobs = filtered.filter(j=>j.roughStatus==="invoice"||j.finishStatus==="invoice");
+                const invoiceJobs = filtered.filter(j=>effRS(j)==="invoice"||effFS(j)==="invoice");
                 return invoiceJobs.length>0?(
                   <div style={{marginTop:8,marginBottom:20}}>
                     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,padding:"10px 14px",
