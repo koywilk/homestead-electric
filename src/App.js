@@ -1,7 +1,5 @@
 import { useState, useEffect, useRef } from "react";
 
-
-
 // Register service worker for offline support
 
 if("serviceWorker" in navigator) {
@@ -17,8 +15,6 @@ if("serviceWorker" in navigator) {
 import { initializeApp } from "firebase/app";
 
 import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
-
-
 
 const firebaseConfig = {
 
@@ -36,13 +32,9 @@ const firebaseConfig = {
 
 };
 
-
-
 const firebaseApp = initializeApp(firebaseConfig);
 
 const db = getFirestore(firebaseApp);
-
-
 
 const HO_WIRE_AMPS = {"14/2":15,"14/3":15,"12/2":20,"12/3":20,"10/2":30,"10/3":30,"8/2":40,"8/3":40,"6/2":50,"6/3":50,"4/2":70,"4/3":70,"2/2":95,"2/3":95,"1/0":125,"2/0":150,"3/0":175,"4/0":200};
 
@@ -57,8 +49,6 @@ const C = {
   orange:"#ea580c", teal:"#0d9488", rough:"#2563eb", finish:"#0ea5e9",
 
 };
-
-
 
 const JOB_ID = "homestead-jobs-v1";
 
@@ -158,8 +148,6 @@ const PULLED_OPTS   = ["","Pulled","Need Specs"];
 
 const DRIVER_SIZES  = ["","20W","40W","60W","96W","192W","288W"];
 
-
-
 const TEAM = [
 
   { name:"Josh",   email:"josh@homesteadelectric.net"   },
@@ -176,13 +164,9 @@ const TEAM = [
 
 ];
 
-
-
 let _uid = Date.now();
 
 const uid = () => String(++_uid);
-
-
 
 const newHRRow     = (num) => ({ id:uid(), num, wire:"", name:"", status:"", panel:"" });
 
@@ -192,13 +176,9 @@ const newKPRow     = (num) => ({ id:uid(), num, name:"" });
 
 const emptyPunch   = ()    => ({ upper:[], main:[], basement:[] });
 
-
-
 const FOREMEN = ["Koy", "Vasa", "Colby"];
 
 const FOREMEN_COLORS = {"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e"};
-
-
 
 const blankJob = () => ({
 
@@ -251,8 +231,6 @@ const blankJob = () => ({
   tapeLights:[], loadMappingNotes:"",
 
 });
-
-
 
 // ── PIN Gate ──────────────────────────────────────────────────
 const ADMIN_PIN = "1234";
@@ -325,13 +303,9 @@ function EmailModal({ subject, body, onClose }) {
 
   const [customErr, setCustomErr] = useState("");
 
-
-
   const toggle = (email) =>
 
     setSelected(s => s.includes(email) ? s.filter(e=>e!==email) : [...s, email]);
-
-
 
   const addCustom = () => {
 
@@ -359,8 +333,6 @@ function EmailModal({ subject, body, onClose }) {
 
   };
 
-
-
   const removeCustom = (email) => {
 
     setCustomList(l=>l.filter(e=>e!==email));
@@ -369,11 +341,7 @@ function EmailModal({ subject, body, onClose }) {
 
   };
 
-
-
   const allRecipients = [...selected];
-
-
 
   const send = () => {
 
@@ -384,8 +352,6 @@ function EmailModal({ subject, body, onClose }) {
     onClose();
 
   };
-
-
 
   return (
 
@@ -399,15 +365,11 @@ function EmailModal({ subject, body, onClose }) {
 
         maxHeight:"90vh",overflowY:"auto"}}>
 
-
-
         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",
 
           color:C.text,marginBottom:4}}>Send Email</div>
 
         <div style={{fontSize:12,color:C.dim,marginBottom:16}}>Select recipients</div>
-
-
 
         {/* Team list */}
 
@@ -454,8 +416,6 @@ function EmailModal({ subject, body, onClose }) {
           ))}
 
         </div>
-
-
 
         {/* Custom recipients */}
 
@@ -515,8 +475,6 @@ function EmailModal({ subject, body, onClose }) {
 
         </div>
 
-
-
         {/* Preview */}
 
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
@@ -537,8 +495,6 @@ function EmailModal({ subject, body, onClose }) {
 
         </div>
 
-
-
         {allRecipients.length>0&&(
 
           <div style={{fontSize:11,color:C.dim,marginBottom:10}}>
@@ -548,8 +504,6 @@ function EmailModal({ subject, body, onClose }) {
           </div>
 
         )}
-
-
 
         <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
 
@@ -581,8 +535,6 @@ function EmailModal({ subject, body, onClose }) {
 
 }
 
-
-
 // ── Atoms ─────────────────────────────────────────────────────
 
 const Pill = ({label,color}) => (
@@ -592,8 +544,6 @@ const Pill = ({label,color}) => (
     background:`${color}22`,color,border:`1px solid ${color}44`,whiteSpace:"nowrap"}}>{label}</span>
 
 );
-
-
 
 const SectionHead = ({label,color=C.dim,action=null}) => (
 
@@ -608,8 +558,6 @@ const SectionHead = ({label,color=C.dim,action=null}) => (
   </div>
 
 );
-
-
 
 // Collapsible section wrapper — collapsed by default
 
@@ -649,8 +597,6 @@ function Section({label, color=C.dim, action=null, defaultOpen=false, children})
 
 }
 
-
-
 const Inp = ({value,onChange,placeholder,style={}}) => (
 
   <input value={value??""} onChange={onChange} placeholder={placeholder}
@@ -664,8 +610,6 @@ const Inp = ({value,onChange,placeholder,style={}}) => (
     onBlur={e=>e.target.style.borderColor=C.border}/>
 
 );
-
-
 
 const Sel = ({value,onChange,options,style={}}) => (
 
@@ -681,8 +625,6 @@ const Sel = ({value,onChange,options,style={}}) => (
 
 );
 
-
-
 const TA = ({value,onChange,placeholder,rows=3}) => (
 
   <textarea value={value??""} onChange={onChange} placeholder={placeholder} rows={rows}
@@ -696,8 +638,6 @@ const TA = ({value,onChange,placeholder,rows=3}) => (
     onBlur={e=>e.target.style.borderColor=C.border}/>
 
 );
-
-
 
 const Btn = ({onClick,children,variant="ghost",style={}}) => {
 
@@ -735,8 +675,6 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
 
 };
 
-
-
 const StageBar = ({stages,current,color}) => {
 
   const isScheduled = current === "Scheduled";
@@ -771,8 +709,6 @@ const StageBar = ({stages,current,color}) => {
 
 };
 
-
-
 // ── Punch List ────────────────────────────────────────────────
 
 // Simple helpers to ensure data is always the right shape
@@ -788,8 +724,6 @@ function normFloor(v) {
   return { general: Array.isArray(v) ? v : [], rooms: [] };
 
 }
-
-
 
 function PunchItems({ items, onChange }) {
 
@@ -895,8 +829,6 @@ function PunchItems({ items, onChange }) {
 
 }
 
-
-
 function RoomNameEdit({name, onSave}) {
 
   const [editing, setEditing] = useState(false);
@@ -937,8 +869,6 @@ function RoomNameEdit({name, onSave}) {
 
 }
 
-
-
 function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor }) {
 
   const data = normFloor(floorData);
@@ -947,13 +877,9 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
   const [roomDraft, setRoomDraft] = useState('');
 
-
-
   const openCount = data.general.filter(i => !i.done).length +
 
     data.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done).length : 0), 0);
-
-
 
   const setGeneral = (general) => onFloorChange(floorKey, { ...data, general });
 
@@ -978,8 +904,6 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
     onFloorChange(floorKey, { ...data, rooms: data.rooms.filter(r => r.id !== roomId) });
 
   };
-
-
 
   return (
 
@@ -1066,8 +990,6 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
   );
 
 }
-
-
 
 function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
 
@@ -1194,8 +1116,6 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
 
 }
 
-
-
 // ── Material Orders ───────────────────────────────────────────
 
 function MaterialOrders({orders,onChange}) {
@@ -1263,8 +1183,6 @@ function MaterialOrders({orders,onChange}) {
   );
 
 }
-
-
 
 // ── Daily Updates ─────────────────────────────────────────────
 
@@ -1412,8 +1330,6 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
                "Approved":C.green,"Denied":C.red,"Work Completed":C.purple};
 
-
-
   const emailCO = (o, i) => {
 
     const subject = `${jobName} — Change Order #${idx+1}`;
@@ -1428,8 +1344,6 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
     const msg = `Change Order #${idx+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||o.status||"Pending"}\n\nhttps://homestead-electric.vercel.app/`;
     openGoogleChat(msg);
   };
-
-
 
   return (
 
@@ -1558,10 +1472,6 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
 }
 
-
-
-
-
 function ReturnTripExtras({trip, onUpd}) {
 
     return (
@@ -1591,8 +1501,6 @@ function ReturnTripExtras({trip, onUpd}) {
         ))}
 
       </div>
-
-
 
       {tab==="Assign Work"&&(
 
@@ -1655,8 +1563,6 @@ function ReturnTripExtras({trip, onUpd}) {
         </div>
 
       )}
-
-
 
       {tab==="Sign Off"&&(
 
@@ -1740,8 +1646,6 @@ function ReturnTripExtras({trip, onUpd}) {
 
 }
 
-
-
 // ── Return Trips ──────────────────────────────────────────────
 
 function ReturnTrips({trips,onChange,jobName,onEmail}) {
@@ -1753,8 +1657,6 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
   const upd = (id,p) => onChange(trips.map(t=>t.id===id?{...t,...p}:t));
 
   const del = (id)   => onChange(trips.filter(t=>t.id!==id));
-
-
 
   const emailTrip = (t,i) => {
 
@@ -1773,8 +1675,6 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
     const msg = `Return Trip #${idx+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}\n\nhttps://homestead-electric.vercel.app/`;
     openGoogleChat(msg);
   };
-
-
 
   const addPhotos = (id, files) => {
 
@@ -1829,8 +1729,6 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
     });
 
   };
-
-
 
   return (
 
@@ -1914,8 +1812,6 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
           <PunchItems items={t.punch||[]} onChange={v=>upd(t.id,{punch:v})}/>
 
-
-
           {/* Photos */}
 
           <div style={{marginTop:14}}>
@@ -1970,8 +1866,6 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
           </div>
 
-
-
           {/* Assigned To */}
 
           <div style={{marginTop:12,padding:"10px 12px",background:`${C.purple}10`,
@@ -1985,8 +1879,6 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
               placeholder="Technician name…"/>
 
           </div>
-
-
 
           {/* Sign Off */}
 
@@ -2078,8 +1970,6 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
       ))}
 
-
-
       {viewPhoto&&(
 
         <div onClick={()=>setViewPhoto(null)}
@@ -2112,13 +2002,6 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
 }
 
-
-
-
-
-
-
-
 // ── Home Runs ─────────────────────────────────────────────────
 
 const DEFAULT_PANELS = ["Panel A","Panel B","Panel C","Panel D"];
@@ -2136,8 +2019,6 @@ const getPanelOrder = (customPanels) => {
 
 const WIRE_ORDER  = {"":0,"14/2":1,"14/3":2,"12/2":3,"12/3":4,"10/2":5,"10/3":6,"8/2":7,"8/3":8,"6/2":9,"6/3":10,"4/2":11,"4/3":12,"2/2":13,"2/3":14,"1/0":15,"2/0":16,"3/0":17,"4/0":18};
 
-
-
 function HomeRunLevel({rows,onChange,label,customPanels}) {
 
   const panelOrder = getPanelOrder(customPanels);
@@ -2151,8 +2032,6 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
   const upd    = (id,p) => { const updated = rows.map(r=>r.id===id?{...r,...p}:r); onChange(('wire' in p||'panel' in p) ? sortRows(updated) : updated.map((r,i)=>({...r,num:i+1}))); };
   const addRow = () => onChange([...rows, newHRRow(rows.length+1)]);
   const delRow = (id) => onChange(sortRows(rows.filter(r=>r.id!==id)));
-
-
 
   const renderRow = (r, flatIdx) => (
     <div key={r.id}
@@ -2214,7 +2093,6 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
 
 }
 
-
 function MeterLoads({loads, onChange}) {
 
   const add = () => onChange([...loads, {id:uid(), name:"", amps:"", notes:""}]);
@@ -2263,8 +2141,6 @@ function MeterLoads({loads, onChange}) {
 
 }
 
-
-
 // Wire → {amps, poles} mapping
 
 const WIRE_BREAKER = {
@@ -2289,8 +2165,6 @@ const WIRE_BREAKER = {
 
 };
 
-
-
 function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
   const extraRows = (homeRuns.extraFloors||[]).flatMap(ef=>homeRuns[ef.key]||[]);
@@ -2307,11 +2181,7 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
   ];
 
-
-
   const panels = getPanelOpts(homeRuns.customPanels||DEFAULT_PANELS).filter(p=>p!==""&&p!=="Meter");
-
-
 
   // For each panel, group rows by breaker label and count poles
 
@@ -2339,8 +2209,6 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
   };
 
-
-
   const totalSpaces = (panel) => {
 
     const g = getPanelBreakers(panel);
@@ -2348,8 +2216,6 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
     return Object.values(g).reduce((s,v)=>s+v.spaces,0);
 
   };
-
-
 
   return (
 
@@ -2449,8 +2315,6 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
 }
 
-
-
 function HRAddFloor({homeRuns, onHRChange}) {
   const [adding, setAdding] = useState(false);
   const [name,   setName]   = useState("");
@@ -2520,7 +2384,6 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
     } catch(e){ alert("Failed to check response."); }
   };
 
-
   const allRows = [...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[]),
     ...(homeRuns.extraFloors||[]).flatMap(e=>homeRuns[e.key]||[])];
 
@@ -2529,8 +2392,6 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
   const pulled  = allRows.filter(r=>r.status==="Pulled").length;
 
   const pct     = total > 0 ? Math.round((pulled/total)*100) : 0;
-
-
 
   return (
 
@@ -2718,8 +2579,6 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
         );
       })()}
 
-
-
       <Section label="Home Runs" color={C.blue} defaultOpen={true}>
         {(()=>{ const cp = homeRuns.customPanels||DEFAULT_PANELS; return (
         <>
@@ -2754,20 +2613,15 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
         <TA value={homeRuns.loadMappingNotes||""} onChange={e=>onHRChange({...homeRuns,loadMappingNotes:e.target.value})} placeholder="Load mapping notes…" rows={5}/>
       </Section>
 
-
-
       <Section label="Panel Breaker Counts" color={C.blue}>
         <BreakerCounts homeRuns={homeRuns} panelCounts={panelCounts} onCountChange={onCountChange}/>
       </Section>
-
 
     </div>
 
   );
 
 }
-
-
 
 // ── Panelized Lighting ────────────────────────────────────────
 
@@ -2820,8 +2674,6 @@ function KeypadSection({loads,onChange,label}) {
   );
 
 }
-
-
 
 function CP4LoadsSection({loads,onChange}) {
 
@@ -2882,8 +2734,6 @@ function CP4LoadsSection({loads,onChange}) {
   );
 
 }
-
-
 
 // ── Tape Light ────────────────────────────────────────────────
 
@@ -3031,8 +2881,6 @@ function TapeLightSection({lights,onChange}) {
 
 }
 
-
-
 // ── Plans & Links with PDF upload ────────────────────────────
 
 const LINK_FIELDS = [
@@ -3045,15 +2893,11 @@ const LINK_FIELDS = [
 
 ];
 
-
-
 function PlansTab({job, onUpdate}) {
 
   return (
 
     <div>
-
-
 
       {LINK_FIELDS.map(([k,l])=>{
 
@@ -3154,8 +2998,6 @@ function PlansTab({job, onUpdate}) {
         );
 
       })}
-
-
 
       {/* Custom named link sections */}
 
@@ -3271,15 +3113,9 @@ function PlansTab({job, onUpdate}) {
 
 }
 
-
-
-
-
 const TABS = ["Job Info","Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
 
               "Change Orders","Return Trips","Plans & Links","QC"];
-
-
 
 const sanitize = (obj) => {
   if(Array.isArray(obj)) return obj.map(sanitize);
@@ -3356,8 +3192,6 @@ onUpdate(updated);
 
   };
 
-
-
   const countFloor = (f) => {
 
     if (!f) return 0;
@@ -3381,8 +3215,6 @@ onUpdate(updated);
   const qcCount = countFloor(job.qcPunch?.upper||{}) + countFloor(job.qcPunch?.main||{}) + countFloor(job.qcPunch?.basement||{}) +
     (job.qcPunch?.extras||[]).reduce((s,e)=>s+countFloor(job.qcPunch?.[e.key]||{}),0);
 
-
-
   return (
 
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.82)",zIndex:200,
@@ -3396,8 +3228,6 @@ onUpdate(updated);
         maxWidth:940,maxHeight:"93vh",display:"flex",flexDirection:"column",overflow:"hidden",
 
         boxShadow:"0 40px 100px rgba(0,0,0,0.7)"}}>
-
-
 
         {/* Header */}
 
@@ -3459,8 +3289,6 @@ onUpdate(updated);
 
         </div>
 
-
-
         {/* Tabs */}
 
         <div style={{display:"flex",gap:1,padding:"8px 22px 0",borderBottom:`1px solid ${C.border}`,
@@ -3487,15 +3315,9 @@ onUpdate(updated);
 
         </div>
 
-
-
         {/* Body */}
 
         <div style={{flex:1,overflowY:"auto",padding:"20px 22px"}}>
-
-
-
-
 
           {tab==="Rough"&&(
 
@@ -3589,8 +3411,6 @@ onUpdate(updated);
 
           )}
 
-
-
           {tab==="Finish"&&(
 
             <div>
@@ -3675,8 +3495,6 @@ onUpdate(updated);
 
           )}
 
-
-
           {tab==="Home Runs"&&(
 
             <HomeRunsTab homeRuns={job.homeRuns} panelCounts={job.panelCounts} jobId={job.id} jobName={job.name}
@@ -3685,15 +3503,11 @@ onUpdate(updated);
 
           )}
 
-
-
           {tab==="Panelized Lighting"&&(
 
             <div>
 
               {/* Lighting Control System Selector */}
-
-
 
               <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
 
@@ -3819,8 +3633,6 @@ onUpdate(updated);
 
           )}
 
-
-
           {tab==="Tape Light"&&(
 
             <div>
@@ -3829,13 +3641,9 @@ onUpdate(updated);
                 <TapeLightSection lights={job.tapeLights||[]} onChange={v=>u({tapeLights:v})}/>
               </Section>
 
-
-
             </div>
 
           )}
-
-
 
           {tab==="Change Orders"&&(
 
@@ -3849,8 +3657,6 @@ onUpdate(updated);
 
           )}
 
-
-
           {tab==="Return Trips"&&(
 
             <div>
@@ -3863,15 +3669,11 @@ onUpdate(updated);
 
           )}
 
-
-
           {tab==="Plans & Links"&&(
 
             <PlansTab job={job} onUpdate={u}/>
 
           )}
-
-
 
           {tab==="QC"&&(
 
@@ -3909,13 +3711,9 @@ onUpdate(updated);
 
           )}
 
-
-
           {tab==="Job Info"&&(
 
             <div>
-
-
 
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
 
@@ -4021,7 +3819,6 @@ onUpdate(updated);
                   )}
                 </div>
 
-
               </div>
 
             </div>
@@ -4032,27 +3829,17 @@ onUpdate(updated);
 
       </div>
 
-
-
       {emailData&&(
 
         <EmailModal subject={emailData.subject} body={emailData.body} onClose={()=>setEmailData(null)}/>
 
       )}
 
-
-
     </div>
 
   );
 
 }
-
-
-
-
-
-
 
 // ── Q&A Punch List ────────────────────────────────────────────
 
@@ -4097,8 +3884,6 @@ function QAInlineEdit({value, done, label, onSave}) {
   );
 
 }
-
-
 
 function QAList({questions: _questions, onChange, color}) {
 
@@ -4232,8 +4017,6 @@ function QAList({questions: _questions, onChange, color}) {
 
 }
 
-
-
 function QASection({questions: _questions, onChange, color}) {
 
   // guard: normalize questions to always be object with array values
@@ -4270,15 +4053,9 @@ function QASection({questions: _questions, onChange, color}) {
 
 }
 
-
-
-
-
 // ── Punch Assignment & Sign-off ───────────────────────────────
 
 const CREW = ["Koy","Vasa","Colby","Josh","Brady","Justin"];
-
-
 
 function PunchAssignTab({phase, assignData, onChange, color}) {
 
@@ -4288,23 +4065,17 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
 
   const signoffs    = data.signoffs    || [];
 
-
-
   const updA = (id, p) => onChange({...data, assignments: assignments.map(a=>a.id===id?{...a,...p}:a)});
 
   const delA = (id)    => onChange({...data, assignments: assignments.filter(a=>a.id!==id)});
 
   const addA = ()      => onChange({...data, assignments: [...assignments, {id:uid(), person:"", task:"", floor:"", room:"", done:false}]});
 
-
-
   const updS = (id, p) => onChange({...data, signoffs: signoffs.map(s=>s.id===id?{...s,...p}:s)});
 
   const delS = (id)    => onChange({...data, signoffs: signoffs.filter(s=>s.id!==id)});
 
   const addS = ()      => onChange({...data, signoffs: [...signoffs, {id:uid(), person:"", task:"", completedDate:"", initials:""}]});
-
-
 
   return (
 
@@ -4394,8 +4165,6 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
 
       <Btn onClick={addA} variant="add" style={{width:"100%",borderStyle:"dashed",marginBottom:24}}>+ Add Assignment</Btn>
 
-
-
       {/* Sign-offs */}
 
       <SectionHead label="Sign Off — Work Completed By" color={color}/>
@@ -4468,10 +4237,6 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
 
 }
 
-
-
-
-
 function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
 
   const [punchTab, setPunchTab] = useState("Items");
@@ -4528,8 +4293,6 @@ function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
 
 }
 
-
-
 // ── Stage Sections ────────────────────────────────────────────
 
 // Effective status — falls back to deriving from % if no status stored
@@ -4570,16 +4333,12 @@ const STAGE_SECTIONS = [
 
 ];
 
-
-
 function StageSectionList({ jobs, JobRow, fc, startCollapsed=true }) {
 
   const initCollapsed = () => Object.fromEntries(STAGE_SECTIONS.map(s=>[s.key,startCollapsed]));
   const [collapsed, setCollapsed] = useState(initCollapsed);
 
   const toggle = key => setCollapsed(c=>({...c,[key]:!c[key]}));
-
-
 
   return (
 
@@ -4664,22 +4423,15 @@ function StageSectionList({ jobs, JobRow, fc, startCollapsed=true }) {
 
 }
 
-
-
 // ── Main Dashboard ────────────────────────────────────────────
 
 const ALL_STAGES = ROUGH_STAGES;
-
-
 
 // ── QC Walks ──────────────────────────────────────────────────
 
 // Detect mobile device
 
 const isMobile = () => /iphone|ipad|ipod|android/i.test(navigator.userAgent);
-
-
-
 
 // Open Google Chat — copies message to clipboard and opens Google Chat
 const openGoogleChat = (message) => {
@@ -4704,8 +4456,6 @@ const openEmail = (to, subject, body) => {
   }
 
 };
-
-
 
 // Deep merge two job objects — arrays are merged by id, scalars prefer local
 
@@ -4780,8 +4530,6 @@ function deepMergeJob(remote, local) {
   return merged;
 
 }
-
-
 
 // ── Homeowner Generator Load Selection Page ───────────────────
 function HomeownerPage({ jobId }) {
@@ -5051,7 +4799,6 @@ function HomeownerPage({ jobId }) {
     </div>
   );
 }
-
 
 // ── Upcoming Jobs ─────────────────────────────────────────────
 
@@ -5707,8 +5454,6 @@ function App() {
 
   const initialLoad  = useRef(true);
 
-
-
   const jobsRef   = useRef(jobs);
 
   const isDirty   = useRef(false);
@@ -5716,8 +5461,6 @@ function App() {
   const saveTimers = useRef({});
 
   useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
-
-
 
   const migrate = (loaded) => {
 
@@ -5735,8 +5478,6 @@ function App() {
 
   };
 
-
-
   // Real-time listener — all devices stay in sync automatically
 
   useEffect(()=>{
@@ -5750,8 +5491,6 @@ function App() {
       if(b) { const p=JSON.parse(b); if(p?.length) setJobs(migrate(p)); }
 
     } catch(e){}
-
-
 
     const unsub = onSnapshot(collection(db,"jobs"),
 
@@ -5824,8 +5563,6 @@ function App() {
 
   },[]);
 
-
-
   // Save a single job as its own Firestore document
 
   const saveJob = (job) => {
@@ -5878,8 +5615,6 @@ if(initialLoad.current) return;
 
   };
 
-
-
   // Delete job document
 
   const flushJob = async (job) => {
@@ -5909,8 +5644,6 @@ if(initialLoad.current) return;
   const deleteUpcomingItem = async (id) => {
     try { await deleteDoc(doc(db,"upcoming",id)); } catch(e){}
   };
-
-
 
   // Flush all pending saves immediately
 
@@ -5942,8 +5675,6 @@ if(initialLoad.current) return;
 
   };
 
-
-
   const flushSaves = () => {
 
     jobsRef.current.forEach(job=>{
@@ -5968,8 +5699,6 @@ if(initialLoad.current) return;
 
   };
 
-
-
   // Save on background/close
 
   useEffect(()=>{
@@ -5990,10 +5719,6 @@ if(initialLoad.current) return;
 
   },[]);
 
-
-
-
-
   const updateJob = updated => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); saveJob(updated); };
 
   const addJob    = () => { const j=blankJob(); setJobs(js=>[j,...js]); setSelected(j); saveJob(j); };
@@ -6009,8 +5734,6 @@ if(initialLoad.current) return;
     });
 
   };
-
-
 
   const openCount = j => {
 
@@ -6036,8 +5759,6 @@ if(initialLoad.current) return;
 
   };
 
-
-
   const totalOpen  = jobs.reduce((a,j)=>a+openCount(j),0);
 
   const flagged    = jobs.filter(j=>j.flagged).length;
@@ -6050,15 +5771,11 @@ if(initialLoad.current) return;
 
   const syncLabel  = {idle:"All changes saved",saving:"Saving…",saved:"✓ Saved",error:"Save failed"}[syncStatus];
 
-
-
   // view: "home" = main page, "foreman" = foreman-specific page
 
   const [view, setView] = useState("home");
 
   const [activeForeman, setActiveForeman] = useState(null);
-
-
 
   const openForeman = (f) => { setActiveForeman(f); setView("foreman"); setSearch(""); setStageF("All"); setFlagOnly(false); };
 
@@ -6066,11 +5783,7 @@ if(initialLoad.current) return;
   const openSchedule  = () => { setView("schedule");  setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openUpcoming  = () => { setView("upcoming");  setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
 
-
-
   const viewJobs = view==="foreman" ? jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):(j.foreman||"Koy")===activeForeman) : jobs;
-
-
 
   const filtered = viewJobs.filter(j=>{
 
@@ -6097,8 +5810,6 @@ if(initialLoad.current) return;
     return ms&&mf&&mt;
 
   });
-
-
 
   const JobRow = ({job, fc, showForeman=false}) => {
 
@@ -6156,8 +5867,6 @@ if(initialLoad.current) return;
               {job.lead&&<span style={{color:C.accent,fontWeight:600,marginRight:6}}>· {job.lead}</span>}
 
               {job.gc||"No GC set"}
-
-
 
             </div>
 
@@ -6254,8 +5963,6 @@ if(initialLoad.current) return;
 
   };
 
-
-
   return (
 
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
@@ -6265,8 +5972,6 @@ if(initialLoad.current) return;
         backgroundRepeat:"no-repeat",backgroundPosition:"center center",
 
         backgroundSize:"320px 320px",opacity:0.15,pointerEvents:"none",zIndex:0}}/>
-
-
 
       {/* iOS Chrome banner */}
 
@@ -6318,8 +6023,6 @@ if(initialLoad.current) return;
 
       `}</style>
 
-
-
       {/* ── TOP NAV BAR ── */}
       <div style={{display:"flex",gap:0,borderBottom:`1px solid ${C.border}`,
         background:C.card,position:"sticky",top:0,zIndex:90,overflowX:"auto",scrollbarWidth:"none"}}>
@@ -6361,8 +6064,6 @@ if(initialLoad.current) return;
                   <span>{jobs.length} total job sites</span>
 
                   <span style={{color:syncColor}}>{syncLabel}</span>
-
-
 
                   <button onClick={backupByEmail}
 
@@ -6406,11 +6107,7 @@ if(initialLoad.current) return;
 
             </div>
 
-
-
           </div>
-
-
 
           <div style={{padding:"28px 26px"}}>
 
@@ -6586,8 +6283,6 @@ if(initialLoad.current) return;
 
                     </div>
 
-
-
                     {(fRT>0||fRTS>0)&&(
                       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
                         {fRT>0&&<span style={{background:"rgba(220,38,38,0.18)",border:"1.5px solid #dc2626",borderRadius:99,
@@ -6685,8 +6380,6 @@ if(initialLoad.current) return;
 
       )}
 
-
-
       {/* ── FOREMAN PAGE ── */}
 
       {view==="foreman"&&(
@@ -6732,8 +6425,6 @@ if(initialLoad.current) return;
               </div>
 
             </div>
-
-
 
             <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}>
 
@@ -6783,8 +6474,6 @@ if(initialLoad.current) return;
 
             </div>
 
-
-
             <div style={{display:"flex",gap:8,paddingBottom:14,flexWrap:"wrap",alignItems:"center"}}>
 
               <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search jobs, GC, address…"
@@ -6826,8 +6515,6 @@ if(initialLoad.current) return;
             </div>
 
           </div>
-
-
 
           <div style={{padding:"14px 26px"}}>
 
@@ -6883,8 +6570,6 @@ if(initialLoad.current) return;
 
       )}
 
-
-
       {selected&&<JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>}
 
       {/* ── SCHEDULING FORECAST PAGE ── */}
@@ -6895,7 +6580,6 @@ if(initialLoad.current) return;
           onSelectJob={(job)=>{ setSelected(job); }}
         />
       )}
-
 
       {/* ── UPCOMING JOBS PAGE ── */}
 
