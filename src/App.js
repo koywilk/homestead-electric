@@ -64,6 +64,7 @@ const JOB_ID = "homestead-jobs-v1";
 
 const ROUGH_STATUSES = [
   {value:"",          label:"— set status —",       color:null},
+  {value:"needs",     label:"Needs to be Scheduled", color:"#dc2626"},
   {value:"ready",     label:"Ready to Start",        color:"#ca8a04", hasDate:true},
   {value:"scheduled", label:"Scheduled",             color:"#2563eb", hasDate:true},
   {value:"waiting",   label:"Waiting on Items",      color:"#ca8a04", dashed:true},
@@ -73,6 +74,7 @@ const ROUGH_STATUSES = [
 ];
 const FINISH_STATUSES = ROUGH_STATUSES;
 const CO_STATUSES_NEW = [
+  {value:"needs",     label:"Needs to be Scheduled", color:"#dc2626"},
   {value:"pending",   label:"Pending",               color:"#ca8a04"},
   {value:"scheduled", label:"Scheduled",             color:"#2563eb", hasDate:true},
   {value:"completed", label:"Work Completed",        color:"#22c55e"},
@@ -86,6 +88,7 @@ const RT_STATUSES = [
 ];
 const QC_STATUSES = [
   {value:"",          label:"— set status —",        color:null},
+  {value:"needs",     label:"Needs to be Scheduled", color:"#dc2626"},
   {value:"scheduled", label:"QC Scheduled",          color:"#2563eb", hasDate:true},
   {value:"completed", label:"QC Completed",          color:"#8b5cf6", hasDate:true},
   {value:"pass",      label:"QC Pass",               color:"#22c55e"},
@@ -5094,7 +5097,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
       const fs = effFS(job);
 
       // Rough — has projected start or scheduled/ready status
-      if(job.roughProjectedStart || rs === "scheduled" || rs === "ready") {
+      if(job.roughProjectedStart || rs === "scheduled" || rs === "ready" || rs === "needs") {
         if(rs !== "complete" && rs !== "invoice" && rs !== "inprogress") {
           items.push({
             id: job.id + "_rough",
@@ -5111,7 +5114,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
       }
 
       // Finish — has projected start or scheduled/ready status
-      if(job.finishProjectedStart || fs === "scheduled" || fs === "ready") {
+      if(job.finishProjectedStart || fs === "scheduled" || fs === "ready" || fs === "needs") {
         if(fs !== "complete" && fs !== "invoice" && fs !== "inprogress") {
           items.push({
             id: job.id + "_finish",
@@ -5147,7 +5150,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
 
       // Change orders needing scheduling
       (job.changeOrders || []).forEach((co, i) => {
-        if(co.coStatus === "scheduled" || co.coStatus === "pending") {
+        if(co.coStatus === "scheduled" || co.coStatus === "pending" || co.coStatus === "needs") {
           items.push({
             id: job.id + "_co_" + co.id,
             jobId: job.id,
