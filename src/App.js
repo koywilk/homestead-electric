@@ -5548,6 +5548,7 @@ function App() {
   if(hoParam) return <HomeownerPage jobId={hoParam}/>;
 
   const [jobs,     setJobs]     = useState([]);
+  const [upcoming, setUpcoming] = useState([]);
 
   const [selected, setSelected] = useState(null);
 
@@ -5670,11 +5671,11 @@ function App() {
     // Load upcoming jobs from Firestore
     const unsubUpcoming = onSnapshot(collection(db,"upcoming"),
       async (snap) => {
-        if(!snap.empty) {
-          const loaded=snap.docs.map(d=>d.data().data).filter(Boolean);
+        const loaded = snap.docs.map(d=>d.data().data).filter(Boolean);
+        if(loaded.length > 0) {
           setUpcoming(loaded);
         } else {
-          // Seed with default upcoming jobs if Firestore is empty
+          // Seed with default upcoming jobs if none found
           setUpcoming(SEED_UPCOMING);
           for(const item of SEED_UPCOMING) {
             try { await setDoc(doc(db,"upcoming",item.id),{data:item,updated_at:new Date().toISOString()}); } catch(e){}
@@ -5919,7 +5920,6 @@ if(initialLoad.current) return;
 
   const [view, setView] = useState("home");
   const [activeForeman, setActiveForeman] = useState(null);
-  const [upcoming, setUpcoming] = useState([]);
 
   const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
   const goHome       = () =>  { setView("home");     setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
