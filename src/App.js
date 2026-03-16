@@ -5294,9 +5294,6 @@ function App() {
   const [flagOnly, setFlagOnly] = useState(false);
 
   const [stageModal, setStageModal] = useState(null);
-  const [view, setView] = useState("home");
-  const [activeForeman, setActiveForeman] = useState(null);
-  const [upcoming, setUpcoming] = useState([]);
 
   const [syncStatus, setSyncStatus] = useState("idle");
 
@@ -5646,17 +5643,15 @@ if(initialLoad.current) return;
   // view: "home" = main page, "foreman" = foreman-specific page
 
   const [view, setView] = useState("home");
-
   const [activeForeman, setActiveForeman] = useState(null);
-
-
+  const [upcoming, setUpcoming] = useState([]);
 
   const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
   const goHome       = () =>  { setView("home");     setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openSchedule = () =>  { setView("schedule"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openUpcoming = () =>  { setView("upcoming"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
 
-  const goHome = () => { setView("home"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+
 
 
 
