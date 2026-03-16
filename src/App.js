@@ -4995,6 +4995,22 @@ function blankUpcoming() {
   return { id: uid(), name:"", city:"", sales:"", customer:"", notes:"", lastFollowUp:"", foreman:"" };
 }
 
+const SEED_UPCOMING = [
+  {id:"seed1",  name:"#2048 - Discovery Ridge Lot 317",                               city:"Kimball Junction",    sales:"Justin", customer:"Milar",                   notes:"No hole yet. Joint venture between customer/Milar.", lastFollowUp:"10/8/25",  foreman:""},
+  {id:"seed2",  name:"#1990 - Kesse Residence",                                        city:"Francis",             sales:"Justin", customer:"LL&L",                    notes:"At foundation",                                      lastFollowUp:"11/5/25",  foreman:""},
+  {id:"seed3",  name:"#1937 - Navarro Residence",                                      city:"American Fork",       sales:"Justin", customer:"Butterfield",              notes:"Working on road improvements before they can start",  lastFollowUp:"11/17/25", foreman:""},
+  {id:"seed4",  name:"#1938 Corbin Church",                                            city:"Provo",               sales:"Justin", customer:"Butterfield",              notes:"Still in development phase",                         lastFollowUp:"11/17/25", foreman:""},
+  {id:"seed5",  name:"#1770 - England Home",                                           city:"Draper",              sales:"Justin", customer:"Greentech",                notes:"Framing. Pending update.",                            lastFollowUp:"1/26/26",  foreman:""},
+  {id:"seed6",  name:"#1590 - Becker Residence",                                       city:"Park City",           sales:"Justin", customer:"Mark Wintzer Company",     notes:"Rough expected to begin 4/1/26",                      lastFollowUp:"12/5/25",  foreman:""},
+  {id:"seed7",  name:"#994 - Smith Residence - Detached Garage/Remodeled Barn",        city:"Cottonwood Heights",  sales:"Josh",   customer:"Black Cactus Construction", notes:"Framing. Pending update.",                           lastFollowUp:"",         foreman:""},
+  {id:"seed8",  name:"#1981 - Meyers Residence",                                       city:"Holladay",            sales:"Josh",   customer:"Eastgate Homes",           notes:"Permitting",                                         lastFollowUp:"9/26/25",  foreman:""},
+  {id:"seed9",  name:"#1862 - Colton Residence",                                       city:"Holladay",            sales:"Josh",   customer:"United Contractors",        notes:"Foundation",                                        lastFollowUp:"12/2/25",  foreman:""},
+  {id:"seed10", name:"#1896 - Casten-Vought Residence",                                city:"Mapleton",            sales:"Justin", customer:"Farnsworth Construction",  notes:"Electrical Rough Scheduled for 02/26",               lastFollowUp:"12/3/25",  foreman:""},
+  {id:"seed11", name:"#2067 - Rule & O'Mara Residence",                                city:"Midway",              sales:"Justin", customer:"Mark Wintzer Company",     notes:"No idea on timeline",                                lastFollowUp:"1/5/26",   foreman:""},
+  {id:"seed12", name:"#2249 - The Hide Out - Hideout",                                 city:"Hideout",             sales:"Justin", customer:"Black Oak Builders",        notes:"Any day now 2/2/26",                                lastFollowUp:"1/27/26",  foreman:""},
+  {id:"seed13", name:"#1809 - Tuhaye Hollow",                                          city:"Kamas",               sales:"Josh",   customer:"The Housley Group",        notes:"",                                                   lastFollowUp:"",         foreman:""},
+];
+
 function UpcomingJobs({ upcoming, onChange, onPromote }) {
   const [editingId, setEditingId] = useState(null);
   const add = () => { const j=blankUpcoming(); onChange([j,...upcoming]); setEditingId(j.id); };
@@ -5594,7 +5610,18 @@ function App() {
 
     // Load upcoming jobs from Firestore
     const unsubUpcoming = onSnapshot(collection(db,"upcoming"),
-      (snap) => { if(!snap.empty) { const loaded=snap.docs.map(d=>d.data().data).filter(Boolean); setUpcoming(loaded); } },
+      async (snap) => {
+        if(!snap.empty) {
+          const loaded=snap.docs.map(d=>d.data().data).filter(Boolean);
+          setUpcoming(loaded);
+        } else {
+          // Seed with default upcoming jobs if Firestore is empty
+          setUpcoming(SEED_UPCOMING);
+          for(const item of SEED_UPCOMING) {
+            try { await setDoc(doc(db,"upcoming",item.id),{data:item,updated_at:new Date().toISOString()}); } catch(e){}
+          }
+        }
+      },
       (err) => { console.error("Upcoming snapshot error:",err); }
     );
 
