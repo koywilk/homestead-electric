@@ -63,9 +63,11 @@ const C = {
 const JOB_ID = "homestead-jobs-v1";
 
 const ROUGH_STATUSES = [
-  {value:"",          label:"— set status —",       color:null},
-  {value:"ready",     label:"Ready to Start",        color:"#ca8a04", hasDate:true},
-  {value:"scheduled", label:"Scheduled",             color:"#2563eb", hasDate:true},
+  {value:"",           label:"— set status —",              color:null},
+  {value:"needs",      label:"Needs to be Scheduled",        color:"#dc2626"},
+  {value:"ready",      label:"Ready to Start — Not Scheduled", color:"#ca8a04"},
+  {value:"readysched", label:"Ready to Start — Scheduled",   color:"#16a34a", hasDate:true},
+  {value:"scheduled",  label:"Scheduled",                   color:"#2563eb", hasDate:true},
   {value:"waiting",   label:"Waiting on Items",      color:"#ca8a04", dashed:true},
   {value:"inprogress",label:"In Progress",           color:"#7dd3fc"},
   {value:"invoice",   label:"Ready to Invoice",      color:"#ea580c"},
@@ -73,6 +75,7 @@ const ROUGH_STATUSES = [
 ];
 const FINISH_STATUSES = ROUGH_STATUSES;
 const CO_STATUSES_NEW = [
+  {value:"needs",     label:"Needs to be Scheduled", color:"#dc2626"},
   {value:"pending",   label:"Pending",               color:"#ca8a04"},
   {value:"scheduled", label:"Scheduled",             color:"#2563eb", hasDate:true},
   {value:"completed", label:"Work Completed",        color:"#22c55e"},
@@ -86,6 +89,7 @@ const RT_STATUSES = [
 ];
 const QC_STATUSES = [
   {value:"",          label:"— set status —",        color:null},
+  {value:"needs",     label:"Needs to be Scheduled", color:"#dc2626"},
   {value:"scheduled", label:"QC Scheduled",          color:"#2563eb", hasDate:true},
   {value:"completed", label:"QC Completed",          color:"#8b5cf6", hasDate:true},
   {value:"pass",      label:"QC Pass",               color:"#22c55e"},
@@ -647,6 +651,7 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
     add:    {background:`${C.green}15`,border:`1px dashed ${C.green}55`,color:C.green},
 
     email:  {background:"none",border:`1px solid ${C.blue}55`,color:C.blue},
+    chat:   {background:"none",border:`1px solid #25d36655`,color:"#25d366"},
 
   };
 
@@ -1351,6 +1356,11 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
 
 
+  const chatCO = (o, i) => {
+    const msg = `Change Order #${i+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.status||"Pending"}\n\nhttps://homestead-electric.vercel.app/`;
+    openGoogleChat(msg);
+  };
+
   const emailCO = (o, i) => {
 
     const subject = `${jobName} — Change Order #${i+1}`;
@@ -1379,6 +1389,7 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
             <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
 
+              <Btn onClick={()=>chatCO(o,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>💬 Chat</Btn>
               <Btn onClick={()=>emailCO(o,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>✉ Email CO</Btn>
 
               <button onClick={()=>del(o.id)}
@@ -1684,6 +1695,12 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
 
 
+  const chatTrip = (t,i) => {
+    const punchOpen = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n") || "None";
+    const msg = `Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}\n\nhttps://homestead-electric.vercel.app/`;
+    openGoogleChat(msg);
+  };
+
   const emailTrip = (t,i) => {
 
     const punchLines = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n") || "None";
@@ -1802,6 +1819,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
             <div style={{display:"flex",gap:8}}>
 
+              <Btn onClick={()=>chatTrip(t,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>💬 Chat</Btn>
               <Btn onClick={()=>emailTrip(t,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>✉ Email Trip</Btn>
 
               <button onClick={()=>del(t.id)}
@@ -4600,6 +4618,12 @@ const isMobile = () => /iphone|ipad|ipod|android/i.test(navigator.userAgent);
 
 
 
+// Open Google Chat — copies message to clipboard and opens Google Chat
+const openGoogleChat = (message) => {
+  navigator.clipboard.writeText(message).catch(()=>{});
+  window.open("https://chat.google.com", "_blank");
+};
+
 // Open email — uses mailto on mobile (opens native mail app), Gmail compose on desktop
 
 const openEmail = (to, subject, body) => {
@@ -4965,6 +4989,295 @@ function HomeownerPage({ jobId }) {
   );
 }
 
+// ── Upcoming Jobs ─────────────────────────────────────────────
+
+function blankUpcoming() {
+  return { id: uid(), name:"", city:"", sales:"", customer:"", notes:"", lastFollowUp:"", foreman:"" };
+}
+
+function UpcomingJobs({ upcoming, onChange, onPromote }) {
+  const [editingId, setEditingId] = useState(null);
+  const add = () => { const j=blankUpcoming(); onChange([j,...upcoming]); setEditingId(j.id); };
+  const upd = (id,patch) => onChange(upcoming.map(u=>u.id===id?{...u,...patch}:u));
+  const del = (id) => { onChange(upcoming.filter(u=>u.id!==id)); setEditingId(null); };
+  const COL = {
+    name:{label:"Job Name",flex:2.5}, city:{label:"City",flex:1.2},
+    sales:{label:"Sales",flex:1}, customer:{label:"Customer / GC",flex:1.5},
+    notes:{label:"Notes",flex:3}, lastFollowUp:{label:"Last Follow Up",flex:1.1},
+  };
+  const colKeys = Object.keys(COL);
+  return (
+    <div>
+      <div style={{padding:"24px 26px 16px",borderBottom:`1px solid ${C.border}`}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+          <div>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>UPCOMING JOBS</div>
+            <div style={{fontSize:11,color:C.dim,marginTop:3}}>{upcoming.length} job{upcoming.length!==1?"s":""} in pipeline</div>
+          </div>
+          <button onClick={add} style={{background:C.accent,border:"none",borderRadius:9,color:"#000",fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Job</button>
+        </div>
+      </div>
+      <div style={{padding:"16px 26px"}}>
+        <div style={{display:"flex",alignItems:"center",gap:0,padding:"6px 12px",marginBottom:4,borderBottom:`1px solid ${C.border}`}}>
+          {colKeys.map(k=>(
+            <div key={k} style={{flex:COL[k].flex,fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase",paddingRight:12}}>{COL[k].label}</div>
+          ))}
+          <div style={{width:110,flexShrink:0}}/>
+        </div>
+        {upcoming.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:13,fontStyle:"italic"}}>No upcoming jobs yet — add one above.</div>}
+        {upcoming.map(u=>{
+          const isEditing=editingId===u.id;
+          return (
+            <div key={u.id} style={{display:"flex",alignItems:isEditing?"flex-start":"center",gap:0,padding:"8px 12px",borderRadius:8,marginBottom:2,background:isEditing?C.surface:"none",border:isEditing?`1px solid ${C.border}`:"1px solid transparent"}}
+              onMouseEnter={e=>{if(!isEditing)e.currentTarget.style.background=C.surface;}}
+              onMouseLeave={e=>{if(!isEditing)e.currentTarget.style.background="none";}}>
+              {isEditing?(
+                <div style={{flex:1,display:"flex",flexDirection:"column",gap:10}}>
+                  <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                    <div style={{flex:2.5,minWidth:160}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Job Name</div><Inp value={u.name} onChange={e=>upd(u.id,{name:e.target.value})} placeholder="Job name"/></div>
+                    <div style={{flex:1.2,minWidth:100}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>City</div><Inp value={u.city} onChange={e=>upd(u.id,{city:e.target.value})} placeholder="City"/></div>
+                    <div style={{flex:1,minWidth:90}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Sales</div><Inp value={u.sales} onChange={e=>upd(u.id,{sales:e.target.value})} placeholder="Sales rep"/></div>
+                    <div style={{flex:1.5,minWidth:130}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Customer / GC</div><Inp value={u.customer} onChange={e=>upd(u.id,{customer:e.target.value})} placeholder="Customer or GC"/></div>
+                    <div style={{flex:1.1,minWidth:110}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Last Follow Up</div><Inp value={u.lastFollowUp} onChange={e=>upd(u.id,{lastFollowUp:e.target.value})} placeholder="MM/DD/YY"/></div>
+                    <div style={{flex:1,minWidth:120}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
+                      <select value={u.foreman||""} onChange={e=>upd(u.id,{foreman:e.target.value})} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
+                        <option value="">— unassigned —</option>
+                        {FOREMEN.map(f=><option key={f} value={f}>{f}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes</div><TA value={u.notes} onChange={e=>upd(u.id,{notes:e.target.value})} placeholder="Status, timeline, notes…" rows={2}/></div>
+                  <div style={{display:"flex",gap:8,marginTop:2}}>
+                    <button onClick={()=>setEditingId(null)} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
+                    <button onClick={()=>{if(window.confirm("Promote to active job?"))onPromote(u);}} style={{background:"none",border:`1px solid ${C.green}`,borderRadius:7,color:C.green,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✓ Promote to Job</button>
+                    <button onClick={()=>del(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>Remove</button>
+                  </div>
+                </div>
+              ):(
+                <>
+                  <div style={{flex:2.5,paddingRight:12,fontSize:13,fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    {u.name||<span style={{color:C.muted,fontStyle:"italic"}}>Untitled</span>}
+                    {u.foreman&&<span style={{marginLeft:8,fontSize:10,fontWeight:700,color:FOREMEN_COLORS[u.foreman]||"#6b7280",background:`${FOREMEN_COLORS[u.foreman]||"#6b7280"}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${FOREMEN_COLORS[u.foreman]||"#6b7280"}33`}}>{u.foreman}</span>}
+                  </div>
+                  <div style={{flex:1.2,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.city||"—"}</div>
+                  <div style={{flex:1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.sales||"—"}</div>
+                  <div style={{flex:1.5,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.customer||"—"}</div>
+                  <div style={{flex:3,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.notes||"—"}</div>
+                  <div style={{flex:1.1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.lastFollowUp||"—"}</div>
+                  <div style={{width:110,flexShrink:0,display:"flex",gap:6,justifyContent:"flex-end"}}>
+                    <button onClick={()=>setEditingId(u.id)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Edit</button>
+                    <button onClick={()=>{if(window.confirm("Promote to active job?"))onPromote(u);}} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✓</button>
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ── Scheduling Forecast ───────────────────────────────────────
+
+function SchedulingForecast({ jobs, onSelectJob }) {
+  const [foremanTab, setForemanTab] = useState("All");
+  const [scheduleView, setScheduleView] = useState("all");
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  const startOfWeek = (d) => { const dt=new Date(d); dt.setHours(0,0,0,0); dt.setDate(dt.getDate()-dt.getDay()); return dt; };
+  const thisWeekStart = startOfWeek(today);
+  const nextWeekStart = new Date(thisWeekStart); nextWeekStart.setDate(thisWeekStart.getDate()+7);
+  const twoWeeksStart = new Date(thisWeekStart); twoWeeksStart.setDate(thisWeekStart.getDate()+14);
+  const thisWeekEnd   = new Date(thisWeekStart); thisWeekEnd.setDate(thisWeekStart.getDate()+7);
+  const nextMonthEnd  = new Date(today); nextMonthEnd.setDate(today.getDate()+30);
+
+  const parseDate = (str) => { if(!str) return null; const d=new Date(str); return isNaN(d.getTime())?null:d; };
+  const getBucket = (dateStr) => {
+    const d=parseDate(dateStr); if(!d) return "unscheduled";
+    d.setHours(0,0,0,0);
+    if(d<thisWeekStart) return "overdue";
+    if(d<nextWeekStart) return "thisWeek";
+    if(d<twoWeeksStart) return "nextWeek";
+    return "later";
+  };
+
+  const buildItems = (jobList) => {
+    const items=[];
+    jobList.forEach(job=>{
+      const rs=effRS(job), fs=effFS(job);
+      if(job.roughProjectedStart||rs==="scheduled"||rs==="readysched"||rs==="ready"||rs==="needs") {
+        if(rs!=="complete"&&rs!=="invoice"&&rs!=="inprogress") {
+          items.push({id:job.id+"_rough",jobId:job.id,job,type:"rough",label:"Rough",color:C.rough,
+            date:job.roughProjectedStart||job.roughStatusDate||"",
+            bucket:getBucket(job.roughProjectedStart||job.roughStatusDate),status:rs});
+        }
+      }
+      if(job.finishProjectedStart||fs==="scheduled"||fs==="readysched"||fs==="ready"||fs==="needs") {
+        if(fs!=="complete"&&fs!=="invoice"&&fs!=="inprogress") {
+          items.push({id:job.id+"_finish",jobId:job.id,job,type:"finish",label:"Finish",color:C.finish,
+            date:job.finishProjectedStart||job.finishStatusDate||"",
+            bucket:getBucket(job.finishProjectedStart||job.finishStatusDate),status:fs});
+        }
+      }
+      (job.returnTrips||[]).forEach((rt,i)=>{
+        if(!rt.signedOff&&(rt.rtStatus==="needs"||rt.rtStatus==="scheduled"||(!rt.rtStatus&&(rt.scope||rt.date)))) {
+          items.push({id:job.id+"_rt_"+rt.id,jobId:job.id,job,type:"returnTrip",label:`Return Trip #${i+1}`,
+            color:"#8b5cf6",date:rt.rtStatusDate||rt.date||"",
+            bucket:getBucket(rt.rtStatusDate||rt.date),status:rt.rtStatus||"needs",scope:rt.scope});
+        }
+      });
+      (job.changeOrders||[]).forEach((co,i)=>{
+        if(co.coStatus==="scheduled"||co.coStatus==="pending"||co.coStatus==="needs") {
+          items.push({id:job.id+"_co_"+co.id,jobId:job.id,job,type:"changeOrder",label:`Change Order #${i+1}`,
+            color:C.accent,date:co.coStatusDate||"",bucket:getBucket(co.coStatusDate),
+            status:co.coStatus,desc:co.desc});
+        }
+      });
+    });
+    return items;
+  };
+
+  const foremanTabs = ["All",...FOREMEN,"Unassigned"];
+  const filteredJobs = foremanTab==="All"?jobs:foremanTab==="Unassigned"?jobs.filter(j=>!j.foreman||j.foreman==="Unassigned"):jobs.filter(j=>(j.foreman||"Koy")===foremanTab);
+  const allItems = buildItems(filteredJobs);
+
+  const BUCKETS = [
+    {key:"overdue",     label:"Overdue",    color:C.red,     desc:"Past projected date"},
+    {key:"thisWeek",    label:"This Week",  color:C.green,   desc:""},
+    {key:"nextWeek",    label:"Next Week",  color:C.blue,    desc:""},
+    {key:"later",       label:"Later",      color:C.dim,     desc:""},
+    {key:"unscheduled", label:"Unscheduled",color:"#ca8a04", desc:"No date set yet"},
+  ];
+
+  const formatDate = (str) => { if(!str) return null; const d=parseDate(str); if(!d) return str; return d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}); };
+
+  const SchedCard = ({item}) => {
+    const {job,label,color,date,status,type,scope,desc}=item;
+    const foreman=job.foreman||"Koy"; const fc=FOREMEN_COLORS[foreman]||"#6b7280";
+    const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):getStatusDef(ROUGH_STATUSES,status);
+    return (
+      <div onClick={()=>onSelectJob(job)} style={{background:C.card,border:`1px solid ${color}33`,borderRadius:12,padding:"12px 14px",marginBottom:8,cursor:"pointer",borderLeft:`3px solid ${color}`}}
+        onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 16px ${color}22`;}}
+        onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+          <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color,background:`${color}18`,borderRadius:99,padding:"2px 8px",border:`1px solid ${color}33`}}>{label.toUpperCase()}</span>
+          {date&&<span style={{fontSize:11,color:C.dim,fontWeight:600}}>{formatDate(date)}</span>}
+        </div>
+        <div style={{fontWeight:700,fontSize:13,color:C.text,marginBottom:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{job.name||"Untitled Job"}</div>
+        {job.address&&<div style={{fontSize:11,color:C.dim,marginBottom:4,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{job.address}</div>}
+        {(scope||desc)&&<div style={{fontSize:11,color:C.dim,fontStyle:"italic",marginBottom:6,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{scope||desc}</div>}
+        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginTop:4}}>
+          <span style={{fontSize:10,fontWeight:700,color:fc,background:`${fc}15`,borderRadius:99,padding:"2px 8px",border:`1px solid ${fc}33`}}>{foreman}</span>
+          {job.lead&&<span style={{fontSize:10,color:C.accent,fontWeight:600}}>· {job.lead}</span>}
+          {job.gc&&<span style={{fontSize:10,color:C.dim}}>{job.gc}</span>}
+          {statusDef.color&&<span style={{fontSize:10,fontWeight:700,color:statusDef.color,background:`${statusDef.color}15`,borderRadius:99,padding:"2px 8px",border:`1px solid ${statusDef.color}33`,marginLeft:"auto"}}>{statusDef.label}</span>}
+        </div>
+      </div>
+    );
+  };
+
+  const totalItems=allItems.length;
+
+  return (
+    <div>
+      <div style={{padding:"24px 26px 0",borderBottom:`1px solid ${C.border}`}}>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12,marginBottom:16}}>
+          <div>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>SCHEDULING FORECAST</div>
+            <div style={{fontSize:11,color:C.dim,marginTop:3}}>{totalItems} item{totalItems!==1?"s":""} to schedule</div>
+          </div>
+        </div>
+        <div style={{display:"flex",gap:6,overflowX:"auto",scrollbarWidth:"none",paddingBottom:1}}>
+          {foremanTabs.map(f=>{
+            const fc=f==="All"?C.accent:FOREMEN_COLORS[f]||"#6b7280";
+            const fJobs=f==="All"?jobs:f==="Unassigned"?jobs.filter(j=>!j.foreman||j.foreman==="Unassigned"):jobs.filter(j=>(j.foreman||"Koy")===f);
+            const fCount=buildItems(fJobs).length;
+            return (
+              <button key={f} onClick={()=>setForemanTab(f)} style={{padding:"7px 16px",borderRadius:"8px 8px 0 0",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:foremanTab===f?700:400,whiteSpace:"nowrap",background:foremanTab===f?fc:"none",border:`1px solid ${foremanTab===f?fc:C.border}`,borderBottom:"none",color:foremanTab===f?"#fff":C.dim,transition:"all 0.15s"}}>
+                {f} {fCount>0&&<span style={{opacity:0.8,fontSize:10}}>({fCount})</span>}
+              </button>
+            );
+          })}
+        </div>
+      </div>
+      <div style={{display:"flex",gap:8,padding:"14px 26px 0",borderBottom:`1px solid ${C.border}`}}>
+        {[{key:"all",label:"All"},{key:"thisWeek",label:"This Week"},{key:"nextMonth",label:"Next 30 Days"}].map(({key,label})=>(
+          <button key={key} onClick={()=>setScheduleView(key)} style={{padding:"8px 18px",fontSize:12,fontWeight:scheduleView===key?700:500,fontFamily:"inherit",cursor:"pointer",background:"none",border:"none",borderBottom:scheduleView===key?`2px solid ${C.accent}`:"2px solid transparent",color:scheduleView===key?C.accent:C.dim,transition:"all 0.15s"}}>{label}</button>
+        ))}
+      </div>
+      {scheduleView==="all"&&(
+        <div style={{padding:"20px 26px",overflowX:"auto"}}>
+          {totalItems===0?(
+            <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}><div style={{fontSize:13}}>Nothing to schedule right now.</div></div>
+          ):(
+            <div style={{display:"grid",gridTemplateColumns:"repeat(5,minmax(220px,1fr))",gap:16,minWidth:900}}>
+              {BUCKETS.map(bucket=>{
+                const bucketItems=allItems.filter(i=>i.bucket===bucket.key);
+                return (
+                  <div key={bucket.key}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,paddingBottom:8,borderBottom:`2px solid ${bucket.color}44`}}>
+                      <div style={{width:8,height:8,borderRadius:"50%",background:bucket.color,flexShrink:0}}/>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.08em",color:bucket.color}}>{bucket.label}</div>
+                      <div style={{background:`${bucket.color}18`,border:`1px solid ${bucket.color}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:bucket.color,fontWeight:700,marginLeft:"auto"}}>{bucketItems.length}</div>
+                    </div>
+                    {bucketItems.length===0?(
+                      <div style={{fontSize:11,color:C.muted,fontStyle:"italic",padding:"16px 0",textAlign:"center",border:`1px dashed ${C.border}`,borderRadius:10}}>Nothing here</div>
+                    ):bucketItems.map(item=><SchedCard key={item.id} item={item}/>)}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+      {(scheduleView==="thisWeek"||scheduleView==="nextMonth")&&(()=>{
+        const cutoff=scheduleView==="thisWeek"?thisWeekEnd:nextMonthEnd;
+        const windowItems=allItems.filter(item=>{
+          if(!item.date) return false;
+          const d=parseDate(item.date); if(!d) return false;
+          d.setHours(0,0,0,0);
+          if(scheduleView==="thisWeek") return d<=thisWeekEnd;
+          return d<=nextMonthEnd;
+        });
+        const STATUS_SECTIONS=[
+          {key:"needs",label:"Needs to be Scheduled",color:"#dc2626"},
+          {key:"ready",label:"Ready to Start — Not Scheduled",color:"#ca8a04"},
+          {key:"readysched",label:"Ready to Start — Scheduled",color:"#16a34a"},
+          {key:"scheduled",label:"Scheduled",color:"#2563eb"},
+          {key:"pending",label:"Pending (CO)",color:"#ca8a04"},
+        ];
+        return (
+          <div style={{padding:"20px 26px"}}>
+            {windowItems.length===0?(
+              <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}><div style={{fontSize:13}}>Nothing scheduled {scheduleView==="thisWeek"?"this week":"in the next 30 days"}.</div></div>
+            ):(
+              <div style={{display:"flex",flexDirection:"column",gap:28}}>
+                {STATUS_SECTIONS.map(section=>{
+                  const sectionItems=windowItems.filter(i=>i.status===section.key);
+                  if(sectionItems.length===0) return null;
+                  return (
+                    <div key={section.key}>
+                      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,paddingBottom:8,borderBottom:`2px solid ${section.color}44`}}>
+                        <div style={{width:10,height:10,borderRadius:"50%",background:section.color,flexShrink:0}}/>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:section.color}}>{section.label}</div>
+                        <div style={{background:`${section.color}18`,border:`1px solid ${section.color}33`,borderRadius:99,padding:"2px 10px",fontSize:11,color:section.color,fontWeight:700,marginLeft:"auto"}}>{sectionItems.length}</div>
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:10}}>
+                        {sectionItems.map(item=><SchedCard key={item.id} item={item}/>)}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+    </div>
+  );
+}
+
 function App() {
   // Homeowner page route — ?homeowner=JOB_ID
   const hoParam = new URLSearchParams(window.location.search).get("homeowner");
@@ -4981,6 +5294,9 @@ function App() {
   const [flagOnly, setFlagOnly] = useState(false);
 
   const [stageModal, setStageModal] = useState(null);
+  const [view, setView] = useState("home");
+  const [activeForeman, setActiveForeman] = useState(null);
+  const [upcoming, setUpcoming] = useState([]);
 
   const [syncStatus, setSyncStatus] = useState("idle");
 
@@ -5090,7 +5406,13 @@ function App() {
 
     );
 
-    return () => unsub(); // cleanup on unmount
+    // Load upcoming jobs from Firestore
+    const unsubUpcoming = onSnapshot(collection(db,"upcoming"),
+      (snap) => { if(!snap.empty) { const loaded=snap.docs.map(d=>d.data().data).filter(Boolean); setUpcoming(loaded); } },
+      (err) => { console.error("Upcoming snapshot error:",err); }
+    );
+
+    return () => { unsub(); unsubUpcoming(); }; // cleanup on unmount
 
   },[]);
 
@@ -5173,6 +5495,13 @@ if(initialLoad.current) return;
   };
 
 
+
+  const saveUpcomingItem = async (item) => {
+    try { await setDoc(doc(db,"upcoming",item.id),{data:item,updated_at:new Date().toISOString()}); } catch(e){ console.error(e); }
+  };
+  const deleteUpcomingItem = async (id) => {
+    try { await deleteDoc(doc(db,"upcoming",id)); } catch(e){}
+  };
 
   // Flush all pending saves immediately
 
@@ -5322,7 +5651,10 @@ if(initialLoad.current) return;
 
 
 
-  const openForeman = (f) => { setActiveForeman(f); setView("foreman"); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const goHome       = () =>  { setView("home");     setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openSchedule = () =>  { setView("schedule"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openUpcoming = () =>  { setView("upcoming"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
 
   const goHome = () => { setView("home"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
 
@@ -5527,6 +5859,16 @@ if(initialLoad.current) return;
         backgroundSize:"320px 320px",opacity:0.15,pointerEvents:"none",zIndex:0}}/>
 
 
+
+      {/* ── TOP NAV BAR ── */}
+      <div style={{display:"flex",gap:0,borderBottom:`1px solid ${C.border}`,background:C.card,position:"sticky",top:0,zIndex:90,overflowX:"auto",scrollbarWidth:"none"}}>
+        {[{key:"home",label:"Job Board"},{key:"schedule",label:"Scheduling Forecast"},{key:"upcoming",label:"Upcoming"}].map(({key,label})=>(
+          <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:openUpcoming}
+            style={{padding:"13px 22px",fontSize:12,fontWeight:view===key?700:500,fontFamily:"inherit",cursor:"pointer",whiteSpace:"nowrap",background:"none",border:"none",borderBottom:view===key?`2px solid ${C.accent}`:"2px solid transparent",color:view===key?C.accent:C.dim,transition:"all 0.15s",letterSpacing:"0.02em"}}>
+            {label}
+          </button>
+        ))}
+      </div>
 
       {/* iOS Chrome banner */}
 
@@ -6128,6 +6470,30 @@ if(initialLoad.current) return;
 
 
       {selected&&<JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>}
+
+      {view==="schedule"&&(
+        <SchedulingForecast jobs={jobs} onSelectJob={(job)=>setSelected(job)}/>
+      )}
+
+      {view==="upcoming"&&(
+        <UpcomingJobs
+          upcoming={upcoming}
+          onChange={(next)=>{
+            next.forEach(item=>{
+              const prev=upcoming.find(u=>u.id===item.id);
+              if(!prev||JSON.stringify(prev)!==JSON.stringify(item)) saveUpcomingItem(item);
+            });
+            upcoming.forEach(item=>{ if(!next.find(u=>u.id===item.id)) deleteUpcomingItem(item.id); });
+            setUpcoming(next);
+          }}
+          onPromote={(u)=>{
+            const j=blankJob();
+            j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman="";
+            setJobs(js=>[j,...js]); setSelected(j); setUpcoming(prev=>prev.filter(x=>x.id!==u.id));
+            setView("home"); saveJob(j); deleteUpcomingItem(u.id);
+          }}
+        />
+      )}
 
     </div>
 
