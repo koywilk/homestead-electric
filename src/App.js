@@ -1398,7 +1398,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
 }
 
-── Change Orders ─────────────────────────────────────────────
+// ── Change Orders ─────────────────────────────────────────────
 
 function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
