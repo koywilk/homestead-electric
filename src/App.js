@@ -1468,8 +1468,6 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
   );
 
-  }
-
 }
 
 function ReturnTripExtras({trip, onUpd}) {
@@ -1968,7 +1966,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
         </div>
 
-      ))}
+      )})}
 
       {viewPhoto&&(
 
