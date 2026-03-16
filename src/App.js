@@ -2364,8 +2364,15 @@ function StageSectionList({ jobs, onSelectJob, filterForeman }) {
     <div>
       {STAGE_SECTIONS.map(sec => {
         const secJobs = filtered.filter(sec.test).sort((a, b) => {
-          const da = a.roughProjectedStart || a.finishProjectedStart || "";
-          const db = b.roughProjectedStart || b.finishProjectedStart || "";
+          const activeDate = (j) => {
+            const rs = effRS(j), fs = effFS(j);
+            if (["ready","scheduled","inprogress","waiting"].includes(rs)) return j.roughProjectedStart || "";
+            if (["ready","scheduled","inprogress","waiting"].includes(fs)) return j.finishProjectedStart || "";
+            if (rs === "complete") return j.finishProjectedStart || "";
+            return j.roughProjectedStart || j.finishProjectedStart || "";
+          };
+          const da = activeDate(a);
+          const db = activeDate(b);
           return da.localeCompare(db);
         });
         if (secJobs.length === 0) return null;
@@ -2413,20 +2420,37 @@ function JobRow({ job: j, onClick, sec }) {
   const foremanColor = FOREMEN_COLORS[j.foreman] || C.dim;
   const rsDef = getStatusDef(ROUGH_STATUSES, rs);
   const fsDef = getStatusDef(FINISH_STATUSES, fs);
+  // Projected start date — show whichever phase is active
+  const projDate = (["ready","scheduled","inprogress","waiting"].includes(rs) ? j.roughProjectedStart : null)
+    || (["ready","scheduled","inprogress","waiting"].includes(fs) ? j.finishProjectedStart : null)
+    || j.roughProjectedStart || j.finishProjectedStart || "";
+  // Left accent border color based on status
+  const accentColor = j.flagged ? C.red : sec.color;
   return (
     <div onClick={onClick}
-      style={{ background: C.card, border: `1px solid ${j.flagged ? C.red+"77" : C.border}`,
+      style={{ background: C.card,
+        border: `1px solid ${C.border}`,
+        borderLeft: `4px solid ${accentColor}`,
         borderRadius: 9, padding: "10px 14px", marginBottom: 5, cursor: "pointer",
-        transition: "border-color 0.15s", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
-      onMouseEnter={e => e.currentTarget.style.borderColor = sec.color}
-      onMouseLeave={e => e.currentTarget.style.borderColor = j.flagged ? C.red+"77" : C.border}>
+        transition: "background 0.15s", display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap" }}
+      onMouseEnter={e => e.currentTarget.style.background = `${accentColor}0d`}
+      onMouseLeave={e => e.currentTarget.style.background = C.card}>
       <div style={{ flex: 1, minWidth: 160 }}>
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
           {j.flagged && <span style={{ fontSize: 13 }} title={j.flagNote || "Flagged"}>🚩</span>}
           <span style={{ fontSize: 13, fontWeight: 700, color: C.text }}>{j.name || "Unnamed"}</span>
           {j.simproNo && <span style={{ fontSize: 10, color: C.dim }}>#{j.simproNo}</span>}
         </div>
-        <div style={{ fontSize: 11, color: C.dim }}>{j.address || "No address"}</div>
+        <div style={{ display: "flex", gap: 10, alignItems: "center", flexWrap: "wrap" }}>
+          <span style={{ fontSize: 11, color: C.dim }}>{j.address || "No address"}</span>
+          {projDate && (
+            <span style={{ fontSize: 11, fontWeight: 700, color: accentColor,
+              background: `${accentColor}18`, border: `1px solid ${accentColor}44`,
+              borderRadius: 5, padding: "1px 6px" }}>
+              📅 {projDate}
+            </span>
+          )}
+        </div>
       </div>
       <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
         {j.foreman && (
