@@ -1403,6 +1403,7 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
             {(()=>{
               const coDef = getStatusDef(CO_STATUSES_NEW, o.coStatus||"pending");
               return (
+                <>
                 <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                   <select value={o.coStatus||"pending"} onChange={e=>{
                     const v=e.target.value;
@@ -1443,6 +1444,7 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
                     )}
                   </div>
                 )}
+                </>
               );
             })()}
           </div>
@@ -1818,6 +1820,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
                   {(()=>{
                     const rtDef = getStatusDef(RT_STATUSES, t.rtStatus||"");
                     return (
+                      <>
                       <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                         <select value={t.rtStatus||""} onChange={e=>{
                           const v=e.target.value;
@@ -1859,6 +1862,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
                           )}
                         </div>
                       )}
+                      </>
                     );
                   })()}
                 </>
