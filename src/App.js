@@ -63,10 +63,11 @@ const C = {
 const JOB_ID = "homestead-jobs-v1";
 
 const ROUGH_STATUSES = [
-  {value:"",          label:"— set status —",       color:null},
-  {value:"needs",     label:"Needs to be Scheduled", color:"#dc2626"},
-  {value:"ready",     label:"Ready to Start",        color:"#ca8a04", hasDate:true},
-  {value:"scheduled", label:"Scheduled",             color:"#2563eb", hasDate:true},
+  {value:"",           label:"— set status —",              color:null},
+  {value:"needs",      label:"Needs to be Scheduled",        color:"#dc2626"},
+  {value:"ready",      label:"Ready to Start — Not Scheduled", color:"#ca8a04"},
+  {value:"readysched", label:"Ready to Start — Scheduled",   color:"#16a34a", hasDate:true},
+  {value:"scheduled",  label:"Scheduled",                   color:"#2563eb", hasDate:true},
   {value:"waiting",   label:"Waiting on Items",      color:"#ca8a04", dashed:true},
   {value:"inprogress",label:"In Progress",           color:"#7dd3fc"},
   {value:"invoice",   label:"Ready to Invoice",      color:"#ea580c"},
@@ -1389,7 +1390,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
         </div>
 
-      ))}
+      })}
 
     </div>
 
@@ -1397,9 +1398,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
 }
 
-
-
-// ── Change Orders ─────────────────────────────────────────────
+── Change Orders ─────────────────────────────────────────────
 
 function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
@@ -1417,16 +1416,16 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
   const emailCO = (o, i) => {
 
-    const subject = `${jobName} — Change Order #${i+1}`;
+    const subject = `${jobName} — Change Order #${idx+1}`;
 
-    const body = `Change Order #${i+1} — ${jobName}\n\nDate: ${o.date||"—"}\nSend CO To: ${o.sendTo||"—"}\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial Needed: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nStatus: ${o.status}\n\nPlease review and confirm.\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
+    const body = `Change Order #${idx+1} — ${jobName}\n\nDate: ${o.date||"—"}\nSend CO To: ${o.sendTo||"—"}\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial Needed: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nStatus: ${o.status}\n\nPlease review and confirm.\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
 
     onEmail({subject, body});
 
   };
 
   const chatCO = (o, i) => {
-    const msg = `Change Order #${i+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||o.status||"Pending"}\n\nhttps://homestead-electric.vercel.app/`;
+    const msg = `Change Order #${idx+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||o.status||"Pending"}\n\nhttps://homestead-electric.vercel.app/`;
     openGoogleChat(msg);
   };
 
@@ -1436,7 +1435,9 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
     <div>
 
-      {orders.map((o,i)=>(
+      <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add Change Order</Btn>
+
+      {[...orders].reverse().map((o,i)=>{const idx=orders.length-1-i; return (
 
         <div key={o.id} style={{background:C.surface,border:`1px solid ${C.border}`,
 
@@ -1444,7 +1445,7 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
 
-            <span style={{fontSize:12,color:C.accent,fontWeight:700}}>Change Order #{i+1}</span>
+            <span style={{fontSize:12,color:C.accent,fontWeight:700}}>Change Order #{idx+1}</span>
 
             <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
 
@@ -1547,13 +1548,13 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
         </div>
 
-      ))}
-
-      <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginTop:4}}>+ Add Change Order</Btn>
+      )})}
 
     </div>
 
   );
+
+  }
 
 }
 
@@ -1759,9 +1760,9 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
     const punchLines = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n") || "None";
 
-    const subject = `${jobName} — Return Trip #${i+1}`;
+    const subject = `${jobName} — Return Trip #${idx+1}`;
 
-    const body = `Return Trip #${i+1} — ${jobName}\n\nDate: ${t.date||"—"}\nScope of Work:\n${t.scope||"—"}\n\nMaterial Needed:\n${t.material||"—"}\n\nPunch List:\n${punchLines}\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
+    const body = `Return Trip #${idx+1} — ${jobName}\n\nDate: ${t.date||"—"}\nScope of Work:\n${t.scope||"—"}\n\nMaterial Needed:\n${t.material||"—"}\n\nPunch List:\n${punchLines}\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
 
     onEmail({subject, body});
 
@@ -1769,7 +1770,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
   const chatTrip = (t,i) => {
     const punchOpen = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n") || "None";
-    const msg = `Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}\n\nhttps://homestead-electric.vercel.app/`;
+    const msg = `Return Trip #${idx+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}\n\nhttps://homestead-electric.vercel.app/`;
     openGoogleChat(msg);
   };
 
@@ -1837,7 +1838,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add Return Trip</Btn>
 
-      {trips.map((t,i)=>(
+      {[...trips].reverse().map((t,i)=>{const idx=trips.length-1-i; return (
 
         <div key={t.id} style={{background:t.needsSchedule?"rgba(220,38,38,0.06)":t.rtScheduled?"rgba(139,92,246,0.06)":C.surface,
 
@@ -1848,7 +1849,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
 
             <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-              <span style={{fontSize:12,color:C.purple,fontWeight:700}}>Return Trip #{i+1}</span>
+              <span style={{fontSize:12,color:C.purple,fontWeight:700}}>Return Trip #{idx+1}</span>
               {!t.signedOff&&(
                 <>
                   {(()=>{
@@ -5052,10 +5053,223 @@ function HomeownerPage({ jobId }) {
 }
 
 
+// ── Upcoming Jobs ─────────────────────────────────────────────
+
+function blankUpcoming() {
+  return {
+    id: uid(),
+    name: "",
+    city: "",
+    sales: "",
+    customer: "",
+    notes: "",
+    lastFollowUp: "",
+    foreman: "",
+  };
+}
+
+function UpcomingJobs({ upcoming, onChange, onPromote }) {
+  const [editingId, setEditingId] = useState(null);
+
+  const add = () => {
+    const j = blankUpcoming();
+    onChange([j, ...upcoming]);
+    setEditingId(j.id);
+  };
+
+  const upd = (id, patch) => onChange(upcoming.map(u => u.id === id ? {...u,...patch} : u));
+  const del  = (id) => { onChange(upcoming.filter(u => u.id !== id)); setEditingId(null); };
+
+  const COL = {
+    name:     { label:"Job Name",          flex:2.5 },
+    city:     { label:"City",              flex:1.2 },
+    sales:    { label:"Sales",             flex:1 },
+    customer: { label:"Customer / GC",     flex:1.5 },
+    notes:    { label:"Notes",             flex:3 },
+    lastFollowUp: { label:"Last Follow Up", flex:1.1 },
+  };
+
+  const colKeys = Object.keys(COL);
+
+  return (
+    <div>
+      {/* Header */}
+      <div style={{padding:"24px 26px 16px",borderBottom:`1px solid ${C.border}`}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+          <div>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,
+              letterSpacing:"0.06em",color:C.text,lineHeight:1}}>
+              UPCOMING JOBS
+            </div>
+            <div style={{fontSize:11,color:C.dim,marginTop:3}}>
+              {upcoming.length} job{upcoming.length!==1?"s":""} in pipeline
+            </div>
+          </div>
+          <button onClick={add}
+            style={{background:C.accent,border:"none",borderRadius:9,color:"#000",
+              fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",
+              fontFamily:"inherit",whiteSpace:"nowrap"}}>
+            + Add Job
+          </button>
+        </div>
+      </div>
+
+      {/* Table */}
+      <div style={{padding:"16px 26px"}}>
+        {/* Column headers */}
+        <div style={{display:"flex",alignItems:"center",gap:0,
+          padding:"6px 12px",marginBottom:4,borderBottom:`1px solid ${C.border}`}}>
+          {colKeys.map(k => (
+            <div key={k} style={{flex:COL[k].flex,fontSize:10,fontWeight:700,
+              letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase",paddingRight:12}}>
+              {COL[k].label}
+            </div>
+          ))}
+          {/* Actions column */}
+          <div style={{width:110,flexShrink:0}}/>
+        </div>
+
+        {/* Rows */}
+        {upcoming.length === 0 && (
+          <div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:13,
+            fontStyle:"italic"}}>
+            No upcoming jobs yet — add one above.
+          </div>
+        )}
+
+        {upcoming.map(u => {
+          const isEditing = editingId === u.id;
+          return (
+            <div key={u.id}
+              style={{display:"flex",alignItems:isEditing?"flex-start":"center",gap:0,
+                padding:"8px 12px",borderRadius:8,marginBottom:2,
+                background:isEditing?C.surface:"none",
+                border:isEditing?`1px solid ${C.border}`:"1px solid transparent",
+                transition:"background 0.15s"}}
+              onMouseEnter={e=>{ if(!isEditing) e.currentTarget.style.background=C.surface; }}
+              onMouseLeave={e=>{ if(!isEditing) e.currentTarget.style.background="none"; }}>
+
+              {isEditing ? (
+                /* ── Edit mode ── */
+                <div style={{flex:1,display:"flex",flexDirection:"column",gap:10}}>
+                  <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                    <div style={{flex:2.5,minWidth:160}}>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Job Name</div>
+                      <Inp value={u.name} onChange={e=>upd(u.id,{name:e.target.value})} placeholder="Job name / address"/>
+                    </div>
+                    <div style={{flex:1.2,minWidth:100}}>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>City</div>
+                      <Inp value={u.city} onChange={e=>upd(u.id,{city:e.target.value})} placeholder="City"/>
+                    </div>
+                    <div style={{flex:1,minWidth:90}}>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Sales</div>
+                      <Inp value={u.sales} onChange={e=>upd(u.id,{sales:e.target.value})} placeholder="Sales rep"/>
+                    </div>
+                    <div style={{flex:1.5,minWidth:130}}>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Customer / GC</div>
+                      <Inp value={u.customer} onChange={e=>upd(u.id,{customer:e.target.value})} placeholder="Customer or GC"/>
+                    </div>
+                    <div style={{flex:1.1,minWidth:110}}>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Last Follow Up</div>
+                      <Inp value={u.lastFollowUp} onChange={e=>upd(u.id,{lastFollowUp:e.target.value})} placeholder="MM/DD/YY"/>
+                    </div>
+                    <div style={{flex:1,minWidth:120}}>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
+                      <select value={u.foreman||""} onChange={e=>upd(u.id,{foreman:e.target.value})}
+                        style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                          color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
+                          outline:"none",cursor:"pointer",width:"100%"}}>
+                        <option value="">— unassigned —</option>
+                        {FOREMEN.map(f=><option key={f} value={f}>{f}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes</div>
+                    <TA value={u.notes} onChange={e=>upd(u.id,{notes:e.target.value})}
+                      placeholder="Status, timeline, notes…" rows={2}/>
+                  </div>
+                  <div style={{display:"flex",gap:8,marginTop:2}}>
+                    <button onClick={()=>setEditingId(null)}
+                      style={{background:C.accent,border:"none",borderRadius:7,color:"#000",
+                        fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+                      Done
+                    </button>
+                    <button onClick={()=>{ if(window.confirm("Promote to active job?")) onPromote(u); }}
+                      style={{background:"none",border:`1px solid ${C.green}`,borderRadius:7,color:C.green,
+                        fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+                      ✓ Promote to Job
+                    </button>
+                    <button onClick={()=>del(u.id)}
+                      style={{background:"none",border:"none",color:C.muted,
+                        fontSize:12,cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>
+                      Remove
+                    </button>
+                  </div>
+                </div>
+              ) : (
+                /* ── Read mode ── */
+                <>
+                  <div style={{flex:2.5,paddingRight:12,fontSize:13,fontWeight:600,
+                    color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    {u.name||<span style={{color:C.muted,fontStyle:"italic"}}>Untitled</span>}
+                    {u.foreman&&(
+                      <span style={{marginLeft:8,fontSize:10,fontWeight:700,
+                        color:FOREMEN_COLORS[u.foreman]||"#6b7280",
+                        background:`${FOREMEN_COLORS[u.foreman]||"#6b7280"}18`,
+                        borderRadius:99,padding:"1px 7px",border:`1px solid ${FOREMEN_COLORS[u.foreman]||"#6b7280"}33`}}>
+                        {u.foreman}
+                      </span>
+                    )}
+                  </div>
+                  <div style={{flex:1.2,paddingRight:12,fontSize:12,color:C.dim,
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    {u.city||"—"}
+                  </div>
+                  <div style={{flex:1,paddingRight:12,fontSize:12,color:C.dim,
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    {u.sales||"—"}
+                  </div>
+                  <div style={{flex:1.5,paddingRight:12,fontSize:12,color:C.dim,
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    {u.customer||"—"}
+                  </div>
+                  <div style={{flex:3,paddingRight:12,fontSize:12,color:C.dim,
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    {u.notes||"—"}
+                  </div>
+                  <div style={{flex:1.1,paddingRight:12,fontSize:12,color:C.dim,
+                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    {u.lastFollowUp||"—"}
+                  </div>
+                  <div style={{width:110,flexShrink:0,display:"flex",gap:6,justifyContent:"flex-end"}}>
+                    <button onClick={()=>setEditingId(u.id)}
+                      style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                        color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>
+                      Edit
+                    </button>
+                    <button onClick={()=>{ if(window.confirm("Promote to active job?")) onPromote(u); }}
+                      style={{background:C.green,border:"none",borderRadius:6,
+                        color:"#fff",fontSize:11,fontWeight:700,padding:"4px 10px",
+                        cursor:"pointer",fontFamily:"inherit"}}>
+                      ✓
+                    </button>
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Scheduling Forecast ───────────────────────────────────────
 
 function SchedulingForecast({ jobs, onSelectJob }) {
-  const [foremanTab, setForemanTab] = useState("All");
+  const [foremanTab, setForemanTab]       = useState("All");
+  const [scheduleView, setScheduleView]   = useState("all"); // "all" | "thisWeek" | "nextMonth"
 
   const today = new Date();
   today.setHours(0,0,0,0);
@@ -5068,9 +5282,11 @@ function SchedulingForecast({ jobs, onSelectJob }) {
     return dt;
   };
 
-  const thisWeekStart = startOfWeek(today);
-  const nextWeekStart = new Date(thisWeekStart); nextWeekStart.setDate(thisWeekStart.getDate() + 7);
-  const twoWeeksStart = new Date(thisWeekStart); twoWeeksStart.setDate(thisWeekStart.getDate() + 14);
+  const thisWeekStart  = startOfWeek(today);
+  const nextWeekStart  = new Date(thisWeekStart); nextWeekStart.setDate(thisWeekStart.getDate() + 7);
+  const twoWeeksStart  = new Date(thisWeekStart); twoWeeksStart.setDate(thisWeekStart.getDate() + 14);
+  const thisWeekEnd    = new Date(thisWeekStart); thisWeekEnd.setDate(thisWeekStart.getDate() + 7);
+  const nextMonthEnd   = new Date(today); nextMonthEnd.setDate(today.getDate() + 30);
 
   const parseDate = (str) => {
     if(!str) return null;
@@ -5097,7 +5313,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
       const fs = effFS(job);
 
       // Rough — has projected start or scheduled/ready status
-      if(job.roughProjectedStart || rs === "scheduled" || rs === "ready" || rs === "needs") {
+      if(job.roughProjectedStart || rs === "scheduled" || rs === "readysched" || rs === "ready" || rs === "needs") {
         if(rs !== "complete" && rs !== "invoice" && rs !== "inprogress") {
           items.push({
             id: job.id + "_rough",
@@ -5114,7 +5330,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
       }
 
       // Finish — has projected start or scheduled/ready status
-      if(job.finishProjectedStart || fs === "scheduled" || fs === "ready" || fs === "needs") {
+      if(job.finishProjectedStart || fs === "scheduled" || fs === "readysched" || fs === "ready" || fs === "needs") {
         if(fs !== "complete" && fs !== "invoice" && fs !== "inprogress") {
           items.push({
             id: job.id + "_finish",
@@ -5303,7 +5519,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
                   fontFamily:"inherit",fontWeight:foremanTab===f?700:400,whiteSpace:"nowrap",
                   background:foremanTab===f?fc:"none",
                   border:`1px solid ${foremanTab===f?fc:C.border}`,
-                  borderBottom:foremanTab===f?"none":"none",
+                  borderBottom:"none",
                   color:foremanTab===f?"#fff":C.dim,transition:"all 0.15s"}}>
                 {f} {fCount > 0 && <span style={{opacity:0.8,fontSize:10}}>({fCount})</span>}
               </button>
@@ -5312,47 +5528,156 @@ function SchedulingForecast({ jobs, onSelectJob }) {
         </div>
       </div>
 
-      {/* Kanban columns */}
-      <div style={{padding:"20px 26px",overflowX:"auto"}}>
-        {totalItems === 0 ? (
-          <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
-            <div style={{fontSize:13}}>Nothing to schedule right now.</div>
-          </div>
-        ) : (
-          <div style={{display:"grid",gridTemplateColumns:"repeat(5,minmax(220px,1fr))",gap:16,minWidth:900}}>
-            {BUCKETS.map(bucket => {
-              const bucketItems = allItems.filter(i => i.bucket === bucket.key);
-              return (
-                <div key={bucket.key}>
-                  {/* Column header */}
-                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,
-                    paddingBottom:8,borderBottom:`2px solid ${bucket.color}44`}}>
-                    <div style={{width:8,height:8,borderRadius:"50%",background:bucket.color,flexShrink:0}}/>
-                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,
-                      letterSpacing:"0.08em",color:bucket.color}}>{bucket.label}</div>
-                    <div style={{background:`${bucket.color}18`,border:`1px solid ${bucket.color}33`,
-                      borderRadius:99,padding:"1px 8px",fontSize:11,color:bucket.color,fontWeight:700,marginLeft:"auto"}}>
-                      {bucketItems.length}
-                    </div>
-                  </div>
-                  {bucket.desc && bucketItems.length > 0 && (
-                    <div style={{fontSize:10,color:C.muted,marginBottom:8,fontStyle:"italic"}}>{bucket.desc}</div>
-                  )}
-                  {bucketItems.length === 0 ? (
-                    <div style={{fontSize:11,color:C.muted,fontStyle:"italic",
-                      padding:"16px 0",textAlign:"center",
-                      border:`1px dashed ${C.border}`,borderRadius:10}}>
-                      Nothing here
-                    </div>
-                  ) : (
-                    bucketItems.map(item => <SchedCard key={item.id} item={item}/>)
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        )}
+      {/* View switcher — All / This Week / Next Month */}
+      <div style={{display:"flex",gap:8,padding:"14px 26px 0",borderBottom:`1px solid ${C.border}`}}>
+        {[
+          {key:"all",       label:"All"},
+          {key:"thisWeek",  label:"This Week"},
+          {key:"nextMonth", label:"Next 30 Days"},
+        ].map(({key,label})=>(
+          <button key={key} onClick={()=>setScheduleView(key)}
+            style={{padding:"8px 18px",fontSize:12,fontWeight:scheduleView===key?700:500,
+              fontFamily:"inherit",cursor:"pointer",background:"none",border:"none",
+              borderBottom:scheduleView===key?`2px solid ${C.accent}`:"2px solid transparent",
+              color:scheduleView===key?C.accent:C.dim,transition:"all 0.15s"}}>
+            {label}
+          </button>
+        ))}
       </div>
+
+      {/* ── ALL VIEW — Kanban columns ── */}
+      {scheduleView === "all" && (
+        <div style={{padding:"20px 26px",overflowX:"auto"}}>
+          {totalItems === 0 ? (
+            <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
+              <div style={{fontSize:13}}>Nothing to schedule right now.</div>
+            </div>
+          ) : (
+            <div style={{display:"grid",gridTemplateColumns:"repeat(5,minmax(220px,1fr))",gap:16,minWidth:900}}>
+              {BUCKETS.map(bucket => {
+                const bucketItems = allItems.filter(i => i.bucket === bucket.key);
+                return (
+                  <div key={bucket.key}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,
+                      paddingBottom:8,borderBottom:`2px solid ${bucket.color}44`}}>
+                      <div style={{width:8,height:8,borderRadius:"50%",background:bucket.color,flexShrink:0}}/>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,
+                        letterSpacing:"0.08em",color:bucket.color}}>{bucket.label}</div>
+                      <div style={{background:`${bucket.color}18`,border:`1px solid ${bucket.color}33`,
+                        borderRadius:99,padding:"1px 8px",fontSize:11,color:bucket.color,fontWeight:700,marginLeft:"auto"}}>
+                        {bucketItems.length}
+                      </div>
+                    </div>
+                    {bucket.desc && bucketItems.length > 0 && (
+                      <div style={{fontSize:10,color:C.muted,marginBottom:8,fontStyle:"italic"}}>{bucket.desc}</div>
+                    )}
+                    {bucketItems.length === 0 ? (
+                      <div style={{fontSize:11,color:C.muted,fontStyle:"italic",
+                        padding:"16px 0",textAlign:"center",
+                        border:`1px dashed ${C.border}`,borderRadius:10}}>
+                        Nothing here
+                      </div>
+                    ) : (
+                      bucketItems.map(item => <SchedCard key={item.id} item={item}/>)
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── THIS WEEK / NEXT 30 DAYS — Grouped by status type ── */}
+      {(scheduleView === "thisWeek" || scheduleView === "nextMonth") && (() => {
+        const parseDate = (str) => { if(!str) return null; const d=new Date(str); return isNaN(d.getTime())?null:d; };
+        const cutoff = scheduleView === "thisWeek" ? thisWeekEnd : nextMonthEnd;
+
+        // Filter items to the window (overdue included in this week)
+        const windowItems = allItems.filter(item => {
+          if(!item.date) return false;
+          const d = parseDate(item.date);
+          if(!d) return false;
+          d.setHours(0,0,0,0);
+          if(scheduleView === "thisWeek") return d <= thisWeekEnd;
+          return d <= nextMonthEnd;
+        });
+
+        // Status sections
+        const STATUS_SECTIONS = [
+          {key:"needs",      label:"Needs to be Scheduled",        color:"#dc2626"},
+          {key:"ready",      label:"Ready to Start — Not Scheduled", color:"#ca8a04"},
+          {key:"readysched", label:"Ready to Start — Scheduled",   color:"#16a34a"},
+          {key:"scheduled",  label:"Scheduled",                    color:"#2563eb"},
+          {key:"pending",    label:"Pending (CO)",                  color:"#ca8a04"},
+        ];
+
+        const getStatusKey = (item) => {
+          if(item.type === "returnTrip") return item.status || "";
+          if(item.type === "changeOrder") return item.status || "";
+          return item.status || "";
+        };
+
+        const totalWindow = windowItems.length;
+
+        return (
+          <div style={{padding:"20px 26px"}}>
+            {totalWindow === 0 ? (
+              <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
+                <div style={{fontSize:13}}>
+                  Nothing scheduled {scheduleView==="thisWeek"?"this week":"in the next 30 days"}.
+                </div>
+              </div>
+            ) : (
+              <div style={{display:"flex",flexDirection:"column",gap:28}}>
+                {STATUS_SECTIONS.map(section => {
+                  const sectionItems = windowItems.filter(i => getStatusKey(i) === section.key);
+                  if(sectionItems.length === 0) return null;
+                  return (
+                    <div key={section.key}>
+                      {/* Section header */}
+                      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,
+                        paddingBottom:8,borderBottom:`2px solid ${section.color}44`}}>
+                        <div style={{width:10,height:10,borderRadius:"50%",background:section.color,flexShrink:0}}/>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,
+                          letterSpacing:"0.08em",color:section.color}}>{section.label}</div>
+                        <div style={{background:`${section.color}18`,border:`1px solid ${section.color}33`,
+                          borderRadius:99,padding:"2px 10px",fontSize:11,color:section.color,fontWeight:700,marginLeft:"auto"}}>
+                          {sectionItems.length}
+                        </div>
+                      </div>
+                      {/* Cards grid */}
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:10}}>
+                        {sectionItems.map(item => <SchedCard key={item.id} item={item}/>)}
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Catch-all: items in the window not matched by a section */}
+                {(() => {
+                  const sectionKeys = STATUS_SECTIONS.map(s=>s.key);
+                  const other = windowItems.filter(i => !sectionKeys.includes(getStatusKey(i)));
+                  if(other.length === 0) return null;
+                  return (
+                    <div>
+                      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,
+                        paddingBottom:8,borderBottom:`2px solid ${C.dim}44`}}>
+                        <div style={{width:10,height:10,borderRadius:"50%",background:C.dim,flexShrink:0}}/>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,
+                          letterSpacing:"0.08em",color:C.dim}}>Other</div>
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:10}}>
+                        {other.map(item => <SchedCard key={item.id} item={item}/>)}
+                      </div>
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
@@ -5376,6 +5701,7 @@ function App() {
 
   const [syncStatus, setSyncStatus] = useState("idle");
   const [pinModal, setPinModal] = useState(null); // {message, onSuccess}
+  const [upcoming, setUpcoming] = useState([]);
 
   const saveTimer    = useRef(null);
 
@@ -5483,7 +5809,18 @@ function App() {
 
     );
 
-    return () => unsub(); // cleanup on unmount
+    // ── Load upcoming jobs from Firestore ──
+    const unsubUpcoming = onSnapshot(collection(db,"upcoming"),
+      (snap) => {
+        if(!snap.empty) {
+          const loaded = snap.docs.map(d=>d.data().data).filter(Boolean);
+          setUpcoming(loaded);
+        }
+      },
+      (err) => { console.error("Upcoming snapshot error:",err); }
+    );
+
+    return () => { unsub(); unsubUpcoming(); }; // cleanup on unmount
 
   },[]);
 
@@ -5563,6 +5900,14 @@ if(initialLoad.current) return;
 
     try { await deleteDoc(doc(db,"jobs",jobId)); } catch(e){}
 
+  };
+
+  const saveUpcomingItem = async (item) => {
+    try { await setDoc(doc(db,"upcoming",item.id),{data:item,updated_at:new Date().toISOString()}); } catch(e){ console.error(e); }
+  };
+
+  const deleteUpcomingItem = async (id) => {
+    try { await deleteDoc(doc(db,"upcoming",id)); } catch(e){}
   };
 
 
@@ -5718,7 +6063,8 @@ if(initialLoad.current) return;
   const openForeman = (f) => { setActiveForeman(f); setView("foreman"); setSearch(""); setStageF("All"); setFlagOnly(false); };
 
   const goHome      = () => { setView("home");     setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
-  const openSchedule = () => { setView("schedule"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openSchedule  = () => { setView("schedule");  setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openUpcoming  = () => { setView("upcoming");  setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
 
 
 
@@ -5980,8 +6326,9 @@ if(initialLoad.current) return;
         {[
           {key:"home",     label:"Job Board"},
           {key:"schedule", label:"Scheduling Forecast"},
+          {key:"upcoming", label:"Upcoming"},
         ].map(({key,label})=>(
-          <button key={key} onClick={key==="home"?goHome:openSchedule}
+          <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:openUpcoming}
             style={{padding:"13px 22px",fontSize:12,fontWeight:view===key?700:500,
               fontFamily:"inherit",cursor:"pointer",whiteSpace:"nowrap",
               background:"none",border:"none",borderBottom:view===key?`2px solid ${C.accent}`:"2px solid transparent",
@@ -6549,6 +6896,45 @@ if(initialLoad.current) return;
         />
       )}
 
+
+      {/* ── UPCOMING JOBS PAGE ── */}
+
+      {view==="upcoming"&&(
+        <UpcomingJobs
+          upcoming={upcoming}
+          onChange={(next) => {
+            // Diff: find added/updated items and deleted items
+            const prevIds = new Set(upcoming.map(u=>u.id));
+            const nextIds = new Set(next.map(u=>u.id));
+            // Save new or updated
+            next.forEach(item => {
+              const prev = upcoming.find(u=>u.id===item.id);
+              if(!prev || JSON.stringify(prev)!==JSON.stringify(item)) {
+                saveUpcomingItem(item);
+              }
+            });
+            // Delete removed
+            upcoming.forEach(item => {
+              if(!nextIds.has(item.id)) deleteUpcomingItem(item.id);
+            });
+            setUpcoming(next);
+          }}
+          onPromote={(u) => {
+            // Build a new job pre-filled from upcoming card
+            const j = blankJob();
+            j.name    = u.name     || "";
+            j.address = u.city     || "";
+            j.gc      = u.customer || "";
+            j.foreman = "";
+            setJobs(js => [j, ...js]);
+            setSelected(j);
+            setUpcoming(prev => prev.filter(x => x.id !== u.id));
+            setView("home");
+            saveJob(j);
+            deleteUpcomingItem(u.id);
+          }}
+        />
+      )}
 
       {pinModal&&<PinModal
         message={pinModal.message}
