@@ -5201,9 +5201,16 @@ function SchedulingForecast({ jobs, onSelectJob }) {
           })}
         </div>
       </div>
-      <div style={{display:"flex",gap:8,padding:"14px 26px 0",borderBottom:`1px solid ${C.border}`}}>
-        {[{key:"all",label:"All"},{key:"thisWeek",label:"This Week"},{key:"nextMonth",label:"Next 30 Days"}].map(({key,label})=>(
-          <button key={key} onClick={()=>setScheduleView(key)} style={{padding:"8px 18px",fontSize:12,fontWeight:scheduleView===key?700:500,fontFamily:"inherit",cursor:"pointer",background:"none",border:"none",borderBottom:scheduleView===key?`2px solid ${C.accent}`:"2px solid transparent",color:scheduleView===key?C.accent:C.dim,transition:"all 0.15s"}}>{label}</button>
+      <div style={{display:"flex",gap:0,padding:"0 26px",borderBottom:`1px solid ${C.border}`,overflowX:"auto",scrollbarWidth:"none"}}>
+        {[
+          {key:"all",label:"Kanban"},
+          {key:"thisWeek",label:"This Week"},
+          {key:"nextMonth",label:"Next 30 Days"},
+          {key:"byForeman",label:"By Foreman"},
+          {key:"byDay",label:"By Day"},
+          {key:"list",label:"List"},
+        ].map(({key,label})=>(
+          <button key={key} onClick={()=>setScheduleView(key)} style={{padding:"10px 16px",fontSize:12,fontWeight:scheduleView===key?700:500,fontFamily:"inherit",cursor:"pointer",background:"none",border:"none",whiteSpace:"nowrap",borderBottom:scheduleView===key?`2px solid ${C.accent}`:"2px solid transparent",color:scheduleView===key?C.accent:C.dim,transition:"all 0.15s"}}>{label}</button>
         ))}
       </div>
       {scheduleView==="all"&&(
@@ -5274,6 +5281,188 @@ function SchedulingForecast({ jobs, onSelectJob }) {
           </div>
         );
       })()}
+
+      {/* ── BY FOREMAN ── */}
+      {scheduleView==="byForeman"&&(
+        <div style={{padding:"20px 26px",overflowX:"auto"}}>
+          {allItems.length===0?(
+            <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}><div style={{fontSize:13}}>Nothing to schedule.</div></div>
+          ):(
+            <div style={{display:"grid",gridTemplateColumns:`repeat(${[...FOREMEN,"Unassigned"].length},minmax(220px,1fr))`,gap:16,minWidth:800}}>
+              {[...FOREMEN,"Unassigned"].map(f=>{
+                const fc=FOREMEN_COLORS[f]||"#6b7280";
+                const fItems=allItems.filter(i=>{
+                  const jf=i.job.foreman||"Koy";
+                  return f==="Unassigned"?(!i.job.foreman||i.job.foreman==="Unassigned"):jf===f;
+                });
+                const sorted=[...fItems].sort((a,b)=>{
+                  if(!a.date&&!b.date) return 0; if(!a.date) return 1; if(!b.date) return -1;
+                  return new Date(a.date)-new Date(b.date);
+                });
+                return (
+                  <div key={f}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,paddingBottom:8,borderBottom:`2px solid ${fc}44`}}>
+                      <div style={{width:8,height:8,borderRadius:"50%",background:fc,flexShrink:0}}/>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:fc}}>{f}</div>
+                      <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:fc,fontWeight:700,marginLeft:"auto"}}>{fItems.length}</div>
+                    </div>
+                    {sorted.length===0?(
+                      <div style={{fontSize:11,color:C.muted,fontStyle:"italic",padding:"16px 0",textAlign:"center",border:`1px dashed ${C.border}`,borderRadius:10}}>Nothing scheduled</div>
+                    ):sorted.map(item=><SchedCard key={item.id} item={item}/>)}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* ── BY DAY — 14 days ── */}
+      {scheduleView==="byDay"&&(()=>{
+        const days=[];
+        for(let i=0;i<14;i++){
+          const d=new Date(today); d.setDate(today.getDate()+i);
+          days.push(d);
+        }
+        const fmt=(d)=>d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
+        const sameDay=(d1,d2)=>d1.getFullYear()===d2.getFullYear()&&d1.getMonth()===d2.getMonth()&&d1.getDate()===d2.getDate();
+        const getItemDate=(item)=>{ if(!item.date) return null; const d=new Date(item.date); return isNaN(d.getTime())?null:d; };
+        const isToday=(d)=>sameDay(d,today);
+        const isWeekend=(d)=>d.getDay()===0||d.getDay()===6;
+
+        // Also collect overdue items (before today, have a date)
+        const overdueItems=allItems.filter(item=>{
+          const d=getItemDate(item); if(!d) return false;
+          d.setHours(0,0,0,0); return d<today;
+        }).sort((a,b)=>new Date(a.date)-new Date(b.date));
+
+        return (
+          <div style={{padding:"20px 26px",overflowX:"auto"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:12,minWidth:600}}>
+              {overdueItems.length>0&&(
+                <div style={{gridColumn:"1/-1",marginBottom:4}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,paddingBottom:6,borderBottom:`2px solid ${C.red}44`}}>
+                    <div style={{width:8,height:8,borderRadius:"50%",background:C.red}}/>
+                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.08em",color:C.red}}>OVERDUE</div>
+                    <div style={{background:`${C.red}18`,border:`1px solid ${C.red}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:C.red,fontWeight:700,marginLeft:"auto"}}>{overdueItems.length}</div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10}}>
+                    {overdueItems.map(item=><SchedCard key={item.id} item={item}/>)}
+                  </div>
+                </div>
+              )}
+              {days.map(day=>{
+                const dayItems=allItems.filter(item=>{
+                  const d=getItemDate(item); if(!d) return false;
+                  return sameDay(d,day);
+                });
+                const todayStyle=isToday(day)?{background:`${C.accent}08`,border:`1px solid ${C.accent}33`}:{background:C.surface,border:`1px solid ${C.border}`};
+                const wknd=isWeekend(day);
+                return (
+                  <div key={day.toISOString()} style={{borderRadius:12,padding:"12px 14px",...todayStyle,opacity:wknd&&dayItems.length===0?0.5:1}}>
+                    <div style={{marginBottom:10}}>
+                      <div style={{fontSize:11,fontWeight:700,color:isToday(day)?C.accent:wknd?C.muted:C.text,letterSpacing:"0.04em"}}>{fmt(day)}</div>
+                      {isToday(day)&&<div style={{fontSize:9,color:C.accent,fontWeight:700,letterSpacing:"0.1em"}}>TODAY</div>}
+                    </div>
+                    {dayItems.length===0?(
+                      <div style={{fontSize:10,color:C.muted,fontStyle:"italic",paddingBottom:4}}>Nothing scheduled</div>
+                    ):dayItems.map(item=><SchedCard key={item.id} item={item}/>)}
+                  </div>
+                );
+              })}
+              {/* Unscheduled column */}
+              {(()=>{
+                const unsch=allItems.filter(i=>!i.date||i.bucket==="unscheduled");
+                if(unsch.length===0) return null;
+                return (
+                  <div style={{borderRadius:12,padding:"12px 14px",background:C.surface,border:`1px dashed ${C.border}`}}>
+                    <div style={{fontSize:11,fontWeight:700,color:"#ca8a04",marginBottom:10,letterSpacing:"0.04em"}}>UNSCHEDULED</div>
+                    {unsch.map(item=><SchedCard key={item.id} item={item}/>)}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── CHRONOLOGICAL LIST ── */}
+      {scheduleView==="list"&&(()=>{
+        const sorted=[...allItems].sort((a,b)=>{
+          if(!a.date&&!b.date) return 0; if(!a.date) return 1; if(!b.date) return -1;
+          return new Date(a.date)-new Date(b.date);
+        });
+        const withDate=sorted.filter(i=>i.date);
+        const noDate=sorted.filter(i=>!i.date);
+        const formatDate=(str)=>{ if(!str) return "—"; const d=new Date(str); return isNaN(d.getTime())?str:d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"}); };
+        const isOverdue=(str)=>{ if(!str) return false; const d=new Date(str); d.setHours(0,0,0,0); return d<today; };
+        return (
+          <div style={{padding:"20px 26px",maxWidth:780}}>
+            {sorted.length===0&&<div style={{textAlign:"center",padding:"60px 0",color:C.muted,fontSize:13}}>Nothing to schedule.</div>}
+            {withDate.map((item,i)=>{
+              const {job,label,color,date,status,type,scope,desc}=item;
+              const foreman=job.foreman||"Koy"; const fc=FOREMEN_COLORS[foreman]||"#6b7280";
+              const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):getStatusDef(ROUGH_STATUSES,status);
+              const overdue=isOverdue(date);
+              return (
+                <div key={item.id} onClick={()=>onSelectJob(job)}
+                  style={{display:"flex",alignItems:"flex-start",gap:14,padding:"10px 14px",borderRadius:10,marginBottom:4,cursor:"pointer",
+                    background:overdue?`${C.red}08`:C.surface,border:`1px solid ${overdue?C.red+"33":C.border}`,
+                    borderLeft:`3px solid ${overdue?C.red:color}`}}
+                  onMouseEnter={e=>e.currentTarget.style.background=overdue?`${C.red}12`:`${color}08`}
+                  onMouseLeave={e=>e.currentTarget.style.background=overdue?`${C.red}08`:C.surface}>
+                  <div style={{minWidth:110,flexShrink:0}}>
+                    <div style={{fontSize:12,fontWeight:700,color:overdue?C.red:C.text}}>{formatDate(date)}</div>
+                    {overdue&&<div style={{fontSize:9,color:C.red,fontWeight:700,letterSpacing:"0.08em"}}>OVERDUE</div>}
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3,flexWrap:"wrap"}}>
+                      <span style={{fontSize:10,fontWeight:700,color,background:`${color}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${color}33`}}>{label.toUpperCase()}</span>
+                      <span style={{fontSize:13,fontWeight:700,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{job.name||"Untitled"}</span>
+                    </div>
+                    {job.address&&<div style={{fontSize:11,color:C.dim,marginBottom:2}}>{job.address}</div>}
+                    {(scope||desc)&&<div style={{fontSize:11,color:C.dim,fontStyle:"italic"}}>{scope||desc}</div>}
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                    <span style={{fontSize:10,fontWeight:700,color:fc,background:`${fc}15`,borderRadius:99,padding:"2px 8px",border:`1px solid ${fc}33`}}>{foreman}</span>
+                    {statusDef.color&&<span style={{fontSize:10,fontWeight:700,color:statusDef.color,background:`${statusDef.color}15`,borderRadius:99,padding:"2px 8px",border:`1px solid ${statusDef.color}33`}}>{statusDef.label}</span>}
+                  </div>
+                </div>
+              );
+            })}
+            {noDate.length>0&&(
+              <div style={{marginTop:20}}>
+                <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.1em",color:"#ca8a04",marginBottom:10,paddingTop:16,borderTop:`1px solid ${C.border}`}}>UNSCHEDULED — NO DATE SET</div>
+                {noDate.map(item=>{
+                  const {job,label,color,status,type,scope,desc}=item;
+                  const foreman=job.foreman||"Koy"; const fc=FOREMEN_COLORS[foreman]||"#6b7280";
+                  const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):getStatusDef(ROUGH_STATUSES,status);
+                  return (
+                    <div key={item.id} onClick={()=>onSelectJob(job)}
+                      style={{display:"flex",alignItems:"flex-start",gap:14,padding:"10px 14px",borderRadius:10,marginBottom:4,cursor:"pointer",background:C.surface,border:`1px solid ${C.border}`,borderLeft:`3px solid ${color}`}}
+                      onMouseEnter={e=>e.currentTarget.style.background=`${color}08`}
+                      onMouseLeave={e=>e.currentTarget.style.background=C.surface}>
+                      <div style={{minWidth:110,flexShrink:0}}><div style={{fontSize:12,color:C.muted,fontStyle:"italic"}}>No date</div></div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3,flexWrap:"wrap"}}>
+                          <span style={{fontSize:10,fontWeight:700,color,background:`${color}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${color}33`}}>{label.toUpperCase()}</span>
+                          <span style={{fontSize:13,fontWeight:700,color:C.text}}>{job.name||"Untitled"}</span>
+                        </div>
+                        {(scope||desc)&&<div style={{fontSize:11,color:C.dim,fontStyle:"italic"}}>{scope||desc}</div>}
+                      </div>
+                      <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+                        <span style={{fontSize:10,fontWeight:700,color:fc,background:`${fc}15`,borderRadius:99,padding:"2px 8px",border:`1px solid ${fc}33`}}>{foreman}</span>
+                        {statusDef.color&&<span style={{fontSize:10,fontWeight:700,color:statusDef.color,background:`${statusDef.color}15`,borderRadius:99,padding:"2px 8px",border:`1px solid ${statusDef.color}33`}}>{statusDef.label}</span>}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
     </div>
   );
 }
