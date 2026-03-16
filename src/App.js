@@ -220,7 +220,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", readyToSchedule:false, readyToInvoice:false, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"",
+  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", roughNeedsByStart:"", roughNeedsByEnd:"", roughNeedsHardDate:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", finishNeedsByStart:"", finishNeedsByEnd:"", finishNeedsHardDate:"", qcStatus:"", qcStatusDate:"", readyToSchedule:false, readyToInvoice:false, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"",
 
   homeRuns:{
 
@@ -3472,6 +3472,32 @@ onUpdate(updated);
                             style={{width:130,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
                         )}
                       </div>
+                      {job.roughStatus==="needs"&&(
+                        <div style={{marginTop:10,padding:"10px 12px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:8}}>
+                          <div style={{fontSize:10,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:8}}>NEEDS TO BE SCHEDULED BY</div>
+                          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                            <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.dim,cursor:"pointer"}}>
+                              <input type="radio" name="roughNeedsType" checked={!job.roughNeedsHardDate} onChange={()=>u({roughNeedsHardDate:false})} style={{accentColor:"#dc2626"}}/>
+                              Date Range
+                            </label>
+                            <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.dim,cursor:"pointer"}}>
+                              <input type="radio" name="roughNeedsType" checked={!!job.roughNeedsHardDate} onChange={()=>u({roughNeedsHardDate:true})} style={{accentColor:"#dc2626"}}/>
+                              Hard Date
+                            </label>
+                          </div>
+                          {!job.roughNeedsHardDate?(
+                            <div style={{display:"flex",gap:8,alignItems:"center",marginTop:8,flexWrap:"wrap"}}>
+                              <Inp value={job.roughNeedsByStart||""} onChange={e=>u({roughNeedsByStart:e.target.value})} placeholder="Start MM/DD/YY" style={{width:130,fontSize:12,borderColor:"#dc262655",background:"#dc262608"}}/>
+                              <span style={{fontSize:12,color:C.dim}}>–</span>
+                              <Inp value={job.roughNeedsByEnd||""} onChange={e=>u({roughNeedsByEnd:e.target.value})} placeholder="End MM/DD/YY" style={{width:130,fontSize:12,borderColor:"#dc262655",background:"#dc262608"}}/>
+                            </div>
+                          ):(
+                            <div style={{marginTop:8}}>
+                              <Inp value={job.roughNeedsByStart||""} onChange={e=>u({roughNeedsByStart:e.target.value})} placeholder="Hard date MM/DD/YY" style={{width:160,fontSize:12,borderColor:"#dc262655",background:"#dc262608"}}/>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
@@ -3566,6 +3592,32 @@ onUpdate(updated);
                             style={{width:130,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
                         )}
                       </div>
+                      {job.finishStatus==="needs"&&(
+                        <div style={{marginTop:10,padding:"10px 12px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:8}}>
+                          <div style={{fontSize:10,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:8}}>NEEDS TO BE SCHEDULED BY</div>
+                          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                            <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.dim,cursor:"pointer"}}>
+                              <input type="radio" name="finishNeedsType" checked={!job.finishNeedsHardDate} onChange={()=>u({finishNeedsHardDate:false})} style={{accentColor:"#dc2626"}}/>
+                              Date Range
+                            </label>
+                            <label style={{display:"flex",alignItems:"center",gap:6,fontSize:12,color:C.dim,cursor:"pointer"}}>
+                              <input type="radio" name="finishNeedsType" checked={!!job.finishNeedsHardDate} onChange={()=>u({finishNeedsHardDate:true})} style={{accentColor:"#dc2626"}}/>
+                              Hard Date
+                            </label>
+                          </div>
+                          {!job.finishNeedsHardDate?(
+                            <div style={{display:"flex",gap:8,alignItems:"center",marginTop:8,flexWrap:"wrap"}}>
+                              <Inp value={job.finishNeedsByStart||""} onChange={e=>u({finishNeedsByStart:e.target.value})} placeholder="Start MM/DD/YY" style={{width:130,fontSize:12,borderColor:"#dc262655",background:"#dc262608"}}/>
+                              <span style={{fontSize:12,color:C.dim}}>–</span>
+                              <Inp value={job.finishNeedsByEnd||""} onChange={e=>u({finishNeedsByEnd:e.target.value})} placeholder="End MM/DD/YY" style={{width:130,fontSize:12,borderColor:"#dc262655",background:"#dc262608"}}/>
+                            </div>
+                          ):(
+                            <div style={{marginTop:8}}>
+                              <Inp value={job.finishNeedsByStart||""} onChange={e=>u({finishNeedsByStart:e.target.value})} placeholder="Hard date MM/DD/YY" style={{width:160,fontSize:12,borderColor:"#dc262655",background:"#dc262608"}}/>
+                            </div>
+                          )}
+                        </div>
+                      )}
                     </div>
                   );
                 })()}
@@ -5180,6 +5232,21 @@ function SchedulingForecast({ jobs, onSelectJob }) {
           <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color,background:`${color}18`,borderRadius:99,padding:"2px 8px",border:`1px solid ${color}33`}}>{label.toUpperCase()}</span>
           {date&&<span style={{fontSize:11,color:C.dim,fontWeight:600}}>{formatDate(date)}</span>}
         </div>
+        {status==="needs"&&(()=>{
+          const isRough=type==="rough"; const isFinish=type==="finish";
+          const hardDate=isRough?job.roughNeedsHardDate:isFinish?job.finishNeedsHardDate:null;
+          const start=isRough?job.roughNeedsByStart:isFinish?job.finishNeedsByStart:null;
+          const end=isRough?job.roughNeedsByEnd:isFinish?job.finishNeedsByEnd:null;
+          if(!start&&!end) return null;
+          return (
+            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6,padding:"4px 8px",background:"#dc262612",borderRadius:6,border:"1px solid #dc262633"}}>
+              <span style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.06em",flexShrink:0}}>{hardDate?"HARD DATE":"WINDOW"}</span>
+              <span style={{fontSize:11,color:"#dc2626",fontWeight:600}}>
+                {hardDate?start:(start&&end?`${start} – ${end}`:start||end)}
+              </span>
+            </div>
+          );
+        })()}
         <div style={{fontWeight:700,fontSize:13,color:C.text,marginBottom:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{job.name||"Untitled Job"}</div>
         {job.address&&<div style={{fontSize:11,color:C.dim,marginBottom:4,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{job.address}</div>}
         {(scope||desc)&&<div style={{fontSize:11,color:C.dim,fontStyle:"italic",marginBottom:6,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{scope||desc}</div>}
