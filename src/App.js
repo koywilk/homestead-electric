@@ -1332,16 +1332,16 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
   const emailCO = (o, i) => {
 
-    const subject = `${jobName} — Change Order #${idx+1}`;
+    const subject = `${jobName} — Change Order #${i+1}`;
 
-    const body = `Change Order #${idx+1} — ${jobName}\n\nDate: ${o.date||"—"}\nSend CO To: ${o.sendTo||"—"}\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial Needed: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nStatus: ${o.status}\n\nPlease review and confirm.\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
+    const body = `Change Order #${i+1} — ${jobName}\n\nDate: ${o.date||"—"}\nSend CO To: ${o.sendTo||"—"}\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial Needed: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nStatus: ${o.status}\n\nPlease review and confirm.\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
 
     onEmail({subject, body});
 
   };
 
   const chatCO = (o, i) => {
-    const msg = `Change Order #${idx+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||o.status||"Pending"}\n\nhttps://homestead-electric.vercel.app/`;
+    const msg = `Change Order #${i+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||o.status||"Pending"}\n\nhttps://homestead-electric.vercel.app/`;
     openGoogleChat(msg);
   };
 
@@ -1351,7 +1351,7 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add Change Order</Btn>
 
-      {[...orders].reverse().map((o,i)=>((idx=>(
+      {orders.map((o,i)=>(
 
         <div key={o.id} style={{background:C.surface,border:`1px solid ${C.border}`,
 
@@ -1359,7 +1359,7 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
 
-            <span style={{fontSize:12,color:C.accent,fontWeight:700}}>Change Order #{idx+1}</span>
+            <span style={{fontSize:12,color:C.accent,fontWeight:700}}>Change Order #{i+1}</span>
 
             <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
 
@@ -1462,7 +1462,7 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
         </div>
 
-      ))(orders.length-1-i)))}
+      ))}
 
     </div>
 
@@ -1660,9 +1660,9 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
     const punchLines = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n") || "None";
 
-    const subject = `${jobName} — Return Trip #${idx+1}`;
+    const subject = `${jobName} — Return Trip #${i+1}`;
 
-    const body = `Return Trip #${idx+1} — ${jobName}\n\nDate: ${t.date||"—"}\nScope of Work:\n${t.scope||"—"}\n\nMaterial Needed:\n${t.material||"—"}\n\nPunch List:\n${punchLines}\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
+    const body = `Return Trip #${i+1} — ${jobName}\n\nDate: ${t.date||"—"}\nScope of Work:\n${t.scope||"—"}\n\nMaterial Needed:\n${t.material||"—"}\n\nPunch List:\n${punchLines}\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
 
     onEmail({subject, body});
 
@@ -1670,7 +1670,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
   const chatTrip = (t,i) => {
     const punchOpen = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n") || "None";
-    const msg = `Return Trip #${idx+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}\n\nhttps://homestead-electric.vercel.app/`;
+    const msg = `Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}\n\nhttps://homestead-electric.vercel.app/`;
     openGoogleChat(msg);
   };
 
@@ -1734,7 +1734,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add Return Trip</Btn>
 
-      {[...trips].reverse().map((t,i)=>((idx=>(
+      {trips.map((t,i)=>(
 
         <div key={t.id} style={{background:t.needsSchedule?"rgba(220,38,38,0.06)":t.rtScheduled?"rgba(139,92,246,0.06)":C.surface,
 
@@ -1745,7 +1745,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
 
             <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-              <span style={{fontSize:12,color:C.purple,fontWeight:700}}>Return Trip #{idx+1}</span>
+              <span style={{fontSize:12,color:C.purple,fontWeight:700}}>Return Trip #{i+1}</span>
               {!t.signedOff&&(
                 <>
                   {(()=>{
@@ -1966,7 +1966,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
         </div>
 
-      ))(trips.length-1-i)))}
+      ))}
 
       {viewPhoto&&(
 
