@@ -1351,7 +1351,7 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add Change Order</Btn>
 
-      {[...orders].reverse().map((o,i)=>{const idx=orders.length-1-i; return (
+      {[...orders].reverse().map((o,i)=>((idx=>(
 
         <div key={o.id} style={{background:C.surface,border:`1px solid ${C.border}`,
 
@@ -1462,7 +1462,7 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
         </div>
 
-      )})}
+      ))(orders.length-1-i)))}
 
     </div>
 
@@ -1734,7 +1734,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add Return Trip</Btn>
 
-      {[...trips].reverse().map((t,i)=>{const idx=trips.length-1-i; return (
+      {[...trips].reverse().map((t,i)=>((idx=>(
 
         <div key={t.id} style={{background:t.needsSchedule?"rgba(220,38,38,0.06)":t.rtScheduled?"rgba(139,92,246,0.06)":C.surface,
 
@@ -1966,7 +1966,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
         </div>
 
-      )})}
+      ))(trips.length-1-i)))}
 
       {viewPhoto&&(
 
