@@ -4488,6 +4488,9 @@ const STAGE_SECTIONS = [
   { key:"complete",     label:"Completed",                 color:"#22c55e",
     test: j => effFS(j) === "complete" },
 
+  { key:"uncategorized", label:"Uncategorized",             color:"#64748b",
+    test: j => true },
+
 ];
 
 
@@ -5918,7 +5921,7 @@ if(initialLoad.current) return;
                 color:C.dim,marginBottom:16,marginTop:32,paddingTop:24,borderTop:`1px solid ${C.border}`}}>
                 ALL JOBS
               </div>
-              <StageSectionList jobs={jobs} JobRow={JobRow} startCollapsed={true}/>
+              <StageSectionList jobs={filtered} JobRow={JobRow} startCollapsed={true}/>
             </div>
 
           </div>
