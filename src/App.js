@@ -5676,14 +5676,16 @@ function App() {
     const unsubUpcoming = onSnapshot(collection(db,"upcoming"),
       async (snap) => {
         const loaded = snap.docs.map(d=>d.data().data).filter(Boolean);
-        if(loaded.length > 0) {
-          setUpcoming(loaded);
-        } else {
-          // Seed with default upcoming jobs if none found
-          setUpcoming(SEED_UPCOMING);
-          for(const item of SEED_UPCOMING) {
+        // Merge seed jobs in — add any seed job not already present by id
+        const loadedIds = new Set(loaded.map(u=>u.id));
+        const missing = SEED_UPCOMING.filter(s=>!loadedIds.has(s.id));
+        if(missing.length > 0) {
+          for(const item of missing) {
             try { await setDoc(doc(db,"upcoming",item.id),{data:item,updated_at:new Date().toISOString()}); } catch(e){}
           }
+          // snapshot will re-fire with the new docs, so no need to setUpcoming here
+        } else {
+          setUpcoming(loaded);
         }
       },
       (err) => { console.error("Upcoming snapshot error:",err); }
