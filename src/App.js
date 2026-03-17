@@ -266,7 +266,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, roughStartConfirmed:false, finishStartConfirmed:false, readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, taskDueDates:{}, roughOnHold:false, finishOnHold:false, tempPed:false, hasTempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
+  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, roughStartConfirmed:false, finishStartConfirmed:false, roughNeedsHardDate:false, roughNeedsByStart:"", roughNeedsByEnd:"", finishNeedsHardDate:false, finishNeedsByStart:"", finishNeedsByEnd:"", readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, taskDueDates:{}, roughOnHold:false, finishOnHold:false, tempPed:false, hasTempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
 
   homeRuns:{
 
@@ -3208,6 +3208,12 @@ const normalizeJob = (raw) => ({
   roughProjectedStart:  raw?.roughProjectedStart  || "",
   roughStartConfirmed:   raw?.roughStartConfirmed   ?? false,
   finishStartConfirmed:  raw?.finishStartConfirmed  ?? false,
+  roughNeedsHardDate:    raw?.roughNeedsHardDate    ?? false,
+  roughNeedsByStart:     raw?.roughNeedsByStart     || "",
+  roughNeedsByEnd:       raw?.roughNeedsByEnd       || "",
+  finishNeedsHardDate:   raw?.finishNeedsHardDate   ?? false,
+  finishNeedsByStart:    raw?.finishNeedsByStart    || "",
+  finishNeedsByEnd:      raw?.finishNeedsByEnd      || "",
   finishStatusDate:     raw?.finishStatusDate     || "",
   finishProjectedStart: raw?.finishProjectedStart || "",
   qcStatusDate:         raw?.qcStatusDate         || "",
@@ -3689,11 +3695,9 @@ onUpdate(updated);
                           fontWeight:rsDef.color?700:400,outline:"none",cursor:"pointer"}}>
                           {ROUGH_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>
-                        {rsDef.hasDate&&(
+                        {rsDef.hasDate&&job.roughStatus!=="date_confirmed"&&(
                           <div style={{display:"flex",flexDirection:"column",gap:3}}>
-                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:rsDef.color}}>
-                              {job.roughStatus==="date_confirmed"?"SCHEDULE BY DATE":"SCHEDULED DATE"}
-                            </div>
+                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:rsDef.color}}>SCHEDULED DATE</div>
                             <Inp value={job.roughStatusDate||""} onChange={e=>u({roughStatusDate:e.target.value})}
                               placeholder="MM/DD/YY"
                               style={{width:120,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
@@ -3701,8 +3705,27 @@ onUpdate(updated);
                         )}
                       </div>
                       {job.roughStatus==="date_confirmed"&&(
-                        <div style={{marginTop:6,fontSize:10,color:"#f97316",fontStyle:"italic"}}>
-                          ↑ Date by which scheduling must be completed — job start date goes in Projected Start above
+                        <div style={{marginTop:8,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:8}}>
+                          <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>NEEDS TO BE SCHEDULED BY</div>
+                          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
+                            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,cursor:"pointer"}}>
+                              <input type="radio" checked={!job.roughNeedsHardDate} onChange={()=>u({roughNeedsHardDate:false})} style={{accentColor:"#dc2626"}}/>
+                              Date Range
+                            </label>
+                            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,cursor:"pointer"}}>
+                              <input type="radio" checked={!!job.roughNeedsHardDate} onChange={()=>u({roughNeedsHardDate:true})} style={{accentColor:"#dc2626"}}/>
+                              Hard Date
+                            </label>
+                          </div>
+                          {!job.roughNeedsHardDate?(
+                            <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                              <Inp value={job.roughNeedsByStart||""} onChange={e=>u({roughNeedsByStart:e.target.value})} placeholder="Start MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                              <span style={{fontSize:11,color:C.dim}}>–</span>
+                              <Inp value={job.roughNeedsByEnd||""} onChange={e=>u({roughNeedsByEnd:e.target.value})} placeholder="End MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                            </div>
+                          ):(
+                            <Inp value={job.roughNeedsByStart||""} onChange={e=>u({roughNeedsByStart:e.target.value})} placeholder="Hard date MM/DD/YY" style={{width:150,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                          )}
                         </div>
                       )}
 
@@ -3816,11 +3839,9 @@ onUpdate(updated);
                           fontWeight:fsDef.color?700:400,outline:"none",cursor:"pointer"}}>
                           {FINISH_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>
-                        {fsDef.hasDate&&(
+                        {fsDef.hasDate&&job.finishStatus!=="date_confirmed"&&(
                           <div style={{display:"flex",flexDirection:"column",gap:3}}>
-                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:fsDef.color}}>
-                              {job.finishStatus==="date_confirmed"?"SCHEDULE BY DATE":"SCHEDULED DATE"}
-                            </div>
+                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:fsDef.color}}>SCHEDULED DATE</div>
                             <Inp value={job.finishStatusDate||""} onChange={e=>u({finishStatusDate:e.target.value})}
                               placeholder="MM/DD/YY"
                               style={{width:120,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
@@ -3828,8 +3849,27 @@ onUpdate(updated);
                         )}
                       </div>
                       {job.finishStatus==="date_confirmed"&&(
-                        <div style={{marginTop:6,fontSize:10,color:"#f97316",fontStyle:"italic"}}>
-                          ↑ Date by which scheduling must be completed — job start date goes in Projected Start above
+                        <div style={{marginTop:8,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:8}}>
+                          <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>NEEDS TO BE SCHEDULED BY</div>
+                          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
+                            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,cursor:"pointer"}}>
+                              <input type="radio" checked={!job.finishNeedsHardDate} onChange={()=>u({finishNeedsHardDate:false})} style={{accentColor:"#dc2626"}}/>
+                              Date Range
+                            </label>
+                            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,cursor:"pointer"}}>
+                              <input type="radio" checked={!!job.finishNeedsHardDate} onChange={()=>u({finishNeedsHardDate:true})} style={{accentColor:"#dc2626"}}/>
+                              Hard Date
+                            </label>
+                          </div>
+                          {!job.finishNeedsHardDate?(
+                            <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                              <Inp value={job.finishNeedsByStart||""} onChange={e=>u({finishNeedsByStart:e.target.value})} placeholder="Start MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                              <span style={{fontSize:11,color:C.dim}}>–</span>
+                              <Inp value={job.finishNeedsByEnd||""} onChange={e=>u({finishNeedsByEnd:e.target.value})} placeholder="End MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                            </div>
+                          ):(
+                            <Inp value={job.finishNeedsByStart||""} onChange={e=>u({finishNeedsByStart:e.target.value})} placeholder="Hard date MM/DD/YY" style={{width:150,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                          )}
                         </div>
                       )}
 
@@ -5538,18 +5578,23 @@ function computeTasks(jobs) {
       });
     }
     if(rs === "date_confirmed") {
+      const rWindow = job.roughNeedsHardDate
+        ? (job.roughNeedsByStart ? `Hard date: ${job.roughNeedsByStart}` : "")
+        : (job.roughNeedsByStart||job.roughNeedsByEnd)
+          ? `Window: ${job.roughNeedsByStart||""}${job.roughNeedsByEnd?" – "+job.roughNeedsByEnd:""}`
+          : "";
       tasks.push({
         id: job.id+"_rough_needs", jobId: job.id, jobName: job.name,
         type: "auto", category: "rough", foreman,
         title: "Schedule Rough",
-        desc: job.roughStatusDate ? `Start date confirmed — schedule by: ${job.roughStatusDate}` : "Start date confirmed — needs to be scheduled",
+        desc: rWindow || "Start date confirmed — needs to be scheduled",
         color: C.rough, cleared: false,
       });
       tasks.push({
         id: job.id+"_rough_po", jobId: job.id, jobName: job.name,
         type: "auto", category: "po", foreman,
         title: "Order Job Start PO",
-        desc: job.roughStatusDate ? `Schedule by: ${job.roughStatusDate}` : "Order materials PO for rough start",
+        desc: rWindow || "Order materials PO for rough start",
         color: "#8b5cf6", cleared: false,
       });
     }
@@ -5565,18 +5610,23 @@ function computeTasks(jobs) {
       });
     }
     if(fs === "date_confirmed") {
+      const fWindow = job.finishNeedsHardDate
+        ? (job.finishNeedsByStart ? `Hard date: ${job.finishNeedsByStart}` : "")
+        : (job.finishNeedsByStart||job.finishNeedsByEnd)
+          ? `Window: ${job.finishNeedsByStart||""}${job.finishNeedsByEnd?" – "+job.finishNeedsByEnd:""}`
+          : "";
       tasks.push({
         id: job.id+"_finish_needs", jobId: job.id, jobName: job.name,
         type: "auto", category: "finish", foreman,
         title: "Schedule Finish",
-        desc: job.finishStatusDate ? `Start date confirmed — schedule by: ${job.finishStatusDate}` : "Start date confirmed — needs to be scheduled",
+        desc: fWindow || "Start date confirmed — needs to be scheduled",
         color: C.finish, cleared: false,
       });
       tasks.push({
         id: job.id+"_finish_po", jobId: job.id, jobName: job.name,
         type: "auto", category: "po", foreman,
         title: "Order Job Start PO",
-        desc: job.finishStatusDate ? `Schedule by: ${job.finishStatusDate}` : "Order materials PO for finish start",
+        desc: fWindow || "Order materials PO for finish start",
         color: "#8b5cf6", cleared: false,
       });
     }
