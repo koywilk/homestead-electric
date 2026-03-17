@@ -96,6 +96,12 @@ const QC_STATUSES = [
   {value:"pass",      label:"QC Pass",               color:"#22c55e"},
   {value:"fail",      label:"QC Fail",               color:"#dc2626"},
 ];
+const TEMP_PED_STATUSES = [
+  {value:"",          label:"— set status —",       color:null},
+  {value:"ready",     label:"Ready to Schedule",    color:"#ca8a04"},
+  {value:"scheduled", label:"Scheduled",            color:"#2563eb", hasDate:true},
+  {value:"completed", label:"Completed",            color:"#22c55e"},
+];
 const getStatusDef = (arr, val) => arr.find(x=>x.value===val)||{};
 
 const PREP_STAGES   = ['Redline Walk Scheduled','Redline Walk Completed','Redline CO Doc Made','Redline Plans Made','Redline CO Sent','Redline CO Signed','Redline Plans Need to be Updated','Job Prep Complete'];
@@ -221,7 +227,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, readyToSchedule:false, readyToInvoice:false, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"",
+  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, readyToSchedule:false, readyToInvoice:false, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
 
   homeRuns:{
 
@@ -4446,6 +4452,86 @@ function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
 
 
 
+// ── Temp Ped Card ─────────────────────────────────────────────
+
+function TempPedCard({ job, onOpen, onUpdate }) {
+  const tpDef = getStatusDef(TEMP_PED_STATUSES, job.tempPedStatus||"");
+  const color = tpDef.color || "#8b5cf6";
+  const foreman = job.foreman||"Koy";
+  const fc = FOREMEN_COLORS[foreman] || "#6b7280";
+
+  const upd = (patch) => onUpdate({...job, ...patch});
+
+  return (
+    <div style={{
+      background:"var(--card)", borderRadius:13, padding:"13px 16px", marginBottom:8,
+      border:`1px solid ${color}33`, borderLeft:`3px solid ${color}`,
+      cursor:"default",
+    }}>
+      <div style={{display:"flex",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+
+        {/* Left: name + meta */}
+        <div style={{flex:"1 1 180px",minWidth:140,cursor:"pointer"}} onClick={()=>onOpen(job)}>
+          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
+            <span style={{fontSize:11,fontWeight:800,color:"#8b5cf6",letterSpacing:"0.06em"}}>TEMP PED</span>
+            {job.tempPedNumber&&<span style={{fontSize:11,fontWeight:700,color:"#8b5cf6",background:"#8b5cf618",borderRadius:99,padding:"1px 7px",border:"1px solid #8b5cf633"}}>#{job.tempPedNumber}</span>}
+          </div>
+          <div style={{fontWeight:700,fontSize:13,color:"var(--text)",marginBottom:2}}>{job.name||"Untitled Job"}</div>
+          <div style={{fontSize:11,color:"var(--dim)",display:"flex",gap:8,flexWrap:"wrap"}}>
+            {job.address&&<span>{job.address}</span>}
+            <span style={{fontWeight:700,color:fc}}>{foreman}</span>
+            {job.lead&&<span style={{color:"var(--accent)"}}>· {job.lead}</span>}
+          </div>
+        </div>
+
+        {/* Right: status control */}
+        <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-end",flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+            <select value={job.tempPedStatus||""} onChange={e=>{
+              const v = e.target.value;
+              const patch = {tempPedStatus: v};
+              if(v==="completed") patch.readyToInvoice = true;
+              if(v==="scheduled") patch.tempPedScheduledDate = job.tempPedScheduledDate||"";
+              if(v!=="scheduled") patch.tempPedScheduledDate = "";
+              upd(patch);
+            }} style={{
+              background: color ? `${color}18` : "var(--surface)",
+              color: color || "var(--dim)",
+              border:`1px solid ${color||"var(--border)"}`,
+              borderRadius:7, padding:"5px 10px", fontSize:11,
+              fontFamily:"inherit", fontWeight:700, outline:"none", cursor:"pointer",
+            }}>
+              {TEMP_PED_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+            </select>
+
+            {(job.tempPedStatus==="scheduled")&&(
+              <input
+                type="text"
+                value={job.tempPedScheduledDate||""}
+                onChange={e=>upd({tempPedScheduledDate:e.target.value})}
+                placeholder="MM/DD/YY"
+                style={{width:96,fontSize:11,padding:"5px 8px",borderRadius:7,
+                  border:`1px solid ${"#2563eb"}55`,background:"#2563eb08",
+                  color:"var(--text)",fontFamily:"inherit",outline:"none"}}
+              />
+            )}
+          </div>
+
+          {/* Completed → ready to invoice banner */}
+          {job.tempPedStatus==="completed"&&!job.readyToInvoice&&(
+            <div style={{fontSize:10,color:"#ea580c",fontWeight:600}}>→ Marked Ready to Invoice</div>
+          )}
+          {job.readyToInvoice&&job.tempPedStatus==="completed"&&(
+            <div style={{fontSize:10,fontWeight:800,color:"#ea580c",background:"#ea580c12",borderRadius:99,padding:"2px 10px",border:"1px solid #ea580c33"}}>
+              READY TO INVOICE
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Stage Sections ────────────────────────────────────────────
 
 // Effective status — falls back to deriving from % if no status stored
@@ -4454,35 +4540,38 @@ const effFS = j => { if(j.finishStatus) return j.finishStatus; const p=parseInt(
 
 const STAGE_SECTIONS = [
 
+  { key:"tempPed",      label:"Temp Peds",                 color:"#8b5cf6",
+    test: j => !!j.tempPed },
+
   { key:"prep",         label:"Pre Job Prep",              color:"#0d9488",
-    test: j => (j.prepStage||"") !== "Job Prep Complete" },
+    test: j => !j.tempPed && (j.prepStage||"") !== "Job Prep Complete" },
 
   { key:"roughNotStarted", label:"Rough — Not Started",   color:"#64748b",
-    test: j => { const rs=effRS(j); return (j.prepStage||"")==="Job Prep Complete" && (!rs||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"); } },
+    test: j => { const rs=effRS(j); return !j.tempPed && (j.prepStage||"")==="Job Prep Complete" && (!rs||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"); } },
 
   { key:"roughHold",    label:"Rough — On Hold",           color:"#ca8a04",
-    test: j => effRS(j) === "waiting" },
+    test: j => !j.tempPed && effRS(j) === "waiting" },
 
   { key:"rough",        label:"Rough In Progress",         color:"#2563eb",
-    test: j => effRS(j) === "inprogress" },
+    test: j => !j.tempPed && effRS(j) === "inprogress" },
 
   { key:"roughInvoice", label:"Rough — Ready to Invoice",  color:"#ea580c",
-    test: j => effRS(j) === "invoice" },
+    test: j => !j.tempPed && effRS(j) === "invoice" },
 
   { key:"between",      label:"In Between",                color:"#e8a020",
-    test: j => { const rs=effRS(j); const fs=effFS(j); return rs==="complete"&&(!fs||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"); } },
+    test: j => { const rs=effRS(j); const fs=effFS(j); return !j.tempPed && rs==="complete"&&(!fs||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"); } },
 
   { key:"finishHold",   label:"Finish — On Hold",          color:"#ca8a04",
-    test: j => effFS(j) === "waiting" },
+    test: j => !j.tempPed && effFS(j) === "waiting" },
 
   { key:"finish",       label:"Finish In Progress",        color:"#0ea5e9",
-    test: j => effFS(j) === "inprogress" },
+    test: j => !j.tempPed && effFS(j) === "inprogress" },
 
   { key:"finishInvoice",label:"Finish — Ready to Invoice", color:"#ea580c",
-    test: j => effFS(j) === "invoice" },
+    test: j => !j.tempPed && effFS(j) === "invoice" },
 
   { key:"complete",     label:"Completed",                 color:"#22c55e",
-    test: j => effFS(j) === "complete" },
+    test: j => !j.tempPed && effFS(j) === "complete" },
 
 ];
 
@@ -4564,7 +4653,9 @@ function StageSectionList({ jobs, JobRow, fc, startCollapsed=true }) {
 
             {!isCollapsed && sJobs.map(job=>(
 
-              <JobRow key={job.id} job={job} fc={fc||undefined} showForeman={!fc}/>
+              {sec.key==="tempPed"
+                ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated)=>updateJob(updated)}/>
+                : <JobRow key={job.id} job={job} fc={fc||undefined} showForeman={!fc}/>}
 
             ))}
 
@@ -5153,6 +5244,15 @@ function computeTasks(jobs) {
       });
     });
 
+    // Temp Ped scheduling task
+    if(job.tempPed && job.tempPedStatus === "ready") tasks.push({
+      id: job.id+"_tempped_sched", jobId: job.id, jobName: job.name,
+      type: "auto", category: "tempped", foreman,
+      title: `Schedule Temp Ped${job.tempPedNumber?" #"+job.tempPedNumber:""}`,
+      desc: "Temp ped is ready to be scheduled",
+      color: "#8b5cf6", cleared: false,
+    });
+
     // Return Trips needing scheduling
     (job.returnTrips||[]).forEach((rt, i) => {
       if(rt.rtStatus === "needs") tasks.push({
@@ -5191,7 +5291,7 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
 
   const CATEGORY_LABELS = {
     rough:"Rough", finish:"Finish", qc:"QC Walk", co:"Change Order",
-    rt:"Return Trip", manual:"Manual Task", prep:"Pre Job Prep", po:"Purchase Order"
+    rt:"Return Trip", manual:"Manual Task", prep:"Pre Job Prep", po:"Purchase Order", tempped:"Temp Ped"
   };
 
   const saveDate = () => {
@@ -5490,6 +5590,46 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
 
       <div style={{padding:filterForeman||compact?"0":"16px 26px"}}>
         {showAdd&&<AddTaskForm defaultForeman={filterForeman||"Koy"} onAdd={handleAdd} onCancel={()=>setShowAdd(false)}/>}
+
+        {/* Ready to Invoice — always shown at top */}
+        {(()=>{
+          const invoiceJobs = jobs.filter(j=>j.readyToInvoice);
+          if(!invoiceJobs.length) return null;
+          return (
+            <div style={{marginBottom:24}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,paddingBottom:8,borderBottom:"2px solid #ea580c33"}}>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#ea580c"}}>READY TO INVOICE</div>
+                <div style={{background:"#ea580c18",border:"1px solid #ea580c33",borderRadius:99,padding:"2px 10px",fontSize:11,color:"#ea580c",fontWeight:700}}>{invoiceJobs.length} job{invoiceJobs.length!==1?"s":""}</div>
+              </div>
+              {invoiceJobs.map(job=>{
+                const foreman = job.foreman||"Koy";
+                const fc = FOREMEN_COLORS[foreman]||"#6b7280";
+                const isTP = job.tempPed;
+                return (
+                  <div key={job.id}
+                    onClick={()=>onSelectJob(job)}
+                    style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,
+                      padding:"11px 14px",borderRadius:10,marginBottom:6,cursor:"pointer",
+                      background:"#ea580c08",border:"1px solid #ea580c33",borderLeft:"3px solid #ea580c"}}
+                    onMouseEnter={e=>e.currentTarget.style.background="#ea580c14"}
+                    onMouseLeave={e=>e.currentTarget.style.background="#ea580c08"}>
+                    <div>
+                      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
+                        <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{job.name||"Untitled Job"}</span>
+                        {isTP&&<span style={{fontSize:9,fontWeight:800,color:"#8b5cf6",background:"#8b5cf618",borderRadius:99,padding:"1px 6px",border:"1px solid #8b5cf633"}}>TEMP PED</span>}
+                      </div>
+                      <div style={{fontSize:11,color:"var(--dim)",display:"flex",gap:8}}>
+                        {job.address&&<span>{job.address}</span>}
+                        <span style={{fontWeight:700,color:fc}}>{foreman}</span>
+                      </div>
+                    </div>
+                    <div style={{fontSize:11,fontWeight:800,color:"#ea580c",whiteSpace:"nowrap"}}>Open →</div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
 
         {/* Koy prep tracker */}
         {(!filterForeman||filterForeman==="Koy")&&(
