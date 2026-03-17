@@ -216,6 +216,12 @@ var FOREMEN        = DEFAULT_FOREMEN;
 var FOREMEN_COLORS = DEFAULT_FOREMEN_COLORS;
 var LEADS          = DEFAULT_LEADS;
 var LEAD_COLORS    = DEFAULT_LEAD_COLORS;
+
+// Helper getters — always return current values even after settings update
+const getFC = (name) => (FOREMEN_COLORS[name]||"#6b7280");
+const getForemenList = () => FOREMEN;
+const getLeadsList = () => LEADS;
+const getLeadFC = (name) => (LEAD_COLORS[name]||"#6b7280");
 const COLOR_OPTIONS = ["#3b82f6","#f97316","#22c55e","#8b5cf6","#ec4899","#14b8a6","#f59e0b","#ef4444","#06b6d4","#a855f7","#84cc16","#f43f5e"];
 
 // ── Auth PINs ─────────────────────────────────────────────────
@@ -3225,7 +3231,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose }) {
   const tpDef   = getStatusDef(TEMP_PED_STATUSES, job.tempPedStatus||"");
   const color   = tpDef.color || "#8b5cf6";
   const foreman = job.foreman||"Koy";
-  const fc      = FOREMEN_COLORS[foreman]||"#6b7280";
+  const fc      = getFC(foreman)||"#6b7280";
 
   // Photo handling
   const addPhotos = (files) => {
@@ -3341,7 +3347,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose }) {
               ))}
               <div>
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
-                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...FOREMEN,"Unassigned"]}/>
+                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...getForemenList(),"Unassigned"]}/>
               </div>
               <div>
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Temp Ped #</div>
@@ -4133,7 +4139,7 @@ onUpdate(updated);
 
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
 
-                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...FOREMEN,"Unassigned"]}/>
+                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...getForemenList(),"Unassigned"]}/>
 
               </div>
 
@@ -4141,7 +4147,7 @@ onUpdate(updated);
 
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Lead</div>
 
-{LEADS.length>0
+{getLeadsList().length>0
                   ? <Sel value={job.lead||""} onChange={e=>u({lead:e.target.value})} options={["", ...LEADS]} placeholder="Select lead…"/>
                   : <Inp value={job.lead||""} onChange={e=>u({lead:e.target.value})} placeholder="Lead name…"/>}
 
@@ -4735,7 +4741,7 @@ function TempPedCard({ job, onOpen, onUpdate, onDelete }) {
   const tpDef = getStatusDef(TEMP_PED_STATUSES, job.tempPedStatus||"");
   const color = tpDef.color || "#8b5cf6";
   const foreman = job.foreman||"Koy";
-  const fc = FOREMEN_COLORS[foreman] || "#6b7280";
+  const fc = getFC(foreman) || "#6b7280";
 
   const upd = (patch) => onUpdate({...job, ...patch});
 
@@ -5430,7 +5436,7 @@ function UpcomingJobs({ upcoming, onChange, onPromote }) {
                     <div style={{flex:1,minWidth:120}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
                       <select value={u.foreman||""} onChange={e=>upd(u.id,{foreman:e.target.value})} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
                         <option value="">— unassigned —</option>
-                        {FOREMEN.map(f=><option key={f} value={f}>{f}</option>)}
+                        {getForemenList().map(f=><option key={f} value={f}>{f}</option>)}
                       </select>
                     </div>
                   </div>
@@ -5445,7 +5451,7 @@ function UpcomingJobs({ upcoming, onChange, onPromote }) {
                 <>
                   <div style={{flex:2.5,paddingRight:12,fontSize:13,fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                     {u.name||<span style={{color:C.muted,fontStyle:"italic"}}>Untitled</span>}
-                    {u.foreman&&<span style={{marginLeft:8,fontSize:10,fontWeight:700,color:FOREMEN_COLORS[u.foreman]||"#6b7280",background:`${FOREMEN_COLORS[u.foreman]||"#6b7280"}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${FOREMEN_COLORS[u.foreman]||"#6b7280"}33`}}>{u.foreman}</span>}
+                    {u.foreman&&<span style={{marginLeft:8,fontSize:10,fontWeight:700,color:getFC(u.foreman)||"#6b7280",background:`${getFC(u.foreman)||"#6b7280"}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${getFC(u.foreman)||"#6b7280"}33`}}>{u.foreman}</span>}
                   </div>
                   <div style={{flex:1.2,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.city||"—"}</div>
                   <div style={{flex:1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.sales||"—"}</div>
@@ -5763,7 +5769,7 @@ function AddTaskForm({ defaultForeman, onAdd, onCancel }) {
           <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Assign To</div>
           <select value={t.foreman} onChange={e=>setT(x=>({...x,foreman:e.target.value}))}
             style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:7,color:"var(--text)",padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
-            {FOREMEN.map(f=><option key={f} value={f}>{f}</option>)}
+            {getForemenList().map(f=><option key={f} value={f}>{f}</option>)}
           </select>
         </div>
         <div style={{flex:1,minWidth:110}}>
@@ -5825,7 +5831,7 @@ function PrepTaskList({ jobs, onSelectJob, onUpdateJob }) {
         const stageIdx = PREP_STAGES.indexOf(stage);
         const pct = stageIdx >= 0 ? Math.round((stageIdx / (PREP_STAGES.length-1)) * 100) : 0;
         const sc = stageColor(stage);
-        const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
+        const fc = getFC(job.foreman||"Koy")||"#6b7280";
         return (
           <div key={job.id} style={{marginBottom:10,padding:"14px 16px",background:"var(--card)",border:`1px solid ${sc}33`,borderRadius:12,borderLeft:`3px solid ${sc}`}}
             onMouseEnter={e=>{e.currentTarget.style.boxShadow=`0 4px 16px ${sc}18`;}}
@@ -5937,7 +5943,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
     return 0;
   });
 
-  const foremanList = filterForeman ? [filterForeman] : [...FOREMEN,"Unassigned"];
+  const foremanList = filterForeman ? [filterForeman] : [...getForemenList(),"Unassigned"];
   const totalCount = allTasks.length;
   const overdueCount = sorted.filter(t=>{ const u=URGENCY(t.dueDate); return u&&u.days<0; }).length;
 
@@ -5973,7 +5979,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
               </div>
               {invoiceJobs.map(job=>{
                 const foreman = job.foreman||"Koy";
-                const fc = FOREMEN_COLORS[foreman]||"#6b7280";
+                const fc = getFC(foreman)||"#6b7280";
                 const isTP = job.tempPed;
                 return (
                   <div key={job.id}
@@ -6051,7 +6057,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
         ) : (
           // Grouped by foreman
           foremanList.map(f=>{
-            const fc = FOREMEN_COLORS[f]||"#6b7280";
+            const fc = getFC(f)||"#6b7280";
             const fTasks = sorted.filter(t=>t.foreman===f);
             const fOverdue = fTasks.filter(t=>{ const u=URGENCY(t.dueDate); return u&&u.days<0; }).length;
             if(fTasks.length===0) return null;
@@ -6494,9 +6500,9 @@ function SchedulingForecast({ jobs, onSelectJob }) {
 }
 
 function SettingsPage({ COLOR_OPTIONS, onSave }) {
-  const [foremen,       setForemen]       = useState([...FOREMEN]);
-  const [foremanColors, setForemanColors] = useState({...FOREMEN_COLORS});
-  const [leads,         setLeads]         = useState([...LEADS]);
+  const [foremen,       setForemen]       = useState([...getForemenList()]);
+  const [foremanColors, setForemanColors] = useState({...FOREMEN_COLORS}); // eslint-disable-line
+  const [leads,         setLeads]         = useState([...getLeadsList()]);
   const [leadColors,    setLeadColors]    = useState({...LEAD_COLORS});
   const [newForeman,    setNewForeman]    = useState("");
   const [newLead,       setNewLead]       = useState("");
