@@ -4063,6 +4063,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                             roughStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete")?job.roughStartConfirmed:false,
                             roughStatusDate:def.hasDate?job.roughStatusDate:"",
                             readyToInvoice:v==="invoice"?true:(job.roughStatus==="invoice"?false:job.readyToInvoice),
+                            ...(v==="invoice"&&!job.readyToInvoice?{readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{}),
                             roughProjectedStart:v==="scheduled"?job.roughProjectedStart:job.roughProjectedStart});
                         }} style={{background:rsDef.color?`${rsDef.color}18`:C.surface,
                           color:rsDef.color||C.dim, border:`1px solid ${rsDef.color||C.border}`,
@@ -4106,7 +4107,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                     </div>
                   );
                 })()}
-                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};u({roughStage:v,  ...qcFire,...(v==="100%"?{roughStatus:"complete",readyToInvoice:true}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
+                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};u({roughStage:v,...qcFire,...prepDone,...(v==="100%"?{roughStatus:"complete",readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
 
                 <div style={{marginTop:8,marginBottom:20}}>
 
@@ -4205,6 +4206,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                             finishStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete")?job.finishStartConfirmed:false,
                             finishStatusDate:def.hasDate?job.finishStatusDate:"",
                             readyToInvoice:v==="invoice"?true:(job.finishStatus==="invoice"?false:job.readyToInvoice),
+                            ...(v==="invoice"&&!job.readyToInvoice?{readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{}),
                             finishProjectedStart:v==="scheduled"?job.finishProjectedStart:job.finishProjectedStart});
                         }} style={{background:fsDef.color?`${fsDef.color}18`:C.surface,
                           color:fsDef.color||C.dim, border:`1px solid ${fsDef.color||C.border}`,
@@ -4248,7 +4250,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                     </div>
                   );
                 })()}
-                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;u({finishStage:v,...(v==="100%"?{finishStatus:"complete",readyToInvoice:true}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
+                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;u({finishStage:v,...(v==="100%"?{finishStatus:"complete",readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
                 <div style={{marginTop:8,marginBottom:20}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
               </Section>
 
@@ -6043,6 +6045,82 @@ function computeTasks(jobs) {
       color: C.teal, cleared: false,
     });
 
+    // FIX 4: Final QC Walk — fires when finish hits 80%+
+    const finishPct = parseInt(job.finishStage)||0;
+    if(finishPct>=80 && job.qcStatus !== "scheduled" && job.qcStatus !== "complete") tasks.push({
+      id: job.id+"_final_qc_walk", jobId: job.id, jobName: job.name,
+      type: "auto", category: "qc", foreman,
+      title: "Schedule Final QC Walk",
+      desc: `Finish is at ${job.finishStage||"80%+"} — time to schedule the final QC walk`,
+      color: C.teal, cleared: false,
+    });
+
+    // FIX 5: Open punch items when phase marked complete or ready to invoice
+    const roughPct2 = parseInt(job.roughStage)||0;
+    const countPunchItems = (punch) => {
+      if(!punch) return 0;
+      const countFloor = (f) => {
+        if(!f) return 0;
+        if(Array.isArray(f)) return f.filter(i=>!i.done).length;
+        return (f.general||[]).filter(i=>!i.done).length +
+          (f.rooms||[]).reduce((a,r)=>a+(Array.isArray(r.items)?r.items.filter(i=>!i.done).length:0),0);
+      };
+      return countFloor(punch.upper)+countFloor(punch.main)+countFloor(punch.basement)+
+        (punch.extras||[]).reduce((s,e)=>s+countFloor(punch[e.key]||{}),0);
+    };
+    const openRoughPunch = countPunchItems(job.roughPunch);
+    const openFinishPunch = countPunchItems(job.finishPunch);
+    if(openRoughPunch>0 && (rs==="complete"||rs==="invoice")) tasks.push({
+      id: job.id+"_punch_rough_warn", jobId: job.id, jobName: job.name,
+      type: "auto", category: "punch", foreman,
+      title: `${openRoughPunch} Open Rough Punch Item${openRoughPunch>1?"s":""}`,
+      desc: "Rough is marked complete or ready to invoice but punch items are still open",
+      color: C.red, cleared: false,
+    });
+    if(openFinishPunch>0 && (fs==="complete"||fs==="invoice")) tasks.push({
+      id: job.id+"_punch_finish_warn", jobId: job.id, jobName: job.name,
+      type: "auto", category: "punch", foreman,
+      title: `${openFinishPunch} Open Finish Punch Item${openFinishPunch>1?"s":""}`,
+      desc: "Finish is marked complete or ready to invoice but punch items are still open",
+      color: C.red, cleared: false,
+    });
+
+    // FIX 6: "In Between" too long — fires after 2 months
+    if(rs==="complete" && (!fs||fs===""||fs==="waiting_date"||fs==="ready")) {
+      const betweenDate = job.roughStatusDate||job.roughProjectedStart||"";
+      if(betweenDate) {
+        const d = (str=>{ const m=str.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m) return new Date(+m[1],+m[2]-1,+m[3]); const m2=str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if(m2) return new Date(+m2[2],+m2[1]-1,+(m2[3].length===2?"20"+m2[3]:m2[3])); return null; })(betweenDate);
+        if(d) {
+          const daysBetween = Math.floor((Date.now()-d.getTime())/(1000*60*60*24));
+          if(daysBetween>=60) tasks.push({
+            id: job.id+"_in_between_long", jobId: job.id, jobName: job.name,
+            type: "auto", category: "schedule", foreman,
+            title: "In Between — Over 2 Months",
+            desc: `Rough completed ${daysBetween} days ago — finish has not been scheduled`,
+            color: C.orange, cleared: false,
+          });
+        }
+      }
+    }
+
+    // FIX 2b: Ready to Invoice stale — fires after 5 days with no action
+    if(job.readyToInvoice && !job.invoiceDismissed) {
+      const invDate = job.readyToInvoiceDate||"";
+      if(invDate) {
+        const d = (str=>{ const m=str.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m) return new Date(+m[1],+m[2]-1,+m[3]); const m2=str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if(m2) return new Date(+m2[2],+m2[1]-1,+(m2[3].length===2?"20"+m2[3]:m2[3])); return null; })(invDate);
+        if(d) {
+          const daysStale = Math.floor((Date.now()-d.getTime())/(1000*60*60*24));
+          if(daysStale>=5) tasks.push({
+            id: job.id+"_invoice_stale", jobId: job.id, jobName: job.name,
+            type: "auto", category: "invoice", foreman,
+            title: `Invoice Overdue — ${daysStale} Days`,
+            desc: "Job has been ready to invoice for more than 5 days — follow up",
+            color: "#dc2626", cleared: false,
+          });
+        }
+      }
+    }
+
     // Change Orders
     const rs2 = effRS(job), fs2 = effFS(job);
     (job.changeOrders||[]).forEach((co, i) => {
@@ -6587,9 +6665,9 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
       <div style={{padding:filterForeman||compact?"0":"16px 26px"}}>
         {showAdd&&<AddTaskForm defaultForeman={filterForeman||"Koy"} onAdd={handleAdd} onCancel={()=>setShowAdd(false)}/>}
 
-        {/* Ready to Invoice — always shown at top */}
+        {/* Ready to Invoice — filter to assigned foreman only (or all if no filter) */}
         {(()=>{
-          const invoiceJobs = jobs.filter(j=>j.readyToInvoice);
+          const invoiceJobs = jobs.filter(j=>j.readyToInvoice&&(!filterForeman||(j.foreman||"Koy")===filterForeman));
           if(!invoiceJobs.length) return null;
           return (
             <div style={{marginBottom:24}}>
