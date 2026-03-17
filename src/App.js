@@ -3302,7 +3302,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose }) {
           <div style={{marginBottom:24}}>
             <div style={{fontSize:10,fontWeight:800,color:C.dim,letterSpacing:"0.12em",marginBottom:12}}>JOB INFO</div>
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-              {[["name","Job Name"],["address","Address"],["gc","General Contractor"],["phone","GC Phone"],["simproNo","Simpro Job #"]].map(([k,l])=>(
+              {[["name","Job Name"],["address","Address"],["gc","General Contractor"],["phone","GC Phone"],["simproNo","Simpro Job #"],["lead","Lead"]].map(([k,l])=>(
                 <div key={k}>
                   <div style={{fontSize:10,color:C.dim,marginBottom:3}}>{l}</div>
                   <Inp value={job[k]||""} onChange={e=>u({[k]:e.target.value})} placeholder={l}/>
@@ -4730,15 +4730,6 @@ function TempPedCard({ job, onOpen, onUpdate, onDelete }) {
 
         {/* Right: status control */}
         <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-end",flexShrink:0}}>
-          <input
-            value={job.lead||""}
-            onChange={e=>upd({lead:e.target.value})}
-            placeholder="Lead name"
-            onClick={e=>e.stopPropagation()}
-            style={{fontSize:11,padding:"4px 8px",borderRadius:7,width:120,
-              border:"1px solid var(--border)",background:"var(--surface)",
-              color:"var(--text)",fontFamily:"inherit",outline:"none",textAlign:"right"}}
-          />
           <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
             <select value={job.tempPedStatus||""} onChange={e=>{
               const v = e.target.value;
