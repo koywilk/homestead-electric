@@ -5788,11 +5788,12 @@ const URGENCY = (dueDateStr) => {
   due.setHours(0,0,0,0);
   const today = new Date(); today.setHours(0,0,0,0);
   const diff = Math.round((due - today) / 86400000);
-  if(diff < 0)  return {label:"OVERDUE", color:"#dc2626", bg:"#dc262612", days: diff};
-  if(diff === 0) return {label:"DUE TODAY", color:"#ea580c", bg:"#ea580c12", days: 0};
-  if(diff <= 3) return {label:`DUE IN ${diff}D`, color:"#ca8a04", bg:"#ca8a0412", days: diff};
-  if(diff <= 7) return {label:`DUE IN ${diff}D`, color:"#2563eb", bg:"#2563eb10", days: diff};
-  return {label:`DUE ${due.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, color:"#6b7280", bg:"transparent", days: diff};
+  if(diff < 0)  return {label:"OVERDUE", color:"#dc2626", bg:"#dc262618", level:"overdue", days: diff};
+  if(diff === 0) return {label:"DUE TODAY", color:"#dc2626", bg:"#dc262618", level:"critical", days: 0};
+  if(diff === 1) return {label:"DUE TOMORROW", color:"#ea580c", bg:"#ea580c15", level:"critical", days: 1};
+  if(diff <= 3) return {label:`DUE IN ${diff} DAYS`, color:"#ca8a04", bg:"#ca8a0418", level:"warning", days: diff};
+  if(diff <= 7) return {label:`DUE IN ${diff} DAYS`, color:"#2563eb", bg:"#2563eb10", level:"soon", days: diff};
+  return {label:`DUE ${due.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, color:"#6b7280", bg:"transparent", level:"fine", days: diff};
 };
 
 function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
@@ -5800,8 +5801,10 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
   const [dateVal, setDateVal] = useState(task.dueDate||"");
 
   const urg = URGENCY(task.dueDate);
-  const isOverdue = urg && urg.days < 0;
-  const isUrgent  = urg && urg.days >= 0 && urg.days <= 3;
+  const isOverdue  = urg && urg.level === "overdue";
+  const isCritical = urg && urg.level === "critical";  // today or tomorrow — red
+  const isWarning  = urg && urg.level === "warning";   // 2-3 days — yellow
+  const isUrgent   = isCritical || isWarning;
 
   const CATEGORY_LABELS = {
     rough:"Rough", finish:"Finish", qc:"QC Walk", co:"Change Order",
@@ -5817,17 +5820,22 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
     <div style={{
       display:"flex", alignItems:"flex-start", gap:12,
       padding:"12px 14px", borderRadius:11, marginBottom:6,
-      background: isOverdue ? "#dc262608" : isUrgent ? "#ea580c06" : "var(--card)",
-      border:`1px solid ${isOverdue?"#dc262633":isUrgent?"#ea580c33":task.color+"22"}`,
-      borderLeft:`3px solid ${isOverdue?"#dc2626":isUrgent?"#ea580c":task.color}`,
-      boxShadow: isOverdue?"0 2px 8px #dc262612":isUrgent?"0 2px 8px #ea580c0a":"none",
+      background: isOverdue||isCritical ? "#dc262610" : isWarning ? "#ca8a0410" : "var(--card)",
+      border:`1px solid ${isOverdue||isCritical?"#dc262644":isWarning?"#ca8a0444":task.color+"22"}`,
+      borderLeft:`4px solid ${isOverdue||isCritical?"#dc2626":isWarning?"#ca8a04":task.color}`,
+      boxShadow: isOverdue||isCritical?"0 0 12px #dc262622, 0 2px 8px #dc262614":isWarning?"0 0 10px #ca8a0420, 0 2px 6px #ca8a0412":"none",
+      animation: isCritical||isOverdue?"taskPulse 2s ease-in-out infinite":isWarning?"taskWarn 2.5s ease-in-out infinite":"none",
       transition:"transform 0.12s, box-shadow 0.12s",
     }}
     onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 14px ${task.color}18`;}}
-    onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow=isOverdue?"0 2px 8px #dc262612":isUrgent?"0 2px 8px #ea580c0a":"none";}}>
+    onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow=isOverdue||isCritical?"0 0 12px #dc262622, 0 2px 8px #dc262614":isWarning?"0 0 10px #ca8a0420, 0 2px 6px #ca8a0412":"none";}}>
 
-      {/* Color dot */}
-      <div style={{width:8,height:8,borderRadius:"50%",background:isOverdue?"#dc2626":task.color,flexShrink:0,marginTop:5}}/>
+      {/* Color dot / urgency indicator */}
+      <div style={{width: isCritical||isOverdue?10:isWarning?9:8, height: isCritical||isOverdue?10:isWarning?9:8,
+        borderRadius:"50%",
+        background:isOverdue||isCritical?"#dc2626":isWarning?"#ca8a04":task.color,
+        flexShrink:0, marginTop:4,
+        boxShadow: isCritical||isOverdue?"0 0 6px #dc2626":isWarning?"0 0 5px #ca8a04":"none"}}/>
 
       <div style={{flex:1,minWidth:0}}>
         {/* Category + urgency row */}
@@ -6272,7 +6280,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
 
 function SchedulingForecast({ jobs, onSelectJob }) {
   const [foremanTab, setForemanTab] = useState("All");
-  const [viewMode,   setViewMode]   = useState("kanban"); // kanban | list | calendar
+  const [viewMode,   setViewMode]   = useState("calendar"); // kanban | list | calendar
   const [calMonth,   setCalMonth]   = useState(() => { const d=new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
   const [calDayDetail, setCalDayDetail] = useState(null); // date string YYYY-MM-DD for expanded day
 
@@ -7734,6 +7742,15 @@ if(initialLoad.current) return;
       <style>{`
 
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Bebas+Neue&display=swap');
+
+        @keyframes taskPulse {
+          0%,100% { box-shadow: 0 0 12px rgba(220,38,38,0.13), 0 2px 8px rgba(220,38,38,0.08); }
+          50%      { box-shadow: 0 0 22px rgba(220,38,38,0.30), 0 2px 14px rgba(220,38,38,0.18); }
+        }
+        @keyframes taskWarn {
+          0%,100% { box-shadow: 0 0 10px rgba(202,138,4,0.12), 0 2px 6px rgba(202,138,4,0.08); }
+          50%      { box-shadow: 0 0 18px rgba(202,138,4,0.28), 0 2px 10px rgba(202,138,4,0.16); }
+        }
 
         *{box-sizing:border-box;margin:0;padding:0;}
 
