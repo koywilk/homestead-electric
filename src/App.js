@@ -7261,25 +7261,34 @@ if(initialLoad.current) return;
   if(authMode === "locked") {
     return (
       <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",
-        display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
-        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:20,
-          padding:"36px 32px",maxWidth:340,width:"100%",textAlign:"center"}}>
-          <div style={{fontSize:48,marginBottom:8}}>⚡</div>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.08em",
-            color:C.text,marginBottom:4}}>HOMESTEAD ELECTRIC</div>
-          <div style={{fontSize:12,color:C.dim,marginBottom:28}}>Enter your PIN to continue</div>
+        display:"flex",alignItems:"center",justifyContent:"center",padding:32,
+        backgroundImage:"url(/icon-192.png)",backgroundRepeat:"no-repeat",
+        backgroundPosition:"center center",backgroundSize:"420px 420px",
+        backgroundBlendMode:"overlay"}}>
+        <div style={{width:"100%",maxWidth:320,textAlign:"center"}}>
+          {/* Logo */}
+          <img src="/icon-192.png" alt="Homestead Electric"
+            style={{width:90,height:90,marginBottom:16,opacity:0.95,borderRadius:18,
+              boxShadow:"0 8px 32px rgba(0,0,0,0.4)"}}/>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,letterSpacing:"0.1em",
+            color:C.text,lineHeight:1,marginBottom:4}}>HOMESTEAD ELECTRIC</div>
+          <div style={{fontSize:12,color:C.dim,letterSpacing:"0.04em",marginBottom:36}}>
+            COMMAND CENTER
+          </div>
           {/* PIN dots */}
-          <div style={{display:"flex",justifyContent:"center",gap:12,marginBottom:24}}>
+          <div style={{display:"flex",justifyContent:"center",gap:14,marginBottom:8}}>
             {[0,1,2,3].map(i=>(
-              <div key={i} style={{width:14,height:14,borderRadius:"50%",
+              <div key={i} style={{width:13,height:13,borderRadius:"50%",
                 background:pinInput.length>i?(pinError?"#dc2626":C.accent):C.surface,
                 border:`2px solid ${pinInput.length>i?(pinError?"#dc2626":C.accent):C.border}`,
                 transition:"all 0.15s"}}/>
             ))}
           </div>
-          {pinError&&<div style={{fontSize:11,color:"#dc2626",fontWeight:600,marginBottom:12}}>Incorrect PIN</div>}
+          <div style={{height:22,marginBottom:20}}>
+            {pinError&&<div style={{fontSize:11,color:"#dc2626",fontWeight:700,letterSpacing:"0.06em"}}>INCORRECT PIN</div>}
+          </div>
           {/* Numpad */}
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
             {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((k,idx)=>(
               <button key={idx} onClick={()=>{
                 if(k==="⌫") { setPinInput(p=>p.slice(0,-1)); return; }
@@ -7288,15 +7297,18 @@ if(initialLoad.current) return;
                 setPinInput(next);
                 if(next.length===4) submitPin(next);
               }}
-              style={{padding:"16px 0",fontSize:k==="⌫"?18:20,fontWeight:600,
-                background:k?C.surface:"transparent",
-                border:k?`1px solid ${C.border}`:"none",
-                borderRadius:12,cursor:k?"pointer":"default",
-                color:k?C.text:C.dim,fontFamily:"inherit",
-                opacity:k?"":0,
+              style={{padding:"18px 0",
+                fontSize:k==="⌫"?16:22,
+                fontWeight:k==="⌫"?400:300,
+                fontFamily:"'DM Sans',sans-serif",
+                background:k?"rgba(255,255,255,0.05)":"transparent",
+                border:k?"1px solid rgba(255,255,255,0.08)":"none",
+                borderRadius:14,cursor:k?"pointer":"default",
+                color:k?C.text:"transparent",
+                letterSpacing:k==="⌫"?"0":"0.05em",
                 transition:"background 0.1s"}}
-              onMouseEnter={e=>{if(k)e.currentTarget.style.background=C.accent+"22";}}
-              onMouseLeave={e=>{if(k)e.currentTarget.style.background=C.surface;}}>
+              onMouseEnter={e=>{if(k)e.currentTarget.style.background="rgba(255,255,255,0.1)";}}
+              onMouseLeave={e=>{if(k)e.currentTarget.style.background=k?"rgba(255,255,255,0.05)":"transparent";}}>
                 {k}
               </button>
             ))}
@@ -7353,46 +7365,49 @@ if(initialLoad.current) return;
                   const lRTs = lJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
                   return (
                     <div key={lead||"__none"} className="foreman-card"
-                      style={{background:C.card,border:`1px solid ${lc}33`,borderRadius:12,
-                        padding:"14px 16px",borderTop:`3px solid ${lc}`}}>
-                      {/* Name + count — identical to foreman card */}
-                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,
-                          letterSpacing:"0.06em",color:lc,lineHeight:1}}>
-                          {lead||"No Lead"}
-                        </div>
-                        <div style={{background:`${lc}18`,border:`1px solid ${lc}33`,borderRadius:99,
-                          padding:"2px 9px",fontSize:10,color:lc,fontWeight:700}}>
-                          {lJobs.length}
-                        </div>
-                      </div>
-                      {/* Stats — identical to foreman card */}
-                      <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
-                        {[[lCOs,"COs",lCOs>0?C.blue:C.muted],[lRTs,"RTs",lRTs>0?"#dc2626":C.muted]].map(([v,l,col])=>(
-                          <div key={l} style={{background:C.surface,borderRadius:7,padding:"5px 8px",flex:1,minWidth:44}}>
-                            <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:col,lineHeight:1}}>{v}</div>
-                            <div style={{fontSize:9,color:C.dim,marginTop:1}}>{l}</div>
+                      style={{background:C.card,borderRadius:14,overflow:"hidden",
+                        boxShadow:`0 2px 12px rgba(0,0,0,0.25)`}}>
+                      {/* Colored header band */}
+                      <div style={{background:`linear-gradient(135deg,${lc}ee,${lc}99)`,
+                        padding:"12px 14px 10px"}}>
+                        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:6}}>
+                          <div style={{fontFamily:"'DM Sans',sans-serif",fontSize:15,fontWeight:800,
+                            color:"#fff",lineHeight:1.1,letterSpacing:"-0.01em"}}>
+                            {lead||"No Lead"}
                           </div>
-                        ))}
+                          <div style={{background:"rgba(0,0,0,0.25)",borderRadius:99,
+                            padding:"2px 8px",fontSize:11,color:"#fff",fontWeight:700,flexShrink:0}}>
+                            {lJobs.length}
+                          </div>
+                        </div>
+                        <div style={{display:"flex",gap:10,marginTop:8}}>
+                          {lCOs>0&&<span style={{fontSize:10,color:"rgba(255,255,255,0.9)",fontWeight:600}}>{lCOs} CO{lCOs>1?"s":""}</span>}
+                          {lRTs>0&&<span style={{fontSize:10,color:"rgba(255,255,255,0.9)",fontWeight:600}}>⚠ {lRTs} RT{lRTs>1?"s":""}</span>}
+                        </div>
                       </div>
                       {/* Job list */}
-                      <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                      <div style={{padding:"6px 8px 8px"}}>
                         {lJobs.map(job=>{
                           const rs=effRS(job); const fs=effFS(job);
                           const rsDef=getStatusDef(ROUGH_STATUSES,rs);
                           const fsDef=getStatusDef(FINISH_STATUSES,fs);
                           const dot=(rsDef.color&&rs)?rsDef.color:(fsDef.color&&fs)?fsDef.color:C.dim;
+                          const hasAlert=(job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
                           return (
                             <div key={job.id} onClick={()=>setSelected(job)}
-                              style={{display:"flex",alignItems:"center",gap:6,padding:"5px 7px",
-                                borderRadius:7,background:C.surface,cursor:"pointer"}}
-                              onMouseEnter={e=>e.currentTarget.style.background=lc+"15"}
-                              onMouseLeave={e=>e.currentTarget.style.background=C.surface}>
-                              <div style={{width:6,height:6,borderRadius:"50%",background:dot,flexShrink:0}}/>
-                              <span style={{fontSize:11,fontWeight:700,color:C.text,flex:1,
-                                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                              style={{display:"flex",alignItems:"center",gap:7,padding:"6px 7px",
+                                borderRadius:8,cursor:"pointer",marginBottom:2,
+                                background:hasAlert?"rgba(220,38,38,0.08)":"transparent",
+                                border:hasAlert?"1px solid rgba(220,38,38,0.2)":"1px solid transparent"}}
+                              onMouseEnter={e=>e.currentTarget.style.background=lc+"18"}
+                              onMouseLeave={e=>e.currentTarget.style.background=hasAlert?"rgba(220,38,38,0.08)":"transparent"}>
+                              <div style={{width:7,height:7,borderRadius:"50%",background:dot,flexShrink:0}}/>
+                              <span style={{fontSize:12,fontWeight:600,color:C.text,flex:1,
+                                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+                                lineHeight:1.3}}>
                                 {job.name||"Untitled"}
                               </span>
+                              {hasAlert&&<span style={{fontSize:9,color:"#dc2626",flexShrink:0}}>!</span>}
                             </div>
                           );
                         })}
@@ -7402,25 +7417,27 @@ if(initialLoad.current) return;
                 })}
                 {/* Temp peds card */}
                 {allPeds.length>0&&(
-                  <div style={{background:C.card,border:"1px solid #8b5cf633",borderRadius:10,
-                    padding:"10px 12px",borderTop:"3px solid #8b5cf6"}}>
-                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,
-                        letterSpacing:"0.06em",color:"#8b5cf6",lineHeight:1}}>Temp Peds</div>
-                      <div style={{background:"#8b5cf618",border:"1px solid #8b5cf633",borderRadius:99,
-                        padding:"1px 7px",fontSize:10,color:"#8b5cf6",fontWeight:700}}>
-                        {allPeds.length}
+                  <div style={{background:C.card,borderRadius:14,overflow:"hidden",
+                    boxShadow:"0 2px 12px rgba(0,0,0,0.25)"}}>
+                    <div style={{background:"linear-gradient(135deg,#8b5cf6ee,#8b5cf699)",
+                      padding:"12px 14px 10px"}}>
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                        <div style={{fontSize:15,fontWeight:800,color:"#fff",letterSpacing:"-0.01em"}}>Temp Peds</div>
+                        <div style={{background:"rgba(0,0,0,0.25)",borderRadius:99,
+                          padding:"2px 8px",fontSize:11,color:"#fff",fontWeight:700}}>
+                          {allPeds.length}
+                        </div>
                       </div>
                     </div>
-                    <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                    <div style={{padding:"6px 8px 8px"}}>
                       {allPeds.map(job=>(
                         <div key={job.id} onClick={()=>setSelected(job)}
-                          style={{display:"flex",alignItems:"center",gap:5,padding:"4px 6px",
-                            borderRadius:6,background:C.surface,cursor:"pointer"}}
-                          onMouseEnter={e=>e.currentTarget.style.background="#8b5cf615"}
-                          onMouseLeave={e=>e.currentTarget.style.background=C.surface}>
-                          <div style={{width:5,height:5,borderRadius:"50%",background:"#8b5cf6",flexShrink:0}}/>
-                          <span style={{fontSize:11,fontWeight:600,color:C.text,flex:1,
+                          style={{display:"flex",alignItems:"center",gap:7,padding:"6px 7px",
+                            borderRadius:8,cursor:"pointer",marginBottom:2}}
+                          onMouseEnter={e=>e.currentTarget.style.background="#8b5cf618"}
+                          onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                          <div style={{width:7,height:7,borderRadius:"50%",background:"#8b5cf6",flexShrink:0}}/>
+                          <span style={{fontSize:12,fontWeight:600,color:C.text,flex:1,
                             overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                             {job.name||"Untitled"}{job.tempPedNumber?" #"+job.tempPedNumber:""}
                           </span>
