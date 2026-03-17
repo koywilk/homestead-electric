@@ -6117,49 +6117,63 @@ function SchedulingForecast({ jobs, onSelectJob }) {
   const buildItems = (jobList) => {
     const items=[];
     jobList.forEach(job=>{
+      if(job.tempPed) return; // temp peds handled separately below
       const rs=effRS(job), fs=effFS(job);
-      if(job.roughProjectedStart||rs==="scheduled"||rs==="date_confirmed"||rs==="waiting_date") {
-        if(rs!=="complete"&&rs!=="invoice"&&rs!=="inprogress") {
-          items.push({id:job.id+"_rough",jobId:job.id,job,type:"rough",label:"Rough",color:C.rough,
-            date:job.roughProjectedStart||job.roughStatusDate||"",
-            bucket:getBucket(job.roughProjectedStart||job.roughStatusDate),status:rs});
-        }
-      }
-      if(job.finishProjectedStart||fs==="scheduled"||fs==="date_confirmed"||fs==="waiting_date") {
-        if(fs!=="complete"&&fs!=="invoice"&&fs!=="inprogress") {
-          items.push({id:job.id+"_finish",jobId:job.id,job,type:"finish",label:"Finish",color:C.finish,
-            date:job.finishProjectedStart||job.finishStatusDate||"",
-            bucket:getBucket(job.finishProjectedStart||job.finishStatusDate),status:fs});
-        }
-      }
-      (job.returnTrips||[]).forEach((rt,i)=>{
-        if(!rt.signedOff&&(rt.rtStatus==="needs"||rt.rtStatus==="scheduled"||(!rt.rtStatus&&(rt.scope||rt.date)))) {
-          items.push({id:job.id+"_rt_"+rt.id,jobId:job.id,job,type:"returnTrip",label:`Return Trip #${i+1}`,
-            color:"#8b5cf6",date:rt.rtStatusDate||rt.date||"",
-            bucket:getBucket(rt.rtStatusDate||rt.date),status:rt.rtStatus||"needs",scope:rt.scope,needsByStart:rt.needsByStart||'',needsByEnd:rt.needsByEnd||'',needsHardDate:rt.needsHardDate||false});
-        }
-      });
-      // QC Walk — shows on forecast when scheduled
-      if(job.roughQCTaskFired && job.qcStatus==="scheduled") {
-        items.push({id:job.id+"_qc",jobId:job.id,job,type:"qcWalk",label:"QC Walk",
-          color:C.teal,date:job.qcStatusDate||"",
-          bucket:getBucket(job.qcStatusDate),status:job.qcStatus});
+
+      // ROUGH — show if needs scheduling (not complete, not invoiced, not in-progress, not blank)
+      const roughNeedsScheduling = rs && rs!=="complete" && rs!=="invoice" && rs!=="inprogress";
+      if(roughNeedsScheduling) {
+        items.push({id:job.id+"_rough",jobId:job.id,job,type:"rough",label:"Rough",color:C.rough,
+          date:job.roughProjectedStart||job.roughStatusDate||"",
+          bucket:getBucket(job.roughProjectedStart||job.roughStatusDate),status:rs});
       }
 
-      (job.changeOrders||[]).forEach((co,i)=>{
-        if(co.coStatus==="scheduled"||co.coStatus==="pending"||co.coStatus==="needs"||co.coStatus==="approved") {
-          items.push({id:job.id+"_co_"+co.id,jobId:job.id,job,type:"changeOrder",label:`Change Order #${i+1}`,
-            color:C.accent,date:co.coStatusDate||"",bucket:getBucket(co.coStatusDate),
-            status:co.coStatus,desc:co.desc,needsByStart:co.needsByStart||'',needsByEnd:co.needsByEnd||'',needsHardDate:co.needsHardDate||false});
+      // FINISH — show if rough is complete and finish needs scheduling
+      const finishNeedsScheduling = fs && fs!=="complete" && fs!=="invoice" && fs!=="inprogress";
+      if(finishNeedsScheduling) {
+        items.push({id:job.id+"_finish",jobId:job.id,job,type:"finish",label:"Finish",color:C.finish,
+          date:job.finishProjectedStart||job.finishStatusDate||"",
+          bucket:getBucket(job.finishProjectedStart||job.finishStatusDate),status:fs});
+      }
+
+      // RETURN TRIPS — any unsigned RT
+      (job.returnTrips||[]).forEach((rt,i)=>{
+        if(!rt.signedOff&&(rt.scope||rt.date||rt.rtStatus)) {
+          items.push({id:job.id+"_rt_"+rt.id,jobId:job.id,job,type:"returnTrip",label:`Return Trip #${i+1}`,
+            color:"#8b5cf6",date:rt.rtStatusDate||rt.date||"",
+            bucket:getBucket(rt.rtStatusDate||rt.date),status:rt.rtStatus||"needs",scope:rt.scope,
+            needsByStart:rt.needsByStart||'',needsByEnd:rt.needsByEnd||'',needsHardDate:rt.needsHardDate||false});
         }
       });
-      // Temp peds — show if not completed
+
+      // QC WALK — show when fired (needs scheduling or scheduled)
+      if(job.roughQCTaskFired && job.qcStatus!=="complete" && job.qcStatus!=="") {
+        items.push({id:job.id+"_qc",jobId:job.id,job,type:"qcWalk",label:"QC Walk",
+          color:C.teal,date:job.qcStatusDate||"",
+          bucket:getBucket(job.qcStatusDate),status:job.qcStatus||"needs"});
+      }
+
+      // CHANGE ORDERS — any active CO
+      (job.changeOrders||[]).forEach((co,i)=>{
+        if(co.status!=="Work Completed"&&co.status!=="Denied") {
+          items.push({id:job.id+"_co_"+co.id,jobId:job.id,job,type:"changeOrder",label:`Change Order #${i+1}`,
+            color:C.accent,date:co.coStatusDate||"",bucket:getBucket(co.coStatusDate),
+            status:co.coStatus||co.status||"pending",desc:co.desc,
+            needsByStart:co.needsByStart||'',needsByEnd:co.needsByEnd||'',needsHardDate:co.needsHardDate||false});
+        }
+      });
+    });
+
+    // TEMP PEDS — show all non-completed
+    jobList.forEach(job=>{
       if(job.tempPed && job.tempPedStatus!=="completed") {
-        items.push({id:job.id+"_tempPed",jobId:job.id,job,type:"tempPed",label:`Temp Ped${job.tempPedNumber?" #"+job.tempPedNumber:""}`,
+        items.push({id:job.id+"_tempPed",jobId:job.id,job,type:"tempPed",
+          label:`Temp Ped${job.tempPedNumber?" #"+job.tempPedNumber:""}`,
           color:"#8b5cf6",date:job.tempPedScheduledDate||"",
           bucket:getBucket(job.tempPedScheduledDate),status:job.tempPedStatus||"ready"});
       }
     });
+
     return items;
   };
 
@@ -6168,11 +6182,11 @@ function SchedulingForecast({ jobs, onSelectJob }) {
   const allItems = buildItems(filteredJobs);
 
   const BUCKETS = [
-    {key:"overdue",     label:"Overdue",    color:C.red,     desc:"Past projected date"},
-    {key:"thisWeek",    label:"This Week",  color:C.green,   desc:""},
-    {key:"nextWeek",    label:"Next Week",  color:C.blue,    desc:""},
-    {key:"later",       label:"Later",      color:C.dim,     desc:""},
-    {key:"unscheduled", label:"Unscheduled",color:"#ca8a04", desc:"No date set yet"},
+    {key:"overdue",     label:"Overdue",          color:C.red,     desc:"Past projected date"},
+    {key:"thisWeek",    label:"This Week",         color:C.green,   desc:""},
+    {key:"nextWeek",    label:"Next Week",         color:C.blue,    desc:""},
+    {key:"later",       label:"Later",             color:C.dim,     desc:""},
+    {key:"unscheduled", label:"Needs Date",        color:"#ca8a04", desc:"No date set — needs scheduling"},
   ];
 
   const formatDate = (str) => { if(!str) return null; const d=parseDate(str); if(!d) return str; return d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}); };
