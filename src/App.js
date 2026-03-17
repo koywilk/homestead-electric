@@ -220,7 +220,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", readyToSchedule:false, readyToInvoice:false, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"",
+  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, readyToSchedule:false, readyToInvoice:false, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"",
 
   homeRuns:{
 
@@ -3531,7 +3531,7 @@ onUpdate(updated);
                     </div>
                   );
                 })()}
-                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;u({roughStage:v,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
+                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};u({roughStage:v,  ...qcFire,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
 
                 <div style={{marginTop:8,marginBottom:20}}>
 
@@ -3899,6 +3899,34 @@ onUpdate(updated);
               <Section label="QC Walk Checklist" color={C.teal} defaultOpen={true}>
                 <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }}/>
               </Section>
+
+              <div style={{marginTop:16,padding:"14px 16px",background:job.qcSignedOff?`${C.green}10`:C.surface,border:`1px solid ${job.qcSignedOff?C.green+"55":C.border}`,borderRadius:10}}>
+                <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:job.qcSignedOff?C.green:C.dim,marginBottom:10}}>QC SIGN-OFF</div>
+                {job.qcSignedOff?(
+                  <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{width:20,height:20,borderRadius:"50%",background:C.green,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#fff",fontWeight:700}}>✓</div>
+                      <div>
+                        <div style={{fontSize:13,fontWeight:700,color:C.green}}>Signed Off</div>
+                        <div style={{fontSize:11,color:C.dim}}>by {job.qcSignedOffBy||"—"} · {job.qcSignedOffDate||"—"}</div>
+                      </div>
+                    </div>
+                    <button onClick={()=>u({qcSignedOff:false,qcSignedOffBy:"",qcSignedOffDate:""})} style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.muted,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Undo</button>
+                  </div>
+                ):(
+                  <div style={{display:"flex",gap:8,alignItems:"flex-end",flexWrap:"wrap"}}>
+                    <div style={{flex:1,minWidth:120}}>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Lead Name</div>
+                      <Inp value={job.qcSignedOffBy||""} onChange={e=>u({qcSignedOffBy:e.target.value})} placeholder="Lead who completed QC"/>
+                    </div>
+                    <div style={{minWidth:110}}>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date</div>
+                      <Inp value={job.qcSignedOffDate||""} onChange={e=>u({qcSignedOffDate:e.target.value})} placeholder="MM/DD/YY"/>
+                    </div>
+                    <button onClick={()=>{if(job.qcSignedOffBy)u({qcSignedOff:true});}} style={{background:C.green,border:"none",borderRadius:7,color:"#fff",fontWeight:700,padding:"8px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>✓ Sign Off</button>
+                  </div>
+                )}
+              </div>
 
             </div>
 
@@ -5151,6 +5179,200 @@ function UpcomingJobs({ upcoming, onChange, onPromote }) {
   );
 }
 
+
+// ── Tasks Engine ─────────────────────────────────────────────
+
+function computeTasks(jobs) {
+  const tasks = [];
+  jobs.forEach(job => {
+    const foreman = job.foreman || "Koy";
+    const rs = job.roughStatus || "";
+    const fs = job.finishStatus || "";
+
+    // Rough needs scheduling
+    if(rs === "needs") tasks.push({
+      id: job.id+"_rough_needs", jobId: job.id, jobName: job.name,
+      type: "auto", category: "rough", foreman,
+      title: "Schedule Rough", desc: "Rough is marked Needs to be Scheduled",
+      color: C.rough, cleared: false,
+    });
+
+    // Finish needs scheduling
+    if(fs === "needs") tasks.push({
+      id: job.id+"_finish_needs", jobId: job.id, jobName: job.name,
+      type: "auto", category: "finish", foreman,
+      title: "Schedule Finish", desc: "Finish is marked Needs to be Scheduled",
+      color: C.finish, cleared: false,
+    });
+
+    // QC Walk — fires once when rough hits 80%+, clears when qcStatus=scheduled
+    if(job.roughQCTaskFired && job.qcStatus !== "scheduled" && job.qcStatus !== "complete") tasks.push({
+      id: job.id+"_qc_walk", jobId: job.id, jobName: job.name,
+      type: "auto", category: "qc", foreman,
+      title: "Schedule QC Walk",
+      desc: `Rough is at ${job.roughStage||"80%+"} — time to schedule the QC walk`,
+      color: C.teal, cleared: false,
+    });
+
+    // Change Orders needing scheduling
+    (job.changeOrders||[]).forEach((co, i) => {
+      if(co.coStatus === "needs") tasks.push({
+        id: job.id+"_co_"+co.id+"_needs", jobId: job.id, jobName: job.name,
+        type: "auto", category: "co", foreman,
+        title: `Schedule Change Order #${i+1}`,
+        desc: co.desc ? `CO: ${co.desc}` : "Change order needs to be scheduled",
+        color: C.accent, cleared: false,
+      });
+    });
+
+    // Return Trips needing scheduling
+    (job.returnTrips||[]).forEach((rt, i) => {
+      if(rt.rtStatus === "needs") tasks.push({
+        id: job.id+"_rt_"+rt.id+"_needs", jobId: job.id, jobName: job.name,
+        type: "auto", category: "rt", foreman,
+        title: `Schedule Return Trip #${i+1}`,
+        desc: rt.scope ? `Scope: ${rt.scope}` : "Return trip needs to be scheduled",
+        color: "#8b5cf6", cleared: false,
+      });
+    });
+  });
+  return tasks;
+}
+
+// ── Tasks Component ───────────────────────────────────────────
+
+function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, filterForeman }) {
+  const [newTask, setNewTask] = useState({title:"", foreman:"Koy", notes:""});
+  const [showAdd, setShowAdd] = useState(false);
+  const [groupBy, setGroupBy] = useState("foreman");
+
+  const autoTasks = computeTasks(jobs);
+  const allTasks = [
+    ...autoTasks,
+    ...(manualTasks||[]).map(t=>({...t, type:"manual"}))
+  ].filter(t => !filterForeman || t.foreman === filterForeman);
+
+  const addManual = () => {
+    if(!newTask.title.trim()) return;
+    const t = { id: uid(), title: newTask.title, foreman: newTask.foreman,
+      notes: newTask.notes, type:"manual", category:"manual",
+      color: "#6b7280", cleared:false, createdAt: new Date().toISOString() };
+    onManualTasksChange([...(manualTasks||[]), t]);
+    setNewTask({title:"", foreman:"Koy", notes:""});
+    setShowAdd(false);
+  };
+
+  const dismissManual = (id) => {
+    onManualTasksChange((manualTasks||[]).filter(t=>t.id!==id));
+  };
+
+  const foremanList = filterForeman ? [filterForeman] : [...FOREMEN, "Unassigned"];
+
+  const CATEGORY_LABELS = {
+    rough:"Rough", finish:"Finish", qc:"QC Walk", co:"Change Order",
+    rt:"Return Trip", manual:"Manual Task"
+  };
+
+  const tasksByForeman = {};
+  foremanList.forEach(f => { tasksByForeman[f] = allTasks.filter(t=>t.foreman===f); });
+
+  const totalCount = allTasks.length;
+
+  return (
+    <div>
+      {!filterForeman&&(
+        <div style={{padding:"24px 26px 16px", borderBottom:`1px solid ${C.border}`}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
+            <div>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>TASKS</div>
+              <div style={{fontSize:11,color:C.dim,marginTop:3}}>{totalCount} open task{totalCount!==1?"s":""}</div>
+            </div>
+            <button onClick={()=>setShowAdd(v=>!v)} style={{background:C.accent,border:"none",borderRadius:9,color:"#000",fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Task</button>
+          </div>
+          {showAdd&&(
+            <div style={{marginTop:14,padding:"14px 16px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10}}>
+              <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
+                <div style={{flex:2,minWidth:180}}>
+                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Task Title</div>
+                  <Inp value={newTask.title} onChange={e=>setNewTask(t=>({...t,title:e.target.value}))} placeholder="What needs to be done?"/>
+                </div>
+                <div style={{minWidth:120}}>
+                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Assign To</div>
+                  <select value={newTask.foreman} onChange={e=>setNewTask(t=>({...t,foreman:e.target.value}))}
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
+                    {FOREMEN.map(f=><option key={f} value={f}>{f}</option>)}
+                  </select>
+                </div>
+              </div>
+              <div style={{marginBottom:10}}>
+                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes (optional)</div>
+                <TA value={newTask.notes} onChange={e=>setNewTask(t=>({...t,notes:e.target.value}))} placeholder="Additional context..." rows={2}/>
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={addManual} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontWeight:700,padding:"7px 18px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Add Task</button>
+                <button onClick={()=>setShowAdd(false)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,color:C.dim,padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
+
+      <div style={{padding:filterForeman?"12px 0":"16px 26px"}}>
+        {totalCount===0&&(
+          <div style={{textAlign:"center",padding:"48px 0",color:C.muted}}>
+            <div style={{fontSize:24,marginBottom:8}}>✓</div>
+            <div style={{fontSize:13}}>No open tasks{filterForeman?` for ${filterForeman}`:""}</div>
+          </div>
+        )}
+        {foremanList.map(f=>{
+          const fTasks = tasksByForeman[f]||[];
+          if(fTasks.length===0 && !filterForeman) return null;
+          const fc = FOREMEN_COLORS[f]||"#6b7280";
+          return (
+            <div key={f} style={{marginBottom:filterForeman?0:28}}>
+              {!filterForeman&&(
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,paddingBottom:8,borderBottom:`2px solid ${fc}44`}}>
+                  <div style={{width:8,height:8,borderRadius:"50%",background:fc}}/>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:fc}}>{f}</div>
+                  <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:fc,fontWeight:700,marginLeft:"auto"}}>{fTasks.length}</div>
+                </div>
+              )}
+              {fTasks.length===0&&filterForeman&&(
+                <div style={{textAlign:"center",padding:"32px 0",color:C.muted,fontSize:12,fontStyle:"italic"}}>No open tasks</div>
+              )}
+              {fTasks.map(task=>{
+                const isManual = task.type==="manual";
+                return (
+                  <div key={task.id} style={{display:"flex",alignItems:"flex-start",gap:12,padding:"10px 12px",borderRadius:10,marginBottom:6,background:C.surface,border:`1px solid ${task.color}33`,borderLeft:`3px solid ${task.color}`}}>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3,flexWrap:"wrap"}}>
+                        <span style={{fontSize:10,fontWeight:700,color:task.color,background:`${task.color}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${task.color}33`}}>
+                          {CATEGORY_LABELS[task.category]||task.category}
+                        </span>
+                        {isManual&&<span style={{fontSize:9,color:C.muted,letterSpacing:"0.06em"}}>MANUAL</span>}
+                      </div>
+                      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:2}}>{task.title}</div>
+                      {task.jobName&&<div onClick={()=>{ if(task.jobId && onSelectJob) { const job=jobs.find(j=>j.id===task.jobId); if(job) onSelectJob(job); }}} style={{fontSize:11,color:C.accent,cursor:task.jobId?"pointer":"default",marginBottom:task.desc?2:0,textDecoration:"underline"}}>{task.jobName}</div>}
+                      {task.desc&&<div style={{fontSize:11,color:C.dim,fontStyle:"italic"}}>{task.desc}</div>}
+                      {task.notes&&<div style={{fontSize:11,color:C.dim,marginTop:2}}>{task.notes}</div>}
+                    </div>
+                    {isManual&&(
+                      <button onClick={()=>dismissManual(task.id)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.muted,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",flexShrink:0}}>✓ Done</button>
+                    )}
+                    {!isManual&&task.jobId&&(
+                      <button onClick={()=>{ const job=jobs.find(j=>j.id===task.jobId); if(job&&onSelectJob) onSelectJob(job); }} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",flexShrink:0}}>Open Job →</button>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
 // ── Scheduling Forecast ───────────────────────────────────────
 
 function SchedulingForecast({ jobs, onSelectJob }) {
@@ -5200,6 +5422,13 @@ function SchedulingForecast({ jobs, onSelectJob }) {
             bucket:getBucket(rt.rtStatusDate||rt.date),status:rt.rtStatus||"needs",scope:rt.scope,needsByStart:rt.needsByStart||'',needsByEnd:rt.needsByEnd||'',needsHardDate:rt.needsHardDate||false});
         }
       });
+      // QC Walk — shows on forecast when scheduled
+      if(job.roughQCTaskFired && job.qcStatus==="scheduled") {
+        items.push({id:job.id+"_qc",jobId:job.id,job,type:"qcWalk",label:"QC Walk",
+          color:C.teal,date:job.qcStatusDate||"",
+          bucket:getBucket(job.qcStatusDate),status:job.qcStatus});
+      }
+
       (job.changeOrders||[]).forEach((co,i)=>{
         if(co.coStatus==="scheduled"||co.coStatus==="pending"||co.coStatus==="needs") {
           items.push({id:job.id+"_co_"+co.id,jobId:job.id,job,type:"changeOrder",label:`Change Order #${i+1}`,
@@ -5556,6 +5785,7 @@ function App() {
 
   const [jobs,     setJobs]     = useState([]);
   const [upcoming, setUpcoming] = useState([]);
+  const [manualTasks, setManualTasks] = useState([]);
 
   const [selected, setSelected] = useState(null);
 
@@ -5694,7 +5924,13 @@ function App() {
       (err) => { console.error("Upcoming snapshot error:",err); }
     );
 
-    return () => { unsub(); unsubUpcoming(); }; // cleanup on unmount
+    // Load manual tasks from Firestore
+    const unsubTasks = onSnapshot(collection(db,"manualTasks"),
+      (snap) => { const loaded=snap.docs.map(d=>d.data().data).filter(Boolean); setManualTasks(loaded); },
+      (err) => { console.error("Tasks snapshot error:",err); }
+    );
+
+    return () => { unsub(); unsubUpcoming(); unsubTasks(); }; // cleanup on unmount
 
   },[]);
 
@@ -5777,6 +6013,13 @@ if(initialLoad.current) return;
   };
 
 
+
+  const saveManualTask = async (task) => {
+    try { await setDoc(doc(db,"manualTasks",task.id),{data:task,updated_at:new Date().toISOString()}); } catch(e){}
+  };
+  const deleteManualTask = async (id) => {
+    try { await deleteDoc(doc(db,"manualTasks",id)); } catch(e){}
+  };
 
   const saveUpcomingItem = async (item) => {
     try { await setDoc(doc(db,"upcoming",item.id),{data:item,updated_at:new Date().toISOString()}); } catch(e){ console.error(e); }
@@ -5934,6 +6177,7 @@ if(initialLoad.current) return;
   const goHome       = () =>  { setView("home");     setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openSchedule = () =>  { setView("schedule"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openUpcoming = () =>  { setView("upcoming"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openTasks    = () =>  { setView("tasks");    setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
 
 
 
@@ -6141,8 +6385,8 @@ if(initialLoad.current) return;
 
       {/* ── TOP NAV BAR ── */}
       <div style={{display:"flex",gap:0,borderBottom:`1px solid ${C.border}`,background:C.card,position:"sticky",top:0,zIndex:90,overflowX:"auto",scrollbarWidth:"none"}}>
-        {[{key:"home",label:"Job Board"},{key:"schedule",label:"Scheduling Forecast"},{key:"upcoming",label:"Upcoming"}].map(({key,label})=>(
-          <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:openUpcoming}
+        {[{key:"home",label:"Job Board"},{key:"schedule",label:"Scheduling Forecast"},{key:"upcoming",label:"Upcoming"},{key:"tasks",label:"Tasks"}].map(({key,label})=>(
+          <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:openTasks}
             style={{padding:"13px 22px",fontSize:12,fontWeight:view===key?700:500,fontFamily:"inherit",cursor:"pointer",whiteSpace:"nowrap",background:"none",border:"none",borderBottom:view===key?`2px solid ${C.accent}`:"2px solid transparent",color:view===key?C.accent:C.dim,transition:"all 0.15s",letterSpacing:"0.02em"}}>
             {label}
           </button>
@@ -6715,6 +6959,21 @@ if(initialLoad.current) return;
             ):(
 
               <>
+              {/* Tasks mini-card for this foreman */}
+              {(()=>{
+                const fTasks = computeTasks(jobs).filter(t=>t.foreman===activeForeman)
+                  .concat((manualTasks||[]).filter(t=>t.foreman===activeForeman));
+                if(fTasks.length===0) return null;
+                return (
+                  <div style={{margin:"0 0 16px",padding:"14px 16px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:12}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.08em",color:"#dc2626"}}>OPEN TASKS</div>
+                      <div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>{fTasks.length}</div>
+                    </div>
+                    <Tasks jobs={jobs} manualTasks={manualTasks} onManualTasksChange={(next)=>{ next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); }); manualTasks.forEach(t=>{ if(!next.find(m=>m.id===t.id)) deleteManualTask(t.id); }); setManualTasks(next); }} onSelectJob={(job)=>setSelected(job)} filterForeman={activeForeman}/>
+                  </div>
+                );
+              })()}
               <StageSectionList jobs={filtered} JobRow={JobRow} fc={FOREMEN_COLORS[activeForeman]} startCollapsed={false}/>
               {(()=>{
                 const invoiceJobs = filtered.filter(j=>effRS(j)==="invoice"||effFS(j)==="invoice");
@@ -6752,6 +7011,19 @@ if(initialLoad.current) return;
 
       {view==="schedule"&&(
         <SchedulingForecast jobs={jobs} onSelectJob={(job)=>setSelected(job)}/>
+      )}
+
+      {view==="tasks"&&(
+        <Tasks
+          jobs={jobs}
+          manualTasks={manualTasks}
+          onManualTasksChange={(next)=>{
+            next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); });
+            manualTasks.forEach(t=>{ if(!next.find(m=>m.id===t.id)) deleteManualTask(t.id); });
+            setManualTasks(next);
+          }}
+          onSelectJob={(job)=>setSelected(job)}
+        />
       )}
 
       {view==="upcoming"&&(
