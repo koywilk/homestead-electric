@@ -3189,8 +3189,20 @@ const normalizeJob = (raw) => ({
   roughQuestions:{upper:[],main:[],basement:[]},
   finishQuestions:{upper:[],main:[],basement:[]},
   ...raw,
-  changeOrders: raw?.changeOrders || [],
-  returnTrips:  raw?.returnTrips  || [],
+  changeOrders: (raw?.changeOrders||[]).map(o=>({
+    needsHardDate:false, needsByStart:"", needsByEnd:"",
+    coStatus:"", coStatusDate:"", ...o,
+    needsHardDate: o.needsHardDate??false,
+    needsByStart:  o.needsByStart||"",
+    needsByEnd:    o.needsByEnd||"",
+  })),
+  returnTrips: (raw?.returnTrips||[]).map(t=>({
+    needsHardDate:false, needsByStart:"", needsByEnd:"",
+    rtStatus:"", rtStatusDate:"", ...t,
+    needsHardDate: t.needsHardDate??false,
+    needsByStart:  t.needsByStart||"",
+    needsByEnd:    t.needsByEnd||"",
+  })),
   uploadedFiles:raw?.uploadedFiles|| [],
   customLinks:  raw?.customLinks  || [],
   roughMaterials: raw?.roughMaterials || [],
@@ -3472,7 +3484,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
     const updated = {...jobRef.current, ...patch};
     jobRef.current = updated;
     setJob(updated);
-onUpdate(updated);
+    onUpdate(updated);
   };
 
   const saveNow = () => onUpdate({...job});
