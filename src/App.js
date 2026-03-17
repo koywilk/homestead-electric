@@ -6113,6 +6113,12 @@ function SchedulingForecast({ jobs, onSelectJob }) {
             status:co.coStatus,desc:co.desc,needsByStart:co.needsByStart||'',needsByEnd:co.needsByEnd||'',needsHardDate:co.needsHardDate||false});
         }
       });
+      // Temp peds — show if not completed
+      if(job.tempPed && job.tempPedStatus!=="completed") {
+        items.push({id:job.id+"_tempPed",jobId:job.id,job,type:"tempPed",label:`Temp Ped${job.tempPedNumber?" #"+job.tempPedNumber:""}`,
+          color:"#8b5cf6",date:job.tempPedScheduledDate||"",
+          bucket:getBucket(job.tempPedScheduledDate),status:job.tempPedStatus||"ready"});
+      }
     });
     return items;
   };
@@ -6134,7 +6140,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
   const SchedCard = ({item}) => {
     const {job,label,color,date,status,type,scope,desc}=item;
     const foreman=job.foreman||"Koy"; const fc=FOREMEN_COLORS[foreman]||"#6b7280";
-    const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):getStatusDef(ROUGH_STATUSES,status);
+    const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):type==="tempPed"?getStatusDef(TEMP_PED_STATUSES,status):getStatusDef(ROUGH_STATUSES,status);
     return (
       <div onClick={()=>onSelectJob(job)} style={{background:C.card,border:`1px solid ${color}33`,borderRadius:12,padding:"12px 14px",marginBottom:8,cursor:"pointer",borderLeft:`3px solid ${color}`}}
         onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 16px ${color}22`;}}
@@ -6389,7 +6395,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
             {withDate.map((item,i)=>{
               const {job,label,color,date,status,type,scope,desc}=item;
               const foreman=job.foreman||"Koy"; const fc=FOREMEN_COLORS[foreman]||"#6b7280";
-              const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):getStatusDef(ROUGH_STATUSES,status);
+              const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):type==="tempPed"?getStatusDef(TEMP_PED_STATUSES,status):getStatusDef(ROUGH_STATUSES,status);
               const overdue=isOverdue(date);
               return (
                 <div key={item.id} onClick={()=>onSelectJob(job)}
@@ -6423,7 +6429,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
                 {noDate.map(item=>{
                   const {job,label,color,status,type,scope,desc}=item;
                   const foreman=job.foreman||"Koy"; const fc=FOREMEN_COLORS[foreman]||"#6b7280";
-                  const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):getStatusDef(ROUGH_STATUSES,status);
+                  const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):type==="tempPed"?getStatusDef(TEMP_PED_STATUSES,status):getStatusDef(ROUGH_STATUSES,status);
                   return (
                     <div key={item.id} onClick={()=>onSelectJob(job)}
                       style={{display:"flex",alignItems:"flex-start",gap:14,padding:"10px 14px",borderRadius:10,marginBottom:4,cursor:"pointer",background:C.surface,border:`1px solid ${C.border}`,borderLeft:`3px solid ${color}`}}
@@ -7350,18 +7356,7 @@ if(initialLoad.current) return;
                           </div>
                         ))}
                       </div>
-                      {/* Progress bars */}
-                      <div style={{display:"flex",flexDirection:"column",gap:4}}>
-                        {[["R",rAvg,C.rough],["F",fnAvg,C.finish]].map(([lbl,avg,col])=>(
-                          <div key={lbl} style={{display:"flex",alignItems:"center",gap:6}}>
-                            <span style={{fontSize:8,fontWeight:800,color:C.dim,width:8,flexShrink:0}}>{lbl}</span>
-                            <div style={{flex:1,height:4,borderRadius:99,background:C.surface,overflow:"hidden"}}>
-                              <div style={{height:"100%",width:`${avg}%`,borderRadius:99,
-                                background:avg===100?C.green:col,transition:"width 0.4s"}}/>
-                            </div>
-                          </div>
-                        ))}
-                      </div>
+
                       <div style={{marginTop:10,fontSize:10,color:fc,fontWeight:600,textAlign:"right",opacity:0.7}}>View →</div>
                     </div>
                     {/* Crew Access */}
