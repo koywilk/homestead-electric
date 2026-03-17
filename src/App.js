@@ -1427,9 +1427,9 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
                   const msg=`Change Order #${i+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||"Pending"}`;
                   navigator.clipboard.writeText(msg).catch(()=>{});
                   window.open(`https://homesteadelectric.simprosuite.com/staff/editProject.php?jobID=${jobSimproNo}`,"_blank");
-                }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>⚡ Simpro</Btn>}
-                {!isConverted&&<Btn onClick={()=>chatCO(o,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>💬 Chat</Btn>}
-                {!isConverted&&<Btn onClick={()=>emailCO(o,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>✉ Email CO</Btn>}
+                }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>Simpro</Btn>}
+                {!isConverted&&<Btn onClick={()=>chatCO(o,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>Chat</Btn>}
+                {!isConverted&&<Btn onClick={()=>emailCO(o,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>Email CO</Btn>}
                 <button onClick={()=>del(o.id)} style={{background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontSize:11}}>Remove</button>
               </div>
             </div>
@@ -1736,9 +1736,9 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
                 const msg=`Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}`;
                 navigator.clipboard.writeText(msg).catch(()=>{});
                 window.open(`https://homesteadelectric.simprosuite.com/staff/editProject.php?jobID=${jobSimproNo}`,"_blank");
-              }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>⚡ Simpro</Btn>}
-              <Btn onClick={()=>chatTrip(t,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>💬 Chat</Btn>
-              <Btn onClick={()=>emailTrip(t,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>✉ Email Trip</Btn>
+              }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>Simpro</Btn>}
+              <Btn onClick={()=>chatTrip(t,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>Chat</Btn>
+              <Btn onClick={()=>emailTrip(t,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>Email Trip</Btn>
 
               <button onClick={()=>del(t.id)}
 
@@ -3241,7 +3241,7 @@ onUpdate(updated);
 
   return (
 
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.82)",zIndex:200,
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.82)",zIndex:400,
 
       display:"flex",alignItems:"center",justifyContent:"center",padding:12}}
 
@@ -6781,7 +6781,7 @@ if(initialLoad.current) return;
 
       {/* ── TOP NAV BAR ── */}
       <div style={{display:"flex",gap:6,padding:"8px 10px",borderBottom:`1px solid ${C.border}`,background:C.card,position:"sticky",top:0,zIndex:90,overflowX:"auto",scrollbarWidth:"none",alignItems:"center"}}>
-        {[{key:"home",label:"Job Board",icon:"⚡"},{key:"schedule",label:"Forecast",icon:"📅"},{key:"upcoming",label:"Upcoming",icon:"🔭"},{key:"tasks",label:"Tasks",icon:"✓"}].map(({key,label,icon})=>{
+        {[{key:"home",label:"Job Board"},{key:"schedule",label:"Forecast"},{key:"upcoming",label:"Upcoming"},{key:"tasks",label:"Tasks"}].map(({key,label})=>{
           const active = view===key;
           return (
             <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:openTasks}
@@ -6792,9 +6792,7 @@ if(initialLoad.current) return;
                 color: active ? "#000" : C.dim,
                 transition:"all 0.15s",letterSpacing:"0.02em",
                 boxShadow: active ? `0 2px 8px ${C.accent}55` : "none",
-                display:"flex",alignItems:"center",gap:5,
               }}>
-              <span style={{fontSize:10,opacity:active?1:0.6}}>{icon}</span>
               {label}
             </button>
           );
@@ -6866,7 +6864,6 @@ if(initialLoad.current) return;
               {/* Title block */}
               <div>
                 <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.08em",color:C.text,lineHeight:1,display:"flex",alignItems:"center",gap:10}}>
-                  <span style={{color:C.accent}}>⚡</span>
                   HOMESTEAD ELECTRIC
                 </div>
                 <div style={{display:"flex",alignItems:"center",gap:10,marginTop:4}}>
@@ -6895,6 +6892,12 @@ if(initialLoad.current) return;
                     fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
                     fontFamily:"inherit",boxShadow:`0 2px 8px ${C.accent}44`,letterSpacing:"0.02em"}}>
                   + New Job
+                </button>
+                <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";j.tempPed=true;j.tempPedNumber="1";setJobs(js=>[j,...js]);setSelected(j);}}
+                  style={{background:"#8b5cf6",border:"none",borderRadius:8,color:"#fff",
+                    fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
+                    fontFamily:"inherit",boxShadow:"0 2px 8px #8b5cf644",letterSpacing:"0.02em"}}>
+                  + Temp Ped
                 </button>
               </div>
 
@@ -7119,7 +7122,6 @@ if(initialLoad.current) return;
                     onMouseEnter={e=>e.currentTarget.style.background=`${fc}12`}
                     onMouseLeave={e=>e.currentTarget.style.background=C.surface}>
                     <div style={{display:"flex",alignItems:"center",gap:7}}>
-                      <span style={{fontSize:13}}>👷</span>
                       <span style={{fontSize:11,fontWeight:600,color:C.dim}}>Crew Access</span>
                     </div>
                     <span style={{fontSize:10,color:C.dim,opacity:0.6}}>Job list only →</span>
@@ -7203,7 +7205,6 @@ if(initialLoad.current) return;
                   padding:"14px 18px",position:"sticky",top:0,zIndex:10,display:"flex",
                   alignItems:"center",justifyContent:"space-between",gap:12}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
-                    <span style={{fontSize:18}}>👷</span>
                     <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,
                       letterSpacing:"0.08em",color:FOREMEN_COLORS[crewView]||"#6b7280"}}>
                       {crewView} — Jobs
