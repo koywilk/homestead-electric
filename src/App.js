@@ -7178,27 +7178,101 @@ if(initialLoad.current) return;
             Lock
           </button>
         </div>
-        {/* Each foreman as a section, flat job list */}
-        <div style={{padding:"16px 16px 60px",maxWidth:700,width:"100%",margin:"0 auto"}}>
+        {/* Each foreman as a section */}
+        <div style={{padding:"16px 16px 80px",maxWidth:680,width:"100%",margin:"0 auto"}}>
           {FOREMEN.map(foreman=>{
             const cfc = FOREMEN_COLORS[foreman]||"#6b7280";
-            const fJobs = jobs.filter(j=>(j.foreman||"Koy")===foreman);
-            if(fJobs.length===0) return null;
+            const fJobs = jobs.filter(j=>(j.foreman||"Koy")===foreman&&!j.tempPed);
+            const fPeds = jobs.filter(j=>(j.foreman||"Koy")===foreman&&j.tempPed);
+            if(fJobs.length===0&&fPeds.length===0) return null;
             return (
-              <div key={foreman} style={{marginBottom:36}}>
-                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,
-                  paddingBottom:10,borderBottom:`3px solid ${cfc}`}}>
-                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,
-                    letterSpacing:"0.08em",color:cfc}}>{foreman}</div>
+              <div key={foreman} style={{marginBottom:40}}>
+                {/* Foreman header */}
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,
+                  paddingBottom:12,borderBottom:`3px solid ${cfc}`}}>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,
+                    letterSpacing:"0.08em",color:cfc,lineHeight:1}}>{foreman}</div>
                   <div style={{background:`${cfc}18`,border:`1px solid ${cfc}33`,
-                    borderRadius:99,padding:"2px 9px",fontSize:10,color:cfc,fontWeight:700}}>
-                    {fJobs.length} jobs
+                    borderRadius:99,padding:"3px 10px",fontSize:11,color:cfc,fontWeight:700}}>
+                    {fJobs.length+fPeds.length} jobs
                   </div>
                 </div>
-                {fJobs.map(job=>(
-                  job.tempPed
-                    ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }}/>
-                    : <JobRow key={job.id} job={job} fc={cfc} showForeman={false}/>
+
+                {/* Job cards */}
+                {fJobs.map(job=>{
+                  const rs = effRS(job); const fs = effFS(job);
+                  const rsDef = getStatusDef(ROUGH_STATUSES, rs);
+                  const fsDef = getStatusDef(FINISH_STATUSES, fs);
+                  const hasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
+                  const pendCO = (job.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length;
+                  const alerts = [];
+                  if(hasRT) alerts.push({label:"Return Trip Needed", color:"#dc2626"});
+                  if(pendCO>0) alerts.push({label:`${pendCO} Pending CO${pendCO>1?"s":""}`, color:"#f97316"});
+                  if(job.prepStage===PREP_STAGE_ALERT) alerts.push({label:"Redline Plans Need Update", color:"#dc2626"});
+
+                  return (
+                    <div key={job.id} onClick={()=>setSelected(job)}
+                      style={{background:C.card,border:`1px solid ${cfc}22`,borderRadius:14,
+                        marginBottom:10,overflow:"hidden",cursor:"pointer",
+                        boxShadow:`0 2px 8px ${cfc}10`}}>
+                      {/* Color bar top */}
+                      <div style={{height:3,background:cfc}}/>
+                      <div style={{padding:"14px 16px"}}>
+                        {/* Alerts */}
+                        {alerts.length>0&&(
+                          <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
+                            {alerts.map((a,i)=>(
+                              <span key={i} style={{fontSize:10,fontWeight:700,color:a.color,
+                                background:a.color+"18",border:`1px solid ${a.color}44`,
+                                borderRadius:99,padding:"2px 8px"}}>⚠ {a.label}</span>
+                            ))}
+                          </div>
+                        )}
+                        {/* Name + meta row */}
+                        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:10,marginBottom:10}}>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontWeight:700,fontSize:15,color:C.text,
+                              marginBottom:3,lineHeight:1.2}}>{job.name||"Untitled Job"}</div>
+                            {job.address&&<div style={{fontSize:11,color:C.dim,marginBottom:2,
+                              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{job.address}</div>}
+                            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginTop:4}}>
+                              {job.lead&&<span style={{fontSize:11,fontWeight:700,color:cfc,
+                                background:cfc+"18",borderRadius:99,padding:"2px 8px",
+                                border:`1px solid ${cfc}33`}}>👷 {job.lead}</span>}
+                              {job.gc&&<span style={{fontSize:11,color:C.dim}}>{job.gc}</span>}
+                            </div>
+                          </div>
+                          <div style={{fontSize:11,color:C.dim,opacity:0.5,flexShrink:0,paddingTop:2}}>→</div>
+                        </div>
+                        {/* Status row */}
+                        <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+                          {rs&&<div style={{display:"flex",alignItems:"center",gap:5,
+                            background:C.surface,borderRadius:8,padding:"6px 10px",flex:1,minWidth:110}}>
+                            <div style={{width:7,height:7,borderRadius:"50%",background:rsDef.color||C.dim,flexShrink:0}}/>
+                            <div>
+                              <div style={{fontSize:8,fontWeight:800,color:C.dim,letterSpacing:"0.1em",marginBottom:1}}>ROUGH</div>
+                              <div style={{fontSize:11,fontWeight:600,color:rsDef.color||C.text}}>{rsDef.label||rs}</div>
+                            </div>
+                          </div>}
+                          {fs&&<div style={{display:"flex",alignItems:"center",gap:5,
+                            background:C.surface,borderRadius:8,padding:"6px 10px",flex:1,minWidth:110}}>
+                            <div style={{width:7,height:7,borderRadius:"50%",background:fsDef.color||C.dim,flexShrink:0}}/>
+                            <div>
+                              <div style={{fontSize:8,fontWeight:800,color:C.dim,letterSpacing:"0.1em",marginBottom:1}}>FINISH</div>
+                              <div style={{fontSize:11,fontWeight:600,color:fsDef.color||C.text}}>{fsDef.label||fs}</div>
+                            </div>
+                          </div>}
+                          {!rs&&!fs&&<div style={{fontSize:11,color:C.dim,fontStyle:"italic",padding:"6px 2px"}}>No status set</div>}
+                        </div>
+                      </div>
+                    </div>
+                  );
+                })}
+
+                {/* Temp peds */}
+                {fPeds.map(job=>(
+                  <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)}
+                    onUpdate={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }}/>
                 ))}
               </div>
             );
