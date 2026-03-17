@@ -211,11 +211,18 @@ const DEFAULT_LEAD_COLORS = {
   "Vasa":"#f97316","Abe":"#f97316","Louis":"#f97316",
   "Jacob":"#6b7280"
 };
-// Module-level refs so components outside App can always read current settings
-let FOREMEN = DEFAULT_FOREMEN;
-let FOREMEN_COLORS = DEFAULT_FOREMEN_COLORS;
-let LEADS = DEFAULT_LEADS;
-let LEAD_COLORS = DEFAULT_LEAD_COLORS;
+// Module-level mutable settings — updated by App, read by all components
+const S = {
+  FOREMEN:        DEFAULT_FOREMEN,
+  FOREMEN_COLORS: DEFAULT_FOREMEN_COLORS,
+  LEADS:          DEFAULT_LEADS,
+  LEAD_COLORS:    DEFAULT_LEAD_COLORS,
+};
+// Convenience aliases (reassigning these won't work — use S.X instead)
+const getFOREMEN        = () => S.FOREMEN;
+const getFOREMEN_COLORS = () => S.FOREMEN_COLORS;
+const getLEADS          = () => S.LEADS;
+const getLEAD_COLORS    = () => S.LEAD_COLORS;
 const COLOR_OPTIONS = ["#3b82f6","#f97316","#22c55e","#8b5cf6","#ec4899","#14b8a6","#f59e0b","#ef4444","#06b6d4","#a855f7","#84cc16","#f43f5e"];
 
 // ── Auth PINs ─────────────────────────────────────────────────
@@ -3225,7 +3232,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose }) {
   const tpDef   = getStatusDef(TEMP_PED_STATUSES, job.tempPedStatus||"");
   const color   = tpDef.color || "#8b5cf6";
   const foreman = job.foreman||"Koy";
-  const fc      = FOREMEN_COLORS[foreman]||"#6b7280";
+  const fc      = S.FOREMEN_COLORS[foreman]||"#6b7280";
 
   // Photo handling
   const addPhotos = (files) => {
@@ -3341,7 +3348,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose }) {
               ))}
               <div>
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
-                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...FOREMEN,"Unassigned"]}/>
+                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...S.FOREMEN,"Unassigned"]}/>
               </div>
               <div>
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Temp Ped #</div>
@@ -4133,7 +4140,7 @@ onUpdate(updated);
 
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
 
-                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...FOREMEN,"Unassigned"]}/>
+                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...S.FOREMEN,"Unassigned"]}/>
 
               </div>
 
@@ -4141,8 +4148,8 @@ onUpdate(updated);
 
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Lead</div>
 
-{LEADS.length>0
-                  ? <Sel value={job.lead||""} onChange={e=>u({lead:e.target.value})} options={["", ...LEADS]} placeholder="Select lead…"/>
+{S.LEADS.length>0
+                  ? <Sel value={job.lead||""} onChange={e=>u({lead:e.target.value})} options={["", ...S.LEADS]} placeholder="Select lead…"/>
                   : <Inp value={job.lead||""} onChange={e=>u({lead:e.target.value})} placeholder="Lead name…"/>}
 
               </div>
@@ -4735,7 +4742,7 @@ function TempPedCard({ job, onOpen, onUpdate, onDelete }) {
   const tpDef = getStatusDef(TEMP_PED_STATUSES, job.tempPedStatus||"");
   const color = tpDef.color || "#8b5cf6";
   const foreman = job.foreman||"Koy";
-  const fc = FOREMEN_COLORS[foreman] || "#6b7280";
+  const fc = S.FOREMEN_COLORS[foreman] || "#6b7280";
 
   const upd = (patch) => onUpdate({...job, ...patch});
 
@@ -5430,7 +5437,7 @@ function UpcomingJobs({ upcoming, onChange, onPromote }) {
                     <div style={{flex:1,minWidth:120}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
                       <select value={u.foreman||""} onChange={e=>upd(u.id,{foreman:e.target.value})} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
                         <option value="">— unassigned —</option>
-                        {FOREMEN.map(f=><option key={f} value={f}>{f}</option>)}
+                        {S.FOREMEN.map(f=><option key={f} value={f}>{f}</option>)}
                       </select>
                     </div>
                   </div>
@@ -5445,7 +5452,7 @@ function UpcomingJobs({ upcoming, onChange, onPromote }) {
                 <>
                   <div style={{flex:2.5,paddingRight:12,fontSize:13,fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                     {u.name||<span style={{color:C.muted,fontStyle:"italic"}}>Untitled</span>}
-                    {u.foreman&&<span style={{marginLeft:8,fontSize:10,fontWeight:700,color:FOREMEN_COLORS[u.foreman]||"#6b7280",background:`${FOREMEN_COLORS[u.foreman]||"#6b7280"}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${FOREMEN_COLORS[u.foreman]||"#6b7280"}33`}}>{u.foreman}</span>}
+                    {u.foreman&&<span style={{marginLeft:8,fontSize:10,fontWeight:700,color:S.FOREMEN_COLORS[u.foreman]||"#6b7280",background:`${S.FOREMEN_COLORS[u.foreman]||"#6b7280"}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${S.FOREMEN_COLORS[u.foreman]||"#6b7280"}33`}}>{u.foreman}</span>}
                   </div>
                   <div style={{flex:1.2,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.city||"—"}</div>
                   <div style={{flex:1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.sales||"—"}</div>
@@ -5763,7 +5770,7 @@ function AddTaskForm({ defaultForeman, onAdd, onCancel }) {
           <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Assign To</div>
           <select value={t.foreman} onChange={e=>setT(x=>({...x,foreman:e.target.value}))}
             style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:7,color:"var(--text)",padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
-            {FOREMEN.map(f=><option key={f} value={f}>{f}</option>)}
+            {S.FOREMEN.map(f=><option key={f} value={f}>{f}</option>)}
           </select>
         </div>
         <div style={{flex:1,minWidth:110}}>
@@ -5825,7 +5832,7 @@ function PrepTaskList({ jobs, onSelectJob, onUpdateJob }) {
         const stageIdx = PREP_STAGES.indexOf(stage);
         const pct = stageIdx >= 0 ? Math.round((stageIdx / (PREP_STAGES.length-1)) * 100) : 0;
         const sc = stageColor(stage);
-        const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
+        const fc = S.FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
         return (
           <div key={job.id} style={{marginBottom:10,padding:"14px 16px",background:"var(--card)",border:`1px solid ${sc}33`,borderRadius:12,borderLeft:`3px solid ${sc}`}}
             onMouseEnter={e=>{e.currentTarget.style.boxShadow=`0 4px 16px ${sc}18`;}}
@@ -5937,7 +5944,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
     return 0;
   });
 
-  const foremanList = filterForeman ? [filterForeman] : [...FOREMEN,"Unassigned"];
+  const foremanList = filterForeman ? [filterForeman] : [...S.FOREMEN,"Unassigned"];
   const totalCount = allTasks.length;
   const overdueCount = sorted.filter(t=>{ const u=URGENCY(t.dueDate); return u&&u.days<0; }).length;
 
@@ -5973,7 +5980,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
               </div>
               {invoiceJobs.map(job=>{
                 const foreman = job.foreman||"Koy";
-                const fc = FOREMEN_COLORS[foreman]||"#6b7280";
+                const fc = S.FOREMEN_COLORS[foreman]||"#6b7280";
                 const isTP = job.tempPed;
                 return (
                   <div key={job.id}
@@ -6051,7 +6058,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
         ) : (
           // Grouped by foreman
           foremanList.map(f=>{
-            const fc = FOREMEN_COLORS[f]||"#6b7280";
+            const fc = S.FOREMEN_COLORS[f]||"#6b7280";
             const fTasks = sorted.filter(t=>t.foreman===f);
             const fOverdue = fTasks.filter(t=>{ const u=URGENCY(t.dueDate); return u&&u.days<0; }).length;
             if(fTasks.length===0) return null;
@@ -6493,11 +6500,11 @@ function SchedulingForecast({ jobs, onSelectJob }) {
   );
 }
 
-function SettingsPage({ FOREMEN, FOREMEN_COLORS, LEADS, LEAD_COLORS, COLOR_OPTIONS, onSave }) {
-  const [foremen,       setForemen]       = useState([...FOREMEN]);
-  const [foremanColors, setForemanColors] = useState({...FOREMEN_COLORS});
-  const [leads,         setLeads]         = useState([...LEADS]);
-  const [leadColors,    setLeadColors]    = useState({...LEAD_COLORS});
+function SettingsPage({ S.FOREMEN, S.FOREMEN_COLORS, S.LEADS, S.LEAD_COLORS, COLOR_OPTIONS, onSave }) {
+  const [foremen,       setForemen]       = useState([...S.FOREMEN]);
+  const [foremanColors, setForemanColors] = useState({...S.FOREMEN_COLORS});
+  const [leads,         setLeads]         = useState([...S.LEADS]);
+  const [leadColors,    setLeadColors]    = useState({...S.LEAD_COLORS});
   const [newForeman,    setNewForeman]    = useState("");
   const [newLead,       setNewLead]       = useState("");
   const [saved,         setSaved]         = useState(false);
@@ -6608,10 +6615,10 @@ function App() {
   const [_leads,          set_leads]          = useState(DEFAULT_LEADS);
   const [_leadColors,     set_leadColors]     = useState(DEFAULT_LEAD_COLORS);
 
-  // Sync module-level refs after state settles (not during render)
+  // Sync S object after state settles (not during render)
   useEffect(()=>{
-    FOREMEN=_foremen; FOREMEN_COLORS=_foremanColors;
-    LEADS=_leads; LEAD_COLORS=_leadColors;
+    S.FOREMEN=_foremen; S.FOREMEN_COLORS=_foremanColors;
+    S.LEADS=_leads; S.LEAD_COLORS=_leadColors;
   },[_foremen,_foremanColors,_leads,_leadColors]);
 
   useEffect(()=>{
@@ -6622,7 +6629,7 @@ function App() {
         const fc = d.foremanColors || DEFAULT_FOREMEN_COLORS;
         const l  = d.leads         || DEFAULT_LEADS;
         const lc = d.leadColors    || DEFAULT_LEAD_COLORS;
-        FOREMEN=f; FOREMEN_COLORS=fc; LEADS=l; LEAD_COLORS=lc;
+        S.FOREMEN=f; S.FOREMEN_COLORS=fc; S.LEADS=l; S.LEAD_COLORS=lc;
         set_foremen(f); set_foremanColors(fc); set_leads(l); set_leadColors(lc);
       }
     });
@@ -6630,7 +6637,7 @@ function App() {
 
   const saveSettings = async(foremen, foremanColors, leads, leadColors) => {
     await setDoc(doc(db,"settings","main"),{foremen,foremanColors,leads,leadColors});
-    FOREMEN=foremen; FOREMEN_COLORS=foremanColors; LEADS=leads; LEAD_COLORS=leadColors;
+    S.FOREMEN=foremen; S.FOREMEN_COLORS=foremanColors; S.LEADS=leads; S.LEAD_COLORS=leadColors;
     set_foremen(foremen); set_foremanColors(foremanColors);
     set_leads(leads); set_leadColors(leadColors);
   };
