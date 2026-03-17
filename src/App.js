@@ -4730,6 +4730,15 @@ function TempPedCard({ job, onOpen, onUpdate }) {
 
         {/* Right: status control */}
         <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-end",flexShrink:0}}>
+          <input
+            value={job.lead||""}
+            onChange={e=>upd({lead:e.target.value})}
+            placeholder="Lead name"
+            onClick={e=>e.stopPropagation()}
+            style={{fontSize:11,padding:"4px 8px",borderRadius:7,width:120,
+              border:"1px solid var(--border)",background:"var(--surface)",
+              color:"var(--text)",fontFamily:"inherit",outline:"none",textAlign:"right"}}
+          />
           <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
             <select value={job.tempPedStatus||""} onChange={e=>{
               const v = e.target.value;
@@ -4798,8 +4807,14 @@ const effFS = j => {
 
 const STAGE_SECTIONS = [
 
-  { key:"tempPed",      label:"Temp Peds — Not Started",   color:"#8b5cf6",
-    test: j => !!j.tempPed && !j.tempPedStatus },
+  { key:"tempPedReady",    label:"Temp Peds — Ready to Schedule", color:"#8b5cf6",
+    test: j => !!j.tempPed && (!j.tempPedStatus||j.tempPedStatus==="ready") },
+
+  { key:"tempPedScheduled", label:"Temp Peds — Scheduled",           color:"#7c3aed",
+    test: j => !!j.tempPed && j.tempPedStatus==="scheduled" },
+
+  { key:"tempPedDone",     label:"Temp Peds — Completed",            color:"#16a34a",
+    test: j => !!j.tempPed && j.tempPedStatus==="completed" },
 
   { key:"prep",         label:"Pre Job Prep",              color:"#0d9488",
     test: j => !j.tempPed && (j.prepStage||"") !== "Job Prep Complete" },
@@ -4910,7 +4925,7 @@ function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, f
             </div>
 
             {!isCollapsed && sJobs.map(job=>(
-              sec.key==="tempPed"
+              job.tempPed
                 ? <TempPedCard key={job.id} job={job} onOpen={onSelectJob} onUpdate={onSaveJob}/>
                 : <JobRow key={job.id} job={job} fc={fc||undefined} showForeman={!fc}/>
             ))}
@@ -7336,7 +7351,6 @@ if(initialLoad.current) return;
                               <div style={{height:"100%",width:`${avg}%`,borderRadius:99,
                                 background:avg===100?C.green:col,transition:"width 0.4s"}}/>
                             </div>
-                            <span style={{fontSize:8,fontWeight:700,color:avg===100?C.green:col,width:22,textAlign:"right"}}>{avg}%</span>
                           </div>
                         ))}
                       </div>
