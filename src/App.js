@@ -7178,129 +7178,66 @@ if(initialLoad.current) return;
             Lock
           </button>
         </div>
-        {/* Each foreman section, leads as cards inside */}
-        <div style={{padding:"16px 16px 80px",maxWidth:680,width:"100%",margin:"0 auto"}}>
-          {FOREMEN.map(foreman=>{
-            const cfc = FOREMEN_COLORS[foreman]||"#6b7280";
-            const fJobs = jobs.filter(j=>(j.foreman||"Koy")===foreman&&!j.tempPed);
-            const fPeds = jobs.filter(j=>(j.foreman||"Koy")===foreman&&j.tempPed);
-            if(fJobs.length===0&&fPeds.length===0) return null;
-
-            // Group by lead
-            const leadMap = {};
-            fJobs.forEach(j=>{ const l=j.lead||""; if(!leadMap[l]) leadMap[l]=[]; leadMap[l].push(j); });
-            const leadKeys = Object.keys(leadMap).sort((a,b)=>{ if(!a)return 1;if(!b)return -1;return a.localeCompare(b); });
-
-            return (
-              <div key={foreman} style={{marginBottom:44}}>
-                {/* Foreman header */}
-                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,
-                  paddingBottom:12,borderBottom:`3px solid ${cfc}`}}>
-                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,
-                    letterSpacing:"0.08em",color:cfc,lineHeight:1}}>{foreman}</div>
-                  <div style={{background:`${cfc}18`,border:`1px solid ${cfc}33`,
-                    borderRadius:99,padding:"3px 10px",fontSize:11,color:cfc,fontWeight:700}}>
-                    {fJobs.length+fPeds.length} jobs
-                  </div>
-                </div>
-
-                {/* Lead cards */}
+        {/* Lead cards — same style as foreman cards on main page */}
+        {(()=>{
+          const allJobs = jobs.filter(j=>!j.tempPed);
+          const allPeds = jobs.filter(j=>j.tempPed);
+          const leadMap = {};
+          allJobs.forEach(j=>{ const l=j.lead||""; if(!leadMap[l]) leadMap[l]=[]; leadMap[l].push(j); });
+          const leadKeys = Object.keys(leadMap).sort((a,b)=>{ if(!a)return 1;if(!b)return -1;return a.localeCompare(b); });
+          // Assign a stable color per lead name
+          const leadColors = ["#3b82f6","#f97316","#22c55e","#8b5cf6","#ec4899","#14b8a6","#f59e0b","#ef4444"];
+          const getLeadColor = (name) => { if(!name) return "#6b7280"; let h=0; for(let i=0;i<name.length;i++) h=(h*31+name.charCodeAt(i))%leadColors.length; return leadColors[h]; };
+          return (
+            <div style={{padding:"16px 16px 80px"}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10,alignItems:"start"}}>
                 {leadKeys.map(lead=>{
+                  const lc = getLeadColor(lead);
                   const lJobs = leadMap[lead];
+                  const lCOs = lJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
+                  const lRTs = lJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
                   return (
-                    <div key={lead||"__none"} style={{
-                      background:C.card, border:`1px solid ${lead?cfc+"33":C.border}`,
-                      borderRadius:16, marginBottom:14, overflow:"hidden",
-                      boxShadow:`0 2px 12px ${cfc}0d`}}>
-                      {/* Lead card header */}
-                      <div style={{
-                        background:lead?cfc+"14":C.surface,
-                        borderBottom:`1px solid ${lead?cfc+"22":C.border}`,
-                        padding:"12px 16px",
-                        display:"flex",alignItems:"center",gap:10}}>
-                        <div style={{
-                          width:34,height:34,borderRadius:"50%",flexShrink:0,
-                          background:lead?cfc+"28":C.border,
-                          border:`2px solid ${lead?cfc+"66":C.border}`,
-                          display:"flex",alignItems:"center",justifyContent:"center",
-                          fontFamily:"'Bebas Neue',sans-serif",fontSize:16,
-                          fontWeight:800,color:lead?cfc:C.dim}}>
-                          {lead?lead[0].toUpperCase():"?"}
+                    <div key={lead||"__none"} className="foreman-card" onClick={()=>setSelected(lJobs[0])}
+                      style={{background:C.card,border:`1px solid ${lc}33`,borderRadius:12,
+                        padding:"14px 16px",borderTop:`3px solid ${lc}`,cursor:"pointer"}}>
+                      {/* Name + count */}
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,
+                          letterSpacing:"0.06em",color:lc,lineHeight:1}}>
+                          {lead||"No Lead"}
                         </div>
-                        <div style={{flex:1,minWidth:0}}>
-                          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,
-                            letterSpacing:"0.06em",color:lead?cfc:C.dim,lineHeight:1}}>
-                            {lead||"No Lead Assigned"}
-                          </div>
-                          <div style={{fontSize:10,color:C.dim,marginTop:2}}>
-                            {lJobs.length} job{lJobs.length!==1?"s":""}
-                          </div>
+                        <div style={{background:`${lc}18`,border:`1px solid ${lc}33`,borderRadius:99,
+                          padding:"2px 9px",fontSize:10,color:lc,fontWeight:700}}>
+                          {lJobs.length}
                         </div>
                       </div>
-
-                      {/* Jobs inside lead card */}
-                      <div style={{padding:"8px 12px 12px"}}>
-                        {lJobs.map((job,idx)=>{
-                          const rs = effRS(job); const fs = effFS(job);
-                          const rsDef = getStatusDef(ROUGH_STATUSES, rs);
-                          const fsDef = getStatusDef(FINISH_STATUSES, fs);
-                          const hasRT = (job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
-                          const pendCO = (job.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length;
-                          const alerts = [];
-                          if(hasRT) alerts.push({label:"Return Trip Needed",color:"#dc2626"});
-                          if(pendCO>0) alerts.push({label:`${pendCO} CO${pendCO>1?"s":""}`,color:"#f97316"});
-                          if(job.prepStage===PREP_STAGE_ALERT) alerts.push({label:"Redline Update",color:"#dc2626"});
+                      {/* Stats */}
+                      <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
+                        {[[lCOs,"COs",lCOs>0?C.blue:C.muted],[lRTs,"RTs",lRTs>0?"#dc2626":C.muted]].map(([v,l,col])=>(
+                          <div key={l} style={{background:C.surface,borderRadius:7,padding:"5px 8px",flex:1,minWidth:44}}>
+                            <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:col,lineHeight:1}}>{v}</div>
+                            <div style={{fontSize:9,color:C.dim,marginTop:1}}>{l}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {/* Job list */}
+                      <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                        {lJobs.map(job=>{
+                          const rs=effRS(job); const fs=effFS(job);
+                          const rsDef=getStatusDef(ROUGH_STATUSES,rs);
+                          const fsDef=getStatusDef(FINISH_STATUSES,fs);
+                          const dot = (rsDef.color&&rs)?rsDef.color:(fsDef.color&&fs)?fsDef.color:C.dim;
                           return (
-                            <div key={job.id} onClick={()=>setSelected(job)}
-                              style={{
-                                marginTop:8,padding:"12px 14px",cursor:"pointer",
-                                background:C.surface,borderRadius:12,
-                                border:`1px solid ${C.border}`,
-                                borderLeft:`3px solid ${lead?cfc:"#6b7280"}`}}>
-                              {alerts.length>0&&(
-                                <div style={{display:"flex",gap:5,flexWrap:"wrap",marginBottom:8}}>
-                                  {alerts.map((a,i)=>(
-                                    <span key={i} style={{fontSize:9,fontWeight:700,color:a.color,
-                                      background:a.color+"15",border:`1px solid ${a.color}33`,
-                                      borderRadius:99,padding:"2px 7px"}}>⚠ {a.label}</span>
-                                  ))}
-                                </div>
-                              )}
-                              <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8}}>
-                                <div style={{flex:1,minWidth:0}}>
-                                  <div style={{fontWeight:700,fontSize:14,color:C.text,
-                                    marginBottom:2,lineHeight:1.2}}>{job.name||"Untitled Job"}</div>
-                                  {job.address&&<div style={{fontSize:11,color:C.dim,
-                                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{job.address}</div>}
-                                </div>
-                                <span style={{fontSize:11,color:C.dim,opacity:0.4,flexShrink:0}}>→</span>
-                              </div>
-                              {(rs||fs)&&(
-                                <div style={{display:"flex",gap:6,marginTop:10,flexWrap:"wrap"}}>
-                                  {rs&&<div style={{display:"flex",alignItems:"center",gap:4,
-                                    background:C.card,borderRadius:7,padding:"5px 8px",flex:1,minWidth:90}}>
-                                    <div style={{width:6,height:6,borderRadius:"50%",
-                                      background:rsDef.color||C.dim,flexShrink:0}}/>
-                                    <div>
-                                      <div style={{fontSize:7,fontWeight:800,color:C.dim,
-                                        letterSpacing:"0.1em"}}>ROUGH</div>
-                                      <div style={{fontSize:10,fontWeight:600,
-                                        color:rsDef.color||C.text}}>{rsDef.label||rs}</div>
-                                    </div>
-                                  </div>}
-                                  {fs&&<div style={{display:"flex",alignItems:"center",gap:4,
-                                    background:C.card,borderRadius:7,padding:"5px 8px",flex:1,minWidth:90}}>
-                                    <div style={{width:6,height:6,borderRadius:"50%",
-                                      background:fsDef.color||C.dim,flexShrink:0}}/>
-                                    <div>
-                                      <div style={{fontSize:7,fontWeight:800,color:C.dim,
-                                        letterSpacing:"0.1em"}}>FINISH</div>
-                                      <div style={{fontSize:10,fontWeight:600,
-                                        color:fsDef.color||C.text}}>{fsDef.label||fs}</div>
-                                    </div>
-                                  </div>}
-                                </div>
-                              )}
+                            <div key={job.id} onClick={e=>{e.stopPropagation();setSelected(job);}}
+                              style={{display:"flex",alignItems:"center",gap:6,padding:"5px 7px",
+                                borderRadius:7,background:C.surface,cursor:"pointer"}}
+                              onMouseEnter={e=>e.currentTarget.style.background=lc+"15"}
+                              onMouseLeave={e=>e.currentTarget.style.background=C.surface}>
+                              <div style={{width:6,height:6,borderRadius:"50%",background:dot,flexShrink:0}}/>
+                              <span style={{fontSize:11,fontWeight:600,color:C.text,flex:1,
+                                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                                {job.name||"Untitled"}
+                              </span>
                             </div>
                           );
                         })}
@@ -7308,36 +7245,39 @@ if(initialLoad.current) return;
                     </div>
                   );
                 })}
-
-                {/* Temp peds */}
-                {fPeds.length>0&&(
-                  <div style={{background:C.card,border:"1px solid #8b5cf633",borderRadius:16,
-                    marginBottom:14,overflow:"hidden"}}>
-                    <div style={{background:"#8b5cf614",borderBottom:"1px solid #8b5cf622",
-                      padding:"12px 16px",display:"flex",alignItems:"center",gap:10}}>
-                      <div style={{width:34,height:34,borderRadius:"50%",background:"#8b5cf628",
-                        border:"2px solid #8b5cf666",display:"flex",alignItems:"center",
-                        justifyContent:"center",fontSize:16}}>⚡</div>
-                      <div>
-                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,
-                          letterSpacing:"0.06em",color:"#8b5cf6"}}>Temp Peds</div>
-                        <div style={{fontSize:10,color:C.dim,marginTop:2}}>{fPeds.length} ped{fPeds.length!==1?"s":""}</div>
+                {/* Temp peds card */}
+                {allPeds.length>0&&(
+                  <div style={{background:C.card,border:"1px solid #8b5cf633",borderRadius:12,
+                    padding:"14px 16px",borderTop:"3px solid #8b5cf6"}}>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,
+                        letterSpacing:"0.06em",color:"#8b5cf6",lineHeight:1}}>Temp Peds</div>
+                      <div style={{background:"#8b5cf618",border:"1px solid #8b5cf633",borderRadius:99,
+                        padding:"2px 9px",fontSize:10,color:"#8b5cf6",fontWeight:700}}>
+                        {allPeds.length}
                       </div>
                     </div>
-                    <div style={{padding:"8px 12px 12px"}}>
-                      {fPeds.map(job=>(
-                        <div style={{marginTop:8}}>
-                          <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)}
-                            onUpdate={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }}/>
+                    <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                      {allPeds.map(job=>(
+                        <div key={job.id} onClick={()=>setSelected(job)}
+                          style={{display:"flex",alignItems:"center",gap:6,padding:"5px 7px",
+                            borderRadius:7,background:C.surface,cursor:"pointer"}}
+                          onMouseEnter={e=>e.currentTarget.style.background="#8b5cf615"}
+                          onMouseLeave={e=>e.currentTarget.style.background=C.surface}>
+                          <div style={{width:6,height:6,borderRadius:"50%",background:"#8b5cf6",flexShrink:0}}/>
+                          <span style={{fontSize:11,fontWeight:600,color:C.text,flex:1,
+                            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                            {job.name||"Untitled"}{job.tempPedNumber?" #"+job.tempPedNumber:""}
+                          </span>
                         </div>
                       ))}
                     </div>
                   </div>
                 )}
               </div>
-            );
-          })}
-        </div>
+            </div>
+          );
+        })()}
         {selected&&(
           selected.tempPed
             ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>
