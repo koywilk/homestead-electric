@@ -5241,24 +5241,222 @@ function computeTasks(jobs) {
 
 // ── Tasks Component ───────────────────────────────────────────
 
-function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, filterForeman }) {
-  const [newTask, setNewTask] = useState({title:"", foreman:"Koy", notes:""});
+const URGENCY = (dueDateStr) => {
+  if(!dueDateStr) return null;
+  const due = new Date(dueDateStr); due.setHours(0,0,0,0);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const diff = Math.round((due - today) / 86400000);
+  if(diff < 0)  return {label:"OVERDUE", color:"#dc2626", bg:"#dc262612", days: diff};
+  if(diff === 0) return {label:"DUE TODAY", color:"#ea580c", bg:"#ea580c12", days: 0};
+  if(diff <= 3) return {label:`DUE IN ${diff}D`, color:"#ca8a04", bg:"#ca8a0412", days: diff};
+  if(diff <= 7) return {label:`DUE IN ${diff}D`, color:"#2563eb", bg:"#2563eb10", days: diff};
+  return {label:`DUE ${new Date(dueDateStr).toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, color:"#6b7280", bg:"transparent", days: diff};
+};
+
+function TaskCard({ task, jobs, onSelectJob, onDismiss, compact }) {
+  const urg = URGENCY(task.dueDate);
+  const isOverdue = urg && urg.days < 0;
+  const isUrgent  = urg && urg.days >= 0 && urg.days <= 3;
+
+  const CATEGORY_LABELS = {
+    rough:"Rough", finish:"Finish", qc:"QC Walk", co:"Change Order",
+    rt:"Return Trip", manual:"Manual Task", prep:"Pre Job Prep"
+  };
+
+  return (
+    <div style={{
+      display:"flex", alignItems:"flex-start", gap:12,
+      padding:"12px 14px", borderRadius:11, marginBottom:6,
+      background: isOverdue ? "#dc262608" : isUrgent ? "#ea580c06" : "var(--card)",
+      border:`1px solid ${isOverdue?"#dc262633":isUrgent?"#ea580c33":task.color+"22"}`,
+      borderLeft:`3px solid ${isOverdue?"#dc2626":isUrgent?"#ea580c":task.color}`,
+      boxShadow: isOverdue?"0 2px 8px #dc262612":isUrgent?"0 2px 8px #ea580c0a":"none",
+      transition:"transform 0.12s, box-shadow 0.12s",
+    }}
+    onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 14px ${task.color}18`;}}
+    onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow=isOverdue?"0 2px 8px #dc262612":isUrgent?"0 2px 8px #ea580c0a":"none";}}>
+
+      {/* Color dot */}
+      <div style={{width:8,height:8,borderRadius:"50%",background:isOverdue?"#dc2626":task.color,flexShrink:0,marginTop:5}}/>
+
+      <div style={{flex:1,minWidth:0}}>
+        {/* Category + urgency row */}
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,flexWrap:"wrap"}}>
+          <span style={{fontSize:9,fontWeight:800,color:task.color,background:`${task.color}18`,borderRadius:99,padding:"2px 8px",border:`1px solid ${task.color}28`,letterSpacing:"0.07em"}}>
+            {(CATEGORY_LABELS[task.category]||task.category).toUpperCase()}
+          </span>
+          {urg&&<span style={{fontSize:9,fontWeight:800,color:urg.color,background:urg.bg,borderRadius:99,padding:"2px 8px",border:`1px solid ${urg.color}33`,letterSpacing:"0.07em"}}>{urg.label}</span>}
+          {task.type==="manual"&&<span style={{fontSize:9,color:"#6b7280",letterSpacing:"0.06em",fontWeight:600}}>MANUAL</span>}
+        </div>
+
+        {/* Title */}
+        <div style={{fontSize:13,fontWeight:700,color:"var(--text)",marginBottom:task.jobName||task.desc||task.notes?3:0,lineHeight:1.3}}>
+          {task.title}
+        </div>
+
+        {/* Job link */}
+        {task.jobName&&(
+          <div onClick={()=>{const job=jobs.find(j=>j.id===task.jobId);if(job&&onSelectJob)onSelectJob(job);}}
+            style={{fontSize:11,color:"var(--accent)",cursor:"pointer",marginBottom:task.desc?2:0,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
+            <span style={{opacity:0.6,fontSize:10}}>↗</span>{task.jobName}
+          </div>
+        )}
+
+        {/* Desc / notes */}
+        {task.desc&&<div style={{fontSize:11,color:"var(--dim)",fontStyle:"italic",lineHeight:1.4}}>{task.desc}</div>}
+        {task.notes&&<div style={{fontSize:11,color:"var(--dim)",marginTop:2,lineHeight:1.4}}>{task.notes}</div>}
+
+        {/* Prep stage pill if prep task */}
+        {task.category==="prep"&&task.prepStage&&(
+          <div style={{marginTop:6}}>
+            <span style={{fontSize:10,fontWeight:700,color:task.prepStage===PREP_STAGE_ALERT?"#dc2626":"#0d9488",background:task.prepStage===PREP_STAGE_ALERT?"#dc262610":"#0d948810",borderRadius:99,padding:"2px 10px",border:`1px solid ${task.prepStage===PREP_STAGE_ALERT?"#dc262633":"#0d948833"}`}}>
+              {task.prepStage===PREP_STAGE_ALERT?"⚠ "+task.prepStage:task.prepStage}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Action button */}
+      <div style={{flexShrink:0,display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
+        {onDismiss&&(
+          <button onClick={onDismiss}
+            style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 11px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>
+            ✓ Done
+          </button>
+        )}
+        {task.jobId&&onSelectJob&&(
+          <button onClick={()=>{const job=jobs.find(j=>j.id===task.jobId);if(job)onSelectJob(job);}}
+            style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 11px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+            Open →
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AddTaskForm({ defaultForeman, onAdd, onCancel }) {
+  const [t, setT] = useState({title:"", foreman:defaultForeman||"Koy", notes:"", dueDate:""});
+  return (
+    <div style={{padding:"14px 16px",background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,marginBottom:16}}>
+      <div style={{fontSize:11,fontWeight:700,color:"var(--dim)",letterSpacing:"0.08em",marginBottom:12}}>NEW TASK</div>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
+        <div style={{flex:3,minWidth:180}}>
+          <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Task</div>
+          <Inp value={t.title} onChange={e=>setT(x=>({...x,title:e.target.value}))} placeholder="What needs to be done?"/>
+        </div>
+        <div style={{flex:1,minWidth:110}}>
+          <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Assign To</div>
+          <select value={t.foreman} onChange={e=>setT(x=>({...x,foreman:e.target.value}))}
+            style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:7,color:"var(--text)",padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
+            {FOREMEN.map(f=><option key={f} value={f}>{f}</option>)}
+          </select>
+        </div>
+        <div style={{flex:1,minWidth:110}}>
+          <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Due Date</div>
+          <Inp value={t.dueDate} onChange={e=>setT(x=>({...x,dueDate:e.target.value}))} placeholder="MM/DD/YY"/>
+        </div>
+      </div>
+      <div style={{marginBottom:12}}>
+        <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Notes</div>
+        <TA value={t.notes} onChange={e=>setT(x=>({...x,notes:e.target.value}))} placeholder="Additional context..." rows={2}/>
+      </div>
+      <div style={{display:"flex",gap:8}}>
+        <button onClick={()=>{if(t.title.trim())onAdd(t);}} style={{background:"var(--accent)",border:"none",borderRadius:7,color:"#000",fontWeight:800,padding:"8px 20px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Add Task</button>
+        <button onClick={onCancel} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",padding:"8px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function PrepTaskList({ jobs, onSelectJob, onUpdateJob }) {
+  // All jobs that have a prep stage set and not complete
+  const prepJobs = jobs.filter(j => j.prepStage && j.prepStage !== "Job Prep Complete")
+    .sort((a,b) => {
+      const ai = PREP_STAGES.indexOf(a.prepStage);
+      const bi = PREP_STAGES.indexOf(b.prepStage);
+      return ai - bi;
+    });
+
+  const completeJobs = jobs.filter(j => j.prepStage === "Job Prep Complete");
+
+  const stageColor = (stage) => {
+    if(stage === PREP_STAGE_ALERT) return "#dc2626";
+    if(stage === "Job Prep Complete") return "#16a34a";
+    const idx = PREP_STAGES.indexOf(stage);
+    const pct = idx / (PREP_STAGES.length - 1);
+    if(pct < 0.3) return "#ca8a04";
+    if(pct < 0.7) return "#2563eb";
+    return "#0d9488";
+  };
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,paddingBottom:10,borderBottom:"2px solid #2563eb22"}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#2563eb"}}>PRE JOB PREP TRACKER</div>
+        <div style={{background:"#2563eb18",border:"1px solid #2563eb33",borderRadius:99,padding:"2px 10px",fontSize:11,color:"#2563eb",fontWeight:700}}>{prepJobs.length} in progress</div>
+        {completeJobs.length>0&&<div style={{background:"#16a34a18",border:"1px solid #16a34a33",borderRadius:99,padding:"2px 10px",fontSize:11,color:"#16a34a",fontWeight:700}}>✓ {completeJobs.length} complete</div>}
+      </div>
+
+      {prepJobs.length===0&&(
+        <div style={{textAlign:"center",padding:"32px 0",color:"var(--muted)",fontSize:12,fontStyle:"italic"}}>No jobs in pre-job prep</div>
+      )}
+
+      {prepJobs.map(job => {
+        const stage = job.prepStage||"";
+        const stageIdx = PREP_STAGES.indexOf(stage);
+        const pct = stageIdx >= 0 ? Math.round((stageIdx / (PREP_STAGES.length-1)) * 100) : 0;
+        const sc = stageColor(stage);
+        const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
+        return (
+          <div key={job.id} style={{marginBottom:10,padding:"14px 16px",background:"var(--card)",border:`1px solid ${sc}33`,borderRadius:12,borderLeft:`3px solid ${sc}`}}
+            onMouseEnter={e=>{e.currentTarget.style.boxShadow=`0 4px 16px ${sc}18`;}}
+            onMouseLeave={e=>{e.currentTarget.style.boxShadow="none";}}>
+            <div style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:10}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:700,color:"var(--text)",marginBottom:3,cursor:"pointer"}}
+                  onClick={()=>onSelectJob(job)}>{job.name||"Untitled Job"}</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                  {job.address&&<span style={{fontSize:10,color:"var(--dim)"}}>{job.address}</span>}
+                  <span style={{fontSize:10,fontWeight:700,color:fc,background:`${fc}15`,borderRadius:99,padding:"1px 7px",border:`1px solid ${fc}28`}}>{job.foreman||"Koy"}</span>
+                </div>
+              </div>
+              <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+                <select value={stage} onChange={e=>onUpdateJob(job.id,{prepStage:e.target.value,...(e.target.value===PREP_STAGE_ALERT?{readyToSchedule:false}:{})})}
+                  style={{background:sc+"12",border:`1px solid ${sc}55`,borderRadius:7,color:sc,padding:"5px 8px",fontSize:11,fontFamily:"inherit",fontWeight:700,outline:"none",cursor:"pointer",maxWidth:200}}>
+                  <option value="">— select —</option>
+                  {PREP_STAGES.map(s=><option key={s} value={s}>{s===PREP_STAGE_ALERT?"⚠ "+s:s}</option>)}
+                </select>
+                <button onClick={()=>onSelectJob(job)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 10px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Open →</button>
+              </div>
+            </div>
+            {/* Progress bar */}
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{flex:1,height:5,background:"var(--border)",borderRadius:99,overflow:"hidden"}}>
+                <div style={{width:`${pct}%`,height:"100%",background:sc,borderRadius:99,transition:"width 0.3s"}}/>
+              </div>
+              <span style={{fontSize:10,fontWeight:700,color:sc,minWidth:28,textAlign:"right"}}>{pct}%</span>
+            </div>
+            {stage===PREP_STAGE_ALERT&&(
+              <div style={{marginTop:8,fontSize:10,fontWeight:700,color:"#dc2626",display:"flex",alignItems:"center",gap:5}}>
+                <span>⚠</span> Redline Plans Need to be Updated
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJob, filterForeman, compact }) {
   const [showAdd, setShowAdd] = useState(false);
-  const [groupBy, setGroupBy] = useState("foreman");
 
-  const autoTasks = computeTasks(jobs);
-  const allTasks = [
-    ...autoTasks,
-    ...(manualTasks||[]).map(t=>({...t, type:"manual"}))
-  ].filter(t => !filterForeman || t.foreman === filterForeman);
-
-  const addManual = () => {
-    if(!newTask.title.trim()) return;
-    const t = { id: uid(), title: newTask.title, foreman: newTask.foreman,
-      notes: newTask.notes, type:"manual", category:"manual",
+  const handleAdd = (t) => {
+    const task = { id: uid(), title: t.title, foreman: t.foreman,
+      notes: t.notes, dueDate: t.dueDate||"", type:"manual", category:"manual",
       color: "#6b7280", cleared:false, createdAt: new Date().toISOString() };
-    onManualTasksChange([...(manualTasks||[]), t]);
-    setNewTask({title:"", foreman:"Koy", notes:""});
+    onManualTasksChange([...(manualTasks||[]), task]);
     setShowAdd(false);
   };
 
@@ -5266,108 +5464,102 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, filterFore
     onManualTasksChange((manualTasks||[]).filter(t=>t.id!==id));
   };
 
-  const foremanList = filterForeman ? [filterForeman] : [...FOREMEN, "Unassigned"];
+  const autoTasks = computeTasks(jobs);
+  const allTasks = [
+    ...autoTasks,
+    ...(manualTasks||[]).map(t=>({...t,type:"manual"}))
+  ].filter(t => !filterForeman || t.foreman === filterForeman);
 
-  const CATEGORY_LABELS = {
-    rough:"Rough", finish:"Finish", qc:"QC Walk", co:"Change Order",
-    rt:"Return Trip", manual:"Manual Task"
-  };
+  // Sort: overdue first, then by dueDate, then undated
+  const sorted = [...allTasks].sort((a,b) => {
+    const ua = URGENCY(a.dueDate), ub = URGENCY(b.dueDate);
+    if(ua&&ub) return ua.days - ub.days;
+    if(ua) return -1; if(ub) return 1;
+    return 0;
+  });
 
-  const tasksByForeman = {};
-  foremanList.forEach(f => { tasksByForeman[f] = allTasks.filter(t=>t.foreman===f); });
-
+  const foremanList = filterForeman ? [filterForeman] : [...FOREMEN,"Unassigned"];
   const totalCount = allTasks.length;
+  const overdueCount = sorted.filter(t=>{ const u=URGENCY(t.dueDate); return u&&u.days<0; }).length;
 
   return (
     <div>
-      {!filterForeman&&(
-        <div style={{padding:"24px 26px 16px", borderBottom:`1px solid ${C.border}`}}>
+      {!compact&&!filterForeman&&(
+        <div style={{padding:"24px 26px 16px",borderBottom:"1px solid var(--border)"}}>
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
             <div>
-              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>TASKS</div>
-              <div style={{fontSize:11,color:C.dim,marginTop:3}}>{totalCount} open task{totalCount!==1?"s":""}</div>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:"var(--text)",lineHeight:1}}>TASKS</div>
+              <div style={{display:"flex",gap:8,marginTop:4,flexWrap:"wrap"}}>
+                <span style={{fontSize:11,color:"var(--dim)"}}>{totalCount} open</span>
+                {overdueCount>0&&<span style={{fontSize:11,fontWeight:700,color:"#dc2626",background:"#dc262612",borderRadius:99,padding:"1px 8px",border:"1px solid #dc262633"}}>⚠ {overdueCount} overdue</span>}
+              </div>
             </div>
-            <button onClick={()=>setShowAdd(v=>!v)} style={{background:C.accent,border:"none",borderRadius:9,color:"#000",fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Task</button>
+            <button onClick={()=>setShowAdd(v=>!v)} style={{background:"var(--accent)",border:"none",borderRadius:9,color:"#000",fontWeight:800,padding:"9px 22px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>+ Add Task</button>
           </div>
-          {showAdd&&(
-            <div style={{marginTop:14,padding:"14px 16px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:10}}>
-              <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
-                <div style={{flex:2,minWidth:180}}>
-                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Task Title</div>
-                  <Inp value={newTask.title} onChange={e=>setNewTask(t=>({...t,title:e.target.value}))} placeholder="What needs to be done?"/>
-                </div>
-                <div style={{minWidth:120}}>
-                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Assign To</div>
-                  <select value={newTask.foreman} onChange={e=>setNewTask(t=>({...t,foreman:e.target.value}))}
-                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
-                    {FOREMEN.map(f=><option key={f} value={f}>{f}</option>)}
-                  </select>
-                </div>
-              </div>
-              <div style={{marginBottom:10}}>
-                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes (optional)</div>
-                <TA value={newTask.notes} onChange={e=>setNewTask(t=>({...t,notes:e.target.value}))} placeholder="Additional context..." rows={2}/>
-              </div>
-              <div style={{display:"flex",gap:8}}>
-                <button onClick={addManual} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontWeight:700,padding:"7px 18px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Add Task</button>
-                <button onClick={()=>setShowAdd(false)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,color:C.dim,padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
-              </div>
-            </div>
-          )}
         </div>
       )}
 
-      <div style={{padding:filterForeman?"12px 0":"16px 26px"}}>
+      <div style={{padding:filterForeman||compact?"0":"16px 26px"}}>
+        {showAdd&&<AddTaskForm defaultForeman={filterForeman||"Koy"} onAdd={handleAdd} onCancel={()=>setShowAdd(false)}/>}
+
+        {/* Koy prep tracker */}
+        {(!filterForeman||filterForeman==="Koy")&&(
+          <div style={{marginBottom:24}}>
+            <PrepTaskList jobs={jobs} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob}/>
+          </div>
+        )}
+
+        {/* Tasks grouped by foreman */}
+        {!filterForeman&&(
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",color:"var(--dim)"}}>ALL TASKS</div>
+            {!showAdd&&<button onClick={()=>setShowAdd(true)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>+ Add Task</button>}
+          </div>
+        )}
+
         {totalCount===0&&(
-          <div style={{textAlign:"center",padding:"48px 0",color:C.muted}}>
-            <div style={{fontSize:24,marginBottom:8}}>✓</div>
+          <div style={{textAlign:"center",padding:"40px 0",color:"var(--muted)"}}>
+            <div style={{fontSize:22,marginBottom:6}}>✓</div>
             <div style={{fontSize:13}}>No open tasks{filterForeman?` for ${filterForeman}`:""}</div>
           </div>
         )}
-        {foremanList.map(f=>{
-          const fTasks = tasksByForeman[f]||[];
-          if(fTasks.length===0 && !filterForeman) return null;
-          const fc = FOREMEN_COLORS[f]||"#6b7280";
-          return (
-            <div key={f} style={{marginBottom:filterForeman?0:28}}>
-              {!filterForeman&&(
-                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,paddingBottom:8,borderBottom:`2px solid ${fc}44`}}>
-                  <div style={{width:8,height:8,borderRadius:"50%",background:fc}}/>
+
+        {filterForeman ? (
+          // Flat list for foreman view
+          <div>
+            {filterForeman&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+              <div style={{fontSize:11,fontWeight:700,color:"var(--dim)",letterSpacing:"0.06em"}}>TASKS</div>
+              <button onClick={()=>setShowAdd(v=>!v)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"4px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>+ Add Task</button>
+            </div>}
+            {showAdd&&filterForeman&&<AddTaskForm defaultForeman={filterForeman} onAdd={handleAdd} onCancel={()=>setShowAdd(false)}/>}
+            {sorted.map(task=>(
+              <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
+                onDismiss={task.type==="manual"?()=>dismissManual(task.id):null}/>
+            ))}
+          </div>
+        ) : (
+          // Grouped by foreman
+          foremanList.map(f=>{
+            const fc = FOREMEN_COLORS[f]||"#6b7280";
+            const fTasks = sorted.filter(t=>t.foreman===f);
+            const fOverdue = fTasks.filter(t=>{ const u=URGENCY(t.dueDate); return u&&u.days<0; }).length;
+            if(fTasks.length===0) return null;
+            return (
+              <div key={f} style={{marginBottom:28}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,paddingBottom:8,borderBottom:`2px solid ${fc}33`}}>
+                  <div style={{width:9,height:9,borderRadius:"50%",background:fc}}/>
                   <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:fc}}>{f}</div>
-                  <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:fc,fontWeight:700,marginLeft:"auto"}}>{fTasks.length}</div>
+                  <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:fc,fontWeight:700}}>{fTasks.length}</div>
+                  {fOverdue>0&&<div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>⚠ {fOverdue} overdue</div>}
                 </div>
-              )}
-              {fTasks.length===0&&filterForeman&&(
-                <div style={{textAlign:"center",padding:"32px 0",color:C.muted,fontSize:12,fontStyle:"italic"}}>No open tasks</div>
-              )}
-              {fTasks.map(task=>{
-                const isManual = task.type==="manual";
-                return (
-                  <div key={task.id} style={{display:"flex",alignItems:"flex-start",gap:12,padding:"10px 12px",borderRadius:10,marginBottom:6,background:C.surface,border:`1px solid ${task.color}33`,borderLeft:`3px solid ${task.color}`}}>
-                    <div style={{flex:1,minWidth:0}}>
-                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:3,flexWrap:"wrap"}}>
-                        <span style={{fontSize:10,fontWeight:700,color:task.color,background:`${task.color}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${task.color}33`}}>
-                          {CATEGORY_LABELS[task.category]||task.category}
-                        </span>
-                        {isManual&&<span style={{fontSize:9,color:C.muted,letterSpacing:"0.06em"}}>MANUAL</span>}
-                      </div>
-                      <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:2}}>{task.title}</div>
-                      {task.jobName&&<div onClick={()=>{ if(task.jobId && onSelectJob) { const job=jobs.find(j=>j.id===task.jobId); if(job) onSelectJob(job); }}} style={{fontSize:11,color:C.accent,cursor:task.jobId?"pointer":"default",marginBottom:task.desc?2:0,textDecoration:"underline"}}>{task.jobName}</div>}
-                      {task.desc&&<div style={{fontSize:11,color:C.dim,fontStyle:"italic"}}>{task.desc}</div>}
-                      {task.notes&&<div style={{fontSize:11,color:C.dim,marginTop:2}}>{task.notes}</div>}
-                    </div>
-                    {isManual&&(
-                      <button onClick={()=>dismissManual(task.id)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.muted,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",flexShrink:0}}>✓ Done</button>
-                    )}
-                    {!isManual&&task.jobId&&(
-                      <button onClick={()=>{ const job=jobs.find(j=>j.id===task.jobId); if(job&&onSelectJob) onSelectJob(job); }} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",flexShrink:0}}>Open Job →</button>
-                    )}
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })}
+                {fTasks.map(task=>(
+                  <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
+                    onDismiss={task.type==="manual"?()=>dismissManual(task.id):null}/>
+                ))}
+              </div>
+            );
+          })
+        )}
       </div>
     </div>
   );
@@ -6970,7 +7162,7 @@ if(initialLoad.current) return;
                       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.08em",color:"#dc2626"}}>OPEN TASKS</div>
                       <div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>{fTasks.length}</div>
                     </div>
-                    <Tasks jobs={jobs} manualTasks={manualTasks} onManualTasksChange={(next)=>{ next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); }); manualTasks.forEach(t=>{ if(!next.find(m=>m.id===t.id)) deleteManualTask(t.id); }); setManualTasks(next); }} onSelectJob={(job)=>setSelected(job)} filterForeman={activeForeman}/>
+                    <Tasks jobs={jobs} manualTasks={manualTasks} onManualTasksChange={(next)=>{ next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); }); manualTasks.forEach(t=>{ if(!next.find(m=>m.id===t.id)) deleteManualTask(t.id); }); setManualTasks(next); }} onSelectJob={(job)=>setSelected(job)} onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch}); }} filterForeman={activeForeman}/>
                   </div>
                 );
               })()}
@@ -7023,6 +7215,7 @@ if(initialLoad.current) return;
             setManualTasks(next);
           }}
           onSelectJob={(job)=>setSelected(job)}
+          onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch}); }}
         />
       )}
 
