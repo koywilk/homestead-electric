@@ -202,9 +202,16 @@ const emptyPunch   = ()    => ({ upper:[], main:[], basement:[] });
 
 
 
-const FOREMEN = ["Koy", "Vasa", "Colby"];
-
-const FOREMEN_COLORS = {"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e"};
+const DEFAULT_FOREMEN = ["Koy", "Vasa", "Colby"];
+const DEFAULT_FOREMEN_COLORS = {"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e"};
+const DEFAULT_LEADS = ["Keegan","Gage","Daegan","Colby","Braden","Treycen","Jon","Vasa","Abe","Louis","Jacob"];
+const DEFAULT_LEAD_COLORS = {
+  "Keegan":"#3b82f6","Gage":"#3b82f6","Daegan":"#3b82f6",
+  "Colby":"#22c55e","Braden":"#22c55e","Treycen":"#22c55e","Jon":"#22c55e",
+  "Vasa":"#f97316","Abe":"#f97316","Louis":"#f97316",
+  "Jacob":"#6b7280"
+};
+const COLOR_OPTIONS = ["#3b82f6","#f97316","#22c55e","#8b5cf6","#ec4899","#14b8a6","#f59e0b","#ef4444","#06b6d4","#a855f7","#84cc16","#f43f5e"];
 
 // ── Auth PINs ─────────────────────────────────────────────────
 const OFFICE_PIN = "0720"; // Full app access
@@ -4129,7 +4136,9 @@ onUpdate(updated);
 
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Lead</div>
 
-                <Inp value={job.lead||""} onChange={e=>u({lead:e.target.value})} placeholder="Lead name…"/>
+{LEADS.length>0
+                  ? <Sel value={job.lead||""} onChange={e=>u({lead:e.target.value})} options={["", ...LEADS]} placeholder="Select lead…"/>
+                  : <Inp value={job.lead||""} onChange={e=>u({lead:e.target.value})} placeholder="Lead name…"/>}
 
               </div>
 
@@ -6479,6 +6488,105 @@ function SchedulingForecast({ jobs, onSelectJob }) {
   );
 }
 
+function SettingsPage({ FOREMEN, FOREMEN_COLORS, LEADS, LEAD_COLORS, COLOR_OPTIONS, onSave }) {
+  const [foremen,       setForemen]       = useState([...FOREMEN]);
+  const [foremanColors, setForemanColors] = useState({...FOREMEN_COLORS});
+  const [leads,         setLeads]         = useState([...LEADS]);
+  const [leadColors,    setLeadColors]    = useState({...LEAD_COLORS});
+  const [newForeman,    setNewForeman]    = useState("");
+  const [newLead,       setNewLead]       = useState("");
+  const [saved,         setSaved]         = useState(false);
+
+  const save = async () => {
+    await onSave(foremen, foremanColors, leads, leadColors);
+    setSaved(true); setTimeout(()=>setSaved(false), 2000);
+  };
+
+  const Section = ({title, children}) => (
+    <div style={{marginBottom:32}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",
+        color:C.text,marginBottom:14,paddingBottom:8,borderBottom:`2px solid ${C.border}`}}>{title}</div>
+      {children}
+    </div>
+  );
+
+  const PersonRow = ({name, color, onColorChange, onDelete}) => (
+    <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",
+      background:C.card,borderRadius:10,marginBottom:8,border:`1px solid ${C.border}`,
+      borderLeft:`3px solid ${color}`}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",
+        color:color,flex:1}}>{name}</div>
+      <div style={{display:"flex",gap:5,flexWrap:"wrap",maxWidth:220}}>
+        {COLOR_OPTIONS.map(col=>(
+          <div key={col} onClick={()=>onColorChange(col)}
+            style={{width:20,height:20,borderRadius:"50%",background:col,cursor:"pointer",
+              border:col===color?"3px solid white":"2px solid transparent",
+              boxShadow:col===color?`0 0 0 2px ${col}`:"none",flexShrink:0}}/>
+        ))}
+      </div>
+      <button onClick={onDelete}
+        style={{background:"none",border:"1px solid #dc262644",borderRadius:7,color:"#dc2626",
+          fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,flexShrink:0}}>
+        Remove
+      </button>
+    </div>
+  );
+
+  return (
+    <div style={{padding:"24px 20px 60px",maxWidth:600,margin:"0 auto"}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.08em",
+        color:C.text,marginBottom:24}}>SETTINGS</div>
+
+      <Section title="Foremen">
+        {foremen.map(name=>(
+          <PersonRow key={name} name={name} color={foremanColors[name]||"#6b7280"}
+            onColorChange={col=>setForemanColors(fc=>({...fc,[name]:col}))}
+            onDelete={()=>{ setForemen(f=>f.filter(x=>x!==name)); setForemanColors(fc=>{const n={...fc};delete n[name];return n;}); }}/>
+        ))}
+        <div style={{display:"flex",gap:8,marginTop:4}}>
+          <input value={newForeman} onChange={e=>setNewForeman(e.target.value)}
+            placeholder="New foreman name"
+            onKeyDown={e=>{ if(e.key==="Enter"&&newForeman.trim()){ setForemen(f=>[...f,newForeman.trim()]); setForemanColors(fc=>({...fc,[newForeman.trim()]:"#6b7280"})); setNewForeman(""); }}}
+            style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
+              padding:"8px 12px",fontSize:13,fontFamily:"inherit",color:C.text,outline:"none"}}/>
+          <button onClick={()=>{ if(!newForeman.trim()) return; setForemen(f=>[...f,newForeman.trim()]); setForemanColors(fc=>({...fc,[newForeman.trim()]:"#6b7280"})); setNewForeman(""); }}
+            style={{background:C.accent,border:"none",borderRadius:8,color:"#000",fontSize:13,
+              fontWeight:700,padding:"8px 16px",cursor:"pointer",fontFamily:"inherit"}}>
+            + Add
+          </button>
+        </div>
+      </Section>
+
+      <Section title="Leads">
+        {leads.map(name=>(
+          <PersonRow key={name} name={name} color={leadColors[name]||"#6b7280"}
+            onColorChange={col=>setLeadColors(lc=>({...lc,[name]:col}))}
+            onDelete={()=>{ setLeads(l=>l.filter(x=>x!==name)); setLeadColors(lc=>{const n={...lc};delete n[name];return n;}); }}/>
+        ))}
+        <div style={{display:"flex",gap:8,marginTop:4}}>
+          <input value={newLead} onChange={e=>setNewLead(e.target.value)}
+            placeholder="New lead name"
+            onKeyDown={e=>{ if(e.key==="Enter"&&newLead.trim()){ setLeads(l=>[...l,newLead.trim()]); setLeadColors(lc=>({...lc,[newLead.trim()]:"#6b7280"})); setNewLead(""); }}}
+            style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
+              padding:"8px 12px",fontSize:13,fontFamily:"inherit",color:C.text,outline:"none"}}/>
+          <button onClick={()=>{ if(!newLead.trim()) return; setLeads(l=>[...l,newLead.trim()]); setLeadColors(lc=>({...lc,[newLead.trim()]:"#6b7280"})); setNewLead(""); }}
+            style={{background:C.accent,border:"none",borderRadius:8,color:"#000",fontSize:13,
+              fontWeight:700,padding:"8px 16px",cursor:"pointer",fontFamily:"inherit"}}>
+            + Add
+          </button>
+        </div>
+      </Section>
+
+      <button onClick={save}
+        style={{width:"100%",background:saved?"#16a34a":C.accent,border:"none",borderRadius:10,
+          color:saved?"#fff":"#000",fontSize:15,fontWeight:700,padding:"14px",
+          cursor:"pointer",fontFamily:"inherit",transition:"background 0.3s"}}>
+        {saved?"✓ Saved!":"Save Changes"}
+      </button>
+    </div>
+  );
+}
+
 function App() {
   // Homeowner page route — ?homeowner=JOB_ID
   const hoParam = new URLSearchParams(window.location.search).get("homeowner");
@@ -6488,6 +6596,30 @@ function App() {
   const [authMode,  setAuthMode]  = useState(()=>getAuthSession()?.mode||"locked");
   const [pinInput,  setPinInput]  = useState("");
   const [pinError,  setPinError]  = useState(false);
+
+  // ── Settings (foremen + leads) ─────────────────────────────
+  const [FOREMEN,        setFOREMEN]        = useState(DEFAULT_FOREMEN);
+  const [FOREMEN_COLORS, setFOREMEN_COLORS] = useState(DEFAULT_FOREMEN_COLORS);
+  const [LEADS,          setLEADS]          = useState(DEFAULT_LEADS);
+  const [LEAD_COLORS,    setLEAD_COLORS]    = useState(DEFAULT_LEAD_COLORS);
+
+  useEffect(()=>{
+    getDoc(doc(db,"settings","main")).then(snap=>{
+      if(snap.exists()){
+        const d = snap.data();
+        if(d.foremen)       setFOREMEN(d.foremen);
+        if(d.foremanColors) setFOREMEN_COLORS(d.foremanColors);
+        if(d.leads)         setLEADS(d.leads);
+        if(d.leadColors)    setLEAD_COLORS(d.leadColors);
+      }
+    });
+  },[]);
+
+  const saveSettings = async(foremen, foremanColors, leads, leadColors) => {
+    await setDoc(doc(db,"settings","main"),{foremen,foremanColors,leads,leadColors});
+    setFOREMEN(foremen); setFOREMEN_COLORS(foremanColors);
+    setLEADS(leads); setLEAD_COLORS(leadColors);
+  };
 
   const submitPin = (pin) => {
     if(pin === OFFICE_PIN) {
@@ -6919,6 +7051,7 @@ if(initialLoad.current) return;
   const openSchedule = () =>  { setView("schedule"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openUpcoming = () =>  { setView("upcoming"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openTasks    = () =>  { setView("tasks");    setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openSettings = () =>  { setView("settings"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
 
 
 
@@ -7178,29 +7311,33 @@ if(initialLoad.current) return;
             Lock
           </button>
         </div>
-        {/* Lead cards — same style as foreman cards on main page */}
+        {/* Lead cards — one per lead, compact */}
         {(()=>{
           const allJobs = jobs.filter(j=>!j.tempPed);
           const allPeds = jobs.filter(j=>j.tempPed);
-          const leadMap = {};
-          allJobs.forEach(j=>{ const l=j.lead||""; if(!leadMap[l]) leadMap[l]=[]; leadMap[l].push(j); });
-          const leadKeys = Object.keys(leadMap).sort((a,b)=>{ if(!a)return 1;if(!b)return -1;return a.localeCompare(b); });
-          // Assign a stable color per lead name
-          const leadColors = ["#3b82f6","#f97316","#22c55e","#8b5cf6","#ec4899","#14b8a6","#f59e0b","#ef4444"];
-          const getLeadColor = (name) => { if(!name) return "#6b7280"; let h=0; for(let i=0;i<name.length;i++) h=(h*31+name.charCodeAt(i))%leadColors.length; return leadColors[h]; };
+          // Build lead list: use Settings leads first, then any unrecognized leads from jobs
+          const settingsLeads = LEADS.length>0 ? LEADS : [];
+          const jobLeads = [...new Set(allJobs.map(j=>j.lead||""))].filter(l=>l&&!settingsLeads.includes(l));
+          // Jacob always last, then no-lead
+          const mainLeads = settingsLeads.filter(l=>l!=="Jacob"&&allJobs.some(j=>j.lead===l));
+          const leadKeys = [...mainLeads, ...jobLeads,
+            ...(allJobs.some(j=>j.lead==="Jacob")?["Jacob"]:[]),
+            ...(allJobs.some(j=>!j.lead)?[""]:[] )];
+          const getLeadColor = (name) => LEAD_COLORS[name]||"#6b7280";
           return (
-            <div style={{padding:"16px 16px 80px"}}>
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10,alignItems:"start"}}>
+            <div style={{padding:"12px 12px 80px"}}>
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:8,alignItems:"start"}}>
                 {leadKeys.map(lead=>{
                   const lc = getLeadColor(lead);
-                  const lJobs = leadMap[lead];
+                  const lJobs = allJobs.filter(j=>(j.lead||"")===(lead));
+                  if(lJobs.length===0) return null;
                   const lCOs = lJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
                   const lRTs = lJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
                   return (
-                    <div key={lead||"__none"} className="foreman-card" onClick={()=>setSelected(lJobs[0])}
+                    <div key={lead||"__none"} className="foreman-card"
                       style={{background:C.card,border:`1px solid ${lc}33`,borderRadius:12,
-                        padding:"14px 16px",borderTop:`3px solid ${lc}`,cursor:"pointer"}}>
-                      {/* Name + count */}
+                        padding:"14px 16px",borderTop:`3px solid ${lc}`}}>
+                      {/* Name + count — identical to foreman card */}
                       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
                         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,
                           letterSpacing:"0.06em",color:lc,lineHeight:1}}>
@@ -7211,7 +7348,7 @@ if(initialLoad.current) return;
                           {lJobs.length}
                         </div>
                       </div>
-                      {/* Stats */}
+                      {/* Stats — identical to foreman card */}
                       <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
                         {[[lCOs,"COs",lCOs>0?C.blue:C.muted],[lRTs,"RTs",lRTs>0?"#dc2626":C.muted]].map(([v,l,col])=>(
                           <div key={l} style={{background:C.surface,borderRadius:7,padding:"5px 8px",flex:1,minWidth:44}}>
@@ -7226,15 +7363,15 @@ if(initialLoad.current) return;
                           const rs=effRS(job); const fs=effFS(job);
                           const rsDef=getStatusDef(ROUGH_STATUSES,rs);
                           const fsDef=getStatusDef(FINISH_STATUSES,fs);
-                          const dot = (rsDef.color&&rs)?rsDef.color:(fsDef.color&&fs)?fsDef.color:C.dim;
+                          const dot=(rsDef.color&&rs)?rsDef.color:(fsDef.color&&fs)?fsDef.color:C.dim;
                           return (
-                            <div key={job.id} onClick={e=>{e.stopPropagation();setSelected(job);}}
+                            <div key={job.id} onClick={()=>setSelected(job)}
                               style={{display:"flex",alignItems:"center",gap:6,padding:"5px 7px",
                                 borderRadius:7,background:C.surface,cursor:"pointer"}}
                               onMouseEnter={e=>e.currentTarget.style.background=lc+"15"}
                               onMouseLeave={e=>e.currentTarget.style.background=C.surface}>
                               <div style={{width:6,height:6,borderRadius:"50%",background:dot,flexShrink:0}}/>
-                              <span style={{fontSize:11,fontWeight:600,color:C.text,flex:1,
+                              <span style={{fontSize:11,fontWeight:700,color:C.text,flex:1,
                                 overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                                 {job.name||"Untitled"}
                               </span>
@@ -7247,24 +7384,24 @@ if(initialLoad.current) return;
                 })}
                 {/* Temp peds card */}
                 {allPeds.length>0&&(
-                  <div style={{background:C.card,border:"1px solid #8b5cf633",borderRadius:12,
-                    padding:"14px 16px",borderTop:"3px solid #8b5cf6"}}>
-                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,
+                  <div style={{background:C.card,border:"1px solid #8b5cf633",borderRadius:10,
+                    padding:"10px 12px",borderTop:"3px solid #8b5cf6"}}>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,
                         letterSpacing:"0.06em",color:"#8b5cf6",lineHeight:1}}>Temp Peds</div>
                       <div style={{background:"#8b5cf618",border:"1px solid #8b5cf633",borderRadius:99,
-                        padding:"2px 9px",fontSize:10,color:"#8b5cf6",fontWeight:700}}>
+                        padding:"1px 7px",fontSize:10,color:"#8b5cf6",fontWeight:700}}>
                         {allPeds.length}
                       </div>
                     </div>
-                    <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                    <div style={{display:"flex",flexDirection:"column",gap:2}}>
                       {allPeds.map(job=>(
                         <div key={job.id} onClick={()=>setSelected(job)}
-                          style={{display:"flex",alignItems:"center",gap:6,padding:"5px 7px",
-                            borderRadius:7,background:C.surface,cursor:"pointer"}}
+                          style={{display:"flex",alignItems:"center",gap:5,padding:"4px 6px",
+                            borderRadius:6,background:C.surface,cursor:"pointer"}}
                           onMouseEnter={e=>e.currentTarget.style.background="#8b5cf615"}
                           onMouseLeave={e=>e.currentTarget.style.background=C.surface}>
-                          <div style={{width:6,height:6,borderRadius:"50%",background:"#8b5cf6",flexShrink:0}}/>
+                          <div style={{width:5,height:5,borderRadius:"50%",background:"#8b5cf6",flexShrink:0}}/>
                           <span style={{fontSize:11,fontWeight:600,color:C.text,flex:1,
                             overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                             {job.name||"Untitled"}{job.tempPedNumber?" #"+job.tempPedNumber:""}
@@ -7301,10 +7438,10 @@ if(initialLoad.current) return;
 
       {/* ── TOP NAV BAR ── */}
       <div style={{display:"flex",gap:6,padding:"8px 10px",borderBottom:`1px solid ${C.border}`,background:C.card,position:"sticky",top:0,zIndex:90,overflowX:"auto",scrollbarWidth:"none",alignItems:"center"}}>
-        {[{key:"home",label:"Job Board"},{key:"schedule",label:"Forecast"},{key:"upcoming",label:"Upcoming"},{key:"tasks",label:"Tasks"}].map(({key,label})=>{
+        {[{key:"home",label:"Job Board"},{key:"schedule",label:"Forecast"},{key:"upcoming",label:"Upcoming"},{key:"tasks",label:"Tasks"},...(authMode==="office"?[{key:"settings",label:"⚙ Settings"}]:[])].map(({key,label})=>{
           const active = view===key;
           return (
-            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:openTasks}
+            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="tasks"?openTasks:openSettings}
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
@@ -7987,6 +8124,15 @@ if(initialLoad.current) return;
             setJobs(js=>[j,...js]); setSelected(j); setUpcoming(prev=>prev.filter(x=>x.id!==u.id));
             setView("home"); saveJob(j); deleteUpcomingItem(u.id);
           }}
+        />
+      )}
+
+      {view==="settings"&&authMode==="office"&&(
+        <SettingsPage
+          FOREMEN={FOREMEN} FOREMEN_COLORS={FOREMEN_COLORS}
+          LEADS={LEADS} LEAD_COLORS={LEAD_COLORS}
+          COLOR_OPTIONS={COLOR_OPTIONS}
+          onSave={saveSettings}
         />
       )}
 
