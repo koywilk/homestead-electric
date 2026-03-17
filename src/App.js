@@ -1,4 +1,6 @@
 import { useState, useEffect, useRef } from “react”;
+import { initializeApp } from “firebase/app”;
+import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from “firebase/firestore”;
 
 // Register service worker for offline support
 
@@ -13,10 +15,6 @@ navigator.serviceWorker.register("/service-worker.js").catch(()=>{});
 });
 
 }
-
-import { initializeApp } from “firebase/app”;
-
-import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from “firebase/firestore”;
 
 const firebaseConfig = {
 
