@@ -1,5 +1,7 @@
 import { useState, useEffect, useRef } from "react";
 
+
+
 // Register service worker for offline support
 
 if("serviceWorker" in navigator) {
@@ -15,6 +17,8 @@ if("serviceWorker" in navigator) {
 import { initializeApp } from "firebase/app";
 
 import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
+
+
 
 const firebaseConfig = {
 
@@ -32,9 +36,13 @@ const firebaseConfig = {
 
 };
 
+
+
 const firebaseApp = initializeApp(firebaseConfig);
 
 const db = getFirestore(firebaseApp);
+
+
 
 const HO_WIRE_AMPS = {"14/2":15,"14/3":15,"12/2":20,"12/3":20,"10/2":30,"10/3":30,"8/2":40,"8/3":40,"6/2":50,"6/3":50,"4/2":70,"4/3":70,"2/2":95,"2/3":95,"1/0":125,"2/0":150,"3/0":175,"4/0":200};
 
@@ -50,26 +58,29 @@ const C = {
 
 };
 
+
+
 const JOB_ID = "homestead-jobs-v1";
 
 const ROUGH_STATUSES = [
-  {value:"",           label:"— set status —",              color:null},
-  {value:"needs",      label:"Needs to be Scheduled",        color:"#dc2626"},
-  {value:"ready",      label:"Ready to Start — Not Scheduled", color:"#ca8a04"},
-  {value:"readysched", label:"Ready to Start — Scheduled",   color:"#16a34a", hasDate:true},
-  {value:"scheduled",  label:"Scheduled",                   color:"#2563eb", hasDate:true},
-  {value:"waiting",   label:"Waiting on Items",      color:"#ca8a04", dashed:true},
-  {value:"inprogress",label:"In Progress",           color:"#7dd3fc"},
-  {value:"invoice",   label:"Ready to Invoice",      color:"#ea580c"},
-  {value:"complete",  label:"Complete",              color:"#22c55e"},
+  {value:"",           label:"— set status —",                        color:null},
+  {value:"waiting_date",label:"Waiting for Start Date Confirmation",  color:"#ca8a04"},
+  {value:"date_confirmed",label:"Start Date Confirmed — Needs to Schedule", color:"#f97316", hasDate:true},
+  {value:"scheduled",  label:"Scheduled",                            color:"#2563eb", hasDate:true},
+  {value:"waiting",    label:"Waiting on Items",                     color:"#ca8a04", dashed:true},
+  {value:"inprogress", label:"In Progress",                          color:"#7dd3fc"},
+  {value:"invoice",    label:"Ready to Invoice",                     color:"#ea580c"},
+  {value:"complete",   label:"Complete",                             color:"#22c55e"},
 ];
 const FINISH_STATUSES = ROUGH_STATUSES;
 const CO_STATUSES_NEW = [
-  {value:"needs",     label:"Needs to be Scheduled", color:"#dc2626"},
-  {value:"pending",   label:"Pending",               color:"#ca8a04"},
-  {value:"scheduled", label:"Scheduled",             color:"#2563eb", hasDate:true},
-  {value:"completed", label:"Work Completed",        color:"#22c55e"},
-  {value:"denied",    label:"Denied",                color:"#dc2626"},
+  {value:"pending",    label:"Pending",                        color:"#ca8a04"},
+  {value:"approved",   label:"Approved",                       color:"#16a34a"},
+  {value:"needs",      label:"Needs to be Scheduled",          color:"#f97316"},
+  {value:"scheduled",  label:"Scheduled",                      color:"#2563eb", hasDate:true},
+  {value:"completed",  label:"Work Completed",                 color:"#22c55e"},
+  {value:"converted",  label:"Converted to Return Trip",       color:"#6b7280"},
+  {value:"denied",     label:"Denied",                         color:"#dc2626"},
 ];
 const RT_STATUSES = [
   {value:"",          label:"— set status —",        color:null},
@@ -84,6 +95,12 @@ const QC_STATUSES = [
   {value:"completed", label:"QC Completed",          color:"#8b5cf6", hasDate:true},
   {value:"pass",      label:"QC Pass",               color:"#22c55e"},
   {value:"fail",      label:"QC Fail",               color:"#dc2626"},
+];
+const TEMP_PED_STATUSES = [
+  {value:"",          label:"— set status —",       color:null},
+  {value:"ready",     label:"Ready to Schedule",    color:"#ca8a04"},
+  {value:"scheduled", label:"Scheduled",            color:"#2563eb", hasDate:true},
+  {value:"completed", label:"Completed",            color:"#22c55e"},
 ];
 const getStatusDef = (arr, val) => arr.find(x=>x.value===val)||{};
 
@@ -148,6 +165,8 @@ const PULLED_OPTS   = ["","Pulled","Need Specs"];
 
 const DRIVER_SIZES  = ["","20W","40W","60W","96W","192W","288W"];
 
+
+
 const TEAM = [
 
   { name:"Josh",   email:"josh@homesteadelectric.net"   },
@@ -164,9 +183,13 @@ const TEAM = [
 
 ];
 
+
+
 let _uid = Date.now();
 
 const uid = () => String(++_uid);
+
+
 
 const newHRRow     = (num) => ({ id:uid(), num, wire:"", name:"", status:"", panel:"" });
 
@@ -176,9 +199,13 @@ const newKPRow     = (num) => ({ id:uid(), num, name:"" });
 
 const emptyPunch   = ()    => ({ upper:[], main:[], basement:[] });
 
+
+
 const FOREMEN = ["Koy", "Vasa", "Colby"];
 
 const FOREMEN_COLORS = {"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e"};
+
+
 
 const blankJob = () => ({
 
@@ -200,7 +227,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", readyToSchedule:false, readyToInvoice:false, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"",
+  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
 
   homeRuns:{
 
@@ -232,64 +259,7 @@ const blankJob = () => ({
 
 });
 
-// ── PIN Gate ──────────────────────────────────────────────────
-const ADMIN_PIN = "1234";
 
-function PinModal({ message, onSuccess, onClose }) {
-  const [pin, setPin] = useState("");
-  const [error, setError] = useState(false);
-  const inputRef = useRef(null);
-
-  useEffect(() => { setTimeout(() => inputRef.current?.focus(), 80); }, []);
-
-  const attempt = () => {
-    if (pin === ADMIN_PIN) {
-      onSuccess();
-      onClose();
-    } else {
-      setError(true);
-      setPin("");
-      setTimeout(() => setError(false), 1200);
-    }
-  };
-
-  return (
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.75)",zIndex:500,
-      display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:16,
-        width:"100%",maxWidth:340,padding:28,boxShadow:"0 24px 60px rgba(0,0,0,0.6)"}}>
-        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",
-          color:C.text,marginBottom:4}}>Admin PIN Required</div>
-        <div style={{fontSize:12,color:C.dim,marginBottom:18}}>{message||"Enter PIN to continue."}</div>
-        <input
-          ref={inputRef}
-          type="password"
-          inputMode="numeric"
-          maxLength={8}
-          value={pin}
-          onChange={e=>setPin(e.target.value)}
-          onKeyDown={e=>e.key==="Enter"&&attempt()}
-          placeholder="Enter PIN…"
-          style={{background:error?"rgba(220,38,38,0.08)":C.surface,
-            border:`1px solid ${error?C.red:C.border}`,borderRadius:8,color:C.text,
-            padding:"10px 14px",fontSize:16,fontFamily:"inherit",width:"100%",
-            outline:"none",letterSpacing:"0.2em",marginBottom:error?6:16,
-            transition:"border-color 0.2s,background 0.2s"}}/>
-        {error&&<div style={{fontSize:11,color:C.red,marginBottom:12}}>Incorrect PIN — try again.</div>}
-        <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
-          <button onClick={onClose}
-            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,
-              padding:"8px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
-          <button onClick={attempt}
-            style={{background:C.red,border:"none",borderRadius:8,color:"#fff",
-              padding:"8px 20px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-            Confirm
-          </button>
-        </div>
-      </div>
-    </div>
-  );
-}
 
 // ── Email composer modal ──────────────────────────────────────
 
@@ -303,9 +273,13 @@ function EmailModal({ subject, body, onClose }) {
 
   const [customErr, setCustomErr] = useState("");
 
+
+
   const toggle = (email) =>
 
     setSelected(s => s.includes(email) ? s.filter(e=>e!==email) : [...s, email]);
+
+
 
   const addCustom = () => {
 
@@ -333,6 +307,8 @@ function EmailModal({ subject, body, onClose }) {
 
   };
 
+
+
   const removeCustom = (email) => {
 
     setCustomList(l=>l.filter(e=>e!==email));
@@ -341,7 +317,11 @@ function EmailModal({ subject, body, onClose }) {
 
   };
 
+
+
   const allRecipients = [...selected];
+
+
 
   const send = () => {
 
@@ -352,6 +332,8 @@ function EmailModal({ subject, body, onClose }) {
     onClose();
 
   };
+
+
 
   return (
 
@@ -365,11 +347,15 @@ function EmailModal({ subject, body, onClose }) {
 
         maxHeight:"90vh",overflowY:"auto"}}>
 
+
+
         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",
 
           color:C.text,marginBottom:4}}>Send Email</div>
 
         <div style={{fontSize:12,color:C.dim,marginBottom:16}}>Select recipients</div>
+
+
 
         {/* Team list */}
 
@@ -416,6 +402,8 @@ function EmailModal({ subject, body, onClose }) {
           ))}
 
         </div>
+
+
 
         {/* Custom recipients */}
 
@@ -475,6 +463,8 @@ function EmailModal({ subject, body, onClose }) {
 
         </div>
 
+
+
         {/* Preview */}
 
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
@@ -495,6 +485,8 @@ function EmailModal({ subject, body, onClose }) {
 
         </div>
 
+
+
         {allRecipients.length>0&&(
 
           <div style={{fontSize:11,color:C.dim,marginBottom:10}}>
@@ -504,6 +496,8 @@ function EmailModal({ subject, body, onClose }) {
           </div>
 
         )}
+
+
 
         <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
 
@@ -535,6 +529,8 @@ function EmailModal({ subject, body, onClose }) {
 
 }
 
+
+
 // ── Atoms ─────────────────────────────────────────────────────
 
 const Pill = ({label,color}) => (
@@ -544,6 +540,8 @@ const Pill = ({label,color}) => (
     background:`${color}22`,color,border:`1px solid ${color}44`,whiteSpace:"nowrap"}}>{label}</span>
 
 );
+
+
 
 const SectionHead = ({label,color=C.dim,action=null}) => (
 
@@ -558,6 +556,8 @@ const SectionHead = ({label,color=C.dim,action=null}) => (
   </div>
 
 );
+
+
 
 // Collapsible section wrapper — collapsed by default
 
@@ -597,6 +597,8 @@ function Section({label, color=C.dim, action=null, defaultOpen=false, children})
 
 }
 
+
+
 const Inp = ({value,onChange,placeholder,style={}}) => (
 
   <input value={value??""} onChange={onChange} placeholder={placeholder}
@@ -610,6 +612,8 @@ const Inp = ({value,onChange,placeholder,style={}}) => (
     onBlur={e=>e.target.style.borderColor=C.border}/>
 
 );
+
+
 
 const Sel = ({value,onChange,options,style={}}) => (
 
@@ -625,6 +629,8 @@ const Sel = ({value,onChange,options,style={}}) => (
 
 );
 
+
+
 const TA = ({value,onChange,placeholder,rows=3}) => (
 
   <textarea value={value??""} onChange={onChange} placeholder={placeholder} rows={rows}
@@ -639,6 +645,8 @@ const TA = ({value,onChange,placeholder,rows=3}) => (
 
 );
 
+
+
 const Btn = ({onClick,children,variant="ghost",style={}}) => {
 
   const vs = {
@@ -650,8 +658,8 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
     add:    {background:`${C.green}15`,border:`1px dashed ${C.green}55`,color:C.green},
 
     email:  {background:"none",border:`1px solid ${C.blue}55`,color:C.blue},
-
     chat:   {background:"none",border:`1px solid #25d36655`,color:"#25d366"},
+    simpro: {background:"none",border:`1px solid #f9731655`,color:"#f97316"},
 
   };
 
@@ -674,6 +682,8 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
   );
 
 };
+
+
 
 const StageBar = ({stages,current,color}) => {
 
@@ -709,6 +719,8 @@ const StageBar = ({stages,current,color}) => {
 
 };
 
+
+
 // ── Punch List ────────────────────────────────────────────────
 
 // Simple helpers to ensure data is always the right shape
@@ -724,6 +736,8 @@ function normFloor(v) {
   return { general: Array.isArray(v) ? v : [], rooms: [] };
 
 }
+
+
 
 function PunchItems({ items, onChange }) {
 
@@ -829,6 +843,8 @@ function PunchItems({ items, onChange }) {
 
 }
 
+
+
 function RoomNameEdit({name, onSave}) {
 
   const [editing, setEditing] = useState(false);
@@ -869,6 +885,8 @@ function RoomNameEdit({name, onSave}) {
 
 }
 
+
+
 function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor }) {
 
   const data = normFloor(floorData);
@@ -877,9 +895,13 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
   const [roomDraft, setRoomDraft] = useState('');
 
+
+
   const openCount = data.general.filter(i => !i.done).length +
 
     data.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done).length : 0), 0);
+
+
 
   const setGeneral = (general) => onFloorChange(floorKey, { ...data, general });
 
@@ -904,6 +926,8 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
     onFloorChange(floorKey, { ...data, rooms: data.rooms.filter(r => r.id !== roomId) });
 
   };
+
+
 
   return (
 
@@ -990,6 +1014,8 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
   );
 
 }
+
+
 
 function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
 
@@ -1116,6 +1142,8 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
 
 }
 
+
+
 // ── Material Orders ───────────────────────────────────────────
 
 function MaterialOrders({orders,onChange}) {
@@ -1183,6 +1211,8 @@ function MaterialOrders({orders,onChange}) {
   );
 
 }
+
+
 
 // ── Daily Updates ─────────────────────────────────────────────
 
@@ -1308,7 +1338,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
         </div>
 
-      })}
+      ))}
 
     </div>
 
@@ -1316,76 +1346,108 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
 }
 
+
+
 // ── Change Orders ─────────────────────────────────────────────
 
-function ChangeOrders({orders,onChange,jobName,onEmail}) {
+function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughStatus, finishStatus}) {
 
-  const add = () => onChange([{id:uid(),date:"",desc:"",task:"",material:"",time:"",status:"Pending",sendTo:"",needsSchedule:false,needsScheduleDate:"",coScheduled:false,scheduledDate:""},...orders]);
+  const add = () => onChange([{
+    id:uid(), date:"", desc:"", task:"", material:"", time:"", sendTo:"",
+    coStatus:"pending", coStatusDate:"",
+    needsHardDate:false, needsByStart:"", needsByEnd:"",
+  }, ...orders]);
 
-  const upd = (id,p) => onChange(orders.map(o=>o.id===id?{...o,...p}:o));
+  const upd = (id, p) => onChange(orders.map(o => o.id===id ? {...o,...p} : o));
+  const del = (id)    => onChange(orders.filter(o => o.id!==id));
 
-  const del = (id)   => onChange(orders.filter(o=>o.id!==id));
-
-  const sc  = {"Pending":C.accent,"CO Created":C.orange,"CO Sent (office)":C.blue,
-
-               "Approved":C.green,"Denied":C.red,"Work Completed":C.purple};
-
-  const emailCO = (o, i) => {
-
-    const subject = `${jobName} — Change Order #${idx+1}`;
-
-    const body = `Change Order #${idx+1} — ${jobName}\n\nDate: ${o.date||"—"}\nSend CO To: ${o.sendTo||"—"}\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial Needed: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nStatus: ${o.status}\n\nPlease review and confirm.\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
-
-    onEmail({subject, body});
-
-  };
+  const crewOnSite = roughStatus==="inprogress" || finishStatus==="inprogress";
 
   const chatCO = (o, i) => {
-    const msg = `Change Order #${idx+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||o.status||"Pending"}\n\nhttps://homestead-electric.vercel.app/`;
+    const msg = `Change Order #${i+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||"Pending"}\n\nhttps://homestead-electric.vercel.app/`;
     openGoogleChat(msg);
   };
 
+  const emailCO = (o, i) => {
+    const subject = `${jobName} — Change Order #${i+1}`;
+    const body = `Change Order #${i+1} — ${jobName}\n\nDate: ${o.date||"—"}\nSend CO To: ${o.sendTo||"—"}\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial Needed: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nStatus: ${o.coStatus||"Pending"}\n\nPlease review and confirm.\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
+    onEmail({subject, body});
+  };
+
+  // Convert CO → Return Trip
+  const convertToRT = (o, i) => {
+    // Mark CO as converted
+    upd(o.id, {coStatus:"converted"});
+    // Build a new return trip pre-filled from CO data
+    const newRT = {
+      id: uid(),
+      scope: o.desc||"",
+      task: o.task||"",
+      material: o.material||"",
+      time: o.time||"",
+      assignedTo: "",
+      rtStatus: "needs",
+      rtStatusDate: "",
+      needsHardDate: o.needsHardDate||false,
+      needsByStart: o.needsByStart||"",
+      needsByEnd: o.needsByEnd||"",
+      notes: `Converted from Change Order #${i+1}${o.desc?" — "+o.desc:""}`,
+      punch: [],
+      photos: [],
+    };
+    // We signal the parent to add the RT — pass via a special onChange shape
+    onChange(orders.map(co => co.id===o.id ? {...co, coStatus:"converted"} : co), newRT, true); // true = add to top
+  };
+
   return (
-
     <div>
+      {orders.map((o, i) => {
+        const coDef = getStatusDef(CO_STATUSES_NEW, o.coStatus||"pending");
+        const isConverted = o.coStatus === "converted";
+        const isApproved  = o.coStatus === "approved";
+        const showConvert = (isApproved || o.coStatus==="needs") && !crewOnSite;
 
-      <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add Change Order</Btn>
+        return (
+          <div key={o.id} style={{
+            background: isConverted ? "var(--surface)" : "var(--card)",
+            border:`1px solid ${isConverted?"var(--border)":coDef.color?coDef.color+"33":"var(--border)"}`,
+            borderLeft:`3px solid ${isConverted?"#6b7280":coDef.color||"var(--border)"}`,
+            borderRadius:11, padding:14, marginBottom:12,
+            opacity: isConverted ? 0.6 : 1,
+          }}>
 
-      {[...orders].reverse().map((o,i)=>((idx=>(
-
-        <div key={o.id} style={{background:C.surface,border:`1px solid ${C.border}`,
-
-          borderRadius:10,padding:14,marginBottom:12}}>
-
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-
-            <span style={{fontSize:12,color:C.accent,fontWeight:700}}>Change Order #{idx+1}</span>
-
-            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-
-              <Btn onClick={()=>chatCO(o,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>💬 Chat</Btn>
-
-              <Btn onClick={()=>emailCO(o,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>✉ Email CO</Btn>
-
-              <button onClick={()=>del(o.id)}
-
-                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
-
+            {/* Header */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:12,color:"var(--accent)",fontWeight:700}}>Change Order #{i+1}</span>
+                {isConverted&&<span style={{fontSize:10,fontWeight:700,color:"#6b7280",background:"#6b728018",borderRadius:99,padding:"2px 8px",border:"1px solid #6b728033"}}>CONVERTED TO RT</span>}
+              </div>
+              <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                {!isConverted&&jobSimproNo&&<Btn onClick={()=>{
+                  const msg=`Change Order #${i+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||"Pending"}`;
+                  navigator.clipboard.writeText(msg).catch(()=>{});
+                  window.open(`https://homesteadelectric.simprosuite.com/staff/editProject.php?jobID=${jobSimproNo}`,"_blank");
+                }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>⚡ Simpro</Btn>}
+                {!isConverted&&<Btn onClick={()=>chatCO(o,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>💬 Chat</Btn>}
+                {!isConverted&&<Btn onClick={()=>emailCO(o,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>✉ Email CO</Btn>}
+                <button onClick={()=>del(o.id)} style={{background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontSize:11}}>Remove</button>
+              </div>
             </div>
-          </div>
 
-          <div style={{marginBottom:8}}>
-            {(()=>{
-              const coDef = getStatusDef(CO_STATUSES_NEW, o.coStatus||"pending");
-              return (
-                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            {/* Status row */}
+            {!isConverted&&(
+              <div style={{marginBottom:10}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
                   <select value={o.coStatus||"pending"} onChange={e=>{
                     const v=e.target.value;
-                    upd(o.id,{coStatus:v,coStatusDate:getStatusDef(CO_STATUSES_NEW,v).hasDate?o.coStatusDate:""});
-                  }} style={{background:coDef.color?`${coDef.color}18`:C.surface,
-                    color:coDef.color||C.dim,border:`1px solid ${coDef.color||C.border}`,
+                    upd(o.id,{coStatus:v, coStatusDate:getStatusDef(CO_STATUSES_NEW,v).hasDate?o.coStatusDate:""});
+                  }} style={{
+                    background:coDef.color?`${coDef.color}18`:"var(--surface)",
+                    color:coDef.color||"var(--dim)",
+                    border:`1px solid ${coDef.color||"var(--border)"}`,
                     borderRadius:7,padding:"5px 8px",fontSize:11,fontFamily:"inherit",
-                    fontWeight:coDef.color?700:400,outline:"none",cursor:"pointer"}}>
+                    fontWeight:coDef.color?700:400,outline:"none",cursor:"pointer",
+                  }}>
                     {CO_STATUSES_NEW.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                   </select>
                   {coDef.hasDate&&(
@@ -1394,259 +1456,120 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
                       style={{width:120,fontSize:11,borderColor:coDef.color+"55",background:`${coDef.color}08`}}/>
                   )}
                 </div>
-              );
-            })()}
-          </div>
 
-          <div style={{marginBottom:8}}>
+                {/* Approved banner */}
+                {isApproved&&(
+                  <div style={{padding:"8px 12px",borderRadius:8,marginBottom:8,
+                    background:crewOnSite?"#16a34a10":"#f9731610",
+                    border:`1px solid ${crewOnSite?"#16a34a33":"#f9731633"}`}}>
+                    <div style={{fontSize:11,fontWeight:700,color:crewOnSite?"#16a34a":"#f97316",marginBottom:2}}>
+                      {crewOnSite?"✓ Crew is on site — confirm approval & get sign-off":"⚠ Crew not on site — this should become a Return Trip"}
+                    </div>
+                    <div style={{fontSize:10,color:"var(--dim)"}}>
+                      {crewOnSite?"Make sure the crew knows this CO is approved and sign off when work is done.":"Convert to a Return Trip below so it gets scheduled properly."}
+                    </div>
+                  </div>
+                )}
 
-            <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Send CO To</div>
+                {/* Convert to RT button */}
+                {showConvert&&(
+                  <div style={{marginBottom:8}}>
+                    <button onClick={()=>convertToRT(o,i)} style={{
+                      background:"#8b5cf618",border:"1px solid #8b5cf633",
+                      borderRadius:8,color:"#8b5cf6",fontSize:11,fontWeight:700,
+                      padding:"7px 14px",cursor:"pointer",fontFamily:"inherit",
+                      display:"flex",alignItems:"center",gap:6,
+                    }}>
+                      🔄 Convert to Return Trip
+                    </button>
+                    <div style={{fontSize:10,color:"var(--dim)",marginTop:3}}>
+                      Crew is not on site — converting creates a new Return Trip pre-filled with this CO's details.
+                    </div>
+                  </div>
+                )}
 
-            <Inp value={o.sendTo||""} onChange={e=>upd(o.id,{sendTo:e.target.value})}
-
-              placeholder="e.g. John Smith / GC / Homeowner…"/>
-
-          </div>
-
-          <div style={{marginBottom:8}}>
-
-            <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Description of Task</div>
-
-            <Inp value={o.desc} onChange={e=>upd(o.id,{desc:e.target.value})} placeholder="Describe the change order…"/>
-
-          </div>
-
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-
-            {[["time","Estimated Time","e.g. 3 hrs"]].map(([k,l,ph])=>(
-
-              <div key={k}>
-
-                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>{l}</div>
-
-                <Inp value={o[k]} onChange={e=>upd(o.id,{[k]:e.target.value})} placeholder={ph}/>
-
+                {/* Needs to be scheduled date window */}
+                {o.coStatus==="needs"&&(
+                  <div style={{marginTop:6,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:8}}>
+                    <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>NEEDS TO BE SCHEDULED BY</div>
+                    <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
+                      <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--dim)",cursor:"pointer"}}>
+                        <input type="radio" name={`co_type_${o.id}`} checked={!o.needsHardDate} onChange={()=>upd(o.id,{needsHardDate:false})} style={{accentColor:"#dc2626"}}/>
+                        Date Range
+                      </label>
+                      <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--dim)",cursor:"pointer"}}>
+                        <input type="radio" name={`co_type_${o.id}`} checked={!!o.needsHardDate} onChange={()=>upd(o.id,{needsHardDate:true})} style={{accentColor:"#dc2626"}}/>
+                        Hard Date
+                      </label>
+                    </div>
+                    {!o.needsHardDate?(
+                      <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                        <Inp value={o.needsByStart||""} onChange={e=>upd(o.id,{needsByStart:e.target.value})} placeholder="Start MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                        <span style={{fontSize:11,color:"var(--dim)"}}>–</span>
+                        <Inp value={o.needsByEnd||""} onChange={e=>upd(o.id,{needsByEnd:e.target.value})} placeholder="End MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                      </div>
+                    ):(
+                      <Inp value={o.needsByStart||""} onChange={e=>upd(o.id,{needsByStart:e.target.value})} placeholder="Hard date MM/DD/YY" style={{width:150,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                    )}
+                  </div>
+                )}
               </div>
-
-            ))}
-
-            <div>
-
-              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Task (In Field)</div>
-
-              <TA value={o.task} onChange={e=>upd(o.id,{task:e.target.value})} placeholder={"- Task 1\n- Task 2"} rows={3}/>
-
-            </div>
-
-            {[[]].map(()=>(
-
-              <div key="spacer2"/>
-
-            ))}
-
-            <div>
-
-              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Material Needed</div>
-
-              <TA value={o.material} onChange={e=>upd(o.id,{material:e.target.value})} placeholder={"- Item 1\n- Item 2"} rows={3}/>
-
-            </div>
-
-            {[[]].map(()=>(
-
-              <div key="spacer"/>
-
-            ))}
-
-          </div>
-
-        </div>
-
-      ))(orders.length-1-i)))}
-
-    </div>
-
-  );
-
-}
-
-function ReturnTripExtras({trip, onUpd}) {
-
-    return (
-
-    <div style={{marginTop:14,borderTop:`1px solid ${C.border}`,paddingTop:14}}>
-
-      <div style={{display:"flex",gap:6,marginBottom:12}}>
-
-        {["Assign Work","Sign Off"].map(t=>(
-
-          <button key={t} onClick={()=>setTab(t)}
-
-            style={{padding:"5px 14px",borderRadius:7,fontSize:11,cursor:"pointer",
-
-              fontFamily:"inherit",fontWeight:tab===t?700:400,
-
-              background:tab===t?C.purple:`${C.purple}15`,
-
-              border:`1px solid ${tab===t?C.purple:`${C.purple}33`}`,
-
-              color:tab===t?"#fff":C.dim,transition:"all 0.15s"}}>
-
-            {t}
-
-          </button>
-
-        ))}
-
-      </div>
-
-      {tab==="Assign Work"&&(
-
-        <div>
-
-          {(trip.assignments||[]).map((a,i)=>(
-
-            <div key={a.id} style={{background:C.card,border:`1px solid ${a.done?C.green+"55":C.border}`,
-
-              borderRadius:10,padding:12,marginBottom:10,borderLeft:`3px solid ${a.done?C.green:C.purple}`}}>
-
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
-
-                <input type="checkbox" checked={!!a.done}
-
-                  onChange={()=>onUpd({assignments:(trip.assignments||[]).map(x=>x.id===a.id?{...x,done:!x.done}:x)})}
-
-                  style={{accentColor:C.green,width:15,height:15,cursor:"pointer",flexShrink:0}}/>
-
-                <span style={{fontSize:11,fontWeight:700,color:a.done?C.green:C.purple,flex:1}}>
-
-                  Task #{i+1}{a.done?" ✓ Done":""}
-
-                </span>
-
-                <button onClick={()=>onUpd({assignments:(trip.assignments||[]).filter(x=>x.id!==a.id)})}
-
-                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
-
-              </div>
-
-              <div style={{marginBottom:8}}>
-
-                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Assign To</div>
-
-                <Inp value={a.person||""} placeholder="Name…"
-
-                  onChange={e=>onUpd({assignments:(trip.assignments||[]).map(x=>x.id===a.id?{...x,person:e.target.value}:x)})}/>
-
-              </div>
-
-              <div>
-
-                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Task Description</div>
-
-                <TA value={a.task||""} rows={2} placeholder="Describe the work to be completed…"
-
-                  onChange={e=>onUpd({assignments:(trip.assignments||[]).map(x=>x.id===a.id?{...x,task:e.target.value}:x)})}/>
-
-              </div>
-
-            </div>
-
-          ))}
-
-          <Btn onClick={()=>onUpd({assignments:[...(trip.assignments||[]),{id:uid(),person:"",task:"",done:false}]})}
-
-            variant="add" style={{width:"100%",borderStyle:"dashed"}}>+ Add Assignment</Btn>
-
-        </div>
-
-      )}
-
-      {tab==="Sign Off"&&(
-
-        <div>
-
-          {(trip.signoffs||[]).map((s,i)=>(
-
-            <div key={s.id} style={{background:C.card,border:`1px solid ${C.green}33`,
-
-              borderRadius:10,padding:12,marginBottom:10,borderLeft:`3px solid ${C.green}`}}>
-
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-
-                <span style={{fontSize:11,fontWeight:700,color:C.green}}>Sign-off #{i+1}</span>
-
-                <button onClick={()=>onUpd({signoffs:(trip.signoffs||[]).filter(x=>x.id!==s.id)})}
-
-                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
-
-              </div>
-
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-
-                <div>
-
-                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Technician Name</div>
-
-                  <Inp value={s.person||""} placeholder="Name…"
-
-                    onChange={e=>onUpd({signoffs:(trip.signoffs||[]).map(x=>x.id===s.id?{...x,person:e.target.value}:x)})}/>
-
+            )}
+
+            {/* Converted note + undo */}
+            {isConverted&&(
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:8,flexWrap:"wrap"}}>
+                <div style={{fontSize:11,color:"#6b7280",fontStyle:"italic"}}>
+                  Converted to Return Trip — see Return Trips tab.
                 </div>
+                <button onClick={()=>upd(o.id,{coStatus:"approved"})}
+                  style={{background:"none",border:"1px solid #ca8a0455",borderRadius:7,
+                    color:"#ca8a04",fontSize:11,padding:"4px 10px",cursor:"pointer",
+                    fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>
+                  ↩ Undo Convert
+                </button>
+              </div>
+            )}
 
-                <div>
-
-                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Completed</div>
-
-                  <Inp value={s.completedDate||""} placeholder="MM/DD/YY"
-
-                    onChange={e=>onUpd({signoffs:(trip.signoffs||[]).map(x=>x.id===s.id?{...x,completedDate:e.target.value}:x)})}/>
-
+            {/* Fields — hidden when converted */}
+            {!isConverted&&(
+              <>
+                <div style={{marginBottom:8}}>
+                  <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Send CO To</div>
+                  <Inp value={o.sendTo||""} onChange={e=>upd(o.id,{sendTo:e.target.value})} placeholder="e.g. John Smith / GC / Homeowner…"/>
                 </div>
+                <div style={{marginBottom:8}}>
+                  <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Description of Task</div>
+                  <Inp value={o.desc||""} onChange={e=>upd(o.id,{desc:e.target.value})} placeholder="Describe the change order…"/>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}}>
+                  <div>
+                    <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Estimated Time</div>
+                    <Inp value={o.time||""} onChange={e=>upd(o.id,{time:e.target.value})} placeholder="e.g. 3 hrs"/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Task (In Field)</div>
+                    <TA value={o.task||""} onChange={e=>upd(o.id,{task:e.target.value})} placeholder={"- Task 1\n- Task 2"} rows={3}/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Material Needed</div>
+                    <TA value={o.material||""} onChange={e=>upd(o.id,{material:e.target.value})} placeholder={"- Item 1\n- Item 2"} rows={3}/>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })}
 
-              </div>
-
-              <div style={{marginBottom:8}}>
-
-                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Work Completed</div>
-
-                <TA value={s.task||""} rows={2} placeholder="Describe what was completed…"
-
-                  onChange={e=>onUpd({signoffs:(trip.signoffs||[]).map(x=>x.id===s.id?{...x,task:e.target.value}:x)})}/>
-
-              </div>
-
-              <div>
-
-                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Initials</div>
-
-                <Inp value={s.initials||""} placeholder="e.g. KM" style={{width:80}}
-
-                  onChange={e=>onUpd({signoffs:(trip.signoffs||[]).map(x=>x.id===s.id?{...x,initials:e.target.value}:x)})}/>
-
-              </div>
-
-            </div>
-
-          ))}
-
-          <Btn onClick={()=>onUpd({signoffs:[...(trip.signoffs||[]),{id:uid(),person:"",task:"",completedDate:"",initials:""}]})}
-
-            variant="add" style={{width:"100%",borderStyle:"dashed"}}>+ Add Sign-off</Btn>
-
-        </div>
-
-      )}
-
+      <Btn onClick={add} variant="ghost" style={{marginTop:4}}>+ Add Change Order</Btn>
     </div>
-
   );
-
 }
 
 // ── Return Trips ──────────────────────────────────────────────
 
-function ReturnTrips({trips,onChange,jobName,onEmail}) {
+function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
 
   const [viewPhoto, setViewPhoto] = useState(null);
 
@@ -1656,23 +1579,27 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
   const del = (id)   => onChange(trips.filter(t=>t.id!==id));
 
+
+
+  const chatTrip = (t,i) => {
+    const punchOpen = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n") || "None";
+    const msg = `Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}\n\nhttps://homestead-electric.vercel.app/`;
+    openGoogleChat(msg);
+  };
+
   const emailTrip = (t,i) => {
 
     const punchLines = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n") || "None";
 
-    const subject = `${jobName} — Return Trip #${idx+1}`;
+    const subject = `${jobName} — Return Trip #${i+1}`;
 
-    const body = `Return Trip #${idx+1} — ${jobName}\n\nDate: ${t.date||"—"}\nScope of Work:\n${t.scope||"—"}\n\nMaterial Needed:\n${t.material||"—"}\n\nPunch List:\n${punchLines}\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
+    const body = `Return Trip #${i+1} — ${jobName}\n\nDate: ${t.date||"—"}\nScope of Work:\n${t.scope||"—"}\n\nMaterial Needed:\n${t.material||"—"}\n\nPunch List:\n${punchLines}\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
 
     onEmail({subject, body});
 
   };
 
-  const chatTrip = (t,i) => {
-    const punchOpen = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n") || "None";
-    const msg = `Return Trip #${idx+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}\n\nhttps://homestead-electric.vercel.app/`;
-    openGoogleChat(msg);
-  };
+
 
   const addPhotos = (id, files) => {
 
@@ -1728,13 +1655,15 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
   };
 
+
+
   return (
 
     <div>
 
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add Return Trip</Btn>
 
-      {[...trips].reverse().map((t,i)=>((idx=>(
+      {trips.map((t,i)=>(
 
         <div key={t.id} style={{background:t.needsSchedule?"rgba(220,38,38,0.06)":t.rtScheduled?"rgba(139,92,246,0.06)":C.surface,
 
@@ -1745,12 +1674,13 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
 
             <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-              <span style={{fontSize:12,color:C.purple,fontWeight:700}}>Return Trip #{idx+1}</span>
+              <span style={{fontSize:12,color:C.purple,fontWeight:700}}>Return Trip</span>
               {!t.signedOff&&(
                 <>
                   {(()=>{
                     const rtDef = getStatusDef(RT_STATUSES, t.rtStatus||"");
                     return (
+                      <>
                       <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                         <select value={t.rtStatus||""} onChange={e=>{
                           const v=e.target.value;
@@ -1768,6 +1698,31 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
                             style={{width:120,fontSize:11,borderColor:rtDef.color+"55",background:`${rtDef.color}08`}}/>
                         )}
                       </div>
+                      {(t.rtStatus==="needs")&&(
+                        <div style={{marginTop:8,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:8}}>
+                          <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>NEEDS TO BE SCHEDULED BY</div>
+                          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
+                            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,cursor:"pointer"}}>
+                              <input type="radio" name={`rt_type_${t.id}`} checked={!t.needsHardDate} onChange={()=>upd(t.id,{needsHardDate:false})} style={{accentColor:"#dc2626"}}/>
+                              Date Range
+                            </label>
+                            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,cursor:"pointer"}}>
+                              <input type="radio" name={`rt_type_${t.id}`} checked={!!t.needsHardDate} onChange={()=>upd(t.id,{needsHardDate:true})} style={{accentColor:"#dc2626"}}/>
+                              Hard Date
+                            </label>
+                          </div>
+                          {!t.needsHardDate?(
+                            <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                              <Inp value={t.needsByStart||""} onChange={e=>upd(t.id,{needsByStart:e.target.value})} placeholder="Start MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                              <span style={{fontSize:11,color:C.dim}}>–</span>
+                              <Inp value={t.needsByEnd||""} onChange={e=>upd(t.id,{needsByEnd:e.target.value})} placeholder="End MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                            </div>
+                          ):(
+                            <Inp value={t.needsByStart||""} onChange={e=>upd(t.id,{needsByStart:e.target.value})} placeholder="Hard date MM/DD/YY" style={{width:150,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                          )}
+                        </div>
+                      )}
+                      </>
                     );
                   })()}
                 </>
@@ -1776,8 +1731,13 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
             <div style={{display:"flex",gap:8}}>
 
+              {jobSimproNo&&<Btn onClick={()=>{
+                const punchOpen=(t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n")||"None";
+                const msg=`Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}`;
+                navigator.clipboard.writeText(msg).catch(()=>{});
+                window.open(`https://homesteadelectric.simprosuite.com/staff/editProject.php?jobID=${jobSimproNo}`,"_blank");
+              }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>⚡ Simpro</Btn>}
               <Btn onClick={()=>chatTrip(t,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>💬 Chat</Btn>
-
               <Btn onClick={()=>emailTrip(t,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>✉ Email Trip</Btn>
 
               <button onClick={()=>del(t.id)}
@@ -1809,6 +1769,8 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
           <div style={{fontSize:10,color:C.dim,fontWeight:700,marginBottom:6,letterSpacing:"0.08em"}}>PUNCH LIST</div>
 
           <PunchItems items={t.punch||[]} onChange={v=>upd(t.id,{punch:v})}/>
+
+
 
           {/* Photos */}
 
@@ -1864,6 +1826,8 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
           </div>
 
+
+
           {/* Assigned To */}
 
           <div style={{marginTop:12,padding:"10px 12px",background:`${C.purple}10`,
@@ -1877,6 +1841,8 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
               placeholder="Technician name…"/>
 
           </div>
+
+
 
           {/* Sign Off */}
 
@@ -1966,7 +1932,9 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
         </div>
 
-      ))(trips.length-1-i)))}
+      ))}
+
+
 
       {viewPhoto&&(
 
@@ -2000,6 +1968,13 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
 }
 
+
+
+
+
+
+
+
 // ── Home Runs ─────────────────────────────────────────────────
 
 const DEFAULT_PANELS = ["Panel A","Panel B","Panel C","Panel D"];
@@ -2017,6 +1992,8 @@ const getPanelOrder = (customPanels) => {
 
 const WIRE_ORDER  = {"":0,"14/2":1,"14/3":2,"12/2":3,"12/3":4,"10/2":5,"10/3":6,"8/2":7,"8/3":8,"6/2":9,"6/3":10,"4/2":11,"4/3":12,"2/2":13,"2/3":14,"1/0":15,"2/0":16,"3/0":17,"4/0":18};
 
+
+
 function HomeRunLevel({rows,onChange,label,customPanels}) {
 
   const panelOrder = getPanelOrder(customPanels);
@@ -2030,6 +2007,8 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
   const upd    = (id,p) => { const updated = rows.map(r=>r.id===id?{...r,...p}:r); onChange(('wire' in p||'panel' in p) ? sortRows(updated) : updated.map((r,i)=>({...r,num:i+1}))); };
   const addRow = () => onChange([...rows, newHRRow(rows.length+1)]);
   const delRow = (id) => onChange(sortRows(rows.filter(r=>r.id!==id)));
+
+
 
   const renderRow = (r, flatIdx) => (
     <div key={r.id}
@@ -2091,6 +2070,7 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
 
 }
 
+
 function MeterLoads({loads, onChange}) {
 
   const add = () => onChange([...loads, {id:uid(), name:"", amps:"", notes:""}]);
@@ -2139,6 +2119,8 @@ function MeterLoads({loads, onChange}) {
 
 }
 
+
+
 // Wire → {amps, poles} mapping
 
 const WIRE_BREAKER = {
@@ -2163,6 +2145,8 @@ const WIRE_BREAKER = {
 
 };
 
+
+
 function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
   const extraRows = (homeRuns.extraFloors||[]).flatMap(ef=>homeRuns[ef.key]||[]);
@@ -2179,7 +2163,11 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
   ];
 
+
+
   const panels = getPanelOpts(homeRuns.customPanels||DEFAULT_PANELS).filter(p=>p!==""&&p!=="Meter");
+
+
 
   // For each panel, group rows by breaker label and count poles
 
@@ -2207,6 +2195,8 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
   };
 
+
+
   const totalSpaces = (panel) => {
 
     const g = getPanelBreakers(panel);
@@ -2214,6 +2204,8 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
     return Object.values(g).reduce((s,v)=>s+v.spaces,0);
 
   };
+
+
 
   return (
 
@@ -2313,6 +2305,8 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
 }
 
+
+
 function HRAddFloor({homeRuns, onHRChange}) {
   const [adding, setAdding] = useState(false);
   const [name,   setName]   = useState("");
@@ -2382,6 +2376,7 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
     } catch(e){ alert("Failed to check response."); }
   };
 
+
   const allRows = [...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[]),
     ...(homeRuns.extraFloors||[]).flatMap(e=>homeRuns[e.key]||[])];
 
@@ -2390,6 +2385,8 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
   const pulled  = allRows.filter(r=>r.status==="Pulled").length;
 
   const pct     = total > 0 ? Math.round((pulled/total)*100) : 0;
+
+
 
   return (
 
@@ -2577,6 +2574,8 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
         );
       })()}
 
+
+
       <Section label="Home Runs" color={C.blue} defaultOpen={true}>
         {(()=>{ const cp = homeRuns.customPanels||DEFAULT_PANELS; return (
         <>
@@ -2611,15 +2610,20 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
         <TA value={homeRuns.loadMappingNotes||""} onChange={e=>onHRChange({...homeRuns,loadMappingNotes:e.target.value})} placeholder="Load mapping notes…" rows={5}/>
       </Section>
 
+
+
       <Section label="Panel Breaker Counts" color={C.blue}>
         <BreakerCounts homeRuns={homeRuns} panelCounts={panelCounts} onCountChange={onCountChange}/>
       </Section>
+
 
     </div>
 
   );
 
 }
+
+
 
 // ── Panelized Lighting ────────────────────────────────────────
 
@@ -2672,6 +2676,8 @@ function KeypadSection({loads,onChange,label}) {
   );
 
 }
+
+
 
 function CP4LoadsSection({loads,onChange}) {
 
@@ -2732,6 +2738,8 @@ function CP4LoadsSection({loads,onChange}) {
   );
 
 }
+
+
 
 // ── Tape Light ────────────────────────────────────────────────
 
@@ -2879,6 +2887,8 @@ function TapeLightSection({lights,onChange}) {
 
 }
 
+
+
 // ── Plans & Links with PDF upload ────────────────────────────
 
 const LINK_FIELDS = [
@@ -2891,11 +2901,15 @@ const LINK_FIELDS = [
 
 ];
 
+
+
 function PlansTab({job, onUpdate}) {
 
   return (
 
     <div>
+
+
 
       {LINK_FIELDS.map(([k,l])=>{
 
@@ -2996,6 +3010,8 @@ function PlansTab({job, onUpdate}) {
         );
 
       })}
+
+
 
       {/* Custom named link sections */}
 
@@ -3111,9 +3127,15 @@ function PlansTab({job, onUpdate}) {
 
 }
 
+
+
+
+
 const TABS = ["Job Info","Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
 
               "Change Orders","Return Trips","Plans & Links","QC"];
+
+
 
 const sanitize = (obj) => {
   if(Array.isArray(obj)) return obj.map(sanitize);
@@ -3190,6 +3212,8 @@ onUpdate(updated);
 
   };
 
+
+
   const countFloor = (f) => {
 
     if (!f) return 0;
@@ -3213,6 +3237,8 @@ onUpdate(updated);
   const qcCount = countFloor(job.qcPunch?.upper||{}) + countFloor(job.qcPunch?.main||{}) + countFloor(job.qcPunch?.basement||{}) +
     (job.qcPunch?.extras||[]).reduce((s,e)=>s+countFloor(job.qcPunch?.[e.key]||{}),0);
 
+
+
   return (
 
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.82)",zIndex:200,
@@ -3226,6 +3252,8 @@ onUpdate(updated);
         maxWidth:940,maxHeight:"93vh",display:"flex",flexDirection:"column",overflow:"hidden",
 
         boxShadow:"0 40px 100px rgba(0,0,0,0.7)"}}>
+
+
 
         {/* Header */}
 
@@ -3287,6 +3315,8 @@ onUpdate(updated);
 
         </div>
 
+
+
         {/* Tabs */}
 
         <div style={{display:"flex",gap:1,padding:"8px 22px 0",borderBottom:`1px solid ${C.border}`,
@@ -3313,9 +3343,15 @@ onUpdate(updated);
 
         </div>
 
+
+
         {/* Body */}
 
         <div style={{flex:1,overflowY:"auto",padding:"20px 22px"}}>
+
+
+
+
 
           {tab==="Rough"&&(
 
@@ -3341,7 +3377,8 @@ onUpdate(updated);
                           const def=getStatusDef(ROUGH_STATUSES,v);
                           u({roughStatus:v, roughOnHold:v==="waiting", roughScheduled:v==="scheduled",
                             roughStatusDate:def.hasDate?job.roughStatusDate:"",
-                            readyToInvoice:v==="invoice"?true:(job.roughStatus==="invoice"?false:job.readyToInvoice)});
+                            readyToInvoice:v==="invoice"?true:(job.roughStatus==="invoice"?false:job.readyToInvoice),
+                            roughProjectedStart:v==="scheduled"?job.roughProjectedStart:job.roughProjectedStart});
                         }} style={{background:rsDef.color?`${rsDef.color}18`:C.surface,
                           color:rsDef.color||C.dim, border:`1px solid ${rsDef.color||C.border}`,
                           borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
@@ -3349,15 +3386,26 @@ onUpdate(updated);
                           {ROUGH_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>
                         {rsDef.hasDate&&(
-                          <Inp value={job.roughStatusDate||""} onChange={e=>u({roughStatusDate:e.target.value})}
-                            placeholder="Date MM/DD/YY"
-                            style={{width:130,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
+                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:rsDef.color}}>
+                              {job.roughStatus==="date_confirmed"?"SCHEDULE BY DATE":"SCHEDULED DATE"}
+                            </div>
+                            <Inp value={job.roughStatusDate||""} onChange={e=>u({roughStatusDate:e.target.value})}
+                              placeholder="MM/DD/YY"
+                              style={{width:120,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
+                          </div>
                         )}
                       </div>
+                      {job.roughStatus==="date_confirmed"&&(
+                        <div style={{marginTop:6,fontSize:10,color:"#f97316",fontStyle:"italic"}}>
+                          ↑ Date by which scheduling must be completed — job start date goes in Projected Start above
+                        </div>
+                      )}
+
                     </div>
                   );
                 })()}
-                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;u({roughStage:v,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
+                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};u({roughStage:v,  ...qcFire,...(v==="100%"?{roughStatus:"complete",readyToInvoice:true}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
 
                 <div style={{marginTop:8,marginBottom:20}}>
 
@@ -3409,6 +3457,8 @@ onUpdate(updated);
 
           )}
 
+
+
           {tab==="Finish"&&(
 
             <div>
@@ -3433,7 +3483,8 @@ onUpdate(updated);
                           const def=getStatusDef(FINISH_STATUSES,v);
                           u({finishStatus:v, finishOnHold:v==="waiting", finishScheduled:v==="scheduled",
                             finishStatusDate:def.hasDate?job.finishStatusDate:"",
-                            readyToInvoice:v==="invoice"?true:(job.finishStatus==="invoice"?false:job.readyToInvoice)});
+                            readyToInvoice:v==="invoice"?true:(job.finishStatus==="invoice"?false:job.readyToInvoice),
+                            finishProjectedStart:v==="scheduled"?job.finishProjectedStart:job.finishProjectedStart});
                         }} style={{background:fsDef.color?`${fsDef.color}18`:C.surface,
                           color:fsDef.color||C.dim, border:`1px solid ${fsDef.color||C.border}`,
                           borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
@@ -3441,15 +3492,26 @@ onUpdate(updated);
                           {FINISH_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>
                         {fsDef.hasDate&&(
-                          <Inp value={job.finishStatusDate||""} onChange={e=>u({finishStatusDate:e.target.value})}
-                            placeholder="Date MM/DD/YY"
-                            style={{width:130,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
+                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:fsDef.color}}>
+                              {job.finishStatus==="date_confirmed"?"SCHEDULE BY DATE":"SCHEDULED DATE"}
+                            </div>
+                            <Inp value={job.finishStatusDate||""} onChange={e=>u({finishStatusDate:e.target.value})}
+                              placeholder="MM/DD/YY"
+                              style={{width:120,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
+                          </div>
                         )}
                       </div>
+                      {job.finishStatus==="date_confirmed"&&(
+                        <div style={{marginTop:6,fontSize:10,color:"#f97316",fontStyle:"italic"}}>
+                          ↑ Date by which scheduling must be completed — job start date goes in Projected Start above
+                        </div>
+                      )}
+
                     </div>
                   );
                 })()}
-                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;u({finishStage:v,...(v==="100%"?{finishStatus:"complete"}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
+                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;u({finishStage:v,...(v==="100%"?{finishStatus:"complete",readyToInvoice:true}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
                 <div style={{marginTop:8,marginBottom:20}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
               </Section>
 
@@ -3493,6 +3555,8 @@ onUpdate(updated);
 
           )}
 
+
+
           {tab==="Home Runs"&&(
 
             <HomeRunsTab homeRuns={job.homeRuns} panelCounts={job.panelCounts} jobId={job.id} jobName={job.name}
@@ -3501,11 +3565,15 @@ onUpdate(updated);
 
           )}
 
+
+
           {tab==="Panelized Lighting"&&(
 
             <div>
 
               {/* Lighting Control System Selector */}
+
+
 
               <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
 
@@ -3631,6 +3699,8 @@ onUpdate(updated);
 
           )}
 
+
+
           {tab==="Tape Light"&&(
 
             <div>
@@ -3639,39 +3709,63 @@ onUpdate(updated);
                 <TapeLightSection lights={job.tapeLights||[]} onChange={v=>u({tapeLights:v})}/>
               </Section>
 
+
+
             </div>
 
           )}
+
+
 
           {tab==="Change Orders"&&(
 
             <div>
 
               <Section label="Change Order Log" color={C.accent} defaultOpen={true}>
-                <ChangeOrders orders={job.changeOrders} onChange={v=>u({changeOrders:v})} jobName={job.name||"This Job"} onEmail={setEmailData}/>
+                <ChangeOrders
+                  orders={job.changeOrders}
+                  onChange={(updatedCOs, newRT) => {
+                    if(newRT) {
+                      u({changeOrders:updatedCOs, returnTrips:[newRT, ...(job.returnTrips||[])]});
+                    } else {
+                      u({changeOrders:updatedCOs});
+                    }
+                  }}
+                  jobName={job.name||"This Job"}
+                  jobSimproNo={job.simproNo}
+                  onEmail={setEmailData}
+                  roughStatus={job.roughStatus||""}
+                  finishStatus={job.finishStatus||""}
+                />
               </Section>
 
             </div>
 
           )}
+
+
 
           {tab==="Return Trips"&&(
 
             <div>
 
               <Section label="Return Trips" color={C.purple} defaultOpen={true}>
-                <ReturnTrips trips={job.returnTrips} onChange={v=>u({returnTrips:v})} jobName={job.name||"This Job"} onEmail={setEmailData}/>
+                <ReturnTrips trips={job.returnTrips} onChange={v=>u({returnTrips:v})} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData}/>
               </Section>
 
             </div>
 
           )}
 
+
+
           {tab==="Plans & Links"&&(
 
             <PlansTab job={job} onUpdate={u}/>
 
           )}
+
+
 
           {tab==="QC"&&(
 
@@ -3705,13 +3799,45 @@ onUpdate(updated);
                 <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }}/>
               </Section>
 
+              <div style={{marginTop:16,padding:"14px 16px",background:job.qcSignedOff?`${C.green}10`:C.surface,border:`1px solid ${job.qcSignedOff?C.green+"55":C.border}`,borderRadius:10}}>
+                <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:job.qcSignedOff?C.green:C.dim,marginBottom:10}}>QC SIGN-OFF</div>
+                {job.qcSignedOff?(
+                  <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{width:20,height:20,borderRadius:"50%",background:C.green,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#fff",fontWeight:700}}>✓</div>
+                      <div>
+                        <div style={{fontSize:13,fontWeight:700,color:C.green}}>Signed Off</div>
+                        <div style={{fontSize:11,color:C.dim}}>by {job.qcSignedOffBy||"—"} · {job.qcSignedOffDate||"—"}</div>
+                      </div>
+                    </div>
+                    <button onClick={()=>u({qcSignedOff:false,qcSignedOffBy:"",qcSignedOffDate:""})} style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.muted,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Undo</button>
+                  </div>
+                ):(
+                  <div style={{display:"flex",gap:8,alignItems:"flex-end",flexWrap:"wrap"}}>
+                    <div style={{flex:1,minWidth:120}}>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Lead Name</div>
+                      <Inp value={job.qcSignedOffBy||""} onChange={e=>u({qcSignedOffBy:e.target.value})} placeholder="Lead who completed QC"/>
+                    </div>
+                    <div style={{minWidth:110}}>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date</div>
+                      <Inp value={job.qcSignedOffDate||""} onChange={e=>u({qcSignedOffDate:e.target.value})} placeholder="MM/DD/YY"/>
+                    </div>
+                    <button onClick={()=>{if(job.qcSignedOffBy)u({qcSignedOff:true});}} style={{background:C.green,border:"none",borderRadius:7,color:"#fff",fontWeight:700,padding:"8px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>✓ Sign Off</button>
+                  </div>
+                )}
+              </div>
+
             </div>
 
           )}
 
+
+
           {tab==="Job Info"&&(
 
             <div>
+
+
 
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
 
@@ -3817,6 +3943,7 @@ onUpdate(updated);
                   )}
                 </div>
 
+
               </div>
 
             </div>
@@ -3827,17 +3954,27 @@ onUpdate(updated);
 
       </div>
 
+
+
       {emailData&&(
 
         <EmailModal subject={emailData.subject} body={emailData.body} onClose={()=>setEmailData(null)}/>
 
       )}
 
+
+
     </div>
 
   );
 
 }
+
+
+
+
+
+
 
 // ── Q&A Punch List ────────────────────────────────────────────
 
@@ -3882,6 +4019,8 @@ function QAInlineEdit({value, done, label, onSave}) {
   );
 
 }
+
+
 
 function QAList({questions: _questions, onChange, color}) {
 
@@ -4015,6 +4154,8 @@ function QAList({questions: _questions, onChange, color}) {
 
 }
 
+
+
 function QASection({questions: _questions, onChange, color}) {
 
   // guard: normalize questions to always be object with array values
@@ -4051,9 +4192,15 @@ function QASection({questions: _questions, onChange, color}) {
 
 }
 
+
+
+
+
 // ── Punch Assignment & Sign-off ───────────────────────────────
 
 const CREW = ["Koy","Vasa","Colby","Josh","Brady","Justin"];
+
+
 
 function PunchAssignTab({phase, assignData, onChange, color}) {
 
@@ -4063,17 +4210,23 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
 
   const signoffs    = data.signoffs    || [];
 
+
+
   const updA = (id, p) => onChange({...data, assignments: assignments.map(a=>a.id===id?{...a,...p}:a)});
 
   const delA = (id)    => onChange({...data, assignments: assignments.filter(a=>a.id!==id)});
 
   const addA = ()      => onChange({...data, assignments: [...assignments, {id:uid(), person:"", task:"", floor:"", room:"", done:false}]});
 
+
+
   const updS = (id, p) => onChange({...data, signoffs: signoffs.map(s=>s.id===id?{...s,...p}:s)});
 
   const delS = (id)    => onChange({...data, signoffs: signoffs.filter(s=>s.id!==id)});
 
   const addS = ()      => onChange({...data, signoffs: [...signoffs, {id:uid(), person:"", task:"", completedDate:"", initials:""}]});
+
+
 
   return (
 
@@ -4163,6 +4316,8 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
 
       <Btn onClick={addA} variant="add" style={{width:"100%",borderStyle:"dashed",marginBottom:24}}>+ Add Assignment</Btn>
 
+
+
       {/* Sign-offs */}
 
       <SectionHead label="Sign Off — Work Completed By" color={color}/>
@@ -4235,6 +4390,10 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
 
 }
 
+
+
+
+
 function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
 
   const [punchTab, setPunchTab] = useState("Items");
@@ -4291,45 +4450,132 @@ function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
 
 }
 
+
+
+// ── Temp Ped Card ─────────────────────────────────────────────
+
+function TempPedCard({ job, onOpen, onUpdate }) {
+  const tpDef = getStatusDef(TEMP_PED_STATUSES, job.tempPedStatus||"");
+  const color = tpDef.color || "#8b5cf6";
+  const foreman = job.foreman||"Koy";
+  const fc = FOREMEN_COLORS[foreman] || "#6b7280";
+
+  const upd = (patch) => onUpdate({...job, ...patch});
+
+  return (
+    <div style={{
+      background:"var(--card)", borderRadius:13, padding:"13px 16px", marginBottom:8,
+      border:`1px solid ${color}33`, borderLeft:`3px solid ${color}`,
+      cursor:"default",
+    }}>
+      <div style={{display:"flex",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+
+        {/* Left: name + meta */}
+        <div style={{flex:"1 1 180px",minWidth:140,cursor:"pointer"}} onClick={()=>onOpen(job)}>
+          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
+            <span style={{fontSize:11,fontWeight:800,color:"#8b5cf6",letterSpacing:"0.06em"}}>TEMP PED</span>
+            {job.tempPedNumber&&<span style={{fontSize:11,fontWeight:700,color:"#8b5cf6",background:"#8b5cf618",borderRadius:99,padding:"1px 7px",border:"1px solid #8b5cf633"}}>#{job.tempPedNumber}</span>}
+          </div>
+          <div style={{fontWeight:700,fontSize:13,color:"var(--text)",marginBottom:2}}>{job.name||"Untitled Job"}</div>
+          <div style={{fontSize:11,color:"var(--dim)",display:"flex",gap:8,flexWrap:"wrap"}}>
+            {job.address&&<span>{job.address}</span>}
+            <span style={{fontWeight:700,color:fc}}>{foreman}</span>
+            {job.lead&&<span style={{color:"var(--accent)"}}>· {job.lead}</span>}
+          </div>
+        </div>
+
+        {/* Right: status control */}
+        <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-end",flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+            <select value={job.tempPedStatus||""} onChange={e=>{
+              const v = e.target.value;
+              const patch = {tempPedStatus: v};
+              if(v==="completed") patch.readyToInvoice = true;
+              if(v==="scheduled") patch.tempPedScheduledDate = job.tempPedScheduledDate||"";
+              if(v!=="scheduled") patch.tempPedScheduledDate = "";
+              upd(patch);
+            }} style={{
+              background: color ? `${color}18` : "var(--surface)",
+              color: color || "var(--dim)",
+              border:`1px solid ${color||"var(--border)"}`,
+              borderRadius:7, padding:"5px 10px", fontSize:11,
+              fontFamily:"inherit", fontWeight:700, outline:"none", cursor:"pointer",
+            }}>
+              {TEMP_PED_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+            </select>
+
+            {(job.tempPedStatus==="scheduled")&&(
+              <input
+                type="text"
+                value={job.tempPedScheduledDate||""}
+                onChange={e=>upd({tempPedScheduledDate:e.target.value})}
+                placeholder="MM/DD/YY"
+                style={{width:96,fontSize:11,padding:"5px 8px",borderRadius:7,
+                  border:`1px solid ${"#2563eb"}55`,background:"#2563eb08",
+                  color:"var(--text)",fontFamily:"inherit",outline:"none"}}
+              />
+            )}
+          </div>
+
+          {/* Completed → ready to invoice banner */}
+          {job.tempPedStatus==="completed"&&!job.readyToInvoice&&(
+            <div style={{fontSize:10,color:"#ea580c",fontWeight:600}}>→ Marked Ready to Invoice</div>
+          )}
+          {job.readyToInvoice&&job.tempPedStatus==="completed"&&(
+            <div style={{fontSize:10,fontWeight:800,color:"#ea580c",background:"#ea580c12",borderRadius:99,padding:"2px 10px",border:"1px solid #ea580c33"}}>
+              READY TO INVOICE
+            </div>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Stage Sections ────────────────────────────────────────────
 
 // Effective status — falls back to deriving from % if no status stored
-const effRS = j => { if(j.roughStatus) return j.roughStatus; const p=parseInt(j.roughStage)||0; return p===100?"complete":p>0?"inprogress":""; };
+const effRS = j => { if(j.roughStatus) return j.roughStatus; const p=parseInt(j.roughStage)||0; return p===100?"complete":p>0?"inprogress":""; }; // date_confirmed triggers scheduling task
 const effFS = j => { if(j.finishStatus) return j.finishStatus; const p=parseInt(j.finishStage)||0; return p===100?"complete":p>0?"inprogress":""; };
 
 const STAGE_SECTIONS = [
 
+  { key:"tempPed",      label:"Temp Peds",                 color:"#8b5cf6",
+    test: j => !!j.tempPed },
+
   { key:"prep",         label:"Pre Job Prep",              color:"#0d9488",
-    test: j => (j.prepStage||"") !== "Job Prep Complete" },
+    test: j => !j.tempPed && (j.prepStage||"") !== "Job Prep Complete" },
 
   { key:"roughNotStarted", label:"Rough — Not Started",   color:"#64748b",
-    test: j => { const rs=effRS(j); return (j.prepStage||"")==="Job Prep Complete" && (!rs||rs==="ready"||rs==="scheduled"); } },
+    test: j => { const rs=effRS(j); return !j.tempPed && (j.prepStage||"")==="Job Prep Complete" && (!rs||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"); } },
 
   { key:"roughHold",    label:"Rough — On Hold",           color:"#ca8a04",
-    test: j => effRS(j) === "waiting" },
+    test: j => !j.tempPed && effRS(j) === "waiting" },
 
   { key:"rough",        label:"Rough In Progress",         color:"#2563eb",
-    test: j => effRS(j) === "inprogress" },
+    test: j => !j.tempPed && effRS(j) === "inprogress" },
 
   { key:"roughInvoice", label:"Rough — Ready to Invoice",  color:"#ea580c",
-    test: j => effRS(j) === "invoice" },
+    test: j => !j.tempPed && effRS(j) === "invoice" },
 
   { key:"between",      label:"In Between",                color:"#e8a020",
-    test: j => { const rs=effRS(j); const fs=effFS(j); return rs==="complete"&&(!fs||fs==="ready"||fs==="scheduled"); } },
+    test: j => { const rs=effRS(j); const fs=effFS(j); return !j.tempPed && rs==="complete"&&(!fs||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"); } },
 
   { key:"finishHold",   label:"Finish — On Hold",          color:"#ca8a04",
-    test: j => effFS(j) === "waiting" },
+    test: j => !j.tempPed && effFS(j) === "waiting" },
 
   { key:"finish",       label:"Finish In Progress",        color:"#0ea5e9",
-    test: j => effFS(j) === "inprogress" },
+    test: j => !j.tempPed && effFS(j) === "inprogress" },
 
   { key:"finishInvoice",label:"Finish — Ready to Invoice", color:"#ea580c",
-    test: j => effFS(j) === "invoice" },
+    test: j => !j.tempPed && effFS(j) === "invoice" },
 
   { key:"complete",     label:"Completed",                 color:"#22c55e",
-    test: j => effFS(j) === "complete" },
+    test: j => !j.tempPed && effFS(j) === "complete" },
 
 ];
+
+
 
 function StageSectionList({ jobs, JobRow, fc, startCollapsed=true }) {
 
@@ -4337,6 +4583,8 @@ function StageSectionList({ jobs, JobRow, fc, startCollapsed=true }) {
   const [collapsed, setCollapsed] = useState(initCollapsed);
 
   const toggle = key => setCollapsed(c=>({...c,[key]:!c[key]}));
+
+
 
   return (
 
@@ -4350,8 +4598,8 @@ function StageSectionList({ jobs, JobRow, fc, startCollapsed=true }) {
           const getDate = j => {
             const rs = effRS(j), fs = effFS(j);
             // Prefer projected start dates, fall back to status dates
-            if(fs==="scheduled"||fs==="ready"||fs==="inprogress") return j.finishProjectedStart||j.finishStatusDate||j.roughProjectedStart||j.roughStatusDate||"";
-            if(rs==="scheduled"||rs==="ready"||rs==="inprogress") return j.roughProjectedStart||j.roughStatusDate||"";
+            if(fs==="scheduled"||fs==="date_confirmed"||fs==="inprogress") return j.finishProjectedStart||j.finishStatusDate||j.roughProjectedStart||j.roughStatusDate||"";
+            if(rs==="scheduled"||rs==="date_confirmed"||rs==="inprogress") return j.roughProjectedStart||j.roughStatusDate||"";
             return j.roughProjectedStart||j.roughStatusDate||j.finishProjectedStart||j.finishStatusDate||"";
           };
           return filtered.sort((a,b)=>{
@@ -4404,9 +4652,9 @@ function StageSectionList({ jobs, JobRow, fc, startCollapsed=true }) {
             </div>
 
             {!isCollapsed && sJobs.map(job=>(
-
-              <JobRow key={job.id} job={job} fc={fc||undefined} showForeman={!fc}/>
-
+              sec.key==="tempPed"
+                ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated)=>updateJob(updated)}/>
+                : <JobRow key={job.id} job={job} fc={fc||undefined} showForeman={!fc}/>
             ))}
 
           </div>
@@ -4421,15 +4669,21 @@ function StageSectionList({ jobs, JobRow, fc, startCollapsed=true }) {
 
 }
 
+
+
 // ── Main Dashboard ────────────────────────────────────────────
 
 const ALL_STAGES = ROUGH_STAGES;
+
+
 
 // ── QC Walks ──────────────────────────────────────────────────
 
 // Detect mobile device
 
 const isMobile = () => /iphone|ipad|ipod|android/i.test(navigator.userAgent);
+
+
 
 // Open Google Chat — copies message to clipboard and opens Google Chat
 const openGoogleChat = (message) => {
@@ -4454,6 +4708,8 @@ const openEmail = (to, subject, body) => {
   }
 
 };
+
+
 
 // Deep merge two job objects — arrays are merged by id, scalars prefer local
 
@@ -4528,6 +4784,8 @@ function deepMergeJob(remote, local) {
   return merged;
 
 }
+
+
 
 // ── Homeowner Generator Load Selection Page ───────────────────
 function HomeownerPage({ jobId }) {
@@ -4801,204 +5059,97 @@ function HomeownerPage({ jobId }) {
 // ── Upcoming Jobs ─────────────────────────────────────────────
 
 function blankUpcoming() {
-  return {
-    id: uid(),
-    name: "",
-    city: "",
-    sales: "",
-    customer: "",
-    notes: "",
-    lastFollowUp: "",
-    foreman: "",
-  };
+  return { id: uid(), name:"", city:"", sales:"", customer:"", notes:"", lastFollowUp:"", foreman:"" };
 }
+
+const SEED_UPCOMING = [
+  {id:"seed1",  name:"#2048 - Discovery Ridge Lot 317",                               city:"Kimball Junction",    sales:"Justin", customer:"Milar",                   notes:"No hole yet. Joint venture between customer/Milar.", lastFollowUp:"10/8/25",  foreman:""},
+  {id:"seed2",  name:"#1990 - Kesse Residence",                                        city:"Francis",             sales:"Justin", customer:"LL&L",                    notes:"At foundation",                                      lastFollowUp:"11/5/25",  foreman:""},
+  {id:"seed3",  name:"#1937 - Navarro Residence",                                      city:"American Fork",       sales:"Justin", customer:"Butterfield",              notes:"Working on road improvements before they can start",  lastFollowUp:"11/17/25", foreman:""},
+  {id:"seed4",  name:"#1938 Corbin Church",                                            city:"Provo",               sales:"Justin", customer:"Butterfield",              notes:"Still in development phase",                         lastFollowUp:"11/17/25", foreman:""},
+  {id:"seed5",  name:"#1770 - England Home",                                           city:"Draper",              sales:"Justin", customer:"Greentech",                notes:"Framing. Pending update.",                            lastFollowUp:"1/26/26",  foreman:""},
+  {id:"seed6",  name:"#1590 - Becker Residence",                                       city:"Park City",           sales:"Justin", customer:"Mark Wintzer Company",     notes:"Rough expected to begin 4/1/26",                      lastFollowUp:"12/5/25",  foreman:""},
+  {id:"seed7",  name:"#994 - Smith Residence - Detached Garage/Remodeled Barn",        city:"Cottonwood Heights",  sales:"Josh",   customer:"Black Cactus Construction", notes:"Framing. Pending update.",                           lastFollowUp:"",         foreman:""},
+  {id:"seed8",  name:"#1981 - Meyers Residence",                                       city:"Holladay",            sales:"Josh",   customer:"Eastgate Homes",           notes:"Permitting",                                         lastFollowUp:"9/26/25",  foreman:""},
+  {id:"seed9",  name:"#1862 - Colton Residence",                                       city:"Holladay",            sales:"Josh",   customer:"United Contractors",        notes:"Foundation",                                        lastFollowUp:"12/2/25",  foreman:""},
+  {id:"seed10", name:"#1896 - Casten-Vought Residence",                                city:"Mapleton",            sales:"Justin", customer:"Farnsworth Construction",  notes:"Electrical Rough Scheduled for 02/26",               lastFollowUp:"12/3/25",  foreman:""},
+  {id:"seed11", name:"#2067 - Rule & O'Mara Residence",                                city:"Midway",              sales:"Justin", customer:"Mark Wintzer Company",     notes:"No idea on timeline",                                lastFollowUp:"1/5/26",   foreman:""},
+  {id:"seed12", name:"#2249 - The Hide Out - Hideout",                                 city:"Hideout",             sales:"Justin", customer:"Black Oak Builders",        notes:"Any day now 2/2/26",                                lastFollowUp:"1/27/26",  foreman:""},
+  {id:"seed13", name:"#1809 - Tuhaye Hollow",                                          city:"Kamas",               sales:"Josh",   customer:"The Housley Group",        notes:"",                                                   lastFollowUp:"",         foreman:""},
+];
 
 function UpcomingJobs({ upcoming, onChange, onPromote }) {
   const [editingId, setEditingId] = useState(null);
-
-  const add = () => {
-    const j = blankUpcoming();
-    onChange([j, ...upcoming]);
-    setEditingId(j.id);
-  };
-
-  const upd = (id, patch) => onChange(upcoming.map(u => u.id === id ? {...u,...patch} : u));
-  const del  = (id) => { onChange(upcoming.filter(u => u.id !== id)); setEditingId(null); };
-
+  const add = () => { const j=blankUpcoming(); onChange([j,...upcoming]); setEditingId(j.id); };
+  const upd = (id,patch) => onChange(upcoming.map(u=>u.id===id?{...u,...patch}:u));
+  const del = (id) => { onChange(upcoming.filter(u=>u.id!==id)); setEditingId(null); };
   const COL = {
-    name:     { label:"Job Name",          flex:2.5 },
-    city:     { label:"City",              flex:1.2 },
-    sales:    { label:"Sales",             flex:1 },
-    customer: { label:"Customer / GC",     flex:1.5 },
-    notes:    { label:"Notes",             flex:3 },
-    lastFollowUp: { label:"Last Follow Up", flex:1.1 },
+    name:{label:"Job Name",flex:2.5}, city:{label:"City",flex:1.2},
+    sales:{label:"Sales",flex:1}, customer:{label:"Customer / GC",flex:1.5},
+    notes:{label:"Notes",flex:3}, lastFollowUp:{label:"Last Follow Up",flex:1.1},
   };
-
   const colKeys = Object.keys(COL);
-
   return (
     <div>
-      {/* Header */}
       <div style={{padding:"24px 26px 16px",borderBottom:`1px solid ${C.border}`}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
           <div>
-            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,
-              letterSpacing:"0.06em",color:C.text,lineHeight:1}}>
-              UPCOMING JOBS
-            </div>
-            <div style={{fontSize:11,color:C.dim,marginTop:3}}>
-              {upcoming.length} job{upcoming.length!==1?"s":""} in pipeline
-            </div>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>UPCOMING JOBS</div>
+            <div style={{fontSize:11,color:C.dim,marginTop:3}}>{upcoming.length} job{upcoming.length!==1?"s":""} in pipeline</div>
           </div>
-          <button onClick={add}
-            style={{background:C.accent,border:"none",borderRadius:9,color:"#000",
-              fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",
-              fontFamily:"inherit",whiteSpace:"nowrap"}}>
-            + Add Job
-          </button>
+          <button onClick={add} style={{background:C.accent,border:"none",borderRadius:9,color:"#000",fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Job</button>
         </div>
       </div>
-
-      {/* Table */}
       <div style={{padding:"16px 26px"}}>
-        {/* Column headers */}
-        <div style={{display:"flex",alignItems:"center",gap:0,
-          padding:"6px 12px",marginBottom:4,borderBottom:`1px solid ${C.border}`}}>
-          {colKeys.map(k => (
-            <div key={k} style={{flex:COL[k].flex,fontSize:10,fontWeight:700,
-              letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase",paddingRight:12}}>
-              {COL[k].label}
-            </div>
+        <div style={{display:"flex",alignItems:"center",gap:0,padding:"6px 12px",marginBottom:4,borderBottom:`1px solid ${C.border}`}}>
+          {colKeys.map(k=>(
+            <div key={k} style={{flex:COL[k].flex,fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase",paddingRight:12}}>{COL[k].label}</div>
           ))}
-          {/* Actions column */}
           <div style={{width:110,flexShrink:0}}/>
         </div>
-
-        {/* Rows */}
-        {upcoming.length === 0 && (
-          <div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:13,
-            fontStyle:"italic"}}>
-            No upcoming jobs yet — add one above.
-          </div>
-        )}
-
-        {upcoming.map(u => {
-          const isEditing = editingId === u.id;
+        {upcoming.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:13,fontStyle:"italic"}}>No upcoming jobs yet — add one above.</div>}
+        {upcoming.map(u=>{
+          const isEditing=editingId===u.id;
           return (
-            <div key={u.id}
-              style={{display:"flex",alignItems:isEditing?"flex-start":"center",gap:0,
-                padding:"8px 12px",borderRadius:8,marginBottom:2,
-                background:isEditing?C.surface:"none",
-                border:isEditing?`1px solid ${C.border}`:"1px solid transparent",
-                transition:"background 0.15s"}}
-              onMouseEnter={e=>{ if(!isEditing) e.currentTarget.style.background=C.surface; }}
-              onMouseLeave={e=>{ if(!isEditing) e.currentTarget.style.background="none"; }}>
-
-              {isEditing ? (
-                /* ── Edit mode ── */
+            <div key={u.id} style={{display:"flex",alignItems:isEditing?"flex-start":"center",gap:0,padding:"8px 12px",borderRadius:8,marginBottom:2,background:isEditing?C.surface:"none",border:isEditing?`1px solid ${C.border}`:"1px solid transparent"}}
+              onMouseEnter={e=>{if(!isEditing)e.currentTarget.style.background=C.surface;}}
+              onMouseLeave={e=>{if(!isEditing)e.currentTarget.style.background="none";}}>
+              {isEditing?(
                 <div style={{flex:1,display:"flex",flexDirection:"column",gap:10}}>
                   <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-                    <div style={{flex:2.5,minWidth:160}}>
-                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Job Name</div>
-                      <Inp value={u.name} onChange={e=>upd(u.id,{name:e.target.value})} placeholder="Job name / address"/>
-                    </div>
-                    <div style={{flex:1.2,minWidth:100}}>
-                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>City</div>
-                      <Inp value={u.city} onChange={e=>upd(u.id,{city:e.target.value})} placeholder="City"/>
-                    </div>
-                    <div style={{flex:1,minWidth:90}}>
-                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Sales</div>
-                      <Inp value={u.sales} onChange={e=>upd(u.id,{sales:e.target.value})} placeholder="Sales rep"/>
-                    </div>
-                    <div style={{flex:1.5,minWidth:130}}>
-                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Customer / GC</div>
-                      <Inp value={u.customer} onChange={e=>upd(u.id,{customer:e.target.value})} placeholder="Customer or GC"/>
-                    </div>
-                    <div style={{flex:1.1,minWidth:110}}>
-                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Last Follow Up</div>
-                      <Inp value={u.lastFollowUp} onChange={e=>upd(u.id,{lastFollowUp:e.target.value})} placeholder="MM/DD/YY"/>
-                    </div>
-                    <div style={{flex:1,minWidth:120}}>
-                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
-                      <select value={u.foreman||""} onChange={e=>upd(u.id,{foreman:e.target.value})}
-                        style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
-                          color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
-                          outline:"none",cursor:"pointer",width:"100%"}}>
+                    <div style={{flex:2.5,minWidth:160}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Job Name</div><Inp value={u.name} onChange={e=>upd(u.id,{name:e.target.value})} placeholder="Job name"/></div>
+                    <div style={{flex:1.2,minWidth:100}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>City</div><Inp value={u.city} onChange={e=>upd(u.id,{city:e.target.value})} placeholder="City"/></div>
+                    <div style={{flex:1,minWidth:90}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Sales</div><Inp value={u.sales} onChange={e=>upd(u.id,{sales:e.target.value})} placeholder="Sales rep"/></div>
+                    <div style={{flex:1.5,minWidth:130}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Customer / GC</div><Inp value={u.customer} onChange={e=>upd(u.id,{customer:e.target.value})} placeholder="Customer or GC"/></div>
+                    <div style={{flex:1.1,minWidth:110}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Last Follow Up</div><Inp value={u.lastFollowUp} onChange={e=>upd(u.id,{lastFollowUp:e.target.value})} placeholder="MM/DD/YY"/></div>
+                    <div style={{flex:1,minWidth:120}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
+                      <select value={u.foreman||""} onChange={e=>upd(u.id,{foreman:e.target.value})} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
                         <option value="">— unassigned —</option>
                         {FOREMEN.map(f=><option key={f} value={f}>{f}</option>)}
                       </select>
                     </div>
                   </div>
-                  <div>
-                    <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes</div>
-                    <TA value={u.notes} onChange={e=>upd(u.id,{notes:e.target.value})}
-                      placeholder="Status, timeline, notes…" rows={2}/>
-                  </div>
+                  <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes</div><TA value={u.notes} onChange={e=>upd(u.id,{notes:e.target.value})} placeholder="Status, timeline, notes…" rows={2}/></div>
                   <div style={{display:"flex",gap:8,marginTop:2}}>
-                    <button onClick={()=>setEditingId(null)}
-                      style={{background:C.accent,border:"none",borderRadius:7,color:"#000",
-                        fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
-                      Done
-                    </button>
-                    <button onClick={()=>{ if(window.confirm("Promote to active job?")) onPromote(u); }}
-                      style={{background:"none",border:`1px solid ${C.green}`,borderRadius:7,color:C.green,
-                        fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
-                      ✓ Promote to Job
-                    </button>
-                    <button onClick={()=>del(u.id)}
-                      style={{background:"none",border:"none",color:C.muted,
-                        fontSize:12,cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>
-                      Remove
-                    </button>
+                    <button onClick={()=>setEditingId(null)} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
+                    <button onClick={()=>{if(window.confirm("Promote to active job?"))onPromote(u);}} style={{background:"none",border:`1px solid ${C.green}`,borderRadius:7,color:C.green,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✓ Promote to Job</button>
+                    <button onClick={()=>del(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>Remove</button>
                   </div>
                 </div>
-              ) : (
-                /* ── Read mode ── */
+              ):(
                 <>
-                  <div style={{flex:2.5,paddingRight:12,fontSize:13,fontWeight:600,
-                    color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                  <div style={{flex:2.5,paddingRight:12,fontSize:13,fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
                     {u.name||<span style={{color:C.muted,fontStyle:"italic"}}>Untitled</span>}
-                    {u.foreman&&(
-                      <span style={{marginLeft:8,fontSize:10,fontWeight:700,
-                        color:FOREMEN_COLORS[u.foreman]||"#6b7280",
-                        background:`${FOREMEN_COLORS[u.foreman]||"#6b7280"}18`,
-                        borderRadius:99,padding:"1px 7px",border:`1px solid ${FOREMEN_COLORS[u.foreman]||"#6b7280"}33`}}>
-                        {u.foreman}
-                      </span>
-                    )}
+                    {u.foreman&&<span style={{marginLeft:8,fontSize:10,fontWeight:700,color:FOREMEN_COLORS[u.foreman]||"#6b7280",background:`${FOREMEN_COLORS[u.foreman]||"#6b7280"}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${FOREMEN_COLORS[u.foreman]||"#6b7280"}33`}}>{u.foreman}</span>}
                   </div>
-                  <div style={{flex:1.2,paddingRight:12,fontSize:12,color:C.dim,
-                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                    {u.city||"—"}
-                  </div>
-                  <div style={{flex:1,paddingRight:12,fontSize:12,color:C.dim,
-                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                    {u.sales||"—"}
-                  </div>
-                  <div style={{flex:1.5,paddingRight:12,fontSize:12,color:C.dim,
-                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                    {u.customer||"—"}
-                  </div>
-                  <div style={{flex:3,paddingRight:12,fontSize:12,color:C.dim,
-                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                    {u.notes||"—"}
-                  </div>
-                  <div style={{flex:1.1,paddingRight:12,fontSize:12,color:C.dim,
-                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                    {u.lastFollowUp||"—"}
-                  </div>
+                  <div style={{flex:1.2,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.city||"—"}</div>
+                  <div style={{flex:1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.sales||"—"}</div>
+                  <div style={{flex:1.5,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.customer||"—"}</div>
+                  <div style={{flex:3,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.notes||"—"}</div>
+                  <div style={{flex:1.1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.lastFollowUp||"—"}</div>
                   <div style={{width:110,flexShrink:0,display:"flex",gap:6,justifyContent:"flex-end"}}>
-                    <button onClick={()=>setEditingId(u.id)}
-                      style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
-                        color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>
-                      Edit
-                    </button>
-                    <button onClick={()=>{ if(window.confirm("Promote to active job?")) onPromote(u); }}
-                      style={{background:C.green,border:"none",borderRadius:6,
-                        color:"#fff",fontSize:11,fontWeight:700,padding:"4px 10px",
-                        cursor:"pointer",fontFamily:"inherit"}}>
-                      ✓
-                    </button>
+                    <button onClick={()=>setEditingId(u.id)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Edit</button>
+                    <button onClick={()=>{if(window.confirm("Promote to active job?"))onPromote(u);}} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✓</button>
                   </div>
                 </>
               )}
@@ -5010,321 +5161,851 @@ function UpcomingJobs({ upcoming, onChange, onPromote }) {
   );
 }
 
-// ── Scheduling Forecast ───────────────────────────────────────
 
-function SchedulingForecast({ jobs, onSelectJob }) {
-  const [foremanTab, setForemanTab]       = useState("All");
-  const [scheduleView, setScheduleView]   = useState("all"); // "all" | "thisWeek" | "nextMonth"
+// ── Tasks Engine ─────────────────────────────────────────────
 
-  const today = new Date();
-  today.setHours(0,0,0,0);
+function computeTasks(jobs) {
+  const tasks = [];
+  jobs.forEach(job => {
+    const foreman = job.foreman || "Koy";
+    const rs = job.roughStatus || "";
+    const fs = job.finishStatus || "";
 
-  const startOfWeek = (d) => {
-    const dt = new Date(d);
-    dt.setHours(0,0,0,0);
-    const day = dt.getDay();
-    dt.setDate(dt.getDate() - day);
-    return dt;
-  };
-
-  const thisWeekStart  = startOfWeek(today);
-  const nextWeekStart  = new Date(thisWeekStart); nextWeekStart.setDate(thisWeekStart.getDate() + 7);
-  const twoWeeksStart  = new Date(thisWeekStart); twoWeeksStart.setDate(thisWeekStart.getDate() + 14);
-  const thisWeekEnd    = new Date(thisWeekStart); thisWeekEnd.setDate(thisWeekStart.getDate() + 7);
-  const nextMonthEnd   = new Date(today); nextMonthEnd.setDate(today.getDate() + 30);
-
-  const parseDate = (str) => {
-    if(!str) return null;
-    const d = new Date(str);
-    return isNaN(d.getTime()) ? null : d;
-  };
-
-  const getBucket = (dateStr) => {
-    const d = parseDate(dateStr);
-    if(!d) return "unscheduled";
-    d.setHours(0,0,0,0);
-    if(d < thisWeekStart) return "overdue";
-    if(d < nextWeekStart) return "thisWeek";
-    if(d < twoWeeksStart) return "nextWeek";
-    return "later";
-  };
-
-  // Build all schedule items from all jobs
-  const buildItems = (jobList) => {
-    const items = [];
-
-    jobList.forEach(job => {
-      const rs = effRS(job);
-      const fs = effFS(job);
-
-      // Rough — has projected start or scheduled/ready status
-      if(job.roughProjectedStart || rs === "scheduled" || rs === "readysched" || rs === "ready" || rs === "needs") {
-        if(rs !== "complete" && rs !== "invoice" && rs !== "inprogress") {
-          items.push({
-            id: job.id + "_rough",
-            jobId: job.id,
-            job,
-            type: "rough",
-            label: "Rough",
-            color: C.rough,
-            date: job.roughProjectedStart || job.roughStatusDate || "",
-            bucket: getBucket(job.roughProjectedStart || job.roughStatusDate),
-            status: rs,
-          });
-        }
-      }
-
-      // Finish — has projected start or scheduled/ready status
-      if(job.finishProjectedStart || fs === "scheduled" || fs === "readysched" || fs === "ready" || fs === "needs") {
-        if(fs !== "complete" && fs !== "invoice" && fs !== "inprogress") {
-          items.push({
-            id: job.id + "_finish",
-            jobId: job.id,
-            job,
-            type: "finish",
-            label: "Finish",
-            color: C.finish,
-            date: job.finishProjectedStart || job.finishStatusDate || "",
-            bucket: getBucket(job.finishProjectedStart || job.finishStatusDate),
-            status: fs,
-          });
-        }
-      }
-
-      // Return trips needing scheduling
-      (job.returnTrips || []).forEach((rt, i) => {
-        if(!rt.signedOff && (rt.rtStatus === "needs" || rt.rtStatus === "scheduled" || (!rt.rtStatus && (rt.scope || rt.date)))) {
-          items.push({
-            id: job.id + "_rt_" + rt.id,
-            jobId: job.id,
-            job,
-            type: "returnTrip",
-            label: `Return Trip #${i+1}`,
-            color: "#8b5cf6",
-            date: rt.rtStatusDate || rt.scheduledDate || rt.date || "",
-            bucket: getBucket(rt.rtStatusDate || rt.scheduledDate || rt.date),
-            status: rt.rtStatus || "needs",
-            scope: rt.scope,
-          });
-        }
+    // Rough — start date confirmed: two tasks fire
+    if(rs === "date_confirmed") {
+      tasks.push({
+        id: job.id+"_rough_needs", jobId: job.id, jobName: job.name,
+        type: "auto", category: "rough", foreman,
+        title: "Schedule Rough",
+        desc: job.roughStatusDate ? `Schedule by: ${job.roughStatusDate}` : "Start date confirmed — needs to be scheduled",
+        color: C.rough, cleared: false,
       });
+      tasks.push({
+        id: job.id+"_rough_po", jobId: job.id, jobName: job.name,
+        type: "auto", category: "po", foreman,
+        title: "Order Job Start PO",
+        desc: job.roughStatusDate ? `Schedule by: ${job.roughStatusDate}` : "Order materials PO for rough start",
+        color: "#8b5cf6", cleared: false,
+      });
+    }
 
-      // Change orders needing scheduling
-      (job.changeOrders || []).forEach((co, i) => {
-        if(co.coStatus === "scheduled" || co.coStatus === "pending" || co.coStatus === "needs") {
-          items.push({
-            id: job.id + "_co_" + co.id,
-            jobId: job.id,
-            job,
-            type: "changeOrder",
-            label: `Change Order #${i+1}`,
-            color: C.accent,
-            date: co.coStatusDate || "",
-            bucket: getBucket(co.coStatusDate),
-            status: co.coStatus,
-            desc: co.desc,
-          });
-        }
+    // Finish — start date confirmed: two tasks fire
+    if(fs === "date_confirmed") {
+      tasks.push({
+        id: job.id+"_finish_needs", jobId: job.id, jobName: job.name,
+        type: "auto", category: "finish", foreman,
+        title: "Schedule Finish",
+        desc: job.finishStatusDate ? `Schedule by: ${job.finishStatusDate}` : "Start date confirmed — needs to be scheduled",
+        color: C.finish, cleared: false,
+      });
+      tasks.push({
+        id: job.id+"_finish_po", jobId: job.id, jobName: job.name,
+        type: "auto", category: "po", foreman,
+        title: "Order Job Start PO",
+        desc: job.finishStatusDate ? `Schedule by: ${job.finishStatusDate}` : "Order materials PO for finish start",
+        color: "#8b5cf6", cleared: false,
+      });
+    }
+
+    // QC Walk — fires once when rough hits 80%+, clears when qcStatus=scheduled
+    if(job.roughQCTaskFired && job.qcStatus !== "scheduled" && job.qcStatus !== "complete") tasks.push({
+      id: job.id+"_qc_walk", jobId: job.id, jobName: job.name,
+      type: "auto", category: "qc", foreman,
+      title: "Schedule QC Walk",
+      desc: `Rough is at ${job.roughStage||"80%+"} — time to schedule the QC walk`,
+      color: C.teal, cleared: false,
+    });
+
+    // Change Orders
+    const rs2 = effRS(job), fs2 = effFS(job);
+    (job.changeOrders||[]).forEach((co, i) => {
+      // Approved — context-aware task
+      if(co.coStatus === "approved") {
+        const crewOnSite = rs2 === "inprogress" || fs2 === "inprogress";
+        tasks.push({
+          id: job.id+"_co_"+co.id+"_approved", jobId: job.id, jobName: job.name,
+          type: "auto", category: "co", foreman,
+          title: crewOnSite
+            ? `CO #${i+1} Approved — confirm with crew & get sign-off`
+            : `CO #${i+1} Approved — convert to return trip & set schedule date`,
+          desc: co.desc ? `CO: ${co.desc}` : undefined,
+          color: "#16a34a", cleared: false,
+        });
+      }
+      // Needs scheduling
+      if(co.coStatus === "needs") tasks.push({
+        id: job.id+"_co_"+co.id+"_needs", jobId: job.id, jobName: job.name,
+        type: "auto", category: "co", foreman,
+        title: `Schedule Change Order #${i+1}`,
+        desc: co.desc ? `CO: ${co.desc}` : "Change order needs to be scheduled",
+        color: C.accent, cleared: false,
       });
     });
 
+    // Ready to Invoice — fires when readyToInvoice is true and not yet dismissed
+    if(job.readyToInvoice && !job.invoiceDismissed) tasks.push({
+      id: job.id+"_invoice", jobId: job.id, jobName: job.name,
+      type: "auto", category: "invoice", foreman,
+      title: "Ready to Invoice",
+      desc: job.tempPed ? "Temp ped completed" : effFS(job)==="complete" ? "Finish complete" : "Rough complete",
+      color: "#ea580c", cleared: false,
+    });
+
+    // CO individually completed → merge/invoice task
+    const coDoneDismissed = job.coDoneDismissed||[];
+    (job.changeOrders||[]).forEach((co, i) => {
+      if(co.coStatus === "completed" && !coDoneDismissed.includes(co.id)) tasks.push({
+        id: job.id+"_co_"+co.id+"_done", jobId: job.id, jobName: job.name,
+        type: "auto", category: "co", foreman,
+        coId: co.id,
+        title: `CO #${i+1} Complete — merge or invoice`,
+        desc: co.desc ? `CO: ${co.desc}` : undefined,
+        color: "#16a34a", cleared: false,
+      });
+    });
+
+    // RT individually completed → merge/invoice task
+    const rtDoneDismissed = job.rtDoneDismissed||[];
+    (job.returnTrips||[]).forEach((rt, i) => {
+      if(rt.rtStatus === "complete" && !rtDoneDismissed.includes(rt.id)) tasks.push({
+        id: job.id+"_rt_"+rt.id+"_done", jobId: job.id, jobName: job.name,
+        type: "auto", category: "rt", foreman,
+        rtId: rt.id,
+        title: `Return Trip #${i+1} Complete — merge or invoice`,
+        desc: rt.scope ? `Scope: ${rt.scope}` : undefined,
+        color: "#16a34a", cleared: false,
+      });
+    });
+
+    // Temp Ped scheduling task
+    if(job.tempPed && job.tempPedStatus === "ready") tasks.push({
+      id: job.id+"_tempped_sched", jobId: job.id, jobName: job.name,
+      type: "auto", category: "tempped", foreman,
+      title: `Schedule Temp Ped${job.tempPedNumber?" #"+job.tempPedNumber:""}`,
+      desc: "Temp ped is ready to be scheduled",
+      color: "#8b5cf6", cleared: false,
+    });
+
+    // Return Trips needing scheduling
+    (job.returnTrips||[]).forEach((rt, i) => {
+      if(rt.rtStatus === "needs") tasks.push({
+        id: job.id+"_rt_"+rt.id+"_needs", jobId: job.id, jobName: job.name,
+        type: "auto", category: "rt", foreman,
+        title: `Schedule Return Trip #${i+1}`,
+        desc: rt.scope ? `Scope: ${rt.scope}` : "Return trip needs to be scheduled",
+        color: "#8b5cf6", cleared: false,
+      });
+    });
+  });
+  return tasks;
+}
+
+// ── Tasks Component ───────────────────────────────────────────
+
+const URGENCY = (dueDateStr) => {
+  if(!dueDateStr) return null;
+  const due = new Date(dueDateStr); due.setHours(0,0,0,0);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const diff = Math.round((due - today) / 86400000);
+  if(diff < 0)  return {label:"OVERDUE", color:"#dc2626", bg:"#dc262612", days: diff};
+  if(diff === 0) return {label:"DUE TODAY", color:"#ea580c", bg:"#ea580c12", days: 0};
+  if(diff <= 3) return {label:`DUE IN ${diff}D`, color:"#ca8a04", bg:"#ca8a0412", days: diff};
+  if(diff <= 7) return {label:`DUE IN ${diff}D`, color:"#2563eb", bg:"#2563eb10", days: diff};
+  return {label:`DUE ${new Date(dueDateStr).toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, color:"#6b7280", bg:"transparent", days: diff};
+};
+
+function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
+  const [editingDate, setEditingDate] = useState(false);
+  const [dateVal, setDateVal] = useState(task.dueDate||"");
+
+  const urg = URGENCY(task.dueDate);
+  const isOverdue = urg && urg.days < 0;
+  const isUrgent  = urg && urg.days >= 0 && urg.days <= 3;
+
+  const CATEGORY_LABELS = {
+    rough:"Rough", finish:"Finish", qc:"QC Walk", co:"Change Order",
+    rt:"Return Trip", manual:"Manual Task", prep:"Pre Job Prep", po:"Purchase Order", tempped:"Temp Ped", invoice:"Invoice"
+  };
+
+  const saveDate = () => {
+    if(onSetDueDate) onSetDueDate(task.id, dateVal);
+    setEditingDate(false);
+  };
+
+  return (
+    <div style={{
+      display:"flex", alignItems:"flex-start", gap:12,
+      padding:"12px 14px", borderRadius:11, marginBottom:6,
+      background: isOverdue ? "#dc262608" : isUrgent ? "#ea580c06" : "var(--card)",
+      border:`1px solid ${isOverdue?"#dc262633":isUrgent?"#ea580c33":task.color+"22"}`,
+      borderLeft:`3px solid ${isOverdue?"#dc2626":isUrgent?"#ea580c":task.color}`,
+      boxShadow: isOverdue?"0 2px 8px #dc262612":isUrgent?"0 2px 8px #ea580c0a":"none",
+      transition:"transform 0.12s, box-shadow 0.12s",
+    }}
+    onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 14px ${task.color}18`;}}
+    onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow=isOverdue?"0 2px 8px #dc262612":isUrgent?"0 2px 8px #ea580c0a":"none";}}>
+
+      {/* Color dot */}
+      <div style={{width:8,height:8,borderRadius:"50%",background:isOverdue?"#dc2626":task.color,flexShrink:0,marginTop:5}}/>
+
+      <div style={{flex:1,minWidth:0}}>
+        {/* Category + urgency row */}
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,flexWrap:"wrap"}}>
+          <span style={{fontSize:9,fontWeight:800,color:task.color,background:`${task.color}18`,borderRadius:99,padding:"2px 8px",border:`1px solid ${task.color}28`,letterSpacing:"0.07em"}}>
+            {(CATEGORY_LABELS[task.category]||task.category).toUpperCase()}
+          </span>
+          {urg&&!editingDate&&(
+            <span onClick={()=>{setEditingDate(true);setDateVal(task.dueDate||"");}}
+              style={{fontSize:9,fontWeight:800,color:urg.color,background:urg.bg,borderRadius:99,padding:"2px 8px",border:`1px solid ${urg.color}33`,letterSpacing:"0.07em",cursor:"pointer"}}
+              title="Click to edit due date">
+              {urg.label} ✏
+            </span>
+          )}
+          {!urg&&!editingDate&&onSetDueDate&&(
+            <span onClick={()=>{setEditingDate(true);setDateVal("");}}
+              style={{fontSize:9,color:"var(--muted)",cursor:"pointer",padding:"2px 6px",borderRadius:99,border:"1px dashed var(--border)"}}
+              title="Set due date">
+              + due date
+            </span>
+          )}
+          {editingDate&&(
+            <div style={{display:"flex",alignItems:"center",gap:4}}>
+              <input
+                autoFocus
+                value={dateVal}
+                onChange={e=>setDateVal(e.target.value)}
+                onKeyDown={e=>{if(e.key==="Enter")saveDate();if(e.key==="Escape")setEditingDate(false);}}
+                placeholder="MM/DD/YY"
+                style={{fontSize:11,border:"1px solid var(--accent)",borderRadius:6,padding:"2px 7px",
+                  background:"var(--surface)",color:"var(--text)",fontFamily:"inherit",width:96,outline:"none"}}
+              />
+              <button onClick={saveDate}
+                style={{fontSize:10,fontWeight:700,background:"var(--accent)",border:"none",
+                  borderRadius:5,color:"#000",padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>
+                Set
+              </button>
+              {task.dueDate&&(
+                <button onClick={()=>{if(onSetDueDate)onSetDueDate(task.id,"");setEditingDate(false);}}
+                  style={{fontSize:10,background:"none",border:"1px solid var(--border)",borderRadius:5,
+                    color:"var(--muted)",padding:"3px 7px",cursor:"pointer",fontFamily:"inherit"}}>
+                  Clear
+                </button>
+              )}
+              <button onClick={()=>setEditingDate(false)}
+                style={{fontSize:10,background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontFamily:"inherit"}}>
+                ✕
+              </button>
+            </div>
+          )}
+          {task.type==="manual"&&<span style={{fontSize:9,color:"#6b7280",letterSpacing:"0.06em",fontWeight:600}}>MANUAL</span>}
+        </div>
+
+        {/* Title */}
+        <div style={{fontSize:13,fontWeight:700,color:"var(--text)",marginBottom:task.jobName||task.desc||task.notes?3:0,lineHeight:1.3}}>
+          {task.title}
+        </div>
+
+        {/* Job link */}
+        {task.jobName&&(
+          <div onClick={()=>{const job=jobs.find(j=>j.id===task.jobId);if(job&&onSelectJob)onSelectJob(job);}}
+            style={{fontSize:11,color:"var(--accent)",cursor:"pointer",marginBottom:task.desc?2:0,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
+            <span style={{opacity:0.6,fontSize:10}}>↗</span>{task.jobName}
+          </div>
+        )}
+
+        {task.desc&&<div style={{fontSize:11,color:"var(--dim)",fontStyle:"italic",lineHeight:1.4}}>{task.desc}</div>}
+        {task.notes&&<div style={{fontSize:11,color:"var(--dim)",marginTop:2,lineHeight:1.4}}>{task.notes}</div>}
+
+        {task.category==="prep"&&task.prepStage&&(
+          <div style={{marginTop:6}}>
+            <span style={{fontSize:10,fontWeight:700,color:task.prepStage===PREP_STAGE_ALERT?"#dc2626":"#0d9488",background:task.prepStage===PREP_STAGE_ALERT?"#dc262610":"#0d948810",borderRadius:99,padding:"2px 10px",border:`1px solid ${task.prepStage===PREP_STAGE_ALERT?"#dc262633":"#0d948833"}`}}>
+              {task.prepStage===PREP_STAGE_ALERT?"⚠ "+task.prepStage:task.prepStage}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Action buttons */}
+      <div style={{flexShrink:0,display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
+        {onDismiss&&(
+          <button onClick={onDismiss}
+            style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 11px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>
+            ✓ Done
+          </button>
+        )}
+        {task.jobId&&onSelectJob&&(
+          <button onClick={()=>{const job=jobs.find(j=>j.id===task.jobId);if(job)onSelectJob(job);}}
+            style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 11px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+            Open →
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AddTaskForm({ defaultForeman, onAdd, onCancel }) {
+  const [t, setT] = useState({title:"", foreman:defaultForeman||"Koy", notes:"", dueDate:""});
+  return (
+    <div style={{padding:"14px 16px",background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,marginBottom:16}}>
+      <div style={{fontSize:11,fontWeight:700,color:"var(--dim)",letterSpacing:"0.08em",marginBottom:12}}>NEW TASK</div>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
+        <div style={{flex:3,minWidth:180}}>
+          <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Task</div>
+          <Inp value={t.title} onChange={e=>setT(x=>({...x,title:e.target.value}))} placeholder="What needs to be done?"/>
+        </div>
+        <div style={{flex:1,minWidth:110}}>
+          <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Assign To</div>
+          <select value={t.foreman} onChange={e=>setT(x=>({...x,foreman:e.target.value}))}
+            style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:7,color:"var(--text)",padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
+            {FOREMEN.map(f=><option key={f} value={f}>{f}</option>)}
+          </select>
+        </div>
+        <div style={{flex:1,minWidth:110}}>
+          <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Due Date</div>
+          <Inp value={t.dueDate} onChange={e=>setT(x=>({...x,dueDate:e.target.value}))} placeholder="MM/DD/YY"/>
+        </div>
+      </div>
+      <div style={{marginBottom:12}}>
+        <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Notes</div>
+        <TA value={t.notes} onChange={e=>setT(x=>({...x,notes:e.target.value}))} placeholder="Additional context..." rows={2}/>
+      </div>
+      <div style={{display:"flex",gap:8}}>
+        <button onClick={()=>{if(t.title.trim())onAdd(t);}} style={{background:"var(--accent)",border:"none",borderRadius:7,color:"#000",fontWeight:800,padding:"8px 20px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Add Task</button>
+        <button onClick={onCancel} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",padding:"8px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function PrepTaskList({ jobs, onSelectJob, onUpdateJob }) {
+  // All jobs that have a prep stage set and not complete
+  const prepJobs = jobs.filter(j => j.prepStage && j.prepStage !== "Job Prep Complete")
+    .sort((a,b) => {
+      const ai = PREP_STAGES.indexOf(a.prepStage);
+      const bi = PREP_STAGES.indexOf(b.prepStage);
+      return ai - bi;
+    });
+
+  const completeJobs = jobs.filter(j => j.prepStage === "Job Prep Complete");
+
+  const stageColor = (stage) => {
+    if(stage === PREP_STAGE_ALERT) return "#dc2626";
+    if(stage === "Job Prep Complete") return "#16a34a";
+    const idx = PREP_STAGES.indexOf(stage);
+    const pct = idx / (PREP_STAGES.length - 1);
+    if(pct < 0.3) return "#ca8a04";
+    if(pct < 0.7) return "#2563eb";
+    return "#0d9488";
+  };
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,paddingBottom:10,borderBottom:"2px solid #2563eb22"}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#2563eb"}}>PRE JOB PREP TRACKER</div>
+        <div style={{background:"#2563eb18",border:"1px solid #2563eb33",borderRadius:99,padding:"2px 10px",fontSize:11,color:"#2563eb",fontWeight:700}}>{prepJobs.length} in progress</div>
+        {completeJobs.length>0&&<div style={{background:"#16a34a18",border:"1px solid #16a34a33",borderRadius:99,padding:"2px 10px",fontSize:11,color:"#16a34a",fontWeight:700}}>✓ {completeJobs.length} complete</div>}
+      </div>
+
+      {prepJobs.length===0&&(
+        <div style={{textAlign:"center",padding:"32px 0",color:"var(--muted)",fontSize:12,fontStyle:"italic"}}>No jobs in pre-job prep</div>
+      )}
+
+      {prepJobs.map(job => {
+        const stage = job.prepStage||"";
+        const stageIdx = PREP_STAGES.indexOf(stage);
+        const pct = stageIdx >= 0 ? Math.round((stageIdx / (PREP_STAGES.length-1)) * 100) : 0;
+        const sc = stageColor(stage);
+        const fc = FOREMEN_COLORS[job.foreman||"Koy"]||"#6b7280";
+        return (
+          <div key={job.id} style={{marginBottom:10,padding:"14px 16px",background:"var(--card)",border:`1px solid ${sc}33`,borderRadius:12,borderLeft:`3px solid ${sc}`}}
+            onMouseEnter={e=>{e.currentTarget.style.boxShadow=`0 4px 16px ${sc}18`;}}
+            onMouseLeave={e=>{e.currentTarget.style.boxShadow="none";}}>
+            <div style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:10}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:700,color:"var(--text)",marginBottom:3,cursor:"pointer"}}
+                  onClick={()=>onSelectJob(job)}>{job.name||"Untitled Job"}</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                  {job.address&&<span style={{fontSize:10,color:"var(--dim)"}}>{job.address}</span>}
+                  <span style={{fontSize:10,fontWeight:700,color:fc,background:`${fc}15`,borderRadius:99,padding:"1px 7px",border:`1px solid ${fc}28`}}>{job.foreman||"Koy"}</span>
+                </div>
+              </div>
+              <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+                <select value={stage} onChange={e=>onUpdateJob(job.id,{prepStage:e.target.value,...(e.target.value===PREP_STAGE_ALERT?{readyToSchedule:false}:{})})}
+                  style={{background:sc+"12",border:`1px solid ${sc}55`,borderRadius:7,color:sc,padding:"5px 8px",fontSize:11,fontFamily:"inherit",fontWeight:700,outline:"none",cursor:"pointer",maxWidth:200}}>
+                  <option value="">— select —</option>
+                  {PREP_STAGES.map(s=><option key={s} value={s}>{s===PREP_STAGE_ALERT?"⚠ "+s:s}</option>)}
+                </select>
+                <button onClick={()=>onSelectJob(job)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 10px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Open →</button>
+              </div>
+            </div>
+            {/* Progress bar */}
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{flex:1,height:5,background:"var(--border)",borderRadius:99,overflow:"hidden"}}>
+                <div style={{width:`${pct}%`,height:"100%",background:sc,borderRadius:99,transition:"width 0.3s"}}/>
+              </div>
+              <span style={{fontSize:10,fontWeight:700,color:sc,minWidth:28,textAlign:"right"}}>{pct}%</span>
+            </div>
+            {stage===PREP_STAGE_ALERT&&(
+              <div style={{marginTop:8,fontSize:10,fontWeight:700,color:"#dc2626",display:"flex",alignItems:"center",gap:5}}>
+                <span>⚠</span> Redline Plans Need to be Updated
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJob, filterForeman, compact }) {
+  const [showAdd, setShowAdd] = useState(false);
+  // Stores due date overrides for auto-tasks keyed by task id
+  const [taskDueDates, setTaskDueDates] = useState({});
+
+  const handleSetDueDate = (taskId, date) => {
+    // Manual task — update in the list
+    const isManual = (manualTasks||[]).find(t => t.id === taskId);
+    if(isManual) {
+      onManualTasksChange((manualTasks||[]).map(t => t.id===taskId ? {...t, dueDate:date} : t));
+    } else {
+      // Auto-task — store override locally
+      setTaskDueDates(prev => ({...prev, [taskId]: date}));
+    }
+  };
+
+  const handleAdd = (t) => {
+    const task = { id: uid(), title: t.title, foreman: t.foreman,
+      notes: t.notes, dueDate: t.dueDate||"", type:"manual", category:"manual",
+      color: "#6b7280", cleared:false, createdAt: new Date().toISOString() };
+    onManualTasksChange([...(manualTasks||[]), task]);
+    setShowAdd(false);
+  };
+
+  const dismissManual = (id) => {
+    onManualTasksChange((manualTasks||[]).filter(t=>t.id!==id));
+  };
+
+  const dismissInvoiceTask = (jobId) => {
+    if(onUpdateJob) onUpdateJob(jobId, {invoiceDismissed:true});
+  };
+
+  const dismissCODoneTask = (jobId, coId) => {
+    // Mark co as invoice-dismissed by adding to job's coDismissed set
+    const job = jobs.find(j=>j.id===jobId);
+    if(!job||!onUpdateJob) return;
+    const dismissed = [...(job.coDoneDismissed||[]), coId];
+    onUpdateJob(jobId, {coDoneDismissed: dismissed});
+  };
+
+  const dismissRTDoneTask = (jobId, rtId) => {
+    const job = jobs.find(j=>j.id===jobId);
+    if(!job||!onUpdateJob) return;
+    const dismissed = [...(job.rtDoneDismissed||[]), rtId];
+    onUpdateJob(jobId, {rtDoneDismissed: dismissed});
+  };
+
+  const autoTasks = computeTasks(jobs);
+  const allTasks = [
+    ...autoTasks.map(t => taskDueDates[t.id] !== undefined ? {...t, dueDate:taskDueDates[t.id]} : t),
+    ...(manualTasks||[]).map(t=>({...t,type:"manual"}))
+  ].filter(t => !filterForeman || t.foreman === filterForeman);
+
+  // Sort: overdue first, then by dueDate, then undated
+  const sorted = [...allTasks].sort((a,b) => {
+    const ua = URGENCY(a.dueDate), ub = URGENCY(b.dueDate);
+    if(ua&&ub) return ua.days - ub.days;
+    if(ua) return -1; if(ub) return 1;
+    return 0;
+  });
+
+  const foremanList = filterForeman ? [filterForeman] : [...FOREMEN,"Unassigned"];
+  const totalCount = allTasks.length;
+  const overdueCount = sorted.filter(t=>{ const u=URGENCY(t.dueDate); return u&&u.days<0; }).length;
+
+  return (
+    <div>
+      {!compact&&!filterForeman&&(
+        <div style={{padding:"24px 26px 16px",borderBottom:"1px solid var(--border)"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
+            <div>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:"var(--text)",lineHeight:1}}>TASKS</div>
+              <div style={{display:"flex",gap:8,marginTop:4,flexWrap:"wrap"}}>
+                <span style={{fontSize:11,color:"var(--dim)"}}>{totalCount} open</span>
+                {overdueCount>0&&<span style={{fontSize:11,fontWeight:700,color:"#dc2626",background:"#dc262612",borderRadius:99,padding:"1px 8px",border:"1px solid #dc262633"}}>⚠ {overdueCount} overdue</span>}
+              </div>
+            </div>
+            <button onClick={()=>setShowAdd(v=>!v)} style={{background:"var(--accent)",border:"none",borderRadius:9,color:"#000",fontWeight:800,padding:"9px 22px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>+ Add Task</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{padding:filterForeman||compact?"0":"16px 26px"}}>
+        {showAdd&&<AddTaskForm defaultForeman={filterForeman||"Koy"} onAdd={handleAdd} onCancel={()=>setShowAdd(false)}/>}
+
+        {/* Ready to Invoice — always shown at top */}
+        {(()=>{
+          const invoiceJobs = jobs.filter(j=>j.readyToInvoice);
+          if(!invoiceJobs.length) return null;
+          return (
+            <div style={{marginBottom:24}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,paddingBottom:8,borderBottom:"2px solid #ea580c33"}}>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#ea580c"}}>READY TO INVOICE</div>
+                <div style={{background:"#ea580c18",border:"1px solid #ea580c33",borderRadius:99,padding:"2px 10px",fontSize:11,color:"#ea580c",fontWeight:700}}>{invoiceJobs.length} job{invoiceJobs.length!==1?"s":""}</div>
+              </div>
+              {invoiceJobs.map(job=>{
+                const foreman = job.foreman||"Koy";
+                const fc = FOREMEN_COLORS[foreman]||"#6b7280";
+                const isTP = job.tempPed;
+                return (
+                  <div key={job.id}
+                    onClick={()=>onSelectJob(job)}
+                    style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,
+                      padding:"11px 14px",borderRadius:10,marginBottom:6,cursor:"pointer",
+                      background:"#ea580c08",border:"1px solid #ea580c33",borderLeft:"3px solid #ea580c"}}
+                    onMouseEnter={e=>e.currentTarget.style.background="#ea580c14"}
+                    onMouseLeave={e=>e.currentTarget.style.background="#ea580c08"}>
+                    <div>
+                      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
+                        <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{job.name||"Untitled Job"}</span>
+                        {isTP&&<span style={{fontSize:9,fontWeight:800,color:"#8b5cf6",background:"#8b5cf618",borderRadius:99,padding:"1px 6px",border:"1px solid #8b5cf633"}}>TEMP PED</span>}
+                      </div>
+                      <div style={{fontSize:11,color:"var(--dim)",display:"flex",gap:8}}>
+                        {job.address&&<span>{job.address}</span>}
+                        <span style={{fontWeight:700,color:fc}}>{foreman}</span>
+                      </div>
+                    </div>
+                    <div style={{fontSize:11,fontWeight:800,color:"#ea580c",whiteSpace:"nowrap"}}>Open →</div>
+                  </div>
+                );
+              })}
+            </div>
+          );
+        })()}
+
+        {/* Koy prep tracker */}
+        {(!filterForeman||filterForeman==="Koy")&&(
+          <div style={{marginBottom:24}}>
+            <PrepTaskList jobs={jobs} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob}/>
+          </div>
+        )}
+
+        {/* Tasks grouped by foreman */}
+        {!filterForeman&&(
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",color:"var(--dim)"}}>ALL TASKS</div>
+            {!showAdd&&<button onClick={()=>setShowAdd(true)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>+ Add Task</button>}
+          </div>
+        )}
+
+        {totalCount===0&&(
+          <div style={{textAlign:"center",padding:"40px 0",color:"var(--muted)"}}>
+            <div style={{fontSize:22,marginBottom:6}}>✓</div>
+            <div style={{fontSize:13}}>No open tasks{filterForeman?` for ${filterForeman}`:""}</div>
+          </div>
+        )}
+
+        {filterForeman ? (
+          // Flat list for foreman view
+          <div>
+            {filterForeman&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+              <div style={{fontSize:11,fontWeight:700,color:"var(--dim)",letterSpacing:"0.06em"}}>TASKS</div>
+              <button onClick={()=>setShowAdd(v=>!v)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"4px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>+ Add Task</button>
+            </div>}
+            {showAdd&&filterForeman&&<AddTaskForm defaultForeman={filterForeman} onAdd={handleAdd} onCancel={()=>setShowAdd(false)}/>}
+            {sorted.map(task=>(
+              <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
+                onDismiss={
+                  task.type==="manual" ? ()=>dismissManual(task.id) :
+                  task.category==="invoice" ? ()=>dismissInvoiceTask(task.jobId) :
+                  task.id.endsWith("_done") && task.coId ? ()=>dismissCODoneTask(task.jobId, task.coId) :
+                  task.id.endsWith("_done") && task.rtId ? ()=>dismissRTDoneTask(task.jobId, task.rtId) :
+                  null
+                }
+                onSetDueDate={handleSetDueDate}/>
+            ))}
+          </div>
+        ) : (
+          // Grouped by foreman
+          foremanList.map(f=>{
+            const fc = FOREMEN_COLORS[f]||"#6b7280";
+            const fTasks = sorted.filter(t=>t.foreman===f);
+            const fOverdue = fTasks.filter(t=>{ const u=URGENCY(t.dueDate); return u&&u.days<0; }).length;
+            if(fTasks.length===0) return null;
+            return (
+              <div key={f} style={{marginBottom:28}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,paddingBottom:8,borderBottom:`2px solid ${fc}33`}}>
+                  <div style={{width:9,height:9,borderRadius:"50%",background:fc}}/>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:fc}}>{f}</div>
+                  <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:fc,fontWeight:700}}>{fTasks.length}</div>
+                  {fOverdue>0&&<div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>⚠ {fOverdue} overdue</div>}
+                </div>
+                {fTasks.map(task=>(
+                  <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
+                    onDismiss={
+                      task.type==="manual" ? ()=>dismissManual(task.id) :
+                      task.category==="invoice" ? ()=>dismissInvoiceTask(task.jobId) :
+                      task.id.endsWith("_done") && task.coId ? ()=>dismissCODoneTask(task.jobId, task.coId) :
+                      task.id.endsWith("_done") && task.rtId ? ()=>dismissRTDoneTask(task.jobId, task.rtId) :
+                      null
+                    }
+                    onSetDueDate={handleSetDueDate}/>
+                ))}
+              </div>
+            );
+          })
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Scheduling Forecast ───────────────────────────────────────
+
+function SchedulingForecast({ jobs, onSelectJob }) {
+  const [foremanTab, setForemanTab] = useState("All");
+  const [scheduleView, setScheduleView] = useState("all");
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  const startOfWeek = (d) => { const dt=new Date(d); dt.setHours(0,0,0,0); dt.setDate(dt.getDate()-dt.getDay()); return dt; };
+  const thisWeekStart = startOfWeek(today);
+  const nextWeekStart = new Date(thisWeekStart); nextWeekStart.setDate(thisWeekStart.getDate()+7);
+  const twoWeeksStart = new Date(thisWeekStart); twoWeeksStart.setDate(thisWeekStart.getDate()+14);
+  const thisWeekEnd   = new Date(thisWeekStart); thisWeekEnd.setDate(thisWeekStart.getDate()+7);
+  const nextMonthEnd  = new Date(today); nextMonthEnd.setDate(today.getDate()+30);
+
+  const parseDate = (str) => { if(!str) return null; const d=new Date(str); return isNaN(d.getTime())?null:d; };
+  const getBucket = (dateStr) => {
+    const d=parseDate(dateStr); if(!d) return "unscheduled";
+    d.setHours(0,0,0,0);
+    if(d<thisWeekStart) return "overdue";
+    if(d<nextWeekStart) return "thisWeek";
+    if(d<twoWeeksStart) return "nextWeek";
+    return "later";
+  };
+
+  const buildItems = (jobList) => {
+    const items=[];
+    jobList.forEach(job=>{
+      const rs=effRS(job), fs=effFS(job);
+      if(job.roughProjectedStart||rs==="scheduled"||rs==="date_confirmed"||rs==="waiting_date") {
+        if(rs!=="complete"&&rs!=="invoice"&&rs!=="inprogress") {
+          items.push({id:job.id+"_rough",jobId:job.id,job,type:"rough",label:"Rough",color:C.rough,
+            date:job.roughProjectedStart||job.roughStatusDate||"",
+            bucket:getBucket(job.roughProjectedStart||job.roughStatusDate),status:rs});
+        }
+      }
+      if(job.finishProjectedStart||fs==="scheduled"||fs==="date_confirmed"||fs==="waiting_date") {
+        if(fs!=="complete"&&fs!=="invoice"&&fs!=="inprogress") {
+          items.push({id:job.id+"_finish",jobId:job.id,job,type:"finish",label:"Finish",color:C.finish,
+            date:job.finishProjectedStart||job.finishStatusDate||"",
+            bucket:getBucket(job.finishProjectedStart||job.finishStatusDate),status:fs});
+        }
+      }
+      (job.returnTrips||[]).forEach((rt,i)=>{
+        if(!rt.signedOff&&(rt.rtStatus==="needs"||rt.rtStatus==="scheduled"||(!rt.rtStatus&&(rt.scope||rt.date)))) {
+          items.push({id:job.id+"_rt_"+rt.id,jobId:job.id,job,type:"returnTrip",label:`Return Trip #${i+1}`,
+            color:"#8b5cf6",date:rt.rtStatusDate||rt.date||"",
+            bucket:getBucket(rt.rtStatusDate||rt.date),status:rt.rtStatus||"needs",scope:rt.scope,needsByStart:rt.needsByStart||'',needsByEnd:rt.needsByEnd||'',needsHardDate:rt.needsHardDate||false});
+        }
+      });
+      // QC Walk — shows on forecast when scheduled
+      if(job.roughQCTaskFired && job.qcStatus==="scheduled") {
+        items.push({id:job.id+"_qc",jobId:job.id,job,type:"qcWalk",label:"QC Walk",
+          color:C.teal,date:job.qcStatusDate||"",
+          bucket:getBucket(job.qcStatusDate),status:job.qcStatus});
+      }
+
+      (job.changeOrders||[]).forEach((co,i)=>{
+        if(co.coStatus==="scheduled"||co.coStatus==="pending"||co.coStatus==="needs"||co.coStatus==="approved") {
+          items.push({id:job.id+"_co_"+co.id,jobId:job.id,job,type:"changeOrder",label:`Change Order #${i+1}`,
+            color:C.accent,date:co.coStatusDate||"",bucket:getBucket(co.coStatusDate),
+            status:co.coStatus,desc:co.desc,needsByStart:co.needsByStart||'',needsByEnd:co.needsByEnd||'',needsHardDate:co.needsHardDate||false});
+        }
+      });
+    });
     return items;
   };
 
-  const foremanTabs = ["All", ...FOREMEN, "Unassigned"];
-
-  const filteredJobs = foremanTab === "All" ? jobs
-    : foremanTab === "Unassigned" ? jobs.filter(j => !j.foreman || j.foreman === "Unassigned")
-    : jobs.filter(j => (j.foreman || "Koy") === foremanTab);
-
+  const foremanTabs = ["All",...FOREMEN,"Unassigned"];
+  const filteredJobs = foremanTab==="All"?jobs:foremanTab==="Unassigned"?jobs.filter(j=>!j.foreman||j.foreman==="Unassigned"):jobs.filter(j=>(j.foreman||"Koy")===foremanTab);
   const allItems = buildItems(filteredJobs);
 
   const BUCKETS = [
-    { key: "overdue",     label: "Overdue",   color: C.red,      desc: "Past projected date" },
-    { key: "thisWeek",    label: "This Week",  color: C.green,    desc: "" },
-    { key: "nextWeek",    label: "Next Week",  color: C.blue,     desc: "" },
-    { key: "later",       label: "Later",      color: C.dim,      desc: "" },
-    { key: "unscheduled", label: "Unscheduled",color: "#ca8a04",  desc: "No date set yet" },
+    {key:"overdue",     label:"Overdue",    color:C.red,     desc:"Past projected date"},
+    {key:"thisWeek",    label:"This Week",  color:C.green,   desc:""},
+    {key:"nextWeek",    label:"Next Week",  color:C.blue,    desc:""},
+    {key:"later",       label:"Later",      color:C.dim,     desc:""},
+    {key:"unscheduled", label:"Unscheduled",color:"#ca8a04", desc:"No date set yet"},
   ];
 
-  const formatDate = (str) => {
-    if(!str) return null;
-    const d = parseDate(str);
-    if(!d) return str;
-    return d.toLocaleDateString("en-US", { month:"short", day:"numeric", year:"numeric" });
-  };
+  const formatDate = (str) => { if(!str) return null; const d=parseDate(str); if(!d) return str; return d.toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"}); };
 
-  const SchedCard = ({ item }) => {
-    const { job, label, color, date, status, type, scope, desc } = item;
-    const foreman = job.foreman || "Koy";
-    const fc = FOREMEN_COLORS[foreman] || "#6b7280";
-    const statusDef = type === "returnTrip" ? getStatusDef(RT_STATUSES, status)
-      : type === "changeOrder" ? getStatusDef(CO_STATUSES_NEW, status)
-      : getStatusDef(ROUGH_STATUSES, status);
-
+  const SchedCard = ({item}) => {
+    const {job,label,color,date,status,type,scope,desc}=item;
+    const foreman=job.foreman||"Koy"; const fc=FOREMEN_COLORS[foreman]||"#6b7280";
+    const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):getStatusDef(ROUGH_STATUSES,status);
     return (
-      <div onClick={() => onSelectJob(job)}
-        style={{background:C.card,border:`1px solid ${color}33`,borderRadius:12,
-          padding:"12px 14px",marginBottom:8,cursor:"pointer",
-          borderLeft:`3px solid ${color}`,transition:"transform 0.1s,box-shadow 0.1s"}}
+      <div onClick={()=>onSelectJob(job)} style={{background:C.card,border:`1px solid ${color}33`,borderRadius:12,padding:"12px 14px",marginBottom:8,cursor:"pointer",borderLeft:`3px solid ${color}`}}
         onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 16px ${color}22`;}}
         onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
-
-        {/* Type badge + date */}
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
-          <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",
-            color,background:`${color}18`,borderRadius:99,padding:"2px 8px",border:`1px solid ${color}33`}}>
-            {label.toUpperCase()}
-          </span>
-          {date && (
-            <span style={{fontSize:11,color:C.dim,fontWeight:600}}>{formatDate(date)}</span>
-          )}
+          <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color,background:`${color}18`,borderRadius:99,padding:"2px 8px",border:`1px solid ${color}33`}}>{label.toUpperCase()}</span>
+          {date&&<span style={{fontSize:11,color:C.dim,fontWeight:600}}>{formatDate(date)}</span>}
         </div>
-
-        {/* Job name */}
-        <div style={{fontWeight:700,fontSize:13,color:C.text,marginBottom:2,
-          whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-          {job.name || "Untitled Job"}
-        </div>
-
-        {/* Address */}
-        {job.address && (
-          <div style={{fontSize:11,color:C.dim,marginBottom:4,
-            whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-            {job.address}
-          </div>
-        )}
-
-        {/* Scope / desc for RT or CO */}
-        {(scope || desc) && (
-          <div style={{fontSize:11,color:C.dim,fontStyle:"italic",marginBottom:6,
-            overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>
-            {scope || desc}
-          </div>
-        )}
-
-        {/* Meta row */}
-        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginTop:4}}>
-          <span style={{fontSize:10,fontWeight:700,color:fc,background:`${fc}15`,
-            borderRadius:99,padding:"2px 8px",border:`1px solid ${fc}33`}}>
-            {foreman}
-          </span>
-          {job.lead && (
-            <span style={{fontSize:10,color:C.accent,fontWeight:600}}>· {job.lead}</span>
-          )}
-          {job.gc && (
-            <span style={{fontSize:10,color:C.dim}}>{job.gc}</span>
-          )}
-          {statusDef.color && (
-            <span style={{fontSize:10,fontWeight:700,color:statusDef.color,
-              background:`${statusDef.color}15`,borderRadius:99,padding:"2px 8px",
-              border:`1px solid ${statusDef.color}33`,marginLeft:"auto"}}>
-              {statusDef.label}
+        {status==="needs"&&(item.needsByStart||item.needsByEnd)&&(
+          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6,padding:"4px 8px",background:"#dc262612",borderRadius:6,border:"1px solid #dc262633"}}>
+            <span style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.06em",flexShrink:0}}>{item.needsHardDate?"HARD DATE":"WINDOW"}</span>
+            <span style={{fontSize:11,color:"#dc2626",fontWeight:600}}>
+              {item.needsHardDate?item.needsByStart:(item.needsByStart&&item.needsByEnd?`${item.needsByStart} – ${item.needsByEnd}`:item.needsByStart||item.needsByEnd)}
             </span>
-          )}
+          </div>
+        )}
+
+        <div style={{fontWeight:700,fontSize:13,color:C.text,marginBottom:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{job.name||"Untitled Job"}</div>
+        {job.address&&<div style={{fontSize:11,color:C.dim,marginBottom:4,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{job.address}</div>}
+        {(scope||desc)&&<div style={{fontSize:11,color:C.dim,fontStyle:"italic",marginBottom:6,overflow:"hidden",display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>{scope||desc}</div>}
+        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginTop:4}}>
+          <span style={{fontSize:10,fontWeight:700,color:fc,background:`${fc}15`,borderRadius:99,padding:"2px 8px",border:`1px solid ${fc}33`}}>{foreman}</span>
+          {job.lead&&<span style={{fontSize:10,color:C.accent,fontWeight:600}}>· {job.lead}</span>}
+          {job.gc&&<span style={{fontSize:10,color:C.dim}}>{job.gc}</span>}
+          {statusDef.color&&<span style={{fontSize:10,fontWeight:700,color:statusDef.color,background:`${statusDef.color}15`,borderRadius:99,padding:"2px 8px",border:`1px solid ${statusDef.color}33`,marginLeft:"auto"}}>{statusDef.label}</span>}
         </div>
       </div>
     );
   };
 
-  const bucketCounts = Object.fromEntries(
-    BUCKETS.map(b => [b.key, allItems.filter(i => i.bucket === b.key).length])
-  );
-  const totalItems = allItems.length;
+  const totalItems=allItems.length;
 
   return (
     <div>
-      {/* Header */}
       <div style={{padding:"24px 26px 0",borderBottom:`1px solid ${C.border}`}}>
-        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",
-          flexWrap:"wrap",gap:12,marginBottom:16}}>
+        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12,marginBottom:16}}>
           <div>
-            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,
-              letterSpacing:"0.06em",color:C.text,lineHeight:1}}>
-              SCHEDULING FORECAST
-            </div>
-            <div style={{fontSize:11,color:C.dim,marginTop:3}}>
-              {totalItems} item{totalItems!==1?"s":""} to schedule
-              {foremanTab!=="All"&&<span style={{color:FOREMEN_COLORS[foremanTab]||"#6b7280",fontWeight:700,marginLeft:6}}>· {foremanTab}</span>}
-            </div>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>SCHEDULING FORECAST</div>
+            <div style={{fontSize:11,color:C.dim,marginTop:3}}>{totalItems} item{totalItems!==1?"s":""} to schedule</div>
           </div>
         </div>
-
-        {/* Foreman tabs */}
         <div style={{display:"flex",gap:6,overflowX:"auto",scrollbarWidth:"none",paddingBottom:1}}>
-          {foremanTabs.map(f => {
-            const fc = f === "All" ? C.accent : FOREMEN_COLORS[f] || "#6b7280";
-            const fJobs = f === "All" ? jobs
-              : f === "Unassigned" ? jobs.filter(j=>!j.foreman||j.foreman==="Unassigned")
-              : jobs.filter(j=>(j.foreman||"Koy")===f);
-            const fCount = buildItems(fJobs).length;
+          {foremanTabs.map(f=>{
+            const fc=f==="All"?C.accent:FOREMEN_COLORS[f]||"#6b7280";
+            const fJobs=f==="All"?jobs:f==="Unassigned"?jobs.filter(j=>!j.foreman||j.foreman==="Unassigned"):jobs.filter(j=>(j.foreman||"Koy")===f);
+            const fCount=buildItems(fJobs).length;
             return (
-              <button key={f} onClick={() => setForemanTab(f)}
-                style={{padding:"7px 16px",borderRadius:"8px 8px 0 0",fontSize:12,cursor:"pointer",
-                  fontFamily:"inherit",fontWeight:foremanTab===f?700:400,whiteSpace:"nowrap",
-                  background:foremanTab===f?fc:"none",
-                  border:`1px solid ${foremanTab===f?fc:C.border}`,
-                  borderBottom:"none",
-                  color:foremanTab===f?"#fff":C.dim,transition:"all 0.15s"}}>
-                {f} {fCount > 0 && <span style={{opacity:0.8,fontSize:10}}>({fCount})</span>}
+              <button key={f} onClick={()=>setForemanTab(f)} style={{padding:"7px 16px",borderRadius:"8px 8px 0 0",fontSize:12,cursor:"pointer",fontFamily:"inherit",fontWeight:foremanTab===f?700:400,whiteSpace:"nowrap",background:foremanTab===f?fc:"none",border:`1px solid ${foremanTab===f?fc:C.border}`,borderBottom:"none",color:foremanTab===f?"#fff":C.dim,transition:"all 0.15s"}}>
+                {f} {fCount>0&&<span style={{opacity:0.8,fontSize:10}}>({fCount})</span>}
               </button>
             );
           })}
         </div>
       </div>
-
-      {/* View switcher — All / This Week / Next Month */}
-      <div style={{display:"flex",gap:8,padding:"14px 26px 0",borderBottom:`1px solid ${C.border}`}}>
+      <div style={{display:"flex",gap:0,padding:"0 26px",borderBottom:`1px solid ${C.border}`,overflowX:"auto",scrollbarWidth:"none"}}>
         {[
-          {key:"all",       label:"All"},
-          {key:"thisWeek",  label:"This Week"},
-          {key:"nextMonth", label:"Next 30 Days"},
+          {key:"all",label:"Kanban"},
+          {key:"thisWeek",label:"This Week"},
+          {key:"nextMonth",label:"Next 30 Days"},
+          {key:"byForeman",label:"By Foreman"},
+          {key:"byDay",label:"By Day"},
+          {key:"list",label:"List"},
         ].map(({key,label})=>(
-          <button key={key} onClick={()=>setScheduleView(key)}
-            style={{padding:"8px 18px",fontSize:12,fontWeight:scheduleView===key?700:500,
-              fontFamily:"inherit",cursor:"pointer",background:"none",border:"none",
-              borderBottom:scheduleView===key?`2px solid ${C.accent}`:"2px solid transparent",
-              color:scheduleView===key?C.accent:C.dim,transition:"all 0.15s"}}>
-            {label}
-          </button>
+          <button key={key} onClick={()=>setScheduleView(key)} style={{padding:"10px 16px",fontSize:12,fontWeight:scheduleView===key?700:500,fontFamily:"inherit",cursor:"pointer",background:"none",border:"none",whiteSpace:"nowrap",borderBottom:scheduleView===key?`2px solid ${C.accent}`:"2px solid transparent",color:scheduleView===key?C.accent:C.dim,transition:"all 0.15s"}}>{label}</button>
         ))}
       </div>
-
-      {/* ── ALL VIEW — Kanban columns ── */}
-      {scheduleView === "all" && (
+      {scheduleView==="all"&&(
         <div style={{padding:"20px 26px",overflowX:"auto"}}>
-          {totalItems === 0 ? (
-            <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
-              <div style={{fontSize:13}}>Nothing to schedule right now.</div>
-            </div>
-          ) : (
+          {totalItems===0?(
+            <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}><div style={{fontSize:13}}>Nothing to schedule right now.</div></div>
+          ):(
             <div style={{display:"grid",gridTemplateColumns:"repeat(5,minmax(220px,1fr))",gap:16,minWidth:900}}>
-              {BUCKETS.map(bucket => {
-                const bucketItems = allItems.filter(i => i.bucket === bucket.key);
+              {BUCKETS.map(bucket=>{
+                const bucketItems=allItems.filter(i=>i.bucket===bucket.key);
                 return (
                   <div key={bucket.key}>
-                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,
-                      paddingBottom:8,borderBottom:`2px solid ${bucket.color}44`}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,paddingBottom:8,borderBottom:`2px solid ${bucket.color}44`}}>
                       <div style={{width:8,height:8,borderRadius:"50%",background:bucket.color,flexShrink:0}}/>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,
-                        letterSpacing:"0.08em",color:bucket.color}}>{bucket.label}</div>
-                      <div style={{background:`${bucket.color}18`,border:`1px solid ${bucket.color}33`,
-                        borderRadius:99,padding:"1px 8px",fontSize:11,color:bucket.color,fontWeight:700,marginLeft:"auto"}}>
-                        {bucketItems.length}
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.08em",color:bucket.color}}>{bucket.label}</div>
+                      <div style={{background:`${bucket.color}18`,border:`1px solid ${bucket.color}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:bucket.color,fontWeight:700,marginLeft:"auto"}}>{bucketItems.length}</div>
+                    </div>
+                    {bucketItems.length===0?(
+                      <div style={{fontSize:11,color:C.muted,fontStyle:"italic",padding:"16px 0",textAlign:"center",border:`1px dashed ${C.border}`,borderRadius:10}}>Nothing here</div>
+                    ):bucketItems.map(item=><SchedCard key={item.id} item={item}/>)}
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+      {(scheduleView==="thisWeek"||scheduleView==="nextMonth")&&(()=>{
+        const cutoff=scheduleView==="thisWeek"?thisWeekEnd:nextMonthEnd;
+        const windowItems=allItems.filter(item=>{
+          if(!item.date) return false;
+          const d=parseDate(item.date); if(!d) return false;
+          d.setHours(0,0,0,0);
+          if(scheduleView==="thisWeek") return d<=thisWeekEnd;
+          return d<=nextMonthEnd;
+        });
+        const STATUS_SECTIONS=[
+          {key:"waiting_date",label:"Waiting for Start Date Confirmation",color:"#ca8a04"},
+          {key:"date_confirmed",label:"Start Date Confirmed — Needs to Schedule",color:"#f97316"},
+          {key:"scheduled",label:"Scheduled",color:"#2563eb"},
+          {key:"pending",label:"Pending (CO)",color:"#ca8a04"},
+        ];
+        return (
+          <div style={{padding:"20px 26px"}}>
+            {windowItems.length===0?(
+              <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}><div style={{fontSize:13}}>Nothing scheduled {scheduleView==="thisWeek"?"this week":"in the next 30 days"}.</div></div>
+            ):(
+              <div style={{display:"flex",flexDirection:"column",gap:28}}>
+                {STATUS_SECTIONS.map(section=>{
+                  const sectionItems=windowItems.filter(i=>i.status===section.key);
+                  if(sectionItems.length===0) return null;
+                  return (
+                    <div key={section.key}>
+                      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,paddingBottom:8,borderBottom:`2px solid ${section.color}44`}}>
+                        <div style={{width:10,height:10,borderRadius:"50%",background:section.color,flexShrink:0}}/>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:section.color}}>{section.label}</div>
+                        <div style={{background:`${section.color}18`,border:`1px solid ${section.color}33`,borderRadius:99,padding:"2px 10px",fontSize:11,color:section.color,fontWeight:700,marginLeft:"auto"}}>{sectionItems.length}</div>
+                      </div>
+                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:10}}>
+                        {sectionItems.map(item=><SchedCard key={item.id} item={item}/>)}
                       </div>
                     </div>
-                    {bucket.desc && bucketItems.length > 0 && (
-                      <div style={{fontSize:10,color:C.muted,marginBottom:8,fontStyle:"italic"}}>{bucket.desc}</div>
-                    )}
-                    {bucketItems.length === 0 ? (
-                      <div style={{fontSize:11,color:C.muted,fontStyle:"italic",
-                        padding:"16px 0",textAlign:"center",
-                        border:`1px dashed ${C.border}`,borderRadius:10}}>
-                        Nothing here
-                      </div>
-                    ) : (
-                      bucketItems.map(item => <SchedCard key={item.id} item={item}/>)
-                    )}
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* ── BY FOREMAN ── */}
+      {scheduleView==="byForeman"&&(
+        <div style={{padding:"20px 26px",overflowX:"auto"}}>
+          {allItems.length===0?(
+            <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}><div style={{fontSize:13}}>Nothing to schedule.</div></div>
+          ):(
+            <div style={{display:"grid",gridTemplateColumns:`repeat(${[...FOREMEN,"Unassigned"].length},minmax(220px,1fr))`,gap:16,minWidth:800}}>
+              {[...FOREMEN,"Unassigned"].map(f=>{
+                const fc=FOREMEN_COLORS[f]||"#6b7280";
+                const fItems=allItems.filter(i=>{
+                  const jf=i.job.foreman||"Koy";
+                  return f==="Unassigned"?(!i.job.foreman||i.job.foreman==="Unassigned"):jf===f;
+                });
+                const sorted=[...fItems].sort((a,b)=>{
+                  if(!a.date&&!b.date) return 0; if(!a.date) return 1; if(!b.date) return -1;
+                  return new Date(a.date)-new Date(b.date);
+                });
+                return (
+                  <div key={f}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,paddingBottom:8,borderBottom:`2px solid ${fc}44`}}>
+                      <div style={{width:8,height:8,borderRadius:"50%",background:fc,flexShrink:0}}/>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:fc}}>{f}</div>
+                      <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:fc,fontWeight:700,marginLeft:"auto"}}>{fItems.length}</div>
+                    </div>
+                    {sorted.length===0?(
+                      <div style={{fontSize:11,color:C.muted,fontStyle:"italic",padding:"16px 0",textAlign:"center",border:`1px dashed ${C.border}`,borderRadius:10}}>Nothing scheduled</div>
+                    ):sorted.map(item=><SchedCard key={item.id} item={item}/>)}
                   </div>
                 );
               })}
@@ -5333,96 +6014,152 @@ function SchedulingForecast({ jobs, onSelectJob }) {
         </div>
       )}
 
-      {/* ── THIS WEEK / NEXT 30 DAYS — Grouped by status type ── */}
-      {(scheduleView === "thisWeek" || scheduleView === "nextMonth") && (() => {
-        const parseDate = (str) => { if(!str) return null; const d=new Date(str); return isNaN(d.getTime())?null:d; };
-        const cutoff = scheduleView === "thisWeek" ? thisWeekEnd : nextMonthEnd;
+      {/* ── BY DAY — 14 days ── */}
+      {scheduleView==="byDay"&&(()=>{
+        const days=[];
+        for(let i=0;i<14;i++){
+          const d=new Date(today); d.setDate(today.getDate()+i);
+          days.push(d);
+        }
+        const fmt=(d)=>d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
+        const sameDay=(d1,d2)=>d1.getFullYear()===d2.getFullYear()&&d1.getMonth()===d2.getMonth()&&d1.getDate()===d2.getDate();
+        const getItemDate=(item)=>{ if(!item.date) return null; const d=new Date(item.date); return isNaN(d.getTime())?null:d; };
+        const isToday=(d)=>sameDay(d,today);
+        const isWeekend=(d)=>d.getDay()===0||d.getDay()===6;
 
-        // Filter items to the window (overdue included in this week)
-        const windowItems = allItems.filter(item => {
-          if(!item.date) return false;
-          const d = parseDate(item.date);
-          if(!d) return false;
-          d.setHours(0,0,0,0);
-          if(scheduleView === "thisWeek") return d <= thisWeekEnd;
-          return d <= nextMonthEnd;
-        });
-
-        // Status sections
-        const STATUS_SECTIONS = [
-          {key:"needs",      label:"Needs to be Scheduled",        color:"#dc2626"},
-          {key:"ready",      label:"Ready to Start — Not Scheduled", color:"#ca8a04"},
-          {key:"readysched", label:"Ready to Start — Scheduled",   color:"#16a34a"},
-          {key:"scheduled",  label:"Scheduled",                    color:"#2563eb"},
-          {key:"pending",    label:"Pending (CO)",                  color:"#ca8a04"},
-        ];
-
-        const getStatusKey = (item) => {
-          if(item.type === "returnTrip") return item.status || "";
-          if(item.type === "changeOrder") return item.status || "";
-          return item.status || "";
-        };
-
-        const totalWindow = windowItems.length;
+        // Also collect overdue items (before today, have a date)
+        const overdueItems=allItems.filter(item=>{
+          const d=getItemDate(item); if(!d) return false;
+          d.setHours(0,0,0,0); return d<today;
+        }).sort((a,b)=>new Date(a.date)-new Date(b.date));
 
         return (
-          <div style={{padding:"20px 26px"}}>
-            {totalWindow === 0 ? (
-              <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
-                <div style={{fontSize:13}}>
-                  Nothing scheduled {scheduleView==="thisWeek"?"this week":"in the next 30 days"}.
+          <div style={{padding:"20px 26px",overflowX:"auto"}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:12,minWidth:600}}>
+              {overdueItems.length>0&&(
+                <div style={{gridColumn:"1/-1",marginBottom:4}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,paddingBottom:6,borderBottom:`2px solid ${C.red}44`}}>
+                    <div style={{width:8,height:8,borderRadius:"50%",background:C.red}}/>
+                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.08em",color:C.red}}>OVERDUE</div>
+                    <div style={{background:`${C.red}18`,border:`1px solid ${C.red}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:C.red,fontWeight:700,marginLeft:"auto"}}>{overdueItems.length}</div>
+                  </div>
+                  <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10}}>
+                    {overdueItems.map(item=><SchedCard key={item.id} item={item}/>)}
+                  </div>
                 </div>
-              </div>
-            ) : (
-              <div style={{display:"flex",flexDirection:"column",gap:28}}>
-                {STATUS_SECTIONS.map(section => {
-                  const sectionItems = windowItems.filter(i => getStatusKey(i) === section.key);
-                  if(sectionItems.length === 0) return null;
+              )}
+              {days.map(day=>{
+                const dayItems=allItems.filter(item=>{
+                  const d=getItemDate(item); if(!d) return false;
+                  return sameDay(d,day);
+                });
+                const todayStyle=isToday(day)?{background:`${C.accent}08`,border:`1px solid ${C.accent}33`}:{background:C.surface,border:`1px solid ${C.border}`};
+                const wknd=isWeekend(day);
+                return (
+                  <div key={day.toISOString()} style={{borderRadius:12,padding:"12px 14px",...todayStyle,opacity:wknd&&dayItems.length===0?0.5:1}}>
+                    <div style={{marginBottom:10}}>
+                      <div style={{fontSize:11,fontWeight:700,color:isToday(day)?C.accent:wknd?C.muted:C.text,letterSpacing:"0.04em"}}>{fmt(day)}</div>
+                      {isToday(day)&&<div style={{fontSize:9,color:C.accent,fontWeight:700,letterSpacing:"0.1em"}}>TODAY</div>}
+                    </div>
+                    {dayItems.length===0?(
+                      <div style={{fontSize:10,color:C.muted,fontStyle:"italic",paddingBottom:4}}>Nothing scheduled</div>
+                    ):dayItems.map(item=><SchedCard key={item.id} item={item}/>)}
+                  </div>
+                );
+              })}
+              {/* Unscheduled column */}
+              {(()=>{
+                const unsch=allItems.filter(i=>!i.date||i.bucket==="unscheduled");
+                if(unsch.length===0) return null;
+                return (
+                  <div style={{borderRadius:12,padding:"12px 14px",background:C.surface,border:`1px dashed ${C.border}`}}>
+                    <div style={{fontSize:11,fontWeight:700,color:"#ca8a04",marginBottom:10,letterSpacing:"0.04em"}}>UNSCHEDULED</div>
+                    {unsch.map(item=><SchedCard key={item.id} item={item}/>)}
+                  </div>
+                );
+              })()}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── CHRONOLOGICAL LIST ── */}
+      {scheduleView==="list"&&(()=>{
+        const sorted=[...allItems].sort((a,b)=>{
+          if(!a.date&&!b.date) return 0; if(!a.date) return 1; if(!b.date) return -1;
+          return new Date(a.date)-new Date(b.date);
+        });
+        const withDate=sorted.filter(i=>i.date);
+        const noDate=sorted.filter(i=>!i.date);
+        const formatDate=(str)=>{ if(!str) return "—"; const d=new Date(str); return isNaN(d.getTime())?str:d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"}); };
+        const isOverdue=(str)=>{ if(!str) return false; const d=new Date(str); d.setHours(0,0,0,0); return d<today; };
+        return (
+          <div style={{padding:"20px 26px",maxWidth:780}}>
+            {sorted.length===0&&<div style={{textAlign:"center",padding:"60px 0",color:C.muted,fontSize:13}}>Nothing to schedule.</div>}
+            {withDate.map((item,i)=>{
+              const {job,label,color,date,status,type,scope,desc}=item;
+              const foreman=job.foreman||"Koy"; const fc=FOREMEN_COLORS[foreman]||"#6b7280";
+              const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):getStatusDef(ROUGH_STATUSES,status);
+              const overdue=isOverdue(date);
+              return (
+                <div key={item.id} onClick={()=>onSelectJob(job)}
+                  style={{display:"flex",alignItems:"flex-start",gap:14,padding:"10px 14px",borderRadius:10,marginBottom:4,cursor:"pointer",
+                    background:overdue?`${C.red}08`:C.surface,border:`1px solid ${overdue?C.red+"33":C.border}`,
+                    borderLeft:`3px solid ${overdue?C.red:color}`}}
+                  onMouseEnter={e=>e.currentTarget.style.background=overdue?`${C.red}12`:`${color}08`}
+                  onMouseLeave={e=>e.currentTarget.style.background=overdue?`${C.red}08`:C.surface}>
+                  <div style={{minWidth:110,flexShrink:0}}>
+                    <div style={{fontSize:12,fontWeight:700,color:overdue?C.red:C.text}}>{formatDate(date)}</div>
+                    {overdue&&<div style={{fontSize:9,color:C.red,fontWeight:700,letterSpacing:"0.08em"}}>OVERDUE</div>}
+                  </div>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3,flexWrap:"wrap"}}>
+                      <span style={{fontSize:10,fontWeight:700,color,background:`${color}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${color}33`}}>{label.toUpperCase()}</span>
+                      <span style={{fontSize:13,fontWeight:700,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{job.name||"Untitled"}</span>
+                    </div>
+                    {job.address&&<div style={{fontSize:11,color:C.dim,marginBottom:2}}>{job.address}</div>}
+                    {(scope||desc)&&<div style={{fontSize:11,color:C.dim,fontStyle:"italic"}}>{scope||desc}</div>}
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                    <span style={{fontSize:10,fontWeight:700,color:fc,background:`${fc}15`,borderRadius:99,padding:"2px 8px",border:`1px solid ${fc}33`}}>{foreman}</span>
+                    {statusDef.color&&<span style={{fontSize:10,fontWeight:700,color:statusDef.color,background:`${statusDef.color}15`,borderRadius:99,padding:"2px 8px",border:`1px solid ${statusDef.color}33`}}>{statusDef.label}</span>}
+                  </div>
+                </div>
+              );
+            })}
+            {noDate.length>0&&(
+              <div style={{marginTop:20}}>
+                <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.1em",color:"#ca8a04",marginBottom:10,paddingTop:16,borderTop:`1px solid ${C.border}`}}>UNSCHEDULED — NO DATE SET</div>
+                {noDate.map(item=>{
+                  const {job,label,color,status,type,scope,desc}=item;
+                  const foreman=job.foreman||"Koy"; const fc=FOREMEN_COLORS[foreman]||"#6b7280";
+                  const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):getStatusDef(ROUGH_STATUSES,status);
                   return (
-                    <div key={section.key}>
-                      {/* Section header */}
-                      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,
-                        paddingBottom:8,borderBottom:`2px solid ${section.color}44`}}>
-                        <div style={{width:10,height:10,borderRadius:"50%",background:section.color,flexShrink:0}}/>
-                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,
-                          letterSpacing:"0.08em",color:section.color}}>{section.label}</div>
-                        <div style={{background:`${section.color}18`,border:`1px solid ${section.color}33`,
-                          borderRadius:99,padding:"2px 10px",fontSize:11,color:section.color,fontWeight:700,marginLeft:"auto"}}>
-                          {sectionItems.length}
+                    <div key={item.id} onClick={()=>onSelectJob(job)}
+                      style={{display:"flex",alignItems:"flex-start",gap:14,padding:"10px 14px",borderRadius:10,marginBottom:4,cursor:"pointer",background:C.surface,border:`1px solid ${C.border}`,borderLeft:`3px solid ${color}`}}
+                      onMouseEnter={e=>e.currentTarget.style.background=`${color}08`}
+                      onMouseLeave={e=>e.currentTarget.style.background=C.surface}>
+                      <div style={{minWidth:110,flexShrink:0}}><div style={{fontSize:12,color:C.muted,fontStyle:"italic"}}>No date</div></div>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:3,flexWrap:"wrap"}}>
+                          <span style={{fontSize:10,fontWeight:700,color,background:`${color}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${color}33`}}>{label.toUpperCase()}</span>
+                          <span style={{fontSize:13,fontWeight:700,color:C.text}}>{job.name||"Untitled"}</span>
                         </div>
+                        {(scope||desc)&&<div style={{fontSize:11,color:C.dim,fontStyle:"italic"}}>{scope||desc}</div>}
                       </div>
-                      {/* Cards grid */}
-                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:10}}>
-                        {sectionItems.map(item => <SchedCard key={item.id} item={item}/>)}
+                      <div style={{display:"flex",alignItems:"center",gap:6,flexShrink:0}}>
+                        <span style={{fontSize:10,fontWeight:700,color:fc,background:`${fc}15`,borderRadius:99,padding:"2px 8px",border:`1px solid ${fc}33`}}>{foreman}</span>
+                        {statusDef.color&&<span style={{fontSize:10,fontWeight:700,color:statusDef.color,background:`${statusDef.color}15`,borderRadius:99,padding:"2px 8px",border:`1px solid ${statusDef.color}33`}}>{statusDef.label}</span>}
                       </div>
                     </div>
                   );
                 })}
-
-                {/* Catch-all: items in the window not matched by a section */}
-                {(() => {
-                  const sectionKeys = STATUS_SECTIONS.map(s=>s.key);
-                  const other = windowItems.filter(i => !sectionKeys.includes(getStatusKey(i)));
-                  if(other.length === 0) return null;
-                  return (
-                    <div>
-                      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14,
-                        paddingBottom:8,borderBottom:`2px solid ${C.dim}44`}}>
-                        <div style={{width:10,height:10,borderRadius:"50%",background:C.dim,flexShrink:0}}/>
-                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,
-                          letterSpacing:"0.08em",color:C.dim}}>Other</div>
-                      </div>
-                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(240px,1fr))",gap:10}}>
-                        {other.map(item => <SchedCard key={item.id} item={item}/>)}
-                      </div>
-                    </div>
-                  );
-                })()}
               </div>
             )}
           </div>
         );
       })()}
+
     </div>
   );
 }
@@ -5433,6 +6170,8 @@ function App() {
   if(hoParam) return <HomeownerPage jobId={hoParam}/>;
 
   const [jobs,     setJobs]     = useState([]);
+  const [upcoming, setUpcoming] = useState([]);
+  const [manualTasks, setManualTasks] = useState([]);
 
   const [selected, setSelected] = useState(null);
 
@@ -5445,12 +6184,12 @@ function App() {
   const [stageModal, setStageModal] = useState(null);
 
   const [syncStatus, setSyncStatus] = useState("idle");
-  const [pinModal, setPinModal] = useState(null); // {message, onSuccess}
-  const [upcoming, setUpcoming] = useState([]);
 
   const saveTimer    = useRef(null);
 
   const initialLoad  = useRef(true);
+
+
 
   const jobsRef   = useRef(jobs);
 
@@ -5459,6 +6198,8 @@ function App() {
   const saveTimers = useRef({});
 
   useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
+
+
 
   const migrate = (loaded) => {
 
@@ -5476,6 +6217,8 @@ function App() {
 
   };
 
+
+
   // Real-time listener — all devices stay in sync automatically
 
   useEffect(()=>{
@@ -5489,6 +6232,8 @@ function App() {
       if(b) { const p=JSON.parse(b); if(p?.length) setJobs(migrate(p)); }
 
     } catch(e){}
+
+
 
     const unsub = onSnapshot(collection(db,"jobs"),
 
@@ -5546,20 +6291,36 @@ function App() {
 
     );
 
-    // ── Load upcoming jobs from Firestore ──
+    // Load upcoming jobs from Firestore
     const unsubUpcoming = onSnapshot(collection(db,"upcoming"),
-      (snap) => {
-        if(!snap.empty) {
-          const loaded = snap.docs.map(d=>d.data().data).filter(Boolean);
+      async (snap) => {
+        const loaded = snap.docs.map(d=>d.data().data).filter(Boolean);
+        // Merge seed jobs in — add any seed job not already present by id
+        const loadedIds = new Set(loaded.map(u=>u.id));
+        const missing = SEED_UPCOMING.filter(s=>!loadedIds.has(s.id));
+        if(missing.length > 0) {
+          for(const item of missing) {
+            try { await setDoc(doc(db,"upcoming",item.id),{data:item,updated_at:new Date().toISOString()}); } catch(e){}
+          }
+          // snapshot will re-fire with the new docs, so no need to setUpcoming here
+        } else {
           setUpcoming(loaded);
         }
       },
       (err) => { console.error("Upcoming snapshot error:",err); }
     );
 
-    return () => { unsub(); unsubUpcoming(); }; // cleanup on unmount
+    // Load manual tasks from Firestore
+    const unsubTasks = onSnapshot(collection(db,"manualTasks"),
+      (snap) => { const loaded=snap.docs.map(d=>d.data().data).filter(Boolean); setManualTasks(loaded); },
+      (err) => { console.error("Tasks snapshot error:",err); }
+    );
+
+    return () => { unsub(); unsubUpcoming(); unsubTasks(); }; // cleanup on unmount
 
   },[]);
+
+
 
   // Save a single job as its own Firestore document
 
@@ -5613,6 +6374,8 @@ if(initialLoad.current) return;
 
   };
 
+
+
   // Delete job document
 
   const flushJob = async (job) => {
@@ -5635,10 +6398,18 @@ if(initialLoad.current) return;
 
   };
 
+
+
+  const saveManualTask = async (task) => {
+    try { await setDoc(doc(db,"manualTasks",task.id),{data:task,updated_at:new Date().toISOString()}); } catch(e){}
+  };
+  const deleteManualTask = async (id) => {
+    try { await deleteDoc(doc(db,"manualTasks",id)); } catch(e){}
+  };
+
   const saveUpcomingItem = async (item) => {
     try { await setDoc(doc(db,"upcoming",item.id),{data:item,updated_at:new Date().toISOString()}); } catch(e){ console.error(e); }
   };
-
   const deleteUpcomingItem = async (id) => {
     try { await deleteDoc(doc(db,"upcoming",id)); } catch(e){}
   };
@@ -5673,6 +6444,8 @@ if(initialLoad.current) return;
 
   };
 
+
+
   const flushSaves = () => {
 
     jobsRef.current.forEach(job=>{
@@ -5697,6 +6470,8 @@ if(initialLoad.current) return;
 
   };
 
+
+
   // Save on background/close
 
   useEffect(()=>{
@@ -5717,21 +6492,27 @@ if(initialLoad.current) return;
 
   },[]);
 
+
+
+
+
   const updateJob = updated => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); saveJob(updated); };
 
   const addJob    = () => { const j=blankJob(); setJobs(js=>[j,...js]); setSelected(j); saveJob(j); };
 
   const deleteJob = id => {
-    setPinModal({
-      message: "Enter PIN to delete this job site. This cannot be undone.",
-      onSuccess: () => {
-        setJobs(js=>js.filter(j=>j.id!==id));
-        if(selected?.id===id) setSelected(null);
-        deleteJobRemote(id);
-      }
-    });
+
+    if(!confirm("Delete this job site?")) return;
+
+    setJobs(js=>js.filter(j=>j.id!==id));
+
+    if(selected?.id===id) setSelected(null);
+
+    deleteJobRemote(id);
 
   };
+
+
 
   const openCount = j => {
 
@@ -5757,6 +6538,8 @@ if(initialLoad.current) return;
 
   };
 
+
+
   const totalOpen  = jobs.reduce((a,j)=>a+openCount(j),0);
 
   const flagged    = jobs.filter(j=>j.flagged).length;
@@ -5769,19 +6552,26 @@ if(initialLoad.current) return;
 
   const syncLabel  = {idle:"All changes saved",saving:"Saving…",saved:"✓ Saved",error:"Save failed"}[syncStatus];
 
+
+
   // view: "home" = main page, "foreman" = foreman-specific page
 
   const [view, setView] = useState("home");
-
   const [activeForeman, setActiveForeman] = useState(null);
 
-  const openForeman = (f) => { setActiveForeman(f); setView("foreman"); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const goHome       = () =>  { setView("home");     setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openSchedule = () =>  { setView("schedule"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openUpcoming = () =>  { setView("upcoming"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openTasks    = () =>  { setView("tasks");    setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
 
-  const goHome      = () => { setView("home");     setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
-  const openSchedule  = () => { setView("schedule");  setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
-  const openUpcoming  = () => { setView("upcoming");  setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+
+
+
 
   const viewJobs = view==="foreman" ? jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):(j.foreman||"Koy")===activeForeman) : jobs;
+
+
 
   const filtered = viewJobs.filter(j=>{
 
@@ -5809,6 +6599,8 @@ if(initialLoad.current) return;
 
   });
 
+
+
   const JobRow = ({job, fc, showForeman=false}) => {
 
     const open      = openCount(job);
@@ -5833,7 +6625,7 @@ if(initialLoad.current) return;
     const isInvoice  = rs==="invoice"||fs==="invoice";
     const isWaiting  = rs==="waiting"||fs==="waiting";
     const isSched    = rs==="scheduled"||fs==="scheduled";
-    const isReady    = rs==="ready"||fs==="ready";
+    const isReady    = rs==="date_confirmed"||fs==="date_confirmed"||rs==="waiting_date"||fs==="waiting_date";
     // Priority: red alerts > RT scheduled > invoice > waiting > scheduled > ready
     const priority = (hasRT||prepAlert)?"red":hasRTSch?"purple":isInvoice?"invoice":isWaiting?"hold":isSched?"sched":isReady?"ready":"none";
     const BG    = {red:"rgba(220,38,38,0.18)",purple:"rgba(139,92,246,0.10)",invoice:"rgba(234,88,12,0.10)",hold:"rgba(234,179,8,0.12)",sched:"rgba(37,99,235,0.08)",ready:"rgba(202,138,4,0.08)",none:C.card};
@@ -5865,6 +6657,8 @@ if(initialLoad.current) return;
               {job.lead&&<span style={{color:C.accent,fontWeight:600,marginRight:6}}>· {job.lead}</span>}
 
               {job.gc||"No GC set"}
+
+
 
             </div>
 
@@ -5910,7 +6704,7 @@ if(initialLoad.current) return;
             {hasRT&&<Pill label="Return trip needed" color="#dc2626"/>}
             {prepAlert&&<Pill label="Redline plans need update" color="#dc2626"/>}
             {hasRTSch&&!hasRT&&<Pill label="Return trip scheduled" color="#8b5cf6"/>}
-            {rs&&!(rs==="complete"&&fs&&fs!=="ready")&&<Pill label={rs==="scheduled"&&job.roughStatusDate?"Rough: "+job.roughStatusDate:rs==="ready"&&job.roughStatusDate?"Rough: "+job.roughStatusDate:("Rough: "+(getStatusDef(ROUGH_STATUSES,rs).label||rs))} color={getStatusDef(ROUGH_STATUSES,rs).color||C.dim}/>}
+            {rs&&!(rs==="complete"&&fs&&fs!=="waiting_date"&&fs!=="date_confirmed")&&<Pill label={rs==="scheduled"&&job.roughStatusDate?"Rough: "+job.roughStatusDate:rs==="date_confirmed"&&job.roughStatusDate?"Rough: "+job.roughStatusDate:("Rough: "+(getStatusDef(ROUGH_STATUSES,rs).label||rs))} color={getStatusDef(ROUGH_STATUSES,rs).color||C.dim}/>}
             {fs&&<Pill label={fs==="scheduled"&&job.finishStatusDate?"Finish: "+job.finishStatusDate:("Finish: "+(getStatusDef(FINISH_STATUSES,fs).label||fs))} color={getStatusDef(FINISH_STATUSES,fs).color||C.dim}/>}
             {open>0   &&<Pill label={`${open} open`} color={C.red}/>}
 
@@ -5961,6 +6755,8 @@ if(initialLoad.current) return;
 
   };
 
+
+
   return (
 
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
@@ -5970,6 +6766,18 @@ if(initialLoad.current) return;
         backgroundRepeat:"no-repeat",backgroundPosition:"center center",
 
         backgroundSize:"320px 320px",opacity:0.15,pointerEvents:"none",zIndex:0}}/>
+
+
+
+      {/* ── TOP NAV BAR ── */}
+      <div style={{display:"flex",gap:0,borderBottom:`1px solid ${C.border}`,background:C.card,position:"sticky",top:0,zIndex:90,overflowX:"auto",scrollbarWidth:"none"}}>
+        {[{key:"home",label:"Job Board"},{key:"schedule",label:"Scheduling Forecast"},{key:"upcoming",label:"Upcoming"},{key:"tasks",label:"Tasks"}].map(({key,label})=>(
+          <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:openTasks}
+            style={{padding:"13px 22px",fontSize:12,fontWeight:view===key?700:500,fontFamily:"inherit",cursor:"pointer",whiteSpace:"nowrap",background:"none",border:"none",borderBottom:view===key?`2px solid ${C.accent}`:"2px solid transparent",color:view===key?C.accent:C.dim,transition:"all 0.15s",letterSpacing:"0.02em"}}>
+            {label}
+          </button>
+        ))}
+      </div>
 
       {/* iOS Chrome banner */}
 
@@ -6021,23 +6829,7 @@ if(initialLoad.current) return;
 
       `}</style>
 
-      {/* ── TOP NAV BAR ── */}
-      <div style={{display:"flex",gap:0,borderBottom:`1px solid ${C.border}`,
-        background:C.card,position:"sticky",top:0,zIndex:90,overflowX:"auto",scrollbarWidth:"none"}}>
-        {[
-          {key:"home",     label:"Job Board"},
-          {key:"schedule", label:"Scheduling Forecast"},
-          {key:"upcoming", label:"Upcoming"},
-        ].map(({key,label})=>(
-          <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:openUpcoming}
-            style={{padding:"13px 22px",fontSize:12,fontWeight:view===key?700:500,
-              fontFamily:"inherit",cursor:"pointer",whiteSpace:"nowrap",
-              background:"none",border:"none",borderBottom:view===key?`2px solid ${C.accent}`:"2px solid transparent",
-              color:view===key?C.accent:C.dim,transition:"all 0.15s",letterSpacing:"0.02em"}}>
-            {label}
-          </button>
-        ))}
-      </div>
+
 
       {/* ── HOME PAGE ── */}
 
@@ -6062,6 +6854,8 @@ if(initialLoad.current) return;
                   <span>{jobs.length} total job sites</span>
 
                   <span style={{color:syncColor}}>{syncLabel}</span>
+
+
 
                   <button onClick={backupByEmail}
 
@@ -6105,7 +6899,11 @@ if(initialLoad.current) return;
 
             </div>
 
+
+
           </div>
+
+
 
           <div style={{padding:"28px 26px"}}>
 
@@ -6281,6 +7079,8 @@ if(initialLoad.current) return;
 
                     </div>
 
+
+
                     {(fRT>0||fRTS>0)&&(
                       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
                         {fRT>0&&<span style={{background:"rgba(220,38,38,0.18)",border:"1.5px solid #dc2626",borderRadius:99,
@@ -6378,6 +7178,8 @@ if(initialLoad.current) return;
 
       )}
 
+
+
       {/* ── FOREMAN PAGE ── */}
 
       {view==="foreman"&&(
@@ -6423,6 +7225,8 @@ if(initialLoad.current) return;
               </div>
 
             </div>
+
+
 
             <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}>
 
@@ -6472,6 +7276,8 @@ if(initialLoad.current) return;
 
             </div>
 
+
+
             <div style={{display:"flex",gap:8,paddingBottom:14,flexWrap:"wrap",alignItems:"center"}}>
 
               <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search jobs, GC, address…"
@@ -6514,6 +7320,8 @@ if(initialLoad.current) return;
 
           </div>
 
+
+
           <div style={{padding:"14px 26px"}}>
 
             {filtered.length===0?(
@@ -6537,6 +7345,21 @@ if(initialLoad.current) return;
             ):(
 
               <>
+              {/* Tasks mini-card for this foreman */}
+              {(()=>{
+                const fTasks = computeTasks(jobs).filter(t=>t.foreman===activeForeman)
+                  .concat((manualTasks||[]).filter(t=>t.foreman===activeForeman));
+                if(fTasks.length===0) return null;
+                return (
+                  <div style={{margin:"0 0 16px",padding:"14px 16px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:12}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.08em",color:"#dc2626"}}>OPEN TASKS</div>
+                      <div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>{fTasks.length}</div>
+                    </div>
+                    <Tasks jobs={jobs} manualTasks={manualTasks} onManualTasksChange={(next)=>{ next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); }); manualTasks.forEach(t=>{ if(!next.find(m=>m.id===t.id)) deleteManualTask(t.id); }); setManualTasks(next); }} onSelectJob={(job)=>setSelected(job)} onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch}); }} filterForeman={activeForeman}/>
+                  </div>
+                );
+              })()}
               <StageSectionList jobs={filtered} JobRow={JobRow} fc={FOREMEN_COLORS[activeForeman]} startCollapsed={false}/>
               {(()=>{
                 const invoiceJobs = filtered.filter(j=>effRS(j)==="invoice"||effFS(j)==="invoice");
@@ -6568,61 +7391,47 @@ if(initialLoad.current) return;
 
       )}
 
+
+
       {selected&&<JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>}
 
-      {/* ── SCHEDULING FORECAST PAGE ── */}
-
       {view==="schedule"&&(
-        <SchedulingForecast
-          jobs={jobs}
-          onSelectJob={(job)=>{ setSelected(job); }}
-        />
+        <SchedulingForecast jobs={jobs} onSelectJob={(job)=>setSelected(job)}/>
       )}
 
-      {/* ── UPCOMING JOBS PAGE ── */}
+      {view==="tasks"&&(
+        <Tasks
+          jobs={jobs}
+          manualTasks={manualTasks}
+          onManualTasksChange={(next)=>{
+            next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); });
+            manualTasks.forEach(t=>{ if(!next.find(m=>m.id===t.id)) deleteManualTask(t.id); });
+            setManualTasks(next);
+          }}
+          onSelectJob={(job)=>setSelected(job)}
+          onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch}); }}
+        />
+      )}
 
       {view==="upcoming"&&(
         <UpcomingJobs
           upcoming={upcoming}
-          onChange={(next) => {
-            // Diff: find added/updated items and deleted items
-            const prevIds = new Set(upcoming.map(u=>u.id));
-            const nextIds = new Set(next.map(u=>u.id));
-            // Save new or updated
-            next.forEach(item => {
-              const prev = upcoming.find(u=>u.id===item.id);
-              if(!prev || JSON.stringify(prev)!==JSON.stringify(item)) {
-                saveUpcomingItem(item);
-              }
+          onChange={(next)=>{
+            next.forEach(item=>{
+              const prev=upcoming.find(u=>u.id===item.id);
+              if(!prev||JSON.stringify(prev)!==JSON.stringify(item)) saveUpcomingItem(item);
             });
-            // Delete removed
-            upcoming.forEach(item => {
-              if(!nextIds.has(item.id)) deleteUpcomingItem(item.id);
-            });
+            upcoming.forEach(item=>{ if(!next.find(u=>u.id===item.id)) deleteUpcomingItem(item.id); });
             setUpcoming(next);
           }}
-          onPromote={(u) => {
-            // Build a new job pre-filled from upcoming card
-            const j = blankJob();
-            j.name    = u.name     || "";
-            j.address = u.city     || "";
-            j.gc      = u.customer || "";
-            j.foreman = "";
-            setJobs(js => [j, ...js]);
-            setSelected(j);
-            setUpcoming(prev => prev.filter(x => x.id !== u.id));
-            setView("home");
-            saveJob(j);
-            deleteUpcomingItem(u.id);
+          onPromote={(u)=>{
+            const j=blankJob();
+            j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman="";
+            setJobs(js=>[j,...js]); setSelected(j); setUpcoming(prev=>prev.filter(x=>x.id!==u.id));
+            setView("home"); saveJob(j); deleteUpcomingItem(u.id);
           }}
         />
       )}
-
-      {pinModal&&<PinModal
-        message={pinModal.message}
-        onSuccess={pinModal.onSuccess}
-        onClose={()=>setPinModal(null)}
-      />}
 
     </div>
 
