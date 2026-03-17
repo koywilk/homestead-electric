@@ -5578,23 +5578,32 @@ function computeTasks(jobs) {
       });
     }
     if(rs === "date_confirmed") {
-      const rWindow = job.roughNeedsHardDate
-        ? (job.roughNeedsByStart ? `Hard date: ${job.roughNeedsByStart}` : "")
-        : (job.roughNeedsByStart||job.roughNeedsByEnd)
-          ? `Window: ${job.roughNeedsByStart||""}${job.roughNeedsByEnd?" – "+job.roughNeedsByEnd:""}`
-          : "";
+      const rHard = job.roughNeedsHardDate;
+      const rStart = job.roughNeedsByStart||"";
+      const rEnd   = job.roughNeedsByEnd||"";
+      const rWindowLabel = rHard
+        ? (rStart ? `Hard date: ${rStart}` : "")
+        : (rStart||rEnd) ? `Window: ${rStart}${rEnd?" – "+rEnd:""}` : "";
+      // Use start of window as dueDate for sorting
+      const rDueDate = rStart || "";
       tasks.push({
         id: job.id+"_rough_needs", jobId: job.id, jobName: job.name,
         type: "auto", category: "rough", foreman,
         title: "Schedule Rough",
-        desc: rWindow || "Start date confirmed — needs to be scheduled",
+        needsHardDate: rHard, needsByStart: rStart, needsByEnd: rEnd,
+        windowLabel: rWindowLabel,
+        dueDate: rDueDate,
+        desc: rWindowLabel || "Start date confirmed — needs to be scheduled",
         color: C.rough, cleared: false,
       });
       tasks.push({
         id: job.id+"_rough_po", jobId: job.id, jobName: job.name,
         type: "auto", category: "po", foreman,
         title: "Order Job Start PO",
-        desc: rWindow || "Order materials PO for rough start",
+        needsHardDate: rHard, needsByStart: rStart, needsByEnd: rEnd,
+        windowLabel: rWindowLabel,
+        dueDate: rDueDate,
+        desc: rWindowLabel || "Order materials PO for rough start",
         color: "#8b5cf6", cleared: false,
       });
     }
@@ -5610,23 +5619,31 @@ function computeTasks(jobs) {
       });
     }
     if(fs === "date_confirmed") {
-      const fWindow = job.finishNeedsHardDate
-        ? (job.finishNeedsByStart ? `Hard date: ${job.finishNeedsByStart}` : "")
-        : (job.finishNeedsByStart||job.finishNeedsByEnd)
-          ? `Window: ${job.finishNeedsByStart||""}${job.finishNeedsByEnd?" – "+job.finishNeedsByEnd:""}`
-          : "";
+      const fHard = job.finishNeedsHardDate;
+      const fStart = job.finishNeedsByStart||"";
+      const fEnd   = job.finishNeedsByEnd||"";
+      const fWindowLabel = fHard
+        ? (fStart ? `Hard date: ${fStart}` : "")
+        : (fStart||fEnd) ? `Window: ${fStart}${fEnd?" – "+fEnd:""}` : "";
+      const fDueDate = fStart || "";
       tasks.push({
         id: job.id+"_finish_needs", jobId: job.id, jobName: job.name,
         type: "auto", category: "finish", foreman,
         title: "Schedule Finish",
-        desc: fWindow || "Start date confirmed — needs to be scheduled",
+        needsHardDate: fHard, needsByStart: fStart, needsByEnd: fEnd,
+        windowLabel: fWindowLabel,
+        dueDate: fDueDate,
+        desc: fWindowLabel || "Start date confirmed — needs to be scheduled",
         color: C.finish, cleared: false,
       });
       tasks.push({
         id: job.id+"_finish_po", jobId: job.id, jobName: job.name,
         type: "auto", category: "po", foreman,
         title: "Order Job Start PO",
-        desc: fWindow || "Order materials PO for finish start",
+        needsHardDate: fHard, needsByStart: fStart, needsByEnd: fEnd,
+        windowLabel: fWindowLabel,
+        dueDate: fDueDate,
+        desc: fWindowLabel || "Order materials PO for finish start",
         color: "#8b5cf6", cleared: false,
       });
     }
@@ -5849,7 +5866,18 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
           </div>
         )}
 
-        {task.desc&&<div style={{fontSize:11,color:"var(--dim)",fontStyle:"italic",lineHeight:1.4}}>{task.desc}</div>}
+        {task.windowLabel&&(
+          <div style={{display:"flex",alignItems:"center",gap:6,marginTop:4,marginBottom:2}}>
+            <span style={{fontSize:10,fontWeight:800,
+              color:task.needsHardDate?"#dc2626":"#ca8a04",
+              background:task.needsHardDate?"#dc262615":"#ca8a0415",
+              border:`1px solid ${task.needsHardDate?"#dc262644":"#ca8a0444"}`,
+              borderRadius:99,padding:"2px 10px",letterSpacing:"0.04em",whiteSpace:"nowrap"}}>
+              {task.needsHardDate?"🔒 ":"📅 "}{task.windowLabel}
+            </span>
+          </div>
+        )}
+        {task.desc&&!task.windowLabel&&<div style={{fontSize:11,color:"var(--dim)",fontStyle:"italic",lineHeight:1.4}}>{task.desc}</div>}
         {task.notes&&<div style={{fontSize:11,color:"var(--dim)",marginTop:2,lineHeight:1.4}}>{task.notes}</div>}
 
         {task.category==="prep"&&task.prepStage&&(
@@ -6056,7 +6084,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
 
   const autoTasks = computeTasks(jobs);
   const allTasks = [
-    ...autoTasks.map(t => allTaskDueDates[t.id] !== undefined ? {...t, dueDate:allTaskDueDates[t.id]} : t),
+    ...autoTasks.map(t => { const manual = allTaskDueDates[t.id]; return manual !== undefined ? {...t, dueDate: manual||t.dueDate||""} : t; }),
     ...(manualTasks||[]).map(t=>({...t,type:"manual"}))
   ].filter(t => t.category !== "prep" && (!filterForeman || t.foreman === filterForeman));
 
