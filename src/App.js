@@ -6156,7 +6156,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
     return items;
   };
 
-  const foremanTabs = ["All",...FOREMEN,"Unassigned"];
+  const foremanTabs = ["All",..._foremen,"Unassigned"];
   const filteredJobs = foremanTab==="All"?jobs:foremanTab==="Unassigned"?jobs.filter(j=>!j.foreman||j.foreman==="Unassigned"):jobs.filter(j=>(j.foreman||"Koy")===foremanTab);
   const allItems = buildItems(filteredJobs);
 
@@ -6172,7 +6172,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
 
   const SchedCard = ({item}) => {
     const {job,label,color,date,status,type,scope,desc}=item;
-    const foreman=job.foreman||"Koy"; const fc=FOREMEN_COLORS[foreman]||"#6b7280";
+    const foreman=job.foreman||"Koy"; const fc=_foremanColors[foreman]||"#6b7280";
     const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):type==="tempPed"?getStatusDef(TEMP_PED_STATUSES,status):getStatusDef(ROUGH_STATUSES,status);
     return (
       <div onClick={()=>onSelectJob(job)} style={{background:C.card,border:`1px solid ${color}33`,borderRadius:12,padding:"12px 14px",marginBottom:8,cursor:"pointer",borderLeft:`3px solid ${color}`}}
@@ -6217,7 +6217,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
         </div>
         <div style={{display:"flex",gap:6,overflowX:"auto",scrollbarWidth:"none",paddingBottom:1}}>
           {foremanTabs.map(f=>{
-            const fc=f==="All"?C.accent:FOREMEN_COLORS[f]||"#6b7280";
+            const fc=f==="All"?C.accent:_foremanColors[f]||"#6b7280";
             const fJobs=f==="All"?jobs:f==="Unassigned"?jobs.filter(j=>!j.foreman||j.foreman==="Unassigned"):jobs.filter(j=>(j.foreman||"Koy")===f);
             const fCount=buildItems(fJobs).length;
             return (
@@ -6314,9 +6314,9 @@ function SchedulingForecast({ jobs, onSelectJob }) {
           {allItems.length===0?(
             <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}><div style={{fontSize:13}}>Nothing to schedule.</div></div>
           ):(
-            <div style={{display:"grid",gridTemplateColumns:`repeat(${[...FOREMEN,"Unassigned"].length},minmax(220px,1fr))`,gap:16,minWidth:800}}>
-              {[...FOREMEN,"Unassigned"].map(f=>{
-                const fc=FOREMEN_COLORS[f]||"#6b7280";
+            <div style={{display:"grid",gridTemplateColumns:`repeat(${[..._foremen,"Unassigned"].length},minmax(220px,1fr))`,gap:16,minWidth:800}}>
+              {[..._foremen,"Unassigned"].map(f=>{
+                const fc=_foremanColors[f]||"#6b7280";
                 const fItems=allItems.filter(i=>{
                   const jf=i.job.foreman||"Koy";
                   return f==="Unassigned"?(!i.job.foreman||i.job.foreman==="Unassigned"):jf===f;
@@ -6427,7 +6427,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
             {sorted.length===0&&<div style={{textAlign:"center",padding:"60px 0",color:C.muted,fontSize:13}}>Nothing to schedule.</div>}
             {withDate.map((item,i)=>{
               const {job,label,color,date,status,type,scope,desc}=item;
-              const foreman=job.foreman||"Koy"; const fc=FOREMEN_COLORS[foreman]||"#6b7280";
+              const foreman=job.foreman||"Koy"; const fc=_foremanColors[foreman]||"#6b7280";
               const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):type==="tempPed"?getStatusDef(TEMP_PED_STATUSES,status):getStatusDef(ROUGH_STATUSES,status);
               const overdue=isOverdue(date);
               return (
@@ -6461,7 +6461,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
                 <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.1em",color:"#ca8a04",marginBottom:10,paddingTop:16,borderTop:`1px solid ${C.border}`}}>UNSCHEDULED — NO DATE SET</div>
                 {noDate.map(item=>{
                   const {job,label,color,status,type,scope,desc}=item;
-                  const foreman=job.foreman||"Koy"; const fc=FOREMEN_COLORS[foreman]||"#6b7280";
+                  const foreman=job.foreman||"Koy"; const fc=_foremanColors[foreman]||"#6b7280";
                   const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):type==="tempPed"?getStatusDef(TEMP_PED_STATUSES,status):getStatusDef(ROUGH_STATUSES,status);
                   return (
                     <div key={item.id} onClick={()=>onSelectJob(job)}
@@ -6608,20 +6608,22 @@ function App() {
   const [_leads,          set_leads]          = useState(DEFAULT_LEADS);
   const [_leadColors,     set_leadColors]     = useState(DEFAULT_LEAD_COLORS);
 
-  // Keep module-level refs in sync so components outside App can read them
-  FOREMEN        = _foremen;
-  FOREMEN_COLORS = _foremanColors;
-  LEADS          = _leads;
-  LEAD_COLORS    = _leadColors;
+  // Sync module-level refs after state settles (not during render)
+  useEffect(()=>{
+    FOREMEN=_foremen; FOREMEN_COLORS=_foremanColors;
+    LEADS=_leads; LEAD_COLORS=_leadColors;
+  },[_foremen,_foremanColors,_leads,_leadColors]);
 
   useEffect(()=>{
     getDoc(doc(db,"settings","main")).then(snap=>{
       if(snap.exists()){
         const d = snap.data();
-        if(d.foremen)       { FOREMEN=d.foremen;               set_foremen(d.foremen); }
-        if(d.foremanColors) { FOREMEN_COLORS=d.foremanColors;  set_foremanColors(d.foremanColors); }
-        if(d.leads)         { LEADS=d.leads;                   set_leads(d.leads); }
-        if(d.leadColors)    { LEAD_COLORS=d.leadColors;        set_leadColors(d.leadColors); }
+        const f  = d.foremen       || DEFAULT_FOREMEN;
+        const fc = d.foremanColors || DEFAULT_FOREMEN_COLORS;
+        const l  = d.leads         || DEFAULT_LEADS;
+        const lc = d.leadColors    || DEFAULT_LEAD_COLORS;
+        FOREMEN=f; FOREMEN_COLORS=fc; LEADS=l; LEAD_COLORS=lc;
+        set_foremen(f); set_foremanColors(fc); set_leads(l); set_leadColors(lc);
       }
     });
   },[]);
@@ -7115,7 +7117,7 @@ if(initialLoad.current) return;
 
     const foreman = job.foreman||"Koy";
 
-    const rowFc = fc || FOREMEN_COLORS[foreman];
+    const rowFc = fc || _foremanColors[foreman];
 
     const hasRT      = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
     const hasRTSch   = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
@@ -7220,13 +7222,13 @@ if(initialLoad.current) return;
 
           <div style={{display:"flex",alignItems:"center",gap:6,marginLeft:"auto",flexShrink:0}}>
 
-            {FOREMEN.filter(f=>f!==foreman).map(f2=>(
+            {_foremen.filter(f=>f!==foreman).map(f2=>(
 
               <button key={f2} onClick={e=>{e.stopPropagation();updateJob({...job,foreman:f2});}}
 
-                style={{background:"none",border:`1px solid ${FOREMEN_COLORS[f2]}44`,borderRadius:6,
+                style={{background:"none",border:`1px solid ${_foremanColors[f2]}44`,borderRadius:6,
 
-                  color:FOREMEN_COLORS[f2],fontSize:10,padding:"3px 8px",cursor:"pointer",
+                  color:_foremanColors[f2],fontSize:10,padding:"3px 8px",cursor:"pointer",
 
                   fontFamily:"inherit",whiteSpace:"nowrap",transition:"opacity 0.15s"}}
 
@@ -7340,7 +7342,7 @@ if(initialLoad.current) return;
           const allJobs = jobs.filter(j=>!j.tempPed);
           const allPeds = jobs.filter(j=>j.tempPed);
           // Build lead list: use Settings leads first, then any unrecognized leads from jobs
-          const settingsLeads = LEADS.length>0 ? LEADS : [];
+          const settingsLeads = _leads.length>0 ? _leads : [];
           // Normalize: match job leads to settings leads case-insensitively
           const normalize = (n) => (n||"").trim().toLowerCase();
           const settingsMap = {}; // normalized -> canonical
@@ -7353,7 +7355,7 @@ if(initialLoad.current) return;
           const leadKeys = [...mainLeads, ...jobLeads,
             ...(allJobs.some(j=>j._leadKey==="Jacob")?["Jacob"]:[]),
             ...(allJobs.some(j=>!j._leadKey)?[""]:[] )];
-          const getLeadColor = (name) => LEAD_COLORS[name]||"#6b7280";
+          const getLeadColor = (name) => _leadColors[name]||"#6b7280";
           return (
             <div style={{padding:"12px 12px 80px"}}>
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:8,alignItems:"start"}}>
@@ -7721,8 +7723,8 @@ if(initialLoad.current) return;
 
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10,marginBottom:40,alignItems:"start"}}>
 
-              {FOREMEN.map(f=>{
-                const fc    = FOREMEN_COLORS[f];
+              {_foremen.map(f=>{
+                const fc    = _foremanColors[f];
                 const fJobs = jobs.filter(j=>(j.foreman||"Koy")===f);
                 const fCOs  = fJobs.reduce((a,j)=>a+j.changeOrders.filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
                 const fRT   = fJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
@@ -7814,13 +7816,13 @@ if(initialLoad.current) return;
                   alignItems:"center",justifyContent:"space-between",gap:12}}>
                   <div style={{display:"flex",alignItems:"center",gap:8}}>
                     <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,
-                      letterSpacing:"0.08em",color:FOREMEN_COLORS[crewView]||"#6b7280"}}>
+                      letterSpacing:"0.08em",color:_foremanColors[crewView]||"#6b7280"}}>
                       {crewView} — Jobs
                     </div>
-                    <div style={{background:`${FOREMEN_COLORS[crewView]||"#6b7280"}18`,
-                      border:`1px solid ${FOREMEN_COLORS[crewView]||"#6b7280"}33`,
+                    <div style={{background:`${_foremanColors[crewView]||"#6b7280"}18`,
+                      border:`1px solid ${_foremanColors[crewView]||"#6b7280"}33`,
                       borderRadius:99,padding:"2px 10px",fontSize:11,
-                      color:FOREMEN_COLORS[crewView]||"#6b7280",fontWeight:700}}>
+                      color:_foremanColors[crewView]||"#6b7280",fontWeight:700}}>
                       {jobs.filter(j=>(j.foreman||"Koy")===crewView).length} jobs
                     </div>
                   </div>
@@ -7833,7 +7835,7 @@ if(initialLoad.current) return;
                 {/* Lead-grouped job cards */}
                 {(()=>{
                   const crewJobs = jobs.filter(j=>(j.foreman||"Koy")===crewView);
-                  const fc2 = FOREMEN_COLORS[crewView]||"#6b7280";
+                  const fc2 = _foremanColors[crewView]||"#6b7280";
                   if(crewJobs.length===0) return (
                     <div style={{textAlign:"center",color:C.dim,padding:"60px 0",fontSize:13}}>
                       No jobs assigned to {crewView}
@@ -7923,11 +7925,11 @@ if(initialLoad.current) return;
 
                   padding:"6px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>← Back</button>
 
-              <div style={{width:10,height:10,borderRadius:"50%",background:FOREMEN_COLORS[activeForeman]||"#6b7280",flexShrink:0}}/>
+              <div style={{width:10,height:10,borderRadius:"50%",background:_foremanColors[activeForeman]||"#6b7280",flexShrink:0}}/>
 
               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",
 
-                color:FOREMEN_COLORS[activeForeman]||"#6b7280",lineHeight:1}}>{activeForeman}</div>
+                color:_foremanColors[activeForeman]||"#6b7280",lineHeight:1}}>{activeForeman}</div>
 
               <div style={{fontSize:11,color:C.dim}}>
 
@@ -7941,7 +7943,7 @@ if(initialLoad.current) return;
 
                 <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setJobs(js=>[j,...js]);setSelected(j);}}
 
-                  style={{background:FOREMEN_COLORS[activeForeman]||"#6b7280",border:"none",borderRadius:9,color:"#000",
+                  style={{background:_foremanColors[activeForeman]||"#6b7280",border:"none",borderRadius:9,color:"#000",
 
                     fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
 
@@ -8059,7 +8061,7 @@ if(initialLoad.current) return;
 
                 <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setJobs(js=>[j,...js]);setSelected(j);}}
 
-                  style={{background:FOREMEN_COLORS[activeForeman]||"#6b7280",border:"none",borderRadius:9,color:"#000",
+                  style={{background:_foremanColors[activeForeman]||"#6b7280",border:"none",borderRadius:9,color:"#000",
 
                     fontWeight:700,padding:"10px 24px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
 
@@ -8087,7 +8089,7 @@ if(initialLoad.current) return;
                   </div>
                 );
               })()}
-              <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} onDeleteJob={(id)=>deleteJob(id)} fc={FOREMEN_COLORS[activeForeman]} startCollapsed={false}/>
+              <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={false}/>
               {(()=>{
                 const invoiceJobs = filtered.filter(j=>effRS(j)==="invoice"||effFS(j)==="invoice");
                 return invoiceJobs.length>0?(
@@ -8164,8 +8166,8 @@ if(initialLoad.current) return;
 
       {view==="settings"&&authMode==="office"&&(
         <SettingsPage
-          FOREMEN={FOREMEN} FOREMEN_COLORS={FOREMEN_COLORS}
-          LEADS={LEADS} LEAD_COLORS={LEAD_COLORS}
+          FOREMEN={_foremen} FOREMEN_COLORS={_foremanColors}
+          LEADS={_leads} LEAD_COLORS={_leadColors}
           COLOR_OPTIONS={COLOR_OPTIONS}
           onSave={saveSettings}
         />
