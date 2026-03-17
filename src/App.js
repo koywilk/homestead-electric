@@ -6495,6 +6495,22 @@ function App() {
 
           const loaded = migrate(snap.docs.map(d=>d.data().data).filter(Boolean));
 
+          // One-time fix: clear tempPed:true from any full jobs that were accidentally flagged
+          // tempPed:true is only valid for dedicated temp ped job cards (created via + Temp Ped)
+          // Full jobs use hasTempPed instead
+          const TEMPPED_FIX_KEY = "heTempPedFixed_v1";
+          if(!localStorage.getItem(TEMPPED_FIX_KEY)) {
+            const toFix = loaded.filter(j => j.tempPed === true);
+            if(toFix.length > 0) {
+              toFix.forEach(job => {
+                const fixed = {...job, tempPed:false, hasTempPed: job.hasTempPed||false};
+                setDoc(doc(db,"jobs",job.id),{data:sanitize(fixed),updated_at:new Date().toISOString()}).catch(()=>{});
+              });
+              console.log(`[HE] Cleared tempPed flag from ${toFix.length} full job(s)`);
+            }
+            localStorage.setItem(TEMPPED_FIX_KEY,"1");
+          }
+
           setJobs(loaded);
 
           // Never overwrite the selected job from snapshot — JobDetail manages its own state
@@ -7118,22 +7134,7 @@ if(initialLoad.current) return;
 
               {/* Action buttons */}
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
-                <button onClick={async()=>{
-                    if(!window.confirm("Reset all accidental temp ped flags? This only clears jobs that were incorrectly marked as temp ped job cards.")) return;
-                    const { collection, getDocs, doc, updateDoc } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js");
-                    const snap = await getDocs(collection(db,"jobs"));
-                    let count=0;
-                    for(const d of snap.docs){
-                      if(d.data().tempPed===true){ await updateDoc(doc(db,"jobs",d.id),{tempPed:false}); count++; }
-                    }
-                    alert(`Done — cleared ${count} job(s)`);
-                    window.location.reload();
-                  }}
-                  style={{background:"none",border:`1px solid #dc262644`,borderRadius:8,
-                    color:"#dc2626",fontSize:11,fontWeight:600,padding:"6px 12px",cursor:"pointer",
-                    fontFamily:"inherit"}}>
-                  Fix Temp Peds
-                </button>
+
                 <button onClick={backupByEmail}
                   style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
                     color:C.dim,fontSize:11,fontWeight:600,padding:"6px 12px",cursor:"pointer",
@@ -7279,172 +7280,93 @@ if(initialLoad.current) return;
 
             )}
 
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:16,marginBottom:40}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10,marginBottom:40,alignItems:"start"}}>
 
               {FOREMEN.map(f=>{
-
                 const fc    = FOREMEN_COLORS[f];
-
-                const fJobs = jobs.filter(j=>(j.foreman||"Koy")===f);
-
-                const fOpen = fJobs.reduce((a,j)=>a+openCount(j),0);
-
+                const fJobs = jobs.filter(j=>(j.foreman||"Koy")===f&&!j.tempPed);
                 const fCOs  = fJobs.reduce((a,j)=>a+j.changeOrders.filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
-
-                const fFlag = fJobs.filter(j=>j.flagged).length;
                 const fRT   = fJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
-                const fRTS  = fJobs.filter(j=>{const r2=parseStage(j.roughStage);const f2=parseStage(j.finishStage);return j.readyToSchedule&&(r2===0||(r2===100&&f2===0));}).length;
-
-                const rAvg  = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+(parseStage(j.roughStage)),0)/fJobs.length) : 0;
-
-                const fnAvg = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+(parseStage(j.finishStage)),0)/fJobs.length) : 0;
-
+                const rAvg  = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+parseStage(j.roughStage),0)/fJobs.length) : 0;
+                const fnAvg = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+parseStage(j.finishStage),0)/fJobs.length) : 0;
                 return (
-
                   <div key={f}>
-                  <div className="foreman-card" onClick={()=>openForeman(f)}
-
-                    style={{background:C.card,border:`1px solid ${fc}44`,borderRadius:16,padding:20,borderTop:`3px solid ${fc}`}}>
-
-                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
-
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:fc}}>{f}</div>
-
-                      <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,
-
-                        padding:"3px 12px",fontSize:11,color:fc,fontWeight:700}}>
-
-                        {fJobs.length} job{fJobs.length!==1?"s":""}
-
-                      </div>
-
-                    </div>
-
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
-
-                      {[[fCOs,"Pending COs",fCOs>0?C.blue:C.muted]].map(([v,l,c])=>(
-
-                        <div key={l} style={{background:C.surface,borderRadius:8,padding:"8px 10px"}}>
-
-                          <div style={{fontFamily:"'Bebas Neue'",fontSize:20,color:c,lineHeight:1}}>{v}</div>
-
-                          <div style={{fontSize:10,color:C.dim,marginTop:2}}>{l}</div>
-
+                    {/* Main card */}
+                    <div className="foreman-card" onClick={()=>openForeman(f)}
+                      style={{background:C.card,border:`1px solid ${fc}33`,borderRadius:12,
+                        padding:"14px 16px",borderTop:`3px solid ${fc}`}}>
+                      {/* Name + count */}
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:fc,lineHeight:1}}>{f}</div>
+                        <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,
+                          padding:"2px 9px",fontSize:10,color:fc,fontWeight:700}}>
+                          {fJobs.length}
                         </div>
-
-                      ))}
-
-                    </div>
-
-
-
-                    {(fRT>0||fRTS>0)&&(
-                      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
-                        {fRT>0&&<span style={{background:"rgba(220,38,38,0.18)",border:"1.5px solid #dc2626",borderRadius:99,
-                          padding:"3px 10px",fontSize:10,color:"#dc2626",fontWeight:700}}>
-                          {fRT} return trip{fRT>1?"s":""} needed
-                        </span>}
-                        {fRTS>0&&<span style={{background:"rgba(234,179,8,0.18)",border:"1.5px solid #ca8a04",borderRadius:99,
-                          padding:"3px 10px",fontSize:10,color:"#ca8a04",fontWeight:700}}>
-                          {fRTS} ready to schedule
-                        </span>}
                       </div>
-                    )}
-                    {/* Progress bars */}
-                    <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:5}}>
-                      {[["Rough",rAvg,C.rough],[" Finish",fnAvg,C.finish]].map(([lbl,avg,col])=>(
-                        <div key={lbl}>
-                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-                            <span style={{fontSize:9,fontWeight:700,color:C.dim,letterSpacing:"0.08em"}}>{lbl.toUpperCase()}</span>
-                            <span style={{fontSize:9,fontWeight:700,color:avg===100?C.green:col}}>{avg}%</span>
+                      {/* Stats row */}
+                      <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
+                        {[[fCOs,"COs",fCOs>0?C.blue:C.muted],[fRT,"RTs",fRT>0?"#dc2626":C.muted]].map(([v,l,col])=>(
+                          <div key={l} style={{background:C.surface,borderRadius:7,padding:"5px 8px",flex:1,minWidth:44}}>
+                            <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:col,lineHeight:1}}>{v}</div>
+                            <div style={{fontSize:9,color:C.dim,marginTop:1}}>{l}</div>
                           </div>
-                          <div style={{height:4,borderRadius:99,background:C.surface,overflow:"hidden"}}>
-                            <div style={{height:"100%",width:`${avg}%`,borderRadius:99,
-                              background:avg===100?C.green:col,
-                              transition:"width 0.4s ease"}}/>
+                        ))}
+                      </div>
+                      {/* Progress bars */}
+                      <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                        {[["R",rAvg,C.rough],["F",fnAvg,C.finish]].map(([lbl,avg,col])=>(
+                          <div key={lbl} style={{display:"flex",alignItems:"center",gap:6}}>
+                            <span style={{fontSize:8,fontWeight:800,color:C.dim,width:8,flexShrink:0}}>{lbl}</span>
+                            <div style={{flex:1,height:4,borderRadius:99,background:C.surface,overflow:"hidden"}}>
+                              <div style={{height:"100%",width:`${avg}%`,borderRadius:99,
+                                background:avg===100?C.green:col,transition:"width 0.4s"}}/>
+                            </div>
+                            <span style={{fontSize:8,fontWeight:700,color:avg===100?C.green:col,width:22,textAlign:"right"}}>{avg}%</span>
                           </div>
-                        </div>
-                      ))}
+                        ))}
+                      </div>
+                      <div style={{marginTop:10,fontSize:10,color:fc,fontWeight:600,textAlign:"right",opacity:0.7}}>View →</div>
                     </div>
-                    <div style={{marginTop:12,fontSize:11,color:fc,fontWeight:600,textAlign:"right",opacity:0.8}}>View Jobs →</div>
-
-                  </div>
-
-                  {/* Crew Access button */}
-                  <div onClick={e=>{e.stopPropagation();setCrewView(f);}}
-                    style={{
-                      marginTop:6,background:C.surface,border:`1px dashed ${fc}55`,
-                      borderRadius:10,padding:"8px 14px",cursor:"pointer",
-                      display:"flex",alignItems:"center",justifyContent:"space-between",
-                      transition:"background 0.15s",
-                    }}
-                    onMouseEnter={e=>e.currentTarget.style.background=`${fc}12`}
-                    onMouseLeave={e=>e.currentTarget.style.background=C.surface}>
-                    <div style={{display:"flex",alignItems:"center",gap:7}}>
-                      <span style={{fontSize:11,fontWeight:600,color:C.dim}}>Crew Access</span>
+                    {/* Crew Access */}
+                    <div onClick={e=>{e.stopPropagation();setCrewView(f);}}
+                      style={{marginTop:4,background:C.surface,border:`1px dashed ${fc}44`,
+                        borderRadius:8,padding:"6px 12px",cursor:"pointer",
+                        display:"flex",alignItems:"center",justifyContent:"space-between",
+                        transition:"background 0.15s"}}
+                      onMouseEnter={e=>e.currentTarget.style.background=`${fc}10`}
+                      onMouseLeave={e=>e.currentTarget.style.background=C.surface}>
+                      <span style={{fontSize:10,fontWeight:600,color:C.dim}}>Crew Access</span>
+                      <span style={{fontSize:9,color:C.dim,opacity:0.5}}>→</span>
                     </div>
-                    <span style={{fontSize:10,color:C.dim,opacity:0.6}}>Job list only →</span>
                   </div>
-                  </div>
-
                 );
-
               })}
 
-              {/* Unassigned block */}
-
+              {/* Unassigned */}
               {(()=>{
-
                 const fc    = "#6b7280";
-
                 const uJobs = jobs.filter(j=>!j.foreman||j.foreman==="Unassigned");
-
-                const uOpen = uJobs.reduce((a,j)=>a+openCount(j),0);
-
                 const uCOs  = uJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
-
-                const uFlag = uJobs.filter(j=>j.flagged).length;
-
                 return (
-
-                  <div className="foreman-card" onClick={()=>openForeman("Unassigned")}
-
-                    style={{background:C.card,border:`1px solid ${fc}44`,borderRadius:16,padding:20,borderTop:`3px solid ${fc}`}}>
-
-                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
-
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:fc}}>Unassigned</div>
-
-                      <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,
-
-                        padding:"3px 12px",fontSize:11,color:fc,fontWeight:700}}>
-
-                        {uJobs.length} job{uJobs.length!==1?"s":""}
-
-                      </div>
-
-                    </div>
-
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
-
-                      {[[uOpen,"Open Items",uOpen>0?C.red:C.muted],
-
-                        [uCOs,"Pending COs",uCOs>0?C.purple:C.muted]].map(([v,l,c])=>(
-
-                        <div key={l} style={{background:C.surface,borderRadius:8,padding:"8px 10px"}}>
-
-                          <div style={{fontFamily:"'Bebas Neue'",fontSize:20,color:c,lineHeight:1}}>{v}</div>
-
-                          <div style={{fontSize:10,color:C.dim,marginTop:2}}>{l}</div>
-
+                  <div>
+                    <div className="foreman-card" onClick={()=>openForeman("Unassigned")}
+                      style={{background:C.card,border:`1px solid ${fc}33`,borderRadius:12,
+                        padding:"14px 16px",borderTop:`3px solid ${fc}`}}>
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:fc,lineHeight:1}}>Unassigned</div>
+                        <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,
+                          padding:"2px 9px",fontSize:10,color:fc,fontWeight:700}}>
+                          {uJobs.length}
                         </div>
-
-                      ))}
-
+                      </div>
+                      <div style={{display:"flex",gap:6,marginBottom:10}}>
+                        <div style={{background:C.surface,borderRadius:7,padding:"5px 8px",flex:1}}>
+                          <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:uCOs>0?C.blue:C.muted,lineHeight:1}}>{uCOs}</div>
+                          <div style={{fontSize:9,color:C.dim,marginTop:1}}>COs</div>
+                        </div>
+                      </div>
+                      <div style={{fontSize:10,color:fc,fontWeight:600,textAlign:"right",opacity:0.7}}>View →</div>
                     </div>
-
-                    <div style={{marginTop:14,fontSize:11,color:fc,fontWeight:600,textAlign:"right"}}>View Jobs →</div>
-
                   </div>
 
                 );
