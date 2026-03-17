@@ -211,6 +211,11 @@ const DEFAULT_LEAD_COLORS = {
   "Vasa":"#f97316","Abe":"#f97316","Louis":"#f97316",
   "Jacob":"#6b7280"
 };
+// Module-level refs so components outside App can always read current settings
+let FOREMEN = DEFAULT_FOREMEN;
+let FOREMEN_COLORS = DEFAULT_FOREMEN_COLORS;
+let LEADS = DEFAULT_LEADS;
+let LEAD_COLORS = DEFAULT_LEAD_COLORS;
 const COLOR_OPTIONS = ["#3b82f6","#f97316","#22c55e","#8b5cf6","#ec4899","#14b8a6","#f59e0b","#ef4444","#06b6d4","#a855f7","#84cc16","#f43f5e"];
 
 // ── Auth PINs ─────────────────────────────────────────────────
@@ -6598,27 +6603,34 @@ function App() {
   const [pinError,  setPinError]  = useState(false);
 
   // ── Settings (foremen + leads) ─────────────────────────────
-  const [FOREMEN,        setFOREMEN]        = useState(DEFAULT_FOREMEN);
-  const [FOREMEN_COLORS, setFOREMEN_COLORS] = useState(DEFAULT_FOREMEN_COLORS);
-  const [LEADS,          setLEADS]          = useState(DEFAULT_LEADS);
-  const [LEAD_COLORS,    setLEAD_COLORS]    = useState(DEFAULT_LEAD_COLORS);
+  const [_foremen,        set_foremen]        = useState(DEFAULT_FOREMEN);
+  const [_foremanColors,  set_foremanColors]  = useState(DEFAULT_FOREMEN_COLORS);
+  const [_leads,          set_leads]          = useState(DEFAULT_LEADS);
+  const [_leadColors,     set_leadColors]     = useState(DEFAULT_LEAD_COLORS);
+
+  // Keep module-level refs in sync so components outside App can read them
+  FOREMEN        = _foremen;
+  FOREMEN_COLORS = _foremanColors;
+  LEADS          = _leads;
+  LEAD_COLORS    = _leadColors;
 
   useEffect(()=>{
     getDoc(doc(db,"settings","main")).then(snap=>{
       if(snap.exists()){
         const d = snap.data();
-        if(d.foremen)       setFOREMEN(d.foremen);
-        if(d.foremanColors) setFOREMEN_COLORS(d.foremanColors);
-        if(d.leads)         setLEADS(d.leads);
-        if(d.leadColors)    setLEAD_COLORS(d.leadColors);
+        if(d.foremen)       { FOREMEN=d.foremen;               set_foremen(d.foremen); }
+        if(d.foremanColors) { FOREMEN_COLORS=d.foremanColors;  set_foremanColors(d.foremanColors); }
+        if(d.leads)         { LEADS=d.leads;                   set_leads(d.leads); }
+        if(d.leadColors)    { LEAD_COLORS=d.leadColors;        set_leadColors(d.leadColors); }
       }
     });
   },[]);
 
   const saveSettings = async(foremen, foremanColors, leads, leadColors) => {
     await setDoc(doc(db,"settings","main"),{foremen,foremanColors,leads,leadColors});
-    setFOREMEN(foremen); setFOREMEN_COLORS(foremanColors);
-    setLEADS(leads); setLEAD_COLORS(leadColors);
+    FOREMEN=foremen; FOREMEN_COLORS=foremanColors; LEADS=leads; LEAD_COLORS=leadColors;
+    set_foremen(foremen); set_foremanColors(foremanColors);
+    set_leads(leads); set_leadColors(leadColors);
   };
 
   const submitPin = (pin) => {
@@ -7317,19 +7329,25 @@ if(initialLoad.current) return;
           const allPeds = jobs.filter(j=>j.tempPed);
           // Build lead list: use Settings leads first, then any unrecognized leads from jobs
           const settingsLeads = LEADS.length>0 ? LEADS : [];
-          const jobLeads = [...new Set(allJobs.map(j=>j.lead||""))].filter(l=>l&&!settingsLeads.includes(l));
+          // Normalize: match job leads to settings leads case-insensitively
+          const normalize = (n) => (n||"").trim().toLowerCase();
+          const settingsMap = {}; // normalized -> canonical
+          settingsLeads.forEach(l=>{ settingsMap[normalize(l)]=l; });
+          // Map every job's lead to its canonical settings name (or itself if unknown)
+          allJobs.forEach(j=>{ if(j.lead) { const canon=settingsMap[normalize(j.lead)]; if(canon&&canon!==j.lead) j._leadKey=canon; else j._leadKey=j.lead; } else j._leadKey=""; });
+          const jobLeads = [...new Set(allJobs.map(j=>j._leadKey))].filter(l=>l&&!settingsLeads.includes(l));
           // Jacob always last, then no-lead
-          const mainLeads = settingsLeads.filter(l=>l!=="Jacob"&&allJobs.some(j=>j.lead===l));
+          const mainLeads = settingsLeads.filter(l=>l!=="Jacob"&&allJobs.some(j=>j._leadKey===l));
           const leadKeys = [...mainLeads, ...jobLeads,
-            ...(allJobs.some(j=>j.lead==="Jacob")?["Jacob"]:[]),
-            ...(allJobs.some(j=>!j.lead)?[""]:[] )];
+            ...(allJobs.some(j=>j._leadKey==="Jacob")?["Jacob"]:[]),
+            ...(allJobs.some(j=>!j._leadKey)?[""]:[] )];
           const getLeadColor = (name) => LEAD_COLORS[name]||"#6b7280";
           return (
             <div style={{padding:"12px 12px 80px"}}>
               <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(160px,1fr))",gap:8,alignItems:"start"}}>
                 {leadKeys.map(lead=>{
                   const lc = getLeadColor(lead);
-                  const lJobs = allJobs.filter(j=>(j.lead||"")===(lead));
+                  const lJobs = allJobs.filter(j=>(j._leadKey||"")===(lead));
                   if(lJobs.length===0) return null;
                   const lCOs = lJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
                   const lRTs = lJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
