@@ -1944,7 +1944,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
 
                 <button
 
-                  onClick={()=>upd(t.id,{signedOff:true})}
+                  onClick={()=>upd(t.id,{signedOff:true, rtStatus:"complete"})}
 
                   disabled={!t.signedOffBy||!t.signedOffDate}
 
@@ -3277,16 +3277,30 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose }) {
   const foreman = job.foreman||"Koy";
   const fc      = (({"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e","Keegan":"#3b82f6","Gage":"#3b82f6","Daegan":"#3b82f6","Braden":"#22c55e","Treycen":"#22c55e","Jon":"#22c55e","Vasa":"#f97316","Abe":"#f97316","Louis":"#f97316","Jacob":"#6b7280"})[foreman]||"#6b7280")||"#6b7280";
 
-  // Photo handling
+  // Photo handling — compress to max 800px / 0.65 quality to stay under Firestore 1MB limit
   const addPhotos = (files) => {
     const arr = Array.from(files);
     let done = 0; const newPhotos = [];
     arr.forEach(file => {
       const reader = new FileReader();
       reader.onload = ev => {
-        newPhotos.push({id:uid(), name:file.name, dataUrl:ev.target.result});
-        done++;
-        if(done===arr.length) u({tempPedPhotos:[...(job.tempPedPhotos||[]),...newPhotos]});
+        const img = new Image();
+        img.onload = () => {
+          const MAX = 800;
+          let w = img.width, h = img.height;
+          if(w > MAX || h > MAX) {
+            if(w > h) { h = Math.round(h * MAX / w); w = MAX; }
+            else { w = Math.round(w * MAX / h); h = MAX; }
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = w; canvas.height = h;
+          canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.65);
+          newPhotos.push({id:uid(), name:file.name, dataUrl});
+          done++;
+          if(done===arr.length) u({tempPedPhotos:[...(job.tempPedPhotos||[]),...newPhotos]});
+        };
+        img.src = ev.target.result;
       };
       reader.readAsDataURL(file);
     });
@@ -3452,19 +3466,34 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose }) {
             {job.tempPedSignedOff ? (
               <div style={{background:`${C.green}12`,border:`1px solid ${C.green}33`,
                 borderRadius:10,padding:"12px 16px",display:"flex",alignItems:"center",
-                justifyContent:"space-between",gap:10}}>
+                justifyContent:"space-between",gap:10,flexWrap:"wrap"}}>
                 <div>
                   <div style={{fontSize:12,fontWeight:700,color:C.green}}>Completed & Signed Off</div>
                   <div style={{fontSize:11,color:C.dim,marginTop:2}}>
                     By {job.tempPedSignedOffBy} · {job.tempPedSignedOffDate}
                   </div>
                 </div>
-                <button onClick={()=>u({tempPedSignedOff:false,tempPedSignedOffBy:"",
-                  tempPedSignedOffDate:"",tempPedStatus:"scheduled",readyToInvoice:false})}
-                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,
-                    color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>
-                  Undo
-                </button>
+                <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                  {job.readyToInvoice&&!job.invoiceSent&&(
+                    <button onClick={()=>u({invoiceSent:true,readyToInvoice:false,invoiceDismissed:true})}
+                      style={{background:"#ea580c",border:"none",borderRadius:7,
+                        color:"#fff",fontSize:11,fontWeight:700,padding:"6px 14px",cursor:"pointer",fontFamily:"inherit"}}>
+                      ✓ Invoice Sent
+                    </button>
+                  )}
+                  {job.invoiceSent&&(
+                    <span style={{fontSize:11,fontWeight:700,color:"#16a34a",background:"#16a34a12",
+                      borderRadius:99,padding:"4px 12px",border:"1px solid #16a34a33"}}>
+                      ✓ Invoice Sent
+                    </span>
+                  )}
+                  <button onClick={()=>u({tempPedSignedOff:false,tempPedSignedOffBy:"",
+                    tempPedSignedOffDate:"",tempPedStatus:"scheduled",readyToInvoice:false,invoiceSent:false})}
+                    style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,
+                      color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>
+                    Undo
+                  </button>
+                </div>
               </div>
             ) : (
               <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
@@ -4923,9 +4952,14 @@ function TempPedCard({ job, onOpen, onUpdate, onDelete }) {
           {job.tempPedStatus==="completed"&&!job.readyToInvoice&&(
             <div style={{fontSize:10,color:"#ea580c",fontWeight:600}}>→ Marked Ready to Invoice</div>
           )}
-          {job.readyToInvoice&&job.tempPedStatus==="completed"&&(
+          {job.readyToInvoice&&job.tempPedStatus==="completed"&&!job.invoiceSent&&(
             <div style={{fontSize:10,fontWeight:800,color:"#ea580c",background:"#ea580c12",borderRadius:99,padding:"2px 10px",border:"1px solid #ea580c33"}}>
               READY TO INVOICE
+            </div>
+          )}
+          {job.invoiceSent&&(
+            <div style={{fontSize:10,fontWeight:800,color:"#16a34a",background:"#16a34a12",borderRadius:99,padding:"2px 10px",border:"1px solid #16a34a33"}}>
+              ✓ INVOICE SENT
             </div>
           )}
           {onDelete&&(
@@ -5594,6 +5628,14 @@ function UpcomingJobs({ upcoming, onChange, onPromote }) {
 
 // ── Tasks Engine ─────────────────────────────────────────────
 
+// Build the patch to mark a job's invoice as sent and clear to complete
+const invoiceSentPatch = (job) => {
+  const patch = { invoiceSent:true, readyToInvoice:false, invoiceDismissed:true };
+  if(job.roughStatus==="invoice") patch.roughStatus = "complete";
+  if(job.finishStatus==="invoice") patch.finishStatus = "complete";
+  return patch;
+};
+
 function computeTasks(jobs) {
   const tasks = [];
   jobs.forEach(job => {
@@ -5764,7 +5806,7 @@ function computeTasks(jobs) {
 
     // Return Trips needing scheduling
     (job.returnTrips||[]).forEach((rt, i) => {
-      if(rt.rtStatus === "needs") tasks.push({
+      if(rt.rtStatus === "needs" && !rt.signedOff) tasks.push({
         id: job.id+"_rt_"+rt.id+"_needs", jobId: job.id, jobName: job.name,
         type: "auto", category: "rt", foreman,
         title: `Schedule Return Trip #${i+1}`,
@@ -5772,7 +5814,7 @@ function computeTasks(jobs) {
         color: "#8b5cf6", cleared: false,
         dueDate: rt.rtStatusDate||"",
       });
-      if(rt.rtStatus === "scheduled") tasks.push({
+      if(rt.rtStatus === "scheduled" && !rt.signedOff) tasks.push({
         id: job.id+"_rt_"+rt.id+"_sched", jobId: job.id, jobName: job.name,
         type: "auto", category: "rt", foreman,
         title: `Return Trip #${i+1} Scheduled`,
@@ -6135,7 +6177,9 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
   };
 
   const dismissInvoiceTask = (jobId) => {
-    if(onUpdateJob) onUpdateJob(jobId, {invoiceDismissed:true});
+    const job = jobs.find(j=>j.id===jobId);
+    if(!job||!onUpdateJob) return;
+    onUpdateJob(jobId, invoiceSentPatch(job));
   };
 
   const dismissCODoneTask = (jobId, coId) => {
@@ -6210,13 +6254,12 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
                 const isTP = job.tempPed;
                 return (
                   <div key={job.id}
-                    onClick={()=>onSelectJob(job)}
                     style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,
-                      padding:"11px 14px",borderRadius:10,marginBottom:6,cursor:"pointer",
-                      background:"#ea580c08",border:"1px solid #ea580c33",borderLeft:"3px solid #ea580c"}}
-                    onMouseEnter={e=>e.currentTarget.style.background="#ea580c14"}
-                    onMouseLeave={e=>e.currentTarget.style.background="#ea580c08"}>
-                    <div>
+                      padding:"11px 14px",borderRadius:10,marginBottom:6,
+                      background:"#ea580c08",border:"1px solid #ea580c33",borderLeft:"3px solid #ea580c"}}>
+                    <div onClick={()=>onSelectJob(job)} style={{flex:1,cursor:"pointer"}}
+                      onMouseEnter={e=>e.currentTarget.style.opacity="0.8"}
+                      onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
                       <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
                         <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{job.name||"Untitled Job"}</span>
                         {isTP&&<span style={{fontSize:9,fontWeight:800,color:"#8b5cf6",background:"#8b5cf618",borderRadius:99,padding:"1px 6px",border:"1px solid #8b5cf633"}}>TEMP PED</span>}
@@ -6226,7 +6269,20 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
                         <span style={{fontWeight:700,color:fc}}>{foreman}</span>
                       </div>
                     </div>
-                    <div style={{fontSize:11,fontWeight:800,color:"#ea580c",whiteSpace:"nowrap"}}>Open →</div>
+                    <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
+                      <button onClick={()=>onSelectJob(job)}
+                        style={{fontSize:11,fontWeight:600,color:"#ea580c",background:"none",
+                          border:"1px solid #ea580c44",borderRadius:7,padding:"5px 10px",
+                          cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                        Open →
+                      </button>
+                      <button onClick={()=>{ if(onUpdateJob) onUpdateJob(job.id, invoiceSentPatch(job)); }}
+                        style={{fontSize:11,fontWeight:700,color:"#fff",background:"#ea580c",
+                          border:"none",borderRadius:7,padding:"5px 14px",
+                          cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                        ✓ Invoice Sent
+                      </button>
+                    </div>
                   </div>
                 );
               })}
@@ -8373,7 +8429,16 @@ if(initialLoad.current) return;
                         {invoiceJobs.length}
                       </div>
                     </div>
-                    {invoiceJobs.map(job=><JobRow key={job.id} job={job}/>)}
+                    {invoiceJobs.map(job=>(
+                      <div key={job.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:6}}>
+                        <div style={{flex:1}}><JobRow job={job}/></div>
+                        <button onClick={()=>{ updateJob({...job,...invoiceSentPatch(job)}); }}
+                          style={{flexShrink:0,fontSize:11,fontWeight:700,color:"#fff",background:"#ea580c",
+                            border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                          ✓ Invoice Sent
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 ):null;
               })()}
