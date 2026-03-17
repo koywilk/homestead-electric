@@ -5799,8 +5799,12 @@ const URGENCY = (dueDateStr) => {
 function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
   const [editingDate, setEditingDate] = useState(false);
   const [dateVal, setDateVal] = useState(task.dueDate||"");
+  // localDueDate keeps color in sync immediately on save without waiting for Firebase round-trip
+  const [localDueDate, setLocalDueDate] = useState(task.dueDate||"");
+  // Sync if parent prop changes (e.g. Firebase comes back with a different value)
+  React.useEffect(() => { setLocalDueDate(task.dueDate||""); }, [task.dueDate]);
 
-  const urg = URGENCY(task.dueDate);
+  const urg = URGENCY(localDueDate);
   const isOverdue  = urg && urg.level === "overdue";
   const isCritical = urg && urg.level === "critical";  // today or tomorrow — red
   const isWarning  = urg && urg.level === "warning";   // 2-3 days — yellow
@@ -5813,6 +5817,7 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
 
   const saveDate = () => {
     if(onSetDueDate) onSetDueDate(task.id, dateVal);
+    setLocalDueDate(dateVal);   // instant local update — no Firebase wait
     setEditingDate(false);
   };
 
@@ -5874,7 +5879,7 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
                 Set
               </button>
               {task.dueDate&&(
-                <button onClick={()=>{if(onSetDueDate)onSetDueDate(task.id,"");setEditingDate(false);}}
+                <button onClick={()=>{if(onSetDueDate)onSetDueDate(task.id,"");setLocalDueDate("");setEditingDate(false);}}
                   style={{fontSize:10,background:"none",border:"1px solid var(--border)",borderRadius:5,
                     color:"var(--muted)",padding:"3px 7px",cursor:"pointer",fontFamily:"inherit"}}>
                   Clear
