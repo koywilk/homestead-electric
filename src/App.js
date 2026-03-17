@@ -6500,7 +6500,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
   );
 }
 
-function SettingsPage({ S.FOREMEN, S.FOREMEN_COLORS, S.LEADS, S.LEAD_COLORS, COLOR_OPTIONS, onSave }) {
+function SettingsPage({ COLOR_OPTIONS, onSave }) {
   const [foremen,       setForemen]       = useState([...S.FOREMEN]);
   const [foremanColors, setForemanColors] = useState({...S.FOREMEN_COLORS});
   const [leads,         setLeads]         = useState([...S.LEADS]);
@@ -8173,8 +8173,6 @@ if(initialLoad.current) return;
 
       {view==="settings"&&authMode==="office"&&(
         <SettingsPage
-          FOREMEN={_foremen} FOREMEN_COLORS={_foremanColors}
-          LEADS={_leads} LEAD_COLORS={_leadColors}
           COLOR_OPTIONS={COLOR_OPTIONS}
           onSave={saveSettings}
         />
