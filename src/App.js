@@ -5824,7 +5824,7 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
   // localDueDate keeps color in sync immediately on save without waiting for Firebase round-trip
   const [localDueDate, setLocalDueDate] = useState(task.dueDate||"");
   // Sync if parent prop changes (e.g. Firebase comes back with a different value)
-  React.useEffect(() => { setLocalDueDate(task.dueDate||""); }, [task.dueDate]);
+  useEffect(() => { setLocalDueDate(task.dueDate||""); }, [task.dueDate]);
 
   const urg = URGENCY(localDueDate);
   const isOverdue  = urg && urg.level === "overdue";
