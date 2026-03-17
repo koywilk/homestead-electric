@@ -266,7 +266,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, taskDueDates:{}, roughOnHold:false, finishOnHold:false, tempPed:false, hasTempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
+  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, roughStartConfirmed:false, finishStartConfirmed:false, readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, taskDueDates:{}, roughOnHold:false, finishOnHold:false, tempPed:false, hasTempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
 
   homeRuns:{
 
@@ -3206,6 +3206,8 @@ const normalizeJob = (raw) => ({
   finishStatus:    raw?.finishStatus    || (()=>{ const p=parseInt(raw?.finishStage)||0; return p===100?"complete":p>0?"inprogress":""; })(),
   roughStatusDate:      raw?.roughStatusDate      || "",
   roughProjectedStart:  raw?.roughProjectedStart  || "",
+  roughStartConfirmed:   raw?.roughStartConfirmed   ?? false,
+  finishStartConfirmed:  raw?.finishStartConfirmed  ?? false,
   finishStatusDate:     raw?.finishStatusDate     || "",
   finishProjectedStart: raw?.finishProjectedStart || "",
   qcStatusDate:         raw?.qcStatusDate         || "",
@@ -3645,10 +3647,30 @@ onUpdate(updated);
                     <div style={{marginBottom:12}}>
                       <div style={{display:"flex",gap:16,marginBottom:12,flexWrap:"wrap"}}>
                         <div style={{flex:1,minWidth:140}}>
-                          <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>PROJECTED START</div>
+                          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
+                            <span style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>PROJECTED START</span>
+                            <button onClick={()=>{
+                              const confirm=!job.roughStartConfirmed;
+                              u({roughStartConfirmed:confirm,
+                                ...(confirm?{roughStatus:"date_confirmed"}:
+                                  (job.roughStatus==="date_confirmed"?{roughStatus:"waiting_date"}:{}))
+                              });
+                            }}
+                              style={{display:"flex",alignItems:"center",gap:4,padding:"2px 8px",borderRadius:99,
+                                fontSize:9,fontWeight:700,cursor:"pointer",fontFamily:"inherit",border:"none",
+                                background:job.roughStartConfirmed?"#16a34a18":"#6b728018",
+                                color:job.roughStartConfirmed?"#16a34a":"#6b7280",
+                                transition:"all 0.15s"}}>
+                              {job.roughStartConfirmed ? "✓ CONFIRMED" : "○ CONFIRM"}
+                            </button>
+                          </div>
                           <Inp value={job.roughProjectedStart||""} onChange={e=>u({roughProjectedStart:e.target.value})}
                             placeholder="MM/DD/YY"
-                            style={{fontSize:13,fontWeight:700,borderColor:C.rough+"55",background:`${C.rough}08`,color:C.rough}}/>
+                            style={{fontSize:13,fontWeight:700,
+                              borderColor:(job.roughStartConfirmed?"#16a34a":C.rough)+"55",
+                              background:job.roughStartConfirmed?"#16a34a08":`${C.rough}08`,
+                              color:job.roughStartConfirmed?"#16a34a":C.rough}}/>
+                          {job.roughStartConfirmed&&<div style={{fontSize:9,color:"#16a34a",fontWeight:700,marginTop:3,letterSpacing:"0.06em"}}>✓ START DATE CONFIRMED</div>}
                         </div>
                       </div>
                       <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
@@ -3657,6 +3679,7 @@ onUpdate(updated);
                           const v=e.target.value;
                           const def=getStatusDef(ROUGH_STATUSES,v);
                           u({roughStatus:v, roughOnHold:v==="waiting", roughScheduled:v==="scheduled",
+                            roughStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete")?job.roughStartConfirmed:false,
                             roughStatusDate:def.hasDate?job.roughStatusDate:"",
                             readyToInvoice:v==="invoice"?true:(job.roughStatus==="invoice"?false:job.readyToInvoice),
                             roughProjectedStart:v==="scheduled"?job.roughProjectedStart:job.roughProjectedStart});
@@ -3751,10 +3774,30 @@ onUpdate(updated);
                     <div style={{marginBottom:12}}>
                       <div style={{display:"flex",gap:16,marginBottom:12,flexWrap:"wrap"}}>
                         <div style={{flex:1,minWidth:140}}>
-                          <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>PROJECTED START</div>
+                          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
+                            <span style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>PROJECTED START</span>
+                            <button onClick={()=>{
+                              const confirm=!job.finishStartConfirmed;
+                              u({finishStartConfirmed:confirm,
+                                ...(confirm?{finishStatus:"date_confirmed"}:
+                                  (job.finishStatus==="date_confirmed"?{finishStatus:"waiting_date"}:{}))
+                              });
+                            }}
+                              style={{display:"flex",alignItems:"center",gap:4,padding:"2px 8px",borderRadius:99,
+                                fontSize:9,fontWeight:700,cursor:"pointer",fontFamily:"inherit",border:"none",
+                                background:job.finishStartConfirmed?"#16a34a18":"#6b728018",
+                                color:job.finishStartConfirmed?"#16a34a":"#6b7280",
+                                transition:"all 0.15s"}}>
+                              {job.finishStartConfirmed ? "✓ CONFIRMED" : "○ CONFIRM"}
+                            </button>
+                          </div>
                           <Inp value={job.finishProjectedStart||""} onChange={e=>u({finishProjectedStart:e.target.value})}
                             placeholder="MM/DD/YY"
-                            style={{fontSize:13,fontWeight:700,borderColor:C.finish+"55",background:`${C.finish}08`,color:C.finish}}/>
+                            style={{fontSize:13,fontWeight:700,
+                              borderColor:(job.finishStartConfirmed?"#16a34a":C.finish)+"55",
+                              background:job.finishStartConfirmed?"#16a34a08":`${C.finish}08`,
+                              color:job.finishStartConfirmed?"#16a34a":C.finish}}/>
+                          {job.finishStartConfirmed&&<div style={{fontSize:9,color:"#16a34a",fontWeight:700,marginTop:3,letterSpacing:"0.06em"}}>✓ START DATE CONFIRMED</div>}
                         </div>
                       </div>
                       <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
@@ -3763,6 +3806,7 @@ onUpdate(updated);
                           const v=e.target.value;
                           const def=getStatusDef(FINISH_STATUSES,v);
                           u({finishStatus:v, finishOnHold:v==="waiting", finishScheduled:v==="scheduled",
+                            finishStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete")?job.finishStartConfirmed:false,
                             finishStatusDate:def.hasDate?job.finishStatusDate:"",
                             readyToInvoice:v==="invoice"?true:(job.finishStatus==="invoice"?false:job.readyToInvoice),
                             finishProjectedStart:v==="scheduled"?job.finishProjectedStart:job.finishProjectedStart});
@@ -5483,13 +5527,22 @@ function computeTasks(jobs) {
     const rs = job.roughStatus || "";
     const fs = job.finishStatus || "";
 
-    // Rough — start date confirmed: two tasks fire
+    // Rough — waiting for date OR date confirmed: fire scheduling task
+    if(rs === "waiting_date") {
+      tasks.push({
+        id: job.id+"_rough_waiting", jobId: job.id, jobName: job.name,
+        type: "auto", category: "rough", foreman,
+        title: "Get Rough Start Date",
+        desc: "Waiting for start date confirmation from GC/homeowner",
+        color: C.rough, cleared: false,
+      });
+    }
     if(rs === "date_confirmed") {
       tasks.push({
         id: job.id+"_rough_needs", jobId: job.id, jobName: job.name,
         type: "auto", category: "rough", foreman,
         title: "Schedule Rough",
-        desc: job.roughStatusDate ? `Schedule by: ${job.roughStatusDate}` : "Start date confirmed — needs to be scheduled",
+        desc: job.roughStatusDate ? `Start date confirmed — schedule by: ${job.roughStatusDate}` : "Start date confirmed — needs to be scheduled",
         color: C.rough, cleared: false,
       });
       tasks.push({
@@ -5501,13 +5554,22 @@ function computeTasks(jobs) {
       });
     }
 
-    // Finish — start date confirmed: two tasks fire
+    // Finish — waiting for date OR date confirmed: fire scheduling task
+    if(fs === "waiting_date") {
+      tasks.push({
+        id: job.id+"_finish_waiting", jobId: job.id, jobName: job.name,
+        type: "auto", category: "finish", foreman,
+        title: "Get Finish Start Date",
+        desc: "Waiting for finish start date confirmation",
+        color: C.finish, cleared: false,
+      });
+    }
     if(fs === "date_confirmed") {
       tasks.push({
         id: job.id+"_finish_needs", jobId: job.id, jobName: job.name,
         type: "auto", category: "finish", foreman,
         title: "Schedule Finish",
-        desc: job.finishStatusDate ? `Schedule by: ${job.finishStatusDate}` : "Start date confirmed — needs to be scheduled",
+        desc: job.finishStatusDate ? `Start date confirmed — schedule by: ${job.finishStatusDate}` : "Start date confirmed — needs to be scheduled",
         color: C.finish, cleared: false,
       });
       tasks.push({
@@ -5608,6 +5670,18 @@ function computeTasks(jobs) {
         color: "#8b5cf6", cleared: false,
       });
     });
+
+    // Pre Job Prep — always assigned to Koy regardless of job foreman
+    if(!job.tempPed && (job.prepStage||"") !== "Job Prep Complete") {
+      tasks.push({
+        id: job.id+"_prep", jobId: job.id, jobName: job.name,
+        type: "auto", category: "prep", foreman: "Koy",
+        prepStage: job.prepStage||"",
+        title: `Pre Job Prep: ${job.name||"Untitled"}`,
+        desc: job.prepStage ? `Stage: ${job.prepStage}` : "Not started",
+        color: "#0d9488", cleared: false,
+      });
+    }
   });
   return tasks;
 }
@@ -6009,13 +6083,11 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
         })()}
 
         {/* Pre Job Prep tracker — all foremen */}
-        {(()=>{
-          const prepFiltered = filterForeman
-            ? jobs.filter(j=>((j.foreman||"Koy")===filterForeman))
-            : jobs;
+        {/* Pre Job Prep — always goes to Koy, hidden from other foremen */}
+        {(!filterForeman || filterForeman==="Koy") && (()=>{
           return (
             <div style={{marginBottom:24}}>
-              <PrepTaskList jobs={prepFiltered} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob}/>
+              <PrepTaskList jobs={jobs} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob}/>
             </div>
           );
         })()}
