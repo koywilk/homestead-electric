@@ -5757,7 +5757,10 @@ function computeTasks(jobs) {
 
 const parseAnyDate = (str) => {
   if(!str) return null;
-  // Handle MM/DD/YY and MM/DD/YYYY
+  // YYYY-MM-DD (from date picker) — parse as LOCAL date to avoid UTC midnight shift
+  const ymd = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(ymd) return new Date(+ymd[1], +ymd[2]-1, +ymd[3]);
+  // MM/DD/YY or MM/DD/YYYY
   const mdy = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
   if(mdy) {
     let [,m,d,y] = mdy;
@@ -6291,7 +6294,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
     const rsDef=getStatusDef(ROUGH_STATUSES,rs);
     const fsDef=getStatusDef(FINISH_STATUSES,fs);
     const openCOs=(job.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied"&&c.status!=="");
-    const openRTs=(job.returnTrips||[]).filter(r=>!r.signedOff&&(r.scope||r.date||r.rtStatus));
+    const openRTs=(job.returnTrips||[]).filter(r=>!r.signedOff&&(r.scope||r.rtStatus||r.rtStatusDate||r.needsByStart));
     const qcPending=job.roughQCTaskFired&&job.qcStatus!=="complete"&&job.qcStatus!=="";
 
     // Does this job have anything needing scheduling?
@@ -6303,7 +6306,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
     // Pick best scheduling date — use parseAnyDate to handle all formats
     const dates=[job.roughProjectedStart,job.roughStatusDate,job.finishProjectedStart,job.finishStatusDate]
       .map(d=>parseAnyDate(d)).filter(Boolean);
-    openRTs.forEach(r=>{ const d=parseAnyDate(r.rtStatusDate||r.needsByStart||r.date); if(d) dates.push(d); });
+    openRTs.forEach(r=>{ const d=parseAnyDate(r.needsByStart||r.rtStatusDate||r.date); if(d) dates.push(d); });
     openCOs.forEach(co=>{ const d=parseAnyDate(co.coStatusDate||co.needsByStart); if(d) dates.push(d); });
     dates.sort((a,b)=>a-b);
     const bestDate=dates.length?dates[0].toISOString().split("T")[0]:"";
@@ -6516,7 +6519,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
         const isWeekend=(d)=>d.getDay()===0||d.getDay()===6;
         const fmt=(d)=>d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
 
-        const getRowDay=(row)=>{ if(!row.bestDate) return null; const d=new Date(row.bestDate); return isNaN(d.getTime())?null:d; };
+        const getRowDay=(row)=>{ if(!row.bestDate) return null; return parseAnyDate(row.bestDate); };
 
         const noDateRows=allRows.filter(r=>!r.bestDate);
         return (
