@@ -1390,7 +1390,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
       photos: [],
     };
     // We signal the parent to add the RT — pass via a special onChange shape
-    onChange(orders.map(co => co.id===o.id ? {...co, coStatus:"converted"} : co), newRT);
+    onChange(orders.map(co => co.id===o.id ? {...co, coStatus:"converted"} : co), newRT, true); // true = add to top
   };
 
   return (
@@ -1510,10 +1510,18 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
               </div>
             )}
 
-            {/* Converted note */}
+            {/* Converted note + undo */}
             {isConverted&&(
-              <div style={{fontSize:11,color:"#6b7280",fontStyle:"italic",marginBottom:8}}>
-                This CO was converted to a Return Trip. See the Return Trips tab.
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:8,flexWrap:"wrap"}}>
+                <div style={{fontSize:11,color:"#6b7280",fontStyle:"italic"}}>
+                  Converted to Return Trip — see Return Trips tab.
+                </div>
+                <button onClick={()=>upd(o.id,{coStatus:"approved"})}
+                  style={{background:"none",border:"1px solid #ca8a0455",borderRadius:7,
+                    color:"#ca8a04",fontSize:11,padding:"4px 10px",cursor:"pointer",
+                    fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>
+                  ↩ Undo Convert
+                </button>
               </div>
             )}
 
@@ -3712,7 +3720,7 @@ onUpdate(updated);
                   orders={job.changeOrders}
                   onChange={(updatedCOs, newRT) => {
                     if(newRT) {
-                      u({changeOrders:updatedCOs, returnTrips:[...(job.returnTrips||[]), newRT]});
+                      u({changeOrders:updatedCOs, returnTrips:[newRT, ...(job.returnTrips||[])]});
                     } else {
                       u({changeOrders:updatedCOs});
                     }
@@ -5173,7 +5181,10 @@ const URGENCY = (dueDateStr) => {
   return {label:`DUE ${new Date(dueDateStr).toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, color:"#6b7280", bg:"transparent", days: diff};
 };
 
-function TaskCard({ task, jobs, onSelectJob, onDismiss, compact }) {
+function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
+  const [editingDate, setEditingDate] = useState(false);
+  const [dateVal, setDateVal] = useState(task.dueDate||"");
+
   const urg = URGENCY(task.dueDate);
   const isOverdue = urg && urg.days < 0;
   const isUrgent  = urg && urg.days >= 0 && urg.days <= 3;
@@ -5181,6 +5192,11 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, compact }) {
   const CATEGORY_LABELS = {
     rough:"Rough", finish:"Finish", qc:"QC Walk", co:"Change Order",
     rt:"Return Trip", manual:"Manual Task", prep:"Pre Job Prep", po:"Purchase Order"
+  };
+
+  const saveDate = () => {
+    if(onSetDueDate) onSetDueDate(task.id, dateVal);
+    setEditingDate(false);
   };
 
   return (
@@ -5205,7 +5221,49 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, compact }) {
           <span style={{fontSize:9,fontWeight:800,color:task.color,background:`${task.color}18`,borderRadius:99,padding:"2px 8px",border:`1px solid ${task.color}28`,letterSpacing:"0.07em"}}>
             {(CATEGORY_LABELS[task.category]||task.category).toUpperCase()}
           </span>
-          {urg&&<span style={{fontSize:9,fontWeight:800,color:urg.color,background:urg.bg,borderRadius:99,padding:"2px 8px",border:`1px solid ${urg.color}33`,letterSpacing:"0.07em"}}>{urg.label}</span>}
+          {urg&&!editingDate&&(
+            <span onClick={()=>{setEditingDate(true);setDateVal(task.dueDate||"");}}
+              style={{fontSize:9,fontWeight:800,color:urg.color,background:urg.bg,borderRadius:99,padding:"2px 8px",border:`1px solid ${urg.color}33`,letterSpacing:"0.07em",cursor:"pointer"}}
+              title="Click to edit due date">
+              {urg.label} ✏
+            </span>
+          )}
+          {!urg&&!editingDate&&onSetDueDate&&(
+            <span onClick={()=>{setEditingDate(true);setDateVal("");}}
+              style={{fontSize:9,color:"var(--muted)",cursor:"pointer",padding:"2px 6px",borderRadius:99,border:"1px dashed var(--border)"}}
+              title="Set due date">
+              + due date
+            </span>
+          )}
+          {editingDate&&(
+            <div style={{display:"flex",alignItems:"center",gap:4}}>
+              <input
+                autoFocus
+                value={dateVal}
+                onChange={e=>setDateVal(e.target.value)}
+                onKeyDown={e=>{if(e.key==="Enter")saveDate();if(e.key==="Escape")setEditingDate(false);}}
+                placeholder="MM/DD/YY"
+                style={{fontSize:11,border:"1px solid var(--accent)",borderRadius:6,padding:"2px 7px",
+                  background:"var(--surface)",color:"var(--text)",fontFamily:"inherit",width:96,outline:"none"}}
+              />
+              <button onClick={saveDate}
+                style={{fontSize:10,fontWeight:700,background:"var(--accent)",border:"none",
+                  borderRadius:5,color:"#000",padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>
+                Set
+              </button>
+              {task.dueDate&&(
+                <button onClick={()=>{if(onSetDueDate)onSetDueDate(task.id,"");setEditingDate(false);}}
+                  style={{fontSize:10,background:"none",border:"1px solid var(--border)",borderRadius:5,
+                    color:"var(--muted)",padding:"3px 7px",cursor:"pointer",fontFamily:"inherit"}}>
+                  Clear
+                </button>
+              )}
+              <button onClick={()=>setEditingDate(false)}
+                style={{fontSize:10,background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontFamily:"inherit"}}>
+                ✕
+              </button>
+            </div>
+          )}
           {task.type==="manual"&&<span style={{fontSize:9,color:"#6b7280",letterSpacing:"0.06em",fontWeight:600}}>MANUAL</span>}
         </div>
 
@@ -5222,11 +5280,9 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, compact }) {
           </div>
         )}
 
-        {/* Desc / notes */}
         {task.desc&&<div style={{fontSize:11,color:"var(--dim)",fontStyle:"italic",lineHeight:1.4}}>{task.desc}</div>}
         {task.notes&&<div style={{fontSize:11,color:"var(--dim)",marginTop:2,lineHeight:1.4}}>{task.notes}</div>}
 
-        {/* Prep stage pill if prep task */}
         {task.category==="prep"&&task.prepStage&&(
           <div style={{marginTop:6}}>
             <span style={{fontSize:10,fontWeight:700,color:task.prepStage===PREP_STAGE_ALERT?"#dc2626":"#0d9488",background:task.prepStage===PREP_STAGE_ALERT?"#dc262610":"#0d948810",borderRadius:99,padding:"2px 10px",border:`1px solid ${task.prepStage===PREP_STAGE_ALERT?"#dc262633":"#0d948833"}`}}>
@@ -5236,7 +5292,7 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, compact }) {
         )}
       </div>
 
-      {/* Action button */}
+      {/* Action buttons */}
       <div style={{flexShrink:0,display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
         {onDismiss&&(
           <button onClick={onDismiss}
@@ -5371,6 +5427,19 @@ function PrepTaskList({ jobs, onSelectJob, onUpdateJob }) {
 
 function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJob, filterForeman, compact }) {
   const [showAdd, setShowAdd] = useState(false);
+  // Stores due date overrides for auto-tasks keyed by task id
+  const [taskDueDates, setTaskDueDates] = useState({});
+
+  const handleSetDueDate = (taskId, date) => {
+    // Manual task — update in the list
+    const isManual = (manualTasks||[]).find(t => t.id === taskId);
+    if(isManual) {
+      onManualTasksChange((manualTasks||[]).map(t => t.id===taskId ? {...t, dueDate:date} : t));
+    } else {
+      // Auto-task — store override locally
+      setTaskDueDates(prev => ({...prev, [taskId]: date}));
+    }
+  };
 
   const handleAdd = (t) => {
     const task = { id: uid(), title: t.title, foreman: t.foreman,
@@ -5386,7 +5455,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
 
   const autoTasks = computeTasks(jobs);
   const allTasks = [
-    ...autoTasks,
+    ...autoTasks.map(t => taskDueDates[t.id] !== undefined ? {...t, dueDate:taskDueDates[t.id]} : t),
     ...(manualTasks||[]).map(t=>({...t,type:"manual"}))
   ].filter(t => !filterForeman || t.foreman === filterForeman);
 
@@ -5454,7 +5523,8 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
             {showAdd&&filterForeman&&<AddTaskForm defaultForeman={filterForeman} onAdd={handleAdd} onCancel={()=>setShowAdd(false)}/>}
             {sorted.map(task=>(
               <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
-                onDismiss={task.type==="manual"?()=>dismissManual(task.id):null}/>
+                onDismiss={task.type==="manual"?()=>dismissManual(task.id):null}
+                onSetDueDate={handleSetDueDate}/>
             ))}
           </div>
         ) : (
@@ -5474,7 +5544,8 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
                 </div>
                 {fTasks.map(task=>(
                   <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
-                    onDismiss={task.type==="manual"?()=>dismissManual(task.id):null}/>
+                    onDismiss={task.type==="manual"?()=>dismissManual(task.id):null}
+                    onSetDueDate={handleSetDueDate}/>
                 ))}
               </div>
             );
