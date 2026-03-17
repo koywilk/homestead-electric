@@ -4698,7 +4698,7 @@ function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
 
 // ── Temp Ped Card ─────────────────────────────────────────────
 
-function TempPedCard({ job, onOpen, onUpdate }) {
+function TempPedCard({ job, onOpen, onUpdate, onDelete }) {
   const tpDef = getStatusDef(TEMP_PED_STATUSES, job.tempPedStatus||"");
   const color = tpDef.color || "#8b5cf6";
   const foreman = job.foreman||"Koy";
@@ -4779,6 +4779,14 @@ function TempPedCard({ job, onOpen, onUpdate }) {
               READY TO INVOICE
             </div>
           )}
+          {onDelete&&(
+            <button onClick={e=>{e.stopPropagation();if(window.confirm("Delete this temp ped job?")) onDelete(job.id);}}
+              style={{marginTop:4,background:"none",border:"1px solid #dc262633",borderRadius:6,
+                color:"#dc2626",fontSize:10,fontWeight:600,padding:"3px 8px",cursor:"pointer",
+                fontFamily:"inherit"}}>
+              Delete
+            </button>
+          )}
         </div>
       </div>
     </div>
@@ -4850,7 +4858,7 @@ const STAGE_SECTIONS = [
 
 
 
-function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, fc, startCollapsed=true }) {
+function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc, startCollapsed=true }) {
 
   const initCollapsed = () => Object.fromEntries(STAGE_SECTIONS.map(s=>[s.key,startCollapsed]));
   const [collapsed, setCollapsed] = useState(initCollapsed);
@@ -4926,7 +4934,7 @@ function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, f
 
             {!isCollapsed && sJobs.map(job=>(
               job.tempPed
-                ? <TempPedCard key={job.id} job={job} onOpen={onSelectJob} onUpdate={onSaveJob}/>
+                ? <TempPedCard key={job.id} job={job} onOpen={onSelectJob} onUpdate={onSaveJob} onDelete={onDeleteJob}/>
                 : <JobRow key={job.id} job={job} fc={fc||undefined} showForeman={!fc}/>
             ))}
 
@@ -5752,11 +5760,15 @@ function AddTaskForm({ defaultForeman, onAdd, onCancel }) {
 }
 
 function PrepTaskList({ jobs, onSelectJob, onUpdateJob }) {
-  // All jobs that have a prep stage set and not complete
-  const prepJobs = jobs.filter(j => j.prepStage && j.prepStage !== "Job Prep Complete")
+  // All jobs in pre-job prep (not complete) — includes ones with no stage set yet
+  const prepJobs = jobs.filter(j => !j.tempPed && (j.prepStage||"") !== "Job Prep Complete")
     .sort((a,b) => {
       const ai = PREP_STAGES.indexOf(a.prepStage);
       const bi = PREP_STAGES.indexOf(b.prepStage);
+      // Jobs with no stage set go to bottom
+      if(ai === -1 && bi === -1) return (a.name||"").localeCompare(b.name||"");
+      if(ai === -1) return 1;
+      if(bi === -1) return -1;
       return ai - bi;
     });
 
@@ -5776,7 +5788,7 @@ function PrepTaskList({ jobs, onSelectJob, onUpdateJob }) {
     <div>
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,paddingBottom:10,borderBottom:"2px solid #2563eb22"}}>
         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#2563eb"}}>PRE JOB PREP TRACKER</div>
-        <div style={{background:"#2563eb18",border:"1px solid #2563eb33",borderRadius:99,padding:"2px 10px",fontSize:11,color:"#2563eb",fontWeight:700}}>{prepJobs.length} in progress</div>
+        <div style={{background:"#2563eb18",border:"1px solid #2563eb33",borderRadius:99,padding:"2px 10px",fontSize:11,color:"#2563eb",fontWeight:700}}>{prepJobs.length} not complete</div>
         {completeJobs.length>0&&<div style={{background:"#16a34a18",border:"1px solid #16a34a33",borderRadius:99,padding:"2px 10px",fontSize:11,color:"#16a34a",fontWeight:700}}>✓ {completeJobs.length} complete</div>}
       </div>
 
@@ -5965,12 +5977,17 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
           );
         })()}
 
-        {/* Koy prep tracker */}
-        {(!filterForeman||filterForeman==="Koy")&&(
-          <div style={{marginBottom:24}}>
-            <PrepTaskList jobs={jobs} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob}/>
-          </div>
-        )}
+        {/* Pre Job Prep tracker — all foremen */}
+        {(()=>{
+          const prepFiltered = filterForeman
+            ? jobs.filter(j=>((j.foreman||"Koy")===filterForeman))
+            : jobs;
+          return (
+            <div style={{marginBottom:24}}>
+              <PrepTaskList jobs={prepFiltered} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob}/>
+            </div>
+          );
+        })()}
 
         {/* Tasks grouped by foreman */}
         {!filterForeman&&(
@@ -7183,7 +7200,7 @@ if(initialLoad.current) return;
                     fontFamily:"inherit",boxShadow:`0 2px 8px ${C.accent}44`,letterSpacing:"0.02em"}}>
                   + New Job
                 </button>
-                <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";j.tempPed=true;j.tempPedNumber="1";setJobs(js=>[j,...js]);setSelected(j);}}
+                <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";j.tempPed=true;setJobs(js=>[j,...js]);setSelected(j);}}
                   style={{background:"#8b5cf6",border:"none",borderRadius:8,color:"#fff",
                     fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
                     fontFamily:"inherit",boxShadow:"0 2px 8px #8b5cf644",letterSpacing:"0.02em"}}>
@@ -7445,6 +7462,7 @@ if(initialLoad.current) return;
                     TempPedCard={TempPedCard}
                     onSelectJob={(j)=>setSelected(j)}
                     onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }}
+                    onDeleteJob={(id)=>deleteJob(id)}
                     fc={FOREMEN_COLORS[crewView]}
                     startCollapsed={false}
                   />
@@ -7458,7 +7476,7 @@ if(initialLoad.current) return;
                 color:C.dim,marginBottom:16,marginTop:32,paddingTop:24,borderTop:`1px solid ${C.border}`}}>
                 ALL JOBS
               </div>
-              <StageSectionList jobs={jobs} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} startCollapsed={true}/>
+              <StageSectionList jobs={jobs} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>
             </div>
 
           </div>
@@ -7649,7 +7667,7 @@ if(initialLoad.current) return;
                   </div>
                 );
               })()}
-              <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} fc={FOREMEN_COLORS[activeForeman]} startCollapsed={false}/>
+              <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} onDeleteJob={(id)=>deleteJob(id)} fc={FOREMEN_COLORS[activeForeman]} startCollapsed={false}/>
               {(()=>{
                 const invoiceJobs = filtered.filter(j=>effRS(j)==="invoice"||effFS(j)==="invoice");
                 return invoiceJobs.length>0?(
