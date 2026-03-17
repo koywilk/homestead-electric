@@ -1543,12 +1543,12 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
                     </div>
                     {!o.needsHardDate?(
                       <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-                        <Inp value={o.needsByStart||""} onChange={e=>upd(o.id,{needsByStart:e.target.value})} placeholder="Start MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                        <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={o.needsByStart||""} onChange={e=>upd(o.id,{needsByStart:e.target.value})}/>
                         <span style={{fontSize:11,color:"var(--dim)"}}>–</span>
-                        <Inp value={o.needsByEnd||""} onChange={e=>upd(o.id,{needsByEnd:e.target.value})} placeholder="End MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                        <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={o.needsByEnd||""} onChange={e=>upd(o.id,{needsByEnd:e.target.value})}/>
                       </div>
                     ):(
-                      <Inp value={o.needsByStart||""} onChange={e=>upd(o.id,{needsByStart:e.target.value})} placeholder="Hard date MM/DD/YY" style={{width:150,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                      <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={o.needsByStart||""} onChange={e=>upd(o.id,{needsByStart:e.target.value})}/>
                     )}
                   </div>
                 )}
@@ -1752,12 +1752,12 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
                           </div>
                           {!t.needsHardDate?(
                             <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-                              <Inp value={t.needsByStart||""} onChange={e=>upd(t.id,{needsByStart:e.target.value})} placeholder="Start MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                              <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={t.needsByStart||""} onChange={e=>upd(t.id,{needsByStart:e.target.value})}/>
                               <span style={{fontSize:11,color:C.dim}}>–</span>
-                              <Inp value={t.needsByEnd||""} onChange={e=>upd(t.id,{needsByEnd:e.target.value})} placeholder="End MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                              <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={t.needsByEnd||""} onChange={e=>upd(t.id,{needsByEnd:e.target.value})}/>
                             </div>
                           ):(
-                            <Inp value={t.needsByStart||""} onChange={e=>upd(t.id,{needsByStart:e.target.value})} placeholder="Hard date MM/DD/YY" style={{width:150,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                            <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={t.needsByStart||""} onChange={e=>upd(t.id,{needsByStart:e.target.value})}/>
                           )}
                         </div>
                       )}
@@ -3719,12 +3719,12 @@ onUpdate(updated);
                           </div>
                           {!job.roughNeedsHardDate?(
                             <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-                              <Inp value={job.roughNeedsByStart||""} onChange={e=>u({roughNeedsByStart:e.target.value})} placeholder="Start MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                              <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={job.roughNeedsByStart||""} onChange={e=>u({roughNeedsByStart:e.target.value})}/>
                               <span style={{fontSize:11,color:C.dim}}>–</span>
-                              <Inp value={job.roughNeedsByEnd||""} onChange={e=>u({roughNeedsByEnd:e.target.value})} placeholder="End MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                              <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={job.roughNeedsByEnd||""} onChange={e=>u({roughNeedsByEnd:e.target.value})}/>
                             </div>
                           ):(
-                            <Inp value={job.roughNeedsByStart||""} onChange={e=>u({roughNeedsByStart:e.target.value})} placeholder="Hard date MM/DD/YY" style={{width:150,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                            <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={job.roughNeedsByStart||""} onChange={e=>u({roughNeedsByStart:e.target.value})}/>
                           )}
                         </div>
                       )}
@@ -3863,12 +3863,12 @@ onUpdate(updated);
                           </div>
                           {!job.finishNeedsHardDate?(
                             <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-                              <Inp value={job.finishNeedsByStart||""} onChange={e=>u({finishNeedsByStart:e.target.value})} placeholder="Start MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                              <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={job.finishNeedsByStart||""} onChange={e=>u({finishNeedsByStart:e.target.value})}/>
                               <span style={{fontSize:11,color:C.dim}}>–</span>
-                              <Inp value={job.finishNeedsByEnd||""} onChange={e=>u({finishNeedsByEnd:e.target.value})} placeholder="End MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                              <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={job.finishNeedsByEnd||""} onChange={e=>u({finishNeedsByEnd:e.target.value})}/>
                             </div>
                           ):(
-                            <Inp value={job.finishNeedsByStart||""} onChange={e=>u({finishNeedsByStart:e.target.value})} placeholder="Hard date MM/DD/YY" style={{width:150,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                            <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={job.finishNeedsByStart||""} onChange={e=>u({finishNeedsByStart:e.target.value})}/>
                           )}
                         </div>
                       )}
@@ -5838,12 +5838,12 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
             <div style={{display:"flex",alignItems:"center",gap:4}}>
               <input
                 autoFocus
+                type="date"
                 value={dateVal}
                 onChange={e=>setDateVal(e.target.value)}
                 onKeyDown={e=>{if(e.key==="Enter")saveDate();if(e.key==="Escape")setEditingDate(false);}}
-                placeholder="MM/DD/YY"
                 style={{fontSize:11,border:"1px solid var(--accent)",borderRadius:6,padding:"2px 7px",
-                  background:"var(--surface)",color:"var(--text)",fontFamily:"inherit",width:96,outline:"none"}}
+                  background:"var(--surface)",color:"var(--text)",fontFamily:"inherit",width:130,outline:"none",colorScheme:"dark"}}
               />
               <button onClick={saveDate}
                 style={{fontSize:10,fontWeight:700,background:"var(--accent)",border:"none",
@@ -6261,9 +6261,9 @@ function SchedulingForecast({ jobs, onSelectJob }) {
 
   const today = new Date(); today.setHours(0,0,0,0);
   const parseDate = (str) => { if(!str) return null; const d=new Date(str); return isNaN(d.getTime())?null:d; };
-  const fmtDate  = (str) => { const d=parseDate(str); if(!d) return null; return d.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
-  const fmtFull  = (str) => { const d=parseDate(str); if(!d) return null; return d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"}); };
-  const isOverdue= (str) => { const d=parseDate(str); if(!d) return false; const c=new Date(d); c.setHours(0,0,0,0); return c<today; };
+  const fmtDate  = (str) => { const d=parseAnyDate(str); if(!d) return null; return d.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
+  const fmtFull  = (str) => { const d=parseAnyDate(str); if(!d) return null; return d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"}); };
+  const isOverdue= (str) => { const d=parseAnyDate(str); if(!d) return false; const c=new Date(d); c.setHours(0,0,0,0); return c<today; };
 
   const startOfWeek=(d)=>{ const dt=new Date(d); dt.setHours(0,0,0,0); dt.setDate(dt.getDate()-dt.getDay()); return dt; };
   const thisWeekStart=startOfWeek(today);
@@ -6285,28 +6285,33 @@ function SchedulingForecast({ jobs, onSelectJob }) {
     :foremanTab==="Unassigned"?jobs.filter(j=>!j.foreman||j.foreman==="Unassigned")
     :jobs.filter(j=>(j.foreman||"Koy")===foremanTab);
 
-  // One row per job — show its most urgent scheduling need + all dates
+  // One row per job — only jobs with something needing scheduling
   const buildRows=(jobList)=>jobList.filter(j=>!j.tempPed).map(job=>{
     const rs=effRS(job), fs=effFS(job);
     const rsDef=getStatusDef(ROUGH_STATUSES,rs);
     const fsDef=getStatusDef(FINISH_STATUSES,fs);
-    const openCOs=(job.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied");
+    const openCOs=(job.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied"&&c.status!=="");
     const openRTs=(job.returnTrips||[]).filter(r=>!r.signedOff&&(r.scope||r.date||r.rtStatus));
     const qcPending=job.roughQCTaskFired&&job.qcStatus!=="complete"&&job.qcStatus!=="";
 
-    // Pick best scheduling date for bucket/sorting
+    // Does this job have anything needing scheduling?
+    const hasActiveRough = rs&&rs!=="complete"&&rs!=="invoice";
+    const hasActiveFinish = fs&&fs!=="complete"&&fs!=="invoice";
+    const needsScheduling = hasActiveRough||hasActiveFinish||openCOs.length>0||openRTs.length>0||qcPending;
+    if(!needsScheduling) return null;
+
+    // Pick best scheduling date — use parseAnyDate to handle all formats
     const dates=[job.roughProjectedStart,job.roughStatusDate,job.finishProjectedStart,job.finishStatusDate]
-      .map(d=>parseDate(d)).filter(Boolean);
-    openRTs.forEach(r=>{ const d=parseDate(r.rtStatusDate||r.date); if(d) dates.push(d); });
-    openCOs.forEach(c=>{ const d=parseDate(c.coStatusDate); if(d) dates.push(d); });
+      .map(d=>parseAnyDate(d)).filter(Boolean);
+    openRTs.forEach(r=>{ const d=parseAnyDate(r.rtStatusDate||r.needsByStart||r.date); if(d) dates.push(d); });
+    openCOs.forEach(co=>{ const d=parseAnyDate(co.coStatusDate||co.needsByStart); if(d) dates.push(d); });
     dates.sort((a,b)=>a-b);
     const bestDate=dates.length?dates[0].toISOString().split("T")[0]:"";
-    // Pass the most relevant status so inprogress jobs aren't marked overdue
     const activeStatus = rs==="inprogress"||fs==="inprogress" ? "inprogress" : rs||fs||"";
     const bucket=getBucket(bestDate, activeStatus);
 
     return {job,rs,fs,rsDef,fsDef,openCOs,openRTs,qcPending,bestDate,bucket};
-  });
+  }).filter(Boolean);
 
   const allRows=buildRows(filteredJobs);
   const allPeds=filteredJobs.filter(j=>j.tempPed);
