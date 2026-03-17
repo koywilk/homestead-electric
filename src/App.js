@@ -206,6 +206,25 @@ const FOREMEN = ["Koy", "Vasa", "Colby"];
 
 const FOREMEN_COLORS = {"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e"};
 
+// ── Auth PINs ─────────────────────────────────────────────────
+const OFFICE_PIN = "0720"; // Full app access
+const CREW_PIN   = "7811"; // Field crew — all jobs, grouped by lead
+// Session stored in localStorage — expires at midnight each day
+const AUTH_KEY = "he_auth";
+const getAuthSession = () => {
+  try {
+    const s = JSON.parse(localStorage.getItem(AUTH_KEY)||"{}");
+    const today = new Date().toDateString();
+    if(s.date !== today) return null; // expired — new day
+    return s; // { date, mode }
+  } catch { return null; }
+};
+const setAuthSession = (mode) => {
+  localStorage.setItem(AUTH_KEY, JSON.stringify({
+    date: new Date().toDateString(), mode
+  }));
+};
+
 
 
 const blankJob = () => ({
@@ -6465,6 +6484,29 @@ function App() {
   const hoParam = new URLSearchParams(window.location.search).get("homeowner");
   if(hoParam) return <HomeownerPage jobId={hoParam}/>;
 
+  // ── Auth ──────────────────────────────────────────────────────
+  const [authMode,  setAuthMode]  = useState(()=>getAuthSession()?.mode||"locked");
+  const [pinInput,  setPinInput]  = useState("");
+  const [pinError,  setPinError]  = useState(false);
+
+  const submitPin = (pin) => {
+    if(pin === OFFICE_PIN) {
+      setAuthSession("office");
+      setAuthMode("office");
+      setPinInput("");
+      setPinError(false);
+    } else if(pin === CREW_PIN) {
+      setAuthSession("crew");
+      setAuthMode("crew");
+      setPinInput("");
+      setPinError(false);
+    } else {
+      setPinError(true);
+      setPinInput("");
+      setTimeout(()=>setPinError(false), 1200);
+    }
+  };
+
   const [jobs,     setJobs]     = useState([]);
   const [upcoming, setUpcoming] = useState([]);
   const [manualTasks, setManualTasks] = useState([]);
@@ -7070,6 +7112,107 @@ if(initialLoad.current) return;
 
 
 
+  // ── Lock screen ─────────────────────────────────────────────
+  if(authMode === "locked") {
+    return (
+      <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",
+        display:"flex",alignItems:"center",justifyContent:"center",padding:24}}>
+        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:20,
+          padding:"36px 32px",maxWidth:340,width:"100%",textAlign:"center"}}>
+          <div style={{fontSize:48,marginBottom:8}}>⚡</div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.08em",
+            color:C.text,marginBottom:4}}>HOMESTEAD ELECTRIC</div>
+          <div style={{fontSize:12,color:C.dim,marginBottom:28}}>Enter your PIN to continue</div>
+          {/* PIN dots */}
+          <div style={{display:"flex",justifyContent:"center",gap:12,marginBottom:24}}>
+            {[0,1,2,3].map(i=>(
+              <div key={i} style={{width:14,height:14,borderRadius:"50%",
+                background:pinInput.length>i?(pinError?"#dc2626":C.accent):C.surface,
+                border:`2px solid ${pinInput.length>i?(pinError?"#dc2626":C.accent):C.border}`,
+                transition:"all 0.15s"}}/>
+            ))}
+          </div>
+          {pinError&&<div style={{fontSize:11,color:"#dc2626",fontWeight:600,marginBottom:12}}>Incorrect PIN</div>}
+          {/* Numpad */}
+          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:10}}>
+            {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((k,idx)=>(
+              <button key={idx} onClick={()=>{
+                if(k==="⌫") { setPinInput(p=>p.slice(0,-1)); return; }
+                if(k==="") return;
+                const next = pinInput+k;
+                setPinInput(next);
+                if(next.length===4) submitPin(next);
+              }}
+              style={{padding:"16px 0",fontSize:k==="⌫"?18:20,fontWeight:600,
+                background:k?C.surface:"transparent",
+                border:k?`1px solid ${C.border}`:"none",
+                borderRadius:12,cursor:k?"pointer":"default",
+                color:k?C.text:C.dim,fontFamily:"inherit",
+                opacity:k?"":0,
+                transition:"background 0.1s"}}
+              onMouseEnter={e=>{if(k)e.currentTarget.style.background=C.accent+"22";}}
+              onMouseLeave={e=>{if(k)e.currentTarget.style.background=C.surface;}}>
+                {k}
+              </button>
+            ))}
+          </div>
+        </div>
+      </div>
+    );
+  }
+
+  // ── Crew mode — field access only ───────────────────────────
+  if(authMode === "crew") {
+    // Show all foremen sections, each grouped by lead — same as clicking crew access on each card
+    return (
+      <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text}}>
+        {/* Crew header */}
+        <div style={{background:C.card,borderBottom:`1px solid ${C.border}`,
+          padding:"14px 18px",position:"sticky",top:0,zIndex:90,
+          display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,
+            letterSpacing:"0.08em",color:C.text}}>CREW ACCESS</div>
+          <button onClick={()=>{setAuthSession("locked");setAuthMode("locked");}}
+            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+              color:C.dim,fontSize:11,padding:"6px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
+            Lock
+          </button>
+        </div>
+        {/* Each foreman as a section, flat job list */}
+        <div style={{padding:"16px 16px 60px",maxWidth:700,width:"100%",margin:"0 auto"}}>
+          {FOREMEN.map(foreman=>{
+            const cfc = FOREMEN_COLORS[foreman]||"#6b7280";
+            const fJobs = jobs.filter(j=>(j.foreman||"Koy")===foreman);
+            if(fJobs.length===0) return null;
+            return (
+              <div key={foreman} style={{marginBottom:36}}>
+                <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,
+                  paddingBottom:10,borderBottom:`3px solid ${cfc}`}}>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,
+                    letterSpacing:"0.08em",color:cfc}}>{foreman}</div>
+                  <div style={{background:`${cfc}18`,border:`1px solid ${cfc}33`,
+                    borderRadius:99,padding:"2px 9px",fontSize:10,color:cfc,fontWeight:700}}>
+                    {fJobs.length} jobs
+                  </div>
+                </div>
+                {fJobs.map(job=>(
+                  job.tempPed
+                    ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }}/>
+                    : <JobRow key={job.id} job={job} fc={cfc} showForeman={false}/>
+                ))}
+              </div>
+            );
+          })}
+        </div>
+        {selected&&(
+          selected.tempPed
+            ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>
+            : <JobDetail key={selected.id} job={selected} allJobs={jobs} onUpdate={updateJob} onDelete={deleteJob} onClose={()=>setSelected(null)} manualTasks={manualTasks} onSaveManualTask={saveManualTask} onDeleteManualTask={deleteManualTask}/>
+        )}
+      </div>
+    );
+  }
+
   return (
 
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
@@ -7179,6 +7322,12 @@ if(initialLoad.current) return;
               {/* Action buttons */}
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
 
+                <button onClick={()=>{setAuthSession("locked");setAuthMode("locked");}}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                    color:C.dim,fontSize:11,fontWeight:600,padding:"6px 12px",cursor:"pointer",
+                    fontFamily:"inherit"}}>
+                  🔒 Lock
+                </button>
                 <button onClick={backupByEmail}
                   style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
                     color:C.dim,fontSize:11,fontWeight:600,padding:"6px 12px",cursor:"pointer",
