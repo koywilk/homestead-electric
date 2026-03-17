@@ -2011,7 +2011,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
 
 const DEFAULT_PANELS = ["Panel A","Panel B","Panel C","Panel D"];
 
-const LEADS = ["","Keegan","Daegan","Gage","Abe","Louis","Jonathan","Braden","Treycen"];
+const HR_LEADS = ["","Keegan","Daegan","Gage","Abe","Louis","Jonathan","Braden","Treycen"];
 
 const PANEL_ORDER_BASE = {"":0,"Meter":0.5,"Dedicated Loads":999};
 const getPanelOpts = (customPanels) => ["","Meter",...(customPanels&&customPanels.length?customPanels:DEFAULT_PANELS),"Dedicated Loads"];
