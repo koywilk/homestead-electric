@@ -6569,6 +6569,7 @@ if(initialLoad.current) return;
   const [activeForeman, setActiveForeman] = useState(null);
 
   const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const [crewView, setCrewView] = useState(null); // foreman name or null
   const goHome       = () =>  { setView("home");     setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openSchedule = () =>  { setView("schedule"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openUpcoming = () =>  { setView("upcoming"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
@@ -7106,6 +7107,23 @@ if(initialLoad.current) return;
 
                   </div>
 
+                  {/* Crew Access button */}
+                  <div onClick={e=>{e.stopPropagation();setCrewView(f);}}
+                    style={{
+                      marginTop:6,background:C.surface,border:`1px dashed ${fc}55`,
+                      borderRadius:10,padding:"8px 14px",cursor:"pointer",
+                      display:"flex",alignItems:"center",justifyContent:"space-between",
+                      transition:"background 0.15s",
+                    }}
+                    onMouseEnter={e=>e.currentTarget.style.background=`${fc}12`}
+                    onMouseLeave={e=>e.currentTarget.style.background=C.surface}>
+                    <div style={{display:"flex",alignItems:"center",gap:7}}>
+                      <span style={{fontSize:13}}>👷</span>
+                      <span style={{fontSize:11,fontWeight:600,color:C.dim}}>Crew Access</span>
+                    </div>
+                    <span style={{fontSize:10,color:C.dim,opacity:0.6}}>Job list only →</span>
+                  </div>
+
                 );
 
               })}
@@ -7171,6 +7189,52 @@ if(initialLoad.current) return;
               })()}
 
             </div>
+
+
+            {/* ── CREW VIEW MODAL ── */}
+            {crewView&&(
+              <div style={{position:"fixed",inset:0,background:C.bg,zIndex:300,
+                display:"flex",flexDirection:"column",overflowY:"auto"}}>
+
+                {/* Crew header */}
+                <div style={{background:C.card,borderBottom:`1px solid ${C.border}`,
+                  padding:"14px 18px",position:"sticky",top:0,zIndex:10,display:"flex",
+                  alignItems:"center",justifyContent:"space-between",gap:12}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <span style={{fontSize:18}}>👷</span>
+                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,
+                      letterSpacing:"0.08em",color:FOREMEN_COLORS[crewView]||"#6b7280"}}>
+                      {crewView} — Jobs
+                    </div>
+                    <div style={{background:`${FOREMEN_COLORS[crewView]||"#6b7280"}18`,
+                      border:`1px solid ${FOREMEN_COLORS[crewView]||"#6b7280"}33`,
+                      borderRadius:99,padding:"2px 10px",fontSize:11,
+                      color:FOREMEN_COLORS[crewView]||"#6b7280",fontWeight:700}}>
+                      {jobs.filter(j=>(j.foreman||"Koy")===crewView).length} jobs
+                    </div>
+                  </div>
+                  <button onClick={()=>setCrewView(null)}
+                    style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                      color:C.dim,fontSize:16,width:34,height:34,cursor:"pointer",
+                      display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+                </div>
+
+                {/* Full job list — same JobRow, tap to open and edit normally */}
+                <div style={{padding:"16px 16px 60px",maxWidth:700,width:"100%",margin:"0 auto"}}>
+                  {jobs.filter(j=>(j.foreman||"Koy")===crewView).length===0&&(
+                    <div style={{textAlign:"center",color:C.dim,padding:"60px 0",fontSize:13}}>
+                      No jobs assigned to {crewView}
+                    </div>
+                  )}
+                  <StageSectionList
+                    jobs={jobs.filter(j=>(j.foreman||"Koy")===crewView)}
+                    JobRow={JobRow}
+                    fc={FOREMEN_COLORS[crewView]}
+                    startCollapsed={false}
+                  />
+                </div>
+              </div>
+            )}
 
             {/* ── ALL JOBS BY SECTION ── */}
             <div style={{padding:"0 26px 32px"}}>
