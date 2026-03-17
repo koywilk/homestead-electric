@@ -7435,24 +7435,63 @@ if(initialLoad.current) return;
                       display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
                 </div>
 
-                {/* Full job list — same JobRow, tap to open and edit normally */}
-                <div style={{padding:"16px 16px 60px",maxWidth:700,width:"100%",margin:"0 auto"}}>
-                  {jobs.filter(j=>(j.foreman||"Koy")===crewView).length===0&&(
+                {/* Lead-grouped job cards */}
+                {(()=>{
+                  const crewJobs = jobs.filter(j=>(j.foreman||"Koy")===crewView);
+                  const fc2 = FOREMEN_COLORS[crewView]||"#6b7280";
+                  if(crewJobs.length===0) return (
                     <div style={{textAlign:"center",color:C.dim,padding:"60px 0",fontSize:13}}>
                       No jobs assigned to {crewView}
                     </div>
-                  )}
-                  <StageSectionList
-                    jobs={jobs.filter(j=>(j.foreman||"Koy")===crewView)}
-                    JobRow={JobRow}
-                    TempPedCard={TempPedCard}
-                    onSelectJob={(j)=>setSelected(j)}
-                    onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }}
-                    onDeleteJob={(id)=>deleteJob(id)}
-                    fc={FOREMEN_COLORS[crewView]}
-                    startCollapsed={false}
-                  />
-                </div>
+                  );
+                  // Group by lead — jobs with no lead go under "Unassigned"
+                  const leadMap = {};
+                  crewJobs.forEach(j=>{
+                    const lead = j.lead||"";
+                    if(!leadMap[lead]) leadMap[lead]=[];
+                    leadMap[lead].push(j);
+                  });
+                  // Sort: named leads alphabetically, unassigned last
+                  const leadKeys = Object.keys(leadMap).sort((a,b)=>{
+                    if(!a) return 1; if(!b) return -1;
+                    return a.localeCompare(b);
+                  });
+                  return (
+                    <div style={{padding:"16px 16px 60px",maxWidth:700,width:"100%",margin:"0 auto"}}>
+                      {leadKeys.map(lead=>(
+                        <div key={lead||"__none"} style={{marginBottom:28}}>
+                          {/* Lead header */}
+                          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,
+                            paddingBottom:8,borderBottom:`2px solid ${lead?fc2+"55":C.border}`}}>
+                            <div style={{width:30,height:30,borderRadius:"50%",
+                              background:lead?fc2+"22":C.surface,
+                              border:`2px solid ${lead?fc2+"66":C.border}`,
+                              display:"flex",alignItems:"center",justifyContent:"center",
+                              fontSize:13,fontWeight:800,color:lead?fc2:C.dim,flexShrink:0}}>
+                              {lead?lead[0].toUpperCase():"?"}
+                            </div>
+                            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,
+                              letterSpacing:"0.06em",color:lead?fc2:C.dim}}>
+                              {lead||"No Lead Assigned"}
+                            </div>
+                            <div style={{background:lead?fc2+"18":C.surface,
+                              border:`1px solid ${lead?fc2+"33":C.border}`,
+                              borderRadius:99,padding:"2px 9px",fontSize:10,
+                              color:lead?fc2:C.dim,fontWeight:700}}>
+                              {leadMap[lead].length} job{leadMap[lead].length!==1?"s":""}
+                            </div>
+                          </div>
+                          {/* Jobs under this lead */}
+                          {leadMap[lead].map(job=>(
+                            job.tempPed
+                              ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }}/>
+                              : <JobRow key={job.id} job={job} fc={fc2} showForeman={false}/>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
               </div>
             )}
 
