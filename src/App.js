@@ -652,6 +652,7 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
 
     email:  {background:"none",border:`1px solid ${C.blue}55`,color:C.blue},
     chat:   {background:"none",border:`1px solid #25d36655`,color:"#25d366"},
+    simpro: {background:"none",border:`1px solid #f9731655`,color:"#f97316"},
 
   };
 
@@ -1342,7 +1343,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
 // ── Change Orders ─────────────────────────────────────────────
 
-function ChangeOrders({orders,onChange,jobName,onEmail}) {
+function ChangeOrders({orders,onChange,jobName,jobSimproNo,onEmail}) {
 
   const add = () => onChange([{id:uid(),date:"",desc:"",task:"",material:"",time:"",status:"Pending",sendTo:"",needsSchedule:false,needsScheduleDate:"",coScheduled:false,scheduledDate:""},...orders]);
 
@@ -1389,6 +1390,7 @@ function ChangeOrders({orders,onChange,jobName,onEmail}) {
 
             <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
 
+              {jobSimproNo&&<Btn onClick={()=>window.open(`https://homesteadelectric.simprosuite.com/staff/editProject.php?jobID=${jobSimproNo}`,"_blank")} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>⚡ Simpro</Btn>}
               <Btn onClick={()=>chatCO(o,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>💬 Chat</Btn>
               <Btn onClick={()=>emailCO(o,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>✉ Email CO</Btn>
 
@@ -1709,7 +1711,7 @@ function ReturnTripExtras({trip, onUpd}) {
 
 // ── Return Trips ──────────────────────────────────────────────
 
-function ReturnTrips({trips,onChange,jobName,onEmail}) {
+function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
 
   const [viewPhoto, setViewPhoto] = useState(null);
 
@@ -1871,6 +1873,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
             <div style={{display:"flex",gap:8}}>
 
+              {jobSimproNo&&<Btn onClick={()=>window.open(`https://homesteadelectric.simprosuite.com/staff/editProject.php?jobID=${jobSimproNo}`,"_blank")} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>⚡ Simpro</Btn>}
               <Btn onClick={()=>chatTrip(t,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>💬 Chat</Btn>
               <Btn onClick={()=>emailTrip(t,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>✉ Email Trip</Btn>
 
@@ -3834,7 +3837,7 @@ onUpdate(updated);
             <div>
 
               <Section label="Change Order Log" color={C.accent} defaultOpen={true}>
-                <ChangeOrders orders={job.changeOrders} onChange={v=>u({changeOrders:v})} jobName={job.name||"This Job"} onEmail={setEmailData}/>
+                <ChangeOrders orders={job.changeOrders} onChange={v=>u({changeOrders:v})} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData}/>
               </Section>
 
             </div>
@@ -3848,7 +3851,7 @@ onUpdate(updated);
             <div>
 
               <Section label="Return Trips" color={C.purple} defaultOpen={true}>
-                <ReturnTrips trips={job.returnTrips} onChange={v=>u({returnTrips:v})} jobName={job.name||"This Job"} onEmail={setEmailData}/>
+                <ReturnTrips trips={job.returnTrips} onChange={v=>u({returnTrips:v})} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData}/>
               </Section>
 
             </div>
