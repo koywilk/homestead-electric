@@ -7039,7 +7039,8 @@ if(initialLoad.current) return;
 
                 return (
 
-                  <div key={f} className="foreman-card" onClick={()=>openForeman(f)}
+                  <div key={f}>
+                  <div className="foreman-card" onClick={()=>openForeman(f)}
 
                     style={{background:C.card,border:`1px solid ${fc}44`,borderRadius:16,padding:20,borderTop:`3px solid ${fc}`}}>
 
@@ -7122,6 +7123,7 @@ if(initialLoad.current) return;
                       <span style={{fontSize:11,fontWeight:600,color:C.dim}}>Crew Access</span>
                     </div>
                     <span style={{fontSize:10,color:C.dim,opacity:0.6}}>Job list only →</span>
+                  </div>
                   </div>
 
                 );
