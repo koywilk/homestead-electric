@@ -6272,13 +6272,12 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
 
 function SchedulingForecast({ jobs, onSelectJob }) {
   const [foremanTab, setForemanTab] = useState("All");
-  const [viewMode,   setViewMode]   = useState("kanban"); // kanban | list | byday
+  const [viewMode,   setViewMode]   = useState("kanban"); // kanban | list | calendar
+  const [calMonth,   setCalMonth]   = useState(() => { const d=new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
+  const [calDayDetail, setCalDayDetail] = useState(null); // date string YYYY-MM-DD for expanded day
 
   const today = new Date(); today.setHours(0,0,0,0);
-  const parseDate = (str) => { if(!str) return null; const d=new Date(str); return isNaN(d.getTime())?null:d; };
-  const fmtDate  = (str) => { const d=parseAnyDate(str); if(!d) return null; return d.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
-  const fmtFull  = (str) => { const d=parseAnyDate(str); if(!d) return null; return d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"}); };
-  const isOverdue= (str) => { const d=parseAnyDate(str); if(!d) return false; const c=new Date(d); c.setHours(0,0,0,0); return c<today; };
+  const todayStr = today.toISOString().split("T")[0];
 
   const startOfWeek=(d)=>{ const dt=new Date(d); dt.setHours(0,0,0,0); dt.setDate(dt.getDate()-dt.getDay()); return dt; };
   const thisWeekStart=startOfWeek(today);
@@ -6286,13 +6285,100 @@ function SchedulingForecast({ jobs, onSelectJob }) {
   const twoWeeksStart=new Date(thisWeekStart); twoWeeksStart.setDate(thisWeekStart.getDate()+14);
 
   const getBucket=(dateStr,status)=>{
-    const d=parseDate(dateStr); if(!d) return "nodate";
+    const d=parseAnyDate(dateStr); if(!d) return "nodate";
     const c=new Date(d); c.setHours(0,0,0,0);
-    // In-progress jobs are never overdue — they're actively happening
     if(c<thisWeekStart && status!=="inprogress") return "overdue";
     if(c<nextWeekStart) return "thisWeek";
     if(c<twoWeeksStart) return "nextWeek";
     return "later";
+  };
+
+  const fmtDate=(str)=>{ const d=parseAnyDate(str); if(!d) return null; return d.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
+  const fmtFull=(str)=>{ const d=parseAnyDate(str); if(!d) return null; return d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"}); };
+  const isOverdue=(str,status)=>{ if(status==="inprogress") return false; const d=parseAnyDate(str); if(!d) return false; const c=new Date(d); c.setHours(0,0,0,0); return c<today; };
+  const toYMD=(d)=>{ const dt=new Date(d); return dt.toISOString().split("T")[0]; };
+
+  // ── Build "events" — one per schedulable item (not per job) ──────────────
+  // Each event: { id, job, type, label, color, startDate, endDate, status, desc, hardDate }
+  const buildEvents=(jobList)=>{
+    const events=[];
+    jobList.filter(j=>!j.tempPed).forEach(job=>{
+      const rs=effRS(job), fs=effFS(job);
+      const fc=getFC(job.foreman||"Koy");
+
+      // ── Rough ──
+      if(rs&&rs!=="complete"&&rs!=="invoice") {
+        const rsDef=getStatusDef(ROUGH_STATUSES,rs);
+        const start=job.roughNeedsByStart||job.roughProjectedStart||job.roughStatusDate||"";
+        const end=job.roughNeedsHardDate?"":job.roughNeedsByEnd||"";
+        if(start||rs==="waiting_date"||rs==="date_confirmed") events.push({
+          id:job.id+"_rough", job, type:"rough",
+          label:"ROUGH", color:C.rough, fc,
+          startDate:start, endDate:end,
+          hardDate:!!job.roughNeedsHardDate,
+          status:rs, statusLabel:rsDef.label,
+          desc:rsDef.label,
+        });
+      }
+
+      // ── Finish ──
+      if(fs&&fs!=="complete"&&fs!=="invoice") {
+        const fsDef=getStatusDef(FINISH_STATUSES,fs);
+        const start=job.finishNeedsByStart||job.finishProjectedStart||job.finishStatusDate||"";
+        const end=job.finishNeedsHardDate?"":job.finishNeedsByEnd||"";
+        if(start||fs==="waiting_date"||fs==="date_confirmed") events.push({
+          id:job.id+"_finish", job, type:"finish",
+          label:"FINISH", color:C.finish, fc,
+          startDate:start, endDate:end,
+          hardDate:!!job.finishNeedsHardDate,
+          status:fs, statusLabel:fsDef.label,
+          desc:fsDef.label,
+        });
+      }
+
+      // ── Return Trips ──
+      (job.returnTrips||[]).filter(r=>!r.signedOff&&(r.scope||r.rtStatus||r.needsByStart||r.rtStatusDate)).forEach((rt,i)=>{
+        const start=rt.needsByStart||rt.rtStatusDate||rt.date||"";
+        const end=rt.needsHardDate?"":rt.needsByEnd||"";
+        events.push({
+          id:job.id+"_rt_"+rt.id, job, type:"rt",
+          label:"RT "+(i+1), color:"#8b5cf6", fc,
+          startDate:start, endDate:end,
+          hardDate:!!rt.needsHardDate,
+          status:rt.rtStatus||"", statusLabel:rt.rtStatus||"needs scheduling",
+          desc:rt.scope||"Return trip",
+        });
+      });
+
+      // ── Change Orders ──
+      (job.changeOrders||[]).filter(co=>co.coStatus&&co.coStatus!=="Work Completed"&&co.coStatus!=="Denied"&&co.coStatus!=="converted").forEach((co,i)=>{
+        const start=co.needsByStart||co.coStatusDate||"";
+        const end=co.needsHardDate?"":co.needsByEnd||"";
+        const coDef=getStatusDef(CO_STATUSES_NEW,co.coStatus||"pending");
+        events.push({
+          id:job.id+"_co_"+co.id, job, type:"co",
+          label:"CO "+(i+1), color:C.accent, fc,
+          startDate:start, endDate:end,
+          hardDate:!!co.needsHardDate,
+          status:co.coStatus||"pending", statusLabel:coDef.label||co.coStatus,
+          desc:co.desc||"Change order",
+        });
+      });
+
+      // ── QC Walk ──
+      if(job.roughQCTaskFired&&job.qcStatus&&job.qcStatus!=="complete") {
+        const start=job.qcStatusDate||"";
+        events.push({
+          id:job.id+"_qc", job, type:"qc",
+          label:"QC", color:C.teal, fc,
+          startDate:start, endDate:"",
+          hardDate:false,
+          status:job.qcStatus, statusLabel:job.qcStatus,
+          desc:"QC Walk",
+        });
+      }
+    });
+    return events;
   };
 
   const foremanTabs=["All",...getForemenList(),"Unassigned"];
@@ -6300,36 +6386,13 @@ function SchedulingForecast({ jobs, onSelectJob }) {
     :foremanTab==="Unassigned"?jobs.filter(j=>!j.foreman||j.foreman==="Unassigned")
     :jobs.filter(j=>(j.foreman||"Koy")===foremanTab);
 
-  // One row per job — only jobs with something needing scheduling
-  const buildRows=(jobList)=>jobList.filter(j=>!j.tempPed).map(job=>{
-    const rs=effRS(job), fs=effFS(job);
-    const rsDef=getStatusDef(ROUGH_STATUSES,rs);
-    const fsDef=getStatusDef(FINISH_STATUSES,fs);
-    const openCOs=(job.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied"&&c.status!=="");
-    const openRTs=(job.returnTrips||[]).filter(r=>!r.signedOff&&(r.scope||r.rtStatus||r.rtStatusDate||r.needsByStart));
-    const qcPending=job.roughQCTaskFired&&job.qcStatus!=="complete"&&job.qcStatus!=="";
+  const allEvents=buildEvents(filteredJobs);
 
-    // Does this job have anything needing scheduling?
-    const hasActiveRough = rs&&rs!=="complete"&&rs!=="invoice";
-    const hasActiveFinish = fs&&fs!=="complete"&&fs!=="invoice";
-    const needsScheduling = hasActiveRough||hasActiveFinish||openCOs.length>0||openRTs.length>0||qcPending;
-    if(!needsScheduling) return null;
-
-    // Pick best scheduling date — use parseAnyDate to handle all formats
-    const dates=[job.roughProjectedStart,job.roughStatusDate,job.finishProjectedStart,job.finishStatusDate]
-      .map(d=>parseAnyDate(d)).filter(Boolean);
-    openRTs.forEach(r=>{ const d=parseAnyDate(r.needsByStart||r.rtStatusDate||r.date); if(d) dates.push(d); });
-    openCOs.forEach(co=>{ const d=parseAnyDate(co.coStatusDate||co.needsByStart); if(d) dates.push(d); });
-    dates.sort((a,b)=>a-b);
-    const bestDate=dates.length?dates[0].toISOString().split("T")[0]:"";
-    const activeStatus = rs==="inprogress"||fs==="inprogress" ? "inprogress" : rs||fs||"";
-    const bucket=getBucket(bestDate, activeStatus);
-
-    return {job,rs,fs,rsDef,fsDef,openCOs,openRTs,qcPending,bestDate,bucket};
-  }).filter(Boolean);
-
-  const allRows=buildRows(filteredJobs);
-  const allPeds=filteredJobs.filter(j=>j.tempPed);
+  // bucket by startDate for kanban
+  const getBucketForEvent=(ev)=>{
+    if(!ev.startDate) return "nodate";
+    return getBucket(ev.startDate, ev.status);
+  };
 
   const BUCKETS=[
     {key:"overdue",  label:"Overdue",    color:C.red},
@@ -6339,98 +6402,179 @@ function SchedulingForecast({ jobs, onSelectJob }) {
     {key:"nodate",   label:"Needs Date", color:"#ca8a04"},
   ];
 
-  // ── Job Card (used in kanban + by-day) ──────────────────────
-  const JobCard=({row})=>{
-    const {job,rs,fs,rsDef,fsDef,openCOs,openRTs,qcPending,bestDate}=row;
-    const fc=getFC(job.foreman||"Koy");
-    const activelyInProgress = rs==="inprogress" || fs==="inprogress";
-    const overdue=!activelyInProgress && isOverdue(bestDate);
-    const roughDate=job.roughProjectedStart||job.roughStatusDate;
-    const finishDate=job.finishProjectedStart||job.finishStatusDate;
+  // ── Event pill (compact, used in calendar cells) ──────────────
+  const EventPill=({ev,mini})=>{
+    const over=isOverdue(ev.startDate,ev.status);
+    const col=over?C.red:ev.color;
     return (
-      <div onClick={()=>onSelectJob(job)}
-        style={{background:C.card,borderRadius:12,padding:"12px 14px",marginBottom:6,cursor:"pointer",
-          border:`1px solid ${overdue?C.red+"55":C.border}`,
-          borderLeft:`3px solid ${overdue?C.red:fc}`,
-          transition:"transform 0.1s,box-shadow 0.1s"}}
-        onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 12px rgba(0,0,0,0.2)`;}}
-        onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
-        {/* Job name + foreman */}
-        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:8,marginBottom:8}}>
-          <div style={{fontWeight:700,fontSize:13,color:C.text,flex:1,lineHeight:1.3}}>{job.name||"Untitled"}</div>
-          <span style={{fontSize:10,fontWeight:700,color:fc,background:fc+"18",borderRadius:99,
-            padding:"2px 7px",border:`1px solid ${fc}33`,flexShrink:0,whiteSpace:"nowrap"}}>{job.foreman||"Koy"}</span>
-        </div>
-        {/* Stage rows */}
-        <div style={{display:"flex",flexDirection:"column",gap:4}}>
-          {rs&&rs!=="complete"&&<div style={{display:"flex",alignItems:"center",gap:6}}>
-            <span style={{fontSize:9,fontWeight:700,color:C.rough,letterSpacing:"0.06em",width:40,flexShrink:0}}>ROUGH</span>
-            <span style={{fontSize:10,color:rsDef.color||C.dim,fontWeight:600,flex:1}}>{rsDef.label}</span>
-            {roughDate&&<span style={{fontSize:10,color:isOverdue(roughDate)?C.red:C.dim,fontWeight:600,flexShrink:0}}>{fmtDate(roughDate)}</span>}
-          </div>}
-          {rs==="complete"&&fs&&fs!=="complete"&&<div style={{display:"flex",alignItems:"center",gap:6}}>
-            <span style={{fontSize:9,fontWeight:700,color:C.finish,letterSpacing:"0.06em",width:40,flexShrink:0}}>FINISH</span>
-            <span style={{fontSize:10,color:fsDef.color||C.dim,fontWeight:600,flex:1}}>{fsDef.label}</span>
-            {finishDate&&<span style={{fontSize:10,color:isOverdue(finishDate)?C.red:C.dim,fontWeight:600,flexShrink:0}}>{fmtDate(finishDate)}</span>}
-          </div>}
-          {rs&&rs!=="complete"&&fs&&fs!=="complete"&&<div style={{display:"flex",alignItems:"center",gap:6}}>
-            <span style={{fontSize:9,fontWeight:700,color:C.finish,letterSpacing:"0.06em",width:40,flexShrink:0}}>FINISH</span>
-            <span style={{fontSize:10,color:fsDef.color||C.dim,fontWeight:600,flex:1}}>{fsDef.label}</span>
-            {finishDate&&<span style={{fontSize:10,color:isOverdue(finishDate)?C.red:C.dim,fontWeight:600,flexShrink:0}}>{fmtDate(finishDate)}</span>}
-          </div>}
-          {openRTs.length>0&&<div style={{display:"flex",alignItems:"center",gap:6}}>
-            <span style={{fontSize:9,fontWeight:700,color:"#8b5cf6",letterSpacing:"0.06em",width:40,flexShrink:0}}>RT×{openRTs.length}</span>
-            <span style={{fontSize:10,color:"#8b5cf6",fontWeight:600,flex:1}}>{openRTs[0].rtStatus||"needs scheduling"}</span>
-            {openRTs[0].rtStatusDate&&<span style={{fontSize:10,color:isOverdue(openRTs[0].rtStatusDate)?C.red:"#8b5cf6",fontWeight:600,flexShrink:0}}>{fmtDate(openRTs[0].rtStatusDate)}</span>}
-          </div>}
-          {openCOs.length>0&&<div style={{display:"flex",alignItems:"center",gap:6}}>
-            <span style={{fontSize:9,fontWeight:700,color:C.accent,letterSpacing:"0.06em",width:40,flexShrink:0}}>CO×{openCOs.length}</span>
-            <span style={{fontSize:10,color:C.accent,fontWeight:600,flex:1}}>{openCOs[0].coStatus||openCOs[0].status||"pending"}</span>
-            {openCOs[0].coStatusDate&&<span style={{fontSize:10,color:isOverdue(openCOs[0].coStatusDate)?C.red:C.accent,fontWeight:600,flexShrink:0}}>{fmtDate(openCOs[0].coStatusDate)}</span>}
-          </div>}
-          {qcPending&&<div style={{display:"flex",alignItems:"center",gap:6}}>
-            <span style={{fontSize:9,fontWeight:700,color:C.teal,letterSpacing:"0.06em",width:40,flexShrink:0}}>QC</span>
-            <span style={{fontSize:10,color:C.teal,fontWeight:600,flex:1}}>{job.qcStatus||"needs scheduling"}</span>
-            {job.qcStatusDate&&<span style={{fontSize:10,color:C.teal,fontWeight:600,flexShrink:0}}>{fmtDate(job.qcStatusDate)}</span>}
-          </div>}
-          {/* If nothing active show overall stage */}
-          {!rs&&!fs&&openRTs.length===0&&openCOs.length===0&&!qcPending&&(
-            <div style={{fontSize:10,color:C.muted,fontStyle:"italic"}}>No active scheduling</div>
-          )}
-        </div>
-        {job.lead&&<div style={{marginTop:6,fontSize:10,color:C.dim}}>Lead: <span style={{color:getLeadFC(job.lead),fontWeight:700}}>{job.lead}</span></div>}
+      <div onClick={e=>{e.stopPropagation();onSelectJob(ev.job);}}
+        style={{display:"flex",alignItems:"center",gap:4,padding:mini?"2px 6px":"3px 8px",
+          borderRadius:99,marginBottom:2,cursor:"pointer",
+          background:col+"18",border:`1px solid ${col}33`,
+          transition:"background 0.1s"}}
+        onMouseEnter={e=>e.currentTarget.style.background=col+"30"}
+        onMouseLeave={e=>e.currentTarget.style.background=col+"18"}>
+        <span style={{width:6,height:6,borderRadius:"50%",background:col,flexShrink:0,display:"block"}}/>
+        <span style={{fontSize:mini?9:10,fontWeight:700,color:col,flexShrink:0}}>{ev.label}</span>
+        <span style={{fontSize:mini?9:10,color:"var(--text)",fontWeight:600,
+          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>
+          {ev.job.name||"Untitled"}
+        </span>
+        {ev.hardDate&&<span style={{fontSize:8,color:col,fontWeight:800,flexShrink:0}}>🔒</span>}
       </div>
     );
   };
 
-  // ── List Row ─────────────────────────────────────────────────
-  const JobListRow=({row})=>{
-    const {job,rs,fs,rsDef,fsDef,openCOs,openRTs,bestDate}=row;
-    const fc=getFC(job.foreman||"Koy");
-    const overdue=!(rs==="inprogress"||fs==="inprogress") && isOverdue(bestDate);
+  // ── Event Card (kanban/list) ──────────────────────────────────
+  const EventCard=({ev})=>{
+    const over=isOverdue(ev.startDate,ev.status);
+    const col=over?C.red:ev.color;
+    const fc=ev.fc;
     return (
-      <div onClick={()=>onSelectJob(job)}
-        style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",
-          borderRadius:10,marginBottom:3,cursor:"pointer",
-          background:overdue?C.red+"08":C.surface,
-          border:`1px solid ${overdue?C.red+"33":C.border}`,
-          borderLeft:`3px solid ${overdue?C.red:fc}`}}
-        onMouseEnter={e=>e.currentTarget.style.background=overdue?C.red+"12":fc+"0A"}
-        onMouseLeave={e=>e.currentTarget.style.background=overdue?C.red+"08":C.surface}>
-        <div style={{flex:"0 0 130px",minWidth:0}}>
-          <div style={{fontWeight:700,fontSize:13,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{job.name||"Untitled"}</div>
-          <div style={{fontSize:10,color:fc,fontWeight:700,marginTop:1}}>{job.foreman||"Koy"}{job.lead&&<span style={{color:getLeadFC(job.lead)}}> · {job.lead}</span>}</div>
+      <div onClick={()=>onSelectJob(ev.job)}
+        style={{background:"var(--card)",borderRadius:12,padding:"11px 13px",marginBottom:6,cursor:"pointer",
+          border:`1px solid ${over?C.red+"44":col+"22"}`,borderLeft:`3px solid ${col}`,
+          transition:"transform 0.1s,box-shadow 0.1s"}}
+        onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 12px ${col}18`;}}
+        onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
+          <span style={{fontSize:9,fontWeight:800,color:col,background:col+"18",borderRadius:99,
+            padding:"2px 8px",border:`1px solid ${col}28`,letterSpacing:"0.07em",flexShrink:0}}>{ev.label}</span>
+          <span style={{fontSize:9,fontWeight:700,color:fc,background:fc+"15",borderRadius:99,
+            padding:"2px 7px",border:`1px solid ${fc}28`,flexShrink:0}}>{ev.job.foreman||"Koy"}</span>
+          {over&&<span style={{fontSize:9,fontWeight:800,color:C.red,letterSpacing:"0.07em",marginLeft:"auto"}}>OVERDUE</span>}
         </div>
-        <div style={{flex:1,display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-          {rs&&rs!=="complete"&&<span style={{fontSize:10,fontWeight:700,color:rsDef.color||C.dim,background:(rsDef.color||C.dim)+"15",borderRadius:99,padding:"2px 8px",border:`1px solid ${(rsDef.color||C.dim)}33`,whiteSpace:"nowrap"}}>R: {rsDef.label}</span>}
-          {fs&&fs!=="complete"&&<span style={{fontSize:10,fontWeight:700,color:fsDef.color||C.dim,background:(fsDef.color||C.dim)+"15",borderRadius:99,padding:"2px 8px",border:`1px solid ${(fsDef.color||C.dim)}33`,whiteSpace:"nowrap"}}>F: {fsDef.label}</span>}
-          {openRTs.length>0&&<span style={{fontSize:10,fontWeight:700,color:"#8b5cf6",background:"#8b5cf615",borderRadius:99,padding:"2px 8px",border:"1px solid #8b5cf633",whiteSpace:"nowrap"}}>⚠ {openRTs.length} RT</span>}
-          {openCOs.length>0&&<span style={{fontSize:10,fontWeight:700,color:C.accent,background:C.accent+"15",borderRadius:99,padding:"2px 8px",border:`1px solid ${C.accent}33`,whiteSpace:"nowrap"}}>{openCOs.length} CO</span>}
+        <div style={{fontWeight:700,fontSize:13,color:"var(--text)",marginBottom:3,
+          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.job.name||"Untitled"}</div>
+        {ev.desc&&ev.type!=="rough"&&ev.type!=="finish"&&
+          <div style={{fontSize:11,color:"var(--dim)",marginBottom:4,overflow:"hidden",
+            textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.desc}</div>}
+        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginTop:2}}>
+          <span style={{fontSize:10,fontWeight:700,color:ev.statusLabel?col:"var(--dim)"}}>{ev.statusLabel}</span>
+          {(ev.startDate||ev.endDate)&&(
+            <span style={{fontSize:10,fontWeight:700,color:over?C.red:"var(--dim)",marginLeft:"auto",
+              background:ev.hardDate?"#dc262612":"transparent",
+              borderRadius:6,padding:ev.hardDate?"2px 6px":"0",
+              border:ev.hardDate?"1px solid #dc262633":"none"}}>
+              {ev.hardDate?"🔒 ":ev.endDate?"📅 ":""}{fmtDate(ev.startDate)||""}{ev.endDate&&!ev.hardDate?" – "+(fmtDate(ev.endDate)||""):""}
+            </span>
+          )}
         </div>
-        <div style={{flexShrink:0,fontSize:11,fontWeight:700,color:overdue?C.red:C.dim,textAlign:"right"}}>
-          {bestDate?fmtFull(bestDate):"No date"}
-          {overdue&&<div style={{fontSize:9,color:C.red,letterSpacing:"0.08em"}}>OVERDUE</div>}
+      </div>
+    );
+  };
+
+  // ── CALENDAR helpers ──────────────────────────────────────────
+  // Returns true if an event "covers" a given date (for window events)
+  const eventCoversDate=(ev,dateStr)=>{
+    if(!ev.startDate) return false;
+    const start=parseAnyDate(ev.startDate);
+    if(!start) return false;
+    start.setHours(0,0,0,0);
+    const target=parseAnyDate(dateStr);
+    if(!target) return false;
+    target.setHours(0,0,0,0);
+    if(ev.endDate&&!ev.hardDate){
+      const end=parseAnyDate(ev.endDate);
+      if(end){ end.setHours(0,0,0,0); return target>=start&&target<=end; }
+    }
+    return toYMD(start)===dateStr;
+  };
+
+  const eventsForDate=(dateStr)=>allEvents.filter(ev=>eventCoversDate(ev,dateStr));
+
+  // ── Calendar view ─────────────────────────────────────────────
+  const CalendarView=()=>{
+    const year=calMonth.getFullYear();
+    const month=calMonth.getMonth();
+    const firstDay=new Date(year,month,1).getDay(); // 0=Sun
+    const daysInMonth=new Date(year,month+1,0).getDate();
+    const prevMonth=()=>setCalMonth(new Date(year,month-1,1));
+    const nextMonth=()=>setCalMonth(new Date(year,month+1,1));
+    const monthLabel=calMonth.toLocaleDateString("en-US",{month:"long",year:"numeric"});
+
+    // Build grid: leading blanks + days
+    const cells=[];
+    for(let i=0;i<firstDay;i++) cells.push(null);
+    for(let d=1;d<=daysInMonth;d++) cells.push(d);
+
+    return (
+      <div style={{padding:"16px 20px"}}>
+        {/* Month nav */}
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}>
+          <button onClick={prevMonth} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+            color:"var(--dim)",padding:"6px 14px",cursor:"pointer",fontSize:16,fontFamily:"inherit"}}>‹</button>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,letterSpacing:"0.06em",
+            color:"var(--text)",flex:1,textAlign:"center"}}>{monthLabel.toUpperCase()}</div>
+          <button onClick={()=>setCalMonth(new Date(today.getFullYear(),today.getMonth(),1))}
+            style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:8,
+            color:C.accent,padding:"6px 14px",cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:700}}>TODAY</button>
+          <button onClick={nextMonth} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+            color:"var(--dim)",padding:"6px 14px",cursor:"pointer",fontSize:16,fontFamily:"inherit"}}>›</button>
         </div>
+
+        {/* Day headers */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:4}}>
+          {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d=>(
+            <div key={d} style={{textAlign:"center",fontSize:10,fontWeight:700,
+              color:"var(--dim)",letterSpacing:"0.06em",padding:"4px 0"}}>{d}</div>
+          ))}
+        </div>
+
+        {/* Calendar grid */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
+          {cells.map((day,i)=>{
+            if(!day) return <div key={"blank"+i}/>;
+            const dateStr=`${year}-${String(month+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+            const dayEvs=eventsForDate(dateStr);
+            const isToday=dateStr===todayStr;
+            const isWeekend=new Date(year,month,day).getDay()===0||new Date(year,month,day).getDay()===6;
+            const isSelected=calDayDetail===dateStr;
+            const hasOverdue=dayEvs.some(ev=>isOverdue(ev.startDate,ev.status)&&toYMD(parseAnyDate(ev.startDate)===dateStr||ev.startDate===dateStr));
+            return (
+              <div key={dateStr} onClick={()=>setCalDayDetail(isSelected?null:dateStr)}
+                style={{minHeight:80,borderRadius:8,padding:"6px 6px 4px",cursor:"pointer",
+                  background:isSelected?C.accent+"18":isToday?C.accent+"0A":isWeekend?"var(--surface)":"var(--card)",
+                  border:`1px solid ${isSelected?C.accent+"55":isToday?C.accent+"33":C.border}`,
+                  opacity:isWeekend&&dayEvs.length===0?0.5:1,
+                  transition:"background 0.1s"}}
+                onMouseEnter={e=>{ if(!isSelected) e.currentTarget.style.background=C.accent+"10"; }}
+                onMouseLeave={e=>{ e.currentTarget.style.background=isSelected?C.accent+"18":isToday?C.accent+"0A":isWeekend?"var(--surface)":"var(--card)"; }}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+                  <span style={{fontSize:11,fontWeight:isToday?800:600,
+                    color:isToday?C.accent:isWeekend?"var(--muted)":"var(--text)"}}>{day}</span>
+                  {isToday&&<span style={{fontSize:8,color:C.accent,fontWeight:800,letterSpacing:"0.08em"}}>TODAY</span>}
+                  {dayEvs.length>0&&!isToday&&<span style={{fontSize:9,fontWeight:700,color:"var(--dim)"}}>{dayEvs.length}</span>}
+                </div>
+                {dayEvs.slice(0,3).map(ev=><EventPill key={ev.id} ev={ev} mini/>)}
+                {dayEvs.length>3&&<div style={{fontSize:9,color:"var(--muted)",paddingLeft:4}}>+{dayEvs.length-3} more</div>}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Day detail panel */}
+        {calDayDetail&&(()=>{
+          const dayEvs=eventsForDate(calDayDetail);
+          const dt=parseAnyDate(calDayDetail);
+          const label=dt?dt.toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"}):"";
+          return (
+            <div style={{marginTop:16,padding:"16px 18px",background:"var(--card)",
+              borderRadius:14,border:`1px solid ${C.accent}33`}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,
+                  letterSpacing:"0.06em",color:C.accent}}>{label.toUpperCase()}</div>
+                <div style={{marginLeft:"auto",fontSize:11,color:"var(--dim)"}}>{dayEvs.length} item{dayEvs.length!==1?"s":""}</div>
+                <button onClick={()=>setCalDayDetail(null)}
+                  style={{background:"none",border:"none",color:"var(--muted)",fontSize:16,cursor:"pointer",padding:"0 4px"}}>✕</button>
+              </div>
+              {dayEvs.length===0
+                ?<div style={{fontSize:12,color:"var(--muted)",fontStyle:"italic"}}>Nothing scheduled this day.</div>
+                :dayEvs.map(ev=><EventCard key={ev.id} ev={ev}/>)
+              }
+            </div>
+          );
+        })()}
       </div>
     );
   };
@@ -6440,14 +6584,14 @@ function SchedulingForecast({ jobs, onSelectJob }) {
       {/* ── Header ── */}
       <div style={{padding:"20px 26px 0",borderBottom:`1px solid ${C.border}`}}>
         <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14,flexWrap:"wrap"}}>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>SCHEDULING FORECAST</div>
-          <div style={{fontSize:11,color:C.dim}}>{allRows.length} job{allRows.length!==1?"s":""}</div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:"var(--text)",lineHeight:1}}>SCHEDULING FORECAST</div>
+          <div style={{fontSize:11,color:"var(--dim)"}}>{allEvents.length} item{allEvents.length!==1?"s":""}</div>
           <div style={{marginLeft:"auto",display:"flex",gap:4}}>
-            {[{k:"kanban",l:"Kanban"},{k:"list",l:"List"},{k:"byday",l:"By Day"}].map(({k,l})=>(
+            {[{k:"kanban",l:"Kanban"},{k:"list",l:"List"},{k:"calendar",l:"📅 Calendar"}].map(({k,l})=>(
               <button key={k} onClick={()=>setViewMode(k)}
                 style={{padding:"6px 14px",borderRadius:8,fontSize:11,fontWeight:viewMode===k?700:500,
                   cursor:"pointer",fontFamily:"inherit",border:`1px solid ${viewMode===k?C.accent:C.border}`,
-                  background:viewMode===k?C.accent:"none",color:viewMode===k?"#fff":C.dim,transition:"all 0.15s"}}>
+                  background:viewMode===k?C.accent:"none",color:viewMode===k?"#fff":"var(--dim)",transition:"all 0.15s"}}>
                 {l}
               </button>
             ))}
@@ -6457,13 +6601,16 @@ function SchedulingForecast({ jobs, onSelectJob }) {
         <div style={{display:"flex",gap:6,overflowX:"auto",scrollbarWidth:"none",paddingBottom:1}}>
           {foremanTabs.map(f=>{
             const fc2=f==="All"?C.accent:getFC(f)||"#6b7280";
-            const ct=f==="All"?allRows.length:buildRows(f==="Unassigned"?jobs.filter(j=>!j.foreman||j.foreman==="Unassigned"):jobs.filter(j=>(j.foreman||"Koy")===f)).length;
+            const ct=f==="All"?allEvents.length:buildEvents(
+              f==="Unassigned"?jobs.filter(j=>!j.foreman||j.foreman==="Unassigned")
+              :jobs.filter(j=>(j.foreman||"Koy")===f)
+            ).length;
             return (
               <button key={f} onClick={()=>setForemanTab(f)}
                 style={{padding:"7px 16px",borderRadius:"8px 8px 0 0",fontSize:12,cursor:"pointer",
                   fontFamily:"inherit",fontWeight:foremanTab===f?700:400,whiteSpace:"nowrap",
                   background:foremanTab===f?fc2:"none",border:`1px solid ${foremanTab===f?fc2:C.border}`,
-                  borderBottom:"none",color:foremanTab===f?"#fff":C.dim,transition:"all 0.15s"}}>
+                  borderBottom:"none",color:foremanTab===f?"#fff":"var(--dim)",transition:"all 0.15s"}}>
                 {f} <span style={{opacity:0.8,fontSize:10}}>({ct})</span>
               </button>
             );
@@ -6474,11 +6621,11 @@ function SchedulingForecast({ jobs, onSelectJob }) {
       {/* ── KANBAN ── */}
       {viewMode==="kanban"&&(
         <div style={{padding:"20px 26px",overflowX:"auto"}}>
-          {allRows.length===0
-            ?<div style={{textAlign:"center",padding:"60px 0",color:C.muted,fontSize:13}}>No jobs.</div>
+          {allEvents.length===0
+            ?<div style={{textAlign:"center",padding:"60px 0",color:"var(--muted)",fontSize:13}}>Nothing to schedule.</div>
             :<div style={{display:"grid",gridTemplateColumns:"repeat(5,minmax(230px,1fr))",gap:14,minWidth:900}}>
               {BUCKETS.map(bucket=>{
-                const bRows=allRows.filter(r=>r.bucket===bucket.key);
+                const bEvs=allEvents.filter(ev=>getBucketForEvent(ev)===bucket.key);
                 return (
                   <div key={bucket.key}>
                     <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,
@@ -6488,13 +6635,13 @@ function SchedulingForecast({ jobs, onSelectJob }) {
                         letterSpacing:"0.08em",color:bucket.color}}>{bucket.label}</div>
                       <div style={{marginLeft:"auto",background:`${bucket.color}18`,border:`1px solid ${bucket.color}33`,
                         borderRadius:99,padding:"1px 8px",fontSize:11,color:bucket.color,fontWeight:700}}>
-                        {bRows.length}
+                        {bEvs.length}
                       </div>
                     </div>
-                    {bRows.length===0
-                      ?<div style={{fontSize:11,color:C.muted,fontStyle:"italic",padding:"16px 0",
+                    {bEvs.length===0
+                      ?<div style={{fontSize:11,color:"var(--muted)",fontStyle:"italic",padding:"16px 0",
                           textAlign:"center",border:`1px dashed ${C.border}`,borderRadius:10}}>Empty</div>
-                      :bRows.map(row=><JobCard key={row.job.id} row={row}/>)
+                      :bEvs.map(ev=><EventCard key={ev.id} ev={ev}/>)
                     }
                   </div>
                 );
@@ -6506,69 +6653,22 @@ function SchedulingForecast({ jobs, onSelectJob }) {
 
       {/* ── LIST ── */}
       {viewMode==="list"&&(()=>{
-        const sorted=[...allRows].sort((a,b)=>{
-          if(!a.bestDate&&!b.bestDate) return 0;
-          if(!a.bestDate) return 1; if(!b.bestDate) return -1;
-          return new Date(a.bestDate)-new Date(b.bestDate);
+        const sorted=[...allEvents].sort((a,b)=>{
+          if(!a.startDate&&!b.startDate) return 0;
+          if(!a.startDate) return 1; if(!b.startDate) return -1;
+          const da=parseAnyDate(a.startDate), db=parseAnyDate(b.startDate);
+          return (da||0)-(db||0);
         });
         return (
           <div style={{padding:"20px 26px",maxWidth:900}}>
-            {sorted.length===0&&<div style={{textAlign:"center",padding:"60px 0",color:C.muted,fontSize:13}}>No jobs.</div>}
-            {sorted.map(row=><JobListRow key={row.job.id} row={row}/>)}
+            {sorted.length===0&&<div style={{textAlign:"center",padding:"60px 0",color:"var(--muted)",fontSize:13}}>Nothing to schedule.</div>}
+            {sorted.map(ev=><EventCard key={ev.id} ev={ev}/>)}
           </div>
         );
       })()}
 
-      {/* ── BY DAY (14 days) ── */}
-      {viewMode==="byday"&&(()=>{
-        const days=[];
-        for(let i=-1;i<14;i++){
-          const d=new Date(today); d.setDate(today.getDate()+i);
-          days.push(d);
-        }
-        const sameDay=(d1,d2)=>d1.getFullYear()===d2.getFullYear()&&d1.getMonth()===d2.getMonth()&&d1.getDate()===d2.getDate();
-        const isToday=(d)=>sameDay(d,today);
-        const isWeekend=(d)=>d.getDay()===0||d.getDay()===6;
-        const fmt=(d)=>d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"});
-
-        const getRowDay=(row)=>{ if(!row.bestDate) return null; return parseAnyDate(row.bestDate); };
-
-        const noDateRows=allRows.filter(r=>!r.bestDate);
-        return (
-          <div style={{padding:"20px 26px",overflowX:"auto"}}>
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(210px,1fr))",gap:10,minWidth:600,alignItems:"start"}}>
-              {days.map(day=>{
-                const dayRows=allRows.filter(r=>{ const d=getRowDay(r); return d&&sameDay(d,day); });
-                const wknd=isWeekend(day);
-                const tdy=isToday(day);
-                return (
-                  <div key={day.toISOString()}
-                    style={{borderRadius:12,padding:"12px 12px",
-                      background:tdy?C.accent+"0A":wknd?C.surface+"80":C.surface,
-                      border:`1px solid ${tdy?C.accent+"44":C.border}`,
-                      opacity:wknd&&dayRows.length===0?0.45:1}}>
-                    <div style={{marginBottom:8}}>
-                      <div style={{fontSize:12,fontWeight:700,color:tdy?C.accent:wknd?C.muted:C.text,letterSpacing:"0.03em"}}>{fmt(day)}</div>
-                      {tdy&&<div style={{fontSize:9,color:C.accent,fontWeight:700,letterSpacing:"0.1em"}}>TODAY</div>}
-                    </div>
-                    {dayRows.length===0
-                      ?<div style={{fontSize:10,color:C.muted,fontStyle:"italic"}}>—</div>
-                      :dayRows.map(row=><JobCard key={row.job.id} row={row}/>)
-                    }
-                  </div>
-                );
-              })}
-              {/* No date */}
-              {noDateRows.length>0&&(
-                <div style={{borderRadius:12,padding:"12px 12px",background:C.surface,border:`1px dashed #ca8a0455`}}>
-                  <div style={{fontSize:12,fontWeight:700,color:"#ca8a04",marginBottom:8,letterSpacing:"0.03em"}}>NEEDS DATE</div>
-                  {noDateRows.map(row=><JobCard key={row.job.id} row={row}/>)}
-                </div>
-              )}
-            </div>
-          </div>
-        );
-      })()}
+      {/* ── CALENDAR ── */}
+      {viewMode==="calendar"&&<CalendarView/>}
     </div>
   );
 }
