@@ -76,13 +76,13 @@ const ROUGH_STATUSES = [
 ];
 const FINISH_STATUSES = ROUGH_STATUSES;
 const CO_STATUSES_NEW = [
-  {value:"pending",    label:"Pending",                        color:"#ca8a04"},
-  {value:"approved",   label:"Approved",                       color:"#16a34a"},
-  {value:"needs",      label:"Needs to be Scheduled",          color:"#f97316"},
-  {value:"scheduled",  label:"Scheduled",                      color:"#2563eb", hasDate:true},
-  {value:"completed",  label:"Work Completed",                 color:"#22c55e"},
-  {value:"converted",  label:"Converted to Return Trip",       color:"#6b7280"},
-  {value:"denied",     label:"Denied",                         color:"#dc2626"},
+  {value:"needs_sending", label:"Needs to be Sent",       color:"#dc2626"},
+  {value:"pending",       label:"Sent — Pending Approval", color:"#ca8a04"},
+  {value:"approved",      label:"Approved",                color:"#16a34a"},
+  {value:"scheduled",     label:"Scheduled",               color:"#2563eb", hasDate:true},
+  {value:"completed",     label:"Work Completed",          color:"#22c55e"},
+  {value:"converted",     label:"Converted to RT",         color:"#6b7280"},
+  {value:"denied",        label:"Denied",                  color:"#dc2626"},
 ];
 const RT_STATUSES = [
   {value:"",          label:"— set status —",        color:null},
@@ -1495,81 +1495,104 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
             {/* Status row */}
             {!isConverted&&(
               <div style={{marginBottom:10}}>
-                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
-                  <select value={o.coStatus||"pending"} onChange={e=>{
-                    const v=e.target.value;
-                    upd(o.id,{coStatus:v, coStatusDate:getStatusDef(CO_STATUSES_NEW,v).hasDate?o.coStatusDate:""});
-                  }} style={{
-                    background:coDef.color?`${coDef.color}18`:"var(--surface)",
-                    color:coDef.color||"var(--dim)",
-                    border:`1px solid ${coDef.color||"var(--border)"}`,
-                    borderRadius:7,padding:"5px 8px",fontSize:11,fontFamily:"inherit",
-                    fontWeight:coDef.color?700:400,outline:"none",cursor:"pointer",
-                  }}>
-                    {CO_STATUSES_NEW.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
-                  </select>
-                  {coDef.hasDate&&(
-                    <div style={{display:"flex",flexDirection:"column",gap:2}}>
-                      <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:coDef.color}}>SCHEDULED DATE</div>
-                      <DateInp value={o.coStatusDate||""} onChange={e=>upd(o.id,{coStatusDate:e.target.value})}
-                        style={{width:140,fontSize:11,borderColor:coDef.color+"55",background:`${coDef.color}08`}}/>
-                    </div>
-                  )}
+
+                {/* Status pill buttons */}
+                <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>
+                  {CO_STATUSES_NEW.filter(s=>s.value!=="converted").map(s=>{
+                    const active = (o.coStatus||"needs_sending")===s.value;
+                    return (
+                      <button key={s.value} onClick={()=>{
+                        const patch={coStatus:s.value};
+                        if(!getStatusDef(CO_STATUSES_NEW,s.value).hasDate) patch.coStatusDate="";
+                        // Switching away from approved clears the schedule window
+                        if(s.value!=="approved"&&s.value!=="scheduled") { patch.needsByStart=""; patch.needsByEnd=""; patch.needsHardDate=false; }
+                        upd(o.id,patch);
+                      }} style={{
+                        padding:"4px 12px",fontSize:11,fontWeight:active?700:500,
+                        borderRadius:99,border:`1px solid ${active?s.color:"var(--border)"}`,
+                        background:active?`${s.color}22`:"none",
+                        color:active?s.color:"var(--dim)",cursor:"pointer",fontFamily:"inherit",
+                        transition:"all 0.15s",
+                      }}>{s.label}</button>
+                    );
+                  })}
                 </div>
 
-                {/* Approved banner */}
-                {isApproved&&(
+                {/* Needs to be Sent — due date */}
+                {(o.coStatus||"needs_sending")==="needs_sending"&&(
                   <div style={{padding:"8px 12px",borderRadius:8,marginBottom:8,
-                    background:crewOnSite?"#16a34a10":"#f9731610",
+                    background:"#dc262608",border:"1px solid #dc262633"}}>
+                    <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>SEND BY DATE</div>
+                    <DateInp value={o.coStatusDate||""} onChange={e=>upd(o.id,{coStatusDate:e.target.value})}
+                      style={{width:140,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                  </div>
+                )}
+
+                {/* Scheduled date picker */}
+                {o.coStatus==="scheduled"&&(
+                  <div style={{padding:"8px 12px",borderRadius:8,marginBottom:8,
+                    background:"#2563eb08",border:"1px solid #2563eb33"}}>
+                    <div style={{fontSize:9,fontWeight:700,color:"#2563eb",letterSpacing:"0.08em",marginBottom:6}}>SCHEDULED DATE</div>
+                    <DateInp value={o.coStatusDate||""} onChange={e=>upd(o.id,{coStatusDate:e.target.value})}
+                      style={{width:140,fontSize:11,borderColor:"#2563eb55",background:"#2563eb08"}}/>
+                  </div>
+                )}
+
+                {/* Approved — branch on crew on site */}
+                {isApproved&&(
+                  <div style={{padding:"10px 12px",borderRadius:8,marginBottom:8,
+                    background:crewOnSite?"#16a34a08":"#f9731608",
                     border:`1px solid ${crewOnSite?"#16a34a33":"#f9731633"}`}}>
-                    <div style={{fontSize:11,fontWeight:700,color:crewOnSite?"#16a34a":"#f97316",marginBottom:2}}>
-                      {crewOnSite?"✓ Crew is on site — confirm approval & get sign-off":"⚠ Crew not on site — this should become a Return Trip"}
-                    </div>
-                    <div style={{fontSize:10,color:"var(--dim)"}}>
-                      {crewOnSite?"Make sure the crew knows this CO is approved and sign off when work is done.":"Convert to a Return Trip below so it gets scheduled properly."}
-                    </div>
-                  </div>
-                )}
-
-                {/* Convert to RT button */}
-                {showConvert&&(
-                  <div style={{marginBottom:8}}>
-                    <button onClick={()=>convertToRT(o,i)} style={{
-                      background:"#8b5cf618",border:"1px solid #8b5cf633",
-                      borderRadius:8,color:"#8b5cf6",fontSize:11,fontWeight:700,
-                      padding:"7px 14px",cursor:"pointer",fontFamily:"inherit",
-                      display:"flex",alignItems:"center",gap:6,
-                    }}>
-                      🔄 Convert to Return Trip
-                    </button>
-                    <div style={{fontSize:10,color:"var(--dim)",marginTop:3}}>
-                      Crew is not on site — converting creates a new Return Trip pre-filled with this CO's details.
-                    </div>
-                  </div>
-                )}
-
-                {/* Schedule window — show for any active CO */}
-                {o.coStatus&&o.coStatus!=="completed"&&o.coStatus!=="denied"&&o.coStatus!=="converted"&&(
-                  <div style={{marginTop:6,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:8}}>
-                    <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>NEEDS TO BE SCHEDULED BY</div>
-                    <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
-                      <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--dim)",cursor:"pointer"}}>
-                        <input type="radio" name={`co_type_${o.id}`} checked={!o.needsHardDate} onChange={()=>upd(o.id,{needsHardDate:false})} style={{accentColor:"#dc2626"}}/>
-                        Date Range
-                      </label>
-                      <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--dim)",cursor:"pointer"}}>
-                        <input type="radio" name={`co_type_${o.id}`} checked={!!o.needsHardDate} onChange={()=>upd(o.id,{needsHardDate:true})} style={{accentColor:"#dc2626"}}/>
-                        Hard Date
-                      </label>
-                    </div>
-                    {!o.needsHardDate?(
-                      <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-                        <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={o.needsByStart||""} onChange={e=>upd(o.id,{needsByStart:e.target.value})}/>
-                        <span style={{fontSize:11,color:"var(--dim)"}}>–</span>
-                        <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={o.needsByEnd||""} onChange={e=>upd(o.id,{needsByEnd:e.target.value})}/>
-                      </div>
+                    {crewOnSite?(
+                      <>
+                        <div style={{fontSize:11,fontWeight:700,color:"#16a34a",marginBottom:8}}>
+                          ✓ Crew is on site — mark work complete when done
+                        </div>
+                        <button onClick={()=>upd(o.id,{coStatus:"completed",needsByStart:"",needsByEnd:"",needsHardDate:false})}
+                          style={{background:"#16a34a",border:"none",borderRadius:8,color:"#fff",
+                            fontSize:11,fontWeight:700,padding:"7px 16px",cursor:"pointer",fontFamily:"inherit"}}>
+                          ✓ Mark Work Completed
+                        </button>
+                      </>
                     ):(
-                      <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={o.needsByStart||""} onChange={e=>upd(o.id,{needsByStart:e.target.value})}/>
+                      <>
+                        <div style={{fontSize:11,fontWeight:700,color:"#f97316",marginBottom:6}}>
+                          ⚠ Crew not on site — set a schedule window then convert to Return Trip
+                        </div>
+                        {/* Window / Hard date picker */}
+                        <div style={{marginBottom:8}}>
+                          <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
+                            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--dim)",cursor:"pointer"}}>
+                              <input type="radio" name={`co_type_${o.id}`} checked={!o.needsHardDate} onChange={()=>upd(o.id,{needsHardDate:false})} style={{accentColor:"#f97316"}}/>
+                              Date Window
+                            </label>
+                            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--dim)",cursor:"pointer"}}>
+                              <input type="radio" name={`co_type_${o.id}`} checked={!!o.needsHardDate} onChange={()=>upd(o.id,{needsHardDate:true})} style={{accentColor:"#f97316"}}/>
+                              Hard Date
+                            </label>
+                          </div>
+                          {!o.needsHardDate?(
+                            <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                              <DateInp value={o.needsByStart||""} onChange={e=>upd(o.id,{needsByStart:e.target.value})}
+                                style={{width:138,fontSize:11,borderColor:"#f9731655",background:"#f9731608"}}/>
+                              <span style={{fontSize:11,color:"var(--dim)"}}>–</span>
+                              <DateInp value={o.needsByEnd||""} onChange={e=>upd(o.id,{needsByEnd:e.target.value})}
+                                style={{width:138,fontSize:11,borderColor:"#f9731655",background:"#f9731608"}}/>
+                            </div>
+                          ):(
+                            <DateInp value={o.needsByStart||""} onChange={e=>upd(o.id,{needsByStart:e.target.value})}
+                              style={{width:138,fontSize:11,borderColor:"#f9731655",background:"#f9731608"}}/>
+                          )}
+                        </div>
+                        <button onClick={()=>convertToRT(o,i)} style={{
+                          background:"#8b5cf618",border:"1px solid #8b5cf633",
+                          borderRadius:8,color:"#8b5cf6",fontSize:11,fontWeight:700,
+                          padding:"7px 14px",cursor:"pointer",fontFamily:"inherit",
+                          display:"flex",alignItems:"center",gap:6,
+                        }}>
+                          🔄 Convert to Return Trip
+                        </button>
+                      </>
                     )}
                   </div>
                 )}
@@ -1744,8 +1767,10 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
                       <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                         <select value={t.rtStatus||""} onChange={e=>{
                           const v=e.target.value;
-                          upd(t.id,{rtStatus:v,rtScheduled:v==="scheduled",needsSchedule:v==="needs",
-                            rtStatusDate:getStatusDef(RT_STATUSES,v).hasDate?t.rtStatusDate:""});
+                          const patch={rtStatus:v,rtScheduled:v==="scheduled",needsSchedule:v==="needs",
+                            rtStatusDate:getStatusDef(RT_STATUSES,v).hasDate?t.rtStatusDate:""};
+                          if(v==="scheduled") { patch.needsByStart=""; patch.needsByEnd=""; patch.needsHardDate=false; }
+                          upd(t.id,patch);
                         }} style={{background:rtDef.color?`${rtDef.color}18`:C.surface,
                           color:rtDef.color||C.dim,border:`1px solid ${rtDef.color||C.border}`,
                           borderRadius:7,padding:"5px 8px",fontSize:11,fontFamily:"inherit",
@@ -1760,7 +1785,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
                           </div>
                         )}
                       </div>
-                      {t.rtStatus&&t.rtStatus!=="complete"&&(
+                      {t.rtStatus==="needs"&&(
                         <div style={{marginTop:8,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:8}}>
                           <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>NEEDS TO BE SCHEDULED BY</div>
                           <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
@@ -5736,27 +5761,53 @@ function computeTasks(jobs) {
     // Change Orders
     const rs2 = effRS(job), fs2 = effFS(job);
     (job.changeOrders||[]).forEach((co, i) => {
-      // Approved — context-aware task
+
+      // Needs to be sent — fires immediately on new CO
+      if((co.coStatus||"needs_sending")==="needs_sending") tasks.push({
+        id: job.id+"_co_"+co.id+"_send", jobId: job.id, jobName: job.name,
+        type: "auto", category: "co", foreman,
+        title: `Send Change Order #${i+1}`,
+        desc: co.desc ? `CO: ${co.desc}` : "Draft and send the change order",
+        color: "#dc2626", cleared: false,
+        dueDate: co.coStatusDate||"",
+      });
+
+      // Approved — context-aware: crew on site → complete, no crew → convert to RT
       if(co.coStatus === "approved") {
         const crewOnSite = rs2 === "inprogress" || fs2 === "inprogress";
         tasks.push({
           id: job.id+"_co_"+co.id+"_approved", jobId: job.id, jobName: job.name,
           type: "auto", category: "co", foreman,
           title: crewOnSite
-            ? `CO #${i+1} Approved — confirm with crew & get sign-off`
-            : `CO #${i+1} Approved — convert to return trip & set schedule date`,
+            ? `CO #${i+1} Approved — mark work complete`
+            : `CO #${i+1} Approved — convert to Return Trip`,
           desc: co.desc ? `CO: ${co.desc}` : undefined,
           color: "#16a34a", cleared: false,
         });
       }
-      // Needs scheduling
-      if(co.coStatus === "needs") tasks.push({
-        id: job.id+"_co_"+co.id+"_needs", jobId: job.id, jobName: job.name,
-        type: "auto", category: "co", foreman,
-        title: `Schedule Change Order #${i+1}`,
-        desc: co.desc ? `CO: ${co.desc}` : "Change order needs to be scheduled",
-        color: C.accent, cleared: false,
-      });
+
+      // Scheduled (after convert to RT and RT gets scheduled date on CO)
+      if(co.coStatus === "scheduled") {
+        // Build window label from the co dates
+        let coWindowLabel = "";
+        if(co.needsHardDate && co.needsByStart) {
+          const d = parseAnyDate(co.needsByStart);
+          coWindowLabel = d ? "🔒 "+d.toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "";
+        } else if(co.needsByStart) {
+          const s = parseAnyDate(co.needsByStart), e = parseAnyDate(co.needsByEnd||co.needsByStart);
+          if(s) coWindowLabel = "📅 "+s.toLocaleDateString("en-US",{month:"short",day:"numeric"})+(e&&co.needsByEnd?" – "+e.toLocaleDateString("en-US",{month:"short",day:"numeric"}):"");
+        }
+        // Scheduled task clears when coStatusDate is set
+        if(!co.coStatusDate) tasks.push({
+          id: job.id+"_co_"+co.id+"_sched", jobId: job.id, jobName: job.name,
+          type: "auto", category: "co", foreman,
+          title: `Schedule CO #${i+1} Return Trip`,
+          desc: co.desc ? `CO: ${co.desc}` : "Set the scheduled date for this return trip",
+          color: "#2563eb", cleared: false,
+          windowLabel: coWindowLabel||undefined,
+          needsHardDate: co.needsHardDate||false,
+        });
+      }
     });
 
     // Ready to Invoice — fires when readyToInvoice is true and not yet dismissed
@@ -5806,19 +5857,32 @@ function computeTasks(jobs) {
 
     // Return Trips needing scheduling
     (job.returnTrips||[]).forEach((rt, i) => {
-      if(rt.rtStatus === "needs" && !rt.signedOff) tasks.push({
-        id: job.id+"_rt_"+rt.id+"_needs", jobId: job.id, jobName: job.name,
-        type: "auto", category: "rt", foreman,
-        title: `Schedule Return Trip #${i+1}`,
-        desc: rt.scope ? `Scope: ${rt.scope}` : "Return trip needs to be scheduled",
-        color: "#8b5cf6", cleared: false,
-        dueDate: rt.rtStatusDate||"",
-      });
+      if(rt.rtStatus === "needs" && !rt.signedOff) {
+        // Build window label like the scheduling forecast does
+        let rtWindowLabel = "";
+        if(rt.needsHardDate && rt.needsByStart) {
+          const d = parseAnyDate(rt.needsByStart);
+          rtWindowLabel = d ? "🔒 "+d.toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "";
+        } else if(rt.needsByStart) {
+          const s = parseAnyDate(rt.needsByStart), e = parseAnyDate(rt.needsByEnd||rt.needsByStart);
+          if(s) rtWindowLabel = "📅 "+s.toLocaleDateString("en-US",{month:"short",day:"numeric"})+(e&&rt.needsByEnd?" – "+e.toLocaleDateString("en-US",{month:"short",day:"numeric"}):"");
+        }
+        tasks.push({
+          id: job.id+"_rt_"+rt.id+"_needs", jobId: job.id, jobName: job.name,
+          type: "auto", category: "rt", foreman,
+          title: `Schedule Return Trip #${i+1}`,
+          desc: rt.scope ? `Scope: ${rt.scope}` : "Return trip needs to be scheduled",
+          color: "#8b5cf6", cleared: false,
+          dueDate: rt.rtStatusDate||"",
+          windowLabel: rtWindowLabel||undefined,
+          needsHardDate: rt.needsHardDate||false,
+        });
+      }
       if(rt.rtStatus === "scheduled" && !rt.signedOff) tasks.push({
         id: job.id+"_rt_"+rt.id+"_sched", jobId: job.id, jobName: job.name,
         type: "auto", category: "rt", foreman,
-        title: `Return Trip #${i+1} Scheduled`,
-        desc: rt.scope ? `Scope: ${rt.scope}` : "Return trip is scheduled",
+        title: `Return Trip #${i+1} — Get Sign-Off`,
+        desc: rt.scope ? `Scope: ${rt.scope}` : "Return trip is scheduled — confirm completion & sign off",
         color: "#8b5cf6", cleared: false,
         dueDate: rt.rtStatusDate||"",
       });
