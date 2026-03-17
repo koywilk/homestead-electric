@@ -5749,6 +5749,7 @@ function computeTasks(jobs) {
         title: `Return Trip #${i+1} Complete — merge or invoice`,
         desc: rt.scope ? `Scope: ${rt.scope}` : undefined,
         color: "#16a34a", cleared: false,
+        dueDate: rt.rtStatusDate||"",
       });
     });
 
@@ -5769,6 +5770,15 @@ function computeTasks(jobs) {
         title: `Schedule Return Trip #${i+1}`,
         desc: rt.scope ? `Scope: ${rt.scope}` : "Return trip needs to be scheduled",
         color: "#8b5cf6", cleared: false,
+        dueDate: rt.rtStatusDate||"",
+      });
+      if(rt.rtStatus === "scheduled") tasks.push({
+        id: job.id+"_rt_"+rt.id+"_sched", jobId: job.id, jobName: job.name,
+        type: "auto", category: "rt", foreman,
+        title: `Return Trip #${i+1} Scheduled`,
+        desc: rt.scope ? `Scope: ${rt.scope}` : "Return trip is scheduled",
+        color: "#8b5cf6", cleared: false,
+        dueDate: rt.rtStatusDate||"",
       });
     });
 
@@ -5844,14 +5854,15 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
   };
 
   return (
-    <div style={{
+    <div
+      className={isCritical||isOverdue?"task-pulse":isWarning?"task-warn":""}
+      style={{
       display:"flex", alignItems:"flex-start", gap:12,
       padding:"12px 14px", borderRadius:11, marginBottom:6,
       background: isOverdue||isCritical ? "#dc262610" : isWarning ? "#ca8a0410" : "var(--card)",
       border:`1px solid ${isOverdue||isCritical?"#dc262644":isWarning?"#ca8a0444":task.color+"22"}`,
       borderLeft:`4px solid ${isOverdue||isCritical?"#dc2626":isWarning?"#ca8a04":task.color}`,
       boxShadow: isOverdue||isCritical?"0 0 12px #dc262622, 0 2px 8px #dc262614":isWarning?"0 0 10px #ca8a0420, 0 2px 6px #ca8a0412":"none",
-      animation: isCritical||isOverdue?"taskPulse 2s ease-in-out infinite":isWarning?"taskWarn 2.5s ease-in-out infinite":"none",
       transition:"transform 0.12s, box-shadow 0.12s",
     }}
     onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 14px ${task.color}18`;}}
@@ -5890,8 +5901,8 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
                 autoFocus
                 type="date"
                 value={dateVal}
-                onChange={e=>setDateVal(e.target.value)}
-                onKeyDown={e=>{if(e.key==="Enter")saveDate();if(e.key==="Escape")setEditingDate(false);}}
+                onChange={e=>{setDateVal(e.target.value);if(e.target.value){if(onSetDueDate)onSetDueDate(task.id,e.target.value);setLocalDueDate(e.target.value);setEditingDate(false);}}}
+                onKeyDown={e=>{if(e.key==="Escape")setEditingDate(false);}}
                 style={{fontSize:11,border:"1px solid var(--accent)",borderRadius:6,padding:"2px 7px",
                   background:"var(--surface)",color:"var(--text)",fontFamily:"inherit",width:130,outline:"none",colorScheme:"dark"}}
               />
@@ -7778,6 +7789,8 @@ if(initialLoad.current) return;
           0%,100% { box-shadow: 0 0 10px rgba(202,138,4,0.12), 0 2px 6px rgba(202,138,4,0.08); }
           50%      { box-shadow: 0 0 18px rgba(202,138,4,0.28), 0 2px 10px rgba(202,138,4,0.16); }
         }
+        .task-pulse { animation: taskPulse 2s ease-in-out infinite; }
+        .task-warn  { animation: taskWarn 2.5s ease-in-out infinite; }
 
         *{box-sizing:border-box;margin:0;padding:0;}
 
