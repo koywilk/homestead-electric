@@ -6779,13 +6779,25 @@ if(initialLoad.current) return;
 
 
       {/* ── TOP NAV BAR ── */}
-      <div style={{display:"flex",gap:0,borderBottom:`1px solid ${C.border}`,background:C.card,position:"sticky",top:0,zIndex:90,overflowX:"auto",scrollbarWidth:"none"}}>
-        {[{key:"home",label:"Job Board"},{key:"schedule",label:"Scheduling Forecast"},{key:"upcoming",label:"Upcoming"},{key:"tasks",label:"Tasks"}].map(({key,label})=>(
-          <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:openTasks}
-            style={{padding:"13px 22px",fontSize:12,fontWeight:view===key?700:500,fontFamily:"inherit",cursor:"pointer",whiteSpace:"nowrap",background:"none",border:"none",borderBottom:view===key?`2px solid ${C.accent}`:"2px solid transparent",color:view===key?C.accent:C.dim,transition:"all 0.15s",letterSpacing:"0.02em"}}>
-            {label}
-          </button>
-        ))}
+      <div style={{display:"flex",gap:6,padding:"8px 10px",borderBottom:`1px solid ${C.border}`,background:C.card,position:"sticky",top:0,zIndex:90,overflowX:"auto",scrollbarWidth:"none",alignItems:"center"}}>
+        {[{key:"home",label:"Job Board",icon:"⚡"},{key:"schedule",label:"Forecast",icon:"📅"},{key:"upcoming",label:"Upcoming",icon:"🔭"},{key:"tasks",label:"Tasks",icon:"✓"}].map(({key,label,icon})=>{
+          const active = view===key;
+          return (
+            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:openTasks}
+              style={{
+                padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
+                cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
+                background: active ? C.accent : "transparent",
+                color: active ? "#000" : C.dim,
+                transition:"all 0.15s",letterSpacing:"0.02em",
+                boxShadow: active ? `0 2px 8px ${C.accent}55` : "none",
+                display:"flex",alignItems:"center",gap:5,
+              }}>
+              <span style={{fontSize:10,opacity:active?1:0.6}}>{icon}</span>
+              {label}
+            </button>
+          );
+        })}
       </div>
 
       {/* iOS Chrome banner */}
@@ -6846,81 +6858,53 @@ if(initialLoad.current) return;
 
         <div>
 
-          <div style={{padding:"24px 26px 20px",borderBottom:`1px solid ${C.border}`}}>
+          {/* ── HOME HEADER ── */}
+          <div style={{padding:"20px 24px 16px",borderBottom:`1px solid ${C.border}`,background:C.card}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
 
-            <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12,marginBottom:20}}>
-
+              {/* Title block */}
               <div>
-
-                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>
-
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.08em",color:C.text,lineHeight:1,display:"flex",alignItems:"center",gap:10}}>
+                  <span style={{color:C.accent}}>⚡</span>
                   HOMESTEAD ELECTRIC
-
                 </div>
-
-                <div style={{fontSize:11,color:C.dim,marginTop:3,display:"flex",gap:16,alignItems:"center"}}>
-
-                  <span>{jobs.length} total job sites</span>
-
-                  <span style={{color:syncColor}}>{syncLabel}</span>
-
-
-
-                  <button onClick={backupByEmail}
-
-                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
-
-                      color:C.dim,fontSize:11,fontWeight:600,padding:"3px 10px",cursor:"pointer",
-
-                      fontFamily:"inherit"}}>
-
-                    Backup
-
-                  </button>
-
-                  <button onClick={()=>window.location.reload()}
-
-                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
-
-                      color:C.dim,fontSize:14,fontWeight:700,padding:"3px 10px",cursor:"pointer",
-
-                      fontFamily:"inherit"}}>
-
-                    ↻
-
-                  </button>
-
-                  <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);}}
-
-                    style={{background:C.blue,border:"none",borderRadius:6,color:"#fff",
-
-                      fontSize:11,fontWeight:700,padding:"3px 12px",cursor:"pointer",
-
-                      fontFamily:"inherit"}}>
-
-                    + Add Job
-
-                  </button>
-
+                <div style={{display:"flex",alignItems:"center",gap:10,marginTop:4}}>
+                  <span style={{fontSize:11,color:C.dim}}>{jobs.length} job sites</span>
+                  <span style={{width:3,height:3,borderRadius:"50%",background:C.border,display:"inline-block"}}/>
+                  <span style={{fontSize:11,color:syncColor,fontWeight:500}}>{syncLabel}</span>
                 </div>
+              </div>
 
+              {/* Action buttons */}
+              <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                <button onClick={backupByEmail}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                    color:C.dim,fontSize:11,fontWeight:600,padding:"6px 12px",cursor:"pointer",
+                    fontFamily:"inherit"}}>
+                  Backup
+                </button>
+                <button onClick={()=>window.location.reload()}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                    color:C.dim,fontSize:14,fontWeight:700,padding:"6px 10px",cursor:"pointer",
+                    fontFamily:"inherit"}}>
+                  ↻
+                </button>
+                <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);}}
+                  style={{background:C.accent,border:"none",borderRadius:8,color:"#000",
+                    fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
+                    fontFamily:"inherit",boxShadow:`0 2px 8px ${C.accent}44`,letterSpacing:"0.02em"}}>
+                  + New Job
+                </button>
               </div>
 
             </div>
-
-
-
           </div>
 
 
 
           <div style={{padding:"28px 26px"}}>
 
-            <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em",marginBottom:16}}>
-
-              TAP A FOREMAN TO VIEW THEIR JOBS
-
-            </div>
+            <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em",marginBottom:14,textTransform:"uppercase"}}>Pipeline Overview</div>
 
             {(()=>{
 
@@ -7102,7 +7086,23 @@ if(initialLoad.current) return;
                         </span>}
                       </div>
                     )}
-                    <div style={{marginTop:14,fontSize:11,color:fc,fontWeight:600,textAlign:"right"}}>View Jobs →</div>
+                    {/* Progress bars */}
+                    <div style={{marginTop:12,display:"flex",flexDirection:"column",gap:5}}>
+                      {[["Rough",rAvg,C.rough],[" Finish",fnAvg,C.finish]].map(([lbl,avg,col])=>(
+                        <div key={lbl}>
+                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                            <span style={{fontSize:9,fontWeight:700,color:C.dim,letterSpacing:"0.08em"}}>{lbl.toUpperCase()}</span>
+                            <span style={{fontSize:9,fontWeight:700,color:avg===100?C.green:col}}>{avg}%</span>
+                          </div>
+                          <div style={{height:4,borderRadius:99,background:C.surface,overflow:"hidden"}}>
+                            <div style={{height:"100%",width:`${avg}%`,borderRadius:99,
+                              background:avg===100?C.green:col,
+                              transition:"width 0.4s ease"}}/>
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                    <div style={{marginTop:12,fontSize:11,color:fc,fontWeight:600,textAlign:"right",opacity:0.8}}>View Jobs →</div>
 
                   </div>
 
