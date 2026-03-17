@@ -3257,9 +3257,16 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose }) {
               {[job.address,job.gc].filter(Boolean).join(" · ")||"No details yet"}
             </div>
           </div>
-          <button onClick={onClose}
-            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
-              color:C.dim,cursor:"pointer",padding:"5px 14px",fontSize:13,flexShrink:0}}>✕</button>
+          <div style={{display:"flex",gap:6,alignItems:"center"}}>
+            <button onClick={()=>{ u({tempPed:false,tempPedStatus:"",tempPedScheduledDate:"",tempPedSignedOff:false,tempPedSignedOffBy:"",tempPedSignedOffDate:"",tempPedPhotos:[],readyToInvoice:false}); onClose(); }}
+              style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                color:C.dim,cursor:"pointer",padding:"5px 12px",fontSize:11,fontFamily:"inherit"}}>
+              Convert to Full Job
+            </button>
+            <button onClick={onClose}
+              style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                color:C.dim,cursor:"pointer",padding:"5px 14px",fontSize:13,flexShrink:0}}>✕</button>
+          </div>
         </div>
 
         {/* Status bar */}
@@ -4895,7 +4902,7 @@ function StageSectionList({ jobs, JobRow, fc, startCollapsed=true }) {
 
             {!isCollapsed && sJobs.map(job=>(
               sec.key==="tempPed"
-                ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated)=>updateJob(updated)}/>
+                ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }}/>
                 : <JobRow key={job.id} job={job} fc={fc||undefined} showForeman={!fc}/>
             ))}
 
