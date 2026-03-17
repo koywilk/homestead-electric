@@ -3522,11 +3522,21 @@ onUpdate(updated);
                           {ROUGH_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>
                         {rsDef.hasDate&&(
-                          <Inp value={job.roughStatusDate||""} onChange={e=>u({roughStatusDate:e.target.value})}
-                            placeholder="Date MM/DD/YY"
-                            style={{width:130,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
+                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:rsDef.color}}>
+                              {job.roughStatus==="date_confirmed"?"SCHEDULE BY DATE":"SCHEDULED DATE"}
+                            </div>
+                            <Inp value={job.roughStatusDate||""} onChange={e=>u({roughStatusDate:e.target.value})}
+                              placeholder="MM/DD/YY"
+                              style={{width:120,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
+                          </div>
                         )}
                       </div>
+                      {job.roughStatus==="date_confirmed"&&(
+                        <div style={{marginTop:6,fontSize:10,color:"#f97316",fontStyle:"italic"}}>
+                          ↑ Date by which scheduling must be completed — job start date goes in Projected Start above
+                        </div>
+                      )}
 
                     </div>
                   );
@@ -3618,11 +3628,21 @@ onUpdate(updated);
                           {FINISH_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>
                         {fsDef.hasDate&&(
-                          <Inp value={job.finishStatusDate||""} onChange={e=>u({finishStatusDate:e.target.value})}
-                            placeholder="Date MM/DD/YY"
-                            style={{width:130,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
+                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:fsDef.color}}>
+                              {job.finishStatus==="date_confirmed"?"SCHEDULE BY DATE":"SCHEDULED DATE"}
+                            </div>
+                            <Inp value={job.finishStatusDate||""} onChange={e=>u({finishStatusDate:e.target.value})}
+                              placeholder="MM/DD/YY"
+                              style={{width:120,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
+                          </div>
                         )}
                       </div>
+                      {job.finishStatus==="date_confirmed"&&(
+                        <div style={{marginTop:6,fontSize:10,color:"#f97316",fontStyle:"italic"}}>
+                          ↑ Date by which scheduling must be completed — job start date goes in Projected Start above
+                        </div>
+                      )}
 
                     </div>
                   );
@@ -5190,23 +5210,41 @@ function computeTasks(jobs) {
     const rs = job.roughStatus || "";
     const fs = job.finishStatus || "";
 
-    // Rough — start date confirmed, needs scheduling
-    if(rs === "date_confirmed") tasks.push({
-      id: job.id+"_rough_needs", jobId: job.id, jobName: job.name,
-      type: "auto", category: "rough", foreman,
-      title: "Schedule Rough",
-      desc: job.roughStatusDate ? `Start date confirmed: ${job.roughStatusDate}` : "Start date confirmed — needs to be scheduled",
-      color: C.rough, cleared: false,
-    });
+    // Rough — start date confirmed: two tasks fire
+    if(rs === "date_confirmed") {
+      tasks.push({
+        id: job.id+"_rough_needs", jobId: job.id, jobName: job.name,
+        type: "auto", category: "rough", foreman,
+        title: "Schedule Rough",
+        desc: job.roughStatusDate ? `Schedule by: ${job.roughStatusDate}` : "Start date confirmed — needs to be scheduled",
+        color: C.rough, cleared: false,
+      });
+      tasks.push({
+        id: job.id+"_rough_po", jobId: job.id, jobName: job.name,
+        type: "auto", category: "po", foreman,
+        title: "Order Job Start PO",
+        desc: job.roughStatusDate ? `Schedule by: ${job.roughStatusDate}` : "Order materials PO for rough start",
+        color: "#8b5cf6", cleared: false,
+      });
+    }
 
-    // Finish — start date confirmed, needs scheduling
-    if(fs === "date_confirmed") tasks.push({
-      id: job.id+"_finish_needs", jobId: job.id, jobName: job.name,
-      type: "auto", category: "finish", foreman,
-      title: "Schedule Finish",
-      desc: job.finishStatusDate ? `Start date confirmed: ${job.finishStatusDate}` : "Start date confirmed — needs to be scheduled",
-      color: C.finish, cleared: false,
-    });
+    // Finish — start date confirmed: two tasks fire
+    if(fs === "date_confirmed") {
+      tasks.push({
+        id: job.id+"_finish_needs", jobId: job.id, jobName: job.name,
+        type: "auto", category: "finish", foreman,
+        title: "Schedule Finish",
+        desc: job.finishStatusDate ? `Schedule by: ${job.finishStatusDate}` : "Start date confirmed — needs to be scheduled",
+        color: C.finish, cleared: false,
+      });
+      tasks.push({
+        id: job.id+"_finish_po", jobId: job.id, jobName: job.name,
+        type: "auto", category: "po", foreman,
+        title: "Order Job Start PO",
+        desc: job.finishStatusDate ? `Schedule by: ${job.finishStatusDate}` : "Order materials PO for finish start",
+        color: "#8b5cf6", cleared: false,
+      });
+    }
 
     // QC Walk — fires once when rough hits 80%+, clears when qcStatus=scheduled
     if(job.roughQCTaskFired && job.qcStatus !== "scheduled" && job.qcStatus !== "complete") tasks.push({
@@ -5263,7 +5301,7 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, compact }) {
 
   const CATEGORY_LABELS = {
     rough:"Rough", finish:"Finish", qc:"QC Walk", co:"Change Order",
-    rt:"Return Trip", manual:"Manual Task", prep:"Pre Job Prep"
+    rt:"Return Trip", manual:"Manual Task", prep:"Pre Job Prep", po:"Purchase Order"
   };
 
   return (
