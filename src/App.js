@@ -6697,13 +6697,13 @@ function App() {
 
     const finishMap = {"Fixtures Ordered":"0%","Finish Scheduled":"20%","Finish In Progress":"50%","Punch List":"75%","CO / Final":"90%","Complete":"100%"};
 
-    return (Array.isArray(loaded)?loaded:[]).map(j=>({...j,
-
-      roughStage:  roughMap[j.roughStage]||(j.roughStage||"0%"),
-
-      finishStage: finishMap[j.finishStage]||(j.finishStage||"0%"),
-
-    }));
+    return (Array.isArray(loaded)?loaded:[]).map(j=>{
+      const migrated = {...j,
+        roughStage:  roughMap[j.roughStage]||(j.roughStage||"0%"),
+        finishStage: finishMap[j.finishStage]||(j.finishStage||"0%"),
+      };
+      return normalizeJob(migrated);
+    });
 
   };
 
@@ -7052,7 +7052,7 @@ if(initialLoad.current) return;
 
   const complete   = jobs.filter(j=>parseStage(j.finishStage)===100).length;
 
-  const pendingCOs = jobs.reduce((a,j)=>a+j.changeOrders.filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
+  const pendingCOs = jobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
 
   const syncColor  = {idle:C.muted,saving:C.accent,saved:C.green,error:C.red}[syncStatus];
 
@@ -7732,7 +7732,7 @@ if(initialLoad.current) return;
               {_foremen.map(f=>{
                 const fc    = _foremanColors[f];
                 const fJobs = jobs.filter(j=>(j.foreman||"Koy")===f);
-                const fCOs  = fJobs.reduce((a,j)=>a+j.changeOrders.filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
+                const fCOs  = fJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
                 const fRT   = fJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
                 const rAvg  = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+parseStage(j.roughStage),0)/fJobs.length) : 0;
                 const fnAvg = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+parseStage(j.finishStage),0)/fJobs.length) : 0;
