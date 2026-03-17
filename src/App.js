@@ -227,7 +227,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, taskDueDates:{}, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
+  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, taskDueDates:{}, roughOnHold:false, finishOnHold:false, tempPed:false, hasTempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
 
   homeRuns:{
 
@@ -3257,16 +3257,9 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose }) {
               {[job.address,job.gc].filter(Boolean).join(" · ")||"No details yet"}
             </div>
           </div>
-          <div style={{display:"flex",gap:6,alignItems:"center"}}>
-            <button onClick={()=>{ u({tempPed:false,tempPedStatus:"",tempPedScheduledDate:"",tempPedSignedOff:false,tempPedSignedOffBy:"",tempPedSignedOffDate:"",tempPedPhotos:[],readyToInvoice:false}); onClose(); }}
-              style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
-                color:C.dim,cursor:"pointer",padding:"5px 12px",fontSize:11,fontFamily:"inherit"}}>
-              Convert to Full Job
-            </button>
-            <button onClick={onClose}
-              style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
-                color:C.dim,cursor:"pointer",padding:"5px 14px",fontSize:13,flexShrink:0}}>✕</button>
-          </div>
+          <button onClick={onClose}
+            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+              color:C.dim,cursor:"pointer",padding:"5px 14px",fontSize:13,flexShrink:0}}>✕</button>
         </div>
 
         {/* Status bar */}
@@ -4169,11 +4162,11 @@ onUpdate(updated);
                 </label>
                 <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
                   <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
-                    <input type="checkbox" checked={!!job.tempPed} onChange={e=>u({tempPed:e.target.checked,tempPedNumber:e.target.checked?job.tempPedNumber:""})}
+                    <input type="checkbox" checked={!!job.hasTempPed} onChange={e=>u({hasTempPed:e.target.checked,tempPedNumber:e.target.checked?job.tempPedNumber:""})}
                       style={{accentColor:C.blue,width:16,height:16}}/>
-                    <span style={{fontSize:13,color:C.text}}>Temp pedestal installed</span>
+                    <span style={{fontSize:13,color:C.text}}>Temp pedestal on site</span>
                   </label>
-                  {job.tempPed&&(
+                  {job.hasTempPed&&(
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
                       <span style={{fontSize:12,color:C.dim}}>Ped #</span>
                       <select value={job.tempPedNumber||""} onChange={e=>u({tempPedNumber:e.target.value})}
@@ -4191,6 +4184,7 @@ onUpdate(updated);
                     </div>
                   )}
                 </div>
+
 
 
               </div>
@@ -4826,7 +4820,7 @@ const STAGE_SECTIONS = [
 
 
 
-function StageSectionList({ jobs, JobRow, fc, startCollapsed=true }) {
+function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, fc, startCollapsed=true }) {
 
   const initCollapsed = () => Object.fromEntries(STAGE_SECTIONS.map(s=>[s.key,startCollapsed]));
   const [collapsed, setCollapsed] = useState(initCollapsed);
@@ -4902,7 +4896,7 @@ function StageSectionList({ jobs, JobRow, fc, startCollapsed=true }) {
 
             {!isCollapsed && sJobs.map(job=>(
               sec.key==="tempPed"
-                ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }}/>
+                ? <TempPedCard key={job.id} job={job} onOpen={onSelectJob} onUpdate={onSaveJob}/>
                 : <JobRow key={job.id} job={job} fc={fc||undefined} showForeman={!fc}/>
             ))}
 
@@ -7124,6 +7118,22 @@ if(initialLoad.current) return;
 
               {/* Action buttons */}
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                <button onClick={async()=>{
+                    if(!window.confirm("Reset all accidental temp ped flags? This only clears jobs that were incorrectly marked as temp ped job cards.")) return;
+                    const { collection, getDocs, doc, updateDoc } = await import("https://www.gstatic.com/firebasejs/10.7.1/firebase-firestore.js");
+                    const snap = await getDocs(collection(db,"jobs"));
+                    let count=0;
+                    for(const d of snap.docs){
+                      if(d.data().tempPed===true){ await updateDoc(doc(db,"jobs",d.id),{tempPed:false}); count++; }
+                    }
+                    alert(`Done — cleared ${count} job(s)`);
+                    window.location.reload();
+                  }}
+                  style={{background:"none",border:`1px solid #dc262644`,borderRadius:8,
+                    color:"#dc2626",fontSize:11,fontWeight:600,padding:"6px 12px",cursor:"pointer",
+                    fontFamily:"inherit"}}>
+                  Fix Temp Peds
+                </button>
                 <button onClick={backupByEmail}
                   style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
                     color:C.dim,fontSize:11,fontWeight:600,padding:"6px 12px",cursor:"pointer",
@@ -7481,6 +7491,9 @@ if(initialLoad.current) return;
                   <StageSectionList
                     jobs={jobs.filter(j=>(j.foreman||"Koy")===crewView)}
                     JobRow={JobRow}
+                    TempPedCard={TempPedCard}
+                    onSelectJob={(j)=>setSelected(j)}
+                    onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }}
                     fc={FOREMEN_COLORS[crewView]}
                     startCollapsed={false}
                   />
@@ -7494,7 +7507,7 @@ if(initialLoad.current) return;
                 color:C.dim,marginBottom:16,marginTop:32,paddingTop:24,borderTop:`1px solid ${C.border}`}}>
                 ALL JOBS
               </div>
-              <StageSectionList jobs={jobs} JobRow={JobRow} startCollapsed={true}/>
+              <StageSectionList jobs={jobs} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} startCollapsed={true}/>
             </div>
 
           </div>
@@ -7685,7 +7698,7 @@ if(initialLoad.current) return;
                   </div>
                 );
               })()}
-              <StageSectionList jobs={filtered} JobRow={JobRow} fc={FOREMEN_COLORS[activeForeman]} startCollapsed={false}/>
+              <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} fc={FOREMEN_COLORS[activeForeman]} startCollapsed={false}/>
               {(()=>{
                 const invoiceJobs = filtered.filter(j=>effRS(j)==="invoice"||effFS(j)==="invoice");
                 return invoiceJobs.length>0?(
