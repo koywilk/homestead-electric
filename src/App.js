@@ -6313,7 +6313,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
         const end=job.roughNeedsHardDate?"":job.roughNeedsByEnd||"";
         if(start||rs==="waiting_date"||rs==="date_confirmed") events.push({
           id:job.id+"_rough", job, type:"rough",
-          label:"ROUGH", color:C.rough, fc,
+          label:"ROUGH", color:rsDef.color||C.rough, fc,
           startDate:start, endDate:end,
           hardDate:!!job.roughNeedsHardDate,
           status:rs, statusLabel:rsDef.label,
@@ -6328,7 +6328,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
         const end=job.finishNeedsHardDate?"":job.finishNeedsByEnd||"";
         if(start||fs==="waiting_date"||fs==="date_confirmed") events.push({
           id:job.id+"_finish", job, type:"finish",
-          label:"FINISH", color:C.finish, fc,
+          label:"FINISH", color:fsDef.color||C.finish, fc,
           startDate:start, endDate:end,
           hardDate:!!job.finishNeedsHardDate,
           status:fs, statusLabel:fsDef.label,
@@ -6340,9 +6340,10 @@ function SchedulingForecast({ jobs, onSelectJob }) {
       (job.returnTrips||[]).filter(r=>!r.signedOff&&r.rtStatus!=="complete"&&(r.scope||r.rtStatus||r.needsByStart||r.rtStatusDate)).forEach((rt,i)=>{
         const start=rt.needsByStart||rt.rtStatusDate||rt.date||"";
         const end=rt.needsHardDate?"":rt.needsByEnd||"";
+        const rtDef=getStatusDef(RT_STATUSES,rt.rtStatus||"needs");
         events.push({
           id:job.id+"_rt_"+rt.id, job, type:"rt",
-          label:"RT "+(i+1), color:"#8b5cf6", fc,
+          label:"RT "+(i+1), color:rtDef.color||"#8b5cf6", fc,
           startDate:start, endDate:end,
           hardDate:!!rt.needsHardDate,
           status:rt.rtStatus||"", statusLabel:rt.rtStatus||"needs scheduling",
@@ -6357,7 +6358,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
         const coDef=getStatusDef(CO_STATUSES_NEW,co.coStatus||"pending");
         events.push({
           id:job.id+"_co_"+co.id, job, type:"co",
-          label:"CO "+(i+1), color:C.accent, fc,
+          label:"CO "+(i+1), color:coDef.color||C.accent, fc,
           startDate:start, endDate:end,
           hardDate:!!co.needsHardDate,
           status:co.coStatus||"pending", statusLabel:coDef.label||co.coStatus,
@@ -6370,7 +6371,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
         const start=job.qcStatusDate||"";
         events.push({
           id:job.id+"_qc", job, type:"qc",
-          label:"QC", color:C.teal, fc,
+          label:"QC", color:getStatusDef(QC_STATUSES,job.qcStatus||"").color||C.teal, fc,
           startDate:start, endDate:"",
           hardDate:false,
           status:job.qcStatus, statusLabel:job.qcStatus,
