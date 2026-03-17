@@ -1527,8 +1527,8 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
                   </div>
                 )}
 
-                {/* Needs to be scheduled date window */}
-                {o.coStatus==="needs"&&(
+                {/* Schedule window — show for any active CO */}
+                {o.coStatus&&o.coStatus!=="completed"&&o.coStatus!=="denied"&&o.coStatus!=="converted"&&(
                   <div style={{marginTop:6,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:8}}>
                     <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>NEEDS TO BE SCHEDULED BY</div>
                     <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
@@ -1737,7 +1737,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
                             style={{width:120,fontSize:11,borderColor:rtDef.color+"55",background:`${rtDef.color}08`}}/>
                         )}
                       </div>
-                      {(t.rtStatus==="needs")&&(
+                      {t.rtStatus&&t.rtStatus!=="complete"&&(
                         <div style={{marginTop:8,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:8}}>
                           <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>NEEDS TO BE SCHEDULED BY</div>
                           <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
@@ -3716,9 +3716,9 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                           </div>
                         )}
                       </div>
-                      {job.roughStatus==="date_confirmed"&&(
+                      {(job.roughStatus==="date_confirmed"||job.roughStatus==="waiting_date"||job.roughStatus==="scheduled")&&(
                         <div style={{marginTop:8,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:8}}>
-                          <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>NEEDS TO BE SCHEDULED BY</div>
+                          <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>SCHEDULE WINDOW / DATE</div>
                           <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
                             <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,cursor:"pointer"}}>
                               <input type="radio" checked={!job.roughNeedsHardDate} onChange={()=>u({roughNeedsHardDate:false})} style={{accentColor:"#dc2626"}}/>
@@ -3860,9 +3860,9 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                           </div>
                         )}
                       </div>
-                      {job.finishStatus==="date_confirmed"&&(
+                      {(job.finishStatus==="date_confirmed"||job.finishStatus==="waiting_date"||job.finishStatus==="scheduled")&&(
                         <div style={{marginTop:8,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:8}}>
-                          <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>NEEDS TO BE SCHEDULED BY</div>
+                          <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>SCHEDULE WINDOW / DATE</div>
                           <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
                             <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,cursor:"pointer"}}>
                               <input type="radio" checked={!job.finishNeedsHardDate} onChange={()=>u({finishNeedsHardDate:false})} style={{accentColor:"#dc2626"}}/>
