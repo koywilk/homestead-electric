@@ -225,24 +225,99 @@ const getLeadsList = () => LEADS;
 const getLeadFC = (name) => (LEAD_COLORS[name]||"#6b7280");
 const COLOR_OPTIONS = ["#3b82f6","#f97316","#22c55e","#8b5cf6","#ec4899","#14b8a6","#f59e0b","#ef4444","#06b6d4","#a855f7","#84cc16","#f43f5e"];
 
-// ── Auth PINs ─────────────────────────────────────────────────
-const OFFICE_PIN = "0720"; // Full app access
-const CREW_PIN   = "7811"; // Field crew — all jobs, grouped by lead
-// Session stored in localStorage — expires at midnight each day
+// ── Identity & Permissions ────────────────────────────────────
+const IDENTITY_KEY = "he_identity"; // localStorage key — persists forever
+
+// All team members with their roles
+const ALL_MEMBERS = [
+  { name:"Justin",  role:"justin"  },
+  { name:"Jeromy",  role:"jeromy"  },
+  { name:"Koy",     role:"foreman" },
+  { name:"Vasa",    role:"foreman" },
+  { name:"Colby",   role:"foreman" },
+  { name:"Josh",    role:"lead"    },
+  { name:"Brady",   role:"lead"    },
+];
+
+// Permission map — feature -> roles that have access
+const PERMISSIONS = {
+  "home.view":         ["admin","justin","jeromy","foreman","lead","crew"],
+  "home.edit":         ["admin","justin","jeromy","foreman","lead","crew"],
+  "tasks.view":        ["admin","justin","jeromy","foreman"],
+  "tasks.setDueDate":  ["admin","justin","foreman"],
+  "tasks.addTask":     ["admin","justin","jeromy","foreman"],
+  "schedule.view":     ["admin","justin","jeromy","foreman"],
+  "schedule.edit":     ["admin","justin","foreman"],
+  "pipeline.view":     ["admin","justin","foreman"],
+  "pipeline.manage":   ["admin","justin"],
+  "job.delete":        ["admin"],
+  "co.edit":           ["admin","justin","jeromy","foreman","lead","crew"],
+  "reports.view":      ["admin","justin","jeromy","foreman"],
+  "foreman.cards":     ["admin","justin","jeromy","foreman","lead","crew"],
+  "users.manage":      ["admin","justin"],
+  "settings.view":     ["admin","justin"],
+};
+
+// Check if a user (identity object) can do a feature
+const can = (identity, feature) => {
+  if(!identity) return false;
+  const allowed = PERMISSIONS[feature] || [];
+  return allowed.includes(identity.role) || allowed.includes("admin") && identity.role === "admin";
+};
+
+// Read/write identity from localStorage (persists forever)
+const getIdentity = () => {
+  try { return JSON.parse(localStorage.getItem(IDENTITY_KEY)||"null"); } catch { return null; }
+};
+const saveIdentity = (member) => {
+  localStorage.setItem(IDENTITY_KEY, JSON.stringify(member));
+};
+
+// UserPicker — full screen name selector shown on first launch
+function UserPicker({ onSelect }) {
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",
+      display:"flex",alignItems:"center",justifyContent:"center",padding:32,
+      backgroundImage:"url(/icon-192.png)",backgroundRepeat:"no-repeat",
+      backgroundPosition:"center center",backgroundSize:"420px 420px",
+      backgroundBlendMode:"overlay"}}>
+      <div style={{width:"100%",maxWidth:340,textAlign:"center"}}>
+        <img src="/icon-192.png" alt="Homestead Electric"
+          style={{width:90,height:90,marginBottom:16,opacity:0.95,borderRadius:18,
+            boxShadow:"0 8px 32px rgba(0,0,0,0.4)"}}/>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,letterSpacing:"0.1em",
+          color:C.text,lineHeight:1,marginBottom:4}}>HOMESTEAD ELECTRIC</div>
+        <div style={{fontSize:12,color:C.dim,letterSpacing:"0.04em",marginBottom:32}}>
+          COMMAND CENTER
+        </div>
+        <div style={{fontSize:13,color:C.dim,marginBottom:16}}>Who are you?</div>
+        <div style={{display:"flex",flexDirection:"column",gap:10}}>
+          {ALL_MEMBERS.map(member=>(
+            <button key={member.name} onClick={()=>{ saveIdentity(member); onSelect(member); }}
+              style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,
+                padding:"14px 20px",fontSize:15,fontWeight:600,cursor:"pointer",
+                fontFamily:"inherit",color:C.text,textAlign:"left",
+                display:"flex",alignItems:"center",justifyContent:"space-between",
+                transition:"all 0.15s"}}
+              onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.background="#fffbeb";}}
+              onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.background=C.card;}}>
+              <span>{member.name}</span>
+              <span style={{fontSize:11,color:C.dim,fontWeight:400,background:C.surface,
+                border:`1px solid ${C.border}`,borderRadius:99,padding:"2px 10px"}}>
+                {member.role}
+              </span>
+            </button>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+// Legacy compat — keep AUTH_KEY so old sessions don't crash
 const AUTH_KEY = "he_auth";
-const getAuthSession = () => {
-  try {
-    const s = JSON.parse(localStorage.getItem(AUTH_KEY)||"{}");
-    const today = new Date().toDateString();
-    if(s.date !== today) return null; // expired — new day
-    return s; // { date, mode }
-  } catch { return null; }
-};
-const setAuthSession = (mode) => {
-  localStorage.setItem(AUTH_KEY, JSON.stringify({
-    date: new Date().toDateString(), mode
-  }));
-};
+const getAuthSession = () => null; // always null — replaced by identity system
+const setAuthSession = () => {};
 
 
 
@@ -5567,11 +5642,11 @@ const SEED_UPCOMING = [
   {id:"seed13", name:"#1809 - Tuhaye Hollow",                                          city:"Kamas",               sales:"Josh",   customer:"The Housley Group",        notes:"",                                                   lastFollowUp:"",         foreman:""},
 ];
 
-function UpcomingJobs({ upcoming, onChange, onPromote }) {
+function UpcomingJobs({ upcoming, onChange, onPromote, canManage=false }) {
   const [editingId, setEditingId] = useState(null);
-  const add = () => { const j=blankUpcoming(); onChange([j,...upcoming]); setEditingId(j.id); };
-  const upd = (id,patch) => onChange(upcoming.map(u=>u.id===id?{...u,...patch}:u));
-  const del = (id) => { onChange(upcoming.filter(u=>u.id!==id)); setEditingId(null); };
+  const add = () => { if(!canManage) return; const j=blankUpcoming(); onChange([j,...upcoming]); setEditingId(j.id); };
+  const upd = (id,patch) => { if(!canManage) return; onChange(upcoming.map(u=>u.id===id?{...u,...patch}:u)); };
+  const del = (id) => { if(!canManage) return; onChange(upcoming.filter(u=>u.id!==id)); setEditingId(null); };
   const COL = {
     name:{label:"Job Name",flex:2.5}, city:{label:"City",flex:1.2},
     sales:{label:"Sales",flex:1}, customer:{label:"Customer / GC",flex:1.5},
@@ -5586,7 +5661,7 @@ function UpcomingJobs({ upcoming, onChange, onPromote }) {
             <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>UPCOMING JOBS</div>
             <div style={{fontSize:11,color:C.dim,marginTop:3}}>{upcoming.length} job{upcoming.length!==1?"s":""} in pipeline</div>
           </div>
-          <button onClick={add} style={{background:C.accent,border:"none",borderRadius:9,color:"#000",fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Job</button>
+          {canManage&&<button onClick={add} style={{background:C.accent,border:"none",borderRadius:9,color:"#000",fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Job</button>}
         </div>
       </div>
       <div style={{padding:"16px 26px"}}>
@@ -6944,10 +7019,10 @@ function App() {
   const hoParam = new URLSearchParams(window.location.search).get("homeowner");
   if(hoParam) return <HomeownerPage jobId={hoParam}/>;
 
-  // ── Auth ──────────────────────────────────────────────────────
-  const [authMode,  setAuthMode]  = useState(()=>getAuthSession()?.mode||"locked");
-  const [pinInput,  setPinInput]  = useState("");
-  const [pinError,  setPinError]  = useState(false);
+  // ── Identity ──────────────────────────────────────────────────
+  const [identity, setIdentity] = useState(()=>getIdentity());
+  const authMode = identity ? "office" : "locked"; // compat for remaining authMode refs
+  const setAuthMode = () => {}; // no-op legacy compat
 
   // ── Settings (foremen + leads) ─────────────────────────────
   const [_foremen,        set_foremen]        = useState(DEFAULT_FOREMEN);
@@ -6982,23 +7057,7 @@ function App() {
     set_leads(leads); set_leadColors(leadColors);
   };
 
-  const submitPin = (pin) => {
-    if(pin === OFFICE_PIN) {
-      setAuthSession("office");
-      setAuthMode("office");
-      setPinInput("");
-      setPinError(false);
-    } else if(pin === CREW_PIN) {
-      setAuthSession("crew");
-      setAuthMode("crew");
-      setPinInput("");
-      setPinError(false);
-    } else {
-      setPinError(true);
-      setPinInput("");
-      setTimeout(()=>setPinError(false), 1200);
-    }
-  };
+  // submitPin removed — replaced by UserPicker identity system
 
   const [jobs,     setJobs]     = useState([]);
   const [upcoming, setUpcoming] = useState([]);
@@ -7584,15 +7643,17 @@ if(initialLoad.current) return;
 
             ))}
 
-            <button onClick={e=>{e.stopPropagation();deleteJob(job.id);}}
+            {can(identity,"job.delete")&&(
+              <button onClick={e=>{e.stopPropagation();deleteJob(job.id);}}
 
-              style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
 
-                fontSize:15,padding:"4px 8px",opacity:0.45,transition:"opacity 0.15s"}}
+                  fontSize:15,padding:"4px 8px",opacity:0.45,transition:"opacity 0.15s"}}
 
-              onMouseEnter={e=>e.currentTarget.style.opacity="1"}
+                onMouseEnter={e=>e.currentTarget.style.opacity="1"}
 
-              onMouseLeave={e=>e.currentTarget.style.opacity="0.45"}>🗑</button>
+                onMouseLeave={e=>e.currentTarget.style.opacity="0.45"}>🗑</button>
+            )}
 
           </div>
 
@@ -7605,237 +7666,12 @@ if(initialLoad.current) return;
 
 
 
-  // ── Lock screen ─────────────────────────────────────────────
-  if(authMode === "locked") {
-    return (
-      <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",
-        display:"flex",alignItems:"center",justifyContent:"center",padding:32,
-        backgroundImage:"url(/icon-192.png)",backgroundRepeat:"no-repeat",
-        backgroundPosition:"center center",backgroundSize:"420px 420px",
-        backgroundBlendMode:"overlay"}}>
-        <div style={{width:"100%",maxWidth:320,textAlign:"center"}}>
-          {/* Logo */}
-          <img src="/icon-192.png" alt="Homestead Electric"
-            style={{width:90,height:90,marginBottom:16,opacity:0.95,borderRadius:18,
-              boxShadow:"0 8px 32px rgba(0,0,0,0.4)"}}/>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,letterSpacing:"0.1em",
-            color:C.text,lineHeight:1,marginBottom:4}}>HOMESTEAD ELECTRIC</div>
-          <div style={{fontSize:12,color:C.dim,letterSpacing:"0.04em",marginBottom:36}}>
-            COMMAND CENTER
-          </div>
-          {/* PIN dots */}
-          <div style={{display:"flex",justifyContent:"center",gap:14,marginBottom:8}}>
-            {[0,1,2,3].map(i=>(
-              <div key={i} style={{width:13,height:13,borderRadius:"50%",
-                background:pinInput.length>i?(pinError?"#dc2626":C.accent):C.surface,
-                border:`2px solid ${pinInput.length>i?(pinError?"#dc2626":C.accent):C.border}`,
-                transition:"all 0.15s"}}/>
-            ))}
-          </div>
-          <div style={{height:22,marginBottom:20}}>
-            {pinError&&<div style={{fontSize:11,color:"#dc2626",fontWeight:700,letterSpacing:"0.06em"}}>INCORRECT PIN</div>}
-          </div>
-          {/* Numpad */}
-          <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8}}>
-            {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((k,idx)=>(
-              <button key={idx} onClick={()=>{
-                if(k==="⌫") { setPinInput(p=>p.slice(0,-1)); return; }
-                if(k==="") return;
-                const next = pinInput+k;
-                setPinInput(next);
-                if(next.length===4) submitPin(next);
-              }}
-              style={{padding:"18px 0",
-                fontSize:k==="⌫"?16:22,
-                fontWeight:k==="⌫"?400:300,
-                fontFamily:"'DM Sans',sans-serif",
-                background:k?"rgba(255,255,255,0.05)":"transparent",
-                border:k?"1px solid rgba(255,255,255,0.08)":"none",
-                borderRadius:14,cursor:k?"pointer":"default",
-                color:k?C.text:"transparent",
-                letterSpacing:k==="⌫"?"0":"0.05em",
-                transition:"background 0.1s"}}
-              onMouseEnter={e=>{if(k)e.currentTarget.style.background="rgba(255,255,255,0.1)";}}
-              onMouseLeave={e=>{if(k)e.currentTarget.style.background=k?"rgba(255,255,255,0.05)":"transparent";}}>
-                {k}
-              </button>
-            ))}
-          </div>
-        </div>
-      </div>
-    );
+  // ── Identity gate — show UserPicker if no identity saved ────
+  if(!identity) {
+    return <UserPicker onSelect={m => setIdentity(m)} />;
   }
 
-  // ── Crew mode — field access only ───────────────────────────
-  if(authMode === "crew") {
-    // Show all foremen sections, each grouped by lead — same as clicking crew access on each card
-    return (
-      <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text}}>
-        {/* Crew header */}
-        <div style={{background:C.card,borderBottom:`1px solid ${C.border}`,
-          padding:"14px 18px",position:"sticky",top:0,zIndex:90,
-          display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,
-            letterSpacing:"0.08em",color:C.text}}>CREW ACCESS</div>
-          <button onClick={()=>{setAuthSession("locked");setAuthMode("locked");}}
-            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
-              color:C.dim,fontSize:11,padding:"6px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
-            Lock
-          </button>
-        </div>
-        {/* Lead cards — full redesign */}
-        {(()=>{
-          const allJobs = jobs.filter(j=>!j.tempPed);
-          const allPeds = jobs.filter(j=>j.tempPed);
 
-          // Canonical lead list from module-level var (always current)
-          const settingsLeads = getLeadsList();
-          const normalize = (n) => (n||"").trim().toLowerCase();
-          const settingsMap = {};
-          settingsLeads.forEach(l=>{ settingsMap[normalize(l)]=l; });
-
-          // Assign canonical _leadKey to every job
-          const taggedJobs = allJobs.map(j=>{
-            const raw = j.lead||"";
-            const canon = settingsMap[normalize(raw)] || raw;
-            return {...j, _leadKey: canon};
-          });
-
-          // Build ordered lead list
-          const extraLeads = [...new Set(taggedJobs.map(j=>j._leadKey))]
-            .filter(l=>l && !settingsLeads.includes(l));
-          const allLeadKeys = [
-            ...settingsLeads.filter(l=>l!=="Jacob"),
-            ...extraLeads,
-            ...(taggedJobs.some(j=>j._leadKey==="Jacob")?["Jacob"]:[]),
-            ...(taggedJobs.some(j=>!j._leadKey)?[""]:[] ),
-          ];
-
-          return (
-            <div style={{padding:"16px 14px 80px"}}>
-              {/* Summary bar */}
-              <div style={{display:"flex",gap:8,marginBottom:16,overflowX:"auto",scrollbarWidth:"none",paddingBottom:2}}>
-                <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"8px 14px",flexShrink:0}}>
-                  <div style={{fontSize:11,color:C.dim,fontWeight:600}}>TOTAL JOBS</div>
-                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,color:C.text,lineHeight:1}}>{taggedJobs.length}</div>
-                </div>
-                {allLeadKeys.filter(l=>l).slice(0,6).map(lead=>{
-                  const lc = getLeadFC(lead);
-                  const ct = taggedJobs.filter(j=>j._leadKey===lead).length;
-                  if(!ct) return null;
-                  return (
-                    <div key={lead} style={{background:lc+"18",border:`1px solid ${lc}44`,borderRadius:10,padding:"8px 14px",flexShrink:0}}>
-                      <div style={{fontSize:11,color:lc,fontWeight:700}}>{lead.toUpperCase()}</div>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,color:lc,lineHeight:1}}>{ct}</div>
-                    </div>
-                  );
-                })}
-              </div>
-
-              {/* Lead cards — match foreman card style */}
-              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10,alignItems:"start"}}>
-                {allLeadKeys.map(lead=>{
-                  const lc = getLeadFC(lead);
-                  const lJobs = taggedJobs.filter(j=>j._leadKey===lead);
-                  if(lJobs.length===0) return null;
-                  const lCOs = lJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length,0);
-                  const lRTs = lJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
-                  return (
-                    <div key={lead||"__none"} className="foreman-card"
-                      style={{background:C.card,border:`1px solid ${lc}33`,borderRadius:12,
-                        padding:"14px 16px",borderTop:`3px solid ${lc}`,cursor:"default"}}>
-                      {/* Name + count */}
-                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,
-                          letterSpacing:"0.06em",color:lc,lineHeight:1}}>{lead||"No Lead"}</div>
-                        <div style={{background:`${lc}18`,border:`1px solid ${lc}33`,borderRadius:99,
-                          padding:"2px 9px",fontSize:10,color:lc,fontWeight:700}}>
-                          {lJobs.length}
-                        </div>
-                      </div>
-                      {/* Stats */}
-                      <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
-                        {[[lCOs,"COs",lCOs>0?C.blue:C.muted],[lRTs,"RTs",lRTs>0?"#dc2626":C.muted]].map(([v,l,col])=>(
-                          <div key={l} style={{background:C.surface,borderRadius:7,padding:"5px 8px",flex:1,minWidth:44}}>
-                            <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:col,lineHeight:1}}>{v}</div>
-                            <div style={{fontSize:9,color:C.dim,marginTop:1}}>{l}</div>
-                          </div>
-                        ))}
-                      </div>
-                      {/* Job list */}
-                      <div style={{display:"flex",flexDirection:"column",gap:2}}>
-                        {lJobs.map(job=>{
-                          const rs=effRS(job); const fs=effFS(job);
-                          const rsDef=getStatusDef(ROUGH_STATUSES,rs);
-                          const fsDef=getStatusDef(FINISH_STATUSES,fs);
-                          const dot=(rsDef.color&&rs)?rsDef.color:(fsDef.color&&fs)?fsDef.color:C.dim;
-                          const hasAlert=(job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
-                          return (
-                            <div key={job.id} onClick={()=>setSelected(job)}
-                              style={{display:"flex",alignItems:"center",gap:7,padding:"5px 7px",
-                                borderRadius:8,cursor:"pointer",
-                                background:hasAlert?"rgba(220,38,38,0.08)":"transparent",
-                                border:hasAlert?"1px solid rgba(220,38,38,0.2)":"1px solid transparent"}}
-                              onMouseEnter={e=>e.currentTarget.style.background=lc+"18"}
-                              onMouseLeave={e=>e.currentTarget.style.background=hasAlert?"rgba(220,38,38,0.08)":"transparent"}>
-                              <div style={{width:7,height:7,borderRadius:"50%",background:dot,flexShrink:0}}/>
-                              <span style={{fontSize:12,fontWeight:600,color:C.text,flex:1,
-                                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                                {job.name||"Untitled"}
-                              </span>
-                              {hasAlert&&<span style={{fontSize:9,color:"#dc2626",fontWeight:800,flexShrink:0}}>RT!</span>}
-                            </div>
-                          );
-                        })}
-                      </div>
-                    </div>
-                  );
-                })}
-
-                {/* Temp peds */}
-                {allPeds.length>0&&(
-                  <div style={{background:C.card,borderRadius:14,overflow:"hidden",
-                    border:"1px solid #8b5cf633",borderLeft:"4px solid #8b5cf6"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px",
-                      background:"#8b5cf610",borderBottom:"1px solid #8b5cf622"}}>
-                      <div style={{width:10,height:10,borderRadius:"50%",background:"#8b5cf6",flexShrink:0}}/>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,
-                        letterSpacing:"0.06em",color:"#8b5cf6",flex:1}}>TEMP PEDS</div>
-                      <div style={{background:"#8b5cf6",borderRadius:99,padding:"3px 10px",
-                        fontSize:12,color:"#fff",fontWeight:800}}>{allPeds.length}</div>
-                    </div>
-                    <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:1,padding:"4px"}}>
-                      {allPeds.map(job=>(
-                        <div key={job.id} onClick={()=>setSelected(job)}
-                          style={{display:"flex",alignItems:"center",gap:7,padding:"10px 12px",
-                            borderRadius:10,cursor:"pointer"}}
-                          onMouseEnter={e=>e.currentTarget.style.background="#8b5cf615"}
-                          onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                          <div style={{width:8,height:8,borderRadius:"50%",background:"#8b5cf6",flexShrink:0}}/>
-                          <span style={{fontSize:13,fontWeight:700,color:C.text,flex:1,
-                            overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                            {job.name||"Untitled"}{job.tempPedNumber?" #"+job.tempPedNumber:""}
-                          </span>
-                          <span style={{fontSize:10,color:"#8b5cf6",fontWeight:600}}>
-                            {job.tempPedStatus||"ready"}
-                          </span>
-                        </div>
-                      ))}
-                    </div>
-                  </div>
-                )}
-              </div>
-            </div>
-          );
-        })()}
-        {selected&&(
-          selected.tempPed
-            ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>
-            : <JobDetail key={selected.id} job={selected} allJobs={jobs} onUpdate={updateJob} onDelete={deleteJob} onClose={()=>setSelected(null)} manualTasks={manualTasks} onSaveManualTask={saveManualTask} onDeleteManualTask={deleteManualTask}/>
-        )}
-      </div>
-    );
-  }
 
   return (
 
@@ -7851,7 +7687,7 @@ if(initialLoad.current) return;
 
       {/* ── TOP NAV BAR ── */}
       <div style={{display:"flex",gap:6,padding:"8px 10px",borderBottom:`1px solid ${C.border}`,background:C.card,position:"sticky",top:0,zIndex:90,overflowX:"auto",scrollbarWidth:"none",alignItems:"center"}}>
-        {[{key:"home",label:"Job Board"},{key:"schedule",label:"Forecast"},{key:"upcoming",label:"Upcoming"},{key:"tasks",label:"Tasks"},...(authMode==="office"?[{key:"settings",label:"⚙ Settings"}]:[])].map(({key,label})=>{
+        {[{key:"home",label:"Job Board"},{key:"schedule",label:"Forecast"},{key:"upcoming",label:"Upcoming"},{key:"tasks",label:"Tasks"},...(can(identity,"settings.view")?[{key:"settings",label:"⚙ Settings"}]:[])].map(({key,label})=>{
           const active = view===key;
           return (
             <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="tasks"?openTasks:openSettings}
@@ -7867,6 +7703,18 @@ if(initialLoad.current) return;
             </button>
           );
         })}
+        <div style={{marginLeft:"auto",flexShrink:0,display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:11,color:C.dim,background:C.surface,border:`1px solid ${C.border}`,
+            borderRadius:99,padding:"4px 12px",whiteSpace:"nowrap"}}>
+            {identity.name}
+          </span>
+          <button onClick={()=>{localStorage.removeItem("he_identity");setIdentity(null);}}
+            style={{fontSize:11,color:C.dim,background:"none",border:`1px solid ${C.border}`,
+              borderRadius:99,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}
+            title="Switch user">
+            ↩ Switch
+          </button>
+        </div>
       </div>
 
       {/* iOS Chrome banner */}
@@ -7957,7 +7805,7 @@ if(initialLoad.current) return;
               {/* Action buttons */}
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
 
-                <button onClick={()=>{setAuthSession("locked");setAuthMode("locked");}}
+                <button onClick={()=>{localStorage.removeItem("he_identity");setIdentity(null);}}
                   style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
                     color:C.dim,fontSize:11,fontWeight:600,padding:"6px 12px",cursor:"pointer",
                     fontFamily:"inherit"}}>
@@ -8522,11 +8370,11 @@ if(initialLoad.current) return;
         ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>
         : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>)}
 
-      {view==="schedule"&&(
-        <SchedulingForecast jobs={jobs} onSelectJob={(job)=>setSelected(job)}/>
+      {view==="schedule"&&can(identity,"schedule.view")&&(
+        <SchedulingForecast jobs={jobs} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)}/>
       )}
 
-      {view==="tasks"&&(
+      {view==="tasks"&&can(identity,"tasks.view")&&(
         <Tasks
           jobs={jobs}
           manualTasks={manualTasks}
@@ -8540,9 +8388,10 @@ if(initialLoad.current) return;
         />
       )}
 
-      {view==="upcoming"&&(
+      {view==="upcoming"&&can(identity,"pipeline.view")&&(
         <UpcomingJobs
           upcoming={upcoming}
+          canManage={can(identity,"pipeline.manage")}
           onChange={(next)=>{
             next.forEach(item=>{
               const prev=upcoming.find(u=>u.id===item.id);
@@ -8560,7 +8409,7 @@ if(initialLoad.current) return;
         />
       )}
 
-      {view==="settings"&&authMode==="office"&&(
+      {view==="settings"&&can(identity,"settings.view")&&(
         <SettingsPage
           COLOR_OPTIONS={COLOR_OPTIONS}
           onSave={saveSettings}
