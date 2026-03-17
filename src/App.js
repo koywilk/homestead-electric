@@ -6107,10 +6107,11 @@ function SchedulingForecast({ jobs, onSelectJob }) {
   const nextWeekStart=new Date(thisWeekStart); nextWeekStart.setDate(thisWeekStart.getDate()+7);
   const twoWeeksStart=new Date(thisWeekStart); twoWeeksStart.setDate(thisWeekStart.getDate()+14);
 
-  const getBucket=(dateStr)=>{
+  const getBucket=(dateStr,status)=>{
     const d=parseDate(dateStr); if(!d) return "nodate";
     const c=new Date(d); c.setHours(0,0,0,0);
-    if(c<thisWeekStart) return "overdue";
+    // In-progress jobs are never overdue — they're actively happening
+    if(c<thisWeekStart && status!=="inprogress") return "overdue";
     if(c<nextWeekStart) return "thisWeek";
     if(c<twoWeeksStart) return "nextWeek";
     return "later";
@@ -6137,7 +6138,9 @@ function SchedulingForecast({ jobs, onSelectJob }) {
     openCOs.forEach(c=>{ const d=parseDate(c.coStatusDate); if(d) dates.push(d); });
     dates.sort((a,b)=>a-b);
     const bestDate=dates.length?dates[0].toISOString().split("T")[0]:"";
-    const bucket=getBucket(bestDate);
+    // Pass the most relevant status so inprogress jobs aren't marked overdue
+    const activeStatus = rs==="inprogress"||fs==="inprogress" ? "inprogress" : rs||fs||"";
+    const bucket=getBucket(bestDate, activeStatus);
 
     return {job,rs,fs,rsDef,fsDef,openCOs,openRTs,qcPending,bestDate,bucket};
   });
@@ -6620,18 +6623,17 @@ function App() {
 
           const loaded = migrate(snap.docs.map(d=>d.data().data).filter(Boolean));
 
-          // One-time fix: clear tempPed:true from any full jobs that were accidentally flagged
-          // tempPed:true is only valid for dedicated temp ped job cards (created via + Temp Ped)
-          // Full jobs use hasTempPed instead
-          const TEMPPED_FIX_KEY = "heTempPedFixed_v1";
+          // One-time fix v2: clear tempPed:true from any job that has a foreman assigned
+          // Real temp peds never have a foreman — they're standalone cards
+          const TEMPPED_FIX_KEY = "heTempPedFixed_v3";
           if(!localStorage.getItem(TEMPPED_FIX_KEY)) {
-            const toFix = loaded.filter(j => j.tempPed === true);
+            const toFix = loaded.filter(j => j.tempPed === true && j.foreman && j.foreman !== "");
             if(toFix.length > 0) {
               toFix.forEach(job => {
                 const fixed = {...job, tempPed:false, hasTempPed: job.hasTempPed||false};
                 setDoc(doc(db,"jobs",job.id),{data:sanitize(fixed),updated_at:new Date().toISOString()}).catch(()=>{});
               });
-              console.log(`[HE] Cleared tempPed flag from ${toFix.length} full job(s)`);
+              console.log(`[HE] v3: Cleared tempPed flag from ${toFix.length} job(s) with foreman assigned`);
             }
             localStorage.setItem(TEMPPED_FIX_KEY,"1");
           }
@@ -7279,73 +7281,58 @@ if(initialLoad.current) return;
                 })}
               </div>
 
-              {/* Lead sections — full width rows */}
-              <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {/* Lead cards — match foreman card style */}
+              <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10,alignItems:"start"}}>
                 {allLeadKeys.map(lead=>{
                   const lc = getLeadFC(lead);
                   const lJobs = taggedJobs.filter(j=>j._leadKey===lead);
                   if(lJobs.length===0) return null;
                   const lCOs = lJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
                   const lRTs = lJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
-                  const lAlerts = lJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
                   return (
-                    <div key={lead||"__none"}
-                      style={{background:C.card,borderRadius:14,overflow:"hidden",
-                        border:`1px solid ${lc}33`,borderLeft:`4px solid ${lc}`}}>
-                      {/* Header row */}
-                      <div style={{display:"flex",alignItems:"center",gap:10,padding:"12px 16px",
-                        background:`${lc}10`,borderBottom:`1px solid ${lc}22`}}>
-                        <div style={{width:10,height:10,borderRadius:"50%",background:lc,flexShrink:0}}/>
-                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,
-                          letterSpacing:"0.06em",color:lc,lineHeight:1,flex:1}}>
-                          {lead||"No Lead"}
-                        </div>
-                        <div style={{display:"flex",alignItems:"center",gap:6}}>
-                          {lRTs>0&&<span style={{fontSize:10,fontWeight:700,color:"#dc2626",
-                            background:"#dc262618",borderRadius:99,padding:"2px 8px",
-                            border:"1px solid #dc262633"}}>⚠ {lRTs} RT{lRTs>1?"s":""}</span>}
-                          {lCOs>0&&<span style={{fontSize:10,fontWeight:700,color:C.accent,
-                            background:C.accent+"18",borderRadius:99,padding:"2px 8px",
-                            border:`1px solid ${C.accent}33`}}>{lCOs} CO{lCOs>1?"s":""}</span>}
-                          <div style={{background:lc,borderRadius:99,
-                            padding:"3px 10px",fontSize:12,color:"#000",fontWeight:800}}>
-                            {lJobs.length}
-                          </div>
+                    <div key={lead||"__none"} className="foreman-card"
+                      style={{background:C.card,border:`1px solid ${lc}33`,borderRadius:12,
+                        padding:"14px 16px",borderTop:`3px solid ${lc}`,cursor:"default"}}>
+                      {/* Name + count */}
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,
+                          letterSpacing:"0.06em",color:lc,lineHeight:1}}>{lead||"No Lead"}</div>
+                        <div style={{background:`${lc}18`,border:`1px solid ${lc}33`,borderRadius:99,
+                          padding:"2px 9px",fontSize:10,color:lc,fontWeight:700}}>
+                          {lJobs.length}
                         </div>
                       </div>
-                      {/* Job grid */}
-                      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:1,padding:"4px"}}>
+                      {/* Stats */}
+                      <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
+                        {[[lCOs,"COs",lCOs>0?C.blue:C.muted],[lRTs,"RTs",lRTs>0?"#dc2626":C.muted]].map(([v,l,col])=>(
+                          <div key={l} style={{background:C.surface,borderRadius:7,padding:"5px 8px",flex:1,minWidth:44}}>
+                            <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:col,lineHeight:1}}>{v}</div>
+                            <div style={{fontSize:9,color:C.dim,marginTop:1}}>{l}</div>
+                          </div>
+                        ))}
+                      </div>
+                      {/* Job list */}
+                      <div style={{display:"flex",flexDirection:"column",gap:2}}>
                         {lJobs.map(job=>{
                           const rs=effRS(job); const fs=effFS(job);
                           const rsDef=getStatusDef(ROUGH_STATUSES,rs);
                           const fsDef=getStatusDef(FINISH_STATUSES,fs);
-                          const statusColor=(rsDef.color&&rs)?rsDef.color:(fsDef.color&&fs)?fsDef.color:C.dim;
-                          const statusLabel=(rs&&rs!=="complete")?rsDef.label:(fs&&fs!=="complete")?fsDef.label:"";
+                          const dot=(rsDef.color&&rs)?rsDef.color:(fsDef.color&&fs)?fsDef.color:C.dim;
                           const hasAlert=(job.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date));
-                          const hasCO=(job.changeOrders||[]).some(c=>c.status!=="Work Completed"&&c.status!=="Denied");
                           return (
                             <div key={job.id} onClick={()=>setSelected(job)}
-                              style={{display:"flex",flexDirection:"column",gap:3,
-                                padding:"10px 12px",borderRadius:10,cursor:"pointer",
-                                background:hasAlert?"rgba(220,38,38,0.07)":"transparent",
-                                border:hasAlert?"1px solid rgba(220,38,38,0.15)":"1px solid transparent",
-                                transition:"background 0.1s"}}
-                              onMouseEnter={e=>e.currentTarget.style.background=lc+"15"}
-                              onMouseLeave={e=>e.currentTarget.style.background=hasAlert?"rgba(220,38,38,0.07)":"transparent"}>
-                              <div style={{display:"flex",alignItems:"center",gap:6}}>
-                                <div style={{width:8,height:8,borderRadius:"50%",background:statusColor,flexShrink:0}}/>
-                                <span style={{fontSize:13,fontWeight:700,color:C.text,flex:1,
-                                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                                  {job.name||"Untitled"}
-                                </span>
-                                {hasAlert&&<span style={{fontSize:10,color:"#dc2626",fontWeight:800,flexShrink:0}}>RT!</span>}
-                                {hasCO&&!hasAlert&&<span style={{fontSize:10,color:C.accent,fontWeight:700,flexShrink:0}}>CO</span>}
-                              </div>
-                              {statusLabel&&<div style={{fontSize:10,color:statusColor,fontWeight:600,
-                                paddingLeft:14,opacity:0.85,
+                              style={{display:"flex",alignItems:"center",gap:7,padding:"5px 7px",
+                                borderRadius:8,cursor:"pointer",
+                                background:hasAlert?"rgba(220,38,38,0.08)":"transparent",
+                                border:hasAlert?"1px solid rgba(220,38,38,0.2)":"1px solid transparent"}}
+                              onMouseEnter={e=>e.currentTarget.style.background=lc+"18"}
+                              onMouseLeave={e=>e.currentTarget.style.background=hasAlert?"rgba(220,38,38,0.08)":"transparent"}>
+                              <div style={{width:7,height:7,borderRadius:"50%",background:dot,flexShrink:0}}/>
+                              <span style={{fontSize:12,fontWeight:600,color:C.text,flex:1,
                                 overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                                {statusLabel}
-                              </div>}
+                                {job.name||"Untitled"}
+                              </span>
+                              {hasAlert&&<span style={{fontSize:9,color:"#dc2626",fontWeight:800,flexShrink:0}}>RT!</span>}
                             </div>
                           );
                         })}
