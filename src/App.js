@@ -3172,6 +3172,248 @@ const normalizeJob = (raw) => ({
   qcStatusDate:         raw?.qcStatusDate         || "",
 });
 
+
+// ── Temp Ped Detail ────────────────────────────────────────────
+function TempPedDetail({ job: rawJob, onUpdate, onClose }) {
+  const [job, setJob] = useState(()=>normalizeJob(rawJob));
+  const jobRef = useRef(job);
+  useEffect(()=>{ jobRef.current = job; }, [job]);
+  useEffect(()=>{ setJob(normalizeJob(rawJob)); }, [rawJob?.id]);
+
+  const u = patch => {
+    const updated = {...jobRef.current, ...patch};
+    jobRef.current = updated;
+    setJob(updated);
+    onUpdate(updated);
+  };
+
+  const [signOffName, setSignOffName] = useState("");
+  const [viewPhoto, setViewPhoto] = useState(null);
+
+  const tpDef   = getStatusDef(TEMP_PED_STATUSES, job.tempPedStatus||"");
+  const color   = tpDef.color || "#8b5cf6";
+  const foreman = job.foreman||"Koy";
+  const fc      = FOREMEN_COLORS[foreman]||"#6b7280";
+
+  // Photo handling
+  const addPhotos = (files) => {
+    const arr = Array.from(files);
+    let done = 0; const newPhotos = [];
+    arr.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = ev => {
+        newPhotos.push({id:uid(), name:file.name, dataUrl:ev.target.result});
+        done++;
+        if(done===arr.length) u({tempPedPhotos:[...(job.tempPedPhotos||[]),...newPhotos]});
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleSignOff = () => {
+    if(!signOffName.trim()) return;
+    u({
+      tempPedStatus:"completed",
+      tempPedSignedOff:true,
+      tempPedSignedOffBy:signOffName.trim(),
+      tempPedSignedOffDate:new Date().toLocaleDateString("en-US"),
+      readyToInvoice:true,
+    });
+    setSignOffName("");
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.82)",zIndex:400,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:12}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+
+      <div onClick={e=>e.stopPropagation()} style={{
+        background:C.card,border:`1px solid ${C.border}`,borderRadius:18,
+        width:"100%",maxWidth:620,maxHeight:"93vh",display:"flex",
+        flexDirection:"column",overflow:"hidden",boxShadow:"0 40px 100px rgba(0,0,0,0.7)"
+      }}>
+
+        {/* Header */}
+        <div style={{padding:"16px 22px",borderBottom:`1px solid ${C.border}`,
+          display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0,gap:12}}>
+          <div>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+              <span style={{fontSize:10,fontWeight:800,color:"#8b5cf6",letterSpacing:"0.08em",
+                background:"#8b5cf618",borderRadius:99,padding:"2px 8px",border:"1px solid #8b5cf633"}}>
+                TEMP PED {job.tempPedNumber?"#"+job.tempPedNumber:""}
+              </span>
+              {job.tempPedStatus==="completed"&&(
+                <span style={{fontSize:10,fontWeight:800,color:C.green,background:`${C.green}18`,
+                  borderRadius:99,padding:"2px 8px",border:`1px solid ${C.green}33`}}>COMPLETE</span>
+              )}
+              {job.readyToInvoice&&(
+                <span style={{fontSize:10,fontWeight:800,color:"#ea580c",background:"#ea580c12",
+                  borderRadius:99,padding:"2px 8px",border:"1px solid #ea580c33"}}>READY TO INVOICE</span>
+              )}
+            </div>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",
+              color:C.text,lineHeight:1}}>{job.name||"New Temp Ped"}</div>
+            <div style={{fontSize:11,color:C.dim,marginTop:2}}>
+              {[job.address,job.gc].filter(Boolean).join(" · ")||"No details yet"}
+            </div>
+          </div>
+          <button onClick={onClose}
+            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+              color:C.dim,cursor:"pointer",padding:"5px 14px",fontSize:13,flexShrink:0}}>✕</button>
+        </div>
+
+        {/* Status bar */}
+        <div style={{padding:"10px 22px",borderBottom:`1px solid ${C.border}`,
+          background:C.surface,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",flexShrink:0}}>
+          <span style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.08em"}}>STATUS</span>
+          {TEMP_PED_STATUSES.filter(s=>s.value).map(s=>{
+            const active = job.tempPedStatus===s.value;
+            return (
+              <button key={s.value} onClick={()=>{
+                  const patch = {tempPedStatus:s.value};
+                  if(s.value==="completed") { patch.readyToInvoice=true; }
+                  if(s.value!=="scheduled") patch.tempPedScheduledDate="";
+                  u(patch);
+                }}
+                style={{
+                  padding:"5px 14px",fontSize:11,fontWeight:active?700:500,
+                  borderRadius:99,border:`1px solid ${active?s.color:C.border}`,
+                  background:active?`${s.color}22`:"none",
+                  color:active?s.color:C.dim,cursor:"pointer",fontFamily:"inherit",
+                  transition:"all 0.15s",
+                }}>
+                {s.label}
+              </button>
+            );
+          })}
+          {job.tempPedStatus==="scheduled"&&(
+            <input value={job.tempPedScheduledDate||""} onChange={e=>u({tempPedScheduledDate:e.target.value})}
+              placeholder="Scheduled date" style={{fontSize:11,padding:"4px 10px",
+                borderRadius:7,border:`1px solid #2563eb55`,background:"#2563eb08",
+                color:C.text,fontFamily:"inherit",outline:"none",width:110}}/>
+          )}
+        </div>
+
+        {/* Body */}
+        <div style={{flex:1,overflowY:"auto",padding:"20px 22px"}}>
+
+          {/* Job Info */}
+          <div style={{marginBottom:24}}>
+            <div style={{fontSize:10,fontWeight:800,color:C.dim,letterSpacing:"0.12em",marginBottom:12}}>JOB INFO</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              {[["name","Job Name"],["address","Address"],["gc","General Contractor"],["phone","GC Phone"],["simproNo","Simpro Job #"]].map(([k,l])=>(
+                <div key={k}>
+                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>{l}</div>
+                  <Inp value={job[k]||""} onChange={e=>u({[k]:e.target.value})} placeholder={l}/>
+                </div>
+              ))}
+              <div>
+                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
+                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...FOREMEN,"Unassigned"]}/>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Temp Ped #</div>
+                <select value={job.tempPedNumber||""} onChange={e=>u({tempPedNumber:e.target.value})}
+                  style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
+                    color:job.tempPedNumber?C.text:C.dim,padding:"8px 10px",fontSize:13,
+                    fontFamily:"inherit",outline:"none",cursor:"pointer"}}>
+                  <option value="">Select #</option>
+                  {["1","2","3","4","5","6","7","8","9","10"].map(n=><option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{marginTop:10}}>
+              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes</div>
+              <textarea value={job.notes||""} onChange={e=>u({notes:e.target.value})}
+                placeholder="Job notes…" rows={4}
+                style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,padding:"8px 10px",fontSize:12,
+                  fontFamily:"inherit",resize:"vertical",outline:"none",lineHeight:1.5}}/>
+            </div>
+          </div>
+
+          {/* Photos */}
+          <div style={{marginBottom:24}}>
+            <div style={{fontSize:10,fontWeight:800,color:C.dim,letterSpacing:"0.12em",marginBottom:12}}>PHOTOS</div>
+            {(job.tempPedPhotos||[]).length>0&&(
+              <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:10}}>
+                {(job.tempPedPhotos||[]).map(p=>(
+                  <div key={p.id} style={{position:"relative",width:80,height:80}}>
+                    <img src={p.dataUrl} alt={p.name} onClick={()=>setViewPhoto(p.dataUrl)}
+                      style={{width:80,height:80,objectFit:"cover",borderRadius:8,cursor:"pointer",
+                        border:`1px solid ${C.border}`}}/>
+                    <button onClick={()=>u({tempPedPhotos:(job.tempPedPhotos||[]).filter(x=>x.id!==p.id)})}
+                      style={{position:"absolute",top:-5,right:-5,background:"#dc2626",border:"none",
+                        borderRadius:"50%",color:"#fff",width:18,height:18,fontSize:10,
+                        cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
+                        lineHeight:1}}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <label style={{display:"inline-flex",alignItems:"center",gap:6,
+              background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
+              padding:"7px 14px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim}}>
+              + Add Photos
+              <input type="file" accept="image/*" multiple style={{display:"none"}}
+                onChange={e=>{addPhotos(e.target.files);e.target.value="";}}/>
+            </label>
+          </div>
+
+          {/* Sign-off / Complete */}
+          <div style={{borderTop:`2px solid ${C.border}`,paddingTop:20}}>
+            <div style={{fontSize:10,fontWeight:800,color:C.dim,letterSpacing:"0.12em",marginBottom:12}}>
+              SIGN-OFF & COMPLETE
+            </div>
+            {job.tempPedSignedOff ? (
+              <div style={{background:`${C.green}12`,border:`1px solid ${C.green}33`,
+                borderRadius:10,padding:"12px 16px",display:"flex",alignItems:"center",
+                justifyContent:"space-between",gap:10}}>
+                <div>
+                  <div style={{fontSize:12,fontWeight:700,color:C.green}}>Completed & Signed Off</div>
+                  <div style={{fontSize:11,color:C.dim,marginTop:2}}>
+                    By {job.tempPedSignedOffBy} · {job.tempPedSignedOffDate}
+                  </div>
+                </div>
+                <button onClick={()=>u({tempPedSignedOff:false,tempPedSignedOffBy:"",
+                  tempPedSignedOffDate:"",tempPedStatus:"scheduled",readyToInvoice:false})}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,
+                    color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>
+                  Undo
+                </button>
+              </div>
+            ) : (
+              <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                <Inp value={signOffName} onChange={e=>setSignOffName(e.target.value)}
+                  placeholder="Completed by…"
+                  style={{flex:"1 1 180px",minWidth:140}}/>
+                <button onClick={handleSignOff} disabled={!signOffName.trim()}
+                  style={{background:signOffName.trim()?C.green:"#374151",border:"none",
+                    borderRadius:8,color:signOffName.trim()?"#000":C.dim,fontSize:12,
+                    fontWeight:700,padding:"9px 20px",cursor:signOffName.trim()?"pointer":"default",
+                    fontFamily:"inherit",transition:"all 0.2s",whiteSpace:"nowrap"}}>
+                  Mark Complete
+                </button>
+              </div>
+            )}
+          </div>
+
+        </div>
+      </div>
+
+      {/* Photo lightbox */}
+      {viewPhoto&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.95)",zIndex:1000,
+          display:"flex",alignItems:"center",justifyContent:"center"}}
+          onClick={()=>setViewPhoto(null)}>
+          <img src={viewPhoto} alt="photo"
+            style={{maxWidth:"95vw",maxHeight:"95vh",objectFit:"contain",borderRadius:8}}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function JobDetail({job: rawJob, onUpdate, onClose}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
@@ -7469,7 +7711,9 @@ if(initialLoad.current) return;
 
 
 
-      {selected&&<JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>}
+      {selected&&(selected.tempPed
+        ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>
+        : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>)}
 
       {view==="schedule"&&(
         <SchedulingForecast jobs={jobs} onSelectJob={(job)=>setSelected(job)}/>
