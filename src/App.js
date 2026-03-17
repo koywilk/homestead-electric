@@ -649,9 +649,28 @@ const Inp = ({value,onChange,placeholder,style={}}) => (
     onFocus={e=>e.target.style.borderColor=C.accent}
 
     onBlur={e=>e.target.style.borderColor=C.border}/>
-
 );
 
+// Convert any date string (MM/DD/YY, MM/DD/YYYY) to YYYY-MM-DD for type="date" inputs
+const toYMD = (str) => {
+  if(!str) return "";
+  if(/^\d{4}-\d{2}-\d{2}$/.test(str)) return str; // already YYYY-MM-DD
+  const m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if(!m) return "";
+  let [,mo,dy,yr] = m;
+  if(yr.length===2) yr="20"+yr;
+  return `${yr}-${mo.padStart(2,"0")}-${dy.padStart(2,"0")}`;
+};
+
+// DateInp — always a calendar date picker, same styling as Inp
+const DateInp = ({value,onChange,style={}}) => (
+  <input type="date" value={toYMD(value)} onChange={onChange}
+    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+      padding:"6px 10px",fontSize:12,fontFamily:"inherit",width:"100%",outline:"none",
+      colorScheme:"dark",...style}}
+    onFocus={e=>e.target.style.borderColor=C.accent}
+    onBlur={e=>e.target.style.borderColor=C.border}/>
+);
 
 
 const Sel = ({value,onChange,options,style={}}) => (
@@ -1323,9 +1342,9 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
         <div>
 
-          <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date</div>
+          <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date of Update</div>
 
-          <Inp value={d.date} onChange={e=>setD(p=>({...p,date:e.target.value}))} placeholder="MM/DD/YY"/>
+          <DateInp value={d.date} onChange={e=>setD(p=>({...p,date:e.target.value}))}/>
 
         </div>
 
@@ -1490,9 +1509,11 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
                     {CO_STATUSES_NEW.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                   </select>
                   {coDef.hasDate&&(
-                    <Inp value={o.coStatusDate||""} onChange={e=>upd(o.id,{coStatusDate:e.target.value})}
-                      placeholder="Date MM/DD/YY"
-                      style={{width:120,fontSize:11,borderColor:coDef.color+"55",background:`${coDef.color}08`}}/>
+                    <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                      <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:coDef.color}}>SCHEDULED DATE</div>
+                      <DateInp value={o.coStatusDate||""} onChange={e=>upd(o.id,{coStatusDate:e.target.value})}
+                        style={{width:140,fontSize:11,borderColor:coDef.color+"55",background:`${coDef.color}08`}}/>
+                    </div>
                   )}
                 </div>
 
@@ -1732,9 +1753,11 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
                           {RT_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>
                         {rtDef.hasDate&&(
-                          <Inp value={t.rtStatusDate||""} onChange={e=>upd(t.id,{rtStatusDate:e.target.value})}
-                            placeholder="Date MM/DD/YY"
-                            style={{width:120,fontSize:11,borderColor:rtDef.color+"55",background:`${rtDef.color}08`}}/>
+                          <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:rtDef.color}}>SCHEDULED DATE</div>
+                            <DateInp value={t.rtStatusDate||""} onChange={e=>upd(t.id,{rtStatusDate:e.target.value})}
+                              style={{width:140,fontSize:11,borderColor:rtDef.color+"55",background:`${rtDef.color}08`}}/>
+                          </div>
                         )}
                       </div>
                       {t.rtStatus&&t.rtStatus!=="complete"&&(
@@ -1911,11 +1934,11 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
 
                 <div>
 
-                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date</div>
+                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Signed Off</div>
 
-                  <Inp value={t.signedOffDate||""} onChange={e=>upd(t.id,{signedOffDate:e.target.value})}
+                  <DateInp value={t.signedOffDate||""} onChange={e=>upd(t.id,{signedOffDate:e.target.value})}
 
-                    placeholder="MM/DD/YY"/>
+                    style={{width:130}}/>
 
                 </div>
 
@@ -3346,10 +3369,12 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose }) {
             );
           })}
           {job.tempPedStatus==="scheduled"&&(
-            <input value={job.tempPedScheduledDate||""} onChange={e=>u({tempPedScheduledDate:e.target.value})}
-              placeholder="Scheduled date" style={{fontSize:11,padding:"4px 10px",
-                borderRadius:7,border:`1px solid #2563eb55`,background:"#2563eb08",
-                color:C.text,fontFamily:"inherit",outline:"none",width:110}}/>
+            <div style={{display:"flex",flexDirection:"column",gap:2}}>
+              <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:"#2563eb"}}>SCHEDULED DATE</div>
+              <DateInp value={job.tempPedScheduledDate||""} onChange={e=>u({tempPedScheduledDate:e.target.value})}
+                style={{fontSize:11,padding:"4px 10px",width:140,
+                  borderColor:"#2563eb55",background:"#2563eb08"}}/>
+            </div>
           )}
         </div>
 
@@ -3682,8 +3707,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                               {job.roughStartConfirmed ? "✓ CONFIRMED" : "○ CONFIRM"}
                             </button>
                           </div>
-                          <Inp value={job.roughProjectedStart||""} onChange={e=>u({roughProjectedStart:e.target.value})}
-                            placeholder="MM/DD/YY"
+                          <DateInp value={job.roughProjectedStart||""} onChange={e=>u({roughProjectedStart:e.target.value})}
                             style={{fontSize:13,fontWeight:700,
                               borderColor:(job.roughStartConfirmed?"#16a34a":C.rough)+"55",
                               background:job.roughStartConfirmed?"#16a34a08":`${C.rough}08`,
@@ -3710,9 +3734,8 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                         {rsDef.hasDate&&job.roughStatus!=="date_confirmed"&&(
                           <div style={{display:"flex",flexDirection:"column",gap:3}}>
                             <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:rsDef.color}}>SCHEDULED DATE</div>
-                            <Inp value={job.roughStatusDate||""} onChange={e=>u({roughStatusDate:e.target.value})}
-                              placeholder="MM/DD/YY"
-                              style={{width:120,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
+                            <DateInp value={job.roughStatusDate||""} onChange={e=>u({roughStatusDate:e.target.value})}
+                              style={{width:130,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
                           </div>
                         )}
                       </div>
@@ -3826,8 +3849,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                               {job.finishStartConfirmed ? "✓ CONFIRMED" : "○ CONFIRM"}
                             </button>
                           </div>
-                          <Inp value={job.finishProjectedStart||""} onChange={e=>u({finishProjectedStart:e.target.value})}
-                            placeholder="MM/DD/YY"
+                          <DateInp value={job.finishProjectedStart||""} onChange={e=>u({finishProjectedStart:e.target.value})}
                             style={{fontSize:13,fontWeight:700,
                               borderColor:(job.finishStartConfirmed?"#16a34a":C.finish)+"55",
                               background:job.finishStartConfirmed?"#16a34a08":`${C.finish}08`,
@@ -3854,9 +3876,8 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                         {fsDef.hasDate&&job.finishStatus!=="date_confirmed"&&(
                           <div style={{display:"flex",flexDirection:"column",gap:3}}>
                             <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:fsDef.color}}>SCHEDULED DATE</div>
-                            <Inp value={job.finishStatusDate||""} onChange={e=>u({finishStatusDate:e.target.value})}
-                              placeholder="MM/DD/YY"
-                              style={{width:120,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
+                            <DateInp value={job.finishStatusDate||""} onChange={e=>u({finishStatusDate:e.target.value})}
+                              style={{width:130,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
                           </div>
                         )}
                       </div>
@@ -4163,9 +4184,11 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                         {QC_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                       </select>
                       {qcDef.hasDate&&(
-                        <Inp value={job.qcStatusDate||""} onChange={e=>u({qcStatusDate:e.target.value})}
-                          placeholder="Date MM/DD/YY"
-                          style={{width:130,fontSize:12,borderColor:qcDef.color+"55",background:`${qcDef.color}08`}}/>
+                        <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                          <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:qcDef.color}}>QC DATE</div>
+                          <DateInp value={job.qcStatusDate||""} onChange={e=>u({qcStatusDate:e.target.value})}
+                            style={{width:140,fontSize:12,borderColor:qcDef.color+"55",background:`${qcDef.color}08`}}/>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -4196,8 +4219,8 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
                       <Inp value={job.qcSignedOffBy||""} onChange={e=>u({qcSignedOffBy:e.target.value})} placeholder="Lead who completed QC"/>
                     </div>
                     <div style={{minWidth:110}}>
-                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date</div>
-                      <Inp value={job.qcSignedOffDate||""} onChange={e=>u({qcSignedOffDate:e.target.value})} placeholder="MM/DD/YY"/>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Signed Off</div>
+                      <DateInp value={job.qcSignedOffDate||""} onChange={e=>u({qcSignedOffDate:e.target.value})} style={{width:140}}/>
                     </div>
                     <button onClick={()=>{if(job.qcSignedOffBy)u({qcSignedOff:true});}} style={{background:C.green,border:"none",borderRadius:7,color:"#fff",fontWeight:700,padding:"8px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>✓ Sign Off</button>
                   </div>
@@ -4732,7 +4755,7 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
 
               <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Completed</div>
 
-              <Inp value={s.completedDate||""} onChange={e=>updS(s.id,{completedDate:e.target.value})} placeholder="MM/DD/YY"/>
+              <DateInp value={s.completedDate||""} onChange={e=>updS(s.id,{completedDate:e.target.value})} style={{width:140}}/>
 
             </div>
 
@@ -4886,13 +4909,12 @@ function TempPedCard({ job, onOpen, onUpdate, onDelete }) {
 
             {(job.tempPedStatus==="scheduled")&&(
               <input
-                type="text"
-                value={job.tempPedScheduledDate||""}
+                type="date"
+                value={toYMD(job.tempPedScheduledDate||"")}
                 onChange={e=>upd({tempPedScheduledDate:e.target.value})}
-                placeholder="MM/DD/YY"
-                style={{width:96,fontSize:11,padding:"5px 8px",borderRadius:7,
+                style={{width:140,fontSize:11,padding:"5px 8px",borderRadius:7,
                   border:`1px solid ${"#2563eb"}55`,background:"#2563eb08",
-                  color:"var(--text)",fontFamily:"inherit",outline:"none"}}
+                  color:"var(--text)",fontFamily:"inherit",outline:"none",colorScheme:"dark"}}
               />
             )}
           </div>
@@ -5529,7 +5551,7 @@ function UpcomingJobs({ upcoming, onChange, onPromote }) {
                     <div style={{flex:1.2,minWidth:100}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>City</div><Inp value={u.city} onChange={e=>upd(u.id,{city:e.target.value})} placeholder="City"/></div>
                     <div style={{flex:1,minWidth:90}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Sales</div><Inp value={u.sales} onChange={e=>upd(u.id,{sales:e.target.value})} placeholder="Sales rep"/></div>
                     <div style={{flex:1.5,minWidth:130}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Customer / GC</div><Inp value={u.customer} onChange={e=>upd(u.id,{customer:e.target.value})} placeholder="Customer or GC"/></div>
-                    <div style={{flex:1.1,minWidth:110}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Last Follow Up</div><Inp value={u.lastFollowUp} onChange={e=>upd(u.id,{lastFollowUp:e.target.value})} placeholder="MM/DD/YY"/></div>
+                    <div style={{flex:1.1,minWidth:110}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Last Follow Up</div><DateInp value={u.lastFollowUp} onChange={e=>upd(u.id,{lastFollowUp:e.target.value})}/></div>
                     <div style={{flex:1,minWidth:120}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
                       <select value={u.foreman||""} onChange={e=>upd(u.id,{foreman:e.target.value})} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
                         <option value="">— unassigned —</option>
@@ -5968,7 +5990,7 @@ function AddTaskForm({ defaultForeman, onAdd, onCancel }) {
         </div>
         <div style={{flex:1,minWidth:110}}>
           <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Due Date</div>
-          <Inp value={t.dueDate} onChange={e=>setT(x=>({...x,dueDate:e.target.value}))} placeholder="MM/DD/YY"/>
+          <DateInp value={t.dueDate} onChange={e=>setT(x=>({...x,dueDate:e.target.value}))}/>
         </div>
       </div>
       <div style={{marginBottom:12}}>
@@ -6309,7 +6331,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
   const fmtDate=(str)=>{ const d=parseAnyDate(str); if(!d) return null; return d.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
   const fmtFull=(str)=>{ const d=parseAnyDate(str); if(!d) return null; return d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"}); };
   const isOverdue=(str,status)=>{ if(status==="inprogress") return false; const d=parseAnyDate(str); if(!d) return false; const c=new Date(d); c.setHours(0,0,0,0); return c<today; };
-  const toYMD=(d)=>{ const dt=new Date(d); return dt.toISOString().split("T")[0]; };
+  const fmtYMD=(d)=>{ if(!d) return ''; const dt=new Date(d); return isNaN(dt)?'':dt.toISOString().split("T")[0]; };
 
   // ── Build "events" — one per schedulable item (not per job) ──────────────
   // Each event: { id, job, type, label, color, startDate, endDate, status, desc, hardDate }
@@ -6492,7 +6514,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
       const end=parseAnyDate(ev.endDate);
       if(end){ end.setHours(0,0,0,0); return target>=start&&target<=end; }
     }
-    return toYMD(start)===dateStr;
+    return fmtYMD(start)===dateStr;
   };
 
   const eventsForDate=(dateStr)=>allEvents.filter(ev=>eventCoversDate(ev,dateStr));
@@ -6544,7 +6566,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
             const isToday=dateStr===todayStr;
             const isWeekend=new Date(year,month,day).getDay()===0||new Date(year,month,day).getDay()===6;
             const isSelected=calDayDetail===dateStr;
-            const hasOverdue=dayEvs.some(ev=>isOverdue(ev.startDate,ev.status)&&toYMD(parseAnyDate(ev.startDate)===dateStr||ev.startDate===dateStr));
+            const hasOverdue=dayEvs.some(ev=>isOverdue(ev.startDate,ev.status)&&fmtYMD(parseAnyDate(ev.startDate)===dateStr||ev.startDate===dateStr));
             return (
               <div key={dateStr} onClick={()=>setCalDayDetail(isSelected?null:dateStr)}
                 style={{minHeight:80,borderRadius:8,padding:"6px 6px 4px",cursor:"pointer",
