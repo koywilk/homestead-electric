@@ -227,7 +227,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
+  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, taskDueDates:{}, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
 
   homeRuns:{
 
@@ -5560,17 +5560,23 @@ function PrepTaskList({ jobs, onSelectJob, onUpdateJob }) {
 
 function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJob, filterForeman, compact }) {
   const [showAdd, setShowAdd] = useState(false);
-  // Stores due date overrides for auto-tasks keyed by task id
-  const [taskDueDates, setTaskDueDates] = useState({});
 
   const handleSetDueDate = (taskId, date) => {
-    // Manual task — update in the list
+    // Manual task — update in the list (persists to Firestore via manualTasks collection)
     const isManual = (manualTasks||[]).find(t => t.id === taskId);
     if(isManual) {
       onManualTasksChange((manualTasks||[]).map(t => t.id===taskId ? {...t, dueDate:date} : t));
-    } else {
-      // Auto-task — store override locally
-      setTaskDueDates(prev => ({...prev, [taskId]: date}));
+      return;
+    }
+    // Auto-task — find which job owns this task and save due date to job.taskDueDates map
+    const autoTasks = computeTasks(jobs);
+    const task = autoTasks.find(t => t.id === taskId);
+    if(task && task.jobId && onUpdateJob) {
+      const job = jobs.find(j => j.id === task.jobId);
+      if(job) {
+        const existing = job.taskDueDates || {};
+        onUpdateJob(task.jobId, { taskDueDates: {...existing, [taskId]: date} });
+      }
     }
   };
 
@@ -5605,9 +5611,12 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
     onUpdateJob(jobId, {rtDoneDismissed: dismissed});
   };
 
+  // Build a merged due-date map from all jobs' taskDueDates
+  const allTaskDueDates = jobs.reduce((acc, j) => ({...acc, ...(j.taskDueDates||{})}), {});
+
   const autoTasks = computeTasks(jobs);
   const allTasks = [
-    ...autoTasks.map(t => taskDueDates[t.id] !== undefined ? {...t, dueDate:taskDueDates[t.id]} : t),
+    ...autoTasks.map(t => allTaskDueDates[t.id] !== undefined ? {...t, dueDate:allTaskDueDates[t.id]} : t),
     ...(manualTasks||[]).map(t=>({...t,type:"manual"}))
   ].filter(t => !filterForeman || t.foreman === filterForeman);
 
