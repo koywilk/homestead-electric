@@ -227,7 +227,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, readyToSchedule:false, readyToInvoice:false, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
+  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
 
   homeRuns:{
 
@@ -3405,7 +3405,7 @@ onUpdate(updated);
                     </div>
                   );
                 })()}
-                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};u({roughStage:v,  ...qcFire,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
+                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};u({roughStage:v,  ...qcFire,...(v==="100%"?{roughStatus:"complete",readyToInvoice:true}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
 
                 <div style={{marginTop:8,marginBottom:20}}>
 
@@ -3511,7 +3511,7 @@ onUpdate(updated);
                     </div>
                   );
                 })()}
-                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;u({finishStage:v,...(v==="100%"?{finishStatus:"complete"}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
+                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;u({finishStage:v,...(v==="100%"?{finishStatus:"complete",readyToInvoice:true}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
                 <div style={{marginTop:8,marginBottom:20}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
               </Section>
 
@@ -5244,6 +5244,41 @@ function computeTasks(jobs) {
       });
     });
 
+    // Ready to Invoice — fires when readyToInvoice is true and not yet dismissed
+    if(job.readyToInvoice && !job.invoiceDismissed) tasks.push({
+      id: job.id+"_invoice", jobId: job.id, jobName: job.name,
+      type: "auto", category: "invoice", foreman,
+      title: "Ready to Invoice",
+      desc: job.tempPed ? "Temp ped completed" : effFS(job)==="complete" ? "Finish complete" : "Rough complete",
+      color: "#ea580c", cleared: false,
+    });
+
+    // CO individually completed → merge/invoice task
+    const coDoneDismissed = job.coDoneDismissed||[];
+    (job.changeOrders||[]).forEach((co, i) => {
+      if(co.coStatus === "completed" && !coDoneDismissed.includes(co.id)) tasks.push({
+        id: job.id+"_co_"+co.id+"_done", jobId: job.id, jobName: job.name,
+        type: "auto", category: "co", foreman,
+        coId: co.id,
+        title: `CO #${i+1} Complete — merge or invoice`,
+        desc: co.desc ? `CO: ${co.desc}` : undefined,
+        color: "#16a34a", cleared: false,
+      });
+    });
+
+    // RT individually completed → merge/invoice task
+    const rtDoneDismissed = job.rtDoneDismissed||[];
+    (job.returnTrips||[]).forEach((rt, i) => {
+      if(rt.rtStatus === "complete" && !rtDoneDismissed.includes(rt.id)) tasks.push({
+        id: job.id+"_rt_"+rt.id+"_done", jobId: job.id, jobName: job.name,
+        type: "auto", category: "rt", foreman,
+        rtId: rt.id,
+        title: `Return Trip #${i+1} Complete — merge or invoice`,
+        desc: rt.scope ? `Scope: ${rt.scope}` : undefined,
+        color: "#16a34a", cleared: false,
+      });
+    });
+
     // Temp Ped scheduling task
     if(job.tempPed && job.tempPedStatus === "ready") tasks.push({
       id: job.id+"_tempped_sched", jobId: job.id, jobName: job.name,
@@ -5291,7 +5326,7 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
 
   const CATEGORY_LABELS = {
     rough:"Rough", finish:"Finish", qc:"QC Walk", co:"Change Order",
-    rt:"Return Trip", manual:"Manual Task", prep:"Pre Job Prep", po:"Purchase Order", tempped:"Temp Ped"
+    rt:"Return Trip", manual:"Manual Task", prep:"Pre Job Prep", po:"Purchase Order", tempped:"Temp Ped", invoice:"Invoice"
   };
 
   const saveDate = () => {
@@ -5553,6 +5588,25 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
     onManualTasksChange((manualTasks||[]).filter(t=>t.id!==id));
   };
 
+  const dismissInvoiceTask = (jobId) => {
+    if(onUpdateJob) onUpdateJob(jobId, {invoiceDismissed:true});
+  };
+
+  const dismissCODoneTask = (jobId, coId) => {
+    // Mark co as invoice-dismissed by adding to job's coDismissed set
+    const job = jobs.find(j=>j.id===jobId);
+    if(!job||!onUpdateJob) return;
+    const dismissed = [...(job.coDoneDismissed||[]), coId];
+    onUpdateJob(jobId, {coDoneDismissed: dismissed});
+  };
+
+  const dismissRTDoneTask = (jobId, rtId) => {
+    const job = jobs.find(j=>j.id===jobId);
+    if(!job||!onUpdateJob) return;
+    const dismissed = [...(job.rtDoneDismissed||[]), rtId];
+    onUpdateJob(jobId, {rtDoneDismissed: dismissed});
+  };
+
   const autoTasks = computeTasks(jobs);
   const allTasks = [
     ...autoTasks.map(t => taskDueDates[t.id] !== undefined ? {...t, dueDate:taskDueDates[t.id]} : t),
@@ -5663,7 +5717,13 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
             {showAdd&&filterForeman&&<AddTaskForm defaultForeman={filterForeman} onAdd={handleAdd} onCancel={()=>setShowAdd(false)}/>}
             {sorted.map(task=>(
               <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
-                onDismiss={task.type==="manual"?()=>dismissManual(task.id):null}
+                onDismiss={
+                  task.type==="manual" ? ()=>dismissManual(task.id) :
+                  task.category==="invoice" ? ()=>dismissInvoiceTask(task.jobId) :
+                  task.id.endsWith("_done") && task.coId ? ()=>dismissCODoneTask(task.jobId, task.coId) :
+                  task.id.endsWith("_done") && task.rtId ? ()=>dismissRTDoneTask(task.jobId, task.rtId) :
+                  null
+                }
                 onSetDueDate={handleSetDueDate}/>
             ))}
           </div>
@@ -5684,7 +5744,13 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
                 </div>
                 {fTasks.map(task=>(
                   <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
-                    onDismiss={task.type==="manual"?()=>dismissManual(task.id):null}
+                    onDismiss={
+                      task.type==="manual" ? ()=>dismissManual(task.id) :
+                      task.category==="invoice" ? ()=>dismissInvoiceTask(task.jobId) :
+                      task.id.endsWith("_done") && task.coId ? ()=>dismissCODoneTask(task.jobId, task.coId) :
+                      task.id.endsWith("_done") && task.rtId ? ()=>dismissRTDoneTask(task.jobId, task.rtId) :
+                      null
+                    }
                     onSetDueDate={handleSetDueDate}/>
                 ))}
               </div>
