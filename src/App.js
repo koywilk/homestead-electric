@@ -74,11 +74,13 @@ const ROUGH_STATUSES = [
 ];
 const FINISH_STATUSES = ROUGH_STATUSES;
 const CO_STATUSES_NEW = [
-  {value:"needs",     label:"Needs to be Scheduled", color:"#dc2626"},
-  {value:"pending",   label:"Pending",               color:"#ca8a04"},
-  {value:"scheduled", label:"Scheduled",             color:"#2563eb", hasDate:true},
-  {value:"completed", label:"Work Completed",        color:"#22c55e"},
-  {value:"denied",    label:"Denied",                color:"#dc2626"},
+  {value:"pending",    label:"Pending",                        color:"#ca8a04"},
+  {value:"approved",   label:"Approved",                       color:"#16a34a"},
+  {value:"needs",      label:"Needs to be Scheduled",          color:"#f97316"},
+  {value:"scheduled",  label:"Scheduled",                      color:"#2563eb", hasDate:true},
+  {value:"completed",  label:"Work Completed",                 color:"#22c55e"},
+  {value:"converted",  label:"Converted to Return Trip",       color:"#6b7280"},
+  {value:"denied",     label:"Denied",                         color:"#dc2626"},
 ];
 const RT_STATUSES = [
   {value:"",          label:"— set status —",        color:null},
@@ -1342,81 +1344,104 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
 // ── Change Orders ─────────────────────────────────────────────
 
-function ChangeOrders({orders,onChange,jobName,jobSimproNo,onEmail}) {
+function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughStatus, finishStatus}) {
 
-  const add = () => onChange([{id:uid(),date:"",desc:"",task:"",material:"",time:"",status:"Pending",sendTo:"",needsSchedule:false,needsScheduleDate:"",coScheduled:false,scheduledDate:""},...orders]);
+  const add = () => onChange([{
+    id:uid(), date:"", desc:"", task:"", material:"", time:"", sendTo:"",
+    coStatus:"pending", coStatusDate:"",
+    needsHardDate:false, needsByStart:"", needsByEnd:"",
+  }, ...orders]);
 
-  const upd = (id,p) => onChange(orders.map(o=>o.id===id?{...o,...p}:o));
+  const upd = (id, p) => onChange(orders.map(o => o.id===id ? {...o,...p} : o));
+  const del = (id)    => onChange(orders.filter(o => o.id!==id));
 
-  const del = (id)   => onChange(orders.filter(o=>o.id!==id));
-
-  const sc  = {"Pending":C.accent,"CO Created":C.orange,"CO Sent (office)":C.blue,
-
-               "Approved":C.green,"Denied":C.red,"Work Completed":C.purple};
-
-
+  const crewOnSite = roughStatus==="inprogress" || finishStatus==="inprogress";
 
   const chatCO = (o, i) => {
-    const msg = `Change Order #${i+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.status||"Pending"}\n\nhttps://homestead-electric.vercel.app/`;
+    const msg = `Change Order #${i+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||"Pending"}\n\nhttps://homestead-electric.vercel.app/`;
     openGoogleChat(msg);
   };
 
   const emailCO = (o, i) => {
-
     const subject = `${jobName} — Change Order #${i+1}`;
-
-    const body = `Change Order #${i+1} — ${jobName}\n\nDate: ${o.date||"—"}\nSend CO To: ${o.sendTo||"—"}\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial Needed: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nStatus: ${o.status}\n\nPlease review and confirm.\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
-
+    const body = `Change Order #${i+1} — ${jobName}\n\nDate: ${o.date||"—"}\nSend CO To: ${o.sendTo||"—"}\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial Needed: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nStatus: ${o.coStatus||"Pending"}\n\nPlease review and confirm.\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
     onEmail({subject, body});
-
   };
 
-
+  // Convert CO → Return Trip
+  const convertToRT = (o, i) => {
+    // Mark CO as converted
+    upd(o.id, {coStatus:"converted"});
+    // Build a new return trip pre-filled from CO data
+    const newRT = {
+      id: uid(),
+      scope: o.desc||"",
+      task: o.task||"",
+      material: o.material||"",
+      time: o.time||"",
+      assignedTo: "",
+      rtStatus: "needs",
+      rtStatusDate: "",
+      needsHardDate: o.needsHardDate||false,
+      needsByStart: o.needsByStart||"",
+      needsByEnd: o.needsByEnd||"",
+      notes: `Converted from Change Order #${i+1}${o.desc?" — "+o.desc:""}`,
+      punch: [],
+      photos: [],
+    };
+    // We signal the parent to add the RT — pass via a special onChange shape
+    onChange(orders.map(co => co.id===o.id ? {...co, coStatus:"converted"} : co), newRT);
+  };
 
   return (
-
     <div>
+      {orders.map((o, i) => {
+        const coDef = getStatusDef(CO_STATUSES_NEW, o.coStatus||"pending");
+        const isConverted = o.coStatus === "converted";
+        const isApproved  = o.coStatus === "approved";
+        const showConvert = (isApproved || o.coStatus==="needs") && !crewOnSite;
 
-      {orders.map((o,i)=>(
+        return (
+          <div key={o.id} style={{
+            background: isConverted ? "var(--surface)" : "var(--card)",
+            border:`1px solid ${isConverted?"var(--border)":coDef.color?coDef.color+"33":"var(--border)"}`,
+            borderLeft:`3px solid ${isConverted?"#6b7280":coDef.color||"var(--border)"}`,
+            borderRadius:11, padding:14, marginBottom:12,
+            opacity: isConverted ? 0.6 : 1,
+          }}>
 
-        <div key={o.id} style={{background:C.surface,border:`1px solid ${C.border}`,
-
-          borderRadius:10,padding:14,marginBottom:12}}>
-
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-
-            <span style={{fontSize:12,color:C.accent,fontWeight:700}}>Change Order</span>
-
-            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-
-              {jobSimproNo&&<Btn onClick={()=>{
-                const msg=`Change Order #${i+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||"Pending"}`;
-                navigator.clipboard.writeText(msg).catch(()=>{});
-                window.open(`https://homesteadelectric.simprosuite.com/staff/editProject.php?jobID=${jobSimproNo}`,"_blank");
-              }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>⚡ Simpro</Btn>}
-              <Btn onClick={()=>chatCO(o,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>💬 Chat</Btn>
-              <Btn onClick={()=>emailCO(o,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>✉ Email CO</Btn>
-
-              <button onClick={()=>del(o.id)}
-
-                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
-
+            {/* Header */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:12,color:"var(--accent)",fontWeight:700}}>Change Order #{i+1}</span>
+                {isConverted&&<span style={{fontSize:10,fontWeight:700,color:"#6b7280",background:"#6b728018",borderRadius:99,padding:"2px 8px",border:"1px solid #6b728033"}}>CONVERTED TO RT</span>}
+              </div>
+              <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                {!isConverted&&jobSimproNo&&<Btn onClick={()=>{
+                  const msg=`Change Order #${i+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||"Pending"}`;
+                  navigator.clipboard.writeText(msg).catch(()=>{});
+                  window.open(`https://homesteadelectric.simprosuite.com/staff/editProject.php?jobID=${jobSimproNo}`,"_blank");
+                }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>⚡ Simpro</Btn>}
+                {!isConverted&&<Btn onClick={()=>chatCO(o,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>💬 Chat</Btn>}
+                {!isConverted&&<Btn onClick={()=>emailCO(o,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>✉ Email CO</Btn>}
+                <button onClick={()=>del(o.id)} style={{background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontSize:11}}>Remove</button>
+              </div>
             </div>
-          </div>
 
-          <div style={{marginBottom:8}}>
-            {(()=>{
-              const coDef = getStatusDef(CO_STATUSES_NEW, o.coStatus||"pending");
-              return (
-                <>
-                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+            {/* Status row */}
+            {!isConverted&&(
+              <div style={{marginBottom:10}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",marginBottom:6}}>
                   <select value={o.coStatus||"pending"} onChange={e=>{
                     const v=e.target.value;
-                    upd(o.id,{coStatus:v,coStatusDate:getStatusDef(CO_STATUSES_NEW,v).hasDate?o.coStatusDate:""});
-                  }} style={{background:coDef.color?`${coDef.color}18`:C.surface,
-                    color:coDef.color||C.dim,border:`1px solid ${coDef.color||C.border}`,
+                    upd(o.id,{coStatus:v, coStatusDate:getStatusDef(CO_STATUSES_NEW,v).hasDate?o.coStatusDate:""});
+                  }} style={{
+                    background:coDef.color?`${coDef.color}18`:"var(--surface)",
+                    color:coDef.color||"var(--dim)",
+                    border:`1px solid ${coDef.color||"var(--border)"}`,
                     borderRadius:7,padding:"5px 8px",fontSize:11,fontFamily:"inherit",
-                    fontWeight:coDef.color?700:400,outline:"none",cursor:"pointer"}}>
+                    fontWeight:coDef.color?700:400,outline:"none",cursor:"pointer",
+                  }}>
                     {CO_STATUSES_NEW.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                   </select>
                   {coDef.hasDate&&(
@@ -1425,15 +1450,48 @@ function ChangeOrders({orders,onChange,jobName,jobSimproNo,onEmail}) {
                       style={{width:120,fontSize:11,borderColor:coDef.color+"55",background:`${coDef.color}08`}}/>
                   )}
                 </div>
-                {(o.coStatus==="needs")&&(
-                  <div style={{marginTop:8,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:8}}>
+
+                {/* Approved banner */}
+                {isApproved&&(
+                  <div style={{padding:"8px 12px",borderRadius:8,marginBottom:8,
+                    background:crewOnSite?"#16a34a10":"#f9731610",
+                    border:`1px solid ${crewOnSite?"#16a34a33":"#f9731633"}`}}>
+                    <div style={{fontSize:11,fontWeight:700,color:crewOnSite?"#16a34a":"#f97316",marginBottom:2}}>
+                      {crewOnSite?"✓ Crew is on site — confirm approval & get sign-off":"⚠ Crew not on site — this should become a Return Trip"}
+                    </div>
+                    <div style={{fontSize:10,color:"var(--dim)"}}>
+                      {crewOnSite?"Make sure the crew knows this CO is approved and sign off when work is done.":"Convert to a Return Trip below so it gets scheduled properly."}
+                    </div>
+                  </div>
+                )}
+
+                {/* Convert to RT button */}
+                {showConvert&&(
+                  <div style={{marginBottom:8}}>
+                    <button onClick={()=>convertToRT(o,i)} style={{
+                      background:"#8b5cf618",border:"1px solid #8b5cf633",
+                      borderRadius:8,color:"#8b5cf6",fontSize:11,fontWeight:700,
+                      padding:"7px 14px",cursor:"pointer",fontFamily:"inherit",
+                      display:"flex",alignItems:"center",gap:6,
+                    }}>
+                      🔄 Convert to Return Trip
+                    </button>
+                    <div style={{fontSize:10,color:"var(--dim)",marginTop:3}}>
+                      Crew is not on site — converting creates a new Return Trip pre-filled with this CO's details.
+                    </div>
+                  </div>
+                )}
+
+                {/* Needs to be scheduled date window */}
+                {o.coStatus==="needs"&&(
+                  <div style={{marginTop:6,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:8}}>
                     <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>NEEDS TO BE SCHEDULED BY</div>
                     <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
-                      <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,cursor:"pointer"}}>
+                      <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--dim)",cursor:"pointer"}}>
                         <input type="radio" name={`co_type_${o.id}`} checked={!o.needsHardDate} onChange={()=>upd(o.id,{needsHardDate:false})} style={{accentColor:"#dc2626"}}/>
                         Date Range
                       </label>
-                      <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,cursor:"pointer"}}>
+                      <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--dim)",cursor:"pointer"}}>
                         <input type="radio" name={`co_type_${o.id}`} checked={!!o.needsHardDate} onChange={()=>upd(o.id,{needsHardDate:true})} style={{accentColor:"#dc2626"}}/>
                         Hard Date
                       </label>
@@ -1441,7 +1499,7 @@ function ChangeOrders({orders,onChange,jobName,jobSimproNo,onEmail}) {
                     {!o.needsHardDate?(
                       <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
                         <Inp value={o.needsByStart||""} onChange={e=>upd(o.id,{needsByStart:e.target.value})} placeholder="Start MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
-                        <span style={{fontSize:11,color:C.dim}}>–</span>
+                        <span style={{fontSize:11,color:"var(--dim)"}}>–</span>
                         <Inp value={o.needsByEnd||""} onChange={e=>upd(o.id,{needsByEnd:e.target.value})} placeholder="End MM/DD/YY" style={{width:115,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
                       </div>
                     ):(
@@ -1449,268 +1507,51 @@ function ChangeOrders({orders,onChange,jobName,jobSimproNo,onEmail}) {
                     )}
                   </div>
                 )}
-                </>
-              );
-            })()}
-          </div>
-
-          <div style={{marginBottom:8}}>
-
-            <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Send CO To</div>
-
-            <Inp value={o.sendTo||""} onChange={e=>upd(o.id,{sendTo:e.target.value})}
-
-              placeholder="e.g. John Smith / GC / Homeowner…"/>
-
-          </div>
-
-          <div style={{marginBottom:8}}>
-
-            <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Description of Task</div>
-
-            <Inp value={o.desc} onChange={e=>upd(o.id,{desc:e.target.value})} placeholder="Describe the change order…"/>
-
-          </div>
-
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-
-            {[["time","Estimated Time","e.g. 3 hrs"]].map(([k,l,ph])=>(
-
-              <div key={k}>
-
-                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>{l}</div>
-
-                <Inp value={o[k]} onChange={e=>upd(o.id,{[k]:e.target.value})} placeholder={ph}/>
-
               </div>
+            )}
 
-            ))}
-
-            <div>
-
-              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Task (In Field)</div>
-
-              <TA value={o.task} onChange={e=>upd(o.id,{task:e.target.value})} placeholder={"- Task 1\n- Task 2"} rows={3}/>
-
-            </div>
-
-            {[[]].map(()=>(
-
-              <div key="spacer2"/>
-
-            ))}
-
-            <div>
-
-              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Material Needed</div>
-
-              <TA value={o.material} onChange={e=>upd(o.id,{material:e.target.value})} placeholder={"- Item 1\n- Item 2"} rows={3}/>
-
-            </div>
-
-            {[[]].map(()=>(
-
-              <div key="spacer"/>
-
-            ))}
-
-          </div>
-
-        </div>
-
-      ))}
-
-      <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginTop:4}}>+ Add Change Order</Btn>
-
-    </div>
-
-  );
-
-}
-
-
-
-
-
-function ReturnTripExtras({trip, onUpd}) {
-
-    return (
-
-    <div style={{marginTop:14,borderTop:`1px solid ${C.border}`,paddingTop:14}}>
-
-      <div style={{display:"flex",gap:6,marginBottom:12}}>
-
-        {["Assign Work","Sign Off"].map(t=>(
-
-          <button key={t} onClick={()=>setTab(t)}
-
-            style={{padding:"5px 14px",borderRadius:7,fontSize:11,cursor:"pointer",
-
-              fontFamily:"inherit",fontWeight:tab===t?700:400,
-
-              background:tab===t?C.purple:`${C.purple}15`,
-
-              border:`1px solid ${tab===t?C.purple:`${C.purple}33`}`,
-
-              color:tab===t?"#fff":C.dim,transition:"all 0.15s"}}>
-
-            {t}
-
-          </button>
-
-        ))}
-
-      </div>
-
-
-
-      {tab==="Assign Work"&&(
-
-        <div>
-
-          {(trip.assignments||[]).map((a,i)=>(
-
-            <div key={a.id} style={{background:C.card,border:`1px solid ${a.done?C.green+"55":C.border}`,
-
-              borderRadius:10,padding:12,marginBottom:10,borderLeft:`3px solid ${a.done?C.green:C.purple}`}}>
-
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
-
-                <input type="checkbox" checked={!!a.done}
-
-                  onChange={()=>onUpd({assignments:(trip.assignments||[]).map(x=>x.id===a.id?{...x,done:!x.done}:x)})}
-
-                  style={{accentColor:C.green,width:15,height:15,cursor:"pointer",flexShrink:0}}/>
-
-                <span style={{fontSize:11,fontWeight:700,color:a.done?C.green:C.purple,flex:1}}>
-
-                  Task #{i+1}{a.done?" ✓ Done":""}
-
-                </span>
-
-                <button onClick={()=>onUpd({assignments:(trip.assignments||[]).filter(x=>x.id!==a.id)})}
-
-                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
-
+            {/* Converted note */}
+            {isConverted&&(
+              <div style={{fontSize:11,color:"#6b7280",fontStyle:"italic",marginBottom:8}}>
+                This CO was converted to a Return Trip. See the Return Trips tab.
               </div>
+            )}
 
-              <div style={{marginBottom:8}}>
-
-                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Assign To</div>
-
-                <Inp value={a.person||""} placeholder="Name…"
-
-                  onChange={e=>onUpd({assignments:(trip.assignments||[]).map(x=>x.id===a.id?{...x,person:e.target.value}:x)})}/>
-
-              </div>
-
-              <div>
-
-                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Task Description</div>
-
-                <TA value={a.task||""} rows={2} placeholder="Describe the work to be completed…"
-
-                  onChange={e=>onUpd({assignments:(trip.assignments||[]).map(x=>x.id===a.id?{...x,task:e.target.value}:x)})}/>
-
-              </div>
-
-            </div>
-
-          ))}
-
-          <Btn onClick={()=>onUpd({assignments:[...(trip.assignments||[]),{id:uid(),person:"",task:"",done:false}]})}
-
-            variant="add" style={{width:"100%",borderStyle:"dashed"}}>+ Add Assignment</Btn>
-
-        </div>
-
-      )}
-
-
-
-      {tab==="Sign Off"&&(
-
-        <div>
-
-          {(trip.signoffs||[]).map((s,i)=>(
-
-            <div key={s.id} style={{background:C.card,border:`1px solid ${C.green}33`,
-
-              borderRadius:10,padding:12,marginBottom:10,borderLeft:`3px solid ${C.green}`}}>
-
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-
-                <span style={{fontSize:11,fontWeight:700,color:C.green}}>Sign-off #{i+1}</span>
-
-                <button onClick={()=>onUpd({signoffs:(trip.signoffs||[]).filter(x=>x.id!==s.id)})}
-
-                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
-
-              </div>
-
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-
-                <div>
-
-                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Technician Name</div>
-
-                  <Inp value={s.person||""} placeholder="Name…"
-
-                    onChange={e=>onUpd({signoffs:(trip.signoffs||[]).map(x=>x.id===s.id?{...x,person:e.target.value}:x)})}/>
-
+            {/* Fields — hidden when converted */}
+            {!isConverted&&(
+              <>
+                <div style={{marginBottom:8}}>
+                  <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Send CO To</div>
+                  <Inp value={o.sendTo||""} onChange={e=>upd(o.id,{sendTo:e.target.value})} placeholder="e.g. John Smith / GC / Homeowner…"/>
                 </div>
-
-                <div>
-
-                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Completed</div>
-
-                  <Inp value={s.completedDate||""} placeholder="MM/DD/YY"
-
-                    onChange={e=>onUpd({signoffs:(trip.signoffs||[]).map(x=>x.id===s.id?{...x,completedDate:e.target.value}:x)})}/>
-
+                <div style={{marginBottom:8}}>
+                  <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Description of Task</div>
+                  <Inp value={o.desc||""} onChange={e=>upd(o.id,{desc:e.target.value})} placeholder="Describe the change order…"/>
                 </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}}>
+                  <div>
+                    <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Estimated Time</div>
+                    <Inp value={o.time||""} onChange={e=>upd(o.id,{time:e.target.value})} placeholder="e.g. 3 hrs"/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Task (In Field)</div>
+                    <TA value={o.task||""} onChange={e=>upd(o.id,{task:e.target.value})} placeholder={"- Task 1\n- Task 2"} rows={3}/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Material Needed</div>
+                    <TA value={o.material||""} onChange={e=>upd(o.id,{material:e.target.value})} placeholder={"- Item 1\n- Item 2"} rows={3}/>
+                  </div>
+                </div>
+              </>
+            )}
+          </div>
+        );
+      })}
 
-              </div>
-
-              <div style={{marginBottom:8}}>
-
-                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Work Completed</div>
-
-                <TA value={s.task||""} rows={2} placeholder="Describe what was completed…"
-
-                  onChange={e=>onUpd({signoffs:(trip.signoffs||[]).map(x=>x.id===s.id?{...x,task:e.target.value}:x)})}/>
-
-              </div>
-
-              <div>
-
-                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Initials</div>
-
-                <Inp value={s.initials||""} placeholder="e.g. KM" style={{width:80}}
-
-                  onChange={e=>onUpd({signoffs:(trip.signoffs||[]).map(x=>x.id===s.id?{...x,initials:e.target.value}:x)})}/>
-
-              </div>
-
-            </div>
-
-          ))}
-
-          <Btn onClick={()=>onUpd({signoffs:[...(trip.signoffs||[]),{id:uid(),person:"",task:"",completedDate:"",initials:""}]})}
-
-            variant="add" style={{width:"100%",borderStyle:"dashed"}}>+ Add Sign-off</Btn>
-
-        </div>
-
-      )}
-
+      <Btn onClick={add} variant="ghost" style={{marginTop:4}}>+ Add Change Order</Btn>
     </div>
-
   );
-
 }
-
-
 
 // ── Return Trips ──────────────────────────────────────────────
 
@@ -3867,7 +3708,21 @@ onUpdate(updated);
             <div>
 
               <Section label="Change Order Log" color={C.accent} defaultOpen={true}>
-                <ChangeOrders orders={job.changeOrders} onChange={v=>u({changeOrders:v})} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData}/>
+                <ChangeOrders
+                  orders={job.changeOrders}
+                  onChange={(updatedCOs, newRT) => {
+                    if(newRT) {
+                      u({changeOrders:updatedCOs, returnTrips:[...(job.returnTrips||[]), newRT]});
+                    } else {
+                      u({changeOrders:updatedCOs});
+                    }
+                  }}
+                  jobName={job.name||"This Job"}
+                  jobSimproNo={job.simproNo}
+                  onEmail={setEmailData}
+                  roughStatus={job.roughStatus||""}
+                  finishStatus={job.finishStatus||""}
+                />
               </Section>
 
             </div>
@@ -5264,8 +5119,23 @@ function computeTasks(jobs) {
       color: C.teal, cleared: false,
     });
 
-    // Change Orders needing scheduling
+    // Change Orders
+    const rs2 = effRS(job), fs2 = effFS(job);
     (job.changeOrders||[]).forEach((co, i) => {
+      // Approved — context-aware task
+      if(co.coStatus === "approved") {
+        const crewOnSite = rs2 === "inprogress" || fs2 === "inprogress";
+        tasks.push({
+          id: job.id+"_co_"+co.id+"_approved", jobId: job.id, jobName: job.name,
+          type: "auto", category: "co", foreman,
+          title: crewOnSite
+            ? `CO #${i+1} Approved — confirm with crew & get sign-off`
+            : `CO #${i+1} Approved — convert to return trip & set schedule date`,
+          desc: co.desc ? `CO: ${co.desc}` : undefined,
+          color: "#16a34a", cleared: false,
+        });
+      }
+      // Needs scheduling
       if(co.coStatus === "needs") tasks.push({
         id: job.id+"_co_"+co.id+"_needs", jobId: job.id, jobName: job.name,
         type: "auto", category: "co", foreman,
@@ -5672,7 +5542,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
       }
 
       (job.changeOrders||[]).forEach((co,i)=>{
-        if(co.coStatus==="scheduled"||co.coStatus==="pending"||co.coStatus==="needs") {
+        if(co.coStatus==="scheduled"||co.coStatus==="pending"||co.coStatus==="needs"||co.coStatus==="approved") {
           items.push({id:job.id+"_co_"+co.id,jobId:job.id,job,type:"changeOrder",label:`Change Order #${i+1}`,
             color:C.accent,date:co.coStatusDate||"",bucket:getBucket(co.coStatusDate),
             status:co.coStatus,desc:co.desc,needsByStart:co.needsByStart||'',needsByEnd:co.needsByEnd||'',needsHardDate:co.needsHardDate||false});
