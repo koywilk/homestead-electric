@@ -6008,7 +6008,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
   const allTasks = [
     ...autoTasks.map(t => allTaskDueDates[t.id] !== undefined ? {...t, dueDate:allTaskDueDates[t.id]} : t),
     ...(manualTasks||[]).map(t=>({...t,type:"manual"}))
-  ].filter(t => !filterForeman || t.foreman === filterForeman);
+  ].filter(t => t.category !== "prep" && (!filterForeman || t.foreman === filterForeman));
 
   // Sort: overdue first, then by dueDate, then undated
   const sorted = [...allTasks].sort((a,b) => {
