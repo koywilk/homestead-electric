@@ -5755,16 +5755,29 @@ function computeTasks(jobs) {
 
 // ── Tasks Component ───────────────────────────────────────────
 
+const parseAnyDate = (str) => {
+  if(!str) return null;
+  // Handle MM/DD/YY and MM/DD/YYYY
+  const mdy = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if(mdy) {
+    let [,m,d,y] = mdy;
+    if(y.length===2) y = "20"+y;
+    return new Date(+y, +m-1, +d);
+  }
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? null : d;
+};
 const URGENCY = (dueDateStr) => {
   if(!dueDateStr) return null;
-  const due = new Date(dueDateStr); due.setHours(0,0,0,0);
+  const due = parseAnyDate(dueDateStr); if(!due) return null;
+  due.setHours(0,0,0,0);
   const today = new Date(); today.setHours(0,0,0,0);
   const diff = Math.round((due - today) / 86400000);
   if(diff < 0)  return {label:"OVERDUE", color:"#dc2626", bg:"#dc262612", days: diff};
   if(diff === 0) return {label:"DUE TODAY", color:"#ea580c", bg:"#ea580c12", days: 0};
   if(diff <= 3) return {label:`DUE IN ${diff}D`, color:"#ca8a04", bg:"#ca8a0412", days: diff};
   if(diff <= 7) return {label:`DUE IN ${diff}D`, color:"#2563eb", bg:"#2563eb10", days: diff};
-  return {label:`DUE ${new Date(dueDateStr).toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, color:"#6b7280", bg:"transparent", days: diff};
+  return {label:`DUE ${due.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, color:"#6b7280", bg:"transparent", days: diff};
 };
 
 function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
@@ -6310,7 +6323,8 @@ function SchedulingForecast({ jobs, onSelectJob }) {
   const JobCard=({row})=>{
     const {job,rs,fs,rsDef,fsDef,openCOs,openRTs,qcPending,bestDate}=row;
     const fc=getFC(job.foreman||"Koy");
-    const overdue=isOverdue(bestDate);
+    const activelyInProgress = rs==="inprogress" || fs==="inprogress";
+    const overdue=!activelyInProgress && isOverdue(bestDate);
     const roughDate=job.roughProjectedStart||job.roughStatusDate;
     const finishDate=job.finishProjectedStart||job.finishStatusDate;
     return (
@@ -6373,7 +6387,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
   const JobListRow=({row})=>{
     const {job,rs,fs,rsDef,fsDef,openCOs,openRTs,bestDate}=row;
     const fc=getFC(job.foreman||"Koy");
-    const overdue=isOverdue(bestDate);
+    const overdue=!(rs==="inprogress"||fs==="inprogress") && isOverdue(bestDate);
     return (
       <div onClick={()=>onSelectJob(job)}
         style={{display:"flex",alignItems:"center",gap:12,padding:"10px 14px",
