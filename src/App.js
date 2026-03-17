@@ -227,17 +227,23 @@ const COLOR_OPTIONS = ["#3b82f6","#f97316","#22c55e","#8b5cf6","#ec4899","#14b8a
 
 // ── Identity & Permissions ────────────────────────────────────
 const IDENTITY_KEY = "he_identity"; // localStorage key — persists forever
+const USERS_KEY    = "he_users";    // Firestore + localStorage user list
 
-// All team members with their roles
-const ALL_MEMBERS = [
-  { name:"Justin",  role:"justin"  },
-  { name:"Jeromy",  role:"jeromy"  },
-  { name:"Koy",     role:"foreman" },
-  { name:"Vasa",    role:"foreman" },
-  { name:"Colby",   role:"foreman" },
-  { name:"Josh",    role:"lead"    },
-  { name:"Brady",   role:"lead"    },
+// Default users — Koy is admin to start, everyone else added in-app
+const DEFAULT_USERS = [
+  { id:"koy",  name:"Koy",  role:"admin", pin:"" },
 ];
+
+const ROLE_LABELS = {
+  admin:   "Admin",
+  justin:  "Justin",
+  jeromy:  "Jeromy",
+  foreman: "Foreman",
+  lead:    "Lead",
+  crew:    "Crew",
+};
+
+const ROLE_OPTIONS = ["admin","foreman","lead","crew"];
 
 // Permission map — feature -> roles that have access
 const PERMISSIONS = {
@@ -262,7 +268,7 @@ const PERMISSIONS = {
 const can = (identity, feature) => {
   if(!identity) return false;
   const allowed = PERMISSIONS[feature] || [];
-  return allowed.includes(identity.role) || allowed.includes("admin") && identity.role === "admin";
+  return allowed.includes(identity.role);
 };
 
 // Read/write identity from localStorage (persists forever)
@@ -273,8 +279,37 @@ const saveIdentity = (member) => {
   localStorage.setItem(IDENTITY_KEY, JSON.stringify(member));
 };
 
-// UserPicker — full screen name selector shown on first launch
-function UserPicker({ onSelect }) {
+// ── UserPicker — name list + PIN entry ───────────────────────
+function UserPicker({ users, onSelect }) {
+  const [step, setStep]       = useState("pick");   // "pick" | "pin"
+  const [chosen, setChosen]   = useState(null);
+  const [pin, setPin]         = useState("");
+  const [error, setError]     = useState(false);
+
+  const pickUser = (u) => {
+    // If user has no PIN set, let them straight in
+    if(!u.pin) { onSelect(u); return; }
+    setChosen(u); setPin(""); setError(false); setStep("pin");
+  };
+
+  const submitPin = (entered) => {
+    if(entered === chosen.pin) {
+      onSelect(chosen);
+    } else {
+      setError(true);
+      setPin("");
+      setTimeout(()=>setError(false), 1200);
+    }
+  };
+
+  const handleKey = (k) => {
+    if(k==="⌫") { setPin(p=>p.slice(0,-1)); return; }
+    if(k==="") return;
+    const next = pin+k;
+    setPin(next);
+    if(next.length===4) submitPin(next);
+  };
+
   return (
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",
       display:"flex",alignItems:"center",justifyContent:"center",padding:32,
@@ -290,25 +325,200 @@ function UserPicker({ onSelect }) {
         <div style={{fontSize:12,color:C.dim,letterSpacing:"0.04em",marginBottom:32}}>
           COMMAND CENTER
         </div>
-        <div style={{fontSize:13,color:C.dim,marginBottom:16}}>Who are you?</div>
-        <div style={{display:"flex",flexDirection:"column",gap:10}}>
-          {ALL_MEMBERS.map(member=>(
-            <button key={member.name} onClick={()=>{ saveIdentity(member); onSelect(member); }}
-              style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,
-                padding:"14px 20px",fontSize:15,fontWeight:600,cursor:"pointer",
-                fontFamily:"inherit",color:C.text,textAlign:"left",
-                display:"flex",alignItems:"center",justifyContent:"space-between",
-                transition:"all 0.15s"}}
-              onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.background="#fffbeb";}}
-              onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.background=C.card;}}>
-              <span>{member.name}</span>
-              <span style={{fontSize:11,color:C.dim,fontWeight:400,background:C.surface,
-                border:`1px solid ${C.border}`,borderRadius:99,padding:"2px 10px"}}>
-                {member.role}
-              </span>
+
+        {step==="pick" && (
+          <>
+            <div style={{fontSize:13,color:C.dim,marginBottom:16}}>Who are you?</div>
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {users.map(u=>(
+                <button key={u.id} onClick={()=>pickUser(u)}
+                  style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,
+                    padding:"14px 20px",fontSize:15,fontWeight:600,cursor:"pointer",
+                    fontFamily:"inherit",color:C.text,textAlign:"left",
+                    display:"flex",alignItems:"center",justifyContent:"space-between",
+                    transition:"all 0.15s"}}
+                  onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.background="#fffbeb";}}
+                  onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.background=C.card;}}>
+                  <span>{u.name}</span>
+                  <span style={{fontSize:11,color:C.dim,fontWeight:400,background:C.surface,
+                    border:`1px solid ${C.border}`,borderRadius:99,padding:"2px 10px"}}>
+                    {ROLE_LABELS[u.role]||u.role}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {step==="pin" && (
+          <>
+            <div style={{fontSize:14,color:C.text,fontWeight:600,marginBottom:4}}>{chosen?.name}</div>
+            <div style={{fontSize:12,color:C.dim,marginBottom:24}}>Enter your PIN</div>
+            <div style={{display:"flex",justifyContent:"center",gap:14,marginBottom:8}}>
+              {[0,1,2,3].map(i=>(
+                <div key={i} style={{width:13,height:13,borderRadius:"50%",
+                  background:pin.length>i?(error?"#dc2626":C.accent):C.surface,
+                  border:`2px solid ${pin.length>i?(error?"#dc2626":C.accent):C.border}`,
+                  transition:"all 0.15s"}}/>
+              ))}
+            </div>
+            <div style={{height:22,marginBottom:16}}>
+              {error&&<div style={{fontSize:11,color:"#dc2626",fontWeight:700,letterSpacing:"0.06em"}}>INCORRECT PIN</div>}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16}}>
+              {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((k,idx)=>(
+                <button key={idx} onClick={()=>handleKey(k)}
+                  style={{padding:"18px 0",fontSize:k==="⌫"?16:22,fontWeight:k==="⌫"?400:300,
+                    fontFamily:"'DM Sans',sans-serif",
+                    background:k?"rgba(0,0,0,0.04)":"transparent",
+                    border:k?"1px solid rgba(0,0,0,0.08)":"none",
+                    borderRadius:14,cursor:k?"pointer":"default",
+                    color:k?C.text:"transparent",transition:"background 0.1s"}}
+                  onMouseEnter={e=>{if(k)e.currentTarget.style.background="rgba(0,0,0,0.08)";}}
+                  onMouseLeave={e=>{if(k)e.currentTarget.style.background=k?"rgba(0,0,0,0.04)":"transparent";}}>
+                  {k}
+                </button>
+              ))}
+            </div>
+            <button onClick={()=>{setStep("pick");setChosen(null);setPin("");}}
+              style={{fontSize:12,color:C.dim,background:"none",border:"none",cursor:"pointer",fontFamily:"inherit"}}>
+              ← Back
             </button>
-          ))}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── User Management (inside Settings) ───────────────────────
+function UserManagement({ users, onSave }) {
+  const [list, setList]       = useState(users);
+  const [editing, setEditing] = useState(null); // user id being edited
+  const [showPin, setShowPin] = useState({});
+
+  useEffect(()=>setList(users),[users]);
+
+  const newUser = () => {
+    const u = { id:"u_"+Date.now(), name:"", role:"crew", pin:"" };
+    setList(l=>[...l,u]);
+    setEditing(u.id);
+  };
+
+  const upd = (id, patch) => setList(l=>l.map(u=>u.id===id?{...u,...patch}:u));
+
+  const del = (id) => {
+    if(!window.confirm("Remove this user?")) return;
+    const next = list.filter(u=>u.id!==id);
+    setList(next);
+    onSave(next);
+  };
+
+  const save = () => { onSave(list); setEditing(null); };
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:C.text}}>
+          TEAM MEMBERS
         </div>
+        <button onClick={newUser}
+          style={{background:C.accent,border:"none",borderRadius:9,color:"#000",
+            fontWeight:700,padding:"8px 18px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+          + Add Person
+        </button>
+      </div>
+
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        {list.map(u=>{
+          const isEditing = editing===u.id;
+          return (
+            <div key={u.id} style={{background:C.card,border:`1px solid ${isEditing?C.accent:C.border}`,
+              borderRadius:12,padding:"14px 16px",transition:"border-color 0.15s"}}>
+              {isEditing ? (
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                    <div>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>NAME</div>
+                      <input value={u.name} onChange={e=>upd(u.id,{name:e.target.value})}
+                        placeholder="Full name…"
+                        style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
+                          borderRadius:7,color:C.text,padding:"7px 10px",fontSize:13,
+                          fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}/>
+                    </div>
+                    <div>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>ROLE</div>
+                      <select value={u.role} onChange={e=>upd(u.id,{role:e.target.value})}
+                        style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
+                          borderRadius:7,color:C.text,padding:"7px 10px",fontSize:13,
+                          fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}>
+                        {ROLE_OPTIONS.map(r=><option key={r} value={r}>{ROLE_LABELS[r]||r}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>PIN (4 digits)</div>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <input
+                        type={showPin[u.id]?"text":"password"}
+                        value={u.pin}
+                        onChange={e=>{ const v=e.target.value.replace(/\D/g,"").slice(0,4); upd(u.id,{pin:v}); }}
+                        placeholder="e.g. 1234"
+                        maxLength={4}
+                        style={{width:100,background:C.surface,border:`1px solid ${C.border}`,
+                          borderRadius:7,color:C.text,padding:"7px 10px",fontSize:13,
+                          fontFamily:"inherit",outline:"none",letterSpacing:"0.2em"}}/>
+                      <button onClick={()=>setShowPin(s=>({...s,[u.id]:!s[u.id]}))}
+                        style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,
+                          color:C.dim,fontSize:11,padding:"6px 10px",cursor:"pointer",fontFamily:"inherit"}}>
+                        {showPin[u.id]?"Hide":"Show"}
+                      </button>
+                    </div>
+                    <div style={{fontSize:10,color:C.muted,marginTop:4}}>Leave blank for no PIN required</div>
+                  </div>
+                  <div style={{display:"flex",gap:8,marginTop:4}}>
+                    <button onClick={save}
+                      style={{background:C.accent,border:"none",borderRadius:8,color:"#000",
+                        fontWeight:700,padding:"8px 18px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+                      Save
+                    </button>
+                    <button onClick={()=>setEditing(null)}
+                      style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                        color:C.dim,padding:"8px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+                      Cancel
+                    </button>
+                    {u.id!=="koy"&&(
+                      <button onClick={()=>del(u.id)}
+                        style={{background:"none",border:"none",color:"#dc2626",fontSize:12,
+                          cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:12}}>
+                    <div style={{width:36,height:36,borderRadius:"50%",background:`${C.accent}22`,
+                      display:"flex",alignItems:"center",justifyContent:"center",
+                      fontSize:14,fontWeight:700,color:C.accent}}>
+                      {u.name?u.name[0].toUpperCase():"?"}
+                    </div>
+                    <div>
+                      <div style={{fontSize:14,fontWeight:600,color:C.text}}>{u.name||"Unnamed"}</div>
+                      <div style={{fontSize:11,color:C.dim}}>{ROLE_LABELS[u.role]||u.role} · PIN: {u.pin?"••••":"not set"}</div>
+                    </div>
+                  </div>
+                  <button onClick={()=>setEditing(u.id)}
+                    style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                      color:C.dim,fontSize:12,padding:"6px 14px",cursor:"pointer",fontFamily:"inherit"}}>
+                    Edit
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
       </div>
     </div>
   );
@@ -316,7 +526,7 @@ function UserPicker({ onSelect }) {
 
 // Legacy compat — keep AUTH_KEY so old sessions don't crash
 const AUTH_KEY = "he_auth";
-const getAuthSession = () => null; // always null — replaced by identity system
+const getAuthSession = () => null;
 const setAuthSession = () => {};
 
 
@@ -7024,6 +7234,27 @@ function App() {
   const authMode = identity ? "office" : "locked"; // compat for remaining authMode refs
   const setAuthMode = () => {}; // no-op legacy compat
 
+  // ── Users (team members) — loaded from Firestore ─────────────
+  const [users, setUsers] = useState(DEFAULT_USERS);
+
+  useEffect(()=>{
+    getDoc(doc(db,"settings","users")).then(snap=>{
+      if(snap.exists()&&snap.data().list?.length) {
+        setUsers(snap.data().list);
+      }
+    }).catch(()=>{});
+  },[]);
+
+  const saveUsers = async (list) => {
+    setUsers(list);
+    // If current identity was removed or role changed, update it
+    if(identity) {
+      const updated = list.find(u=>u.id===identity.id);
+      if(updated) { saveIdentity(updated); setIdentity(updated); }
+    }
+    try { await setDoc(doc(db,"settings","users"),{list}); } catch(e){ console.error(e); }
+  };
+
   // ── Settings (foremen + leads) ─────────────────────────────
   const [_foremen,        set_foremen]        = useState(DEFAULT_FOREMEN);
   const [_foremanColors,  set_foremanColors]  = useState(DEFAULT_FOREMEN_COLORS);
@@ -7668,7 +7899,7 @@ if(initialLoad.current) return;
 
   // ── Identity gate — show UserPicker if no identity saved ────
   if(!identity) {
-    return <UserPicker onSelect={m => setIdentity(m)} />;
+    return <UserPicker users={users} onSelect={m => { saveIdentity(m); setIdentity(m); }} />;
   }
 
 
@@ -7706,7 +7937,7 @@ if(initialLoad.current) return;
         <div style={{marginLeft:"auto",flexShrink:0,display:"flex",alignItems:"center",gap:8}}>
           <span style={{fontSize:11,color:C.dim,background:C.surface,border:`1px solid ${C.border}`,
             borderRadius:99,padding:"4px 12px",whiteSpace:"nowrap"}}>
-            {identity.name}
+            {identity.name} · {ROLE_LABELS[identity.role]||identity.role}
           </span>
           <button onClick={()=>{localStorage.removeItem("he_identity");setIdentity(null);}}
             style={{fontSize:11,color:C.dim,background:"none",border:`1px solid ${C.border}`,
@@ -8410,10 +8641,19 @@ if(initialLoad.current) return;
       )}
 
       {view==="settings"&&can(identity,"settings.view")&&(
-        <SettingsPage
-          COLOR_OPTIONS={COLOR_OPTIONS}
-          onSave={saveSettings}
-        />
+        <div>
+          <SettingsPage
+            COLOR_OPTIONS={COLOR_OPTIONS}
+            onSave={saveSettings}
+          />
+          {can(identity,"users.manage")&&(
+            <div style={{padding:"0 26px 40px"}}>
+              <div style={{borderTop:`1px solid ${C.border}`,paddingTop:32,marginTop:8}}>
+                <UserManagement users={users} onSave={saveUsers}/>
+              </div>
+            </div>
+          )}
+        </div>
       )}
 
     </div>
