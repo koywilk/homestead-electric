@@ -3533,7 +3533,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
     return total + countFloor(p.upper) + countFloor(p.main) + countFloor(p.basement) + extraCount;
   },0);
 
-  const pendingCOs = (job.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length;
+  const pendingCOs = (job.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length;
 
   const qcCount = countFloor(job.qcPunch?.upper||{}) + countFloor(job.qcPunch?.main||{}) + countFloor(job.qcPunch?.basement||{}) +
     (job.qcPunch?.extras||[]).reduce((s,e)=>s+countFloor(job.qcPunch?.[e.key]||{}),0);
@@ -6337,7 +6337,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
       }
 
       // ── Return Trips ──
-      (job.returnTrips||[]).filter(r=>!r.signedOff&&(r.scope||r.rtStatus||r.needsByStart||r.rtStatusDate)).forEach((rt,i)=>{
+      (job.returnTrips||[]).filter(r=>!r.signedOff&&r.rtStatus!=="complete"&&(r.scope||r.rtStatus||r.needsByStart||r.rtStatusDate)).forEach((rt,i)=>{
         const start=rt.needsByStart||rt.rtStatusDate||rt.date||"";
         const end=rt.needsHardDate?"":rt.needsByEnd||"";
         events.push({
@@ -6351,7 +6351,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
       });
 
       // ── Change Orders ──
-      (job.changeOrders||[]).filter(co=>co.coStatus&&co.coStatus!=="Work Completed"&&co.coStatus!=="Denied"&&co.coStatus!=="converted").forEach((co,i)=>{
+      (job.changeOrders||[]).filter(co=>co.coStatus&&co.coStatus!=="completed"&&co.coStatus!=="denied"&&co.coStatus!=="converted").forEach((co,i)=>{
         const start=co.needsByStart||co.coStatusDate||"";
         const end=co.needsHardDate?"":co.needsByEnd||"";
         const coDef=getStatusDef(CO_STATUSES_NEW,co.coStatus||"pending");
@@ -7225,7 +7225,7 @@ if(initialLoad.current) return;
 
   const complete   = jobs.filter(j=>parseStage(j.finishStage)===100).length;
 
-  const pendingCOs = jobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
+  const pendingCOs = jobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length,0);
 
   const syncColor  = {idle:C.muted,saving:C.accent,saved:C.green,error:C.red}[syncStatus];
 
@@ -7286,7 +7286,7 @@ if(initialLoad.current) return;
 
     const open      = openCount(job);
 
-    const pendCO    = (job.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length;
+    const pendCO    = (job.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length;
 
     const pendRT    = (job.returnTrips||[]).filter(r=>!r.signedOff).length;
 
@@ -7571,7 +7571,7 @@ if(initialLoad.current) return;
                   const lc = getLeadFC(lead);
                   const lJobs = taggedJobs.filter(j=>j._leadKey===lead);
                   if(lJobs.length===0) return null;
-                  const lCOs = lJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
+                  const lCOs = lJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length,0);
                   const lRTs = lJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
                   return (
                     <div key={lead||"__none"} className="foreman-card"
@@ -7935,7 +7935,7 @@ if(initialLoad.current) return;
               {_foremen.map(f=>{
                 const fc    = _foremanColors[f];
                 const fJobs = jobs.filter(j=>(j.foreman||"Koy")===f);
-                const fCOs  = fJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
+                const fCOs  = fJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length,0);
                 const fRT   = fJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
                 const rAvg  = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+parseStage(j.roughStage),0)/fJobs.length) : 0;
                 const fnAvg = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+parseStage(j.finishStage),0)/fJobs.length) : 0;
@@ -7984,7 +7984,7 @@ if(initialLoad.current) return;
               {(()=>{
                 const fc    = "#6b7280";
                 const uJobs = jobs.filter(j=>!j.foreman||j.foreman==="Unassigned");
-                const uCOs  = uJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
+                const uCOs  = uJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length,0);
                 return (
                   <div>
                     <div className="foreman-card" onClick={()=>openForeman("Unassigned")}
