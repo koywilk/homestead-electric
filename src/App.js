@@ -3232,7 +3232,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose }) {
   const tpDef   = getStatusDef(TEMP_PED_STATUSES, job.tempPedStatus||"");
   const color   = tpDef.color || "#8b5cf6";
   const foreman = job.foreman||"Koy";
-  const fc      = getFC(foreman)||"#6b7280";
+  const fc      = (({"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e","Keegan":"#3b82f6","Gage":"#3b82f6","Daegan":"#3b82f6","Braden":"#22c55e","Treycen":"#22c55e","Jon":"#22c55e","Vasa":"#f97316","Abe":"#f97316","Louis":"#f97316","Jacob":"#6b7280"})[foreman]||"#6b7280")||"#6b7280";
 
   // Photo handling
   const addPhotos = (files) => {
@@ -3348,7 +3348,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose }) {
               ))}
               <div>
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
-                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...getForemenList(),"Unassigned"]}/>
+                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...["Koy","Vasa","Colby"],"Unassigned"]}/>
               </div>
               <div>
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Temp Ped #</div>
@@ -4140,7 +4140,7 @@ onUpdate(updated);
 
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
 
-                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...getForemenList(),"Unassigned"]}/>
+                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...["Koy","Vasa","Colby"],"Unassigned"]}/>
 
               </div>
 
@@ -4148,7 +4148,7 @@ onUpdate(updated);
 
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Lead</div>
 
-{getLeadsList().length>0
+{["Keegan","Gage","Daegan","Colby","Braden","Treycen","Jon","Vasa","Abe","Louis","Jacob"].length>0
                   ? <Sel value={job.lead||""} onChange={e=>u({lead:e.target.value})} options={["", ...LEADS]} placeholder="Select lead…"/>
                   : <Inp value={job.lead||""} onChange={e=>u({lead:e.target.value})} placeholder="Lead name…"/>}
 
@@ -4742,7 +4742,7 @@ function TempPedCard({ job, onOpen, onUpdate, onDelete }) {
   const tpDef = getStatusDef(TEMP_PED_STATUSES, job.tempPedStatus||"");
   const color = tpDef.color || "#8b5cf6";
   const foreman = job.foreman||"Koy";
-  const fc = getFC(foreman) || "#6b7280";
+  const fc = (({"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e","Keegan":"#3b82f6","Gage":"#3b82f6","Daegan":"#3b82f6","Braden":"#22c55e","Treycen":"#22c55e","Jon":"#22c55e","Vasa":"#f97316","Abe":"#f97316","Louis":"#f97316","Jacob":"#6b7280"})[foreman]||"#6b7280") || "#6b7280";
 
   const upd = (patch) => onUpdate({...job, ...patch});
 
@@ -5944,7 +5944,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
     return 0;
   });
 
-  const foremanList = filterForeman ? [filterForeman] : [...getForemenList(),"Unassigned"];
+  const foremanList = filterForeman ? [filterForeman] : [...["Koy","Vasa","Colby"],"Unassigned"];
   const totalCount = allTasks.length;
   const overdueCount = sorted.filter(t=>{ const u=URGENCY(t.dueDate); return u&&u.days<0; }).length;
 
@@ -5980,7 +5980,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
               </div>
               {invoiceJobs.map(job=>{
                 const foreman = job.foreman||"Koy";
-                const fc = getFC(foreman)||"#6b7280";
+                const fc = (({"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e","Keegan":"#3b82f6","Gage":"#3b82f6","Daegan":"#3b82f6","Braden":"#22c55e","Treycen":"#22c55e","Jon":"#22c55e","Vasa":"#f97316","Abe":"#f97316","Louis":"#f97316","Jacob":"#6b7280"})[foreman]||"#6b7280")||"#6b7280";
                 const isTP = job.tempPed;
                 return (
                   <div key={job.id}
@@ -6058,7 +6058,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
         ) : (
           // Grouped by foreman
           foremanList.map(f=>{
-            const fc = getFC(f)||"#6b7280";
+            const fc = (({"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e","Keegan":"#3b82f6","Gage":"#3b82f6","Daegan":"#3b82f6","Braden":"#22c55e","Treycen":"#22c55e","Jon":"#22c55e","Vasa":"#f97316","Abe":"#f97316","Louis":"#f97316","Jacob":"#6b7280"})[f]||"#6b7280")||"#6b7280";
             const fTasks = sorted.filter(t=>t.foreman===f);
             const fOverdue = fTasks.filter(t=>{ const u=URGENCY(t.dueDate); return u&&u.days<0; }).length;
             if(fTasks.length===0) return null;
@@ -6163,7 +6163,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
     return items;
   };
 
-  const foremanTabs = ["All",..._foremen,"Unassigned"];
+  const foremanTabs = ["All",...getForemenList(),"Unassigned"];
   const filteredJobs = foremanTab==="All"?jobs:foremanTab==="Unassigned"?jobs.filter(j=>!j.foreman||j.foreman==="Unassigned"):jobs.filter(j=>(j.foreman||"Koy")===foremanTab);
   const allItems = buildItems(filteredJobs);
 
@@ -6179,7 +6179,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
 
   const SchedCard = ({item}) => {
     const {job,label,color,date,status,type,scope,desc}=item;
-    const foreman=job.foreman||"Koy"; const fc=_foremanColors[foreman]||"#6b7280";
+    const foreman=job.foreman||"Koy"; const fc=getFC(foreman)||"#6b7280";
     const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):type==="tempPed"?getStatusDef(TEMP_PED_STATUSES,status):getStatusDef(ROUGH_STATUSES,status);
     return (
       <div onClick={()=>onSelectJob(job)} style={{background:C.card,border:`1px solid ${color}33`,borderRadius:12,padding:"12px 14px",marginBottom:8,cursor:"pointer",borderLeft:`3px solid ${color}`}}
@@ -6224,7 +6224,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
         </div>
         <div style={{display:"flex",gap:6,overflowX:"auto",scrollbarWidth:"none",paddingBottom:1}}>
           {foremanTabs.map(f=>{
-            const fc=f==="All"?C.accent:_foremanColors[f]||"#6b7280";
+            const fc=f==="All"?C.accent:getFC(f)||"#6b7280";
             const fJobs=f==="All"?jobs:f==="Unassigned"?jobs.filter(j=>!j.foreman||j.foreman==="Unassigned"):jobs.filter(j=>(j.foreman||"Koy")===f);
             const fCount=buildItems(fJobs).length;
             return (
@@ -6321,9 +6321,9 @@ function SchedulingForecast({ jobs, onSelectJob }) {
           {allItems.length===0?(
             <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}><div style={{fontSize:13}}>Nothing to schedule.</div></div>
           ):(
-            <div style={{display:"grid",gridTemplateColumns:`repeat(${[..._foremen,"Unassigned"].length},minmax(220px,1fr))`,gap:16,minWidth:800}}>
-              {[..._foremen,"Unassigned"].map(f=>{
-                const fc=_foremanColors[f]||"#6b7280";
+            <div style={{display:"grid",gridTemplateColumns:`repeat(${[...getForemenList(),"Unassigned"].length},minmax(220px,1fr))`,gap:16,minWidth:800}}>
+              {[...getForemenList(),"Unassigned"].map(f=>{
+                const fc=getFC(f)||"#6b7280";
                 const fItems=allItems.filter(i=>{
                   const jf=i.job.foreman||"Koy";
                   return f==="Unassigned"?(!i.job.foreman||i.job.foreman==="Unassigned"):jf===f;
@@ -6434,7 +6434,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
             {sorted.length===0&&<div style={{textAlign:"center",padding:"60px 0",color:C.muted,fontSize:13}}>Nothing to schedule.</div>}
             {withDate.map((item,i)=>{
               const {job,label,color,date,status,type,scope,desc}=item;
-              const foreman=job.foreman||"Koy"; const fc=_foremanColors[foreman]||"#6b7280";
+              const foreman=job.foreman||"Koy"; const fc=getFC(foreman)||"#6b7280";
               const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):type==="tempPed"?getStatusDef(TEMP_PED_STATUSES,status):getStatusDef(ROUGH_STATUSES,status);
               const overdue=isOverdue(date);
               return (
@@ -6468,7 +6468,7 @@ function SchedulingForecast({ jobs, onSelectJob }) {
                 <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.1em",color:"#ca8a04",marginBottom:10,paddingTop:16,borderTop:`1px solid ${C.border}`}}>UNSCHEDULED — NO DATE SET</div>
                 {noDate.map(item=>{
                   const {job,label,color,status,type,scope,desc}=item;
-                  const foreman=job.foreman||"Koy"; const fc=_foremanColors[foreman]||"#6b7280";
+                  const foreman=job.foreman||"Koy"; const fc=getFC(foreman)||"#6b7280";
                   const statusDef=type==="returnTrip"?getStatusDef(RT_STATUSES,status):type==="changeOrder"?getStatusDef(CO_STATUSES_NEW,status):type==="tempPed"?getStatusDef(TEMP_PED_STATUSES,status):getStatusDef(ROUGH_STATUSES,status);
                   return (
                     <div key={item.id} onClick={()=>onSelectJob(job)}
