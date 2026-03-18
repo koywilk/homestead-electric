@@ -2763,12 +2763,20 @@ function HRAddFloor({homeRuns, onHRChange}) {
 
 // ── Generator Load Section (internal curator) ─────────────────
 function GeneratorLoadSection({ homeRuns, genLoads, onGenLoadsChange }) {
-  const [dragIdx, setDragIdx] = useState(null);
-  const [overIdx, setOverIdx] = useState(null);
-  const [editId,  setEditId]  = useState(null);
+  const [dragIdx,    setDragIdx]  = useState(null);
+  const [overIdx,    setOverIdx]  = useState(null);
+  const [editId,     setEditId]   = useState(null);
+  // Local state for immediate UI feedback — synced to parent on every change
+  const [localLoads, setLocalLoads] = useState(genLoads || []);
 
-  const loads = genLoads || [];
-  const save  = (next) => onGenLoadsChange(next);
+  // Keep in sync when parent prop changes (e.g. on Firestore load)
+  useEffect(() => { setLocalLoads(genLoads || []); }, [JSON.stringify(genLoads)]);
+
+  const loads = localLoads;
+  const save  = (next) => {
+    setLocalLoads(next);
+    onGenLoadsChange(next);
+  };
 
   const importFromHomeRuns = () => {
     const allRows = [
@@ -7512,21 +7520,14 @@ function SettingsPage({ COLOR_OPTIONS, onSave }) {
     setSaved(true); setTimeout(()=>setSaved(false), 2000);
   };
 
-  // Section is a local layout helper — OK to define here (no hooks, no state)
-  const Section = ({title, children}) => (
-    <div style={{marginBottom:32}}>
-      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",
-        color:C.text,marginBottom:14,paddingBottom:8,borderBottom:`2px solid ${C.border}`}}>{title}</div>
-      {children}
-    </div>
-  );
-
   return (
     <div style={{padding:"24px 20px 60px",maxWidth:600,margin:"0 auto"}}>
       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.08em",
         color:C.text,marginBottom:24}}>SETTINGS</div>
 
-      <Section title="Foremen">
+      <div style={{marginBottom:32}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",
+          color:C.text,marginBottom:14,paddingBottom:8,borderBottom:`2px solid ${C.border}`}}>Foremen</div>
         {foremen.map(name=>(
           <SettingsPersonRow key={name} name={name} color={foremanColors[name]||"#6b7280"}
             colorOptions={COLOR_OPTIONS}
@@ -7546,9 +7547,11 @@ function SettingsPage({ COLOR_OPTIONS, onSave }) {
             + Add
           </button>
         </div>
-      </Section>
+      </div>
 
-      <Section title="Leads">
+      <div style={{marginBottom:32}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",
+          color:C.text,marginBottom:14,paddingBottom:8,borderBottom:`2px solid ${C.border}`}}>Leads</div>
         {leads.map(name=>(
           <SettingsPersonRow key={name} name={name} color={leadColors[name]||"#6b7280"}
             colorOptions={COLOR_OPTIONS}
@@ -7568,7 +7571,7 @@ function SettingsPage({ COLOR_OPTIONS, onSave }) {
             + Add
           </button>
         </div>
-      </Section>
+      </div>
 
       <button onClick={save}
         style={{width:"100%",background:saved?"#16a34a":C.accent,border:"none",borderRadius:10,
