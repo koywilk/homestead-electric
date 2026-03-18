@@ -3227,8 +3227,8 @@ const normalizeJob = (raw) => ({
   homeRuns:    raw?.homeRuns    || {},
   roughQuestions: raw?.roughQuestions || {upper:[],main:[],basement:[]},
   finishQuestions:raw?.finishQuestions|| {upper:[],main:[],basement:[]},
-  roughStatus:  (()=>{ const s=raw?.roughStatus||""; const valid=["","ready","scheduled","waiting","inprogress","invoice","complete"]; const p=parseInt(raw?.roughStage)||0; if(valid.includes(s)) return s||(p===100?"complete":p>0?"inprogress":""); return p===100?"complete":p>0?"inprogress":""; })(),
-  finishStatus: (()=>{ const s=raw?.finishStatus||""; const valid=["","ready","scheduled","waiting","inprogress","invoice","complete"]; const p=parseInt(raw?.finishStage)||0; if(valid.includes(s)) return s||(p===100?"complete":p>0?"inprogress":""); return p===100?"complete":p>0?"inprogress":""; })(),
+  roughStatus:     raw?.roughStatus     || (()=>{ const p=parseInt(raw?.roughStage)||0;  return p===100?"complete":p>0?"inprogress":""; })(),
+  finishStatus:    raw?.finishStatus    || (()=>{ const p=parseInt(raw?.finishStage)||0; return p===100?"complete":p>0?"inprogress":""; })(),
   roughStatusDate:      raw?.roughStatusDate      || "",
   roughProjectedStart:  raw?.roughProjectedStart  || "",
   finishStatusDate:     raw?.finishStatusDate     || "",
@@ -4453,9 +4453,8 @@ function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
 // ── Stage Sections ────────────────────────────────────────────
 
 // Effective status — falls back to deriving from % if no status stored
-const VALID_STATUSES = new Set(['','ready','scheduled','waiting','inprogress','invoice','complete']);
-const effRS = j => { const s=j.roughStatus||""; if(VALID_STATUSES.has(s)&&s) return s; const p=parseInt(j.roughStage)||0; return p===100?"complete":p>0?"inprogress":""; };
-const effFS = j => { const s=j.finishStatus||""; if(VALID_STATUSES.has(s)&&s) return s; const p=parseInt(j.finishStage)||0; return p===100?"complete":p>0?"inprogress":""; };
+const effRS = j => { if(j.roughStatus) return j.roughStatus; const p=parseInt(j.roughStage)||0; return p===100?"complete":p>0?"inprogress":""; };
+const effFS = j => { if(j.finishStatus) return j.finishStatus; const p=parseInt(j.finishStage)||0; return p===100?"complete":p>0?"inprogress":""; };
 
 const STAGE_SECTIONS = [
 
@@ -4488,9 +4487,6 @@ const STAGE_SECTIONS = [
 
   { key:"complete",     label:"Completed",                 color:"#22c55e",
     test: j => effFS(j) === "complete" },
-
-  { key:"uncategorized", label:"Uncategorized",             color:"#64748b",
-    test: j => true },
 
 ];
 
@@ -5922,7 +5918,7 @@ if(initialLoad.current) return;
                 color:C.dim,marginBottom:16,marginTop:32,paddingTop:24,borderTop:`1px solid ${C.border}`}}>
                 ALL JOBS
               </div>
-              <StageSectionList jobs={filtered} JobRow={JobRow} startCollapsed={true}/>
+              <StageSectionList jobs={jobs} JobRow={JobRow} startCollapsed={true}/>
             </div>
 
           </div>
