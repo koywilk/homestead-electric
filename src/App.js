@@ -7790,26 +7790,6 @@ function App() {
       if(updated) { saveIdentity(updated); setIdentity(updated); }
     }
     try { await setDoc(doc(db,"settings","users"),{list}); } catch(e){ console.error(e); }
-
-    // Auto-update foremen/leads from the new user list (role-driven)
-    const foremanRoles = new Set(["admin","justin","jeromy","foreman"]);
-    const leadRoles    = new Set(["lead"]);
-    const newForemen = list.filter(u=>foremanRoles.has(u.role)).map(u=>u.name);
-    const newLeads   = list.filter(u=>leadRoles.has(u.role)).map(u=>u.name);
-    // Merge with any existing manual extras (names not in user list)
-    const userNames = new Set(list.map(u=>u.name));
-    const extraF = _foremen.filter(n=>!userNames.has(n));
-    const extraL = _leads.filter(n=>!userNames.has(n));
-    const mergedForemen = [...newForemen, ...extraF];
-    const mergedLeads   = [...newLeads,   ...extraL];
-    const newFC = {..._foremanColors};
-    const newLC = {..._leadColors};
-    mergedForemen.forEach(n=>{ if(!newFC[n]) newFC[n]="#6b7280"; });
-    mergedLeads.forEach(n=>{ if(!newLC[n]) newLC[n]="#6b7280"; });
-    FOREMEN=mergedForemen; FOREMEN_COLORS=newFC; LEADS=mergedLeads; LEAD_COLORS=newLC;
-    set_foremen(mergedForemen); set_foremanColors(newFC);
-    set_leads(mergedLeads); set_leadColors(newLC);
-    setDoc(doc(db,"settings","main"),{foremen:mergedForemen,foremanColors:newFC,leads:mergedLeads,leadColors:newLC}).catch(()=>{});
   };
 
   // ── Settings (foremen + leads) ─────────────────────────────
@@ -7835,11 +7815,16 @@ function App() {
           "Callen Jakeman","Isaiah Miller","Jacob Nuffer","Jacob Spackman","Jakob Bingham",
           "James Coleman Christen","Noah Davis","Payton Bolda","Koy Wilkinson","Justin Cloward","Jeromy Cloward",
         ]);
-        const f  = (d.foremen       || DEFAULT_FOREMEN).filter(n=>!BAD_NAMES.has(n));
+        let f  = (d.foremen       || DEFAULT_FOREMEN).filter(n=>!BAD_NAMES.has(n));
         const fc = {...(d.foremanColors || DEFAULT_FOREMEN_COLORS)};
-        const l  = (d.leads         || DEFAULT_LEADS).filter(n=>!BAD_NAMES.has(n));
+        let l  = (d.leads         || DEFAULT_LEADS).filter(n=>!BAD_NAMES.has(n));
         const lc = {...(d.leadColors    || DEFAULT_LEAD_COLORS)};
         BAD_NAMES.forEach(n=>{ delete fc[n]; delete lc[n]; });
+
+        // Hard reset if list got corrupted (none of the expected foremen present)
+        if(f.length===0 || !DEFAULT_FOREMEN.some(n=>f.includes(n))) { f=[...DEFAULT_FOREMEN]; }
+        if(l.length===0) { l=[...DEFAULT_LEADS]; }
+
         FOREMEN=f; FOREMEN_COLORS=fc; LEADS=l; LEAD_COLORS=lc;
         set_foremen(f); set_foremanColors(fc); set_leads(l); set_leadColors(lc);
         // Write cleaned data back
