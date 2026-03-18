@@ -2797,13 +2797,24 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
 
 
 
-  const copyLink = async () => {
-    // Flush job to Firestore immediately so homeowner page reads latest recommended flags
-    if(onFlush) await onFlush();
+  const copyLink = () => {
+    // Copy immediately (clipboard requires direct user gesture — no await before it)
     navigator.clipboard.writeText(hoLink).then(()=>{
       setLinkCopied(true);
       setTimeout(()=>setLinkCopied(false), 2500);
+    }).catch(()=>{
+      // Fallback for browsers that block clipboard
+      const el = document.createElement("textarea");
+      el.value = hoLink;
+      document.body.appendChild(el);
+      el.select();
+      document.execCommand("copy");
+      document.body.removeChild(el);
+      setLinkCopied(true);
+      setTimeout(()=>setLinkCopied(false), 2500);
     });
+    // Flush to Firestore in background so homeowner sees latest stars
+    if(onFlush) onFlush();
   };
 
 
@@ -7605,8 +7616,15 @@ function App() {
 
   useEffect(()=>{
     getDoc(doc(db,"settings","users")).then(snap=>{
-      if(snap.exists()&&snap.data().list?.length) {
-        setUsers(snap.data().list);
+      const existing = snap.exists()&&snap.data().list?.length ? snap.data().list : [];
+      // Merge — add any DEFAULT_USERS not already in Firestore (match by id)
+      const existingIds = new Set(existing.map(u=>u.id));
+      const toAdd = DEFAULT_USERS.filter(u=>!existingIds.has(u.id));
+      const merged = [...existing, ...toAdd];
+      setUsers(merged);
+      // If we added anyone new, persist back to Firestore
+      if(toAdd.length>0) {
+        setDoc(doc(db,"settings","users"),{list:merged}).catch(()=>{});
       }
     }).catch(()=>{});
   },[]);
