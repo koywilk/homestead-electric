@@ -2741,15 +2741,17 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
 
   const copyLink = async () => {
     setSending(true);
-    // Write recommended IDs to a dedicated Firestore doc — simple and reliable
     const recIds = Object.entries(recommended).filter(([,v])=>v).map(([id])=>id);
     try {
-      await setDoc(doc(db, "homeowner_recommended", jobId), {
+      // Save into homeowner_requests — same collection homeowner page already reads
+      const existing = await getDoc(doc(db, "homeowner_requests", jobId));
+      const existingData = existing.exists() ? existing.data() : {};
+      await setDoc(doc(db, "homeowner_requests", jobId), {
+        ...existingData,
         recommendedIds: recIds,
         updatedAt: new Date().toISOString(),
       });
     } catch(e) { console.error("Failed to save recommendations:", e); }
-    // Copy link to clipboard
     try { await navigator.clipboard.writeText(hoLink); } catch(e){}
     setSending(false);
     setLinkCopied(true);
@@ -5761,14 +5763,10 @@ function HomeownerPage({ jobId }) {
         const j = snap.data().data;
         setJob(j);
 
-        // Load recommended IDs from dedicated collection
-        let recIds = new Set();
-        try {
-          const recSnap = await getDoc(doc(db,"homeowner_recommended",jobId));
-          if(recSnap.exists()) {
-            (recSnap.data().recommendedIds||[]).forEach(id=>recIds.add(id));
-          }
-        } catch(e){}
+        // Load homeowner_requests — contains both recommendations and any prior submission
+        const reqSnap = await getDoc(doc(db,"homeowner_requests",jobId));
+        const reqData = reqSnap.exists() ? reqSnap.data() : {};
+        const recIds = new Set(reqData.recommendedIds||[]);
 
         // Build rows — stamp recommended flag from recIds
         const rows = [
@@ -5780,12 +5778,11 @@ function HomeownerPage({ jobId }) {
          .map((r,i)=>({...r, priority:i+1, included:true, notes:"", recommended:recIds.has(r.id)}));
         setItems(rows);
 
-        // If already submitted, load saved selections
-        const reqSnap = await getDoc(doc(db,"homeowner_requests",jobId));
-        if(reqSnap.exists()&&reqSnap.data().submitted){
+        // If already submitted, restore their saved selections (preserving recommended flags)
+        if(reqData.submitted && reqData.items) {
           setSubmitted(true);
-          const saved = reqSnap.data().items;
-          if(saved) setItems(saved);
+          const savedWithRec = reqData.items.map(it=>({...it, recommended:recIds.has(it.id)}));
+          setItems(savedWithRec);
         }
       } catch(e){ setError("Failed to load. Please try again."); }
       setLoading(false);
@@ -5832,23 +5829,16 @@ function HomeownerPage({ jobId }) {
   const excluded = items.filter(it=>!it.included);
 
   // ── Generator size calculator ─────────────────────────────
-  const WIRE_AMPS_MAP = {
-    "14/2":15,"14/3":15,"12/2":20,"12/3":20,"10/2":30,"10/3":30,
-    "8/2":40,"8/3":40,"6/2":50,"6/3":50,"4/2":70,"4/3":70,
-    "2/2":95,"2/3":95,"1/0":125,"2/0":150,"3/0":175,"4/0":200,
-  };
-  // Estimate watts from amps — use 240V for 2-pole (large), 120V for single pole
-  // Conservative: use 80% of breaker rating as running load
+  // /3 wire = 2-pole 240V circuit, /2 wire = single-pole 120V
   const estimateWatts = (wire) => {
-    if(!wire||!WIRE_AMPS_MAP[wire]) return 0;
-    const amps = WIRE_AMPS_MAP[wire];
-    const is2pole = wire.endsWith("/3")||amps>=30;
+    if(!wire||!HO_WIRE_AMPS[wire]) return 0;
+    const amps = HO_WIRE_AMPS[wire];
+    const is2pole = amps >= 30 || wire.endsWith("/3");
     const volts = is2pole ? 240 : 120;
     return Math.round(amps * volts * 0.8);
   };
   const totalWatts = included.reduce((sum,it)=>sum+estimateWatts(it.wire),0);
   const totalKW    = (totalWatts/1000).toFixed(1);
-  // Generator sizing: add 25% headroom for startup surge
   const surgeKW    = Math.ceil(totalWatts*1.25/1000);
   const genSize = surgeKW<=11?"11 kW":surgeKW<=14?"14 kW":surgeKW<=17?"17 kW":surgeKW<=20?"20 kW":surgeKW<=22?"22 kW":surgeKW<=24?"24 kW":surgeKW<=26?"26 kW":surgeKW<=36?"36 kW":">36 kW — consult engineer";
 
@@ -6830,75 +6820,72 @@ function PrepTaskList({ jobs, onSelectJob, onUpdateJob }) {
 // ── ForemanTaskCard — collapsible task card shown on foreman page ──
 // For Koy it shows two tabs: Prep | Tasks. For others just Tasks.
 function ForemanTaskCard({ isKoy, fTasks, prepTasks, jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJob, activeForeman }) {
-  const [open, setOpen] = useState(true);
-  const [tab, setTab]   = useState(isKoy ? "prep" : "tasks");
+  const [prepOpen,  setPrepOpen]  = useState(false); // starts collapsed
+  const [tasksOpen, setTasksOpen] = useState(true);  // starts expanded
 
-  const totalCount = fTasks.length + (isKoy ? prepTasks.length : 0);
   const overdueCount = fTasks.filter(t=>{ const u=URGENCY(t.dueDate); return u&&u.days<0; }).length;
+
+  const SectionHeader = ({label, count, overdue, open, onToggle, color}) => (
+    <div onClick={onToggle}
+      style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",
+        background:`${color}08`,borderBottom:open?`1px solid ${color}22`:"none",
+        cursor:"pointer",userSelect:"none"}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:14,letterSpacing:"0.08em",color}}>{label}</div>
+      {count>0&&<div style={{background:`${color}18`,border:`1px solid ${color}33`,borderRadius:99,
+        padding:"1px 8px",fontSize:11,color,fontWeight:700}}>{count}</div>}
+      {overdue>0&&<div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,
+        padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>⚠ {overdue}</div>}
+      <div style={{marginLeft:"auto",fontSize:12,color,opacity:0.6}}>{open?"▾":"▸"}</div>
+    </div>
+  );
 
   return (
     <div style={{margin:"0 0 16px",border:"1px solid #dc262633",borderRadius:12,overflow:"hidden"}}>
-      {/* Header — always visible, click to collapse */}
-      <div onClick={()=>setOpen(v=>!v)}
-        style={{display:"flex",alignItems:"center",gap:8,padding:"12px 16px",
-          background:"#dc262608",cursor:"pointer",userSelect:"none"}}>
-        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.08em",color:"#dc2626"}}>
-          OPEN TASKS
-        </div>
-        <div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,
-          padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>{totalCount}</div>
-        {overdueCount>0&&(
-          <div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,
-            padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>⚠ {overdueCount} overdue</div>
-        )}
-        <div style={{marginLeft:"auto",fontSize:13,color:"#dc2626",opacity:0.7}}>{open?"▾":"▸"}</div>
-      </div>
 
-      {open && (
-        <div style={{padding:"12px 14px"}}>
-          {/* Tab bar — only for Koy */}
-          {isKoy && (
-            <div style={{display:"flex",gap:6,marginBottom:12}}>
-              {[["prep","Job Prep",prepTasks.length],["tasks","Tasks",fTasks.length]].map(([k,label,count])=>(
-                <button key={k} onClick={e=>{e.stopPropagation();setTab(k);}}
-                  style={{padding:"5px 14px",borderRadius:7,fontSize:12,cursor:"pointer",
-                    fontFamily:"inherit",fontWeight:tab===k?700:500,
-                    background:tab===k?"#dc2626":"transparent",
-                    border:`1px solid ${tab===k?"#dc2626":"#dc262644"}`,
-                    color:tab===k?"#fff":"#dc2626",transition:"all 0.15s",
-                    display:"flex",alignItems:"center",gap:6}}>
-                  {label}
-                  {count>0&&(
-                    <span style={{background:tab===k?"rgba(255,255,255,0.25)":"#dc262618",
-                      borderRadius:99,padding:"0px 6px",fontSize:10,fontWeight:700}}>
-                      {count}
-                    </span>
-                  )}
-                </button>
-              ))}
+      {/* Job Prep section — Koy only, starts collapsed */}
+      {isKoy && (
+        <>
+          <SectionHeader
+            label="JOB PREP"
+            count={prepTasks.length}
+            overdue={0}
+            open={prepOpen}
+            onToggle={()=>setPrepOpen(v=>!v)}
+            color="#f59e0b"
+          />
+          {prepOpen && (
+            <div style={{padding:"12px 14px",borderBottom:"1px solid #dc262322"}}>
+              {prepTasks.length===0
+                ? <div style={{fontSize:12,color:"var(--muted)",textAlign:"center",padding:"12px 0"}}>✓ All prep complete</div>
+                : <PrepTaskList jobs={jobs} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob}/>
+              }
             </div>
           )}
+        </>
+      )}
 
-          {/* Prep tab — Koy only */}
-          {isKoy && tab==="prep" && (
-            prepTasks.length===0
-              ? <div style={{fontSize:12,color:"var(--muted)",textAlign:"center",padding:"16px 0"}}>✓ All prep complete</div>
-              : <PrepTaskList jobs={jobs} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob}/>
-          )}
-
-          {/* Tasks tab — all foremen */}
-          {(!isKoy || tab==="tasks") && (
-            fTasks.length===0
-              ? <div style={{fontSize:12,color:"var(--muted)",textAlign:"center",padding:"16px 0"}}>✓ No open tasks</div>
-              : <Tasks
-                  jobs={jobs}
-                  manualTasks={manualTasks}
-                  onManualTasksChange={onManualTasksChange}
-                  onSelectJob={onSelectJob}
-                  onUpdateJob={onUpdateJob}
-                  filterForeman={activeForeman}
-                />
-          )}
+      {/* Tasks section — all foremen, starts expanded */}
+      <SectionHeader
+        label="TASKS"
+        count={fTasks.length}
+        overdue={overdueCount}
+        open={tasksOpen}
+        onToggle={()=>setTasksOpen(v=>!v)}
+        color="#dc2626"
+      />
+      {tasksOpen && (
+        <div style={{padding:"12px 14px"}}>
+          {fTasks.length===0
+            ? <div style={{fontSize:12,color:"var(--muted)",textAlign:"center",padding:"12px 0"}}>✓ No open tasks</div>
+            : <Tasks
+                jobs={jobs}
+                manualTasks={manualTasks}
+                onManualTasksChange={onManualTasksChange}
+                onSelectJob={onSelectJob}
+                onUpdateJob={onUpdateJob}
+                filterForeman={activeForeman}
+              />
+          }
         </div>
       )}
     </div>
