@@ -226,7 +226,8 @@ const getLeadFC = (name) => (LEAD_COLORS[name]||"#6b7280");
 const COLOR_OPTIONS = ["#3b82f6","#f97316","#22c55e","#8b5cf6","#ec4899","#14b8a6","#f59e0b","#ef4444","#06b6d4","#a855f7","#84cc16","#f43f5e"];
 
 // ── Identity & Permissions ────────────────────────────────────
-const IDENTITY_KEY = "he_identity"; // localStorage key — persists forever
+const IDENTITY_KEY   = "he_identity";
+const IDENTITY_TTL   = 24 * 60 * 60 * 1000; // 24 hours in ms
 const USERS_KEY    = "he_users";    // Firestore + localStorage user list
 
 // Default users — Koy is admin to start, everyone else added in-app
@@ -271,24 +272,39 @@ const can = (identity, feature) => {
   return allowed.includes(identity.role);
 };
 
-// Read/write identity from localStorage (persists forever)
+// Read identity — returns null if missing or older than 24h
 const getIdentity = () => {
-  try { return JSON.parse(localStorage.getItem(IDENTITY_KEY)||"null"); } catch { return null; }
+  try {
+    const raw = localStorage.getItem(IDENTITY_KEY);
+    if(!raw) return null;
+    const stored = JSON.parse(raw);
+    if(!stored) return null;
+    if(Date.now() - (stored.pinVerifiedAt||0) > IDENTITY_TTL) {
+      localStorage.removeItem(IDENTITY_KEY);
+      return null;
+    }
+    return stored;
+  } catch { return null; }
 };
 const saveIdentity = (member) => {
-  localStorage.setItem(IDENTITY_KEY, JSON.stringify(member));
+  localStorage.setItem(IDENTITY_KEY, JSON.stringify({...member, pinVerifiedAt: Date.now()}));
 };
 
 // ── UserPicker — name list + PIN entry ───────────────────────
-function UserPicker({ users, onSelect }) {
-  const [step, setStep]       = useState("pick");   // "pick" | "pin"
-  const [chosen, setChosen]   = useState(null);
-  const [pin, setPin]         = useState("");
-  const [error, setError]     = useState(false);
+function UserPicker({ users, onSelect, onSavePin }) {
+  const [step, setStep]         = useState("pick");   // "pick" | "pin" | "create" | "confirm"
+  const [chosen, setChosen]     = useState(null);
+  const [pin, setPin]           = useState("");
+  const [firstPin, setFirstPin] = useState("");
+  const [error, setError]       = useState(false);
+  const [saving, setSaving]     = useState(false);
 
   const pickUser = (u) => {
-    // If user has no PIN set, let them straight in
-    if(!u.pin) { onSelect(u); return; }
+    if(!u.pin) {
+      // No PIN yet — prompt to create one
+      setChosen(u); setPin(""); setFirstPin(""); setError(false); setStep("create");
+      return;
+    }
     setChosen(u); setPin(""); setError(false); setStep("pin");
   };
 
@@ -296,10 +312,27 @@ function UserPicker({ users, onSelect }) {
     if(entered === chosen.pin) {
       onSelect(chosen);
     } else {
-      setError(true);
-      setPin("");
+      setError(true); setPin("");
       setTimeout(()=>setError(false), 1200);
     }
+  };
+
+  const submitCreate = (entered) => {
+    // First entry — move to confirm step
+    setFirstPin(entered); setPin(""); setStep("confirm");
+  };
+
+  const submitConfirm = async (entered) => {
+    if(entered !== firstPin) {
+      setError(true); setPin("");
+      setTimeout(()=>{ setError(false); setStep("create"); setFirstPin(""); }, 1200);
+      return;
+    }
+    // PINs match — save and log in
+    setSaving(true);
+    const updated = {...chosen, pin: entered};
+    await onSavePin(updated);
+    onSelect(updated);
   };
 
   const handleKey = (k) => {
@@ -307,7 +340,11 @@ function UserPicker({ users, onSelect }) {
     if(k==="") return;
     const next = pin+k;
     setPin(next);
-    if(next.length===4) submitPin(next);
+    if(next.length===4) {
+      if(step==="pin")     submitPin(next);
+      if(step==="create")  submitCreate(next);
+      if(step==="confirm") submitConfirm(next);
+    }
   };
 
   return (
@@ -350,10 +387,14 @@ function UserPicker({ users, onSelect }) {
           </>
         )}
 
-        {step==="pin" && (
+        {(step==="pin"||step==="create"||step==="confirm") && (
           <>
             <div style={{fontSize:14,color:C.text,fontWeight:600,marginBottom:4}}>{chosen?.name}</div>
-            <div style={{fontSize:12,color:C.dim,marginBottom:24}}>Enter your PIN</div>
+            <div style={{fontSize:12,color:C.dim,marginBottom:24}}>
+              {step==="pin"     && "Enter your PIN"}
+              {step==="create"  && "Create a 4-digit PIN"}
+              {step==="confirm" && (error ? "PINs don't match — try again" : "Confirm your PIN")}
+            </div>
             <div style={{display:"flex",justifyContent:"center",gap:14,marginBottom:8}}>
               {[0,1,2,3].map(i=>(
                 <div key={i} style={{width:13,height:13,borderRadius:"50%",
@@ -363,11 +404,12 @@ function UserPicker({ users, onSelect }) {
               ))}
             </div>
             <div style={{height:22,marginBottom:16}}>
-              {error&&<div style={{fontSize:11,color:"#dc2626",fontWeight:700,letterSpacing:"0.06em"}}>INCORRECT PIN</div>}
+              {step==="pin"&&error&&<div style={{fontSize:11,color:"#dc2626",fontWeight:700,letterSpacing:"0.06em"}}>INCORRECT PIN</div>}
+              {saving&&<div style={{fontSize:11,color:C.accent,fontWeight:600}}>Saving…</div>}
             </div>
             <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16}}>
               {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((k,idx)=>(
-                <button key={idx} onClick={()=>handleKey(k)}
+                <button key={idx} onClick={()=>handleKey(k)} disabled={saving}
                   style={{padding:"18px 0",fontSize:k==="⌫"?16:22,fontWeight:k==="⌫"?400:300,
                     fontFamily:"'DM Sans',sans-serif",
                     background:k?"rgba(0,0,0,0.04)":"transparent",
@@ -380,7 +422,7 @@ function UserPicker({ users, onSelect }) {
                 </button>
               ))}
             </div>
-            <button onClick={()=>{setStep("pick");setChosen(null);setPin("");}}
+            <button onClick={()=>{setStep("pick");setChosen(null);setPin("");setFirstPin("");}}
               style={{fontSize:12,color:C.dim,background:"none",border:"none",cursor:"pointer",fontFamily:"inherit"}}>
               ← Back
             </button>
@@ -7420,27 +7462,49 @@ function SettingsPage({ COLOR_OPTIONS, onSave }) {
     </div>
   );
 
-  const PersonRow = ({name, color, onColorChange, onDelete}) => (
-    <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",
-      background:C.card,borderRadius:10,marginBottom:8,border:`1px solid ${C.border}`,
-      borderLeft:`3px solid ${color}`}}>
-      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",
-        color:color,flex:1}}>{name}</div>
-      <div style={{display:"flex",gap:5,flexWrap:"wrap",maxWidth:220}}>
-        {COLOR_OPTIONS.map(col=>(
-          <div key={col} onClick={()=>onColorChange(col)}
-            style={{width:20,height:20,borderRadius:"50%",background:col,cursor:"pointer",
-              border:col===color?"3px solid white":"2px solid transparent",
-              boxShadow:col===color?`0 0 0 2px ${col}`:"none",flexShrink:0}}/>
-        ))}
+  const PersonRow = ({name, color, onColorChange, onDelete, onRename}) => {
+    const [editing, setEditing] = useState(false);
+    const [draft,   setDraft]   = useState(name);
+    const commit = () => {
+      const trimmed = draft.trim();
+      if(trimmed && trimmed !== name) onRename(trimmed);
+      setEditing(false);
+    };
+    return (
+      <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",
+        background:C.card,borderRadius:10,marginBottom:8,border:`1px solid ${C.border}`,
+        borderLeft:`3px solid ${color}`}}>
+        {editing ? (
+          <input autoFocus value={draft} onChange={e=>setDraft(e.target.value)}
+            onBlur={commit}
+            onKeyDown={e=>{ if(e.key==="Enter") commit(); if(e.key==="Escape"){ setDraft(name); setEditing(false); }}}
+            style={{flex:1,fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",
+              color:color,background:"transparent",border:"none",borderBottom:`1px solid ${color}`,
+              outline:"none",padding:"0 0 2px"}}/>
+        ) : (
+          <div onClick={()=>{ setDraft(name); setEditing(true); }}
+            title="Click to rename"
+            style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",
+              color:color,flex:1,cursor:"text"}}>
+            {name}
+          </div>
+        )}
+        <div style={{display:"flex",gap:5,flexWrap:"wrap",maxWidth:220}}>
+          {COLOR_OPTIONS.map(col=>(
+            <div key={col} onClick={()=>onColorChange(col)}
+              style={{width:20,height:20,borderRadius:"50%",background:col,cursor:"pointer",
+                border:col===color?"3px solid white":"2px solid transparent",
+                boxShadow:col===color?`0 0 0 2px ${col}`:"none",flexShrink:0}}/>
+          ))}
+        </div>
+        <button onClick={onDelete}
+          style={{background:"none",border:"1px solid #dc262644",borderRadius:7,color:"#dc2626",
+            fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,flexShrink:0}}>
+          Remove
+        </button>
       </div>
-      <button onClick={onDelete}
-        style={{background:"none",border:"1px solid #dc262644",borderRadius:7,color:"#dc2626",
-          fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,flexShrink:0}}>
-        Remove
-      </button>
-    </div>
-  );
+    );
+  };
 
   return (
     <div style={{padding:"24px 20px 60px",maxWidth:600,margin:"0 auto"}}>
@@ -7451,6 +7515,7 @@ function SettingsPage({ COLOR_OPTIONS, onSave }) {
         {foremen.map(name=>(
           <PersonRow key={name} name={name} color={foremanColors[name]||"#6b7280"}
             onColorChange={col=>setForemanColors(fc=>({...fc,[name]:col}))}
+            onRename={next=>{ setForemen(f=>f.map(x=>x===name?next:x)); setForemanColors(fc=>{ const n={...fc}; n[next]=n[name]; delete n[name]; return n; }); }}
             onDelete={()=>{ setForemen(f=>f.filter(x=>x!==name)); setForemanColors(fc=>{const n={...fc};delete n[name];return n;}); }}/>
         ))}
         <div style={{display:"flex",gap:8,marginTop:4}}>
@@ -7471,6 +7536,7 @@ function SettingsPage({ COLOR_OPTIONS, onSave }) {
         {leads.map(name=>(
           <PersonRow key={name} name={name} color={leadColors[name]||"#6b7280"}
             onColorChange={col=>setLeadColors(lc=>({...lc,[name]:col}))}
+            onRename={next=>{ setLeads(l=>l.map(x=>x===name?next:x)); setLeadColors(lc=>{ const n={...lc}; n[next]=n[name]; delete n[name]; return n; }); }}
             onDelete={()=>{ setLeads(l=>l.filter(x=>x!==name)); setLeadColors(lc=>{const n={...lc};delete n[name];return n;}); }}/>
         ))}
         <div style={{display:"flex",gap:8,marginTop:4}}>
@@ -8172,7 +8238,14 @@ if(initialLoad.current) return;
 
   // ── Identity gate — show UserPicker if no identity saved ────
   if(!identity) {
-    return <UserPicker users={users} onSelect={m => { saveIdentity(m); setIdentity(m); }} />;
+    return <UserPicker users={users}
+      onSelect={m => { saveIdentity(m); setIdentity(m); }}
+      onSavePin={async (updated) => {
+        // Save the new PIN into the users list in Firestore
+        const newList = users.map(u => u.id===updated.id ? updated : u);
+        await saveUsers(newList);
+      }}
+    />;
   }
 
 
