@@ -1,5 +1,6 @@
 // BUILD_v9_FIXED
-import { useState, useEffect, useRef, createPortal } from "react";
+import { useState, useEffect, useRef } from "react";
+import { createPortal } from "react-dom";
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
 
