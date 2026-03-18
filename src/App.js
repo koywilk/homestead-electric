@@ -236,8 +236,8 @@ const DEFAULT_USERS = [
 ];
 
 // ── Title = field role (who they are on site) ────────────────
-const TITLE_OPTIONS = ["foreman","lead","crew"];
-const TITLE_LABELS  = { foreman:"Foreman", lead:"Lead", crew:"Crew" };
+const TITLE_OPTIONS = ["admin","foreman","lead","crew"];
+const TITLE_LABELS  = { admin:"Admin", foreman:"Foreman", lead:"Lead", crew:"Crew" };
 
 // ── Access = what they can do in the app ─────────────────────
 const ACCESS_OPTIONS = ["admin","manager","standard","limited"];
@@ -495,7 +495,7 @@ function UserManagement({ users, onSave }) {
         {list.map(u=>{
           const isEditing = editing===u.id;
           const access    = getAccess(u);
-          const title     = u.title || (["foreman","lead","crew"].includes(u.role)?u.role:"foreman");
+          const title     = u.title || (["admin","justin","jeromy"].includes(u.role) ? "admin" : ["foreman","lead","crew"].includes(u.role) ? u.role : "crew");
           return (
             <div key={u.id} style={{background:C.card,border:`1px solid ${isEditing?C.accent:C.border}`,
               borderRadius:12,padding:"14px 16px",transition:"border-color 0.15s",
@@ -7426,7 +7426,7 @@ function SettingsRoleBadge({label, color}) {
 function SettingsPersonRow({user, color, colorOptions, onColorChange}) {
   const accessColors = { admin:"#ef4444", manager:"#8b5cf6", standard:"#2563eb", limited:"#64748b" };
   const titleLabels  = { foreman:"Foreman", lead:"Lead", crew:"Crew" };
-  const title  = user.title || (["foreman","lead","crew"].includes(user.role) ? user.role : "crew");
+  const title  = user.title || (["admin","justin","jeromy"].includes(user.role) ? "admin" : ["foreman","lead","crew"].includes(user.role) ? user.role : "crew");
   const access = getAccess(user);
   return (
     <div style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",
@@ -7459,7 +7459,12 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides }) {
   // Sync if parent colorOverrides changes (e.g. on load)
   useEffect(()=>{ setColors({...colorOverrides}); }, [JSON.stringify(colorOverrides)]);
 
-  const getT = (u) => u.title || (["foreman","lead","crew"].includes(u.role) ? u.role : "crew");
+  const getT = (u) => {
+    if(u.title) return u.title;
+    if(["admin","justin","jeromy"].includes(u.role)) return "admin";
+    if(["foreman","lead","crew"].includes(u.role)) return u.role;
+    return "crew";
+  };
   const foremanUsers = (users||[]).filter(u=>getT(u)==="foreman");
   const leadUsers    = (users||[]).filter(u=>getT(u)==="lead");
   const crewUsers    = (users||[]).filter(u=>getT(u)==="crew");
@@ -7477,7 +7482,8 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides }) {
     setSaved(true); setTimeout(()=>setSaved(false),2000);
   };
 
-  const noUsers = foremanUsers.length===0 && leadUsers.length===0 && crewUsers.length===0;
+  const adminUsers  = (users||[]).filter(u=>getT(u)==="admin");
+  const noUsers = adminUsers.length===0 && foremanUsers.length===0 && leadUsers.length===0 && crewUsers.length===0;
 
   return (
     <div style={{padding:"24px 20px 60px",maxWidth:600,margin:"0 auto"}}>
@@ -7492,6 +7498,18 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides }) {
         <div style={{fontSize:13,color:"#94a3b8",fontStyle:"italic",marginBottom:24,
           padding:"16px",background:"#f8fafc",borderRadius:10,border:"1px dashed #e2e8f0"}}>
           No team members yet. Add people in the Team Members section below, then assign them roles.
+        </div>
+      )}
+
+      {adminUsers.length>0 && (
+        <div style={{marginBottom:32}}>
+          <SettingsGroupHead label="Admin"/>
+          {adminUsers.map(u=>(
+            <SettingsPersonRow key={u.id} user={u}
+              color={getColor(u.name)}
+              colorOptions={COLOR_OPTIONS}
+              onColorChange={col=>setColor(u.name,col)}/>
+          ))}
         </div>
       )}
 
@@ -7861,7 +7879,12 @@ function App() {
 
   // Derive foremen/leads from users list by role
   // Derive groups from title field (new) with fallback to role (legacy)
-  const getTitle = (u) => u.title || (["foreman","lead","crew"].includes(u.role) ? u.role : "crew");
+  const getTitle = (u) => {
+    if(u.title) return u.title;
+    if(["admin","justin","jeromy"].includes(u.role)) return "admin";
+    if(["foreman","lead","crew"].includes(u.role)) return u.role;
+    return "crew";
+  };
   const _foremanUsers = users.filter(u=>getTitle(u)==="foreman");
   const _leadUsers    = users.filter(u=>getTitle(u)==="lead");
   const _crewUsers    = users.filter(u=>getTitle(u)==="crew");
