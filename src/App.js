@@ -2416,6 +2416,7 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
         <Inp value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"/>
         <Sel value={r.status} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
           style={{color:r.status==="Pulled"?C.green:r.status==="Need Specs"?C.red:C.text,fontSize:10}}/>
+
       </div>
     </div>
   );
@@ -2433,6 +2434,7 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
           <div key={i} style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
         ))}
       </div>
+
       {flatRows.map(({r,i})=>renderRow(r,i))}
       {rows.length===0&&<div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No rows yet</div>}
       <Btn onClick={addRow} variant="add" style={{fontSize:11,padding:"3px 10px",marginTop:6}}>+ Add Row</Btn>
@@ -2710,19 +2712,50 @@ function HRAddFloor({homeRuns, onHRChange}) {
 
 function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobName}) {
 
-  const [hoResponse, setHoResponse] = useState(null);
-  const [showHoModal, setShowHoModal] = useState(false);
-  const [linkCopied, setLinkCopied] = useState(false);
-  const [newPanelName, setNewPanelName] = useState("");
+  const [hoResponse,     setHoResponse]     = useState(null);
+  const [showHoModal,    setShowHoModal]     = useState(false);
+  const [linkCopied,     setLinkCopied]      = useState(false);
+  const [newPanelName,   setNewPanelName]    = useState("");
+  const [showSendModal,  setShowSendModal]   = useState(false);
+  const [recommended,    setRecommended]     = useState({});  // id -> bool
 
   const hoLink = `https://homestead-electric.vercel.app/?homeowner=${jobId}`;
 
+  // All rows from all floors, filtered to named ones
+  const getAllRows = () => [
+    ...(homeRuns.main||[]),
+    ...(homeRuns.upper||[]),
+    ...(homeRuns.basement||[]),
+    ...(homeRuns.extraFloors||[]).flatMap(e=>homeRuns[e.key]||[]),
+  ].filter(r=>r.name||r.panel);
+
+  const openSendModal = () => {
+    // Pre-populate recommended from any previously saved state on rows
+    const init = {};
+    getAllRows().forEach(r=>{ if(r.recommended) init[r.id]=true; });
+    setRecommended(init);
+    setShowSendModal(true);
+  };
+
   const copyLink = () => {
+    // Save recommended flags back onto the rows before copying
+    const applyRec = (arr) => (arr||[]).map(r=>({...r, recommended:!!recommended[r.id]}));
+    const updated = {
+      ...homeRuns,
+      main:     applyRec(homeRuns.main),
+      upper:    applyRec(homeRuns.upper),
+      basement: applyRec(homeRuns.basement),
+      ...(homeRuns.extraFloors||[]).reduce((acc,e)=>({...acc,[e.key]:applyRec(homeRuns[e.key])}),{}),
+    };
+    onHRChange(updated);
     navigator.clipboard.writeText(hoLink).then(()=>{
       setLinkCopied(true);
-      setTimeout(()=>setLinkCopied(false),2000);
+      setShowSendModal(false);
+      setTimeout(()=>setLinkCopied(false),2500);
     });
   };
+
+  const toggleRec = (id) => setRecommended(r=>({...r,[id]:!r[id]}));
 
   const resetResponse = async () => {
     if(!window.confirm("Clear the homeowner's response so they can redo it? This cannot be undone.")) return;
@@ -2772,10 +2805,10 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
             <div style={{fontSize:11,color:C.dim}}>Share a link so the homeowner can choose &amp; prioritize circuits</div>
           </div>
           <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-            <button onClick={copyLink}
+            <button onClick={openSendModal}
               style={{background:linkCopied?"#16a34a":"#1e293b",border:"none",borderRadius:7,color:"#fff",
                 fontWeight:500,fontSize:11,padding:"6px 12px",cursor:"pointer",fontFamily:"inherit"}}>
-              {linkCopied?"✓ Copied":"Copy link"}
+              {linkCopied?"✓ Copied":"📋 Copy link"}
             </button>
             <button onClick={()=>window.open(hoLink,"_blank")}
               style={{background:"none",border:`0.5px solid ${C.border}`,borderRadius:7,color:C.dim,
@@ -2790,6 +2823,117 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
           </div>
         </div>
       </div>
+
+      {/* ── Send to Homeowner Modal — select recommended loads ── */}
+      {showSendModal&&(
+        <div onClick={()=>setShowSendModal(false)}
+          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:9999,
+            display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{background:C.card,borderRadius:14,width:"100%",maxWidth:460,
+              maxHeight:"88vh",display:"flex",flexDirection:"column",
+              border:`1px solid ${C.border}`,overflow:"hidden"}}>
+
+            {/* Modal header */}
+            <div style={{padding:"18px 20px 14px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:C.text}}>
+                  SELECT RECOMMENDED LOADS
+                </div>
+                <button onClick={()=>setShowSendModal(false)}
+                  style={{background:"none",border:"none",color:C.muted,fontSize:18,cursor:"pointer",padding:"0 4px"}}>✕</button>
+              </div>
+              <div style={{fontSize:12,color:C.dim,lineHeight:1.5}}>
+                Star the circuits you want to highlight as recommended. The homeowner will see a <span style={{color:"#f59e0b",fontWeight:700}}>★ WE RECOMMEND</span> badge on those circuits when they open the link.
+              </div>
+            </div>
+
+            {/* Load list */}
+            <div style={{overflowY:"auto",flex:1,padding:"12px 16px"}}>
+              {getAllRows().length===0&&(
+                <div style={{textAlign:"center",padding:"32px 0",color:C.muted,fontSize:13}}>
+                  No loads found — add home run rows first
+                </div>
+              )}
+              {(()=>{
+                // Group by floor label
+                const floors = [
+                  {label:"Main Level",   rows:homeRuns.main||[]},
+                  {label:"Upper Level",  rows:homeRuns.upper||[]},
+                  {label:"Basement",     rows:homeRuns.basement||[]},
+                  ...(homeRuns.extraFloors||[]).map(e=>({label:e.label,rows:homeRuns[e.key]||[]})),
+                ].filter(f=>f.rows.filter(r=>r.name||r.panel).length>0);
+
+                return floors.map(floor=>(
+                  <div key={floor.label} style={{marginBottom:16}}>
+                    <div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.08em",marginBottom:8}}>
+                      {floor.label.toUpperCase()}
+                    </div>
+                    {floor.rows.filter(r=>r.name||r.panel).map(r=>{
+                      const isRec = !!recommended[r.id];
+                      const WIRE_AMPS_Q = {"14/2":15,"14/3":15,"12/2":20,"12/3":20,"10/2":30,"10/3":30,"8/2":40,"8/3":40,"6/2":50,"6/3":50,"4/2":70,"4/3":70,"2/2":95,"2/3":95,"1/0":125,"2/0":150,"3/0":175,"4/0":200};
+                      return (
+                        <div key={r.id}
+                          onClick={()=>toggleRec(r.id)}
+                          style={{display:"flex",alignItems:"center",gap:12,padding:"10px 12px",
+                            borderRadius:10,marginBottom:6,cursor:"pointer",
+                            background:isRec?"#fffbeb":C.surface,
+                            border:`1px solid ${isRec?"#f59e0b":C.border}`,
+                            transition:"all 0.15s"}}>
+                          {/* Star toggle */}
+                          <div style={{width:28,height:28,borderRadius:"50%",flexShrink:0,
+                            display:"flex",alignItems:"center",justifyContent:"center",
+                            background:isRec?"#f59e0b":C.card,
+                            border:`1px solid ${isRec?"#f59e0b":C.border}`,
+                            fontSize:14,color:isRec?"#fff":C.muted,transition:"all 0.15s"}}>
+                            ★
+                          </div>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:13,fontWeight:600,color:C.text}}>{r.name||"Unnamed"}</div>
+                            <div style={{fontSize:11,color:C.dim,display:"flex",gap:8,flexWrap:"wrap"}}>
+                              {r.panel&&<span>{r.panel}</span>}
+                              {r.wire&&<span>{r.wire}</span>}
+                              {r.wire&&WIRE_AMPS_Q[r.wire]&&<span style={{color:"#f59e0b",fontWeight:600}}>{WIRE_AMPS_Q[r.wire]}A</span>}
+                            </div>
+                          </div>
+                          {isRec&&(
+                            <span style={{fontSize:9,fontWeight:700,color:"#92400e",background:"#fef3c7",
+                              border:"0.5px solid #fde68a",borderRadius:99,padding:"2px 8px",
+                              letterSpacing:"0.06em",flexShrink:0}}>
+                              RECOMMENDED
+                            </span>
+                          )}
+                        </div>
+                      );
+                    })}
+                  </div>
+                ));
+              })()}
+            </div>
+
+            {/* Footer */}
+            <div style={{padding:"14px 16px",borderTop:`1px solid ${C.border}`,flexShrink:0,
+              display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+              <div style={{fontSize:11,color:C.dim}}>
+                {Object.values(recommended).filter(Boolean).length} recommended
+                {" · "}{getAllRows().length} total circuits
+              </div>
+              <div style={{display:"flex",gap:8}}>
+                <button onClick={()=>setShowSendModal(false)}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                    color:C.dim,fontSize:12,padding:"8px 16px",cursor:"pointer",fontFamily:"inherit"}}>
+                  Cancel
+                </button>
+                <button onClick={copyLink}
+                  style={{background:"#1e293b",border:"none",borderRadius:8,color:"#fff",
+                    fontSize:12,fontWeight:700,padding:"8px 20px",cursor:"pointer",fontFamily:"inherit"}}>
+                  📋 Copy link &amp; send
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+      )}
 
       {/* Homeowner Response Modal */}
       {showHoModal&&hoResponse&&(
@@ -3942,6 +4086,14 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
             </div>
 
+            {job.accessNote&&(
+              <div style={{display:"inline-flex",alignItems:"center",gap:5,marginTop:4,
+                fontSize:11,color:"#92400e",background:"#fef3c7",
+                border:"1px solid #fde68a",borderRadius:7,padding:"3px 9px"}}>
+                {job.accessNote}
+              </div>
+            )}
+
           </div>
 
           <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
@@ -4614,6 +4766,22 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
 
               </div>
 
+              </div>
+
+              {/* Access note — gate code, keybox, etc. */}
+              <div style={{marginTop:12}}>
+                <div style={{fontSize:10,color:C.dim,marginBottom:3,display:"flex",alignItems:"center",gap:6}}>
+                  ACCESS NOTE <span style={{color:C.muted,fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>(gate code, keybox, entry instructions…)</span>
+                </div>
+                <textarea
+                  value={job.accessNote||""} onChange={e=>u({accessNote:e.target.value})}
+                  placeholder="e.g. Gate code: 1234 · Keybox on front door knob"
+                  rows={2}
+                  style={{width:"100%",boxSizing:"border-box",background:C.surface,
+                    border:`1px solid ${job.accessNote?"#f59e0b":C.border}`,
+                    borderRadius:8,padding:"8px 10px",fontSize:12,fontFamily:"inherit",
+                    color:C.text,resize:"vertical",outline:"none",lineHeight:1.5,
+                    transition:"border-color 0.15s"}}/>
               </div>
 
               <div style={{marginTop:16}}>
@@ -5646,6 +5814,27 @@ function HomeownerPage({ jobId }) {
   const included = items.filter(it=>it.included);
   const excluded = items.filter(it=>!it.included);
 
+  // ── Generator size calculator ─────────────────────────────
+  const WIRE_AMPS_MAP = {
+    "14/2":15,"14/3":15,"12/2":20,"12/3":20,"10/2":30,"10/3":30,
+    "8/2":40,"8/3":40,"6/2":50,"6/3":50,"4/2":70,"4/3":70,
+    "2/2":95,"2/3":95,"1/0":125,"2/0":150,"3/0":175,"4/0":200,
+  };
+  // Estimate watts from amps — use 240V for 2-pole (large), 120V for single pole
+  // Conservative: use 80% of breaker rating as running load
+  const estimateWatts = (wire) => {
+    if(!wire||!WIRE_AMPS_MAP[wire]) return 0;
+    const amps = WIRE_AMPS_MAP[wire];
+    const is2pole = wire.endsWith("/3")||amps>=30;
+    const volts = is2pole ? 240 : 120;
+    return Math.round(amps * volts * 0.8);
+  };
+  const totalWatts = included.reduce((sum,it)=>sum+estimateWatts(it.wire),0);
+  const totalKW    = (totalWatts/1000).toFixed(1);
+  // Generator sizing: add 25% headroom for startup surge
+  const surgeKW    = Math.ceil(totalWatts*1.25/1000);
+  const genSize = surgeKW<=11?"11 kW":surgeKW<=14?"14 kW":surgeKW<=17?"17 kW":surgeKW<=20?"20 kW":surgeKW<=22?"22 kW":surgeKW<=24?"24 kW":surgeKW<=26?"26 kW":surgeKW<=36?"36 kW":">36 kW — consult engineer";
+
   const base = {fontFamily:"system-ui,-apple-system,sans-serif",minHeight:"100vh",
     background:"#f8fafc",color:"#1e293b"};
 
@@ -5702,6 +5891,41 @@ function HomeownerPage({ jobId }) {
 
       <div style={{padding:"20px 16px 0"}}>
 
+        {/* Generator size calculator */}
+        {included.length>0&&(
+          <div style={{marginBottom:16,padding:"14px 16px",background:"#1e293b",borderRadius:12,
+            border:"0.5px solid #334155"}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
+              <div>
+                <div style={{fontSize:10,fontWeight:600,color:"#64748b",letterSpacing:"0.08em",marginBottom:4}}>
+                  ESTIMATED GENERATOR SIZE NEEDED
+                </div>
+                <div style={{fontSize:26,fontWeight:700,color:"#f59e0b",lineHeight:1}}>
+                  {genSize}
+                </div>
+                <div style={{fontSize:11,color:"#64748b",marginTop:4}}>
+                  {included.length} circuit{included.length!==1?"s":""} · ~{totalKW} kW running · {surgeKW} kW w/ startup surge
+                </div>
+              </div>
+              <div style={{textAlign:"right"}}>
+                <div style={{fontSize:10,color:"#64748b",marginBottom:6}}>Running load by circuit</div>
+                {included.filter(it=>estimateWatts(it.wire)>0).slice(0,5).map(it=>(
+                  <div key={it.id} style={{fontSize:11,color:"#94a3b8",marginBottom:2,display:"flex",gap:8,justifyContent:"flex-end"}}>
+                    <span style={{color:"#cbd5e1"}}>{it.name||"Unnamed"}</span>
+                    <span style={{color:"#f59e0b",fontWeight:600}}>{(estimateWatts(it.wire)/1000).toFixed(1)}kW</span>
+                  </div>
+                ))}
+                {included.filter(it=>estimateWatts(it.wire)>0).length>5&&(
+                  <div style={{fontSize:10,color:"#475569"}}>+{included.filter(it=>estimateWatts(it.wire)>0).length-5} more…</div>
+                )}
+              </div>
+            </div>
+            <div style={{marginTop:10,fontSize:10,color:"#475569",lineHeight:1.5}}>
+              * Estimate based on 80% of breaker ratings at rated voltage with 25% surge headroom. Final sizing determined by Homestead Electric.
+            </div>
+          </div>
+        )}
+
         {/* ON GENERATOR */}
         <div style={{fontSize:10,fontWeight:500,color:"#94a3b8",letterSpacing:"0.08em",marginBottom:10}}>
           ON GENERATOR · {included.length} circuit{included.length!==1?"s":""}
@@ -5720,7 +5944,9 @@ function HomeownerPage({ jobId }) {
             onDragStart={()=>onDragStart(i)}
             onDragOver={e=>onDragOver(e,i)}
             onDragEnd={onDragEnd}
-            style={{...cardStyle,cursor:"grab",userSelect:"none"}}>
+            style={{...cardStyle,cursor:"grab",userSelect:"none",
+              borderLeft:it.recommended?"3px solid #f59e0b":"0.5px solid #e2e8f0",
+              background:it.recommended?"#fffbeb":"#fff"}}>
             <div style={{display:"flex",alignItems:"center",gap:10}}>
               {/* Drag handle */}
               <div style={{color:"#cbd5e1",fontSize:15,flexShrink:0,lineHeight:1}}>⠿</div>
@@ -5732,14 +5958,26 @@ function HomeownerPage({ jobId }) {
               </div>
               {/* Info */}
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:13,fontWeight:500,color:"#1e293b",marginBottom:2}}>
-                  {it.name||"Unnamed circuit"}
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2,flexWrap:"wrap"}}>
+                  <span style={{fontSize:13,fontWeight:500,color:"#1e293b"}}>
+                    {it.name||"Unnamed circuit"}
+                  </span>
+                  {it.recommended&&(
+                    <span style={{fontSize:9,fontWeight:700,color:"#92400e",background:"#fef3c7",
+                      border:"0.5px solid #fde68a",borderRadius:99,padding:"1px 7px",
+                      letterSpacing:"0.06em",whiteSpace:"nowrap"}}>
+                      ★ WE RECOMMEND
+                    </span>
+                  )}
                 </div>
                 <div style={{fontSize:11,color:"#94a3b8",display:"flex",gap:8}}>
                   {it.panel&&<span>{it.panel}</span>}
                   {it.wire&&<span>{it.wire}</span>}
                   {it.wire&&WIRE_AMPS[it.wire]&&(
                     <span style={{color:A,fontWeight:500}}>{WIRE_AMPS[it.wire]}A</span>
+                  )}
+                  {estimateWatts(it.wire)>0&&(
+                    <span style={{color:"#64748b"}}>~{(estimateWatts(it.wire)/1000).toFixed(1)}kW</span>
                   )}
                 </div>
               </div>
