@@ -232,7 +232,32 @@ const USERS_KEY    = "he_users";    // Firestore + localStorage user list
 
 // Default users — Koy is admin to start, everyone else added in-app
 const DEFAULT_USERS = [
-  { id:"koy",  name:"Koy",  role:"admin", pin:"" },
+  { id:"koy",              name:"Koy",                    role:"admin",   pin:"" },
+  { id:"justin",           name:"Justin Cloward",         role:"justin",  pin:"" },
+  { id:"jeromy",           name:"Jeromy Cloward",         role:"jeromy",  pin:"" },
+  { id:"josh_cloward",     name:"Josh Cloward",           role:"foreman", pin:"" },
+  { id:"keegan",           name:"Keegan Wilkinson",       role:"lead",    pin:"" },
+  { id:"daegan",           name:"Daegan Smith",           role:"lead",    pin:"" },
+  { id:"gage",             name:"Gage Lund",              role:"lead",    pin:"" },
+  { id:"treycen",          name:"Treycen Rollene",        role:"lead",    pin:"" },
+  { id:"jonathan",         name:"Jonathan Harding",       role:"lead",    pin:"" },
+  { id:"braden",           name:"Braden Davis",           role:"lead",    pin:"" },
+  { id:"colby",            name:"Colby Fogh",             role:"lead",    pin:"" },
+  { id:"fonoivasa",        name:"Fonoivasa Mataafa",      role:"crew",    pin:"" },
+  { id:"abraham",          name:"Abraham Tristan",        role:"crew",    pin:"" },
+  { id:"asher",            name:"Asher Miller",           role:"crew",    pin:"" },
+  { id:"austin",           name:"Austin Schut",           role:"crew",    pin:"" },
+  { id:"bailey",           name:"Bailey Smith",           role:"crew",    pin:"" },
+  { id:"brady",            name:"Brady Nelson",           role:"crew",    pin:"" },
+  { id:"braxton",          name:"Braxton Raven",          role:"crew",    pin:"" },
+  { id:"callen",           name:"Callen Jakeman",         role:"crew",    pin:"" },
+  { id:"isaiah",           name:"Isaiah Miller",          role:"crew",    pin:"" },
+  { id:"jacob_nuffer",     name:"Jacob Nuffer",           role:"crew",    pin:"" },
+  { id:"jacob_spackman",   name:"Jacob Spackman",         role:"crew",    pin:"" },
+  { id:"jakob",            name:"Jakob Bingham",          role:"crew",    pin:"" },
+  { id:"james",            name:"James Coleman Christen", role:"crew",    pin:"" },
+  { id:"noah",             name:"Noah Davis",             role:"crew",    pin:"" },
+  { id:"payton",           name:"Payton Bolda",           role:"crew",    pin:"" },
 ];
 
 const ROLE_LABELS = {
