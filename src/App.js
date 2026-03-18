@@ -7733,21 +7733,12 @@ function App() {
   const [users, setUsers] = useState(DEFAULT_USERS);
 
   useEffect(()=>{
-    // Names we mistakenly pushed into foremen list — purge from settings/main too
-    const BAD_NAMES = new Set([
-      "Josh Cloward","Keegan Wilkinson","Daegan Smith","Gage Lund","Treycen Rollene",
-      "Jonathan Harding","Braden Davis","Colby Fogh","Fonoivasa Mataafa","Abraham Tristan",
-      "Asher Miller","Austin Schut","Bailey Smith","Brady Nelson","Braxton Raven",
-      "Callen Jakeman","Isaiah Miller","Jacob Nuffer","Jacob Spackman","Jakob Bingham",
-      "James Coleman Christen","Noah Davis","Payton Bolda",
-    ]);
+    // ── Load users ──
     const BAD_IDS = new Set([
       "josh_cloward","keegan","daegan","gage","treycen","jonathan","braden","colby",
       "fonoivasa","abraham","asher","austin","bailey","brady","braxton","callen",
       "isaiah","jacob_nuffer","jacob_spackman","jakob","james","noah","payton",
     ]);
-
-    // Clean users list
     getDoc(doc(db,"settings","users")).then(snap=>{
       const raw = snap.exists()&&snap.data().list ? snap.data().list : [];
       const cleaned = raw.filter(u=>!BAD_IDS.has(u.id));
@@ -7757,34 +7748,48 @@ function App() {
       }
     }).catch(()=>{});
 
-    // Clean foremen/leads lists in settings/main
+    // ── Load foremen/leads from settings/main ──
+    // Only trust the saved data if it was saved by the correct Settings page
+    // (identified by having a settingsVersion flag, or by containing known default names)
     getDoc(doc(db,"settings","main")).then(snap=>{
       if(!snap.exists()) return;
       const d = snap.data();
-      let foremen = (d.foremen||DEFAULT_FOREMEN).filter(n=>!BAD_NAMES.has(n));
-      let leads   = (d.leads  ||DEFAULT_LEADS  ).filter(n=>!BAD_NAMES.has(n));
+
+      // Valid names are short first-name-only strings (no spaces = not role-derived full names)
+      const isValidName = n => typeof n==="string" && n.trim().length>0 && !n.includes(" ");
+
+      let foremen = (d.foremen||[]).filter(isValidName);
+      let leads   = (d.leads  ||[]).filter(isValidName);
       const foremanColors = {...(d.foremanColors||{})};
       const leadColors    = {...(d.leadColors||{})};
-      BAD_NAMES.forEach(n=>{ delete foremanColors[n]; delete leadColors[n]; });
 
-      // If foremen list is empty or has no recognizable names, reset to defaults
-      if(foremen.length===0) { foremen=[...DEFAULT_FOREMEN]; }
-      if(leads.length===0)   { leads=[...DEFAULT_LEADS]; }
+      // Strip colors for any full-name (invalid) entries
+      Object.keys(foremanColors).forEach(n=>{ if(!isValidName(n)) delete foremanColors[n]; });
+      Object.keys(leadColors).forEach(n=>{ if(!isValidName(n)) delete leadColors[n]; });
 
-      // If none of the default foremen are present, the list got corrupted — hard reset
-      const hasDefaultForeman = DEFAULT_FOREMEN.some(n=>foremen.includes(n));
-      if(!hasDefaultForeman) { foremen=[...DEFAULT_FOREMEN]; leads=[...DEFAULT_LEADS]; }
+      // If corrupted, reset to defaults and rewrite Firestore
+      if(foremen.length===0 || !DEFAULT_FOREMEN.some(n=>foremen.includes(n))) {
+        foremen=[...DEFAULT_FOREMEN]; leads=[...DEFAULT_LEADS];
+        setDoc(doc(db,"settings","main"),{
+          foremen, foremanColors:DEFAULT_FOREMEN_COLORS,
+          leads, leadColors:DEFAULT_LEAD_COLORS
+        }).catch(()=>{});
+        FOREMEN=foremen; FOREMEN_COLORS={...DEFAULT_FOREMEN_COLORS};
+        LEADS=leads; LEAD_COLORS={...DEFAULT_LEAD_COLORS};
+        set_foremen(foremen); set_foremanColors({...DEFAULT_FOREMEN_COLORS});
+        set_leads(leads); set_leadColors({...DEFAULT_LEAD_COLORS});
+        return;
+      }
+      if(leads.length===0) leads=[...DEFAULT_LEADS];
 
       FOREMEN=foremen; FOREMEN_COLORS=foremanColors; LEADS=leads; LEAD_COLORS=leadColors;
       set_foremen(foremen); set_foremanColors(foremanColors);
       set_leads(leads); set_leadColors(leadColors);
-      setDoc(doc(db,"settings","main"),{foremen,foremanColors,leads,leadColors}).catch(()=>{});
     }).catch(()=>{});
   },[]);
 
   const saveUsers = async (list) => {
     setUsers(list);
-    // If current identity was removed or role changed, update it
     if(identity) {
       const updated = list.find(u=>u.id===identity.id);
       if(updated) { saveIdentity(updated); setIdentity(updated); }
@@ -7792,46 +7797,17 @@ function App() {
     try { await setDoc(doc(db,"settings","users"),{list}); } catch(e){ console.error(e); }
   };
 
-  // ── Settings (foremen + leads) ─────────────────────────────
+  // ── Settings state (foremen + leads) ──────────────────────
   const [_foremen,        set_foremen]        = useState(DEFAULT_FOREMEN);
   const [_foremanColors,  set_foremanColors]  = useState(DEFAULT_FOREMEN_COLORS);
   const [_leads,          set_leads]          = useState(DEFAULT_LEADS);
   const [_leadColors,     set_leadColors]     = useState(DEFAULT_LEAD_COLORS);
 
-  // Sync S object after state settles (not during render)
+  // Keep module-level globals in sync with state
   useEffect(()=>{
     FOREMEN=_foremen; FOREMEN_COLORS=_foremanColors;
     LEADS=_leads; LEAD_COLORS=_leadColors;
   },[_foremen,_foremanColors,_leads,_leadColors]);
-
-  useEffect(()=>{
-    getDoc(doc(db,"settings","main")).then(snap=>{
-      if(snap.exists()){
-        const d = snap.data();
-        const BAD_NAMES = new Set([
-          "Josh Cloward","Keegan Wilkinson","Daegan Smith","Gage Lund","Treycen Rollene",
-          "Jonathan Harding","Braden Davis","Colby Fogh","Fonoivasa Mataafa","Abraham Tristan",
-          "Asher Miller","Austin Schut","Bailey Smith","Brady Nelson","Braxton Raven",
-          "Callen Jakeman","Isaiah Miller","Jacob Nuffer","Jacob Spackman","Jakob Bingham",
-          "James Coleman Christen","Noah Davis","Payton Bolda","Koy Wilkinson","Justin Cloward","Jeromy Cloward",
-        ]);
-        let f  = (d.foremen       || DEFAULT_FOREMEN).filter(n=>!BAD_NAMES.has(n));
-        const fc = {...(d.foremanColors || DEFAULT_FOREMEN_COLORS)};
-        let l  = (d.leads         || DEFAULT_LEADS).filter(n=>!BAD_NAMES.has(n));
-        const lc = {...(d.leadColors    || DEFAULT_LEAD_COLORS)};
-        BAD_NAMES.forEach(n=>{ delete fc[n]; delete lc[n]; });
-
-        // Hard reset if list got corrupted (none of the expected foremen present)
-        if(f.length===0 || !DEFAULT_FOREMEN.some(n=>f.includes(n))) { f=[...DEFAULT_FOREMEN]; }
-        if(l.length===0) { l=[...DEFAULT_LEADS]; }
-
-        FOREMEN=f; FOREMEN_COLORS=fc; LEADS=l; LEAD_COLORS=lc;
-        set_foremen(f); set_foremanColors(fc); set_leads(l); set_leadColors(lc);
-        // Write cleaned data back
-        setDoc(doc(db,"settings","main"),{foremen:f,foremanColors:fc,leads:l,leadColors:lc}).catch(()=>{});
-      }
-    });
-  },[]);
 
   const saveSettings = async(foremen, foremanColors, leads, leadColors) => {
     await setDoc(doc(db,"settings","main"),{foremen,foremanColors,leads,leadColors});
