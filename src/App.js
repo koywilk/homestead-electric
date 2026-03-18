@@ -7126,24 +7126,6 @@ function App() {
       if(updated) { saveIdentity(updated); setIdentity(updated); }
     }
     try { await setDoc(doc(db,"settings","users"),{list}); } catch(e){ console.error(e); }
-
-    // Auto-sync foremen + leads lists from user roles
-    // Anyone with role "foreman" -> foremen list, role "lead" -> leads list
-    // We add them if missing, remove them if their role changed away
-    const roleForemen = list.filter(u=>u.role==="foreman"||u.role==="justin"||u.role==="jeromy"||u.role==="admin").map(u=>u.name);
-    const roleLeads   = list.filter(u=>u.role==="lead").map(u=>u.name);
-
-    // Merge: keep existing entries not derived from users, add new ones
-    const nextForemen = [...new Set([..._foremen.filter(n=>!list.some(u=>u.name===n)), ...roleForemen])];
-    const nextLeads   = [...new Set([..._leads.filter(n=>!list.some(u=>u.name===n)),   ...roleLeads])];
-
-    // Carry over existing colors, default new ones
-    const nextFC = {..._foremanColors};
-    roleForemen.forEach(n=>{ if(!nextFC[n]) nextFC[n]="#6b7280"; });
-    const nextLC = {..._leadColors};
-    roleLeads.forEach(n=>{ if(!nextLC[n]) nextLC[n]="#6b7280"; });
-
-    await saveSettings(nextForemen, nextFC, nextLeads, nextLC);
   };
 
   // ── Settings (foremen + leads) ─────────────────────────────
