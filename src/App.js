@@ -7513,15 +7513,69 @@ function SettingsPersonRow({name, color, onColorChange, onDelete, onRename, colo
   );
 }
 
+// ── Settings page helpers — defined at MODULE level (never inside a component)
+// so React never sees a new type identity and never remounts children mid-render.
+const SETTINGS_ROLE_BG = {admin:"#6366f1",justin:"#6366f1",jeromy:"#6366f1",foreman:"#2563eb",lead:"#0d9488",crew:"#64748b"};
+const SETTINGS_ROLE_LB = {admin:"Admin",justin:"Admin",jeromy:"Admin",foreman:"Foreman",lead:"Lead",crew:"Crew"};
+
+function SettingsSectionHead({label}) {
+  return (
+    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",
+      color:"#0f172a",marginBottom:14,paddingBottom:8,borderBottom:"2px solid #e2e8f0"}}>{label}</div>
+  );
+}
+
+function SettingsRoleTag({role}) {
+  return (
+    <span style={{fontSize:9,fontWeight:700,color:"#fff",
+      background:SETTINGS_ROLE_BG[role]||"#64748b",
+      borderRadius:99,padding:"2px 7px",letterSpacing:"0.06em",flexShrink:0}}>
+      {SETTINGS_ROLE_LB[role]||role}
+    </span>
+  );
+}
+
+function SettingsPersonColorRow({name, role, color, colorOptions, onColorChange, onRemove}) {
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",
+      background:"#ffffff",borderRadius:10,marginBottom:8,
+      border:"1px solid #e2e8f0",
+      borderLeft:`3px solid ${color||"#6b7280"}`}}>
+      <div style={{flex:1,fontSize:14,fontWeight:600,color:"#0f172a",
+        display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+        <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{name}</span>
+        {role && <SettingsRoleTag role={role}/>}
+        {!role && <span style={{fontSize:9,color:"#64748b",fontWeight:400,flexShrink:0}}>(manual)</span>}
+      </div>
+      <div style={{display:"flex",gap:5,flexWrap:"wrap",maxWidth:200,flexShrink:0}}>
+        {(colorOptions||[]).map(col=>(
+          <div key={col} onClick={()=>onColorChange(col)}
+            style={{width:20,height:20,borderRadius:"50%",background:col,cursor:"pointer",flexShrink:0,
+              border:color===col?"3px solid white":"2px solid transparent",
+              boxShadow:color===col?`0 0 0 2px ${col}`:"none"}}/>
+        ))}
+      </div>
+      {onRemove && (
+        <button onClick={onRemove}
+          style={{background:"none",border:"1px solid #dc262644",borderRadius:7,color:"#dc2626",
+            fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",
+            fontWeight:600,flexShrink:0}}>
+          Remove
+        </button>
+      )}
+    </div>
+  );
+}
+
 function SettingsPage({ COLOR_OPTIONS, onSave, users }) {
-  const [colorOverrides, setColorOverrides] = useState({...FOREMEN_COLORS, ...LEAD_COLORS});
+  const [colorOverrides, setColorOverrides] = useState({...FOREMEN_COLORS,...LEAD_COLORS});
   const [extraForemen,   setExtraForemen]   = useState([]);
   const [extraLeads,     setExtraLeads]     = useState([]);
   const [newForeman,     setNewForeman]     = useState("");
   const [newLead,        setNewLead]        = useState("");
   const [saved,          setSaved]          = useState(false);
 
-  // Seed extras from current globals minus what is covered by users
+  // Seed extras once on mount
   useEffect(() => {
     const userNames = new Set((users||[]).map(u=>u.name));
     setExtraForemen(FOREMEN.filter(n=>!userNames.has(n)));
@@ -7530,67 +7584,21 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users }) {
   }, []); // eslint-disable-line
 
   const userList     = users || [];
-  const foremanUsers = userList.filter(u=>u.role==="foreman"||u.role==="admin"||u.role==="justin"||u.role==="jeromy");
+  const foremanUsers = userList.filter(u=>["foreman","admin","justin","jeromy"].includes(u.role));
   const leadUsers    = userList.filter(u=>u.role==="lead");
   const crewUsers    = userList.filter(u=>u.role==="crew");
 
-  const setColor   = (name, col) => setColorOverrides(prev=>({...prev,[name]:col}));
   const allForemen = [...foremanUsers.map(u=>u.name), ...extraForemen];
   const allLeads   = [...leadUsers.map(u=>u.name),    ...extraLeads];
 
   const save = async () => {
     const foremanColors = {};
     const leadColors    = {};
-    allForemen.forEach(n => { foremanColors[n] = colorOverrides[n]||"#6b7280"; });
-    allLeads.forEach(n   => { leadColors[n]    = colorOverrides[n]||"#6b7280"; });
+    allForemen.forEach(n=>{ foremanColors[n]=colorOverrides[n]||"#6b7280"; });
+    allLeads.forEach(n=>  { leadColors[n]   =colorOverrides[n]||"#6b7280"; });
     await onSave(allForemen, foremanColors, allLeads, leadColors);
     setSaved(true); setTimeout(()=>setSaved(false), 2000);
   };
-
-  const SettingsSectionHead = ({label}) => (
-    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",
-      color:C.text,marginBottom:14,paddingBottom:8,borderBottom:`2px solid ${C.border}`}}>{label}</div>
-  );
-
-  const roleTag = (role) => {
-    const bg = {admin:"#6366f1",justin:"#6366f1",jeromy:"#6366f1",foreman:C.blue,lead:C.teal,crew:C.dim};
-    const lb = {admin:"Admin",justin:"Admin",jeromy:"Admin",foreman:"Foreman",lead:"Lead",crew:"Crew"};
-    return (
-      <span style={{fontSize:9,fontWeight:700,color:"#fff",background:bg[role]||C.dim,
-        borderRadius:99,padding:"2px 7px",letterSpacing:"0.06em",flexShrink:0}}>
-        {lb[role]||role}
-      </span>
-    );
-  };
-
-  // renderPersonRow: inline helper (not a component) — avoids remount-on-render bug
-  const renderPersonRow = (name, role, onRemove) => (
-    <div key={name} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",
-      background:C.card,borderRadius:10,marginBottom:8,
-      border:`1px solid ${C.border}`,
-      borderLeft:`3px solid ${colorOverrides[name]||"#6b7280"}`}}>
-      <div style={{flex:1,fontSize:14,fontWeight:600,color:C.text,display:"flex",alignItems:"center",gap:8,minWidth:0}}>
-        <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{name}</span>
-        {role && roleTag(role)}
-        {!role && <span style={{fontSize:9,color:C.muted,fontWeight:400,flexShrink:0}}>(manual)</span>}
-      </div>
-      <div style={{display:"flex",gap:5,flexWrap:"wrap",maxWidth:200,flexShrink:0}}>
-        {COLOR_OPTIONS.map(col=>(
-          <div key={col} onClick={()=>setColor(name,col)}
-            style={{width:20,height:20,borderRadius:"50%",background:col,cursor:"pointer",flexShrink:0,
-              border:(colorOverrides[name]||"#6b7280")===col?"3px solid white":"2px solid transparent",
-              boxShadow:(colorOverrides[name]||"#6b7280")===col?`0 0 0 2px ${col}`:"none"}}/>
-        ))}
-      </div>
-      {onRemove && (
-        <button onClick={onRemove}
-          style={{background:"none",border:"1px solid #dc262644",borderRadius:7,color:"#dc2626",
-            fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,flexShrink:0}}>
-          Remove
-        </button>
-      )}
-    </div>
-  );
 
   return (
     <div style={{padding:"24px 20px 60px",maxWidth:600,margin:"0 auto"}}>
@@ -7600,15 +7608,30 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users }) {
         Foremen and leads are pulled from Team Members by role. Assign a color to each person, or add manual entries for field staff not in the team list.
       </div>
 
+      {/* Foremen */}
       <div style={{marginBottom:32}}>
         <SettingsSectionHead label="Foremen"/>
         {foremanUsers.length===0 && extraForemen.length===0 && (
           <div style={{fontSize:12,color:C.muted,fontStyle:"italic",marginBottom:12}}>
-            No foremen yet — add team members with the Foreman role below, or add manually.
+            No foremen yet — add team members with the Foreman role in Team Members below, or add manually.
           </div>
         )}
-        {foremanUsers.map(u=>renderPersonRow(u.name, u.role, null))}
-{extraForemen.map(name=>renderPersonRow(name, null, ()=>setExtraForemen(f=>f.filter(x=>x!==name))))}
+        {foremanUsers.map(u=>(
+          <SettingsPersonColorRow
+            key={u.id} name={u.name} role={u.role}
+            color={colorOverrides[u.name]||"#6b7280"}
+            colorOptions={COLOR_OPTIONS}
+            onColorChange={col=>setColorOverrides(prev=>({...prev,[u.name]:col}))}
+            onRemove={null}/>
+        ))}
+        {extraForemen.map(name=>(
+          <SettingsPersonColorRow
+            key={name} name={name} role={null}
+            color={colorOverrides[name]||"#6b7280"}
+            colorOptions={COLOR_OPTIONS}
+            onColorChange={col=>setColorOverrides(prev=>({...prev,[name]:col}))}
+            onRemove={()=>setExtraForemen(f=>f.filter(x=>x!==name))}/>
+        ))}
         <div style={{display:"flex",gap:8,marginTop:8}}>
           <input value={newForeman} onChange={e=>setNewForeman(e.target.value)}
             placeholder="Add foreman name manually…"
@@ -7617,19 +7640,36 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users }) {
               padding:"8px 12px",fontSize:13,fontFamily:"inherit",color:C.text,outline:"none"}}/>
           <button onClick={()=>{ if(!newForeman.trim()) return; setExtraForemen(f=>[...f,newForeman.trim()]); setNewForeman(""); }}
             style={{background:C.accent,border:"none",borderRadius:8,color:"#000",fontSize:13,
-              fontWeight:700,padding:"8px 16px",cursor:"pointer",fontFamily:"inherit"}}>+ Add</button>
+              fontWeight:700,padding:"8px 16px",cursor:"pointer",fontFamily:"inherit"}}>
+            + Add
+          </button>
         </div>
       </div>
 
+      {/* Leads */}
       <div style={{marginBottom:32}}>
         <SettingsSectionHead label="Leads"/>
         {leadUsers.length===0 && extraLeads.length===0 && (
           <div style={{fontSize:12,color:C.muted,fontStyle:"italic",marginBottom:12}}>
-            No leads yet — add team members with the Lead role below, or add manually.
+            No leads yet — add team members with the Lead role in Team Members below, or add manually.
           </div>
         )}
-        {leadUsers.map(u=>renderPersonRow(u.name, u.role, null))}
-{extraLeads.map(name=>renderPersonRow(name, null, ()=>setExtraLeads(l=>l.filter(x=>x!==name))))}
+        {leadUsers.map(u=>(
+          <SettingsPersonColorRow
+            key={u.id} name={u.name} role={u.role}
+            color={colorOverrides[u.name]||"#6b7280"}
+            colorOptions={COLOR_OPTIONS}
+            onColorChange={col=>setColorOverrides(prev=>({...prev,[u.name]:col}))}
+            onRemove={null}/>
+        ))}
+        {extraLeads.map(name=>(
+          <SettingsPersonColorRow
+            key={name} name={name} role={null}
+            color={colorOverrides[name]||"#6b7280"}
+            colorOptions={COLOR_OPTIONS}
+            onColorChange={col=>setColorOverrides(prev=>({...prev,[name]:col}))}
+            onRemove={()=>setExtraLeads(l=>l.filter(x=>x!==name))}/>
+        ))}
         <div style={{display:"flex",gap:8,marginTop:8}}>
           <input value={newLead} onChange={e=>setNewLead(e.target.value)}
             placeholder="Add lead name manually…"
@@ -7638,14 +7678,24 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users }) {
               padding:"8px 12px",fontSize:13,fontFamily:"inherit",color:C.text,outline:"none"}}/>
           <button onClick={()=>{ if(!newLead.trim()) return; setExtraLeads(l=>[...l,newLead.trim()]); setNewLead(""); }}
             style={{background:C.accent,border:"none",borderRadius:8,color:"#000",fontSize:13,
-              fontWeight:700,padding:"8px 16px",cursor:"pointer",fontFamily:"inherit"}}>+ Add</button>
+              fontWeight:700,padding:"8px 16px",cursor:"pointer",fontFamily:"inherit"}}>
+            + Add
+          </button>
         </div>
       </div>
 
+      {/* Crew */}
       {crewUsers.length > 0 && (
         <div style={{marginBottom:32}}>
           <SettingsSectionHead label="Crew"/>
-          {crewUsers.map(u=>renderPersonRow(u.name, u.role, null))}
+          {crewUsers.map(u=>(
+            <SettingsPersonColorRow
+              key={u.id} name={u.name} role={u.role}
+              color={colorOverrides[u.name]||"#6b7280"}
+              colorOptions={COLOR_OPTIONS}
+              onColorChange={col=>setColorOverrides(prev=>({...prev,[u.name]:col}))}
+              onRemove={null}/>
+          ))}
         </div>
       )}
 
@@ -7653,14 +7703,12 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users }) {
         style={{width:"100%",background:saved?"#16a34a":C.accent,border:"none",borderRadius:10,
           color:saved?"#fff":"#000",fontSize:15,fontWeight:700,padding:"14px",
           cursor:"pointer",fontFamily:"inherit",transition:"background 0.3s"}}>
-        {saved?"\u2713 Saved!":"Save Changes"}
+        {saved?"✓ Saved!":"Save Changes"}
       </button>
     </div>
   );
 }
 
-
-// ── Homeowner Generator Load Selection Page ───────────────────
 function HomeownerPage({ jobId }) {
   const [job,        setJob]        = useState(null);
   const [items,      setItems]      = useState([]);
