@@ -7079,9 +7079,21 @@ function App() {
   const [users, setUsers] = useState(DEFAULT_USERS);
 
   useEffect(()=>{
+    // IDs we mistakenly pushed — remove them from Firestore on load
+    const BAD_IDS = new Set([
+      "josh_cloward","keegan","daegan","gage","treycen","jonathan","braden","colby",
+      "fonoivasa","abraham","asher","austin","bailey","brady","braxton","callen",
+      "isaiah","jacob_nuffer","jacob_spackman","jakob","james","noah","payton",
+    ]);
     getDoc(doc(db,"settings","users")).then(snap=>{
       if(snap.exists()&&snap.data().list?.length) {
-        setUsers(snap.data().list);
+        const raw = snap.data().list;
+        const cleaned = raw.filter(u=>!BAD_IDS.has(u.id));
+        setUsers(cleaned);
+        // If we removed anyone, write the cleaned list back
+        if(cleaned.length !== raw.length) {
+          setDoc(doc(db,"settings","users"),{list:cleaned}).catch(()=>{});
+        }
       }
     }).catch(()=>{});
   },[]);
