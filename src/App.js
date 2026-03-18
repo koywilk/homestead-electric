@@ -7112,9 +7112,17 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
   };
 
   const foremanTabs=["All",...(foremenList||getForemenList()),"Unassigned"];
+  const matchesForemanTab = (job, tab) => {
+    const jf = (job.foreman||"").trim().toLowerCase();
+    const t  = (tab||"").trim().toLowerCase();
+    if(jf===t) return true;
+    if(t.startsWith(jf+" ")||jf.startsWith(t+" ")) return true;
+    const parts = t.split(" ");
+    return parts.some(p=>p&&(p===jf||p.includes(jf)||jf.includes(p)));
+  };
   const filteredJobs=foremanTab==="All"?jobs
     :foremanTab==="Unassigned"?jobs.filter(j=>!j.foreman||j.foreman==="Unassigned")
-    :jobs.filter(j=>(j.foreman||"Koy")===foremanTab);
+    :jobs.filter(j=>matchesForemanTab(j,foremanTab));
 
   const allEvents=buildEvents(filteredJobs);
 
@@ -7333,7 +7341,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
             const fc2=f==="All"?C.accent:getFC(f)||"#6b7280";
             const ct=f==="All"?allEvents.length:buildEvents(
               f==="Unassigned"?jobs.filter(j=>!j.foreman||j.foreman==="Unassigned")
-              :jobs.filter(j=>matchesForeman(j,f))
+              :jobs.filter(j=>matchesForemanTab(j,f))
             ).length;
             return (
               <button key={f} onClick={()=>setForemanTab(f)}
