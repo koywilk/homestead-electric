@@ -1,5 +1,5 @@
 // BUILD_v9_FIXED
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, createPortal } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
 
@@ -2730,24 +2730,36 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
   ].filter(r=>r.name||r.panel);
 
   const openSendModal = () => {
-    // Pre-populate recommended from any previously saved state on rows
     const init = {};
     getAllRows().forEach(r=>{ if(r.recommended) init[r.id]=true; });
     setRecommended(init);
     setShowSendModal(true);
   };
 
-  const copyLink = () => {
-    // Save recommended flags back onto the rows before copying
+  const copyLink = async () => {
+    // Build updated homeRuns with recommended flags stamped onto each row
     const applyRec = (arr) => (arr||[]).map(r=>({...r, recommended:!!recommended[r.id]}));
-    const updated = {
+    const updatedHomeRuns = {
       ...homeRuns,
       main:     applyRec(homeRuns.main),
       upper:    applyRec(homeRuns.upper),
       basement: applyRec(homeRuns.basement),
       ...(homeRuns.extraFloors||[]).reduce((acc,e)=>({...acc,[e.key]:applyRec(homeRuns[e.key])}),{}),
     };
-    onHRChange(updated);
+    // Update local React state immediately
+    onHRChange(updatedHomeRuns);
+    // Flush directly to Firestore NOW — don't wait for the debounced saveJob
+    try {
+      const snap = await getDoc(doc(db,"jobs",jobId));
+      if(snap.exists()) {
+        const jobData = snap.data().data;
+        await setDoc(doc(db,"jobs",jobId),{
+          data: {...jobData, homeRuns: updatedHomeRuns},
+          updated_at: new Date().toISOString()
+        });
+      }
+    } catch(e) { console.error("Failed to save recommendations:", e); }
+    // Now copy the link
     navigator.clipboard.writeText(hoLink).then(()=>{
       setLinkCopied(true);
       setShowSendModal(false);
@@ -2808,7 +2820,7 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
             <button onClick={openSendModal}
               style={{background:linkCopied?"#16a34a":"#1e293b",border:"none",borderRadius:7,color:"#fff",
                 fontWeight:500,fontSize:11,padding:"6px 12px",cursor:"pointer",fontFamily:"inherit"}}>
-              {linkCopied?"✓ Copied":"📋 Copy link"}
+              {linkCopied?"✓ Copied":"Copy link"}
             </button>
             <button onClick={()=>window.open(hoLink,"_blank")}
               style={{background:"none",border:`0.5px solid ${C.border}`,borderRadius:7,color:C.dim,
@@ -2824,10 +2836,10 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
         </div>
       </div>
 
-      {/* ── Send to Homeowner Modal — select recommended loads ── */}
-      {showSendModal&&(
+      {/* ── Send to Homeowner Modal — rendered via portal to escape overflow:hidden parents ── */}
+      {showSendModal&&createPortal(
         <div onClick={()=>setShowSendModal(false)}
-          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:9999,
+          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:99999,
             display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
           <div onClick={e=>e.stopPropagation()}
             style={{background:C.card,borderRadius:14,width:"100%",maxWidth:460,
@@ -2927,13 +2939,13 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
                 <button onClick={copyLink}
                   style={{background:"#1e293b",border:"none",borderRadius:8,color:"#fff",
                     fontSize:12,fontWeight:700,padding:"8px 20px",cursor:"pointer",fontFamily:"inherit"}}>
-                  📋 Copy link &amp; send
+                  Copy link &amp; send
                 </button>
               </div>
             </div>
           </div>
         </div>
-      )}
+      , document.body)}
 
       {/* Homeowner Response Modal */}
       {showHoModal&&hoResponse&&(
@@ -5891,8 +5903,8 @@ function HomeownerPage({ jobId }) {
 
       <div style={{padding:"20px 16px 0"}}>
 
-        {/* Generator size calculator */}
-        {included.length>0&&(
+        {/* Generator size calculator — only show when wire data exists to calculate from */}
+        {included.length>0&&totalWatts>0&&(
           <div style={{marginBottom:16,padding:"14px 16px",background:"#1e293b",borderRadius:12,
             border:"0.5px solid #334155"}}>
             <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
