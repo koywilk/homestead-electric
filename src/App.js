@@ -232,32 +232,7 @@ const USERS_KEY    = "he_users";    // Firestore + localStorage user list
 
 // Default users — Koy is admin to start, everyone else added in-app
 const DEFAULT_USERS = [
-  { id:"koy",              name:"Koy",                    role:"admin",   pin:"" },
-  { id:"justin",           name:"Justin Cloward",         role:"justin",  pin:"" },
-  { id:"jeromy",           name:"Jeromy Cloward",         role:"jeromy",  pin:"" },
-  { id:"josh_cloward",     name:"Josh Cloward",           role:"foreman", pin:"" },
-  { id:"keegan",           name:"Keegan Wilkinson",       role:"lead",    pin:"" },
-  { id:"daegan",           name:"Daegan Smith",           role:"lead",    pin:"" },
-  { id:"gage",             name:"Gage Lund",              role:"lead",    pin:"" },
-  { id:"treycen",          name:"Treycen Rollene",        role:"lead",    pin:"" },
-  { id:"jonathan",         name:"Jonathan Harding",       role:"lead",    pin:"" },
-  { id:"braden",           name:"Braden Davis",           role:"lead",    pin:"" },
-  { id:"colby",            name:"Colby Fogh",             role:"lead",    pin:"" },
-  { id:"fonoivasa",        name:"Fonoivasa Mataafa",      role:"crew",    pin:"" },
-  { id:"abraham",          name:"Abraham Tristan",        role:"crew",    pin:"" },
-  { id:"asher",            name:"Asher Miller",           role:"crew",    pin:"" },
-  { id:"austin",           name:"Austin Schut",           role:"crew",    pin:"" },
-  { id:"bailey",           name:"Bailey Smith",           role:"crew",    pin:"" },
-  { id:"brady",            name:"Brady Nelson",           role:"crew",    pin:"" },
-  { id:"braxton",          name:"Braxton Raven",          role:"crew",    pin:"" },
-  { id:"callen",           name:"Callen Jakeman",         role:"crew",    pin:"" },
-  { id:"isaiah",           name:"Isaiah Miller",          role:"crew",    pin:"" },
-  { id:"jacob_nuffer",     name:"Jacob Nuffer",           role:"crew",    pin:"" },
-  { id:"jacob_spackman",   name:"Jacob Spackman",         role:"crew",    pin:"" },
-  { id:"jakob",            name:"Jakob Bingham",          role:"crew",    pin:"" },
-  { id:"james",            name:"James Coleman Christen", role:"crew",    pin:"" },
-  { id:"noah",             name:"Noah Davis",             role:"crew",    pin:"" },
-  { id:"payton",           name:"Payton Bolda",           role:"crew",    pin:"" },
+  { id:"koy", name:"Koy", role:"admin", pin:"" },
 ];
 
 const ROLE_LABELS = {
@@ -7105,15 +7080,8 @@ function App() {
 
   useEffect(()=>{
     getDoc(doc(db,"settings","users")).then(snap=>{
-      const existing = snap.exists()&&snap.data().list?.length ? snap.data().list : [];
-      // Merge — add any DEFAULT_USERS not already in Firestore (match by id)
-      const existingIds = new Set(existing.map(u=>u.id));
-      const toAdd = DEFAULT_USERS.filter(u=>!existingIds.has(u.id));
-      const merged = [...existing, ...toAdd];
-      setUsers(merged);
-      // If we added anyone new, persist back to Firestore
-      if(toAdd.length>0) {
-        setDoc(doc(db,"settings","users"),{list:merged}).catch(()=>{});
+      if(snap.exists()&&snap.data().list?.length) {
+        setUsers(snap.data().list);
       }
     }).catch(()=>{});
   },[]);
