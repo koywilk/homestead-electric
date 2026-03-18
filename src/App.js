@@ -2737,38 +2737,24 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
     setShowSendModal(true);
   };
 
+  const [sending, setSending] = useState(false);
+
   const copyLink = async () => {
-    // Build updated homeRuns with recommended flags stamped onto each row
-    const applyRec = (arr) => (arr||[]).map(r=>({...r, recommended:!!recommended[r.id]}));
-    const updatedHomeRuns = {
-      ...homeRuns,
-      main:     applyRec(homeRuns.main),
-      upper:    applyRec(homeRuns.upper),
-      basement: applyRec(homeRuns.basement),
-      ...(homeRuns.extraFloors||[]).reduce((acc,e)=>({...acc,[e.key]:applyRec(homeRuns[e.key])}),{}),
-    };
-    // Update local React state immediately
-    onHRChange(updatedHomeRuns);
-    // Flush directly to Firestore NOW — don't wait for the debounced saveJob
+    setSending(true);
+    // Write recommended IDs to a dedicated Firestore doc — simple and reliable
+    const recIds = Object.entries(recommended).filter(([,v])=>v).map(([id])=>id);
     try {
-      const snap = await getDoc(doc(db,"jobs",jobId));
-      if(snap.exists()) {
-        const jobData = snap.data().data;
-        const merged = {...jobData, homeRuns: updatedHomeRuns};
-        await setDoc(doc(db,"jobs",jobId),{
-          data: sanitize(merged),
-          updated_at: new Date().toISOString()
-        });
-        console.log("Saved recommendations to Firestore:", 
-          Object.values(recommended).filter(Boolean).length, "starred");
-      }
+      await setDoc(doc(db, "homeowner_recommended", jobId), {
+        recommendedIds: recIds,
+        updatedAt: new Date().toISOString(),
+      });
     } catch(e) { console.error("Failed to save recommendations:", e); }
-    // Now copy the link
-    navigator.clipboard.writeText(hoLink).then(()=>{
-      setLinkCopied(true);
-      setShowSendModal(false);
-      setTimeout(()=>setLinkCopied(false),2500);
-    });
+    // Copy link to clipboard
+    try { await navigator.clipboard.writeText(hoLink); } catch(e){}
+    setSending(false);
+    setLinkCopied(true);
+    setShowSendModal(false);
+    setTimeout(()=>setLinkCopied(false), 2500);
   };
 
   const toggleRec = (id) => setRecommended(r=>({...r,[id]:!r[id]}));
@@ -2940,10 +2926,10 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
                     color:C.dim,fontSize:12,padding:"8px 16px",cursor:"pointer",fontFamily:"inherit"}}>
                   Cancel
                 </button>
-                <button onClick={copyLink}
-                  style={{background:"#1e293b",border:"none",borderRadius:8,color:"#fff",
-                    fontSize:12,fontWeight:700,padding:"8px 20px",cursor:"pointer",fontFamily:"inherit"}}>
-                  Copy link &amp; send
+                <button onClick={copyLink} disabled={sending}
+                  style={{background:sending?"#475569":"#1e293b",border:"none",borderRadius:8,color:"#fff",
+                    fontSize:12,fontWeight:700,padding:"8px 20px",cursor:sending?"not-allowed":"pointer",fontFamily:"inherit"}}>
+                  {sending ? "Saving…" : "Copy link & send"}
                 </button>
               </div>
             </div>
@@ -5769,18 +5755,32 @@ function HomeownerPage({ jobId }) {
   useEffect(()=>{
     async function load() {
       try {
+        // Load job data
         const snap = await getDoc(doc(db,"jobs",jobId));
         if(!snap.exists()){ setError("Job not found."); setLoading(false); return; }
         const j = snap.data().data;
         setJob(j);
+
+        // Load recommended IDs from dedicated collection
+        let recIds = new Set();
+        try {
+          const recSnap = await getDoc(doc(db,"homeowner_recommended",jobId));
+          if(recSnap.exists()) {
+            (recSnap.data().recommendedIds||[]).forEach(id=>recIds.add(id));
+          }
+        } catch(e){}
+
+        // Build rows — stamp recommended flag from recIds
         const rows = [
           ...(j.homeRuns?.main||[]),
           ...(j.homeRuns?.upper||[]),
           ...(j.homeRuns?.basement||[]),
           ...(j.homeRuns?.extraFloors||[]).flatMap(e=>j.homeRuns?.[e.key]||[]),
-        ].filter(r=>r.name||r.panel).map((r,i)=>({...r, priority:i+1, included:true, notes:r.notes||""}));
-        console.log("Homeowner rows loaded:", rows.map(r=>({name:r.name,wire:r.wire,recommended:r.recommended})));
+        ].filter(r=>r.name||r.panel)
+         .map((r,i)=>({...r, priority:i+1, included:true, notes:"", recommended:recIds.has(r.id)}));
         setItems(rows);
+
+        // If already submitted, load saved selections
         const reqSnap = await getDoc(doc(db,"homeowner_requests",jobId));
         if(reqSnap.exists()&&reqSnap.data().submitted){
           setSubmitted(true);
@@ -5908,33 +5908,43 @@ function HomeownerPage({ jobId }) {
 
       <div style={{padding:"20px 16px 0"}}>
 
-        {/* Generator size calculator — only show when wire data exists to calculate from */}
-        {included.length>0&&totalWatts>0&&(
+        {/* Generator size calculator */}
+        {included.length>0&&(
           <div style={{marginBottom:16,padding:"14px 16px",background:"#1e293b",borderRadius:12,
             border:"0.5px solid #334155"}}>
-            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
-              <div>
-                <div style={{fontSize:10,fontWeight:600,color:"#64748b",letterSpacing:"0.08em",marginBottom:4}}>
-                  ESTIMATED GENERATOR SIZE NEEDED
-                </div>
-                <div style={{fontSize:26,fontWeight:700,color:"#f59e0b",lineHeight:1}}>
+            <div style={{fontSize:10,fontWeight:600,color:"#64748b",letterSpacing:"0.08em",marginBottom:10}}>
+              ESTIMATED GENERATOR SIZE
+            </div>
+            {totalWatts>0 ? (
+              <>
+                <div style={{fontSize:28,fontWeight:700,color:"#f59e0b",lineHeight:1,marginBottom:4}}>
                   {genSize}
                 </div>
-                <div style={{fontSize:11,color:"#64748b",marginTop:4}}>
-                  {included.length} circuit{included.length!==1?"s":""} · ~{totalKW} kW running · {surgeKW} kW w/ startup surge
+                <div style={{fontSize:11,color:"#64748b",marginBottom:10}}>
+                  {included.length} circuit{included.length!==1?"s":""} · {totalKW} kW running · {surgeKW} kW with surge
                 </div>
+                <div style={{borderTop:"0.5px solid #334155",paddingTop:8}}>
+                  {included.filter(it=>estimateWatts(it.wire)>0).map(it=>(
+                    <div key={it.id} style={{display:"flex",justifyContent:"space-between",
+                      fontSize:11,color:"#94a3b8",marginBottom:3}}>
+                      <span>{it.name||"Unnamed"}</span>
+                      <span style={{color:"#f59e0b",fontWeight:600,marginLeft:12}}>
+                        {(estimateWatts(it.wire)/1000).toFixed(1)} kW
+                      </span>
+                    </div>
+                  ))}
+                </div>
+                <div style={{marginTop:8,fontSize:10,color:"#475569"}}>
+                  Based on 80% of breaker ratings + 25% surge. Final sizing by Homestead Electric.
+                </div>
+              </>
+            ) : (
+              <div style={{fontSize:12,color:"#475569"}}>
+                Wire sizes needed to calculate — Homestead Electric will determine the correct size.
               </div>
-              <div style={{textAlign:"right"}}>
-                <div style={{fontSize:10,color:"#64748b",marginBottom:6}}>Running load by circuit</div>
-                {included.filter(it=>estimateWatts(it.wire)>0).slice(0,5).map(it=>(
-                  <div key={it.id} style={{fontSize:11,color:"#94a3b8",marginBottom:2,display:"flex",gap:8,justifyContent:"flex-end"}}>
-                    <span style={{color:"#cbd5e1"}}>{it.name||"Unnamed"}</span>
-                    <span style={{color:"#f59e0b",fontWeight:600}}>{(estimateWatts(it.wire)/1000).toFixed(1)}kW</span>
-                  </div>
-                ))}
-                {included.filter(it=>estimateWatts(it.wire)>0).length>5&&(
-                  <div style={{fontSize:10,color:"#475569"}}>+{included.filter(it=>estimateWatts(it.wire)>0).length-5} more…</div>
-                )}
+            )}
+          </div>
+        )}
               </div>
             </div>
             <div style={{marginTop:10,fontSize:10,color:"#475569",lineHeight:1.5}}>
