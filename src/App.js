@@ -235,41 +235,60 @@ const DEFAULT_USERS = [
   { id:"koy", name:"Koy", role:"admin", pin:"" },
 ];
 
-const ROLE_LABELS = {
-  admin:   "Admin",
-  justin:  "Justin",
-  jeromy:  "Jeromy",
-  foreman: "Foreman",
-  lead:    "Lead",
-  crew:    "Crew",
-};
+// ── Title = field role (who they are on site) ────────────────
+const TITLE_OPTIONS = ["foreman","lead","crew"];
+const TITLE_LABELS  = { foreman:"Foreman", lead:"Lead", crew:"Crew" };
 
+// ── Access = what they can do in the app ─────────────────────
+const ACCESS_OPTIONS = ["admin","manager","standard","limited"];
+const ACCESS_LABELS  = { admin:"Admin", manager:"Manager", standard:"Standard", limited:"Limited" };
+
+// Legacy role field compat (old users only have role, not title+access)
+const ROLE_LABELS = {
+  admin:"Admin", justin:"Admin", jeromy:"Admin",
+  foreman:"Foreman", lead:"Lead", crew:"Crew",
+};
 const ROLE_OPTIONS = ["admin","foreman","lead","crew"];
 
-// Permission map — feature -> roles that have access
+// Permission map — keyed by access level
+// admin    = full access
+// manager  = everything except delete jobs
+// standard = foreman-level (cards, tasks, schedule, pipeline view)
+// limited  = home + job editing only (lead/crew)
 const PERMISSIONS = {
-  "home.view":         ["admin","justin","jeromy","foreman","lead","crew"],
-  "home.edit":         ["admin","justin","jeromy","foreman","lead","crew"],
-  "tasks.view":        ["admin","justin","jeromy","foreman"],
-  "tasks.setDueDate":  ["admin","justin","foreman"],
-  "tasks.addTask":     ["admin","justin","jeromy","foreman"],
-  "schedule.view":     ["admin","justin","jeromy","foreman"],
-  "schedule.edit":     ["admin","justin","foreman"],
-  "pipeline.view":     ["admin","justin","foreman"],
-  "pipeline.manage":   ["admin","justin"],
-  "job.delete":        ["admin"],
-  "co.edit":           ["admin","justin","jeromy","foreman","lead","crew"],
-  "reports.view":      ["admin","justin","jeromy","foreman"],
-  "foreman.cards":     ["admin","justin","jeromy","foreman","lead","crew"],
-  "users.manage":      ["admin","justin"],
-  "settings.view":     ["admin","justin"],
+  "home.view":       ["admin","manager","standard","limited"],
+  "home.edit":       ["admin","manager","standard","limited"],
+  "co.edit":         ["admin","manager","standard","limited"],
+  "foreman.cards":   ["admin","manager","standard","limited"],
+  "tasks.view":      ["admin","manager","standard"],
+  "tasks.addTask":   ["admin","manager","standard"],
+  "tasks.setDueDate":["admin","manager","standard"],
+  "schedule.view":   ["admin","manager","standard"],
+  "schedule.edit":   ["admin","manager"],
+  "pipeline.view":   ["admin","manager","standard"],
+  "pipeline.manage": ["admin","manager"],
+  "reports.view":    ["admin","manager","standard"],
+  "settings.view":   ["admin","manager"],
+  "users.manage":    ["admin","manager"],
+  "job.delete":      ["admin"],
+};
+
+// Resolve access level from user object (supports legacy role-only users)
+const getAccess = (user) => {
+  if(!user) return "limited";
+  if(user.access) return user.access;
+  // Legacy: map old role to access level
+  const legacyMap = { admin:"admin", justin:"admin", jeromy:"manager",
+                      foreman:"standard", lead:"limited", crew:"limited" };
+  return legacyMap[user.role] || "limited";
 };
 
 // Check if a user (identity object) can do a feature
 const can = (identity, feature) => {
   if(!identity) return false;
+  const access  = getAccess(identity);
   const allowed = PERMISSIONS[feature] || [];
-  return allowed.includes(identity.role);
+  return allowed.includes(access);
 };
 
 // Read identity — returns null if missing or older than 24h
@@ -435,28 +454,24 @@ function UserPicker({ users, onSelect, onSavePin }) {
 
 // ── User Management (inside Settings) ───────────────────────
 function UserManagement({ users, onSave }) {
-  const [list, setList]       = useState(users);
-  const [editing, setEditing] = useState(null); // user id being edited
+  const [list,    setList]    = useState(users);
+  const [editing, setEditing] = useState(null);
   const [showPin, setShowPin] = useState({});
 
   useEffect(()=>setList(users),[users]);
 
   const newUser = () => {
-    const u = { id:"u_"+Date.now(), name:"", role:"crew", pin:"" };
+    const u = { id:"u_"+Date.now(), name:"", title:"foreman", access:"standard", pin:"" };
     setList(l=>[...l,u]);
     setEditing(u.id);
   };
 
-  const upd = (id, patch) => setList(l=>l.map(u=>u.id===id?{...u,...patch}:u));
-
-  const del = (id) => {
-    if(!window.confirm("Remove this user?")) return;
-    const next = list.filter(u=>u.id!==id);
-    setList(next);
-    onSave(next);
-  };
-
+  const upd  = (id, patch) => setList(l=>l.map(u=>u.id===id?{...u,...patch}:u));
+  const del  = (id) => { if(!window.confirm("Remove this person?")) return; const next=list.filter(u=>u.id!==id); setList(next); onSave(next); };
   const save = () => { onSave(list); setEditing(null); };
+
+  // Access level colors
+  const accessColor = { admin:C.red, manager:"#8b5cf6", standard:C.blue, limited:C.dim };
 
   return (
     <div>
@@ -471,42 +486,71 @@ function UserManagement({ users, onSave }) {
         </button>
       </div>
 
+      <div style={{fontSize:11,color:C.dim,marginBottom:16,lineHeight:1.5}}>
+        <strong>Title</strong> = field role (appears on home screen cards) &nbsp;·&nbsp;
+        <strong>Access</strong> = what they can see and do in the app
+      </div>
+
       <div style={{display:"flex",flexDirection:"column",gap:10}}>
         {list.map(u=>{
           const isEditing = editing===u.id;
+          const access    = getAccess(u);
+          const title     = u.title || (["foreman","lead","crew"].includes(u.role)?u.role:"foreman");
           return (
             <div key={u.id} style={{background:C.card,border:`1px solid ${isEditing?C.accent:C.border}`,
-              borderRadius:12,padding:"14px 16px",transition:"border-color 0.15s"}}>
+              borderRadius:12,padding:"14px 16px",transition:"border-color 0.15s",
+              borderLeft:`3px solid ${accessColor[access]||C.dim}`}}>
               {isEditing ? (
-                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                  {/* Name */}
+                  <div>
+                    <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>FULL NAME</div>
+                    <input value={u.name} onChange={e=>upd(u.id,{name:e.target.value})}
+                      placeholder="First and last name…"
+                      style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
+                        borderRadius:7,color:C.text,padding:"8px 10px",fontSize:13,
+                        fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}/>
+                  </div>
+                  {/* Title + Access */}
                   <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
                     <div>
-                      <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>NAME</div>
-                      <input value={u.name} onChange={e=>upd(u.id,{name:e.target.value})}
-                        placeholder="Full name…"
+                      <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>TITLE</div>
+                      <select value={title} onChange={e=>upd(u.id,{title:e.target.value})}
                         style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
-                          borderRadius:7,color:C.text,padding:"7px 10px",fontSize:13,
-                          fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}/>
+                          borderRadius:7,color:C.text,padding:"8px 10px",fontSize:13,
+                          fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}>
+                        {TITLE_OPTIONS.map(t=><option key={t} value={t}>{TITLE_LABELS[t]}</option>)}
+                      </select>
+                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Field role — which card group they appear in</div>
                     </div>
                     <div>
-                      <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>ROLE</div>
-                      <select value={u.role} onChange={e=>upd(u.id,{role:e.target.value})}
-                        style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
-                          borderRadius:7,color:C.text,padding:"7px 10px",fontSize:13,
-                          fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}>
-                        {ROLE_OPTIONS.map(r=><option key={r} value={r}>{ROLE_LABELS[r]||r}</option>)}
+                      <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>ACCESS LEVEL</div>
+                      <select value={access} onChange={e=>upd(u.id,{access:e.target.value})}
+                        style={{width:"100%",background:C.surface,border:`1px solid ${accessColor[access]||C.border}44`,
+                          borderRadius:7,color:accessColor[access]||C.text,padding:"8px 10px",fontSize:13,
+                          fontWeight:700,fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}>
+                        {ACCESS_OPTIONS.map(a=><option key={a} value={a} style={{color:C.text,fontWeight:400}}>{ACCESS_LABELS[a]}</option>)}
                       </select>
+                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>What they can see and do</div>
                     </div>
                   </div>
+                  {/* Access description */}
+                  <div style={{fontSize:11,color:C.dim,background:C.surface,borderRadius:8,padding:"8px 12px",
+                    border:`1px solid ${accessColor[access]||C.border}33`}}>
+                    {access==="admin"    && "Full access — everything including delete jobs and manage team"}
+                    {access==="manager"  && "Everything except delete jobs — can manage settings and pipeline"}
+                    {access==="standard" && "Can view all cards, add tasks, see schedule and pipeline (no manage)"}
+                    {access==="limited"  && "Home screen and job editing only — no settings, pipeline, or tasks"}
+                  </div>
+                  {/* PIN */}
                   <div>
                     <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>PIN (4 digits)</div>
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
                       <input
                         type={showPin[u.id]?"text":"password"}
-                        value={u.pin}
+                        value={u.pin||""}
                         onChange={e=>{ const v=e.target.value.replace(/\D/g,"").slice(0,4); upd(u.id,{pin:v}); }}
-                        placeholder="e.g. 1234"
-                        maxLength={4}
+                        placeholder="e.g. 1234" maxLength={4}
                         style={{width:100,background:C.surface,border:`1px solid ${C.border}`,
                           borderRadius:7,color:C.text,padding:"7px 10px",fontSize:13,
                           fontFamily:"inherit",outline:"none",letterSpacing:"0.2em"}}/>
@@ -541,14 +585,22 @@ function UserManagement({ users, onSave }) {
               ) : (
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
                   <div style={{display:"flex",alignItems:"center",gap:12}}>
-                    <div style={{width:36,height:36,borderRadius:"50%",background:`${C.accent}22`,
+                    <div style={{width:36,height:36,borderRadius:"50%",
+                      background:`${accessColor[access]||C.dim}22`,
                       display:"flex",alignItems:"center",justifyContent:"center",
-                      fontSize:14,fontWeight:700,color:C.accent}}>
+                      fontSize:14,fontWeight:700,color:accessColor[access]||C.dim}}>
                       {u.name?u.name[0].toUpperCase():"?"}
                     </div>
                     <div>
                       <div style={{fontSize:14,fontWeight:600,color:C.text}}>{u.name||"Unnamed"}</div>
-                      <div style={{fontSize:11,color:C.dim}}>{ROLE_LABELS[u.role]||u.role} · PIN: {u.pin?"••••":"not set"}</div>
+                      <div style={{fontSize:11,color:C.dim,display:"flex",gap:8,alignItems:"center",marginTop:2}}>
+                        <span style={{background:`${accessColor[access]||C.dim}15`,color:accessColor[access]||C.dim,
+                          borderRadius:99,padding:"1px 8px",fontSize:10,fontWeight:700}}>
+                          {ACCESS_LABELS[access]||access}
+                        </span>
+                        <span>{TITLE_LABELS[title]||title}</span>
+                        <span style={{color:C.muted}}>PIN: {u.pin?"••••":"not set"}</span>
+                      </div>
                     </div>
                   </div>
                   <button onClick={()=>setEditing(u.id)}
@@ -7362,28 +7414,31 @@ function SettingsGroupHead({label}) {
   );
 }
 
-function SettingsRoleBadge({role}) {
-  const bg={admin:"#6366f1",justin:"#6366f1",jeromy:"#6366f1",foreman:"#2563eb",lead:"#0d9488",crew:"#64748b"};
-  const lb={admin:"Admin",justin:"Admin",jeromy:"Admin",foreman:"Foreman",lead:"Lead",crew:"Crew"};
+function SettingsRoleBadge({label, color}) {
   return (
-    <span style={{fontSize:9,fontWeight:700,color:"#fff",background:bg[role]||"#64748b",
+    <span style={{fontSize:9,fontWeight:700,color:"#fff",background:color||"#64748b",
       borderRadius:99,padding:"2px 8px",letterSpacing:"0.06em",flexShrink:0}}>
-      {lb[role]||role}
+      {label}
     </span>
   );
 }
 
 function SettingsPersonRow({user, color, colorOptions, onColorChange}) {
+  const accessColors = { admin:"#ef4444", manager:"#8b5cf6", standard:"#2563eb", limited:"#64748b" };
+  const titleLabels  = { foreman:"Foreman", lead:"Lead", crew:"Crew" };
+  const title  = user.title || (["foreman","lead","crew"].includes(user.role) ? user.role : "crew");
+  const access = getAccess(user);
   return (
     <div style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",
       background:"#ffffff",borderRadius:10,marginBottom:8,
       border:"1px solid #e2e8f0",borderLeft:`3px solid ${color}`}}>
-      <div style={{flex:1,display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+      <div style={{flex:1,display:"flex",alignItems:"center",gap:6,minWidth:0,flexWrap:"wrap"}}>
         <span style={{fontSize:14,fontWeight:600,color:"#0f172a",
           overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
           {user.name}
         </span>
-        <SettingsRoleBadge role={user.role}/>
+        <SettingsRoleBadge label={titleLabels[title]||title} color={color}/>
+        <SettingsRoleBadge label={ACCESS_LABELS[access]||access} color={accessColors[access]||"#64748b"}/>
       </div>
       <div style={{display:"flex",gap:5,flexWrap:"wrap",maxWidth:200,flexShrink:0}}>
         {colorOptions.map(col=>(
@@ -7404,9 +7459,10 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides }) {
   // Sync if parent colorOverrides changes (e.g. on load)
   useEffect(()=>{ setColors({...colorOverrides}); }, [JSON.stringify(colorOverrides)]);
 
-  const foremanUsers = (users||[]).filter(u=>["admin","justin","jeromy","foreman"].includes(u.role));
-  const leadUsers    = (users||[]).filter(u=>u.role==="lead");
-  const crewUsers    = (users||[]).filter(u=>u.role==="crew");
+  const getT = (u) => u.title || (["foreman","lead","crew"].includes(u.role) ? u.role : "crew");
+  const foremanUsers = (users||[]).filter(u=>getT(u)==="foreman");
+  const leadUsers    = (users||[]).filter(u=>getT(u)==="lead");
+  const crewUsers    = (users||[]).filter(u=>getT(u)==="crew");
 
   const getColor = (name) => {
     if(colors[name]) return colors[name];
@@ -7804,9 +7860,11 @@ function App() {
   });
 
   // Derive foremen/leads from users list by role
-  const _foremanUsers = users.filter(u=>["admin","justin","jeromy","foreman"].includes(u.role));
-  const _leadUsers    = users.filter(u=>u.role==="lead");
-  const _crewUsers    = users.filter(u=>u.role==="crew");
+  // Derive groups from title field (new) with fallback to role (legacy)
+  const getTitle = (u) => u.title || (["foreman","lead","crew"].includes(u.role) ? u.role : "crew");
+  const _foremanUsers = users.filter(u=>getTitle(u)==="foreman");
+  const _leadUsers    = users.filter(u=>getTitle(u)==="lead");
+  const _crewUsers    = users.filter(u=>getTitle(u)==="crew");
 
   // Full-name lists for dropdowns/display
   const _foremen = _foremanUsers.map(u=>u.name);
@@ -7834,12 +7892,17 @@ function App() {
 
   // Job foreman matching: support both full name and first-name-only (legacy jobs)
   const matchesForeman = (job, name) => {
-    const jf = job.foreman||"";
-    if(jf===name) return true;
-    // Legacy: job has "Koy", name is "Koy Wilkinson"
-    if(name.startsWith(jf+" ")||name===jf) return true;
-    // Legacy: job has "Koy Wilkinson", name is "Koy"
-    if(jf.startsWith(name+" ")) return true;
+    const jf = (job.foreman||"").trim().toLowerCase();
+    const n  = (name||"").trim().toLowerCase();
+    if(!jf || !n) return false;
+    if(jf === n) return true;
+    // "Koy" matches "Koy Wilkinson" — job first name is prefix of full name
+    if(n.startsWith(jf+" ")) return true;
+    // "Koy Wilkinson" matches "Koy" — full name starts with job value
+    if(jf.startsWith(n+" ")) return true;
+    // "Vasa" matches "Fonoivasa Mataafa" — job value appears anywhere in full name words
+    const nameParts = n.split(" ");
+    if(nameParts.some(part => part === jf || part.includes(jf) || jf.includes(part))) return true;
     return false;
   };
 
@@ -8505,7 +8568,7 @@ if(initialLoad.current) return;
         <div style={{marginLeft:"auto",flexShrink:0,display:"flex",alignItems:"center",gap:8}}>
           <span style={{fontSize:11,color:C.dim,background:C.surface,border:`1px solid ${C.border}`,
             borderRadius:99,padding:"4px 12px",whiteSpace:"nowrap"}}>
-            {identity.name} · {ROLE_LABELS[identity.role]||identity.role}
+            {identity.name} · {ACCESS_LABELS[getAccess(identity)]||getAccess(identity)}
           </span>
           <button onClick={()=>{localStorage.removeItem("he_identity");setIdentity(null);}}
             style={{fontSize:11,color:C.dim,background:"none",border:`1px solid ${C.border}`,
