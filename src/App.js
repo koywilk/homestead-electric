@@ -4389,7 +4389,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                             roughStatusDate:def.hasDate?job.roughStatusDate:"",
                             readyToInvoice:v==="invoice"?true:(job.roughStatus==="invoice"?false:job.readyToInvoice),
                             ...(v==="invoice"&&!job.readyToInvoice?{readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{}),
-                            roughProjectedStart:v==="scheduled"?job.roughProjectedStart:job.roughProjectedStart});
+                            roughProjectedStart:v==="scheduled"?job.roughProjectedStart:job.roughProjectedStart,
+                            // Reset deposit dismissed when rescheduled so task reappears
+                            ...(v==="scheduled"?{roughDepositDismissed:false}:{}),
+                          });
                         }} style={{background:rsDef.color?`${rsDef.color}18`:C.surface,
                           color:rsDef.color||C.dim, border:`1px solid ${rsDef.color||C.border}`,
                           borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
@@ -4509,7 +4512,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                             finishStatusDate:def.hasDate?job.finishStatusDate:"",
                             readyToInvoice:v==="invoice"?true:(job.finishStatus==="invoice"?false:job.readyToInvoice),
                             ...(v==="invoice"&&!job.readyToInvoice?{readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{}),
-                            finishProjectedStart:v==="scheduled"?job.finishProjectedStart:job.finishProjectedStart});
+                            finishProjectedStart:v==="scheduled"?job.finishProjectedStart:job.finishProjectedStart,
+                            // Reset deposit dismissed when rescheduled so task reappears
+                            ...(v==="scheduled"?{finishDepositDismissed:false}:{}),
+                          });
                         }} style={{background:fsDef.color?`${fsDef.color}18`:C.surface,
                           color:fsDef.color||C.dim, border:`1px solid ${fsDef.color||C.border}`,
                           borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
@@ -5982,6 +5988,16 @@ function computeTasks(jobs) {
     const fs = job.finishStatus || "";
 
     // Rough — waiting for date OR date confirmed: fire scheduling task
+    if(rs === "scheduled" && !job.roughDepositDismissed) {
+      tasks.push({
+        id: job.id+"_rough_deposit", jobId: job.id, jobName: job.name,
+        type: "auto", category: "invoice", foreman,
+        title: "Material Deposit — Rough",
+        desc: "Rough is scheduled — collect material deposit before start",
+        dueDate: job.roughStatusDate||"",
+        color: C.orange, cleared: false,
+      });
+    }
     if(rs === "waiting_date") {
       tasks.push({
         id: job.id+"_rough_waiting", jobId: job.id, jobName: job.name,
@@ -6023,6 +6039,16 @@ function computeTasks(jobs) {
     }
 
     // Finish — waiting for date OR date confirmed: fire scheduling task
+    if(fs === "scheduled" && !job.finishDepositDismissed) {
+      tasks.push({
+        id: job.id+"_finish_deposit", jobId: job.id, jobName: job.name,
+        type: "auto", category: "invoice", foreman,
+        title: "Material Deposit — Finish",
+        desc: "Finish is scheduled — collect material deposit before start",
+        dueDate: job.finishStatusDate||"",
+        color: C.orange, cleared: false,
+      });
+    }
     if(fs === "waiting_date") {
       tasks.push({
         id: job.id+"_finish_waiting", jobId: job.id, jobName: job.name,
@@ -6713,6 +6739,18 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
     onUpdateJob(jobId, invoiceSentPatch(job));
   };
 
+  const dismissRoughDeposit = (jobId) => {
+    const job = jobs.find(j=>j.id===jobId);
+    if(!job||!onUpdateJob) return;
+    onUpdateJob(jobId, {roughDepositDismissed: true});
+  };
+
+  const dismissFinishDeposit = (jobId) => {
+    const job = jobs.find(j=>j.id===jobId);
+    if(!job||!onUpdateJob) return;
+    onUpdateJob(jobId, {finishDepositDismissed: true});
+  };
+
   const dismissCODoneTask = (jobId, coId) => {
     // Mark co as invoice-dismissed by adding to job's coDismissed set
     const job = jobs.find(j=>j.id===jobId);
@@ -6858,6 +6896,8 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
               <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
                 onDismiss={
                   task.type==="manual" ? ()=>dismissManual(task.id) :
+                  task.id.endsWith("_rough_deposit") ? ()=>dismissRoughDeposit(task.jobId) :
+                  task.id.endsWith("_finish_deposit") ? ()=>dismissFinishDeposit(task.jobId) :
                   task.category==="invoice" ? ()=>dismissInvoiceTask(task.jobId) :
                   task.id.endsWith("_done") && task.coId ? ()=>dismissCODoneTask(task.jobId, task.coId) :
                   task.id.endsWith("_done") && task.rtId ? ()=>dismissRTDoneTask(task.jobId, task.rtId) :
@@ -6887,6 +6927,8 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
                   <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
                     onDismiss={
                       task.type==="manual" ? ()=>dismissManual(task.id) :
+                      task.id.endsWith("_rough_deposit") ? ()=>dismissRoughDeposit(task.jobId) :
+                      task.id.endsWith("_finish_deposit") ? ()=>dismissFinishDeposit(task.jobId) :
                       task.category==="invoice" ? ()=>dismissInvoiceTask(task.jobId) :
                       task.id.endsWith("_done") && task.coId ? ()=>dismissCODoneTask(task.jobId, task.coId) :
                       task.id.endsWith("_done") && task.rtId ? ()=>dismissRTDoneTask(task.jobId, task.rtId) :
