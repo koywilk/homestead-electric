@@ -7761,11 +7761,20 @@ function App() {
     getDoc(doc(db,"settings","main")).then(snap=>{
       if(!snap.exists()) return;
       const d = snap.data();
-      const foremen = (d.foremen||DEFAULT_FOREMEN).filter(n=>!BAD_NAMES.has(n));
-      const leads   = (d.leads  ||DEFAULT_LEADS  ).filter(n=>!BAD_NAMES.has(n));
+      let foremen = (d.foremen||DEFAULT_FOREMEN).filter(n=>!BAD_NAMES.has(n));
+      let leads   = (d.leads  ||DEFAULT_LEADS  ).filter(n=>!BAD_NAMES.has(n));
       const foremanColors = {...(d.foremanColors||{})};
       const leadColors    = {...(d.leadColors||{})};
       BAD_NAMES.forEach(n=>{ delete foremanColors[n]; delete leadColors[n]; });
+
+      // If foremen list is empty or has no recognizable names, reset to defaults
+      if(foremen.length===0) { foremen=[...DEFAULT_FOREMEN]; }
+      if(leads.length===0)   { leads=[...DEFAULT_LEADS]; }
+
+      // If none of the default foremen are present, the list got corrupted — hard reset
+      const hasDefaultForeman = DEFAULT_FOREMEN.some(n=>foremen.includes(n));
+      if(!hasDefaultForeman) { foremen=[...DEFAULT_FOREMEN]; leads=[...DEFAULT_LEADS]; }
+
       FOREMEN=foremen; FOREMEN_COLORS=foremanColors; LEADS=leads; LEAD_COLORS=leadColors;
       set_foremen(foremen); set_foremanColors(foremanColors);
       set_leads(leads); set_leadColors(leadColors);
