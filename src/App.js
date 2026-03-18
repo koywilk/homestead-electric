@@ -5945,13 +5945,6 @@ function HomeownerPage({ jobId }) {
             )}
           </div>
         )}
-              </div>
-            </div>
-            <div style={{marginTop:10,fontSize:10,color:"#475569",lineHeight:1.5}}>
-              * Estimate based on 80% of breaker ratings at rated voltage with 25% surge headroom. Final sizing determined by Homestead Electric.
-            </div>
-          </div>
-        )}
 
         {/* ON GENERATOR */}
         <div style={{fontSize:10,fontWeight:500,color:"#94a3b8",letterSpacing:"0.08em",marginBottom:10}}>
