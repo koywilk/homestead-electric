@@ -6569,8 +6569,88 @@ function PrepTaskList({ jobs, onSelectJob, onUpdateJob }) {
   );
 }
 
+// ── ForemanTaskCard — collapsible task card shown on foreman page ──
+// For Koy it shows two tabs: Prep | Tasks. For others just Tasks.
+function ForemanTaskCard({ isKoy, fTasks, prepTasks, jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJob, activeForeman }) {
+  const [open, setOpen] = useState(true);
+  const [tab, setTab]   = useState(isKoy ? "prep" : "tasks");
+
+  const totalCount = fTasks.length + (isKoy ? prepTasks.length : 0);
+  const overdueCount = fTasks.filter(t=>{ const u=URGENCY(t.dueDate); return u&&u.days<0; }).length;
+
+  return (
+    <div style={{margin:"0 0 16px",border:"1px solid #dc262633",borderRadius:12,overflow:"hidden"}}>
+      {/* Header — always visible, click to collapse */}
+      <div onClick={()=>setOpen(v=>!v)}
+        style={{display:"flex",alignItems:"center",gap:8,padding:"12px 16px",
+          background:"#dc262608",cursor:"pointer",userSelect:"none"}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.08em",color:"#dc2626"}}>
+          OPEN TASKS
+        </div>
+        <div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,
+          padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>{totalCount}</div>
+        {overdueCount>0&&(
+          <div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,
+            padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>⚠ {overdueCount} overdue</div>
+        )}
+        <div style={{marginLeft:"auto",fontSize:13,color:"#dc2626",opacity:0.7}}>{open?"▾":"▸"}</div>
+      </div>
+
+      {open && (
+        <div style={{padding:"12px 14px"}}>
+          {/* Tab bar — only for Koy */}
+          {isKoy && (
+            <div style={{display:"flex",gap:6,marginBottom:12}}>
+              {[["prep","Job Prep",prepTasks.length],["tasks","Tasks",fTasks.length]].map(([k,label,count])=>(
+                <button key={k} onClick={e=>{e.stopPropagation();setTab(k);}}
+                  style={{padding:"5px 14px",borderRadius:7,fontSize:12,cursor:"pointer",
+                    fontFamily:"inherit",fontWeight:tab===k?700:500,
+                    background:tab===k?"#dc2626":"transparent",
+                    border:`1px solid ${tab===k?"#dc2626":"#dc262644"}`,
+                    color:tab===k?"#fff":"#dc2626",transition:"all 0.15s",
+                    display:"flex",alignItems:"center",gap:6}}>
+                  {label}
+                  {count>0&&(
+                    <span style={{background:tab===k?"rgba(255,255,255,0.25)":"#dc262618",
+                      borderRadius:99,padding:"0px 6px",fontSize:10,fontWeight:700}}>
+                      {count}
+                    </span>
+                  )}
+                </button>
+              ))}
+            </div>
+          )}
+
+          {/* Prep tab — Koy only */}
+          {isKoy && tab==="prep" && (
+            prepTasks.length===0
+              ? <div style={{fontSize:12,color:"var(--muted)",textAlign:"center",padding:"16px 0"}}>✓ All prep complete</div>
+              : <PrepTaskList jobs={jobs} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob}/>
+          )}
+
+          {/* Tasks tab — all foremen */}
+          {(!isKoy || tab==="tasks") && (
+            fTasks.length===0
+              ? <div style={{fontSize:12,color:"var(--muted)",textAlign:"center",padding:"16px 0"}}>✓ No open tasks</div>
+              : <Tasks
+                  jobs={jobs}
+                  manualTasks={manualTasks}
+                  onManualTasksChange={onManualTasksChange}
+                  onSelectJob={onSelectJob}
+                  onUpdateJob={onUpdateJob}
+                  filterForeman={activeForeman}
+                />
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJob, filterForeman, compact }) {
   const [showAdd, setShowAdd] = useState(false);
+  const [collapsedForemen, setCollapsedForemen] = useState({});
+  const toggleForeman = (f) => setCollapsedForemen(c=>({...c,[f]:!c[f]}));
 
   const handleSetDueDate = (taskId, date) => {
     // Manual task — update in the list (persists to Firestore via manualTasks collection)
@@ -6769,15 +6849,17 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
             const fTasks = sorted.filter(t=>t.foreman===f);
             const fOverdue = fTasks.filter(t=>{ const u=URGENCY(t.dueDate); return u&&u.days<0; }).length;
             if(fTasks.length===0) return null;
+            const fCollapsed = !!collapsedForemen[f];
             return (
               <div key={f} style={{marginBottom:28}}>
-                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,paddingBottom:8,borderBottom:`2px solid ${fc}33`}}>
+                <div onClick={()=>toggleForeman(f)} style={{display:"flex",alignItems:"center",gap:8,marginBottom:fCollapsed?0:12,paddingBottom:8,borderBottom:`2px solid ${fc}33`,cursor:"pointer",userSelect:"none"}}>
                   <div style={{width:9,height:9,borderRadius:"50%",background:fc}}/>
                   <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:fc}}>{f}</div>
                   <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:fc,fontWeight:700}}>{fTasks.length}</div>
                   {fOverdue>0&&<div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>⚠ {fOverdue} overdue</div>}
+                  <div style={{marginLeft:"auto",fontSize:12,color:fc,opacity:0.7,paddingRight:4}}>{fCollapsed?"▸":"▾"}</div>
                 </div>
-                {fTasks.map(task=>(
+                {!fCollapsed&&fTasks.map(task=>(
                   <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
                     onDismiss={
                       task.type==="manual" ? ()=>dismissManual(task.id) :
@@ -8618,19 +8700,29 @@ if(initialLoad.current) return;
             ):(
 
               <>
-              {/* Tasks mini-card for this foreman */}
+              {/* Tasks + Prep mini-card for this foreman, tabbed for Koy */}
               {(()=>{
-                const fTasks = computeTasks(jobs).filter(t=>t.foreman===activeForeman)
+                const isKoy = activeForeman === "Koy";
+                const fTasks = computeTasks(jobs)
+                  .filter(t=>t.foreman===activeForeman && t.category!=="prep")
                   .concat((manualTasks||[]).filter(t=>t.foreman===activeForeman));
-                if(fTasks.length===0) return null;
+                const prepTasks = computeTasks(jobs).filter(t=>t.foreman==="Koy"&&t.category==="prep");
+                const totalCount = isKoy ? fTasks.length + prepTasks.length : fTasks.length;
+                if(totalCount===0&&!isKoy) return null;
+                if(totalCount===0&&isKoy&&prepTasks.length===0) return null;
+
                 return (
-                  <div style={{margin:"0 0 16px",padding:"14px 16px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:12}}>
-                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.08em",color:"#dc2626"}}>OPEN TASKS</div>
-                      <div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>{fTasks.length}</div>
-                    </div>
-                    <Tasks jobs={jobs} manualTasks={manualTasks} onManualTasksChange={(next)=>{ next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); }); manualTasks.forEach(t=>{ if(!next.find(m=>m.id===t.id)) deleteManualTask(t.id); }); setManualTasks(next); }} onSelectJob={(job)=>setSelected(job)} onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch}); }} filterForeman={activeForeman}/>
-                  </div>
+                  <ForemanTaskCard
+                    isKoy={isKoy}
+                    fTasks={fTasks}
+                    prepTasks={prepTasks}
+                    jobs={jobs}
+                    manualTasks={manualTasks}
+                    onManualTasksChange={(next)=>{ next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); }); manualTasks.forEach(t=>{ if(!next.find(m=>m.id===t.id)) deleteManualTask(t.id); }); setManualTasks(next); }}
+                    onSelectJob={(job)=>setSelected(job)}
+                    onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch}); }}
+                    activeForeman={activeForeman}
+                  />
                 );
               })()}
               <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={false}/>
