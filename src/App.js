@@ -7079,22 +7079,43 @@ function App() {
   const [users, setUsers] = useState(DEFAULT_USERS);
 
   useEffect(()=>{
-    // IDs we mistakenly pushed — remove them from Firestore on load
+    // Names we mistakenly pushed into foremen list — purge from settings/main too
+    const BAD_NAMES = new Set([
+      "Josh Cloward","Keegan Wilkinson","Daegan Smith","Gage Lund","Treycen Rollene",
+      "Jonathan Harding","Braden Davis","Colby Fogh","Fonoivasa Mataafa","Abraham Tristan",
+      "Asher Miller","Austin Schut","Bailey Smith","Brady Nelson","Braxton Raven",
+      "Callen Jakeman","Isaiah Miller","Jacob Nuffer","Jacob Spackman","Jakob Bingham",
+      "James Coleman Christen","Noah Davis","Payton Bolda",
+    ]);
     const BAD_IDS = new Set([
       "josh_cloward","keegan","daegan","gage","treycen","jonathan","braden","colby",
       "fonoivasa","abraham","asher","austin","bailey","brady","braxton","callen",
       "isaiah","jacob_nuffer","jacob_spackman","jakob","james","noah","payton",
     ]);
+
+    // Clean users list
     getDoc(doc(db,"settings","users")).then(snap=>{
-      if(snap.exists()&&snap.data().list?.length) {
-        const raw = snap.data().list;
-        const cleaned = raw.filter(u=>!BAD_IDS.has(u.id));
-        setUsers(cleaned);
-        // If we removed anyone, write the cleaned list back
-        if(cleaned.length !== raw.length) {
-          setDoc(doc(db,"settings","users"),{list:cleaned}).catch(()=>{});
-        }
+      const raw = snap.exists()&&snap.data().list ? snap.data().list : [];
+      const cleaned = raw.filter(u=>!BAD_IDS.has(u.id));
+      setUsers(cleaned.length ? cleaned : DEFAULT_USERS);
+      if(cleaned.length !== raw.length) {
+        setDoc(doc(db,"settings","users"),{list:cleaned}).catch(()=>{});
       }
+    }).catch(()=>{});
+
+    // Clean foremen/leads lists in settings/main
+    getDoc(doc(db,"settings","main")).then(snap=>{
+      if(!snap.exists()) return;
+      const d = snap.data();
+      const foremen = (d.foremen||DEFAULT_FOREMEN).filter(n=>!BAD_NAMES.has(n));
+      const leads   = (d.leads  ||DEFAULT_LEADS  ).filter(n=>!BAD_NAMES.has(n));
+      const foremanColors = {...(d.foremanColors||{})};
+      const leadColors    = {...(d.leadColors||{})};
+      BAD_NAMES.forEach(n=>{ delete foremanColors[n]; delete leadColors[n]; });
+      FOREMEN=foremen; FOREMEN_COLORS=foremanColors; LEADS=leads; LEAD_COLORS=leadColors;
+      set_foremen(foremen); set_foremanColors(foremanColors);
+      set_leads(leads); set_leadColors(leadColors);
+      setDoc(doc(db,"settings","main"),{foremen,foremanColors,leads,leadColors}).catch(()=>{});
     }).catch(()=>{});
   },[]);
 
@@ -7124,12 +7145,22 @@ function App() {
     getDoc(doc(db,"settings","main")).then(snap=>{
       if(snap.exists()){
         const d = snap.data();
-        const f  = d.foremen       || DEFAULT_FOREMEN;
-        const fc = d.foremanColors || DEFAULT_FOREMEN_COLORS;
-        const l  = d.leads         || DEFAULT_LEADS;
-        const lc = d.leadColors    || DEFAULT_LEAD_COLORS;
+        const BAD_NAMES = new Set([
+          "Josh Cloward","Keegan Wilkinson","Daegan Smith","Gage Lund","Treycen Rollene",
+          "Jonathan Harding","Braden Davis","Colby Fogh","Fonoivasa Mataafa","Abraham Tristan",
+          "Asher Miller","Austin Schut","Bailey Smith","Brady Nelson","Braxton Raven",
+          "Callen Jakeman","Isaiah Miller","Jacob Nuffer","Jacob Spackman","Jakob Bingham",
+          "James Coleman Christen","Noah Davis","Payton Bolda","Koy Wilkinson","Justin Cloward","Jeromy Cloward",
+        ]);
+        const f  = (d.foremen       || DEFAULT_FOREMEN).filter(n=>!BAD_NAMES.has(n));
+        const fc = {...(d.foremanColors || DEFAULT_FOREMEN_COLORS)};
+        const l  = (d.leads         || DEFAULT_LEADS).filter(n=>!BAD_NAMES.has(n));
+        const lc = {...(d.leadColors    || DEFAULT_LEAD_COLORS)};
+        BAD_NAMES.forEach(n=>{ delete fc[n]; delete lc[n]; });
         FOREMEN=f; FOREMEN_COLORS=fc; LEADS=l; LEAD_COLORS=lc;
         set_foremen(f); set_foremanColors(fc); set_leads(l); set_leadColors(lc);
+        // Write cleaned data back
+        setDoc(doc(db,"settings","main"),{foremen:f,foremanColors:fc,leads:l,leadColors:lc}).catch(()=>{});
       }
     });
   },[]);
