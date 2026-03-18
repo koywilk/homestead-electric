@@ -2754,10 +2754,13 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
       const snap = await getDoc(doc(db,"jobs",jobId));
       if(snap.exists()) {
         const jobData = snap.data().data;
+        const merged = {...jobData, homeRuns: updatedHomeRuns};
         await setDoc(doc(db,"jobs",jobId),{
-          data: {...jobData, homeRuns: updatedHomeRuns},
+          data: sanitize(merged),
           updated_at: new Date().toISOString()
         });
+        console.log("Saved recommendations to Firestore:", 
+          Object.values(recommended).filter(Boolean).length, "starred");
       }
     } catch(e) { console.error("Failed to save recommendations:", e); }
     // Now copy the link
@@ -5775,7 +5778,8 @@ function HomeownerPage({ jobId }) {
           ...(j.homeRuns?.upper||[]),
           ...(j.homeRuns?.basement||[]),
           ...(j.homeRuns?.extraFloors||[]).flatMap(e=>j.homeRuns?.[e.key]||[]),
-        ].filter(r=>r.name||r.panel).map((r,i)=>({...r, priority:i+1, included:true, notes:""}));
+        ].filter(r=>r.name||r.panel).map((r,i)=>({...r, priority:i+1, included:true, notes:r.notes||""}));
+        console.log("Homeowner rows loaded:", rows.map(r=>({name:r.name,wire:r.wire,recommended:r.recommended})));
         setItems(rows);
         const reqSnap = await getDoc(doc(db,"homeowner_requests",jobId));
         if(reqSnap.exists()&&reqSnap.data().submitted){
