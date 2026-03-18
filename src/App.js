@@ -2758,7 +2758,7 @@ function HRAddFloor({homeRuns, onHRChange}) {
   );
 }
 
-function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobName}) {
+function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobName,onFlush}) {
 
   const [hoResponse,     setHoResponse]     = useState(null);
   const [showHoModal,    setShowHoModal]     = useState(false);
@@ -2772,7 +2772,9 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
 
 
 
-  const copyLink = () => {
+  const copyLink = async () => {
+    // Flush job to Firestore immediately so homeowner page reads latest recommended flags
+    if(onFlush) await onFlush();
     navigator.clipboard.writeText(hoLink).then(()=>{
       setLinkCopied(true);
       setTimeout(()=>setLinkCopied(false), 2500);
@@ -4364,8 +4366,8 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
           {tab==="Home Runs"&&(
 
             <HomeRunsTab homeRuns={job.homeRuns} panelCounts={job.panelCounts} jobId={job.id} jobName={job.name}
-
-              onHRChange={v=>u({homeRuns:v})} onCountChange={v=>u({panelCounts:v})}/>
+              onHRChange={v=>u({homeRuns:v})} onCountChange={v=>u({panelCounts:v})}
+              onFlush={()=>flushJob(jobRef.current)}/>
 
           )}
 
