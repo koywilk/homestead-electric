@@ -7281,7 +7281,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
             const fc2=f==="All"?C.accent:getFC(f)||"#6b7280";
             const ct=f==="All"?allEvents.length:buildEvents(
               f==="Unassigned"?jobs.filter(j=>!j.foreman||j.foreman==="Unassigned")
-              :jobs.filter(j=>(j.foreman||"Koy")===f)
+              :jobs.filter(j=>matchesForeman(j,f))
             ).length;
             return (
               <button key={f} onClick={()=>setForemanTab(f)}
@@ -7352,103 +7352,131 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
 }
 
 // ── Settings ─────────────────────────────────────────────────
-function SettingsPage({ COLOR_OPTIONS, onSave }) {
-  const [foremen,       setForemen]       = useState([...getForemenList()]);
-  const [foremanColors, setForemanColors] = useState({...FOREMEN_COLORS});
-  const [leads,         setLeads]         = useState([...getLeadsList()]);
-  const [leadColors,    setLeadColors]    = useState({...LEAD_COLORS});
-  const [newForeman,    setNewForeman]    = useState("");
-  const [newLead,       setNewLead]       = useState("");
-  const [saved,         setSaved]         = useState(false);
+// Three module-level components so React never sees new types mid-render
+function SettingsGroupHead({label}) {
+  return (
+    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",
+      color:"#0f172a",marginBottom:14,paddingBottom:8,borderBottom:"2px solid #e2e8f0"}}>
+      {label}
+    </div>
+  );
+}
+
+function SettingsRoleBadge({role}) {
+  const bg={admin:"#6366f1",justin:"#6366f1",jeromy:"#6366f1",foreman:"#2563eb",lead:"#0d9488",crew:"#64748b"};
+  const lb={admin:"Admin",justin:"Admin",jeromy:"Admin",foreman:"Foreman",lead:"Lead",crew:"Crew"};
+  return (
+    <span style={{fontSize:9,fontWeight:700,color:"#fff",background:bg[role]||"#64748b",
+      borderRadius:99,padding:"2px 8px",letterSpacing:"0.06em",flexShrink:0}}>
+      {lb[role]||role}
+    </span>
+  );
+}
+
+function SettingsPersonRow({user, color, colorOptions, onColorChange}) {
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",
+      background:"#ffffff",borderRadius:10,marginBottom:8,
+      border:"1px solid #e2e8f0",borderLeft:`3px solid ${color}`}}>
+      <div style={{flex:1,display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+        <span style={{fontSize:14,fontWeight:600,color:"#0f172a",
+          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+          {user.name}
+        </span>
+        <SettingsRoleBadge role={user.role}/>
+      </div>
+      <div style={{display:"flex",gap:5,flexWrap:"wrap",maxWidth:200,flexShrink:0}}>
+        {colorOptions.map(col=>(
+          <div key={col} onClick={()=>onColorChange(col)}
+            style={{width:20,height:20,borderRadius:"50%",background:col,cursor:"pointer",
+              border:color===col?"3px solid white":"2px solid transparent",
+              boxShadow:color===col?`0 0 0 2px ${col}`:"none",flexShrink:0}}/>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides }) {
+  const [colors, setColors] = useState({...colorOverrides});
+  const [saved,  setSaved]  = useState(false);
+
+  // Sync if parent colorOverrides changes (e.g. on load)
+  useEffect(()=>{ setColors({...colorOverrides}); }, [JSON.stringify(colorOverrides)]);
+
+  const foremanUsers = (users||[]).filter(u=>["admin","justin","jeromy","foreman"].includes(u.role));
+  const leadUsers    = (users||[]).filter(u=>u.role==="lead");
+  const crewUsers    = (users||[]).filter(u=>u.role==="crew");
+
+  const getColor = (name) => {
+    if(colors[name]) return colors[name];
+    const first = name.split(" ")[0];
+    return colors[first]||"#6b7280";
+  };
+
+  const setColor = (name, col) => setColors(prev=>({...prev,[name]:col}));
 
   const save = async () => {
-    await onSave(foremen, foremanColors, leads, leadColors);
-    setSaved(true); setTimeout(()=>setSaved(false), 2000);
+    await onSave(colors);
+    setSaved(true); setTimeout(()=>setSaved(false),2000);
   };
+
+  const noUsers = foremanUsers.length===0 && leadUsers.length===0 && crewUsers.length===0;
 
   return (
     <div style={{padding:"24px 20px 60px",maxWidth:600,margin:"0 auto"}}>
       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.08em",
-        color:C.text,marginBottom:24}}>SETTINGS</div>
-
-      <div style={{marginBottom:32}}>
-        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",
-          color:C.text,marginBottom:14,paddingBottom:8,borderBottom:`2px solid ${C.border}`}}>Foremen</div>
-        {foremen.map(name=>(
-          <div key={name} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",
-            background:C.card,borderRadius:10,marginBottom:8,border:`1px solid ${C.border}`,
-            borderLeft:`3px solid ${foremanColors[name]||"#6b7280"}`}}>
-            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",
-              color:foremanColors[name]||"#6b7280",flex:1}}>{name}</div>
-            <div style={{display:"flex",gap:5,flexWrap:"wrap",maxWidth:220}}>
-              {COLOR_OPTIONS.map(col=>(
-                <div key={col} onClick={()=>setForemanColors(fc=>({...fc,[name]:col}))}
-                  style={{width:20,height:20,borderRadius:"50%",background:col,cursor:"pointer",
-                    border:(foremanColors[name]||"#6b7280")===col?"3px solid white":"2px solid transparent",
-                    boxShadow:(foremanColors[name]||"#6b7280")===col?`0 0 0 2px ${col}`:"none",flexShrink:0}}/>
-              ))}
-            </div>
-            <button onClick={()=>{ setForemen(f=>f.filter(x=>x!==name)); setForemanColors(fc=>{const n={...fc};delete n[name];return n;}); }}
-              style={{background:"none",border:"1px solid #dc262644",borderRadius:7,color:"#dc2626",
-                fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,flexShrink:0}}>
-              Remove
-            </button>
-          </div>
-        ))}
-        <div style={{display:"flex",gap:8,marginTop:4}}>
-          <input value={newForeman} onChange={e=>setNewForeman(e.target.value)}
-            placeholder="New foreman name"
-            onKeyDown={e=>{ if(e.key==="Enter"&&newForeman.trim()){ setForemen(f=>[...f,newForeman.trim()]); setForemanColors(fc=>({...fc,[newForeman.trim()]:"#6b7280"})); setNewForeman(""); }}}
-            style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
-              padding:"8px 12px",fontSize:13,fontFamily:"inherit",color:C.text,outline:"none"}}/>
-          <button onClick={()=>{ if(!newForeman.trim()) return; setForemen(f=>[...f,newForeman.trim()]); setForemanColors(fc=>({...fc,[newForeman.trim()]:"#6b7280"})); setNewForeman(""); }}
-            style={{background:C.accent,border:"none",borderRadius:8,color:"#000",fontSize:13,
-              fontWeight:700,padding:"8px 16px",cursor:"pointer",fontFamily:"inherit"}}>
-            + Add
-          </button>
-        </div>
+        color:"#0f172a",marginBottom:6}}>SETTINGS</div>
+      <div style={{fontSize:12,color:"#64748b",marginBottom:24,lineHeight:1.5}}>
+        Team members are grouped by role. Assign a color to each person — it appears on their card and throughout the app.
+        To add or remove people, use the <strong>Team Members</strong> section below.
       </div>
 
-      <div style={{marginBottom:32}}>
-        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",
-          color:C.text,marginBottom:14,paddingBottom:8,borderBottom:`2px solid ${C.border}`}}>Leads</div>
-        {leads.map(name=>(
-          <div key={name} style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",
-            background:C.card,borderRadius:10,marginBottom:8,border:`1px solid ${C.border}`,
-            borderLeft:`3px solid ${leadColors[name]||"#6b7280"}`}}>
-            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",
-              color:leadColors[name]||"#6b7280",flex:1}}>{name}</div>
-            <div style={{display:"flex",gap:5,flexWrap:"wrap",maxWidth:220}}>
-              {COLOR_OPTIONS.map(col=>(
-                <div key={col} onClick={()=>setLeadColors(lc=>({...lc,[name]:col}))}
-                  style={{width:20,height:20,borderRadius:"50%",background:col,cursor:"pointer",
-                    border:(leadColors[name]||"#6b7280")===col?"3px solid white":"2px solid transparent",
-                    boxShadow:(leadColors[name]||"#6b7280")===col?`0 0 0 2px ${col}`:"none",flexShrink:0}}/>
-              ))}
-            </div>
-            <button onClick={()=>{ setLeads(l=>l.filter(x=>x!==name)); setLeadColors(lc=>{const n={...lc};delete n[name];return n;}); }}
-              style={{background:"none",border:"1px solid #dc262644",borderRadius:7,color:"#dc2626",
-                fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,flexShrink:0}}>
-              Remove
-            </button>
-          </div>
-        ))}
-        <div style={{display:"flex",gap:8,marginTop:4}}>
-          <input value={newLead} onChange={e=>setNewLead(e.target.value)}
-            placeholder="New lead name"
-            onKeyDown={e=>{ if(e.key==="Enter"&&newLead.trim()){ setLeads(l=>[...l,newLead.trim()]); setLeadColors(lc=>({...lc,[newLead.trim()]:"#6b7280"})); setNewLead(""); }}}
-            style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
-              padding:"8px 12px",fontSize:13,fontFamily:"inherit",color:C.text,outline:"none"}}/>
-          <button onClick={()=>{ if(!newLead.trim()) return; setLeads(l=>[...l,newLead.trim()]); setLeadColors(lc=>({...lc,[newLead.trim()]:"#6b7280"})); setNewLead(""); }}
-            style={{background:C.accent,border:"none",borderRadius:8,color:"#000",fontSize:13,
-              fontWeight:700,padding:"8px 16px",cursor:"pointer",fontFamily:"inherit"}}>
-            + Add
-          </button>
+      {noUsers && (
+        <div style={{fontSize:13,color:"#94a3b8",fontStyle:"italic",marginBottom:24,
+          padding:"16px",background:"#f8fafc",borderRadius:10,border:"1px dashed #e2e8f0"}}>
+          No team members yet. Add people in the Team Members section below, then assign them roles.
         </div>
-      </div>
+      )}
+
+      {foremanUsers.length>0 && (
+        <div style={{marginBottom:32}}>
+          <SettingsGroupHead label="Foremen"/>
+          {foremanUsers.map(u=>(
+            <SettingsPersonRow key={u.id} user={u}
+              color={getColor(u.name)}
+              colorOptions={COLOR_OPTIONS}
+              onColorChange={col=>setColor(u.name,col)}/>
+          ))}
+        </div>
+      )}
+
+      {leadUsers.length>0 && (
+        <div style={{marginBottom:32}}>
+          <SettingsGroupHead label="Leads"/>
+          {leadUsers.map(u=>(
+            <SettingsPersonRow key={u.id} user={u}
+              color={getColor(u.name)}
+              colorOptions={COLOR_OPTIONS}
+              onColorChange={col=>setColor(u.name,col)}/>
+          ))}
+        </div>
+      )}
+
+      {crewUsers.length>0 && (
+        <div style={{marginBottom:32}}>
+          <SettingsGroupHead label="Crew"/>
+          {crewUsers.map(u=>(
+            <SettingsPersonRow key={u.id} user={u}
+              color={getColor(u.name)}
+              colorOptions={COLOR_OPTIONS}
+              onColorChange={col=>setColor(u.name,col)}/>
+          ))}
+        </div>
+      )}
 
       <button onClick={save}
-        style={{width:"100%",background:saved?"#16a34a":C.accent,border:"none",borderRadius:10,
+        style={{width:"100%",background:saved?"#16a34a":"#d97706",border:"none",borderRadius:10,
           color:saved?"#fff":"#000",fontSize:15,fontWeight:700,padding:"14px",
           cursor:"pointer",fontFamily:"inherit",transition:"background 0.3s"}}>
         {saved?"✓ Saved!":"Save Changes"}
@@ -7733,7 +7761,7 @@ function App() {
   const [users, setUsers] = useState(DEFAULT_USERS);
 
   useEffect(()=>{
-    // ── Load users ──
+    // ── Load users ────────────────────────────────────────────
     const BAD_IDS = new Set([
       "josh_cloward","keegan","daegan","gage","treycen","jonathan","braden","colby",
       "fonoivasa","abraham","asher","austin","bailey","brady","braxton","callen",
@@ -7743,48 +7771,19 @@ function App() {
       const raw = snap.exists()&&snap.data().list ? snap.data().list : [];
       const cleaned = raw.filter(u=>!BAD_IDS.has(u.id));
       setUsers(cleaned.length ? cleaned : DEFAULT_USERS);
-      if(cleaned.length !== raw.length) {
+      if(cleaned.length !== raw.length)
         setDoc(doc(db,"settings","users"),{list:cleaned}).catch(()=>{});
-      }
     }).catch(()=>{});
 
-    // ── Load foremen/leads from settings/main ──
-    // Only trust the saved data if it was saved by the correct Settings page
-    // (identified by having a settingsVersion flag, or by containing known default names)
+    // ── Load color overrides only from settings/main ───────────
+    // Name lists are ALWAYS derived from users by role — never stored separately
     getDoc(doc(db,"settings","main")).then(snap=>{
       if(!snap.exists()) return;
       const d = snap.data();
-
-      // Valid names are short first-name-only strings (no spaces = not role-derived full names)
-      const isValidName = n => typeof n==="string" && n.trim().length>0 && !n.includes(" ");
-
-      let foremen = (d.foremen||[]).filter(isValidName);
-      let leads   = (d.leads  ||[]).filter(isValidName);
-      const foremanColors = {...(d.foremanColors||{})};
-      const leadColors    = {...(d.leadColors||{})};
-
-      // Strip colors for any full-name (invalid) entries
-      Object.keys(foremanColors).forEach(n=>{ if(!isValidName(n)) delete foremanColors[n]; });
-      Object.keys(leadColors).forEach(n=>{ if(!isValidName(n)) delete leadColors[n]; });
-
-      // If corrupted, reset to defaults and rewrite Firestore
-      if(foremen.length===0 || !DEFAULT_FOREMEN.some(n=>foremen.includes(n))) {
-        foremen=[...DEFAULT_FOREMEN]; leads=[...DEFAULT_LEADS];
-        setDoc(doc(db,"settings","main"),{
-          foremen, foremanColors:DEFAULT_FOREMEN_COLORS,
-          leads, leadColors:DEFAULT_LEAD_COLORS
-        }).catch(()=>{});
-        FOREMEN=foremen; FOREMEN_COLORS={...DEFAULT_FOREMEN_COLORS};
-        LEADS=leads; LEAD_COLORS={...DEFAULT_LEAD_COLORS};
-        set_foremen(foremen); set_foremanColors({...DEFAULT_FOREMEN_COLORS});
-        set_leads(leads); set_leadColors({...DEFAULT_LEAD_COLORS});
-        return;
-      }
-      if(leads.length===0) leads=[...DEFAULT_LEADS];
-
-      FOREMEN=foremen; FOREMEN_COLORS=foremanColors; LEADS=leads; LEAD_COLORS=leadColors;
-      set_foremen(foremen); set_foremanColors(foremanColors);
-      set_leads(leads); set_leadColors(leadColors);
+      const colors = {...(d.colorOverrides||d.foremanColors||{}),
+                      ...(d.leadColors||{})};
+      if(Object.keys(colors).length)
+        set_colorOverrides(prev=>({...prev,...colors}));
     }).catch(()=>{});
   },[]);
 
@@ -7797,64 +7796,58 @@ function App() {
     try { await setDoc(doc(db,"settings","users"),{list}); } catch(e){ console.error(e); }
   };
 
-  // ── Settings state (foremen + leads) ──────────────────────
-  const [_foremen,        set_foremen]        = useState(DEFAULT_FOREMEN);
-  const [_foremanColors,  set_foremanColors]  = useState(DEFAULT_FOREMEN_COLORS);
-  const [_leads,          set_leads]          = useState(DEFAULT_LEADS);
-  const [_leadColors,     set_leadColors]     = useState(DEFAULT_LEAD_COLORS);
+  // ── Color overrides (keyed by full name) ─────────────────────
+  const [_colorOverrides, set_colorOverrides] = useState({
+    "Koy":"#3b82f6","Koy Wilkinson":"#3b82f6",
+    "Vasa":"#f97316","Fonoivasa Mataafa":"#f97316",
+    "Colby":"#22c55e","Colby Fogh":"#22c55e",
+  });
 
-  // Keep module-level globals in sync with state
-  useEffect(()=>{
-    FOREMEN=_foremen; FOREMEN_COLORS=_foremanColors;
-    LEADS=_leads; LEAD_COLORS=_leadColors;
-  },[_foremen,_foremanColors,_leads,_leadColors]);
+  // Derive foremen/leads from users list by role
+  const _foremanUsers = users.filter(u=>["admin","justin","jeromy","foreman"].includes(u.role));
+  const _leadUsers    = users.filter(u=>u.role==="lead");
+  const _crewUsers    = users.filter(u=>u.role==="crew");
 
-  const saveSettings = async(foremen, foremanColors, leads, leadColors) => {
-    await setDoc(doc(db,"settings","main"),{foremen,foremanColors,leads,leadColors});
-    FOREMEN=foremen; FOREMEN_COLORS=foremanColors; LEADS=leads; LEAD_COLORS=leadColors;
+  // Full-name lists for dropdowns/display
+  const _foremen = _foremanUsers.map(u=>u.name);
+  const _leads   = _leadUsers.map(u=>u.name);
 
-    // Cascade renames to all jobs — match by first name if full name changed
-    const prevForemen = _foremen;
-    const prevLeads   = _leads;
-
-    const buildFirstNameMap = (prevList, nextList) => {
-      // Returns {oldName -> newName} for any names that changed
-      // Matches by first name (first word) if exact match not found
-      const map = {};
-      prevList.forEach(oldName => {
-        if(nextList.includes(oldName)) return; // unchanged
-        const oldFirst = oldName.split(' ')[0].toLowerCase();
-        const match = nextList.find(n => n.split(' ')[0].toLowerCase() === oldFirst);
-        if(match) map[oldName] = match;
-      });
-      return map;
-    };
-
-    const foremanRenames = buildFirstNameMap(prevForemen, foremen);
-    const leadRenames    = buildFirstNameMap(prevLeads,   leads);
-
-    if(Object.keys(foremanRenames).length > 0 || Object.keys(leadRenames).length > 0) {
-      setJobs(currentJobs => currentJobs.map(job => {
-        let changed = false;
-        const patch = {};
-        if(job.foreman && foremanRenames[job.foreman]) {
-          patch.foreman = foremanRenames[job.foreman];
-          changed = true;
-        }
-        if(job.lead && leadRenames[job.lead]) {
-          patch.lead = leadRenames[job.lead];
-          changed = true;
-        }
-        if(!changed) return job;
-        const updated = {...job, ...patch};
-        saveJob(updated);
-        return updated;
-      }));
-    }
-
-    set_foremen(foremen); set_foremanColors(foremanColors);
-    set_leads(leads); set_leadColors(leadColors);
+  // Build color map: try full name, then first name
+  const getPersonColor = (name) => {
+    if(_colorOverrides[name]) return _colorOverrides[name];
+    const first = name.split(" ")[0];
+    if(_colorOverrides[first]) return _colorOverrides[first];
+    return "#6b7280";
   };
+
+  // Sync module-level globals (used by legacy code that reads FOREMEN/LEADS directly)
+  const _foremanColors = {};
+  const _leadColors    = {};
+  _foremen.forEach(n=>{ _foremanColors[n]=getPersonColor(n); });
+  _leads.forEach(n=>  { _leadColors[n]   =getPersonColor(n); });
+
+  // Keep module-level vars in sync so legacy getForemenList()/LEADS refs still work
+  FOREMEN        = _foremen.length ? _foremen : DEFAULT_FOREMEN;
+  FOREMEN_COLORS = _foremanColors;
+  LEADS          = _leads.length   ? _leads   : DEFAULT_LEADS;
+  LEAD_COLORS    = _leadColors;
+
+  // Job foreman matching: support both full name and first-name-only (legacy jobs)
+  const matchesForeman = (job, name) => {
+    const jf = job.foreman||"";
+    if(jf===name) return true;
+    // Legacy: job has "Koy", name is "Koy Wilkinson"
+    if(name.startsWith(jf+" ")||name===jf) return true;
+    // Legacy: job has "Koy Wilkinson", name is "Koy"
+    if(jf.startsWith(name+" ")) return true;
+    return false;
+  };
+
+  const saveSettings = async(colorOverrides) => {
+    set_colorOverrides(colorOverrides);
+    await setDoc(doc(db,"settings","main"),{colorOverrides}).catch(()=>{});
+  };
+
 
   // submitPin removed — replaced by UserPicker identity system
 
@@ -8275,7 +8268,7 @@ if(initialLoad.current) return;
 
 
 
-  const viewJobs = view==="foreman" ? jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):(j.foreman||"Koy")===activeForeman) : jobs;
+  const viewJobs = view==="foreman" ? jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):matchesForeman(j,activeForeman)) : jobs;
 
 
 
@@ -8765,8 +8758,8 @@ if(initialLoad.current) return;
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10,marginBottom:40,alignItems:"start"}}>
 
               {_foremen.map(f=>{
-                const fc    = _foremanColors[f];
-                const fJobs = jobs.filter(j=>(j.foreman||"Koy")===f);
+                const fc    = getPersonColor(f);
+                const fJobs = jobs.filter(j=>matchesForeman(j,f));
                 const fCOs  = fJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length,0);
                 const fRT   = fJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
                 const rAvg  = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+parseStage(j.roughStage),0)/fJobs.length) : 0;
@@ -8864,7 +8857,7 @@ if(initialLoad.current) return;
                       border:`1px solid ${_foremanColors[crewView]||"#6b7280"}33`,
                       borderRadius:99,padding:"2px 10px",fontSize:11,
                       color:_foremanColors[crewView]||"#6b7280",fontWeight:700}}>
-                      {jobs.filter(j=>(j.foreman||"Koy")===crewView).length} jobs
+                      {jobs.filter(j=>matchesForeman(j,crewView)).length} jobs
                     </div>
                   </div>
                   <button onClick={()=>setCrewView(null)}
@@ -8875,7 +8868,7 @@ if(initialLoad.current) return;
 
                 {/* Lead-grouped job cards */}
                 {(()=>{
-                  const crewJobs = jobs.filter(j=>(j.foreman||"Koy")===crewView);
+                  const crewJobs = jobs.filter(j=>matchesForeman(j,crewView));
                   const fc2 = _foremanColors[crewView]||"#6b7280";
                   if(crewJobs.length===0) return (
                     <div style={{textAlign:"center",color:C.dim,padding:"60px 0",fontSize:13}}>
@@ -8974,7 +8967,7 @@ if(initialLoad.current) return;
 
               <div style={{fontSize:11,color:C.dim}}>
 
-                {jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):(j.foreman||"Koy")===activeForeman).length} job sites
+                {jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):matchesForeman(j,activeForeman)).length} job sites
 
               </div>
 
@@ -9002,7 +8995,7 @@ if(initialLoad.current) return;
 
               {(()=>{
 
-                const fJobs = jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):(j.foreman||"Koy")===activeForeman);
+                const fJobs = jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):matchesForeman(j,activeForeman));
 
                 const fDone = fJobs.filter(j=>parseStage(j.finishStage)===100).length;
 
@@ -9232,6 +9225,8 @@ if(initialLoad.current) return;
         <div>
           <SettingsPage
             COLOR_OPTIONS={COLOR_OPTIONS}
+            users={users}
+            colorOverrides={_colorOverrides}
             onSave={saveSettings}
           />
           {can(identity,"users.manage")&&(
