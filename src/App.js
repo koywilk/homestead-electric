@@ -4392,6 +4392,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                             roughProjectedStart:v==="scheduled"?job.roughProjectedStart:job.roughProjectedStart,
                             // Reset deposit dismissed when rescheduled so task reappears
                             ...(v==="scheduled"?{roughDepositDismissed:false}:{}),
+                            // Reset invoice dismissed when status changes away from complete/invoice
+                            ...((v!=="complete"&&v!=="invoice")?{roughInvoiceDismissed:false}:{}),
                           });
                         }} style={{background:rsDef.color?`${rsDef.color}18`:C.surface,
                           color:rsDef.color||C.dim, border:`1px solid ${rsDef.color||C.border}`,
@@ -4515,6 +4517,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                             finishProjectedStart:v==="scheduled"?job.finishProjectedStart:job.finishProjectedStart,
                             // Reset deposit dismissed when rescheduled so task reappears
                             ...(v==="scheduled"?{finishDepositDismissed:false}:{}),
+                            // Reset invoice dismissed when status changes away from complete/invoice
+                            ...((v!=="complete"&&v!=="invoice")?{finishInvoiceDismissed:false}:{}),
                           });
                         }} style={{background:fsDef.color?`${fsDef.color}18`:C.surface,
                           color:fsDef.color||C.dim, border:`1px solid ${fsDef.color||C.border}`,
@@ -6234,6 +6238,24 @@ function computeTasks(jobs) {
       color: "#ea580c", cleared: false,
     });
 
+    // Rough complete → invoice rough-in task
+    if((rs==="complete"||rs==="invoice") && !job.roughInvoiceDismissed) tasks.push({
+      id: job.id+"_rough_invoice", jobId: job.id, jobName: job.name,
+      type: "auto", category: "invoice", foreman,
+      title: "Invoice Rough-In",
+      desc: "Rough is complete — ready to invoice rough-in",
+      color: "#ea580c", cleared: false,
+    });
+
+    // Finish complete → invoice finish task
+    if((fs==="complete"||fs==="invoice") && !job.finishInvoiceDismissed) tasks.push({
+      id: job.id+"_finish_invoice", jobId: job.id, jobName: job.name,
+      type: "auto", category: "invoice", foreman,
+      title: "Invoice Finish",
+      desc: "Finish is complete — ready to invoice finish",
+      color: "#ea580c", cleared: false,
+    });
+
     // CO individually completed → merge/invoice task
     const coDoneDismissed = job.coDoneDismissed||[];
     (job.changeOrders||[]).forEach((co, i) => {
@@ -6698,26 +6720,19 @@ function ForemanTaskCard({ isKoy, fTasks, prepTasks, jobs, manualTasks, onManual
 }
 
 function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJob, filterForeman, compact, foremenList }) {
-  const [showAdd, setShowAdd] = useState(false);
+  const [showAdd,          setShowAdd]          = useState(false);
   const [collapsedForemen, setCollapsedForemen] = useState({});
+  const [catFilter,        setCatFilter]        = useState("all"); // all | invoice | other
   const toggleForeman = (f) => setCollapsedForemen(c=>({...c,[f]:!c[f]}));
 
   const handleSetDueDate = (taskId, date) => {
-    // Manual task — update in the list (persists to Firestore via manualTasks collection)
     const isManual = (manualTasks||[]).find(t => t.id === taskId);
-    if(isManual) {
-      onManualTasksChange((manualTasks||[]).map(t => t.id===taskId ? {...t, dueDate:date} : t));
-      return;
-    }
-    // Auto-task — find which job owns this task and save due date to job.taskDueDates map
+    if(isManual) { onManualTasksChange((manualTasks||[]).map(t => t.id===taskId ? {...t, dueDate:date} : t)); return; }
     const autoTasks = computeTasks(jobs);
     const task = autoTasks.find(t => t.id === taskId);
     if(task && task.jobId && onUpdateJob) {
       const job = jobs.find(j => j.id === task.jobId);
-      if(job) {
-        const existing = job.taskDueDates || {};
-        onUpdateJob(task.jobId, { taskDueDates: {...existing, [taskId]: date} });
-      }
+      if(job) onUpdateJob(task.jobId, { taskDueDates: {...(job.taskDueDates||{}), [taskId]: date} });
     }
   };
 
@@ -6729,63 +6744,130 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
     setShowAdd(false);
   };
 
-  const dismissManual = (id) => {
-    onManualTasksChange((manualTasks||[]).filter(t=>t.id!==id));
-  };
+  const dismissManual        = (id)        => { onManualTasksChange((manualTasks||[]).filter(t=>t.id!==id)); };
+  const dismissInvoiceTask   = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId, invoiceSentPatch(job)); };
+  const dismissRoughDeposit  = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{roughDepositDismissed:true}); };
+  const dismissFinishDeposit = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{finishDepositDismissed:true}); };
+  const dismissRoughInvoice  = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{roughInvoiceDismissed:true}); };
+  const dismissFinishInvoice = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{finishInvoiceDismissed:true}); };
+  const dismissCODoneTask    = (jobId,coId)=> { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{coDoneDismissed:[...(job.coDoneDismissed||[]),coId]}); };
+  const dismissRTDoneTask    = (jobId,rtId)=> { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{rtDoneDismissed:[...(job.rtDoneDismissed||[]),rtId]}); };
 
-  const dismissInvoiceTask = (jobId) => {
-    const job = jobs.find(j=>j.id===jobId);
-    if(!job||!onUpdateJob) return;
-    onUpdateJob(jobId, invoiceSentPatch(job));
-  };
-
-  const dismissRoughDeposit = (jobId) => {
-    const job = jobs.find(j=>j.id===jobId);
-    if(!job||!onUpdateJob) return;
-    onUpdateJob(jobId, {roughDepositDismissed: true});
-  };
-
-  const dismissFinishDeposit = (jobId) => {
-    const job = jobs.find(j=>j.id===jobId);
-    if(!job||!onUpdateJob) return;
-    onUpdateJob(jobId, {finishDepositDismissed: true});
-  };
-
-  const dismissCODoneTask = (jobId, coId) => {
-    // Mark co as invoice-dismissed by adding to job's coDismissed set
-    const job = jobs.find(j=>j.id===jobId);
-    if(!job||!onUpdateJob) return;
-    const dismissed = [...(job.coDoneDismissed||[]), coId];
-    onUpdateJob(jobId, {coDoneDismissed: dismissed});
-  };
-
-  const dismissRTDoneTask = (jobId, rtId) => {
-    const job = jobs.find(j=>j.id===jobId);
-    if(!job||!onUpdateJob) return;
-    const dismissed = [...(job.rtDoneDismissed||[]), rtId];
-    onUpdateJob(jobId, {rtDoneDismissed: dismissed});
-  };
-
-  // Build a merged due-date map from all jobs' taskDueDates
-  const allTaskDueDates = jobs.reduce((acc, j) => ({...acc, ...(j.taskDueDates||{})}), {});
-
+  const allTaskDueDates = jobs.reduce((acc,j)=>({...acc,...(j.taskDueDates||{})}),{});
   const autoTasks = computeTasks(jobs);
   const allTasks = [
-    ...autoTasks.map(t => { const manual = allTaskDueDates[t.id]; return manual !== undefined ? {...t, dueDate: manual||t.dueDate||""} : t; }),
+    ...autoTasks.map(t=>{ const d=allTaskDueDates[t.id]; return d!==undefined?{...t,dueDate:d||t.dueDate||""}:t; }),
     ...(manualTasks||[]).map(t=>({...t,type:"manual"}))
   ].filter(t => t.category !== "prep" && (!filterForeman || t.foreman === filterForeman));
 
-  // Sort: overdue first, then by dueDate, then undated
-  const sorted = [...allTasks].sort((a,b) => {
-    const ua = URGENCY(a.dueDate), ub = URGENCY(b.dueDate);
-    if(ua&&ub) return ua.days - ub.days;
-    if(ua) return -1; if(ub) return 1;
-    return 0;
+  const URGENCY_FN = (due) => {
+    if(!due) return null;
+    const d=(str=>{ const m=str.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m) return new Date(+m[1],+m[2]-1,+m[3]); const m2=str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if(m2) return new Date(+m2[2],+m2[1]-1,+(m2[3].length===2?"20"+m2[3]:m2[3])); return null; })(due);
+    if(!d) return null;
+    const days=Math.floor((d-new Date().setHours(0,0,0,0))/(1000*60*60*24));
+    return {days,color:days<0?"#dc2626":days<=3?"#ea580c":days<=7?"#ca8a04":"#16a34a",label:days<0?`${Math.abs(days)}d overdue`:days===0?"Due today":days===1?"Due tomorrow":`Due in ${days}d`};
+  };
+
+  // Separate invoice tasks from regular tasks
+  const isInvoiceCat = (t) => t.category==="invoice" || t.id.endsWith("_rough_deposit") || t.id.endsWith("_finish_deposit");
+  const invoiceTasks = allTasks.filter(isInvoiceCat);
+  const otherTasks   = allTasks.filter(t=>!isInvoiceCat(t));
+
+  // Ready to Invoice jobs (the job-level flag, separate from task list)
+  const invoiceJobs = jobs.filter(j=>j.readyToInvoice&&(!filterForeman||matchesForeman(j,filterForeman)));
+
+  const sorted = [...otherTasks].sort((a,b)=>{
+    const ua=URGENCY_FN(a.dueDate), ub=URGENCY_FN(b.dueDate);
+    if(ua&&ub) return ua.days-ub.days; if(ua) return -1; if(ub) return 1; return 0;
+  });
+  const sortedInvoice = [...invoiceTasks].sort((a,b)=>{
+    const ua=URGENCY_FN(a.dueDate), ub=URGENCY_FN(b.dueDate);
+    if(ua&&ub) return ua.days-ub.days; if(ua) return -1; if(ub) return 1; return 0;
   });
 
   const foremanList = filterForeman ? [filterForeman] : [...(foremenList||getForemenList()),"Unassigned"];
-  const totalCount = allTasks.length;
-  const overdueCount = sorted.filter(t=>{ const u=URGENCY(t.dueDate); return u&&u.days<0; }).length;
+  const totalInvoice = invoiceTasks.length + invoiceJobs.length;
+  const totalOther   = otherTasks.length;
+  const overdueCount = sorted.filter(t=>{ const u=URGENCY_FN(t.dueDate); return u&&u.days<0; }).length;
+
+  const dismissFor = (task) =>
+    task.type==="manual"                    ? ()=>dismissManual(task.id) :
+    task.id.endsWith("_rough_deposit")      ? ()=>dismissRoughDeposit(task.jobId) :
+    task.id.endsWith("_finish_deposit")     ? ()=>dismissFinishDeposit(task.jobId) :
+    task.id.endsWith("_rough_invoice")      ? ()=>dismissRoughInvoice(task.jobId) :
+    task.id.endsWith("_finish_invoice")     ? ()=>dismissFinishInvoice(task.jobId) :
+    task.category==="invoice"               ? ()=>dismissInvoiceTask(task.jobId) :
+    task.id.endsWith("_done")&&task.coId   ? ()=>dismissCODoneTask(task.jobId,task.coId) :
+    task.id.endsWith("_done")&&task.rtId   ? ()=>dismissRTDoneTask(task.jobId,task.rtId) :
+    null;
+
+  // ── Invoice section — collapsible ────────────────────────────
+  const [invoiceCollapsed, setInvoiceCollapsed] = useState(false);
+
+  const InvoiceSection = () => {
+    if(totalInvoice===0 && invoiceJobs.length===0) return null;
+    const count = invoiceJobs.length + sortedInvoice.length;
+    return (
+      <div style={{marginBottom:24}}>
+        <div onClick={()=>setInvoiceCollapsed(c=>!c)}
+          style={{display:"flex",alignItems:"center",gap:8,marginBottom:invoiceCollapsed?0:12,
+            paddingBottom:8,borderBottom:"2px solid #ea580c33",cursor:"pointer",userSelect:"none"}}>
+          <div style={{width:9,height:9,borderRadius:"50%",background:"#ea580c"}}/>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#ea580c"}}>
+            READY TO INVOICE
+          </div>
+          <div style={{background:"#ea580c18",border:"1px solid #ea580c33",borderRadius:99,
+            padding:"1px 8px",fontSize:11,color:"#ea580c",fontWeight:700}}>{count}</div>
+          <div style={{marginLeft:"auto",fontSize:12,color:"#ea580c",opacity:0.7,paddingRight:4}}>
+            {invoiceCollapsed?"▸":"▾"}
+          </div>
+        </div>
+        {!invoiceCollapsed&&(
+          <>
+            {/* Job-level ready to invoice */}
+            {invoiceJobs.map(job=>{
+              const fc = getFC(job.foreman)||"#6b7280";
+              return (
+                <div key={job.id}
+                  style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,
+                    padding:"11px 14px",borderRadius:10,marginBottom:6,
+                    background:"#ea580c08",border:"1px solid #ea580c33",borderLeft:"3px solid #ea580c"}}>
+                  <div onClick={()=>onSelectJob(job)} style={{flex:1,cursor:"pointer"}}>
+                    <div style={{fontSize:13,fontWeight:700,color:"var(--text)",marginBottom:2}}>
+                      {job.name||"Untitled Job"}
+                    </div>
+                    <div style={{fontSize:11,color:"var(--dim)",display:"flex",gap:8}}>
+                      {job.address&&<span>{job.address}</span>}
+                      <span style={{fontWeight:700,color:fc}}>{job.foreman}</span>
+                    </div>
+                  </div>
+                  <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
+                    <button onClick={()=>onSelectJob(job)}
+                      style={{fontSize:11,fontWeight:600,color:"#ea580c",background:"none",
+                        border:"1px solid #ea580c44",borderRadius:7,padding:"5px 10px",
+                        cursor:"pointer",fontFamily:"inherit"}}>
+                      Open →
+                    </button>
+                    <button onClick={()=>{ if(onUpdateJob) onUpdateJob(job.id,invoiceSentPatch(job)); }}
+                      style={{fontSize:11,fontWeight:700,color:"#fff",background:"#ea580c",
+                        border:"none",borderRadius:7,padding:"5px 14px",
+                        cursor:"pointer",fontFamily:"inherit"}}>
+                      ✓ Invoice Sent
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+            {/* Invoice-category tasks (deposits, stale alerts, etc.) */}
+            {sortedInvoice.map(task=>(
+              <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
+                onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate}/>
+            ))}
+          </>
+        )}
+      </div>
+    );
+  };
 
   return (
     <div>
@@ -6794,12 +6876,29 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
             <div>
               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:"var(--text)",lineHeight:1}}>TASKS</div>
-              <div style={{display:"flex",gap:8,marginTop:4,flexWrap:"wrap"}}>
-                <span style={{fontSize:11,color:"var(--dim)"}}>{totalCount} open</span>
+              <div style={{display:"flex",gap:8,marginTop:4,flexWrap:"wrap",alignItems:"center"}}>
+                <span style={{fontSize:11,color:"var(--dim)"}}>{totalOther} task{totalOther!==1?"s":""}</span>
+                {totalInvoice>0&&<span style={{fontSize:11,fontWeight:700,color:"#ea580c",background:"#ea580c12",borderRadius:99,padding:"1px 8px",border:"1px solid #ea580c33"}}>💰 {totalInvoice} invoice</span>}
                 {overdueCount>0&&<span style={{fontSize:11,fontWeight:700,color:"#dc2626",background:"#dc262612",borderRadius:99,padding:"1px 8px",border:"1px solid #dc262633"}}>⚠ {overdueCount} overdue</span>}
               </div>
             </div>
-            <button onClick={()=>setShowAdd(v=>!v)} style={{background:"var(--accent)",border:"none",borderRadius:9,color:"#000",fontWeight:800,padding:"9px 22px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>+ Add Task</button>
+            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+              {/* Category filter dropdown */}
+              <select value={catFilter} onChange={e=>setCatFilter(e.target.value)}
+                style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:8,
+                  color:catFilter==="invoice"?"#ea580c":"var(--dim)",
+                  padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none",
+                  fontWeight:catFilter!=="all"?700:400,cursor:"pointer"}}>
+                <option value="all">All Categories</option>
+                <option value="invoice">💰 Ready to Invoice</option>
+                <option value="other">Tasks Only</option>
+              </select>
+              <button onClick={()=>setShowAdd(v=>!v)}
+                style={{background:"var(--accent)",border:"none",borderRadius:9,color:"#000",
+                  fontWeight:800,padding:"9px 22px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+                + Add Task
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -6807,138 +6906,72 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
       <div style={{padding:filterForeman||compact?"0":"16px 26px"}}>
         {showAdd&&<AddTaskForm defaultForeman={filterForeman||"Koy"} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList}/>}
 
-        {/* Ready to Invoice — filter to assigned foreman only (or all if no filter) */}
-        {(()=>{
-          const invoiceJobs = jobs.filter(j=>j.readyToInvoice&&(!filterForeman||(j.foreman||"Koy")===filterForeman));
-          if(!invoiceJobs.length) return null;
-          return (
-            <div style={{marginBottom:24}}>
-              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,paddingBottom:8,borderBottom:"2px solid #ea580c33"}}>
-                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#ea580c"}}>READY TO INVOICE</div>
-                <div style={{background:"#ea580c18",border:"1px solid #ea580c33",borderRadius:99,padding:"2px 10px",fontSize:11,color:"#ea580c",fontWeight:700}}>{invoiceJobs.length} job{invoiceJobs.length!==1?"s":""}</div>
+        {/* Pre Job Prep — always goes to Koy */}
+        {(!filterForeman||filterForeman==="Koy")&&catFilter!=="invoice"&&(()=>(
+          <div style={{marginBottom:24}}>
+            <PrepTaskList jobs={jobs} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob}/>
+          </div>
+        ))()}
+
+        {/* Ready to Invoice section — shown unless filtered to "other" */}
+        {catFilter!=="other"&&<InvoiceSection/>}
+
+        {/* Regular tasks — shown unless filtered to "invoice" */}
+        {catFilter!=="invoice"&&(
+          <>
+            {!filterForeman&&(
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",color:"var(--dim)"}}>ALL TASKS</div>
+                {!showAdd&&<button onClick={()=>setShowAdd(true)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>+ Add Task</button>}
               </div>
-              {invoiceJobs.map(job=>{
-                const foreman = job.foreman||"Koy";
-                const fc = (({"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e","Keegan":"#3b82f6","Gage":"#3b82f6","Daegan":"#3b82f6","Braden":"#22c55e","Treycen":"#22c55e","Jon":"#22c55e","Vasa":"#f97316","Abe":"#f97316","Louis":"#f97316","Jacob":"#6b7280"})[foreman]||"#6b7280")||"#6b7280";
-                const isTP = job.tempPed;
-                return (
-                  <div key={job.id}
-                    style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,
-                      padding:"11px 14px",borderRadius:10,marginBottom:6,
-                      background:"#ea580c08",border:"1px solid #ea580c33",borderLeft:"3px solid #ea580c"}}>
-                    <div onClick={()=>onSelectJob(job)} style={{flex:1,cursor:"pointer"}}
-                      onMouseEnter={e=>e.currentTarget.style.opacity="0.8"}
-                      onMouseLeave={e=>e.currentTarget.style.opacity="1"}>
-                      <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
-                        <span style={{fontSize:13,fontWeight:700,color:"var(--text)"}}>{job.name||"Untitled Job"}</span>
-                        {isTP&&<span style={{fontSize:9,fontWeight:800,color:"#8b5cf6",background:"#8b5cf618",borderRadius:99,padding:"1px 6px",border:"1px solid #8b5cf633"}}>TEMP PED</span>}
-                      </div>
-                      <div style={{fontSize:11,color:"var(--dim)",display:"flex",gap:8}}>
-                        {job.address&&<span>{job.address}</span>}
-                        <span style={{fontWeight:700,color:fc}}>{foreman}</span>
-                      </div>
-                    </div>
-                    <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
-                      <button onClick={()=>onSelectJob(job)}
-                        style={{fontSize:11,fontWeight:600,color:"#ea580c",background:"none",
-                          border:"1px solid #ea580c44",borderRadius:7,padding:"5px 10px",
-                          cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
-                        Open →
-                      </button>
-                      <button onClick={()=>{ if(onUpdateJob) onUpdateJob(job.id, invoiceSentPatch(job)); }}
-                        style={{fontSize:11,fontWeight:700,color:"#fff",background:"#ea580c",
-                          border:"none",borderRadius:7,padding:"5px 14px",
-                          cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
-                        ✓ Invoice Sent
-                      </button>
-                    </div>
-                  </div>
-                );
-              })}
-            </div>
-          );
-        })()}
+            )}
 
-        {/* Pre Job Prep tracker — all foremen */}
-        {/* Pre Job Prep — always goes to Koy, hidden from other foremen */}
-        {(!filterForeman || filterForeman==="Koy") && (()=>{
-          return (
-            <div style={{marginBottom:24}}>
-              <PrepTaskList jobs={jobs} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob}/>
-            </div>
-          );
-        })()}
+            {totalOther===0&&(
+              <div style={{textAlign:"center",padding:"40px 0",color:"var(--muted)"}}>
+                <div style={{fontSize:22,marginBottom:6}}>✓</div>
+                <div style={{fontSize:13}}>No open tasks{filterForeman?` for ${filterForeman}`:""}</div>
+              </div>
+            )}
 
-        {/* Tasks grouped by foreman */}
-        {!filterForeman&&(
-          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",color:"var(--dim)"}}>ALL TASKS</div>
-            {!showAdd&&<button onClick={()=>setShowAdd(true)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>+ Add Task</button>}
-          </div>
-        )}
-
-        {totalCount===0&&(
-          <div style={{textAlign:"center",padding:"40px 0",color:"var(--muted)"}}>
-            <div style={{fontSize:22,marginBottom:6}}>✓</div>
-            <div style={{fontSize:13}}>No open tasks{filterForeman?` for ${filterForeman}`:""}</div>
-          </div>
-        )}
-
-        {filterForeman ? (
-          // Flat list for foreman view
-          <div>
-            {filterForeman&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
-              <div style={{fontSize:11,fontWeight:700,color:"var(--dim)",letterSpacing:"0.06em"}}>TASKS</div>
-              <button onClick={()=>setShowAdd(v=>!v)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"4px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>+ Add Task</button>
-            </div>}
-            {showAdd&&filterForeman&&<AddTaskForm defaultForeman={filterForeman} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList}/>}
-            {sorted.map(task=>(
-              <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
-                onDismiss={
-                  task.type==="manual" ? ()=>dismissManual(task.id) :
-                  task.id.endsWith("_rough_deposit") ? ()=>dismissRoughDeposit(task.jobId) :
-                  task.id.endsWith("_finish_deposit") ? ()=>dismissFinishDeposit(task.jobId) :
-                  task.category==="invoice" ? ()=>dismissInvoiceTask(task.jobId) :
-                  task.id.endsWith("_done") && task.coId ? ()=>dismissCODoneTask(task.jobId, task.coId) :
-                  task.id.endsWith("_done") && task.rtId ? ()=>dismissRTDoneTask(task.jobId, task.rtId) :
-                  null
-                }
-                onSetDueDate={handleSetDueDate}/>
-            ))}
-          </div>
-        ) : (
-          // Grouped by foreman
-          foremanList.map(f=>{
-            const fc = (({"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e","Keegan":"#3b82f6","Gage":"#3b82f6","Daegan":"#3b82f6","Braden":"#22c55e","Treycen":"#22c55e","Jon":"#22c55e","Vasa":"#f97316","Abe":"#f97316","Louis":"#f97316","Jacob":"#6b7280"})[f]||"#6b7280")||"#6b7280";
-            const fTasks = sorted.filter(t=>t.foreman===f);
-            const fOverdue = fTasks.filter(t=>{ const u=URGENCY(t.dueDate); return u&&u.days<0; }).length;
-            if(fTasks.length===0) return null;
-            const fCollapsed = !!collapsedForemen[f];
-            return (
-              <div key={f} style={{marginBottom:28}}>
-                <div onClick={()=>toggleForeman(f)} style={{display:"flex",alignItems:"center",gap:8,marginBottom:fCollapsed?0:12,paddingBottom:8,borderBottom:`2px solid ${fc}33`,cursor:"pointer",userSelect:"none"}}>
-                  <div style={{width:9,height:9,borderRadius:"50%",background:fc}}/>
-                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:fc}}>{f}</div>
-                  <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:fc,fontWeight:700}}>{fTasks.length}</div>
-                  {fOverdue>0&&<div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>⚠ {fOverdue} overdue</div>}
-                  <div style={{marginLeft:"auto",fontSize:12,color:fc,opacity:0.7,paddingRight:4}}>{fCollapsed?"▸":"▾"}</div>
-                </div>
-                {!fCollapsed&&fTasks.map(task=>(
+            {filterForeman ? (
+              <div>
+                {filterForeman&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                  <div style={{fontSize:11,fontWeight:700,color:"var(--dim)",letterSpacing:"0.06em"}}>TASKS</div>
+                  <button onClick={()=>setShowAdd(v=>!v)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"4px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>+ Add Task</button>
+                </div>}
+                {showAdd&&filterForeman&&<AddTaskForm defaultForeman={filterForeman} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList}/>}
+                {sorted.map(task=>(
                   <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
-                    onDismiss={
-                      task.type==="manual" ? ()=>dismissManual(task.id) :
-                      task.id.endsWith("_rough_deposit") ? ()=>dismissRoughDeposit(task.jobId) :
-                      task.id.endsWith("_finish_deposit") ? ()=>dismissFinishDeposit(task.jobId) :
-                      task.category==="invoice" ? ()=>dismissInvoiceTask(task.jobId) :
-                      task.id.endsWith("_done") && task.coId ? ()=>dismissCODoneTask(task.jobId, task.coId) :
-                      task.id.endsWith("_done") && task.rtId ? ()=>dismissRTDoneTask(task.jobId, task.rtId) :
-                      null
-                    }
-                    onSetDueDate={handleSetDueDate}/>
+                    onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate}/>
                 ))}
               </div>
-            );
-          })
+            ) : (
+              foremanList.map(f=>{
+                const fc=getFC(f)||"#6b7280";
+                const fTasks=sorted.filter(t=>t.foreman===f);
+                const fOverdue=fTasks.filter(t=>{ const u=URGENCY_FN(t.dueDate); return u&&u.days<0; }).length;
+                if(fTasks.length===0) return null;
+                const fCollapsed=!!collapsedForemen[f];
+                return (
+                  <div key={f} style={{marginBottom:28}}>
+                    <div onClick={()=>toggleForeman(f)}
+                      style={{display:"flex",alignItems:"center",gap:8,marginBottom:fCollapsed?0:12,
+                        paddingBottom:8,borderBottom:`2px solid ${fc}33`,cursor:"pointer",userSelect:"none"}}>
+                      <div style={{width:9,height:9,borderRadius:"50%",background:fc}}/>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:fc}}>{f}</div>
+                      <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:fc,fontWeight:700}}>{fTasks.length}</div>
+                      {fOverdue>0&&<div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>⚠ {fOverdue} overdue</div>}
+                      <div style={{marginLeft:"auto",fontSize:12,color:fc,opacity:0.7,paddingRight:4}}>{fCollapsed?"▸":"▾"}</div>
+                    </div>
+                    {!fCollapsed&&fTasks.map(task=>(
+                      <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
+                        onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate}/>
+                    ))}
+                  </div>
+                );
+              })
+            )}
+          </>
         )}
       </div>
     </div>
