@@ -1936,32 +1936,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
                     ):(
                       <>
                         <div style={{fontSize:11,fontWeight:700,color:"#f97316",marginBottom:6}}>
-                          ⚠ Crew not on site — set a schedule window then convert to Return Trip
-                        </div>
-                        {/* Window / Hard date picker */}
-                        <div style={{marginBottom:8}}>
-                          <div style={{display:"flex",gap:10,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
-                            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--dim)",cursor:"pointer"}}>
-                              <input type="radio" name={`co_type_${o.id}`} checked={!o.needsHardDate} onChange={()=>upd(o.id,{needsHardDate:false})} style={{accentColor:"#f97316"}}/>
-                              Date Window
-                            </label>
-                            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:"var(--dim)",cursor:"pointer"}}>
-                              <input type="radio" name={`co_type_${o.id}`} checked={!!o.needsHardDate} onChange={()=>upd(o.id,{needsHardDate:true})} style={{accentColor:"#f97316"}}/>
-                              Hard Date
-                            </label>
-                          </div>
-                          {!o.needsHardDate?(
-                            <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-                              <DateInp value={o.needsByStart||""} onChange={e=>upd(o.id,{needsByStart:e.target.value})}
-                                style={{width:138,fontSize:11,borderColor:"#f9731655",background:"#f9731608"}}/>
-                              <span style={{fontSize:11,color:"var(--dim)"}}>–</span>
-                              <DateInp value={o.needsByEnd||""} onChange={e=>upd(o.id,{needsByEnd:e.target.value})}
-                                style={{width:138,fontSize:11,borderColor:"#f9731655",background:"#f9731608"}}/>
-                            </div>
-                          ):(
-                            <DateInp value={o.needsByStart||""} onChange={e=>upd(o.id,{needsByStart:e.target.value})}
-                              style={{width:138,fontSize:11,borderColor:"#f9731655",background:"#f9731608"}}/>
-                          )}
+                          ⚠ Crew not on site — convert to Return Trip to schedule
                         </div>
                         <button onClick={()=>convertToRT(o,i)} style={{
                           background:"#8b5cf618",border:"1px solid #8b5cf633",
@@ -2164,30 +2139,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
                           </div>
                         )}
                       </div>
-                      {t.rtStatus==="needs"&&(
-                        <div style={{marginTop:8,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:8}}>
-                          <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>NEEDS TO BE SCHEDULED BY</div>
-                          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
-                            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,cursor:"pointer"}}>
-                              <input type="radio" name={`rt_type_${t.id}`} checked={!t.needsHardDate} onChange={()=>upd(t.id,{needsHardDate:false})} style={{accentColor:"#dc2626"}}/>
-                              Date Range
-                            </label>
-                            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,cursor:"pointer"}}>
-                              <input type="radio" name={`rt_type_${t.id}`} checked={!!t.needsHardDate} onChange={()=>upd(t.id,{needsHardDate:true})} style={{accentColor:"#dc2626"}}/>
-                              Hard Date
-                            </label>
-                          </div>
-                          {!t.needsHardDate?(
-                            <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-                              <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={t.needsByStart||""} onChange={e=>upd(t.id,{needsByStart:e.target.value})}/>
-                              <span style={{fontSize:11,color:C.dim}}>–</span>
-                              <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={t.needsByEnd||""} onChange={e=>upd(t.id,{needsByEnd:e.target.value})}/>
-                            </div>
-                          ):(
-                            <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={t.needsByStart||""} onChange={e=>upd(t.id,{needsByStart:e.target.value})}/>
-                          )}
-                        </div>
-                      )}
+                
                       </>
                     );
                   })()}
@@ -4452,30 +4404,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                           </div>
                         )}
                       </div>
-                      {(job.roughStatus==="date_confirmed"||job.roughStatus==="waiting_date"||job.roughStatus==="scheduled")&&(
-                        <div style={{marginTop:8,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:8}}>
-                          <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>SCHEDULE WINDOW / DATE</div>
-                          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
-                            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,cursor:"pointer"}}>
-                              <input type="radio" checked={!job.roughNeedsHardDate} onChange={()=>u({roughNeedsHardDate:false})} style={{accentColor:"#dc2626"}}/>
-                              Date Range
-                            </label>
-                            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,cursor:"pointer"}}>
-                              <input type="radio" checked={!!job.roughNeedsHardDate} onChange={()=>u({roughNeedsHardDate:true})} style={{accentColor:"#dc2626"}}/>
-                              Hard Date
-                            </label>
-                          </div>
-                          {!job.roughNeedsHardDate?(
-                            <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-                              <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={job.roughNeedsByStart||""} onChange={e=>u({roughNeedsByStart:e.target.value})}/>
-                              <span style={{fontSize:11,color:C.dim}}>–</span>
-                              <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={job.roughNeedsByEnd||""} onChange={e=>u({roughNeedsByEnd:e.target.value})}/>
-                            </div>
-                          ):(
-                            <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={job.roughNeedsByStart||""} onChange={e=>u({roughNeedsByStart:e.target.value})}/>
-                          )}
-                        </div>
-                      )}
+
 
                     </div>
                   );
@@ -4595,30 +4524,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                           </div>
                         )}
                       </div>
-                      {(job.finishStatus==="date_confirmed"||job.finishStatus==="waiting_date"||job.finishStatus==="scheduled")&&(
-                        <div style={{marginTop:8,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262633",borderRadius:8}}>
-                          <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>SCHEDULE WINDOW / DATE</div>
-                          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:6,flexWrap:"wrap"}}>
-                            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,cursor:"pointer"}}>
-                              <input type="radio" checked={!job.finishNeedsHardDate} onChange={()=>u({finishNeedsHardDate:false})} style={{accentColor:"#dc2626"}}/>
-                              Date Range
-                            </label>
-                            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,color:C.dim,cursor:"pointer"}}>
-                              <input type="radio" checked={!!job.finishNeedsHardDate} onChange={()=>u({finishNeedsHardDate:true})} style={{accentColor:"#dc2626"}}/>
-                              Hard Date
-                            </label>
-                          </div>
-                          {!job.finishNeedsHardDate?(
-                            <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-                              <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={job.finishNeedsByStart||""} onChange={e=>u({finishNeedsByStart:e.target.value})}/>
-                              <span style={{fontSize:11,color:C.dim}}>–</span>
-                              <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={job.finishNeedsByEnd||""} onChange={e=>u({finishNeedsByEnd:e.target.value})}/>
-                            </div>
-                          ):(
-                            <input type="date" style={{width:130,fontSize:11,borderRadius:7,border:"1px solid #dc262655",background:"#dc262608",color:"var(--text)",padding:"4px 8px",fontFamily:"inherit",outline:"none",colorScheme:"dark"}} value={job.finishNeedsByStart||""} onChange={e=>u({finishNeedsByStart:e.target.value})}/>
-                          )}
-                        </div>
-                      )}
+
 
                     </div>
                   );
@@ -9212,6 +9118,8 @@ if(initialLoad.current) return;
                 const totalCount = isKoy ? fTasks.length + prepTasks.length : fTasks.length;
                 if(totalCount===0&&!isKoy) return null;
                 if(totalCount===0&&isKoy&&prepTasks.length===0) return null;
+                // Limited access users don't see the task card
+                if(getAccess(identity)==="limited") return null;
 
                 return (
                   <ForemanTaskCard
