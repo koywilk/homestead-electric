@@ -5918,6 +5918,25 @@ function computeTasks(jobs) {
         color: C.orange, cleared: false,
       });
     }
+    // Rough scheduled — 14 days before start, fire "Confirm Start Date" task
+    if(rs === "scheduled" && job.roughStatusDate && !job.roughStartConfirmed) {
+      const startD = parseAnyDate(job.roughStatusDate);
+      if(startD) {
+        const daysUntil = Math.floor((startD.getTime() - Date.now()) / (1000*60*60*24));
+        if(daysUntil <= 14) {
+          tasks.push({
+            id: job.id+"_rough_confirm_start", jobId: job.id, jobName: job.name,
+            type: "auto", category: "rough", foreman,
+            title: "Confirm Rough Start Date",
+            desc: daysUntil <= 0
+              ? `Rough was scheduled to start ${job.roughStatusDate} — confirm with GC`
+              : `Rough starts in ${daysUntil} day${daysUntil!==1?"s":""} (${job.roughStatusDate}) — confirm with GC`,
+            dueDate: job.roughStatusDate,
+            color: daysUntil <= 3 ? C.red : C.rough, cleared: false,
+          });
+        }
+      }
+    }
     if(rs === "waiting_date") {
       tasks.push({
         id: job.id+"_rough_waiting", jobId: job.id, jobName: job.name,
@@ -5968,6 +5987,25 @@ function computeTasks(jobs) {
         dueDate: job.finishStatusDate||"",
         color: C.orange, cleared: false,
       });
+    }
+    // Finish scheduled — 14 days before start, fire "Confirm Start Date" task
+    if(fs === "scheduled" && job.finishStatusDate && !job.finishStartConfirmed) {
+      const startD = parseAnyDate(job.finishStatusDate);
+      if(startD) {
+        const daysUntil = Math.floor((startD.getTime() - Date.now()) / (1000*60*60*24));
+        if(daysUntil <= 14) {
+          tasks.push({
+            id: job.id+"_finish_confirm_start", jobId: job.id, jobName: job.name,
+            type: "auto", category: "finish", foreman,
+            title: "Confirm Finish Start Date",
+            desc: daysUntil <= 0
+              ? `Finish was scheduled to start ${job.finishStatusDate} — confirm with GC`
+              : `Finish starts in ${daysUntil} day${daysUntil!==1?"s":""} (${job.finishStatusDate}) — confirm with GC`,
+            dueDate: job.finishStatusDate,
+            color: daysUntil <= 3 ? C.red : C.finish, cleared: false,
+          });
+        }
+      }
     }
     if(fs === "waiting_date") {
       tasks.push({
@@ -8024,6 +8062,33 @@ function App() {
           }
 
           setJobs(loaded);
+
+          // Auto-advance: if rough complete and finish has no status for 60+ days,
+          // automatically set finish to "waiting_date" so the "Get Finish Start Date" task fires
+          loaded.forEach(job => {
+            if(job.tempPed) return;
+            const rs = job.roughStatus || (parseInt(job.roughStage)===100?"complete":"");
+            const fs = job.finishStatus || "";
+            if(rs !== "complete") return;
+            if(fs && fs !== "" && fs !== "ready") return; // already has a finish status
+            const betweenDate = job.roughStatusDate || job.roughProjectedStart || "";
+            if(!betweenDate) return;
+            const parseD = (str) => {
+              const m1 = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+              if(m1) return new Date(+m1[1],+m1[2]-1,+m1[3]);
+              const m2 = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+              if(m2) return new Date(+(m2[3].length===2?"20"+m2[3]:m2[3]),+m2[1]-1,+m2[2]);
+              return null;
+            };
+            const d = parseD(betweenDate);
+            if(!d) return;
+            const daysBetween = Math.floor((Date.now() - d.getTime()) / (1000*60*60*24));
+            if(daysBetween >= 60) {
+              const patch = { finishStatus: "waiting_date" };
+              setDoc(doc(db,"jobs",job.id),{data:sanitize({...job,...patch}),updated_at:new Date().toISOString()}).catch(()=>{});
+              console.log(`[HE] Auto-advanced finish to waiting_date: ${job.name} (${daysBetween} days in between)`);
+            }
+          });
 
           // Never overwrite the selected job from snapshot — JobDetail manages its own state
 
