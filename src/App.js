@@ -1,4 +1,8 @@
+// BUILD_v9_FIXED
 import { useState, useEffect, useRef } from "react";
+import { initializeApp } from "firebase/app";
+import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, enableMultiTabIndexedDbPersistence } from "firebase/firestore";
+
 
 
 
@@ -14,9 +18,7 @@ if("serviceWorker" in navigator) {
 
 }
 
-import { initializeApp } from "firebase/app";
 
-import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
 
 
 
@@ -42,6 +44,17 @@ const firebaseApp = initializeApp(firebaseConfig);
 
 const db = getFirestore(firebaseApp);
 
+// Enable offline persistence — queues writes when offline, syncs when back online
+// Multi-tab version: works even if multiple tabs are open
+enableMultiTabIndexedDbPersistence(db).catch((err) => {
+  if (err.code === 'failed-precondition') {
+    console.warn('Firestore persistence unavailable: failed precondition');
+  } else if (err.code === 'unimplemented') {
+    // Browser doesn't support persistence
+    console.warn('Firestore persistence unavailable: browser not supported');
+  }
+});
+
 
 
 const HO_WIRE_AMPS = {"14/2":15,"14/3":15,"12/2":20,"12/3":20,"10/2":30,"10/3":30,"8/2":40,"8/3":40,"6/2":50,"6/3":50,"4/2":70,"4/3":70,"2/2":95,"2/3":95,"1/0":125,"2/0":150,"3/0":175,"4/0":200};
@@ -63,20 +76,24 @@ const C = {
 const JOB_ID = "homestead-jobs-v1";
 
 const ROUGH_STATUSES = [
-  {value:"",          label:"— set status —",       color:null},
-  {value:"ready",     label:"Ready to Start",        color:"#ca8a04", hasDate:true},
-  {value:"scheduled", label:"Scheduled",             color:"#2563eb", hasDate:true},
-  {value:"waiting",   label:"Waiting on Items",      color:"#ca8a04", dashed:true},
-  {value:"inprogress",label:"In Progress",           color:"#7dd3fc"},
-  {value:"invoice",   label:"Ready to Invoice",      color:"#ea580c"},
-  {value:"complete",  label:"Complete",              color:"#22c55e"},
+  {value:"",           label:"— set status —",                        color:null},
+  {value:"waiting_date",label:"Waiting for Start Date Confirmation",  color:"#ca8a04"},
+  {value:"date_confirmed",label:"Start Date Confirmed — Needs to Schedule", color:"#f97316", hasDate:true},
+  {value:"scheduled",  label:"Scheduled",                            color:"#2563eb", hasDate:true},
+  {value:"waiting",    label:"Waiting on Items",                     color:"#ca8a04", dashed:true},
+  {value:"inprogress", label:"In Progress",                          color:"#7dd3fc"},
+  {value:"invoice",    label:"Ready to Invoice",                     color:"#ea580c"},
+  {value:"complete",   label:"Complete",                             color:"#22c55e"},
 ];
 const FINISH_STATUSES = ROUGH_STATUSES;
 const CO_STATUSES_NEW = [
-  {value:"pending",   label:"Pending",               color:"#ca8a04"},
-  {value:"scheduled", label:"Scheduled",             color:"#2563eb", hasDate:true},
-  {value:"completed", label:"Work Completed",        color:"#22c55e"},
-  {value:"denied",    label:"Denied",                color:"#dc2626"},
+  {value:"needs_sending", label:"Needs to be Sent",       color:"#dc2626"},
+  {value:"pending",       label:"Sent — Pending Approval", color:"#ca8a04"},
+  {value:"approved",      label:"Approved",                color:"#16a34a"},
+  {value:"scheduled",     label:"Scheduled",               color:"#2563eb", hasDate:true},
+  {value:"completed",     label:"Work Completed",          color:"#22c55e"},
+  {value:"converted",     label:"Converted to RT",         color:"#6b7280"},
+  {value:"denied",        label:"Denied",                  color:"#dc2626"},
 ];
 const RT_STATUSES = [
   {value:"",          label:"— set status —",        color:null},
@@ -86,10 +103,17 @@ const RT_STATUSES = [
 ];
 const QC_STATUSES = [
   {value:"",          label:"— set status —",        color:null},
+  {value:"needs",     label:"Needs to be Scheduled", color:"#dc2626"},
   {value:"scheduled", label:"QC Scheduled",          color:"#2563eb", hasDate:true},
   {value:"completed", label:"QC Completed",          color:"#8b5cf6", hasDate:true},
   {value:"pass",      label:"QC Pass",               color:"#22c55e"},
   {value:"fail",      label:"QC Fail",               color:"#dc2626"},
+];
+const TEMP_PED_STATUSES = [
+  {value:"",          label:"— set status —",       color:null},
+  {value:"ready",     label:"Ready to Schedule",    color:"#ca8a04"},
+  {value:"scheduled", label:"Scheduled",            color:"#2563eb", hasDate:true},
+  {value:"completed", label:"Completed",            color:"#22c55e"},
 ];
 const getStatusDef = (arr, val) => arr.find(x=>x.value===val)||{};
 
@@ -190,9 +214,425 @@ const emptyPunch   = ()    => ({ upper:[], main:[], basement:[] });
 
 
 
-const FOREMEN = ["Koy", "Vasa", "Colby"];
+const DEFAULT_FOREMEN = ["Koy", "Vasa", "Colby"];
+const DEFAULT_FOREMEN_COLORS = {"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e"};
+const DEFAULT_LEADS = ["Keegan","Gage","Daegan","Colby","Braden","Treycen","Jon","Vasa","Abe","Louis","Jacob"];
+const DEFAULT_LEAD_COLORS = {
+  "Keegan":"#3b82f6","Gage":"#3b82f6","Daegan":"#3b82f6",
+  "Colby":"#22c55e","Braden":"#22c55e","Treycen":"#22c55e","Jon":"#22c55e",
+  "Vasa":"#f97316","Abe":"#f97316","Louis":"#f97316",
+  "Jacob":"#6b7280"
+};
+// Module-level settings — mutated by App.saveSettings and load
+var FOREMEN        = DEFAULT_FOREMEN;
+var FOREMEN_COLORS = DEFAULT_FOREMEN_COLORS;
+var LEADS          = DEFAULT_LEADS;
+var LEAD_COLORS    = DEFAULT_LEAD_COLORS;
 
-const FOREMEN_COLORS = {"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e"};
+// Helper getters — always return current values even after settings update
+const getFC = (name) => (FOREMEN_COLORS[name]||"#6b7280");
+const getForemenList = () => FOREMEN;
+const getLeadsList = () => LEADS;
+const getLeadFC = (name) => (LEAD_COLORS[name]||"#6b7280");
+const COLOR_OPTIONS = ["#3b82f6","#f97316","#22c55e","#8b5cf6","#ec4899","#14b8a6","#f59e0b","#ef4444","#06b6d4","#a855f7","#84cc16","#f43f5e"];
+
+// ── Identity & Permissions ────────────────────────────────────
+const IDENTITY_KEY   = "he_identity";
+const IDENTITY_TTL   = 24 * 60 * 60 * 1000; // 24 hours in ms
+const USERS_KEY    = "he_users";    // Firestore + localStorage user list
+
+// Default users — Koy is admin to start, everyone else added in-app
+const DEFAULT_USERS = [
+  { id:"koy", name:"Koy Wilkinson", role:"admin", pin:"" },
+];
+
+// ── Title = field role (who they are on site) ────────────────
+const TITLE_OPTIONS = ["admin","foreman","lead","crew"];
+const TITLE_LABELS  = { admin:"Admin", foreman:"Foreman", lead:"Lead", crew:"Crew" };
+
+// ── Access = what they can do in the app ─────────────────────
+const ACCESS_OPTIONS = ["admin","manager","standard","limited"];
+const ACCESS_LABELS  = { admin:"Admin", manager:"Manager", standard:"Standard", limited:"Limited" };
+
+// Legacy role field compat (old users only have role, not title+access)
+const ROLE_LABELS = {
+  admin:"Admin", justin:"Admin", jeromy:"Admin",
+  foreman:"Foreman", lead:"Lead", crew:"Crew",
+};
+const ROLE_OPTIONS = ["admin","foreman","lead","crew"];
+
+// Permission map — keyed by access level
+// admin    = full access
+// manager  = everything except delete jobs
+// standard = foreman-level (cards, tasks, schedule, pipeline view)
+// limited  = home + job editing only (lead/crew)
+const PERMISSIONS = {
+  "home.view":       ["admin","manager","standard","limited"],
+  "home.edit":       ["admin","manager","standard","limited"],
+  "co.edit":         ["admin","manager","standard","limited"],
+  "foreman.cards":   ["admin","manager","standard","limited"],
+  "tasks.view":      ["admin","manager","standard"],
+  "tasks.addTask":   ["admin","manager","standard"],
+  "tasks.setDueDate":["admin","manager","standard"],
+  "schedule.view":   ["admin","manager","standard"],
+  "schedule.edit":   ["admin","manager"],
+  "pipeline.view":   ["admin","manager","standard"],
+  "pipeline.manage": ["admin","manager"],
+  "reports.view":    ["admin","manager","standard"],
+  "settings.view":   ["admin","manager"],
+  "users.manage":    ["admin","manager"],
+  "job.delete":      ["admin"],
+};
+
+// Resolve access level from user object (supports legacy role-only users)
+const getAccess = (user) => {
+  if(!user) return "limited";
+  if(user.access) return user.access;
+  // Legacy: map old role to access level
+  const legacyMap = { admin:"admin", justin:"admin", jeromy:"manager",
+                      foreman:"standard", lead:"limited", crew:"limited" };
+  return legacyMap[user.role] || "limited";
+};
+
+// Check if a user (identity object) can do a feature
+const can = (identity, feature) => {
+  if(!identity) return false;
+  const access  = getAccess(identity);
+  const allowed = PERMISSIONS[feature] || [];
+  return allowed.includes(access);
+};
+
+// Read identity — returns null if missing or older than 24h
+const getIdentity = () => {
+  try {
+    const raw = localStorage.getItem(IDENTITY_KEY);
+    if(!raw) return null;
+    const stored = JSON.parse(raw);
+    if(!stored) return null;
+    if(Date.now() - (stored.pinVerifiedAt||0) > IDENTITY_TTL) {
+      localStorage.removeItem(IDENTITY_KEY);
+      return null;
+    }
+    return stored;
+  } catch { return null; }
+};
+const saveIdentity = (member) => {
+  localStorage.setItem(IDENTITY_KEY, JSON.stringify({...member, pinVerifiedAt: Date.now()}));
+};
+
+// ── UserPicker — name list + PIN entry ───────────────────────
+function UserPicker({ users, onSelect, onSavePin }) {
+  const [step, setStep]         = useState("pick");   // "pick" | "pin" | "create" | "confirm"
+  const [chosen, setChosen]     = useState(null);
+  const [pin, setPin]           = useState("");
+  const [firstPin, setFirstPin] = useState("");
+  const [error, setError]       = useState(false);
+  const [saving, setSaving]     = useState(false);
+
+  const pickUser = (u) => {
+    if(!u.pin) {
+      // No PIN yet — prompt to create one
+      setChosen(u); setPin(""); setFirstPin(""); setError(false); setStep("create");
+      return;
+    }
+    setChosen(u); setPin(""); setError(false); setStep("pin");
+  };
+
+  const submitPin = (entered) => {
+    if(entered === chosen.pin) {
+      onSelect(chosen);
+    } else {
+      setError(true); setPin("");
+      setTimeout(()=>setError(false), 1200);
+    }
+  };
+
+  const submitCreate = (entered) => {
+    // First entry — move to confirm step
+    setFirstPin(entered); setPin(""); setStep("confirm");
+  };
+
+  const submitConfirm = async (entered) => {
+    if(entered !== firstPin) {
+      setError(true); setPin("");
+      setTimeout(()=>{ setError(false); setStep("create"); setFirstPin(""); }, 1200);
+      return;
+    }
+    // PINs match — save and log in
+    setSaving(true);
+    const updated = {...chosen, pin: entered};
+    await onSavePin(updated);
+    onSelect(updated);
+  };
+
+  const handleKey = (k) => {
+    if(k==="⌫") { setPin(p=>p.slice(0,-1)); return; }
+    if(k==="") return;
+    const next = pin+k;
+    setPin(next);
+    if(next.length===4) {
+      if(step==="pin")     submitPin(next);
+      if(step==="create")  submitCreate(next);
+      if(step==="confirm") submitConfirm(next);
+    }
+  };
+
+  return (
+    <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",
+      display:"flex",alignItems:"center",justifyContent:"center",padding:32,
+      backgroundImage:"url(/icon-192.png)",backgroundRepeat:"no-repeat",
+      backgroundPosition:"center center",backgroundSize:"420px 420px",
+      backgroundBlendMode:"overlay"}}>
+      <div style={{width:"100%",maxWidth:340,textAlign:"center"}}>
+        <img src="/icon-192.png" alt="Homestead Electric"
+          style={{width:90,height:90,marginBottom:16,opacity:0.95,borderRadius:18,
+            boxShadow:"0 8px 32px rgba(0,0,0,0.4)"}}/>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,letterSpacing:"0.1em",
+          color:C.text,lineHeight:1,marginBottom:4}}>HOMESTEAD ELECTRIC</div>
+        <div style={{fontSize:12,color:C.dim,letterSpacing:"0.04em",marginBottom:32}}>
+          COMMAND CENTER
+        </div>
+
+        {step==="pick" && (
+          <>
+            <div style={{fontSize:13,color:C.dim,marginBottom:16}}>Who are you?</div>
+            <div style={{display:"flex",flexDirection:"column",gap:10}}>
+              {users.map(u=>(
+                <button key={u.id} onClick={()=>pickUser(u)}
+                  style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,
+                    padding:"14px 20px",fontSize:15,fontWeight:600,cursor:"pointer",
+                    fontFamily:"inherit",color:C.text,textAlign:"left",
+                    display:"flex",alignItems:"center",justifyContent:"space-between",
+                    transition:"all 0.15s"}}
+                  onMouseEnter={e=>{e.currentTarget.style.borderColor=C.accent;e.currentTarget.style.background="#fffbeb";}}
+                  onMouseLeave={e=>{e.currentTarget.style.borderColor=C.border;e.currentTarget.style.background=C.card;}}>
+                  <span>{u.name}</span>
+                  <span style={{fontSize:11,color:C.dim,fontWeight:400,background:C.surface,
+                    border:`1px solid ${C.border}`,borderRadius:99,padding:"2px 10px"}}>
+                    {ROLE_LABELS[u.role]||u.role}
+                  </span>
+                </button>
+              ))}
+            </div>
+          </>
+        )}
+
+        {(step==="pin"||step==="create"||step==="confirm") && (
+          <>
+            <div style={{fontSize:14,color:C.text,fontWeight:600,marginBottom:4}}>{chosen?.name}</div>
+            <div style={{fontSize:12,color:C.dim,marginBottom:24}}>
+              {step==="pin"     && "Enter your PIN"}
+              {step==="create"  && "Create a 4-digit PIN"}
+              {step==="confirm" && (error ? "PINs don't match — try again" : "Confirm your PIN")}
+            </div>
+            <div style={{display:"flex",justifyContent:"center",gap:14,marginBottom:8}}>
+              {[0,1,2,3].map(i=>(
+                <div key={i} style={{width:13,height:13,borderRadius:"50%",
+                  background:pin.length>i?(error?"#dc2626":C.accent):C.surface,
+                  border:`2px solid ${pin.length>i?(error?"#dc2626":C.accent):C.border}`,
+                  transition:"all 0.15s"}}/>
+              ))}
+            </div>
+            <div style={{height:22,marginBottom:16}}>
+              {step==="pin"&&error&&<div style={{fontSize:11,color:"#dc2626",fontWeight:700,letterSpacing:"0.06em"}}>INCORRECT PIN</div>}
+              {saving&&<div style={{fontSize:11,color:C.accent,fontWeight:600}}>Saving…</div>}
+            </div>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(3,1fr)",gap:8,marginBottom:16}}>
+              {["1","2","3","4","5","6","7","8","9","","0","⌫"].map((k,idx)=>(
+                <button key={idx} onClick={()=>handleKey(k)} disabled={saving}
+                  style={{padding:"18px 0",fontSize:k==="⌫"?16:22,fontWeight:k==="⌫"?400:300,
+                    fontFamily:"'DM Sans',sans-serif",
+                    background:k?"rgba(0,0,0,0.04)":"transparent",
+                    border:k?"1px solid rgba(0,0,0,0.08)":"none",
+                    borderRadius:14,cursor:k?"pointer":"default",
+                    color:k?C.text:"transparent",transition:"background 0.1s"}}
+                  onMouseEnter={e=>{if(k)e.currentTarget.style.background="rgba(0,0,0,0.08)";}}
+                  onMouseLeave={e=>{if(k)e.currentTarget.style.background=k?"rgba(0,0,0,0.04)":"transparent";}}>
+                  {k}
+                </button>
+              ))}
+            </div>
+            <button onClick={()=>{setStep("pick");setChosen(null);setPin("");setFirstPin("");}}
+              style={{fontSize:12,color:C.dim,background:"none",border:"none",cursor:"pointer",fontFamily:"inherit"}}>
+              ← Back
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── User Management (inside Settings) ───────────────────────
+function UserManagement({ users, onSave }) {
+  const [list,    setList]    = useState(users);
+  const [editing, setEditing] = useState(null);
+  const [showPin, setShowPin] = useState({});
+
+  useEffect(()=>setList(users),[users]);
+
+  const newUser = () => {
+    const u = { id:"u_"+Date.now(), name:"", title:"foreman", access:"standard", pin:"" };
+    setList(l=>[...l,u]);
+    setEditing(u.id);
+  };
+
+  const upd  = (id, patch) => setList(l=>l.map(u=>u.id===id?{...u,...patch}:u));
+  const del  = (id) => { if(!window.confirm("Remove this person?")) return; const next=list.filter(u=>u.id!==id); setList(next); onSave(next); };
+  const save = () => { onSave(list); setEditing(null); };
+
+  // Access level colors
+  const accessColor = { admin:C.red, manager:"#8b5cf6", standard:C.blue, limited:C.dim };
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:C.text}}>
+          TEAM MEMBERS
+        </div>
+        <button onClick={newUser}
+          style={{background:C.accent,border:"none",borderRadius:9,color:"#000",
+            fontWeight:700,padding:"8px 18px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+          + Add Person
+        </button>
+      </div>
+
+      <div style={{fontSize:11,color:C.dim,marginBottom:16,lineHeight:1.5}}>
+        <strong>Title</strong> = field role (appears on home screen cards) &nbsp;·&nbsp;
+        <strong>Access</strong> = what they can see and do in the app
+      </div>
+
+      <div style={{display:"flex",flexDirection:"column",gap:10}}>
+        {list.map(u=>{
+          const isEditing = editing===u.id;
+          const access    = getAccess(u);
+          const title     = u.title || (["admin","justin","jeromy"].includes(u.role) ? "admin" : ["foreman","lead","crew"].includes(u.role) ? u.role : "crew");
+          return (
+            <div key={u.id} style={{background:C.card,border:`1px solid ${isEditing?C.accent:C.border}`,
+              borderRadius:12,padding:"14px 16px",transition:"border-color 0.15s",
+              borderLeft:`3px solid ${accessColor[access]||C.dim}`}}>
+              {isEditing ? (
+                <div style={{display:"flex",flexDirection:"column",gap:12}}>
+                  {/* Name */}
+                  <div>
+                    <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>FULL NAME</div>
+                    <input value={u.name} onChange={e=>upd(u.id,{name:e.target.value})}
+                      placeholder="First and last name…"
+                      style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
+                        borderRadius:7,color:C.text,padding:"8px 10px",fontSize:13,
+                        fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}/>
+                  </div>
+                  {/* Title + Access */}
+                  <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+                    <div>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>TITLE</div>
+                      <select value={title} onChange={e=>upd(u.id,{title:e.target.value})}
+                        style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
+                          borderRadius:7,color:C.text,padding:"8px 10px",fontSize:13,
+                          fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}>
+                        {TITLE_OPTIONS.map(t=><option key={t} value={t}>{TITLE_LABELS[t]}</option>)}
+                      </select>
+                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Field role — which card group they appear in</div>
+                    </div>
+                    <div>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>ACCESS LEVEL</div>
+                      <select value={access} onChange={e=>upd(u.id,{access:e.target.value})}
+                        style={{width:"100%",background:C.surface,border:`1px solid ${accessColor[access]||C.border}44`,
+                          borderRadius:7,color:accessColor[access]||C.text,padding:"8px 10px",fontSize:13,
+                          fontWeight:700,fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}>
+                        {ACCESS_OPTIONS.map(a=><option key={a} value={a} style={{color:C.text,fontWeight:400}}>{ACCESS_LABELS[a]}</option>)}
+                      </select>
+                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>What they can see and do</div>
+                    </div>
+                  </div>
+                  {/* Access description */}
+                  <div style={{fontSize:11,color:C.dim,background:C.surface,borderRadius:8,padding:"8px 12px",
+                    border:`1px solid ${accessColor[access]||C.border}33`}}>
+                    {access==="admin"    && "Full access — everything including delete jobs and manage team"}
+                    {access==="manager"  && "Everything except delete jobs — can manage settings and pipeline"}
+                    {access==="standard" && "Can view all cards, add tasks, see schedule and pipeline (no manage)"}
+                    {access==="limited"  && "Home screen and job editing only — no settings, pipeline, or tasks"}
+                  </div>
+                  {/* PIN */}
+                  <div>
+                    <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>PIN (4 digits)</div>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <input
+                        type={showPin[u.id]?"text":"password"}
+                        value={u.pin||""}
+                        onChange={e=>{ const v=e.target.value.replace(/\D/g,"").slice(0,4); upd(u.id,{pin:v}); }}
+                        placeholder="e.g. 1234" maxLength={4}
+                        style={{width:100,background:C.surface,border:`1px solid ${C.border}`,
+                          borderRadius:7,color:C.text,padding:"7px 10px",fontSize:13,
+                          fontFamily:"inherit",outline:"none",letterSpacing:"0.2em"}}/>
+                      <button onClick={()=>setShowPin(s=>({...s,[u.id]:!s[u.id]}))}
+                        style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,
+                          color:C.dim,fontSize:11,padding:"6px 10px",cursor:"pointer",fontFamily:"inherit"}}>
+                        {showPin[u.id]?"Hide":"Show"}
+                      </button>
+                    </div>
+                    <div style={{fontSize:10,color:C.muted,marginTop:4}}>Leave blank for no PIN required</div>
+                  </div>
+                  <div style={{display:"flex",gap:8,marginTop:4}}>
+                    <button onClick={save}
+                      style={{background:C.accent,border:"none",borderRadius:8,color:"#000",
+                        fontWeight:700,padding:"8px 18px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+                      Save
+                    </button>
+                    <button onClick={()=>setEditing(null)}
+                      style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                        color:C.dim,padding:"8px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+                      Cancel
+                    </button>
+                    {u.id!=="koy"&&(
+                      <button onClick={()=>del(u.id)}
+                        style={{background:"none",border:"none",color:"#dc2626",fontSize:12,
+                          cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>
+                        Remove
+                      </button>
+                    )}
+                  </div>
+                </div>
+              ) : (
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:12}}>
+                    <div style={{width:36,height:36,borderRadius:"50%",
+                      background:`${accessColor[access]||C.dim}22`,
+                      display:"flex",alignItems:"center",justifyContent:"center",
+                      fontSize:14,fontWeight:700,color:accessColor[access]||C.dim}}>
+                      {u.name?u.name[0].toUpperCase():"?"}
+                    </div>
+                    <div>
+                      <div style={{fontSize:14,fontWeight:600,color:C.text}}>{u.name||"Unnamed"}</div>
+                      <div style={{fontSize:11,color:C.dim,display:"flex",gap:8,alignItems:"center",marginTop:2}}>
+                        <span style={{background:`${accessColor[access]||C.dim}15`,color:accessColor[access]||C.dim,
+                          borderRadius:99,padding:"1px 8px",fontSize:10,fontWeight:700}}>
+                          {ACCESS_LABELS[access]||access}
+                        </span>
+                        <span>{TITLE_LABELS[title]||title}</span>
+                        <span style={{color:C.muted}}>PIN: {u.pin?"••••":"not set"}</span>
+                      </div>
+                    </div>
+                  </div>
+                  <button onClick={()=>setEditing(u.id)}
+                    style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                      color:C.dim,fontSize:12,padding:"6px 14px",cursor:"pointer",fontFamily:"inherit"}}>
+                    Edit
+                  </button>
+                </div>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// Legacy compat — keep AUTH_KEY so old sessions don't crash
+const AUTH_KEY = "he_auth";
+const getAuthSession = () => null;
+const setAuthSession = () => {};
 
 
 
@@ -210,13 +650,11 @@ const blankJob = () => ({
 
   qcPunch:emptyPunch(),
 
-  finishStage:"0%",
-
   finishPunch:emptyPunch(), finishMaterials:[], finishUpdates:[], finishNotes:"",
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", readyToSchedule:false, readyToInvoice:false, roughOnHold:false, finishOnHold:false, tempPed:false, tempPedNumber:"",
+  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, roughStartConfirmed:false, finishStartConfirmed:false, roughNeedsHardDate:false, roughNeedsByStart:"", roughNeedsByEnd:"", finishNeedsHardDate:false, finishNeedsByStart:"", finishNeedsByEnd:"", readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, taskDueDates:{}, roughOnHold:false, finishOnHold:false, tempPed:false, hasTempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
 
   homeRuns:{
 
@@ -599,9 +1037,45 @@ const Inp = ({value,onChange,placeholder,style={}}) => (
     onFocus={e=>e.target.style.borderColor=C.accent}
 
     onBlur={e=>e.target.style.borderColor=C.border}/>
-
 );
 
+// Convert any date string (MM/DD/YY, MM/DD/YYYY) to YYYY-MM-DD for type="date" inputs
+const toYMD = (str) => {
+  if(!str) return "";
+  if(/^\d{4}-\d{2}-\d{2}$/.test(str)) return str; // already YYYY-MM-DD
+  const m = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if(!m) return "";
+  let [,mo,dy,yr] = m;
+  if(yr.length===2) yr="20"+yr;
+  return `${yr}-${mo.padStart(2,"0")}-${dy.padStart(2,"0")}`;
+};
+
+// Format any date string for display as M/D/YYYY
+const fmtDisplay = (str) => {
+  if(!str) return "";
+  // Already M/D/YYYY or M/D/YY
+  if(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(str)) return str;
+  // YYYY-MM-DD → M/D/YYYY
+  const m = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(m) return `${parseInt(m[2])}/${parseInt(m[3])}/${m[1]}`;
+  return str;
+};
+
+// DateInp — always a calendar date picker, same styling as Inp
+const DateInp = ({value,onChange,style={}}) => (
+  <input type="date" value={toYMD(value)} onChange={e=>{
+    // Convert YYYY-MM-DD from browser to M/D/YYYY for storage
+    const ymd = e.target.value;
+    const m = ymd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const display = m ? `${parseInt(m[2])}/${parseInt(m[3])}/${m[1]}` : ymd;
+    onChange({...e, target:{...e.target, value: display}});
+  }}
+    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+      padding:"6px 10px",fontSize:12,fontFamily:"inherit",width:"100%",outline:"none",
+      colorScheme:"light",...style}}
+    onFocus={e=>e.target.style.borderColor=C.accent}
+    onBlur={e=>e.target.style.borderColor=C.border}/>
+);
 
 
 const Sel = ({value,onChange,options,style={}}) => (
@@ -647,6 +1121,8 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
     add:    {background:`${C.green}15`,border:`1px dashed ${C.green}55`,color:C.green},
 
     email:  {background:"none",border:`1px solid ${C.blue}55`,color:C.blue},
+    chat:   {background:"none",border:`1px solid #25d36655`,color:"#25d366"},
+    simpro: {background:"none",border:`1px solid #f9731655`,color:"#f97316"},
 
   };
 
@@ -1271,9 +1747,9 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
         <div>
 
-          <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date</div>
+          <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date of Update</div>
 
-          <Inp value={d.date} onChange={e=>setD(p=>({...p,date:e.target.value}))} placeholder="MM/DD/YY"/>
+          <DateInp value={d.date} onChange={e=>setD(p=>({...p,date:e.target.value}))}/>
 
         </div>
 
@@ -1337,342 +1813,226 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
 // ── Change Orders ─────────────────────────────────────────────
 
-function ChangeOrders({orders,onChange,jobName,onEmail}) {
+function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughStatus, finishStatus}) {
 
-  const add = () => onChange([{id:uid(),date:"",desc:"",task:"",material:"",time:"",status:"Pending",sendTo:"",needsSchedule:false,needsScheduleDate:"",coScheduled:false,scheduledDate:""},...orders]);
+  const add = () => onChange([{
+    id:uid(), date:"", desc:"", task:"", material:"", time:"", sendTo:"",
+    coStatus:"pending", coStatusDate:"",
+    needsHardDate:false, needsByStart:"", needsByEnd:"",
+  }, ...orders]);
 
-  const upd = (id,p) => onChange(orders.map(o=>o.id===id?{...o,...p}:o));
+  const upd = (id, p) => onChange(orders.map(o => o.id===id ? {...o,...p} : o));
+  const del = (id)    => onChange(orders.filter(o => o.id!==id));
 
-  const del = (id)   => onChange(orders.filter(o=>o.id!==id));
+  const crewOnSite = roughStatus==="inprogress" || finishStatus==="inprogress";
 
-  const sc  = {"Pending":C.accent,"CO Created":C.orange,"CO Sent (office)":C.blue,
-
-               "Approved":C.green,"Denied":C.red,"Work Completed":C.purple};
-
-
-
-  const emailCO = (o, i) => {
-
-    const subject = `${jobName} — Change Order #${i+1}`;
-
-    const body = `Change Order #${i+1} — ${jobName}\n\nDate: ${o.date||"—"}\nSend CO To: ${o.sendTo||"—"}\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial Needed: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nStatus: ${o.status}\n\nPlease review and confirm.\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
-
-    onEmail({subject, body});
-
+  const chatCO = (o, i) => {
+    const msg = `Change Order #${i+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||"Pending"}\n\nhttps://homestead-electric.vercel.app/`;
+    openGoogleChat(msg);
   };
 
+  const emailCO = (o, i) => {
+    const subject = `${jobName} — Change Order #${i+1}`;
+    const body = `Change Order #${i+1} — ${jobName}\n\nDate: ${o.date||"—"}\nSend CO To: ${o.sendTo||"—"}\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial Needed: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nStatus: ${o.coStatus||"Pending"}\n\nPlease review and confirm.\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
+    onEmail({subject, body});
+  };
 
+  // Convert CO → Return Trip
+  const convertToRT = (o, i) => {
+    // Mark CO as converted
+    upd(o.id, {coStatus:"converted"});
+    // Build a new return trip pre-filled from CO data
+    const newRT = {
+      id: uid(),
+      scope: o.desc||"",
+      task: o.task||"",
+      material: o.material||"",
+      time: o.time||"",
+      assignedTo: "",
+      rtStatus: "needs",
+      rtStatusDate: "",
+      needsHardDate: o.needsHardDate||false,
+      needsByStart: o.needsByStart||"",
+      needsByEnd: o.needsByEnd||"",
+      notes: `Converted from Change Order #${i+1}${o.desc?" — "+o.desc:""}`,
+      punch: [],
+      photos: [],
+    };
+    // We signal the parent to add the RT — pass via a special onChange shape
+    onChange(orders.map(co => co.id===o.id ? {...co, coStatus:"converted"} : co), newRT, true); // true = add to top
+  };
 
   return (
-
     <div>
+      {orders.map((o, i) => {
+        const coDef = getStatusDef(CO_STATUSES_NEW, o.coStatus||"pending");
+        const isConverted = o.coStatus === "converted";
+        const isApproved  = o.coStatus === "approved";
+        const showConvert = (isApproved || o.coStatus==="needs") && !crewOnSite;
 
-      {orders.map((o,i)=>(
+        return (
+          <div key={o.id} style={{
+            background: isConverted ? "var(--surface)" : "var(--card)",
+            border:`1px solid ${isConverted?"var(--border)":coDef.color?coDef.color+"33":"var(--border)"}`,
+            borderLeft:`3px solid ${isConverted?"#6b7280":coDef.color||"var(--border)"}`,
+            borderRadius:11, padding:14, marginBottom:12,
+            opacity: isConverted ? 0.6 : 1,
+          }}>
 
-        <div key={o.id} style={{background:C.surface,border:`1px solid ${C.border}`,
-
-          borderRadius:10,padding:14,marginBottom:12}}>
-
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-
-            <span style={{fontSize:12,color:C.accent,fontWeight:700}}>Change Order</span>
-
-            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-
-              <Btn onClick={()=>emailCO(o,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>✉ Email CO</Btn>
-
-              <button onClick={()=>del(o.id)}
-
-                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
-
-            </div>
-          </div>
-
-          <div style={{marginBottom:8}}>
-            {(()=>{
-              const coDef = getStatusDef(CO_STATUSES_NEW, o.coStatus||"pending");
-              return (
-                <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                  <select value={o.coStatus||"pending"} onChange={e=>{
-                    const v=e.target.value;
-                    upd(o.id,{coStatus:v,coStatusDate:getStatusDef(CO_STATUSES_NEW,v).hasDate?o.coStatusDate:""});
-                  }} style={{background:coDef.color?`${coDef.color}18`:C.surface,
-                    color:coDef.color||C.dim,border:`1px solid ${coDef.color||C.border}`,
-                    borderRadius:7,padding:"5px 8px",fontSize:11,fontFamily:"inherit",
-                    fontWeight:coDef.color?700:400,outline:"none",cursor:"pointer"}}>
-                    {CO_STATUSES_NEW.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
-                  </select>
-                  {coDef.hasDate&&(
-                    <Inp value={o.coStatusDate||""} onChange={e=>upd(o.id,{coStatusDate:e.target.value})}
-                      placeholder="Date MM/DD/YY"
-                      style={{width:120,fontSize:11,borderColor:coDef.color+"55",background:`${coDef.color}08`}}/>
-                  )}
-                </div>
-              );
-            })()}
-          </div>
-
-          <div style={{marginBottom:8}}>
-
-            <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Send CO To</div>
-
-            <Inp value={o.sendTo||""} onChange={e=>upd(o.id,{sendTo:e.target.value})}
-
-              placeholder="e.g. John Smith / GC / Homeowner…"/>
-
-          </div>
-
-          <div style={{marginBottom:8}}>
-
-            <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Description of Task</div>
-
-            <Inp value={o.desc} onChange={e=>upd(o.id,{desc:e.target.value})} placeholder="Describe the change order…"/>
-
-          </div>
-
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8}}>
-
-            {[["time","Estimated Time","e.g. 3 hrs"]].map(([k,l,ph])=>(
-
-              <div key={k}>
-
-                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>{l}</div>
-
-                <Inp value={o[k]} onChange={e=>upd(o.id,{[k]:e.target.value})} placeholder={ph}/>
-
+            {/* Header */}
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
+              <div style={{display:"flex",alignItems:"center",gap:8}}>
+                <span style={{fontSize:12,color:"var(--accent)",fontWeight:700}}>Change Order #{i+1}</span>
+                {isConverted&&<span style={{fontSize:10,fontWeight:700,color:"#6b7280",background:"#6b728018",borderRadius:99,padding:"2px 8px",border:"1px solid #6b728033"}}>CONVERTED TO RT</span>}
               </div>
-
-            ))}
-
-            <div>
-
-              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Task (In Field)</div>
-
-              <TA value={o.task} onChange={e=>upd(o.id,{task:e.target.value})} placeholder={"- Task 1\n- Task 2"} rows={3}/>
-
+              <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
+                {!isConverted&&jobSimproNo&&<Btn onClick={()=>{
+                  const msg=`Change Order #${i+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||"Pending"}`;
+                  navigator.clipboard.writeText(msg).catch(()=>{});
+                  window.open(`https://homesteadelectric.simprosuite.com/staff/editProject.php?jobID=${jobSimproNo}`,"_blank");
+                }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>Simpro</Btn>}
+                {!isConverted&&<Btn onClick={()=>chatCO(o,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>Chat</Btn>}
+                {!isConverted&&<Btn onClick={()=>emailCO(o,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>Email CO</Btn>}
+                <button onClick={()=>del(o.id)} style={{background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontSize:11}}>Remove</button>
+              </div>
             </div>
 
-            {[[]].map(()=>(
+            {/* Status row */}
+            {!isConverted&&(
+              <div style={{marginBottom:10}}>
 
-              <div key="spacer2"/>
+                {/* Status pill buttons */}
+                <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>
+                  {CO_STATUSES_NEW.filter(s=>s.value!=="converted").map(s=>{
+                    const active = (o.coStatus||"needs_sending")===s.value;
+                    return (
+                      <button key={s.value} onClick={()=>{
+                        const patch={coStatus:s.value};
+                        if(!getStatusDef(CO_STATUSES_NEW,s.value).hasDate) patch.coStatusDate="";
+                        // Switching away from approved clears the schedule window
+                        if(s.value!=="approved"&&s.value!=="scheduled") { patch.needsByStart=""; patch.needsByEnd=""; patch.needsHardDate=false; }
+                        upd(o.id,patch);
+                      }} style={{
+                        padding:"4px 12px",fontSize:11,fontWeight:active?700:500,
+                        borderRadius:99,border:`1px solid ${active?s.color:"var(--border)"}`,
+                        background:active?`${s.color}22`:"none",
+                        color:active?s.color:"var(--dim)",cursor:"pointer",fontFamily:"inherit",
+                        transition:"all 0.15s",
+                      }}>{s.label}</button>
+                    );
+                  })}
+                </div>
 
-            ))}
+                {/* Needs to be Sent — due date */}
+                {(o.coStatus||"needs_sending")==="needs_sending"&&(
+                  <div style={{padding:"8px 12px",borderRadius:8,marginBottom:8,
+                    background:"#dc262608",border:"1px solid #dc262633"}}>
+                    <div style={{fontSize:9,fontWeight:700,color:"#dc2626",letterSpacing:"0.08em",marginBottom:6}}>SEND BY DATE</div>
+                    <DateInp value={o.coStatusDate||""} onChange={e=>upd(o.id,{coStatusDate:e.target.value})}
+                      style={{width:140,fontSize:11,borderColor:"#dc262655",background:"#dc262608"}}/>
+                  </div>
+                )}
 
-            <div>
+                {/* Scheduled date picker */}
+                {o.coStatus==="scheduled"&&(
+                  <div style={{padding:"8px 12px",borderRadius:8,marginBottom:8,
+                    background:"#2563eb08",border:"1px solid #2563eb33"}}>
+                    <div style={{fontSize:9,fontWeight:700,color:"#2563eb",letterSpacing:"0.08em",marginBottom:6}}>SCHEDULED DATE</div>
+                    <DateInp value={o.coStatusDate||""} onChange={e=>upd(o.id,{coStatusDate:e.target.value})}
+                      style={{width:140,fontSize:11,borderColor:"#2563eb55",background:"#2563eb08"}}/>
+                  </div>
+                )}
 
-              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Material Needed</div>
+                {/* Approved — branch on crew on site */}
+                {isApproved&&(
+                  <div style={{padding:"10px 12px",borderRadius:8,marginBottom:8,
+                    background:crewOnSite?"#16a34a08":"#f9731608",
+                    border:`1px solid ${crewOnSite?"#16a34a33":"#f9731633"}`}}>
+                    {crewOnSite?(
+                      <>
+                        <div style={{fontSize:11,fontWeight:700,color:"#16a34a",marginBottom:8}}>
+                          ✓ Crew is on site — mark work complete when done
+                        </div>
+                        <button onClick={()=>upd(o.id,{coStatus:"completed",needsByStart:"",needsByEnd:"",needsHardDate:false})}
+                          style={{background:"#16a34a",border:"none",borderRadius:8,color:"#fff",
+                            fontSize:11,fontWeight:700,padding:"7px 16px",cursor:"pointer",fontFamily:"inherit"}}>
+                          ✓ Mark Work Completed
+                        </button>
+                      </>
+                    ):(
+                      <>
+                        <div style={{fontSize:11,fontWeight:700,color:"#f97316",marginBottom:6}}>
+                          ⚠ Crew not on site — convert to Return Trip to schedule
+                        </div>
+                        <button onClick={()=>convertToRT(o,i)} style={{
+                          background:"#8b5cf618",border:"1px solid #8b5cf633",
+                          borderRadius:8,color:"#8b5cf6",fontSize:11,fontWeight:700,
+                          padding:"7px 14px",cursor:"pointer",fontFamily:"inherit",
+                          display:"flex",alignItems:"center",gap:6,
+                        }}>
+                          🔄 Convert to Return Trip
+                        </button>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            )}
 
-              <TA value={o.material} onChange={e=>upd(o.id,{material:e.target.value})} placeholder={"- Item 1\n- Item 2"} rows={3}/>
+            {/* Converted note + undo */}
+            {isConverted&&(
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:8,flexWrap:"wrap"}}>
+                <div style={{fontSize:11,color:"#6b7280",fontStyle:"italic"}}>
+                  Converted to Return Trip — see Return Trips tab.
+                </div>
+                <button onClick={()=>upd(o.id,{coStatus:"approved"})}
+                  style={{background:"none",border:"1px solid #ca8a0455",borderRadius:7,
+                    color:"#ca8a04",fontSize:11,padding:"4px 10px",cursor:"pointer",
+                    fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>
+                  ↩ Undo Convert
+                </button>
+              </div>
+            )}
 
-            </div>
-
-            {[[]].map(()=>(
-
-              <div key="spacer"/>
-
-            ))}
-
+            {/* Fields — hidden when converted */}
+            {!isConverted&&(
+              <>
+                <div style={{marginBottom:8}}>
+                  <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Send CO To</div>
+                  <Inp value={o.sendTo||""} onChange={e=>upd(o.id,{sendTo:e.target.value})} placeholder="e.g. John Smith / GC / Homeowner…"/>
+                </div>
+                <div style={{marginBottom:8}}>
+                  <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Description of Task</div>
+                  <Inp value={o.desc||""} onChange={e=>upd(o.id,{desc:e.target.value})} placeholder="Describe the change order…"/>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}}>
+                  <div>
+                    <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Estimated Time</div>
+                    <Inp value={o.time||""} onChange={e=>upd(o.id,{time:e.target.value})} placeholder="e.g. 3 hrs"/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Task (In Field)</div>
+                    <TA value={o.task||""} onChange={e=>upd(o.id,{task:e.target.value})} placeholder={"- Task 1\n- Task 2"} rows={3}/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Material Needed</div>
+                    <TA value={o.material||""} onChange={e=>upd(o.id,{material:e.target.value})} placeholder={"- Item 1\n- Item 2"} rows={3}/>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
+        );
+      })}
 
-        </div>
-
-      ))}
-
-      <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginTop:4}}>+ Add Change Order</Btn>
-
+      <Btn onClick={add} variant="ghost" style={{marginTop:4}}>+ Add Change Order</Btn>
     </div>
-
   );
-
 }
-
-
-
-
-
-function ReturnTripExtras({trip, onUpd}) {
-
-    return (
-
-    <div style={{marginTop:14,borderTop:`1px solid ${C.border}`,paddingTop:14}}>
-
-      <div style={{display:"flex",gap:6,marginBottom:12}}>
-
-        {["Assign Work","Sign Off"].map(t=>(
-
-          <button key={t} onClick={()=>setTab(t)}
-
-            style={{padding:"5px 14px",borderRadius:7,fontSize:11,cursor:"pointer",
-
-              fontFamily:"inherit",fontWeight:tab===t?700:400,
-
-              background:tab===t?C.purple:`${C.purple}15`,
-
-              border:`1px solid ${tab===t?C.purple:`${C.purple}33`}`,
-
-              color:tab===t?"#fff":C.dim,transition:"all 0.15s"}}>
-
-            {t}
-
-          </button>
-
-        ))}
-
-      </div>
-
-
-
-      {tab==="Assign Work"&&(
-
-        <div>
-
-          {(trip.assignments||[]).map((a,i)=>(
-
-            <div key={a.id} style={{background:C.card,border:`1px solid ${a.done?C.green+"55":C.border}`,
-
-              borderRadius:10,padding:12,marginBottom:10,borderLeft:`3px solid ${a.done?C.green:C.purple}`}}>
-
-              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10}}>
-
-                <input type="checkbox" checked={!!a.done}
-
-                  onChange={()=>onUpd({assignments:(trip.assignments||[]).map(x=>x.id===a.id?{...x,done:!x.done}:x)})}
-
-                  style={{accentColor:C.green,width:15,height:15,cursor:"pointer",flexShrink:0}}/>
-
-                <span style={{fontSize:11,fontWeight:700,color:a.done?C.green:C.purple,flex:1}}>
-
-                  Task #{i+1}{a.done?" ✓ Done":""}
-
-                </span>
-
-                <button onClick={()=>onUpd({assignments:(trip.assignments||[]).filter(x=>x.id!==a.id)})}
-
-                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
-
-              </div>
-
-              <div style={{marginBottom:8}}>
-
-                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Assign To</div>
-
-                <Inp value={a.person||""} placeholder="Name…"
-
-                  onChange={e=>onUpd({assignments:(trip.assignments||[]).map(x=>x.id===a.id?{...x,person:e.target.value}:x)})}/>
-
-              </div>
-
-              <div>
-
-                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Task Description</div>
-
-                <TA value={a.task||""} rows={2} placeholder="Describe the work to be completed…"
-
-                  onChange={e=>onUpd({assignments:(trip.assignments||[]).map(x=>x.id===a.id?{...x,task:e.target.value}:x)})}/>
-
-              </div>
-
-            </div>
-
-          ))}
-
-          <Btn onClick={()=>onUpd({assignments:[...(trip.assignments||[]),{id:uid(),person:"",task:"",done:false}]})}
-
-            variant="add" style={{width:"100%",borderStyle:"dashed"}}>+ Add Assignment</Btn>
-
-        </div>
-
-      )}
-
-
-
-      {tab==="Sign Off"&&(
-
-        <div>
-
-          {(trip.signoffs||[]).map((s,i)=>(
-
-            <div key={s.id} style={{background:C.card,border:`1px solid ${C.green}33`,
-
-              borderRadius:10,padding:12,marginBottom:10,borderLeft:`3px solid ${C.green}`}}>
-
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
-
-                <span style={{fontSize:11,fontWeight:700,color:C.green}}>Sign-off #{i+1}</span>
-
-                <button onClick={()=>onUpd({signoffs:(trip.signoffs||[]).filter(x=>x.id!==s.id)})}
-
-                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
-
-              </div>
-
-              <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:8}}>
-
-                <div>
-
-                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Technician Name</div>
-
-                  <Inp value={s.person||""} placeholder="Name…"
-
-                    onChange={e=>onUpd({signoffs:(trip.signoffs||[]).map(x=>x.id===s.id?{...x,person:e.target.value}:x)})}/>
-
-                </div>
-
-                <div>
-
-                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Completed</div>
-
-                  <Inp value={s.completedDate||""} placeholder="MM/DD/YY"
-
-                    onChange={e=>onUpd({signoffs:(trip.signoffs||[]).map(x=>x.id===s.id?{...x,completedDate:e.target.value}:x)})}/>
-
-                </div>
-
-              </div>
-
-              <div style={{marginBottom:8}}>
-
-                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Work Completed</div>
-
-                <TA value={s.task||""} rows={2} placeholder="Describe what was completed…"
-
-                  onChange={e=>onUpd({signoffs:(trip.signoffs||[]).map(x=>x.id===s.id?{...x,task:e.target.value}:x)})}/>
-
-              </div>
-
-              <div>
-
-                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Initials</div>
-
-                <Inp value={s.initials||""} placeholder="e.g. KM" style={{width:80}}
-
-                  onChange={e=>onUpd({signoffs:(trip.signoffs||[]).map(x=>x.id===s.id?{...x,initials:e.target.value}:x)})}/>
-
-              </div>
-
-            </div>
-
-          ))}
-
-          <Btn onClick={()=>onUpd({signoffs:[...(trip.signoffs||[]),{id:uid(),person:"",task:"",completedDate:"",initials:""}]})}
-
-            variant="add" style={{width:"100%",borderStyle:"dashed"}}>+ Add Sign-off</Btn>
-
-        </div>
-
-      )}
-
-    </div>
-
-  );
-
-}
-
-
 
 // ── Return Trips ──────────────────────────────────────────────
 
-function ReturnTrips({trips,onChange,jobName,onEmail}) {
+function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
 
   const [viewPhoto, setViewPhoto] = useState(null);
 
@@ -1683,6 +2043,12 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
   const del = (id)   => onChange(trips.filter(t=>t.id!==id));
 
 
+
+  const chatTrip = (t,i) => {
+    const punchOpen = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n") || "None";
+    const msg = `Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}\n\nhttps://homestead-electric.vercel.app/`;
+    openGoogleChat(msg);
+  };
 
   const emailTrip = (t,i) => {
 
@@ -1777,11 +2143,14 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
                   {(()=>{
                     const rtDef = getStatusDef(RT_STATUSES, t.rtStatus||"");
                     return (
+                      <>
                       <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                         <select value={t.rtStatus||""} onChange={e=>{
                           const v=e.target.value;
-                          upd(t.id,{rtStatus:v,rtScheduled:v==="scheduled",needsSchedule:v==="needs",
-                            rtStatusDate:getStatusDef(RT_STATUSES,v).hasDate?t.rtStatusDate:""});
+                          const patch={rtStatus:v,rtScheduled:v==="scheduled",needsSchedule:v==="needs",
+                            rtStatusDate:getStatusDef(RT_STATUSES,v).hasDate?t.rtStatusDate:""};
+                          if(v==="scheduled") { patch.needsByStart=""; patch.needsByEnd=""; patch.needsHardDate=false; }
+                          upd(t.id,patch);
                         }} style={{background:rtDef.color?`${rtDef.color}18`:C.surface,
                           color:rtDef.color||C.dim,border:`1px solid ${rtDef.color||C.border}`,
                           borderRadius:7,padding:"5px 8px",fontSize:11,fontFamily:"inherit",
@@ -1789,11 +2158,17 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
                           {RT_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>
                         {rtDef.hasDate&&(
-                          <Inp value={t.rtStatusDate||""} onChange={e=>upd(t.id,{rtStatusDate:e.target.value})}
-                            placeholder="Date MM/DD/YY"
-                            style={{width:120,fontSize:11,borderColor:rtDef.color+"55",background:`${rtDef.color}08`}}/>
+                          <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:rtDef.color}}>
+                              {t.rtStatus==="needs"?"WORK TO BE COMPLETED BY":"SCHEDULED DATE"}
+                            </div>
+                            <DateInp value={t.rtStatusDate||""} onChange={e=>upd(t.id,{rtStatusDate:e.target.value})}
+                              style={{width:140,fontSize:11,borderColor:rtDef.color+"55",background:`${rtDef.color}08`}}/>
+                          </div>
                         )}
                       </div>
+                
+                      </>
                     );
                   })()}
                 </>
@@ -1802,7 +2177,14 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
             <div style={{display:"flex",gap:8}}>
 
-              <Btn onClick={()=>emailTrip(t,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>✉ Email Trip</Btn>
+              {jobSimproNo&&<Btn onClick={()=>{
+                const punchOpen=(t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n")||"None";
+                const msg=`Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}`;
+                navigator.clipboard.writeText(msg).catch(()=>{});
+                window.open(`https://homesteadelectric.simprosuite.com/staff/editProject.php?jobID=${jobSimproNo}`,"_blank");
+              }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>Simpro</Btn>}
+              <Btn onClick={()=>chatTrip(t,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>Chat</Btn>
+              <Btn onClick={()=>emailTrip(t,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>Email Trip</Btn>
 
               <button onClick={()=>del(t.id)}
 
@@ -1936,17 +2318,17 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
                 <div>
 
-                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date</div>
+                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Signed Off</div>
 
-                  <Inp value={t.signedOffDate||""} onChange={e=>upd(t.id,{signedOffDate:e.target.value})}
+                  <DateInp value={t.signedOffDate||""} onChange={e=>upd(t.id,{signedOffDate:e.target.value})}
 
-                    placeholder="MM/DD/YY"/>
+                    style={{width:130}}/>
 
                 </div>
 
                 <button
 
-                  onClick={()=>upd(t.id,{signedOff:true})}
+                  onClick={()=>upd(t.id,{signedOff:true, rtStatus:"complete"})}
 
                   disabled={!t.signedOffBy||!t.signedOffDate}
 
@@ -1974,7 +2356,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
                   <span style={{fontSize:13,color:C.green,fontWeight:700}}>✓ Completed by {t.signedOffBy}</span>
 
-                  <span style={{fontSize:11,color:C.dim,marginLeft:10}}>{t.signedOffDate}</span>
+                  <span style={{fontSize:11,color:C.dim,marginLeft:10}}>{fmtDisplay(t.signedOffDate)}</span>
 
                 </div>
 
@@ -2043,7 +2425,7 @@ function ReturnTrips({trips,onChange,jobName,onEmail}) {
 
 const DEFAULT_PANELS = ["Panel A","Panel B","Panel C","Panel D"];
 
-const LEADS = ["","Keegan","Daegan","Gage","Abe","Louis","Jonathan","Braden","Treycen"];
+const HR_LEADS = ["","Keegan","Daegan","Gage","Abe","Louis","Jonathan","Braden","Treycen"];
 
 const PANEL_ORDER_BASE = {"":0,"Meter":0.5,"Dedicated Loads":999};
 const getPanelOpts = (customPanels) => ["","Meter",...(customPanels&&customPanels.length?customPanels:DEFAULT_PANELS),"Dedicated Loads"];
@@ -2125,6 +2507,7 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
           <div key={i} style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
         ))}
       </div>
+
       {flatRows.map(({r,i})=>renderRow(r,i))}
       {rows.length===0&&<div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No rows yet</div>}
       <Btn onClick={addRow} variant="add" style={{fontSize:11,padding:"3px 10px",marginTop:6}}>+ Add Row</Btn>
@@ -2209,6 +2592,14 @@ const WIRE_BREAKER = {
 
 };
 
+// ── Generator constants ───────────────────────────────────────
+const GEN_SIZES_W = [7500, 10000, 14000, 20000, 22000, 24000, 26000];
+const genRecommend = (w) => GEN_SIZES_W.find(s=>s>=w) || GEN_SIZES_W[GEN_SIZES_W.length-1];
+const genFmtKw     = (w) => (w/1000).toFixed(1).replace(/\.0$/,'')+'kW';
+const wireWatts    = (wire) => {
+  const b=WIRE_BREAKER[wire]; if(!b) return 0;
+  return b.poles===2 ? b.amps*240 : b.amps*120;
+};
 
 
 function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
@@ -2400,155 +2791,352 @@ function HRAddFloor({homeRuns, onHRChange}) {
   );
 }
 
-function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobName}) {
+// ── Generator Load Section ────────────────────────────────────
+function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
+  // KEY FIX: local state so ★ toggle and checkboxes update instantly
+  const [loads, setLoads] = useState(genLoads || []);
+  const [dragIdx, setDragIdx] = useState(null);
+  const [overIdx, setOverIdx] = useState(null);
 
-  const [hoResponse, setHoResponse] = useState(null);
-  const [showHoModal, setShowHoModal] = useState(false);
-  const [linkCopied, setLinkCopied] = useState(false);
-  const [newPanelName, setNewPanelName] = useState("");
+  // Sync from parent only when genLoads identity changes (Firestore load)
+  const prevRef = useRef(genLoads);
+  useEffect(() => {
+    if (genLoads !== prevRef.current) {
+      prevRef.current = genLoads;
+      setLoads(genLoads || []);
+    }
+  });
+
+  const commit = (next) => { setLoads(next); onSave(next); };
+
+  const importFromHR = () => {
+    const rows = [
+      ...(homeRuns.main||[]),
+      ...(homeRuns.upper||[]),
+      ...(homeRuns.basement||[]),
+      ...(homeRuns.extraFloors||[]).flatMap(e=>homeRuns[e.key]||[]),
+    ].filter(r=>(r.name||'').trim() && r.wire);
+    const existing = new Set(loads.map(l=>l.name));
+    const added = rows.filter(r=>!existing.has(r.name)).map(r=>({
+      id: uid(), name: r.name, wire: r.wire,
+      watts: wireWatts(r.wire), recommended: false, included: true,
+    }));
+    if (!added.length) { alert('No new named+wired loads to import.'); return; }
+    commit([...loads, ...added]);
+  };
+
+  const toggle  = (id, key) => commit(loads.map(l=>l.id===id?{...l,[key]:!l[key]}:l));
+  const updName = (id, name) => commit(loads.map(l=>l.id===id?{...l,name}:l));
+  const updWire = (id, wire) => commit(loads.map(l=>l.id===id?{...l,wire,watts:wireWatts(wire)}:l));
+  const updWatts= (id, watts) => commit(loads.map(l=>l.id===id?{...l,watts:parseFloat(watts)||0}:l));
+  const del     = (id) => commit(loads.filter(l=>l.id!==id));
+  const addRow  = () => commit([...loads,{id:uid(),name:'',wire:'',watts:0,recommended:false,included:true}]);
+
+  const onDragStart = (i) => setDragIdx(i);
+  const onDragOver  = (e,i) => { e.preventDefault(); setOverIdx(i); };
+  const onDrop      = (i) => {
+    if (dragIdx===null||dragIdx===i) { setDragIdx(null); setOverIdx(null); return; }
+    const next=[...loads]; const [m]=next.splice(dragIdx,1); next.splice(i,0,m);
+    commit(next); setDragIdx(null); setOverIdx(null);
+  };
+
+
+  return (
+    <div>
+      <div style={{display:'flex',gap:8,marginBottom:12,flexWrap:'wrap',alignItems:'center'}}>
+        <button onClick={importFromHR}
+          style={{background:`${C.blue}15`,border:`1px solid ${C.blue}44`,borderRadius:8,
+            color:C.blue,fontSize:12,fontWeight:700,padding:'7px 14px',cursor:'pointer',fontFamily:'inherit'}}>
+          ⬇ Import from Home Runs
+        </button>
+        <button onClick={addRow}
+          style={{background:`${C.green}12`,border:`1px dashed ${C.green}55`,borderRadius:8,
+            color:C.green,fontSize:12,fontWeight:600,padding:'7px 14px',cursor:'pointer',fontFamily:'inherit'}}>
+          + Add Manually
+        </button>
+        {loads.length>0&&(
+          <button onClick={()=>{if(window.confirm('Clear all loads?')) commit([]);}}
+            style={{marginLeft:'auto',background:'none',border:`1px solid ${C.border}`,borderRadius:8,
+              color:C.muted,fontSize:11,padding:'6px 12px',cursor:'pointer',fontFamily:'inherit'}}>
+            Clear All
+          </button>
+        )}
+      </div>
+
+      {loads.length===0&&(
+        <div style={{textAlign:'center',padding:'24px',color:C.muted,fontSize:12,fontStyle:'italic',
+          border:`1px dashed ${C.border}`,borderRadius:10,marginBottom:12}}>
+          No loads yet — import from Home Runs or add manually
+        </div>
+      )}
+
+      {loads.map((load,i)=>(
+        <div key={load.id}
+          draggable
+          onDragStart={()=>onDragStart(i)}
+          onDragOver={e=>onDragOver(e,i)}
+          onDrop={()=>onDrop(i)}
+          onDragEnd={()=>{setDragIdx(null);setOverIdx(null);}}
+          style={{
+            display:'flex',alignItems:'center',gap:7,padding:'8px 10px',
+            borderRadius:10,marginBottom:5,cursor:'grab',
+            background:overIdx===i?`${C.accent}12`:load.recommended?`${C.accent}08`:C.surface,
+            border:`1px solid ${overIdx===i?C.accent:load.recommended?`${C.accent}44`:C.border}`,
+            borderLeft:`3px solid ${load.recommended?C.accent:load.included?C.blue:C.muted}`,
+            opacity:load.included?1:0.45,transition:'border-color 0.1s,background 0.1s',
+          }}>
+          <span style={{fontSize:13,color:C.muted,cursor:'grab',userSelect:'none',flexShrink:0}}>⠿</span>
+          <span style={{fontSize:10,fontWeight:700,color:C.dim,minWidth:14,textAlign:'center',flexShrink:0}}>{i+1}</span>
+          <input type="checkbox" checked={!!load.included} onChange={()=>toggle(load.id,'included')}
+            style={{accentColor:C.blue,width:13,height:13,flexShrink:0,cursor:'pointer'}}/>
+          <input value={load.name||''} onChange={e=>updName(load.id,e.target.value)}
+            placeholder="Load name…"
+            style={{flex:1,minWidth:60,background:'transparent',border:'none',
+              borderBottom:`1px solid ${C.border}`,color:C.text,fontSize:12,
+              fontFamily:'inherit',outline:'none',padding:'2px 4px'}}/>
+          <select value={load.wire||''} onChange={e=>updWire(load.id,e.target.value)}
+            style={{background:WIRE_COLORS[load.wire]||C.surface,
+              color:load.wire?(WIRE_TEXT[load.wire]||C.text):C.dim,
+              border:`1px solid ${C.border}`,borderRadius:6,
+              padding:'3px 4px',fontSize:10,fontFamily:'inherit',outline:'none',
+              flexShrink:0,width:60}}>
+            {WIRE_SIZES.map(o=>(
+              <option key={o} value={o}
+                style={{background:WIRE_COLORS[o]||'#f1f5f9',color:WIRE_TEXT[o]||'#0f172a'}}>
+                {o||'wire'}
+              </option>
+            ))}
+          </select>
+          <input value={load.watts||0} onChange={e=>updWatts(load.id,e.target.value)}
+            style={{width:50,background:'transparent',border:`1px solid ${C.border}`,borderRadius:6,
+              color:C.accent,fontSize:11,fontWeight:700,fontFamily:'inherit',outline:'none',
+              padding:'3px 5px',textAlign:'right',flexShrink:0}}/>
+          <span style={{fontSize:9,color:C.dim,flexShrink:0}}>W</span>
+          {/* ★ Recommended — KEY FIX: reads from local `load` which updates immediately */}
+          <button onClick={()=>toggle(load.id,'recommended')}
+            title={load.recommended?'Remove recommendation':'Mark recommended'}
+            style={{
+              background:load.recommended?`${C.accent}22`:'none',
+              border:`1px solid ${load.recommended?C.accent:C.border}`,
+              borderRadius:6,color:load.recommended?C.accent:C.muted,
+              fontSize:13,padding:'2px 7px',cursor:'pointer',flexShrink:0,
+              fontWeight:load.recommended?800:400,transition:'all 0.15s',
+            }}>★</button>
+          <button onClick={()=>del(load.id)}
+            style={{background:'none',border:'none',color:C.muted,cursor:'pointer',
+              fontSize:12,flexShrink:0,padding:'0 2px'}}>✕</button>
+        </div>
+      ))}
+
+    </div>
+  );
+}
+
+function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName}) {
+  const [newPanelName, setNewPanelName] = useState('');
+  const [genLoads,     setGenLoads]     = useState([]);
+  const [hoResponse,   setHoResponse]   = useState(null);
+  const [showModal,    setShowModal]    = useState(false);
+  const [sending,      setSending]      = useState(false);
+  const [copied,       setCopied]       = useState(false);
 
   const hoLink = `https://homestead-electric.vercel.app/?homeowner=${jobId}`;
 
-  const copyLink = () => {
-    navigator.clipboard.writeText(hoLink).then(()=>{
-      setLinkCopied(true);
-      setTimeout(()=>setLinkCopied(false),2000);
-    });
+  useEffect(()=>{
+    getDoc(doc(db,'homeowner_requests',jobId)).then(snap=>{
+      if(snap.exists()){
+        if(snap.data().genLoads) setGenLoads(snap.data().genLoads);
+        if(snap.data().submitted) setHoResponse(snap.data());
+      }
+    }).catch(()=>{});
+  },[jobId]);
+
+  // Debounced Firestore save
+  const saveGenLoads = (next) => {
+    setGenLoads(next);
+    clearTimeout(window._genSave);
+    window._genSave = setTimeout(()=>{
+      getDoc(doc(db,'homeowner_requests',jobId)).then(snap=>{
+        const ex = snap.exists()?snap.data():{};
+        setDoc(doc(db,'homeowner_requests',jobId),{...ex,genLoads:next}).catch(()=>{});
+      }).catch(()=>{});
+    },800);
   };
 
-  const resetResponse = async () => {
-    if(!window.confirm("Clear the homeowner's response so they can redo it? This cannot be undone.")) return;
+  const send = async () => {
+    if (!genLoads.length) { alert('Add loads first.'); return; }
+    setSending(true);
     try {
-      await deleteDoc(doc(db,"homeowner_requests",jobId));
-      setHoResponse(null);
-      setShowHoModal(false);
-      alert("Response cleared. You can now resend the link to the homeowner.");
-    } catch(e) {
-      alert("Error clearing response: "+e.message);
-    }
+      await setDoc(doc(db,'homeowner_requests',jobId),{
+        jobId, jobName:jobName||'', genLoads,
+        submitted:false, submittedAt:null, signature:'', signedDate:'', items:[],
+        sentAt:new Date().toISOString(),
+      });
+      await navigator.clipboard.writeText(hoLink);
+      setCopied(true); setTimeout(()=>setCopied(false),3000);
+    } catch(e){ alert('Failed. Check connection.'); }
+    setSending(false);
+  };
+
+  const resend = async () => {
+    const msg = hoResponse?.submitted
+      ? 'Homeowner already submitted. Reset and resend?'
+      : 'Resend link with current load list?';
+    if (!window.confirm(msg)) return;
+    setSending(true);
+    try {
+      await setDoc(doc(db,'homeowner_requests',jobId),{
+        jobId, jobName:jobName||'', genLoads,
+        submitted:false, submittedAt:null, signature:'', signedDate:'', items:[],
+        sentAt:new Date().toISOString(),
+      });
+      setHoResponse(null); setShowModal(false);
+      await navigator.clipboard.writeText(hoLink);
+      setCopied(true); setTimeout(()=>setCopied(false),3000);
+    } catch(e){ alert('Failed. Check connection.'); }
+    setSending(false);
   };
 
   const checkResponse = async () => {
     try {
-      const snap = await getDoc(doc(db,"homeowner_requests",jobId));
-      if(snap.exists()&&snap.data().submitted) {
-        setHoResponse(snap.data());
-        setShowHoModal(true);
-      } else {
-        alert("No response submitted yet.");
-      }
-    } catch(e){ alert("Failed to check response."); }
+      const snap = await getDoc(doc(db,'homeowner_requests',jobId));
+      if(snap.exists()&&snap.data().submitted){ setHoResponse(snap.data()); setShowModal(true); }
+      else alert('No response yet.');
+    } catch(e){ alert('Failed to check.'); }
   };
 
-
-  const allRows = [...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[]),
+  const allRows=[...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[]),
     ...(homeRuns.extraFloors||[]).flatMap(e=>homeRuns[e.key]||[])];
-
-  const total   = allRows.length;
-
-  const pulled  = allRows.filter(r=>r.status==="Pulled").length;
-
-  const pct     = total > 0 ? Math.round((pulled/total)*100) : 0;
-
-
+  const total=allRows.length, pulled=allRows.filter(r=>r.status==='Pulled').length;
+  const pct=total>0?Math.round((pulled/total)*100):0;
 
   return (
-
     <div>
-
-      {/* Send to Homeowner */}
-      <div style={{marginBottom:16,padding:"12px 14px",background:C.surface,border:`0.5px solid ${C.border}`,borderRadius:10}}>
-        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",flexWrap:"wrap",gap:10}}>
-          <div>
-            <div style={{fontSize:12,fontWeight:500,color:C.text,marginBottom:2}}>Generator load selection</div>
-            <div style={{fontSize:11,color:C.dim}}>Share a link so the homeowner can choose &amp; prioritize circuits</div>
-          </div>
-          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
-            <button onClick={copyLink}
-              style={{background:linkCopied?"#16a34a":"#1e293b",border:"none",borderRadius:7,color:"#fff",
-                fontWeight:500,fontSize:11,padding:"6px 12px",cursor:"pointer",fontFamily:"inherit"}}>
-              {linkCopied?"✓ Copied":"Copy link"}
-            </button>
-            <button onClick={()=>window.open(hoLink,"_blank")}
-              style={{background:"none",border:`0.5px solid ${C.border}`,borderRadius:7,color:C.dim,
-                fontWeight:500,fontSize:11,padding:"6px 12px",cursor:"pointer",fontFamily:"inherit"}}>
-              Preview
-            </button>
-            <button onClick={checkResponse}
-              style={{background:"none",border:`0.5px solid ${C.border}`,borderRadius:7,color:C.dim,
-                fontWeight:500,fontSize:11,padding:"6px 12px",cursor:"pointer",fontFamily:"inherit"}}>
-              View response
-            </button>
-          </div>
-        </div>
-      </div>
-
-      {/* Homeowner Response Modal */}
-      {showHoModal&&hoResponse&&(
-        <div onClick={()=>setShowHoModal(false)}
-          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.4)",zIndex:9999,
-            display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-          <div onClick={e=>e.stopPropagation()}
-            style={{background:"#fff",borderRadius:12,padding:22,maxWidth:440,width:"100%",
-              maxHeight:"82vh",overflowY:"auto",border:"0.5px solid #e2e8f0"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-              <div style={{fontSize:14,fontWeight:500,color:"#1e293b"}}>Homeowner selections</div>
-              <button onClick={()=>setShowHoModal(false)}
-                style={{background:"none",border:"none",fontSize:16,cursor:"pointer",color:"#94a3b8",padding:0}}>✕</button>
-            </div>
-            <div style={{fontSize:11,color:"#94a3b8",marginBottom:10}}>
-              Submitted {hoResponse.submittedAt?new Date(hoResponse.submittedAt).toLocaleString():""}
-            </div>
-            <button onClick={resetResponse}
-              style={{width:"100%",marginBottom:14,background:"none",border:`1px solid ${C.border}`,
-                borderRadius:7,padding:"7px 12px",fontSize:11,fontWeight:500,color:C.dim,
-                cursor:"pointer",fontFamily:"inherit"}}>
-              🔄 Reset &amp; resend — let homeowner redo their selections
-            </button>
-            {hoResponse.signature&&(
-              <div style={{fontSize:12,color:"#64748b",marginBottom:14,padding:"8px 10px",
-                background:"#f8fafc",borderRadius:7,border:"0.5px solid #e2e8f0"}}>
-                Signed by: <span style={{fontFamily:"Georgia,serif",color:"#1e293b"}}>{hoResponse.signature}</span>
+      {/* Generator Load Selection */}
+      <Section label="Generator Load Selection" color={C.accent} defaultOpen={true}>
+        {hoResponse?.submitted&&(
+          <div style={{background:`${C.green}12`,border:`1px solid ${C.green}44`,borderRadius:10,
+            padding:'10px 14px',marginBottom:14,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+            <div style={{flex:1}}>
+              <div style={{fontSize:12,fontWeight:700,color:C.green}}>✓ Homeowner Submitted</div>
+              <div style={{fontSize:11,color:C.dim,marginTop:2}}>
+                {hoResponse.signature} · {hoResponse.signedDate}
+                {' · '}{(hoResponse.items||[]).filter(i=>i.included).length} circuits selected
               </div>
-            )}
-            <div style={{fontSize:10,fontWeight:500,color:"#94a3b8",letterSpacing:"0.08em",marginBottom:8}}>
+            </div>
+            <button onClick={()=>setShowModal(true)}
+              style={{background:'none',border:`1px solid ${C.green}44`,borderRadius:7,
+                color:C.green,fontSize:11,fontWeight:600,padding:'5px 12px',cursor:'pointer',fontFamily:'inherit'}}>
+              View
+            </button>
+            <button onClick={resend} disabled={sending}
+              style={{background:'none',border:`1px solid ${C.border}`,borderRadius:7,
+                color:C.dim,fontSize:11,padding:'5px 12px',cursor:'pointer',fontFamily:'inherit'}}>
+              🔄 Resend
+            </button>
+          </div>
+        )}
+
+        <GeneratorLoadSection homeRuns={homeRuns} genLoads={genLoads} onSave={saveGenLoads}/>
+
+        <div style={{marginTop:14,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+          {!hoResponse?.submitted?(
+            <button onClick={send} disabled={sending||!genLoads.length}
+              style={{background:genLoads.length?C.accent:C.muted,border:'none',borderRadius:9,
+                color:'#000',fontSize:13,fontWeight:700,padding:'10px 22px',
+                cursor:genLoads.length?'pointer':'not-allowed',fontFamily:'inherit',
+                opacity:sending?0.6:1}}>
+              {sending?'⏳ Sending…':'🔗 Send to Homeowner'}
+            </button>
+          ):(
+            <button onClick={resend} disabled={sending}
+              style={{background:'none',border:`1px solid ${C.accent}55`,borderRadius:9,
+                color:C.accent,fontSize:12,fontWeight:700,padding:'8px 18px',
+                cursor:'pointer',fontFamily:'inherit',opacity:sending?0.6:1}}>
+              {sending?'⏳ Resending…':'🔄 Reset & Resend'}
+            </button>
+          )}
+          {copied&&<span style={{fontSize:12,color:C.green,fontWeight:700}}>✓ Link copied!</span>}
+        </div>
+
+        <div style={{marginTop:10,display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
+          <button onClick={()=>{navigator.clipboard.writeText(hoLink);setCopied(true);setTimeout(()=>setCopied(false),2000);}}
+            style={{background:'none',border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
+              fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit'}}>
+            🔗 Copy link
+          </button>
+          <button onClick={()=>window.open(hoLink,'_blank')}
+            style={{background:'none',border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
+              fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit'}}>
+            Preview
+          </button>
+          {!hoResponse?.submitted&&(
+            <button onClick={checkResponse}
+              style={{background:'none',border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
+                fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit'}}>
+              Check for response
+            </button>
+          )}
+        </div>
+      </Section>
+
+      {/* Response modal */}
+      {showModal&&hoResponse&&(
+        <div onClick={()=>setShowModal(false)}
+          style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.45)',zIndex:9999,
+            display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{background:'#fff',borderRadius:14,padding:22,maxWidth:460,width:'100%',
+              maxHeight:'85vh',overflowY:'auto',border:'0.5px solid #e2e8f0'}}>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:4}}>
+              <div style={{fontSize:14,fontWeight:600,color:'#1e293b'}}>Homeowner Selections</div>
+              <button onClick={()=>setShowModal(false)}
+                style={{background:'none',border:'none',fontSize:16,cursor:'pointer',color:'#94a3b8'}}>✕</button>
+            </div>
+            <div style={{fontSize:11,color:'#94a3b8',marginBottom:14}}>
+              Signed: {hoResponse.signature} · {hoResponse.signedDate}
+            </div>
+            <button onClick={resend} disabled={sending}
+              style={{width:'100%',marginBottom:14,background:'none',border:`1px solid ${C.border}`,
+                borderRadius:8,color:C.dim,fontSize:12,padding:'8px',cursor:'pointer',fontFamily:'inherit'}}>
+              🔄 Reset &amp; Resend
+            </button>
+
+                        <div style={{fontSize:10,fontWeight:600,color:'#94a3b8',letterSpacing:'0.08em',marginBottom:8}}>
               ON GENERATOR · {(hoResponse.items||[]).filter(i=>i.included).length}
             </div>
-            {(hoResponse.items||[]).filter(i=>i.included).map((it,i)=>(
-              <div key={it.id||i} style={{background:"#f8fafc",border:"0.5px solid #e2e8f0",
-                borderRadius:8,padding:"9px 12px",marginBottom:5}}>
-                <div style={{display:"flex",alignItems:"center",gap:8}}>
-                  <div style={{width:20,height:20,borderRadius:"50%",background:"#fef3c7",
-                    border:"0.5px solid #fde68a",display:"flex",alignItems:"center",
-                    justifyContent:"center",fontSize:10,fontWeight:500,color:"#b45309",flexShrink:0}}>
-                    {it.priority||i+1}
+            {(hoResponse.items||[]).filter(i=>i.included).map((it,idx)=>(
+              <div key={it.id||idx} style={{background:'#f8fafc',border:'0.5px solid #e2e8f0',
+                borderRadius:8,padding:'9px 12px',marginBottom:5}}>
+                <div style={{display:'flex',alignItems:'center',gap:8}}>
+                  <div style={{width:20,height:20,borderRadius:'50%',background:'#fef3c7',
+                    border:'0.5px solid #fde68a',display:'flex',alignItems:'center',
+                    justifyContent:'center',fontSize:10,fontWeight:600,color:'#b45309',flexShrink:0}}>
+                    {it.priority||idx+1}
                   </div>
                   <div style={{flex:1}}>
-                    <div style={{fontSize:13,fontWeight:500,color:"#1e293b"}}>{it.name||"Unnamed"}</div>
-                    <div style={{fontSize:11,color:"#94a3b8",display:"flex",gap:6}}>
-                      {it.panel&&<span>{it.panel}</span>}
-                      {it.wire&&<span>{it.wire}</span>}
-                      {it.wire&&HO_WIRE_AMPS[it.wire]&&<span style={{color:"#b45309",fontWeight:500}}>{HO_WIRE_AMPS[it.wire]}A</span>}
+                    <div style={{fontSize:13,fontWeight:500,color:'#1e293b',display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                      {it.name||'Unnamed'}
+                      {it.recommended&&<span style={{fontSize:9,fontWeight:800,color:'#b45309',
+                        background:'#fef3c7',borderRadius:99,padding:'1px 6px',border:'0.5px solid #fde68a'}}>★ REC</span>}
                     </div>
-                    {it.notes&&<div style={{fontSize:11,color:"#64748b",marginTop:2}}>"{it.notes}"</div>}
+                    <div style={{fontSize:11,color:'#94a3b8',marginTop:2}}>
+                      {it.wire||''}{it.watts?` · ${it.watts}W`:''}
+                    </div>
+                    {it.notes&&<div style={{fontSize:11,color:'#64748b',marginTop:2,fontStyle:'italic'}}>"{it.notes}"</div>}
                   </div>
                 </div>
               </div>
             ))}
             {(hoResponse.items||[]).filter(i=>!i.included).length>0&&(
               <>
-                <div style={{fontSize:10,fontWeight:500,color:"#cbd5e1",letterSpacing:"0.08em",margin:"12px 0 8px"}}>
+                <div style={{fontSize:10,fontWeight:600,color:'#cbd5e1',letterSpacing:'0.08em',margin:'12px 0 8px'}}>
                   NOT ON GENERATOR · {(hoResponse.items||[]).filter(i=>!i.included).length}
                 </div>
-                {(hoResponse.items||[]).filter(i=>!i.included).map((it,i)=>(
-                  <div key={it.id||i} style={{border:"0.5px solid #f1f5f9",borderRadius:8,
-                    padding:"8px 12px",marginBottom:4,opacity:0.55}}>
-                    <div style={{fontSize:12,color:"#94a3b8"}}>{it.name||"Unnamed"}</div>
-                    <div style={{fontSize:11,color:"#cbd5e1",display:"flex",gap:6}}>
-                      {it.panel&&<span>{it.panel}</span>}
-                      {it.wire&&<span>{it.wire}</span>}
-                      {it.wire&&HO_WIRE_AMPS[it.wire]&&<span>{HO_WIRE_AMPS[it.wire]}A</span>}
-                    </div>
+                {(hoResponse.items||[]).filter(i=>!i.included).map((it,idx)=>(
+                  <div key={it.id||idx} style={{background:'#f8fafc',border:'0.5px solid #e2e8f0',
+                    borderRadius:8,padding:'8px 12px',marginBottom:4,opacity:0.55}}>
+                    <div style={{fontSize:12,color:'#64748b'}}>{it.name||'Unnamed'}</div>
                   </div>
                 ))}
               </>
@@ -2557,137 +3145,89 @@ function HomeRunsTab({homeRuns,panelCounts,onHRChange,onCountChange,jobId,jobNam
         </div>
       )}
 
-      {total > 0 && (
-
-        <div style={{marginBottom:20,padding:"14px 16px",background:C.surface,
-
+      {/* Pull progress */}
+      {total>0&&(
+        <div style={{marginBottom:20,padding:'14px 16px',background:C.surface,
           border:`1px solid ${C.border}`,borderRadius:12}}>
-
-          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:8}}>
-
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
             <span style={{fontSize:12,fontWeight:700,color:C.text}}>Home Runs Pulled</span>
-
             <span style={{fontSize:13,fontWeight:700,color:pct===100?C.green:C.blue}}>{pulled} / {total} — {pct}%</span>
-
           </div>
-
-          <div style={{height:8,background:C.border,borderRadius:99,overflow:"hidden"}}>
-
-            <div style={{height:"100%",width:`${pct}%`,
-
-              background:pct===100?C.green:C.blue,
-
-              borderRadius:99,transition:"width 0.4s ease"}}/>
-
+          <div style={{height:8,background:C.border,borderRadius:99,overflow:'hidden'}}>
+            <div style={{height:'100%',width:`${pct}%`,background:pct===100?C.green:C.blue,
+              borderRadius:99,transition:'width 0.4s ease'}}/>
           </div>
-
         </div>
-
       )}
 
-      {/* ── Panel Manager ── */}
+      {/* Panels */}
       {(()=>{
-        const cPanels = homeRuns.customPanels || DEFAULT_PANELS;
-        const addPanel = () => {
-          const n = newPanelName.trim();
-          if(!n || cPanels.includes(n)) return;
-          onHRChange({...homeRuns, customPanels:[...cPanels, n]});
-          setNewPanelName("");
-        };
-        const removePanel = (p) => {
-          onHRChange({...homeRuns, customPanels: cPanels.filter(x=>x!==p)});
-        };
-        const resetPanels = () => onHRChange({...homeRuns, customPanels: DEFAULT_PANELS});
+        const cP=homeRuns.customPanels||DEFAULT_PANELS;
+        const addP=()=>{ const n=newPanelName.trim(); if(!n||cP.includes(n)) return; onHRChange({...homeRuns,customPanels:[...cP,n]}); setNewPanelName(''); };
         return (
           <Section label="Panels" color={C.blue} defaultOpen={false}>
-            <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:10}}>
-              {cPanels.map(p=>(
-                <div key={p} style={{display:"flex",alignItems:"center",gap:4,
+            <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
+              {cP.map(p=>(
+                <div key={p} style={{display:'flex',alignItems:'center',gap:4,
                   background:`${C.blue}15`,border:`1px solid ${C.blue}44`,
-                  borderRadius:20,padding:"4px 10px 4px 12px",fontSize:12,color:C.blue,fontWeight:600}}>
+                  borderRadius:20,padding:'4px 10px 4px 12px',fontSize:12,color:C.blue,fontWeight:600}}>
                   {p}
-                  <button onClick={()=>removePanel(p)}
-                    style={{background:"none",border:"none",cursor:"pointer",color:C.dim,
-                      fontSize:14,lineHeight:1,padding:"0 2px",fontWeight:700}}>×</button>
+                  <button onClick={()=>onHRChange({...homeRuns,customPanels:cP.filter(x=>x!==p)})}
+                    style={{background:'none',border:'none',cursor:'pointer',color:C.dim,
+                      fontSize:14,lineHeight:1,padding:'0 2px',fontWeight:700}}>×</button>
                 </div>
               ))}
             </div>
-            <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-              <input
-                value={newPanelName}
-                onChange={e=>setNewPanelName(e.target.value)}
-                onKeyDown={e=>e.key==="Enter"&&addPanel()}
-                placeholder="e.g. Panel E, Sub Panel, Shed Panel…"
+            <div style={{display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+              <input value={newPanelName} onChange={e=>setNewPanelName(e.target.value)}
+                onKeyDown={e=>e.key==='Enter'&&addP()}
+                placeholder="e.g. Panel E, Sub Panel…"
                 style={{flex:1,minWidth:180,background:C.surface,border:`1px solid ${C.border}`,
-                  borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",color:C.text}}/>
-              <button onClick={addPanel}
-                style={{background:C.blue,color:"#fff",border:"none",borderRadius:7,
-                  padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",whiteSpace:"nowrap"}}>
-                + Add Panel
-              </button>
-              <button onClick={resetPanels}
-                style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,
-                  padding:"7px 12px",fontSize:11,color:C.dim,cursor:"pointer",whiteSpace:"nowrap"}}>
-                Reset to defaults
-              </button>
+                  borderRadius:7,padding:'7px 10px',fontSize:12,fontFamily:'inherit',outline:'none',color:C.text}}/>
+              <button onClick={addP}
+                style={{background:C.blue,color:'#fff',border:'none',borderRadius:7,
+                  padding:'7px 14px',fontSize:12,fontWeight:700,cursor:'pointer'}}>+ Add Panel</button>
+              <button onClick={()=>onHRChange({...homeRuns,customPanels:DEFAULT_PANELS})}
+                style={{background:'none',border:`1px solid ${C.border}`,borderRadius:7,
+                  padding:'7px 12px',fontSize:11,color:C.dim,cursor:'pointer'}}>Reset</button>
             </div>
-            <div style={{fontSize:11,color:C.muted,marginTop:8}}>
-              "Meter" and "Dedicated Loads" are always available. Add as many panels as needed.
-            </div>
+            <div style={{fontSize:11,color:C.muted,marginTop:8}}>"Meter" and "Dedicated Loads" always available.</div>
           </Section>
         );
       })()}
 
-
-
       <Section label="Home Runs" color={C.blue} defaultOpen={true}>
-        {(()=>{ const cp = homeRuns.customPanels||DEFAULT_PANELS; return (
-        <>
-        {[["main","Main Level Loads"],["basement","Basement Level Loads"],["upper","Upper Level Loads"]].map(([k,l])=>(
-          <HomeRunLevel key={k} label={l} rows={homeRuns[k]||[]} customPanels={cp} onChange={v=>onHRChange({...homeRuns,[k]:v})}/>
-        ))}
-        {(homeRuns.extraFloors||[]).map((ef,i)=>(
-          <div key={ef.key} style={{position:"relative"}}>
-            <HomeRunLevel
-              label={ef.label}
-              rows={homeRuns[ef.key]||[]}
-              customPanels={cp}
-              onChange={v=>onHRChange({...homeRuns,[ef.key]:v})}/>
-            <button onClick={()=>{
-                const newExtras=(homeRuns.extraFloors||[]).filter(e=>e.key!==ef.key);
-                const updated={...homeRuns,extraFloors:newExtras};
-                delete updated[ef.key];
-                onHRChange(updated);
-              }}
-              style={{position:"absolute",top:0,right:0,background:"none",border:"none",
-                color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 6px",fontFamily:"inherit"}}>
-              Remove
-            </button>
-          </div>
-        ))}
-        <HRAddFloor homeRuns={homeRuns} onHRChange={onHRChange}/>
-        </>
+        {(()=>{ const cp=homeRuns.customPanels||DEFAULT_PANELS; return (
+          <>
+          {[['main','Main Level Loads'],['basement','Basement Level Loads'],['upper','Upper Level Loads']].map(([k,l])=>(
+            <HomeRunLevel key={k} label={l} rows={homeRuns[k]||[]} customPanels={cp} onChange={v=>onHRChange({...homeRuns,[k]:v})}/>
+          ))}
+          {(homeRuns.extraFloors||[]).map((ef)=>(
+            <div key={ef.key} style={{position:'relative'}}>
+              <HomeRunLevel label={ef.label} rows={homeRuns[ef.key]||[]} customPanels={cp}
+                onChange={v=>onHRChange({...homeRuns,[ef.key]:v})}/>
+              <button onClick={()=>{ const ne=(homeRuns.extraFloors||[]).filter(e=>e.key!==ef.key); const u={...homeRuns,extraFloors:ne}; delete u[ef.key]; onHRChange(u); }}
+                style={{position:'absolute',top:0,right:0,background:'none',border:'none',
+                  color:C.muted,cursor:'pointer',fontSize:11,padding:'2px 6px',fontFamily:'inherit'}}>
+                Remove
+              </button>
+            </div>
+          ))}
+          <HRAddFloor homeRuns={homeRuns} onHRChange={onHRChange}/>
+          </>
         ); })()}
       </Section>
 
       <Section label="Load Mapping Notes" color={C.blue}>
-        <TA value={homeRuns.loadMappingNotes||""} onChange={e=>onHRChange({...homeRuns,loadMappingNotes:e.target.value})} placeholder="Load mapping notes…" rows={5}/>
+        <TA value={homeRuns.loadMappingNotes||''} onChange={e=>onHRChange({...homeRuns,loadMappingNotes:e.target.value})} placeholder="Load mapping notes…" rows={5}/>
       </Section>
-
-
 
       <Section label="Panel Breaker Counts" color={C.blue}>
         <BreakerCounts homeRuns={homeRuns} panelCounts={panelCounts} onCountChange={onCountChange}/>
       </Section>
-
-
     </div>
-
   );
-
 }
-
-
 
 // ── Panelized Lighting ────────────────────────────────────────
 
@@ -3214,8 +3754,20 @@ const normalizeJob = (raw) => ({
   roughQuestions:{upper:[],main:[],basement:[]},
   finishQuestions:{upper:[],main:[],basement:[]},
   ...raw,
-  changeOrders: raw?.changeOrders || [],
-  returnTrips:  raw?.returnTrips  || [],
+  changeOrders: (raw?.changeOrders||[]).map(o=>({
+    needsHardDate:false, needsByStart:"", needsByEnd:"",
+    coStatus:"", coStatusDate:"", ...o,
+    needsHardDate: o.needsHardDate??false,
+    needsByStart:  o.needsByStart||"",
+    needsByEnd:    o.needsByEnd||"",
+  })),
+  returnTrips: (raw?.returnTrips||[]).map(t=>({
+    needsHardDate:false, needsByStart:"", needsByEnd:"",
+    rtStatus:"", rtStatusDate:"", ...t,
+    needsHardDate: t.needsHardDate??false,
+    needsByStart:  t.needsByStart||"",
+    needsByEnd:    t.needsByEnd||"",
+  })),
   uploadedFiles:raw?.uploadedFiles|| [],
   customLinks:  raw?.customLinks  || [],
   roughMaterials: raw?.roughMaterials || [],
@@ -3231,12 +3783,293 @@ const normalizeJob = (raw) => ({
   finishStatus:    raw?.finishStatus    || (()=>{ const p=parseInt(raw?.finishStage)||0; return p===100?"complete":p>0?"inprogress":""; })(),
   roughStatusDate:      raw?.roughStatusDate      || "",
   roughProjectedStart:  raw?.roughProjectedStart  || "",
+  roughStartConfirmed:   raw?.roughStartConfirmed   ?? false,
+  finishStartConfirmed:  raw?.finishStartConfirmed  ?? false,
+  roughNeedsHardDate:    raw?.roughNeedsHardDate    ?? false,
+  roughNeedsByStart:     raw?.roughNeedsByStart     || "",
+  roughNeedsByEnd:       raw?.roughNeedsByEnd       || "",
+  finishNeedsHardDate:   raw?.finishNeedsHardDate   ?? false,
+  finishNeedsByStart:    raw?.finishNeedsByStart    || "",
+  finishNeedsByEnd:      raw?.finishNeedsByEnd      || "",
   finishStatusDate:     raw?.finishStatusDate     || "",
   finishProjectedStart: raw?.finishProjectedStart || "",
   qcStatusDate:         raw?.qcStatusDate         || "",
 });
 
-function JobDetail({job: rawJob, onUpdate, onClose}) {
+
+// ── Temp Ped Detail ────────────────────────────────────────────
+function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
+  const [job, setJob] = useState(()=>normalizeJob(rawJob));
+  const jobRef = useRef(job);
+  useEffect(()=>{ jobRef.current = job; }, [job]);
+  useEffect(()=>{ setJob(normalizeJob(rawJob)); }, [rawJob?.id]);
+
+  const u = patch => {
+    const updated = {...jobRef.current, ...patch};
+    jobRef.current = updated;
+    setJob(updated);
+    onUpdate(updated);
+  };
+
+  const [signOffName, setSignOffName] = useState("");
+  const [viewPhoto, setViewPhoto] = useState(null);
+
+  const tpDef   = getStatusDef(TEMP_PED_STATUSES, job.tempPedStatus||"");
+  const color   = tpDef.color || "#8b5cf6";
+  const foreman = job.foreman||"Koy";
+  const fc      = (({"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e","Keegan":"#3b82f6","Gage":"#3b82f6","Daegan":"#3b82f6","Braden":"#22c55e","Treycen":"#22c55e","Jon":"#22c55e","Vasa":"#f97316","Abe":"#f97316","Louis":"#f97316","Jacob":"#6b7280"})[foreman]||"#6b7280")||"#6b7280";
+
+  // Photo handling — compress to max 800px / 0.65 quality to stay under Firestore 1MB limit
+  const addPhotos = (files) => {
+    const arr = Array.from(files);
+    let done = 0; const newPhotos = [];
+    arr.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const img = new Image();
+        img.onload = () => {
+          const MAX = 800;
+          let w = img.width, h = img.height;
+          if(w > MAX || h > MAX) {
+            if(w > h) { h = Math.round(h * MAX / w); w = MAX; }
+            else { w = Math.round(w * MAX / h); h = MAX; }
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = w; canvas.height = h;
+          canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.65);
+          newPhotos.push({id:uid(), name:file.name, dataUrl});
+          done++;
+          if(done===arr.length) u({tempPedPhotos:[...(job.tempPedPhotos||[]),...newPhotos]});
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  const handleSignOff = () => {
+    if(!signOffName.trim()) return;
+    u({
+      tempPedStatus:"completed",
+      tempPedSignedOff:true,
+      tempPedSignedOffBy:signOffName.trim(),
+      tempPedSignedOffDate:new Date().toLocaleDateString("en-US"),
+      readyToInvoice:true,
+    });
+    setSignOffName("");
+  };
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.82)",zIndex:400,
+      display:"flex",alignItems:"center",justifyContent:"center",padding:12}}
+      onClick={e=>{if(e.target===e.currentTarget)onClose();}}>
+
+      <div onClick={e=>e.stopPropagation()} style={{
+        background:C.card,border:`1px solid ${C.border}`,borderRadius:18,
+        width:"100%",maxWidth:620,maxHeight:"93vh",display:"flex",
+        flexDirection:"column",overflow:"hidden",boxShadow:"0 40px 100px rgba(0,0,0,0.7)"
+      }}>
+
+        {/* Header */}
+        <div style={{padding:"16px 22px",borderBottom:`1px solid ${C.border}`,
+          display:"flex",justifyContent:"space-between",alignItems:"center",flexShrink:0,gap:12}}>
+          <div>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:2}}>
+              <span style={{fontSize:10,fontWeight:800,color:"#8b5cf6",letterSpacing:"0.08em",
+                background:"#8b5cf618",borderRadius:99,padding:"2px 8px",border:"1px solid #8b5cf633"}}>
+                TEMP PED {job.tempPedNumber?"#"+job.tempPedNumber:""}
+              </span>
+              {job.tempPedStatus==="completed"&&(
+                <span style={{fontSize:10,fontWeight:800,color:C.green,background:`${C.green}18`,
+                  borderRadius:99,padding:"2px 8px",border:`1px solid ${C.green}33`}}>COMPLETE</span>
+              )}
+              {job.readyToInvoice&&(
+                <span style={{fontSize:10,fontWeight:800,color:"#ea580c",background:"#ea580c12",
+                  borderRadius:99,padding:"2px 8px",border:"1px solid #ea580c33"}}>READY TO INVOICE</span>
+              )}
+            </div>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",
+              color:C.text,lineHeight:1}}>{job.name||"New Temp Ped"}</div>
+            <div style={{fontSize:11,color:C.dim,marginTop:2}}>
+              {[job.address,job.gc].filter(Boolean).join(" · ")||"No details yet"}
+            </div>
+          </div>
+          <button onClick={onClose}
+            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+              color:C.dim,cursor:"pointer",padding:"5px 14px",fontSize:13,flexShrink:0}}>✕</button>
+        </div>
+
+        {/* Status bar */}
+        <div style={{padding:"10px 22px",borderBottom:`1px solid ${C.border}`,
+          background:C.surface,display:"flex",alignItems:"center",gap:10,flexWrap:"wrap",flexShrink:0}}>
+          <span style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.08em"}}>STATUS</span>
+          {TEMP_PED_STATUSES.filter(s=>s.value).map(s=>{
+            const active = job.tempPedStatus===s.value;
+            return (
+              <button key={s.value} onClick={()=>{
+                  const patch = {tempPedStatus:s.value};
+                  if(s.value==="completed") { patch.readyToInvoice=true; }
+                  if(s.value!=="scheduled") patch.tempPedScheduledDate="";
+                  u(patch);
+                }}
+                style={{
+                  padding:"5px 14px",fontSize:11,fontWeight:active?700:500,
+                  borderRadius:99,border:`1px solid ${active?s.color:C.border}`,
+                  background:active?`${s.color}22`:"none",
+                  color:active?s.color:C.dim,cursor:"pointer",fontFamily:"inherit",
+                  transition:"all 0.15s",
+                }}>
+                {s.label}
+              </button>
+            );
+          })}
+          {job.tempPedStatus==="scheduled"&&(
+            <div style={{display:"flex",flexDirection:"column",gap:2}}>
+              <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:"#2563eb"}}>SCHEDULED DATE</div>
+              <DateInp value={job.tempPedScheduledDate||""} onChange={e=>u({tempPedScheduledDate:e.target.value})}
+                style={{fontSize:11,padding:"4px 10px",width:140,
+                  borderColor:"#2563eb55",background:"#2563eb08"}}/>
+            </div>
+          )}
+        </div>
+
+        {/* Body */}
+        <div style={{flex:1,overflowY:"auto",padding:"20px 22px"}}>
+
+          {/* Job Info */}
+          <div style={{marginBottom:24}}>
+            <div style={{fontSize:10,fontWeight:800,color:C.dim,letterSpacing:"0.12em",marginBottom:12}}>JOB INFO</div>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              {[["name","Job Name"],["address","Address"],["gc","General Contractor"],["phone","GC Phone"],["simproNo","Simpro Job #"],["lead","Lead"]].map(([k,l])=>(
+                <div key={k}>
+                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>{l}</div>
+                  <Inp value={job[k]||""} onChange={e=>u({[k]:e.target.value})} placeholder={l}/>
+                </div>
+              ))}
+              <div>
+                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
+                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...(foremenList||getForemenList()),"Unassigned"]}/>
+              </div>
+              <div>
+                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Temp Ped #</div>
+                <select value={job.tempPedNumber||""} onChange={e=>u({tempPedNumber:e.target.value})}
+                  style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
+                    color:job.tempPedNumber?C.text:C.dim,padding:"8px 10px",fontSize:13,
+                    fontFamily:"inherit",outline:"none",cursor:"pointer"}}>
+                  <option value="">Select #</option>
+                  {["1","2","3","4","5","6","7","8","9","10"].map(n=><option key={n} value={n}>{n}</option>)}
+                </select>
+              </div>
+            </div>
+            <div style={{marginTop:10}}>
+              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes</div>
+              <textarea value={job.notes||""} onChange={e=>u({notes:e.target.value})}
+                placeholder="Job notes…" rows={4}
+                style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
+                  borderRadius:8,color:C.text,padding:"8px 10px",fontSize:12,
+                  fontFamily:"inherit",resize:"vertical",outline:"none",lineHeight:1.5}}/>
+            </div>
+          </div>
+
+          {/* Photos */}
+          <div style={{marginBottom:24}}>
+            <div style={{fontSize:10,fontWeight:800,color:C.dim,letterSpacing:"0.12em",marginBottom:12}}>PHOTOS</div>
+            {(job.tempPedPhotos||[]).length>0&&(
+              <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:10}}>
+                {(job.tempPedPhotos||[]).map(p=>(
+                  <div key={p.id} style={{position:"relative",width:80,height:80}}>
+                    <img src={p.dataUrl} alt={p.name} onClick={()=>setViewPhoto(p.dataUrl)}
+                      style={{width:80,height:80,objectFit:"cover",borderRadius:8,cursor:"pointer",
+                        border:`1px solid ${C.border}`}}/>
+                    <button onClick={()=>u({tempPedPhotos:(job.tempPedPhotos||[]).filter(x=>x.id!==p.id)})}
+                      style={{position:"absolute",top:-5,right:-5,background:"#dc2626",border:"none",
+                        borderRadius:"50%",color:"#fff",width:18,height:18,fontSize:10,
+                        cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
+                        lineHeight:1}}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <label style={{display:"inline-flex",alignItems:"center",gap:6,
+              background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
+              padding:"7px 14px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim}}>
+              + Add Photos
+              <input type="file" accept="image/*" multiple style={{display:"none"}}
+                onChange={e=>{addPhotos(e.target.files);e.target.value="";}}/>
+            </label>
+          </div>
+
+          {/* Sign-off / Complete */}
+          <div style={{borderTop:`2px solid ${C.border}`,paddingTop:20}}>
+            <div style={{fontSize:10,fontWeight:800,color:C.dim,letterSpacing:"0.12em",marginBottom:12}}>
+              SIGN-OFF & COMPLETE
+            </div>
+            {job.tempPedSignedOff ? (
+              <div style={{background:`${C.green}12`,border:`1px solid ${C.green}33`,
+                borderRadius:10,padding:"12px 16px",display:"flex",alignItems:"center",
+                justifyContent:"space-between",gap:10,flexWrap:"wrap"}}>
+                <div>
+                  <div style={{fontSize:12,fontWeight:700,color:C.green}}>Completed & Signed Off</div>
+                  <div style={{fontSize:11,color:C.dim,marginTop:2}}>
+                    By {job.tempPedSignedOffBy} · {job.tempPedSignedOffDate}
+                  </div>
+                </div>
+                <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                  {job.readyToInvoice&&!job.invoiceSent&&(
+                    <button onClick={()=>u({invoiceSent:true,readyToInvoice:false,invoiceDismissed:true})}
+                      style={{background:"#ea580c",border:"none",borderRadius:7,
+                        color:"#fff",fontSize:11,fontWeight:700,padding:"6px 14px",cursor:"pointer",fontFamily:"inherit"}}>
+                      ✓ Invoice Sent
+                    </button>
+                  )}
+                  {job.invoiceSent&&(
+                    <span style={{fontSize:11,fontWeight:700,color:"#16a34a",background:"#16a34a12",
+                      borderRadius:99,padding:"4px 12px",border:"1px solid #16a34a33"}}>
+                      ✓ Invoice Sent
+                    </span>
+                  )}
+                  <button onClick={()=>u({tempPedSignedOff:false,tempPedSignedOffBy:"",
+                    tempPedSignedOffDate:"",tempPedStatus:"scheduled",readyToInvoice:false,invoiceSent:false})}
+                    style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,
+                      color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>
+                    Undo
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                <Inp value={signOffName} onChange={e=>setSignOffName(e.target.value)}
+                  placeholder="Completed by…"
+                  style={{flex:"1 1 180px",minWidth:140}}/>
+                <button onClick={handleSignOff} disabled={!signOffName.trim()}
+                  style={{background:signOffName.trim()?C.green:"#374151",border:"none",
+                    borderRadius:8,color:signOffName.trim()?"#000":C.dim,fontSize:12,
+                    fontWeight:700,padding:"9px 20px",cursor:signOffName.trim()?"pointer":"default",
+                    fontFamily:"inherit",transition:"all 0.2s",whiteSpace:"nowrap"}}>
+                  Mark Complete
+                </button>
+              </div>
+            )}
+          </div>
+
+        </div>
+      </div>
+
+      {/* Photo lightbox */}
+      {viewPhoto&&(
+        <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.95)",zIndex:1000,
+          display:"flex",alignItems:"center",justifyContent:"center"}}
+          onClick={()=>setViewPhoto(null)}>
+          <img src={viewPhoto} alt="photo"
+            style={{maxWidth:"95vw",maxHeight:"95vh",objectFit:"contain",borderRadius:8}}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
@@ -3247,7 +4080,7 @@ function JobDetail({job: rawJob, onUpdate, onClose}) {
     const updated = {...jobRef.current, ...patch};
     jobRef.current = updated;
     setJob(updated);
-onUpdate(updated);
+    onUpdate(updated);
   };
 
   const saveNow = () => onUpdate({...job});
@@ -3264,11 +4097,9 @@ onUpdate(updated);
 
     try {
 
-      const snap = await getDocs(collection(db,"jobs"));
+      const snap = await getDoc(doc(db,"jobs",job.id));
 
-      const found = snap.docs.find(d=>d.id===job.id);
-
-      if(found?.data()?.data) onUpdate(found.data().data);
+      if(snap.exists()&&snap.data()?.data) onUpdate(snap.data().data);
 
     } catch(e){ console.error(e); }
 
@@ -3296,7 +4127,7 @@ onUpdate(updated);
     return total + countFloor(p.upper) + countFloor(p.main) + countFloor(p.basement) + extraCount;
   },0);
 
-  const pendingCOs = (job.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length;
+  const pendingCOs = (job.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length;
 
   const qcCount = countFloor(job.qcPunch?.upper||{}) + countFloor(job.qcPunch?.main||{}) + countFloor(job.qcPunch?.basement||{}) +
     (job.qcPunch?.extras||[]).reduce((s,e)=>s+countFloor(job.qcPunch?.[e.key]||{}),0);
@@ -3305,7 +4136,7 @@ onUpdate(updated);
 
   return (
 
-    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.82)",zIndex:200,
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.82)",zIndex:400,
 
       display:"flex",alignItems:"center",justifyContent:"center",padding:12}}
 
@@ -3340,6 +4171,14 @@ onUpdate(updated);
               {[job.address,job.gc].filter(Boolean).join(" · ")||"No details yet"}
 
             </div>
+
+            {job.accessNote&&(
+              <div style={{display:"inline-flex",alignItems:"center",gap:5,marginTop:4,
+                fontSize:11,color:"#92400e",background:"#fef3c7",
+                border:"1px solid #fde68a",borderRadius:7,padding:"3px 9px"}}>
+                {job.accessNote}
+              </div>
+            )}
 
           </div>
 
@@ -3428,10 +4267,31 @@ onUpdate(updated);
                     <div style={{marginBottom:12}}>
                       <div style={{display:"flex",gap:16,marginBottom:12,flexWrap:"wrap"}}>
                         <div style={{flex:1,minWidth:140}}>
-                          <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>PROJECTED START</div>
-                          <Inp value={job.roughProjectedStart||""} onChange={e=>u({roughProjectedStart:e.target.value})}
-                            placeholder="MM/DD/YY"
-                            style={{fontSize:13,fontWeight:700,borderColor:C.rough+"55",background:`${C.rough}08`,color:C.rough}}/>
+                          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
+                            <span style={{fontSize:10,color:job.roughStartConfirmed?"#16a34a":C.dim,fontWeight:700,letterSpacing:"0.08em"}}>
+                              {job.roughStartConfirmed ? "ROUGH STARTED ON" : "PROJECTED START"}
+                            </span>
+                            <button onClick={()=>{
+                              const confirm=!job.roughStartConfirmed;
+                              u({roughStartConfirmed:confirm,
+                                ...(confirm?{roughStatus:"date_confirmed"}:
+                                  (job.roughStatus==="date_confirmed"?{roughStatus:"waiting_date"}:{}))
+                              });
+                            }}
+                              style={{display:"flex",alignItems:"center",gap:4,padding:"2px 8px",borderRadius:99,
+                                fontSize:9,fontWeight:700,cursor:"pointer",fontFamily:"inherit",border:"none",
+                                background:job.roughStartConfirmed?"#16a34a18":"#6b728018",
+                                color:job.roughStartConfirmed?"#16a34a":"#6b7280",
+                                transition:"all 0.15s"}}>
+                              {job.roughStartConfirmed ? "✓ CONFIRMED" : "○ CONFIRM"}
+                            </button>
+                          </div>
+                          <DateInp value={job.roughProjectedStart||""} onChange={e=>u({roughProjectedStart:e.target.value})}
+                            style={{fontSize:13,fontWeight:700,
+                              borderColor:(job.roughStartConfirmed?"#16a34a":C.rough)+"55",
+                              background:job.roughStartConfirmed?"#16a34a08":`${C.rough}08`,
+                              color:job.roughStartConfirmed?"#16a34a":C.rough}}/>
+                          {job.roughStartConfirmed&&<div style={{fontSize:9,color:"#16a34a",fontWeight:700,marginTop:3,letterSpacing:"0.06em"}}>✓ START DATE CONFIRMED</div>}
                         </div>
                       </div>
                       <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
@@ -3440,24 +4300,36 @@ onUpdate(updated);
                           const v=e.target.value;
                           const def=getStatusDef(ROUGH_STATUSES,v);
                           u({roughStatus:v, roughOnHold:v==="waiting", roughScheduled:v==="scheduled",
+                            roughStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete")?job.roughStartConfirmed:false,
                             roughStatusDate:def.hasDate?job.roughStatusDate:"",
-                            readyToInvoice:v==="invoice"?true:(job.roughStatus==="invoice"?false:job.readyToInvoice)});
+                            readyToInvoice:v==="invoice"?true:(job.roughStatus==="invoice"?false:job.readyToInvoice),
+                            ...(v==="invoice"&&!job.readyToInvoice?{readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{}),
+                            roughProjectedStart:v==="scheduled"?job.roughProjectedStart:job.roughProjectedStart,
+                            // Reset deposit dismissed when rescheduled so task reappears
+                            ...(v==="scheduled"?{roughDepositDismissed:false}:{}),
+                            // Reset invoice dismissed when status changes away from complete/invoice
+                            ...((v!=="complete"&&v!=="invoice")?{roughInvoiceDismissed:false}:{}),
+                          });
                         }} style={{background:rsDef.color?`${rsDef.color}18`:C.surface,
                           color:rsDef.color||C.dim, border:`1px solid ${rsDef.color||C.border}`,
                           borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
                           fontWeight:rsDef.color?700:400,outline:"none",cursor:"pointer"}}>
                           {ROUGH_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>
-                        {rsDef.hasDate&&(
-                          <Inp value={job.roughStatusDate||""} onChange={e=>u({roughStatusDate:e.target.value})}
-                            placeholder="Date MM/DD/YY"
-                            style={{width:130,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
+                        {rsDef.hasDate&&job.roughStatus!=="date_confirmed"&&(
+                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:rsDef.color}}>SCHEDULED DATE</div>
+                            <DateInp value={job.roughStatusDate||""} onChange={e=>u({roughStatusDate:e.target.value})}
+                              style={{width:130,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
+                          </div>
                         )}
                       </div>
+
+
                     </div>
                   );
                 })()}
-                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;u({roughStage:v,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
+                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};u({roughStage:v,...qcFire,...prepDone,...(v==="100%"?{roughStatus:"complete",readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
 
                 <div style={{marginTop:8,marginBottom:20}}>
 
@@ -3522,10 +4394,31 @@ onUpdate(updated);
                     <div style={{marginBottom:12}}>
                       <div style={{display:"flex",gap:16,marginBottom:12,flexWrap:"wrap"}}>
                         <div style={{flex:1,minWidth:140}}>
-                          <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>PROJECTED START</div>
-                          <Inp value={job.finishProjectedStart||""} onChange={e=>u({finishProjectedStart:e.target.value})}
-                            placeholder="MM/DD/YY"
-                            style={{fontSize:13,fontWeight:700,borderColor:C.finish+"55",background:`${C.finish}08`,color:C.finish}}/>
+                          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
+                            <span style={{fontSize:10,color:job.finishStartConfirmed?"#16a34a":C.dim,fontWeight:700,letterSpacing:"0.08em"}}>
+                              {job.finishStartConfirmed ? "FINISH STARTED ON" : "PROJECTED START"}
+                            </span>
+                            <button onClick={()=>{
+                              const confirm=!job.finishStartConfirmed;
+                              u({finishStartConfirmed:confirm,
+                                ...(confirm?{finishStatus:"date_confirmed"}:
+                                  (job.finishStatus==="date_confirmed"?{finishStatus:"waiting_date"}:{}))
+                              });
+                            }}
+                              style={{display:"flex",alignItems:"center",gap:4,padding:"2px 8px",borderRadius:99,
+                                fontSize:9,fontWeight:700,cursor:"pointer",fontFamily:"inherit",border:"none",
+                                background:job.finishStartConfirmed?"#16a34a18":"#6b728018",
+                                color:job.finishStartConfirmed?"#16a34a":"#6b7280",
+                                transition:"all 0.15s"}}>
+                              {job.finishStartConfirmed ? "✓ CONFIRMED" : "○ CONFIRM"}
+                            </button>
+                          </div>
+                          <DateInp value={job.finishProjectedStart||""} onChange={e=>u({finishProjectedStart:e.target.value})}
+                            style={{fontSize:13,fontWeight:700,
+                              borderColor:(job.finishStartConfirmed?"#16a34a":C.finish)+"55",
+                              background:job.finishStartConfirmed?"#16a34a08":`${C.finish}08`,
+                              color:job.finishStartConfirmed?"#16a34a":C.finish}}/>
+                          {job.finishStartConfirmed&&<div style={{fontSize:9,color:"#16a34a",fontWeight:700,marginTop:3,letterSpacing:"0.06em"}}>✓ START DATE CONFIRMED</div>}
                         </div>
                       </div>
                       <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
@@ -3534,24 +4427,36 @@ onUpdate(updated);
                           const v=e.target.value;
                           const def=getStatusDef(FINISH_STATUSES,v);
                           u({finishStatus:v, finishOnHold:v==="waiting", finishScheduled:v==="scheduled",
+                            finishStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete")?job.finishStartConfirmed:false,
                             finishStatusDate:def.hasDate?job.finishStatusDate:"",
-                            readyToInvoice:v==="invoice"?true:(job.finishStatus==="invoice"?false:job.readyToInvoice)});
+                            readyToInvoice:v==="invoice"?true:(job.finishStatus==="invoice"?false:job.readyToInvoice),
+                            ...(v==="invoice"&&!job.readyToInvoice?{readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{}),
+                            finishProjectedStart:v==="scheduled"?job.finishProjectedStart:job.finishProjectedStart,
+                            // Reset deposit dismissed when rescheduled so task reappears
+                            ...(v==="scheduled"?{finishDepositDismissed:false}:{}),
+                            // Reset invoice dismissed when status changes away from complete/invoice
+                            ...((v!=="complete"&&v!=="invoice")?{finishInvoiceDismissed:false}:{}),
+                          });
                         }} style={{background:fsDef.color?`${fsDef.color}18`:C.surface,
                           color:fsDef.color||C.dim, border:`1px solid ${fsDef.color||C.border}`,
                           borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
                           fontWeight:fsDef.color?700:400,outline:"none",cursor:"pointer"}}>
                           {FINISH_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>
-                        {fsDef.hasDate&&(
-                          <Inp value={job.finishStatusDate||""} onChange={e=>u({finishStatusDate:e.target.value})}
-                            placeholder="Date MM/DD/YY"
-                            style={{width:130,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
+                        {fsDef.hasDate&&job.finishStatus!=="date_confirmed"&&(
+                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:fsDef.color}}>SCHEDULED DATE</div>
+                            <DateInp value={job.finishStatusDate||""} onChange={e=>u({finishStatusDate:e.target.value})}
+                              style={{width:130,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
+                          </div>
                         )}
                       </div>
+
+
                     </div>
                   );
                 })()}
-                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;u({finishStage:v,...(v==="100%"?{finishStatus:"complete"}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
+                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;u({finishStage:v,...(v==="100%"?{finishStatus:"complete",readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
                 <div style={{marginTop:8,marginBottom:20}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
               </Section>
 
@@ -3600,7 +4505,6 @@ onUpdate(updated);
           {tab==="Home Runs"&&(
 
             <HomeRunsTab homeRuns={job.homeRuns} panelCounts={job.panelCounts} jobId={job.id} jobName={job.name}
-
               onHRChange={v=>u({homeRuns:v})} onCountChange={v=>u({panelCounts:v})}/>
 
           )}
@@ -3762,7 +4666,21 @@ onUpdate(updated);
             <div>
 
               <Section label="Change Order Log" color={C.accent} defaultOpen={true}>
-                <ChangeOrders orders={job.changeOrders} onChange={v=>u({changeOrders:v})} jobName={job.name||"This Job"} onEmail={setEmailData}/>
+                <ChangeOrders
+                  orders={job.changeOrders}
+                  onChange={(updatedCOs, newRT) => {
+                    if(newRT) {
+                      u({changeOrders:updatedCOs, returnTrips:[newRT, ...(job.returnTrips||[])]});
+                    } else {
+                      u({changeOrders:updatedCOs});
+                    }
+                  }}
+                  jobName={job.name||"This Job"}
+                  jobSimproNo={job.simproNo}
+                  onEmail={setEmailData}
+                  roughStatus={job.roughStatus||""}
+                  finishStatus={job.finishStatus||""}
+                />
               </Section>
 
             </div>
@@ -3776,7 +4694,7 @@ onUpdate(updated);
             <div>
 
               <Section label="Return Trips" color={C.purple} defaultOpen={true}>
-                <ReturnTrips trips={job.returnTrips} onChange={v=>u({returnTrips:v})} jobName={job.name||"This Job"} onEmail={setEmailData}/>
+                <ReturnTrips trips={job.returnTrips} onChange={v=>u({returnTrips:v})} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData}/>
               </Section>
 
             </div>
@@ -3812,9 +4730,11 @@ onUpdate(updated);
                         {QC_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                       </select>
                       {qcDef.hasDate&&(
-                        <Inp value={job.qcStatusDate||""} onChange={e=>u({qcStatusDate:e.target.value})}
-                          placeholder="Date MM/DD/YY"
-                          style={{width:130,fontSize:12,borderColor:qcDef.color+"55",background:`${qcDef.color}08`}}/>
+                        <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                          <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:qcDef.color}}>QC DATE</div>
+                          <DateInp value={job.qcStatusDate||""} onChange={e=>u({qcStatusDate:e.target.value})}
+                            style={{width:140,fontSize:12,borderColor:qcDef.color+"55",background:`${qcDef.color}08`}}/>
+                        </div>
                       )}
                     </div>
                   </div>
@@ -3824,6 +4744,34 @@ onUpdate(updated);
               <Section label="QC Walk Checklist" color={C.teal} defaultOpen={true}>
                 <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }}/>
               </Section>
+
+              <div style={{marginTop:16,padding:"14px 16px",background:job.qcSignedOff?`${C.green}10`:C.surface,border:`1px solid ${job.qcSignedOff?C.green+"55":C.border}`,borderRadius:10}}>
+                <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:job.qcSignedOff?C.green:C.dim,marginBottom:10}}>QC SIGN-OFF</div>
+                {job.qcSignedOff?(
+                  <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8}}>
+                      <div style={{width:20,height:20,borderRadius:"50%",background:C.green,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#fff",fontWeight:700}}>✓</div>
+                      <div>
+                        <div style={{fontSize:13,fontWeight:700,color:C.green}}>Signed Off</div>
+                        <div style={{fontSize:11,color:C.dim}}>by {job.qcSignedOffBy||"—"} · {job.qcSignedOffDate||"—"}</div>
+                      </div>
+                    </div>
+                    <button onClick={()=>u({qcSignedOff:false,qcSignedOffBy:"",qcSignedOffDate:""})} style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.muted,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Undo</button>
+                  </div>
+                ):(
+                  <div style={{display:"flex",gap:8,alignItems:"flex-end",flexWrap:"wrap"}}>
+                    <div style={{flex:1,minWidth:120}}>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Lead Name</div>
+                      <Inp value={job.qcSignedOffBy||""} onChange={e=>u({qcSignedOffBy:e.target.value})} placeholder="Lead who completed QC"/>
+                    </div>
+                    <div style={{minWidth:110}}>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Signed Off</div>
+                      <DateInp value={job.qcSignedOffDate||""} onChange={e=>u({qcSignedOffDate:e.target.value})} style={{width:140}}/>
+                    </div>
+                    <button onClick={()=>{if(job.qcSignedOffBy)u({qcSignedOff:true});}} style={{background:C.green,border:"none",borderRadius:7,color:"#fff",fontWeight:700,padding:"8px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>✓ Sign Off</button>
+                  </div>
+                )}
+              </div>
 
             </div>
 
@@ -3857,7 +4805,7 @@ onUpdate(updated);
 
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
 
-                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...FOREMEN,"Unassigned"]}/>
+                <Sel value={job.foreman||"Koy"} onChange={e=>u({foreman:e.target.value})} options={[...(foremenList||getForemenList()),"Unassigned"]}/>
 
               </div>
 
@@ -3865,10 +4813,28 @@ onUpdate(updated);
 
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Lead</div>
 
-                <Inp value={job.lead||""} onChange={e=>u({lead:e.target.value})} placeholder="Lead name…"/>
+{["Keegan","Gage","Daegan","Colby","Braden","Treycen","Jon","Vasa","Abe","Louis","Jacob"].length>0
+                  ? <Sel value={job.lead||""} onChange={e=>u({lead:e.target.value})} options={["", ...(leadsList||LEADS)]} placeholder="Select lead…"/>
+                  : <Inp value={job.lead||""} onChange={e=>u({lead:e.target.value})} placeholder="Lead name…"/>}
 
               </div>
 
+              </div>
+
+              {/* Access note — gate code, keybox, etc. */}
+              <div style={{marginTop:12}}>
+                <div style={{fontSize:10,color:C.dim,marginBottom:3,display:"flex",alignItems:"center",gap:6}}>
+                  ACCESS NOTE <span style={{color:C.muted,fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>(gate code, keybox, entry instructions…)</span>
+                </div>
+                <textarea
+                  value={job.accessNote||""} onChange={e=>u({accessNote:e.target.value})}
+                  placeholder="e.g. Gate code: 1234 · Keybox on front door knob"
+                  rows={2}
+                  style={{width:"100%",boxSizing:"border-box",background:C.surface,
+                    border:`1px solid ${job.accessNote?"#f59e0b":C.border}`,
+                    borderRadius:8,padding:"8px 10px",fontSize:12,fontFamily:"inherit",
+                    color:C.text,resize:"vertical",outline:"none",lineHeight:1.5,
+                    transition:"border-color 0.15s"}}/>
               </div>
 
               <div style={{marginTop:16}}>
@@ -3918,11 +4884,11 @@ onUpdate(updated);
                 </label>
                 <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
                   <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
-                    <input type="checkbox" checked={!!job.tempPed} onChange={e=>u({tempPed:e.target.checked,tempPedNumber:e.target.checked?job.tempPedNumber:""})}
+                    <input type="checkbox" checked={!!job.hasTempPed} onChange={e=>u({hasTempPed:e.target.checked,tempPedNumber:e.target.checked?job.tempPedNumber:""})}
                       style={{accentColor:C.blue,width:16,height:16}}/>
-                    <span style={{fontSize:13,color:C.text}}>Temp pedestal installed</span>
+                    <span style={{fontSize:13,color:C.text}}>Temp pedestal on site</span>
                   </label>
-                  {job.tempPed&&(
+                  {job.hasTempPed&&(
                     <div style={{display:"flex",alignItems:"center",gap:8}}>
                       <span style={{fontSize:12,color:C.dim}}>Ped #</span>
                       <select value={job.tempPedNumber||""} onChange={e=>u({tempPedNumber:e.target.value})}
@@ -3940,6 +4906,7 @@ onUpdate(updated);
                     </div>
                   )}
                 </div>
+
 
 
               </div>
@@ -4350,7 +5317,7 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
 
               <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Completed</div>
 
-              <Inp value={s.completedDate||""} onChange={e=>updS(s.id,{completedDate:e.target.value})} placeholder="MM/DD/YY"/>
+              <DateInp value={s.completedDate||""} onChange={e=>updS(s.id,{completedDate:e.target.value})} style={{width:140}}/>
 
             </div>
 
@@ -4450,19 +5417,134 @@ function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
 
 
 
+// ── Temp Ped Card ─────────────────────────────────────────────
+
+function TempPedCard({ job, onOpen, onUpdate, onDelete }) {
+  const tpDef = getStatusDef(TEMP_PED_STATUSES, job.tempPedStatus||"");
+  const color = tpDef.color || "#8b5cf6";
+  const foreman = job.foreman||"Koy";
+  const fc = (({"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e","Keegan":"#3b82f6","Gage":"#3b82f6","Daegan":"#3b82f6","Braden":"#22c55e","Treycen":"#22c55e","Jon":"#22c55e","Vasa":"#f97316","Abe":"#f97316","Louis":"#f97316","Jacob":"#6b7280"})[foreman]||"#6b7280") || "#6b7280";
+
+  const upd = (patch) => onUpdate({...job, ...patch});
+
+  return (
+    <div style={{
+      background:"var(--card)", borderRadius:13, padding:"13px 16px", marginBottom:8,
+      border:`1px solid ${color}33`, borderLeft:`3px solid ${color}`,
+      cursor:"default",
+    }}>
+      <div style={{display:"flex",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+
+        {/* Left: name + meta */}
+        <div style={{flex:"1 1 180px",minWidth:140,cursor:"pointer"}} onClick={()=>onOpen(job)}>
+          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
+            <span style={{fontSize:11,fontWeight:800,color:"#8b5cf6",letterSpacing:"0.06em"}}>TEMP PED</span>
+            {job.tempPedNumber&&<span style={{fontSize:11,fontWeight:700,color:"#8b5cf6",background:"#8b5cf618",borderRadius:99,padding:"1px 7px",border:"1px solid #8b5cf633"}}>#{job.tempPedNumber}</span>}
+          </div>
+          <div style={{fontWeight:700,fontSize:13,color:"var(--text)",marginBottom:2}}>{job.name||"Untitled Job"}</div>
+          <div style={{fontSize:11,color:"var(--dim)",display:"flex",gap:8,flexWrap:"wrap"}}>
+            {job.address&&<span>{job.address}</span>}
+            <span style={{fontWeight:700,color:fc}}>{foreman}</span>
+            {job.lead&&<span style={{color:"var(--accent)"}}>· {job.lead}</span>}
+          </div>
+        </div>
+
+        {/* Right: status control */}
+        <div style={{display:"flex",flexDirection:"column",gap:6,alignItems:"flex-end",flexShrink:0}}>
+          <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+            <select value={job.tempPedStatus||""} onChange={e=>{
+              const v = e.target.value;
+              const patch = {tempPedStatus: v};
+              if(v==="completed") patch.readyToInvoice = true;
+              if(v==="scheduled") patch.tempPedScheduledDate = job.tempPedScheduledDate||"";
+              if(v!=="scheduled") patch.tempPedScheduledDate = "";
+              upd(patch);
+            }} style={{
+              background: color ? `${color}18` : "var(--surface)",
+              color: color || "var(--dim)",
+              border:`1px solid ${color||"var(--border)"}`,
+              borderRadius:7, padding:"5px 10px", fontSize:11,
+              fontFamily:"inherit", fontWeight:700, outline:"none", cursor:"pointer",
+            }}>
+              {TEMP_PED_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+            </select>
+
+            {(job.tempPedStatus==="scheduled")&&(
+              <input
+                type="date"
+                value={toYMD(job.tempPedScheduledDate||"")}
+                onChange={e=>upd({tempPedScheduledDate:e.target.value})}
+                style={{width:140,fontSize:11,padding:"5px 8px",borderRadius:7,
+                  border:`1px solid ${"#2563eb"}55`,background:"#2563eb08",
+                  color:"var(--text)",fontFamily:"inherit",outline:"none",colorScheme:"light"}}
+              />
+            )}
+          </div>
+
+          {/* Completed → ready to invoice banner */}
+          {job.tempPedStatus==="completed"&&!job.readyToInvoice&&(
+            <div style={{fontSize:10,color:"#ea580c",fontWeight:600}}>→ Marked Ready to Invoice</div>
+          )}
+          {job.readyToInvoice&&job.tempPedStatus==="completed"&&!job.invoiceSent&&(
+            <div style={{fontSize:10,fontWeight:800,color:"#ea580c",background:"#ea580c12",borderRadius:99,padding:"2px 10px",border:"1px solid #ea580c33"}}>
+              READY TO INVOICE
+            </div>
+          )}
+          {job.invoiceSent&&(
+            <div style={{fontSize:10,fontWeight:800,color:"#16a34a",background:"#16a34a12",borderRadius:99,padding:"2px 10px",border:"1px solid #16a34a33"}}>
+              ✓ INVOICE SENT
+            </div>
+          )}
+          {onDelete&&(
+            <button onClick={e=>{e.stopPropagation();if(window.confirm("Delete this temp ped job?")) onDelete(job.id);}}
+              style={{marginTop:4,background:"none",border:"1px solid #dc262633",borderRadius:6,
+                color:"#dc2626",fontSize:10,fontWeight:600,padding:"3px 8px",cursor:"pointer",
+                fontFamily:"inherit"}}>
+              Delete
+            </button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Stage Sections ────────────────────────────────────────────
 
 // Effective status — falls back to deriving from % if no status stored
-const effRS = j => { if(j.roughStatus) return j.roughStatus; const p=parseInt(j.roughStage)||0; return p===100?"complete":p>0?"inprogress":""; };
-const effFS = j => { if(j.finishStatus) return j.finishStatus; const p=parseInt(j.finishStage)||0; return p===100?"complete":p>0?"inprogress":""; };
+const effRS = j => {
+  if(j.tempPed) {
+    const s = j.tempPedStatus||"";
+    if(s==="completed") return "complete";
+    if(s==="scheduled") return "scheduled";
+    if(s==="ready") return "waiting_date";
+    return "";
+  }
+  if(j.roughStatus) return j.roughStatus;
+  const p=parseInt(j.roughStage)||0; return p===100?"complete":p>0?"inprogress":"";
+}; // date_confirmed triggers scheduling task
+const effFS = j => {
+  if(j.tempPed) return ""; // temp peds don't have a finish stage
+  if(j.finishStatus) return j.finishStatus;
+  const p=parseInt(j.finishStage)||0; return p===100?"complete":p>0?"inprogress":"";
+};
 
 const STAGE_SECTIONS = [
 
+  { key:"tempPedReady",    label:"Temp Peds — Ready to Schedule", color:"#8b5cf6",
+    test: j => !!j.tempPed && (!j.tempPedStatus||j.tempPedStatus==="ready") },
+
+  { key:"tempPedScheduled", label:"Temp Peds — Scheduled",           color:"#7c3aed",
+    test: j => !!j.tempPed && j.tempPedStatus==="scheduled" },
+
+  { key:"tempPedDone",     label:"Temp Peds — Completed",            color:"#16a34a",
+    test: j => !!j.tempPed && j.tempPedStatus==="completed" },
+
   { key:"prep",         label:"Pre Job Prep",              color:"#0d9488",
-    test: j => (j.prepStage||"") !== "Job Prep Complete" },
+    test: j => !j.tempPed && (j.prepStage||"") !== "Job Prep Complete" },
 
   { key:"roughNotStarted", label:"Rough — Not Started",   color:"#64748b",
-    test: j => { const rs=effRS(j); return (j.prepStage||"")==="Job Prep Complete" && (!rs||rs==="ready"||rs==="scheduled"); } },
+    test: j => { const rs=effRS(j); return !j.tempPed && (j.prepStage||"")==="Job Prep Complete" && (!rs||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"); } },
 
   { key:"roughHold",    label:"Rough — On Hold",           color:"#ca8a04",
     test: j => effRS(j) === "waiting" },
@@ -4474,7 +5556,7 @@ const STAGE_SECTIONS = [
     test: j => effRS(j) === "invoice" },
 
   { key:"between",      label:"In Between",                color:"#e8a020",
-    test: j => { const rs=effRS(j); const fs=effFS(j); return rs==="complete"&&(!fs||fs==="ready"||fs==="scheduled"); } },
+    test: j => { const rs=effRS(j); const fs=effFS(j); return rs==="complete"&&(!fs||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"); } },
 
   { key:"finishHold",   label:"Finish — On Hold",          color:"#ca8a04",
     test: j => effFS(j) === "waiting" },
@@ -4492,7 +5574,7 @@ const STAGE_SECTIONS = [
 
 
 
-function StageSectionList({ jobs, JobRow, fc, startCollapsed=true }) {
+function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc, startCollapsed=true }) {
 
   const initCollapsed = () => Object.fromEntries(STAGE_SECTIONS.map(s=>[s.key,startCollapsed]));
   const [collapsed, setCollapsed] = useState(initCollapsed);
@@ -4513,8 +5595,8 @@ function StageSectionList({ jobs, JobRow, fc, startCollapsed=true }) {
           const getDate = j => {
             const rs = effRS(j), fs = effFS(j);
             // Prefer projected start dates, fall back to status dates
-            if(fs==="scheduled"||fs==="ready"||fs==="inprogress") return j.finishProjectedStart||j.finishStatusDate||j.roughProjectedStart||j.roughStatusDate||"";
-            if(rs==="scheduled"||rs==="ready"||rs==="inprogress") return j.roughProjectedStart||j.roughStatusDate||"";
+            if(fs==="scheduled"||fs==="date_confirmed"||fs==="inprogress") return j.finishProjectedStart||j.finishStatusDate||j.roughProjectedStart||j.roughStatusDate||"";
+            if(rs==="scheduled"||rs==="date_confirmed"||rs==="inprogress") return j.roughProjectedStart||j.roughStatusDate||"";
             return j.roughProjectedStart||j.roughStatusDate||j.finishProjectedStart||j.finishStatusDate||"";
           };
           return filtered.sort((a,b)=>{
@@ -4567,9 +5649,9 @@ function StageSectionList({ jobs, JobRow, fc, startCollapsed=true }) {
             </div>
 
             {!isCollapsed && sJobs.map(job=>(
-
-              <JobRow key={job.id} job={job} fc={fc||undefined} showForeman={!fc}/>
-
+              job.tempPed
+                ? <TempPedCard key={job.id} job={job} onOpen={onSelectJob} onUpdate={onSaveJob} onDelete={onDeleteJob}/>
+                : <JobRow key={job.id} job={job} fc={fc||undefined} showForeman={!fc}/>
             ))}
 
           </div>
@@ -4599,6 +5681,12 @@ const ALL_STAGES = ROUGH_STAGES;
 const isMobile = () => /iphone|ipad|ipod|android/i.test(navigator.userAgent);
 
 
+
+// Open Google Chat — copies message to clipboard and opens Google Chat
+const openGoogleChat = (message) => {
+  navigator.clipboard.writeText(message).catch(()=>{});
+  window.open("https://chat.google.com", "_blank");
+};
 
 // Open email — uses mailto on mobile (opens native mail app), Gmail compose on desktop
 
@@ -4696,281 +5784,2159 @@ function deepMergeJob(remote, local) {
 
 
 
-// ── Homeowner Generator Load Selection Page ───────────────────
-function HomeownerPage({ jobId }) {
-  const [job,        setJob]        = useState(null);
-  const [items,      setItems]      = useState([]);
-  const [submitted,  setSubmitted]  = useState(false);
-  const [loading,    setLoading]    = useState(true);
-  const [submitting, setSubmitting] = useState(false);
-  const [error,      setError]      = useState(null);
-  const [signature,  setSignature]  = useState("");
-  const [sigError,   setSigError]   = useState(false);
-  const dragIdx = useRef(null);
+// ── Upcoming Jobs ─────────────────────────────────────────────
 
-  // Wire size → amps lookup
-  const WIRE_AMPS = {
-    "14/2":15,"14/3":15,"12/2":20,"12/3":20,"10/2":30,"10/3":30,
-    "8/2":40,"8/3":40,"6/2":50,"6/3":50,"4/2":70,"4/3":70,
-    "2/2":95,"2/3":95,"1/0":125,"2/0":150,"3/0":175,"4/0":200,
+function blankUpcoming() {
+  return { id: uid(), name:"", city:"", sales:"", customer:"", notes:"", lastFollowUp:"", foreman:"" };
+}
+
+const SEED_UPCOMING = [
+  {id:"seed1",  name:"#2048 - Discovery Ridge Lot 317",                               city:"Kimball Junction",    sales:"Justin", customer:"Milar",                   notes:"No hole yet. Joint venture between customer/Milar.", lastFollowUp:"10/8/25",  foreman:""},
+  {id:"seed2",  name:"#1990 - Kesse Residence",                                        city:"Francis",             sales:"Justin", customer:"LL&L",                    notes:"At foundation",                                      lastFollowUp:"11/5/25",  foreman:""},
+  {id:"seed3",  name:"#1937 - Navarro Residence",                                      city:"American Fork",       sales:"Justin", customer:"Butterfield",              notes:"Working on road improvements before they can start",  lastFollowUp:"11/17/25", foreman:""},
+  {id:"seed4",  name:"#1938 Corbin Church",                                            city:"Provo",               sales:"Justin", customer:"Butterfield",              notes:"Still in development phase",                         lastFollowUp:"11/17/25", foreman:""},
+  {id:"seed5",  name:"#1770 - England Home",                                           city:"Draper",              sales:"Justin", customer:"Greentech",                notes:"Framing. Pending update.",                            lastFollowUp:"1/26/26",  foreman:""},
+  {id:"seed6",  name:"#1590 - Becker Residence",                                       city:"Park City",           sales:"Justin", customer:"Mark Wintzer Company",     notes:"Rough expected to begin 4/1/26",                      lastFollowUp:"12/5/25",  foreman:""},
+  {id:"seed7",  name:"#994 - Smith Residence - Detached Garage/Remodeled Barn",        city:"Cottonwood Heights",  sales:"Josh",   customer:"Black Cactus Construction", notes:"Framing. Pending update.",                           lastFollowUp:"",         foreman:""},
+  {id:"seed8",  name:"#1981 - Meyers Residence",                                       city:"Holladay",            sales:"Josh",   customer:"Eastgate Homes",           notes:"Permitting",                                         lastFollowUp:"9/26/25",  foreman:""},
+  {id:"seed9",  name:"#1862 - Colton Residence",                                       city:"Holladay",            sales:"Josh",   customer:"United Contractors",        notes:"Foundation",                                        lastFollowUp:"12/2/25",  foreman:""},
+  {id:"seed10", name:"#1896 - Casten-Vought Residence",                                city:"Mapleton",            sales:"Justin", customer:"Farnsworth Construction",  notes:"Electrical Rough Scheduled for 02/26",               lastFollowUp:"12/3/25",  foreman:""},
+  {id:"seed11", name:"#2067 - Rule & O'Mara Residence",                                city:"Midway",              sales:"Justin", customer:"Mark Wintzer Company",     notes:"No idea on timeline",                                lastFollowUp:"1/5/26",   foreman:""},
+  {id:"seed12", name:"#2249 - The Hide Out - Hideout",                                 city:"Hideout",             sales:"Justin", customer:"Black Oak Builders",        notes:"Any day now 2/2/26",                                lastFollowUp:"1/27/26",  foreman:""},
+  {id:"seed13", name:"#1809 - Tuhaye Hollow",                                          city:"Kamas",               sales:"Josh",   customer:"The Housley Group",        notes:"",                                                   lastFollowUp:"",         foreman:""},
+];
+
+function UpcomingJobs({ upcoming, onChange, onPromote, canManage=false, foremenList }) {
+  const [editingId, setEditingId] = useState(null);
+  const add = () => { if(!canManage) return; const j=blankUpcoming(); onChange([j,...upcoming]); setEditingId(j.id); };
+  const upd = (id,patch) => { if(!canManage) return; onChange(upcoming.map(u=>u.id===id?{...u,...patch}:u)); };
+  const del = (id) => { if(!canManage) return; onChange(upcoming.filter(u=>u.id!==id)); setEditingId(null); };
+  const COL = {
+    name:{label:"Job Name",flex:2.5}, city:{label:"City",flex:1.2},
+    sales:{label:"Sales",flex:1}, customer:{label:"Customer / GC",flex:1.5},
+    notes:{label:"Notes",flex:3}, lastFollowUp:{label:"Last Follow Up",flex:1.1},
   };
-
-  useEffect(()=>{
-    async function load() {
-      try {
-        const snap = await getDoc(doc(db,"jobs",jobId));
-        if(!snap.exists()){ setError("Job not found."); setLoading(false); return; }
-        const j = snap.data().data;
-        setJob(j);
-        const rows = [
-          ...(j.homeRuns?.main||[]),
-          ...(j.homeRuns?.upper||[]),
-          ...(j.homeRuns?.basement||[]),
-          ...(j.homeRuns?.extraFloors||[]).flatMap(e=>j.homeRuns?.[e.key]||[]),
-        ].filter(r=>r.name||r.panel).map((r,i)=>({...r, priority:i+1, included:true, notes:""}));
-        setItems(rows);
-        const reqSnap = await getDoc(doc(db,"homeowner_requests",jobId));
-        if(reqSnap.exists()&&reqSnap.data().submitted){
-          setSubmitted(true);
-          const saved = reqSnap.data().items;
-          if(saved) setItems(saved);
-        }
-      } catch(e){ setError("Failed to load. Please try again."); }
-      setLoading(false);
-    }
-    load();
-  },[jobId]);
-
-  const toggle   = (id) => setItems(its=>its.map(it=>it.id===id?{...it,included:!it.included}:it));
-  const setNotes = (id,v) => setItems(its=>its.map(it=>it.id===id?{...it,notes:v}:it));
-
-  const onDragStart = (i) => { dragIdx.current = i; };
-  const onDragOver  = (e,i) => {
-    e.preventDefault();
-    if(dragIdx.current===null||dragIdx.current===i) return;
-    setItems(its=>{
-      const arr=[...its];
-      const [moved]=arr.splice(dragIdx.current,1);
-      arr.splice(i,0,moved);
-      dragIdx.current=i;
-      return arr.map((it,idx)=>({...it,priority:idx+1}));
-    });
-  };
-  const onDragEnd = () => { dragIdx.current=null; };
-
-  const submit = async () => {
-    if(!signature.trim()){ setSigError(true); return; }
-    setSigError(false);
-    setSubmitting(true);
-    try {
-      await setDoc(doc(db,"homeowner_requests",jobId),{
-        jobId, jobName: job?.name||"", submitted:true,
-        submittedAt: new Date().toISOString(),
-        signature: signature.trim(),
-        items: items.map((it,i)=>({...it,priority:i+1})),
-      });
-      setSubmitted(true);
-    } catch(e){ alert("Failed to submit. Please try again."); }
-    setSubmitting(false);
-  };
-
-  const A = "#b45309";  // amber text
-  const AB = "#fef3c7"; // amber bg light
-  const included = items.filter(it=>it.included);
-  const excluded = items.filter(it=>!it.included);
-
-  const base = {fontFamily:"system-ui,-apple-system,sans-serif",minHeight:"100vh",
-    background:"#f8fafc",color:"#1e293b"};
-
-  const cardStyle = {background:"#fff",border:"0.5px solid #e2e8f0",borderRadius:10,
-    marginBottom:6,padding:"12px 14px"};
-
-  if(loading) return (
-    <div style={{...base,display:"flex",alignItems:"center",justifyContent:"center"}}>
-      <div style={{fontSize:14,color:"#94a3b8"}}>Loading…</div>
-    </div>
-  );
-  if(error) return (
-    <div style={{...base,display:"flex",alignItems:"center",justifyContent:"center",padding:32,textAlign:"center"}}>
-      <div style={{fontSize:14,color:"#dc2626"}}>{error}</div>
-    </div>
-  );
-  if(submitted) return (
-    <div style={{...base,display:"flex",flexDirection:"column",alignItems:"center",
-      justifyContent:"center",padding:40,textAlign:"center"}}>
-      <div style={{width:56,height:56,borderRadius:"50%",background:"#f0fdf4",
-        border:"0.5px solid #bbf7d0",display:"flex",alignItems:"center",
-        justifyContent:"center",fontSize:24,marginBottom:20}}>✓</div>
-      <div style={{fontSize:20,fontWeight:500,color:"#1e293b",marginBottom:8}}>Selections received</div>
-      <div style={{fontSize:14,color:"#64748b",maxWidth:320,lineHeight:1.6}}>
-        Thank you, <strong>{items[0]?.signature||signature||"homeowner"}</strong>. Homestead Electric has received your generator load selections and will be in touch to confirm the final plan.
+  const colKeys = Object.keys(COL);
+  return (
+    <div>
+      <div style={{padding:"24px 26px 16px",borderBottom:`1px solid ${C.border}`}}>
+        <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+          <div>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>UPCOMING JOBS</div>
+            <div style={{fontSize:11,color:C.dim,marginTop:3}}>{upcoming.length} job{upcoming.length!==1?"s":""} in pipeline</div>
+          </div>
+          {canManage&&<button onClick={add} style={{background:C.accent,border:"none",borderRadius:9,color:"#000",fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Job</button>}
+        </div>
       </div>
-      <div style={{marginTop:40,fontSize:11,color:"#cbd5e1",letterSpacing:"0.06em"}}>HOMESTEAD ELECTRIC</div>
+      <div style={{padding:"16px 26px"}}>
+        <div style={{display:"flex",alignItems:"center",gap:0,padding:"6px 12px",marginBottom:4,borderBottom:`1px solid ${C.border}`}}>
+          {colKeys.map(k=>(
+            <div key={k} style={{flex:COL[k].flex,fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase",paddingRight:12}}>{COL[k].label}</div>
+          ))}
+          <div style={{width:110,flexShrink:0}}/>
+        </div>
+        {upcoming.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:13,fontStyle:"italic"}}>No upcoming jobs yet — add one above.</div>}
+        {upcoming.map(u=>{
+          const isEditing=editingId===u.id;
+          return (
+            <div key={u.id} style={{display:"flex",alignItems:isEditing?"flex-start":"center",gap:0,padding:"8px 12px",borderRadius:8,marginBottom:2,background:isEditing?C.surface:"none",border:isEditing?`1px solid ${C.border}`:"1px solid transparent"}}
+              onMouseEnter={e=>{if(!isEditing)e.currentTarget.style.background=C.surface;}}
+              onMouseLeave={e=>{if(!isEditing)e.currentTarget.style.background="none";}}>
+              {isEditing?(
+                <div style={{flex:1,display:"flex",flexDirection:"column",gap:10}}>
+                  <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+                    <div style={{flex:2.5,minWidth:160}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Job Name</div><Inp value={u.name} onChange={e=>upd(u.id,{name:e.target.value})} placeholder="Job name"/></div>
+                    <div style={{flex:1.2,minWidth:100}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>City</div><Inp value={u.city} onChange={e=>upd(u.id,{city:e.target.value})} placeholder="City"/></div>
+                    <div style={{flex:1,minWidth:90}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Sales</div><Inp value={u.sales} onChange={e=>upd(u.id,{sales:e.target.value})} placeholder="Sales rep"/></div>
+                    <div style={{flex:1.5,minWidth:130}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Customer / GC</div><Inp value={u.customer} onChange={e=>upd(u.id,{customer:e.target.value})} placeholder="Customer or GC"/></div>
+                    <div style={{flex:1.1,minWidth:110}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Last Follow Up</div><DateInp value={u.lastFollowUp} onChange={e=>upd(u.id,{lastFollowUp:e.target.value})}/></div>
+                    <div style={{flex:1,minWidth:120}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
+                      <select value={u.foreman||""} onChange={e=>upd(u.id,{foreman:e.target.value})} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
+                        <option value="">— unassigned —</option>
+                        {(foremenList||getForemenList()).map(f=><option key={f} value={f}>{f}</option>)}
+                      </select>
+                    </div>
+                  </div>
+                  <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes</div><TA value={u.notes} onChange={e=>upd(u.id,{notes:e.target.value})} placeholder="Status, timeline, notes…" rows={2}/></div>
+                  <div style={{display:"flex",gap:8,marginTop:2}}>
+                    <button onClick={()=>setEditingId(null)} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
+                    <button onClick={()=>{if(window.confirm("Promote to active job?"))onPromote(u);}} style={{background:"none",border:`1px solid ${C.green}`,borderRadius:7,color:C.green,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✓ Promote to Job</button>
+                    <button onClick={()=>del(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>Remove</button>
+                  </div>
+                </div>
+              ):(
+                <>
+                  <div style={{flex:2.5,paddingRight:12,fontSize:13,fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                    {u.name||<span style={{color:C.muted,fontStyle:"italic"}}>Untitled</span>}
+                    {u.foreman&&<span style={{marginLeft:8,fontSize:10,fontWeight:700,color:getFC(u.foreman)||"#6b7280",background:`${getFC(u.foreman)||"#6b7280"}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${getFC(u.foreman)||"#6b7280"}33`}}>{u.foreman}</span>}
+                  </div>
+                  <div style={{flex:1.2,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.city||"—"}</div>
+                  <div style={{flex:1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.sales||"—"}</div>
+                  <div style={{flex:1.5,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.customer||"—"}</div>
+                  <div style={{flex:3,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.notes||"—"}</div>
+                  <div style={{flex:1.1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.lastFollowUp||"—"}</div>
+                  <div style={{width:110,flexShrink:0,display:"flex",gap:6,justifyContent:"flex-end"}}>
+                    <button onClick={()=>setEditingId(u.id)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Edit</button>
+                    <button onClick={()=>{if(window.confirm("Promote to active job?"))onPromote(u);}} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✓</button>
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+
+// ── Tasks Engine ─────────────────────────────────────────────
+
+// Build the patch to mark a job's invoice as sent and clear to complete
+const invoiceSentPatch = (job) => {
+  const patch = { invoiceSent:true, readyToInvoice:false, invoiceDismissed:true };
+  if(job.roughStatus==="invoice") patch.roughStatus = "complete";
+  if(job.finishStatus==="invoice") patch.finishStatus = "complete";
+  return patch;
+};
+
+function computeTasks(jobs) {
+  const tasks = [];
+  jobs.forEach(job => {
+    const foreman = job.foreman || "Koy";
+    const rs = job.roughStatus || "";
+    const fs = job.finishStatus || "";
+
+    // Rough — waiting for date OR date confirmed: fire scheduling task
+    if(rs === "scheduled" && !job.roughDepositDismissed) {
+      tasks.push({
+        id: job.id+"_rough_deposit", jobId: job.id, jobName: job.name,
+        type: "auto", category: "invoice", foreman,
+        title: "Material Deposit — Rough",
+        desc: "Rough is scheduled — collect material deposit before start",
+        dueDate: job.roughStatusDate||"",
+        color: C.orange, cleared: false,
+      });
+    }
+    if(rs === "waiting_date") {
+      tasks.push({
+        id: job.id+"_rough_waiting", jobId: job.id, jobName: job.name,
+        type: "auto", category: "rough", foreman,
+        title: "Get Rough Start Date",
+        desc: "Waiting for start date confirmation from GC/homeowner",
+        color: C.rough, cleared: false,
+      });
+    }
+    if(rs === "date_confirmed") {
+      const rHard = job.roughNeedsHardDate;
+      const rStart = job.roughNeedsByStart||"";
+      const rEnd   = job.roughNeedsByEnd||"";
+      const rWindowLabel = rHard
+        ? (rStart ? `Hard date: ${rStart}` : "")
+        : (rStart||rEnd) ? `Window: ${rStart}${rEnd?" – "+rEnd:""}` : "";
+      // Use start of window as dueDate for sorting
+      const rDueDate = rStart || "";
+      tasks.push({
+        id: job.id+"_rough_needs", jobId: job.id, jobName: job.name,
+        type: "auto", category: "rough", foreman,
+        title: "Schedule Rough",
+        needsHardDate: rHard, needsByStart: rStart, needsByEnd: rEnd,
+        windowLabel: rWindowLabel,
+        dueDate: rDueDate,
+        desc: rWindowLabel || "Start date confirmed — needs to be scheduled",
+        color: C.rough, cleared: false,
+      });
+      tasks.push({
+        id: job.id+"_rough_po", jobId: job.id, jobName: job.name,
+        type: "auto", category: "po", foreman,
+        title: "Order Job Start PO",
+        needsHardDate: rHard, needsByStart: rStart, needsByEnd: rEnd,
+        windowLabel: rWindowLabel,
+        dueDate: rDueDate,
+        desc: rWindowLabel || "Order materials PO for rough start",
+        color: "#8b5cf6", cleared: false,
+      });
+    }
+
+    // Finish — waiting for date OR date confirmed: fire scheduling task
+    if(fs === "scheduled" && !job.finishDepositDismissed) {
+      tasks.push({
+        id: job.id+"_finish_deposit", jobId: job.id, jobName: job.name,
+        type: "auto", category: "invoice", foreman,
+        title: "Material Deposit — Finish",
+        desc: "Finish is scheduled — collect material deposit before start",
+        dueDate: job.finishStatusDate||"",
+        color: C.orange, cleared: false,
+      });
+    }
+    if(fs === "waiting_date") {
+      tasks.push({
+        id: job.id+"_finish_waiting", jobId: job.id, jobName: job.name,
+        type: "auto", category: "finish", foreman,
+        title: "Get Finish Start Date",
+        desc: "Waiting for finish start date confirmation",
+        color: C.finish, cleared: false,
+      });
+    }
+    if(fs === "date_confirmed") {
+      const fHard = job.finishNeedsHardDate;
+      const fStart = job.finishNeedsByStart||"";
+      const fEnd   = job.finishNeedsByEnd||"";
+      const fWindowLabel = fHard
+        ? (fStart ? `Hard date: ${fStart}` : "")
+        : (fStart||fEnd) ? `Window: ${fStart}${fEnd?" – "+fEnd:""}` : "";
+      const fDueDate = fStart || "";
+      tasks.push({
+        id: job.id+"_finish_needs", jobId: job.id, jobName: job.name,
+        type: "auto", category: "finish", foreman,
+        title: "Schedule Finish",
+        needsHardDate: fHard, needsByStart: fStart, needsByEnd: fEnd,
+        windowLabel: fWindowLabel,
+        dueDate: fDueDate,
+        desc: fWindowLabel || "Start date confirmed — needs to be scheduled",
+        color: C.finish, cleared: false,
+      });
+      tasks.push({
+        id: job.id+"_finish_po", jobId: job.id, jobName: job.name,
+        type: "auto", category: "po", foreman,
+        title: "Order Job Start PO",
+        needsHardDate: fHard, needsByStart: fStart, needsByEnd: fEnd,
+        windowLabel: fWindowLabel,
+        dueDate: fDueDate,
+        desc: fWindowLabel || "Order materials PO for finish start",
+        color: "#8b5cf6", cleared: false,
+      });
+    }
+
+    // QC Walk — fires once when rough hits 80%+, clears when qcStatus=scheduled/completed/pass/fail
+    if(job.roughQCTaskFired && !["scheduled","completed","pass","fail"].includes(job.qcStatus)) tasks.push({
+      id: job.id+"_qc_walk", jobId: job.id, jobName: job.name,
+      type: "auto", category: "qc", foreman,
+      title: "Schedule QC Walk",
+      desc: `Rough is at ${job.roughStage||"80%+"} — time to schedule the QC walk`,
+      color: C.teal, cleared: false,
+    });
+
+    // FIX 4: Final QC Walk — fires when finish hits 80%+
+    const finishPct = parseInt(job.finishStage)||0;
+    if(finishPct>=80 && !["scheduled","completed","pass","fail"].includes(job.qcStatus)) tasks.push({
+      id: job.id+"_final_qc_walk", jobId: job.id, jobName: job.name,
+      type: "auto", category: "qc", foreman,
+      title: "Schedule Final QC Walk",
+      desc: `Finish is at ${job.finishStage||"80%+"} — time to schedule the final QC walk`,
+      color: C.teal, cleared: false,
+    });
+
+    // FIX 5: Open punch items when phase marked complete or ready to invoice
+    const roughPct2 = parseInt(job.roughStage)||0;
+    const countPunchItems = (punch) => {
+      if(!punch) return 0;
+      const countFloor = (f) => {
+        if(!f) return 0;
+        if(Array.isArray(f)) return f.filter(i=>!i.done).length;
+        return (f.general||[]).filter(i=>!i.done).length +
+          (f.rooms||[]).reduce((a,r)=>a+(Array.isArray(r.items)?r.items.filter(i=>!i.done).length:0),0);
+      };
+      return countFloor(punch.upper)+countFloor(punch.main)+countFloor(punch.basement)+
+        (punch.extras||[]).reduce((s,e)=>s+countFloor(punch[e.key]||{}),0);
+    };
+    const openRoughPunch = countPunchItems(job.roughPunch);
+    const openFinishPunch = countPunchItems(job.finishPunch);
+    if(openRoughPunch>0 && (rs==="complete"||rs==="invoice")) tasks.push({
+      id: job.id+"_punch_rough_warn", jobId: job.id, jobName: job.name,
+      type: "auto", category: "punch", foreman,
+      title: `${openRoughPunch} Open Rough Punch Item${openRoughPunch>1?"s":""}`,
+      desc: "Rough is marked complete or ready to invoice but punch items are still open",
+      color: C.red, cleared: false,
+    });
+    if(openFinishPunch>0 && (fs==="complete"||fs==="invoice")) tasks.push({
+      id: job.id+"_punch_finish_warn", jobId: job.id, jobName: job.name,
+      type: "auto", category: "punch", foreman,
+      title: `${openFinishPunch} Open Finish Punch Item${openFinishPunch>1?"s":""}`,
+      desc: "Finish is marked complete or ready to invoice but punch items are still open",
+      color: C.red, cleared: false,
+    });
+
+    // FIX 6: "In Between" too long — fires after 2 months
+    if(rs==="complete" && (!fs||fs===""||fs==="waiting_date"||fs==="ready")) {
+      const betweenDate = job.roughStatusDate||job.roughProjectedStart||"";
+      if(betweenDate) {
+        const d = (str=>{ const m=str.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m) return new Date(+m[1],+m[2]-1,+m[3]); const m2=str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if(m2) return new Date(+m2[2],+m2[1]-1,+(m2[3].length===2?"20"+m2[3]:m2[3])); return null; })(betweenDate);
+        if(d) {
+          const daysBetween = Math.floor((Date.now()-d.getTime())/(1000*60*60*24));
+          if(daysBetween>=60) tasks.push({
+            id: job.id+"_in_between_long", jobId: job.id, jobName: job.name,
+            type: "auto", category: "schedule", foreman,
+            title: "In Between — Over 2 Months",
+            desc: `Rough completed ${daysBetween} days ago — finish has not been scheduled`,
+            color: C.orange, cleared: false,
+          });
+        }
+      }
+    }
+
+    // FIX 2b: Ready to Invoice stale — fires after 5 days with no action
+    if(job.readyToInvoice && !job.invoiceDismissed) {
+      const invDate = job.readyToInvoiceDate||"";
+      if(invDate) {
+        const d = (str=>{ const m=str.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m) return new Date(+m[1],+m[2]-1,+m[3]); const m2=str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if(m2) return new Date(+m2[2],+m2[1]-1,+(m2[3].length===2?"20"+m2[3]:m2[3])); return null; })(invDate);
+        if(d) {
+          const daysStale = Math.floor((Date.now()-d.getTime())/(1000*60*60*24));
+          if(daysStale>=5) tasks.push({
+            id: job.id+"_invoice_stale", jobId: job.id, jobName: job.name,
+            type: "auto", category: "invoice", foreman,
+            title: `Invoice Overdue — ${daysStale} Days`,
+            desc: "Job has been ready to invoice for more than 5 days — follow up",
+            color: "#dc2626", cleared: false,
+          });
+        }
+      }
+    }
+
+    // Change Orders
+    const rs2 = effRS(job), fs2 = effFS(job);
+    (job.changeOrders||[]).forEach((co, i) => {
+
+      // Needs to be sent — fires immediately on new CO
+      if((co.coStatus||"needs_sending")==="needs_sending") tasks.push({
+        id: job.id+"_co_"+co.id+"_send", jobId: job.id, jobName: job.name,
+        type: "auto", category: "co", foreman,
+        title: `Send Change Order #${i+1}`,
+        desc: co.desc ? `CO: ${co.desc}` : "Draft and send the change order",
+        color: "#dc2626", cleared: false,
+        dueDate: co.coStatusDate||"",
+      });
+
+      // Approved — context-aware: crew on site → complete, no crew → convert to RT
+      if(co.coStatus === "approved") {
+        const crewOnSite = rs2 === "inprogress" || fs2 === "inprogress";
+        tasks.push({
+          id: job.id+"_co_"+co.id+"_approved", jobId: job.id, jobName: job.name,
+          type: "auto", category: "co", foreman,
+          title: crewOnSite
+            ? `CO #${i+1} Approved — mark work complete`
+            : `CO #${i+1} Approved — convert to Return Trip`,
+          desc: co.desc ? `CO: ${co.desc}` : undefined,
+          color: "#16a34a", cleared: false,
+        });
+      }
+
+      // Scheduled (after convert to RT and RT gets scheduled date on CO)
+      if(co.coStatus === "scheduled") {
+        // Build window label from the co dates
+        let coWindowLabel = "";
+        if(co.needsHardDate && co.needsByStart) {
+          const d = parseAnyDate(co.needsByStart);
+          coWindowLabel = d ? "🔒 "+d.toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "";
+        } else if(co.needsByStart) {
+          const s = parseAnyDate(co.needsByStart), e = parseAnyDate(co.needsByEnd||co.needsByStart);
+          if(s) coWindowLabel = "📅 "+s.toLocaleDateString("en-US",{month:"short",day:"numeric"})+(e&&co.needsByEnd?" – "+e.toLocaleDateString("en-US",{month:"short",day:"numeric"}):"");
+        }
+        // Scheduled task clears when coStatusDate is set
+        if(!co.coStatusDate) tasks.push({
+          id: job.id+"_co_"+co.id+"_sched", jobId: job.id, jobName: job.name,
+          type: "auto", category: "co", foreman,
+          title: `Schedule CO #${i+1} Return Trip`,
+          desc: co.desc ? `CO: ${co.desc}` : "Set the scheduled date for this return trip",
+          color: "#2563eb", cleared: false,
+          windowLabel: coWindowLabel||undefined,
+          needsHardDate: co.needsHardDate||false,
+        });
+      }
+    });
+
+    // Ready to Invoice — fires when readyToInvoice is true and not yet dismissed
+    if(job.readyToInvoice && !job.invoiceDismissed) tasks.push({
+      id: job.id+"_invoice", jobId: job.id, jobName: job.name,
+      type: "auto", category: "invoice", foreman,
+      title: "Ready to Invoice",
+      desc: job.tempPed ? "Temp ped completed" : effFS(job)==="complete" ? "Finish complete" : "Rough complete",
+      color: "#ea580c", cleared: false,
+    });
+
+    // Rough complete → invoice rough-in task
+    if((rs==="complete"||rs==="invoice") && !job.roughInvoiceDismissed) tasks.push({
+      id: job.id+"_rough_invoice", jobId: job.id, jobName: job.name,
+      type: "auto", category: "invoice", foreman,
+      title: "Invoice Rough-In",
+      desc: "Rough is complete — ready to invoice rough-in",
+      color: "#ea580c", cleared: false,
+    });
+
+    // Finish complete → invoice finish task
+    if((fs==="complete"||fs==="invoice") && !job.finishInvoiceDismissed) tasks.push({
+      id: job.id+"_finish_invoice", jobId: job.id, jobName: job.name,
+      type: "auto", category: "invoice", foreman,
+      title: "Invoice Finish",
+      desc: "Finish is complete — ready to invoice finish",
+      color: "#ea580c", cleared: false,
+    });
+
+    // CO individually completed → merge/invoice task
+    const coDoneDismissed = job.coDoneDismissed||[];
+    (job.changeOrders||[]).forEach((co, i) => {
+      if(co.coStatus === "completed" && !coDoneDismissed.includes(co.id)) tasks.push({
+        id: job.id+"_co_"+co.id+"_done", jobId: job.id, jobName: job.name,
+        type: "auto", category: "co", foreman,
+        coId: co.id,
+        title: `CO #${i+1} Complete — merge or invoice`,
+        desc: co.desc ? `CO: ${co.desc}` : undefined,
+        color: "#16a34a", cleared: false,
+      });
+    });
+
+    // RT individually completed → merge/invoice task
+    const rtDoneDismissed = job.rtDoneDismissed||[];
+    (job.returnTrips||[]).forEach((rt, i) => {
+      if(rt.rtStatus === "complete" && !rtDoneDismissed.includes(rt.id)) tasks.push({
+        id: job.id+"_rt_"+rt.id+"_done", jobId: job.id, jobName: job.name,
+        type: "auto", category: "rt", foreman,
+        rtId: rt.id,
+        title: `Return Trip #${i+1} Complete — merge or invoice`,
+        desc: rt.scope ? `Scope: ${rt.scope}` : undefined,
+        color: "#16a34a", cleared: false,
+        dueDate: rt.rtStatusDate||"",
+      });
+    });
+
+    // Temp Ped scheduling task
+    if(job.tempPed && job.tempPedStatus === "ready") tasks.push({
+      id: job.id+"_tempped_sched", jobId: job.id, jobName: job.name,
+      type: "auto", category: "tempped", foreman,
+      title: `Schedule Temp Ped${job.tempPedNumber?" #"+job.tempPedNumber:""}`,
+      desc: "Temp ped is ready to be scheduled",
+      color: "#8b5cf6", cleared: false,
+    });
+
+    // Return Trips needing scheduling
+    (job.returnTrips||[]).forEach((rt, i) => {
+      if(rt.rtStatus === "needs" && !rt.signedOff) {
+        // Build window label like the scheduling forecast does
+        let rtWindowLabel = "";
+        if(rt.needsHardDate && rt.needsByStart) {
+          const d = parseAnyDate(rt.needsByStart);
+          rtWindowLabel = d ? "🔒 "+d.toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "";
+        } else if(rt.needsByStart) {
+          const s = parseAnyDate(rt.needsByStart), e = parseAnyDate(rt.needsByEnd||rt.needsByStart);
+          if(s) rtWindowLabel = "📅 "+s.toLocaleDateString("en-US",{month:"short",day:"numeric"})+(e&&rt.needsByEnd?" – "+e.toLocaleDateString("en-US",{month:"short",day:"numeric"}):"");
+        }
+        tasks.push({
+          id: job.id+"_rt_"+rt.id+"_needs", jobId: job.id, jobName: job.name,
+          type: "auto", category: "rt", foreman,
+          title: `Schedule Return Trip #${i+1}`,
+          desc: rt.scope ? `Scope: ${rt.scope}` : "Return trip needs to be scheduled",
+          color: "#8b5cf6", cleared: false,
+          dueDate: rt.rtStatusDate||"",
+          windowLabel: rtWindowLabel||undefined,
+          needsHardDate: rt.needsHardDate||false,
+        });
+      }
+      if(rt.rtStatus === "scheduled" && !rt.signedOff) tasks.push({
+        id: job.id+"_rt_"+rt.id+"_sched", jobId: job.id, jobName: job.name,
+        type: "auto", category: "rt", foreman,
+        title: `Return Trip #${i+1} — Get Sign-Off`,
+        desc: rt.scope ? `Scope: ${rt.scope}` : "Return trip is scheduled — confirm completion & sign off",
+        color: "#8b5cf6", cleared: false,
+        dueDate: rt.rtStatusDate||"",
+      });
+    });
+
+    // Pre Job Prep — always assigned to Koy regardless of job foreman
+    if(!job.tempPed && (job.prepStage||"") !== "Job Prep Complete") {
+      tasks.push({
+        id: job.id+"_prep", jobId: job.id, jobName: job.name,
+        type: "auto", category: "prep", foreman: "Koy",
+        prepStage: job.prepStage||"",
+        title: `Pre Job Prep: ${job.name||"Untitled"}`,
+        desc: job.prepStage ? `Stage: ${job.prepStage}` : "Not started",
+        color: "#0d9488", cleared: false,
+      });
+    }
+  });
+  return tasks;
+}
+
+// ── Tasks Component ───────────────────────────────────────────
+
+const parseAnyDate = (str) => {
+  if(!str) return null;
+  // YYYY-MM-DD (from date picker) — parse as LOCAL date to avoid UTC midnight shift
+  const ymd = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(ymd) return new Date(+ymd[1], +ymd[2]-1, +ymd[3]);
+  // MM/DD/YY or MM/DD/YYYY
+  const mdy = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+  if(mdy) {
+    let [,m,d,y] = mdy;
+    if(y.length===2) y = "20"+y;
+    return new Date(+y, +m-1, +d);
+  }
+  const d = new Date(str);
+  return isNaN(d.getTime()) ? null : d;
+};
+const URGENCY = (dueDateStr) => {
+  if(!dueDateStr) return null;
+  const due = parseAnyDate(dueDateStr); if(!due) return null;
+  due.setHours(0,0,0,0);
+  const today = new Date(); today.setHours(0,0,0,0);
+  const diff = Math.round((due - today) / 86400000);
+  if(diff < 0)  return {label:"OVERDUE", color:"#dc2626", bg:"#dc262618", level:"overdue", days: diff};
+  if(diff === 0) return {label:"DUE TODAY", color:"#dc2626", bg:"#dc262618", level:"critical", days: 0};
+  if(diff === 1) return {label:"DUE TOMORROW", color:"#ea580c", bg:"#ea580c15", level:"critical", days: 1};
+  if(diff <= 3) return {label:`DUE IN ${diff} DAYS`, color:"#ca8a04", bg:"#ca8a0418", level:"warning", days: diff};
+  if(diff <= 7) return {label:`DUE IN ${diff} DAYS`, color:"#2563eb", bg:"#2563eb10", level:"soon", days: diff};
+  return {label:`DUE ${due.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, color:"#6b7280", bg:"transparent", level:"fine", days: diff};
+};
+
+function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualClear }) {
+  const [editingDate, setEditingDate] = useState(false);
+  const [dateVal, setDateVal] = useState(task.dueDate||"");
+  // localDueDate keeps color in sync immediately on save without waiting for Firebase round-trip
+  const [localDueDate, setLocalDueDate] = useState(task.dueDate||"");
+  // Sync if parent prop changes (e.g. Firebase comes back with a different value)
+  useEffect(() => { setLocalDueDate(task.dueDate||""); }, [task.dueDate]);
+
+  const urg = URGENCY(localDueDate);
+  const isOverdue  = urg && urg.level === "overdue";
+  const isCritical = urg && urg.level === "critical";  // today or tomorrow — red
+  const isWarning  = urg && urg.level === "warning";   // 2-3 days — yellow
+  const isUrgent   = isCritical || isWarning;
+
+  const CATEGORY_LABELS = {
+    rough:"Rough", finish:"Finish", qc:"QC Walk", co:"Change Order",
+    rt:"Return Trip", manual:"Manual Task", prep:"Pre Job Prep", po:"Purchase Order", tempped:"Temp Ped", invoice:"Invoice"
+  };
+
+  const saveDate = () => {
+    if(onSetDueDate) onSetDueDate(task.id, dateVal);
+    setLocalDueDate(dateVal);   // instant local update — no Firebase wait
+    setEditingDate(false);
+  };
+
+  return (
+    <div
+      className={isCritical||isOverdue?"task-pulse":isWarning?"task-warn":""}
+      style={{
+      display:"flex", alignItems:"flex-start", gap:12,
+      padding:"12px 14px", borderRadius:11, marginBottom:6,
+      background: isOverdue||isCritical ? "#dc262610" : isWarning ? "#ca8a0410" : "var(--card)",
+      border:`1px solid ${isOverdue||isCritical?"#dc262644":isWarning?"#ca8a0444":task.color+"22"}`,
+      borderLeft:`4px solid ${isOverdue||isCritical?"#dc2626":isWarning?"#ca8a04":task.color}`,
+      boxShadow: isOverdue||isCritical?"0 0 12px #dc262622, 0 2px 8px #dc262614":isWarning?"0 0 10px #ca8a0420, 0 2px 6px #ca8a0412":"none",
+      transition:"transform 0.12s, box-shadow 0.12s",
+    }}
+    onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 14px ${task.color}18`;}}
+    onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow=isOverdue||isCritical?"0 0 12px #dc262622, 0 2px 8px #dc262614":isWarning?"0 0 10px #ca8a0420, 0 2px 6px #ca8a0412":"none";}}>
+
+      {/* Color dot / urgency indicator */}
+      <div style={{width: isCritical||isOverdue?10:isWarning?9:8, height: isCritical||isOverdue?10:isWarning?9:8,
+        borderRadius:"50%",
+        background:isOverdue||isCritical?"#dc2626":isWarning?"#ca8a04":task.color,
+        flexShrink:0, marginTop:4,
+        boxShadow: isCritical||isOverdue?"0 0 6px #dc2626":isWarning?"0 0 5px #ca8a04":"none"}}/>
+
+      <div style={{flex:1,minWidth:0}}>
+        {/* Category + urgency row */}
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4,flexWrap:"wrap"}}>
+          <span style={{fontSize:9,fontWeight:800,color:task.color,background:`${task.color}18`,borderRadius:99,padding:"2px 8px",border:`1px solid ${task.color}28`,letterSpacing:"0.07em"}}>
+            {(CATEGORY_LABELS[task.category]||task.category).toUpperCase()}
+          </span>
+          {urg&&!editingDate&&(
+            <span onClick={()=>{setEditingDate(true);setDateVal(task.dueDate||"");}}
+              style={{fontSize:9,fontWeight:800,color:urg.color,background:urg.bg,borderRadius:99,padding:"2px 8px",border:`1px solid ${urg.color}33`,letterSpacing:"0.07em",cursor:"pointer"}}
+              title="Click to edit due date">
+              {urg.label} ✏
+            </span>
+          )}
+          {!urg&&!editingDate&&onSetDueDate&&(
+            <span onClick={()=>{setEditingDate(true);setDateVal("");}}
+              style={{fontSize:9,color:"var(--muted)",cursor:"pointer",padding:"2px 6px",borderRadius:99,border:"1px dashed var(--border)"}}
+              title="Set due date">
+              + due date
+            </span>
+          )}
+          {editingDate&&(
+            <div style={{display:"flex",alignItems:"center",gap:4}}>
+              <input
+                autoFocus
+                type="date"
+                value={dateVal}
+                onChange={e=>{setDateVal(e.target.value);if(e.target.value){if(onSetDueDate)onSetDueDate(task.id,e.target.value);setLocalDueDate(e.target.value);setEditingDate(false);}}}
+                onKeyDown={e=>{if(e.key==="Escape")setEditingDate(false);}}
+                style={{fontSize:11,border:"1px solid var(--accent)",borderRadius:6,padding:"2px 7px",
+                  background:"var(--surface)",color:"var(--text)",fontFamily:"inherit",width:130,outline:"none",colorScheme:"light"}}
+              />
+              <button onClick={saveDate}
+                style={{fontSize:10,fontWeight:700,background:"var(--accent)",border:"none",
+                  borderRadius:5,color:"#000",padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>
+                Set
+              </button>
+              {task.dueDate&&(
+                <button onClick={()=>{if(onSetDueDate)onSetDueDate(task.id,"");setLocalDueDate("");setEditingDate(false);}}
+                  style={{fontSize:10,background:"none",border:"1px solid var(--border)",borderRadius:5,
+                    color:"var(--muted)",padding:"3px 7px",cursor:"pointer",fontFamily:"inherit"}}>
+                  Clear
+                </button>
+              )}
+              <button onClick={()=>setEditingDate(false)}
+                style={{fontSize:10,background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontFamily:"inherit"}}>
+                ✕
+              </button>
+            </div>
+          )}
+          {task.type==="manual"&&<span style={{fontSize:9,color:"#6b7280",letterSpacing:"0.06em",fontWeight:600}}>MANUAL</span>}
+        </div>
+
+        {/* Title */}
+        <div style={{fontSize:13,fontWeight:700,color:"var(--text)",marginBottom:task.jobName||task.desc||task.notes?3:0,lineHeight:1.3}}>
+          {task.title}
+        </div>
+
+        {/* Job link */}
+        {task.jobName&&(
+          <div onClick={()=>{const job=jobs.find(j=>j.id===task.jobId);if(job&&onSelectJob)onSelectJob(job);}}
+            style={{fontSize:11,color:"var(--accent)",cursor:"pointer",marginBottom:task.desc?2:0,fontWeight:600,display:"flex",alignItems:"center",gap:4}}>
+            <span style={{opacity:0.6,fontSize:10}}>↗</span>{task.jobName}
+          </div>
+        )}
+
+        {task.windowLabel&&(
+          <div style={{display:"flex",alignItems:"center",gap:6,marginTop:4,marginBottom:2}}>
+            <span style={{fontSize:10,fontWeight:800,
+              color:task.needsHardDate?"#dc2626":"#ca8a04",
+              background:task.needsHardDate?"#dc262615":"#ca8a0415",
+              border:`1px solid ${task.needsHardDate?"#dc262644":"#ca8a0444"}`,
+              borderRadius:99,padding:"2px 10px",letterSpacing:"0.04em",whiteSpace:"nowrap"}}>
+              {task.needsHardDate?"🔒 ":"📅 "}{task.windowLabel}
+            </span>
+          </div>
+        )}
+        {task.desc&&!task.windowLabel&&<div style={{fontSize:11,color:"var(--dim)",fontStyle:"italic",lineHeight:1.4}}>{task.desc}</div>}
+        {task.notes&&<div style={{fontSize:11,color:"var(--dim)",marginTop:2,lineHeight:1.4}}>{task.notes}</div>}
+
+        {task.category==="prep"&&task.prepStage&&(
+          <div style={{marginTop:6}}>
+            <span style={{fontSize:10,fontWeight:700,color:task.prepStage===PREP_STAGE_ALERT?"#dc2626":"#0d9488",background:task.prepStage===PREP_STAGE_ALERT?"#dc262610":"#0d948810",borderRadius:99,padding:"2px 10px",border:`1px solid ${task.prepStage===PREP_STAGE_ALERT?"#dc262633":"#0d948833"}`}}>
+              {task.prepStage===PREP_STAGE_ALERT?"⚠ "+task.prepStage:task.prepStage}
+            </span>
+          </div>
+        )}
+      </div>
+
+      {/* Action buttons */}
+      <div style={{flexShrink:0,display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
+        {onDismiss&&(
+          <button onClick={onDismiss}
+            style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 11px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>
+            ✓ Done
+          </button>
+        )}
+        {!onDismiss&&task.type!=="manual"&&task.jobId&&(
+          <button onClick={()=>{
+            const job=jobs.find(j=>j.id===task.jobId);
+            if(!job||!onManualClear) return;
+            onManualClear(task.jobId, [...(job.clearedTasks||[]), task.id]);
+          }}
+            style={{background:"#16a34a12",border:"1px solid #16a34a44",borderRadius:7,color:"#16a34a",fontSize:11,padding:"5px 11px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>
+            ✓ Mark Done
+          </button>
+        )}
+        {task.jobId&&onSelectJob&&(
+          <button onClick={()=>{const job=jobs.find(j=>j.id===task.jobId);if(job)onSelectJob(job);}}
+            style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 11px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+            Open →
+          </button>
+        )}
+      </div>
+    </div>
+  );
+}
+
+function AddTaskForm({ defaultForeman, onAdd, onCancel, foremenList }) {
+  const [t, setT] = useState({title:"", foreman:defaultForeman||"Koy", notes:"", dueDate:""});
+  return (
+    <div style={{padding:"14px 16px",background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,marginBottom:16}}>
+      <div style={{fontSize:11,fontWeight:700,color:"var(--dim)",letterSpacing:"0.08em",marginBottom:12}}>NEW TASK</div>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
+        <div style={{flex:3,minWidth:180}}>
+          <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Task</div>
+          <Inp value={t.title} onChange={e=>setT(x=>({...x,title:e.target.value}))} placeholder="What needs to be done?"/>
+        </div>
+        <div style={{flex:1,minWidth:110}}>
+          <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Assign To</div>
+          <select value={t.foreman} onChange={e=>setT(x=>({...x,foreman:e.target.value}))}
+            style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:7,color:"var(--text)",padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
+            {(foremenList||getForemenList()).map(f=><option key={f} value={f}>{f}</option>)}
+          </select>
+        </div>
+        <div style={{flex:1,minWidth:110}}>
+          <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Due Date</div>
+          <DateInp value={t.dueDate} onChange={e=>setT(x=>({...x,dueDate:e.target.value}))}/>
+        </div>
+      </div>
+      <div style={{marginBottom:12}}>
+        <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Notes</div>
+        <TA value={t.notes} onChange={e=>setT(x=>({...x,notes:e.target.value}))} placeholder="Additional context..." rows={2}/>
+      </div>
+      <div style={{display:"flex",gap:8}}>
+        <button onClick={()=>{if(t.title.trim())onAdd(t);}} style={{background:"var(--accent)",border:"none",borderRadius:7,color:"#000",fontWeight:800,padding:"8px 20px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Add Task</button>
+        <button onClick={onCancel} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",padding:"8px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+      </div>
+    </div>
+  );
+}
+
+function PrepTaskList({ jobs, onSelectJob, onUpdateJob }) {
+  // All jobs in pre-job prep (not complete) — includes ones with no stage set yet
+  const prepJobs = jobs.filter(j => !j.tempPed && (j.prepStage||"") !== "Job Prep Complete")
+    .sort((a,b) => {
+      const ai = PREP_STAGES.indexOf(a.prepStage);
+      const bi = PREP_STAGES.indexOf(b.prepStage);
+      // Jobs with no stage set go to bottom
+      if(ai === -1 && bi === -1) return (a.name||"").localeCompare(b.name||"");
+      if(ai === -1) return 1;
+      if(bi === -1) return -1;
+      return ai - bi;
+    });
+
+  const completeJobs = jobs.filter(j => j.prepStage === "Job Prep Complete");
+
+  const stageColor = (stage) => {
+    if(stage === PREP_STAGE_ALERT) return "#dc2626";
+    if(stage === "Job Prep Complete") return "#16a34a";
+    const idx = PREP_STAGES.indexOf(stage);
+    const pct = idx / (PREP_STAGES.length - 1);
+    if(pct < 0.3) return "#ca8a04";
+    if(pct < 0.7) return "#2563eb";
+    return "#0d9488";
+  };
+
+  return (
+    <div>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,paddingBottom:10,borderBottom:"2px solid #2563eb22"}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#2563eb"}}>PRE JOB PREP TRACKER</div>
+        <div style={{background:"#2563eb18",border:"1px solid #2563eb33",borderRadius:99,padding:"2px 10px",fontSize:11,color:"#2563eb",fontWeight:700}}>{prepJobs.length} not complete</div>
+        {completeJobs.length>0&&<div style={{background:"#16a34a18",border:"1px solid #16a34a33",borderRadius:99,padding:"2px 10px",fontSize:11,color:"#16a34a",fontWeight:700}}>✓ {completeJobs.length} complete</div>}
+      </div>
+
+      {prepJobs.length===0&&(
+        <div style={{textAlign:"center",padding:"32px 0",color:"var(--muted)",fontSize:12,fontStyle:"italic"}}>No jobs in pre-job prep</div>
+      )}
+
+      {prepJobs.map(job => {
+        const stage = job.prepStage||"";
+        const stageIdx = PREP_STAGES.indexOf(stage);
+        const pct = stageIdx >= 0 ? Math.round((stageIdx / (PREP_STAGES.length-1)) * 100) : 0;
+        const sc = stageColor(stage);
+        const fc = getFC(job.foreman||"Koy")||"#6b7280";
+        return (
+          <div key={job.id} style={{marginBottom:10,padding:"14px 16px",background:"var(--card)",border:`1px solid ${sc}33`,borderRadius:12,borderLeft:`3px solid ${sc}`}}
+            onMouseEnter={e=>{e.currentTarget.style.boxShadow=`0 4px 16px ${sc}18`;}}
+            onMouseLeave={e=>{e.currentTarget.style.boxShadow="none";}}>
+            <div style={{display:"flex",alignItems:"flex-start",gap:10,marginBottom:10}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:700,color:"var(--text)",marginBottom:3,cursor:"pointer"}}
+                  onClick={()=>onSelectJob(job)}>{job.name||"Untitled Job"}</div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                  {job.address&&<span style={{fontSize:10,color:"var(--dim)"}}>{job.address}</span>}
+                  <span style={{fontSize:10,fontWeight:700,color:fc,background:`${fc}15`,borderRadius:99,padding:"1px 7px",border:`1px solid ${fc}28`}}>{job.foreman||"Koy"}</span>
+                </div>
+              </div>
+              <div style={{display:"flex",gap:6,alignItems:"center",flexShrink:0}}>
+                <select value={stage} onChange={e=>onUpdateJob(job.id,{prepStage:e.target.value,...(e.target.value===PREP_STAGE_ALERT?{readyToSchedule:false}:{})})}
+                  style={{background:sc+"12",border:`1px solid ${sc}55`,borderRadius:7,color:sc,padding:"5px 8px",fontSize:11,fontFamily:"inherit",fontWeight:700,outline:"none",cursor:"pointer",maxWidth:200}}>
+                  <option value="">— select —</option>
+                  {PREP_STAGES.map(s=><option key={s} value={s}>{s===PREP_STAGE_ALERT?"⚠ "+s:s}</option>)}
+                </select>
+                <button onClick={()=>onSelectJob(job)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 10px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Open →</button>
+              </div>
+            </div>
+            {/* Progress bar */}
+            <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{flex:1,height:5,background:"var(--border)",borderRadius:99,overflow:"hidden"}}>
+                <div style={{width:`${pct}%`,height:"100%",background:sc,borderRadius:99,transition:"width 0.3s"}}/>
+              </div>
+              <span style={{fontSize:10,fontWeight:700,color:sc,minWidth:28,textAlign:"right"}}>{pct}%</span>
+            </div>
+            {stage===PREP_STAGE_ALERT&&(
+              <div style={{marginTop:8,fontSize:10,fontWeight:700,color:"#dc2626",display:"flex",alignItems:"center",gap:5}}>
+                <span>⚠</span> Redline Plans Need to be Updated
+              </div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// ── ForemanTaskCard — collapsible task card shown on foreman page ──
+// For Koy it shows two tabs: Prep | Tasks. For others just Tasks.
+function ForemanTaskCard({ isKoy, fTasks, prepTasks, jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJob, activeForeman, foremenList }) {
+  const [prepOpen,  setPrepOpen]  = useState(false); // starts collapsed
+  const [tasksOpen, setTasksOpen] = useState(true);  // starts expanded
+
+  const overdueCount = fTasks.filter(t=>{ const u=URGENCY(t.dueDate); return u&&u.days<0; }).length;
+
+  const SectionHeader = ({label, count, overdue, open, onToggle, color}) => (
+    <div onClick={onToggle}
+      style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",
+        background:`${color}08`,borderBottom:open?`1px solid ${color}22`:"none",
+        cursor:"pointer",userSelect:"none"}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:14,letterSpacing:"0.08em",color}}>{label}</div>
+      {count>0&&<div style={{background:`${color}18`,border:`1px solid ${color}33`,borderRadius:99,
+        padding:"1px 8px",fontSize:11,color,fontWeight:700}}>{count}</div>}
+      {overdue>0&&<div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,
+        padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>⚠ {overdue}</div>}
+      <div style={{marginLeft:"auto",fontSize:12,color,opacity:0.6}}>{open?"▾":"▸"}</div>
     </div>
   );
 
   return (
-    <div style={{...base,maxWidth:500,margin:"0 auto",padding:"0 0 80px"}}>
+    <div style={{margin:"0 0 16px",border:"1px solid #dc262633",borderRadius:12,overflow:"hidden"}}>
 
-      {/* Header */}
-      <div style={{padding:"24px 20px 20px",borderBottom:"0.5px solid #e2e8f0"}}>
-        <div style={{fontSize:10,fontWeight:500,color:"#94a3b8",letterSpacing:"0.1em",marginBottom:6}}>HOMESTEAD ELECTRIC</div>
-        <div style={{fontSize:20,fontWeight:500,color:"#1e293b",marginBottom:4}}>{job?.name||"Generator load selection"}</div>
-        <div style={{fontSize:13,color:"#64748b",lineHeight:1.55}}>
-          A standby generator powers select circuits in your home during an outage — but not everything can run at once due to capacity limits. Review the circuits below, choose which ones matter most to you, and rank them by priority. Homestead Electric will use your selections to finalize the generator plan.
-        </div>
-      </div>
-
-      {/* How it works */}
-      <div style={{margin:"0 16px",marginTop:16,padding:"12px 14px",
-        background:AB,border:`0.5px solid #fde68a`,borderRadius:10}}>
-        <div style={{fontSize:12,fontWeight:500,color:A,marginBottom:4}}>How to complete this form</div>
-        <div style={{fontSize:12,color:"#92400e",lineHeight:1.6}}>
-          1. Toggle circuits off if you don't want them on the generator.<br/>
-          2. Drag the handle on the left to reorder — most important at the top.<br/>
-          3. Add a note to any circuit if helpful.<br/>
-          4. Sign your name at the bottom and tap Submit.
-        </div>
-      </div>
-
-      <div style={{padding:"20px 16px 0"}}>
-
-        {/* ON GENERATOR */}
-        <div style={{fontSize:10,fontWeight:500,color:"#94a3b8",letterSpacing:"0.08em",marginBottom:10}}>
-          ON GENERATOR · {included.length} circuit{included.length!==1?"s":""}
-        </div>
-
-        {included.length===0&&(
-          <div style={{textAlign:"center",padding:"24px 0",fontSize:13,color:"#94a3b8",
-            border:"0.5px dashed #e2e8f0",borderRadius:10,marginBottom:12}}>
-            No circuits selected — add some back below
-          </div>
-        )}
-
-        {items.map((it,i)=> it.included ? (
-          <div key={it.id}
-            draggable
-            onDragStart={()=>onDragStart(i)}
-            onDragOver={e=>onDragOver(e,i)}
-            onDragEnd={onDragEnd}
-            style={{...cardStyle,cursor:"grab",userSelect:"none"}}>
-            <div style={{display:"flex",alignItems:"center",gap:10}}>
-              {/* Drag handle */}
-              <div style={{color:"#cbd5e1",fontSize:15,flexShrink:0,lineHeight:1}}>⠿</div>
-              {/* Priority badge */}
-              <div style={{width:22,height:22,borderRadius:"50%",background:"#fef3c7",
-                border:"0.5px solid #fde68a",display:"flex",alignItems:"center",
-                justifyContent:"center",fontSize:10,fontWeight:500,color:A,flexShrink:0}}>
-                {i+1}
-              </div>
-              {/* Info */}
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:13,fontWeight:500,color:"#1e293b",marginBottom:2}}>
-                  {it.name||"Unnamed circuit"}
-                </div>
-                <div style={{fontSize:11,color:"#94a3b8",display:"flex",gap:8}}>
-                  {it.panel&&<span>{it.panel}</span>}
-                  {it.wire&&<span>{it.wire}</span>}
-                  {it.wire&&WIRE_AMPS[it.wire]&&(
-                    <span style={{color:A,fontWeight:500}}>{WIRE_AMPS[it.wire]}A</span>
-                  )}
-                </div>
-              </div>
-              <button onClick={()=>toggle(it.id)}
-                style={{background:"none",border:"0.5px solid #e2e8f0",borderRadius:7,
-                  padding:"4px 10px",fontSize:11,cursor:"pointer",color:"#94a3b8",
-                  flexShrink:0,fontFamily:"inherit"}}>
-                Remove
-              </button>
+      {/* Job Prep section — Koy only, starts collapsed */}
+      {isKoy && (
+        <>
+          <SectionHeader
+            label="JOB PREP"
+            count={prepTasks.length}
+            overdue={0}
+            open={prepOpen}
+            onToggle={()=>setPrepOpen(v=>!v)}
+            color="#f59e0b"
+          />
+          {prepOpen && (
+            <div style={{padding:"12px 14px",borderBottom:"1px solid #dc262322"}}>
+              {prepTasks.length===0
+                ? <div style={{fontSize:12,color:"var(--muted)",textAlign:"center",padding:"12px 0"}}>✓ All prep complete</div>
+                : <PrepTaskList jobs={jobs} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob}/>
+              }
             </div>
-            <div style={{marginTop:8,paddingLeft:32}}>
-              <input value={it.notes||""} onChange={e=>setNotes(it.id,e.target.value)}
-                placeholder="Add a note (optional)…"
-                style={{width:"100%",boxSizing:"border-box",border:"0.5px solid #e2e8f0",
-                  borderRadius:7,padding:"6px 10px",fontSize:12,fontFamily:"inherit",
-                  color:"#1e293b",background:"#f8fafc",outline:"none"}}/>
-            </div>
-          </div>
-        ) : null)}
+          )}
+        </>
+      )}
 
-        {/* NOT ON GENERATOR */}
-        {excluded.length>0&&(
+      {/* Tasks section — all foremen, starts expanded */}
+      <SectionHeader
+        label="TASKS"
+        count={fTasks.length}
+        overdue={overdueCount}
+        open={tasksOpen}
+        onToggle={()=>setTasksOpen(v=>!v)}
+        color="#dc2626"
+      />
+      {tasksOpen && (
+        <div style={{padding:"12px 14px"}}>
+          {fTasks.length===0
+            ? <div style={{fontSize:12,color:"var(--muted)",textAlign:"center",padding:"12px 0"}}>✓ No open tasks</div>
+            : <Tasks
+                jobs={jobs}
+                manualTasks={manualTasks}
+                onManualTasksChange={onManualTasksChange}
+                onSelectJob={onSelectJob}
+                onUpdateJob={onUpdateJob}
+                filterForeman={activeForeman}
+                foremenList={foremenList}
+              />
+          }
+        </div>
+      )}
+    </div>
+  );
+}
+
+function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJob, filterForeman, compact, foremenList }) {
+  const [showAdd,          setShowAdd]          = useState(false);
+  const [collapsedForemen, setCollapsedForemen] = useState({});
+  const [catFilter,        setCatFilter]        = useState("all");
+  const [prepOpen,         setPrepOpen]         = useState(false); // collapsed by default
+  const toggleForeman = (f) => setCollapsedForemen(c=>({...c,[f]:!c[f]}));
+
+  const handleSetDueDate = (taskId, date) => {
+    const isManual = (manualTasks||[]).find(t => t.id === taskId);
+    if(isManual) { onManualTasksChange((manualTasks||[]).map(t => t.id===taskId ? {...t, dueDate:date} : t)); return; }
+    const autoTasks = computeTasks(jobs);
+    const task = autoTasks.find(t => t.id === taskId);
+    if(task && task.jobId && onUpdateJob) {
+      const job = jobs.find(j => j.id === task.jobId);
+      if(job) onUpdateJob(task.jobId, { taskDueDates: {...(job.taskDueDates||{}), [taskId]: date} });
+    }
+  };
+
+  const handleAdd = (t) => {
+    const task = { id: uid(), title: t.title, foreman: t.foreman,
+      notes: t.notes, dueDate: t.dueDate||"", type:"manual", category:"manual",
+      color: "#6b7280", cleared:false, createdAt: new Date().toISOString() };
+    onManualTasksChange([...(manualTasks||[]), task]);
+    setShowAdd(false);
+  };
+
+  const dismissManual        = (id)        => { onManualTasksChange((manualTasks||[]).filter(t=>t.id!==id)); };
+  const dismissInvoiceTask   = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId, invoiceSentPatch(job)); };
+  const dismissRoughDeposit  = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{roughDepositDismissed:true}); };
+  const dismissFinishDeposit = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{finishDepositDismissed:true}); };
+  const dismissRoughInvoice  = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{roughInvoiceDismissed:true}); };
+  const dismissFinishInvoice = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{finishInvoiceDismissed:true}); };
+  const handleManualClear    = (jobId, clearedTasks) => { if(onUpdateJob) onUpdateJob(jobId,{clearedTasks}); };
+  const dismissCODoneTask    = (jobId,coId)=> { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{coDoneDismissed:[...(job.coDoneDismissed||[]),coId]}); };
+  const dismissRTDoneTask    = (jobId,rtId)=> { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{rtDoneDismissed:[...(job.rtDoneDismissed||[]),rtId]}); };
+
+  const allTaskDueDates = jobs.reduce((acc,j)=>({...acc,...(j.taskDueDates||{})}),{});
+  // Build set of manually cleared task IDs across all jobs
+  const allClearedTasks = new Set(jobs.flatMap(j=>j.clearedTasks||[]));
+
+  const autoTasks = computeTasks(jobs);
+  const allTasks = [
+    ...autoTasks.map(t=>{ const d=allTaskDueDates[t.id]; return d!==undefined?{...t,dueDate:d||t.dueDate||""}:t; }),
+    ...(manualTasks||[]).map(t=>({...t,type:"manual"}))
+  ].filter(t => t.category !== "prep" && (!filterForeman || t.foreman === filterForeman) && !allClearedTasks.has(t.id));
+
+  const URGENCY_FN = (due) => {
+    if(!due) return null;
+    const d=(str=>{ const m=str.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m) return new Date(+m[1],+m[2]-1,+m[3]); const m2=str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if(m2) return new Date(+m2[2],+m2[1]-1,+(m2[3].length===2?"20"+m2[3]:m2[3])); return null; })(due);
+    if(!d) return null;
+    const days=Math.floor((d-new Date().setHours(0,0,0,0))/(1000*60*60*24));
+    return {days,color:days<0?"#dc2626":days<=3?"#ea580c":days<=7?"#ca8a04":"#16a34a",label:days<0?`${Math.abs(days)}d overdue`:days===0?"Due today":days===1?"Due tomorrow":`Due in ${days}d`};
+  };
+
+  // Separate invoice tasks from regular tasks
+  const isInvoiceCat = (t) => t.category==="invoice" || t.id.endsWith("_rough_deposit") || t.id.endsWith("_finish_deposit");
+  const invoiceTasks = allTasks.filter(isInvoiceCat);
+  const otherTasks   = allTasks.filter(t=>!isInvoiceCat(t));
+
+  // Ready to Invoice jobs (the job-level flag, separate from task list)
+  const invoiceJobs = jobs.filter(j=>j.readyToInvoice&&(!filterForeman||matchesForeman(j,filterForeman)));
+
+  const sorted = [...otherTasks].sort((a,b)=>{
+    const ua=URGENCY_FN(a.dueDate), ub=URGENCY_FN(b.dueDate);
+    if(ua&&ub) return ua.days-ub.days; if(ua) return -1; if(ub) return 1; return 0;
+  });
+  const sortedInvoice = [...invoiceTasks].sort((a,b)=>{
+    const ua=URGENCY_FN(a.dueDate), ub=URGENCY_FN(b.dueDate);
+    if(ua&&ub) return ua.days-ub.days; if(ua) return -1; if(ub) return 1; return 0;
+  });
+
+  const foremanList = filterForeman ? [filterForeman] : [...(foremenList||getForemenList()),"Unassigned"];
+  const totalInvoice = invoiceTasks.length + invoiceJobs.length;
+  const totalOther   = otherTasks.length;
+  const overdueCount = sorted.filter(t=>{ const u=URGENCY_FN(t.dueDate); return u&&u.days<0; }).length;
+
+  const dismissFor = (task) =>
+    task.type==="manual"                    ? ()=>dismissManual(task.id) :
+    task.id.endsWith("_rough_deposit")      ? ()=>dismissRoughDeposit(task.jobId) :
+    task.id.endsWith("_finish_deposit")     ? ()=>dismissFinishDeposit(task.jobId) :
+    task.id.endsWith("_rough_invoice")      ? ()=>dismissRoughInvoice(task.jobId) :
+    task.id.endsWith("_finish_invoice")     ? ()=>dismissFinishInvoice(task.jobId) :
+    task.category==="invoice"               ? ()=>dismissInvoiceTask(task.jobId) :
+    task.id.endsWith("_done")&&task.coId   ? ()=>dismissCODoneTask(task.jobId,task.coId) :
+    task.id.endsWith("_done")&&task.rtId   ? ()=>dismissRTDoneTask(task.jobId,task.rtId) :
+    null;
+
+  // ── Invoice section — collapsible ────────────────────────────
+  const [invoiceCollapsed, setInvoiceCollapsed] = useState(false);
+
+  const InvoiceSection = () => {
+    if(totalInvoice===0 && invoiceJobs.length===0) return null;
+    const count = invoiceJobs.length + sortedInvoice.length;
+    return (
+      <div style={{marginBottom:24}}>
+        <div onClick={()=>setInvoiceCollapsed(c=>!c)}
+          style={{display:"flex",alignItems:"center",gap:8,marginBottom:invoiceCollapsed?0:12,
+            paddingBottom:8,borderBottom:"2px solid #ea580c33",cursor:"pointer",userSelect:"none"}}>
+          <div style={{width:9,height:9,borderRadius:"50%",background:"#ea580c"}}/>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#ea580c"}}>
+            READY TO INVOICE
+          </div>
+          <div style={{background:"#ea580c18",border:"1px solid #ea580c33",borderRadius:99,
+            padding:"1px 8px",fontSize:11,color:"#ea580c",fontWeight:700}}>{count}</div>
+          <div style={{marginLeft:"auto",fontSize:12,color:"#ea580c",opacity:0.7,paddingRight:4}}>
+            {invoiceCollapsed?"▸":"▾"}
+          </div>
+        </div>
+        {!invoiceCollapsed&&(
           <>
-            <div style={{fontSize:10,fontWeight:500,color:"#cbd5e1",letterSpacing:"0.08em",
-              margin:"20px 0 10px"}}>
-              NOT ON GENERATOR · {excluded.length}
-            </div>
-            {items.map((it,i)=> !it.included ? (
-              <div key={it.id}
-                style={{...cardStyle,opacity:0.6}}>
-                <div style={{display:"flex",alignItems:"center",gap:10}}>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:13,color:"#64748b",marginBottom:2}}>
-                      {it.name||"Unnamed circuit"}
+            {/* Job-level ready to invoice */}
+            {invoiceJobs.map(job=>{
+              const fc = getFC(job.foreman)||"#6b7280";
+              return (
+                <div key={job.id}
+                  style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,
+                    padding:"11px 14px",borderRadius:10,marginBottom:6,
+                    background:"#ea580c08",border:"1px solid #ea580c33",borderLeft:"3px solid #ea580c"}}>
+                  <div onClick={()=>onSelectJob(job)} style={{flex:1,cursor:"pointer"}}>
+                    <div style={{fontSize:13,fontWeight:700,color:"var(--text)",marginBottom:2}}>
+                      {job.name||"Untitled Job"}
                     </div>
-                    <div style={{fontSize:11,color:"#94a3b8",display:"flex",gap:8}}>
-                      {it.panel&&<span>{it.panel}</span>}
-                      {it.wire&&<span>{it.wire}</span>}
-                      {it.wire&&WIRE_AMPS[it.wire]&&<span>{WIRE_AMPS[it.wire]}A</span>}
+                    <div style={{fontSize:11,color:"var(--dim)",display:"flex",gap:8}}>
+                      {job.address&&<span>{job.address}</span>}
+                      <span style={{fontWeight:700,color:fc}}>{job.foreman}</span>
                     </div>
                   </div>
-                  <button onClick={()=>toggle(it.id)}
-                    style={{background:"none",border:`0.5px solid #fde68a`,borderRadius:7,
-                      padding:"4px 10px",fontSize:11,cursor:"pointer",color:A,
-                      flexShrink:0,fontFamily:"inherit"}}>
-                    Add back
-                  </button>
+                  <div style={{display:"flex",gap:8,alignItems:"center",flexShrink:0}}>
+                    <button onClick={()=>onSelectJob(job)}
+                      style={{fontSize:11,fontWeight:600,color:"#ea580c",background:"none",
+                        border:"1px solid #ea580c44",borderRadius:7,padding:"5px 10px",
+                        cursor:"pointer",fontFamily:"inherit"}}>
+                      Open →
+                    </button>
+                    <button onClick={()=>{ if(onUpdateJob) onUpdateJob(job.id,invoiceSentPatch(job)); }}
+                      style={{fontSize:11,fontWeight:700,color:"#fff",background:"#ea580c",
+                        border:"none",borderRadius:7,padding:"5px 14px",
+                        cursor:"pointer",fontFamily:"inherit"}}>
+                      ✓ Invoice Sent
+                    </button>
+                  </div>
                 </div>
-              </div>
-            ) : null)}
+              );
+            })}
+            {/* Invoice-category tasks (deposits, stale alerts, etc.) */}
+            {sortedInvoice.map(task=>(
+              <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
+                onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear}/>
+            ))}
           </>
         )}
+      </div>
+    );
+  };
 
-        {/* Signature */}
-        <div style={{marginTop:28,padding:"16px",background:"#fff",
-          border:`0.5px solid ${sigError?"#fca5a5":"#e2e8f0"}`,borderRadius:10}}>
-          <div style={{fontSize:12,fontWeight:500,color:"#1e293b",marginBottom:4}}>
-            Sign off on your selections
+  return (
+    <div>
+      {!compact&&!filterForeman&&(
+        <div style={{padding:"24px 26px 16px",borderBottom:"1px solid var(--border)"}}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
+            <div>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:"var(--text)",lineHeight:1}}>TASKS</div>
+              <div style={{display:"flex",gap:8,marginTop:4,flexWrap:"wrap",alignItems:"center"}}>
+                <span style={{fontSize:11,color:"var(--dim)"}}>{totalOther} task{totalOther!==1?"s":""}</span>
+                {totalInvoice>0&&<span style={{fontSize:11,fontWeight:700,color:"#ea580c",background:"#ea580c12",borderRadius:99,padding:"1px 8px",border:"1px solid #ea580c33"}}>💰 {totalInvoice} invoice</span>}
+                {overdueCount>0&&<span style={{fontSize:11,fontWeight:700,color:"#dc2626",background:"#dc262612",borderRadius:99,padding:"1px 8px",border:"1px solid #dc262633"}}>⚠ {overdueCount} overdue</span>}
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,alignItems:"center"}}>
+              {/* Category filter dropdown */}
+              <select value={catFilter} onChange={e=>setCatFilter(e.target.value)}
+                style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:8,
+                  color:catFilter==="invoice"?"#ea580c":"var(--dim)",
+                  padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none",
+                  fontWeight:catFilter!=="all"?700:400,cursor:"pointer"}}>
+                <option value="all">All Categories</option>
+                <option value="invoice">💰 Ready to Invoice</option>
+                <option value="other">Tasks Only</option>
+              </select>
+              <button onClick={()=>setShowAdd(v=>!v)}
+                style={{background:"var(--accent)",border:"none",borderRadius:9,color:"#000",
+                  fontWeight:800,padding:"9px 22px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+                + Add Task
+              </button>
+            </div>
           </div>
-          <div style={{fontSize:12,color:"#64748b",marginBottom:12,lineHeight:1.5}}>
-            By typing your full name below, you confirm these are the circuits you'd like included on your generator. Homestead Electric will use this as authorization to proceed with the plan.
-          </div>
-          <input
-            value={signature}
-            onChange={e=>{ setSignature(e.target.value); if(e.target.value.trim()) setSigError(false); }}
-            placeholder="Type your full name…"
-            style={{width:"100%",boxSizing:"border-box",border:`0.5px solid ${sigError?"#fca5a5":"#e2e8f0"}`,
-              borderRadius:7,padding:"10px 12px",fontSize:14,fontFamily:"Georgia,serif",
-              color:"#1e293b",background:"#f8fafc",outline:"none"}}/>
-          {sigError&&(
-            <div style={{fontSize:11,color:"#dc2626",marginTop:6}}>Please sign your name to submit.</div>
+        </div>
+      )}
+
+      <div style={{padding:filterForeman||compact?"0":"16px 26px"}}>
+        {showAdd&&<AddTaskForm defaultForeman={filterForeman||"Koy"} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList}/>}
+
+        {/* Pre Job Prep — only on main Tasks page (not foreman filter), collapsible, starts collapsed */}
+        {!filterForeman&&catFilter!=="invoice"&&(()=>{
+          const prepJobs = jobs.filter(j=>!j.tempPed&&(j.prepStage||"")!=="Job Prep Complete");
+          if(prepJobs.length===0) return null;
+          return (
+            <div style={{marginBottom:24}}>
+              <div onClick={()=>setPrepOpen(v=>!v)}
+                style={{display:"flex",alignItems:"center",gap:8,marginBottom:prepOpen?12:0,
+                  paddingBottom:8,borderBottom:"2px solid #0d948833",cursor:"pointer",userSelect:"none"}}>
+                <div style={{width:9,height:9,borderRadius:"50%",background:"#0d9488"}}/>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#0d9488"}}>
+                  PRE JOB PREP
+                </div>
+                <div style={{background:"#0d948818",border:"1px solid #0d948833",borderRadius:99,
+                  padding:"1px 8px",fontSize:11,color:"#0d9488",fontWeight:700}}>{prepJobs.length}</div>
+                <div style={{marginLeft:"auto",fontSize:12,color:"#0d9488",opacity:0.7,paddingRight:4}}>
+                  {prepOpen?"▾":"▸"}
+                </div>
+              </div>
+              {prepOpen&&<PrepTaskList jobs={jobs} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob}/>}
+            </div>
+          );
+        })()}
+
+        {/* Ready to Invoice section — shown unless filtered to "other" */}
+        {catFilter!=="other"&&<InvoiceSection/>}
+
+        {/* Regular tasks — shown unless filtered to "invoice" */}
+        {catFilter!=="invoice"&&(
+          <>
+            {!filterForeman&&(
+              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",color:"var(--dim)"}}>ALL TASKS</div>
+                {!showAdd&&<button onClick={()=>setShowAdd(true)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>+ Add Task</button>}
+              </div>
+            )}
+
+            {totalOther===0&&(
+              <div style={{textAlign:"center",padding:"40px 0",color:"var(--muted)"}}>
+                <div style={{fontSize:22,marginBottom:6}}>✓</div>
+                <div style={{fontSize:13}}>No open tasks{filterForeman?` for ${filterForeman}`:""}</div>
+              </div>
+            )}
+
+            {filterForeman ? (
+              <div>
+                {filterForeman&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                  <div style={{fontSize:11,fontWeight:700,color:"var(--dim)",letterSpacing:"0.06em"}}>TASKS</div>
+                  <button onClick={()=>setShowAdd(v=>!v)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"4px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>+ Add Task</button>
+                </div>}
+                {showAdd&&filterForeman&&<AddTaskForm defaultForeman={filterForeman} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList}/>}
+                {sorted.map(task=>(
+                  <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
+                    onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear}/>
+                ))}
+              </div>
+            ) : (
+              foremanList.map(f=>{
+                const fc=getFC(f)||"#6b7280";
+                const fTasks=sorted.filter(t=>t.foreman===f);
+                const fOverdue=fTasks.filter(t=>{ const u=URGENCY_FN(t.dueDate); return u&&u.days<0; }).length;
+                if(fTasks.length===0) return null;
+                const fCollapsed=!!collapsedForemen[f];
+                return (
+                  <div key={f} style={{marginBottom:28}}>
+                    <div onClick={()=>toggleForeman(f)}
+                      style={{display:"flex",alignItems:"center",gap:8,marginBottom:fCollapsed?0:12,
+                        paddingBottom:8,borderBottom:`2px solid ${fc}33`,cursor:"pointer",userSelect:"none"}}>
+                      <div style={{width:9,height:9,borderRadius:"50%",background:fc}}/>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:fc}}>{f}</div>
+                      <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:fc,fontWeight:700}}>{fTasks.length}</div>
+                      {fOverdue>0&&<div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>⚠ {fOverdue} overdue</div>}
+                      <div style={{marginLeft:"auto",fontSize:12,color:fc,opacity:0.7,paddingRight:4}}>{fCollapsed?"▸":"▾"}</div>
+                    </div>
+                    {!fCollapsed&&fTasks.map(task=>(
+                      <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
+                        onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear}/>
+                    ))}
+                  </div>
+                );
+              })
+            )}
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Scheduling Forecast ───────────────────────────────────────
+
+function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
+  const [foremanTab, setForemanTab] = useState("All");
+  const [viewMode,   setViewMode]   = useState("calendar"); // kanban | list | calendar
+  const [calMonth,   setCalMonth]   = useState(() => { const d=new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
+  const [calDayDetail, setCalDayDetail] = useState(null); // date string YYYY-MM-DD for expanded day
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  const todayStr = today.toISOString().split("T")[0];
+
+  const startOfWeek=(d)=>{ const dt=new Date(d); dt.setHours(0,0,0,0); dt.setDate(dt.getDate()-dt.getDay()); return dt; };
+  const thisWeekStart=startOfWeek(today);
+  const nextWeekStart=new Date(thisWeekStart); nextWeekStart.setDate(thisWeekStart.getDate()+7);
+  const twoWeeksStart=new Date(thisWeekStart); twoWeeksStart.setDate(thisWeekStart.getDate()+14);
+
+  const getBucket=(dateStr,status)=>{
+    const d=parseAnyDate(dateStr); if(!d) return "nodate";
+    const c=new Date(d); c.setHours(0,0,0,0);
+    if(c<thisWeekStart && status!=="inprogress") return "overdue";
+    if(c<nextWeekStart) return "thisWeek";
+    if(c<twoWeeksStart) return "nextWeek";
+    return "later";
+  };
+
+  const fmtDate=(str)=>{ const d=parseAnyDate(str); if(!d) return null; return d.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
+  const fmtFull=(str)=>{ const d=parseAnyDate(str); if(!d) return null; return d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric",year:"numeric"}); };
+  const isOverdue=(str,status)=>{ if(status==="inprogress") return false; const d=parseAnyDate(str); if(!d) return false; const c=new Date(d); c.setHours(0,0,0,0); return c<today; };
+  const fmtYMD=(d)=>{ if(!d) return ''; const dt=new Date(d); return isNaN(dt)?'':dt.toISOString().split("T")[0]; };
+
+  // ── Build "events" — one per schedulable item (not per job) ──────────────
+  // Each event: { id, job, type, label, color, startDate, endDate, status, desc, hardDate }
+  const buildEvents=(jobList)=>{
+    const events=[];
+    jobList.filter(j=>!j.tempPed).forEach(job=>{
+      const rs=effRS(job), fs=effFS(job);
+      const fc=getFC(job.foreman||"Koy");
+
+      // ── Rough ──
+      // ── Rough — include invoice status ──
+      if(rs&&rs!=="complete") {
+        const rsDef=getStatusDef(ROUGH_STATUSES,rs);
+        const start=job.roughProjectedStart||job.roughStatusDate||"";
+        const isInv=rs==="invoice";
+        if(start||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"||rs==="inprogress"||isInv) events.push({
+          id:job.id+"_rough", job, type:"rough",
+          label:"ROUGH", color:isInv?"#ea580c":rsDef.color||C.rough, fc,
+          startDate:isInv?job.readyToInvoiceDate||start:start, endDate:"",
+          hardDate:false,
+          status:rs, statusLabel:isInv?"Ready to Invoice":rsDef.label,
+          desc:isInv?"Ready to Invoice":rsDef.label,
+        });
+      }
+
+      // ── Finish — include invoice status ──
+      if(fs&&fs!=="complete") {
+        const fsDef=getStatusDef(FINISH_STATUSES,fs);
+        const start=job.finishProjectedStart||job.finishStatusDate||"";
+        const isInv=fs==="invoice";
+        if(start||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"||fs==="inprogress"||isInv) events.push({
+          id:job.id+"_finish", job, type:"finish",
+          label:"FINISH", color:isInv?"#ea580c":fsDef.color||C.finish, fc,
+          startDate:isInv?job.readyToInvoiceDate||start:start, endDate:"",
+          hardDate:false,
+          status:fs, statusLabel:isInv?"Ready to Invoice":fsDef.label,
+          desc:isInv?"Ready to Invoice":fsDef.label,
+        });
+      }
+
+      // ── Ready to Invoice (job-level flag, not phase-specific) ──
+      if(job.readyToInvoice&&!job.invoiceDismissed&&rs!=="invoice"&&fs!=="invoice") {
+        events.push({
+          id:job.id+"_invoice", job, type:"invoice",
+          label:"INVOICE", color:"#ea580c", fc,
+          startDate:job.readyToInvoiceDate||"", endDate:"",
+          hardDate:false,
+          status:"invoice", statusLabel:"Ready to Invoice",
+          desc:"Ready to Invoice",
+        });
+      }
+
+      // ── Return Trips ──
+      (job.returnTrips||[]).filter(r=>!r.signedOff&&r.rtStatus!=="complete"&&(r.scope||r.rtStatus||r.rtStatusDate||r.date)).forEach((rt,i)=>{
+        const start=rt.rtStatusDate||rt.date||"";
+        const rtDef=getStatusDef(RT_STATUSES,rt.rtStatus||"needs");
+        const statusLabel=rt.rtStatus==="needs"?"Needs to be Scheduled":rtDef.label||rt.rtStatus||"needs scheduling";
+        events.push({
+          id:job.id+"_rt_"+rt.id, job, type:"rt",
+          label:"RT "+(i+1), color:rtDef.color||"#8b5cf6", fc,
+          startDate:start, endDate:"",
+          hardDate:false,
+          status:rt.rtStatus||"", statusLabel,
+          desc:rt.scope||"Return trip",
+          rtNeedsDate: rt.rtStatus==="needs"?rt.rtStatusDate:"",
+        });
+      });
+
+      // ── Change Orders ──
+      (job.changeOrders||[]).filter(co=>co.coStatus&&co.coStatus!=="completed"&&co.coStatus!=="denied"&&co.coStatus!=="converted").forEach((co,i)=>{
+        const start=co.coStatusDate||"";
+        const coDef=getStatusDef(CO_STATUSES_NEW,co.coStatus||"pending");
+        events.push({
+          id:job.id+"_co_"+co.id, job, type:"co",
+          label:"CO "+(i+1), color:coDef.color||C.accent, fc,
+          startDate:start, endDate:"",
+          hardDate:false,
+          status:co.coStatus||"pending", statusLabel:coDef.label||co.coStatus,
+          desc:co.desc||"Change order",
+        });
+      });
+
+      // ── QC Walk — show for all active statuses including scheduled ──
+      if(job.roughQCTaskFired&&job.qcStatus&&!["completed","pass","fail"].includes(job.qcStatus)) {
+        const qcDef=getStatusDef(QC_STATUSES,job.qcStatus||"");
+        const start=job.qcStatusDate||"";
+        events.push({
+          id:job.id+"_qc", job, type:"qc",
+          label:"QC", color:qcDef.color||C.teal, fc,
+          startDate:start, endDate:"",
+          hardDate:false,
+          status:job.qcStatus, statusLabel:qcDef.label||job.qcStatus,
+          desc:"QC Walk",
+        });
+      }
+    });
+    return events;
+  };
+
+  const foremanTabs=["All",...(foremenList||getForemenList()),"Unassigned"];
+  const matchesForemanTab = (job, tab) => {
+    const jf = (job.foreman||"").trim().toLowerCase();
+    const t  = (tab||"").trim().toLowerCase();
+    if(jf===t) return true;
+    if(t.startsWith(jf+" ")||jf.startsWith(t+" ")) return true;
+    const parts = t.split(" ");
+    return parts.some(p=>p&&(p===jf||p.includes(jf)||jf.includes(p)));
+  };
+  const filteredJobs=foremanTab==="All"?jobs
+    :foremanTab==="Unassigned"?jobs.filter(j=>!j.foreman||j.foreman==="Unassigned")
+    :jobs.filter(j=>matchesForemanTab(j,foremanTab));
+
+  const allEvents=buildEvents(filteredJobs);
+
+  // bucket by startDate for kanban
+  const getBucketForEvent=(ev)=>{
+    if(!ev.startDate) return "nodate";
+    return getBucket(ev.startDate, ev.status);
+  };
+
+  const BUCKETS=[
+    {key:"overdue",  label:"Overdue",    color:C.red},
+    {key:"thisWeek", label:"This Week",  color:C.green},
+    {key:"nextWeek", label:"Next Week",  color:C.blue},
+    {key:"later",    label:"Later",      color:C.dim},
+    {key:"nodate",   label:"Needs Date", color:"#ca8a04"},
+  ];
+
+  // ── Event pill (compact, used in calendar cells) ──────────────
+  const EventPill=({ev,mini})=>{
+    const over=isOverdue(ev.startDate,ev.status);
+    const col=over?C.red:ev.color;
+    return (
+      <div onClick={e=>{e.stopPropagation();onSelectJob(ev.job);}}
+        style={{display:"flex",alignItems:"center",gap:4,padding:mini?"2px 6px":"3px 8px",
+          borderRadius:99,marginBottom:2,cursor:"pointer",
+          background:col+"18",border:`1px solid ${col}33`,
+          transition:"background 0.1s"}}
+        onMouseEnter={e=>e.currentTarget.style.background=col+"30"}
+        onMouseLeave={e=>e.currentTarget.style.background=col+"18"}>
+        <span style={{width:6,height:6,borderRadius:"50%",background:col,flexShrink:0,display:"block"}}/>
+        <span style={{fontSize:mini?9:10,fontWeight:700,color:col,flexShrink:0}}>{ev.label}</span>
+        <span style={{fontSize:mini?9:10,color:"var(--text)",fontWeight:600,
+          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>
+          {ev.job.name||"Untitled"}
+        </span>
+        {ev.hardDate&&<span style={{fontSize:8,color:col,fontWeight:800,flexShrink:0}}>🔒</span>}
+      </div>
+    );
+  };
+
+  // ── Event Card (kanban/list) ──────────────────────────────────
+  const EventCard=({ev})=>{
+    const over=isOverdue(ev.startDate,ev.status);
+    const col=over?C.red:ev.color;
+    const fc=ev.fc;
+    return (
+      <div onClick={()=>onSelectJob(ev.job)}
+        style={{background:"var(--card)",borderRadius:12,padding:"11px 13px",marginBottom:6,cursor:"pointer",
+          border:`1px solid ${over?C.red+"44":col+"22"}`,borderLeft:`3px solid ${col}`,
+          transition:"transform 0.1s,box-shadow 0.1s"}}
+        onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 12px ${col}18`;}}
+        onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
+          <span style={{fontSize:9,fontWeight:800,color:col,background:col+"18",borderRadius:99,
+            padding:"2px 8px",border:`1px solid ${col}28`,letterSpacing:"0.07em",flexShrink:0}}>{ev.label}</span>
+          <span style={{fontSize:9,fontWeight:700,color:fc,background:fc+"15",borderRadius:99,
+            padding:"2px 7px",border:`1px solid ${fc}28`,flexShrink:0}}>{ev.job.foreman||"Koy"}</span>
+          {over&&<span style={{fontSize:9,fontWeight:800,color:C.red,letterSpacing:"0.07em",marginLeft:"auto"}}>OVERDUE</span>}
+        </div>
+        <div style={{fontWeight:700,fontSize:13,color:"var(--text)",marginBottom:3,
+          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.job.name||"Untitled"}</div>
+        {ev.desc&&ev.type!=="rough"&&ev.type!=="finish"&&
+          <div style={{fontSize:11,color:"var(--dim)",marginBottom:4,overflow:"hidden",
+            textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.desc}</div>}
+        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginTop:2}}>
+          <span style={{fontSize:10,fontWeight:700,color:ev.statusLabel?col:"var(--dim)"}}>{ev.statusLabel}</span>
+          {ev.startDate&&(
+            <span style={{fontSize:10,fontWeight:700,color:over?C.red:"var(--dim)",marginLeft:"auto"}}>
+              {ev.type==="rt"&&ev.status==="needs"?"Due: ":""}{fmtDate(ev.startDate)||""}
+            </span>
           )}
         </div>
+      </div>
+    );
+  };
 
-        {/* Submit */}
-        <button onClick={submit} disabled={submitting}
-          style={{width:"100%",marginTop:12,padding:"14px",
-            background:submitting?"#e2e8f0":"#1e293b",
-            border:"none",borderRadius:10,
-            color:submitting?"#94a3b8":"#fff",
-            fontSize:14,fontWeight:500,cursor:submitting?"not-allowed":"pointer",
-            fontFamily:"inherit",letterSpacing:"0.01em"}}>
-          {submitting?"Submitting…":"Submit my selections"}
-        </button>
-        <div style={{textAlign:"center",marginTop:14,fontSize:10,color:"#cbd5e1",letterSpacing:"0.08em"}}>
-          HOMESTEAD ELECTRIC
+  // ── CALENDAR helpers ──────────────────────────────────────────
+  // Returns true if an event "covers" a given date (for window events)
+  const eventCoversDate=(ev,dateStr)=>{
+    if(!ev.startDate) return false;
+    const start=parseAnyDate(ev.startDate);
+    if(!start) return false;
+    start.setHours(0,0,0,0);
+    const target=parseAnyDate(dateStr);
+    if(!target) return false;
+    target.setHours(0,0,0,0);
+    if(ev.endDate&&!ev.hardDate){
+      const end=parseAnyDate(ev.endDate);
+      if(end){ end.setHours(0,0,0,0); return target>=start&&target<=end; }
+    }
+    return fmtYMD(start)===dateStr;
+  };
+
+  const eventsForDate=(dateStr)=>allEvents.filter(ev=>eventCoversDate(ev,dateStr));
+
+  // ── Calendar view ─────────────────────────────────────────────
+  const CalendarView=()=>{
+    const year=calMonth.getFullYear();
+    const month=calMonth.getMonth();
+    const firstDay=new Date(year,month,1).getDay(); // 0=Sun
+    const daysInMonth=new Date(year,month+1,0).getDate();
+    const prevMonth=()=>setCalMonth(new Date(year,month-1,1));
+    const nextMonth=()=>setCalMonth(new Date(year,month+1,1));
+    const monthLabel=calMonth.toLocaleDateString("en-US",{month:"long",year:"numeric"});
+
+    // Build grid: leading blanks + days
+    const cells=[];
+    for(let i=0;i<firstDay;i++) cells.push(null);
+    for(let d=1;d<=daysInMonth;d++) cells.push(d);
+
+    return (
+      <div style={{padding:"16px 20px"}}>
+        {/* Month nav */}
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16}}>
+          <button onClick={prevMonth} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+            color:"var(--dim)",padding:"6px 14px",cursor:"pointer",fontSize:16,fontFamily:"inherit"}}>‹</button>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,letterSpacing:"0.06em",
+            color:"var(--text)",flex:1,textAlign:"center"}}>{monthLabel.toUpperCase()}</div>
+          <button onClick={()=>setCalMonth(new Date(today.getFullYear(),today.getMonth(),1))}
+            style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:8,
+            color:C.accent,padding:"6px 14px",cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:700}}>TODAY</button>
+          <button onClick={nextMonth} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+            color:"var(--dim)",padding:"6px 14px",cursor:"pointer",fontSize:16,fontFamily:"inherit"}}>›</button>
+        </div>
+
+        {/* Day headers */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2,marginBottom:4}}>
+          {["Sun","Mon","Tue","Wed","Thu","Fri","Sat"].map(d=>(
+            <div key={d} style={{textAlign:"center",fontSize:10,fontWeight:700,
+              color:"var(--dim)",letterSpacing:"0.06em",padding:"4px 0"}}>{d}</div>
+          ))}
+        </div>
+
+        {/* Calendar grid */}
+        <div style={{display:"grid",gridTemplateColumns:"repeat(7,1fr)",gap:2}}>
+          {cells.map((day,i)=>{
+            if(!day) return <div key={"blank"+i}/>;
+            const dateStr=`${year}-${String(month+1).padStart(2,"0")}-${String(day).padStart(2,"0")}`;
+            const dayEvs=eventsForDate(dateStr);
+            const isToday=dateStr===todayStr;
+            const isWeekend=new Date(year,month,day).getDay()===0||new Date(year,month,day).getDay()===6;
+            const isSelected=calDayDetail===dateStr;
+            const hasOverdue=dayEvs.some(ev=>isOverdue(ev.startDate,ev.status)&&fmtYMD(parseAnyDate(ev.startDate)===dateStr||ev.startDate===dateStr));
+            return (
+              <div key={dateStr} onClick={()=>setCalDayDetail(isSelected?null:dateStr)}
+                style={{minHeight:80,borderRadius:8,padding:"6px 6px 4px",cursor:"pointer",
+                  background:isSelected?C.accent+"18":isToday?C.accent+"0A":isWeekend?"var(--surface)":"var(--card)",
+                  border:`1px solid ${isSelected?C.accent+"55":isToday?C.accent+"33":C.border}`,
+                  opacity:isWeekend&&dayEvs.length===0?0.5:1,
+                  transition:"background 0.1s"}}
+                onMouseEnter={e=>{ if(!isSelected) e.currentTarget.style.background=C.accent+"10"; }}
+                onMouseLeave={e=>{ e.currentTarget.style.background=isSelected?C.accent+"18":isToday?C.accent+"0A":isWeekend?"var(--surface)":"var(--card)"; }}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
+                  <span style={{fontSize:11,fontWeight:isToday?800:600,
+                    color:isToday?C.accent:isWeekend?"var(--muted)":"var(--text)"}}>{day}</span>
+                  {isToday&&<span style={{fontSize:8,color:C.accent,fontWeight:800,letterSpacing:"0.08em"}}>TODAY</span>}
+                  {dayEvs.length>0&&!isToday&&<span style={{fontSize:9,fontWeight:700,color:"var(--dim)"}}>{dayEvs.length}</span>}
+                </div>
+                {dayEvs.slice(0,3).map(ev=><EventPill key={ev.id} ev={ev} mini/>)}
+                {dayEvs.length>3&&<div style={{fontSize:9,color:"var(--muted)",paddingLeft:4}}>+{dayEvs.length-3} more</div>}
+              </div>
+            );
+          })}
+        </div>
+
+        {/* Day detail panel */}
+        {calDayDetail&&(()=>{
+          const dayEvs=eventsForDate(calDayDetail);
+          const dt=parseAnyDate(calDayDetail);
+          const label=dt?dt.toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric",year:"numeric"}):"";
+          return (
+            <div style={{marginTop:16,padding:"16px 18px",background:"var(--card)",
+              borderRadius:14,border:`1px solid ${C.accent}33`}}>
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:14}}>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,
+                  letterSpacing:"0.06em",color:C.accent}}>{label.toUpperCase()}</div>
+                <div style={{marginLeft:"auto",fontSize:11,color:"var(--dim)"}}>{dayEvs.length} item{dayEvs.length!==1?"s":""}</div>
+                <button onClick={()=>setCalDayDetail(null)}
+                  style={{background:"none",border:"none",color:"var(--muted)",fontSize:16,cursor:"pointer",padding:"0 4px"}}>✕</button>
+              </div>
+              {dayEvs.length===0
+                ?<div style={{fontSize:12,color:"var(--muted)",fontStyle:"italic"}}>Nothing scheduled this day.</div>
+                :dayEvs.map(ev=><EventCard key={ev.id} ev={ev}/>)
+              }
+            </div>
+          );
+        })()}
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      {/* ── Header ── */}
+      <div style={{padding:"20px 26px 0",borderBottom:`1px solid ${C.border}`}}>
+        <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14,flexWrap:"wrap"}}>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:"var(--text)",lineHeight:1}}>SCHEDULING FORECAST</div>
+          <div style={{fontSize:11,color:"var(--dim)"}}>{allEvents.length} item{allEvents.length!==1?"s":""}</div>
+          <div style={{marginLeft:"auto",display:"flex",gap:4}}>
+            {[{k:"kanban",l:"Kanban"},{k:"list",l:"List"},{k:"calendar",l:"📅 Calendar"}].map(({k,l})=>(
+              <button key={k} onClick={()=>setViewMode(k)}
+                style={{padding:"6px 14px",borderRadius:8,fontSize:11,fontWeight:viewMode===k?700:500,
+                  cursor:"pointer",fontFamily:"inherit",border:`1px solid ${viewMode===k?C.accent:C.border}`,
+                  background:viewMode===k?C.accent:"none",color:viewMode===k?"#fff":"var(--dim)",transition:"all 0.15s"}}>
+                {l}
+              </button>
+            ))}
+          </div>
+        </div>
+        {/* Foreman tabs */}
+        <div style={{display:"flex",gap:6,overflowX:"auto",scrollbarWidth:"none",paddingBottom:1}}>
+          {foremanTabs.map(f=>{
+            const fc2=f==="All"?C.accent:getFC(f)||"#6b7280";
+            const ct=f==="All"?allEvents.length:buildEvents(
+              f==="Unassigned"?jobs.filter(j=>!j.foreman||j.foreman==="Unassigned")
+              :jobs.filter(j=>matchesForemanTab(j,f))
+            ).length;
+            return (
+              <button key={f} onClick={()=>setForemanTab(f)}
+                style={{padding:"7px 16px",borderRadius:"8px 8px 0 0",fontSize:12,cursor:"pointer",
+                  fontFamily:"inherit",fontWeight:foremanTab===f?700:400,whiteSpace:"nowrap",
+                  background:foremanTab===f?fc2:"none",border:`1px solid ${foremanTab===f?fc2:C.border}`,
+                  borderBottom:"none",color:foremanTab===f?"#fff":"var(--dim)",transition:"all 0.15s"}}>
+                {f} <span style={{opacity:0.8,fontSize:10}}>({ct})</span>
+              </button>
+            );
+          })}
+        </div>
+      </div>
+
+      {/* ── KANBAN ── */}
+      {viewMode==="kanban"&&(
+        <div style={{padding:"20px 26px",overflowX:"auto"}}>
+          {allEvents.length===0
+            ?<div style={{textAlign:"center",padding:"60px 0",color:"var(--muted)",fontSize:13}}>Nothing to schedule.</div>
+            :<div style={{display:"grid",gridTemplateColumns:"repeat(5,minmax(230px,1fr))",gap:14,minWidth:900}}>
+              {BUCKETS.map(bucket=>{
+                const bEvs=allEvents.filter(ev=>getBucketForEvent(ev)===bucket.key);
+                return (
+                  <div key={bucket.key}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,
+                      paddingBottom:8,borderBottom:`2px solid ${bucket.color}55`}}>
+                      <div style={{width:8,height:8,borderRadius:"50%",background:bucket.color,flexShrink:0}}/>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:15,
+                        letterSpacing:"0.08em",color:bucket.color}}>{bucket.label}</div>
+                      <div style={{marginLeft:"auto",background:`${bucket.color}18`,border:`1px solid ${bucket.color}33`,
+                        borderRadius:99,padding:"1px 8px",fontSize:11,color:bucket.color,fontWeight:700}}>
+                        {bEvs.length}
+                      </div>
+                    </div>
+                    {bEvs.length===0
+                      ?<div style={{fontSize:11,color:"var(--muted)",fontStyle:"italic",padding:"16px 0",
+                          textAlign:"center",border:`1px dashed ${C.border}`,borderRadius:10}}>Empty</div>
+                      :bEvs.map(ev=><EventCard key={ev.id} ev={ev}/>)
+                    }
+                  </div>
+                );
+              })}
+            </div>
+          }
+        </div>
+      )}
+
+      {/* ── LIST ── */}
+      {viewMode==="list"&&(()=>{
+        const sorted=[...allEvents].sort((a,b)=>{
+          if(!a.startDate&&!b.startDate) return 0;
+          if(!a.startDate) return 1; if(!b.startDate) return -1;
+          const da=parseAnyDate(a.startDate), db=parseAnyDate(b.startDate);
+          return (da||0)-(db||0);
+        });
+        return (
+          <div style={{padding:"20px 26px",maxWidth:900}}>
+            {sorted.length===0&&<div style={{textAlign:"center",padding:"60px 0",color:"var(--muted)",fontSize:13}}>Nothing to schedule.</div>}
+            {sorted.map(ev=><EventCard key={ev.id} ev={ev}/>)}
+          </div>
+        );
+      })()}
+
+      {/* ── CALENDAR ── */}
+      {viewMode==="calendar"&&<CalendarView/>}
+
+      {/* ── Color Key ── */}
+      <div style={{padding:"16px 26px 32px",borderTop:"1px solid var(--border)",marginTop:8}}>
+        <div style={{fontSize:10,fontWeight:700,color:"var(--dim)",letterSpacing:"0.1em",marginBottom:12}}>COLOR KEY</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+          {[
+            {color:"#ca8a04", label:"Waiting for Date",       desc:"Waiting for start date confirmation from GC/homeowner"},
+            {color:"#f97316", label:"Date Confirmed",         desc:"Start date confirmed — needs to be scheduled"},
+            {color:"#2563eb", label:"Scheduled",              desc:"Rough or finish is scheduled with a date set"},
+            {color:"#7dd3fc", label:"In Progress",            desc:"Crew is actively working on rough or finish"},
+            {color:"#ea580c", label:"Ready to Invoice",       desc:"Work complete — invoice has not been sent yet"},
+            {color:"#dc2626", label:"Needs Scheduling (RT)",  desc:"Return trip needs to be scheduled"},
+            {color:"#8b5cf6", label:"RT Scheduled",           desc:"Return trip has been scheduled"},
+            {color:"#dc2626", label:"CO — Needs Sending",     desc:"Change order drafted but not sent yet"},
+            {color:"#ca8a04", label:"CO — Pending Approval",  desc:"Change order sent, waiting for approval"},
+            {color:"#16a34a", label:"CO — Approved",          desc:"Change order approved, awaiting completion"},
+            {color:C.teal,    label:"QC Walk",                desc:"Quality control walk needs to be scheduled or is scheduled"},
+            {color:C.red,     label:"Overdue",                desc:"Start date has passed with no completion"},
+          ].map(({color,label,desc})=>(
+            <div key={label} style={{display:"flex",alignItems:"flex-start",gap:8,
+              padding:"8px 12px",borderRadius:9,background:"var(--surface)",
+              border:"1px solid var(--border)",flex:"1 1 200px",minWidth:180}}>
+              <div style={{width:10,height:10,borderRadius:"50%",background:color,flexShrink:0,marginTop:3}}/>
+              <div>
+                <div style={{fontSize:12,fontWeight:700,color:"var(--text)",marginBottom:2}}>{label}</div>
+                <div style={{fontSize:11,color:"var(--dim)",lineHeight:1.4}}>{desc}</div>
+              </div>
+            </div>
+          ))}
         </div>
       </div>
     </div>
   );
 }
 
+// ── Settings ─────────────────────────────────────────────────
+// Three module-level components so React never sees new types mid-render
+function SettingsGroupHead({label}) {
+  return (
+    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.08em",
+      color:"#0f172a",marginBottom:14,paddingBottom:8,borderBottom:"2px solid #e2e8f0"}}>
+      {label}
+    </div>
+  );
+}
+
+function SettingsRoleBadge({label, color}) {
+  return (
+    <span style={{fontSize:9,fontWeight:700,color:"#fff",background:color||"#64748b",
+      borderRadius:99,padding:"2px 8px",letterSpacing:"0.06em",flexShrink:0}}>
+      {label}
+    </span>
+  );
+}
+
+function SettingsPersonRow({user, color, colorOptions, onColorChange}) {
+  const accessColors = { admin:"#ef4444", manager:"#8b5cf6", standard:"#2563eb", limited:"#64748b" };
+  const titleLabels  = { foreman:"Foreman", lead:"Lead", crew:"Crew" };
+  const title  = user.title || (["admin","justin","jeromy"].includes(user.role) ? "admin" : ["foreman","lead","crew"].includes(user.role) ? user.role : "crew");
+  const access = getAccess(user);
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:10,padding:"11px 14px",
+      background:"#ffffff",borderRadius:10,marginBottom:8,
+      border:"1px solid #e2e8f0",borderLeft:`3px solid ${color}`}}>
+      <div style={{flex:1,display:"flex",alignItems:"center",gap:6,minWidth:0,flexWrap:"wrap"}}>
+        <span style={{fontSize:14,fontWeight:600,color:"#0f172a",
+          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+          {user.name}
+        </span>
+        <SettingsRoleBadge label={titleLabels[title]||title} color={color}/>
+        <SettingsRoleBadge label={ACCESS_LABELS[access]||access} color={accessColors[access]||"#64748b"}/>
+      </div>
+      <div style={{display:"flex",gap:5,flexWrap:"wrap",maxWidth:200,flexShrink:0}}>
+        {colorOptions.map(col=>(
+          <div key={col} onClick={()=>onColorChange(col)}
+            style={{width:20,height:20,borderRadius:"50%",background:col,cursor:"pointer",
+              border:color===col?"3px solid white":"2px solid transparent",
+              boxShadow:color===col?`0 0 0 2px ${col}`:"none",flexShrink:0}}/>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides }) {
+  const [colors, setColors] = useState({...colorOverrides});
+  const [saved,  setSaved]  = useState(false);
+
+  // Sync if parent colorOverrides changes (e.g. on load)
+  useEffect(()=>{ setColors({...colorOverrides}); }, [JSON.stringify(colorOverrides)]);
+
+  const getT = (u) => {
+    if(u.title) return u.title;
+    if(["admin","justin","jeromy"].includes(u.role)) return "admin";
+    if(["foreman","lead","crew"].includes(u.role)) return u.role;
+    return "crew";
+  };
+  const foremanUsers = (users||[]).filter(u=>getT(u)==="foreman");
+  const leadUsers    = (users||[]).filter(u=>getT(u)==="lead");
+  const crewUsers    = (users||[]).filter(u=>getT(u)==="crew");
+
+  const getColor = (name) => {
+    if(colors[name]) return colors[name];
+    const first = name.split(" ")[0];
+    return colors[first]||"#6b7280";
+  };
+
+  const setColor = (name, col) => setColors(prev=>({...prev,[name]:col}));
+
+  const save = async () => {
+    await onSave(colors);
+    setSaved(true); setTimeout(()=>setSaved(false),2000);
+  };
+
+  const adminUsers  = (users||[]).filter(u=>getT(u)==="admin");
+  const noUsers = adminUsers.length===0 && foremanUsers.length===0 && leadUsers.length===0 && crewUsers.length===0;
+
+  return (
+    <div style={{padding:"24px 20px 60px",maxWidth:600,margin:"0 auto"}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.08em",
+        color:"#0f172a",marginBottom:6}}>SETTINGS</div>
+      <div style={{fontSize:12,color:"#64748b",marginBottom:24,lineHeight:1.5}}>
+        Team members are grouped by role. Assign a color to each person — it appears on their card and throughout the app.
+        To add or remove people, use the <strong>Team Members</strong> section below.
+      </div>
+
+      {noUsers && (
+        <div style={{fontSize:13,color:"#94a3b8",fontStyle:"italic",marginBottom:24,
+          padding:"16px",background:"#f8fafc",borderRadius:10,border:"1px dashed #e2e8f0"}}>
+          No team members yet. Add people in the Team Members section below, then assign them roles.
+        </div>
+      )}
+
+      {adminUsers.length>0 && (
+        <div style={{marginBottom:32}}>
+          <SettingsGroupHead label="Admin"/>
+          {adminUsers.map(u=>(
+            <SettingsPersonRow key={u.id} user={u}
+              color={getColor(u.name)}
+              colorOptions={COLOR_OPTIONS}
+              onColorChange={col=>setColor(u.name,col)}/>
+          ))}
+        </div>
+      )}
+
+      {foremanUsers.length>0 && (
+        <div style={{marginBottom:32}}>
+          <SettingsGroupHead label="Foremen"/>
+          {foremanUsers.map(u=>(
+            <SettingsPersonRow key={u.id} user={u}
+              color={getColor(u.name)}
+              colorOptions={COLOR_OPTIONS}
+              onColorChange={col=>setColor(u.name,col)}/>
+          ))}
+        </div>
+      )}
+
+      {leadUsers.length>0 && (
+        <div style={{marginBottom:32}}>
+          <SettingsGroupHead label="Leads"/>
+          {leadUsers.map(u=>(
+            <SettingsPersonRow key={u.id} user={u}
+              color={getColor(u.name)}
+              colorOptions={COLOR_OPTIONS}
+              onColorChange={col=>setColor(u.name,col)}/>
+          ))}
+        </div>
+      )}
+
+      {crewUsers.length>0 && (
+        <div style={{marginBottom:32}}>
+          <SettingsGroupHead label="Crew"/>
+          {crewUsers.map(u=>(
+            <SettingsPersonRow key={u.id} user={u}
+              color={getColor(u.name)}
+              colorOptions={COLOR_OPTIONS}
+              onColorChange={col=>setColor(u.name,col)}/>
+          ))}
+        </div>
+      )}
+
+      <button onClick={save}
+        style={{width:"100%",background:saved?"#16a34a":"#d97706",border:"none",borderRadius:10,
+          color:saved?"#fff":"#000",fontSize:15,fontWeight:700,padding:"14px",
+          cursor:"pointer",fontFamily:"inherit",transition:"background 0.3s"}}>
+        {saved?"✓ Saved!":"Save Changes"}
+      </button>
+    </div>
+  );
+}
+
+// ── Homeowner Generator Load Selection Page ──────────────────
+function HomeownerPage({ jobId }) {
+  const [job,        setJob]        = useState(null);
+  const [genLoads,   setGenLoads]   = useState([]);
+  const [items,      setItems]      = useState([]); // homeowner's working list
+  const [submitted,  setSubmitted]  = useState(false);
+  const [loading,    setLoading]    = useState(true);
+  const [submitting, setSubmitting] = useState(false);
+  const [error,      setError]      = useState(null);
+  const [sigName,    setSigName]    = useState('');
+  const [sigDate,    setSigDate]    = useState('');
+  const [sigErr,     setSigErr]     = useState(false);
+  const dragIdx = useRef(null);
+
+  useEffect(()=>{
+    (async()=>{
+      try {
+        const jsnap = await getDoc(doc(db,'jobs',jobId));
+        if(!jsnap.exists()){ setError('Job not found.'); setLoading(false); return; }
+        setJob(jsnap.data().data);
+        const rsnap = await getDoc(doc(db,'homeowner_requests',jobId));
+        if(rsnap.exists()&&rsnap.data().submitted){
+          setSubmitted(true);
+          setItems(rsnap.data().items||[]);
+          setGenLoads(rsnap.data().genLoads||[]);
+        } else {
+          const gl = rsnap.exists()?(rsnap.data().genLoads||[]):[];
+          setGenLoads(gl);
+          setItems(gl.map((l,i)=>({...l,priority:i+1,included:true,notes:''})));
+        }
+      } catch(e){ setError('Failed to load. Please try again.'); }
+      setLoading(false);
+    })();
+  },[jobId]);
+
+  const glById = {};
+  genLoads.forEach(g=>{ glById[g.id]=g; });
+
+  // KEY FIX: all interactions use local state → instant UI, no round-trip wait
+  const toggle  = (id) => setItems(its=>its.map(it=>it.id===id?{...it,included:!it.included}:it));
+  const setNote = (id,v) => setItems(its=>its.map(it=>it.id===id?{...it,notes:v}:it));
+
+  const onDragStart = (i) => { dragIdx.current=i; };
+  const onDragOver  = (e,i) => {
+    e.preventDefault();
+    if(dragIdx.current===null||dragIdx.current===i) return;
+    setItems(its=>{
+      const a=[...its]; const [m]=a.splice(dragIdx.current,1); a.splice(i,0,m);
+      dragIdx.current=i;
+      return a.map((x,idx)=>({...x,priority:idx+1}));
+    });
+  };
+  const onDragEnd = ()=>{ dragIdx.current=null; };
+
+  const included = items.filter(it=>it.included);
+  const excluded = items.filter(it=>!it.included);
+
+  const submit = async () => {
+    if(!sigName.trim()||!sigDate){ setSigErr(true); return; }
+    setSigErr(false); setSubmitting(true);
+    try {
+      await setDoc(doc(db,'homeowner_requests',jobId),{
+        jobId, jobName:job?.name||'', submitted:true,
+        submittedAt:new Date().toISOString(),
+        signature:sigName.trim(), signedDate:sigDate,
+        items:items.map((it,i)=>({...it,priority:i+1})),
+        genLoads,
+      });
+      setSubmitted(true);
+    } catch(e){ alert('Failed to submit. Please try again.'); }
+    setSubmitting(false);
+  };
+
+  const A='#b45309', AB='#fef3c7';
+  const base={fontFamily:'system-ui,-apple-system,sans-serif',minHeight:'100vh',background:'#f8fafc',color:'#1e293b'};
+  const card={background:'#fff',border:'0.5px solid #e2e8f0',borderRadius:10,marginBottom:6,padding:'12px 14px'};
+
+  if(loading) return <div style={{...base,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{fontSize:14,color:'#94a3b8'}}>Loading…</div></div>;
+  if(error)   return <div style={{...base,display:'flex',alignItems:'center',justifyContent:'center',padding:32,textAlign:'center'}}><div style={{fontSize:14,color:'#dc2626'}}>{error}</div></div>;
+  if(submitted) return (
+    <div style={{...base,display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',padding:40,textAlign:'center'}}>
+      <div style={{width:56,height:56,borderRadius:'50%',background:'#f0fdf4',border:'0.5px solid #bbf7d0',display:'flex',alignItems:'center',justifyContent:'center',fontSize:24,marginBottom:20}}>✓</div>
+      <div style={{fontSize:20,fontWeight:500,marginBottom:8}}>Selections received</div>
+      <div style={{fontSize:14,color:'#64748b',maxWidth:320,lineHeight:1.6}}>
+        Thank you. Homestead Electric has your generator load selections.
+      </div>
+      <div style={{marginTop:40,fontSize:11,color:'#cbd5e1',letterSpacing:'0.06em'}}>HOMESTEAD ELECTRIC</div>
+    </div>
+  );
+
+  return (
+    <div style={{...base,maxWidth:500,margin:'0 auto',padding:'0 0 80px'}}>
+      {/* Header */}
+      <div style={{padding:'24px 20px 20px',borderBottom:'0.5px solid #e2e8f0'}}>
+        <div style={{fontSize:10,fontWeight:500,color:'#94a3b8',letterSpacing:'0.1em',marginBottom:6}}>HOMESTEAD ELECTRIC</div>
+        <div style={{fontSize:20,fontWeight:500,marginBottom:4}}>{job?.name||'Generator Load Selection'}</div>
+        <div style={{fontSize:13,color:'#64748b',lineHeight:1.55}}>
+          Review the circuits below — check the ones you want on your generator, drag to reorder by priority (most important first), and submit when done.
+        </div>
+      </div>
+
+      {/* Instructions */}
+      <div style={{margin:'16px 16px 0',padding:'12px 14px',background:AB,border:'0.5px solid #fde68a',borderRadius:10}}>
+        <div style={{fontSize:12,fontWeight:500,color:A,marginBottom:4}}>How to complete</div>
+        <div style={{fontSize:12,color:'#92400e',lineHeight:1.6}}>
+          ★ = Recommended by Homestead Electric<br/>
+          Check/uncheck circuits · Drag ⠿ to reorder · Sign &amp; submit
+        </div>
+      </div>
+
+      <div style={{padding:'20px 16px 0'}}>
+
+        {/* ON GENERATOR */}
+        <div style={{fontSize:10,fontWeight:500,color:'#94a3b8',letterSpacing:'0.08em',marginBottom:10}}>
+          ON GENERATOR · {included.length}
+        </div>
+        {included.length===0&&(
+          <div style={{textAlign:'center',padding:'20px',fontSize:13,color:'#94a3b8',
+            border:'0.5px dashed #e2e8f0',borderRadius:10,marginBottom:12}}>
+            No circuits selected
+          </div>
+        )}
+        {items.map((it,i)=>!it.included?null:(
+          <div key={it.id} draggable
+            onDragStart={()=>onDragStart(i)}
+            onDragOver={e=>onDragOver(e,i)}
+            onDragEnd={onDragEnd}
+            style={{...card,cursor:'grab',userSelect:'none',
+              borderLeft:`3px solid ${it.recommended?A:'#e2e8f0'}`}}>
+            <div style={{display:'flex',alignItems:'center',gap:10}}>
+              <div style={{color:'#cbd5e1',fontSize:15,flexShrink:0}}>⠿</div>
+              <div style={{width:22,height:22,borderRadius:'50%',background:AB,border:'0.5px solid #fde68a',
+                display:'flex',alignItems:'center',justifyContent:'center',
+                fontSize:10,fontWeight:500,color:A,flexShrink:0}}>
+                {included.indexOf(it)+1}
+              </div>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:13,fontWeight:500,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginBottom:2}}>
+                  {it.name||'Unnamed'}
+                  {it.recommended&&<span style={{fontSize:9,fontWeight:700,color:A,background:AB,
+                    borderRadius:99,padding:'1px 7px',border:'0.5px solid #fde68a',flexShrink:0}}>★ Recommended</span>}
+                </div>
+                <div style={{fontSize:11,color:'#94a3b8',display:'flex',gap:8}}>
+                  {it.wire&&<span>{it.wire}</span>}
+                  {it.watts>0&&<span style={{color:A,fontWeight:500}}>{it.watts}W</span>}
+                </div>
+              </div>
+              <button onClick={()=>toggle(it.id)}
+                style={{background:'none',border:'0.5px solid #e2e8f0',borderRadius:7,
+                  padding:'4px 10px',fontSize:11,cursor:'pointer',color:'#94a3b8',
+                  flexShrink:0,fontFamily:'inherit'}}>
+                Remove
+              </button>
+            </div>
+            <div style={{marginTop:8,paddingLeft:32}}>
+              <input value={it.notes||''} onChange={e=>setNote(it.id,e.target.value)}
+                placeholder="Add a note (optional)…"
+                style={{width:'100%',boxSizing:'border-box',border:'0.5px solid #e2e8f0',
+                  borderRadius:7,padding:'6px 10px',fontSize:12,fontFamily:'inherit',
+                  color:'#1e293b',background:'#f8fafc',outline:'none'}}/>
+            </div>
+          </div>
+        ))}
+
+        {/* NOT ON GENERATOR */}
+        {excluded.length>0&&(
+          <>
+            <div style={{fontSize:10,fontWeight:500,color:'#cbd5e1',letterSpacing:'0.08em',margin:'20px 0 10px'}}>
+              NOT ON GENERATOR · {excluded.length}
+            </div>
+            {items.map(it=>it.included?null:(
+              <div key={it.id} style={{...card,opacity:0.6}}>
+                <div style={{display:'flex',alignItems:'center',gap:10}}>
+                  <div style={{flex:1,fontSize:13,color:'#94a3b8'}}>{it.name||'Unnamed'}</div>
+                  <button onClick={()=>toggle(it.id)}
+                    style={{background:'none',border:'0.5px solid #e2e8f0',borderRadius:7,
+                      padding:'4px 10px',fontSize:11,cursor:'pointer',color:A,
+                      flexShrink:0,fontFamily:'inherit'}}>
+                    Add back
+                  </button>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {/* Sign off */}
+        <div style={{marginTop:28,paddingTop:20,borderTop:'0.5px solid #e2e8f0'}}>
+          <div style={{fontSize:13,fontWeight:500,marginBottom:4}}>Sign &amp; Submit</div>
+          <div style={{fontSize:12,color:'#64748b',marginBottom:14,lineHeight:1.5}}>
+            By submitting you confirm these circuits represent your generator load selection.
+          </div>
+          <div style={{display:'grid',gridTemplateColumns:'1fr 1fr',gap:10,marginBottom:14}}>
+            <div>
+              <div style={{fontSize:10,color:'#64748b',marginBottom:4}}>Full Name</div>
+              <input value={sigName} onChange={e=>{setSigName(e.target.value);setSigErr(false);}}
+                placeholder="Your name…"
+                style={{width:'100%',boxSizing:'border-box',
+                  border:`0.5px solid ${sigErr&&!sigName.trim()?'#dc2626':'#e2e8f0'}`,
+                  borderRadius:9,padding:'10px 12px',fontSize:13,fontFamily:'inherit',
+                  color:'#1e293b',background:'#fff',outline:'none'}}/>
+            </div>
+            <div>
+              <div style={{fontSize:10,color:'#64748b',marginBottom:4}}>Date</div>
+              <input type="date" value={sigDate} onChange={e=>setSigDate(e.target.value)}
+                style={{width:'100%',boxSizing:'border-box',
+                  border:`0.5px solid ${sigErr&&!sigDate?'#dc2626':'#e2e8f0'}`,
+                  borderRadius:9,padding:'10px 12px',fontSize:13,fontFamily:'inherit',
+                  color:'#1e293b',background:'#fff',outline:'none',colorScheme:'light'}}/>
+            </div>
+          </div>
+          {sigErr&&<div style={{fontSize:11,color:'#dc2626',marginBottom:10}}>Please enter your name and date.</div>}
+          <button onClick={submit} disabled={submitting}
+            style={{width:'100%',padding:'15px',borderRadius:10,
+              background:submitting?'#e2e8f0':'#1e293b',border:'none',
+              color:submitting?'#94a3b8':'#fff',fontSize:14,fontWeight:500,
+              cursor:submitting?'not-allowed':'pointer',fontFamily:'inherit'}}>
+            {submitting?'Submitting…':'Submit my selections'}
+          </button>
+          <div style={{textAlign:'center',marginTop:14,fontSize:10,color:'#cbd5e1',letterSpacing:'0.06em'}}>
+            HOMESTEAD ELECTRIC
+          </div>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+
 function App() {
   // Homeowner page route — ?homeowner=JOB_ID
   const hoParam = new URLSearchParams(window.location.search).get("homeowner");
   if(hoParam) return <HomeownerPage jobId={hoParam}/>;
 
+  // ── Identity ──────────────────────────────────────────────────
+  const [identity, setIdentity] = useState(()=>getIdentity());
+  const authMode = identity ? "office" : "locked"; // compat for remaining authMode refs
+  const setAuthMode = () => {}; // no-op legacy compat
+
+  // ── Users (team members) — loaded from Firestore ─────────────
+  const [users, setUsers] = useState(DEFAULT_USERS);
+
+  useEffect(()=>{
+    // ── Load users ────────────────────────────────────────────
+    const BAD_IDS = new Set([
+      "josh_cloward","keegan","daegan","gage","treycen","jonathan","braden","colby",
+      "fonoivasa","abraham","asher","austin","bailey","brady","braxton","callen",
+      "isaiah","jacob_nuffer","jacob_spackman","jakob","james","noah","payton",
+    ]);
+    getDoc(doc(db,"settings","users")).then(snap=>{
+      const raw = snap.exists()&&snap.data().list ? snap.data().list : [];
+      const cleaned = raw.filter(u=>!BAD_IDS.has(u.id));
+
+      // ── One-time merge: add missing employees (v1) ──────────────
+      const MERGE_KEY = "heUserMerge_v1";
+      if(!localStorage.getItem(MERGE_KEY)) {
+        const ALL_EMPLOYEES = [
+          { id:"abraham_tristan",        name:"Abraham Tristan" },
+          { id:"asher_miller",           name:"Asher Miller" },
+          { id:"austin_schut",           name:"Austin Schut" },
+          { id:"bailey_smith",           name:"Bailey Smith" },
+          { id:"braden_davis",           name:"Braden Davis" },
+          { id:"brady_nelson",           name:"Brady Nelson" },
+          { id:"braxton_raven",          name:"Braxton Raven" },
+          { id:"callen_jakeman",         name:"Callen Jakeman" },
+          { id:"colby_fogh",            name:"Colby Fogh" },
+          { id:"daegan_smith",           name:"Daegan Smith" },
+          { id:"fonoivasa_mataafa",      name:"Fonoivasa Mataafa" },
+          { id:"gage_lund",             name:"Gage Lund" },
+          { id:"isaiah_miller",          name:"Isaiah Miller" },
+          { id:"jacob_nuffer",           name:"Jacob Nuffer" },
+          { id:"jacob_spackman",         name:"Jacob Spackman" },
+          { id:"jakob_bingham",          name:"Jakob Bingham" },
+          { id:"james_coleman_christen", name:"James Coleman Christen" },
+          { id:"jeromy_cloward",         name:"Jeromy Cloward" },
+          { id:"jonathan_harding",       name:"Jonathan Harding" },
+          { id:"josh_cloward",           name:"Josh Cloward" },
+          { id:"justin_cloward",         name:"Justin Cloward" },
+          { id:"keegan_wilkinson",       name:"Keegan Wilkinson" },
+          { id:"koy_wilkinson",          name:"Koy Wilkinson" },
+          { id:"lisa_brown",             name:"Lisa Brown" },
+          { id:"louis_hoffman",          name:"Louis Hoffman" },
+          { id:"noah_davis",             name:"Noah Davis" },
+          { id:"payton_bolda",           name:"Payton Bolda" },
+          { id:"treycen_rollene",        name:"Treycen Rollene" },
+        ];
+        const existingNames = new Set(cleaned.map(u=>(u.name||"").toLowerCase()));
+        const existingIds   = new Set(cleaned.map(u=>u.id));
+        const toAdd = ALL_EMPLOYEES
+          .filter(e => !existingNames.has(e.name.toLowerCase()) && !existingIds.has(e.id))
+          .map(e => ({ ...e, title:"crew", access:"limited", pin:"" }));
+        if(toAdd.length > 0) {
+          const merged = [...cleaned, ...toAdd];
+          setUsers(merged);
+          setDoc(doc(db,"settings","users"),{list:merged}).catch(()=>{});
+          console.log(`[HE] Added ${toAdd.length} missing employee(s):`, toAdd.map(u=>u.name).join(", "));
+        } else {
+          setUsers(cleaned.length ? cleaned : DEFAULT_USERS);
+        }
+        localStorage.setItem(MERGE_KEY, "1");
+      } else {
+        setUsers(cleaned.length ? cleaned : DEFAULT_USERS);
+      }
+
+      if(cleaned.length !== raw.length)
+        setDoc(doc(db,"settings","users"),{list:cleaned}).catch(()=>{});
+    }).catch(()=>{});
+
+    // ── Load color overrides only from settings/main ───────────
+    // Name lists are ALWAYS derived from users by role — never stored separately
+    getDoc(doc(db,"settings","main")).then(snap=>{
+      if(!snap.exists()) return;
+      const d = snap.data();
+      const colors = {...(d.colorOverrides||d.foremanColors||{}),
+                      ...(d.leadColors||{})};
+      if(Object.keys(colors).length)
+        set_colorOverrides(prev=>({...prev,...colors}));
+    }).catch(()=>{});
+  },[]);
+
+  const saveUsers = async (list) => {
+    setUsers(list);
+    if(identity) {
+      const updated = list.find(u=>u.id===identity.id);
+      if(updated) { saveIdentity(updated); setIdentity(updated); }
+    }
+    try { await setDoc(doc(db,"settings","users"),{list}); } catch(e){ console.error(e); }
+  };
+
+  // ── Color overrides (keyed by full name) ─────────────────────
+  const [_colorOverrides, set_colorOverrides] = useState({
+    "Koy":"#3b82f6","Koy Wilkinson":"#3b82f6",
+    "Vasa":"#f97316","Fonoivasa Mataafa":"#f97316",
+    "Colby":"#22c55e","Colby Fogh":"#22c55e",
+  });
+
+  // Derive foremen/leads from users list by role
+  // Derive groups from title field (new) with fallback to role (legacy)
+  const getTitle = (u) => {
+    if(u.title) return u.title;
+    if(["admin","justin","jeromy"].includes(u.role)) return "admin";
+    if(["foreman","lead","crew"].includes(u.role)) return u.role;
+    return "crew";
+  };
+  const _foremanUsers = users.filter(u=>getTitle(u)==="foreman");
+  const _leadUsers    = users.filter(u=>getTitle(u)==="lead");
+  const _crewUsers    = users.filter(u=>getTitle(u)==="crew");
+
+  // Full-name lists for dropdowns/display
+  const _foremen = _foremanUsers.map(u=>u.name);
+  const _leads   = _leadUsers.map(u=>u.name);
+
+  // Build color map: try full name, then first name
+  const getPersonColor = (name) => {
+    if(_colorOverrides[name]) return _colorOverrides[name];
+    const first = name.split(" ")[0];
+    if(_colorOverrides[first]) return _colorOverrides[first];
+    return "#6b7280";
+  };
+
+  // Sync module-level globals (used by legacy code that reads FOREMEN/LEADS directly)
+  const _foremanColors = {};
+  const _leadColors    = {};
+  _foremen.forEach(n=>{ _foremanColors[n]=getPersonColor(n); });
+  _leads.forEach(n=>  { _leadColors[n]   =getPersonColor(n); });
+
+  // Keep module-level vars in sync so legacy getForemenList()/LEADS refs still work
+  FOREMEN        = _foremen.length ? _foremen : DEFAULT_FOREMEN;
+  FOREMEN_COLORS = _foremanColors;
+  LEADS          = _leads.length   ? _leads   : DEFAULT_LEADS;
+  LEAD_COLORS    = _leadColors;
+
+  // Job foreman matching: support both full name and first-name-only (legacy jobs)
+  const matchesForeman = (job, name) => {
+    const jf = (job.foreman||"").trim().toLowerCase();
+    const n  = (name||"").trim().toLowerCase();
+    if(!jf || !n) return false;
+    if(jf === n) return true;
+    // "Koy" matches "Koy Wilkinson" — job first name is prefix of full name
+    if(n.startsWith(jf+" ")) return true;
+    // "Koy Wilkinson" matches "Koy" — full name starts with job value
+    if(jf.startsWith(n+" ")) return true;
+    // "Vasa" matches "Fonoivasa Mataafa" — job value appears anywhere in full name words
+    const nameParts = n.split(" ");
+    if(nameParts.some(part => part === jf || part.includes(jf) || jf.includes(part))) return true;
+    return false;
+  };
+
+  const saveSettings = async(colorOverrides) => {
+    set_colorOverrides(colorOverrides);
+    await setDoc(doc(db,"settings","main"),{colorOverrides}).catch(()=>{});
+  };
+
+
+  // submitPin removed — replaced by UserPicker identity system
+
   const [jobs,     setJobs]     = useState([]);
+  const [upcoming, setUpcoming] = useState([]);
+  const [manualTasks, setManualTasks] = useState([]);
 
   const [selected, setSelected] = useState(null);
 
@@ -5006,13 +7972,13 @@ function App() {
 
     const finishMap = {"Fixtures Ordered":"0%","Finish Scheduled":"20%","Finish In Progress":"50%","Punch List":"75%","CO / Final":"90%","Complete":"100%"};
 
-    return (Array.isArray(loaded)?loaded:[]).map(j=>({...j,
-
-      roughStage:  roughMap[j.roughStage]||(j.roughStage||"0%"),
-
-      finishStage: finishMap[j.finishStage]||(j.finishStage||"0%"),
-
-    }));
+    return (Array.isArray(loaded)?loaded:[]).map(j=>{
+      const migrated = {...j,
+        roughStage:  roughMap[j.roughStage]||(j.roughStage||"0%"),
+        finishStage: finishMap[j.finishStage]||(j.finishStage||"0%"),
+      };
+      return normalizeJob(migrated);
+    });
 
   };
 
@@ -5041,6 +8007,21 @@ function App() {
         if(!snap.empty) {
 
           const loaded = migrate(snap.docs.map(d=>d.data().data).filter(Boolean));
+
+          // One-time fix v2: clear tempPed:true from any job that has a foreman assigned
+          // Real temp peds never have a foreman — they're standalone cards
+          const TEMPPED_FIX_KEY = "heTempPedFixed_v3";
+          if(!localStorage.getItem(TEMPPED_FIX_KEY)) {
+            const toFix = loaded.filter(j => j.tempPed === true && j.foreman && j.foreman !== "");
+            if(toFix.length > 0) {
+              toFix.forEach(job => {
+                const fixed = {...job, tempPed:false, hasTempPed: job.hasTempPed||false};
+                setDoc(doc(db,"jobs",job.id),{data:sanitize(fixed),updated_at:new Date().toISOString()}).catch(()=>{});
+              });
+              console.log(`[HE] v3: Cleared tempPed flag from ${toFix.length} job(s) with foreman assigned`);
+            }
+            localStorage.setItem(TEMPPED_FIX_KEY,"1");
+          }
 
           setJobs(loaded);
 
@@ -5090,7 +8071,32 @@ function App() {
 
     );
 
-    return () => unsub(); // cleanup on unmount
+    // Load upcoming jobs from Firestore
+    const unsubUpcoming = onSnapshot(collection(db,"upcoming"),
+      async (snap) => {
+        const loaded = snap.docs.map(d=>d.data().data).filter(Boolean);
+        // Merge seed jobs in — add any seed job not already present by id
+        const loadedIds = new Set(loaded.map(u=>u.id));
+        const missing = SEED_UPCOMING.filter(s=>!loadedIds.has(s.id));
+        if(missing.length > 0) {
+          for(const item of missing) {
+            try { await setDoc(doc(db,"upcoming",item.id),{data:item,updated_at:new Date().toISOString()}); } catch(e){}
+          }
+          // snapshot will re-fire with the new docs, so no need to setUpcoming here
+        } else {
+          setUpcoming(loaded);
+        }
+      },
+      (err) => { console.error("Upcoming snapshot error:",err); }
+    );
+
+    // Load manual tasks from Firestore
+    const unsubTasks = onSnapshot(collection(db,"manualTasks"),
+      (snap) => { const loaded=snap.docs.map(d=>d.data().data).filter(Boolean); setManualTasks(loaded); },
+      (err) => { console.error("Tasks snapshot error:",err); }
+    );
+
+    return () => { unsub(); unsubUpcoming(); unsubTasks(); }; // cleanup on unmount
 
   },[]);
 
@@ -5173,6 +8179,20 @@ if(initialLoad.current) return;
   };
 
 
+
+  const saveManualTask = async (task) => {
+    try { await setDoc(doc(db,"manualTasks",task.id),{data:task,updated_at:new Date().toISOString()}); } catch(e){}
+  };
+  const deleteManualTask = async (id) => {
+    try { await deleteDoc(doc(db,"manualTasks",id)); } catch(e){}
+  };
+
+  const saveUpcomingItem = async (item) => {
+    try { await setDoc(doc(db,"upcoming",item.id),{data:item,updated_at:new Date().toISOString()}); } catch(e){ console.error(e); }
+  };
+  const deleteUpcomingItem = async (id) => {
+    try { await deleteDoc(doc(db,"upcoming",id)); } catch(e){}
+  };
 
   // Flush all pending saves immediately
 
@@ -5292,7 +8312,7 @@ if(initialLoad.current) return;
 
       const p = j[key]||{};
 
-      return total + countFloor(p.upper) + countFloor(p.main) + countFloor(p.basement);
+      return total + countFloor(p.upper) + countFloor(p.main) + countFloor(p.basement) + ((p.extras||[]).reduce((s,e)=>s+countFloor(p[e.key]),0));
 
     },0);
 
@@ -5306,7 +8326,7 @@ if(initialLoad.current) return;
 
   const complete   = jobs.filter(j=>parseStage(j.finishStage)===100).length;
 
-  const pendingCOs = jobs.reduce((a,j)=>a+j.changeOrders.filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
+  const pendingCOs = jobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length,0);
 
   const syncColor  = {idle:C.muted,saving:C.accent,saved:C.green,error:C.red}[syncStatus];
 
@@ -5317,18 +8337,21 @@ if(initialLoad.current) return;
   // view: "home" = main page, "foreman" = foreman-specific page
 
   const [view, setView] = useState("home");
-
   const [activeForeman, setActiveForeman] = useState(null);
 
+  const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const [crewView, setCrewView] = useState(null); // foreman name or null
+  const goHome       = () =>  { setView("home");     setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openSchedule = () =>  { setView("schedule"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openUpcoming = () =>  { setView("upcoming"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openTasks    = () =>  { setView("tasks");    setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openSettings = () =>  { setView("settings"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
 
 
-  const openForeman = (f) => { setActiveForeman(f); setView("foreman"); setSearch(""); setStageF("All"); setFlagOnly(false); };
-
-  const goHome = () => { setView("home"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
 
 
 
-  const viewJobs = view==="foreman" ? jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):(j.foreman||"Koy")===activeForeman) : jobs;
+  const viewJobs = view==="foreman" ? jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):matchesForeman(j,activeForeman)) : jobs;
 
 
 
@@ -5364,17 +8387,17 @@ if(initialLoad.current) return;
 
     const open      = openCount(job);
 
-    const pendCO    = (job.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length;
+    const pendCO    = (job.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length;
 
     const pendRT    = (job.returnTrips||[]).filter(r=>!r.signedOff).length;
 
     const countQCFloor = (f) => { if(!f) return 0; return (f.general||[]).filter(i=>!i.done).length + (f.rooms||[]).reduce((a,r)=>a+(r.items||[]).filter(i=>!i.done).length,0); };
 
-    const qcItems = countQCFloor(job.qcPunch?.upper) + countQCFloor(job.qcPunch?.main) + countQCFloor(job.qcPunch?.basement);
+    const qcItems = countQCFloor(job.qcPunch?.upper) + countQCFloor(job.qcPunch?.main) + countQCFloor(job.qcPunch?.basement) + ((job.qcPunch?.extras||[]).reduce((s,e)=>s+countQCFloor(job.qcPunch?.[e.key]),0));
 
     const foreman = job.foreman||"Koy";
 
-    const rowFc = fc || FOREMEN_COLORS[foreman];
+    const rowFc = fc || _foremanColors[foreman];
 
     const hasRT      = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
     const hasRTSch   = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
@@ -5384,7 +8407,7 @@ if(initialLoad.current) return;
     const isInvoice  = rs==="invoice"||fs==="invoice";
     const isWaiting  = rs==="waiting"||fs==="waiting";
     const isSched    = rs==="scheduled"||fs==="scheduled";
-    const isReady    = rs==="ready"||fs==="ready";
+    const isReady    = rs==="date_confirmed"||fs==="date_confirmed"||rs==="waiting_date"||fs==="waiting_date";
     // Priority: red alerts > RT scheduled > invoice > waiting > scheduled > ready
     const priority = (hasRT||prepAlert)?"red":hasRTSch?"purple":isInvoice?"invoice":isWaiting?"hold":isSched?"sched":isReady?"ready":"none";
     const BG    = {red:"rgba(220,38,38,0.18)",purple:"rgba(139,92,246,0.10)",invoice:"rgba(234,88,12,0.10)",hold:"rgba(234,179,8,0.12)",sched:"rgba(37,99,235,0.08)",ready:"rgba(202,138,4,0.08)",none:C.card};
@@ -5442,8 +8465,9 @@ if(initialLoad.current) return;
             <div style={{fontSize:9,color:C.rough,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>ROUGH</div>
             <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough}/>
             {job.roughProjectedStart&&(
-              <div style={{marginTop:4,fontSize:12,color:"#dc2626",fontWeight:700}}>
-                Projected Start - {job.roughProjectedStart}
+              <div style={{marginTop:4,fontSize:12,fontWeight:700,
+                color:job.roughStartConfirmed?"#16a34a":"#dc2626"}}>
+                {job.roughStartConfirmed?"Started: ":"Projected: "}{fmtDisplay(job.roughProjectedStart)}
               </div>
             )}
           </div>
@@ -5452,8 +8476,9 @@ if(initialLoad.current) return;
             <div style={{fontSize:9,color:C.finish,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>FINISH</div>
             <StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/>
             {job.finishProjectedStart&&(
-              <div style={{marginTop:4,fontSize:12,color:"#dc2626",fontWeight:700}}>
-                Projected Start - {job.finishProjectedStart}
+              <div style={{marginTop:4,fontSize:12,fontWeight:700,
+                color:job.finishStartConfirmed?"#16a34a":"#dc2626"}}>
+                {job.finishStartConfirmed?"Started: ":"Projected: "}{fmtDisplay(job.finishProjectedStart)}
               </div>
             )}
           </div>
@@ -5463,8 +8488,8 @@ if(initialLoad.current) return;
             {hasRT&&<Pill label="Return trip needed" color="#dc2626"/>}
             {prepAlert&&<Pill label="Redline plans need update" color="#dc2626"/>}
             {hasRTSch&&!hasRT&&<Pill label="Return trip scheduled" color="#8b5cf6"/>}
-            {rs&&!(rs==="complete"&&fs&&fs!=="ready")&&<Pill label={rs==="scheduled"&&job.roughStatusDate?"Rough: "+job.roughStatusDate:rs==="ready"&&job.roughStatusDate?"Rough: "+job.roughStatusDate:("Rough: "+(getStatusDef(ROUGH_STATUSES,rs).label||rs))} color={getStatusDef(ROUGH_STATUSES,rs).color||C.dim}/>}
-            {fs&&<Pill label={fs==="scheduled"&&job.finishStatusDate?"Finish: "+job.finishStatusDate:("Finish: "+(getStatusDef(FINISH_STATUSES,fs).label||fs))} color={getStatusDef(FINISH_STATUSES,fs).color||C.dim}/>}
+            {rs&&!(rs==="complete"&&fs&&fs!=="waiting_date"&&fs!=="date_confirmed")&&<Pill label={rs==="scheduled"&&job.roughStatusDate?"Rough: "+fmtDisplay(job.roughStatusDate):rs==="date_confirmed"&&job.roughStatusDate?"Rough: "+fmtDisplay(job.roughStatusDate):("Rough: "+(getStatusDef(ROUGH_STATUSES,rs).label||rs))} color={getStatusDef(ROUGH_STATUSES,rs).color||C.dim}/>}
+            {fs&&<Pill label={fs==="scheduled"&&job.finishStatusDate?"Finish: "+fmtDisplay(job.finishStatusDate):("Finish: "+(getStatusDef(FINISH_STATUSES,fs).label||fs))} color={getStatusDef(FINISH_STATUSES,fs).color||C.dim}/>}
             {open>0   &&<Pill label={`${open} open`} color={C.red}/>}
 
             {pendCO>0 &&<Pill label={`${pendCO} CO`} color={C.orange}/>}
@@ -5479,13 +8504,13 @@ if(initialLoad.current) return;
 
           <div style={{display:"flex",alignItems:"center",gap:6,marginLeft:"auto",flexShrink:0}}>
 
-            {FOREMEN.filter(f=>f!==foreman).map(f2=>(
+            {_foremen.filter(f=>f!==foreman).map(f2=>(
 
               <button key={f2} onClick={e=>{e.stopPropagation();updateJob({...job,foreman:f2});}}
 
-                style={{background:"none",border:`1px solid ${FOREMEN_COLORS[f2]}44`,borderRadius:6,
+                style={{background:"none",border:`1px solid ${_foremanColors[f2]}44`,borderRadius:6,
 
-                  color:FOREMEN_COLORS[f2],fontSize:10,padding:"3px 8px",cursor:"pointer",
+                  color:_foremanColors[f2],fontSize:10,padding:"3px 8px",cursor:"pointer",
 
                   fontFamily:"inherit",whiteSpace:"nowrap",transition:"opacity 0.15s"}}
 
@@ -5495,15 +8520,17 @@ if(initialLoad.current) return;
 
             ))}
 
-            <button onClick={e=>{e.stopPropagation();deleteJob(job.id);}}
+            {can(identity,"job.delete")&&(
+              <button onClick={e=>{e.stopPropagation();deleteJob(job.id);}}
 
-              style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
 
-                fontSize:15,padding:"4px 8px",opacity:0.45,transition:"opacity 0.15s"}}
+                  fontSize:15,padding:"4px 8px",opacity:0.45,transition:"opacity 0.15s"}}
 
-              onMouseEnter={e=>e.currentTarget.style.opacity="1"}
+                onMouseEnter={e=>e.currentTarget.style.opacity="1"}
 
-              onMouseLeave={e=>e.currentTarget.style.opacity="0.45"}>🗑</button>
+                onMouseLeave={e=>e.currentTarget.style.opacity="0.45"}>🗑</button>
+            )}
 
           </div>
 
@@ -5513,6 +8540,20 @@ if(initialLoad.current) return;
     );
 
   };
+
+
+
+  // ── Identity gate — show UserPicker if no identity saved ────
+  if(!identity) {
+    return <UserPicker users={users}
+      onSelect={m => { saveIdentity(m); setIdentity(m); }}
+      onSavePin={async (updated) => {
+        // Save the new PIN into the users list in Firestore
+        const newList = users.map(u => u.id===updated.id ? updated : u);
+        await saveUsers(newList);
+      }}
+    />;
+  }
 
 
 
@@ -5527,6 +8568,38 @@ if(initialLoad.current) return;
         backgroundSize:"320px 320px",opacity:0.15,pointerEvents:"none",zIndex:0}}/>
 
 
+
+      {/* ── TOP NAV BAR ── */}
+      <div style={{display:"flex",gap:6,padding:"8px 10px",borderBottom:`1px solid ${C.border}`,background:C.card,position:"sticky",top:0,zIndex:90,overflowX:"auto",scrollbarWidth:"none",alignItems:"center"}}>
+        {[{key:"home",label:"Job Board"},{key:"schedule",label:"Forecast"},{key:"upcoming",label:"Upcoming"},{key:"tasks",label:"Tasks"},...(can(identity,"settings.view")?[{key:"settings",label:"⚙ Settings"}]:[])].map(({key,label})=>{
+          const active = view===key;
+          return (
+            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="tasks"?openTasks:openSettings}
+              style={{
+                padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
+                cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
+                background: active ? C.accent : "transparent",
+                color: active ? "#000" : C.dim,
+                transition:"all 0.15s",letterSpacing:"0.02em",
+                boxShadow: active ? `0 2px 8px ${C.accent}55` : "none",
+              }}>
+              {label}
+            </button>
+          );
+        })}
+        <div style={{marginLeft:"auto",flexShrink:0,display:"flex",alignItems:"center",gap:8}}>
+          <span style={{fontSize:11,color:C.dim,background:C.surface,border:`1px solid ${C.border}`,
+            borderRadius:99,padding:"4px 12px",whiteSpace:"nowrap"}}>
+            {identity.name} · {ACCESS_LABELS[getAccess(identity)]||getAccess(identity)}
+          </span>
+          <button onClick={()=>{localStorage.removeItem("he_identity");setIdentity(null);}}
+            style={{fontSize:11,color:C.dim,background:"none",border:`1px solid ${C.border}`,
+              borderRadius:99,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}
+            title="Switch user">
+            ↩ Switch
+          </button>
+        </div>
+      </div>
 
       {/* iOS Chrome banner */}
 
@@ -5560,6 +8633,17 @@ if(initialLoad.current) return;
 
         @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Bebas+Neue&display=swap');
 
+        @keyframes taskPulse {
+          0%,100% { box-shadow: 0 0 12px rgba(220,38,38,0.13), 0 2px 8px rgba(220,38,38,0.08); }
+          50%      { box-shadow: 0 0 22px rgba(220,38,38,0.30), 0 2px 14px rgba(220,38,38,0.18); }
+        }
+        @keyframes taskWarn {
+          0%,100% { box-shadow: 0 0 10px rgba(202,138,4,0.12), 0 2px 6px rgba(202,138,4,0.08); }
+          50%      { box-shadow: 0 0 18px rgba(202,138,4,0.28), 0 2px 10px rgba(202,138,4,0.16); }
+        }
+        .task-pulse { animation: taskPulse 2s ease-in-out infinite; }
+        .task-warn  { animation: taskWarn 2.5s ease-in-out infinite; }
+
         *{box-sizing:border-box;margin:0;padding:0;}
 
         ::-webkit-scrollbar{width:4px;height:4px;}
@@ -5586,81 +8670,65 @@ if(initialLoad.current) return;
 
         <div>
 
-          <div style={{padding:"24px 26px 20px",borderBottom:`1px solid ${C.border}`}}>
+          {/* ── HOME HEADER ── */}
+          <div style={{padding:"20px 24px 16px",borderBottom:`1px solid ${C.border}`,background:C.card}}>
+            <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12,flexWrap:"wrap"}}>
 
-            <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",flexWrap:"wrap",gap:12,marginBottom:20}}>
-
+              {/* Title block */}
               <div>
-
-                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>
-
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.08em",color:C.text,lineHeight:1,display:"flex",alignItems:"center",gap:10}}>
                   HOMESTEAD ELECTRIC
-
                 </div>
-
-                <div style={{fontSize:11,color:C.dim,marginTop:3,display:"flex",gap:16,alignItems:"center"}}>
-
-                  <span>{jobs.length} total job sites</span>
-
-                  <span style={{color:syncColor}}>{syncLabel}</span>
-
-
-
-                  <button onClick={backupByEmail}
-
-                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
-
-                      color:C.dim,fontSize:11,fontWeight:600,padding:"3px 10px",cursor:"pointer",
-
-                      fontFamily:"inherit"}}>
-
-                    Backup
-
-                  </button>
-
-                  <button onClick={()=>window.location.reload()}
-
-                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
-
-                      color:C.dim,fontSize:14,fontWeight:700,padding:"3px 10px",cursor:"pointer",
-
-                      fontFamily:"inherit"}}>
-
-                    ↻
-
-                  </button>
-
-                  <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);}}
-
-                    style={{background:C.blue,border:"none",borderRadius:6,color:"#fff",
-
-                      fontSize:11,fontWeight:700,padding:"3px 12px",cursor:"pointer",
-
-                      fontFamily:"inherit"}}>
-
-                    + Add Job
-
-                  </button>
-
+                <div style={{display:"flex",alignItems:"center",gap:10,marginTop:4}}>
+                  <span style={{fontSize:11,color:C.dim}}>{jobs.length} job sites</span>
+                  <span style={{width:3,height:3,borderRadius:"50%",background:C.border,display:"inline-block"}}/>
+                  <span style={{fontSize:11,color:syncColor,fontWeight:500}}>{syncLabel}</span>
                 </div>
+              </div>
 
+              {/* Action buttons */}
+              <div style={{display:"flex",gap:6,alignItems:"center"}}>
+
+                <button onClick={()=>{localStorage.removeItem("he_identity");setIdentity(null);}}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                    color:C.dim,fontSize:11,fontWeight:600,padding:"6px 12px",cursor:"pointer",
+                    fontFamily:"inherit"}}>
+                  🔒 Lock
+                </button>
+                <button onClick={backupByEmail}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                    color:C.dim,fontSize:11,fontWeight:600,padding:"6px 12px",cursor:"pointer",
+                    fontFamily:"inherit"}}>
+                  Backup
+                </button>
+                <button onClick={()=>window.location.reload()}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                    color:C.dim,fontSize:14,fontWeight:700,padding:"6px 10px",cursor:"pointer",
+                    fontFamily:"inherit"}}>
+                  ↻
+                </button>
+                <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);}}
+                  style={{background:C.accent,border:"none",borderRadius:8,color:"#000",
+                    fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
+                    fontFamily:"inherit",boxShadow:`0 2px 8px ${C.accent}44`,letterSpacing:"0.02em"}}>
+                  + New Job
+                </button>
+                <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";j.tempPed=true;setJobs(js=>[j,...js]);setSelected(j);}}
+                  style={{background:"#8b5cf6",border:"none",borderRadius:8,color:"#fff",
+                    fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
+                    fontFamily:"inherit",boxShadow:"0 2px 8px #8b5cf644",letterSpacing:"0.02em"}}>
+                  + Temp Ped
+                </button>
               </div>
 
             </div>
-
-
-
           </div>
 
 
 
           <div style={{padding:"28px 26px"}}>
 
-            <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em",marginBottom:16}}>
-
-              TAP A FOREMAN TO VIEW THEIR JOBS
-
-            </div>
+            <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em",marginBottom:14,textTransform:"uppercase"}}>Pipeline Overview</div>
 
             {(()=>{
 
@@ -5772,138 +8840,81 @@ if(initialLoad.current) return;
 
             )}
 
-            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))",gap:16,marginBottom:40}}>
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10,marginBottom:40,alignItems:"start"}}>
 
-              {FOREMEN.map(f=>{
-
-                const fc    = FOREMEN_COLORS[f];
-
-                const fJobs = jobs.filter(j=>(j.foreman||"Koy")===f);
-
-                const fOpen = fJobs.reduce((a,j)=>a+openCount(j),0);
-
-                const fCOs  = fJobs.reduce((a,j)=>a+j.changeOrders.filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
-
-                const fFlag = fJobs.filter(j=>j.flagged).length;
+              {_foremen.map(f=>{
+                const fc    = getPersonColor(f);
+                const fJobs = jobs.filter(j=>matchesForeman(j,f));
+                const fCOs  = fJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length,0);
                 const fRT   = fJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
-                const fRTS  = fJobs.filter(j=>{const r2=parseStage(j.roughStage);const f2=parseStage(j.finishStage);return j.readyToSchedule&&(r2===0||(r2===100&&f2===0));}).length;
-
-                const rAvg  = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+(parseStage(j.roughStage)),0)/fJobs.length) : 0;
-
-                const fnAvg = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+(parseStage(j.finishStage)),0)/fJobs.length) : 0;
-
+                const rAvg  = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+parseStage(j.roughStage),0)/fJobs.length) : 0;
+                const fnAvg = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+parseStage(j.finishStage),0)/fJobs.length) : 0;
                 return (
-
-                  <div key={f} className="foreman-card" onClick={()=>openForeman(f)}
-
-                    style={{background:C.card,border:`1px solid ${fc}44`,borderRadius:16,padding:20,borderTop:`3px solid ${fc}`}}>
-
-                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
-
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:fc}}>{f}</div>
-
-                      <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,
-
-                        padding:"3px 12px",fontSize:11,color:fc,fontWeight:700}}>
-
-                        {fJobs.length} job{fJobs.length!==1?"s":""}
-
-                      </div>
-
-                    </div>
-
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
-
-                      {[[fCOs,"Pending COs",fCOs>0?C.blue:C.muted]].map(([v,l,c])=>(
-
-                        <div key={l} style={{background:C.surface,borderRadius:8,padding:"8px 10px"}}>
-
-                          <div style={{fontFamily:"'Bebas Neue'",fontSize:20,color:c,lineHeight:1}}>{v}</div>
-
-                          <div style={{fontSize:10,color:C.dim,marginTop:2}}>{l}</div>
-
+                  <div key={f}>
+                    {/* Main card */}
+                    <div className="foreman-card" onClick={()=>openForeman(f)}
+                      style={{background:C.card,border:`1px solid ${fc}33`,borderRadius:12,
+                        padding:"14px 16px",borderTop:`3px solid ${fc}`}}>
+                      {/* Name + count */}
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:fc,lineHeight:1}}>{f}</div>
+                        <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,
+                          padding:"2px 9px",fontSize:10,color:fc,fontWeight:700}}>
+                          {fJobs.length}
                         </div>
-
-                      ))}
-
-                    </div>
-
-
-
-                    {(fRT>0||fRTS>0)&&(
-                      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10}}>
-                        {fRT>0&&<span style={{background:"rgba(220,38,38,0.18)",border:"1.5px solid #dc2626",borderRadius:99,
-                          padding:"3px 10px",fontSize:10,color:"#dc2626",fontWeight:700}}>
-                          {fRT} return trip{fRT>1?"s":""} needed
-                        </span>}
-                        {fRTS>0&&<span style={{background:"rgba(234,179,8,0.18)",border:"1.5px solid #ca8a04",borderRadius:99,
-                          padding:"3px 10px",fontSize:10,color:"#ca8a04",fontWeight:700}}>
-                          {fRTS} ready to schedule
-                        </span>}
                       </div>
-                    )}
-                    <div style={{marginTop:14,fontSize:11,color:fc,fontWeight:600,textAlign:"right"}}>View Jobs →</div>
+                      {/* Stats row */}
+                      <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
+                        {[[fCOs,"COs",fCOs>0?C.blue:C.muted],[fRT,"RTs",fRT>0?"#dc2626":C.muted]].map(([v,l,col])=>(
+                          <div key={l} style={{background:C.surface,borderRadius:7,padding:"5px 8px",flex:1,minWidth:44}}>
+                            <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:col,lineHeight:1}}>{v}</div>
+                            <div style={{fontSize:9,color:C.dim,marginTop:1}}>{l}</div>
+                          </div>
+                        ))}
+                      </div>
 
+                      <div style={{marginTop:10,fontSize:10,color:fc,fontWeight:600,textAlign:"right",opacity:0.7}}>View →</div>
+                    </div>
+                    {/* Crew Access */}
+                    <div onClick={e=>{e.stopPropagation();setCrewView(f);}}
+                      style={{marginTop:4,background:C.surface,border:`1px dashed ${fc}44`,
+                        borderRadius:8,padding:"6px 12px",cursor:"pointer",
+                        display:"flex",alignItems:"center",justifyContent:"space-between",
+                        transition:"background 0.15s"}}
+                      onMouseEnter={e=>e.currentTarget.style.background=`${fc}10`}
+                      onMouseLeave={e=>e.currentTarget.style.background=C.surface}>
+                      <span style={{fontSize:10,fontWeight:600,color:C.dim}}>Crew Access</span>
+                      <span style={{fontSize:9,color:C.dim,opacity:0.5}}>→</span>
+                    </div>
                   </div>
-
                 );
-
               })}
 
-              {/* Unassigned block */}
-
+              {/* Unassigned */}
               {(()=>{
-
                 const fc    = "#6b7280";
-
                 const uJobs = jobs.filter(j=>!j.foreman||j.foreman==="Unassigned");
-
-                const uOpen = uJobs.reduce((a,j)=>a+openCount(j),0);
-
-                const uCOs  = uJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.status!=="Work Completed"&&c.status!=="Denied").length,0);
-
-                const uFlag = uJobs.filter(j=>j.flagged).length;
-
+                const uCOs  = uJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length,0);
                 return (
-
-                  <div className="foreman-card" onClick={()=>openForeman("Unassigned")}
-
-                    style={{background:C.card,border:`1px solid ${fc}44`,borderRadius:16,padding:20,borderTop:`3px solid ${fc}`}}>
-
-                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:16}}>
-
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:fc}}>Unassigned</div>
-
-                      <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,
-
-                        padding:"3px 12px",fontSize:11,color:fc,fontWeight:700}}>
-
-                        {uJobs.length} job{uJobs.length!==1?"s":""}
-
-                      </div>
-
-                    </div>
-
-                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:8,marginBottom:14}}>
-
-                      {[[uOpen,"Open Items",uOpen>0?C.red:C.muted],
-
-                        [uCOs,"Pending COs",uCOs>0?C.purple:C.muted]].map(([v,l,c])=>(
-
-                        <div key={l} style={{background:C.surface,borderRadius:8,padding:"8px 10px"}}>
-
-                          <div style={{fontFamily:"'Bebas Neue'",fontSize:20,color:c,lineHeight:1}}>{v}</div>
-
-                          <div style={{fontSize:10,color:C.dim,marginTop:2}}>{l}</div>
-
+                  <div>
+                    <div className="foreman-card" onClick={()=>openForeman("Unassigned")}
+                      style={{background:C.card,border:`1px solid ${fc}33`,borderRadius:12,
+                        padding:"14px 16px",borderTop:`3px solid ${fc}`}}>
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:fc,lineHeight:1}}>Unassigned</div>
+                        <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,
+                          padding:"2px 9px",fontSize:10,color:fc,fontWeight:700}}>
+                          {uJobs.length}
                         </div>
-
-                      ))}
-
+                      </div>
+                      <div style={{display:"flex",gap:6,marginBottom:10}}>
+                        <div style={{background:C.surface,borderRadius:7,padding:"5px 8px",flex:1}}>
+                          <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:uCOs>0?C.blue:C.muted,lineHeight:1}}>{uCOs}</div>
+                          <div style={{fontSize:9,color:C.dim,marginTop:1}}>COs</div>
+                        </div>
+                      </div>
+                      <div style={{fontSize:10,color:fc,fontWeight:600,textAlign:"right",opacity:0.7}}>View →</div>
                     </div>
-
-                    <div style={{marginTop:14,fontSize:11,color:fc,fontWeight:600,textAlign:"right"}}>View Jobs →</div>
-
                   </div>
 
                 );
@@ -5912,13 +8923,101 @@ if(initialLoad.current) return;
 
             </div>
 
+
+            {/* ── CREW VIEW MODAL ── */}
+            {crewView&&(
+              <div style={{position:"fixed",inset:0,background:C.bg,zIndex:300,
+                display:"flex",flexDirection:"column",overflowY:"auto"}}>
+
+                {/* Crew header */}
+                <div style={{background:C.card,borderBottom:`1px solid ${C.border}`,
+                  padding:"14px 18px",position:"sticky",top:0,zIndex:10,display:"flex",
+                  alignItems:"center",justifyContent:"space-between",gap:12}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8}}>
+                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,
+                      letterSpacing:"0.08em",color:_foremanColors[crewView]||"#6b7280"}}>
+                      {crewView} — Jobs
+                    </div>
+                    <div style={{background:`${_foremanColors[crewView]||"#6b7280"}18`,
+                      border:`1px solid ${_foremanColors[crewView]||"#6b7280"}33`,
+                      borderRadius:99,padding:"2px 10px",fontSize:11,
+                      color:_foremanColors[crewView]||"#6b7280",fontWeight:700}}>
+                      {jobs.filter(j=>matchesForeman(j,crewView)).length} jobs
+                    </div>
+                  </div>
+                  <button onClick={()=>setCrewView(null)}
+                    style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                      color:C.dim,fontSize:16,width:34,height:34,cursor:"pointer",
+                      display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
+                </div>
+
+                {/* Lead-grouped job cards */}
+                {(()=>{
+                  const crewJobs = jobs.filter(j=>matchesForeman(j,crewView));
+                  const fc2 = _foremanColors[crewView]||"#6b7280";
+                  if(crewJobs.length===0) return (
+                    <div style={{textAlign:"center",color:C.dim,padding:"60px 0",fontSize:13}}>
+                      No jobs assigned to {crewView}
+                    </div>
+                  );
+                  // Group by lead — jobs with no lead go under "Unassigned"
+                  const leadMap = {};
+                  crewJobs.forEach(j=>{
+                    const lead = j.lead||"";
+                    if(!leadMap[lead]) leadMap[lead]=[];
+                    leadMap[lead].push(j);
+                  });
+                  // Sort: named leads alphabetically, unassigned last
+                  const leadKeys = Object.keys(leadMap).sort((a,b)=>{
+                    if(!a) return 1; if(!b) return -1;
+                    return a.localeCompare(b);
+                  });
+                  return (
+                    <div style={{padding:"16px 16px 60px",maxWidth:700,width:"100%",margin:"0 auto"}}>
+                      {leadKeys.map(lead=>(
+                        <div key={lead||"__none"} style={{marginBottom:28}}>
+                          {/* Lead header */}
+                          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,
+                            paddingBottom:8,borderBottom:`2px solid ${lead?fc2+"55":C.border}`}}>
+                            <div style={{width:30,height:30,borderRadius:"50%",
+                              background:lead?fc2+"22":C.surface,
+                              border:`2px solid ${lead?fc2+"66":C.border}`,
+                              display:"flex",alignItems:"center",justifyContent:"center",
+                              fontSize:13,fontWeight:800,color:lead?fc2:C.dim,flexShrink:0}}>
+                              {lead?lead[0].toUpperCase():"?"}
+                            </div>
+                            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,
+                              letterSpacing:"0.06em",color:lead?fc2:C.dim}}>
+                              {lead||"No Lead Assigned"}
+                            </div>
+                            <div style={{background:lead?fc2+"18":C.surface,
+                              border:`1px solid ${lead?fc2+"33":C.border}`,
+                              borderRadius:99,padding:"2px 9px",fontSize:10,
+                              color:lead?fc2:C.dim,fontWeight:700}}>
+                              {leadMap[lead].length} job{leadMap[lead].length!==1?"s":""}
+                            </div>
+                          </div>
+                          {/* Jobs under this lead */}
+                          {leadMap[lead].map(job=>(
+                            job.tempPed
+                              ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }}/>
+                              : <JobRow key={job.id} job={job} fc={fc2} showForeman={false}/>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  );
+                })()}
+              </div>
+            )}
+
             {/* ── ALL JOBS BY SECTION ── */}
             <div style={{padding:"0 26px 32px"}}>
               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.08em",
                 color:C.dim,marginBottom:16,marginTop:32,paddingTop:24,borderTop:`1px solid ${C.border}`}}>
                 ALL JOBS
               </div>
-              <StageSectionList jobs={jobs} JobRow={JobRow} startCollapsed={true}/>
+              <StageSectionList jobs={jobs} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>
             </div>
 
           </div>
@@ -5945,15 +9044,15 @@ if(initialLoad.current) return;
 
                   padding:"6px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>← Back</button>
 
-              <div style={{width:10,height:10,borderRadius:"50%",background:FOREMEN_COLORS[activeForeman]||"#6b7280",flexShrink:0}}/>
+              <div style={{width:10,height:10,borderRadius:"50%",background:_foremanColors[activeForeman]||"#6b7280",flexShrink:0}}/>
 
               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",
 
-                color:FOREMEN_COLORS[activeForeman]||"#6b7280",lineHeight:1}}>{activeForeman}</div>
+                color:_foremanColors[activeForeman]||"#6b7280",lineHeight:1}}>{activeForeman}</div>
 
               <div style={{fontSize:11,color:C.dim}}>
 
-                {jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):(j.foreman||"Koy")===activeForeman).length} job sites
+                {jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):matchesForeman(j,activeForeman)).length} job sites
 
               </div>
 
@@ -5963,7 +9062,7 @@ if(initialLoad.current) return;
 
                 <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setJobs(js=>[j,...js]);setSelected(j);}}
 
-                  style={{background:FOREMEN_COLORS[activeForeman]||"#6b7280",border:"none",borderRadius:9,color:"#000",
+                  style={{background:_foremanColors[activeForeman]||"#6b7280",border:"none",borderRadius:9,color:"#000",
 
                     fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
 
@@ -5981,7 +9080,7 @@ if(initialLoad.current) return;
 
               {(()=>{
 
-                const fJobs = jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):(j.foreman||"Koy")===activeForeman);
+                const fJobs = jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):matchesForeman(j,activeForeman));
 
                 const fDone = fJobs.filter(j=>parseStage(j.finishStage)===100).length;
 
@@ -6081,7 +9180,7 @@ if(initialLoad.current) return;
 
                 <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setJobs(js=>[j,...js]);setSelected(j);}}
 
-                  style={{background:FOREMEN_COLORS[activeForeman]||"#6b7280",border:"none",borderRadius:9,color:"#000",
+                  style={{background:_foremanColors[activeForeman]||"#6b7280",border:"none",borderRadius:9,color:"#000",
 
                     fontWeight:700,padding:"10px 24px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
 
@@ -6094,7 +9193,35 @@ if(initialLoad.current) return;
             ):(
 
               <>
-              <StageSectionList jobs={filtered} JobRow={JobRow} fc={FOREMEN_COLORS[activeForeman]} startCollapsed={false}/>
+              {/* Tasks + Prep mini-card for this foreman, tabbed for Koy */}
+              {(()=>{
+                const isKoy = activeForeman === "Koy";
+                const fTasks = computeTasks(jobs)
+                  .filter(t=>t.foreman===activeForeman && t.category!=="prep")
+                  .concat((manualTasks||[]).filter(t=>t.foreman===activeForeman));
+                const prepTasks = computeTasks(jobs).filter(t=>t.foreman==="Koy"&&t.category==="prep");
+                const totalCount = isKoy ? fTasks.length + prepTasks.length : fTasks.length;
+                if(totalCount===0&&!isKoy) return null;
+                if(totalCount===0&&isKoy&&prepTasks.length===0) return null;
+                // Limited access users don't see the task card
+                if(getAccess(identity)==="limited") return null;
+
+                return (
+                  <ForemanTaskCard
+                    isKoy={isKoy}
+                    fTasks={fTasks}
+                    prepTasks={prepTasks}
+                    jobs={jobs}
+                    manualTasks={manualTasks}
+                    onManualTasksChange={(next)=>{ next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); }); manualTasks.forEach(t=>{ if(!next.find(m=>m.id===t.id)) deleteManualTask(t.id); }); setManualTasks(next); }}
+                    onSelectJob={(job)=>setSelected(job)}
+                    onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch}); }}
+                    activeForeman={activeForeman}
+                    foremenList={_foremen}
+                  />
+                );
+              })()}
+              <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={false}/>
               {(()=>{
                 const invoiceJobs = filtered.filter(j=>effRS(j)==="invoice"||effFS(j)==="invoice");
                 return invoiceJobs.length>0?(
@@ -6111,7 +9238,16 @@ if(initialLoad.current) return;
                         {invoiceJobs.length}
                       </div>
                     </div>
-                    {invoiceJobs.map(job=><JobRow key={job.id} job={job}/>)}
+                    {invoiceJobs.map(job=>(
+                      <div key={job.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:6}}>
+                        <div style={{flex:1}}><JobRow job={job}/></div>
+                        <button onClick={()=>{ updateJob({...job,...invoiceSentPatch(job)}); }}
+                          style={{flexShrink:0,fontSize:11,fontWeight:700,color:"#fff",background:"#ea580c",
+                            border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                          ✓ Invoice Sent
+                        </button>
+                      </div>
+                    ))}
                   </div>
                 ):null;
               })()}
@@ -6127,7 +9263,68 @@ if(initialLoad.current) return;
 
 
 
-      {selected&&<JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>}
+      {selected&&(selected.tempPed
+        ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)} foremenList={_foremen}/>
+        : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)} foremenList={_foremen} leadsList={_leads}/>)}
+
+      {view==="schedule"&&can(identity,"schedule.view")&&(
+        <SchedulingForecast jobs={jobs} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)} foremenList={_foremen}/>
+      )}
+
+      {view==="tasks"&&can(identity,"tasks.view")&&(
+        <Tasks
+          jobs={jobs}
+          manualTasks={manualTasks}
+          onManualTasksChange={(next)=>{
+            next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); });
+            manualTasks.forEach(t=>{ if(!next.find(m=>m.id===t.id)) deleteManualTask(t.id); });
+            setManualTasks(next);
+          }}
+          onSelectJob={(job)=>setSelected(job)}
+          onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch}); }}
+          foremenList={_foremen}
+        />
+      )}
+
+      {view==="upcoming"&&can(identity,"pipeline.view")&&(
+        <UpcomingJobs
+          upcoming={upcoming}
+          canManage={can(identity,"pipeline.manage")}
+          foremenList={_foremen}
+          onChange={(next)=>{
+            next.forEach(item=>{
+              const prev=upcoming.find(u=>u.id===item.id);
+              if(!prev||JSON.stringify(prev)!==JSON.stringify(item)) saveUpcomingItem(item);
+            });
+            upcoming.forEach(item=>{ if(!next.find(u=>u.id===item.id)) deleteUpcomingItem(item.id); });
+            setUpcoming(next);
+          }}
+          onPromote={(u)=>{
+            const j=blankJob();
+            j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman="";
+            setJobs(js=>[j,...js]); setSelected(j); setUpcoming(prev=>prev.filter(x=>x.id!==u.id));
+            setView("home"); saveJob(j); deleteUpcomingItem(u.id);
+          }}
+        />
+      )}
+
+      {view==="settings"&&can(identity,"settings.view")&&(
+        <div>
+          <SettingsPage
+            COLOR_OPTIONS={COLOR_OPTIONS}
+            users={users}
+            colorOverrides={_colorOverrides}
+            onSave={saveSettings}
+          />
+          {can(identity,"users.manage")&&(
+            <div style={{padding:"0 26px 40px"}}>
+              <div style={{borderTop:`1px solid ${C.border}`,paddingTop:32,marginTop:8}}>
+                <UserManagement users={users} onSave={saveUsers}/>
+              </div>
+            </div>
+          )}
+        </div>
+      )}
 
     </div>
 
