@@ -7006,7 +7006,10 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
       // ── Rough — include invoice status ──
       if(rs&&rs!=="complete") {
         const rsDef=getStatusDef(ROUGH_STATUSES,rs);
-        const start=job.roughProjectedStart||job.roughStatusDate||"";
+        // Date priority: when scheduled, use the scheduled date first; otherwise projected start
+        const start=(rs==="scheduled"||rs==="inprogress")
+          ? (job.roughStatusDate||job.roughProjectedStart||"")
+          : (job.roughProjectedStart||job.roughStatusDate||"");
         const isInv=rs==="invoice";
         if(start||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"||rs==="inprogress"||isInv) events.push({
           id:job.id+"_rough", job, type:"rough",
@@ -7021,7 +7024,10 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
       // ── Finish — include invoice status ──
       if(fs&&fs!=="complete") {
         const fsDef=getStatusDef(FINISH_STATUSES,fs);
-        const start=job.finishProjectedStart||job.finishStatusDate||"";
+        // Date priority: when scheduled, use the scheduled date first; otherwise projected start
+        const start=(fs==="scheduled"||fs==="inprogress")
+          ? (job.finishStatusDate||job.finishProjectedStart||"")
+          : (job.finishProjectedStart||job.finishStatusDate||"");
         const isInv=fs==="invoice";
         if(start||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"||fs==="inprogress"||isInv) events.push({
           id:job.id+"_finish", job, type:"finish",
