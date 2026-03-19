@@ -6958,30 +6958,45 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
       const fc=getFC(job.foreman||"Koy");
 
       // ── Rough ──
-      if(rs&&rs!=="complete"&&rs!=="invoice") {
+      // ── Rough — include invoice status ──
+      if(rs&&rs!=="complete") {
         const rsDef=getStatusDef(ROUGH_STATUSES,rs);
         const start=job.roughProjectedStart||job.roughStatusDate||"";
-        if(start||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"||rs==="inprogress") events.push({
+        const isInv=rs==="invoice";
+        if(start||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"||rs==="inprogress"||isInv) events.push({
           id:job.id+"_rough", job, type:"rough",
-          label:"ROUGH", color:rsDef.color||C.rough, fc,
-          startDate:start, endDate:"",
+          label:"ROUGH", color:isInv?"#ea580c":rsDef.color||C.rough, fc,
+          startDate:isInv?job.readyToInvoiceDate||start:start, endDate:"",
           hardDate:false,
-          status:rs, statusLabel:rsDef.label,
-          desc:rsDef.label,
+          status:rs, statusLabel:isInv?"Ready to Invoice":rsDef.label,
+          desc:isInv?"Ready to Invoice":rsDef.label,
         });
       }
 
-      // ── Finish ──
-      if(fs&&fs!=="complete"&&fs!=="invoice") {
+      // ── Finish — include invoice status ──
+      if(fs&&fs!=="complete") {
         const fsDef=getStatusDef(FINISH_STATUSES,fs);
         const start=job.finishProjectedStart||job.finishStatusDate||"";
-        if(start||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"||fs==="inprogress") events.push({
+        const isInv=fs==="invoice";
+        if(start||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"||fs==="inprogress"||isInv) events.push({
           id:job.id+"_finish", job, type:"finish",
-          label:"FINISH", color:fsDef.color||C.finish, fc,
-          startDate:start, endDate:"",
+          label:"FINISH", color:isInv?"#ea580c":fsDef.color||C.finish, fc,
+          startDate:isInv?job.readyToInvoiceDate||start:start, endDate:"",
           hardDate:false,
-          status:fs, statusLabel:fsDef.label,
-          desc:fsDef.label,
+          status:fs, statusLabel:isInv?"Ready to Invoice":fsDef.label,
+          desc:isInv?"Ready to Invoice":fsDef.label,
+        });
+      }
+
+      // ── Ready to Invoice (job-level flag, not phase-specific) ──
+      if(job.readyToInvoice&&!job.invoiceDismissed&&rs!=="invoice"&&fs!=="invoice") {
+        events.push({
+          id:job.id+"_invoice", job, type:"invoice",
+          label:"INVOICE", color:"#ea580c", fc,
+          startDate:job.readyToInvoiceDate||"", endDate:"",
+          hardDate:false,
+          status:"invoice", statusLabel:"Ready to Invoice",
+          desc:"Ready to Invoice",
         });
       }
 
@@ -7015,15 +7030,16 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
         });
       });
 
-      // ── QC Walk ──
-      if(job.roughQCTaskFired&&job.qcStatus&&job.qcStatus!=="complete") {
+      // ── QC Walk — show for all active statuses including scheduled ──
+      if(job.roughQCTaskFired&&job.qcStatus&&!["completed","pass","fail"].includes(job.qcStatus)) {
+        const qcDef=getStatusDef(QC_STATUSES,job.qcStatus||"");
         const start=job.qcStatusDate||"";
         events.push({
           id:job.id+"_qc", job, type:"qc",
-          label:"QC", color:getStatusDef(QC_STATUSES,job.qcStatus||"").color||C.teal, fc,
+          label:"QC", color:qcDef.color||C.teal, fc,
           startDate:start, endDate:"",
           hardDate:false,
-          status:job.qcStatus, statusLabel:job.qcStatus,
+          status:job.qcStatus, statusLabel:qcDef.label||job.qcStatus,
           desc:"QC Walk",
         });
       }
@@ -7327,20 +7343,26 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
 
       {/* ── Color Key ── */}
       <div style={{padding:"16px 26px 32px",borderTop:"1px solid var(--border)",marginTop:8}}>
-        <div style={{fontSize:10,fontWeight:700,color:"var(--dim)",letterSpacing:"0.1em",marginBottom:10}}>COLOR KEY</div>
-        <div style={{display:"flex",flexWrap:"wrap",gap:8}}>
+        <div style={{fontSize:10,fontWeight:700,color:"var(--dim)",letterSpacing:"0.1em",marginBottom:12}}>COLOR KEY</div>
+        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
           {[
-            {color:C.rough,    label:"Rough"},
-            {color:C.finish,   label:"Finish"},
-            {color:"#8b5cf6",  label:"Return Trip"},
-            {color:C.accent,   label:"Change Order"},
-            {color:C.teal,     label:"QC Walk"},
-            {color:C.red,      label:"Overdue"},
-            {color:"#ca8a04",  label:"Needs Date"},
-          ].map(({color,label})=>(
-            <div key={label} style={{display:"flex",alignItems:"center",gap:5}}>
-              <div style={{width:10,height:10,borderRadius:"50%",background:color,flexShrink:0}}/>
-              <span style={{fontSize:11,color:"var(--dim)"}}>{label}</span>
+            {color:C.rough,   label:"Rough",        desc:"Rough-in phase is active or scheduled"},
+            {color:C.finish,  label:"Finish",        desc:"Finish phase is active or scheduled"},
+            {color:"#8b5cf6", label:"Return Trip",   desc:"Additional trip needed for outstanding work"},
+            {color:C.accent,  label:"Change Order",  desc:"Approved CO awaiting scheduling or completion"},
+            {color:C.teal,    label:"QC Walk",       desc:"Quality control walk needs to be scheduled"},
+            {color:"#ea580c", label:"Ready to Invoice", desc:"Work complete — invoice has not been sent yet"},
+            {color:C.red,     label:"Overdue",       desc:"Start date has passed with no completion"},
+            {color:"#ca8a04", label:"Needs Date",    desc:"No start date set — needs to be scheduled"},
+          ].map(({color,label,desc})=>(
+            <div key={label} style={{display:"flex",alignItems:"flex-start",gap:8,
+              padding:"8px 12px",borderRadius:9,background:"var(--surface)",
+              border:"1px solid var(--border)",flex:"1 1 200px",minWidth:180}}>
+              <div style={{width:10,height:10,borderRadius:"50%",background:color,flexShrink:0,marginTop:3}}/>
+              <div>
+                <div style={{fontSize:12,fontWeight:700,color:"var(--text)",marginBottom:2}}>{label}</div>
+                <div style={{fontSize:11,color:"var(--dim)",lineHeight:1.4}}>{desc}</div>
+              </div>
             </div>
           ))}
         </div>
