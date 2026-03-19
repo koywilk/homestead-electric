@@ -1,7 +1,7 @@
 // BUILD_v9_FIXED
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
+import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, enableMultiTabIndexedDbPersistence } from "firebase/firestore";
 
 
 
@@ -43,6 +43,17 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 
 const db = getFirestore(firebaseApp);
+
+// Enable offline persistence — queues writes when offline, syncs when back online
+// Multi-tab version: works even if multiple tabs are open
+enableMultiTabIndexedDbPersistence(db).catch((err) => {
+  if (err.code === 'failed-precondition') {
+    console.warn('Firestore persistence unavailable: failed precondition');
+  } else if (err.code === 'unimplemented') {
+    // Browser doesn't support persistence
+    console.warn('Firestore persistence unavailable: browser not supported');
+  }
+});
 
 
 
@@ -638,8 +649,6 @@ const blankJob = () => ({
   roughPunch:emptyPunch(), roughMaterials:[], roughUpdates:[], roughNotes:"",
 
   qcPunch:emptyPunch(),
-
-  finishStage:"0%",
 
   finishPunch:emptyPunch(), finishMaterials:[], finishUpdates:[], finishNotes:"",
 
@@ -4088,11 +4097,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
 
     try {
 
-      const snap = await getDocs(collection(db,"jobs"));
+      const snap = await getDoc(doc(db,"jobs",job.id));
 
-      const found = snap.docs.find(d=>d.id===job.id);
-
-      if(found?.data()?.data) onUpdate(found.data().data);
+      if(snap.exists()&&snap.data()?.data) onUpdate(snap.data().data);
 
     } catch(e){ console.error(e); }
 
@@ -7346,14 +7353,18 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
         <div style={{fontSize:10,fontWeight:700,color:"var(--dim)",letterSpacing:"0.1em",marginBottom:12}}>COLOR KEY</div>
         <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
           {[
-            {color:C.rough,   label:"Rough",        desc:"Rough-in phase is active or scheduled"},
-            {color:C.finish,  label:"Finish",        desc:"Finish phase is active or scheduled"},
-            {color:"#8b5cf6", label:"Return Trip",   desc:"Additional trip needed for outstanding work"},
-            {color:C.accent,  label:"Change Order",  desc:"Approved CO awaiting scheduling or completion"},
-            {color:C.teal,    label:"QC Walk",       desc:"Quality control walk needs to be scheduled"},
-            {color:"#ea580c", label:"Ready to Invoice", desc:"Work complete — invoice has not been sent yet"},
-            {color:C.red,     label:"Overdue",       desc:"Start date has passed with no completion"},
-            {color:"#ca8a04", label:"Needs Date",    desc:"No start date set — needs to be scheduled"},
+            {color:"#ca8a04", label:"Waiting for Date",       desc:"Waiting for start date confirmation from GC/homeowner"},
+            {color:"#f97316", label:"Date Confirmed",         desc:"Start date confirmed — needs to be scheduled"},
+            {color:"#2563eb", label:"Scheduled",              desc:"Rough or finish is scheduled with a date set"},
+            {color:"#7dd3fc", label:"In Progress",            desc:"Crew is actively working on rough or finish"},
+            {color:"#ea580c", label:"Ready to Invoice",       desc:"Work complete — invoice has not been sent yet"},
+            {color:"#dc2626", label:"Needs Scheduling (RT)",  desc:"Return trip needs to be scheduled"},
+            {color:"#8b5cf6", label:"RT Scheduled",           desc:"Return trip has been scheduled"},
+            {color:"#dc2626", label:"CO — Needs Sending",     desc:"Change order drafted but not sent yet"},
+            {color:"#ca8a04", label:"CO — Pending Approval",  desc:"Change order sent, waiting for approval"},
+            {color:"#16a34a", label:"CO — Approved",          desc:"Change order approved, awaiting completion"},
+            {color:C.teal,    label:"QC Walk",                desc:"Quality control walk needs to be scheduled or is scheduled"},
+            {color:C.red,     label:"Overdue",                desc:"Start date has passed with no completion"},
           ].map(({color,label,desc})=>(
             <div key={label} style={{display:"flex",alignItems:"flex-start",gap:8,
               padding:"8px 12px",borderRadius:9,background:"var(--surface)",
@@ -8250,7 +8261,7 @@ if(initialLoad.current) return;
 
       const p = j[key]||{};
 
-      return total + countFloor(p.upper) + countFloor(p.main) + countFloor(p.basement);
+      return total + countFloor(p.upper) + countFloor(p.main) + countFloor(p.basement) + ((p.extras||[]).reduce((s,e)=>s+countFloor(p[e.key]),0));
 
     },0);
 
@@ -8331,7 +8342,7 @@ if(initialLoad.current) return;
 
     const countQCFloor = (f) => { if(!f) return 0; return (f.general||[]).filter(i=>!i.done).length + (f.rooms||[]).reduce((a,r)=>a+(r.items||[]).filter(i=>!i.done).length,0); };
 
-    const qcItems = countQCFloor(job.qcPunch?.upper) + countQCFloor(job.qcPunch?.main) + countQCFloor(job.qcPunch?.basement);
+    const qcItems = countQCFloor(job.qcPunch?.upper) + countQCFloor(job.qcPunch?.main) + countQCFloor(job.qcPunch?.basement) + ((job.qcPunch?.extras||[]).reduce((s,e)=>s+countQCFloor(job.qcPunch?.[e.key]),0));
 
     const foreman = job.foreman||"Koy";
 
