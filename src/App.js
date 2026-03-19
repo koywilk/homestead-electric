@@ -1041,9 +1041,26 @@ const toYMD = (str) => {
   return `${yr}-${mo.padStart(2,"0")}-${dy.padStart(2,"0")}`;
 };
 
+// Format any date string for display as M/D/YYYY
+const fmtDisplay = (str) => {
+  if(!str) return "";
+  // Already M/D/YYYY or M/D/YY
+  if(/^\d{1,2}\/\d{1,2}\/\d{2,4}$/.test(str)) return str;
+  // YYYY-MM-DD → M/D/YYYY
+  const m = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(m) return `${parseInt(m[2])}/${parseInt(m[3])}/${m[1]}`;
+  return str;
+};
+
 // DateInp — always a calendar date picker, same styling as Inp
 const DateInp = ({value,onChange,style={}}) => (
-  <input type="date" value={toYMD(value)} onChange={onChange}
+  <input type="date" value={toYMD(value)} onChange={e=>{
+    // Convert YYYY-MM-DD from browser to M/D/YYYY for storage
+    const ymd = e.target.value;
+    const m = ymd.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+    const display = m ? `${parseInt(m[2])}/${parseInt(m[3])}/${m[1]}` : ymd;
+    onChange({...e, target:{...e.target, value: display}});
+  }}
     style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
       padding:"6px 10px",fontSize:12,fontFamily:"inherit",width:"100%",outline:"none",
       colorScheme:"light",...style}}
@@ -2328,7 +2345,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
 
                   <span style={{fontSize:13,color:C.green,fontWeight:700}}>✓ Completed by {t.signedOffBy}</span>
 
-                  <span style={{fontSize:11,color:C.dim,marginLeft:10}}>{t.signedOffDate}</span>
+                  <span style={{fontSize:11,color:C.dim,marginLeft:10}}>{fmtDisplay(t.signedOffDate)}</span>
 
                 </div>
 
@@ -7773,7 +7790,7 @@ if(initialLoad.current) return;
             {job.roughProjectedStart&&(
               <div style={{marginTop:4,fontSize:12,fontWeight:700,
                 color:job.roughStartConfirmed?"#16a34a":"#dc2626"}}>
-                {job.roughStartConfirmed?"Started: ":"Projected: "}{job.roughProjectedStart}
+                {job.roughStartConfirmed?"Started: ":"Projected: "}{fmtDisplay(job.roughProjectedStart)}
               </div>
             )}
           </div>
@@ -7784,7 +7801,7 @@ if(initialLoad.current) return;
             {job.finishProjectedStart&&(
               <div style={{marginTop:4,fontSize:12,fontWeight:700,
                 color:job.finishStartConfirmed?"#16a34a":"#dc2626"}}>
-                {job.finishStartConfirmed?"Started: ":"Projected: "}{job.finishProjectedStart}
+                {job.finishStartConfirmed?"Started: ":"Projected: "}{fmtDisplay(job.finishProjectedStart)}
               </div>
             )}
           </div>
@@ -7794,8 +7811,8 @@ if(initialLoad.current) return;
             {hasRT&&<Pill label="Return trip needed" color="#dc2626"/>}
             {prepAlert&&<Pill label="Redline plans need update" color="#dc2626"/>}
             {hasRTSch&&!hasRT&&<Pill label="Return trip scheduled" color="#8b5cf6"/>}
-            {rs&&!(rs==="complete"&&fs&&fs!=="waiting_date"&&fs!=="date_confirmed")&&<Pill label={rs==="scheduled"&&job.roughStatusDate?"Rough: "+job.roughStatusDate:rs==="date_confirmed"&&job.roughStatusDate?"Rough: "+job.roughStatusDate:("Rough: "+(getStatusDef(ROUGH_STATUSES,rs).label||rs))} color={getStatusDef(ROUGH_STATUSES,rs).color||C.dim}/>}
-            {fs&&<Pill label={fs==="scheduled"&&job.finishStatusDate?"Finish: "+job.finishStatusDate:("Finish: "+(getStatusDef(FINISH_STATUSES,fs).label||fs))} color={getStatusDef(FINISH_STATUSES,fs).color||C.dim}/>}
+            {rs&&!(rs==="complete"&&fs&&fs!=="waiting_date"&&fs!=="date_confirmed")&&<Pill label={rs==="scheduled"&&job.roughStatusDate?"Rough: "+fmtDisplay(job.roughStatusDate):rs==="date_confirmed"&&job.roughStatusDate?"Rough: "+fmtDisplay(job.roughStatusDate):("Rough: "+(getStatusDef(ROUGH_STATUSES,rs).label||rs))} color={getStatusDef(ROUGH_STATUSES,rs).color||C.dim}/>}
+            {fs&&<Pill label={fs==="scheduled"&&job.finishStatusDate?"Finish: "+fmtDisplay(job.finishStatusDate):("Finish: "+(getStatusDef(FINISH_STATUSES,fs).label||fs))} color={getStatusDef(FINISH_STATUSES,fs).color||C.dim}/>}
             {open>0   &&<Pill label={`${open} open`} color={C.red}/>}
 
             {pendCO>0 &&<Pill label={`${pendCO} CO`} color={C.orange}/>}
