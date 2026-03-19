@@ -243,7 +243,7 @@ const USERS_KEY    = "he_users";    // Firestore + localStorage user list
 
 // Default users — Koy is admin to start, everyone else added in-app
 const DEFAULT_USERS = [
-  { id:"koy", name:"Koy", role:"admin", pin:"" },
+  { id:"koy", name:"Koy Wilkinson", role:"admin", pin:"" },
 ];
 
 // ── Title = field role (who they are on site) ────────────────
@@ -7790,7 +7790,58 @@ function App() {
     getDoc(doc(db,"settings","users")).then(snap=>{
       const raw = snap.exists()&&snap.data().list ? snap.data().list : [];
       const cleaned = raw.filter(u=>!BAD_IDS.has(u.id));
-      setUsers(cleaned.length ? cleaned : DEFAULT_USERS);
+
+      // ── One-time merge: add missing employees (v1) ──────────────
+      const MERGE_KEY = "heUserMerge_v1";
+      if(!localStorage.getItem(MERGE_KEY)) {
+        const ALL_EMPLOYEES = [
+          { id:"abraham_tristan",        name:"Abraham Tristan" },
+          { id:"asher_miller",           name:"Asher Miller" },
+          { id:"austin_schut",           name:"Austin Schut" },
+          { id:"bailey_smith",           name:"Bailey Smith" },
+          { id:"braden_davis",           name:"Braden Davis" },
+          { id:"brady_nelson",           name:"Brady Nelson" },
+          { id:"braxton_raven",          name:"Braxton Raven" },
+          { id:"callen_jakeman",         name:"Callen Jakeman" },
+          { id:"colby_fogh",            name:"Colby Fogh" },
+          { id:"daegan_smith",           name:"Daegan Smith" },
+          { id:"fonoivasa_mataafa",      name:"Fonoivasa Mataafa" },
+          { id:"gage_lund",             name:"Gage Lund" },
+          { id:"isaiah_miller",          name:"Isaiah Miller" },
+          { id:"jacob_nuffer",           name:"Jacob Nuffer" },
+          { id:"jacob_spackman",         name:"Jacob Spackman" },
+          { id:"jakob_bingham",          name:"Jakob Bingham" },
+          { id:"james_coleman_christen", name:"James Coleman Christen" },
+          { id:"jeromy_cloward",         name:"Jeromy Cloward" },
+          { id:"jonathan_harding",       name:"Jonathan Harding" },
+          { id:"josh_cloward",           name:"Josh Cloward" },
+          { id:"justin_cloward",         name:"Justin Cloward" },
+          { id:"keegan_wilkinson",       name:"Keegan Wilkinson" },
+          { id:"koy_wilkinson",          name:"Koy Wilkinson" },
+          { id:"lisa_brown",             name:"Lisa Brown" },
+          { id:"louis_hoffman",          name:"Louis Hoffman" },
+          { id:"noah_davis",             name:"Noah Davis" },
+          { id:"payton_bolda",           name:"Payton Bolda" },
+          { id:"treycen_rollene",        name:"Treycen Rollene" },
+        ];
+        const existingNames = new Set(cleaned.map(u=>(u.name||"").toLowerCase()));
+        const existingIds   = new Set(cleaned.map(u=>u.id));
+        const toAdd = ALL_EMPLOYEES
+          .filter(e => !existingNames.has(e.name.toLowerCase()) && !existingIds.has(e.id))
+          .map(e => ({ ...e, title:"crew", access:"limited", pin:"" }));
+        if(toAdd.length > 0) {
+          const merged = [...cleaned, ...toAdd];
+          setUsers(merged);
+          setDoc(doc(db,"settings","users"),{list:merged}).catch(()=>{});
+          console.log(`[HE] Added ${toAdd.length} missing employee(s):`, toAdd.map(u=>u.name).join(", "));
+        } else {
+          setUsers(cleaned.length ? cleaned : DEFAULT_USERS);
+        }
+        localStorage.setItem(MERGE_KEY, "1");
+      } else {
+        setUsers(cleaned.length ? cleaned : DEFAULT_USERS);
+      }
+
       if(cleaned.length !== raw.length)
         setDoc(doc(db,"settings","users"),{list:cleaned}).catch(()=>{});
     }).catch(()=>{});
