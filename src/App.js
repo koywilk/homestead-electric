@@ -1046,7 +1046,7 @@ const DateInp = ({value,onChange,style={}}) => (
   <input type="date" value={toYMD(value)} onChange={onChange}
     style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
       padding:"6px 10px",fontSize:12,fontFamily:"inherit",width:"100%",outline:"none",
-      colorScheme:"dark",...style}}
+      colorScheme:"light",...style}}
     onFocus={e=>e.target.style.borderColor=C.accent}
     onBlur={e=>e.target.style.borderColor=C.border}/>
 );
@@ -5108,7 +5108,7 @@ function TempPedCard({ job, onOpen, onUpdate, onDelete }) {
                 onChange={e=>upd({tempPedScheduledDate:e.target.value})}
                 style={{width:140,fontSize:11,padding:"5px 8px",borderRadius:7,
                   border:`1px solid ${"#2563eb"}55`,background:"#2563eb08",
-                  color:"var(--text)",fontFamily:"inherit",outline:"none",colorScheme:"dark"}}
+                  color:"var(--text)",fontFamily:"inherit",outline:"none",colorScheme:"light"}}
               />
             )}
           </div>
@@ -5640,8 +5640,8 @@ function computeTasks(jobs) {
       });
     }
 
-    // QC Walk — fires once when rough hits 80%+, clears when qcStatus=scheduled
-    if(job.roughQCTaskFired && job.qcStatus !== "scheduled" && job.qcStatus !== "complete") tasks.push({
+    // QC Walk — fires once when rough hits 80%+, clears when qcStatus=scheduled/completed/pass/fail
+    if(job.roughQCTaskFired && !["scheduled","completed","pass","fail"].includes(job.qcStatus)) tasks.push({
       id: job.id+"_qc_walk", jobId: job.id, jobName: job.name,
       type: "auto", category: "qc", foreman,
       title: "Schedule QC Walk",
@@ -5651,7 +5651,7 @@ function computeTasks(jobs) {
 
     // FIX 4: Final QC Walk — fires when finish hits 80%+
     const finishPct = parseInt(job.finishStage)||0;
-    if(finishPct>=80 && job.qcStatus !== "scheduled" && job.qcStatus !== "complete") tasks.push({
+    if(finishPct>=80 && !["scheduled","completed","pass","fail"].includes(job.qcStatus)) tasks.push({
       id: job.id+"_final_qc_walk", jobId: job.id, jobName: job.name,
       type: "auto", category: "qc", foreman,
       title: "Schedule Final QC Walk",
@@ -5919,7 +5919,7 @@ const URGENCY = (dueDateStr) => {
   return {label:`DUE ${due.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, color:"#6b7280", bg:"transparent", level:"fine", days: diff};
 };
 
-function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
+function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualClear }) {
   const [editingDate, setEditingDate] = useState(false);
   const [dateVal, setDateVal] = useState(task.dueDate||"");
   // localDueDate keeps color in sync immediately on save without waiting for Firebase round-trip
@@ -5995,7 +5995,7 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
                 onChange={e=>{setDateVal(e.target.value);if(e.target.value){if(onSetDueDate)onSetDueDate(task.id,e.target.value);setLocalDueDate(e.target.value);setEditingDate(false);}}}
                 onKeyDown={e=>{if(e.key==="Escape")setEditingDate(false);}}
                 style={{fontSize:11,border:"1px solid var(--accent)",borderRadius:6,padding:"2px 7px",
-                  background:"var(--surface)",color:"var(--text)",fontFamily:"inherit",width:130,outline:"none",colorScheme:"dark"}}
+                  background:"var(--surface)",color:"var(--text)",fontFamily:"inherit",width:130,outline:"none",colorScheme:"light"}}
               />
               <button onClick={saveDate}
                 style={{fontSize:10,fontWeight:700,background:"var(--accent)",border:"none",
@@ -6060,6 +6060,16 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate }) {
           <button onClick={onDismiss}
             style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 11px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>
             ✓ Done
+          </button>
+        )}
+        {!onDismiss&&task.type!=="manual"&&task.jobId&&(
+          <button onClick={()=>{
+            const job=jobs.find(j=>j.id===task.jobId);
+            if(!job||!onManualClear) return;
+            onManualClear(task.jobId, [...(job.clearedTasks||[]), task.id]);
+          }}
+            style={{background:"#16a34a12",border:"1px solid #16a34a44",borderRadius:7,color:"#16a34a",fontSize:11,padding:"5px 11px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>
+            ✓ Mark Done
           </button>
         )}
         {task.jobId&&onSelectJob&&(
@@ -6299,15 +6309,19 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
   const dismissFinishDeposit = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{finishDepositDismissed:true}); };
   const dismissRoughInvoice  = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{roughInvoiceDismissed:true}); };
   const dismissFinishInvoice = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{finishInvoiceDismissed:true}); };
+  const handleManualClear    = (jobId, clearedTasks) => { if(onUpdateJob) onUpdateJob(jobId,{clearedTasks}); };
   const dismissCODoneTask    = (jobId,coId)=> { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{coDoneDismissed:[...(job.coDoneDismissed||[]),coId]}); };
   const dismissRTDoneTask    = (jobId,rtId)=> { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{rtDoneDismissed:[...(job.rtDoneDismissed||[]),rtId]}); };
 
   const allTaskDueDates = jobs.reduce((acc,j)=>({...acc,...(j.taskDueDates||{})}),{});
+  // Build set of manually cleared task IDs across all jobs
+  const allClearedTasks = new Set(jobs.flatMap(j=>j.clearedTasks||[]));
+
   const autoTasks = computeTasks(jobs);
   const allTasks = [
     ...autoTasks.map(t=>{ const d=allTaskDueDates[t.id]; return d!==undefined?{...t,dueDate:d||t.dueDate||""}:t; }),
     ...(manualTasks||[]).map(t=>({...t,type:"manual"}))
-  ].filter(t => t.category !== "prep" && (!filterForeman || t.foreman === filterForeman));
+  ].filter(t => t.category !== "prep" && (!filterForeman || t.foreman === filterForeman) && !allClearedTasks.has(t.id));
 
   const URGENCY_FN = (due) => {
     if(!due) return null;
@@ -6410,7 +6424,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
             {/* Invoice-category tasks (deposits, stale alerts, etc.) */}
             {sortedInvoice.map(task=>(
               <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
-                onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate}/>
+                onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear}/>
             ))}
           </>
         )}
@@ -6508,7 +6522,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
                 {showAdd&&filterForeman&&<AddTaskForm defaultForeman={filterForeman} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList}/>}
                 {sorted.map(task=>(
                   <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
-                    onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate}/>
+                    onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear}/>
                 ))}
               </div>
             ) : (
@@ -6531,7 +6545,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
                     </div>
                     {!fCollapsed&&fTasks.map(task=>(
                       <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
-                        onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate}/>
+                        onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear}/>
                     ))}
                   </div>
                 );
@@ -7757,8 +7771,9 @@ if(initialLoad.current) return;
             <div style={{fontSize:9,color:C.rough,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>ROUGH</div>
             <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough}/>
             {job.roughProjectedStart&&(
-              <div style={{marginTop:4,fontSize:12,color:"#dc2626",fontWeight:700}}>
-                Projected Start - {job.roughProjectedStart}
+              <div style={{marginTop:4,fontSize:12,fontWeight:700,
+                color:job.roughStartConfirmed?"#16a34a":"#dc2626"}}>
+                {job.roughStartConfirmed?"Started: ":"Projected: "}{job.roughProjectedStart}
               </div>
             )}
           </div>
@@ -7767,8 +7782,9 @@ if(initialLoad.current) return;
             <div style={{fontSize:9,color:C.finish,marginBottom:4,fontWeight:700,letterSpacing:"0.1em"}}>FINISH</div>
             <StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/>
             {job.finishProjectedStart&&(
-              <div style={{marginTop:4,fontSize:12,color:"#dc2626",fontWeight:700}}>
-                Projected Start - {job.finishProjectedStart}
+              <div style={{marginTop:4,fontSize:12,fontWeight:700,
+                color:job.finishStartConfirmed?"#16a34a":"#dc2626"}}>
+                {job.finishStartConfirmed?"Started: ":"Projected: "}{job.finishProjectedStart}
               </div>
             )}
           </div>
