@@ -3883,7 +3883,7 @@ const normalizeJob = (raw) => ({
 
 
 // ── Temp Ped Detail ────────────────────────────────────────────
-function TempPedDetail({ job: rawJob, onUpdate, onClose }) {
+function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
   const jobRef = useRef(job);
   useEffect(()=>{ jobRef.current = job; }, [job]);
@@ -4355,7 +4355,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                       <div style={{display:"flex",gap:16,marginBottom:12,flexWrap:"wrap"}}>
                         <div style={{flex:1,minWidth:140}}>
                           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
-                            <span style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>PROJECTED START</span>
+                            <span style={{fontSize:10,color:job.roughStartConfirmed?"#16a34a":C.dim,fontWeight:700,letterSpacing:"0.08em"}}>
+                              {job.roughStartConfirmed ? "ROUGH STARTED ON" : "PROJECTED START"}
+                            </span>
                             <button onClick={()=>{
                               const confirm=!job.roughStartConfirmed;
                               u({roughStartConfirmed:confirm,
@@ -4480,7 +4482,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                       <div style={{display:"flex",gap:16,marginBottom:12,flexWrap:"wrap"}}>
                         <div style={{flex:1,minWidth:140}}>
                           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
-                            <span style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>PROJECTED START</span>
+                            <span style={{fontSize:10,color:job.finishStartConfirmed?"#16a34a":C.dim,fontWeight:700,letterSpacing:"0.08em"}}>
+                              {job.finishStartConfirmed ? "FINISH STARTED ON" : "PROJECTED START"}
+                            </span>
                             <button onClick={()=>{
                               const confirm=!job.finishStartConfirmed;
                               u({finishStartConfirmed:confirm,
@@ -6722,7 +6726,8 @@ function ForemanTaskCard({ isKoy, fTasks, prepTasks, jobs, manualTasks, onManual
 function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJob, filterForeman, compact, foremenList }) {
   const [showAdd,          setShowAdd]          = useState(false);
   const [collapsedForemen, setCollapsedForemen] = useState({});
-  const [catFilter,        setCatFilter]        = useState("all"); // all | invoice | other
+  const [catFilter,        setCatFilter]        = useState("all");
+  const [prepOpen,         setPrepOpen]         = useState(false); // collapsed by default
   const toggleForeman = (f) => setCollapsedForemen(c=>({...c,[f]:!c[f]}));
 
   const handleSetDueDate = (taskId, date) => {
@@ -6906,12 +6911,29 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
       <div style={{padding:filterForeman||compact?"0":"16px 26px"}}>
         {showAdd&&<AddTaskForm defaultForeman={filterForeman||"Koy"} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList}/>}
 
-        {/* Pre Job Prep — always goes to Koy */}
-        {(!filterForeman||filterForeman==="Koy")&&catFilter!=="invoice"&&(()=>(
-          <div style={{marginBottom:24}}>
-            <PrepTaskList jobs={jobs} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob}/>
-          </div>
-        ))()}
+        {/* Pre Job Prep — only on main Tasks page (not foreman filter), collapsible, starts collapsed */}
+        {!filterForeman&&catFilter!=="invoice"&&(()=>{
+          const prepJobs = jobs.filter(j=>!j.tempPed&&(j.prepStage||"")!=="Job Prep Complete");
+          if(prepJobs.length===0) return null;
+          return (
+            <div style={{marginBottom:24}}>
+              <div onClick={()=>setPrepOpen(v=>!v)}
+                style={{display:"flex",alignItems:"center",gap:8,marginBottom:prepOpen?12:0,
+                  paddingBottom:8,borderBottom:"2px solid #0d948833",cursor:"pointer",userSelect:"none"}}>
+                <div style={{width:9,height:9,borderRadius:"50%",background:"#0d9488"}}/>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#0d9488"}}>
+                  PRE JOB PREP
+                </div>
+                <div style={{background:"#0d948818",border:"1px solid #0d948833",borderRadius:99,
+                  padding:"1px 8px",fontSize:11,color:"#0d9488",fontWeight:700}}>{prepJobs.length}</div>
+                <div style={{marginLeft:"auto",fontSize:12,color:"#0d9488",opacity:0.7,paddingRight:4}}>
+                  {prepOpen?"▾":"▸"}
+                </div>
+              </div>
+              {prepOpen&&<PrepTaskList jobs={jobs} onSelectJob={onSelectJob} onUpdateJob={onUpdateJob}/>}
+            </div>
+          );
+        })()}
 
         {/* Ready to Invoice section — shown unless filtered to "other" */}
         {catFilter!=="other"&&<InvoiceSection/>}
@@ -9254,7 +9276,7 @@ if(initialLoad.current) return;
 
 
       {selected&&(selected.tempPed
-        ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)}/>
+        ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)} foremenList={_foremen}/>
         : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)} foremenList={_foremen} leadsList={_leads}/>)}
 
       {view==="schedule"&&can(identity,"schedule.view")&&(
