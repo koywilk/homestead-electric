@@ -8757,7 +8757,19 @@ function App() {
             localStorage.setItem(TEMPPED_FIX_KEY,"1");
           }
 
-          setJobs(loaded);
+          // Merge snapshot data with any pending local edits
+          // Jobs with active save timers should keep their local version
+          setJobs(prev => {
+            const pendingIds = new Set(Object.keys(saveTimers.current).filter(k => saveTimers.current[k]));
+            if(pendingIds.size === 0) return loaded;
+            return loaded.map(sj => {
+              if(pendingIds.has(sj.id)) {
+                const local = prev.find(p => p.id === sj.id);
+                return local || sj;
+              }
+              return sj;
+            });
+          });
 
           // Auto-advance: one-time — if rough complete and finish has no status for 60+ days,
           // set finish to "waiting_date" so the "Get Finish Start Date" task fires
