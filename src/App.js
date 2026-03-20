@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, enableMultiTabIndexedDbPersistence } from "firebase/firestore";
+import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 
 
@@ -43,6 +44,7 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 
 const db = getFirestore(firebaseApp);
+const storage = getStorage(firebaseApp);
 
 // Enable offline persistence — queues writes when offline, syncs when back online
 // Multi-tab version: works even if multiple tabs are open
@@ -3507,13 +3509,204 @@ const LINK_FIELDS = [
 
 
 
+// ── File Upload Section (Firebase Storage) ────────────────────
+function FileUploadSection({ jobId, files, onChange }) {
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState("");
+  const [viewFile, setViewFile] = useState(null);
+
+  const handleUpload = async (inputFiles) => {
+    if (!inputFiles || inputFiles.length === 0) return;
+    setUploading(true);
+    const newFiles = [];
+    for (const file of Array.from(inputFiles)) {
+      try {
+        setUploadProgress(`Uploading ${file.name}...`);
+        const fileId = uid();
+        const ext = file.name.split(".").pop() || "file";
+        const storagePath = `jobs/${jobId}/plans/${fileId}.${ext}`;
+        const storageRef = ref(storage, storagePath);
+        await uploadBytes(storageRef, file);
+        const url = await getDownloadURL(storageRef);
+        newFiles.push({
+          id: fileId,
+          name: file.name,
+          url,
+          storagePath,
+          type: file.type || "application/octet-stream",
+          size: file.size,
+          uploadedAt: new Date().toISOString(),
+        });
+      } catch (e) {
+        console.error("Upload failed:", e);
+        alert(`Failed to upload ${file.name}. Check your connection and try again.`);
+      }
+    }
+    if (newFiles.length > 0) {
+      onChange([...(files || []), ...newFiles]);
+    }
+    setUploading(false);
+    setUploadProgress("");
+  };
+
+  const handleDelete = async (file) => {
+    if (!window.confirm(`Delete ${file.name}?`)) return;
+    try {
+      if (file.storagePath) {
+        const storageRef = ref(storage, file.storagePath);
+        await deleteObject(storageRef).catch(() => {}); // ok if already deleted
+      }
+    } catch (e) { console.warn("Storage delete failed:", e); }
+    onChange((files || []).filter(f => f.id !== file.id));
+  };
+
+  const isImage = (file) => (file.type || "").startsWith("image/") || /\.(jpg|jpeg|png|gif|webp|heic)$/i.test(file.name);
+  const isPDF = (file) => (file.type || "") === "application/pdf" || /\.pdf$/i.test(file.name);
+  const fileIcon = (file) => isPDF(file) ? "📄" : isImage(file) ? "🖼" : "📎";
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: "0.08em" }}>UPLOADED FILES</div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {/* File upload */}
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 5,
+            background: `${C.blue}15`, border: `1px solid ${C.blue}44`, borderRadius: 7,
+            padding: "5px 12px", fontSize: 11, fontWeight: 600, color: C.blue,
+            cursor: uploading ? "not-allowed" : "pointer", opacity: uploading ? 0.5 : 1,
+            fontFamily: "inherit" }}>
+            📎 Upload Files
+            <input type="file" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.dwg,.dxf"
+              style={{ display: "none" }} disabled={uploading}
+              onChange={e => { handleUpload(e.target.files); e.target.value = ""; }} />
+          </label>
+          {/* Camera capture */}
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 5,
+            background: `${C.teal}15`, border: `1px solid ${C.teal}44`, borderRadius: 7,
+            padding: "5px 12px", fontSize: 11, fontWeight: 600, color: C.teal,
+            cursor: uploading ? "not-allowed" : "pointer", opacity: uploading ? 0.5 : 1,
+            fontFamily: "inherit" }}>
+            📷 Take Photo
+            <input type="file" accept="image/*" capture="environment"
+              style={{ display: "none" }} disabled={uploading}
+              onChange={e => { handleUpload(e.target.files); e.target.value = ""; }} />
+          </label>
+        </div>
+      </div>
+
+      {uploading && (
+        <div style={{ fontSize: 11, color: C.accent, fontWeight: 600, marginBottom: 10,
+          padding: "8px 12px", background: `${C.accent}12`, border: `1px solid ${C.accent}33`,
+          borderRadius: 8 }}>
+          ⏳ {uploadProgress || "Uploading..."}
+        </div>
+      )}
+
+      {(!files || files.length === 0) && !uploading && (
+        <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic", padding: "16px",
+          textAlign: "center", border: `1px dashed ${C.border}`, borderRadius: 10 }}>
+          No files uploaded yet — use the buttons above to upload plans, photos, or documents
+        </div>
+      )}
+
+      {/* Image grid */}
+      {(files || []).filter(f => isImage(f)).length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>IMAGES</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(100px,1fr))", gap: 8 }}>
+            {(files || []).filter(f => isImage(f)).map(f => (
+              <div key={f.id} style={{ position: "relative" }}>
+                <img src={f.url} alt={f.name}
+                  onClick={() => setViewFile(f)}
+                  style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 8,
+                    border: `1px solid ${C.border}`, cursor: "pointer" }} />
+                <button onClick={() => handleDelete(f)}
+                  style={{ position: "absolute", top: -5, right: -5, background: "#dc2626",
+                    border: "none", borderRadius: "50%", color: "#fff", width: 18, height: 18,
+                    fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center",
+                    justifyContent: "center", lineHeight: 1 }}>✕</button>
+                <div style={{ fontSize: 9, color: C.dim, marginTop: 3, overflow: "hidden",
+                  textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Document list */}
+      {(files || []).filter(f => !isImage(f)).length > 0 && (
+        <div>
+          <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>DOCUMENTS</div>
+          {(files || []).filter(f => !isImage(f)).map(f => (
+            <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+              background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 6 }}>
+              <span style={{ fontSize: 18, flexShrink: 0 }}>{fileIcon(f)}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden",
+                  textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                <div style={{ fontSize: 10, color: C.muted }}>
+                  {f.size ? (f.size < 1024 * 1024 ? Math.round(f.size / 1024) + " KB" : (f.size / (1024 * 1024)).toFixed(1) + " MB") : ""}
+                </div>
+              </div>
+              <a href={f.url} target="_blank" rel="noreferrer"
+                style={{ fontSize: 11, fontWeight: 600, color: C.blue, textDecoration: "none",
+                  border: `1px solid ${C.blue}44`, borderRadius: 7, padding: "5px 10px",
+                  flexShrink: 0 }}>
+                Open ↗
+              </a>
+              <button onClick={() => handleDelete(f)}
+                style={{ background: "none", border: "none", color: C.muted, cursor: "pointer",
+                  fontSize: 13, flexShrink: 0 }}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Lightbox */}
+      {viewFile && (
+        <div onClick={() => setViewFile(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.95)", zIndex: 1000,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <button onClick={() => setViewFile(null)}
+            style={{ position: "absolute", top: 16, right: 16, background: "rgba(255,255,255,0.15)",
+              border: "none", borderRadius: "50%", color: "#fff", fontSize: 22, width: 40, height: 40,
+              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+          {isImage(viewFile) ? (
+            <img src={viewFile.url} alt={viewFile.name}
+              style={{ maxWidth: "95vw", maxHeight: "95vh", objectFit: "contain", borderRadius: 8 }}
+              onClick={e => e.stopPropagation()} />
+          ) : (
+            <div onClick={e => e.stopPropagation()}
+              style={{ background: "#fff", borderRadius: 12, padding: 24, textAlign: "center" }}>
+              <div style={{ fontSize: 48, marginBottom: 12 }}>{fileIcon(viewFile)}</div>
+              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{viewFile.name}</div>
+              <a href={viewFile.url} target="_blank" rel="noreferrer"
+                style={{ fontSize: 13, color: C.blue, fontWeight: 600 }}>Open file ↗</a>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PlansTab({job, onUpdate}) {
 
   return (
 
     <div>
 
+      {/* File Uploads — Firebase Storage */}
+      <FileUploadSection
+        jobId={job.id}
+        files={job.planFiles || []}
+        onChange={v => onUpdate({ planFiles: v })}
+      />
 
+      <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 12,
+        paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
+        LINKS
+      </div>
 
       {LINK_FIELDS.map(([k,l])=>{
 
@@ -4269,7 +4462,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                         <div style={{flex:1,minWidth:140}}>
                           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
                             <span style={{fontSize:10,color:job.roughStartConfirmed?"#16a34a":C.dim,fontWeight:700,letterSpacing:"0.08em"}}>
-                              {job.roughStartConfirmed ? "ROUGH STARTED ON" : "PROJECTED START"}
+                              {job.roughStartConfirmed ? "READY TO START" : "PROJECTED START"}
                             </span>
                             <button onClick={()=>{
                               const confirm=!job.roughStartConfirmed;
@@ -4403,7 +4596,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                         <div style={{flex:1,minWidth:140}}>
                           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
                             <span style={{fontSize:10,color:job.finishStartConfirmed?"#16a34a":C.dim,fontWeight:700,letterSpacing:"0.08em"}}>
-                              {job.finishStartConfirmed ? "FINISH STARTED ON" : "PROJECTED START"}
+                              {job.finishStartConfirmed ? "READY TO START" : "PROJECTED START"}
                             </span>
                             <button onClick={()=>{
                               const confirm=!job.finishStartConfirmed;
@@ -8577,7 +8770,7 @@ if(initialLoad.current) return;
             {job.roughProjectedStart&&(
               <div style={{marginTop:4,fontSize:12,fontWeight:700,
                 color:job.roughStartConfirmed?"#16a34a":"#dc2626"}}>
-                {job.roughStartConfirmed?"Started: ":"Projected: "}{fmtDisplay(job.roughProjectedStart)}
+                {job.roughStartConfirmed?"Ready: ":"Projected: "}{fmtDisplay(job.roughProjectedStart)}
               </div>
             )}
           </div>
@@ -8588,7 +8781,7 @@ if(initialLoad.current) return;
             {job.finishProjectedStart&&(
               <div style={{marginTop:4,fontSize:12,fontWeight:700,
                 color:job.finishStartConfirmed?"#16a34a":"#dc2626"}}>
-                {job.finishStartConfirmed?"Started: ":"Projected: "}{fmtDisplay(job.finishProjectedStart)}
+                {job.finishStartConfirmed?"Ready: ":"Projected: "}{fmtDisplay(job.finishProjectedStart)}
               </div>
             )}
           </div>
