@@ -117,6 +117,19 @@ const TEMP_PED_STATUSES = [
   {value:"scheduled", label:"Scheduled",            color:"#2563eb", hasDate:true},
   {value:"completed", label:"Completed",            color:"#22c55e"},
 ];
+const QUICK_JOB_STATUSES = [
+  {value:"new",       label:"New",                  color:"#6b7280"},
+  {value:"scheduled", label:"Scheduled",            color:"#2563eb", hasDate:true},
+  {value:"inprogress",label:"In Progress",          color:"#7dd3fc"},
+  {value:"complete",  label:"Complete",             color:"#22c55e"},
+  {value:"invoice",   label:"Ready to Invoice",     color:"#ea580c"},
+];
+const QUICK_JOB_TYPES = [
+  {value:"service",    label:"Service Call",    color:"#f97316"},
+  {value:"panel",      label:"Panel Upgrade",   color:"#2563eb"},
+  {value:"tempped",    label:"Temp Ped Pickup", color:"#8b5cf6"},
+  {value:"other",      label:"Other",           color:"#6b7280"},
+];
 const getStatusDef = (arr, val) => arr.find(x=>x.value===val)||{};
 
 const PREP_STAGES   = ['Redline Walk Scheduled','Redline Walk Completed','Redline CO Doc Made','Redline Plans Made','Redline CO Sent','Redline CO Signed','Redline Plans Need to be Updated','Job Prep Complete'];
@@ -689,6 +702,26 @@ const blankJob = () => ({
 });
 
 
+
+const blankQuickJob = (type = "service") => ({
+  id: uid(), name: "", address: "", gc: "", phone: "", simproNo: "",
+  foreman: "Koy", lead: "", flagged: false, flagNote: "",
+  quickJob: true,
+  quickJobType: type,
+  quickJobStatus: "new",
+  quickJobDate: "",
+  quickJobEndDate: "",
+  scope: "",
+  material: "",
+  notes: "",
+  photos: [],
+  signedOff: false, signedOffBy: "", signedOffDate: "",
+  readyToInvoice: false, invoiceDismissed: false, invoiceSent: false,
+  readyToInvoiceDate: "",
+  accessNote: "",
+  taskDueDates: {},
+  changeOrders: [], returnTrips: [],
+});
 
 // ── Email composer modal ──────────────────────────────────────
 
@@ -3991,6 +4024,303 @@ const normalizeJob = (raw) => ({
 
 
 // ── Temp Ped Detail ────────────────────────────────────────────
+// ── Quick Job Detail ───────────────────────────────────────────
+function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList }) {
+  const [job, setJob] = useState({...rawJob});
+  const jobRef = useRef(job);
+  useEffect(() => { jobRef.current = job; }, [job]);
+  useEffect(() => { setJob({...rawJob}); }, [rawJob?.id]);
+
+  const u = patch => {
+    const updated = {...jobRef.current, ...patch};
+    jobRef.current = updated;
+    setJob(updated);
+    onUpdate(updated);
+  };
+
+  const [viewPhoto, setViewPhoto] = useState(null);
+  const [emailData, setEmailData] = useState(null);
+
+  const qjDef = getStatusDef(QUICK_JOB_STATUSES, job.quickJobStatus || "new");
+  const typeDef = QUICK_JOB_TYPES.find(t => t.value === job.quickJobType) || QUICK_JOB_TYPES[3];
+  const foreman = job.foreman || "Koy";
+
+  // Photo handling
+  const addPhotos = (files) => {
+    const arr = Array.from(files);
+    let done = 0; const newPhotos = [];
+    arr.forEach(file => {
+      const reader = new FileReader();
+      reader.onload = ev => {
+        const img = new Image();
+        img.onload = () => {
+          const MAX = 800;
+          let w = img.width, h = img.height;
+          if (w > MAX || h > MAX) {
+            if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
+            else { w = Math.round(w * MAX / h); h = MAX; }
+          }
+          const canvas = document.createElement("canvas");
+          canvas.width = w; canvas.height = h;
+          canvas.getContext("2d").drawImage(img, 0, 0, w, h);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.65);
+          newPhotos.push({ id: uid(), name: file.name, dataUrl });
+          done++;
+          if (done === arr.length) u({ photos: [...(job.photos || []), ...newPhotos] });
+        };
+        img.src = ev.target.result;
+      };
+      reader.readAsDataURL(file);
+    });
+  };
+
+  return (
+    <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.82)", zIndex: 400,
+      display: "flex", alignItems: "center", justifyContent: "center", padding: 12 }}
+      onClick={e => { if (e.target === e.currentTarget) onClose(); }}>
+
+      <div onClick={e => e.stopPropagation()} style={{
+        background: C.card, border: `1px solid ${C.border}`, borderRadius: 18,
+        width: "100%", maxWidth: 680, maxHeight: "93vh", display: "flex",
+        flexDirection: "column", overflow: "hidden", boxShadow: "0 40px 100px rgba(0,0,0,0.7)"
+      }}>
+
+        {/* Header */}
+        <div style={{ padding: "16px 22px", borderBottom: `1px solid ${C.border}`,
+          display: "flex", justifyContent: "space-between", alignItems: "center", flexShrink: 0, gap: 12 }}>
+          <div>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 2 }}>
+              <span style={{ fontSize: 10, fontWeight: 800, color: typeDef.color, letterSpacing: "0.08em",
+                background: typeDef.color + "18", borderRadius: 99, padding: "2px 8px",
+                border: `1px solid ${typeDef.color}33` }}>
+                {typeDef.label.toUpperCase()}
+              </span>
+              <span style={{ fontSize: 10, fontWeight: 800, color: "#6b7280", letterSpacing: "0.08em",
+                background: "#6b728018", borderRadius: 99, padding: "2px 8px",
+                border: "1px solid #6b728033" }}>
+                QUICK JOB
+              </span>
+              {job.readyToInvoice && (
+                <span style={{ fontSize: 10, fontWeight: 800, color: "#ea580c", background: "#ea580c12",
+                  borderRadius: 99, padding: "2px 8px", border: "1px solid #ea580c33" }}>READY TO INVOICE</span>
+              )}
+            </div>
+            <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 22, letterSpacing: "0.06em",
+              color: C.text, lineHeight: 1 }}>{job.name || "New Quick Job"}</div>
+            <div style={{ fontSize: 11, color: C.dim, marginTop: 2 }}>
+              {[job.address, job.gc].filter(Boolean).join(" · ") || "No details yet"}
+            </div>
+          </div>
+          <button onClick={onClose}
+            style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 8,
+              color: C.dim, cursor: "pointer", padding: "5px 14px", fontSize: 13, flexShrink: 0 }}>✕</button>
+        </div>
+
+        {/* Status bar */}
+        <div style={{ padding: "12px 22px", borderBottom: `1px solid ${C.border}`,
+          background: C.surface, display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", flexShrink: 0 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: C.dim, letterSpacing: "0.08em" }}>STATUS</span>
+          {QUICK_JOB_STATUSES.map(s => {
+            const active = (job.quickJobStatus || "new") === s.value;
+            return (
+              <button key={s.value} onClick={() => {
+                const patch = { quickJobStatus: s.value };
+                if (s.value === "invoice") { patch.readyToInvoice = true; patch.readyToInvoiceDate = new Date().toLocaleDateString("en-US"); }
+                if (s.value === "complete") { patch.readyToInvoice = true; patch.readyToInvoiceDate = new Date().toLocaleDateString("en-US"); }
+                if (!s.hasDate) { patch.quickJobDate = job.quickJobDate; }
+                u(patch);
+              }} style={{
+                padding: "5px 14px", fontSize: 11, fontWeight: active ? 700 : 500,
+                borderRadius: 99, border: `1px solid ${active ? s.color : C.border}`,
+                background: active ? `${s.color}22` : "none",
+                color: active ? s.color : C.dim, cursor: "pointer", fontFamily: "inherit",
+                transition: "all 0.15s",
+              }}>{s.label}</button>
+            );
+          })}
+        </div>
+
+        {/* Scheduled date row */}
+        {(job.quickJobStatus === "scheduled" || job.quickJobStatus === "inprogress") && (
+          <div style={{ padding: "10px 22px", borderBottom: `1px solid ${C.border}`,
+            background: `${C.blue}06`, display: "flex", alignItems: "center", gap: 12, flexWrap: "wrap", flexShrink: 0 }}>
+            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.08em", color: C.blue }}>SCHEDULED DATE</div>
+              <DateInp value={job.quickJobDate || ""} onChange={e => u({ quickJobDate: e.target.value })}
+                style={{ width: 140, fontSize: 11, borderColor: C.blue + "55", background: C.blue + "08" }} />
+            </div>
+            <div style={{ display: "flex", flexDirection: "column", gap: 2 }}>
+              <div style={{ fontSize: 9, fontWeight: 700, letterSpacing: "0.08em", color: C.blue }}>END DATE</div>
+              <DateInp value={job.quickJobEndDate || ""} onChange={e => u({ quickJobEndDate: e.target.value })}
+                style={{ width: 140, fontSize: 11, borderColor: C.blue + "55", background: C.blue + "08" }} />
+            </div>
+          </div>
+        )}
+
+        {/* Body */}
+        <div style={{ flex: 1, overflowY: "auto", padding: "20px 22px" }}>
+
+          {/* Job Info */}
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: C.dim, letterSpacing: "0.12em", marginBottom: 12 }}>JOB INFO</div>
+            <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
+              {[["name", "Job Name"], ["address", "Address"], ["gc", "General Contractor / Customer"], ["phone", "Phone"], ["simproNo", "Simpro Job #"]].map(([k, l]) => (
+                <div key={k}>
+                  <div style={{ fontSize: 10, color: C.dim, marginBottom: 3 }}>{l}</div>
+                  <Inp value={job[k] || ""} onChange={e => u({ [k]: e.target.value })} placeholder={l} />
+                </div>
+              ))}
+              <div>
+                <div style={{ fontSize: 10, color: C.dim, marginBottom: 3 }}>Foreman</div>
+                <Sel value={job.foreman || "Koy"} onChange={e => u({ foreman: e.target.value })} options={[...(foremenList || getForemenList()), "Unassigned"]} />
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: C.dim, marginBottom: 3 }}>Lead</div>
+                <Sel value={job.lead || ""} onChange={e => u({ lead: e.target.value })} options={["", ...(leadsList || LEADS)]} />
+              </div>
+              <div>
+                <div style={{ fontSize: 10, color: C.dim, marginBottom: 3 }}>Job Type</div>
+                <select value={job.quickJobType || "service"} onChange={e => u({ quickJobType: e.target.value })}
+                  style={{ width: "100%", background: C.surface, border: `1px solid ${C.border}`,
+                    borderRadius: 7, color: C.text, padding: "7px 10px", fontSize: 12,
+                    fontFamily: "inherit", outline: "none", cursor: "pointer" }}>
+                  {QUICK_JOB_TYPES.map(t => <option key={t.value} value={t.value}>{t.label}</option>)}
+                </select>
+              </div>
+            </div>
+            {/* Access Note */}
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 10, color: C.dim, marginBottom: 3 }}>Access Note (gate code, keybox, entry instructions)</div>
+              <textarea value={job.accessNote || ""} onChange={e => u({ accessNote: e.target.value })}
+                placeholder="e.g. Gate code: 1234 · Keybox on front door"
+                rows={2} style={{ width: "100%", boxSizing: "border-box", background: C.surface,
+                  border: `1px solid ${job.accessNote ? "#f59e0b" : C.border}`,
+                  borderRadius: 8, padding: "8px 10px", fontSize: 12, fontFamily: "inherit",
+                  color: C.text, resize: "vertical", outline: "none", lineHeight: 1.5 }} />
+            </div>
+          </div>
+
+          {/* Scope & Material */}
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: C.dim, letterSpacing: "0.12em", marginBottom: 12 }}>SCOPE OF WORK</div>
+            <TA value={job.scope || ""} onChange={e => u({ scope: e.target.value })}
+              placeholder="Describe what needs to be done..." rows={4} />
+            <div style={{ marginTop: 12 }}>
+              <div style={{ fontSize: 10, color: C.dim, marginBottom: 3 }}>Material Needed</div>
+              <TA value={job.material || ""} onChange={e => u({ material: e.target.value })}
+                placeholder="List materials needed..." rows={3} />
+            </div>
+          </div>
+
+          {/* Notes */}
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: C.dim, letterSpacing: "0.12em", marginBottom: 12 }}>NOTES</div>
+            <TA value={job.notes || ""} onChange={e => u({ notes: e.target.value })}
+              placeholder="Additional notes, updates, follow-up..." rows={4} />
+          </div>
+
+          {/* Photos */}
+          <div style={{ marginBottom: 24 }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: C.dim, letterSpacing: "0.12em", marginBottom: 12 }}>PHOTOS</div>
+            {(job.photos || []).length > 0 && (
+              <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
+                {(job.photos || []).map(p => (
+                  <div key={p.id} style={{ position: "relative", width: 80, height: 80 }}>
+                    <img src={p.dataUrl} alt={p.name} onClick={() => setViewPhoto(p.dataUrl)}
+                      style={{ width: 80, height: 80, objectFit: "cover", borderRadius: 8, cursor: "pointer",
+                        border: `1px solid ${C.border}` }} />
+                    <button onClick={() => u({ photos: (job.photos || []).filter(x => x.id !== p.id) })}
+                      style={{ position: "absolute", top: -5, right: -5, background: "#dc2626", border: "none",
+                        borderRadius: "50%", color: "#fff", width: 18, height: 18, fontSize: 10,
+                        cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+                  </div>
+                ))}
+              </div>
+            )}
+            <label style={{ display: "inline-flex", alignItems: "center", gap: 6,
+              background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
+              padding: "7px 14px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.dim }}>
+              + Add Photos
+              <input type="file" accept="image/*" multiple style={{ display: "none" }}
+                onChange={e => { addPhotos(e.target.files); e.target.value = ""; }} />
+            </label>
+          </div>
+
+          {/* Sign-off / Complete */}
+          <div style={{ borderTop: `2px solid ${C.border}`, paddingTop: 20 }}>
+            <div style={{ fontSize: 10, fontWeight: 800, color: C.dim, letterSpacing: "0.12em", marginBottom: 12 }}>
+              SIGN-OFF & COMPLETE
+            </div>
+            {job.signedOff ? (
+              <div style={{ background: `${C.green}12`, border: `1px solid ${C.green}33`,
+                borderRadius: 10, padding: "12px 16px", display: "flex", alignItems: "center",
+                justifyContent: "space-between", gap: 10, flexWrap: "wrap" }}>
+                <div>
+                  <div style={{ fontSize: 12, fontWeight: 700, color: C.green }}>Completed & Signed Off</div>
+                  <div style={{ fontSize: 11, color: C.dim, marginTop: 2 }}>
+                    By {job.signedOffBy} · {job.signedOffDate}
+                  </div>
+                </div>
+                <div style={{ display: "flex", gap: 8, alignItems: "center" }}>
+                  {job.readyToInvoice && !job.invoiceSent && (
+                    <button onClick={() => u({ invoiceSent: true, readyToInvoice: false, invoiceDismissed: true, quickJobStatus: "invoice" })}
+                      style={{ background: "#ea580c", border: "none", borderRadius: 7,
+                        color: "#fff", fontSize: 11, fontWeight: 700, padding: "6px 14px",
+                        cursor: "pointer", fontFamily: "inherit" }}>
+                      ✓ Invoice Sent
+                    </button>
+                  )}
+                  {job.invoiceSent && (
+                    <span style={{ fontSize: 11, fontWeight: 700, color: "#16a34a", background: "#16a34a12",
+                      borderRadius: 99, padding: "4px 12px", border: "1px solid #16a34a33" }}>
+                      ✓ Invoice Sent
+                    </span>
+                  )}
+                  <button onClick={() => u({ signedOff: false, signedOffBy: "", signedOffDate: "",
+                    quickJobStatus: "inprogress", readyToInvoice: false, invoiceSent: false })}
+                    style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 7,
+                      color: C.dim, fontSize: 11, padding: "4px 10px", cursor: "pointer", fontFamily: "inherit" }}>
+                    Undo
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div style={{ display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+                <Inp value={job.signedOffBy || ""} onChange={e => u({ signedOffBy: e.target.value })}
+                  placeholder="Completed by..." style={{ flex: "1 1 180px", minWidth: 140 }} />
+                <button onClick={() => {
+                  if (!job.signedOffBy?.trim()) return;
+                  u({ signedOff: true, signedOffDate: new Date().toLocaleDateString("en-US"),
+                    quickJobStatus: "complete", readyToInvoice: true,
+                    readyToInvoiceDate: new Date().toLocaleDateString("en-US") });
+                }} disabled={!job.signedOffBy?.trim()}
+                  style={{ background: job.signedOffBy?.trim() ? C.green : "#374151", border: "none",
+                    borderRadius: 8, color: job.signedOffBy?.trim() ? "#000" : C.dim, fontSize: 12,
+                    fontWeight: 700, padding: "9px 20px", cursor: job.signedOffBy?.trim() ? "pointer" : "default",
+                    fontFamily: "inherit", whiteSpace: "nowrap" }}>
+                  Mark Complete
+                </button>
+              </div>
+            )}
+          </div>
+        </div>
+      </div>
+
+      {/* Photo lightbox */}
+      {viewPhoto && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.95)", zIndex: 1000,
+          display: "flex", alignItems: "center", justifyContent: "center" }}
+          onClick={() => setViewPhoto(null)}>
+          <img src={viewPhoto} alt="photo"
+            style={{ maxWidth: "95vw", maxHeight: "95vh", objectFit: "contain", borderRadius: 8 }} />
+        </div>
+      )}
+
+      {emailData && <EmailModal subject={emailData.subject} body={emailData.body} onClose={() => setEmailData(null)} />}
+    </div>
+  );
+}
+
 function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
   const jobRef = useRef(job);
@@ -4462,7 +4792,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                         <div style={{flex:1,minWidth:140}}>
                           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
                             <span style={{fontSize:10,color:job.roughStartConfirmed?"#16a34a":C.dim,fontWeight:700,letterSpacing:"0.08em"}}>
-                              {job.roughStartConfirmed ? "ROUGH STARTED ON" : "PROJECTED START"}
+                              {job.roughStartConfirmed ? "READY TO START" : "PROJECTED START"}
                             </span>
                             <button onClick={()=>{
                               const confirm=!job.roughStartConfirmed;
@@ -4596,7 +4926,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                         <div style={{flex:1,minWidth:140}}>
                           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
                             <span style={{fontSize:10,color:job.finishStartConfirmed?"#16a34a":C.dim,fontWeight:700,letterSpacing:"0.08em"}}>
-                              {job.finishStartConfirmed ? "FINISH STARTED ON" : "PROJECTED START"}
+                              {job.finishStartConfirmed ? "READY TO START" : "PROJECTED START"}
                             </span>
                             <button onClick={()=>{
                               const confirm=!job.finishStartConfirmed;
@@ -5626,6 +5956,69 @@ function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
 
 // ── Temp Ped Card ─────────────────────────────────────────────
 
+// ── Quick Job Card ─────────────────────────────────────────────
+function QuickJobCard({ job, onOpen, onUpdate, onDelete }) {
+  const qjDef = getStatusDef(QUICK_JOB_STATUSES, job.quickJobStatus || "new");
+  const typeDef = QUICK_JOB_TYPES.find(t => t.value === job.quickJobType) || QUICK_JOB_TYPES[3];
+  const color = qjDef.color || "#6b7280";
+  const foreman = job.foreman || "Koy";
+  const fc = getFC(foreman) || "#6b7280";
+
+  return (
+    <div style={{
+      background: C.card, borderRadius: 13, padding: "13px 16px", marginBottom: 8,
+      border: `1px solid ${color}33`, borderLeft: `3px solid ${color}`, cursor: "default",
+    }}>
+      <div style={{ display: "flex", alignItems: "flex-start", gap: 12, flexWrap: "wrap" }}>
+        <div style={{ flex: "1 1 180px", minWidth: 140, cursor: "pointer" }} onClick={() => onOpen(job)}>
+          <div style={{ display: "flex", alignItems: "center", gap: 6, marginBottom: 2 }}>
+            <span style={{ fontSize: 10, fontWeight: 800, color: typeDef.color, letterSpacing: "0.06em",
+              background: typeDef.color + "18", borderRadius: 99, padding: "1px 7px",
+              border: `1px solid ${typeDef.color}33` }}>{typeDef.label.toUpperCase()}</span>
+            <span style={{ fontSize: 9, fontWeight: 700, color: "#6b7280", background: "#6b728015",
+              borderRadius: 99, padding: "1px 6px", border: "1px solid #6b728022" }}>QUICK</span>
+          </div>
+          <div style={{ fontWeight: 700, fontSize: 13, color: C.text, marginBottom: 2 }}>{job.name || "Untitled Job"}</div>
+          <div style={{ fontSize: 11, color: C.dim, display: "flex", gap: 8, flexWrap: "wrap" }}>
+            {job.address && <span>{job.address}</span>}
+            <span style={{ fontWeight: 700, color: fc }}>{foreman}</span>
+            {job.lead && <span style={{ color: C.accent }}>· {job.lead}</span>}
+          </div>
+        </div>
+
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end", flexShrink: 0 }}>
+          <span style={{ fontSize: 10, fontWeight: 700, color: qjDef.color,
+            background: qjDef.color + "18", borderRadius: 99, padding: "2px 10px",
+            border: `1px solid ${qjDef.color}33` }}>{qjDef.label}</span>
+          {job.quickJobDate && (
+            <span style={{ fontSize: 10, color: C.dim }}>
+              {fmtDisplay(job.quickJobDate)}{job.quickJobEndDate ? " – " + fmtDisplay(job.quickJobEndDate) : ""}
+            </span>
+          )}
+          {job.readyToInvoice && !job.invoiceSent && (
+            <span style={{ fontSize: 10, fontWeight: 800, color: "#ea580c", background: "#ea580c12",
+              borderRadius: 99, padding: "2px 10px", border: "1px solid #ea580c33" }}>
+              READY TO INVOICE
+            </span>
+          )}
+          {job.invoiceSent && (
+            <span style={{ fontSize: 10, fontWeight: 800, color: "#16a34a", background: "#16a34a12",
+              borderRadius: 99, padding: "2px 10px", border: "1px solid #16a34a33" }}>
+              ✓ INVOICE SENT
+            </span>
+          )}
+          {onDelete && (
+            <button onClick={e => { e.stopPropagation(); if (window.confirm("Delete this quick job?")) onDelete(job.id); }}
+              style={{ background: "none", border: "1px solid #dc262633", borderRadius: 6,
+                color: "#dc2626", fontSize: 10, fontWeight: 600, padding: "3px 8px",
+                cursor: "pointer", fontFamily: "inherit" }}>Delete</button>
+          )}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function TempPedCard({ job, onOpen, onUpdate, onDelete }) {
   const tpDef = getStatusDef(TEMP_PED_STATUSES, job.tempPedStatus||"");
   const color = tpDef.color || "#8b5cf6";
@@ -5738,6 +6131,20 @@ const effFS = j => {
 
 const STAGE_SECTIONS = [
 
+  // Quick Jobs
+  { key:"quickNew",        label:"Quick Jobs — New",              color:"#6b7280",
+    test: j => !!j.quickJob && (j.quickJobStatus||"new")==="new" },
+
+  { key:"quickScheduled",  label:"Quick Jobs — Scheduled",        color:"#2563eb",
+    test: j => !!j.quickJob && j.quickJobStatus==="scheduled" },
+
+  { key:"quickInProgress", label:"Quick Jobs — In Progress",      color:"#0ea5e9",
+    test: j => !!j.quickJob && j.quickJobStatus==="inprogress" },
+
+  { key:"quickComplete",   label:"Quick Jobs — Complete",         color:"#22c55e",
+    test: j => !!j.quickJob && (j.quickJobStatus==="complete"||j.quickJobStatus==="invoice") },
+
+  // Temp Peds
   { key:"tempPedReady",    label:"Temp Peds — Ready to Schedule", color:"#8b5cf6",
     test: j => !!j.tempPed && (!j.tempPedStatus||j.tempPedStatus==="ready") },
 
@@ -5747,11 +6154,12 @@ const STAGE_SECTIONS = [
   { key:"tempPedDone",     label:"Temp Peds — Completed",            color:"#16a34a",
     test: j => !!j.tempPed && j.tempPedStatus==="completed" },
 
+  // Full Jobs
   { key:"prep",         label:"Pre Job Prep",              color:"#0d9488",
-    test: j => !j.tempPed && (j.prepStage||"") !== "Job Prep Complete" },
+    test: j => !j.tempPed && !j.quickJob && (j.prepStage||"") !== "Job Prep Complete" },
 
   { key:"roughNotStarted", label:"Rough — Not Started",   color:"#64748b",
-    test: j => { const rs=effRS(j); return !j.tempPed && (j.prepStage||"")==="Job Prep Complete" && (!rs||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"); } },
+    test: j => { const rs=effRS(j); return !j.tempPed && !j.quickJob && (j.prepStage||"")==="Job Prep Complete" && (!rs||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"); } },
 
   { key:"roughHold",    label:"Rough — On Hold",           color:"#ca8a04",
     test: j => effRS(j) === "waiting" },
@@ -5856,7 +6264,9 @@ function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, o
             </div>
 
             {!isCollapsed && sJobs.map(job=>(
-              job.tempPed
+              job.quickJob
+                ? <QuickJobCard key={job.id} job={job} onOpen={onSelectJob} onUpdate={onSaveJob} onDelete={onDeleteJob}/>
+                : job.tempPed
                 ? <TempPedCard key={job.id} job={job} onOpen={onSelectJob} onUpdate={onSaveJob} onDelete={onDeleteJob}/>
                 : <JobRow key={job.id} job={job} fc={fc||undefined} showForeman={!fc}/>
             ))}
@@ -6465,6 +6875,40 @@ function computeTasks(jobs) {
       desc: "Temp ped is ready to be scheduled",
       color: "#8b5cf6", cleared: false,
     });
+
+    // Quick Job tasks
+    if(job.quickJob) {
+      const qjs = job.quickJobStatus || "new";
+      const typeDef = QUICK_JOB_TYPES.find(t=>t.value===job.quickJobType) || QUICK_JOB_TYPES[3];
+      if(qjs === "new") tasks.push({
+        id: job.id+"_quick_schedule", jobId: job.id, jobName: job.name,
+        type: "auto", category: "schedule", foreman,
+        title: `Schedule ${typeDef.label}: ${job.name||"Untitled"}`,
+        desc: job.scope || "New quick job needs to be scheduled",
+        color: typeDef.color, cleared: false,
+      });
+      if(qjs === "scheduled" && job.quickJobDate) {
+        const startD = parseAnyDate(job.quickJobDate);
+        if(startD) {
+          const daysUntil = Math.floor((startD.getTime() - Date.now()) / (1000*60*60*24));
+          if(daysUntil <= 3) tasks.push({
+            id: job.id+"_quick_upcoming", jobId: job.id, jobName: job.name,
+            type: "auto", category: "schedule", foreman,
+            title: `${typeDef.label} ${daysUntil<=0?"Today/Overdue":"in "+daysUntil+" day"+(daysUntil!==1?"s":"")}`,
+            desc: job.scope || job.name || "Quick job coming up",
+            dueDate: job.quickJobDate,
+            color: daysUntil <= 0 ? C.red : typeDef.color, cleared: false,
+          });
+        }
+      }
+      if((qjs === "complete" || qjs === "invoice") && job.readyToInvoice && !job.invoiceDismissed) tasks.push({
+        id: job.id+"_quick_invoice", jobId: job.id, jobName: job.name,
+        type: "auto", category: "invoice", foreman,
+        title: `Invoice ${typeDef.label}: ${job.name||"Untitled"}`,
+        desc: "Quick job complete — ready to invoice",
+        color: "#ea580c", cleared: false,
+      });
+    }
 
     // Return Trips needing scheduling
     (job.returnTrips||[]).forEach((rt, i) => {
@@ -7221,6 +7665,26 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
     jobList.filter(j=>!j.tempPed).forEach(job=>{
       const rs=effRS(job), fs=effFS(job);
       const fc=getFC(job.foreman||"Koy");
+
+      // ── Quick Jobs ──
+      if(job.quickJob) {
+        const qjs = job.quickJobStatus || "new";
+        if(qjs !== "invoice" && !(qjs === "complete" && job.invoiceSent)) {
+          const typeDef = QUICK_JOB_TYPES.find(t=>t.value===job.quickJobType) || QUICK_JOB_TYPES[3];
+          const qjDef = getStatusDef(QUICK_JOB_STATUSES, qjs);
+          const start = job.quickJobDate || "";
+          if(start || qjs === "new") events.push({
+            id:job.id+"_quick", job, type:"quick",
+            label:typeDef.label.toUpperCase(), color:qjDef.color||typeDef.color, fc,
+            startDate:start,
+            endDate:(qjs==="scheduled"||qjs==="inprogress")?job.quickJobEndDate||"":"",
+            hardDate:false,
+            status:qjs, statusLabel:qjDef.label||"New",
+            desc:job.scope||qjDef.label||"Quick Job",
+          });
+        }
+        return; // skip rough/finish for quick jobs
+      }
 
       // ── Rough ──
       // ── Rough — include invoice status ──
@@ -8770,7 +9234,7 @@ if(initialLoad.current) return;
             {job.roughProjectedStart&&(
               <div style={{marginTop:4,fontSize:12,fontWeight:700,
                 color:job.roughStartConfirmed?"#16a34a":"#dc2626"}}>
-                {job.roughStartConfirmed?"Started: ":"Projected: "}{fmtDisplay(job.roughProjectedStart)}
+                {job.roughStartConfirmed?"Ready: ":"Projected: "}{fmtDisplay(job.roughProjectedStart)}
               </div>
             )}
           </div>
@@ -8781,7 +9245,7 @@ if(initialLoad.current) return;
             {job.finishProjectedStart&&(
               <div style={{marginTop:4,fontSize:12,fontWeight:700,
                 color:job.finishStartConfirmed?"#16a34a":"#dc2626"}}>
-                {job.finishStartConfirmed?"Started: ":"Projected: "}{fmtDisplay(job.finishProjectedStart)}
+                {job.finishStartConfirmed?"Ready: ":"Projected: "}{fmtDisplay(job.finishProjectedStart)}
               </div>
             )}
           </div>
@@ -9021,6 +9485,12 @@ if(initialLoad.current) return;
                     fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
                     fontFamily:"inherit",boxShadow:"0 2px 8px #8b5cf644",letterSpacing:"0.02em"}}>
                   + Temp Ped
+                </button>
+                <button onClick={()=>{const j=blankQuickJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);saveJob(j);}}
+                  style={{background:"#f97316",border:"none",borderRadius:8,color:"#fff",
+                    fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
+                    fontFamily:"inherit",boxShadow:"0 2px 8px #f9731644",letterSpacing:"0.02em"}}>
+                  + Quick Job
                 </button>
               </div>
 
@@ -9302,7 +9772,9 @@ if(initialLoad.current) return;
                           </div>
                           {/* Jobs under this lead */}
                           {leadMap[lead].map(job=>(
-                            job.tempPed
+                            job.quickJob
+                              ? <QuickJobCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }}/>
+                              : job.tempPed
                               ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }}/>
                               : <JobRow key={job.id} job={job} fc={fc2} showForeman={false}/>
                           ))}
@@ -9566,7 +10038,9 @@ if(initialLoad.current) return;
 
 
 
-      {selected&&(selected.tempPed
+      {selected&&(selected.quickJob
+        ? <QuickJobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)} foremenList={_foremen} leadsList={_leads}/>
+        : selected.tempPed
         ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)} foremenList={_foremen}/>
         : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)} foremenList={_foremen} leadsList={_leads}/>)}
 
