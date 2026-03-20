@@ -2,6 +2,7 @@
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, enableMultiTabIndexedDbPersistence } from "firebase/firestore";
+import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 
 
@@ -43,6 +44,7 @@ const firebaseConfig = {
 const firebaseApp = initializeApp(firebaseConfig);
 
 const db = getFirestore(firebaseApp);
+const storage = getStorage(firebaseApp);
 
 // Enable offline persistence — queues writes when offline, syncs when back online
 // Multi-tab version: works even if multiple tabs are open
@@ -654,7 +656,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, roughStartConfirmed:false, finishStartConfirmed:false, roughNeedsHardDate:false, roughNeedsByStart:"", roughNeedsByEnd:"", finishNeedsHardDate:false, finishNeedsByStart:"", finishNeedsByEnd:"", readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, taskDueDates:{}, roughOnHold:false, finishOnHold:false, tempPed:false, hasTempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
+  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughScheduledEnd:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishScheduledEnd:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, roughStartConfirmed:false, finishStartConfirmed:false, roughNeedsHardDate:false, roughNeedsByStart:"", roughNeedsByEnd:"", finishNeedsHardDate:false, finishNeedsByStart:"", finishNeedsByEnd:"", readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, taskDueDates:{}, roughOnHold:false, finishOnHold:false, tempPed:false, hasTempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
 
   homeRuns:{
 
@@ -3507,13 +3509,204 @@ const LINK_FIELDS = [
 
 
 
+// ── File Upload Section (Firebase Storage) ────────────────────
+function FileUploadSection({ jobId, files, onChange }) {
+  const [uploading, setUploading] = useState(false);
+  const [uploadProgress, setUploadProgress] = useState("");
+  const [viewFile, setViewFile] = useState(null);
+
+  const handleUpload = async (inputFiles) => {
+    if (!inputFiles || inputFiles.length === 0) return;
+    setUploading(true);
+    const newFiles = [];
+    for (const file of Array.from(inputFiles)) {
+      try {
+        setUploadProgress(`Uploading ${file.name}...`);
+        const fileId = uid();
+        const ext = file.name.split(".").pop() || "file";
+        const storagePath = `jobs/${jobId}/plans/${fileId}.${ext}`;
+        const storageRef = ref(storage, storagePath);
+        await uploadBytes(storageRef, file);
+        const url = await getDownloadURL(storageRef);
+        newFiles.push({
+          id: fileId,
+          name: file.name,
+          url,
+          storagePath,
+          type: file.type || "application/octet-stream",
+          size: file.size,
+          uploadedAt: new Date().toISOString(),
+        });
+      } catch (e) {
+        console.error("Upload failed:", e);
+        alert(`Failed to upload ${file.name}. Check your connection and try again.`);
+      }
+    }
+    if (newFiles.length > 0) {
+      onChange([...(files || []), ...newFiles]);
+    }
+    setUploading(false);
+    setUploadProgress("");
+  };
+
+  const handleDelete = async (file) => {
+    if (!window.confirm(`Delete ${file.name}?`)) return;
+    try {
+      if (file.storagePath) {
+        const storageRef = ref(storage, file.storagePath);
+        await deleteObject(storageRef).catch(() => {}); // ok if already deleted
+      }
+    } catch (e) { console.warn("Storage delete failed:", e); }
+    onChange((files || []).filter(f => f.id !== file.id));
+  };
+
+  const isImage = (file) => (file.type || "").startsWith("image/") || /\.(jpg|jpeg|png|gif|webp|heic)$/i.test(file.name);
+  const isPDF = (file) => (file.type || "") === "application/pdf" || /\.pdf$/i.test(file.name);
+  const fileIcon = (file) => isPDF(file) ? "📄" : isImage(file) ? "🖼" : "📎";
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: "0.08em" }}>UPLOADED FILES</div>
+        <div style={{ display: "flex", gap: 6 }}>
+          {/* File upload */}
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 5,
+            background: `${C.blue}15`, border: `1px solid ${C.blue}44`, borderRadius: 7,
+            padding: "5px 12px", fontSize: 11, fontWeight: 600, color: C.blue,
+            cursor: uploading ? "not-allowed" : "pointer", opacity: uploading ? 0.5 : 1,
+            fontFamily: "inherit" }}>
+            📎 Upload Files
+            <input type="file" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.dwg,.dxf"
+              style={{ display: "none" }} disabled={uploading}
+              onChange={e => { handleUpload(e.target.files); e.target.value = ""; }} />
+          </label>
+          {/* Camera capture */}
+          <label style={{ display: "inline-flex", alignItems: "center", gap: 5,
+            background: `${C.teal}15`, border: `1px solid ${C.teal}44`, borderRadius: 7,
+            padding: "5px 12px", fontSize: 11, fontWeight: 600, color: C.teal,
+            cursor: uploading ? "not-allowed" : "pointer", opacity: uploading ? 0.5 : 1,
+            fontFamily: "inherit" }}>
+            📷 Take Photo
+            <input type="file" accept="image/*" capture="environment"
+              style={{ display: "none" }} disabled={uploading}
+              onChange={e => { handleUpload(e.target.files); e.target.value = ""; }} />
+          </label>
+        </div>
+      </div>
+
+      {uploading && (
+        <div style={{ fontSize: 11, color: C.accent, fontWeight: 600, marginBottom: 10,
+          padding: "8px 12px", background: `${C.accent}12`, border: `1px solid ${C.accent}33`,
+          borderRadius: 8 }}>
+          ⏳ {uploadProgress || "Uploading..."}
+        </div>
+      )}
+
+      {(!files || files.length === 0) && !uploading && (
+        <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic", padding: "16px",
+          textAlign: "center", border: `1px dashed ${C.border}`, borderRadius: 10 }}>
+          No files uploaded yet — use the buttons above to upload plans, photos, or documents
+        </div>
+      )}
+
+      {/* Image grid */}
+      {(files || []).filter(f => isImage(f)).length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>IMAGES</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(100px,1fr))", gap: 8 }}>
+            {(files || []).filter(f => isImage(f)).map(f => (
+              <div key={f.id} style={{ position: "relative" }}>
+                <img src={f.url} alt={f.name}
+                  onClick={() => setViewFile(f)}
+                  style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 8,
+                    border: `1px solid ${C.border}`, cursor: "pointer" }} />
+                <button onClick={() => handleDelete(f)}
+                  style={{ position: "absolute", top: -5, right: -5, background: "#dc2626",
+                    border: "none", borderRadius: "50%", color: "#fff", width: 18, height: 18,
+                    fontSize: 10, cursor: "pointer", display: "flex", alignItems: "center",
+                    justifyContent: "center", lineHeight: 1 }}>✕</button>
+                <div style={{ fontSize: 9, color: C.dim, marginTop: 3, overflow: "hidden",
+                  textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Document list */}
+      {(files || []).filter(f => !isImage(f)).length > 0 && (
+        <div>
+          <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>DOCUMENTS</div>
+          {(files || []).filter(f => !isImage(f)).map(f => (
+            <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+              background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 6 }}>
+              <span style={{ fontSize: 18, flexShrink: 0 }}>{fileIcon(f)}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden",
+                  textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                <div style={{ fontSize: 10, color: C.muted }}>
+                  {f.size ? (f.size < 1024 * 1024 ? Math.round(f.size / 1024) + " KB" : (f.size / (1024 * 1024)).toFixed(1) + " MB") : ""}
+                </div>
+              </div>
+              <a href={f.url} target="_blank" rel="noreferrer"
+                style={{ fontSize: 11, fontWeight: 600, color: C.blue, textDecoration: "none",
+                  border: `1px solid ${C.blue}44`, borderRadius: 7, padding: "5px 10px",
+                  flexShrink: 0 }}>
+                Open ↗
+              </a>
+              <button onClick={() => handleDelete(f)}
+                style={{ background: "none", border: "none", color: C.muted, cursor: "pointer",
+                  fontSize: 13, flexShrink: 0 }}>✕</button>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Lightbox */}
+      {viewFile && (
+        <div onClick={() => setViewFile(null)}
+          style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.95)", zIndex: 1000,
+            display: "flex", alignItems: "center", justifyContent: "center", padding: 16 }}>
+          <button onClick={() => setViewFile(null)}
+            style={{ position: "absolute", top: 16, right: 16, background: "rgba(255,255,255,0.15)",
+              border: "none", borderRadius: "50%", color: "#fff", fontSize: 22, width: 40, height: 40,
+              cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
+          {isImage(viewFile) ? (
+            <img src={viewFile.url} alt={viewFile.name}
+              style={{ maxWidth: "95vw", maxHeight: "95vh", objectFit: "contain", borderRadius: 8 }}
+              onClick={e => e.stopPropagation()} />
+          ) : (
+            <div onClick={e => e.stopPropagation()}
+              style={{ background: "#fff", borderRadius: 12, padding: 24, textAlign: "center" }}>
+              <div style={{ fontSize: 48, marginBottom: 12 }}>{fileIcon(viewFile)}</div>
+              <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{viewFile.name}</div>
+              <a href={viewFile.url} target="_blank" rel="noreferrer"
+                style={{ fontSize: 13, color: C.blue, fontWeight: 600 }}>Open file ↗</a>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PlansTab({job, onUpdate}) {
 
   return (
 
     <div>
 
+      {/* File Uploads — Firebase Storage */}
+      <FileUploadSection
+        jobId={job.id}
+        files={job.planFiles || []}
+        onChange={v => onUpdate({ planFiles: v })}
+      />
 
+      <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 12,
+        paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
+        LINKS
+      </div>
 
       {LINK_FIELDS.map(([k,l])=>{
 
@@ -4323,6 +4516,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                               style={{width:130,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
                           </div>
                         )}
+                        {rsDef.hasDate&&job.roughStatus==="scheduled"&&(
+                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:rsDef.color}}>SCHEDULED END</div>
+                            <DateInp value={job.roughScheduledEnd||""} onChange={e=>u({roughScheduledEnd:e.target.value})}
+                              style={{width:130,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
+                          </div>
+                        )}
                       </div>
 
 
@@ -4447,6 +4647,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                           <div style={{display:"flex",flexDirection:"column",gap:3}}>
                             <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:fsDef.color}}>SCHEDULED DATE</div>
                             <DateInp value={job.finishStatusDate||""} onChange={e=>u({finishStatusDate:e.target.value})}
+                              style={{width:130,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
+                          </div>
+                        )}
+                        {fsDef.hasDate&&job.finishStatus==="scheduled"&&(
+                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:fsDef.color}}>SCHEDULED END</div>
+                            <DateInp value={job.finishScheduledEnd||""} onChange={e=>u({finishScheduledEnd:e.target.value})}
                               style={{width:130,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
                           </div>
                         )}
@@ -5900,6 +6107,19 @@ const invoiceSentPatch = (job) => {
   return patch;
 };
 
+// Module-level foreman matching — used by Tasks and other components outside App
+const matchesForeman = (job, name) => {
+  const jf = (job.foreman||"").trim().toLowerCase();
+  const n  = (name||"").trim().toLowerCase();
+  if(!jf || !n) return false;
+  if(jf === n) return true;
+  if(n.startsWith(jf+" ")) return true;
+  if(jf.startsWith(n+" ")) return true;
+  const nameParts = n.split(" ");
+  if(nameParts.some(part => part === jf || part.includes(jf) || jf.includes(part))) return true;
+  return false;
+};
+
 function computeTasks(jobs) {
   const tasks = [];
   jobs.forEach(job => {
@@ -7004,7 +7224,9 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
 
       // ── Rough ──
       // ── Rough — include invoice status ──
-      if(rs&&rs!=="complete") {
+      // Show on forecast if: has a status (not complete), OR has a projected start date
+      const hasRoughDate = !!(job.roughProjectedStart || job.roughStatusDate);
+      if((rs&&rs!=="complete") || (!rs && hasRoughDate && parseInt(job.roughStage||"0")< 100)) {
         const rsDef=getStatusDef(ROUGH_STATUSES,rs);
         // Date priority: when scheduled, use the scheduled date first; otherwise projected start
         const start=(rs==="scheduled"||rs==="inprogress")
@@ -7014,15 +7236,18 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
         if(start||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"||rs==="inprogress"||isInv) events.push({
           id:job.id+"_rough", job, type:"rough",
           label:"ROUGH", color:isInv?"#ea580c":rsDef.color||C.rough, fc,
-          startDate:isInv?job.readyToInvoiceDate||start:start, endDate:"",
+          startDate:isInv?job.readyToInvoiceDate||start:start,
+          endDate:(rs==="scheduled"||rs==="inprogress")?job.roughScheduledEnd||"":"",
           hardDate:false,
-          status:rs, statusLabel:isInv?"Ready to Invoice":rsDef.label,
-          desc:isInv?"Ready to Invoice":rsDef.label,
+          status:rs, statusLabel:isInv?"Ready to Invoice":(rsDef.label||"Projected"),
+          desc:isInv?"Ready to Invoice":(rsDef.label||"Projected start date set"),
         });
       }
 
       // ── Finish — include invoice status ──
-      if(fs&&fs!=="complete") {
+      // Show on forecast if: has a status (not complete), OR has a projected start date
+      const hasFinishDate = !!(job.finishProjectedStart || job.finishStatusDate);
+      if((fs&&fs!=="complete") || (!fs && hasFinishDate && parseInt(job.finishStage||"0") < 100)) {
         const fsDef=getStatusDef(FINISH_STATUSES,fs);
         // Date priority: when scheduled, use the scheduled date first; otherwise projected start
         const start=(fs==="scheduled"||fs==="inprogress")
@@ -7032,10 +7257,11 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
         if(start||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"||fs==="inprogress"||isInv) events.push({
           id:job.id+"_finish", job, type:"finish",
           label:"FINISH", color:isInv?"#ea580c":fsDef.color||C.finish, fc,
-          startDate:isInv?job.readyToInvoiceDate||start:start, endDate:"",
+          startDate:isInv?job.readyToInvoiceDate||start:start,
+          endDate:(fs==="scheduled"||fs==="inprogress")?job.finishScheduledEnd||"":"",
           hardDate:false,
-          status:fs, statusLabel:isInv?"Ready to Invoice":fsDef.label,
-          desc:isInv?"Ready to Invoice":fsDef.label,
+          status:fs, statusLabel:isInv?"Ready to Invoice":(fsDef.label||"Projected"),
+          desc:isInv?"Ready to Invoice":(fsDef.label||"Projected start date set"),
         });
       }
 
@@ -7178,7 +7404,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
           <span style={{fontSize:10,fontWeight:700,color:ev.statusLabel?col:"var(--dim)"}}>{ev.statusLabel}</span>
           {ev.startDate&&(
             <span style={{fontSize:10,fontWeight:700,color:over?C.red:"var(--dim)",marginLeft:"auto"}}>
-              {ev.type==="rt"&&ev.status==="needs"?"Due: ":""}{fmtDate(ev.startDate)||""}
+              {ev.type==="rt"&&ev.status==="needs"?"Due: ":""}{fmtDate(ev.startDate)||""}{ev.endDate?" \u2013 "+fmtDate(ev.endDate):""}
             </span>
           )}
         </div>
@@ -7196,7 +7422,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
     const target=parseAnyDate(dateStr);
     if(!target) return false;
     target.setHours(0,0,0,0);
-    if(ev.endDate&&!ev.hardDate){
+    if(ev.endDate){
       const end=parseAnyDate(ev.endDate);
       if(end){ end.setHours(0,0,0,0); return target>=start&&target<=end; }
     }
@@ -8069,32 +8295,38 @@ function App() {
 
           setJobs(loaded);
 
-          // Auto-advance: if rough complete and finish has no status for 60+ days,
-          // automatically set finish to "waiting_date" so the "Get Finish Start Date" task fires
-          loaded.forEach(job => {
-            if(job.tempPed) return;
-            const rs = job.roughStatus || (parseInt(job.roughStage)===100?"complete":"");
-            const fs = job.finishStatus || "";
-            if(rs !== "complete") return;
-            if(fs && fs !== "" && fs !== "ready") return; // already has a finish status
-            const betweenDate = job.roughStatusDate || job.roughProjectedStart || "";
-            if(!betweenDate) return;
-            const parseD = (str) => {
-              const m1 = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-              if(m1) return new Date(+m1[1],+m1[2]-1,+m1[3]);
-              const m2 = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-              if(m2) return new Date(+(m2[3].length===2?"20"+m2[3]:m2[3]),+m2[1]-1,+m2[2]);
-              return null;
-            };
-            const d = parseD(betweenDate);
-            if(!d) return;
-            const daysBetween = Math.floor((Date.now() - d.getTime()) / (1000*60*60*24));
-            if(daysBetween >= 60) {
-              const patch = { finishStatus: "waiting_date" };
-              setDoc(doc(db,"jobs",job.id),{data:sanitize({...job,...patch}),updated_at:new Date().toISOString()}).catch(()=>{});
-              console.log(`[HE] Auto-advanced finish to waiting_date: ${job.name} (${daysBetween} days in between)`);
-            }
-          });
+          // Auto-advance: one-time — if rough complete and finish has no status for 60+ days,
+          // set finish to "waiting_date" so the "Get Finish Start Date" task fires
+          const ADVANCE_KEY = "heAutoAdvanceFinish_v1";
+          if(!localStorage.getItem(ADVANCE_KEY)) {
+            let advancedCount = 0;
+            loaded.forEach(job => {
+              if(job.tempPed) return;
+              const rs = job.roughStatus || (parseInt(job.roughStage)===100?"complete":"");
+              const fs = job.finishStatus || "";
+              if(rs !== "complete") return;
+              if(fs && fs !== "" && fs !== "ready") return; // already has a finish status
+              const betweenDate = job.roughStatusDate || job.roughProjectedStart || "";
+              if(!betweenDate) return;
+              const parseD = (str) => {
+                const m1 = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+                if(m1) return new Date(+m1[1],+m1[2]-1,+m1[3]);
+                const m2 = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+                if(m2) return new Date(+(m2[3].length===2?"20"+m2[3]:m2[3]),+m2[1]-1,+m2[2]);
+                return null;
+              };
+              const d = parseD(betweenDate);
+              if(!d) return;
+              const daysBetween = Math.floor((Date.now() - d.getTime()) / (1000*60*60*24));
+              if(daysBetween >= 60) {
+                const patch = { finishStatus: "waiting_date" };
+                setDoc(doc(db,"jobs",job.id),{data:sanitize({...job,...patch}),updated_at:new Date().toISOString()}).catch(()=>{});
+                advancedCount++;
+              }
+            });
+            if(advancedCount > 0) console.log(`[HE] Auto-advanced ${advancedCount} job(s) finish to waiting_date`);
+            localStorage.setItem(ADVANCE_KEY, "1");
+          }
 
           // Never overwrite the selected job from snapshot — JobDetail manages its own state
 
