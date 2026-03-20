@@ -654,7 +654,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, roughStartConfirmed:false, finishStartConfirmed:false, roughNeedsHardDate:false, roughNeedsByStart:"", roughNeedsByEnd:"", finishNeedsHardDate:false, finishNeedsByStart:"", finishNeedsByEnd:"", readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, taskDueDates:{}, roughOnHold:false, finishOnHold:false, tempPed:false, hasTempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
+  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughScheduledEnd:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishScheduledEnd:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, roughStartConfirmed:false, finishStartConfirmed:false, roughNeedsHardDate:false, roughNeedsByStart:"", roughNeedsByEnd:"", finishNeedsHardDate:false, finishNeedsByStart:"", finishNeedsByEnd:"", readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, taskDueDates:{}, roughOnHold:false, finishOnHold:false, tempPed:false, hasTempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
 
   homeRuns:{
 
@@ -4323,6 +4323,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                               style={{width:130,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
                           </div>
                         )}
+                        {rsDef.hasDate&&job.roughStatus==="scheduled"&&(
+                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:rsDef.color}}>SCHEDULED END</div>
+                            <DateInp value={job.roughScheduledEnd||""} onChange={e=>u({roughScheduledEnd:e.target.value})}
+                              style={{width:130,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
+                          </div>
+                        )}
                       </div>
 
 
@@ -4447,6 +4454,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                           <div style={{display:"flex",flexDirection:"column",gap:3}}>
                             <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:fsDef.color}}>SCHEDULED DATE</div>
                             <DateInp value={job.finishStatusDate||""} onChange={e=>u({finishStatusDate:e.target.value})}
+                              style={{width:130,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
+                          </div>
+                        )}
+                        {fsDef.hasDate&&job.finishStatus==="scheduled"&&(
+                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:fsDef.color}}>SCHEDULED END</div>
+                            <DateInp value={job.finishScheduledEnd||""} onChange={e=>u({finishScheduledEnd:e.target.value})}
                               style={{width:130,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
                           </div>
                         )}
@@ -5900,6 +5914,19 @@ const invoiceSentPatch = (job) => {
   return patch;
 };
 
+// Module-level foreman matching — used by Tasks and other components outside App
+const matchesForeman = (job, name) => {
+  const jf = (job.foreman||"").trim().toLowerCase();
+  const n  = (name||"").trim().toLowerCase();
+  if(!jf || !n) return false;
+  if(jf === n) return true;
+  if(n.startsWith(jf+" ")) return true;
+  if(jf.startsWith(n+" ")) return true;
+  const nameParts = n.split(" ");
+  if(nameParts.some(part => part === jf || part.includes(jf) || jf.includes(part))) return true;
+  return false;
+};
+
 function computeTasks(jobs) {
   const tasks = [];
   jobs.forEach(job => {
@@ -7004,7 +7031,9 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
 
       // ── Rough ──
       // ── Rough — include invoice status ──
-      if(rs&&rs!=="complete") {
+      // Show on forecast if: has a status (not complete), OR has a projected start date
+      const hasRoughDate = !!(job.roughProjectedStart || job.roughStatusDate);
+      if((rs&&rs!=="complete") || (!rs && hasRoughDate && parseInt(job.roughStage||"0")< 100)) {
         const rsDef=getStatusDef(ROUGH_STATUSES,rs);
         // Date priority: when scheduled, use the scheduled date first; otherwise projected start
         const start=(rs==="scheduled"||rs==="inprogress")
@@ -7014,15 +7043,18 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
         if(start||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"||rs==="inprogress"||isInv) events.push({
           id:job.id+"_rough", job, type:"rough",
           label:"ROUGH", color:isInv?"#ea580c":rsDef.color||C.rough, fc,
-          startDate:isInv?job.readyToInvoiceDate||start:start, endDate:"",
+          startDate:isInv?job.readyToInvoiceDate||start:start,
+          endDate:(rs==="scheduled"||rs==="inprogress")?job.roughScheduledEnd||"":"",
           hardDate:false,
-          status:rs, statusLabel:isInv?"Ready to Invoice":rsDef.label,
-          desc:isInv?"Ready to Invoice":rsDef.label,
+          status:rs, statusLabel:isInv?"Ready to Invoice":(rsDef.label||"Projected"),
+          desc:isInv?"Ready to Invoice":(rsDef.label||"Projected start date set"),
         });
       }
 
       // ── Finish — include invoice status ──
-      if(fs&&fs!=="complete") {
+      // Show on forecast if: has a status (not complete), OR has a projected start date
+      const hasFinishDate = !!(job.finishProjectedStart || job.finishStatusDate);
+      if((fs&&fs!=="complete") || (!fs && hasFinishDate && parseInt(job.finishStage||"0") < 100)) {
         const fsDef=getStatusDef(FINISH_STATUSES,fs);
         // Date priority: when scheduled, use the scheduled date first; otherwise projected start
         const start=(fs==="scheduled"||fs==="inprogress")
@@ -7032,10 +7064,11 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
         if(start||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"||fs==="inprogress"||isInv) events.push({
           id:job.id+"_finish", job, type:"finish",
           label:"FINISH", color:isInv?"#ea580c":fsDef.color||C.finish, fc,
-          startDate:isInv?job.readyToInvoiceDate||start:start, endDate:"",
+          startDate:isInv?job.readyToInvoiceDate||start:start,
+          endDate:(fs==="scheduled"||fs==="inprogress")?job.finishScheduledEnd||"":"",
           hardDate:false,
-          status:fs, statusLabel:isInv?"Ready to Invoice":fsDef.label,
-          desc:isInv?"Ready to Invoice":fsDef.label,
+          status:fs, statusLabel:isInv?"Ready to Invoice":(fsDef.label||"Projected"),
+          desc:isInv?"Ready to Invoice":(fsDef.label||"Projected start date set"),
         });
       }
 
@@ -7178,7 +7211,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
           <span style={{fontSize:10,fontWeight:700,color:ev.statusLabel?col:"var(--dim)"}}>{ev.statusLabel}</span>
           {ev.startDate&&(
             <span style={{fontSize:10,fontWeight:700,color:over?C.red:"var(--dim)",marginLeft:"auto"}}>
-              {ev.type==="rt"&&ev.status==="needs"?"Due: ":""}{fmtDate(ev.startDate)||""}
+              {ev.type==="rt"&&ev.status==="needs"?"Due: ":""}{fmtDate(ev.startDate)||""}{ev.endDate?" \u2013 "+fmtDate(ev.endDate):""}
             </span>
           )}
         </div>
@@ -7196,7 +7229,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
     const target=parseAnyDate(dateStr);
     if(!target) return false;
     target.setHours(0,0,0,0);
-    if(ev.endDate&&!ev.hardDate){
+    if(ev.endDate){
       const end=parseAnyDate(ev.endDate);
       if(end){ end.setHours(0,0,0,0); return target>=start&&target<=end; }
     }
@@ -8069,32 +8102,38 @@ function App() {
 
           setJobs(loaded);
 
-          // Auto-advance: if rough complete and finish has no status for 60+ days,
-          // automatically set finish to "waiting_date" so the "Get Finish Start Date" task fires
-          loaded.forEach(job => {
-            if(job.tempPed) return;
-            const rs = job.roughStatus || (parseInt(job.roughStage)===100?"complete":"");
-            const fs = job.finishStatus || "";
-            if(rs !== "complete") return;
-            if(fs && fs !== "" && fs !== "ready") return; // already has a finish status
-            const betweenDate = job.roughStatusDate || job.roughProjectedStart || "";
-            if(!betweenDate) return;
-            const parseD = (str) => {
-              const m1 = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
-              if(m1) return new Date(+m1[1],+m1[2]-1,+m1[3]);
-              const m2 = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
-              if(m2) return new Date(+(m2[3].length===2?"20"+m2[3]:m2[3]),+m2[1]-1,+m2[2]);
-              return null;
-            };
-            const d = parseD(betweenDate);
-            if(!d) return;
-            const daysBetween = Math.floor((Date.now() - d.getTime()) / (1000*60*60*24));
-            if(daysBetween >= 60) {
-              const patch = { finishStatus: "waiting_date" };
-              setDoc(doc(db,"jobs",job.id),{data:sanitize({...job,...patch}),updated_at:new Date().toISOString()}).catch(()=>{});
-              console.log(`[HE] Auto-advanced finish to waiting_date: ${job.name} (${daysBetween} days in between)`);
-            }
-          });
+          // Auto-advance: one-time — if rough complete and finish has no status for 60+ days,
+          // set finish to "waiting_date" so the "Get Finish Start Date" task fires
+          const ADVANCE_KEY = "heAutoAdvanceFinish_v1";
+          if(!localStorage.getItem(ADVANCE_KEY)) {
+            let advancedCount = 0;
+            loaded.forEach(job => {
+              if(job.tempPed) return;
+              const rs = job.roughStatus || (parseInt(job.roughStage)===100?"complete":"");
+              const fs = job.finishStatus || "";
+              if(rs !== "complete") return;
+              if(fs && fs !== "" && fs !== "ready") return; // already has a finish status
+              const betweenDate = job.roughStatusDate || job.roughProjectedStart || "";
+              if(!betweenDate) return;
+              const parseD = (str) => {
+                const m1 = str.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+                if(m1) return new Date(+m1[1],+m1[2]-1,+m1[3]);
+                const m2 = str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/);
+                if(m2) return new Date(+(m2[3].length===2?"20"+m2[3]:m2[3]),+m2[1]-1,+m2[2]);
+                return null;
+              };
+              const d = parseD(betweenDate);
+              if(!d) return;
+              const daysBetween = Math.floor((Date.now() - d.getTime()) / (1000*60*60*24));
+              if(daysBetween >= 60) {
+                const patch = { finishStatus: "waiting_date" };
+                setDoc(doc(db,"jobs",job.id),{data:sanitize({...job,...patch}),updated_at:new Date().toISOString()}).catch(()=>{});
+                advancedCount++;
+              }
+            });
+            if(advancedCount > 0) console.log(`[HE] Auto-advanced ${advancedCount} job(s) finish to waiting_date`);
+            localStorage.setItem(ADVANCE_KEY, "1");
+          }
 
           // Never overwrite the selected job from snapshot — JobDetail manages its own state
 
