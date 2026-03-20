@@ -2121,7 +2121,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
 
           // Resize to max 800px wide and compress
 
-          const MAX = 800;
+          const MAX = 500;
 
           const scale = Math.min(1, MAX / Math.max(img.width, img.height));
 
@@ -2133,7 +2133,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
 
           canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
 
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.35);
 
           newPhotos.push({id:uid(), name:file.name, dataUrl});
 
@@ -4054,7 +4054,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
       reader.onload = ev => {
         const img = new Image();
         img.onload = () => {
-          const MAX = 800;
+          const MAX = 500;
           let w = img.width, h = img.height;
           if (w > MAX || h > MAX) {
             if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
@@ -4063,7 +4063,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
           const canvas = document.createElement("canvas");
           canvas.width = w; canvas.height = h;
           canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-          const dataUrl = canvas.toDataURL("image/jpeg", 0.65);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.35);
           newPhotos.push({ id: uid(), name: file.name, dataUrl });
           done++;
           if (done === arr.length) u({ photos: [...(job.photos || []), ...newPhotos] });
@@ -4351,7 +4351,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
       reader.onload = ev => {
         const img = new Image();
         img.onload = () => {
-          const MAX = 800;
+          const MAX = 500;
           let w = img.width, h = img.height;
           if(w > MAX || h > MAX) {
             if(w > h) { h = Math.round(h * MAX / w); w = MAX; }
@@ -4360,7 +4360,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
           const canvas = document.createElement("canvas");
           canvas.width = w; canvas.height = h;
           canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-          const dataUrl = canvas.toDataURL("image/jpeg", 0.65);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.35);
           newPhotos.push({id:uid(), name:file.name, dataUrl});
           done++;
           if(done===arr.length) u({tempPedPhotos:[...(job.tempPedPhotos||[]),...newPhotos]});
@@ -8913,7 +8913,19 @@ if(initialLoad.current) return;
 
       try {
 
-        await setDoc(doc(db,"jobs",job.id),{data:sanitize(job),updated_at:new Date().toISOString()});
+        const payload = {data:sanitize(job),updated_at:new Date().toISOString()};
+        // Check estimated size before saving
+        const estimatedSize = JSON.stringify(payload).length;
+        if(estimatedSize > 900000) {
+          console.warn(`[HE] Job ${job.name} is ${Math.round(estimatedSize/1024)}KB — approaching Firestore 1MB limit`);
+          if(estimatedSize > 1000000) {
+            console.error(`[HE] Job ${job.name} exceeds 1MB (${Math.round(estimatedSize/1024)}KB) — photos may need to be removed`);
+            setSyncStatus("error");
+            alert(`Save failed: "${job.name}" is too large (${Math.round(estimatedSize/1024)}KB). Try removing some photos — each photo adds to the document size. Firebase Storage for photos is coming soon.`);
+            return;
+          }
+        }
+        await setDoc(doc(db,"jobs",job.id),payload);
 
         isDirty.current = false;
 
@@ -8924,8 +8936,13 @@ if(initialLoad.current) return;
       } catch(e){
 
         console.error('Save error:',e?.message||e);
-
-        setSyncStatus("error");
+        const msg = e?.message || "";
+        if(msg.includes("exceeds the maximum") || msg.includes("too large") || msg.includes("INVALID_ARGUMENT")) {
+          setSyncStatus("error");
+          alert(`Save failed: "${job.name}" document is too large for Firestore. Try removing photos to reduce size.`);
+        } else {
+          setSyncStatus("error");
+        }
 
       }
 
