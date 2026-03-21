@@ -1792,11 +1792,11 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
 function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughStatus, finishStatus}) {
 
-  const add = () => onChange([{
+  const add = () => onChange([...orders, {
     id:uid(), date:"", desc:"", task:"", material:"", time:"", sendTo:"",
     coStatus:"pending", coStatusDate:"",
     needsHardDate:false, needsByStart:"", needsByEnd:"",
-  }, ...orders]);
+  }]);
 
   const upd = (id, p) => onChange(orders.map(o => o.id===id ? {...o,...p} : o));
   const del = (id)    => onChange(orders.filter(o => o.id!==id));
@@ -2013,7 +2013,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId}) {
 
   const [viewPhoto, setViewPhoto] = useState(null);
 
-  const add = () => onChange([{id:uid(),date:"",scope:"",material:"",punch:[],photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:false,needsScheduleDate:"",rtScheduled:false,scheduledDate:""},...trips]);
+  const add = () => onChange([...trips, {id:uid(),date:"",scope:"",material:"",punch:[],photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:false,needsScheduleDate:"",rtScheduled:false,scheduledDate:""}]);
 
   const upd = (id,p) => onChange(trips.map(t=>t.id===id?{...t,...p}:t));
 
@@ -5156,7 +5156,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                   orders={job.changeOrders}
                   onChange={(updatedCOs, newRT) => {
                     if(newRT) {
-                      u({changeOrders:updatedCOs, returnTrips:[newRT, ...(job.returnTrips||[])]});
+                      u({changeOrders:updatedCOs, returnTrips:[...(job.returnTrips||[]), newRT]});
                     } else {
                       u({changeOrders:updatedCOs});
                     }
