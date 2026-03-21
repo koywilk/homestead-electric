@@ -8952,8 +8952,13 @@ if(initialLoad.current) return;
 
   const flushJob = async (job) => {
     if(!job) return;
-    clearTimeout(saveTimers.current[job.id]);
-    try { await setDoc(doc(db,"jobs",job.id),{data:sanitize(job),updated_at:new Date().toISOString()}); } catch(e){}
+    // If there's a pending save timer, use the latest state from jobsRef
+    if(saveTimers.current[job.id]) {
+      clearTimeout(saveTimers.current[job.id]);
+      saveTimers.current[job.id] = null;
+      const latest = jobsRef.current.find(j=>j.id===job.id) || job;
+      try { await setDoc(doc(db,"jobs",latest.id),{data:sanitize(latest),updated_at:new Date().toISOString()}); } catch(e){}
+    }
   };
 
   const deleteJobRemote = async (jobId) => {
@@ -9020,9 +9025,14 @@ if(initialLoad.current) return;
 
   const flushSaves = () => {
 
-    jobsRef.current.forEach(job=>{
+    // Only flush jobs that have pending save timers — avoids overwriting other users' changes
+    const pendingIds = new Set(Object.keys(saveTimers.current).filter(k => saveTimers.current[k]));
+    if(pendingIds.size === 0) return;
+
+    jobsRef.current.filter(job => pendingIds.has(job.id)).forEach(job=>{
 
       clearTimeout(saveTimers.current[job.id]);
+      saveTimers.current[job.id] = null;
 
       setDoc(doc(db,"jobs",job.id),{data:sanitize(job),updated_at:new Date().toISOString()}).catch(e=>console.error(e));
 
@@ -9048,7 +9058,7 @@ if(initialLoad.current) return;
 
   useEffect(()=>{
 
-    const handleVisibility = ()=>{ if(document.visibilityState==='hidden' && isDirty.current) flushSaves(); };
+    const handleVisibility = ()=>{ if(document.visibilityState==='hidden') flushSaves(); };
 
     document.addEventListener('visibilitychange', handleVisibility);
 
@@ -10101,10 +10111,10 @@ if(initialLoad.current) return;
 
 
       {selected&&(selected.quickJob
-        ? <QuickJobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)} foremenList={_foremen} leadsList={_leads}/>
+        ? <QuickJobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen} leadsList={_leads}/>
         : selected.tempPed
-        ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)} foremenList={_foremen}/>
-        : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)} foremenList={_foremen} leadsList={_leads}/>)}
+        ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen}/>
+        : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen} leadsList={_leads}/>)}
 
       {view==="schedule"&&can(identity,"schedule.view")&&(
         <SchedulingForecast jobs={jobs} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)} foremenList={_foremen}/>
