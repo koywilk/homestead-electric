@@ -1030,6 +1030,21 @@ const Inp = ({value,onChange,placeholder,style={}}) => (
     onBlur={e=>e.target.style.borderColor=C.border}/>
 );
 
+// Time ago helper for "updated X ago" display
+const timeAgo = (isoStr) => {
+  if(!isoStr) return "";
+  const d = new Date(isoStr);
+  if(isNaN(d.getTime())) return "";
+  const mins = Math.floor((Date.now()-d.getTime())/60000);
+  if(mins < 1) return "just now";
+  if(mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins/60);
+  if(hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs/24);
+  if(days < 7) return `${days}d ago`;
+  return d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
+};
+
 // Convert any date string (MM/DD/YY, MM/DD/YYYY) to YYYY-MM-DD for type="date" inputs
 const toYMD = (str) => {
   if(!str) return "";
@@ -1794,7 +1809,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
 
   const add = () => onChange([...orders, {
     id:uid(), date:"", desc:"", task:"", material:"", time:"", sendTo:"",
-    coStatus:"pending", coStatusDate:"",
+    coStatus:"needs_sending", coStatusDate:"",
     needsHardDate:false, needsByStart:"", needsByEnd:"",
   }]);
 
@@ -6644,7 +6659,7 @@ function computeTasks(jobs) {
     if(rs==="complete" && (!fs||fs===""||fs==="waiting_date"||fs==="ready")) {
       const betweenDate = job.roughStatusDate||job.roughProjectedStart||"";
       if(betweenDate) {
-        const d = (str=>{ const m=str.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m) return new Date(+m[1],+m[2]-1,+m[3]); const m2=str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if(m2) return new Date(+m2[2],+m2[1]-1,+(m2[3].length===2?"20"+m2[3]:m2[3])); return null; })(betweenDate);
+        const d = parseAnyDate(betweenDate);
         if(d) {
           const daysBetween = Math.floor((Date.now()-d.getTime())/(1000*60*60*24));
           if(daysBetween>=60) tasks.push({
@@ -6662,7 +6677,7 @@ function computeTasks(jobs) {
     if(job.readyToInvoice && !job.invoiceDismissed) {
       const invDate = job.readyToInvoiceDate||"";
       if(invDate) {
-        const d = (str=>{ const m=str.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m) return new Date(+m[1],+m[2]-1,+m[3]); const m2=str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if(m2) return new Date(+m2[2],+m2[1]-1,+(m2[3].length===2?"20"+m2[3]:m2[3])); return null; })(invDate);
+        const d = parseAnyDate(invDate);
         if(d) {
           const daysStale = Math.floor((Date.now()-d.getTime())/(1000*60*60*24));
           if(daysStale>=5) tasks.push({
@@ -8653,7 +8668,7 @@ function App() {
 
         if(!snap.empty) {
 
-          const loaded = migrate(snap.docs.map(d=>d.data().data).filter(Boolean));
+          const loaded = migrate(snap.docs.map(d=>{const raw=d.data(); return raw?.data ? {...raw.data, updated_at:raw.updated_at||""} : null;}).filter(Boolean));
 
           // One-time fix v2: clear tempPed:true from any job that has a foreman assigned
           // Real temp peds never have a foreman — they're standalone cards
@@ -8989,7 +9004,7 @@ function App() {
 
   const updateJob = updated => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); saveJob(updated); };
 
-  const addJob    = () => { const j=blankJob(); setJobs(js=>[j,...js]); setSelected(j); saveJob(j); };
+  // addJob removed — inline in each button instead
 
   const deleteJob = id => {
 
@@ -9143,6 +9158,7 @@ function App() {
 
               {job.gc||"No GC set"}
 
+              {job.updated_at&&<span style={{color:C.muted,marginLeft:6,fontSize:10}}>· {timeAgo(job.updated_at)}</span>}
 
             </div>
 
@@ -9415,7 +9431,7 @@ function App() {
                     fontFamily:"inherit",boxShadow:"0 2px 8px #8b5cf644",letterSpacing:"0.02em"}}>
                   + Temp Ped
                 </button>
-                <button onClick={()=>{const j=blankQuickJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);saveJob(j);}}
+                <button onClick={()=>{const j=blankQuickJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);}}
                   style={{background:"#f97316",border:"none",borderRadius:8,color:"#fff",
                     fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
                     fontFamily:"inherit",boxShadow:"0 2px 8px #f9731644",letterSpacing:"0.02em"}}>
@@ -9673,13 +9689,23 @@ function App() {
                       display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
                 </div>
 
+                {/* Search within crew view */}
+                <div style={{padding:"10px 18px 0"}}>
+                  <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search jobs…"
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,
+                      padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",maxWidth:300}}/>
+                </div>
+
                 {/* Lead-grouped job cards */}
                 {(()=>{
-                  const crewJobs = jobs.filter(j=>matchesForeman(j,crewView));
+                  const s = search.toLowerCase();
+                  const crewJobs = jobs.filter(j=>matchesForeman(j,crewView)).filter(j=>
+                    !s||(j.name||"").toLowerCase().includes(s)||(j.address||"").toLowerCase().includes(s)||(j.gc||"").toLowerCase().includes(s)
+                  );
                   const fc2 = _foremanColors[crewView]||"#6b7280";
                   if(crewJobs.length===0) return (
                     <div style={{textAlign:"center",color:C.dim,padding:"60px 0",fontSize:13}}>
-                      No jobs assigned to {crewView}
+                      {search ? "No matching jobs" : `No jobs assigned to ${crewView}`}
                     </div>
                   );
                   // Group by lead — jobs with no lead go under "Unassigned"
