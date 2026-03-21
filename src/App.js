@@ -3464,12 +3464,28 @@ const DRIVE_API_KEY = firebaseConfig.apiKey; // reuse Firebase API key (must ena
 
 function extractDriveFolderId(input) {
   if (!input) return "";
-  // Handle full URLs like https://drive.google.com/drive/folders/FOLDER_ID or just the ID
   const match = input.match(/folders\/([a-zA-Z0-9_-]+)/);
   if (match) return match[1];
-  // If it looks like a raw ID (no slashes, reasonable length), use as-is
   if (/^[a-zA-Z0-9_-]{10,}$/.test(input.trim())) return input.trim();
   return "";
+}
+
+// Recursively fetch all files from a Drive folder and its sub-folders
+async function fetchDriveFilesRecursive(folderId, folderName, depth) {
+  if (depth > 3) return []; // safety limit
+  const url = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&key=${DRIVE_API_KEY}&fields=files(id,name,mimeType,thumbnailLink,size,modifiedTime,webViewLink)&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=name`;
+  const resp = await fetch(url);
+  const data = await resp.json();
+  if (data.error) throw new Error(data.error.message || "Could not load Drive files");
+  const files = data.files || [];
+  const folders = files.filter(f => f.mimeType === "application/vnd.google-apps.folder");
+  const nonFolders = files.filter(f => f.mimeType !== "application/vnd.google-apps.folder")
+    .map(f => ({ ...f, _folder: folderName }));
+  // Recurse into each sub-folder
+  const subResults = await Promise.all(
+    folders.map(sf => fetchDriveFilesRecursive(sf.id, sf.name, depth + 1))
+  );
+  return [...nonFolders, ...subResults.flat()];
 }
 
 function DriveFilesSection({ job, onUpdate }) {
@@ -3487,21 +3503,15 @@ function DriveFilesSection({ job, onUpdate }) {
     let cancelled = false;
     setLoading(true);
     setError("");
-    fetch(`https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&key=${DRIVE_API_KEY}&fields=files(id,name,mimeType,thumbnailLink,size,modifiedTime,webViewLink)&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=name`)
-      .then(r => r.json())
-      .then(data => {
+    fetchDriveFilesRecursive(folderId, "Root", 0)
+      .then(allFiles => {
         if (cancelled) return;
-        if (data.error) {
-          setError(data.error.message || "Could not load Drive files");
-          setDriveFiles([]);
-        } else {
-          setDriveFiles(data.files || []);
-        }
+        setDriveFiles(allFiles);
         setLoading(false);
       })
       .catch(e => {
         if (cancelled) return;
-        setError("Network error loading Drive files");
+        setError(e.message || "Network error loading Drive files");
         setLoading(false);
       });
     return () => { cancelled = true; };
@@ -3523,16 +3533,15 @@ function DriveFilesSection({ job, onUpdate }) {
 
   const isImage = (f) => (f.mimeType || "").startsWith("image/");
   const isPDF = (f) => f.mimeType === "application/pdf" || /\.pdf$/i.test(f.name);
-  const isFolder = (f) => f.mimeType === "application/vnd.google-apps.folder";
-  const fileIcon = (f) => isFolder(f) ? "📁" : isPDF(f) ? "📄" : isImage(f) ? "🖼" : "📎";
+  const fileIcon = (f) => isPDF(f) ? "📄" : isImage(f) ? "🖼" : "📎";
 
   const previewUrl = (f) => `https://drive.google.com/file/d/${f.id}/preview`;
   const thumbUrl = (f) => f.thumbnailLink ? f.thumbnailLink.replace(/=s\d+/, "=s400") : `https://drive.google.com/thumbnail?id=${f.id}&sz=w400`;
 
-  const viewableFiles = driveFiles.filter(f => !isFolder(f));
-  const folders = driveFiles.filter(f => isFolder(f));
-  const images = viewableFiles.filter(f => isImage(f));
-  const docs = viewableFiles.filter(f => !isImage(f));
+  // Group files by sub-folder
+  const folderNames = [...new Set(driveFiles.map(f => f._folder))];
+  const images = driveFiles.filter(f => isImage(f));
+  const docs = driveFiles.filter(f => !isImage(f));
 
   return (
     <div style={{ marginBottom: 24 }}>
@@ -3575,7 +3584,10 @@ function DriveFilesSection({ job, onUpdate }) {
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "8px 12px",
           background: `${C.green}10`, border: `1px solid ${C.green}33`, borderRadius: 8 }}>
           <span style={{ fontSize: 14 }}>📁</span>
-          <span style={{ fontSize: 11, color: C.green, fontWeight: 600, flex: 1 }}>Drive folder linked</span>
+          <span style={{ fontSize: 11, color: C.green, fontWeight: 600, flex: 1 }}>
+            Drive folder linked{driveFiles.length > 0 ? ` — ${driveFiles.length} file${driveFiles.length === 1 ? "" : "s"}` : ""}
+            {folderNames.length > 1 ? ` across ${folderNames.length} folders` : ""}
+          </span>
           <a href={`https://drive.google.com/drive/folders/${folderId}`} target="_blank" rel="noreferrer"
             style={{ fontSize: 11, color: C.blue, fontWeight: 600, textDecoration: "none" }}>
             Open in Drive ↗
@@ -3600,82 +3612,82 @@ function DriveFilesSection({ job, onUpdate }) {
       )}
 
       {/* Empty state */}
-      {folderId && !loading && !error && viewableFiles.length === 0 && folders.length === 0 && (
+      {folderId && !loading && !error && driveFiles.length === 0 && (
         <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic", padding: "16px",
           textAlign: "center", border: `1px dashed ${C.border}`, borderRadius: 10 }}>
           No files found in this Drive folder
         </div>
       )}
 
-      {/* Sub-folders */}
-      {folders.length > 0 && (
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>FOLDERS</div>
-          {folders.map(f => (
-            <a key={f.id} href={f.webViewLink || `https://drive.google.com/drive/folders/${f.id}`}
-              target="_blank" rel="noreferrer"
-              style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
-                background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 6,
-                textDecoration: "none", color: C.text }}>
-              <span style={{ fontSize: 18 }}>📁</span>
-              <div style={{ flex: 1, fontSize: 12, fontWeight: 600 }}>{f.name}</div>
-              <span style={{ fontSize: 11, color: C.blue, fontWeight: 600 }}>Open ↗</span>
-            </a>
-          ))}
-        </div>
-      )}
-
-      {/* Images grid */}
-      {images.length > 0 && (
-        <div style={{ marginBottom: 12 }}>
-          <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>IMAGES</div>
-          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(100px,1fr))", gap: 8 }}>
-            {images.map(f => (
-              <div key={f.id} style={{ position: "relative", cursor: "pointer" }} onClick={() => setViewFile(f)}>
-                <img src={thumbUrl(f)} alt={f.name}
-                  style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 8,
-                    border: `1px solid ${C.border}`, background: C.surface }} />
-                <div style={{ fontSize: 9, color: C.dim, marginTop: 3, overflow: "hidden",
-                  textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+      {/* Files grouped by sub-folder */}
+      {folderNames.map(folder => {
+        const folderImages = images.filter(f => f._folder === folder);
+        const folderDocs = docs.filter(f => f._folder === folder);
+        if (folderImages.length === 0 && folderDocs.length === 0) return null;
+        return (
+          <div key={folder} style={{ marginBottom: 16 }}>
+            {/* Folder header — only show if there are multiple folders */}
+            {folderNames.length > 1 && (
+              <div style={{ fontSize: 10, color: C.accent, fontWeight: 700, letterSpacing: "0.06em",
+                marginBottom: 8, paddingBottom: 4, borderBottom: `1px solid ${C.border}` }}>
+                📁 {folder === "Root" ? "Top Level" : folder}
               </div>
-            ))}
-          </div>
-        </div>
-      )}
+            )}
 
-      {/* Documents list */}
-      {docs.length > 0 && (
-        <div>
-          <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>DOCUMENTS</div>
-          {docs.map(f => (
-            <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
-              background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 6 }}>
-              <span style={{ fontSize: 18, flexShrink: 0 }}>{fileIcon(f)}</span>
-              <div style={{ flex: 1, minWidth: 0 }}>
-                <div style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden",
-                  textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
-                <div style={{ fontSize: 10, color: C.muted }}>
-                  {f.size ? (Number(f.size) < 1024 * 1024 ? Math.round(Number(f.size) / 1024) + " KB" : (Number(f.size) / (1024 * 1024)).toFixed(1) + " MB") : ""}
+            {/* Images grid */}
+            {folderImages.length > 0 && (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>IMAGES</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(100px,1fr))", gap: 8 }}>
+                  {folderImages.map(f => (
+                    <div key={f.id} style={{ position: "relative", cursor: "pointer" }} onClick={() => setViewFile(f)}>
+                      <img src={thumbUrl(f)} alt={f.name}
+                        style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 8,
+                          border: `1px solid ${C.border}`, background: C.surface }} />
+                      <div style={{ fontSize: 9, color: C.dim, marginTop: 3, overflow: "hidden",
+                        textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                    </div>
+                  ))}
                 </div>
               </div>
-              {(isPDF(f) || isImage(f)) && (
-                <button onClick={() => setViewFile(f)}
-                  style={{ fontSize: 11, fontWeight: 600, color: C.accent, background: `${C.accent}12`,
-                    border: `1px solid ${C.accent}44`, borderRadius: 7, padding: "5px 10px",
-                    cursor: "pointer", flexShrink: 0, fontFamily: "inherit" }}>
-                  View
-                </button>
-              )}
-              <a href={f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`} target="_blank" rel="noreferrer"
-                style={{ fontSize: 11, fontWeight: 600, color: C.blue, textDecoration: "none",
-                  border: `1px solid ${C.blue}44`, borderRadius: 7, padding: "5px 10px",
-                  flexShrink: 0 }}>
-                Open ↗
-              </a>
-            </div>
-          ))}
-        </div>
-      )}
+            )}
+
+            {/* Documents list */}
+            {folderDocs.length > 0 && (
+              <div>
+                <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>DOCUMENTS</div>
+                {folderDocs.map(f => (
+                  <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+                    background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 6 }}>
+                    <span style={{ fontSize: 18, flexShrink: 0 }}>{fileIcon(f)}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden",
+                        textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                      <div style={{ fontSize: 10, color: C.muted }}>
+                        {f.size ? (Number(f.size) < 1024 * 1024 ? Math.round(Number(f.size) / 1024) + " KB" : (Number(f.size) / (1024 * 1024)).toFixed(1) + " MB") : ""}
+                      </div>
+                    </div>
+                    {(isPDF(f) || isImage(f)) && (
+                      <button onClick={() => setViewFile(f)}
+                        style={{ fontSize: 11, fontWeight: 600, color: C.accent, background: `${C.accent}12`,
+                          border: `1px solid ${C.accent}44`, borderRadius: 7, padding: "5px 10px",
+                          cursor: "pointer", flexShrink: 0, fontFamily: "inherit" }}>
+                        View
+                      </button>
+                    )}
+                    <a href={f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`} target="_blank" rel="noreferrer"
+                      style={{ fontSize: 11, fontWeight: 600, color: C.blue, textDecoration: "none",
+                        border: `1px solid ${C.blue}44`, borderRadius: 7, padding: "5px 10px",
+                        flexShrink: 0 }}>
+                      Open ↗
+                    </a>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
 
       {/* Inline viewer (lightbox) */}
       {viewFile && (
@@ -3685,7 +3697,9 @@ function DriveFilesSection({ job, onUpdate }) {
           <div style={{ display: "flex", alignItems: "center", padding: "12px 16px", gap: 12,
             background: "rgba(255,255,255,0.08)", flexShrink: 0 }}>
             <span style={{ fontSize: 14, color: "#fff", fontWeight: 600, flex: 1, overflow: "hidden",
-              textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{viewFile.name}</span>
+              textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {viewFile._folder && viewFile._folder !== "Root" ? `${viewFile._folder} / ` : ""}{viewFile.name}
+            </span>
             <a href={viewFile.webViewLink || `https://drive.google.com/file/d/${viewFile.id}/view`}
               target="_blank" rel="noreferrer"
               style={{ fontSize: 12, color: C.blue, fontWeight: 600, textDecoration: "none",
