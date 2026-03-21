@@ -19,11 +19,9 @@ self.addEventListener("activate", e => {
 self.addEventListener("fetch", e => {
   if (e.request.method !== "GET") return;
 
-  // Always go live for Firebase (Firestore, Auth, Storage)
+  // Always go live for Firebase
   if (e.request.url.includes("googleapis.com")) return;
   if (e.request.url.includes("firebaseapp.com")) return;
-  if (e.request.url.includes("firebasestorage.app")) return;
-  if (e.request.url.includes("firebaseio.com")) return;
 
   e.respondWith(
     fetch(e.request)

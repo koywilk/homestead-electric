@@ -7836,7 +7836,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
 
 function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
   const [foremanTab, setForemanTab] = useState("All");
-  const [viewMode,   setViewMode]   = useState("calendar"); // kanban | list | calendar
+  const [viewMode,   setViewMode]   = useState("calendar"); // kanban | week | attention | calendar
   const [calMonth,   setCalMonth]   = useState(() => { const d=new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
   const [calDayDetail, setCalDayDetail] = useState(null); // date string YYYY-MM-DD for expanded day
 
@@ -8203,7 +8203,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
           <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:"var(--text)",lineHeight:1}}>SCHEDULING FORECAST</div>
           <div style={{fontSize:11,color:"var(--dim)"}}>{allEvents.length} item{allEvents.length!==1?"s":""}</div>
           <div style={{marginLeft:"auto",display:"flex",gap:4}}>
-            {[{k:"kanban",l:"Kanban"},{k:"list",l:"List"},{k:"calendar",l:"📅 Calendar"}].map(({k,l})=>(
+            {[{k:"kanban",l:"Kanban"},{k:"week",l:"📋 Week"},{k:"attention",l:"⚠️ Attention"},{k:"calendar",l:"📅 Calendar"}].map(({k,l})=>(
               <button key={k} onClick={()=>setViewMode(k)}
                 style={{padding:"6px 14px",borderRadius:8,fontSize:11,fontWeight:viewMode===k?700:500,
                   cursor:"pointer",fontFamily:"inherit",border:`1px solid ${viewMode===k?C.accent:C.border}`,
@@ -8267,18 +8267,234 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
         </div>
       )}
 
-      {/* ── LIST ── */}
-      {viewMode==="list"&&(()=>{
-        const sorted=[...allEvents].sort((a,b)=>{
-          if(!a.startDate&&!b.startDate) return 0;
-          if(!a.startDate) return 1; if(!b.startDate) return -1;
-          const da=parseAnyDate(a.startDate), db=parseAnyDate(b.startDate);
-          return (da||0)-(db||0);
-        });
+      {/* ── WEEK AT A GLANCE ── */}
+      {viewMode==="week"&&(()=>{
+        // Build 7 days starting from this week's Sunday
+        const weekDays=[];
+        for(let i=0;i<7;i++){
+          const d=new Date(thisWeekStart);
+          d.setDate(thisWeekStart.getDate()+i);
+          weekDays.push(d);
+        }
+        const dayNames=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+        const shortDay=["SUN","MON","TUE","WED","THU","FRI","SAT"];
+
         return (
-          <div style={{padding:"20px 26px",maxWidth:900}}>
-            {sorted.length===0&&<div style={{textAlign:"center",padding:"60px 0",color:"var(--muted)",fontSize:13}}>Nothing to schedule.</div>}
-            {sorted.map(ev=><EventCard key={ev.id} ev={ev}/>)}
+          <div style={{padding:"20px 26px"}}>
+            {/* Week header */}
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)"}}>
+                WEEK OF {thisWeekStart.toLocaleDateString("en-US",{month:"long",day:"numeric"}).toUpperCase()}
+              </div>
+              <div style={{fontSize:11,color:"var(--dim)"}}>{allEvents.length} total items</div>
+            </div>
+
+            {/* Day rows */}
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {weekDays.map((dayDate,idx)=>{
+                const dateStr=fmtYMD(dayDate);
+                const dayEvs=allEvents.filter(ev=>eventCoversDate(ev,dateStr));
+                const isToday2=dateStr===todayStr;
+                const isPast=dayDate<today&&!isToday2;
+                const isWeekend2=idx===0||idx===6;
+
+                // Group by type for summary chips
+                const typeCounts={};
+                dayEvs.forEach(ev=>{
+                  const t=ev.type==="quick"?"Quick":ev.type==="rough"?"Rough":ev.type==="finish"?"Finish":
+                    ev.type==="rt"?"RT":ev.type==="co"?"CO":ev.type==="qc"?"QC":ev.type==="invoice"?"Invoice":ev.type;
+                  typeCounts[t]=(typeCounts[t]||0)+1;
+                });
+
+                const overdueEvs=dayEvs.filter(ev=>isOverdue(ev.startDate,ev.status));
+
+                return (
+                  <div key={dateStr} style={{
+                    background:isToday2?"var(--card)":isPast?"var(--surface)":"var(--card)",
+                    borderRadius:12,padding:"14px 16px",
+                    border:`1px solid ${isToday2?C.accent+"55":C.border}`,
+                    opacity:isPast&&dayEvs.length===0?0.4:isPast?0.7:1,
+                    borderLeft:isToday2?`3px solid ${C.accent}`:`3px solid transparent`}}>
+
+                    {/* Day header */}
+                    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:dayEvs.length>0?10:0}}>
+                      <div style={{display:"flex",alignItems:"baseline",gap:6,minWidth:140}}>
+                        <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.06em",
+                          color:isToday2?C.accent:isWeekend2?"var(--muted)":"var(--text)"}}>{shortDay[idx]}</span>
+                        <span style={{fontSize:12,fontWeight:600,
+                          color:isToday2?C.accent:"var(--dim)"}}>
+                          {dayDate.toLocaleDateString("en-US",{month:"short",day:"numeric"})}
+                        </span>
+                        {isToday2&&<span style={{fontSize:9,fontWeight:800,color:C.accent,
+                          background:C.accent+"18",borderRadius:99,padding:"1px 8px",letterSpacing:"0.08em"}}>TODAY</span>}
+                      </div>
+
+                      {/* Type summary chips */}
+                      <div style={{display:"flex",gap:4,flex:1,flexWrap:"wrap"}}>
+                        {Object.entries(typeCounts).map(([type,count])=>{
+                          const chipColor=type==="Rough"?C.rough||"#2563eb":type==="Finish"?C.finish||"#16a34a":
+                            type==="Quick"?"#f59e0b":type==="RT"?"#8b5cf6":type==="CO"?C.accent:
+                            type==="QC"?C.teal:type==="Invoice"?"#ea580c":"var(--dim)";
+                          return (
+                            <span key={type} style={{fontSize:10,fontWeight:700,color:chipColor,
+                              background:chipColor+"15",border:`1px solid ${chipColor}28`,
+                              borderRadius:99,padding:"2px 8px"}}>
+                              {count} {type}
+                            </span>
+                          );
+                        })}
+                      </div>
+
+                      {/* Overdue warning */}
+                      {overdueEvs.length>0&&(
+                        <span style={{fontSize:10,fontWeight:800,color:C.red,
+                          background:C.red+"15",borderRadius:99,padding:"2px 10px",
+                          border:`1px solid ${C.red}28`,flexShrink:0}}>
+                          {overdueEvs.length} OVERDUE
+                        </span>
+                      )}
+
+                      {dayEvs.length===0&&(
+                        <span style={{fontSize:11,color:"var(--muted)",fontStyle:"italic"}}>
+                          {isWeekend2?"Weekend — nothing scheduled":"Nothing scheduled"}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Event pills for the day */}
+                    {dayEvs.length>0&&(
+                      <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                        {dayEvs.map(ev=>(
+                          <div key={ev.id} onClick={()=>onSelectJob(ev.job)}
+                            style={{display:"flex",alignItems:"center",gap:8,padding:"5px 10px",
+                              borderRadius:8,cursor:"pointer",background:"var(--surface)",
+                              border:`1px solid ${C.border}`,transition:"background 0.1s"}}
+                            onMouseEnter={e=>e.currentTarget.style.background=ev.color+"12"}
+                            onMouseLeave={e=>e.currentTarget.style.background="var(--surface)"}>
+                            <span style={{width:7,height:7,borderRadius:"50%",
+                              background:isOverdue(ev.startDate,ev.status)?C.red:ev.color,flexShrink:0}}/>
+                            <span style={{fontSize:10,fontWeight:800,
+                              color:isOverdue(ev.startDate,ev.status)?C.red:ev.color,
+                              letterSpacing:"0.05em",minWidth:48}}>{ev.label}</span>
+                            <span style={{fontSize:11,fontWeight:600,color:"var(--text)",
+                              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>
+                              {ev.job.name||"Untitled"}
+                            </span>
+                            <span style={{fontSize:10,fontWeight:600,
+                              color:isOverdue(ev.startDate,ev.status)?C.red:ev.color,flexShrink:0}}>
+                              {ev.statusLabel}
+                            </span>
+                            <span style={{fontSize:9,fontWeight:700,color:ev.fc,
+                              background:ev.fc+"15",borderRadius:99,padding:"1px 6px",
+                              border:`1px solid ${ev.fc}20`,flexShrink:0}}>{ev.job.foreman||"Koy"}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── NEEDS ATTENTION ── */}
+      {viewMode==="attention"&&(()=>{
+        // Categorize events that need attention
+        const overdueItems=allEvents.filter(ev=>isOverdue(ev.startDate,ev.status));
+        const needsDateItems=allEvents.filter(ev=>!ev.startDate||ev.status==="waiting_date");
+        const needsScheduling=allEvents.filter(ev=>
+          (ev.status==="date_confirmed")||(ev.type==="rt"&&ev.status==="needs"));
+        const invoiceItems=allEvents.filter(ev=>ev.type==="invoice"||ev.status==="invoice");
+        const pendingCOs=allEvents.filter(ev=>ev.type==="co"&&(ev.status==="pending"||ev.status==="sent"));
+        const thisWeekItems=allEvents.filter(ev=>{
+          if(!ev.startDate) return false;
+          const bucket=getBucket(ev.startDate,ev.status);
+          return bucket==="thisWeek"&&ev.status!=="inprogress";
+        });
+
+        const sections=[
+          {key:"overdue",label:"OVERDUE",icon:"🔴",color:C.red,
+            desc:"Past the start date with no completion",items:overdueItems},
+          {key:"needsDate",label:"NEEDS DATE",icon:"📅",color:"#ca8a04",
+            desc:"Waiting for a start date or date confirmation",items:needsDateItems},
+          {key:"needsSched",label:"READY TO SCHEDULE",icon:"📋",color:"#f97316",
+            desc:"Date confirmed — needs to be put on the schedule",items:needsScheduling},
+          {key:"invoices",label:"READY TO INVOICE",icon:"💰",color:"#ea580c",
+            desc:"Work complete — invoice hasn't been sent",items:invoiceItems},
+          {key:"cos",label:"PENDING CHANGE ORDERS",icon:"📝",color:C.accent,
+            desc:"Change orders waiting to be sent or approved",items:pendingCOs},
+          {key:"upcoming",label:"COMING UP THIS WEEK",icon:"⏰",color:C.green,
+            desc:"Scheduled this week but not yet started",items:thisWeekItems},
+        ].filter(s=>s.items.length>0);
+
+        const totalAttention=overdueItems.length+needsDateItems.length+needsScheduling.length
+          +invoiceItems.length+pendingCOs.length;
+
+        return (
+          <div style={{padding:"20px 26px"}}>
+            {/* Summary bar */}
+            <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:20,flexWrap:"wrap"}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)"}}>
+                NEEDS ATTENTION
+              </div>
+              {totalAttention>0?(
+                <span style={{fontSize:12,fontWeight:800,color:C.red,
+                  background:C.red+"15",borderRadius:99,padding:"3px 12px",
+                  border:`1px solid ${C.red}28`}}>
+                  {totalAttention} item{totalAttention!==1?"s":""} need action
+                </span>
+              ):(
+                <span style={{fontSize:12,fontWeight:600,color:C.green,
+                  background:C.green+"15",borderRadius:99,padding:"3px 12px",
+                  border:`1px solid ${C.green}28`}}>
+                  All clear — nothing needs immediate attention
+                </span>
+              )}
+            </div>
+
+            {/* Quick stat boxes */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:20}}>
+              {[
+                {label:"Overdue",count:overdueItems.length,color:C.red},
+                {label:"Needs Date",count:needsDateItems.length,color:"#ca8a04"},
+                {label:"Ready to Schedule",count:needsScheduling.length,color:"#f97316"},
+                {label:"Ready to Invoice",count:invoiceItems.length,color:"#ea580c"},
+                {label:"Pending COs",count:pendingCOs.length,color:C.accent},
+              ].map(stat=>(
+                <div key={stat.label} style={{background:"var(--card)",borderRadius:10,padding:"12px 14px",
+                  border:`1px solid ${stat.count>0?stat.color+"33":C.border}`,textAlign:"center"}}>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,
+                    color:stat.count>0?stat.color:"var(--muted)",lineHeight:1}}>{stat.count}</div>
+                  <div style={{fontSize:10,fontWeight:700,color:stat.count>0?stat.color:"var(--muted)",
+                    letterSpacing:"0.06em",marginTop:4}}>{stat.label.toUpperCase()}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Sections */}
+            {sections.length===0&&(
+              <div style={{textAlign:"center",padding:"60px 0",color:"var(--muted)",fontSize:13}}>
+                Nothing needs attention right now. You're all caught up!
+              </div>
+            )}
+
+            {sections.map(section=>(
+              <div key={section.key} style={{marginBottom:20}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,
+                  paddingBottom:8,borderBottom:`2px solid ${section.color}44`}}>
+                  <span style={{fontSize:14}}>{section.icon}</span>
+                  <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,
+                    letterSpacing:"0.06em",color:section.color}}>{section.label}</span>
+                  <span style={{fontSize:11,fontWeight:700,color:section.color,
+                    background:section.color+"15",borderRadius:99,padding:"1px 8px",
+                    border:`1px solid ${section.color}28`}}>{section.items.length}</span>
+                  <span style={{fontSize:11,color:"var(--dim)",marginLeft:4}}>{section.desc}</span>
+                </div>
+                {section.items.map(ev=><EventCard key={ev.id} ev={ev}/>)}
+              </div>
+            ))}
           </div>
         );
       })()}
