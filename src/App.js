@@ -1,7 +1,7 @@
 // BUILD_v9_FIXED
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, enableMultiTabIndexedDbPersistence } from "firebase/firestore";
+import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 
@@ -46,16 +46,9 @@ const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 const storage = getStorage(firebaseApp);
 
-// Enable offline persistence — queues writes when offline, syncs when back online
-// Multi-tab version: works even if multiple tabs are open
-enableMultiTabIndexedDbPersistence(db).catch((err) => {
-  if (err.code === 'failed-precondition') {
-    console.warn('Firestore persistence unavailable: failed precondition');
-  } else if (err.code === 'unimplemented') {
-    // Browser doesn't support persistence
-    console.warn('Firestore persistence unavailable: browser not supported');
-  }
-});
+// Offline persistence is enabled by default in Firebase v10+ web SDK
+// Multi-tab support via enableMultiTabIndexedDbPersistence is deprecated
+// If you upgrade to firebase v11+, use initializeFirestore with persistenceSettings instead
 
 
 
@@ -239,10 +232,10 @@ const DEFAULT_LEAD_COLORS = {
   "Jacob":"#6b7280"
 };
 // Module-level settings — mutated by App.saveSettings and load
-var FOREMEN        = DEFAULT_FOREMEN;
-var FOREMEN_COLORS = DEFAULT_FOREMEN_COLORS;
-var LEADS          = DEFAULT_LEADS;
-var LEAD_COLORS    = DEFAULT_LEAD_COLORS;
+let FOREMEN        = DEFAULT_FOREMEN;
+let FOREMEN_COLORS = DEFAULT_FOREMEN_COLORS;
+let LEADS          = DEFAULT_LEADS;
+let LEAD_COLORS    = DEFAULT_LEAD_COLORS;
 
 // Helper getters — always return current values even after settings update
 const getFC = (name) => (FOREMEN_COLORS[name]||"#6b7280");
@@ -2121,7 +2114,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
 
           // Resize to max 800px wide and compress
 
-          const MAX = 800;
+          const MAX = 500;
 
           const scale = Math.min(1, MAX / Math.max(img.width, img.height));
 
@@ -2133,7 +2126,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
 
           canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
 
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.6);
+          const dataUrl = canvas.toDataURL('image/jpeg', 0.35);
 
           newPhotos.push({id:uid(), name:file.name, dataUrl});
 
@@ -4054,7 +4047,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
       reader.onload = ev => {
         const img = new Image();
         img.onload = () => {
-          const MAX = 800;
+          const MAX = 500;
           let w = img.width, h = img.height;
           if (w > MAX || h > MAX) {
             if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
@@ -4063,7 +4056,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
           const canvas = document.createElement("canvas");
           canvas.width = w; canvas.height = h;
           canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-          const dataUrl = canvas.toDataURL("image/jpeg", 0.65);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.35);
           newPhotos.push({ id: uid(), name: file.name, dataUrl });
           done++;
           if (done === arr.length) u({ photos: [...(job.photos || []), ...newPhotos] });
@@ -4351,7 +4344,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
       reader.onload = ev => {
         const img = new Image();
         img.onload = () => {
-          const MAX = 800;
+          const MAX = 500;
           let w = img.width, h = img.height;
           if(w > MAX || h > MAX) {
             if(w > h) { h = Math.round(h * MAX / w); w = MAX; }
@@ -4360,7 +4353,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
           const canvas = document.createElement("canvas");
           canvas.width = w; canvas.height = h;
           canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-          const dataUrl = canvas.toDataURL("image/jpeg", 0.65);
+          const dataUrl = canvas.toDataURL("image/jpeg", 0.35);
           newPhotos.push({id:uid(), name:file.name, dataUrl});
           done++;
           if(done===arr.length) u({tempPedPhotos:[...(job.tempPedPhotos||[]),...newPhotos]});
@@ -8639,10 +8632,13 @@ function App() {
   _leads.forEach(n=>  { _leadColors[n]   =getPersonColor(n); });
 
   // Keep module-level vars in sync so legacy getForemenList()/LEADS refs still work
-  FOREMEN        = _foremen.length ? _foremen : DEFAULT_FOREMEN;
-  FOREMEN_COLORS = _foremanColors;
-  LEADS          = _leads.length   ? _leads   : DEFAULT_LEADS;
-  LEAD_COLORS    = _leadColors;
+  // Wrapped in useEffect to avoid mutations during render
+  useEffect(()=>{
+    FOREMEN        = _foremen.length ? _foremen : DEFAULT_FOREMEN;
+    FOREMEN_COLORS = _foremanColors;
+    LEADS          = _leads.length   ? _leads   : DEFAULT_LEADS;
+    LEAD_COLORS    = _leadColors;
+  });
 
   // Job foreman matching: support both full name and first-name-only (legacy jobs)
   const matchesForeman = (job, name) => {
@@ -8757,7 +8753,19 @@ function App() {
             localStorage.setItem(TEMPPED_FIX_KEY,"1");
           }
 
-          setJobs(loaded);
+          // Merge snapshot data with any pending local edits
+          // Jobs with active save timers should keep their local version
+          setJobs(prev => {
+            const pendingIds = new Set(Object.keys(saveTimers.current).filter(k => saveTimers.current[k]));
+            if(pendingIds.size === 0) return loaded;
+            return loaded.map(sj => {
+              if(pendingIds.has(sj.id)) {
+                const local = prev.find(p => p.id === sj.id);
+                return local || sj;
+              }
+              return sj;
+            });
+          });
 
           // Auto-advance: one-time — if rough complete and finish has no status for 60+ days,
           // set finish to "waiting_date" so the "Get Finish Start Date" task fires
@@ -8901,7 +8909,19 @@ if(initialLoad.current) return;
 
       try {
 
-        await setDoc(doc(db,"jobs",job.id),{data:sanitize(job),updated_at:new Date().toISOString()});
+        const payload = {data:sanitize(job),updated_at:new Date().toISOString()};
+        // Check estimated size before saving
+        const estimatedSize = JSON.stringify(payload).length;
+        if(estimatedSize > 900000) {
+          console.warn(`[HE] Job ${job.name} is ${Math.round(estimatedSize/1024)}KB — approaching Firestore 1MB limit`);
+          if(estimatedSize > 1000000) {
+            console.error(`[HE] Job ${job.name} exceeds 1MB (${Math.round(estimatedSize/1024)}KB) — photos may need to be removed`);
+            setSyncStatus("error");
+            alert(`Save failed: "${job.name}" is too large (${Math.round(estimatedSize/1024)}KB). Try removing some photos — each photo adds to the document size. Firebase Storage for photos is coming soon.`);
+            return;
+          }
+        }
+        await setDoc(doc(db,"jobs",job.id),payload);
 
         isDirty.current = false;
 
@@ -8912,8 +8932,13 @@ if(initialLoad.current) return;
       } catch(e){
 
         console.error('Save error:',e?.message||e);
-
-        setSyncStatus("error");
+        const msg = e?.message || "";
+        if(msg.includes("exceeds the maximum") || msg.includes("too large") || msg.includes("INVALID_ARGUMENT")) {
+          setSyncStatus("error");
+          alert(`Save failed: "${job.name}" document is too large for Firestore. Try removing photos to reduce size.`);
+        } else {
+          setSyncStatus("error");
+        }
 
       }
 
@@ -9398,8 +9423,6 @@ if(initialLoad.current) return;
 
       <style>{`
 
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Bebas+Neue&display=swap');
-
         @keyframes taskPulse {
           0%,100% { box-shadow: 0 0 12px rgba(220,38,38,0.13), 0 2px 8px rgba(220,38,38,0.08); }
           50%      { box-shadow: 0 0 22px rgba(220,38,38,0.30), 0 2px 14px rgba(220,38,38,0.18); }
@@ -9507,7 +9530,7 @@ if(initialLoad.current) return;
 
               const prepJobs = jobs.filter(j=>{const r=parseStage(j.roughStage);return r===0;});
 
-              const nsJobs   = [];
+              const nsJobs   = jobs.filter(j=>{const rs=j.roughStatus||"";return rs!==""&&parseStage(j.roughStage)===0&&!prepJobs.includes(j);});
 
               const roJobs   = jobs.filter(j=>{const r=parseStage(j.roughStage);const f=parseStage(j.finishStage);return r>0&&r<100&&f===0;});
 
@@ -9644,6 +9667,27 @@ if(initialLoad.current) return;
                             <div style={{fontSize:9,color:C.dim,marginTop:1}}>{l}</div>
                           </div>
                         ))}
+                      </div>
+                      {/* Rough / Finish progress bars */}
+                      <div style={{display:"flex",gap:6,marginTop:8}}>
+                        <div style={{flex:1}}>
+                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                            <span style={{fontSize:9,color:C.dim}}>Rough</span>
+                            <span style={{fontSize:9,color:C.rough,fontWeight:600}}>{rAvg}%</span>
+                          </div>
+                          <div style={{height:4,background:`${C.rough}22`,borderRadius:4,overflow:"hidden"}}>
+                            <div style={{height:"100%",width:`${rAvg}%`,background:C.rough,borderRadius:4,transition:"width 0.3s"}}/>
+                          </div>
+                        </div>
+                        <div style={{flex:1}}>
+                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                            <span style={{fontSize:9,color:C.dim}}>Finish</span>
+                            <span style={{fontSize:9,color:C.finish,fontWeight:600}}>{fnAvg}%</span>
+                          </div>
+                          <div style={{height:4,background:`${C.finish}22`,borderRadius:4,overflow:"hidden"}}>
+                            <div style={{height:"100%",width:`${fnAvg}%`,background:C.finish,borderRadius:4,transition:"width 0.3s"}}/>
+                          </div>
+                        </div>
                       </div>
 
                       <div style={{marginTop:10,fontSize:10,color:fc,fontWeight:600,textAlign:"right",opacity:0.7}}>View →</div>
@@ -9792,7 +9836,25 @@ if(initialLoad.current) return;
                 color:C.dim,marginBottom:16,marginTop:32,paddingTop:24,borderTop:`1px solid ${C.border}`}}>
                 ALL JOBS
               </div>
-              <StageSectionList jobs={jobs} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>
+              <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+                <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search jobs, GC, address…"
+                  style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,
+                    padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none",width:220}}/>
+                {search&&<button onClick={()=>setSearch("")}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,
+                    padding:"6px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Clear</button>}
+              </div>
+              {(()=>{
+                const s = search.toLowerCase();
+                const homeFiltered = s ? jobs.filter(j=>
+                  (j.name||"").toLowerCase().includes(s)||
+                  (j.address||"").toLowerCase().includes(s)||
+                  (j.gc||"").toLowerCase().includes(s)||
+                  (j.foreman||"").toLowerCase().includes(s)||
+                  (j.simproNo||"").toLowerCase().includes(s)
+                ) : jobs;
+                return <StageSectionList jobs={homeFiltered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>;
+              })()}
             </div>
 
           </div>
@@ -9867,7 +9929,7 @@ if(initialLoad.current) return;
 
                 const fFinish  = fJobs.filter(j=>parseInt(j.finishStage)>0&&parseInt(j.finishStage)<100).length;
 
-                const fNotStarted = 0;
+                const fNotStarted = fJobs.filter(j=>{const rs=j.roughStatus||"";return rs!==""&&parseStage(j.roughStage)===0;}).length - fPrep;
 
                 return [[fJobs.length,"Total Jobs",C.blue],
 
