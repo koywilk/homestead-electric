@@ -1,10 +1,8 @@
 // BUILD_v9_FIXED
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, enableMultiTabIndexedDbPersistence } from "firebase/firestore";
+import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
-
-
 
 
 // Register service worker for offline support
@@ -18,9 +16,6 @@ if("serviceWorker" in navigator) {
   });
 
 }
-
-
-
 
 
 const firebaseConfig = {
@@ -40,23 +35,14 @@ const firebaseConfig = {
 };
 
 
-
 const firebaseApp = initializeApp(firebaseConfig);
 
 const db = getFirestore(firebaseApp);
 const storage = getStorage(firebaseApp);
 
-// Enable offline persistence — queues writes when offline, syncs when back online
-// Multi-tab version: works even if multiple tabs are open
-enableMultiTabIndexedDbPersistence(db).catch((err) => {
-  if (err.code === 'failed-precondition') {
-    console.warn('Firestore persistence unavailable: failed precondition');
-  } else if (err.code === 'unimplemented') {
-    // Browser doesn't support persistence
-    console.warn('Firestore persistence unavailable: browser not supported');
-  }
-});
-
+// Offline persistence is enabled by default in Firebase v10+ web SDK
+// Multi-tab support via enableMultiTabIndexedDbPersistence is deprecated
+// If you upgrade to firebase v11+, use initializeFirestore with persistenceSettings instead
 
 
 const HO_WIRE_AMPS = {"14/2":15,"14/3":15,"12/2":20,"12/3":20,"10/2":30,"10/3":30,"8/2":40,"8/3":40,"6/2":50,"6/3":50,"4/2":70,"4/3":70,"2/2":95,"2/3":95,"1/0":125,"2/0":150,"3/0":175,"4/0":200};
@@ -73,9 +59,6 @@ const C = {
 
 };
 
-
-
-const JOB_ID = "homestead-jobs-v1";
 
 const ROUGH_STATUSES = [
   {value:"",           label:"— set status —",                        color:null},
@@ -187,12 +170,9 @@ const WIRE_TEXT = {
 
 };
 
-const CO_STATUSES   = ["Pending","CO Created","CO Sent (office)","Approved","Denied","Work Completed"];
-
 const PULLED_OPTS   = ["","Pulled","Need Specs"];
 
 const DRIVER_SIZES  = ["","20W","40W","60W","96W","192W","288W"];
-
 
 
 const TEAM = [
@@ -212,11 +192,9 @@ const TEAM = [
 ];
 
 
-
 let _uid = Date.now();
 
 const uid = () => String(++_uid);
-
 
 
 const newHRRow     = (num) => ({ id:uid(), num, wire:"", name:"", status:"", panel:"" });
@@ -226,7 +204,6 @@ const newCP4Row    = (num) => ({ id:uid(), num, name:"", module:"", status:"" })
 const newKPRow     = (num) => ({ id:uid(), num, name:"" });
 
 const emptyPunch   = ()    => ({ upper:[], main:[], basement:[] });
-
 
 
 const DEFAULT_FOREMEN = ["Koy", "Vasa", "Colby"];
@@ -239,10 +216,10 @@ const DEFAULT_LEAD_COLORS = {
   "Jacob":"#6b7280"
 };
 // Module-level settings — mutated by App.saveSettings and load
-var FOREMEN        = DEFAULT_FOREMEN;
-var FOREMEN_COLORS = DEFAULT_FOREMEN_COLORS;
-var LEADS          = DEFAULT_LEADS;
-var LEAD_COLORS    = DEFAULT_LEAD_COLORS;
+let FOREMEN        = DEFAULT_FOREMEN;
+let FOREMEN_COLORS = DEFAULT_FOREMEN_COLORS;
+let LEADS          = DEFAULT_LEADS;
+let LEAD_COLORS    = DEFAULT_LEAD_COLORS;
 
 // Helper getters — always return current values even after settings update
 const getFC = (name) => (FOREMEN_COLORS[name]||"#6b7280");
@@ -644,18 +621,14 @@ function UserManagement({ users, onSave }) {
   );
 }
 
-// Legacy compat — keep AUTH_KEY so old sessions don't crash
-const AUTH_KEY = "he_auth";
-const getAuthSession = () => null;
-const setAuthSession = () => {};
-
+// Legacy auth stubs removed — identity system replaced them
 
 
 const blankJob = () => ({
 
   id:uid(), name:"", address:"", gc:"", phone:"", simproNo:"", foreman:"Koy", lead:"", flagged:false, flagNote:"",
 
-  planLink:"", redlineLink:"", lightingLink:"", panelLink:"", qcLink:"", matterportLink:"",
+  planLink:"", redlineLink:"", lightingLink:"", panelLink:"", qcLink:"", matterportLink:"", driveFolderId:"",
 
   uploadedFiles:[],
 
@@ -702,7 +675,6 @@ const blankJob = () => ({
 });
 
 
-
 const blankQuickJob = (type = "service") => ({
   id: uid(), name: "", address: "", gc: "", phone: "", simproNo: "",
   foreman: "Koy", lead: "", flagged: false, flagNote: "",
@@ -736,11 +708,9 @@ function EmailModal({ subject, body, onClose }) {
   const [customErr, setCustomErr] = useState("");
 
 
-
   const toggle = (email) =>
 
     setSelected(s => s.includes(email) ? s.filter(e=>e!==email) : [...s, email]);
-
 
 
   const addCustom = () => {
@@ -770,7 +740,6 @@ function EmailModal({ subject, body, onClose }) {
   };
 
 
-
   const removeCustom = (email) => {
 
     setCustomList(l=>l.filter(e=>e!==email));
@@ -780,9 +749,7 @@ function EmailModal({ subject, body, onClose }) {
   };
 
 
-
   const allRecipients = [...selected];
-
 
 
   const send = () => {
@@ -794,7 +761,6 @@ function EmailModal({ subject, body, onClose }) {
     onClose();
 
   };
-
 
 
   return (
@@ -810,13 +776,11 @@ function EmailModal({ subject, body, onClose }) {
         maxHeight:"90vh",overflowY:"auto"}}>
 
 
-
         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",
 
           color:C.text,marginBottom:4}}>Send Email</div>
 
         <div style={{fontSize:12,color:C.dim,marginBottom:16}}>Select recipients</div>
-
 
 
         {/* Team list */}
@@ -864,7 +828,6 @@ function EmailModal({ subject, body, onClose }) {
           ))}
 
         </div>
-
 
 
         {/* Custom recipients */}
@@ -926,7 +889,6 @@ function EmailModal({ subject, body, onClose }) {
         </div>
 
 
-
         {/* Preview */}
 
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
@@ -948,7 +910,6 @@ function EmailModal({ subject, body, onClose }) {
         </div>
 
 
-
         {allRecipients.length>0&&(
 
           <div style={{fontSize:11,color:C.dim,marginBottom:10}}>
@@ -958,7 +919,6 @@ function EmailModal({ subject, body, onClose }) {
           </div>
 
         )}
-
 
 
         <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
@@ -992,7 +952,6 @@ function EmailModal({ subject, body, onClose }) {
 }
 
 
-
 // ── Atoms ─────────────────────────────────────────────────────
 
 const Pill = ({label,color}) => (
@@ -1002,7 +961,6 @@ const Pill = ({label,color}) => (
     background:`${color}22`,color,border:`1px solid ${color}44`,whiteSpace:"nowrap"}}>{label}</span>
 
 );
-
 
 
 const SectionHead = ({label,color=C.dim,action=null}) => (
@@ -1018,7 +976,6 @@ const SectionHead = ({label,color=C.dim,action=null}) => (
   </div>
 
 );
-
 
 
 // Collapsible section wrapper — collapsed by default
@@ -1060,7 +1017,6 @@ function Section({label, color=C.dim, action=null, defaultOpen=false, children})
 }
 
 
-
 const Inp = ({value,onChange,placeholder,style={}}) => (
 
   <input value={value??""} onChange={onChange} placeholder={placeholder}
@@ -1073,6 +1029,21 @@ const Inp = ({value,onChange,placeholder,style={}}) => (
 
     onBlur={e=>e.target.style.borderColor=C.border}/>
 );
+
+// Time ago helper for "updated X ago" display
+const timeAgo = (isoStr) => {
+  if(!isoStr) return "";
+  const d = new Date(isoStr);
+  if(isNaN(d.getTime())) return "";
+  const mins = Math.floor((Date.now()-d.getTime())/60000);
+  if(mins < 1) return "just now";
+  if(mins < 60) return `${mins}m ago`;
+  const hrs = Math.floor(mins/60);
+  if(hrs < 24) return `${hrs}h ago`;
+  const days = Math.floor(hrs/24);
+  if(days < 7) return `${days}d ago`;
+  return d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
+};
 
 // Convert any date string (MM/DD/YY, MM/DD/YYYY) to YYYY-MM-DD for type="date" inputs
 const toYMD = (str) => {
@@ -1128,7 +1099,6 @@ const Sel = ({value,onChange,options,style={}}) => (
 );
 
 
-
 const TA = ({value,onChange,placeholder,rows=3}) => (
 
   <textarea value={value??""} onChange={onChange} placeholder={placeholder} rows={rows}
@@ -1142,7 +1112,6 @@ const TA = ({value,onChange,placeholder,rows=3}) => (
     onBlur={e=>e.target.style.borderColor=C.border}/>
 
 );
-
 
 
 const Btn = ({onClick,children,variant="ghost",style={}}) => {
@@ -1182,7 +1151,6 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
 };
 
 
-
 const StageBar = ({stages,current,color}) => {
 
   const isScheduled = current === "Scheduled";
@@ -1218,7 +1186,6 @@ const StageBar = ({stages,current,color}) => {
 };
 
 
-
 // ── Punch List ────────────────────────────────────────────────
 
 // Simple helpers to ensure data is always the right shape
@@ -1234,7 +1201,6 @@ function normFloor(v) {
   return { general: Array.isArray(v) ? v : [], rooms: [] };
 
 }
-
 
 
 function PunchItems({ items, onChange }) {
@@ -1342,7 +1308,6 @@ function PunchItems({ items, onChange }) {
 }
 
 
-
 function RoomNameEdit({name, onSave}) {
 
   const [editing, setEditing] = useState(false);
@@ -1384,7 +1349,6 @@ function RoomNameEdit({name, onSave}) {
 }
 
 
-
 function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor }) {
 
   const data = normFloor(floorData);
@@ -1394,11 +1358,9 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
   const [roomDraft, setRoomDraft] = useState('');
 
 
-
   const openCount = data.general.filter(i => !i.done).length +
 
     data.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done).length : 0), 0);
-
 
 
   const setGeneral = (general) => onFloorChange(floorKey, { ...data, general });
@@ -1424,7 +1386,6 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
     onFloorChange(floorKey, { ...data, rooms: data.rooms.filter(r => r.id !== roomId) });
 
   };
-
 
 
   return (
@@ -1512,7 +1473,6 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
   );
 
 }
-
 
 
 function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
@@ -1641,7 +1601,6 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
 }
 
 
-
 // ── Material Orders ───────────────────────────────────────────
 
 function MaterialOrders({orders,onChange}) {
@@ -1709,7 +1668,6 @@ function MaterialOrders({orders,onChange}) {
   );
 
 }
-
 
 
 // ── Daily Updates ─────────────────────────────────────────────
@@ -1845,16 +1803,15 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 }
 
 
-
 // ── Change Orders ─────────────────────────────────────────────
 
 function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughStatus, finishStatus}) {
 
-  const add = () => onChange([{
+  const add = () => onChange([...orders, {
     id:uid(), date:"", desc:"", task:"", material:"", time:"", sendTo:"",
-    coStatus:"pending", coStatusDate:"",
+    coStatus:"needs_sending", coStatusDate:"",
     needsHardDate:false, needsByStart:"", needsByEnd:"",
-  }, ...orders]);
+  }]);
 
   const upd = (id, p) => onChange(orders.map(o => o.id===id ? {...o,...p} : o));
   const del = (id)    => onChange(orders.filter(o => o.id!==id));
@@ -2067,16 +2024,15 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
 
 // ── Return Trips ──────────────────────────────────────────────
 
-function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
+function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId}) {
 
   const [viewPhoto, setViewPhoto] = useState(null);
 
-  const add = () => onChange([{id:uid(),date:"",scope:"",material:"",punch:[],photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:false,needsScheduleDate:"",rtScheduled:false,scheduledDate:""},...trips]);
+  const add = () => onChange([...trips, {id:uid(),date:"",scope:"",material:"",punch:[],photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:false,needsScheduleDate:"",rtScheduled:false,scheduledDate:""}]);
 
   const upd = (id,p) => onChange(trips.map(t=>t.id===id?{...t,...p}:t));
 
   const del = (id)   => onChange(trips.filter(t=>t.id!==id));
-
 
 
   const chatTrip = (t,i) => {
@@ -2098,61 +2054,44 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
   };
 
 
+  const [uploading, setUploading] = useState(false);
 
-  const addPhotos = (id, files) => {
-
+  const addPhotos = async (id, files) => {
+    if(!jobId) { alert("Cannot upload photos — job ID missing. Save the job first."); return; }
     const trip = trips.find(t=>t.id===id);
-
     const existing = trip?.photos||[];
+    const newPhotos = [];
+    setUploading(true);
 
-    let done=0; const newPhotos=[];
+    for(const file of Array.from(files)) {
+      try {
+        const photoId = uid();
+        const ext = file.name.split(".").pop() || "jpg";
+        const storagePath = `jobs/${jobId}/rt-photos/${id}/${photoId}.${ext}`;
+        const storageRef = ref(storage, storagePath);
+        await uploadBytes(storageRef, file);
+        const url = await getDownloadURL(storageRef);
+        newPhotos.push({id:photoId, name:file.name, url, storagePath});
+      } catch(e) {
+        console.error("RT photo upload failed:", e);
+        alert(`Failed to upload ${file.name}. Check connection.`);
+      }
+    }
 
-    const total = files.length;
-
-    Array.from(files).forEach(file=>{
-
-      const img = new Image();
-
-      const reader = new FileReader();
-
-      reader.onload = ev => {
-
-        img.onload = () => {
-
-          // Resize to max 800px wide and compress
-
-          const MAX = 500;
-
-          const scale = Math.min(1, MAX / Math.max(img.width, img.height));
-
-          const canvas = document.createElement('canvas');
-
-          canvas.width  = Math.round(img.width  * scale);
-
-          canvas.height = Math.round(img.height * scale);
-
-          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.35);
-
-          newPhotos.push({id:uid(), name:file.name, dataUrl});
-
-          done++;
-
-          if(done===total) upd(id,{photos:[...existing,...newPhotos]});
-
-        };
-
-        img.src = ev.target.result;
-
-      };
-
-      reader.readAsDataURL(file);
-
-    });
-
+    if(newPhotos.length > 0) {
+      upd(id, {photos:[...existing, ...newPhotos]});
+    }
+    setUploading(false);
   };
 
+  const deletePhoto = async (tripId, photo) => {
+    // Delete from Firebase Storage if it has a storagePath (new photos)
+    if(photo.storagePath) {
+      try { await deleteObject(ref(storage, photo.storagePath)).catch(()=>{}); } catch(e){}
+    }
+    const trip = trips.find(t=>t.id===tripId);
+    upd(tripId, {photos:(trip?.photos||[]).filter(x=>x.id!==photo.id)});
+  };
 
 
   return (
@@ -2252,7 +2191,6 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
           <PunchItems items={t.punch||[]} onChange={v=>upd(t.id,{punch:v})}/>
 
 
-
           {/* Photos */}
 
           <div style={{marginTop:14}}>
@@ -2267,15 +2205,15 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
 
                   <div key={p.id} style={{position:"relative"}}>
 
-                    <img src={p.dataUrl} alt={p.name}
+                    <img src={p.url||p.dataUrl} alt={p.name}
 
-                      onClick={()=>setViewPhoto(p.dataUrl)}
+                      onClick={()=>setViewPhoto(p.url||p.dataUrl)}
 
                       style={{width:"100%",aspectRatio:"1",objectFit:"cover",borderRadius:8,
 
                         border:`1px solid ${C.border}`,cursor:"pointer"}}/>
 
-                    <button onClick={()=>upd(t.id,{photos:(t.photos||[]).filter(x=>x.id!==p.id)})}
+                    <button onClick={()=>deletePhoto(t.id,p)}
 
                       style={{position:"absolute",top:3,right:3,background:"rgba(0,0,0,0.7)",
 
@@ -2291,22 +2229,32 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
 
             )}
 
-            <label style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",
+            {uploading&&<div style={{fontSize:11,color:C.accent,fontWeight:600,marginBottom:8,
+              padding:"6px 10px",background:`${C.accent}12`,border:`1px solid ${C.accent}33`,
+              borderRadius:7}}>⏳ Uploading photos...</div>}
 
-              background:`${C.purple}12`,border:`1px dashed ${C.purple}55`,borderRadius:8,
-
-              cursor:"pointer",fontSize:12,color:C.purple,fontWeight:600}}>
-
-              📷 Add Photos
-
-              <input type="file" accept="image/*" multiple style={{display:"none"}}
-
-                onChange={e=>{addPhotos(t.id,e.target.files);e.target.value="";}}/>
-
-            </label>
+            <div style={{display:"flex",gap:6}}>
+              <label style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",
+                background:`${C.purple}12`,border:`1px dashed ${C.purple}55`,borderRadius:8,
+                cursor:uploading?"not-allowed":"pointer",opacity:uploading?0.5:1,
+                fontSize:12,color:C.purple,fontWeight:600}}>
+                📷 Add Photos
+                <input type="file" accept="image/*" multiple style={{display:"none"}}
+                  disabled={uploading}
+                  onChange={e=>{addPhotos(t.id,e.target.files);e.target.value="";}}/>
+              </label>
+              <label style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",
+                background:`${C.teal}12`,border:`1px dashed ${C.teal}55`,borderRadius:8,
+                cursor:uploading?"not-allowed":"pointer",opacity:uploading?0.5:1,
+                fontSize:12,color:C.teal,fontWeight:600}}>
+                📸 Take Photo
+                <input type="file" accept="image/*" capture="environment" style={{display:"none"}}
+                  disabled={uploading}
+                  onChange={e=>{addPhotos(t.id,e.target.files);e.target.value="";}}/>
+              </label>
+            </div>
 
           </div>
-
 
 
           {/* Assigned To */}
@@ -2322,7 +2270,6 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
               placeholder="Technician name…"/>
 
           </div>
-
 
 
           {/* Sign Off */}
@@ -2416,7 +2363,6 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
       ))}
 
 
-
       {viewPhoto&&(
 
         <div onClick={()=>setViewPhoto(null)}
@@ -2450,12 +2396,6 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
 }
 
 
-
-
-
-
-
-
 // ── Home Runs ─────────────────────────────────────────────────
 
 const DEFAULT_PANELS = ["Panel A","Panel B","Panel C","Panel D"];
@@ -2474,7 +2414,6 @@ const getPanelOrder = (customPanels) => {
 const WIRE_ORDER  = {"":0,"14/2":1,"14/3":2,"12/2":3,"12/3":4,"10/2":5,"10/3":6,"8/2":7,"8/3":8,"6/2":9,"6/3":10,"4/2":11,"4/3":12,"2/2":13,"2/3":14,"1/0":15,"2/0":16,"3/0":17,"4/0":18};
 
 
-
 function HomeRunLevel({rows,onChange,label,customPanels}) {
 
   const panelOrder = getPanelOrder(customPanels);
@@ -2488,7 +2427,6 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
   const upd    = (id,p) => { const updated = rows.map(r=>r.id===id?{...r,...p}:r); onChange(('wire' in p||'panel' in p) ? sortRows(updated) : updated.map((r,i)=>({...r,num:i+1}))); };
   const addRow = () => onChange([...rows, newHRRow(rows.length+1)]);
   const delRow = (id) => onChange(sortRows(rows.filter(r=>r.id!==id)));
-
 
 
   const renderRow = (r, flatIdx) => (
@@ -2602,7 +2540,6 @@ function MeterLoads({loads, onChange}) {
 }
 
 
-
 // Wire → {amps, poles} mapping
 
 const WIRE_BREAKER = {
@@ -2654,9 +2591,7 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
   ];
 
 
-
   const panels = getPanelOpts(homeRuns.customPanels||DEFAULT_PANELS).filter(p=>p!==""&&p!=="Meter");
-
 
 
   // For each panel, group rows by breaker label and count poles
@@ -2686,7 +2621,6 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
   };
 
 
-
   const totalSpaces = (panel) => {
 
     const g = getPanelBreakers(panel);
@@ -2694,7 +2628,6 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
     return Object.values(g).reduce((s,v)=>s+v.spaces,0);
 
   };
-
 
 
   return (
@@ -2794,7 +2727,6 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
   );
 
 }
-
 
 
 function HRAddFloor({homeRuns, onHRChange}) {
@@ -3317,7 +3249,6 @@ function KeypadSection({loads,onChange,label}) {
 }
 
 
-
 function CP4LoadsSection({loads,onChange}) {
 
   const upd    = (id,p) => onChange(loads.map(r=>r.id===id?{...r,...p}:r));
@@ -3377,7 +3308,6 @@ function CP4LoadsSection({loads,onChange}) {
   );
 
 }
-
 
 
 // ── Tape Light ────────────────────────────────────────────────
@@ -3527,8 +3457,331 @@ function TapeLightSection({lights,onChange}) {
 }
 
 
-
 // ── Plans & Links with PDF upload ────────────────────────────
+
+// ── Google Drive Files Section ─────────────────────────────────
+const DRIVE_API_KEY = firebaseConfig.apiKey; // reuse Firebase API key (must enable Drive API in Cloud Console)
+
+function extractDriveFolderId(input) {
+  if (!input) return "";
+  const match = input.match(/folders\/([a-zA-Z0-9_-]+)/);
+  if (match) return match[1];
+  if (/^[a-zA-Z0-9_-]{10,}$/.test(input.trim())) return input.trim();
+  return "";
+}
+
+// Recursively fetch all files from a Drive folder and its sub-folders
+async function fetchDriveFilesRecursive(folderId, folderName, depth) {
+  if (depth > 3) return []; // safety limit
+  const url = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&key=${DRIVE_API_KEY}&fields=files(id,name,mimeType,thumbnailLink,size,modifiedTime,webViewLink)&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=name`;
+  const resp = await fetch(url);
+  const data = await resp.json();
+  if (data.error) throw new Error(data.error.message || "Could not load Drive files");
+  const files = data.files || [];
+  const folders = files.filter(f => f.mimeType === "application/vnd.google-apps.folder");
+  const nonFolders = files.filter(f => f.mimeType !== "application/vnd.google-apps.folder")
+    .map(f => ({ ...f, _folder: folderName }));
+  // Recurse into each sub-folder
+  const subResults = await Promise.all(
+    folders.map(sf => fetchDriveFilesRecursive(sf.id, sf.name, depth + 1))
+  );
+  return [...nonFolders, ...subResults.flat()];
+}
+
+// Parent Drive folder containing all job plan folders
+const DRIVE_PARENT_FOLDER_ID = "1laC4udt1sBdV-_QUMzzbKJfD03q4_Ml3";
+
+// Normalize a name for fuzzy matching: lowercase, strip #numbers, common suffixes, extra whitespace
+function normalizeName(name) {
+  return (name || "").toLowerCase()
+    .replace(/#\d+\s*[-–—]?\s*/g, "")  // strip #1260 - prefix
+    .replace(/\b(plans|residence|home|house|electrical)\b/gi, "")
+    .replace(/[^a-z0-9]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Match a Drive folder name to a job name
+function namesMatch(driveName, jobName) {
+  const dn = normalizeName(driveName);
+  const jn = normalizeName(jobName);
+  if (!dn || !jn) return false;
+  // Check if either contains the other
+  if (dn.includes(jn) || jn.includes(dn)) return true;
+  // Check if all words of the job name appear in the folder name
+  const jobWords = jn.split(" ").filter(w => w.length > 2);
+  if (jobWords.length > 0 && jobWords.every(w => dn.includes(w))) return true;
+  return false;
+}
+
+async function syncDriveFoldersToJobs(jobs, updateJob) {
+  // 1. Fetch all folders in the parent Drive folder
+  const url = `https://www.googleapis.com/drive/v3/files?q='${DRIVE_PARENT_FOLDER_ID}'+in+parents+and+mimeType='application/vnd.google-apps.folder'+and+trashed=false&key=${DRIVE_API_KEY}&fields=files(id,name)&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=name`;
+  const resp = await fetch(url);
+  const data = await resp.json();
+  if (data.error) throw new Error(data.error.message || "Could not load Drive folders");
+  const driveFolders = data.files || [];
+
+  // 2. Match folders to jobs that don't already have a driveFolderId
+  const results = { matched: [], skipped: [], ambiguous: [] };
+  for (const job of jobs) {
+    if (job.driveFolderId) { results.skipped.push(job.name); continue; }
+    const matches = driveFolders.filter(df => namesMatch(df.name, job.name));
+    if (matches.length === 1) {
+      results.matched.push({ jobName: job.name, folderName: matches[0].name, folderId: matches[0].id });
+    } else if (matches.length > 1) {
+      results.ambiguous.push({ jobName: job.name, folders: matches.map(m => m.name) });
+    }
+  }
+
+  // 3. Apply matches
+  for (const match of results.matched) {
+    const job = jobs.find(j => j.name === match.jobName);
+    if (job) updateJob({ ...job, driveFolderId: match.folderId });
+  }
+
+  return { total: driveFolders.length, ...results };
+}
+
+function DriveFilesSection({ job, onUpdate }) {
+  const [driveFiles, setDriveFiles] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [viewFile, setViewFile] = useState(null);
+  const [folderInput, setFolderInput] = useState(job.driveFolderId || "");
+  const [editingFolder, setEditingFolder] = useState(!job.driveFolderId);
+
+  const folderId = extractDriveFolderId(job.driveFolderId);
+
+  useEffect(() => {
+    if (!folderId) { setDriveFiles([]); return; }
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    fetchDriveFilesRecursive(folderId, "Root", 0)
+      .then(allFiles => {
+        if (cancelled) return;
+        setDriveFiles(allFiles);
+        setLoading(false);
+      })
+      .catch(e => {
+        if (cancelled) return;
+        setError(e.message || "Network error loading Drive files");
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [folderId]);
+
+  const handleSaveFolder = () => {
+    const id = extractDriveFolderId(folderInput);
+    onUpdate({ driveFolderId: id || folderInput.trim() });
+    setEditingFolder(false);
+  };
+
+  const handleRemoveFolder = () => {
+    if (!window.confirm("Remove Google Drive folder link?")) return;
+    onUpdate({ driveFolderId: "" });
+    setFolderInput("");
+    setEditingFolder(true);
+    setDriveFiles([]);
+  };
+
+  const isImage = (f) => (f.mimeType || "").startsWith("image/");
+  const isPDF = (f) => f.mimeType === "application/pdf" || /\.pdf$/i.test(f.name);
+  const fileIcon = (f) => isPDF(f) ? "📄" : isImage(f) ? "🖼" : "📎";
+
+  const previewUrl = (f) => `https://drive.google.com/file/d/${f.id}/preview`;
+  const thumbUrl = (f) => f.thumbnailLink ? f.thumbnailLink.replace(/=s\d+/, "=s400") : `https://drive.google.com/thumbnail?id=${f.id}&sz=w400`;
+
+  // Group files by sub-folder
+  const folderNames = [...new Set(driveFiles.map(f => f._folder))];
+  const images = driveFiles.filter(f => isImage(f));
+  const docs = driveFiles.filter(f => !isImage(f));
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: "0.08em" }}>GOOGLE DRIVE PLANS</div>
+        {folderId && !editingFolder && (
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => setEditingFolder(true)}
+              style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6,
+                color: C.dim, cursor: "pointer", fontSize: 11, padding: "3px 8px", fontFamily: "inherit" }}>
+              Edit
+            </button>
+            <button onClick={handleRemoveFolder}
+              style={{ background: "none", border: `1px solid ${C.red}44`, borderRadius: 6,
+                color: C.red, cursor: "pointer", fontSize: 11, padding: "3px 8px", fontFamily: "inherit" }}>
+              Remove
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Folder URL input */}
+      {editingFolder && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          <input value={folderInput} onChange={e => setFolderInput(e.target.value)}
+            placeholder="Paste Google Drive folder URL..."
+            style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7,
+              padding: "8px 12px", fontSize: 12, color: C.text, fontFamily: "inherit", outline: "none" }} />
+          <button onClick={handleSaveFolder} disabled={!folderInput.trim()}
+            style={{ background: C.blue, border: "none", borderRadius: 7, color: "#fff",
+              fontSize: 11, fontWeight: 600, padding: "8px 16px", cursor: "pointer",
+              opacity: folderInput.trim() ? 1 : 0.4, fontFamily: "inherit" }}>
+            Link Folder
+          </button>
+        </div>
+      )}
+
+      {/* Connected folder indicator */}
+      {folderId && !editingFolder && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "8px 12px",
+          background: `${C.green}10`, border: `1px solid ${C.green}33`, borderRadius: 8 }}>
+          <span style={{ fontSize: 14 }}>📁</span>
+          <span style={{ fontSize: 11, color: C.green, fontWeight: 600, flex: 1 }}>
+            Drive folder linked{driveFiles.length > 0 ? ` — ${driveFiles.length} file${driveFiles.length === 1 ? "" : "s"}` : ""}
+            {folderNames.length > 1 ? ` across ${folderNames.length} folders` : ""}
+          </span>
+          <a href={`https://drive.google.com/drive/folders/${folderId}`} target="_blank" rel="noreferrer"
+            style={{ fontSize: 11, color: C.blue, fontWeight: 600, textDecoration: "none" }}>
+            Open in Drive ↗
+          </a>
+        </div>
+      )}
+
+      {/* Loading state */}
+      {loading && (
+        <div style={{ fontSize: 11, color: C.accent, fontWeight: 600, padding: "16px",
+          textAlign: "center", border: `1px dashed ${C.border}`, borderRadius: 10 }}>
+          Loading Drive files...
+        </div>
+      )}
+
+      {/* Error state */}
+      {error && (
+        <div style={{ fontSize: 11, color: C.red, padding: "12px",
+          background: `${C.red}10`, border: `1px solid ${C.red}33`, borderRadius: 8, marginBottom: 12 }}>
+          {error}. Make sure the folder is shared as "Anyone with the link can view" and the Drive API is enabled.
+        </div>
+      )}
+
+      {/* Empty state */}
+      {folderId && !loading && !error && driveFiles.length === 0 && (
+        <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic", padding: "16px",
+          textAlign: "center", border: `1px dashed ${C.border}`, borderRadius: 10 }}>
+          No files found in this Drive folder
+        </div>
+      )}
+
+      {/* Files grouped by sub-folder */}
+      {folderNames.map(folder => {
+        const folderImages = images.filter(f => f._folder === folder);
+        const folderDocs = docs.filter(f => f._folder === folder);
+        if (folderImages.length === 0 && folderDocs.length === 0) return null;
+        return (
+          <div key={folder} style={{ marginBottom: 16 }}>
+            {/* Folder header — only show if there are multiple folders */}
+            {folderNames.length > 1 && (
+              <div style={{ fontSize: 10, color: C.accent, fontWeight: 700, letterSpacing: "0.06em",
+                marginBottom: 8, paddingBottom: 4, borderBottom: `1px solid ${C.border}` }}>
+                📁 {folder === "Root" ? "Top Level" : folder}
+              </div>
+            )}
+
+            {/* Images grid */}
+            {folderImages.length > 0 && (
+              <div style={{ marginBottom: 10 }}>
+                <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>IMAGES</div>
+                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(100px,1fr))", gap: 8 }}>
+                  {folderImages.map(f => (
+                    <div key={f.id} style={{ position: "relative", cursor: "pointer" }} onClick={() => setViewFile(f)}>
+                      <img src={thumbUrl(f)} alt={f.name}
+                        style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 8,
+                          border: `1px solid ${C.border}`, background: C.surface }} />
+                      <div style={{ fontSize: 9, color: C.dim, marginTop: 3, overflow: "hidden",
+                        textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                    </div>
+                  ))}
+                </div>
+              </div>
+            )}
+
+            {/* Documents list */}
+            {folderDocs.length > 0 && (
+              <div>
+                <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>DOCUMENTS</div>
+                {folderDocs.map(f => (
+                  <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+                    background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 6 }}>
+                    <span style={{ fontSize: 18, flexShrink: 0 }}>{fileIcon(f)}</span>
+                    <div style={{ flex: 1, minWidth: 0 }}>
+                      <div style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden",
+                        textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                      <div style={{ fontSize: 10, color: C.muted }}>
+                        {f.size ? (Number(f.size) < 1024 * 1024 ? Math.round(Number(f.size) / 1024) + " KB" : (Number(f.size) / (1024 * 1024)).toFixed(1) + " MB") : ""}
+                      </div>
+                    </div>
+                    {(isPDF(f) || isImage(f)) && (
+                      <button onClick={() => setViewFile(f)}
+                        style={{ fontSize: 11, fontWeight: 600, color: C.accent, background: `${C.accent}12`,
+                          border: `1px solid ${C.accent}44`, borderRadius: 7, padding: "5px 10px",
+                          cursor: "pointer", flexShrink: 0, fontFamily: "inherit" }}>
+                        View
+                      </button>
+                    )}
+                    <a href={f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`} target="_blank" rel="noreferrer"
+                      style={{ fontSize: 11, fontWeight: 600, color: C.blue, textDecoration: "none",
+                        border: `1px solid ${C.blue}44`, borderRadius: 7, padding: "5px 10px",
+                        flexShrink: 0 }}>
+                      Open ↗
+                    </a>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* Inline viewer (lightbox) */}
+      {viewFile && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.95)", zIndex: 1000,
+          display: "flex", flexDirection: "column", padding: 0 }}>
+          {/* Header bar */}
+          <div style={{ display: "flex", alignItems: "center", padding: "12px 16px", gap: 12,
+            background: "rgba(255,255,255,0.08)", flexShrink: 0 }}>
+            <span style={{ fontSize: 14, color: "#fff", fontWeight: 600, flex: 1, overflow: "hidden",
+              textOverflow: "ellipsis", whiteSpace: "nowrap" }}>
+              {viewFile._folder && viewFile._folder !== "Root" ? `${viewFile._folder} / ` : ""}{viewFile.name}
+            </span>
+            <a href={viewFile.webViewLink || `https://drive.google.com/file/d/${viewFile.id}/view`}
+              target="_blank" rel="noreferrer"
+              style={{ fontSize: 12, color: C.blue, fontWeight: 600, textDecoration: "none",
+                border: `1px solid ${C.blue}66`, borderRadius: 7, padding: "5px 12px", flexShrink: 0 }}>
+              Open in Drive ↗
+            </a>
+            <button onClick={() => setViewFile(null)}
+              style={{ background: "rgba(255,255,255,0.15)", border: "none", borderRadius: "50%",
+                color: "#fff", fontSize: 20, width: 36, height: 36, cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>✕</button>
+          </div>
+          {/* Content */}
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+            {isImage(viewFile) ? (
+              <img src={thumbUrl(viewFile).replace(/=s\d+/, "=s1600")} alt={viewFile.name}
+                style={{ maxWidth: "95vw", maxHeight: "calc(100vh - 70px)", objectFit: "contain" }} />
+            ) : (
+              <iframe src={previewUrl(viewFile)} title={viewFile.name}
+                style={{ width: "100%", height: "100%", border: "none" }}
+                allow="autoplay" />
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
 
 const LINK_FIELDS = [
 
@@ -3539,7 +3792,6 @@ const LINK_FIELDS = [
 ["matterportLink","Matterport Link"],
 
 ];
-
 
 
 // ── File Upload Section (Firebase Storage) ────────────────────
@@ -3729,12 +3981,18 @@ function PlansTab({job, onUpdate}) {
 
     <div>
 
-      {/* File Uploads — Firebase Storage */}
-      <FileUploadSection
-        jobId={job.id}
-        files={job.planFiles || []}
-        onChange={v => onUpdate({ planFiles: v })}
-      />
+      {/* Google Drive Plans */}
+      <DriveFilesSection job={job} onUpdate={onUpdate} />
+
+      {/* Divider between Drive and uploads */}
+      <div style={{ borderTop: `1px solid ${C.border}`, marginBottom: 16, paddingTop: 16 }}>
+        {/* File Uploads — Firebase Storage */}
+        <FileUploadSection
+          jobId={job.id}
+          files={job.planFiles || []}
+          onChange={v => onUpdate({ planFiles: v })}
+        />
+      </div>
 
       <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 12,
         paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
@@ -3840,7 +4098,6 @@ function PlansTab({job, onUpdate}) {
         );
 
       })}
-
 
 
       {/* Custom named link sections */}
@@ -3958,13 +4215,9 @@ function PlansTab({job, onUpdate}) {
 }
 
 
-
-
-
 const TABS = ["Job Info","Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
 
               "Change Orders","Return Trips","Plans & Links","QC"];
-
 
 
 const sanitize = (obj) => {
@@ -4026,10 +4279,10 @@ const normalizeJob = (raw) => ({
 // ── Temp Ped Detail ────────────────────────────────────────────
 // ── Quick Job Detail ───────────────────────────────────────────
 function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList }) {
-  const [job, setJob] = useState({...rawJob});
+  const [job, setJob] = useState(()=>({...normalizeJob(rawJob), quickJob:true}));
   const jobRef = useRef(job);
   useEffect(() => { jobRef.current = job; }, [job]);
-  useEffect(() => { setJob({...rawJob}); }, [rawJob?.id]);
+  useEffect(() => { setJob({...normalizeJob(rawJob), quickJob:true}); }, [rawJob?.id]);
 
   const u = patch => {
     const updated = {...jobRef.current, ...patch};
@@ -4045,33 +4298,29 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
   const typeDef = QUICK_JOB_TYPES.find(t => t.value === job.quickJobType) || QUICK_JOB_TYPES[3];
   const foreman = job.foreman || "Koy";
 
-  // Photo handling
-  const addPhotos = (files) => {
-    const arr = Array.from(files);
-    let done = 0; const newPhotos = [];
-    arr.forEach(file => {
-      const reader = new FileReader();
-      reader.onload = ev => {
-        const img = new Image();
-        img.onload = () => {
-          const MAX = 500;
-          let w = img.width, h = img.height;
-          if (w > MAX || h > MAX) {
-            if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
-            else { w = Math.round(w * MAX / h); h = MAX; }
-          }
-          const canvas = document.createElement("canvas");
-          canvas.width = w; canvas.height = h;
-          canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-          const dataUrl = canvas.toDataURL("image/jpeg", 0.35);
-          newPhotos.push({ id: uid(), name: file.name, dataUrl });
-          done++;
-          if (done === arr.length) u({ photos: [...(job.photos || []), ...newPhotos] });
-        };
-        img.src = ev.target.result;
-      };
-      reader.readAsDataURL(file);
-    });
+  // Photo handling — upload to Firebase Storage
+  const [qjUploading, setQjUploading] = useState(false);
+  const addPhotos = async (files) => {
+    const existing = job.photos || [];
+    const newPhotos = [];
+    setQjUploading(true);
+    for(const file of Array.from(files)) {
+      try {
+        const photoId = uid();
+        const ext = file.name.split(".").pop() || "jpg";
+        const storagePath = `jobs/${job.id}/photos/${photoId}.${ext}`;
+        const storageRef = ref(storage, storagePath);
+        await uploadBytes(storageRef, file);
+        const url = await getDownloadURL(storageRef);
+        newPhotos.push({id:photoId, name:file.name, url, storagePath});
+      } catch(e) { console.error("Photo upload failed:", e); alert(`Failed to upload ${file.name}.`); }
+    }
+    if(newPhotos.length > 0) u({ photos: [...existing, ...newPhotos] });
+    setQjUploading(false);
+  };
+  const deleteJobPhoto = async (photo) => {
+    if(photo.storagePath) { try { await deleteObject(ref(storage, photo.storagePath)).catch(()=>{}); } catch(e){} }
+    u({ photos: (job.photos || []).filter(x => x.id !== photo.id) });
   };
 
   return (
@@ -4226,10 +4475,10 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
                 {(job.photos || []).map(p => (
                   <div key={p.id} style={{ position: "relative", width: 80, height: 80 }}>
-                    <img src={p.dataUrl} alt={p.name} onClick={() => setViewPhoto(p.dataUrl)}
+                    <img src={p.url||p.dataUrl} alt={p.name} onClick={() => setViewPhoto(p.url||p.dataUrl)}
                       style={{ width: 80, height: 80, objectFit: "cover", borderRadius: 8, cursor: "pointer",
                         border: `1px solid ${C.border}` }} />
-                    <button onClick={() => u({ photos: (job.photos || []).filter(x => x.id !== p.id) })}
+                    <button onClick={() => deleteJobPhoto(p)}
                       style={{ position: "absolute", top: -5, right: -5, background: "#dc2626", border: "none",
                         borderRadius: "50%", color: "#fff", width: 18, height: 18, fontSize: 10,
                         cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
@@ -4237,11 +4486,16 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
                 ))}
               </div>
             )}
+            {qjUploading&&<div style={{fontSize:11,color:C.accent,fontWeight:600,marginBottom:8,
+              padding:"6px 10px",background:`${C.accent}12`,border:`1px solid ${C.accent}33`,
+              borderRadius:7}}>⏳ Uploading...</div>}
             <label style={{ display: "inline-flex", alignItems: "center", gap: 6,
               background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
-              padding: "7px 14px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.dim }}>
+              padding: "7px 14px", cursor: qjUploading?"not-allowed":"pointer",
+              opacity: qjUploading?0.5:1, fontSize: 11, fontWeight: 600, color: C.dim }}>
               + Add Photos
               <input type="file" accept="image/*" multiple style={{ display: "none" }}
+                disabled={qjUploading}
                 onChange={e => { addPhotos(e.target.files); e.target.value = ""; }} />
             </label>
           </div>
@@ -4342,33 +4596,29 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
   const foreman = job.foreman||"Koy";
   const fc      = (({"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e","Keegan":"#3b82f6","Gage":"#3b82f6","Daegan":"#3b82f6","Braden":"#22c55e","Treycen":"#22c55e","Jon":"#22c55e","Vasa":"#f97316","Abe":"#f97316","Louis":"#f97316","Jacob":"#6b7280"})[foreman]||"#6b7280")||"#6b7280";
 
-  // Photo handling — compress to max 800px / 0.65 quality to stay under Firestore 1MB limit
-  const addPhotos = (files) => {
-    const arr = Array.from(files);
-    let done = 0; const newPhotos = [];
-    arr.forEach(file => {
-      const reader = new FileReader();
-      reader.onload = ev => {
-        const img = new Image();
-        img.onload = () => {
-          const MAX = 500;
-          let w = img.width, h = img.height;
-          if(w > MAX || h > MAX) {
-            if(w > h) { h = Math.round(h * MAX / w); w = MAX; }
-            else { w = Math.round(w * MAX / h); h = MAX; }
-          }
-          const canvas = document.createElement("canvas");
-          canvas.width = w; canvas.height = h;
-          canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-          const dataUrl = canvas.toDataURL("image/jpeg", 0.35);
-          newPhotos.push({id:uid(), name:file.name, dataUrl});
-          done++;
-          if(done===arr.length) u({tempPedPhotos:[...(job.tempPedPhotos||[]),...newPhotos]});
-        };
-        img.src = ev.target.result;
-      };
-      reader.readAsDataURL(file);
-    });
+  // Photo handling — upload to Firebase Storage
+  const [tpUploading, setTpUploading] = useState(false);
+  const addPhotos = async (files) => {
+    const existing = job.tempPedPhotos || [];
+    const newPhotos = [];
+    setTpUploading(true);
+    for(const file of Array.from(files)) {
+      try {
+        const photoId = uid();
+        const ext = file.name.split(".").pop() || "jpg";
+        const storagePath = `jobs/${job.id}/photos/${photoId}.${ext}`;
+        const storageRef = ref(storage, storagePath);
+        await uploadBytes(storageRef, file);
+        const url = await getDownloadURL(storageRef);
+        newPhotos.push({id:photoId, name:file.name, url, storagePath});
+      } catch(e) { console.error("Photo upload failed:", e); alert(`Failed to upload ${file.name}.`); }
+    }
+    if(newPhotos.length > 0) u({tempPedPhotos:[...existing, ...newPhotos]});
+    setTpUploading(false);
+  };
+  const deleteTpPhoto = async (photo) => {
+    if(photo.storagePath) { try { await deleteObject(ref(storage, photo.storagePath)).catch(()=>{}); } catch(e){} }
+    u({tempPedPhotos: (job.tempPedPhotos || []).filter(x => x.id !== photo.id)});
   };
 
   const handleSignOff = () => {
@@ -4502,10 +4752,10 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
               <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:10}}>
                 {(job.tempPedPhotos||[]).map(p=>(
                   <div key={p.id} style={{position:"relative",width:80,height:80}}>
-                    <img src={p.dataUrl} alt={p.name} onClick={()=>setViewPhoto(p.dataUrl)}
+                    <img src={p.url||p.dataUrl} alt={p.name} onClick={()=>setViewPhoto(p.url||p.dataUrl)}
                       style={{width:80,height:80,objectFit:"cover",borderRadius:8,cursor:"pointer",
                         border:`1px solid ${C.border}`}}/>
-                    <button onClick={()=>u({tempPedPhotos:(job.tempPedPhotos||[]).filter(x=>x.id!==p.id)})}
+                    <button onClick={()=>deleteTpPhoto(p)}
                       style={{position:"absolute",top:-5,right:-5,background:"#dc2626",border:"none",
                         borderRadius:"50%",color:"#fff",width:18,height:18,fontSize:10,
                         cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
@@ -4514,11 +4764,16 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
                 ))}
               </div>
             )}
+            {tpUploading&&<div style={{fontSize:11,color:C.accent,fontWeight:600,marginBottom:8,
+              padding:"6px 10px",background:`${C.accent}12`,border:`1px solid ${C.accent}33`,
+              borderRadius:7}}>⏳ Uploading...</div>}
             <label style={{display:"inline-flex",alignItems:"center",gap:6,
               background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
-              padding:"7px 14px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim}}>
+              padding:"7px 14px",cursor:tpUploading?"not-allowed":"pointer",
+              opacity:tpUploading?0.5:1,fontSize:11,fontWeight:600,color:C.dim}}>
               + Add Photos
               <input type="file" accept="image/*" multiple style={{display:"none"}}
+                disabled={tpUploading}
                 onChange={e=>{addPhotos(e.target.files);e.target.value="";}}/>
             </label>
           </div>
@@ -4606,8 +4861,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
     onUpdate(updated);
   };
 
-  const saveNow = () => onUpdate({...job});
-
   const [tab, setTab] = useState("Job Info");
   const [newLightingFloor, setNewLightingFloor] = useState("");
   const [emailData, setEmailData] = useState(null);
@@ -4629,7 +4882,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
     setRefreshing(false);
 
   };
-
 
 
   const countFloor = (f) => {
@@ -4656,7 +4908,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
     (job.qcPunch?.extras||[]).reduce((s,e)=>s+countFloor(job.qcPunch?.[e.key]||{}),0);
 
 
-
   return (
 
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.82)",zIndex:400,
@@ -4670,7 +4921,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
         maxWidth:940,maxHeight:"93vh",display:"flex",flexDirection:"column",overflow:"hidden",
 
         boxShadow:"0 40px 100px rgba(0,0,0,0.7)"}}>
-
 
 
         {/* Header */}
@@ -4742,7 +4992,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
         </div>
 
 
-
         {/* Tabs */}
 
         <div style={{display:"flex",gap:1,padding:"8px 22px 0",borderBottom:`1px solid ${C.border}`,
@@ -4770,13 +5019,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
         </div>
 
 
-
         {/* Body */}
 
         <div style={{flex:1,overflowY:"auto",padding:"20px 22px"}}>
-
-
-
 
 
           {tab==="Rough"&&(
@@ -4823,7 +5068,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                           const v=e.target.value;
                           const def=getStatusDef(ROUGH_STATUSES,v);
                           u({roughStatus:v, roughOnHold:v==="waiting", roughScheduled:v==="scheduled",
-                            roughStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete")?job.roughStartConfirmed:false,
+                            roughStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting"||v==="invoice")?job.roughStartConfirmed:false,
                             roughStatusDate:def.hasDate?job.roughStatusDate:"",
                             readyToInvoice:v==="invoice"?true:(job.roughStatus==="invoice"?false:job.readyToInvoice),
                             ...(v==="invoice"&&!job.readyToInvoice?{readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{}),
@@ -4912,7 +5157,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
           )}
 
 
-
           {tab==="Finish"&&(
 
             <div>
@@ -4957,7 +5201,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                           const v=e.target.value;
                           const def=getStatusDef(FINISH_STATUSES,v);
                           u({finishStatus:v, finishOnHold:v==="waiting", finishScheduled:v==="scheduled",
-                            finishStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete")?job.finishStartConfirmed:false,
+                            finishStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting"||v==="invoice")?job.finishStartConfirmed:false,
                             finishStatusDate:def.hasDate?job.finishStatusDate:"",
                             readyToInvoice:v==="invoice"?true:(job.finishStatus==="invoice"?false:job.readyToInvoice),
                             ...(v==="invoice"&&!job.readyToInvoice?{readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{}),
@@ -5038,7 +5282,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
           )}
 
 
-
           {tab==="Home Runs"&&(
 
             <HomeRunsTab homeRuns={job.homeRuns} panelCounts={job.panelCounts} jobId={job.id} jobName={job.name}
@@ -5047,13 +5290,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
           )}
 
 
-
           {tab==="Panelized Lighting"&&(
 
             <div>
 
               {/* Lighting Control System Selector */}
-
 
 
               <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
@@ -5181,7 +5422,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
           )}
 
 
-
           {tab==="Tape Light"&&(
 
             <div>
@@ -5191,11 +5431,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
               </Section>
 
 
-
             </div>
 
           )}
-
 
 
           {tab==="Change Orders"&&(
@@ -5207,7 +5445,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                   orders={job.changeOrders}
                   onChange={(updatedCOs, newRT) => {
                     if(newRT) {
-                      u({changeOrders:updatedCOs, returnTrips:[newRT, ...(job.returnTrips||[])]});
+                      u({changeOrders:updatedCOs, returnTrips:[...(job.returnTrips||[]), newRT]});
                     } else {
                       u({changeOrders:updatedCOs});
                     }
@@ -5225,13 +5463,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
           )}
 
 
-
           {tab==="Return Trips"&&(
 
             <div>
 
               <Section label="Return Trips" color={C.purple} defaultOpen={true}>
-                <ReturnTrips trips={job.returnTrips} onChange={v=>u({returnTrips:v})} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData}/>
+                <ReturnTrips trips={job.returnTrips} onChange={v=>u({returnTrips:v})} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData} jobId={job.id}/>
               </Section>
 
             </div>
@@ -5239,13 +5476,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
           )}
 
 
-
           {tab==="Plans & Links"&&(
 
             <PlansTab job={job} onUpdate={u}/>
 
           )}
-
 
 
           {tab==="QC"&&(
@@ -5315,11 +5550,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
           )}
 
 
-
           {tab==="Job Info"&&(
 
             <div>
-
 
 
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
@@ -5445,7 +5678,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                 </div>
 
 
-
               </div>
 
             </div>
@@ -5457,7 +5689,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
       </div>
 
 
-
       {emailData&&(
 
         <EmailModal subject={emailData.subject} body={emailData.body} onClose={()=>setEmailData(null)}/>
@@ -5465,17 +5696,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
       )}
 
 
-
     </div>
 
   );
 
 }
-
-
-
-
-
 
 
 // ── Q&A Punch List ────────────────────────────────────────────
@@ -5521,7 +5746,6 @@ function QAInlineEdit({value, done, label, onSave}) {
   );
 
 }
-
 
 
 function QAList({questions: _questions, onChange, color}) {
@@ -5657,7 +5881,6 @@ function QAList({questions: _questions, onChange, color}) {
 }
 
 
-
 function QASection({questions: _questions, onChange, color}) {
 
   // guard: normalize questions to always be object with array values
@@ -5695,13 +5918,9 @@ function QASection({questions: _questions, onChange, color}) {
 }
 
 
-
-
-
 // ── Punch Assignment & Sign-off ───────────────────────────────
 
 const CREW = ["Koy","Vasa","Colby","Josh","Brady","Justin"];
-
 
 
 function PunchAssignTab({phase, assignData, onChange, color}) {
@@ -5713,7 +5932,6 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
   const signoffs    = data.signoffs    || [];
 
 
-
   const updA = (id, p) => onChange({...data, assignments: assignments.map(a=>a.id===id?{...a,...p}:a)});
 
   const delA = (id)    => onChange({...data, assignments: assignments.filter(a=>a.id!==id)});
@@ -5721,13 +5939,11 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
   const addA = ()      => onChange({...data, assignments: [...assignments, {id:uid(), person:"", task:"", floor:"", room:"", done:false}]});
 
 
-
   const updS = (id, p) => onChange({...data, signoffs: signoffs.map(s=>s.id===id?{...s,...p}:s)});
 
   const delS = (id)    => onChange({...data, signoffs: signoffs.filter(s=>s.id!==id)});
 
   const addS = ()      => onChange({...data, signoffs: [...signoffs, {id:uid(), person:"", task:"", completedDate:"", initials:""}]});
-
 
 
   return (
@@ -5819,7 +6035,6 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
       <Btn onClick={addA} variant="add" style={{width:"100%",borderStyle:"dashed",marginBottom:24}}>+ Add Assignment</Btn>
 
 
-
       {/* Sign-offs */}
 
       <SectionHead label="Sign Off — Work Completed By" color={color}/>
@@ -5893,9 +6108,6 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
 }
 
 
-
-
-
 function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
 
   const [punchTab, setPunchTab] = useState("Items");
@@ -5951,7 +6163,6 @@ function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
   );
 
 }
-
 
 
 // ── Temp Ped Card ─────────────────────────────────────────────
@@ -6162,31 +6373,30 @@ const STAGE_SECTIONS = [
     test: j => { const rs=effRS(j); return !j.tempPed && !j.quickJob && (j.prepStage||"")==="Job Prep Complete" && (!rs||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"); } },
 
   { key:"roughHold",    label:"Rough — On Hold",           color:"#ca8a04",
-    test: j => effRS(j) === "waiting" },
+    test: j => !j.tempPed && !j.quickJob && effRS(j) === "waiting" },
 
   { key:"rough",        label:"Rough In Progress",         color:"#2563eb",
-    test: j => effRS(j) === "inprogress" },
+    test: j => !j.tempPed && !j.quickJob && effRS(j) === "inprogress" },
 
   { key:"roughInvoice", label:"Rough — Ready to Invoice",  color:"#ea580c",
-    test: j => effRS(j) === "invoice" },
+    test: j => !j.tempPed && !j.quickJob && effRS(j) === "invoice" },
 
   { key:"between",      label:"In Between",                color:"#e8a020",
-    test: j => { const rs=effRS(j); const fs=effFS(j); return rs==="complete"&&(!fs||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"); } },
+    test: j => { if(j.tempPed||j.quickJob) return false; const rs=effRS(j); const fs=effFS(j); return rs==="complete"&&(!fs||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"); } },
 
   { key:"finishHold",   label:"Finish — On Hold",          color:"#ca8a04",
-    test: j => effFS(j) === "waiting" },
+    test: j => !j.tempPed && !j.quickJob && effFS(j) === "waiting" },
 
   { key:"finish",       label:"Finish In Progress",        color:"#0ea5e9",
-    test: j => effFS(j) === "inprogress" },
+    test: j => !j.tempPed && !j.quickJob && effFS(j) === "inprogress" },
 
   { key:"finishInvoice",label:"Finish — Ready to Invoice", color:"#ea580c",
-    test: j => effFS(j) === "invoice" },
+    test: j => !j.tempPed && !j.quickJob && effFS(j) === "invoice" },
 
   { key:"complete",     label:"Completed",                 color:"#22c55e",
-    test: j => effFS(j) === "complete" },
+    test: j => !j.tempPed && !j.quickJob && effFS(j) === "complete" },
 
 ];
-
 
 
 function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc, startCollapsed=true }) {
@@ -6195,7 +6405,6 @@ function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, o
   const [collapsed, setCollapsed] = useState(initCollapsed);
 
   const toggle = key => setCollapsed(c=>({...c,[key]:!c[key]}));
-
 
 
   return (
@@ -6284,11 +6493,9 @@ function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, o
 }
 
 
-
 // ── Main Dashboard ────────────────────────────────────────────
 
-const ALL_STAGES = ROUGH_STAGES;
-
+// ALL_STAGES removed — use ROUGH_STAGES directly
 
 
 // ── QC Walks ──────────────────────────────────────────────────
@@ -6296,7 +6503,6 @@ const ALL_STAGES = ROUGH_STAGES;
 // Detect mobile device
 
 const isMobile = () => /iphone|ipad|ipod|android/i.test(navigator.userAgent);
-
 
 
 // Open Google Chat — copies message to clipboard and opens Google Chat
@@ -6322,7 +6528,6 @@ const openEmail = (to, subject, body) => {
   }
 
 };
-
 
 
 // Deep merge two job objects — arrays are merged by id, scalars prefer local
@@ -6398,7 +6603,6 @@ function deepMergeJob(remote, local) {
   return merged;
 
 }
-
 
 
 // ── Upcoming Jobs ─────────────────────────────────────────────
@@ -6729,7 +6933,7 @@ function computeTasks(jobs) {
     if(rs==="complete" && (!fs||fs===""||fs==="waiting_date"||fs==="ready")) {
       const betweenDate = job.roughStatusDate||job.roughProjectedStart||"";
       if(betweenDate) {
-        const d = (str=>{ const m=str.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m) return new Date(+m[1],+m[2]-1,+m[3]); const m2=str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if(m2) return new Date(+m2[2],+m2[1]-1,+(m2[3].length===2?"20"+m2[3]:m2[3])); return null; })(betweenDate);
+        const d = parseAnyDate(betweenDate);
         if(d) {
           const daysBetween = Math.floor((Date.now()-d.getTime())/(1000*60*60*24));
           if(daysBetween>=60) tasks.push({
@@ -6747,7 +6951,7 @@ function computeTasks(jobs) {
     if(job.readyToInvoice && !job.invoiceDismissed) {
       const invDate = job.readyToInvoiceDate||"";
       if(invDate) {
-        const d = (str=>{ const m=str.match(/^(\d{4})-(\d{2})-(\d{2})$/); if(m) return new Date(+m[1],+m[2]-1,+m[3]); const m2=str.match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})$/); if(m2) return new Date(+m2[2],+m2[1]-1,+(m2[3].length===2?"20"+m2[3]:m2[3])); return null; })(invDate);
+        const d = parseAnyDate(invDate);
         if(d) {
           const daysStale = Math.floor((Date.now()-d.getTime())/(1000*60*60*24));
           if(daysStale>=5) tasks.push({
@@ -7632,7 +7836,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
 
 function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
   const [foremanTab, setForemanTab] = useState("All");
-  const [viewMode,   setViewMode]   = useState("calendar"); // kanban | list | calendar
+  const [viewMode,   setViewMode]   = useState("calendar"); // kanban | week | attention | calendar
   const [calMonth,   setCalMonth]   = useState(() => { const d=new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
   const [calDayDetail, setCalDayDetail] = useState(null); // date string YYYY-MM-DD for expanded day
 
@@ -7999,7 +8203,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
           <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:"var(--text)",lineHeight:1}}>SCHEDULING FORECAST</div>
           <div style={{fontSize:11,color:"var(--dim)"}}>{allEvents.length} item{allEvents.length!==1?"s":""}</div>
           <div style={{marginLeft:"auto",display:"flex",gap:4}}>
-            {[{k:"kanban",l:"Kanban"},{k:"list",l:"List"},{k:"calendar",l:"📅 Calendar"}].map(({k,l})=>(
+            {[{k:"kanban",l:"Kanban"},{k:"week",l:"📋 Week"},{k:"attention",l:"⚠️ Attention"},{k:"calendar",l:"📅 Calendar"}].map(({k,l})=>(
               <button key={k} onClick={()=>setViewMode(k)}
                 style={{padding:"6px 14px",borderRadius:8,fontSize:11,fontWeight:viewMode===k?700:500,
                   cursor:"pointer",fontFamily:"inherit",border:`1px solid ${viewMode===k?C.accent:C.border}`,
@@ -8063,18 +8267,234 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
         </div>
       )}
 
-      {/* ── LIST ── */}
-      {viewMode==="list"&&(()=>{
-        const sorted=[...allEvents].sort((a,b)=>{
-          if(!a.startDate&&!b.startDate) return 0;
-          if(!a.startDate) return 1; if(!b.startDate) return -1;
-          const da=parseAnyDate(a.startDate), db=parseAnyDate(b.startDate);
-          return (da||0)-(db||0);
-        });
+      {/* ── WEEK AT A GLANCE ── */}
+      {viewMode==="week"&&(()=>{
+        // Build 7 days starting from this week's Sunday
+        const weekDays=[];
+        for(let i=0;i<7;i++){
+          const d=new Date(thisWeekStart);
+          d.setDate(thisWeekStart.getDate()+i);
+          weekDays.push(d);
+        }
+        const dayNames=["Sunday","Monday","Tuesday","Wednesday","Thursday","Friday","Saturday"];
+        const shortDay=["SUN","MON","TUE","WED","THU","FRI","SAT"];
+
         return (
-          <div style={{padding:"20px 26px",maxWidth:900}}>
-            {sorted.length===0&&<div style={{textAlign:"center",padding:"60px 0",color:"var(--muted)",fontSize:13}}>Nothing to schedule.</div>}
-            {sorted.map(ev=><EventCard key={ev.id} ev={ev}/>)}
+          <div style={{padding:"20px 26px"}}>
+            {/* Week header */}
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:18}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)"}}>
+                WEEK OF {thisWeekStart.toLocaleDateString("en-US",{month:"long",day:"numeric"}).toUpperCase()}
+              </div>
+              <div style={{fontSize:11,color:"var(--dim)"}}>{allEvents.length} total items</div>
+            </div>
+
+            {/* Day rows */}
+            <div style={{display:"flex",flexDirection:"column",gap:6}}>
+              {weekDays.map((dayDate,idx)=>{
+                const dateStr=fmtYMD(dayDate);
+                const dayEvs=allEvents.filter(ev=>eventCoversDate(ev,dateStr));
+                const isToday2=dateStr===todayStr;
+                const isPast=dayDate<today&&!isToday2;
+                const isWeekend2=idx===0||idx===6;
+
+                // Group by type for summary chips
+                const typeCounts={};
+                dayEvs.forEach(ev=>{
+                  const t=ev.type==="quick"?"Quick":ev.type==="rough"?"Rough":ev.type==="finish"?"Finish":
+                    ev.type==="rt"?"RT":ev.type==="co"?"CO":ev.type==="qc"?"QC":ev.type==="invoice"?"Invoice":ev.type;
+                  typeCounts[t]=(typeCounts[t]||0)+1;
+                });
+
+                const overdueEvs=dayEvs.filter(ev=>isOverdue(ev.startDate,ev.status));
+
+                return (
+                  <div key={dateStr} style={{
+                    background:isToday2?"var(--card)":isPast?"var(--surface)":"var(--card)",
+                    borderRadius:12,padding:"14px 16px",
+                    border:`1px solid ${isToday2?C.accent+"55":C.border}`,
+                    opacity:isPast&&dayEvs.length===0?0.4:isPast?0.7:1,
+                    borderLeft:isToday2?`3px solid ${C.accent}`:`3px solid transparent`}}>
+
+                    {/* Day header */}
+                    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:dayEvs.length>0?10:0}}>
+                      <div style={{display:"flex",alignItems:"baseline",gap:6,minWidth:140}}>
+                        <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.06em",
+                          color:isToday2?C.accent:isWeekend2?"var(--muted)":"var(--text)"}}>{shortDay[idx]}</span>
+                        <span style={{fontSize:12,fontWeight:600,
+                          color:isToday2?C.accent:"var(--dim)"}}>
+                          {dayDate.toLocaleDateString("en-US",{month:"short",day:"numeric"})}
+                        </span>
+                        {isToday2&&<span style={{fontSize:9,fontWeight:800,color:C.accent,
+                          background:C.accent+"18",borderRadius:99,padding:"1px 8px",letterSpacing:"0.08em"}}>TODAY</span>}
+                      </div>
+
+                      {/* Type summary chips */}
+                      <div style={{display:"flex",gap:4,flex:1,flexWrap:"wrap"}}>
+                        {Object.entries(typeCounts).map(([type,count])=>{
+                          const chipColor=type==="Rough"?C.rough||"#2563eb":type==="Finish"?C.finish||"#16a34a":
+                            type==="Quick"?"#f59e0b":type==="RT"?"#8b5cf6":type==="CO"?C.accent:
+                            type==="QC"?C.teal:type==="Invoice"?"#ea580c":"var(--dim)";
+                          return (
+                            <span key={type} style={{fontSize:10,fontWeight:700,color:chipColor,
+                              background:chipColor+"15",border:`1px solid ${chipColor}28`,
+                              borderRadius:99,padding:"2px 8px"}}>
+                              {count} {type}
+                            </span>
+                          );
+                        })}
+                      </div>
+
+                      {/* Overdue warning */}
+                      {overdueEvs.length>0&&(
+                        <span style={{fontSize:10,fontWeight:800,color:C.red,
+                          background:C.red+"15",borderRadius:99,padding:"2px 10px",
+                          border:`1px solid ${C.red}28`,flexShrink:0}}>
+                          {overdueEvs.length} OVERDUE
+                        </span>
+                      )}
+
+                      {dayEvs.length===0&&(
+                        <span style={{fontSize:11,color:"var(--muted)",fontStyle:"italic"}}>
+                          {isWeekend2?"Weekend — nothing scheduled":"Nothing scheduled"}
+                        </span>
+                      )}
+                    </div>
+
+                    {/* Event pills for the day */}
+                    {dayEvs.length>0&&(
+                      <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                        {dayEvs.map(ev=>(
+                          <div key={ev.id} onClick={()=>onSelectJob(ev.job)}
+                            style={{display:"flex",alignItems:"center",gap:8,padding:"5px 10px",
+                              borderRadius:8,cursor:"pointer",background:"var(--surface)",
+                              border:`1px solid ${C.border}`,transition:"background 0.1s"}}
+                            onMouseEnter={e=>e.currentTarget.style.background=ev.color+"12"}
+                            onMouseLeave={e=>e.currentTarget.style.background="var(--surface)"}>
+                            <span style={{width:7,height:7,borderRadius:"50%",
+                              background:isOverdue(ev.startDate,ev.status)?C.red:ev.color,flexShrink:0}}/>
+                            <span style={{fontSize:10,fontWeight:800,
+                              color:isOverdue(ev.startDate,ev.status)?C.red:ev.color,
+                              letterSpacing:"0.05em",minWidth:48}}>{ev.label}</span>
+                            <span style={{fontSize:11,fontWeight:600,color:"var(--text)",
+                              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1}}>
+                              {ev.job.name||"Untitled"}
+                            </span>
+                            <span style={{fontSize:10,fontWeight:600,
+                              color:isOverdue(ev.startDate,ev.status)?C.red:ev.color,flexShrink:0}}>
+                              {ev.statusLabel}
+                            </span>
+                            <span style={{fontSize:9,fontWeight:700,color:ev.fc,
+                              background:ev.fc+"15",borderRadius:99,padding:"1px 6px",
+                              border:`1px solid ${ev.fc}20`,flexShrink:0}}>{ev.job.foreman||"Koy"}</span>
+                          </div>
+                        ))}
+                      </div>
+                    )}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })()}
+
+      {/* ── NEEDS ATTENTION ── */}
+      {viewMode==="attention"&&(()=>{
+        // Categorize events that need attention
+        const overdueItems=allEvents.filter(ev=>isOverdue(ev.startDate,ev.status));
+        const needsDateItems=allEvents.filter(ev=>!ev.startDate||ev.status==="waiting_date");
+        const needsScheduling=allEvents.filter(ev=>
+          (ev.status==="date_confirmed")||(ev.type==="rt"&&ev.status==="needs"));
+        const invoiceItems=allEvents.filter(ev=>ev.type==="invoice"||ev.status==="invoice");
+        const pendingCOs=allEvents.filter(ev=>ev.type==="co"&&(ev.status==="pending"||ev.status==="sent"));
+        const thisWeekItems=allEvents.filter(ev=>{
+          if(!ev.startDate) return false;
+          const bucket=getBucket(ev.startDate,ev.status);
+          return bucket==="thisWeek"&&ev.status!=="inprogress";
+        });
+
+        const sections=[
+          {key:"overdue",label:"OVERDUE",icon:"🔴",color:C.red,
+            desc:"Past the start date with no completion",items:overdueItems},
+          {key:"needsDate",label:"NEEDS DATE",icon:"📅",color:"#ca8a04",
+            desc:"Waiting for a start date or date confirmation",items:needsDateItems},
+          {key:"needsSched",label:"READY TO SCHEDULE",icon:"📋",color:"#f97316",
+            desc:"Date confirmed — needs to be put on the schedule",items:needsScheduling},
+          {key:"invoices",label:"READY TO INVOICE",icon:"💰",color:"#ea580c",
+            desc:"Work complete — invoice hasn't been sent",items:invoiceItems},
+          {key:"cos",label:"PENDING CHANGE ORDERS",icon:"📝",color:C.accent,
+            desc:"Change orders waiting to be sent or approved",items:pendingCOs},
+          {key:"upcoming",label:"COMING UP THIS WEEK",icon:"⏰",color:C.green,
+            desc:"Scheduled this week but not yet started",items:thisWeekItems},
+        ].filter(s=>s.items.length>0);
+
+        const totalAttention=overdueItems.length+needsDateItems.length+needsScheduling.length
+          +invoiceItems.length+pendingCOs.length;
+
+        return (
+          <div style={{padding:"20px 26px"}}>
+            {/* Summary bar */}
+            <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:20,flexWrap:"wrap"}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)"}}>
+                NEEDS ATTENTION
+              </div>
+              {totalAttention>0?(
+                <span style={{fontSize:12,fontWeight:800,color:C.red,
+                  background:C.red+"15",borderRadius:99,padding:"3px 12px",
+                  border:`1px solid ${C.red}28`}}>
+                  {totalAttention} item{totalAttention!==1?"s":""} need action
+                </span>
+              ):(
+                <span style={{fontSize:12,fontWeight:600,color:C.green,
+                  background:C.green+"15",borderRadius:99,padding:"3px 12px",
+                  border:`1px solid ${C.green}28`}}>
+                  All clear — nothing needs immediate attention
+                </span>
+              )}
+            </div>
+
+            {/* Quick stat boxes */}
+            <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:20}}>
+              {[
+                {label:"Overdue",count:overdueItems.length,color:C.red},
+                {label:"Needs Date",count:needsDateItems.length,color:"#ca8a04"},
+                {label:"Ready to Schedule",count:needsScheduling.length,color:"#f97316"},
+                {label:"Ready to Invoice",count:invoiceItems.length,color:"#ea580c"},
+                {label:"Pending COs",count:pendingCOs.length,color:C.accent},
+              ].map(stat=>(
+                <div key={stat.label} style={{background:"var(--card)",borderRadius:10,padding:"12px 14px",
+                  border:`1px solid ${stat.count>0?stat.color+"33":C.border}`,textAlign:"center"}}>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,
+                    color:stat.count>0?stat.color:"var(--muted)",lineHeight:1}}>{stat.count}</div>
+                  <div style={{fontSize:10,fontWeight:700,color:stat.count>0?stat.color:"var(--muted)",
+                    letterSpacing:"0.06em",marginTop:4}}>{stat.label.toUpperCase()}</div>
+                </div>
+              ))}
+            </div>
+
+            {/* Sections */}
+            {sections.length===0&&(
+              <div style={{textAlign:"center",padding:"60px 0",color:"var(--muted)",fontSize:13}}>
+                Nothing needs attention right now. You're all caught up!
+              </div>
+            )}
+
+            {sections.map(section=>(
+              <div key={section.key} style={{marginBottom:20}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,
+                  paddingBottom:8,borderBottom:`2px solid ${section.color}44`}}>
+                  <span style={{fontSize:14}}>{section.icon}</span>
+                  <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,
+                    letterSpacing:"0.06em",color:section.color}}>{section.label}</span>
+                  <span style={{fontSize:11,fontWeight:700,color:section.color,
+                    background:section.color+"15",borderRadius:99,padding:"1px 8px",
+                    border:`1px solid ${section.color}28`}}>{section.items.length}</span>
+                  <span style={{fontSize:11,color:"var(--dim)",marginLeft:4}}>{section.desc}</span>
+                </div>
+                {section.items.map(ev=><EventCard key={ev.id} ev={ev}/>)}
+              </div>
+            ))}
           </div>
         );
       })()}
@@ -8508,8 +8928,7 @@ function App() {
 
   // ── Identity ──────────────────────────────────────────────────
   const [identity, setIdentity] = useState(()=>getIdentity());
-  const authMode = identity ? "office" : "locked"; // compat for remaining authMode refs
-  const setAuthMode = () => {}; // no-op legacy compat
+  // Legacy auth stubs removed — identity system handles this now
 
   // ── Users (team members) — loaded from Firestore ─────────────
   const [users, setUsers] = useState(DEFAULT_USERS);
@@ -8639,10 +9058,13 @@ function App() {
   _leads.forEach(n=>  { _leadColors[n]   =getPersonColor(n); });
 
   // Keep module-level vars in sync so legacy getForemenList()/LEADS refs still work
-  FOREMEN        = _foremen.length ? _foremen : DEFAULT_FOREMEN;
-  FOREMEN_COLORS = _foremanColors;
-  LEADS          = _leads.length   ? _leads   : DEFAULT_LEADS;
-  LEAD_COLORS    = _leadColors;
+  // Wrapped in useEffect to avoid mutations during render
+  useEffect(()=>{
+    FOREMEN        = _foremen.length ? _foremen : DEFAULT_FOREMEN;
+    FOREMEN_COLORS = _foremanColors;
+    LEADS          = _leads.length   ? _leads   : DEFAULT_LEADS;
+    LEAD_COLORS    = _leadColors;
+  });
 
   // Job foreman matching: support both full name and first-name-only (legacy jobs)
   const matchesForeman = (job, name) => {
@@ -8680,6 +9102,8 @@ function App() {
 
   const [flagOnly, setFlagOnly] = useState(false);
 
+  const [foremanViewTab, setForemanViewTab] = useState("jobs");
+
   const [stageModal, setStageModal] = useState(null);
 
   const [syncStatus, setSyncStatus] = useState("idle");
@@ -8689,7 +9113,6 @@ function App() {
   const initialLoad  = useRef(true);
 
 
-
   const jobsRef   = useRef(jobs);
 
   const isDirty   = useRef(false);
@@ -8697,7 +9120,6 @@ function App() {
   const saveTimers = useRef({});
 
   useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
-
 
 
   const migrate = (loaded) => {
@@ -8717,7 +9139,6 @@ function App() {
   };
 
 
-
   // Real-time listener — all devices stay in sync automatically
 
   useEffect(()=>{
@@ -8733,14 +9154,13 @@ function App() {
     } catch(e){}
 
 
-
     const unsub = onSnapshot(collection(db,"jobs"),
 
       (snap) => {
 
         if(!snap.empty) {
 
-          const loaded = migrate(snap.docs.map(d=>d.data().data).filter(Boolean));
+          const loaded = migrate(snap.docs.map(d=>{const raw=d.data(); return raw?.data ? {...raw.data, updated_at:raw.updated_at||""} : null;}).filter(Boolean));
 
           // One-time fix v2: clear tempPed:true from any job that has a foreman assigned
           // Real temp peds never have a foreman — they're standalone cards
@@ -8826,7 +9246,7 @@ function App() {
 
                 setJobs(p);
 
-                p.forEach(job => setDoc(doc(db,"jobs",job.id),{data:job,updated_at:new Date().toISOString()}).catch(()=>{}));
+                p.forEach(job => setDoc(doc(db,"jobs",job.id),{data:sanitize(job),updated_at:new Date().toISOString()}).catch(()=>{}));
 
               }
 
@@ -8880,12 +9300,11 @@ function App() {
   },[]);
 
 
-
   // Save a single job as its own Firestore document
 
   const saveJob = (job) => {
 
-if(initialLoad.current) return;
+    if(initialLoad.current) return;
 
     isDirty.current = true;
 
@@ -8951,13 +9370,17 @@ if(initialLoad.current) return;
   };
 
 
-
   // Delete job document
 
   const flushJob = async (job) => {
     if(!job) return;
-    clearTimeout(saveTimers.current[job.id]);
-    try { await setDoc(doc(db,"jobs",job.id),{data:sanitize(job),updated_at:new Date().toISOString()}); } catch(e){}
+    // If there's a pending save timer, use the latest state from jobsRef
+    if(saveTimers.current[job.id]) {
+      clearTimeout(saveTimers.current[job.id]);
+      saveTimers.current[job.id] = null;
+      const latest = jobsRef.current.find(j=>j.id===job.id) || job;
+      try { await setDoc(doc(db,"jobs",latest.id),{data:sanitize(latest),updated_at:new Date().toISOString()}); } catch(e){}
+    }
   };
 
   const deleteJobRemote = async (jobId) => {
@@ -8973,7 +9396,6 @@ if(initialLoad.current) return;
     try { await deleteDoc(doc(db,"jobs",jobId)); } catch(e){}
 
   };
-
 
 
   const saveManualTask = async (task) => {
@@ -9021,12 +9443,16 @@ if(initialLoad.current) return;
   };
 
 
-
   const flushSaves = () => {
 
-    jobsRef.current.forEach(job=>{
+    // Only flush jobs that have pending save timers — avoids overwriting other users' changes
+    const pendingIds = new Set(Object.keys(saveTimers.current).filter(k => saveTimers.current[k]));
+    if(pendingIds.size === 0) return;
+
+    jobsRef.current.filter(job => pendingIds.has(job.id)).forEach(job=>{
 
       clearTimeout(saveTimers.current[job.id]);
+      saveTimers.current[job.id] = null;
 
       setDoc(doc(db,"jobs",job.id),{data:sanitize(job),updated_at:new Date().toISOString()}).catch(e=>console.error(e));
 
@@ -9047,12 +9473,11 @@ if(initialLoad.current) return;
   };
 
 
-
   // Save on background/close
 
   useEffect(()=>{
 
-    const handleVisibility = ()=>{ if(document.visibilityState==='hidden' && isDirty.current) flushSaves(); };
+    const handleVisibility = ()=>{ if(document.visibilityState==='hidden') flushSaves(); };
 
     document.addEventListener('visibilitychange', handleVisibility);
 
@@ -9069,16 +9494,13 @@ if(initialLoad.current) return;
   },[]);
 
 
-
-
-
   const updateJob = updated => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); saveJob(updated); };
 
-  const addJob    = () => { const j=blankJob(); setJobs(js=>[j,...js]); setSelected(j); saveJob(j); };
+  // addJob removed — inline in each button instead
 
   const deleteJob = id => {
 
-    if(!confirm("Delete this job site?")) return;
+    if(!window.confirm("Delete this job site?")) return;
 
     setJobs(js=>js.filter(j=>j.id!==id));
 
@@ -9087,7 +9509,6 @@ if(initialLoad.current) return;
     deleteJobRemote(id);
 
   };
-
 
 
   const openCount = j => {
@@ -9115,7 +9536,6 @@ if(initialLoad.current) return;
   };
 
 
-
   const totalOpen  = jobs.reduce((a,j)=>a+openCount(j),0);
 
   const flagged    = jobs.filter(j=>j.flagged).length;
@@ -9127,7 +9547,6 @@ if(initialLoad.current) return;
   const syncColor  = {idle:C.muted,saving:C.accent,saved:C.green,error:C.red}[syncStatus];
 
   const syncLabel  = {idle:"All changes saved",saving:"Saving…",saved:"✓ Saved",error:"Save failed"}[syncStatus];
-
 
 
   // view: "home" = main page, "foreman" = foreman-specific page
@@ -9144,11 +9563,7 @@ if(initialLoad.current) return;
   const openSettings = () =>  { setView("settings"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
 
 
-
-
-
   const viewJobs = view==="foreman" ? jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):matchesForeman(j,activeForeman)) : jobs;
-
 
 
   const filtered = viewJobs.filter(j=>{
@@ -9176,7 +9591,6 @@ if(initialLoad.current) return;
     return ms&&mf&&mt;
 
   });
-
 
 
   const JobRow = ({job, fc, showForeman=false}) => {
@@ -9236,7 +9650,7 @@ if(initialLoad.current) return;
 
               {job.gc||"No GC set"}
 
-
+              {job.updated_at&&<span style={{color:C.dim,marginLeft:6,fontSize:11,fontWeight:500}}>· {timeAgo(job.updated_at)}</span>}
 
             </div>
 
@@ -9338,7 +9752,6 @@ if(initialLoad.current) return;
   };
 
 
-
   // ── Identity gate — show UserPicker if no identity saved ────
   if(!identity) {
     return <UserPicker users={users}
@@ -9352,7 +9765,6 @@ if(initialLoad.current) return;
   }
 
 
-
   return (
 
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
@@ -9362,7 +9774,6 @@ if(initialLoad.current) return;
         backgroundRepeat:"no-repeat",backgroundPosition:"center center",
 
         backgroundSize:"320px 320px",opacity:0.15,pointerEvents:"none",zIndex:0}}/>
-
 
 
       {/* ── TOP NAV BAR ── */}
@@ -9427,8 +9838,6 @@ if(initialLoad.current) return;
 
       <style>{`
 
-        @import url('https://fonts.googleapis.com/css2?family=DM+Sans:wght@300;400;500;600&family=Bebas+Neue&display=swap');
-
         @keyframes taskPulse {
           0%,100% { box-shadow: 0 0 12px rgba(220,38,38,0.13), 0 2px 8px rgba(220,38,38,0.08); }
           50%      { box-shadow: 0 0 22px rgba(220,38,38,0.30), 0 2px 14px rgba(220,38,38,0.18); }
@@ -9457,7 +9866,6 @@ if(initialLoad.current) return;
         .foreman-card:hover{transform:translateY(-3px);box-shadow:0 12px 32px rgba(0,0,0,0.4);}
 
       `}</style>
-
 
 
       {/* ── HOME PAGE ── */}
@@ -9503,6 +9911,27 @@ if(initialLoad.current) return;
                     fontFamily:"inherit"}}>
                   ↻
                 </button>
+                {getAccess(identity)==="admin"&&(
+                <button onClick={async()=>{
+                    try {
+                      const btn = document.activeElement; if(btn) btn.disabled = true;
+                      const result = await syncDriveFoldersToJobs(jobs, updateJob);
+                      const msg = `Drive Sync Complete!\n\n` +
+                        `${result.matched.length} new match${result.matched.length===1?"":"es"} linked` +
+                        (result.matched.length > 0 ? ":\n" + result.matched.map(m=>`  ${m.folderName} → ${m.jobName}`).join("\n") : "") +
+                        `\n${result.skipped.length} already linked` +
+                        (result.ambiguous.length > 0 ? `\n${result.ambiguous.length} ambiguous (skipped):\n` + result.ambiguous.map(a=>`  ${a.jobName}: ${a.folders.join(", ")}`).join("\n") : "") +
+                        `\n\n${result.total} Drive folders scanned`;
+                      alert(msg);
+                      if(btn) btn.disabled = false;
+                    } catch(e) { alert("Drive sync failed: " + e.message); }
+                  }}
+                  style={{background:"none",border:`1px solid ${C.blue}44`,borderRadius:8,
+                    color:C.blue,fontSize:11,fontWeight:600,padding:"6px 12px",cursor:"pointer",
+                    fontFamily:"inherit"}}>
+                  Sync Drive
+                </button>
+                )}
                 <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);}}
                   style={{background:C.accent,border:"none",borderRadius:8,color:"#000",
                     fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
@@ -9515,7 +9944,7 @@ if(initialLoad.current) return;
                     fontFamily:"inherit",boxShadow:"0 2px 8px #8b5cf644",letterSpacing:"0.02em"}}>
                   + Temp Ped
                 </button>
-                <button onClick={()=>{const j=blankQuickJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);saveJob(j);}}
+                <button onClick={()=>{const j=blankQuickJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);}}
                   style={{background:"#f97316",border:"none",borderRadius:8,color:"#fff",
                     fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
                     fontFamily:"inherit",boxShadow:"0 2px 8px #f9731644",letterSpacing:"0.02em"}}>
@@ -9527,7 +9956,6 @@ if(initialLoad.current) return;
           </div>
 
 
-
           <div style={{padding:"28px 26px"}}>
 
             <div style={{fontSize:10,color:C.dim,fontWeight:800,letterSpacing:"0.14em",marginBottom:14,textTransform:"uppercase"}}>Pipeline Overview</div>
@@ -9536,7 +9964,7 @@ if(initialLoad.current) return;
 
               const prepJobs = jobs.filter(j=>{const r=parseStage(j.roughStage);return r===0;});
 
-              const nsJobs   = [];
+              const nsJobs   = jobs.filter(j=>{const rs=j.roughStatus||"";return rs!==""&&parseStage(j.roughStage)===0&&!prepJobs.includes(j);});
 
               const roJobs   = jobs.filter(j=>{const r=parseStage(j.roughStage);const f=parseStage(j.finishStage);return r>0&&r<100&&f===0;});
 
@@ -9674,6 +10102,27 @@ if(initialLoad.current) return;
                           </div>
                         ))}
                       </div>
+                      {/* Rough / Finish progress bars */}
+                      <div style={{display:"flex",gap:6,marginTop:8}}>
+                        <div style={{flex:1}}>
+                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                            <span style={{fontSize:9,color:C.dim}}>Rough</span>
+                            <span style={{fontSize:9,color:C.rough,fontWeight:600}}>{rAvg}%</span>
+                          </div>
+                          <div style={{height:4,background:`${C.rough}22`,borderRadius:4,overflow:"hidden"}}>
+                            <div style={{height:"100%",width:`${rAvg}%`,background:C.rough,borderRadius:4,transition:"width 0.3s"}}/>
+                          </div>
+                        </div>
+                        <div style={{flex:1}}>
+                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                            <span style={{fontSize:9,color:C.dim}}>Finish</span>
+                            <span style={{fontSize:9,color:C.finish,fontWeight:600}}>{fnAvg}%</span>
+                          </div>
+                          <div style={{height:4,background:`${C.finish}22`,borderRadius:4,overflow:"hidden"}}>
+                            <div style={{height:"100%",width:`${fnAvg}%`,background:C.finish,borderRadius:4,transition:"width 0.3s"}}/>
+                          </div>
+                        </div>
+                      </div>
 
                       <div style={{marginTop:10,fontSize:10,color:fc,fontWeight:600,textAlign:"right",opacity:0.7}}>View →</div>
                     </div>
@@ -9753,13 +10202,23 @@ if(initialLoad.current) return;
                       display:"flex",alignItems:"center",justifyContent:"center"}}>✕</button>
                 </div>
 
+                {/* Search within crew view */}
+                <div style={{padding:"10px 18px 0"}}>
+                  <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search jobs…"
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,
+                      padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",maxWidth:300}}/>
+                </div>
+
                 {/* Lead-grouped job cards */}
                 {(()=>{
-                  const crewJobs = jobs.filter(j=>matchesForeman(j,crewView));
+                  const s = search.toLowerCase();
+                  const crewJobs = jobs.filter(j=>matchesForeman(j,crewView)).filter(j=>
+                    !s||(j.name||"").toLowerCase().includes(s)||(j.address||"").toLowerCase().includes(s)||(j.gc||"").toLowerCase().includes(s)
+                  );
                   const fc2 = _foremanColors[crewView]||"#6b7280";
                   if(crewJobs.length===0) return (
                     <div style={{textAlign:"center",color:C.dim,padding:"60px 0",fontSize:13}}>
-                      No jobs assigned to {crewView}
+                      {search ? "No matching jobs" : `No jobs assigned to ${crewView}`}
                     </div>
                   );
                   // Group by lead — jobs with no lead go under "Unassigned"
@@ -9821,7 +10280,25 @@ if(initialLoad.current) return;
                 color:C.dim,marginBottom:16,marginTop:32,paddingTop:24,borderTop:`1px solid ${C.border}`}}>
                 ALL JOBS
               </div>
-              <StageSectionList jobs={jobs} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>
+              <div style={{display:"flex",gap:8,marginBottom:16,flexWrap:"wrap",alignItems:"center"}}>
+                <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search jobs, GC, address…"
+                  style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,
+                    padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none",width:220}}/>
+                {search&&<button onClick={()=>setSearch("")}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,
+                    padding:"6px 10px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>Clear</button>}
+              </div>
+              {(()=>{
+                const s = search.toLowerCase();
+                const homeFiltered = s ? jobs.filter(j=>
+                  (j.name||"").toLowerCase().includes(s)||
+                  (j.address||"").toLowerCase().includes(s)||
+                  (j.gc||"").toLowerCase().includes(s)||
+                  (j.foreman||"").toLowerCase().includes(s)||
+                  (j.simproNo||"").toLowerCase().includes(s)
+                ) : jobs;
+                return <StageSectionList jobs={homeFiltered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>;
+              })()}
             </div>
 
           </div>
@@ -9829,7 +10306,6 @@ if(initialLoad.current) return;
         </div>
 
       )}
-
 
 
       {/* ── FOREMAN PAGE ── */}
@@ -9879,7 +10355,6 @@ if(initialLoad.current) return;
             </div>
 
 
-
             <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}>
 
               {(()=>{
@@ -9896,7 +10371,7 @@ if(initialLoad.current) return;
 
                 const fFinish  = fJobs.filter(j=>parseInt(j.finishStage)>0&&parseInt(j.finishStage)<100).length;
 
-                const fNotStarted = 0;
+                const fNotStarted = fJobs.filter(j=>{const rs=j.roughStatus||"";return rs!==""&&parseStage(j.roughStage)===0;}).length - fPrep;
 
                 return [[fJobs.length,"Total Jobs",C.blue],
 
@@ -9928,104 +10403,71 @@ if(initialLoad.current) return;
 
             </div>
 
-
-
-            <div style={{display:"flex",gap:8,paddingBottom:14,flexWrap:"wrap",alignItems:"center"}}>
-
-              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search jobs, GC, address…"
-
-                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,
-
-                  padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none",width:220}}/>
-
-              <select value={stageF} onChange={e=>setStageF(e.target.value)}
-
-                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,
-
-                  padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none"}}>
-
-                <option value="All">All Jobs</option>
-
-                <option value="rough">Rough In Progress</option>
-
-                <option value="between">In Between</option>
-
-                <option value="finish">Finish In Progress</option>
-
-              </select>
-
-              <button onClick={()=>setFlagOnly(f=>!f)}
-
-                style={{background:flagOnly?`${C.accent}22`:C.surface,
-
-                  border:`1px solid ${flagOnly?C.accent:C.border}`,borderRadius:8,
-
-                  color:flagOnly?C.accent:C.dim,padding:"7px 14px",fontSize:12,
-
-                  cursor:"pointer",fontFamily:"inherit"}}>
-
-                ⚑ {flagOnly?"Flagged Only":"All Jobs"}
-
-              </button>
-
-            </div>
+            {/* ── Jobs | Tasks tab bar ── */}
+            {(()=>{
+              const isKoy = activeForeman === "Koy";
+              const fTasks = computeTasks(jobs)
+                .filter(t=>t.foreman===activeForeman && t.category!=="prep")
+                .concat((manualTasks||[]).filter(t=>t.foreman===activeForeman));
+              const prepTasks = computeTasks(jobs).filter(t=>t.foreman==="Koy"&&t.category==="prep");
+              const taskCount = isKoy ? fTasks.length + prepTasks.length : fTasks.length;
+              const fc = _foremanColors[activeForeman]||"#6b7280";
+              return (
+                <div style={{display:"flex",gap:0,borderBottom:`2px solid ${C.border}`,marginTop:8}}>
+                  {[["jobs","Jobs"],["tasks",`Tasks${taskCount>0?` (${taskCount})`:""}`]].map(([key,label])=>(
+                    <button key={key} onClick={()=>setForemanViewTab(key)}
+                      style={{background:"none",border:"none",borderBottom:foremanViewTab===key?`2px solid ${fc}`:"2px solid transparent",
+                        color:foremanViewTab===key?fc:C.dim,fontSize:13,fontWeight:foremanViewTab===key?700:500,
+                        padding:"10px 20px",cursor:"pointer",fontFamily:"inherit",marginBottom:-2,
+                        letterSpacing:"0.02em"}}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
 
           </div>
 
-
-
-          <div style={{padding:"14px 26px"}}>
-
-            {filtered.length===0?(
-
-              <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
-
-                <div style={{fontSize:13,marginBottom:20}}>No jobs yet for {activeForeman}</div>
-
-                <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setJobs(js=>[j,...js]);setSelected(j);}}
-
-                  style={{background:_foremanColors[activeForeman]||"#6b7280",border:"none",borderRadius:9,color:"#000",
-
-                    fontWeight:700,padding:"10px 24px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
-
-                  + Add First Job
-
-                </button>
-
+          {/* ── JOBS TAB ── */}
+          {foremanViewTab==="jobs"&&(
+            <div>
+              <div style={{padding:"14px 26px 0"}}>
+                <div style={{display:"flex",gap:8,paddingBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+                  <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search jobs, GC, address…"
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,
+                      padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none",width:220}}/>
+                  <select value={stageF} onChange={e=>setStageF(e.target.value)}
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,
+                      padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none"}}>
+                    <option value="All">All Jobs</option>
+                    <option value="rough">Rough In Progress</option>
+                    <option value="between">In Between</option>
+                    <option value="finish">Finish In Progress</option>
+                  </select>
+                  <button onClick={()=>setFlagOnly(f=>!f)}
+                    style={{background:flagOnly?`${C.accent}22`:C.surface,
+                      border:`1px solid ${flagOnly?C.accent:C.border}`,borderRadius:8,
+                      color:flagOnly?C.accent:C.dim,padding:"7px 14px",fontSize:12,
+                      cursor:"pointer",fontFamily:"inherit"}}>
+                    ⚑ {flagOnly?"Flagged Only":"All Jobs"}
+                  </button>
+                </div>
               </div>
 
-            ):(
-
-              <>
-              {/* Tasks + Prep mini-card for this foreman, tabbed for Koy */}
-              {(()=>{
-                const isKoy = activeForeman === "Koy";
-                const fTasks = computeTasks(jobs)
-                  .filter(t=>t.foreman===activeForeman && t.category!=="prep")
-                  .concat((manualTasks||[]).filter(t=>t.foreman===activeForeman));
-                const prepTasks = computeTasks(jobs).filter(t=>t.foreman==="Koy"&&t.category==="prep");
-                const totalCount = isKoy ? fTasks.length + prepTasks.length : fTasks.length;
-                if(totalCount===0&&!isKoy) return null;
-                if(totalCount===0&&isKoy&&prepTasks.length===0) return null;
-                // Limited access users don't see the task card
-                if(getAccess(identity)==="limited") return null;
-
-                return (
-                  <ForemanTaskCard
-                    isKoy={isKoy}
-                    fTasks={fTasks}
-                    prepTasks={prepTasks}
-                    jobs={jobs}
-                    manualTasks={manualTasks}
-                    onManualTasksChange={(next)=>{ next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); }); manualTasks.forEach(t=>{ if(!next.find(m=>m.id===t.id)) deleteManualTask(t.id); }); setManualTasks(next); }}
-                    onSelectJob={(job)=>setSelected(job)}
-                    onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch}); }}
-                    activeForeman={activeForeman}
-                    foremenList={_foremen}
-                  />
-                );
-              })()}
-              <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={false}/>
+              <div style={{padding:"0 26px 14px"}}>
+                {filtered.length===0?(
+                  <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
+                    <div style={{fontSize:13,marginBottom:20}}>No jobs yet for {activeForeman}</div>
+                    <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setJobs(js=>[j,...js]);setSelected(j);}}
+                      style={{background:_foremanColors[activeForeman]||"#6b7280",border:"none",borderRadius:9,color:"#000",
+                        fontWeight:700,padding:"10px 24px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+                      + Add First Job
+                    </button>
+                  </div>
+                ):(
+                  <>
+                  <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={false}/>
               {(()=>{
                 const invoiceJobs = filtered.filter(j=>effRS(j)==="invoice"||effFS(j)==="invoice");
                 return invoiceJobs.length>0?(
@@ -10060,18 +10502,46 @@ if(initialLoad.current) return;
             )}
 
           </div>
+          </div>
+          )}
+
+          {/* ── TASKS TAB ── */}
+          {foremanViewTab==="tasks"&&(
+            <div style={{padding:"14px 26px"}}>
+              {(()=>{
+                const isKoy = activeForeman === "Koy";
+                const fTasks = computeTasks(jobs)
+                  .filter(t=>t.foreman===activeForeman && t.category!=="prep")
+                  .concat((manualTasks||[]).filter(t=>t.foreman===activeForeman));
+                const prepTasks = computeTasks(jobs).filter(t=>t.foreman==="Koy"&&t.category==="prep");
+                return (
+                  <ForemanTaskCard
+                    isKoy={isKoy}
+                    fTasks={fTasks}
+                    prepTasks={prepTasks}
+                    jobs={jobs}
+                    manualTasks={manualTasks}
+                    onManualTasksChange={(next)=>{ next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); }); manualTasks.forEach(t=>{ if(!next.find(m=>m.id===t.id)) deleteManualTask(t.id); }); setManualTasks(next); }}
+                    onSelectJob={(job)=>setSelected(job)}
+                    onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch}); }}
+                    activeForeman={activeForeman}
+                    foremenList={_foremen}
+                  />
+                );
+              })()}
+            </div>
+          )}
 
         </div>
 
       )}
 
 
-
       {selected&&(selected.quickJob
-        ? <QuickJobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)} foremenList={_foremen} leadsList={_leads}/>
+        ? <QuickJobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen} leadsList={_leads}/>
         : selected.tempPed
-        ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)} foremenList={_foremen}/>
-        : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>setSelected(null)} foremenList={_foremen} leadsList={_leads}/>)}
+        ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen}/>
+        : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen} leadsList={_leads}/>)}
 
       {view==="schedule"&&can(identity,"schedule.view")&&(
         <SchedulingForecast jobs={jobs} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)} foremenList={_foremen}/>
@@ -10107,7 +10577,7 @@ if(initialLoad.current) return;
           }}
           onPromote={(u)=>{
             const j=blankJob();
-            j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman="";
+            j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman=u.foreman||"Unassigned";
             setJobs(js=>[j,...js]); setSelected(j); setUpcoming(prev=>prev.filter(x=>x.id!==u.id));
             setView("home"); saveJob(j); deleteUpcomingItem(u.id);
           }}
