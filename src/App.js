@@ -8886,6 +8886,8 @@ function App() {
 
   const [flagOnly, setFlagOnly] = useState(false);
 
+  const [foremanViewTab, setForemanViewTab] = useState("jobs");
+
   const [stageModal, setStageModal] = useState(null);
 
   const [syncStatus, setSyncStatus] = useState("idle");
@@ -9693,6 +9695,7 @@ function App() {
                     fontFamily:"inherit"}}>
                   ↻
                 </button>
+                {getAccess(identity)==="admin"&&(
                 <button onClick={async()=>{
                     try {
                       const btn = document.activeElement; if(btn) btn.disabled = true;
@@ -9712,6 +9715,7 @@ function App() {
                     fontFamily:"inherit"}}>
                   Sync Drive
                 </button>
+                )}
                 <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);}}
                   style={{background:C.accent,border:"none",borderRadius:8,color:"#000",
                     fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
@@ -10183,102 +10187,71 @@ function App() {
 
             </div>
 
-
-            <div style={{display:"flex",gap:8,paddingBottom:14,flexWrap:"wrap",alignItems:"center"}}>
-
-              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search jobs, GC, address…"
-
-                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,
-
-                  padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none",width:220}}/>
-
-              <select value={stageF} onChange={e=>setStageF(e.target.value)}
-
-                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,
-
-                  padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none"}}>
-
-                <option value="All">All Jobs</option>
-
-                <option value="rough">Rough In Progress</option>
-
-                <option value="between">In Between</option>
-
-                <option value="finish">Finish In Progress</option>
-
-              </select>
-
-              <button onClick={()=>setFlagOnly(f=>!f)}
-
-                style={{background:flagOnly?`${C.accent}22`:C.surface,
-
-                  border:`1px solid ${flagOnly?C.accent:C.border}`,borderRadius:8,
-
-                  color:flagOnly?C.accent:C.dim,padding:"7px 14px",fontSize:12,
-
-                  cursor:"pointer",fontFamily:"inherit"}}>
-
-                ⚑ {flagOnly?"Flagged Only":"All Jobs"}
-
-              </button>
-
-            </div>
+            {/* ── Jobs | Tasks tab bar ── */}
+            {(()=>{
+              const isKoy = activeForeman === "Koy";
+              const fTasks = computeTasks(jobs)
+                .filter(t=>t.foreman===activeForeman && t.category!=="prep")
+                .concat((manualTasks||[]).filter(t=>t.foreman===activeForeman));
+              const prepTasks = computeTasks(jobs).filter(t=>t.foreman==="Koy"&&t.category==="prep");
+              const taskCount = isKoy ? fTasks.length + prepTasks.length : fTasks.length;
+              const fc = _foremanColors[activeForeman]||"#6b7280";
+              return (
+                <div style={{display:"flex",gap:0,borderBottom:`2px solid ${C.border}`,marginTop:8}}>
+                  {[["jobs","Jobs"],["tasks",`Tasks${taskCount>0?` (${taskCount})`:""}`]].map(([key,label])=>(
+                    <button key={key} onClick={()=>setForemanViewTab(key)}
+                      style={{background:"none",border:"none",borderBottom:foremanViewTab===key?`2px solid ${fc}`:"2px solid transparent",
+                        color:foremanViewTab===key?fc:C.dim,fontSize:13,fontWeight:foremanViewTab===key?700:500,
+                        padding:"10px 20px",cursor:"pointer",fontFamily:"inherit",marginBottom:-2,
+                        letterSpacing:"0.02em"}}>
+                      {label}
+                    </button>
+                  ))}
+                </div>
+              );
+            })()}
 
           </div>
 
-
-          <div style={{padding:"14px 26px"}}>
-
-            {filtered.length===0?(
-
-              <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
-
-                <div style={{fontSize:13,marginBottom:20}}>No jobs yet for {activeForeman}</div>
-
-                <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setJobs(js=>[j,...js]);setSelected(j);}}
-
-                  style={{background:_foremanColors[activeForeman]||"#6b7280",border:"none",borderRadius:9,color:"#000",
-
-                    fontWeight:700,padding:"10px 24px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
-
-                  + Add First Job
-
-                </button>
-
+          {/* ── JOBS TAB ── */}
+          {foremanViewTab==="jobs"&&(
+            <div>
+              <div style={{padding:"14px 26px 0"}}>
+                <div style={{display:"flex",gap:8,paddingBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+                  <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search jobs, GC, address…"
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,
+                      padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none",width:220}}/>
+                  <select value={stageF} onChange={e=>setStageF(e.target.value)}
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,
+                      padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none"}}>
+                    <option value="All">All Jobs</option>
+                    <option value="rough">Rough In Progress</option>
+                    <option value="between">In Between</option>
+                    <option value="finish">Finish In Progress</option>
+                  </select>
+                  <button onClick={()=>setFlagOnly(f=>!f)}
+                    style={{background:flagOnly?`${C.accent}22`:C.surface,
+                      border:`1px solid ${flagOnly?C.accent:C.border}`,borderRadius:8,
+                      color:flagOnly?C.accent:C.dim,padding:"7px 14px",fontSize:12,
+                      cursor:"pointer",fontFamily:"inherit"}}>
+                    ⚑ {flagOnly?"Flagged Only":"All Jobs"}
+                  </button>
+                </div>
               </div>
 
-            ):(
-
-              <>
-              {/* Tasks + Prep mini-card for this foreman, tabbed for Koy */}
-              {(()=>{
-                const isKoy = activeForeman === "Koy";
-                const fTasks = computeTasks(jobs)
-                  .filter(t=>t.foreman===activeForeman && t.category!=="prep")
-                  .concat((manualTasks||[]).filter(t=>t.foreman===activeForeman));
-                const prepTasks = computeTasks(jobs).filter(t=>t.foreman==="Koy"&&t.category==="prep");
-                const totalCount = isKoy ? fTasks.length + prepTasks.length : fTasks.length;
-                if(totalCount===0&&!isKoy) return null;
-                if(totalCount===0&&isKoy&&prepTasks.length===0) return null;
-                // Limited access users don't see the task card
-                if(getAccess(identity)==="limited") return null;
-
-                return (
-                  <ForemanTaskCard
-                    isKoy={isKoy}
-                    fTasks={fTasks}
-                    prepTasks={prepTasks}
-                    jobs={jobs}
-                    manualTasks={manualTasks}
-                    onManualTasksChange={(next)=>{ next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); }); manualTasks.forEach(t=>{ if(!next.find(m=>m.id===t.id)) deleteManualTask(t.id); }); setManualTasks(next); }}
-                    onSelectJob={(job)=>setSelected(job)}
-                    onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch}); }}
-                    activeForeman={activeForeman}
-                    foremenList={_foremen}
-                  />
-                );
-              })()}
-              <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={false}/>
+              <div style={{padding:"0 26px 14px"}}>
+                {filtered.length===0?(
+                  <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
+                    <div style={{fontSize:13,marginBottom:20}}>No jobs yet for {activeForeman}</div>
+                    <button onClick={()=>{const j=blankJob();j.foreman=activeForeman;setJobs(js=>[j,...js]);setSelected(j);}}
+                      style={{background:_foremanColors[activeForeman]||"#6b7280",border:"none",borderRadius:9,color:"#000",
+                        fontWeight:700,padding:"10px 24px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+                      + Add First Job
+                    </button>
+                  </div>
+                ):(
+                  <>
+                  <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={false}/>
               {(()=>{
                 const invoiceJobs = filtered.filter(j=>effRS(j)==="invoice"||effFS(j)==="invoice");
                 return invoiceJobs.length>0?(
@@ -10313,6 +10286,35 @@ function App() {
             )}
 
           </div>
+          </div>
+          )}
+
+          {/* ── TASKS TAB ── */}
+          {foremanViewTab==="tasks"&&(
+            <div style={{padding:"14px 26px"}}>
+              {(()=>{
+                const isKoy = activeForeman === "Koy";
+                const fTasks = computeTasks(jobs)
+                  .filter(t=>t.foreman===activeForeman && t.category!=="prep")
+                  .concat((manualTasks||[]).filter(t=>t.foreman===activeForeman));
+                const prepTasks = computeTasks(jobs).filter(t=>t.foreman==="Koy"&&t.category==="prep");
+                return (
+                  <ForemanTaskCard
+                    isKoy={isKoy}
+                    fTasks={fTasks}
+                    prepTasks={prepTasks}
+                    jobs={jobs}
+                    manualTasks={manualTasks}
+                    onManualTasksChange={(next)=>{ next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); }); manualTasks.forEach(t=>{ if(!next.find(m=>m.id===t.id)) deleteManualTask(t.id); }); setManualTasks(next); }}
+                    onSelectJob={(job)=>setSelected(job)}
+                    onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch}); }}
+                    activeForeman={activeForeman}
+                    foremenList={_foremen}
+                  />
+                );
+              })()}
+            </div>
+          )}
 
         </div>
 
