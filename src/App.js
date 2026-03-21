@@ -628,7 +628,7 @@ const blankJob = () => ({
 
   id:uid(), name:"", address:"", gc:"", phone:"", simproNo:"", foreman:"Koy", lead:"", flagged:false, flagNote:"",
 
-  planLink:"", redlineLink:"", lightingLink:"", panelLink:"", qcLink:"", matterportLink:"",
+  planLink:"", redlineLink:"", lightingLink:"", panelLink:"", qcLink:"", matterportLink:"", driveFolderId:"",
 
   uploadedFiles:[],
 
@@ -3459,6 +3459,261 @@ function TapeLightSection({lights,onChange}) {
 
 // ── Plans & Links with PDF upload ────────────────────────────
 
+// ── Google Drive Files Section ─────────────────────────────────
+const DRIVE_API_KEY = firebaseConfig.apiKey; // reuse Firebase API key (must enable Drive API in Cloud Console)
+
+function extractDriveFolderId(input) {
+  if (!input) return "";
+  // Handle full URLs like https://drive.google.com/drive/folders/FOLDER_ID or just the ID
+  const match = input.match(/folders\/([a-zA-Z0-9_-]+)/);
+  if (match) return match[1];
+  // If it looks like a raw ID (no slashes, reasonable length), use as-is
+  if (/^[a-zA-Z0-9_-]{10,}$/.test(input.trim())) return input.trim();
+  return "";
+}
+
+function DriveFilesSection({ job, onUpdate }) {
+  const [driveFiles, setDriveFiles] = useState([]);
+  const [loading, setLoading] = useState(false);
+  const [error, setError] = useState("");
+  const [viewFile, setViewFile] = useState(null);
+  const [folderInput, setFolderInput] = useState(job.driveFolderId || "");
+  const [editingFolder, setEditingFolder] = useState(!job.driveFolderId);
+
+  const folderId = extractDriveFolderId(job.driveFolderId);
+
+  useEffect(() => {
+    if (!folderId) { setDriveFiles([]); return; }
+    let cancelled = false;
+    setLoading(true);
+    setError("");
+    fetch(`https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&key=${DRIVE_API_KEY}&fields=files(id,name,mimeType,thumbnailLink,size,modifiedTime,webViewLink)&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=name`)
+      .then(r => r.json())
+      .then(data => {
+        if (cancelled) return;
+        if (data.error) {
+          setError(data.error.message || "Could not load Drive files");
+          setDriveFiles([]);
+        } else {
+          setDriveFiles(data.files || []);
+        }
+        setLoading(false);
+      })
+      .catch(e => {
+        if (cancelled) return;
+        setError("Network error loading Drive files");
+        setLoading(false);
+      });
+    return () => { cancelled = true; };
+  }, [folderId]);
+
+  const handleSaveFolder = () => {
+    const id = extractDriveFolderId(folderInput);
+    onUpdate({ driveFolderId: id || folderInput.trim() });
+    setEditingFolder(false);
+  };
+
+  const handleRemoveFolder = () => {
+    if (!window.confirm("Remove Google Drive folder link?")) return;
+    onUpdate({ driveFolderId: "" });
+    setFolderInput("");
+    setEditingFolder(true);
+    setDriveFiles([]);
+  };
+
+  const isImage = (f) => (f.mimeType || "").startsWith("image/");
+  const isPDF = (f) => f.mimeType === "application/pdf" || /\.pdf$/i.test(f.name);
+  const isFolder = (f) => f.mimeType === "application/vnd.google-apps.folder";
+  const fileIcon = (f) => isFolder(f) ? "📁" : isPDF(f) ? "📄" : isImage(f) ? "🖼" : "📎";
+
+  const previewUrl = (f) => `https://drive.google.com/file/d/${f.id}/preview`;
+  const thumbUrl = (f) => f.thumbnailLink ? f.thumbnailLink.replace(/=s\d+/, "=s400") : `https://drive.google.com/thumbnail?id=${f.id}&sz=w400`;
+
+  const viewableFiles = driveFiles.filter(f => !isFolder(f));
+  const folders = driveFiles.filter(f => isFolder(f));
+  const images = viewableFiles.filter(f => isImage(f));
+  const docs = viewableFiles.filter(f => !isImage(f));
+
+  return (
+    <div style={{ marginBottom: 24 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
+        <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: "0.08em" }}>GOOGLE DRIVE PLANS</div>
+        {folderId && !editingFolder && (
+          <div style={{ display: "flex", gap: 6 }}>
+            <button onClick={() => setEditingFolder(true)}
+              style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6,
+                color: C.dim, cursor: "pointer", fontSize: 11, padding: "3px 8px", fontFamily: "inherit" }}>
+              Edit
+            </button>
+            <button onClick={handleRemoveFolder}
+              style={{ background: "none", border: `1px solid ${C.red}44`, borderRadius: 6,
+                color: C.red, cursor: "pointer", fontSize: 11, padding: "3px 8px", fontFamily: "inherit" }}>
+              Remove
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Folder URL input */}
+      {editingFolder && (
+        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
+          <input value={folderInput} onChange={e => setFolderInput(e.target.value)}
+            placeholder="Paste Google Drive folder URL..."
+            style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7,
+              padding: "8px 12px", fontSize: 12, color: C.text, fontFamily: "inherit", outline: "none" }} />
+          <button onClick={handleSaveFolder} disabled={!folderInput.trim()}
+            style={{ background: C.blue, border: "none", borderRadius: 7, color: "#fff",
+              fontSize: 11, fontWeight: 600, padding: "8px 16px", cursor: "pointer",
+              opacity: folderInput.trim() ? 1 : 0.4, fontFamily: "inherit" }}>
+            Link Folder
+          </button>
+        </div>
+      )}
+
+      {/* Connected folder indicator */}
+      {folderId && !editingFolder && (
+        <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "8px 12px",
+          background: `${C.green}10`, border: `1px solid ${C.green}33`, borderRadius: 8 }}>
+          <span style={{ fontSize: 14 }}>📁</span>
+          <span style={{ fontSize: 11, color: C.green, fontWeight: 600, flex: 1 }}>Drive folder linked</span>
+          <a href={`https://drive.google.com/drive/folders/${folderId}`} target="_blank" rel="noreferrer"
+            style={{ fontSize: 11, color: C.blue, fontWeight: 600, textDecoration: "none" }}>
+            Open in Drive ↗
+          </a>
+        </div>
+      )}
+
+      {/* Loading state */}
+      {loading && (
+        <div style={{ fontSize: 11, color: C.accent, fontWeight: 600, padding: "16px",
+          textAlign: "center", border: `1px dashed ${C.border}`, borderRadius: 10 }}>
+          Loading Drive files...
+        </div>
+      )}
+
+      {/* Error state */}
+      {error && (
+        <div style={{ fontSize: 11, color: C.red, padding: "12px",
+          background: `${C.red}10`, border: `1px solid ${C.red}33`, borderRadius: 8, marginBottom: 12 }}>
+          {error}. Make sure the folder is shared as "Anyone with the link can view" and the Drive API is enabled.
+        </div>
+      )}
+
+      {/* Empty state */}
+      {folderId && !loading && !error && viewableFiles.length === 0 && folders.length === 0 && (
+        <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic", padding: "16px",
+          textAlign: "center", border: `1px dashed ${C.border}`, borderRadius: 10 }}>
+          No files found in this Drive folder
+        </div>
+      )}
+
+      {/* Sub-folders */}
+      {folders.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>FOLDERS</div>
+          {folders.map(f => (
+            <a key={f.id} href={f.webViewLink || `https://drive.google.com/drive/folders/${f.id}`}
+              target="_blank" rel="noreferrer"
+              style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+                background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 6,
+                textDecoration: "none", color: C.text }}>
+              <span style={{ fontSize: 18 }}>📁</span>
+              <div style={{ flex: 1, fontSize: 12, fontWeight: 600 }}>{f.name}</div>
+              <span style={{ fontSize: 11, color: C.blue, fontWeight: 600 }}>Open ↗</span>
+            </a>
+          ))}
+        </div>
+      )}
+
+      {/* Images grid */}
+      {images.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>IMAGES</div>
+          <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(100px,1fr))", gap: 8 }}>
+            {images.map(f => (
+              <div key={f.id} style={{ position: "relative", cursor: "pointer" }} onClick={() => setViewFile(f)}>
+                <img src={thumbUrl(f)} alt={f.name}
+                  style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 8,
+                    border: `1px solid ${C.border}`, background: C.surface }} />
+                <div style={{ fontSize: 9, color: C.dim, marginTop: 3, overflow: "hidden",
+                  textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {/* Documents list */}
+      {docs.length > 0 && (
+        <div>
+          <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>DOCUMENTS</div>
+          {docs.map(f => (
+            <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+              background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 6 }}>
+              <span style={{ fontSize: 18, flexShrink: 0 }}>{fileIcon(f)}</span>
+              <div style={{ flex: 1, minWidth: 0 }}>
+                <div style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden",
+                  textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                <div style={{ fontSize: 10, color: C.muted }}>
+                  {f.size ? (Number(f.size) < 1024 * 1024 ? Math.round(Number(f.size) / 1024) + " KB" : (Number(f.size) / (1024 * 1024)).toFixed(1) + " MB") : ""}
+                </div>
+              </div>
+              {(isPDF(f) || isImage(f)) && (
+                <button onClick={() => setViewFile(f)}
+                  style={{ fontSize: 11, fontWeight: 600, color: C.accent, background: `${C.accent}12`,
+                    border: `1px solid ${C.accent}44`, borderRadius: 7, padding: "5px 10px",
+                    cursor: "pointer", flexShrink: 0, fontFamily: "inherit" }}>
+                  View
+                </button>
+              )}
+              <a href={f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`} target="_blank" rel="noreferrer"
+                style={{ fontSize: 11, fontWeight: 600, color: C.blue, textDecoration: "none",
+                  border: `1px solid ${C.blue}44`, borderRadius: 7, padding: "5px 10px",
+                  flexShrink: 0 }}>
+                Open ↗
+              </a>
+            </div>
+          ))}
+        </div>
+      )}
+
+      {/* Inline viewer (lightbox) */}
+      {viewFile && (
+        <div style={{ position: "fixed", inset: 0, background: "rgba(0,0,0,0.95)", zIndex: 1000,
+          display: "flex", flexDirection: "column", padding: 0 }}>
+          {/* Header bar */}
+          <div style={{ display: "flex", alignItems: "center", padding: "12px 16px", gap: 12,
+            background: "rgba(255,255,255,0.08)", flexShrink: 0 }}>
+            <span style={{ fontSize: 14, color: "#fff", fontWeight: 600, flex: 1, overflow: "hidden",
+              textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{viewFile.name}</span>
+            <a href={viewFile.webViewLink || `https://drive.google.com/file/d/${viewFile.id}/view`}
+              target="_blank" rel="noreferrer"
+              style={{ fontSize: 12, color: C.blue, fontWeight: 600, textDecoration: "none",
+                border: `1px solid ${C.blue}66`, borderRadius: 7, padding: "5px 12px", flexShrink: 0 }}>
+              Open in Drive ↗
+            </a>
+            <button onClick={() => setViewFile(null)}
+              style={{ background: "rgba(255,255,255,0.15)", border: "none", borderRadius: "50%",
+                color: "#fff", fontSize: 20, width: 36, height: 36, cursor: "pointer",
+                display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>✕</button>
+          </div>
+          {/* Content */}
+          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden" }}>
+            {isImage(viewFile) ? (
+              <img src={thumbUrl(viewFile).replace(/=s\d+/, "=s1600")} alt={viewFile.name}
+                style={{ maxWidth: "95vw", maxHeight: "calc(100vh - 70px)", objectFit: "contain" }} />
+            ) : (
+              <iframe src={previewUrl(viewFile)} title={viewFile.name}
+                style={{ width: "100%", height: "100%", border: "none" }}
+                allow="autoplay" />
+            )}
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 const LINK_FIELDS = [
 
   ["planLink","Plans"],
@@ -3657,12 +3912,18 @@ function PlansTab({job, onUpdate}) {
 
     <div>
 
-      {/* File Uploads — Firebase Storage */}
-      <FileUploadSection
-        jobId={job.id}
-        files={job.planFiles || []}
-        onChange={v => onUpdate({ planFiles: v })}
-      />
+      {/* Google Drive Plans */}
+      <DriveFilesSection job={job} onUpdate={onUpdate} />
+
+      {/* Divider between Drive and uploads */}
+      <div style={{ borderTop: `1px solid ${C.border}`, marginBottom: 16, paddingTop: 16 }}>
+        {/* File Uploads — Firebase Storage */}
+        <FileUploadSection
+          jobId={job.id}
+          files={job.planFiles || []}
+          onChange={v => onUpdate({ planFiles: v })}
+        />
+      </div>
 
       <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 12,
         paddingTop: 16, borderTop: `1px solid ${C.border}` }}>
