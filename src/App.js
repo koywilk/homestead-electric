@@ -2065,31 +2065,11 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId}) {
 
     for(const file of Array.from(files)) {
       try {
-        // Resize on canvas before uploading — keeps storage lean
-        const dataUrl = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = ev => {
-            const img = new Image();
-            img.onload = () => {
-              const MAX = 800;
-              const scale = Math.min(1, MAX / Math.max(img.width, img.height));
-              const canvas = document.createElement('canvas');
-              canvas.width = Math.round(img.width * scale);
-              canvas.height = Math.round(img.height * scale);
-              canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-              canvas.toBlob(blob => blob ? resolve(blob) : reject("Blob failed"), 'image/jpeg', 0.7);
-            };
-            img.onerror = reject;
-            img.src = ev.target.result;
-          };
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
-
         const photoId = uid();
-        const storagePath = `jobs/${jobId}/rt-photos/${id}/${photoId}.jpg`;
+        const ext = file.name.split(".").pop() || "jpg";
+        const storagePath = `jobs/${jobId}/rt-photos/${id}/${photoId}.${ext}`;
         const storageRef = ref(storage, storagePath);
-        await uploadBytes(storageRef, dataUrl);
+        await uploadBytes(storageRef, file);
         const url = await getDownloadURL(storageRef);
         newPhotos.push({id:photoId, name:file.name, url, storagePath});
       } catch(e) {
@@ -3996,29 +3976,11 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
     setQjUploading(true);
     for(const file of Array.from(files)) {
       try {
-        const blob = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = ev => {
-            const img = new Image();
-            img.onload = () => {
-              const MAX = 800;
-              const scale = Math.min(1, MAX / Math.max(img.width, img.height));
-              const canvas = document.createElement('canvas');
-              canvas.width = Math.round(img.width * scale);
-              canvas.height = Math.round(img.height * scale);
-              canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-              canvas.toBlob(b => b ? resolve(b) : reject("Blob failed"), 'image/jpeg', 0.7);
-            };
-            img.onerror = reject;
-            img.src = ev.target.result;
-          };
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
         const photoId = uid();
-        const storagePath = `jobs/${job.id}/photos/${photoId}.jpg`;
+        const ext = file.name.split(".").pop() || "jpg";
+        const storagePath = `jobs/${job.id}/photos/${photoId}.${ext}`;
         const storageRef = ref(storage, storagePath);
-        await uploadBytes(storageRef, blob);
+        await uploadBytes(storageRef, file);
         const url = await getDownloadURL(storageRef);
         newPhotos.push({id:photoId, name:file.name, url, storagePath});
       } catch(e) { console.error("Photo upload failed:", e); alert(`Failed to upload ${file.name}.`); }
@@ -4312,29 +4274,11 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
     setTpUploading(true);
     for(const file of Array.from(files)) {
       try {
-        const blob = await new Promise((resolve, reject) => {
-          const reader = new FileReader();
-          reader.onload = ev => {
-            const img = new Image();
-            img.onload = () => {
-              const MAX = 800;
-              const scale = Math.min(1, MAX / Math.max(img.width, img.height));
-              const canvas = document.createElement('canvas');
-              canvas.width = Math.round(img.width * scale);
-              canvas.height = Math.round(img.height * scale);
-              canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-              canvas.toBlob(b => b ? resolve(b) : reject("Blob failed"), 'image/jpeg', 0.7);
-            };
-            img.onerror = reject;
-            img.src = ev.target.result;
-          };
-          reader.onerror = reject;
-          reader.readAsDataURL(file);
-        });
         const photoId = uid();
-        const storagePath = `jobs/${job.id}/photos/${photoId}.jpg`;
+        const ext = file.name.split(".").pop() || "jpg";
+        const storagePath = `jobs/${job.id}/photos/${photoId}.${ext}`;
         const storageRef = ref(storage, storagePath);
-        await uploadBytes(storageRef, blob);
+        await uploadBytes(storageRef, file);
         const url = await getDownloadURL(storageRef);
         newPhotos.push({id:photoId, name:file.name, url, storagePath});
       } catch(e) { console.error("Photo upload failed:", e); alert(`Failed to upload ${file.name}.`); }
@@ -4794,7 +4738,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                           const v=e.target.value;
                           const def=getStatusDef(ROUGH_STATUSES,v);
                           u({roughStatus:v, roughOnHold:v==="waiting", roughScheduled:v==="scheduled",
-                            roughStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete")?job.roughStartConfirmed:false,
+                            roughStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting"||v==="invoice")?job.roughStartConfirmed:false,
                             roughStatusDate:def.hasDate?job.roughStatusDate:"",
                             readyToInvoice:v==="invoice"?true:(job.roughStatus==="invoice"?false:job.readyToInvoice),
                             ...(v==="invoice"&&!job.readyToInvoice?{readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{}),
@@ -4927,7 +4871,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                           const v=e.target.value;
                           const def=getStatusDef(FINISH_STATUSES,v);
                           u({finishStatus:v, finishOnHold:v==="waiting", finishScheduled:v==="scheduled",
-                            finishStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete")?job.finishStartConfirmed:false,
+                            finishStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting"||v==="invoice")?job.finishStartConfirmed:false,
                             finishStatusDate:def.hasDate?job.finishStatusDate:"",
                             readyToInvoice:v==="invoice"?true:(job.finishStatus==="invoice"?false:job.readyToInvoice),
                             ...(v==="invoice"&&!job.readyToInvoice?{readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{}),
