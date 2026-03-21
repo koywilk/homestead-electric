@@ -9158,7 +9158,7 @@ function App() {
 
               {job.gc||"No GC set"}
 
-              {job.updated_at&&<span style={{color:C.muted,marginLeft:6,fontSize:10}}>· {timeAgo(job.updated_at)}</span>}
+              {job.updated_at&&<span style={{color:C.dim,marginLeft:6,fontSize:11,fontWeight:500}}>· {timeAgo(job.updated_at)}</span>}
 
             </div>
 
