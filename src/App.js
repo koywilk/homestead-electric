@@ -3643,10 +3643,26 @@ function PinchZoomImage({ src, alt, style }) {
     setScale(1); setTranslate({ x: 0, y: 0 });
   }, [src]);
 
+  // Attach touch listeners with { passive: false } so preventDefault works on mobile
+  useEffect(() => {
+    const el = containerRef.current;
+    if (!el) return;
+    const opts = { passive: false };
+    el.addEventListener("touchstart", onTouchStart, opts);
+    el.addEventListener("touchmove", onTouchMove, opts);
+    el.addEventListener("touchend", onTouchEnd, opts);
+    el.addEventListener("wheel", onWheel, opts);
+    return () => {
+      el.removeEventListener("touchstart", onTouchStart, opts);
+      el.removeEventListener("touchmove", onTouchMove, opts);
+      el.removeEventListener("touchend", onTouchEnd, opts);
+      el.removeEventListener("wheel", onWheel, opts);
+    };
+  });
+
   return (
     <div ref={containerRef}
-      onTouchStart={onTouchStart} onTouchMove={onTouchMove} onTouchEnd={onTouchEnd}
-      onClick={onTap} onWheel={onWheel}
+      onClick={onTap}
       style={{ width: "100%", height: "100%", display: "flex", alignItems: "center",
         justifyContent: "center", overflow: "hidden", touchAction: "none", cursor: scale > 1 ? "grab" : "default" }}>
       <img src={src} alt={alt || ""}
