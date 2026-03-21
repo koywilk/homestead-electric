@@ -3488,6 +3488,61 @@ async function fetchDriveFilesRecursive(folderId, folderName, depth) {
   return [...nonFolders, ...subResults.flat()];
 }
 
+// Parent Drive folder containing all job plan folders
+const DRIVE_PARENT_FOLDER_ID = "1laC4udt1sBdV-_QUMzzbKJfD03q4_Ml3";
+
+// Normalize a name for fuzzy matching: lowercase, strip #numbers, common suffixes, extra whitespace
+function normalizeName(name) {
+  return (name || "").toLowerCase()
+    .replace(/#\d+\s*[-–—]?\s*/g, "")  // strip #1260 - prefix
+    .replace(/\b(plans|residence|home|house|electrical)\b/gi, "")
+    .replace(/[^a-z0-9]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+// Match a Drive folder name to a job name
+function namesMatch(driveName, jobName) {
+  const dn = normalizeName(driveName);
+  const jn = normalizeName(jobName);
+  if (!dn || !jn) return false;
+  // Check if either contains the other
+  if (dn.includes(jn) || jn.includes(dn)) return true;
+  // Check if all words of the job name appear in the folder name
+  const jobWords = jn.split(" ").filter(w => w.length > 2);
+  if (jobWords.length > 0 && jobWords.every(w => dn.includes(w))) return true;
+  return false;
+}
+
+async function syncDriveFoldersToJobs(jobs, updateJob) {
+  // 1. Fetch all folders in the parent Drive folder
+  const url = `https://www.googleapis.com/drive/v3/files?q='${DRIVE_PARENT_FOLDER_ID}'+in+parents+and+mimeType='application/vnd.google-apps.folder'+and+trashed=false&key=${DRIVE_API_KEY}&fields=files(id,name)&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=name`;
+  const resp = await fetch(url);
+  const data = await resp.json();
+  if (data.error) throw new Error(data.error.message || "Could not load Drive folders");
+  const driveFolders = data.files || [];
+
+  // 2. Match folders to jobs that don't already have a driveFolderId
+  const results = { matched: [], skipped: [], ambiguous: [] };
+  for (const job of jobs) {
+    if (job.driveFolderId) { results.skipped.push(job.name); continue; }
+    const matches = driveFolders.filter(df => namesMatch(df.name, job.name));
+    if (matches.length === 1) {
+      results.matched.push({ jobName: job.name, folderName: matches[0].name, folderId: matches[0].id });
+    } else if (matches.length > 1) {
+      results.ambiguous.push({ jobName: job.name, folders: matches.map(m => m.name) });
+    }
+  }
+
+  // 3. Apply matches
+  for (const match of results.matched) {
+    const job = jobs.find(j => j.name === match.jobName);
+    if (job) updateJob({ ...job, driveFolderId: match.folderId });
+  }
+
+  return { total: driveFolders.length, ...results };
+}
+
 function DriveFilesSection({ job, onUpdate }) {
   const [driveFiles, setDriveFiles] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -9637,6 +9692,25 @@ function App() {
                     color:C.dim,fontSize:14,fontWeight:700,padding:"6px 10px",cursor:"pointer",
                     fontFamily:"inherit"}}>
                   ↻
+                </button>
+                <button onClick={async()=>{
+                    try {
+                      const btn = document.activeElement; if(btn) btn.disabled = true;
+                      const result = await syncDriveFoldersToJobs(jobs, updateJob);
+                      const msg = `Drive Sync Complete!\n\n` +
+                        `${result.matched.length} new match${result.matched.length===1?"":"es"} linked` +
+                        (result.matched.length > 0 ? ":\n" + result.matched.map(m=>`  ${m.folderName} → ${m.jobName}`).join("\n") : "") +
+                        `\n${result.skipped.length} already linked` +
+                        (result.ambiguous.length > 0 ? `\n${result.ambiguous.length} ambiguous (skipped):\n` + result.ambiguous.map(a=>`  ${a.jobName}: ${a.folders.join(", ")}`).join("\n") : "") +
+                        `\n\n${result.total} Drive folders scanned`;
+                      alert(msg);
+                      if(btn) btn.disabled = false;
+                    } catch(e) { alert("Drive sync failed: " + e.message); }
+                  }}
+                  style={{background:"none",border:`1px solid ${C.blue}44`,borderRadius:8,
+                    color:C.blue,fontSize:11,fontWeight:600,padding:"6px 12px",cursor:"pointer",
+                    fontFamily:"inherit"}}>
+                  Sync Drive
                 </button>
                 <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);}}
                   style={{background:C.accent,border:"none",borderRadius:8,color:"#000",
