@@ -5,8 +5,6 @@ import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSn
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 
-
-
 // Register service worker for offline support
 
 if("serviceWorker" in navigator) {
@@ -18,9 +16,6 @@ if("serviceWorker" in navigator) {
   });
 
 }
-
-
-
 
 
 const firebaseConfig = {
@@ -40,7 +35,6 @@ const firebaseConfig = {
 };
 
 
-
 const firebaseApp = initializeApp(firebaseConfig);
 
 const db = getFirestore(firebaseApp);
@@ -49,7 +43,6 @@ const storage = getStorage(firebaseApp);
 // Offline persistence is enabled by default in Firebase v10+ web SDK
 // Multi-tab support via enableMultiTabIndexedDbPersistence is deprecated
 // If you upgrade to firebase v11+, use initializeFirestore with persistenceSettings instead
-
 
 
 const HO_WIRE_AMPS = {"14/2":15,"14/3":15,"12/2":20,"12/3":20,"10/2":30,"10/3":30,"8/2":40,"8/3":40,"6/2":50,"6/3":50,"4/2":70,"4/3":70,"2/2":95,"2/3":95,"1/0":125,"2/0":150,"3/0":175,"4/0":200};
@@ -66,9 +59,6 @@ const C = {
 
 };
 
-
-
-const JOB_ID = "homestead-jobs-v1";
 
 const ROUGH_STATUSES = [
   {value:"",           label:"— set status —",                        color:null},
@@ -180,12 +170,9 @@ const WIRE_TEXT = {
 
 };
 
-const CO_STATUSES   = ["Pending","CO Created","CO Sent (office)","Approved","Denied","Work Completed"];
-
 const PULLED_OPTS   = ["","Pulled","Need Specs"];
 
 const DRIVER_SIZES  = ["","20W","40W","60W","96W","192W","288W"];
-
 
 
 const TEAM = [
@@ -205,11 +192,9 @@ const TEAM = [
 ];
 
 
-
 let _uid = Date.now();
 
 const uid = () => String(++_uid);
-
 
 
 const newHRRow     = (num) => ({ id:uid(), num, wire:"", name:"", status:"", panel:"" });
@@ -219,7 +204,6 @@ const newCP4Row    = (num) => ({ id:uid(), num, name:"", module:"", status:"" })
 const newKPRow     = (num) => ({ id:uid(), num, name:"" });
 
 const emptyPunch   = ()    => ({ upper:[], main:[], basement:[] });
-
 
 
 const DEFAULT_FOREMEN = ["Koy", "Vasa", "Colby"];
@@ -637,11 +621,7 @@ function UserManagement({ users, onSave }) {
   );
 }
 
-// Legacy compat — keep AUTH_KEY so old sessions don't crash
-const AUTH_KEY = "he_auth";
-const getAuthSession = () => null;
-const setAuthSession = () => {};
-
+// Legacy auth stubs removed — identity system replaced them
 
 
 const blankJob = () => ({
@@ -695,7 +675,6 @@ const blankJob = () => ({
 });
 
 
-
 const blankQuickJob = (type = "service") => ({
   id: uid(), name: "", address: "", gc: "", phone: "", simproNo: "",
   foreman: "Koy", lead: "", flagged: false, flagNote: "",
@@ -729,11 +708,9 @@ function EmailModal({ subject, body, onClose }) {
   const [customErr, setCustomErr] = useState("");
 
 
-
   const toggle = (email) =>
 
     setSelected(s => s.includes(email) ? s.filter(e=>e!==email) : [...s, email]);
-
 
 
   const addCustom = () => {
@@ -763,7 +740,6 @@ function EmailModal({ subject, body, onClose }) {
   };
 
 
-
   const removeCustom = (email) => {
 
     setCustomList(l=>l.filter(e=>e!==email));
@@ -773,9 +749,7 @@ function EmailModal({ subject, body, onClose }) {
   };
 
 
-
   const allRecipients = [...selected];
-
 
 
   const send = () => {
@@ -787,7 +761,6 @@ function EmailModal({ subject, body, onClose }) {
     onClose();
 
   };
-
 
 
   return (
@@ -803,13 +776,11 @@ function EmailModal({ subject, body, onClose }) {
         maxHeight:"90vh",overflowY:"auto"}}>
 
 
-
         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",
 
           color:C.text,marginBottom:4}}>Send Email</div>
 
         <div style={{fontSize:12,color:C.dim,marginBottom:16}}>Select recipients</div>
-
 
 
         {/* Team list */}
@@ -857,7 +828,6 @@ function EmailModal({ subject, body, onClose }) {
           ))}
 
         </div>
-
 
 
         {/* Custom recipients */}
@@ -919,7 +889,6 @@ function EmailModal({ subject, body, onClose }) {
         </div>
 
 
-
         {/* Preview */}
 
         <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
@@ -941,7 +910,6 @@ function EmailModal({ subject, body, onClose }) {
         </div>
 
 
-
         {allRecipients.length>0&&(
 
           <div style={{fontSize:11,color:C.dim,marginBottom:10}}>
@@ -951,7 +919,6 @@ function EmailModal({ subject, body, onClose }) {
           </div>
 
         )}
-
 
 
         <div style={{display:"flex",gap:10,justifyContent:"flex-end"}}>
@@ -985,7 +952,6 @@ function EmailModal({ subject, body, onClose }) {
 }
 
 
-
 // ── Atoms ─────────────────────────────────────────────────────
 
 const Pill = ({label,color}) => (
@@ -995,7 +961,6 @@ const Pill = ({label,color}) => (
     background:`${color}22`,color,border:`1px solid ${color}44`,whiteSpace:"nowrap"}}>{label}</span>
 
 );
-
 
 
 const SectionHead = ({label,color=C.dim,action=null}) => (
@@ -1011,7 +976,6 @@ const SectionHead = ({label,color=C.dim,action=null}) => (
   </div>
 
 );
-
 
 
 // Collapsible section wrapper — collapsed by default
@@ -1051,7 +1015,6 @@ function Section({label, color=C.dim, action=null, defaultOpen=false, children})
   );
 
 }
-
 
 
 const Inp = ({value,onChange,placeholder,style={}}) => (
@@ -1121,7 +1084,6 @@ const Sel = ({value,onChange,options,style={}}) => (
 );
 
 
-
 const TA = ({value,onChange,placeholder,rows=3}) => (
 
   <textarea value={value??""} onChange={onChange} placeholder={placeholder} rows={rows}
@@ -1135,7 +1097,6 @@ const TA = ({value,onChange,placeholder,rows=3}) => (
     onBlur={e=>e.target.style.borderColor=C.border}/>
 
 );
-
 
 
 const Btn = ({onClick,children,variant="ghost",style={}}) => {
@@ -1175,7 +1136,6 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
 };
 
 
-
 const StageBar = ({stages,current,color}) => {
 
   const isScheduled = current === "Scheduled";
@@ -1211,7 +1171,6 @@ const StageBar = ({stages,current,color}) => {
 };
 
 
-
 // ── Punch List ────────────────────────────────────────────────
 
 // Simple helpers to ensure data is always the right shape
@@ -1227,7 +1186,6 @@ function normFloor(v) {
   return { general: Array.isArray(v) ? v : [], rooms: [] };
 
 }
-
 
 
 function PunchItems({ items, onChange }) {
@@ -1335,7 +1293,6 @@ function PunchItems({ items, onChange }) {
 }
 
 
-
 function RoomNameEdit({name, onSave}) {
 
   const [editing, setEditing] = useState(false);
@@ -1377,7 +1334,6 @@ function RoomNameEdit({name, onSave}) {
 }
 
 
-
 function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor }) {
 
   const data = normFloor(floorData);
@@ -1387,11 +1343,9 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
   const [roomDraft, setRoomDraft] = useState('');
 
 
-
   const openCount = data.general.filter(i => !i.done).length +
 
     data.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done).length : 0), 0);
-
 
 
   const setGeneral = (general) => onFloorChange(floorKey, { ...data, general });
@@ -1417,7 +1371,6 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
     onFloorChange(floorKey, { ...data, rooms: data.rooms.filter(r => r.id !== roomId) });
 
   };
-
 
 
   return (
@@ -1505,7 +1458,6 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
   );
 
 }
-
 
 
 function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
@@ -1634,7 +1586,6 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
 }
 
 
-
 // ── Material Orders ───────────────────────────────────────────
 
 function MaterialOrders({orders,onChange}) {
@@ -1702,7 +1653,6 @@ function MaterialOrders({orders,onChange}) {
   );
 
 }
-
 
 
 // ── Daily Updates ─────────────────────────────────────────────
@@ -1836,7 +1786,6 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
   );
 
 }
-
 
 
 // ── Change Orders ─────────────────────────────────────────────
@@ -2071,7 +2020,6 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
   const del = (id)   => onChange(trips.filter(t=>t.id!==id));
 
 
-
   const chatTrip = (t,i) => {
     const punchOpen = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n") || "None";
     const msg = `Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}\n\nhttps://homestead-electric.vercel.app/`;
@@ -2089,7 +2037,6 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
     onEmail({subject, body});
 
   };
-
 
 
   const addPhotos = (id, files) => {
@@ -2145,7 +2092,6 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
     });
 
   };
-
 
 
   return (
@@ -2245,7 +2191,6 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
           <PunchItems items={t.punch||[]} onChange={v=>upd(t.id,{punch:v})}/>
 
 
-
           {/* Photos */}
 
           <div style={{marginTop:14}}>
@@ -2301,7 +2246,6 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
           </div>
 
 
-
           {/* Assigned To */}
 
           <div style={{marginTop:12,padding:"10px 12px",background:`${C.purple}10`,
@@ -2315,7 +2259,6 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
               placeholder="Technician name…"/>
 
           </div>
-
 
 
           {/* Sign Off */}
@@ -2409,7 +2352,6 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
       ))}
 
 
-
       {viewPhoto&&(
 
         <div onClick={()=>setViewPhoto(null)}
@@ -2443,12 +2385,6 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
 }
 
 
-
-
-
-
-
-
 // ── Home Runs ─────────────────────────────────────────────────
 
 const DEFAULT_PANELS = ["Panel A","Panel B","Panel C","Panel D"];
@@ -2467,7 +2403,6 @@ const getPanelOrder = (customPanels) => {
 const WIRE_ORDER  = {"":0,"14/2":1,"14/3":2,"12/2":3,"12/3":4,"10/2":5,"10/3":6,"8/2":7,"8/3":8,"6/2":9,"6/3":10,"4/2":11,"4/3":12,"2/2":13,"2/3":14,"1/0":15,"2/0":16,"3/0":17,"4/0":18};
 
 
-
 function HomeRunLevel({rows,onChange,label,customPanels}) {
 
   const panelOrder = getPanelOrder(customPanels);
@@ -2481,7 +2416,6 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
   const upd    = (id,p) => { const updated = rows.map(r=>r.id===id?{...r,...p}:r); onChange(('wire' in p||'panel' in p) ? sortRows(updated) : updated.map((r,i)=>({...r,num:i+1}))); };
   const addRow = () => onChange([...rows, newHRRow(rows.length+1)]);
   const delRow = (id) => onChange(sortRows(rows.filter(r=>r.id!==id)));
-
 
 
   const renderRow = (r, flatIdx) => (
@@ -2595,7 +2529,6 @@ function MeterLoads({loads, onChange}) {
 }
 
 
-
 // Wire → {amps, poles} mapping
 
 const WIRE_BREAKER = {
@@ -2647,9 +2580,7 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
   ];
 
 
-
   const panels = getPanelOpts(homeRuns.customPanels||DEFAULT_PANELS).filter(p=>p!==""&&p!=="Meter");
-
 
 
   // For each panel, group rows by breaker label and count poles
@@ -2679,7 +2610,6 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
   };
 
 
-
   const totalSpaces = (panel) => {
 
     const g = getPanelBreakers(panel);
@@ -2687,7 +2617,6 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
     return Object.values(g).reduce((s,v)=>s+v.spaces,0);
 
   };
-
 
 
   return (
@@ -2787,7 +2716,6 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
   );
 
 }
-
 
 
 function HRAddFloor({homeRuns, onHRChange}) {
@@ -3310,7 +3238,6 @@ function KeypadSection({loads,onChange,label}) {
 }
 
 
-
 function CP4LoadsSection({loads,onChange}) {
 
   const upd    = (id,p) => onChange(loads.map(r=>r.id===id?{...r,...p}:r));
@@ -3370,7 +3297,6 @@ function CP4LoadsSection({loads,onChange}) {
   );
 
 }
-
 
 
 // ── Tape Light ────────────────────────────────────────────────
@@ -3520,7 +3446,6 @@ function TapeLightSection({lights,onChange}) {
 }
 
 
-
 // ── Plans & Links with PDF upload ────────────────────────────
 
 const LINK_FIELDS = [
@@ -3532,7 +3457,6 @@ const LINK_FIELDS = [
 ["matterportLink","Matterport Link"],
 
 ];
-
 
 
 // ── File Upload Section (Firebase Storage) ────────────────────
@@ -3835,7 +3759,6 @@ function PlansTab({job, onUpdate}) {
       })}
 
 
-
       {/* Custom named link sections */}
 
       <div style={{marginTop:8}}>
@@ -3951,13 +3874,9 @@ function PlansTab({job, onUpdate}) {
 }
 
 
-
-
-
 const TABS = ["Job Info","Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
 
               "Change Orders","Return Trips","Plans & Links","QC"];
-
 
 
 const sanitize = (obj) => {
@@ -4599,8 +4518,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
     onUpdate(updated);
   };
 
-  const saveNow = () => onUpdate({...job});
-
   const [tab, setTab] = useState("Job Info");
   const [newLightingFloor, setNewLightingFloor] = useState("");
   const [emailData, setEmailData] = useState(null);
@@ -4622,7 +4539,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
     setRefreshing(false);
 
   };
-
 
 
   const countFloor = (f) => {
@@ -4649,7 +4565,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
     (job.qcPunch?.extras||[]).reduce((s,e)=>s+countFloor(job.qcPunch?.[e.key]||{}),0);
 
 
-
   return (
 
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.82)",zIndex:400,
@@ -4663,7 +4578,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
         maxWidth:940,maxHeight:"93vh",display:"flex",flexDirection:"column",overflow:"hidden",
 
         boxShadow:"0 40px 100px rgba(0,0,0,0.7)"}}>
-
 
 
         {/* Header */}
@@ -4735,7 +4649,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
         </div>
 
 
-
         {/* Tabs */}
 
         <div style={{display:"flex",gap:1,padding:"8px 22px 0",borderBottom:`1px solid ${C.border}`,
@@ -4763,13 +4676,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
         </div>
 
 
-
         {/* Body */}
 
         <div style={{flex:1,overflowY:"auto",padding:"20px 22px"}}>
-
-
-
 
 
           {tab==="Rough"&&(
@@ -4905,7 +4814,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
           )}
 
 
-
           {tab==="Finish"&&(
 
             <div>
@@ -5031,7 +4939,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
           )}
 
 
-
           {tab==="Home Runs"&&(
 
             <HomeRunsTab homeRuns={job.homeRuns} panelCounts={job.panelCounts} jobId={job.id} jobName={job.name}
@@ -5040,13 +4947,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
           )}
 
 
-
           {tab==="Panelized Lighting"&&(
 
             <div>
 
               {/* Lighting Control System Selector */}
-
 
 
               <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
@@ -5174,7 +5079,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
           )}
 
 
-
           {tab==="Tape Light"&&(
 
             <div>
@@ -5184,11 +5088,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
               </Section>
 
 
-
             </div>
 
           )}
-
 
 
           {tab==="Change Orders"&&(
@@ -5218,7 +5120,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
           )}
 
 
-
           {tab==="Return Trips"&&(
 
             <div>
@@ -5232,13 +5133,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
           )}
 
 
-
           {tab==="Plans & Links"&&(
 
             <PlansTab job={job} onUpdate={u}/>
 
           )}
-
 
 
           {tab==="QC"&&(
@@ -5308,11 +5207,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
           )}
 
 
-
           {tab==="Job Info"&&(
 
             <div>
-
 
 
               <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:12,marginBottom:16}}>
@@ -5438,7 +5335,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                 </div>
 
 
-
               </div>
 
             </div>
@@ -5450,7 +5346,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
       </div>
 
 
-
       {emailData&&(
 
         <EmailModal subject={emailData.subject} body={emailData.body} onClose={()=>setEmailData(null)}/>
@@ -5458,17 +5353,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
       )}
 
 
-
     </div>
 
   );
 
 }
-
-
-
-
-
 
 
 // ── Q&A Punch List ────────────────────────────────────────────
@@ -5514,7 +5403,6 @@ function QAInlineEdit({value, done, label, onSave}) {
   );
 
 }
-
 
 
 function QAList({questions: _questions, onChange, color}) {
@@ -5650,7 +5538,6 @@ function QAList({questions: _questions, onChange, color}) {
 }
 
 
-
 function QASection({questions: _questions, onChange, color}) {
 
   // guard: normalize questions to always be object with array values
@@ -5688,13 +5575,9 @@ function QASection({questions: _questions, onChange, color}) {
 }
 
 
-
-
-
 // ── Punch Assignment & Sign-off ───────────────────────────────
 
 const CREW = ["Koy","Vasa","Colby","Josh","Brady","Justin"];
-
 
 
 function PunchAssignTab({phase, assignData, onChange, color}) {
@@ -5706,7 +5589,6 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
   const signoffs    = data.signoffs    || [];
 
 
-
   const updA = (id, p) => onChange({...data, assignments: assignments.map(a=>a.id===id?{...a,...p}:a)});
 
   const delA = (id)    => onChange({...data, assignments: assignments.filter(a=>a.id!==id)});
@@ -5714,13 +5596,11 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
   const addA = ()      => onChange({...data, assignments: [...assignments, {id:uid(), person:"", task:"", floor:"", room:"", done:false}]});
 
 
-
   const updS = (id, p) => onChange({...data, signoffs: signoffs.map(s=>s.id===id?{...s,...p}:s)});
 
   const delS = (id)    => onChange({...data, signoffs: signoffs.filter(s=>s.id!==id)});
 
   const addS = ()      => onChange({...data, signoffs: [...signoffs, {id:uid(), person:"", task:"", completedDate:"", initials:""}]});
-
 
 
   return (
@@ -5812,7 +5692,6 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
       <Btn onClick={addA} variant="add" style={{width:"100%",borderStyle:"dashed",marginBottom:24}}>+ Add Assignment</Btn>
 
 
-
       {/* Sign-offs */}
 
       <SectionHead label="Sign Off — Work Completed By" color={color}/>
@@ -5886,9 +5765,6 @@ function PunchAssignTab({phase, assignData, onChange, color}) {
 }
 
 
-
-
-
 function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
 
   const [punchTab, setPunchTab] = useState("Items");
@@ -5944,7 +5820,6 @@ function PunchTabWrapper({job, u, phase, punchKey, assignKey, color, onEmail}) {
   );
 
 }
-
 
 
 // ── Temp Ped Card ─────────────────────────────────────────────
@@ -6181,14 +6056,12 @@ const STAGE_SECTIONS = [
 ];
 
 
-
 function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, onDeleteJob, fc, startCollapsed=true }) {
 
   const initCollapsed = () => Object.fromEntries(STAGE_SECTIONS.map(s=>[s.key,startCollapsed]));
   const [collapsed, setCollapsed] = useState(initCollapsed);
 
   const toggle = key => setCollapsed(c=>({...c,[key]:!c[key]}));
-
 
 
   return (
@@ -6277,11 +6150,9 @@ function StageSectionList({ jobs, JobRow, TempPedCard, onSelectJob, onSaveJob, o
 }
 
 
-
 // ── Main Dashboard ────────────────────────────────────────────
 
-const ALL_STAGES = ROUGH_STAGES;
-
+// ALL_STAGES removed — use ROUGH_STAGES directly
 
 
 // ── QC Walks ──────────────────────────────────────────────────
@@ -6289,7 +6160,6 @@ const ALL_STAGES = ROUGH_STAGES;
 // Detect mobile device
 
 const isMobile = () => /iphone|ipad|ipod|android/i.test(navigator.userAgent);
-
 
 
 // Open Google Chat — copies message to clipboard and opens Google Chat
@@ -6315,7 +6185,6 @@ const openEmail = (to, subject, body) => {
   }
 
 };
-
 
 
 // Deep merge two job objects — arrays are merged by id, scalars prefer local
@@ -6391,7 +6260,6 @@ function deepMergeJob(remote, local) {
   return merged;
 
 }
-
 
 
 // ── Upcoming Jobs ─────────────────────────────────────────────
@@ -8501,8 +8369,7 @@ function App() {
 
   // ── Identity ──────────────────────────────────────────────────
   const [identity, setIdentity] = useState(()=>getIdentity());
-  const authMode = identity ? "office" : "locked"; // compat for remaining authMode refs
-  const setAuthMode = () => {}; // no-op legacy compat
+  // Legacy auth stubs removed — identity system handles this now
 
   // ── Users (team members) — loaded from Firestore ─────────────
   const [users, setUsers] = useState(DEFAULT_USERS);
@@ -8685,7 +8552,6 @@ function App() {
   const initialLoad  = useRef(true);
 
 
-
   const jobsRef   = useRef(jobs);
 
   const isDirty   = useRef(false);
@@ -8693,7 +8559,6 @@ function App() {
   const saveTimers = useRef({});
 
   useEffect(()=>{ jobsRef.current = jobs; },[jobs]);
-
 
 
   const migrate = (loaded) => {
@@ -8713,7 +8578,6 @@ function App() {
   };
 
 
-
   // Real-time listener — all devices stay in sync automatically
 
   useEffect(()=>{
@@ -8727,7 +8591,6 @@ function App() {
       if(b) { const p=JSON.parse(b); if(p?.length) setJobs(migrate(p)); }
 
     } catch(e){}
-
 
 
     const unsub = onSnapshot(collection(db,"jobs"),
@@ -8876,7 +8739,6 @@ function App() {
   },[]);
 
 
-
   // Save a single job as its own Firestore document
 
   const saveJob = (job) => {
@@ -8947,7 +8809,6 @@ function App() {
   };
 
 
-
   // Delete job document
 
   const flushJob = async (job) => {
@@ -8974,7 +8835,6 @@ function App() {
     try { await deleteDoc(doc(db,"jobs",jobId)); } catch(e){}
 
   };
-
 
 
   const saveManualTask = async (task) => {
@@ -9022,7 +8882,6 @@ function App() {
   };
 
 
-
   const flushSaves = () => {
 
     // Only flush jobs that have pending save timers — avoids overwriting other users' changes
@@ -9053,7 +8912,6 @@ function App() {
   };
 
 
-
   // Save on background/close
 
   useEffect(()=>{
@@ -9075,16 +8933,13 @@ function App() {
   },[]);
 
 
-
-
-
   const updateJob = updated => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); saveJob(updated); };
 
   const addJob    = () => { const j=blankJob(); setJobs(js=>[j,...js]); setSelected(j); saveJob(j); };
 
   const deleteJob = id => {
 
-    if(!confirm("Delete this job site?")) return;
+    if(!window.confirm("Delete this job site?")) return;
 
     setJobs(js=>js.filter(j=>j.id!==id));
 
@@ -9093,7 +8948,6 @@ function App() {
     deleteJobRemote(id);
 
   };
-
 
 
   const openCount = j => {
@@ -9121,7 +8975,6 @@ function App() {
   };
 
 
-
   const totalOpen  = jobs.reduce((a,j)=>a+openCount(j),0);
 
   const flagged    = jobs.filter(j=>j.flagged).length;
@@ -9133,7 +8986,6 @@ function App() {
   const syncColor  = {idle:C.muted,saving:C.accent,saved:C.green,error:C.red}[syncStatus];
 
   const syncLabel  = {idle:"All changes saved",saving:"Saving…",saved:"✓ Saved",error:"Save failed"}[syncStatus];
-
 
 
   // view: "home" = main page, "foreman" = foreman-specific page
@@ -9150,11 +9002,7 @@ function App() {
   const openSettings = () =>  { setView("settings"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
 
 
-
-
-
   const viewJobs = view==="foreman" ? jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):matchesForeman(j,activeForeman)) : jobs;
-
 
 
   const filtered = viewJobs.filter(j=>{
@@ -9182,7 +9030,6 @@ function App() {
     return ms&&mf&&mt;
 
   });
-
 
 
   const JobRow = ({job, fc, showForeman=false}) => {
@@ -9241,7 +9088,6 @@ function App() {
               {job.lead&&<span style={{color:C.accent,fontWeight:600,marginRight:6}}>· {job.lead}</span>}
 
               {job.gc||"No GC set"}
-
 
 
             </div>
@@ -9344,7 +9190,6 @@ function App() {
   };
 
 
-
   // ── Identity gate — show UserPicker if no identity saved ────
   if(!identity) {
     return <UserPicker users={users}
@@ -9358,7 +9203,6 @@ function App() {
   }
 
 
-
   return (
 
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
@@ -9368,7 +9212,6 @@ function App() {
         backgroundRepeat:"no-repeat",backgroundPosition:"center center",
 
         backgroundSize:"320px 320px",opacity:0.15,pointerEvents:"none",zIndex:0}}/>
-
 
 
       {/* ── TOP NAV BAR ── */}
@@ -9463,7 +9306,6 @@ function App() {
       `}</style>
 
 
-
       {/* ── HOME PAGE ── */}
 
       {view==="home"&&(
@@ -9529,7 +9371,6 @@ function App() {
 
             </div>
           </div>
-
 
 
           <div style={{padding:"28px 26px"}}>
@@ -9874,7 +9715,6 @@ function App() {
       )}
 
 
-
       {/* ── FOREMAN PAGE ── */}
 
       {view==="foreman"&&(
@@ -9920,7 +9760,6 @@ function App() {
               </div>
 
             </div>
-
 
 
             <div style={{display:"flex",gap:10,marginBottom:16,flexWrap:"wrap"}}>
@@ -9972,7 +9811,6 @@ function App() {
             </div>
 
 
-
             <div style={{display:"flex",gap:8,paddingBottom:14,flexWrap:"wrap",alignItems:"center"}}>
 
               <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search jobs, GC, address…"
@@ -10014,7 +9852,6 @@ function App() {
             </div>
 
           </div>
-
 
 
           <div style={{padding:"14px 26px"}}>
@@ -10109,7 +9946,6 @@ function App() {
       )}
 
 
-
       {selected&&(selected.quickJob
         ? <QuickJobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen} leadsList={_leads}/>
         : selected.tempPed
@@ -10150,7 +9986,7 @@ function App() {
           }}
           onPromote={(u)=>{
             const j=blankJob();
-            j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman="";
+            j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman=u.foreman||"Unassigned";
             setJobs(js=>[j,...js]); setSelected(j); setUpcoming(prev=>prev.filter(x=>x.id!==u.id));
             setView("home"); saveJob(j); deleteUpcomingItem(u.id);
           }}
