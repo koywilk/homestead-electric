@@ -2009,7 +2009,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
 
 // ── Return Trips ──────────────────────────────────────────────
 
-function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
+function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId}) {
 
   const [viewPhoto, setViewPhoto] = useState(null);
 
@@ -2039,58 +2039,63 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
   };
 
 
-  const addPhotos = (id, files) => {
+  const [uploading, setUploading] = useState(false);
 
+  const addPhotos = async (id, files) => {
+    if(!jobId) { alert("Cannot upload photos — job ID missing. Save the job first."); return; }
     const trip = trips.find(t=>t.id===id);
-
     const existing = trip?.photos||[];
+    const newPhotos = [];
+    setUploading(true);
 
-    let done=0; const newPhotos=[];
+    for(const file of Array.from(files)) {
+      try {
+        // Resize on canvas before uploading — keeps storage lean
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = ev => {
+            const img = new Image();
+            img.onload = () => {
+              const MAX = 800;
+              const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+              const canvas = document.createElement('canvas');
+              canvas.width = Math.round(img.width * scale);
+              canvas.height = Math.round(img.height * scale);
+              canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+              canvas.toBlob(blob => blob ? resolve(blob) : reject("Blob failed"), 'image/jpeg', 0.7);
+            };
+            img.onerror = reject;
+            img.src = ev.target.result;
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
 
-    const total = files.length;
+        const photoId = uid();
+        const storagePath = `jobs/${jobId}/rt-photos/${id}/${photoId}.jpg`;
+        const storageRef = ref(storage, storagePath);
+        await uploadBytes(storageRef, dataUrl);
+        const url = await getDownloadURL(storageRef);
+        newPhotos.push({id:photoId, name:file.name, url, storagePath});
+      } catch(e) {
+        console.error("RT photo upload failed:", e);
+        alert(`Failed to upload ${file.name}. Check connection.`);
+      }
+    }
 
-    Array.from(files).forEach(file=>{
+    if(newPhotos.length > 0) {
+      upd(id, {photos:[...existing, ...newPhotos]});
+    }
+    setUploading(false);
+  };
 
-      const img = new Image();
-
-      const reader = new FileReader();
-
-      reader.onload = ev => {
-
-        img.onload = () => {
-
-          // Resize to max 800px wide and compress
-
-          const MAX = 500;
-
-          const scale = Math.min(1, MAX / Math.max(img.width, img.height));
-
-          const canvas = document.createElement('canvas');
-
-          canvas.width  = Math.round(img.width  * scale);
-
-          canvas.height = Math.round(img.height * scale);
-
-          canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
-
-          const dataUrl = canvas.toDataURL('image/jpeg', 0.35);
-
-          newPhotos.push({id:uid(), name:file.name, dataUrl});
-
-          done++;
-
-          if(done===total) upd(id,{photos:[...existing,...newPhotos]});
-
-        };
-
-        img.src = ev.target.result;
-
-      };
-
-      reader.readAsDataURL(file);
-
-    });
-
+  const deletePhoto = async (tripId, photo) => {
+    // Delete from Firebase Storage if it has a storagePath (new photos)
+    if(photo.storagePath) {
+      try { await deleteObject(ref(storage, photo.storagePath)).catch(()=>{}); } catch(e){}
+    }
+    const trip = trips.find(t=>t.id===tripId);
+    upd(tripId, {photos:(trip?.photos||[]).filter(x=>x.id!==photo.id)});
   };
 
 
@@ -2205,15 +2210,15 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
 
                   <div key={p.id} style={{position:"relative"}}>
 
-                    <img src={p.dataUrl} alt={p.name}
+                    <img src={p.url||p.dataUrl} alt={p.name}
 
-                      onClick={()=>setViewPhoto(p.dataUrl)}
+                      onClick={()=>setViewPhoto(p.url||p.dataUrl)}
 
                       style={{width:"100%",aspectRatio:"1",objectFit:"cover",borderRadius:8,
 
                         border:`1px solid ${C.border}`,cursor:"pointer"}}/>
 
-                    <button onClick={()=>upd(t.id,{photos:(t.photos||[]).filter(x=>x.id!==p.id)})}
+                    <button onClick={()=>deletePhoto(t.id,p)}
 
                       style={{position:"absolute",top:3,right:3,background:"rgba(0,0,0,0.7)",
 
@@ -2229,19 +2234,30 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail}) {
 
             )}
 
-            <label style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",
+            {uploading&&<div style={{fontSize:11,color:C.accent,fontWeight:600,marginBottom:8,
+              padding:"6px 10px",background:`${C.accent}12`,border:`1px solid ${C.accent}33`,
+              borderRadius:7}}>⏳ Uploading photos...</div>}
 
-              background:`${C.purple}12`,border:`1px dashed ${C.purple}55`,borderRadius:8,
-
-              cursor:"pointer",fontSize:12,color:C.purple,fontWeight:600}}>
-
-              📷 Add Photos
-
-              <input type="file" accept="image/*" multiple style={{display:"none"}}
-
-                onChange={e=>{addPhotos(t.id,e.target.files);e.target.value="";}}/>
-
-            </label>
+            <div style={{display:"flex",gap:6}}>
+              <label style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",
+                background:`${C.purple}12`,border:`1px dashed ${C.purple}55`,borderRadius:8,
+                cursor:uploading?"not-allowed":"pointer",opacity:uploading?0.5:1,
+                fontSize:12,color:C.purple,fontWeight:600}}>
+                📷 Add Photos
+                <input type="file" accept="image/*" multiple style={{display:"none"}}
+                  disabled={uploading}
+                  onChange={e=>{addPhotos(t.id,e.target.files);e.target.value="";}}/>
+              </label>
+              <label style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",
+                background:`${C.teal}12`,border:`1px dashed ${C.teal}55`,borderRadius:8,
+                cursor:uploading?"not-allowed":"pointer",opacity:uploading?0.5:1,
+                fontSize:12,color:C.teal,fontWeight:600}}>
+                📸 Take Photo
+                <input type="file" accept="image/*" capture="environment" style={{display:"none"}}
+                  disabled={uploading}
+                  onChange={e=>{addPhotos(t.id,e.target.files);e.target.value="";}}/>
+              </label>
+            </div>
 
           </div>
 
@@ -3957,33 +3973,47 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
   const typeDef = QUICK_JOB_TYPES.find(t => t.value === job.quickJobType) || QUICK_JOB_TYPES[3];
   const foreman = job.foreman || "Koy";
 
-  // Photo handling
-  const addPhotos = (files) => {
-    const arr = Array.from(files);
-    let done = 0; const newPhotos = [];
-    arr.forEach(file => {
-      const reader = new FileReader();
-      reader.onload = ev => {
-        const img = new Image();
-        img.onload = () => {
-          const MAX = 500;
-          let w = img.width, h = img.height;
-          if (w > MAX || h > MAX) {
-            if (w > h) { h = Math.round(h * MAX / w); w = MAX; }
-            else { w = Math.round(w * MAX / h); h = MAX; }
-          }
-          const canvas = document.createElement("canvas");
-          canvas.width = w; canvas.height = h;
-          canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-          const dataUrl = canvas.toDataURL("image/jpeg", 0.35);
-          newPhotos.push({ id: uid(), name: file.name, dataUrl });
-          done++;
-          if (done === arr.length) u({ photos: [...(job.photos || []), ...newPhotos] });
-        };
-        img.src = ev.target.result;
-      };
-      reader.readAsDataURL(file);
-    });
+  // Photo handling — upload to Firebase Storage
+  const [qjUploading, setQjUploading] = useState(false);
+  const addPhotos = async (files) => {
+    const existing = job.photos || [];
+    const newPhotos = [];
+    setQjUploading(true);
+    for(const file of Array.from(files)) {
+      try {
+        const blob = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = ev => {
+            const img = new Image();
+            img.onload = () => {
+              const MAX = 800;
+              const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+              const canvas = document.createElement('canvas');
+              canvas.width = Math.round(img.width * scale);
+              canvas.height = Math.round(img.height * scale);
+              canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+              canvas.toBlob(b => b ? resolve(b) : reject("Blob failed"), 'image/jpeg', 0.7);
+            };
+            img.onerror = reject;
+            img.src = ev.target.result;
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        const photoId = uid();
+        const storagePath = `jobs/${job.id}/photos/${photoId}.jpg`;
+        const storageRef = ref(storage, storagePath);
+        await uploadBytes(storageRef, blob);
+        const url = await getDownloadURL(storageRef);
+        newPhotos.push({id:photoId, name:file.name, url, storagePath});
+      } catch(e) { console.error("Photo upload failed:", e); alert(`Failed to upload ${file.name}.`); }
+    }
+    if(newPhotos.length > 0) u({ photos: [...existing, ...newPhotos] });
+    setQjUploading(false);
+  };
+  const deleteJobPhoto = async (photo) => {
+    if(photo.storagePath) { try { await deleteObject(ref(storage, photo.storagePath)).catch(()=>{}); } catch(e){} }
+    u({ photos: (job.photos || []).filter(x => x.id !== photo.id) });
   };
 
   return (
@@ -4138,10 +4168,10 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
               <div style={{ display: "flex", flexWrap: "wrap", gap: 8, marginBottom: 10 }}>
                 {(job.photos || []).map(p => (
                   <div key={p.id} style={{ position: "relative", width: 80, height: 80 }}>
-                    <img src={p.dataUrl} alt={p.name} onClick={() => setViewPhoto(p.dataUrl)}
+                    <img src={p.url||p.dataUrl} alt={p.name} onClick={() => setViewPhoto(p.url||p.dataUrl)}
                       style={{ width: 80, height: 80, objectFit: "cover", borderRadius: 8, cursor: "pointer",
                         border: `1px solid ${C.border}` }} />
-                    <button onClick={() => u({ photos: (job.photos || []).filter(x => x.id !== p.id) })}
+                    <button onClick={() => deleteJobPhoto(p)}
                       style={{ position: "absolute", top: -5, right: -5, background: "#dc2626", border: "none",
                         borderRadius: "50%", color: "#fff", width: 18, height: 18, fontSize: 10,
                         cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center" }}>✕</button>
@@ -4149,11 +4179,16 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
                 ))}
               </div>
             )}
+            {qjUploading&&<div style={{fontSize:11,color:C.accent,fontWeight:600,marginBottom:8,
+              padding:"6px 10px",background:`${C.accent}12`,border:`1px solid ${C.accent}33`,
+              borderRadius:7}}>⏳ Uploading...</div>}
             <label style={{ display: "inline-flex", alignItems: "center", gap: 6,
               background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
-              padding: "7px 14px", cursor: "pointer", fontSize: 11, fontWeight: 600, color: C.dim }}>
+              padding: "7px 14px", cursor: qjUploading?"not-allowed":"pointer",
+              opacity: qjUploading?0.5:1, fontSize: 11, fontWeight: 600, color: C.dim }}>
               + Add Photos
               <input type="file" accept="image/*" multiple style={{ display: "none" }}
+                disabled={qjUploading}
                 onChange={e => { addPhotos(e.target.files); e.target.value = ""; }} />
             </label>
           </div>
@@ -4254,33 +4289,47 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
   const foreman = job.foreman||"Koy";
   const fc      = (({"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e","Keegan":"#3b82f6","Gage":"#3b82f6","Daegan":"#3b82f6","Braden":"#22c55e","Treycen":"#22c55e","Jon":"#22c55e","Vasa":"#f97316","Abe":"#f97316","Louis":"#f97316","Jacob":"#6b7280"})[foreman]||"#6b7280")||"#6b7280";
 
-  // Photo handling — compress to max 800px / 0.65 quality to stay under Firestore 1MB limit
-  const addPhotos = (files) => {
-    const arr = Array.from(files);
-    let done = 0; const newPhotos = [];
-    arr.forEach(file => {
-      const reader = new FileReader();
-      reader.onload = ev => {
-        const img = new Image();
-        img.onload = () => {
-          const MAX = 500;
-          let w = img.width, h = img.height;
-          if(w > MAX || h > MAX) {
-            if(w > h) { h = Math.round(h * MAX / w); w = MAX; }
-            else { w = Math.round(w * MAX / h); h = MAX; }
-          }
-          const canvas = document.createElement("canvas");
-          canvas.width = w; canvas.height = h;
-          canvas.getContext("2d").drawImage(img, 0, 0, w, h);
-          const dataUrl = canvas.toDataURL("image/jpeg", 0.35);
-          newPhotos.push({id:uid(), name:file.name, dataUrl});
-          done++;
-          if(done===arr.length) u({tempPedPhotos:[...(job.tempPedPhotos||[]),...newPhotos]});
-        };
-        img.src = ev.target.result;
-      };
-      reader.readAsDataURL(file);
-    });
+  // Photo handling — upload to Firebase Storage
+  const [tpUploading, setTpUploading] = useState(false);
+  const addPhotos = async (files) => {
+    const existing = job.tempPedPhotos || [];
+    const newPhotos = [];
+    setTpUploading(true);
+    for(const file of Array.from(files)) {
+      try {
+        const blob = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = ev => {
+            const img = new Image();
+            img.onload = () => {
+              const MAX = 800;
+              const scale = Math.min(1, MAX / Math.max(img.width, img.height));
+              const canvas = document.createElement('canvas');
+              canvas.width = Math.round(img.width * scale);
+              canvas.height = Math.round(img.height * scale);
+              canvas.getContext('2d').drawImage(img, 0, 0, canvas.width, canvas.height);
+              canvas.toBlob(b => b ? resolve(b) : reject("Blob failed"), 'image/jpeg', 0.7);
+            };
+            img.onerror = reject;
+            img.src = ev.target.result;
+          };
+          reader.onerror = reject;
+          reader.readAsDataURL(file);
+        });
+        const photoId = uid();
+        const storagePath = `jobs/${job.id}/photos/${photoId}.jpg`;
+        const storageRef = ref(storage, storagePath);
+        await uploadBytes(storageRef, blob);
+        const url = await getDownloadURL(storageRef);
+        newPhotos.push({id:photoId, name:file.name, url, storagePath});
+      } catch(e) { console.error("Photo upload failed:", e); alert(`Failed to upload ${file.name}.`); }
+    }
+    if(newPhotos.length > 0) u({tempPedPhotos:[...existing, ...newPhotos]});
+    setTpUploading(false);
+  };
+  const deleteTpPhoto = async (photo) => {
+    if(photo.storagePath) { try { await deleteObject(ref(storage, photo.storagePath)).catch(()=>{}); } catch(e){} }
+    u({tempPedPhotos: (job.tempPedPhotos || []).filter(x => x.id !== photo.id)});
   };
 
   const handleSignOff = () => {
@@ -4414,10 +4463,10 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
               <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:10}}>
                 {(job.tempPedPhotos||[]).map(p=>(
                   <div key={p.id} style={{position:"relative",width:80,height:80}}>
-                    <img src={p.dataUrl} alt={p.name} onClick={()=>setViewPhoto(p.dataUrl)}
+                    <img src={p.url||p.dataUrl} alt={p.name} onClick={()=>setViewPhoto(p.url||p.dataUrl)}
                       style={{width:80,height:80,objectFit:"cover",borderRadius:8,cursor:"pointer",
                         border:`1px solid ${C.border}`}}/>
-                    <button onClick={()=>u({tempPedPhotos:(job.tempPedPhotos||[]).filter(x=>x.id!==p.id)})}
+                    <button onClick={()=>deleteTpPhoto(p)}
                       style={{position:"absolute",top:-5,right:-5,background:"#dc2626",border:"none",
                         borderRadius:"50%",color:"#fff",width:18,height:18,fontSize:10,
                         cursor:"pointer",display:"flex",alignItems:"center",justifyContent:"center",
@@ -4426,11 +4475,16 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
                 ))}
               </div>
             )}
+            {tpUploading&&<div style={{fontSize:11,color:C.accent,fontWeight:600,marginBottom:8,
+              padding:"6px 10px",background:`${C.accent}12`,border:`1px solid ${C.accent}33`,
+              borderRadius:7}}>⏳ Uploading...</div>}
             <label style={{display:"inline-flex",alignItems:"center",gap:6,
               background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
-              padding:"7px 14px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim}}>
+              padding:"7px 14px",cursor:tpUploading?"not-allowed":"pointer",
+              opacity:tpUploading?0.5:1,fontSize:11,fontWeight:600,color:C.dim}}>
               + Add Photos
               <input type="file" accept="image/*" multiple style={{display:"none"}}
+                disabled={tpUploading}
                 onChange={e=>{addPhotos(e.target.files);e.target.value="";}}/>
             </label>
           </div>
@@ -5125,7 +5179,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
             <div>
 
               <Section label="Return Trips" color={C.purple} defaultOpen={true}>
-                <ReturnTrips trips={job.returnTrips} onChange={v=>u({returnTrips:v})} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData}/>
+                <ReturnTrips trips={job.returnTrips} onChange={v=>u({returnTrips:v})} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData} jobId={job.id}/>
               </Section>
 
             </div>
