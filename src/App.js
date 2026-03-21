@@ -4019,10 +4019,10 @@ const normalizeJob = (raw) => ({
 // ── Temp Ped Detail ────────────────────────────────────────────
 // ── Quick Job Detail ───────────────────────────────────────────
 function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList }) {
-  const [job, setJob] = useState({...rawJob});
+  const [job, setJob] = useState(()=>({...normalizeJob(rawJob), quickJob:true}));
   const jobRef = useRef(job);
   useEffect(() => { jobRef.current = job; }, [job]);
-  useEffect(() => { setJob({...rawJob}); }, [rawJob?.id]);
+  useEffect(() => { setJob({...normalizeJob(rawJob), quickJob:true}); }, [rawJob?.id]);
 
   const u = patch => {
     const updated = {...jobRef.current, ...patch};
@@ -6155,28 +6155,28 @@ const STAGE_SECTIONS = [
     test: j => { const rs=effRS(j); return !j.tempPed && !j.quickJob && (j.prepStage||"")==="Job Prep Complete" && (!rs||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"); } },
 
   { key:"roughHold",    label:"Rough — On Hold",           color:"#ca8a04",
-    test: j => effRS(j) === "waiting" },
+    test: j => !j.tempPed && !j.quickJob && effRS(j) === "waiting" },
 
   { key:"rough",        label:"Rough In Progress",         color:"#2563eb",
-    test: j => effRS(j) === "inprogress" },
+    test: j => !j.tempPed && !j.quickJob && effRS(j) === "inprogress" },
 
   { key:"roughInvoice", label:"Rough — Ready to Invoice",  color:"#ea580c",
-    test: j => effRS(j) === "invoice" },
+    test: j => !j.tempPed && !j.quickJob && effRS(j) === "invoice" },
 
   { key:"between",      label:"In Between",                color:"#e8a020",
-    test: j => { const rs=effRS(j); const fs=effFS(j); return rs==="complete"&&(!fs||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"); } },
+    test: j => { if(j.tempPed||j.quickJob) return false; const rs=effRS(j); const fs=effFS(j); return rs==="complete"&&(!fs||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"); } },
 
   { key:"finishHold",   label:"Finish — On Hold",          color:"#ca8a04",
-    test: j => effFS(j) === "waiting" },
+    test: j => !j.tempPed && !j.quickJob && effFS(j) === "waiting" },
 
   { key:"finish",       label:"Finish In Progress",        color:"#0ea5e9",
-    test: j => effFS(j) === "inprogress" },
+    test: j => !j.tempPed && !j.quickJob && effFS(j) === "inprogress" },
 
   { key:"finishInvoice",label:"Finish — Ready to Invoice", color:"#ea580c",
-    test: j => effFS(j) === "invoice" },
+    test: j => !j.tempPed && !j.quickJob && effFS(j) === "invoice" },
 
   { key:"complete",     label:"Completed",                 color:"#22c55e",
-    test: j => effFS(j) === "complete" },
+    test: j => !j.tempPed && !j.quickJob && effFS(j) === "complete" },
 
 ];
 
@@ -8822,7 +8822,7 @@ function App() {
 
                 setJobs(p);
 
-                p.forEach(job => setDoc(doc(db,"jobs",job.id),{data:job,updated_at:new Date().toISOString()}).catch(()=>{}));
+                p.forEach(job => setDoc(doc(db,"jobs",job.id),{data:sanitize(job),updated_at:new Date().toISOString()}).catch(()=>{}));
 
               }
 
@@ -8881,7 +8881,7 @@ function App() {
 
   const saveJob = (job) => {
 
-if(initialLoad.current) return;
+    if(initialLoad.current) return;
 
     isDirty.current = true;
 
