@@ -3544,138 +3544,156 @@ async function syncDriveFoldersToJobs(jobs, updateJob) {
 }
 
 // ── Pinch-to-Zoom Image Viewer (mobile + desktop scroll) ──────────
+// Uses direct DOM manipulation during gestures to avoid React re-render interruptions.
+// Supports: two-finger pinch, one-finger pan (when zoomed), double-tap toggle, scroll-wheel zoom.
 function PinchZoomImage({ src, alt, style }) {
   const containerRef = useRef(null);
-  const [scale, setScale] = useState(1);
-  const [translate, setTranslate] = useState({ x: 0, y: 0 });
-  const stateRef = useRef({ scale: 1, tx: 0, ty: 0, startDist: 0, startScale: 1, startMid: null, startTx: 0, startTy: 0, panning: false, panStart: null });
+  const imgRef = useRef(null);
+  const badgeRef = useRef(null);
+  const st = useRef({ scale:1, tx:0, ty:0, startDist:0, startScale:1, startMid:null, startTx:0, startTy:0, panning:false, panStartX:0, panStartY:0, lastTap:0 });
 
-  const clampTranslate = (tx, ty, s) => {
-    if (s <= 1) return { x: 0, y: 0 };
+  // Apply current transform directly to DOM (no React state)
+  const applyTransform = () => {
+    const s = st.current;
+    if (imgRef.current) imgRef.current.style.transform = `translate(${s.tx}px,${s.ty}px) scale(${s.scale})`;
+    if (badgeRef.current) {
+      badgeRef.current.style.display = s.scale > 1.05 ? "block" : "none";
+      badgeRef.current.textContent = Math.round(s.scale * 100) + "% — double-tap to reset";
+    }
+  };
+
+  const clamp = (tx, ty, sc) => {
+    if (sc <= 1) return { x:0, y:0 };
     const el = containerRef.current;
-    if (!el) return { x: tx, y: ty };
-    const maxX = (el.offsetWidth * (s - 1)) / 2;
-    const maxY = (el.offsetHeight * (s - 1)) / 2;
-    return { x: Math.max(-maxX, Math.min(maxX, tx)), y: Math.max(-maxY, Math.min(maxY, ty)) };
+    if (!el) return { x:tx, y:ty };
+    const mx = (el.offsetWidth * (sc - 1)) / 2;
+    const my = (el.offsetHeight * (sc - 1)) / 2;
+    return { x: Math.max(-mx, Math.min(mx, tx)), y: Math.max(-my, Math.min(my, ty)) };
   };
 
-  const getDist = (t) => Math.hypot(t[1].clientX - t[0].clientX, t[1].clientY - t[0].clientY);
-  const getMid = (t) => ({ x: (t[0].clientX + t[1].clientX) / 2, y: (t[0].clientY + t[1].clientY) / 2 });
+  const dist = (a, b) => Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
+  const mid = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
 
-  const onTouchStart = (e) => {
-    const s = stateRef.current;
-    if (e.touches.length === 2) {
-      e.preventDefault();
-      s.startDist = getDist(e.touches);
-      s.startScale = s.scale;
-      s.startMid = getMid(e.touches);
-      s.startTx = s.tx; s.startTy = s.ty;
-      s.panning = false;
-    } else if (e.touches.length === 1 && s.scale > 1) {
-      e.preventDefault();
-      s.panning = true;
-      s.panStart = { x: e.touches[0].clientX, y: e.touches[0].clientY };
-      s.startTx = s.tx; s.startTy = s.ty;
-    }
-  };
-
-  const onTouchMove = (e) => {
-    const s = stateRef.current;
-    if (e.touches.length === 2) {
-      e.preventDefault();
-      const newDist = getDist(e.touches);
-      const newScale = Math.max(1, Math.min(5, s.startScale * (newDist / s.startDist)));
-      const mid = getMid(e.touches);
-      const dx = mid.x - s.startMid.x;
-      const dy = mid.y - s.startMid.y;
-      const clamped = clampTranslate(s.startTx + dx, s.startTy + dy, newScale);
-      s.scale = newScale; s.tx = clamped.x; s.ty = clamped.y;
-      setScale(newScale); setTranslate(clamped);
-    } else if (e.touches.length === 1 && s.panning && s.scale > 1) {
-      e.preventDefault();
-      const dx = e.touches[0].clientX - s.panStart.x;
-      const dy = e.touches[0].clientY - s.panStart.y;
-      const clamped = clampTranslate(s.startTx + dx, s.startTy + dy, s.scale);
-      s.tx = clamped.x; s.ty = clamped.y;
-      setTranslate(clamped);
-    }
-  };
-
-  const onTouchEnd = (e) => {
-    const s = stateRef.current;
-    if (e.touches.length === 0) { s.panning = false; }
-    if (s.scale <= 1.05) { s.scale = 1; s.tx = 0; s.ty = 0; setScale(1); setTranslate({ x: 0, y: 0 }); }
-  };
-
-  // Double-tap to zoom in/out
-  const lastTap = useRef(0);
-  const onTap = (e) => {
-    const now = Date.now();
-    if (now - lastTap.current < 300) {
-      e.preventDefault();
-      const s = stateRef.current;
-      if (s.scale > 1) {
-        s.scale = 1; s.tx = 0; s.ty = 0;
-        setScale(1); setTranslate({ x: 0, y: 0 });
-      } else {
-        s.scale = 2.5; s.tx = 0; s.ty = 0;
-        setScale(2.5); setTranslate({ x: 0, y: 0 });
-      }
-    }
-    lastTap.current = now;
-  };
-
-  // Desktop scroll-to-zoom
-  const onWheel = (e) => {
-    e.preventDefault();
-    const s = stateRef.current;
-    const delta = e.deltaY > 0 ? 0.9 : 1.1;
-    const newScale = Math.max(1, Math.min(5, s.scale * delta));
-    const clamped = clampTranslate(s.tx, s.ty, newScale);
-    s.scale = newScale; s.tx = clamped.x; s.ty = clamped.y;
-    setScale(newScale); setTranslate(clamped);
-  };
-
-  // Reset on src change
-  useEffect(() => {
-    const s = stateRef.current;
-    s.scale = 1; s.tx = 0; s.ty = 0;
-    setScale(1); setTranslate({ x: 0, y: 0 });
-  }, [src]);
-
-  // Attach touch listeners with { passive: false } so preventDefault works on mobile
   useEffect(() => {
     const el = containerRef.current;
     if (!el) return;
-    const opts = { passive: false };
-    el.addEventListener("touchstart", onTouchStart, opts);
-    el.addEventListener("touchmove", onTouchMove, opts);
-    el.addEventListener("touchend", onTouchEnd, opts);
-    el.addEventListener("wheel", onWheel, opts);
-    return () => {
-      el.removeEventListener("touchstart", onTouchStart, opts);
-      el.removeEventListener("touchmove", onTouchMove, opts);
-      el.removeEventListener("touchend", onTouchEnd, opts);
-      el.removeEventListener("wheel", onWheel, opts);
+
+    const onTS = (e) => {
+      const s = st.current;
+      if (e.touches.length === 2) {
+        e.preventDefault(); e.stopPropagation();
+        s.startDist = dist(e.touches[0], e.touches[1]);
+        s.startScale = s.scale;
+        s.startMid = mid(e.touches[0], e.touches[1]);
+        s.startTx = s.tx; s.startTy = s.ty;
+        s.panning = false;
+      } else if (e.touches.length === 1 && s.scale > 1.05) {
+        e.preventDefault();
+        s.panning = true;
+        s.panStartX = e.touches[0].clientX; s.panStartY = e.touches[0].clientY;
+        s.startTx = s.tx; s.startTy = s.ty;
+      }
     };
-  });
+
+    const onTM = (e) => {
+      const s = st.current;
+      if (e.touches.length === 2) {
+        e.preventDefault(); e.stopPropagation();
+        const d = dist(e.touches[0], e.touches[1]);
+        const ns = Math.max(1, Math.min(6, s.startScale * (d / (s.startDist || 1))));
+        const m = mid(e.touches[0], e.touches[1]);
+        const c = clamp(s.startTx + (m.x - s.startMid.x), s.startTy + (m.y - s.startMid.y), ns);
+        s.scale = ns; s.tx = c.x; s.ty = c.y;
+        applyTransform();
+      } else if (e.touches.length === 1 && s.panning) {
+        e.preventDefault();
+        const c = clamp(s.startTx + (e.touches[0].clientX - s.panStartX), s.startTy + (e.touches[0].clientY - s.panStartY), s.scale);
+        s.tx = c.x; s.ty = c.y;
+        applyTransform();
+      }
+    };
+
+    const onTE = (e) => {
+      const s = st.current;
+      s.panning = false;
+      if (s.scale <= 1.05) { s.scale = 1; s.tx = 0; s.ty = 0; }
+      applyTransform();
+      // Double-tap detection
+      if (e.touches.length === 0 && e.changedTouches.length === 1) {
+        const now = Date.now();
+        if (now - s.lastTap < 320) {
+          e.preventDefault();
+          if (s.scale > 1.05) { s.scale = 1; s.tx = 0; s.ty = 0; }
+          else { s.scale = 2.8; s.tx = 0; s.ty = 0; }
+          applyTransform();
+        }
+        s.lastTap = now;
+      }
+    };
+
+    // iOS Safari gesture events (more reliable than touch for pinch on iOS)
+    const onGS = (e) => { e.preventDefault(); st.current.startScale = st.current.scale; };
+    const onGC = (e) => {
+      e.preventDefault();
+      const s = st.current;
+      s.scale = Math.max(1, Math.min(6, s.startScale * e.scale));
+      if (s.scale <= 1.05) { s.tx = 0; s.ty = 0; }
+      applyTransform();
+    };
+    const onGE = (e) => { e.preventDefault(); const s = st.current; if (s.scale <= 1.05) { s.scale = 1; s.tx = 0; s.ty = 0; applyTransform(); } };
+
+    // Desktop scroll wheel
+    const onWh = (e) => {
+      e.preventDefault();
+      const s = st.current;
+      const factor = e.deltaY > 0 ? 0.9 : 1.1;
+      s.scale = Math.max(1, Math.min(6, s.scale * factor));
+      const c = clamp(s.tx, s.ty, s.scale);
+      s.tx = c.x; s.ty = c.y;
+      applyTransform();
+    };
+
+    const opts = { passive: false };
+    el.addEventListener("touchstart", onTS, opts);
+    el.addEventListener("touchmove", onTM, opts);
+    el.addEventListener("touchend", onTE, opts);
+    el.addEventListener("gesturestart", onGS, opts);
+    el.addEventListener("gesturechange", onGC, opts);
+    el.addEventListener("gestureend", onGE, opts);
+    el.addEventListener("wheel", onWh, opts);
+    return () => {
+      el.removeEventListener("touchstart", onTS, opts);
+      el.removeEventListener("touchmove", onTM, opts);
+      el.removeEventListener("touchend", onTE, opts);
+      el.removeEventListener("gesturestart", onGS, opts);
+      el.removeEventListener("gesturechange", onGC, opts);
+      el.removeEventListener("gestureend", onGE, opts);
+      el.removeEventListener("wheel", onWh, opts);
+    };
+  }, [src]);
+
+  // Reset on src change
+  useEffect(() => {
+    const s = st.current;
+    s.scale = 1; s.tx = 0; s.ty = 0;
+    applyTransform();
+  }, [src]);
 
   return (
     <div ref={containerRef}
-      onClick={onTap}
       style={{ width: "100%", height: "100%", display: "flex", alignItems: "center",
-        justifyContent: "center", overflow: "hidden", touchAction: "none", cursor: scale > 1 ? "grab" : "default" }}>
-      <img src={src} alt={alt || ""}
+        justifyContent: "center", overflow: "hidden", touchAction: "none",
+        WebkitUserSelect: "none", userSelect: "none", position: "relative" }}>
+      <img ref={imgRef} src={src} alt={alt || ""}
         draggable={false}
-        style={{ ...style, transform: `translate(${translate.x}px, ${translate.y}px) scale(${scale})`,
-          transition: "none", willChange: "transform", userSelect: "none", pointerEvents: "none" }} />
-      {scale > 1 && (
-        <div style={{ position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)",
+        style={{ ...style, transform: "scale(1)", transformOrigin: "center center",
+          willChange: "transform", userSelect: "none", WebkitUserSelect: "none",
+          pointerEvents: "none" }} />
+      <div ref={badgeRef}
+        style={{ display: "none", position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)",
           background: "rgba(0,0,0,0.6)", borderRadius: 99, padding: "4px 14px",
-          fontSize: 11, color: "rgba(255,255,255,0.7)", fontWeight: 600, pointerEvents: "none" }}>
-          {Math.round(scale * 100)}% — double-tap to reset
-        </div>
-      )}
+          fontSize: 11, color: "rgba(255,255,255,0.7)", fontWeight: 600, pointerEvents: "none",
+          whiteSpace: "nowrap" }} />
     </div>
   );
 }
