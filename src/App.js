@@ -3543,161 +3543,6 @@ async function syncDriveFoldersToJobs(jobs, updateJob) {
   return { total: driveFolders.length, ...results };
 }
 
-// ── Pinch-to-Zoom Image Viewer (mobile + desktop scroll) ──────────
-// Uses direct DOM manipulation during gestures to avoid React re-render interruptions.
-// Supports: two-finger pinch, one-finger pan (when zoomed), double-tap toggle, scroll-wheel zoom.
-function PinchZoomImage({ src, alt, style }) {
-  const containerRef = useRef(null);
-  const imgRef = useRef(null);
-  const badgeRef = useRef(null);
-  const st = useRef({ scale:1, tx:0, ty:0, startDist:0, startScale:1, startMid:null, startTx:0, startTy:0, panning:false, panStartX:0, panStartY:0, lastTap:0 });
-
-  // Apply current transform directly to DOM (no React state)
-  const applyTransform = () => {
-    const s = st.current;
-    if (imgRef.current) imgRef.current.style.transform = `translate(${s.tx}px,${s.ty}px) scale(${s.scale})`;
-    if (badgeRef.current) {
-      badgeRef.current.style.display = s.scale > 1.05 ? "block" : "none";
-      badgeRef.current.textContent = Math.round(s.scale * 100) + "% — double-tap to reset";
-    }
-  };
-
-  const clamp = (tx, ty, sc) => {
-    if (sc <= 1) return { x:0, y:0 };
-    const el = containerRef.current;
-    if (!el) return { x:tx, y:ty };
-    const mx = (el.offsetWidth * (sc - 1)) / 2;
-    const my = (el.offsetHeight * (sc - 1)) / 2;
-    return { x: Math.max(-mx, Math.min(mx, tx)), y: Math.max(-my, Math.min(my, ty)) };
-  };
-
-  const dist = (a, b) => Math.hypot(b.clientX - a.clientX, b.clientY - a.clientY);
-  const mid = (a, b) => ({ x: (a.clientX + b.clientX) / 2, y: (a.clientY + b.clientY) / 2 });
-
-  useEffect(() => {
-    const el = containerRef.current;
-    if (!el) return;
-
-    const onTS = (e) => {
-      const s = st.current;
-      if (e.touches.length === 2) {
-        e.preventDefault(); e.stopPropagation();
-        s.startDist = dist(e.touches[0], e.touches[1]);
-        s.startScale = s.scale;
-        s.startMid = mid(e.touches[0], e.touches[1]);
-        s.startTx = s.tx; s.startTy = s.ty;
-        s.panning = false;
-      } else if (e.touches.length === 1 && s.scale > 1.05) {
-        e.preventDefault();
-        s.panning = true;
-        s.panStartX = e.touches[0].clientX; s.panStartY = e.touches[0].clientY;
-        s.startTx = s.tx; s.startTy = s.ty;
-      }
-    };
-
-    const onTM = (e) => {
-      const s = st.current;
-      if (e.touches.length === 2) {
-        e.preventDefault(); e.stopPropagation();
-        const d = dist(e.touches[0], e.touches[1]);
-        const ns = Math.max(1, Math.min(6, s.startScale * (d / (s.startDist || 1))));
-        const m = mid(e.touches[0], e.touches[1]);
-        const c = clamp(s.startTx + (m.x - s.startMid.x), s.startTy + (m.y - s.startMid.y), ns);
-        s.scale = ns; s.tx = c.x; s.ty = c.y;
-        applyTransform();
-      } else if (e.touches.length === 1 && s.panning) {
-        e.preventDefault();
-        const c = clamp(s.startTx + (e.touches[0].clientX - s.panStartX), s.startTy + (e.touches[0].clientY - s.panStartY), s.scale);
-        s.tx = c.x; s.ty = c.y;
-        applyTransform();
-      }
-    };
-
-    const onTE = (e) => {
-      const s = st.current;
-      s.panning = false;
-      if (s.scale <= 1.05) { s.scale = 1; s.tx = 0; s.ty = 0; }
-      applyTransform();
-      // Double-tap detection
-      if (e.touches.length === 0 && e.changedTouches.length === 1) {
-        const now = Date.now();
-        if (now - s.lastTap < 320) {
-          e.preventDefault();
-          if (s.scale > 1.05) { s.scale = 1; s.tx = 0; s.ty = 0; }
-          else { s.scale = 2.8; s.tx = 0; s.ty = 0; }
-          applyTransform();
-        }
-        s.lastTap = now;
-      }
-    };
-
-    // iOS Safari gesture events (more reliable than touch for pinch on iOS)
-    const onGS = (e) => { e.preventDefault(); st.current.startScale = st.current.scale; };
-    const onGC = (e) => {
-      e.preventDefault();
-      const s = st.current;
-      s.scale = Math.max(1, Math.min(6, s.startScale * e.scale));
-      if (s.scale <= 1.05) { s.tx = 0; s.ty = 0; }
-      applyTransform();
-    };
-    const onGE = (e) => { e.preventDefault(); const s = st.current; if (s.scale <= 1.05) { s.scale = 1; s.tx = 0; s.ty = 0; applyTransform(); } };
-
-    // Desktop scroll wheel
-    const onWh = (e) => {
-      e.preventDefault();
-      const s = st.current;
-      const factor = e.deltaY > 0 ? 0.9 : 1.1;
-      s.scale = Math.max(1, Math.min(6, s.scale * factor));
-      const c = clamp(s.tx, s.ty, s.scale);
-      s.tx = c.x; s.ty = c.y;
-      applyTransform();
-    };
-
-    const opts = { passive: false };
-    el.addEventListener("touchstart", onTS, opts);
-    el.addEventListener("touchmove", onTM, opts);
-    el.addEventListener("touchend", onTE, opts);
-    el.addEventListener("gesturestart", onGS, opts);
-    el.addEventListener("gesturechange", onGC, opts);
-    el.addEventListener("gestureend", onGE, opts);
-    el.addEventListener("wheel", onWh, opts);
-    return () => {
-      el.removeEventListener("touchstart", onTS, opts);
-      el.removeEventListener("touchmove", onTM, opts);
-      el.removeEventListener("touchend", onTE, opts);
-      el.removeEventListener("gesturestart", onGS, opts);
-      el.removeEventListener("gesturechange", onGC, opts);
-      el.removeEventListener("gestureend", onGE, opts);
-      el.removeEventListener("wheel", onWh, opts);
-    };
-  }, [src]);
-
-  // Reset on src change
-  useEffect(() => {
-    const s = st.current;
-    s.scale = 1; s.tx = 0; s.ty = 0;
-    applyTransform();
-  }, [src]);
-
-  return (
-    <div ref={containerRef}
-      style={{ width: "100%", height: "100%", display: "flex", alignItems: "center",
-        justifyContent: "center", overflow: "hidden", touchAction: "none",
-        WebkitUserSelect: "none", userSelect: "none", position: "relative" }}>
-      <img ref={imgRef} src={src} alt={alt || ""}
-        draggable={false}
-        style={{ ...style, transform: "scale(1)", transformOrigin: "center center",
-          willChange: "transform", userSelect: "none", WebkitUserSelect: "none",
-          pointerEvents: "none" }} />
-      <div ref={badgeRef}
-        style={{ display: "none", position: "absolute", bottom: 16, left: "50%", transform: "translateX(-50%)",
-          background: "rgba(0,0,0,0.6)", borderRadius: 99, padding: "4px 14px",
-          fontSize: 11, color: "rgba(255,255,255,0.7)", fontWeight: 600, pointerEvents: "none",
-          whiteSpace: "nowrap" }} />
-    </div>
-  );
-}
-
 function DriveFilesSection({ job, onUpdate }) {
   const [driveFiles, setDriveFiles] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -3922,13 +3767,16 @@ function DriveFilesSection({ job, onUpdate }) {
                 display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0 }}>✕</button>
           </div>
           {/* Content */}
-          <div style={{ flex: 1, display: "flex", alignItems: "center", justifyContent: "center", overflow: "hidden", position: "relative" }}>
-            {isImage(viewFile) ? (
-              <PinchZoomImage
-                src={thumbUrl(viewFile).replace(/=s\d+/, "=s1600")}
-                alt={viewFile.name}
-                style={{ maxWidth: "95vw", maxHeight: "calc(100vh - 70px)", objectFit: "contain" }} />
-            ) : (
+          <div style={{ flex: 1, display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", overflow: "hidden", padding: 16 }}>
+            {isImage(viewFile) ? (<>
+              <img src={thumbUrl(viewFile).replace(/=s\d+/, "=s1600")} alt={viewFile.name}
+                style={{ maxWidth: "95vw", maxHeight: "calc(95vh - 120px)", objectFit: "contain" }} />
+              <a href={`https://drive.google.com/uc?export=view&id=${viewFile.id}`} target="_blank" rel="noreferrer"
+                style={{ marginTop: 12, fontSize: 12, color: C.blue, fontWeight: 600, textDecoration: "none",
+                  border: `1px solid ${C.blue}66`, borderRadius: 7, padding: "6px 16px", background: "rgba(0,0,0,0.4)" }}>
+                Open full size (pinch-to-zoom) ↗
+              </a>
+            </>) : (
               <iframe src={previewUrl(viewFile)} title={viewFile.name}
                 style={{ width: "100%", height: "100%", border: "none" }}
                 allow="autoplay" />
@@ -4114,9 +3962,15 @@ function FileUploadSection({ jobId, files, onChange }) {
               border: "none", borderRadius: "50%", color: "#fff", fontSize: 22, width: 40, height: 40,
               cursor: "pointer", display: "flex", alignItems: "center", justifyContent: "center", zIndex: 1001 }}>✕</button>
           {isImage(viewFile) ? (
-            <div onClick={e => e.stopPropagation()} style={{ width: "100%", height: "100%", position: "relative" }}>
-              <PinchZoomImage src={viewFile.url} alt={viewFile.name}
-                style={{ maxWidth: "95vw", maxHeight: "95vh", objectFit: "contain", borderRadius: 8 }} />
+            <div onClick={e => e.stopPropagation()}
+              style={{ width: "100%", height: "100%", display: "flex", flexDirection: "column", alignItems: "center", justifyContent: "center", padding: 16 }}>
+              <img src={viewFile.url} alt={viewFile.name}
+                style={{ maxWidth: "95vw", maxHeight: "calc(95vh - 60px)", objectFit: "contain", borderRadius: 8 }} />
+              <a href={viewFile.url} target="_blank" rel="noreferrer"
+                style={{ marginTop: 12, fontSize: 12, color: C.blue, fontWeight: 600, textDecoration: "none",
+                  border: `1px solid ${C.blue}66`, borderRadius: 7, padding: "6px 16px", background: "rgba(0,0,0,0.4)" }}>
+                Open full size (pinch-to-zoom) ↗
+              </a>
             </div>
           ) : (
             <div onClick={e => e.stopPropagation()}
