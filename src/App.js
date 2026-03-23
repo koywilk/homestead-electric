@@ -40,6 +40,31 @@ const firebaseApp = initializeApp(firebaseConfig);
 const db = getFirestore(firebaseApp);
 const storage = getStorage(firebaseApp);
 window.__HE_DB = db;
+
+// Check what Firestore ACTUALLY has for a job
+window.__HE_CHECK = async(name)=>{
+  const snap = await getDocs(collection(db,"jobs"));
+  const found = snap.docs.map(d=>({id:d.id,...d.data()})).find(j=>j.data?.name?.includes(name||'Jeremy Ranch'));
+  if(found) { console.log('Firestore has:',{foreman:found.data.foreman, lead:found.data.lead, name:found.data.name}); return found.data; }
+  else { console.log('Job not found'); return null; }
+};
+
+// Compare localStorage backup vs Firestore for all jobs
+window.__HE_COMPARE = async()=>{
+  const backup=JSON.parse(localStorage.getItem('hejobs_backup')||'[]');
+  const snap = await getDocs(collection(db,"jobs"));
+  const fsJobs = snap.docs.map(d=>{ const raw=d.data(); return raw?.data||null; }).filter(Boolean);
+  let diffs=0;
+  backup.forEach(bj=>{
+    const fj=fsJobs.find(f=>f.id===bj.id||f.name===bj.name);
+    if(fj && fj.foreman!==bj.foreman){
+      console.log('MISMATCH: '+bj.name+' — backup: '+bj.foreman+' | firestore: '+fj.foreman);
+      diffs++;
+    }
+  });
+  console.log(diffs===0?'All foremen match!':diffs+' mismatches found');
+};
+
 window.__HE_RESTORE = async()=>{
   const b=localStorage.getItem('hejobs_backup');
   if(!b){console.log('No backup');return;}
@@ -53,6 +78,9 @@ window.__HE_RESTORE = async()=>{
     if(c%10===0) console.log(c+'/'+jobs.length);
   }
   console.log('DONE — restored '+c+' jobs to Firestore');
+  // Verify it stuck
+  console.log('Verifying...');
+  await window.__HE_CHECK('Jeremy Ranch');
   alert('Restored '+c+' jobs! Refresh the page.');
 };
 
