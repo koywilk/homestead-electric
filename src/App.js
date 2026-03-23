@@ -8597,9 +8597,30 @@ function SettingsPersonRow({user, color, colorOptions, onColorChange}) {
   );
 }
 
-function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides }) {
+function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upcoming, manualTasks }) {
   const [colors, setColors] = useState({...colorOverrides});
   const [saved,  setSaved]  = useState(false);
+
+  // ── Data Backup Export ──
+  const exportBackup = () => {
+    const backup = {
+      exportedAt: new Date().toISOString(),
+      version: "v1",
+      jobs: jobs || [],
+      upcoming: upcoming || [],
+      manualTasks: manualTasks || [],
+      users: users || [],
+      colorOverrides: colors,
+    };
+    const blob = new Blob([JSON.stringify(backup, null, 2)], { type: "application/json" });
+    const url = URL.createObjectURL(blob);
+    const a = document.createElement("a");
+    const date = new Date().toISOString().split("T")[0];
+    a.href = url;
+    a.download = `homestead-backup-${date}.json`;
+    a.click();
+    URL.revokeObjectURL(url);
+  };
 
   // Sync if parent colorOverrides changes (e.g. on load)
   useEffect(()=>{ setColors({...colorOverrides}); }, [JSON.stringify(colorOverrides)]);
@@ -8637,6 +8658,24 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides }) {
       <div style={{fontSize:12,color:"#64748b",marginBottom:24,lineHeight:1.5}}>
         Team members are grouped by role. Assign a color to each person — it appears on their card and throughout the app.
         To add or remove people, use the <strong>Team Members</strong> section below.
+      </div>
+
+      {/* Data Backup */}
+      <div style={{marginBottom:32,padding:"16px 18px",background:"#f0fdf4",borderRadius:12,
+        border:"1px solid #bbf7d0"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+          <span style={{fontSize:16}}>💾</span>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.06em",color:"#166534"}}>DATA BACKUP</div>
+        </div>
+        <div style={{fontSize:11,color:"#15803d",marginBottom:12,lineHeight:1.5}}>
+          Download a full backup of all jobs, tasks, and settings. Do this regularly to protect your data.
+        </div>
+        <button onClick={exportBackup}
+          style={{padding:"10px 20px",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer",
+            fontFamily:"inherit",background:"#16a34a",color:"#fff",border:"none",
+            display:"flex",alignItems:"center",gap:8}}>
+          📥 Download Backup ({(jobs||[]).length} jobs)
+        </button>
       </div>
 
       {noUsers && (
@@ -9240,31 +9279,24 @@ function App() {
 
           // Just keep the jobs list in sync for the home screen
 
-          try { localStorage.setItem('hejobs_backup', JSON.stringify(loaded)); } catch(e){}
+          // Only update localStorage backup if Firestore has real data
+          // Never let a smaller/stale snapshot overwrite a larger backup
+          try {
+            const existingBackup = JSON.parse(localStorage.getItem('hejobs_backup')||'[]');
+            if(loaded.length >= existingBackup.length || loaded.length > 3) {
+              localStorage.setItem('hejobs_backup', JSON.stringify(loaded));
+            } else {
+              console.warn(`[HE] Firestore returned ${loaded.length} jobs but backup has ${existingBackup.length} — NOT overwriting backup`);
+            }
+          } catch(e){}
 
         } else {
 
-          // Firestore empty — restore from localStorage
-
-          try {
-
-            const b = localStorage.getItem('hejobs_backup');
-
-            if(b) {
-
-              const p = JSON.parse(b);
-
-              if(p?.length) {
-
-                setJobs(p);
-
-                p.forEach(job => setDoc(doc(db,"jobs",job.id),{data:sanitize(job),updated_at:new Date().toISOString()}).catch(()=>{}));
-
-              }
-
-            }
-
-          } catch(e){}
+          // Firestore appears empty — DO NOT blindly restore from localStorage
+          // This can overwrite real data if there's a brief network glitch
+          // Only restore if we've NEVER had jobs before (truly new install)
+          console.warn("[HE] Firestore snapshot was empty. NOT restoring from localStorage to prevent data loss.");
+          console.warn("[HE] If this is a new install, add your first job manually.");
 
         }
 
@@ -10603,6 +10635,9 @@ function App() {
             users={users}
             colorOverrides={_colorOverrides}
             onSave={saveSettings}
+            jobs={jobs}
+            upcoming={upcoming}
+            manualTasks={manualTasks}
           />
           {can(identity,"users.manage")&&(
             <div style={{padding:"0 26px 40px"}}>
