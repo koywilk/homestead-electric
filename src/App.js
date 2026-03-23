@@ -9519,6 +9519,28 @@ function App() {
 
   },[]);
 
+  // Automatic daily safety backup — separate from the normal rolling backup
+  // Kept under a dated key so it can't be accidentally overwritten
+  useEffect(() => {
+    if(!jobs.length) return;
+    const today = new Date().toISOString().split("T")[0];
+    const key = `he_daily_backup_${today}`;
+    if(!localStorage.getItem(key)) {
+      localStorage.setItem(key, JSON.stringify({savedAt: new Date().toISOString(), count: jobs.length, jobs}));
+      // Clean up backups older than 7 days
+      for(let i = 0; i < localStorage.length; i++) {
+        const k = localStorage.key(i);
+        if(k?.startsWith("he_daily_backup_") && k !== key) {
+          try {
+            const d = k.replace("he_daily_backup_","");
+            if(d < new Date(Date.now() - 7*86400000).toISOString().split("T")[0]) localStorage.removeItem(k);
+          } catch(e){}
+        }
+      }
+      console.log(`[HE] Daily safety backup saved: ${jobs.length} jobs (${today})`);
+    }
+  }, [jobs.length > 0]);
+
 
   // Save a single job as its own Firestore document
 
@@ -9552,7 +9574,9 @@ function App() {
 
       try {
 
-        const payload = {data:sanitize(job),updated_at:new Date().toISOString()};
+        // Tag every save with device identity so we can trace who changed what
+        const deviceId = localStorage.getItem('he_device_id') || (() => { const id = 'dev_' + Math.random().toString(36).slice(2,8); localStorage.setItem('he_device_id', id); return id; })();
+        const payload = {data:sanitize(job),updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
         // Check estimated size before saving
         const estimatedSize = JSON.stringify(payload).length;
         if(estimatedSize > 900000) {
