@@ -5179,7 +5179,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                               style={{width:130,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
                           </div>
                         )}
-                        {rsDef.hasDate&&job.roughStatus==="scheduled"&&(
+                        {rsDef.hasDate&&(job.roughStatus==="scheduled"||job.roughStatus==="inprogress")&&(
                           <div style={{display:"flex",flexDirection:"column",gap:3}}>
                             <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:rsDef.color}}>SCHEDULED END</div>
                             <DateInp value={job.roughScheduledEnd||""} onChange={e=>u({roughScheduledEnd:e.target.value})}
@@ -5312,7 +5312,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                               style={{width:130,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
                           </div>
                         )}
-                        {fsDef.hasDate&&job.finishStatus==="scheduled"&&(
+                        {fsDef.hasDate&&(job.finishStatus==="scheduled"||job.finishStatus==="inprogress")&&(
                           <div style={{display:"flex",flexDirection:"column",gap:3}}>
                             <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:fsDef.color}}>SCHEDULED END</div>
                             <DateInp value={job.finishScheduledEnd||""} onChange={e=>u({finishScheduledEnd:e.target.value})}
