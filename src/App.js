@@ -9309,6 +9309,15 @@ function App() {
             });
           });
 
+          // Keep selected job in sync with Firestore updates
+          setSelected(prev => {
+            if(!prev) return null;
+            // Don't overwrite if there's a pending save for this job
+            if(saveTimers.current[prev.id]) return prev;
+            const updated = loaded.find(j => j.id === prev.id);
+            return updated ? normalizeJob(updated) : prev;
+          });
+
           // Auto-advance: one-time — if rough complete and finish has no status for 60+ days,
           // set finish to "waiting_date" so the "Get Finish Start Date" task fires
           const ADVANCE_KEY = "heAutoAdvanceFinish_v1";
