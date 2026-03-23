@@ -8597,9 +8597,10 @@ function SettingsPersonRow({user, color, colorOptions, onColorChange}) {
   );
 }
 
-function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upcoming, manualTasks }) {
+function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upcoming, manualTasks, onRestoreFromBackup }) {
   const [colors, setColors] = useState({...colorOverrides});
   const [saved,  setSaved]  = useState(false);
+  const [restoring, setRestoring] = useState(false);
 
   // ── Data Backup Export ──
   const exportBackup = () => {
@@ -8670,12 +8671,31 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upco
         <div style={{fontSize:11,color:"#15803d",marginBottom:12,lineHeight:1.5}}>
           Download a full backup of all jobs, tasks, and settings. Do this regularly to protect your data.
         </div>
-        <button onClick={exportBackup}
-          style={{padding:"10px 20px",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer",
-            fontFamily:"inherit",background:"#16a34a",color:"#fff",border:"none",
-            display:"flex",alignItems:"center",gap:8}}>
-          📥 Download Backup ({(jobs||[]).length} jobs)
-        </button>
+        <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+          <button onClick={exportBackup}
+            style={{padding:"10px 20px",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer",
+              fontFamily:"inherit",background:"#16a34a",color:"#fff",border:"none",
+              display:"flex",alignItems:"center",gap:8}}>
+            📥 Download Backup ({(jobs||[]).length} jobs)
+          </button>
+          {onRestoreFromBackup&&(
+            <button disabled={restoring} onClick={async()=>{
+              const backupRaw=localStorage.getItem('hejobs_backup');
+              if(!backupRaw){alert('No backup found');return;}
+              const backupJobs=JSON.parse(backupRaw);
+              if(!confirm(`Restore ${backupJobs.length} jobs from local backup? This will overwrite current Firestore data with your cached version.`)) return;
+              setRestoring(true);
+              const count=await onRestoreFromBackup();
+              setRestoring(false);
+              if(count>0){alert(`Restored ${count} jobs! Refreshing...`);window.location.reload();}
+            }}
+              style={{padding:"10px 20px",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer",
+                fontFamily:"inherit",background:restoring?"#9ca3af":"#dc2626",color:"#fff",border:"none",
+                display:"flex",alignItems:"center",gap:8}}>
+              {restoring?"⏳ Restoring...":"🔄 Restore from Local Backup"}
+            </button>
+          )}
+        </div>
       </div>
 
       {noUsers && (
@@ -10638,6 +10658,18 @@ function App() {
             jobs={jobs}
             upcoming={upcoming}
             manualTasks={manualTasks}
+            onRestoreFromBackup={async()=>{
+              try {
+                const b=localStorage.getItem('hejobs_backup');
+                if(!b){alert('No backup found in localStorage');return 0;}
+                const backupJobs=JSON.parse(b);
+                if(!backupJobs||!backupJobs.length){alert('Backup is empty');return 0;}
+                for(const job of backupJobs){
+                  await setDoc(doc(db,"jobs",job.id),{data:sanitize(job),updated_at:new Date().toISOString()});
+                }
+                return backupJobs.length;
+              }catch(e){console.error('Restore failed:',e);alert('Restore failed: '+e.message);return 0;}
+            }}
           />
           {can(identity,"users.manage")&&(
             <div style={{padding:"0 26px 40px"}}>
