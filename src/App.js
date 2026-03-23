@@ -4338,7 +4338,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
   const [job, setJob] = useState(()=>({...normalizeJob(rawJob), quickJob:true}));
   const jobRef = useRef(job);
   useEffect(() => { jobRef.current = job; }, [job]);
-  useEffect(() => { setJob({...normalizeJob(rawJob), quickJob:true}); }, [rawJob?.id]);
+  useEffect(() => { setJob({...normalizeJob(rawJob), quickJob:true}); }, [rawJob?.id, rawJob?.updated_at, rawJob?.foreman, rawJob?.lead]);
 
   const u = patch => {
     const updated = {...jobRef.current, ...patch};
@@ -4635,7 +4635,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
   const jobRef = useRef(job);
   useEffect(()=>{ jobRef.current = job; }, [job]);
-  useEffect(()=>{ setJob(normalizeJob(rawJob)); }, [rawJob?.id]);
+  useEffect(()=>{ setJob(normalizeJob(rawJob)); }, [rawJob?.id, rawJob?.updated_at, rawJob?.foreman, rawJob?.lead]);
 
   const u = patch => {
     const updated = {...jobRef.current, ...patch};
@@ -4906,6 +4906,9 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
 function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
+
+  // Re-sync local state when Firestore pushes updated data
+  useEffect(()=>{ setJob(normalizeJob(rawJob)); }, [rawJob?.id, rawJob?.updated_at, rawJob?.foreman, rawJob?.lead]);
 
   const jobRef = useRef(job);
   useEffect(()=>{ jobRef.current = job; }, [job]);
