@@ -9626,7 +9626,7 @@ function App() {
     const today = new Date().toISOString().split("T")[0];
     const key = `he_daily_backup_${today}`;
     if(!localStorage.getItem(key)) {
-      localStorage.setItem(key, JSON.stringify({savedAt: new Date().toISOString(), count: jobs.length, jobs}));
+      try { localStorage.setItem(key, JSON.stringify({savedAt: new Date().toISOString(), count: jobs.length, jobs})); } catch(e) { console.warn("[HE] Daily backup failed (storage full?):", e); }
       // Clean up backups older than 7 days
       for(let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
