@@ -9443,7 +9443,19 @@ function App() {
       (err) => { console.error("Tasks snapshot error:",err); }
     );
 
-    return () => { unsub(); unsubUpcoming(); unsubTasks(); }; // cleanup on unmount
+    // Force-reload listener: when _appVersion changes in Firestore, reload all clients
+    // This ensures everyone gets the latest code after a deploy
+    const APP_VERSION = "2026-03-23-v2";
+    const unsubVersion = onSnapshot(doc(db,"config","app"), (snap) => {
+      if(!snap.exists()) return;
+      const serverVersion = snap.data()?.version || "";
+      if(serverVersion && serverVersion !== APP_VERSION) {
+        console.log(`[HE] New app version detected (${serverVersion} vs ${APP_VERSION}) — reloading...`);
+        window.location.reload();
+      }
+    }, ()=>{});
+
+    return () => { unsub(); unsubUpcoming(); unsubTasks(); unsubVersion(); }; // cleanup on unmount
 
   },[]);
 
@@ -9489,6 +9501,24 @@ function App() {
             console.error(`[HE] Job ${job.name} exceeds 1MB (${Math.round(estimatedSize/1024)}KB) — photos may need to be removed`);
             setSyncStatus("error");
             alert(`Save failed: "${job.name}" is too large (${Math.round(estimatedSize/1024)}KB). Try removing some photos — each photo adds to the document size. Firebase Storage for photos is coming soon.`);
+            return;
+          }
+        }
+        // Stale-write guard: check if Firestore has newer data before overwriting
+        const currentSnap = await getDoc(doc(db,"jobs",job.id));
+        if(currentSnap.exists()) {
+          const serverUpdatedAt = currentSnap.data()?.updated_at || "";
+          const localUpdatedAt = job.updated_at || "";
+          if(serverUpdatedAt && localUpdatedAt && serverUpdatedAt > localUpdatedAt) {
+            console.warn(`[HE] Stale write blocked for "${job.name}" — server has newer data (${serverUpdatedAt} > ${localUpdatedAt}). Refreshing from server.`);
+            // Refresh this job from server data instead of overwriting
+            const serverJob = currentSnap.data()?.data;
+            if(serverJob) {
+              setJobs(js => js.map(j => j.id === job.id ? normalizeJob({...serverJob, updated_at: serverUpdatedAt}) : j));
+              setSelected(prev => prev?.id === job.id ? normalizeJob({...serverJob, updated_at: serverUpdatedAt}) : prev);
+            }
+            setSyncStatus("saved");
+            setTimeout(()=>setSyncStatus("idle"),2000);
             return;
           }
         }
@@ -10757,10 +10787,14 @@ function App() {
             onRestoreFromFile={async(jobsArr)=>{
               try {
                 if(!jobsArr||!jobsArr.length){alert('No jobs in file');return 0;}
+                const ts = new Date().toISOString();
                 for(const job of jobsArr){
                   const clean=Object.fromEntries(Object.entries(job).filter(([,v])=>v!==undefined));
-                  await setDoc(doc(db,"jobs",job.id),{data:clean,updated_at:new Date().toISOString()});
+                  await setDoc(doc(db,"jobs",job.id),{data:clean,updated_at:ts});
                 }
+                // Force ALL clients to reload so they pick up new code + fresh data
+                const newVersion = "restore-" + Date.now();
+                await setDoc(doc(db,"config","app"),{version:newVersion});
                 return jobsArr.length;
               }catch(e){console.error('File restore failed:',e);alert('Restore failed: '+e.message);return 0;}
             }}
