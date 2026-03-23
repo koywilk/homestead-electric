@@ -9189,6 +9189,15 @@ function App() {
   const _foremen = _foremanUsers.map(u=>u.name);
   const _leads   = _leadUsers.map(u=>u.name);
 
+  // Normalize foreman/lead names to match the canonical casing from users list
+  // Fixes issues where "Vasa mataafa" != "Vasa Mataafa" in dropdowns
+  const _allPeople = users.map(u=>u.name).filter(Boolean);
+  const normalizeName = (val) => {
+    if(!val) return val;
+    const match = _allPeople.find(p => p.toLowerCase() === val.toLowerCase());
+    return match || val;
+  };
+
   // Build color map: try full name, then first name
   const getPersonColor = (name) => {
     if(_colorOverrides[name]) return _colorOverrides[name];
@@ -9307,6 +9316,13 @@ function App() {
         if(!snap.empty) {
 
           const loaded = migrate(snap.docs.map(d=>{const raw=d.data(); return raw?.data ? {...raw.data, updated_at:raw.updated_at||""} : null;}).filter(Boolean));
+
+          // Normalize foreman/lead names to match canonical casing from users list
+          // This prevents "Vasa mataafa" showing as wrong person in dropdowns
+          loaded.forEach(j => {
+            if(j.foreman) { const fixed = normalizeName(j.foreman); if(fixed !== j.foreman) j.foreman = fixed; }
+            if(j.lead)    { const fixed = normalizeName(j.lead);    if(fixed !== j.lead)    j.lead = fixed; }
+          });
 
           // One-time fix v2: clear tempPed:true from any job that has a foreman assigned
           // Real temp peds never have a foreman — they're standalone cards
@@ -10790,6 +10806,8 @@ function App() {
                 if(!jobsArr||!jobsArr.length){alert('No jobs in file');return 0;}
                 const ts = new Date().toISOString();
                 for(const job of jobsArr){
+                  if(job.foreman) job.foreman = normalizeName(job.foreman);
+                  if(job.lead) job.lead = normalizeName(job.lead);
                   const clean=Object.fromEntries(Object.entries(job).filter(([,v])=>v!==undefined));
                   await setDoc(doc(db,"jobs",job.id),{data:clean,updated_at:ts});
                 }
