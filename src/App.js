@@ -1128,19 +1128,22 @@ const DateInp = ({value,onChange,style={}}) => (
 );
 
 
-const Sel = ({value,onChange,options,style={}}) => (
-
-  <select value={value??""} onChange={onChange}
-
-    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
-
-      padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",...style}}>
-
-    {options.map(o=><option key={o.value??o} value={o.value??o}>{o.label??o}</option>)}
-
-  </select>
-
-);
+const Sel = ({value,onChange,options,style={}}) => {
+  // Case-insensitive value matching: find the option that matches ignoring case
+  const raw = value ?? "";
+  const matched = options.find(o => {
+    const ov = (o.value ?? o ?? "").toString();
+    return ov === raw || ov.toLowerCase() === raw.toString().toLowerCase();
+  });
+  const resolved = matched ? (matched.value ?? matched) : raw;
+  return (
+    <select value={resolved} onChange={onChange}
+      style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+        padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",...style}}>
+      {options.map(o=><option key={o.value??o} value={o.value??o}>{o.label??o}</option>)}
+    </select>
+  );
+};
 
 
 const TA = ({value,onChange,placeholder,rows=3}) => (
