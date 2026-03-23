@@ -39,6 +39,22 @@ const firebaseApp = initializeApp(firebaseConfig);
 
 const db = getFirestore(firebaseApp);
 const storage = getStorage(firebaseApp);
+window.__HE_DB = db;
+window.__HE_RESTORE = async()=>{
+  const b=localStorage.getItem('hejobs_backup');
+  if(!b){console.log('No backup');return;}
+  const jobs=JSON.parse(b);
+  console.log('Restoring '+jobs.length+' jobs...');
+  let c=0;
+  for(const job of jobs){
+    const clean=Object.fromEntries(Object.entries(job).filter(([,v])=>v!==undefined));
+    await setDoc(doc(db,"jobs",job.id),{data:clean,updated_at:new Date().toISOString()});
+    c++;
+    if(c%10===0) console.log(c+'/'+jobs.length);
+  }
+  console.log('DONE — restored '+c+' jobs to Firestore');
+  alert('Restored '+c+' jobs! Refresh the page.');
+};
 
 // Offline persistence is enabled by default in Firebase v10+ web SDK
 // Multi-tab support via enableMultiTabIndexedDbPersistence is deprecated
