@@ -9443,7 +9443,20 @@ function App() {
       (err) => { console.error("Tasks snapshot error:",err); }
     );
 
-    return () => { unsub(); unsubUpcoming(); unsubTasks(); }; // cleanup on unmount
+    // Force-reload: watch config/app for version changes AFTER initial load
+    let firstVersionSeen = null;
+    const unsubVersion = onSnapshot(doc(db,"config","app"), (snap) => {
+      if(!snap.exists()) return;
+      const v = snap.data()?.version || "";
+      if(!v) return;
+      if(firstVersionSeen === null) { firstVersionSeen = v; return; } // first load — just record it
+      if(v !== firstVersionSeen) {
+        console.log(`[HE] App version changed (${firstVersionSeen} → ${v}) — reloading...`);
+        window.location.reload();
+      }
+    }, ()=>{});
+
+    return () => { unsub(); unsubUpcoming(); unsubTasks(); unsubVersion(); }; // cleanup on unmount
 
   },[]);
 
@@ -10780,6 +10793,8 @@ function App() {
                   const clean=Object.fromEntries(Object.entries(job).filter(([,v])=>v!==undefined));
                   await setDoc(doc(db,"jobs",job.id),{data:clean,updated_at:ts});
                 }
+                // Bump version to force ALL other clients to reload (picks up new code + fresh data)
+                await setDoc(doc(db,"config","app"),{version:"restore-"+Date.now()});
                 return jobsArr.length;
               }catch(e){console.error('File restore failed:',e);alert('Restore failed: '+e.message);return 0;}
             }}
