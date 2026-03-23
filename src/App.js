@@ -110,7 +110,7 @@ const ROUGH_STATUSES = [
   {value:"date_confirmed",label:"Start Date Confirmed — Needs to Schedule", color:"#f97316", hasDate:true},
   {value:"scheduled",  label:"Scheduled",                            color:"#2563eb", hasDate:true},
   {value:"waiting",    label:"Waiting on Items",                     color:"#ca8a04", dashed:true},
-  {value:"inprogress", label:"In Progress",                          color:"#7dd3fc"},
+  {value:"inprogress", label:"In Progress",                          color:"#7dd3fc", hasDate:true},
   {value:"invoice",    label:"Ready to Invoice",                     color:"#ea580c"},
   {value:"complete",   label:"Complete",                             color:"#22c55e"},
 ];
