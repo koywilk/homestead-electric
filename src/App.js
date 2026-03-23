@@ -8647,6 +8647,46 @@ function SettingsPersonRow({user, color, colorOptions, onColorChange}) {
   );
 }
 
+function BulkEditTable({ jobs, foremenList, leadsList, onUpdateJob }) {
+  const [filter, setFilter] = useState("");
+  const filtered = filter
+    ? jobs.filter(j => (j.name||"").toLowerCase().includes(filter.toLowerCase()) || (j.foreman||"").toLowerCase().includes(filter.toLowerCase()))
+    : jobs;
+  const sorted = [...filtered].sort((a,b) => (a.foreman||"").localeCompare(b.foreman||"") || (a.name||"").localeCompare(b.name||""));
+  return (
+    <div style={{padding:"20px 26px"}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.06em",color:C.text,marginBottom:12}}>Bulk Edit — Foreman & Lead</div>
+      <input placeholder="Filter by job name or foreman..." value={filter} onChange={e=>setFilter(e.target.value)}
+        style={{width:"100%",maxWidth:400,padding:"8px 12px",borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,color:C.text,fontSize:13,fontFamily:"inherit",marginBottom:16,outline:"none"}}/>
+      <div style={{overflowX:"auto",borderRadius:10,border:`1px solid ${C.border}`}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,fontFamily:"inherit"}}>
+          <thead>
+            <tr style={{background:C.surface,borderBottom:`2px solid ${C.border}`}}>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em"}}>Job Name</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:180}}>Foreman</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:180}}>Lead</th>
+            </tr>
+          </thead>
+          <tbody>
+            {sorted.map(job => (
+              <tr key={job.id} style={{borderBottom:`1px solid ${C.border}22`}}>
+                <td style={{padding:"8px 12px",color:C.text,fontWeight:600}}>{job.name||"(untitled)"}</td>
+                <td style={{padding:"6px 8px"}}>
+                  <Sel value={job.foreman||""} onChange={e=>onUpdateJob({...job, foreman:e.target.value})} options={[...(foremenList||[]),"Unassigned"]}/>
+                </td>
+                <td style={{padding:"6px 8px"}}>
+                  <Sel value={job.lead||""} onChange={e=>onUpdateJob({...job, lead:e.target.value})} options={["Lead TBD",...(leadsList||[])]}/>
+                </td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{marginTop:10,fontSize:11,color:C.muted}}>{sorted.length} jobs shown — changes save automatically</div>
+    </div>
+  );
+}
+
 function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upcoming, manualTasks, onRestoreFromBackup, onRestoreFromFile }) {
   const [colors, setColors] = useState({...colorOverrides});
   const [saved,  setSaved]  = useState(false);
@@ -10784,6 +10824,8 @@ function App() {
 
       {view==="settings"&&can(identity,"settings.view")&&(
         <div>
+          <BulkEditTable jobs={jobs} foremenList={_foremen} leadsList={_leads} onUpdateJob={updateJob}/>
+          <div style={{height:1,background:C.border,margin:"0 26px"}}/>
           <SettingsPage
             COLOR_OPTIONS={COLOR_OPTIONS}
             users={users}
