@@ -1128,19 +1128,21 @@ const DateInp = ({value,onChange,style={}}) => (
 );
 
 
-const Sel = ({value,onChange,options,style={}}) => {
+const Sel = ({value,onChange,options:rawOpts,style={}}) => {
+  const opts = rawOpts || [];
   // Case-insensitive value matching: find the option that matches ignoring case
-  const raw = value ?? "";
-  const matched = options.find(o => {
+  const raw = (value ?? "").toString();
+  const matched = opts.find(o => {
+    if(o == null) return false;
     const ov = (o.value ?? o ?? "").toString();
-    return ov === raw || ov.toLowerCase() === raw.toString().toLowerCase();
+    return ov === raw || ov.toLowerCase() === raw.toLowerCase();
   });
   const resolved = matched ? (matched.value ?? matched) : raw;
   return (
     <select value={resolved} onChange={onChange}
       style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
         padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",...style}}>
-      {options.map(o=><option key={o.value??o} value={o.value??o}>{o.label??o}</option>)}
+      {opts.filter(o=>o!=null).map(o=><option key={o.value??o} value={o.value??o}>{o.label??o}</option>)}
     </select>
   );
 };
@@ -1160,6 +1162,30 @@ const TA = ({value,onChange,placeholder,rows=3}) => (
 
 );
 
+
+// Clickable address that opens in Google Maps or Apple Maps (user choice)
+const AddressLink = ({address, children, style={}}) => {
+  if(!address) return null;
+  const encoded = encodeURIComponent(address);
+  const googleUrl = `https://www.google.com/maps/search/?api=1&query=${encoded}`;
+  const appleUrl = `https://maps.apple.com/?q=${encoded}`;
+  const handleClick = (e) => {
+    e.stopPropagation();
+    // On iOS/macOS Safari, Apple Maps is native; elsewhere default to Google
+    const isApple = /iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent);
+    if(isApple) {
+      const choice = window.confirm("Open in Apple Maps?\n\nOK = Apple Maps\nCancel = Google Maps");
+      window.open(choice ? appleUrl : googleUrl, "_blank");
+    } else {
+      window.open(googleUrl, "_blank");
+    }
+  };
+  return (
+    <span onClick={handleClick} style={{cursor:"pointer",textDecoration: children ? "none" : "underline",textDecorationStyle:"dotted",textUnderlineOffset:2,...style}}>
+      {children || address}
+    </span>
+  );
+};
 
 const Btn = ({onClick,children,variant="ghost",style={}}) => {
 
@@ -4416,7 +4442,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
             <div style={{ fontFamily: "'Bebas Neue',sans-serif", fontSize: 22, letterSpacing: "0.06em",
               color: C.text, lineHeight: 1 }}>{job.name || "New Quick Job"}</div>
             <div style={{ fontSize: 11, color: C.dim, marginTop: 2 }}>
-              {[job.address, job.gc].filter(Boolean).join(" · ") || "No details yet"}
+              {job.address ? <><AddressLink address={job.address} style={{color:C.dim}}/>{job.gc ? ` · ${job.gc}` : ""}</> : (job.gc||"No details yet")}
             </div>
           </div>
           <button onClick={onClose}
@@ -4724,7 +4750,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
             <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",
               color:C.text,lineHeight:1}}>{job.name||"New Temp Ped"}</div>
             <div style={{fontSize:11,color:C.dim,marginTop:2}}>
-              {[job.address,job.gc].filter(Boolean).join(" · ")||"No details yet"}
+              {job.address ? <><AddressLink address={job.address} style={{color:C.dim}}/>{job.gc ? ` · ${job.gc}` : ""}</> : (job.gc||"No details yet")}
             </div>
           </div>
           <button onClick={onClose}
@@ -5003,7 +5029,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
 
             <div style={{fontSize:11,color:C.dim,marginTop:2}}>
 
-              {[job.address,job.gc].filter(Boolean).join(" · ")||"No details yet"}
+              {job.address ? <><AddressLink address={job.address} style={{color:C.dim}}/>{job.gc ? ` · ${job.gc}` : ""}</> : (job.gc||"No details yet")}
 
             </div>
 
@@ -5627,7 +5653,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
 
                     <div style={{fontSize:10,color:C.dim,marginBottom:3}}>{l}</div>
 
-                    <Inp value={job[k]} onChange={e=>u({[k]:e.target.value})} placeholder={l}/>
+                    {k==="address" ? (
+                      <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                        <div style={{flex:1}}><Inp value={job[k]} onChange={e=>u({[k]:e.target.value})} placeholder={l}/></div>
+                        {job.address && <AddressLink address={job.address} style={{fontSize:16,color:C.accent,flexShrink:0,padding:"6px 4px",lineHeight:1}}>📍</AddressLink>}
+                      </div>
+                    ) : (
+                      <Inp value={job[k]} onChange={e=>u({[k]:e.target.value})} placeholder={l}/>
+                    )}
 
                   </div>
 
@@ -8647,6 +8680,73 @@ function SettingsPersonRow({user, color, colorOptions, onColorChange}) {
   );
 }
 
+function ActivityLog({ jobs }) {
+  const [filter, setFilter] = useState("");
+  // Sort by most recently updated
+  const sorted = [...jobs]
+    .filter(j => j.updated_at)
+    .sort((a,b) => (b.updated_at||"").localeCompare(a.updated_at||""));
+  const filtered = filter
+    ? sorted.filter(j => (j.name||"").toLowerCase().includes(filter.toLowerCase()) || (j._saved_by||"").toLowerCase().includes(filter.toLowerCase()))
+    : sorted;
+
+  const timeAgo = (iso) => {
+    if(!iso) return "—";
+    const diff = Date.now() - new Date(iso).getTime();
+    const mins = Math.floor(diff/60000);
+    if(mins < 1) return "just now";
+    if(mins < 60) return `${mins}m ago`;
+    const hrs = Math.floor(mins/60);
+    if(hrs < 24) return `${hrs}h ago`;
+    const days = Math.floor(hrs/24);
+    return `${days}d ago`;
+  };
+
+  const fmtDate = (iso) => {
+    if(!iso) return "—";
+    try {
+      const d = new Date(iso);
+      return d.toLocaleDateString("en-US",{month:"short",day:"numeric"}) + " " + d.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});
+    } catch(e) { return iso; }
+  };
+
+  return (
+    <div style={{padding:"20px 26px"}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.06em",color:C.text,marginBottom:4}}>Activity Log</div>
+      <div style={{fontSize:12,color:C.muted,marginBottom:12}}>Shows who last edited each job and when. Updated in real time.</div>
+      <input placeholder="Filter by job name or person..." value={filter} onChange={e=>setFilter(e.target.value)}
+        style={{width:"100%",maxWidth:400,padding:"8px 12px",borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,color:C.text,fontSize:13,fontFamily:"inherit",marginBottom:16,outline:"none"}}/>
+      <div style={{overflowX:"auto",borderRadius:10,border:`1px solid ${C.border}`}}>
+        <table style={{width:"100%",borderCollapse:"collapse",fontSize:13,fontFamily:"inherit"}}>
+          <thead>
+            <tr style={{background:C.surface,borderBottom:`2px solid ${C.border}`}}>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em"}}>Job</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:130}}>Last Edited By</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:100}}>When</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:150}}>Date</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:90}}>Foreman</th>
+              <th style={{textAlign:"left",padding:"10px 12px",fontWeight:700,color:C.muted,fontSize:11,textTransform:"uppercase",letterSpacing:"0.05em",width:90}}>Lead</th>
+            </tr>
+          </thead>
+          <tbody>
+            {filtered.slice(0,100).map(job => (
+              <tr key={job.id} style={{borderBottom:`1px solid ${C.border}22`}}>
+                <td style={{padding:"8px 12px",color:C.text,fontWeight:600}}>{job.name||"(untitled)"}</td>
+                <td style={{padding:"8px 12px",color:job._saved_by?C.text:C.muted}}>{job._saved_by||"—"}</td>
+                <td style={{padding:"8px 12px",color:C.muted,fontSize:12}}>{timeAgo(job.updated_at)}</td>
+                <td style={{padding:"8px 12px",color:C.muted,fontSize:11}}>{fmtDate(job.updated_at)}</td>
+                <td style={{padding:"8px 12px",color:C.text,fontSize:12}}>{job.foreman||"—"}</td>
+                <td style={{padding:"8px 12px",color:C.text,fontSize:12}}>{job.lead||"—"}</td>
+              </tr>
+            ))}
+          </tbody>
+        </table>
+      </div>
+      <div style={{marginTop:10,fontSize:11,color:C.muted}}>{filtered.length} entries — most recent first</div>
+    </div>
+  );
+}
+
 function BulkEditTable({ jobs, foremenList, leadsList, onUpdateJob }) {
   const [filter, setFilter] = useState("");
   const filtered = filter
@@ -9358,7 +9458,7 @@ function App() {
 
         if(!snap.empty) {
 
-          const loaded = migrate(snap.docs.map(d=>{const raw=d.data(); return raw?.data ? {...raw.data, updated_at:raw.updated_at||""} : null;}).filter(Boolean));
+          const loaded = migrate(snap.docs.map(d=>{const raw=d.data(); return raw?.data ? {...raw.data, updated_at:raw.updated_at||"", _saved_by:raw.saved_by||"", _device:raw.device||""} : null;}).filter(Boolean));
 
           // Normalize foreman/lead names to match canonical casing from users list
           // This prevents "Vasa mataafa" showing as wrong person in dropdowns
@@ -10849,6 +10949,8 @@ function App() {
       {view==="settings"&&can(identity,"settings.view")&&(
         <div>
           <BulkEditTable jobs={jobs} foremenList={_foremen} leadsList={_leads} onUpdateJob={updateJob}/>
+          <div style={{height:1,background:C.border,margin:"0 26px"}}/>
+          <ActivityLog jobs={jobs}/>
           <div style={{height:1,background:C.border,margin:"0 26px"}}/>
           <SettingsPage
             COLOR_OPTIONS={COLOR_OPTIONS}
