@@ -3287,6 +3287,8 @@ function KeypadSection({loads,onChange,label}) {
 
         <div style={{fontSize:12,color:C.purple,fontWeight:700}}>{label}</div>
 
+        <Btn onClick={addRow} variant="add" style={{fontSize:11,padding:"3px 10px"}}>+ Add Row</Btn>
+
       </div>
 
       <div style={{display:"grid",gridTemplateColumns:"36px 1fr 28px",gap:6,marginBottom:6}}>
