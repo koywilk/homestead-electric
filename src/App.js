@@ -8644,10 +8644,11 @@ function SettingsPersonRow({user, color, colorOptions, onColorChange}) {
   );
 }
 
-function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upcoming, manualTasks, onRestoreFromBackup }) {
+function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upcoming, manualTasks, onRestoreFromBackup, onRestoreFromFile }) {
   const [colors, setColors] = useState({...colorOverrides});
   const [saved,  setSaved]  = useState(false);
   const [restoring, setRestoring] = useState(false);
+  const fileInputRef = useRef(null);
 
   // ── Data Backup Export ──
   const exportBackup = () => {
@@ -8741,6 +8742,33 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upco
                 display:"flex",alignItems:"center",gap:8}}>
               {restoring?"⏳ Restoring...":"🔄 Restore from Local Backup"}
             </button>
+          )}
+          {onRestoreFromFile&&(
+            <>
+              <input type="file" accept=".json" ref={fileInputRef} style={{display:"none"}} onChange={async(e)=>{
+                const file=e.target.files[0];
+                if(!file) return;
+                try {
+                  const text=await file.text();
+                  const parsed=JSON.parse(text);
+                  // Support both formats: {jobs:[...]} or raw array [...]
+                  const jobsArr=Array.isArray(parsed)?parsed:(parsed.jobs||[]);
+                  if(!jobsArr.length){alert('No jobs found in file');return;}
+                  if(!confirm(`Restore ${jobsArr.length} jobs from "${file.name}"? This will overwrite current Firestore data.`)) return;
+                  setRestoring(true);
+                  const count=await onRestoreFromFile(jobsArr);
+                  setRestoring(false);
+                  if(count>0){alert(`Restored ${count} jobs from file! Refreshing...`);window.location.reload();}
+                }catch(err){setRestoring(false);alert('Failed to read file: '+err.message);}
+                e.target.value='';
+              }}/>
+              <button disabled={restoring} onClick={()=>fileInputRef.current?.click()}
+                style={{padding:"10px 20px",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer",
+                  fontFamily:"inherit",background:restoring?"#9ca3af":"#7c3aed",color:"#fff",border:"none",
+                  display:"flex",alignItems:"center",gap:8}}>
+                {restoring?"⏳ Restoring...":"📂 Restore from File"}
+              </button>
+            </>
           )}
         </div>
       </div>
@@ -10725,6 +10753,16 @@ function App() {
                 }
                 return backupJobs.length;
               }catch(e){console.error('Restore failed:',e);alert('Restore failed: '+e.message);return 0;}
+            }}
+            onRestoreFromFile={async(jobsArr)=>{
+              try {
+                if(!jobsArr||!jobsArr.length){alert('No jobs in file');return 0;}
+                for(const job of jobsArr){
+                  const clean=Object.fromEntries(Object.entries(job).filter(([,v])=>v!==undefined));
+                  await setDoc(doc(db,"jobs",job.id),{data:clean,updated_at:new Date().toISOString()});
+                }
+                return jobsArr.length;
+              }catch(e){console.error('File restore failed:',e);alert('Restore failed: '+e.message);return 0;}
             }}
           />
           {can(identity,"users.manage")&&(
