@@ -1,7 +1,7 @@
 // BUILD_v9_FIXED
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
+import { getFirestore, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 
@@ -4373,7 +4373,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
     const updated = {...jobRef.current, ...patch};
     jobRef.current = updated;
     setJob(updated);
-    onUpdate(updated);
+    onUpdate(updated, patch);
   };
 
   const [viewPhoto, setViewPhoto] = useState(null);
@@ -4670,7 +4670,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
     const updated = {...jobRef.current, ...patch};
     jobRef.current = updated;
     setJob(updated);
-    onUpdate(updated);
+    onUpdate(updated, patch);
   };
 
   const [signOffName, setSignOffName] = useState("");
@@ -4946,7 +4946,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
     const updated = {...jobRef.current, ...patch};
     jobRef.current = updated;
     setJob(updated);
-    onUpdate(updated);
+    onUpdate(updated, patch);
   };
 
   const [tab, setTab] = useState("Job Info");
@@ -9642,15 +9642,22 @@ function App() {
   }, [jobs.length > 0]);
 
 
-  // Save a single job as its own Firestore document
+  // Save a single job — uses field-level merge when a patch is provided
+  // so concurrent edits to different fields don't overwrite each other
+  const pendingPatches = useRef({}); // jobId → accumulated patch fields
 
-  const saveJob = (job) => {
+  const saveJob = (job, patch) => {
 
     if(initialLoad.current) return;
 
     isDirty.current = true;
 
     setSyncStatus("saving");
+
+    // Accumulate patches for this job so we only write changed fields
+    if(patch) {
+      pendingPatches.current[job.id] = {...(pendingPatches.current[job.id]||{}), ...patch};
+    }
 
     // Always write to localStorage immediately
 
@@ -9676,37 +9683,31 @@ function App() {
 
         // Tag every save with device identity so we can trace who changed what
         const deviceId = localStorage.getItem('he_device_id') || (() => { const id = 'dev_' + Math.random().toString(36).slice(2,8); localStorage.setItem('he_device_id', id); return id; })();
-        const payload = {data:sanitize(job),updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
-        // Check estimated size before saving
-        const estimatedSize = JSON.stringify(payload).length;
-        if(estimatedSize > 900000) {
-          console.warn(`[HE] Job ${job.name} is ${Math.round(estimatedSize/1024)}KB — approaching Firestore 1MB limit`);
-          if(estimatedSize > 1000000) {
-            console.error(`[HE] Job ${job.name} exceeds 1MB (${Math.round(estimatedSize/1024)}KB) — photos may need to be removed`);
-            setSyncStatus("error");
-            alert(`Save failed: "${job.name}" is too large (${Math.round(estimatedSize/1024)}KB). Try removing some photos — each photo adds to the document size. Firebase Storage for photos is coming soon.`);
-            return;
-          }
-        }
-        // Stale-write guard: check if Firestore has newer data before overwriting
-        const currentSnap = await getDoc(doc(db,"jobs",job.id));
-        if(currentSnap.exists()) {
-          const serverUpdatedAt = currentSnap.data()?.updated_at || "";
-          const localUpdatedAt = job.updated_at || "";
-          if(serverUpdatedAt && localUpdatedAt && serverUpdatedAt > localUpdatedAt) {
-            console.warn(`[HE] Stale write blocked for "${job.name}" — server has newer data (${serverUpdatedAt} > ${localUpdatedAt}). Refreshing from server.`);
-            // Refresh this job from server data instead of overwriting
-            const serverJob = currentSnap.data()?.data;
-            if(serverJob) {
-              setJobs(js => js.map(j => j.id === job.id ? normalizeJob({...serverJob, updated_at: serverUpdatedAt}) : j));
-              setSelected(prev => prev?.id === job.id ? normalizeJob({...serverJob, updated_at: serverUpdatedAt}) : prev);
+        const accumulated = pendingPatches.current[job.id];
+        delete pendingPatches.current[job.id];
+
+        if(accumulated && Object.keys(accumulated).length > 0) {
+          // Merge mode: only write the changed fields — other users' changes to other fields are preserved
+          const mergeData = {updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
+          // Build dot-notation paths for changed fields within the data map
+          Object.entries(sanitize(accumulated)).forEach(([k,v]) => { mergeData["data."+k] = v; });
+          await updateDoc(doc(db,"jobs",job.id), mergeData);
+        } else {
+          // Full write mode: new job or no patch tracking (e.g. from promote, bulk edit)
+          const payload = {data:sanitize(job),updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
+          // Check estimated size before saving
+          const estimatedSize = JSON.stringify(payload).length;
+          if(estimatedSize > 900000) {
+            console.warn(`[HE] Job ${job.name} is ${Math.round(estimatedSize/1024)}KB — approaching Firestore 1MB limit`);
+            if(estimatedSize > 1000000) {
+              console.error(`[HE] Job ${job.name} exceeds 1MB (${Math.round(estimatedSize/1024)}KB) — photos may need to be removed`);
+              setSyncStatus("error");
+              alert(`Save failed: "${job.name}" is too large (${Math.round(estimatedSize/1024)}KB). Try removing some photos — each photo adds to the document size. Firebase Storage for photos is coming soon.`);
+              return;
             }
-            setSyncStatus("saved");
-            setTimeout(()=>setSyncStatus("idle"),2000);
-            return;
           }
+          await setDoc(doc(db,"jobs",job.id),payload);
         }
-        await setDoc(doc(db,"jobs",job.id),payload);
 
         isDirty.current = false;
 
@@ -9736,12 +9737,20 @@ function App() {
 
   const flushJob = async (job) => {
     if(!job) return;
-    // If there's a pending save timer, use the latest state from jobsRef
+    // If there's a pending save timer, flush accumulated patches
     if(saveTimers.current[job.id]) {
       clearTimeout(saveTimers.current[job.id]);
       saveTimers.current[job.id] = null;
-      const latest = jobsRef.current.find(j=>j.id===job.id) || job;
-      try { await setDoc(doc(db,"jobs",latest.id),{data:sanitize(latest),updated_at:new Date().toISOString()}); } catch(e){}
+      const accumulated = pendingPatches.current[job.id];
+      delete pendingPatches.current[job.id];
+      if(accumulated && Object.keys(accumulated).length > 0) {
+        const mergeData = {updated_at:new Date().toISOString()};
+        Object.entries(sanitize(accumulated)).forEach(([k,v]) => { mergeData["data."+k] = v; });
+        try { await updateDoc(doc(db,"jobs",job.id), mergeData); } catch(e){}
+      } else {
+        const latest = jobsRef.current.find(j=>j.id===job.id) || job;
+        try { await setDoc(doc(db,"jobs",latest.id),{data:sanitize(latest),updated_at:new Date().toISOString()}); } catch(e){}
+      }
     }
   };
 
@@ -9856,7 +9865,7 @@ function App() {
   },[]);
 
 
-  const updateJob = updated => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); saveJob(updated); };
+  const updateJob = (updated, patch) => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); saveJob(updated, patch); };
 
   // addJob removed — inline in each button instead
 
