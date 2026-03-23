@@ -9443,19 +9443,7 @@ function App() {
       (err) => { console.error("Tasks snapshot error:",err); }
     );
 
-    // Force-reload listener: when _appVersion changes in Firestore, reload all clients
-    // This ensures everyone gets the latest code after a deploy
-    const APP_VERSION = "2026-03-23-v2";
-    const unsubVersion = onSnapshot(doc(db,"config","app"), (snap) => {
-      if(!snap.exists()) return;
-      const serverVersion = snap.data()?.version || "";
-      if(serverVersion && serverVersion !== APP_VERSION) {
-        console.log(`[HE] New app version detected (${serverVersion} vs ${APP_VERSION}) — reloading...`);
-        window.location.reload();
-      }
-    }, ()=>{});
-
-    return () => { unsub(); unsubUpcoming(); unsubTasks(); unsubVersion(); }; // cleanup on unmount
+    return () => { unsub(); unsubUpcoming(); unsubTasks(); }; // cleanup on unmount
 
   },[]);
 
@@ -10792,9 +10780,6 @@ function App() {
                   const clean=Object.fromEntries(Object.entries(job).filter(([,v])=>v!==undefined));
                   await setDoc(doc(db,"jobs",job.id),{data:clean,updated_at:ts});
                 }
-                // Force ALL clients to reload so they pick up new code + fresh data
-                const newVersion = "restore-" + Date.now();
-                await setDoc(doc(db,"config","app"),{version:newVersion});
                 return jobsArr.length;
               }catch(e){console.error('File restore failed:',e);alert('Restore failed: '+e.message);return 0;}
             }}
