@@ -6288,7 +6288,7 @@ function QuickJobCard({ job, onOpen, onUpdate, onDelete }) {
           </div>
           <div style={{ fontWeight: 700, fontSize: 13, color: C.text, marginBottom: 2 }}>{job.name || "Untitled Job"}</div>
           <div style={{ fontSize: 11, color: C.dim, display: "flex", gap: 8, flexWrap: "wrap" }}>
-            {job.address && <span>{job.address}</span>}
+            {job.address && <AddressLink address={job.address} style={{color:C.dim}}/>}
             <span style={{ fontWeight: 700, color: fc }}>{foreman}</span>
             {job.lead && <span style={{ color: C.accent }}>· {job.lead}</span>}
           </div>
@@ -6351,7 +6351,7 @@ function TempPedCard({ job, onOpen, onUpdate, onDelete }) {
           </div>
           <div style={{fontWeight:700,fontSize:13,color:"var(--text)",marginBottom:2}}>{job.name||"Untitled Job"}</div>
           <div style={{fontSize:11,color:"var(--dim)",display:"flex",gap:8,flexWrap:"wrap"}}>
-            {job.address&&<span>{job.address}</span>}
+            {job.address&&<AddressLink address={job.address} style={{color:"var(--dim)"}}/>}
             <span style={{fontWeight:700,color:fc}}>{foreman}</span>
             {job.lead&&<span style={{color:"var(--accent)"}}>· {job.lead}</span>}
           </div>
@@ -7540,7 +7540,7 @@ function PrepTaskList({ jobs, onSelectJob, onUpdateJob }) {
                 <div style={{fontSize:13,fontWeight:700,color:"var(--text)",marginBottom:3,cursor:"pointer"}}
                   onClick={()=>onSelectJob(job)}>{job.name||"Untitled Job"}</div>
                 <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
-                  {job.address&&<span style={{fontSize:10,color:"var(--dim)"}}>{job.address}</span>}
+                  {job.address&&<AddressLink address={job.address} style={{fontSize:10,color:"var(--dim)"}}/>}
                   <span style={{fontSize:10,fontWeight:700,color:fc,background:`${fc}15`,borderRadius:99,padding:"1px 7px",border:`1px solid ${fc}28`}}>{job.foreman||"Koy"}</span>
                 </div>
               </div>
@@ -7771,7 +7771,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
                       {job.name||"Untitled Job"}
                     </div>
                     <div style={{fontSize:11,color:"var(--dim)",display:"flex",gap:8}}>
-                      {job.address&&<span>{job.address}</span>}
+                      {job.address&&<AddressLink address={job.address} style={{color:"var(--dim)"}}/>}
                       <span style={{fontWeight:700,color:fc}}>{job.foreman}</span>
                     </div>
                   </div>
