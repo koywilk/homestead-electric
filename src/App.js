@@ -5034,8 +5034,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
   const [tab, setTab] = useState("Job Info");
   const [newLightingFloor, setNewLightingFloor] = useState("");
   const [emailData, setEmailData] = useState(null);
+  const [gcAnswers, setGcAnswers] = useState(null); // answers submitted by GC/homeowner via share link
 
   const [refreshing, setRefreshing] = useState(false);
+
+  // Live listener for GC question answers
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,'homeowner_requests',job.id), snap => {
+      if(snap.exists() && snap.data().questionAnswers) setGcAnswers(snap.data().questionAnswers);
+      else setGcAnswers(null);
+    }, ()=>{});
+    return ()=>unsub();
+  }, [job.id]);
 
   const refreshJob = async () => {
 
@@ -5322,11 +5332,36 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
               </Section>
 
               <div style={{marginTop:20}}>
-
-                <Section label="Questions" color={C.rough}>
-                <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough}/>
-              </Section>
-
+                <Section label="Questions" color={C.rough} action={
+                  <button onClick={()=>{
+                    const link=`${window.location.origin}/?questions=${job.id}`;
+                    navigator.clipboard.writeText(link).then(()=>alert('Link copied! Send this to your GC or homeowner:\n\n'+link)).catch(()=>alert('Link:\n'+link));
+                  }} style={{fontSize:10,fontWeight:700,color:'#fff',background:C.rough,border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.04em'}}>
+                    📤 SHARE LINK
+                  </button>
+                }>
+                  <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough}/>
+                  {gcAnswers?.rough&&(()=>{
+                    const allAns=[
+                      ...(gcAnswers.rough.upper||[]),
+                      ...(gcAnswers.rough.main||[]),
+                      ...(gcAnswers.rough.basement||[]),
+                    ].filter(a=>a.answer);
+                    return allAns.length>0?(
+                      <div style={{marginTop:14,background:'#f0fdf4',border:'1px solid #16a34a44',borderRadius:10,padding:14}}>
+                        <div style={{fontSize:10,fontWeight:700,color:'#16a34a',letterSpacing:'0.08em',marginBottom:10}}>
+                          ✅ GC ANSWERS — {gcAnswers.answeredBy||'GC'} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}
+                        </div>
+                        {allAns.map((a,i)=>(
+                          <div key={a.id||i} style={{marginBottom:10,paddingBottom:10,borderBottom:i<allAns.length-1?'1px solid #16a34a22':'none'}}>
+                            <div style={{fontSize:11,color:'#374151',fontWeight:600,marginBottom:3}}>{a.question}</div>
+                            <div style={{fontSize:12,color:'#16a34a',fontStyle:'italic',lineHeight:1.5}}>{a.answer}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ):null;
+                  })()}
+                </Section>
               </div>
 
               <div style={{marginTop:20}}>
@@ -5457,11 +5492,36 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
               </div>
 
               <div style={{marginTop:20}}>
-
-                <Section label="Questions" color={C.finish}>
-                <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish}/>
-              </Section>
-
+                <Section label="Questions" color={C.finish} action={
+                  <button onClick={()=>{
+                    const link=`${window.location.origin}/?questions=${job.id}`;
+                    navigator.clipboard.writeText(link).then(()=>alert('Link copied! Send this to your GC or homeowner:\n\n'+link)).catch(()=>alert('Link:\n'+link));
+                  }} style={{fontSize:10,fontWeight:700,color:'#fff',background:C.finish,border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.04em'}}>
+                    📤 SHARE LINK
+                  </button>
+                }>
+                  <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish}/>
+                  {gcAnswers?.finish&&(()=>{
+                    const allAns=[
+                      ...(gcAnswers.finish.upper||[]),
+                      ...(gcAnswers.finish.main||[]),
+                      ...(gcAnswers.finish.basement||[]),
+                    ].filter(a=>a.answer);
+                    return allAns.length>0?(
+                      <div style={{marginTop:14,background:'#f0fdf4',border:'1px solid #16a34a44',borderRadius:10,padding:14}}>
+                        <div style={{fontSize:10,fontWeight:700,color:'#16a34a',letterSpacing:'0.08em',marginBottom:10}}>
+                          ✅ GC ANSWERS — {gcAnswers.answeredBy||'GC'} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}
+                        </div>
+                        {allAns.map((a,i)=>(
+                          <div key={a.id||i} style={{marginBottom:10,paddingBottom:10,borderBottom:i<allAns.length-1?'1px solid #16a34a22':'none'}}>
+                            <div style={{fontSize:11,color:'#374151',fontWeight:600,marginBottom:3}}>{a.question}</div>
+                            <div style={{fontSize:12,color:'#16a34a',fontStyle:'italic',lineHeight:1.5}}>{a.answer}</div>
+                          </div>
+                        ))}
+                      </div>
+                    ):null;
+                  })()}
+                </Section>
               </div>
 
               <div style={{marginTop:20}}>
