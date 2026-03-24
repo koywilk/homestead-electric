@@ -1182,7 +1182,7 @@ const AddressLink = ({address, children, style={}}) => {
   };
   return (
     <span onClick={handleClick} style={{cursor:"pointer",textDecoration: children ? "none" : "underline",textDecorationStyle:"dotted",textUnderlineOffset:2,...style}}>
-      {children || address}
+      {children || <>{address} <span style={{fontSize:10,opacity:0.7}}>📍</span></>}
     </span>
   );
 };
@@ -5686,7 +5686,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                     {k==="address" ? (
                       <div style={{display:"flex",gap:4,alignItems:"center"}}>
                         <div style={{flex:1}}><Inp value={job[k]} onChange={e=>u({[k]:e.target.value})} placeholder={l}/></div>
-                        {job.address && <AddressLink address={job.address} style={{fontSize:16,color:C.accent,flexShrink:0,padding:"6px 4px",lineHeight:1}}>📍</AddressLink>}
+                        {job.address && <AddressLink address={job.address} style={{fontSize:11,fontWeight:700,color:"#fff",background:"#2563eb",border:"none",borderRadius:7,padding:"7px 12px",cursor:"pointer",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}>📍 Maps</AddressLink>}
                       </div>
                     ) : (
                       <Inp value={job[k]} onChange={e=>u({[k]:e.target.value})} placeholder={l}/>
