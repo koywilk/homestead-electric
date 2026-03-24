@@ -7678,6 +7678,7 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
               </button>
             </div>
           )}
+          {task.foreman&&task.foreman!=="Unassigned"&&(()=>{const fc=getFC(task.foreman)||"#6b7280";return(<span style={{fontSize:9,fontWeight:700,color:fc,background:`${fc}18`,borderRadius:99,padding:"2px 7px",border:`1px solid ${fc}33`,letterSpacing:"0.04em"}}>{task.foreman.split(" ")[0]}</span>);})()}
           {task.type==="manual"&&<span style={{fontSize:9,color:"#6b7280",letterSpacing:"0.06em",fontWeight:600}}>MANUAL</span>}
         </div>
 
@@ -8162,13 +8163,6 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
         {/* Regular tasks — shown unless filtered to "invoice" */}
         {catFilter!=="invoice"&&(
           <>
-            {!filterForeman&&(
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",color:"var(--dim)"}}>ALL TASKS</div>
-                {!showAdd&&<button onClick={()=>setShowAdd(true)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>+ Add Task</button>}
-              </div>
-            )}
-
             {totalOther===0&&(
               <div style={{textAlign:"center",padding:"40px 0",color:"var(--muted)"}}>
                 <div style={{fontSize:22,marginBottom:6}}>✓</div>
@@ -8178,35 +8172,43 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
 
             {filterForeman ? (
               <div>
-                {filterForeman&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
                   <div style={{fontSize:11,fontWeight:700,color:"var(--dim)",letterSpacing:"0.06em"}}>TASKS</div>
                   <button onClick={()=>setShowAdd(v=>!v)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"4px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>+ Add Task</button>
-                </div>}
-                {showAdd&&filterForeman&&<AddTaskForm defaultForeman={filterForeman} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList}/>}
+                </div>
+                {showAdd&&<AddTaskForm defaultForeman={filterForeman} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList}/>}
                 {sorted.map(task=>(
                   <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
                     onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear}/>
                 ))}
               </div>
             ) : (
-              foremanList.map(f=>{
-                const fc=getFC(f)||"#6b7280";
-                const fTasks=sorted.filter(t=>t.foreman===f);
-                const fOverdue=fTasks.filter(t=>{ const u=URGENCY_FN(t.dueDate); return u&&u.days<0; }).length;
-                if(fTasks.length===0) return null;
-                const fCollapsed=!!collapsedForemen[f];
+              [
+                {key:'scheduling', label:'Scheduling',      icon:'📅', color:'#2563eb', cats:['rough','finish','schedule','tempped']},
+                {key:'rt',         label:'Return Trips',    icon:'🔄', color:'#8b5cf6', cats:['rt']},
+                {key:'co',         label:'Change Orders',   icon:'📋', color:'#dc2626', cats:['co']},
+                {key:'qc',         label:'QC Walks',        icon:'✅', color:'#0d9488', cats:['qc']},
+                {key:'po',         label:'Purchase Orders', icon:'📦', color:'#7c3aed', cats:['po']},
+                {key:'punch',      label:'Open Punch',      icon:'⚠️', color:'#ea580c', cats:['punch']},
+                {key:'manual',     label:'Manual Tasks',    icon:'📝', color:'#6b7280', cats:['manual']},
+              ].map(group=>{
+                const groupTasks = sorted.filter(t=>group.cats.includes(t.category));
+                if(groupTasks.length===0) return null;
+                const gc = group.color;
+                const isCollapsed = !!collapsedForemen[group.key];
+                const overdue = groupTasks.filter(t=>{ const u=URGENCY_FN(t.dueDate); return u&&u.days<0; }).length;
                 return (
-                  <div key={f} style={{marginBottom:28}}>
-                    <div onClick={()=>toggleForeman(f)}
-                      style={{display:"flex",alignItems:"center",gap:8,marginBottom:fCollapsed?0:12,
-                        paddingBottom:8,borderBottom:`2px solid ${fc}33`,cursor:"pointer",userSelect:"none"}}>
-                      <div style={{width:9,height:9,borderRadius:"50%",background:fc}}/>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:fc}}>{f}</div>
-                      <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:fc,fontWeight:700}}>{fTasks.length}</div>
-                      {fOverdue>0&&<div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>⚠ {fOverdue} overdue</div>}
-                      <div style={{marginLeft:"auto",fontSize:12,color:fc,opacity:0.7,paddingRight:4}}>{fCollapsed?"▸":"▾"}</div>
+                  <div key={group.key} style={{marginBottom:28}}>
+                    <div onClick={()=>toggleForeman(group.key)}
+                      style={{display:"flex",alignItems:"center",gap:8,marginBottom:isCollapsed?0:12,
+                        paddingBottom:8,borderBottom:`2px solid ${gc}33`,cursor:"pointer",userSelect:"none"}}>
+                      <span style={{fontSize:14,lineHeight:1}}>{group.icon}</span>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:gc}}>{group.label}</div>
+                      <div style={{background:`${gc}18`,border:`1px solid ${gc}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:gc,fontWeight:700}}>{groupTasks.length}</div>
+                      {overdue>0&&<div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>⚠ {overdue} overdue</div>}
+                      <div style={{marginLeft:"auto",fontSize:12,color:gc,opacity:0.7,paddingRight:4}}>{isCollapsed?"▸":"▾"}</div>
                     </div>
-                    {!fCollapsed&&fTasks.map(task=>(
+                    {!isCollapsed&&groupTasks.map(task=>(
                       <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
                         onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear}/>
                     ))}
