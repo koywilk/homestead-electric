@@ -3200,6 +3200,18 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
         </div>
       )}
 
+      {/* Share Live View */}
+      <div style={{marginBottom:16,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+        <button onClick={()=>{
+          const link=`${window.location.origin}/?homeruns=${jobId}`;
+          navigator.clipboard.writeText(link).then(()=>alert('✓ Live view link copied!\n\nAnyone with this link can see Home Runs in real time (view only).')).catch(()=>alert('Link:\n'+link));
+        }} style={{background:`${C.blue}15`,border:`1px solid ${C.blue}44`,borderRadius:8,
+          color:C.blue,fontSize:12,fontWeight:700,padding:'7px 14px',cursor:'pointer',fontFamily:'inherit'}}>
+          📤 Share Live View
+        </button>
+        <span style={{fontSize:11,color:C.dim}}>Anyone with the link can see pull status in real time</span>
+      </div>
+
       {/* Panels */}
       {(()=>{
         const cP=homeRuns.customPanels||DEFAULT_PANELS;
@@ -5035,14 +5047,17 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
   const [newLightingFloor, setNewLightingFloor] = useState("");
   const [emailData, setEmailData] = useState(null);
   const [gcAnswers, setGcAnswers] = useState(null); // answers submitted by GC/homeowner via share link
+  const [lvCollab, setLvCollab] = useState(null); // lighting collab data from LV company
 
   const [refreshing, setRefreshing] = useState(false);
 
-  // Live listener for GC question answers
+  // Live listener for GC question answers + LV lighting collab
   useEffect(() => {
     const unsub = onSnapshot(doc(db,'homeowner_requests',job.id), snap => {
       if(snap.exists() && snap.data().questionAnswers) setGcAnswers(snap.data().questionAnswers);
       else setGcAnswers(null);
+      if(snap.exists() && snap.data().lightingCollab) setLvCollab(snap.data().lightingCollab);
+      else setLvCollab(null);
     }, ()=>{});
     return ()=>unsub();
   }, [job.id]);
@@ -5537,6 +5552,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
 
             <div>
 
+              {/* Share Collab Link */}
+              <div style={{marginBottom:16,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                <button onClick={()=>{
+                  const link=`${window.location.origin}/?lighting=${job.id}`;
+                  navigator.clipboard.writeText(link).then(()=>alert('✓ Lighting collab link copied!\n\nThe low voltage company can view assignments and add their module/channel info.')).catch(()=>alert('Link:\n'+link));
+                }} style={{background:`${C.purple}15`,border:`1px solid ${C.purple}44`,borderRadius:8,
+                  color:C.purple,fontSize:12,fontWeight:700,padding:'7px 14px',cursor:'pointer',fontFamily:'inherit'}}>
+                  📤 Share with LV Company
+                </button>
+                <span style={{fontSize:11,color:C.dim}}>LV company can add module/channel assignments</span>
+              </div>
+
               {/* Lighting Control System Selector */}
 
 
@@ -5656,6 +5683,65 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                         fontFamily:"inherit",whiteSpace:"nowrap"}}>
                       + Add Floor / Area
                     </button>
+                  </div>
+                );
+              })()}
+
+              {/* LV Company Additions */}
+              {lvCollab&&(()=>{
+                const hasAny = [
+                  ...(lvCollab.mainKeypad||[]),
+                  ...(lvCollab.basementKeypad||[]),
+                  ...(lvCollab.upperKeypad||[]),
+                  ...(Object.keys(lvCollab).filter(k=>k.startsWith('pl_')).flatMap(k=>lvCollab[k]||[])),
+                  ...(lvCollab.generalNotes?[1]:[]),
+                ].length > 0;
+                if(!hasAny) return null;
+                const LVBadge = ()=><span style={{fontSize:9,fontWeight:800,color:'#7c3aed',background:'#ede9fe',borderRadius:4,padding:'1px 5px',marginRight:6,flexShrink:0}}>LV</span>;
+                const renderLVRows = (rows) => rows&&rows.length>0?(
+                  <div style={{marginBottom:8}}>
+                    {rows.map((r,i)=>(
+                      <div key={i} style={{display:'flex',alignItems:'flex-start',gap:8,padding:'5px 10px',
+                        background:'#faf5ff',border:'1px solid #c4b5fd44',borderRadius:7,marginBottom:4}}>
+                        <LVBadge/>
+                        <div style={{flex:1}}>
+                          <div style={{fontSize:12,color:'#6d28d9',fontWeight:600}}>{r.name||'—'}</div>
+                          {r.module&&<div style={{fontSize:11,color:'#7c3aed',marginTop:1}}>Module/Ch: {r.module}</div>}
+                          {r.notes&&<div style={{fontSize:11,color:'#8b5cf6',fontStyle:'italic',marginTop:1}}>"{r.notes}"</div>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ):null;
+                const sectionLabels = {mainKeypad:'Main Keypad',basementKeypad:'Basement Keypad',upperKeypad:'Upper Keypad'};
+                const sections = ['mainKeypad','basementKeypad','upperKeypad',
+                  ...Object.keys(lvCollab).filter(k=>k.startsWith('pl_'))];
+                return (
+                  <div style={{marginTop:20,padding:'14px 16px',background:'#faf5ff',
+                    border:'1px solid #c4b5fd',borderRadius:12}}>
+                    <div style={{fontSize:12,fontWeight:700,color:'#7c3aed',marginBottom:12,display:'flex',alignItems:'center',gap:6}}>
+                      <LVBadge/>
+                      LV Company Additions
+                      {lvCollab.companyName&&<span style={{fontSize:11,color:'#8b5cf6',fontWeight:400}}>· {lvCollab.companyName}</span>}
+                    </div>
+                    {sections.map(key=>{
+                      const rows = lvCollab[key];
+                      if(!rows||!rows.length) return null;
+                      const label = sectionLabels[key]||(key.startsWith('pl_')?key.replace(/^pl_/,'').replace(/_\d+$/,'').replace(/_/g,' '):'Other');
+                      return (
+                        <div key={key} style={{marginBottom:10}}>
+                          <div style={{fontSize:10,color:'#8b5cf6',fontWeight:700,letterSpacing:'0.07em',
+                            textTransform:'uppercase',marginBottom:6}}>{label}</div>
+                          {renderLVRows(rows)}
+                        </div>
+                      );
+                    })}
+                    {lvCollab.generalNotes&&(
+                      <div style={{marginTop:6,paddingTop:10,borderTop:'1px solid #c4b5fd55'}}>
+                        <div style={{fontSize:10,color:'#8b5cf6',fontWeight:700,letterSpacing:'0.07em',marginBottom:4}}>NOTES</div>
+                        <div style={{fontSize:12,color:'#6d28d9',fontStyle:'italic',whiteSpace:'pre-wrap'}}>{lvCollab.generalNotes}</div>
+                      </div>
+                    )}
                   </div>
                 );
               })()}
@@ -9430,6 +9516,264 @@ function HomeownerPage({ jobId }) {
 
 
 // ── Questions Share Page (public) ─────────────────────────────
+// ── Home Runs Share Page (view-only) ──────────────────────────
+function HomeRunsSharePage({ jobId }) {
+  const [job, setJob] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
+      if(!snap.exists()){ setError('Not found.'); setLoading(false); return; }
+      setJob(snap.data().data);
+      setLoading(false);
+    }, () => { setError('Failed to load.'); setLoading(false); });
+    return () => unsub();
+  }, [jobId]);
+
+  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6b7280',fontSize:14}}>Loading…</div>;
+  if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#dc2626',fontSize:14}}>{error}</div>;
+
+  const hr = job?.homeRuns || {};
+  const floors = [
+    {key:'main', label:'Main Level'},
+    {key:'basement', label:'Basement'},
+    {key:'upper', label:'Upper Level'},
+    ...((hr.extraFloors||[]).map(ef=>({key:ef.key, label:ef.label}))),
+  ];
+  const allRows = floors.flatMap(f => hr[f.key]||[]);
+  const pulled = allRows.filter(r=>r.status==='Pulled').length;
+  const pct = allRows.length>0 ? Math.round((pulled/allRows.length)*100) : 0;
+
+  const wireChip = (wire) => {
+    const bg = WIRE_COLORS[wire]||'#f1f5f9';
+    const col = WIRE_TEXT[wire]||'#0f172a';
+    return wire ? <span style={{background:bg,color:col,borderRadius:5,padding:'1px 7px',fontSize:11,fontWeight:700}}>{wire}</span> : null;
+  };
+
+  return (
+    <div style={{maxWidth:700,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#f3f4f6',minHeight:'100vh'}}>
+      <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:22}}>
+        <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>HOMESTEAD ELECTRIC — HOME RUNS</div>
+        <div style={{fontSize:19,fontWeight:700,color:'#fff',marginBottom:2}}>{job?.name||'Job'}</div>
+        {job?.address&&<div style={{fontSize:12,color:'rgba(255,255,255,0.65)'}}>{job.address}</div>}
+      </div>
+
+      {allRows.length>0&&(
+        <div style={{background:'#fff',border:'1px solid #e5e7eb',borderRadius:10,padding:'14px 16px',marginBottom:16}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+            <span style={{fontSize:12,fontWeight:700,color:'#111'}}>Pull Progress</span>
+            <span style={{fontSize:13,fontWeight:700,color:pct===100?'#16a34a':'#2563eb'}}>{pulled} / {allRows.length} — {pct}%</span>
+          </div>
+          <div style={{height:8,background:'#e5e7eb',borderRadius:99,overflow:'hidden'}}>
+            <div style={{height:'100%',width:`${pct}%`,background:pct===100?'#16a34a':'#2563eb',borderRadius:99,transition:'width 0.4s'}}/>
+          </div>
+        </div>
+      )}
+
+      {floors.map(f => {
+        const rows = (hr[f.key]||[]).filter(r=>r.name||r.panel||r.wire);
+        if(!rows.length) return null;
+        return (
+          <div key={f.key} style={{background:'#fff',border:'1px solid #e5e7eb',borderRadius:10,marginBottom:12,overflow:'hidden'}}>
+            <div style={{background:'#2563eb',padding:'8px 16px'}}>
+              <span style={{fontSize:11,fontWeight:700,color:'#fff',letterSpacing:'0.08em'}}>{f.label.toUpperCase()}</span>
+            </div>
+            <div style={{padding:'0 4px'}}>
+              {rows.map((r,i) => (
+                <div key={r.id} style={{display:'flex',alignItems:'center',gap:8,padding:'9px 12px',borderBottom:i<rows.length-1?'1px solid #f3f4f6':'none',background:r.status==='Pulled'?'#f0fdf4':'#fff'}}>
+                  <span style={{fontSize:11,color:'#9ca3af',width:22,flexShrink:0,textAlign:'right'}}>{r.num}.</span>
+                  <span style={{flex:1,fontSize:13,fontWeight:600,color:'#111'}}>{r.name||<span style={{color:'#9ca3af',fontStyle:'italic'}}>Unnamed</span>}</span>
+                  {r.panel&&<span style={{fontSize:11,color:'#6b7280',background:'#f3f4f6',borderRadius:5,padding:'2px 7px'}}>{r.panel}</span>}
+                  {wireChip(r.wire)}
+                  {r.status==='Pulled'&&<span style={{fontSize:11,fontWeight:700,color:'#16a34a'}}>✓</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+
+      {allRows.length===0&&<div style={{textAlign:'center',padding:'48px 20px',color:'#9ca3af',background:'#fff',borderRadius:12}}>No home runs have been added yet.</div>}
+    </div>
+  );
+}
+
+// ── Lighting Collab Share Page ─────────────────────────────────
+function LightingSharePage({ jobId }) {
+  const [job,        setJob]       = useState(null);
+  const [loading,    setLoading]   = useState(true);
+  const [error,      setError]     = useState(null);
+  const [collab,     setCollab]    = useState({sections:{},notes:'',submittedBy:''});
+  const [saving,     setSaving]    = useState(false);
+  const [savedAt,    setSavedAt]   = useState(null);
+  const saveTimer = useRef(null);
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
+      if(!snap.exists()){ setError('Not found.'); setLoading(false); return; }
+      setJob(snap.data().data);
+      setLoading(false);
+    }, () => { setError('Failed to load.'); setLoading(false); });
+    return () => unsub();
+  }, [jobId]);
+
+  useEffect(() => {
+    getDoc(doc(db,'homeowner_requests',jobId)).then(snap => {
+      if(snap.exists()&&snap.data().lightingCollab) setCollab(snap.data().lightingCollab);
+    }).catch(()=>{});
+  }, [jobId]);
+
+  const saveCollab = (next) => {
+    setCollab(next);
+    clearTimeout(saveTimer.current);
+    setSaving(true);
+    saveTimer.current = setTimeout(async()=>{
+      try {
+        const ex = await getDoc(doc(db,'homeowner_requests',jobId));
+        await setDoc(doc(db,'homeowner_requests',jobId),{
+          ...(ex.exists()?ex.data():{}),
+          jobId, jobName:job?.name||'',
+          lightingCollab:{...next, savedAt:new Date().toISOString()},
+        });
+        setSavedAt(new Date());
+      } catch(e){}
+      setSaving(false);
+    },800);
+  };
+
+  const getSection = (key) => collab.sections?.[key] || [];
+  const setSection = (key, rows) => saveCollab({...collab, sections:{...collab.sections,[key]:rows}});
+  const addRow = (key) => setSection(key,[...getSection(key),{id:uid(),name:'',module:'',notes:'',addedByLV:true}]);
+  const updRow = (key,id,patch) => setSection(key,getSection(key).map(r=>r.id===id?{...r,...patch}:r));
+  const delRow = (key,id) => setSection(key,getSection(key).filter(r=>r.id!==id));
+
+  const sys = job?.lightingSystem||'Control 4';
+  const pl = job?.panelizedLighting||{};
+
+  const keypadSections = [
+    {key:'mainKeypad',     label:'Main Level Keypad'},
+    {key:'basementKeypad', label:'Basement Keypad'},
+    {key:'upperKeypad',    label:'Upper Level Keypad'},
+    ...((pl.extraFloors||[]).map(ef=>({key:ef.key+'_keypad',label:`${ef.label} Keypad`}))),
+  ];
+  const panelFloors = ['main','basement','upper',...((pl.extraFloors||[]).map(ef=>ef.key))];
+  const floorLabel = (k) => k==='main'?'Main Level':k==='basement'?'Basement':k==='upper'?'Upper Level':k;
+
+  const inputStyle = {background:'#f9fafb',border:'1px solid #e5e7eb',borderRadius:6,padding:'5px 8px',fontSize:12,fontFamily:'inherit',outline:'none',width:'100%',boxSizing:'border-box'};
+  const lvRowStyle = {background:'#faf5ff',border:'1px solid #a78bfa44',borderRadius:8,padding:'8px 10px',marginBottom:6,display:'flex',gap:8,alignItems:'flex-start'};
+
+  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6b7280'}}>Loading…</div>;
+  if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#dc2626'}}>{error}</div>;
+
+  return (
+    <div style={{maxWidth:680,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#f3f4f6',minHeight:'100vh'}}>
+      <div style={{background:'#4c1d95',borderRadius:14,padding:'20px 22px',marginBottom:6}}>
+        <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>HOMESTEAD ELECTRIC — {sys.toUpperCase()} LIGHTING</div>
+        <div style={{fontSize:19,fontWeight:700,color:'#fff',marginBottom:2}}>{job?.name||'Job'}</div>
+        {job?.address&&<div style={{fontSize:12,color:'rgba(255,255,255,0.65)'}}>{job.address}</div>}
+      </div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 4px 14px'}}>
+        <div style={{fontSize:11,color:'#6b7280'}}>Add your module assignments and circuit additions below. Changes save automatically.</div>
+        <div style={{fontSize:11,fontWeight:600,color:saving?'#9ca3af':'#16a34a'}}>{saving?'Saving…':savedAt?`✓ Saved ${savedAt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`:''}</div>
+      </div>
+
+      {/* Name field */}
+      <div style={{background:'#fff',border:'1px solid #e5e7eb',borderRadius:10,padding:14,marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:'#374151',marginBottom:6}}>YOUR NAME / COMPANY</div>
+        <input value={collab.submittedBy||''} onChange={e=>saveCollab({...collab,submittedBy:e.target.value})}
+          placeholder="e.g. John Smith — LV Solutions" style={{...inputStyle,fontSize:13}}/>
+      </div>
+
+      {/* Keypad sections */}
+      {keypadSections.map(({key,label}) => {
+        const existingRows = (pl[key]||[]).filter(r=>r.name);
+        const lvRows = getSection(key);
+        return (
+          <div key={key} style={{background:'#fff',border:'1px solid #e5e7eb',borderRadius:10,marginBottom:12,overflow:'hidden'}}>
+            <div style={{background:'#4c1d95',padding:'8px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <span style={{fontSize:11,fontWeight:700,color:'#fff',letterSpacing:'0.08em'}}>{label.toUpperCase()}</span>
+              <span style={{fontSize:10,color:'rgba(255,255,255,0.6)'}}>{sys}</span>
+            </div>
+            <div style={{padding:'10px 12px'}}>
+              {existingRows.length>0&&(
+                <div style={{marginBottom:10}}>
+                  <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginBottom:6}}>PLANNED BUTTONS</div>
+                  {existingRows.map((r,i)=>(
+                    <div key={r.id} style={{display:'flex',gap:8,alignItems:'center',padding:'5px 0',borderBottom:i<existingRows.length-1?'1px solid #f3f4f6':'none'}}>
+                      <span style={{fontSize:11,color:'#9ca3af',width:20}}>{r.num}.</span>
+                      <span style={{flex:1,fontSize:12,color:'#374151',fontWeight:500}}>{r.name}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{fontSize:10,color:'#7c3aed',fontWeight:700,marginBottom:6,marginTop:existingRows.length?8:0}}>YOUR ADDITIONS / ASSIGNMENTS</div>
+              {lvRows.map(r=>(
+                <div key={r.id} style={lvRowStyle}>
+                  <div style={{flex:2}}><input value={r.name||''} onChange={e=>updRow(key,r.id,{name:e.target.value})} placeholder="Circuit / button name…" style={inputStyle}/></div>
+                  <div style={{flex:1}}><input value={r.module||''} onChange={e=>updRow(key,r.id,{module:e.target.value})} placeholder="Module / channel…" style={inputStyle}/></div>
+                  <div style={{flex:2}}><input value={r.notes||''} onChange={e=>updRow(key,r.id,{notes:e.target.value})} placeholder="Notes…" style={inputStyle}/></div>
+                  <button onClick={()=>delRow(key,r.id)} style={{background:'none',border:'none',color:'#9ca3af',cursor:'pointer',fontSize:13,flexShrink:0}}>✕</button>
+                </div>
+              ))}
+              <button onClick={()=>addRow(key)} style={{fontSize:11,fontWeight:700,color:'#7c3aed',background:'#faf5ff',border:'1px dashed #a78bfa',borderRadius:6,padding:'5px 14px',cursor:'pointer',fontFamily:'inherit',width:'100%',marginTop:4}}>+ Add Row</button>
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Panel load sections */}
+      {panelFloors.map(floor => {
+        const existingRows = (pl.cp4Loads?.[floor]||[]).filter(r=>r.name||r.module);
+        const lvKey = 'cp4_'+floor;
+        const lvRows = getSection(lvKey);
+        if(!existingRows.length&&!lvRows.length&&getSection(lvKey).length===0) return null;
+        return (
+          <div key={floor} style={{background:'#fff',border:'1px solid #e5e7eb',borderRadius:10,marginBottom:12,overflow:'hidden'}}>
+            <div style={{background:'#5b21b6',padding:'8px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <span style={{fontSize:11,fontWeight:700,color:'#fff',letterSpacing:'0.08em'}}>{floorLabel(floor).toUpperCase()} PANEL LOADS</span>
+              <span style={{fontSize:10,color:'rgba(255,255,255,0.6)'}}>{sys}</span>
+            </div>
+            <div style={{padding:'10px 12px'}}>
+              {existingRows.length>0&&(
+                <div style={{marginBottom:10}}>
+                  <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginBottom:6}}>PLANNED LOADS</div>
+                  {existingRows.map((r,i)=>(
+                    <div key={r.id} style={{display:'flex',gap:8,alignItems:'center',padding:'5px 0',borderBottom:i<existingRows.length-1?'1px solid #f3f4f6':'none'}}>
+                      <span style={{fontSize:11,color:'#9ca3af',width:20}}>{r.num}.</span>
+                      <span style={{flex:1,fontSize:12,color:'#374151',fontWeight:500}}>{r.name}</span>
+                      {r.module&&<span style={{fontSize:11,color:'#7c3aed',background:'#faf5ff',borderRadius:4,padding:'1px 6px'}}>{r.module}</span>}
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{fontSize:10,color:'#7c3aed',fontWeight:700,marginBottom:6,marginTop:existingRows.length?8:0}}>YOUR ADDITIONS / ASSIGNMENTS</div>
+              {lvRows.map(r=>(
+                <div key={r.id} style={lvRowStyle}>
+                  <div style={{flex:2}}><input value={r.name||''} onChange={e=>updRow(lvKey,r.id,{name:e.target.value})} placeholder="Load name…" style={inputStyle}/></div>
+                  <div style={{flex:1}}><input value={r.module||''} onChange={e=>updRow(lvKey,r.id,{module:e.target.value})} placeholder="Module…" style={inputStyle}/></div>
+                  <div style={{flex:2}}><input value={r.notes||''} onChange={e=>updRow(lvKey,r.id,{notes:e.target.value})} placeholder="Notes…" style={inputStyle}/></div>
+                  <button onClick={()=>delRow(lvKey,r.id)} style={{background:'none',border:'none',color:'#9ca3af',cursor:'pointer',fontSize:13,flexShrink:0}}>✕</button>
+                </div>
+              ))}
+              <button onClick={()=>addRow(lvKey)} style={{fontSize:11,fontWeight:700,color:'#7c3aed',background:'#faf5ff',border:'1px dashed #a78bfa',borderRadius:6,padding:'5px 14px',cursor:'pointer',fontFamily:'inherit',width:'100%',marginTop:4}}>+ Add Row</button>
+            </div>
+          </div>
+        );
+      })}
+
+      {/* General notes */}
+      <div style={{background:'#fff',border:'1px solid #e5e7eb',borderRadius:10,padding:14,marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:'#374151',marginBottom:6}}>GENERAL NOTES</div>
+        <textarea value={collab.notes||''} onChange={e=>saveCollab({...collab,notes:e.target.value})}
+          placeholder="Any additional notes, questions, or specifications for Homestead Electric…" rows={4}
+          style={{width:'100%',border:'1px solid #e5e7eb',borderRadius:7,padding:'8px 10px',fontSize:13,fontFamily:'inherit',resize:'vertical',boxSizing:'border-box',outline:'none'}}/>
+      </div>
+      <div style={{textAlign:'center',fontSize:11,color:'#9ca3af'}}>Changes save automatically as you type.</div>
+    </div>
+  );
+}
+
 function QuestionsSharePage({ jobId }) {
   const [job,            setJob]           = useState(null);
   const [loading,        setLoading]       = useState(true);
@@ -9591,6 +9935,14 @@ function App() {
   // Questions share page route — ?questions=JOB_ID
   const qParam = new URLSearchParams(window.location.search).get("questions");
   if(qParam) return <QuestionsSharePage jobId={qParam}/>;
+
+  // Home Runs share page route — ?homeruns=JOB_ID
+  const hrParam = new URLSearchParams(window.location.search).get("homeruns");
+  if(hrParam) return <HomeRunsSharePage jobId={hrParam}/>;
+
+  // Lighting collab share page route — ?lighting=JOB_ID
+  const ltParam = new URLSearchParams(window.location.search).get("lighting");
+  if(ltParam) return <LightingSharePage jobId={ltParam}/>;
 
   // ── Identity ──────────────────────────────────────────────────
   const [identity, setIdentity] = useState(()=>getIdentity());
