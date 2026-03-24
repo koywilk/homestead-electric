@@ -5047,6 +5047,30 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
     return ()=>unsub();
   }, [job.id]);
 
+  // Auto-apply GC answers — mark each answered question as done and fill in the answer
+  const appliedGcRef = useRef(null);
+  useEffect(() => {
+    if(!gcAnswers?.answeredAt) return;
+    if(appliedGcRef.current === gcAnswers.answeredAt) return; // already applied this batch
+    appliedGcRef.current = gcAnswers.answeredAt;
+    const applyPhase = (current, gcPhase) => {
+      let changed = false;
+      const updated = {};
+      ['upper','main','basement'].forEach(floor => {
+        updated[floor] = (current?.[floor]||[]).map(q => {
+          const gcAns = (gcPhase?.[floor]||[]).find(a=>a.id===q.id);
+          if(gcAns?.answer && !q.done) { changed=true; return {...q, answer:gcAns.answer, done:true, gcAnswered:true}; }
+          return q;
+        });
+      });
+      return {updated, changed};
+    };
+    const {updated:newRough, changed:rc} = applyPhase(jobRef.current.roughQuestions, gcAnswers.rough);
+    const {updated:newFinish, changed:fc} = applyPhase(jobRef.current.finishQuestions, gcAnswers.finish);
+    if(rc) u({roughQuestions: newRough});
+    if(fc) u({finishQuestions: newFinish});
+  }, [gcAnswers?.answeredAt]);
+
   const refreshJob = async () => {
 
     setRefreshing(true);
@@ -5340,27 +5364,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                     📤 SHARE LINK
                   </button>
                 }>
-                  <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough}/>
-                  {gcAnswers?.rough&&(()=>{
-                    const allAns=[
-                      ...(gcAnswers.rough.upper||[]),
-                      ...(gcAnswers.rough.main||[]),
-                      ...(gcAnswers.rough.basement||[]),
-                    ].filter(a=>a.answer);
-                    return allAns.length>0?(
-                      <div style={{marginTop:14,background:'#f0fdf4',border:'1px solid #16a34a44',borderRadius:10,padding:14}}>
-                        <div style={{fontSize:10,fontWeight:700,color:'#16a34a',letterSpacing:'0.08em',marginBottom:10}}>
-                          ✅ GC ANSWERS — {gcAnswers.answeredBy||'GC'} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}
-                        </div>
-                        {allAns.map((a,i)=>(
-                          <div key={a.id||i} style={{marginBottom:10,paddingBottom:10,borderBottom:i<allAns.length-1?'1px solid #16a34a22':'none'}}>
-                            <div style={{fontSize:11,color:'#374151',fontWeight:600,marginBottom:3}}>{a.question}</div>
-                            <div style={{fontSize:12,color:'#16a34a',fontStyle:'italic',lineHeight:1.5}}>{a.answer}</div>
-                          </div>
-                        ))}
-                      </div>
-                    ):null;
-                  })()}
+                  {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{if(a.answer&&!((job.roughQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m}/>;})()}
+                  {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#16a34a',marginTop:6}}>✅ Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
+                  </div>}
                 </Section>
               </div>
 
@@ -5500,27 +5506,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                     📤 SHARE LINK
                   </button>
                 }>
-                  <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish}/>
-                  {gcAnswers?.finish&&(()=>{
-                    const allAns=[
-                      ...(gcAnswers.finish.upper||[]),
-                      ...(gcAnswers.finish.main||[]),
-                      ...(gcAnswers.finish.basement||[]),
-                    ].filter(a=>a.answer);
-                    return allAns.length>0?(
-                      <div style={{marginTop:14,background:'#f0fdf4',border:'1px solid #16a34a44',borderRadius:10,padding:14}}>
-                        <div style={{fontSize:10,fontWeight:700,color:'#16a34a',letterSpacing:'0.08em',marginBottom:10}}>
-                          ✅ GC ANSWERS — {gcAnswers.answeredBy||'GC'} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric',year:'numeric'}):''}
-                        </div>
-                        {allAns.map((a,i)=>(
-                          <div key={a.id||i} style={{marginBottom:10,paddingBottom:10,borderBottom:i<allAns.length-1?'1px solid #16a34a22':'none'}}>
-                            <div style={{fontSize:11,color:'#374151',fontWeight:600,marginBottom:3}}>{a.question}</div>
-                            <div style={{fontSize:12,color:'#16a34a',fontStyle:'italic',lineHeight:1.5}}>{a.answer}</div>
-                          </div>
-                        ))}
-                      </div>
-                    ):null;
-                  })()}
+                  {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{if(a.answer&&!((job.finishQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m}/>;})()}
+                  {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#16a34a',marginTop:6}}>✅ Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
+                  </div>}
                 </Section>
               </div>
 
@@ -6051,7 +6039,7 @@ function QAInlineEdit({value, done, label, onSave}) {
 }
 
 
-function QAList({questions: _questions, onChange, color}) {
+function QAList({questions: _questions, onChange, color, gcAnswerMap={}}) {
 
   // guard: old data may be a string instead of array
 
@@ -6127,8 +6115,19 @@ function QAList({questions: _questions, onChange, color}) {
 
       {q.done&&q.answer&&(
 
-        <div style={{marginLeft:22,marginTop:4,fontSize:11,color:C.dim,fontStyle:"italic"}}>{q.answer}</div>
+        <div style={{marginLeft:22,marginTop:4,fontSize:11,color:C.dim,fontStyle:"italic",display:"flex",alignItems:"flex-start",gap:6}}>
+          {q.gcAnswered&&<span style={{fontSize:9,fontWeight:700,color:"#16a34a",background:"#dcfce7",borderRadius:4,padding:"1px 5px",flexShrink:0,marginTop:1}}>GC</span>}
+          <span>{q.answer}</span>
+        </div>
 
+      )}
+
+      {/* If GC has answered but it hasn't been applied yet, show a pending indicator */}
+      {!q.done&&gcAnswerMap[q.id]&&(
+        <div style={{marginLeft:22,marginTop:6,background:"#f0fdf4",border:"1px solid #16a34a44",borderRadius:6,padding:"6px 10px",fontSize:11}}>
+          <span style={{fontSize:9,fontWeight:700,color:"#16a34a",background:"#dcfce7",borderRadius:4,padding:"1px 5px",marginRight:6}}>GC</span>
+          <span style={{color:"#15803d",fontStyle:"italic"}}>{gcAnswerMap[q.id]}</span>
+        </div>
       )}
 
     </div>
@@ -6184,7 +6183,7 @@ function QAList({questions: _questions, onChange, color}) {
 }
 
 
-function QASection({questions: _questions, onChange, color}) {
+function QASection({questions: _questions, onChange, color, gcAnswerMap={}}) {
 
   // guard: normalize questions to always be object with array values
 
@@ -6208,7 +6207,8 @@ function QASection({questions: _questions, onChange, color}) {
 
             onChange={v=>onChange({...questions,[k]:v})}
 
-            color={color}/>
+            color={color}
+            gcAnswerMap={gcAnswerMap}/>
 
         </div>
 
