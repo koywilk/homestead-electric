@@ -5229,12 +5229,22 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                               {job.roughStartConfirmed ? "✓ CONFIRMED" : "○ CONFIRM"}
                             </button>
                           </div>
-                          <DateInp value={job.roughProjectedStart||""} onChange={e=>u({roughProjectedStart:e.target.value})}
+                          <DateInp value={job.roughProjectedStart||""} onChange={e=>{
+                              const patch={roughProjectedStart:e.target.value};
+                              // Auto-advance to "Waiting for Start Date Confirmation" when a date is entered and no status is set yet
+                              if(e.target.value && !job.roughStatus) patch.roughStatus="waiting_date";
+                              u(patch);
+                            }}
                             style={{fontSize:13,fontWeight:700,
                               borderColor:(job.roughStartConfirmed?"#16a34a":C.rough)+"55",
                               background:job.roughStartConfirmed?"#16a34a08":`${C.rough}08`,
                               color:job.roughStartConfirmed?"#16a34a":C.rough}}/>
                           {job.roughStartConfirmed&&<div style={{fontSize:9,color:"#16a34a",fontWeight:700,marginTop:3,letterSpacing:"0.06em"}}>✓ START DATE CONFIRMED</div>}
+                        </div>
+                        <div style={{flex:1,minWidth:140}}>
+                          <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>4-WAY TARGET DATE</div>
+                          <DateInp value={job.fourWayTargetDate||""} onChange={e=>u({fourWayTargetDate:e.target.value})}
+                            style={{fontSize:13,fontWeight:700,borderColor:C.rough+"55",background:`${C.rough}08`,color:C.rough}}/>
                         </div>
                       </div>
                       <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
@@ -5362,12 +5372,22 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                               {job.finishStartConfirmed ? "✓ CONFIRMED" : "○ CONFIRM"}
                             </button>
                           </div>
-                          <DateInp value={job.finishProjectedStart||""} onChange={e=>u({finishProjectedStart:e.target.value})}
+                          <DateInp value={job.finishProjectedStart||""} onChange={e=>{
+                              const patch={finishProjectedStart:e.target.value};
+                              // Auto-advance to "Waiting for Start Date Confirmation" when a date is entered and no status is set yet
+                              if(e.target.value && !job.finishStatus) patch.finishStatus="waiting_date";
+                              u(patch);
+                            }}
                             style={{fontSize:13,fontWeight:700,
                               borderColor:(job.finishStartConfirmed?"#16a34a":C.finish)+"55",
                               background:job.finishStartConfirmed?"#16a34a08":`${C.finish}08`,
                               color:job.finishStartConfirmed?"#16a34a":C.finish}}/>
                           {job.finishStartConfirmed&&<div style={{fontSize:9,color:"#16a34a",fontWeight:700,marginTop:3,letterSpacing:"0.06em"}}>✓ START DATE CONFIRMED</div>}
+                        </div>
+                        <div style={{flex:1,minWidth:140}}>
+                          <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>FINAL INSPECTION TARGET DATE</div>
+                          <DateInp value={job.finalInspectionTargetDate||""} onChange={e=>u({finalInspectionTargetDate:e.target.value})}
+                            style={{fontSize:13,fontWeight:700,borderColor:C.finish+"55",background:`${C.finish}08`,color:C.finish}}/>
                         </div>
                       </div>
                       <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
@@ -9349,10 +9369,168 @@ function HomeownerPage({ jobId }) {
 }
 
 
+// ── Questions Share Page (public) ─────────────────────────────
+function QuestionsSharePage({ jobId }) {
+  const [job,            setJob]           = useState(null);
+  const [loading,        setLoading]       = useState(true);
+  const [error,          setError]         = useState(null);
+  const [answers,        setAnswers]       = useState({});
+  const [submitting,     setSubmitting]    = useState(false);
+  const [submitted,      setSubmitted]     = useState(false);
+  const [respondentName, setRespondentName]= useState('');
+  const [nameErr,        setNameErr]       = useState(false);
+  const [prevAnsweredBy, setPrevAnsweredBy]= useState('');
+
+  // Live listener — questions update in real-time as crew adds them
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
+      if(!snap.exists()){ setError('This questions form is not available.'); setLoading(false); return; }
+      setJob(snap.data().data);
+      setLoading(false);
+    }, () => { setError('Failed to load. Please try again.'); setLoading(false); });
+    return () => unsub();
+  }, [jobId]);
+
+  // Pre-load any previously submitted answers
+  useEffect(() => {
+    getDoc(doc(db,'homeowner_requests',jobId)).then(snap => {
+      if(snap.exists() && snap.data().questionAnswers) {
+        const qa = snap.data().questionAnswers;
+        setPrevAnsweredBy(qa.answeredBy || '');
+        const ans = {};
+        ['rough','finish'].forEach(phase => {
+          ['upper','main','basement'].forEach(floor => {
+            (qa[phase]?.[floor] || []).forEach(a => { if(a.answer) ans[a.id] = a.answer; });
+          });
+        });
+        setAnswers(ans);
+      }
+    }).catch(()=>{});
+  }, [jobId]);
+
+  const handleSubmit = async () => {
+    if(!respondentName.trim()){ setNameErr(true); return; }
+    setSubmitting(true);
+    const buildPhase = (qs) => {
+      const r = {};
+      ['upper','main','basement'].forEach(floor => {
+        r[floor] = (qs?.[floor] || []).map(q => ({id:q.id, question:q.question, answer:answers[q.id]||''}));
+      });
+      return r;
+    };
+    const questionAnswers = {
+      rough: buildPhase(job?.roughQuestions),
+      finish: buildPhase(job?.finishQuestions),
+      answeredBy: respondentName.trim(),
+      answeredAt: new Date().toISOString(),
+    };
+    try {
+      const ex = await getDoc(doc(db,'homeowner_requests',jobId));
+      await setDoc(doc(db,'homeowner_requests',jobId), {
+        ...(ex.exists()?ex.data():{}),
+        jobId, jobName:job?.name||'', questionAnswers,
+      });
+      setSubmitted(true);
+    } catch(e){ alert('Failed to submit. Please try again.'); }
+    setSubmitting(false);
+  };
+
+  const roughQs = job ? [
+    ...(job.roughQuestions?.upper||[]).map(q=>({...q,floor:'Upper Level'})),
+    ...(job.roughQuestions?.main||[]).map(q=>({...q,floor:'Main Level'})),
+    ...(job.roughQuestions?.basement||[]).map(q=>({...q,floor:'Basement'})),
+  ] : [];
+  const finishQs = job ? [
+    ...(job.finishQuestions?.upper||[]).map(q=>({...q,floor:'Upper Level'})),
+    ...(job.finishQuestions?.main||[]).map(q=>({...q,floor:'Main Level'})),
+    ...(job.finishQuestions?.basement||[]).map(q=>({...q,floor:'Basement'})),
+  ] : [];
+  const hasQs = roughQs.length+finishQs.length > 0;
+
+  const cardStyle = {background:'#fff',border:'1px solid #e5e7eb',borderRadius:10,padding:16,marginBottom:12};
+  const taStyle = {width:'100%',border:'1px solid #d1d5db',borderRadius:7,padding:'8px 10px',fontSize:13,fontFamily:'inherit',resize:'vertical',boxSizing:'border-box',outline:'none'};
+
+  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6b7280',fontSize:14}}>Loading…</div>;
+  if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#dc2626',fontSize:14,padding:24,textAlign:'center'}}>{error}</div>;
+  if(submitted) return (
+    <div style={{maxWidth:600,margin:'0 auto',padding:'60px 24px',textAlign:'center',fontFamily:'system-ui,sans-serif'}}>
+      <div style={{fontSize:48,marginBottom:16}}>✅</div>
+      <div style={{fontSize:22,fontWeight:700,color:'#111',marginBottom:8}}>Answers Submitted</div>
+      <div style={{fontSize:14,color:'#6b7280',lineHeight:1.6}}>Thank you, {respondentName}. Homestead Electric has received your responses and will follow up if needed.</div>
+    </div>
+  );
+
+  return (
+    <div style={{maxWidth:640,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#f3f4f6',minHeight:'100vh'}}>
+      <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:22}}>
+        <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>HOMESTEAD ELECTRIC</div>
+        <div style={{fontSize:19,fontWeight:700,color:'#fff',marginBottom:2}}>{job?.name||'Project Questions'}</div>
+        {job?.address&&<div style={{fontSize:12,color:'rgba(255,255,255,0.65)'}}>{job.address}</div>}
+      </div>
+
+      {prevAnsweredBy&&<div style={{background:'#fef3c7',border:'1px solid #f59e0b',borderRadius:8,padding:'10px 14px',marginBottom:16,fontSize:12,color:'#92400e'}}>✏️ You previously submitted answers as <b>{prevAnsweredBy}</b>. You can update them below and resubmit.</div>}
+
+      {!hasQs ? (
+        <div style={{textAlign:'center',padding:'48px 20px',color:'#9ca3af',background:'#fff',borderRadius:12}}>
+          <div style={{fontSize:32,marginBottom:12}}>📋</div>
+          No questions have been added yet. Check back later — this page updates automatically.
+        </div>
+      ) : (
+        <>
+          <div style={{fontSize:13,color:'#6b7280',marginBottom:18,lineHeight:1.6}}>Please answer the questions below. Your responses go directly to our team. This page updates automatically if new questions are added.</div>
+
+          {roughQs.length>0&&(
+            <div style={{marginBottom:20}}>
+              <div style={{fontSize:11,fontWeight:700,color:'#2563eb',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #2563eb33'}}>⚡ ROUGH PHASE</div>
+              {roughQs.map((q,i)=>(
+                <div key={q.id} style={{...cardStyle,borderLeft:'3px solid #2563eb'}}>
+                  <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginBottom:3}}>{q.floor}</div>
+                  <div style={{fontSize:14,fontWeight:600,color:'#111',marginBottom:10}}>Q{i+1}: {q.question}</div>
+                  <textarea value={answers[q.id]||''} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))} placeholder="Type your answer here…" rows={3} style={taStyle}/>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {finishQs.length>0&&(
+            <div style={{marginBottom:20}}>
+              <div style={{fontSize:11,fontWeight:700,color:'#0ea5e9',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #0ea5e933'}}>🏁 FINISH PHASE</div>
+              {finishQs.map((q,i)=>(
+                <div key={q.id} style={{...cardStyle,borderLeft:'3px solid #0ea5e9'}}>
+                  <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginBottom:3}}>{q.floor}</div>
+                  <div style={{fontSize:14,fontWeight:600,color:'#111',marginBottom:10}}>Q{i+1}: {q.question}</div>
+                  <textarea value={answers[q.id]||''} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))} placeholder="Type your answer here…" rows={3} style={taStyle}/>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{...cardStyle,marginBottom:12}}>
+            <div style={{fontSize:11,fontWeight:700,color:'#374151',marginBottom:6}}>YOUR NAME *</div>
+            <input value={respondentName} onChange={e=>{setRespondentName(e.target.value);setNameErr(false);}} placeholder="Enter your name before submitting"
+              style={{width:'100%',border:`1px solid ${nameErr?'#dc2626':'#d1d5db'}`,borderRadius:7,padding:'8px 10px',fontSize:13,fontFamily:'inherit',outline:'none',boxSizing:'border-box'}}/>
+            {nameErr&&<div style={{color:'#dc2626',fontSize:11,marginTop:4}}>Please enter your name</div>}
+          </div>
+
+          <button onClick={handleSubmit} disabled={submitting}
+            style={{width:'100%',background:'#1e3a5f',color:'#fff',border:'none',borderRadius:10,padding:14,fontSize:15,fontWeight:700,cursor:submitting?'not-allowed':'pointer',fontFamily:'inherit',opacity:submitting?0.7:1,marginBottom:16}}>
+            {submitting?'Submitting…':'Submit Answers'}
+          </button>
+          <div style={{textAlign:'center',fontSize:11,color:'#9ca3af'}}>Questions update live — new questions added by our team will appear here automatically.</div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function App() {
   // Homeowner page route — ?homeowner=JOB_ID
   const hoParam = new URLSearchParams(window.location.search).get("homeowner");
   if(hoParam) return <HomeownerPage jobId={hoParam}/>;
+
+  // Questions share page route — ?questions=JOB_ID
+  const qParam = new URLSearchParams(window.location.search).get("questions");
+  if(qParam) return <QuestionsSharePage jobId={qParam}/>;
 
   // ── Identity ──────────────────────────────────────────────────
   const [identity, setIdentity] = useState(()=>getIdentity());
