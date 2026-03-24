@@ -9753,18 +9753,23 @@ function App() {
     const today = new Date().toISOString().split("T")[0];
     const key = `he_daily_backup_${today}`;
     if(!localStorage.getItem(key)) {
-      try { localStorage.setItem(key, JSON.stringify({savedAt: new Date().toISOString(), count: jobs.length, jobs})); } catch(e) { console.warn("[HE] Daily backup failed (storage full?):", e); }
-      // Clean up backups older than 7 days
+      // Clean up old backups FIRST to free space, then save today's
+      const cutoff = new Date(Date.now() - 3*86400000).toISOString().split("T")[0];
+      const keysToRemove = [];
       for(let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
         if(k?.startsWith("he_daily_backup_") && k !== key) {
-          try {
-            const d = k.replace("he_daily_backup_","");
-            if(d < new Date(Date.now() - 7*86400000).toISOString().split("T")[0]) localStorage.removeItem(k);
-          } catch(e){}
+          const d = k.replace("he_daily_backup_","");
+          if(d < cutoff) keysToRemove.push(k);
         }
       }
-      console.log(`[HE] Daily safety backup saved: ${jobs.length} jobs (${today})`);
+      keysToRemove.forEach(k => { try { localStorage.removeItem(k); } catch(e){} });
+      // Save a compact version (no uploaded file blobs) to avoid quota issues
+      const compact = jobs.map(j => {const c={...j}; delete c.uploadedFiles; return c;});
+      try {
+        localStorage.setItem(key, JSON.stringify({savedAt: new Date().toISOString(), count: jobs.length, jobs: compact}));
+        console.log(`[HE] Daily safety backup saved: ${jobs.length} jobs (${today})`);
+      } catch(e) { console.warn("[HE] Daily backup failed (storage still full after cleanup):", e); }
     }
   }, [jobs.length > 0]);
 
@@ -9820,7 +9825,9 @@ function App() {
           Object.entries(sanitize(accumulated)).forEach(([k,v]) => { mergeData["data."+k] = v; });
           // setDoc with mergeFields is safer than updateDoc — it creates the doc if it doesn't exist yet
           // (fixes race condition on new jobs) AND only touches specified fields (safe for concurrency)
-          await setDoc(doc(db,"jobs",job.id), mergeData, {mergeFields: Object.keys(mergeData)});
+          // Filter out any keys whose value is undefined — Firestore throws if a key is in mergeFields but missing from data
+          const mergeFields1 = Object.keys(mergeData).filter(k => mergeData[k] !== undefined);
+          await setDoc(doc(db,"jobs",job.id), mergeData, {mergeFields: mergeFields1});
         } else {
           // No accumulated patches — either a new job or a code path that didn't pass a patch.
           // SAFETY: Convert all fields to dot-notation mergeFields so we never wipe Firestore fields
@@ -9842,7 +9849,9 @@ function App() {
           // Firestore fields that aren't present in our local snapshot.
           const mergeData = {updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
           Object.entries(sanitized).forEach(([k,v]) => { mergeData["data."+k] = v; });
-          await setDoc(doc(db,"jobs",job.id), mergeData, {mergeFields: Object.keys(mergeData)});
+          // Filter out any keys whose value is undefined — Firestore throws if a key is in mergeFields but missing from data
+          const mergeFields2 = Object.keys(mergeData).filter(k => mergeData[k] !== undefined);
+          await setDoc(doc(db,"jobs",job.id), mergeData, {mergeFields: mergeFields2});
         }
 
         isDirty.current = false;
@@ -9882,7 +9891,8 @@ function App() {
       if(accumulated && Object.keys(accumulated).length > 0) {
         const mergeData = {updated_at:new Date().toISOString()};
         Object.entries(sanitize(accumulated)).forEach(([k,v]) => { mergeData["data."+k] = v; });
-        try { await setDoc(doc(db,"jobs",job.id), mergeData, {mergeFields: Object.keys(mergeData)}); } catch(e){console.error('[HE] flushJob save error:',e?.message);}
+        const mergeFieldsFlush = Object.keys(mergeData).filter(k => mergeData[k] !== undefined);
+        try { await setDoc(doc(db,"jobs",job.id), mergeData, {mergeFields: mergeFieldsFlush}); } catch(e){console.error('[HE] flushJob save error:',e?.message);}
       }
       // No else — never do a full setDoc overwrite from flushJob, it can wipe other users' data
     }
