@@ -9819,19 +9819,22 @@ function App() {
         delete pendingPatches.current[job.id];
 
         if(accumulated && Object.keys(accumulated).length > 0) {
-          // Merge mode: only write the changed fields — other users' changes to other fields are preserved
-          const mergeData = {updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
-          // Build dot-notation paths for changed fields within the data map
-          Object.entries(sanitize(accumulated)).forEach(([k,v]) => { mergeData["data."+k] = v; });
-          // setDoc with mergeFields is safer than updateDoc — it creates the doc if it doesn't exist yet
-          // (fixes race condition on new jobs) AND only touches specified fields (safe for concurrency)
-          // Filter out any keys whose value is undefined — Firestore throws if a key is in mergeFields but missing from data
-          const mergeFields1 = Object.keys(mergeData).filter(k => mergeData[k] !== undefined);
-          await setDoc(doc(db,"jobs",job.id), mergeData, {mergeFields: mergeFields1});
+          // Patch mode: only write the fields that changed.
+          // updateDoc with dot-notation is the correct Firebase API for this — it touches ONLY
+          // the specified nested fields and leaves everything else in Firestore untouched.
+          const patch = {updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
+          Object.entries(sanitize(accumulated)).forEach(([k,v]) => { patch["data."+k] = v; });
+          try {
+            await updateDoc(doc(db,"jobs",job.id), patch);
+          } catch(notFound) {
+            // Document doesn't exist yet (new job created but first setDoc hasn't landed) — create it now
+            if(notFound?.code === 'not-found') {
+              await setDoc(doc(db,"jobs",job.id), {data:sanitize(job), updated_at:patch.updated_at, saved_by:patch.saved_by, device:patch.device});
+            } else { throw notFound; }
+          }
         } else {
-          // No accumulated patches — either a new job or a code path that didn't pass a patch.
-          // SAFETY: Convert all fields to dot-notation mergeFields so we never wipe Firestore fields
-          // that another user added and we don't have in our local snapshot.
+          // No patch — new job or unpatch'd save path. Write all current fields via dot-notation updateDoc
+          // so we never wipe Firestore fields another user added that aren't in our local snapshot.
           const sanitized = sanitize(job);
           // Check estimated size before saving
           const estimatedSize = JSON.stringify(sanitized).length;
@@ -9844,14 +9847,17 @@ function App() {
               return;
             }
           }
-          // Use dot-notation + mergeFields — identical safety to the patch path above.
-          // Creates the doc if it doesn't exist (safe for new jobs) and never overwrites
-          // Firestore fields that aren't present in our local snapshot.
-          const mergeData = {updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
-          Object.entries(sanitized).forEach(([k,v]) => { mergeData["data."+k] = v; });
-          // Filter out any keys whose value is undefined — Firestore throws if a key is in mergeFields but missing from data
-          const mergeFields2 = Object.keys(mergeData).filter(k => mergeData[k] !== undefined);
-          await setDoc(doc(db,"jobs",job.id), mergeData, {mergeFields: mergeFields2});
+          const meta = {updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
+          const fullPatch = {...meta};
+          Object.entries(sanitized).forEach(([k,v]) => { fullPatch["data."+k] = v; });
+          try {
+            await updateDoc(doc(db,"jobs",job.id), fullPatch);
+          } catch(notFound) {
+            // New document — create it with full structure
+            if(notFound?.code === 'not-found') {
+              await setDoc(doc(db,"jobs",job.id), {data:sanitized, ...meta});
+            } else { throw notFound; }
+          }
         }
 
         isDirty.current = false;
@@ -9889,12 +9895,18 @@ function App() {
       const accumulated = pendingPatches.current[job.id];
       delete pendingPatches.current[job.id];
       if(accumulated && Object.keys(accumulated).length > 0) {
-        const mergeData = {updated_at:new Date().toISOString()};
-        Object.entries(sanitize(accumulated)).forEach(([k,v]) => { mergeData["data."+k] = v; });
-        const mergeFieldsFlush = Object.keys(mergeData).filter(k => mergeData[k] !== undefined);
-        try { await setDoc(doc(db,"jobs",job.id), mergeData, {mergeFields: mergeFieldsFlush}); } catch(e){console.error('[HE] flushJob save error:',e?.message);}
+        const patch = {updated_at:new Date().toISOString()};
+        Object.entries(sanitize(accumulated)).forEach(([k,v]) => { patch["data."+k] = v; });
+        try {
+          await updateDoc(doc(db,"jobs",job.id), patch);
+        } catch(e) {
+          if(e?.code === 'not-found') {
+            // New doc — create it
+            try { await setDoc(doc(db,"jobs",job.id), {data:sanitize(job), updated_at:patch.updated_at}); } catch(e2){console.error('[HE] flushJob create error:',e2?.message);}
+          } else { console.error('[HE] flushJob save error:',e?.message); }
+        }
       }
-      // No else — never do a full setDoc overwrite from flushJob, it can wipe other users' data
+      // No else — never do a full overwrite from flushJob, it can wipe other users' data
     }
   };
 
@@ -9969,13 +9981,17 @@ function App() {
       clearTimeout(saveTimers.current[job.id]);
       saveTimers.current[job.id] = null;
 
-      // Use accumulated patches if available — never do full setDoc overwrite
+      // Use accumulated patches if available — never do full overwrite
       const accumulated = pendingPatches.current[job.id];
       delete pendingPatches.current[job.id];
       if(accumulated && Object.keys(accumulated).length > 0) {
-        const mergeData = {updated_at:new Date().toISOString()};
-        Object.entries(sanitize(accumulated)).forEach(([k,v]) => { mergeData["data."+k] = v; });
-        setDoc(doc(db,"jobs",job.id), mergeData, {mergeFields: Object.keys(mergeData)}).catch(e=>console.error('[HE] flushSaves error:',e?.message));
+        const patch = {updated_at:new Date().toISOString()};
+        Object.entries(sanitize(accumulated)).forEach(([k,v]) => { patch["data."+k] = v; });
+        updateDoc(doc(db,"jobs",job.id), patch).catch(e => {
+          if(e?.code === 'not-found') {
+            setDoc(doc(db,"jobs",job.id), {data:sanitize(job), updated_at:patch.updated_at}).catch(e2=>console.error('[HE] flushSaves create error:',e2?.message));
+          } else { console.error('[HE] flushSaves error:',e?.message); }
+        });
       }
       // If no accumulated patches, skip — don't overwrite with potentially stale data
 
