@@ -4534,6 +4534,20 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
                   borderRadius: 8, padding: "8px 10px", fontSize: 12, fontFamily: "inherit",
                   color: C.text, resize: "vertical", outline: "none", lineHeight: 1.5 }} />
             </div>
+            {/* Matterport Link */}
+            <div style={{ marginTop: 10 }}>
+              <div style={{ fontSize: 10, color: C.dim, marginBottom: 3 }}>Matterport Link</div>
+              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
+                <div style={{ flex: 1 }}>
+                  <Inp value={job.matterportLink || ""} onChange={e => u({ matterportLink: e.target.value })} placeholder="Paste Matterport URL…" />
+                </div>
+                {job.matterportLink && <a href={job.matterportLink} target="_blank" rel="noopener noreferrer"
+                  onClick={e => e.stopPropagation()}
+                  style={{ fontSize: 11, fontWeight: 700, color: "#8b5cf6", background: "#8b5cf615", border: "1px solid #8b5cf633",
+                    borderRadius: 7, padding: "6px 10px", textDecoration: "none", whiteSpace: "nowrap", cursor: "pointer" }}>
+                  Open 🔗</a>}
+              </div>
+            </div>
           </div>
 
           {/* Scope & Material */}
@@ -4829,6 +4843,20 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
                 style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
                   borderRadius:8,color:C.text,padding:"8px 10px",fontSize:12,
                   fontFamily:"inherit",resize:"vertical",outline:"none",lineHeight:1.5}}/>
+            </div>
+            {/* Matterport Link */}
+            <div style={{marginTop:10}}>
+              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Matterport Link</div>
+              <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                <div style={{flex:1}}>
+                  <Inp value={job.matterportLink||""} onChange={e=>u({matterportLink:e.target.value})} placeholder="Paste Matterport URL…"/>
+                </div>
+                {job.matterportLink&&<a href={job.matterportLink} target="_blank" rel="noopener noreferrer"
+                  onClick={e=>e.stopPropagation()}
+                  style={{fontSize:11,fontWeight:700,color:"#8b5cf6",background:"#8b5cf615",border:"1px solid #8b5cf633",
+                    borderRadius:7,padding:"6px 10px",textDecoration:"none",whiteSpace:"nowrap",cursor:"pointer"}}>
+                  Open 🔗</a>}
+              </div>
             </div>
           </div>
 
@@ -5702,6 +5730,23 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                     borderRadius:8,padding:"8px 10px",fontSize:12,fontFamily:"inherit",
                     color:C.text,resize:"vertical",outline:"none",lineHeight:1.5,
                     transition:"border-color 0.15s"}}/>
+              </div>
+
+              {/* Matterport link */}
+              <div style={{marginTop:12}}>
+                <div style={{fontSize:10,color:C.dim,marginBottom:3,display:"flex",alignItems:"center",gap:6}}>
+                  MATTERPORT LINK
+                </div>
+                <div style={{display:"flex",gap:4,alignItems:"center"}}>
+                  <div style={{flex:1}}>
+                    <Inp value={job.matterportLink||""} onChange={e=>u({matterportLink:e.target.value})} placeholder="Paste Matterport URL…"/>
+                  </div>
+                  {job.matterportLink&&<a href={job.matterportLink} target="_blank" rel="noopener noreferrer"
+                    onClick={e=>e.stopPropagation()}
+                    style={{fontSize:11,fontWeight:700,color:"#8b5cf6",background:"#8b5cf615",border:"1px solid #8b5cf633",
+                      borderRadius:7,padding:"6px 10px",textDecoration:"none",whiteSpace:"nowrap",cursor:"pointer"}}>
+                    Open 🔗</a>}
+                </div>
               </div>
 
               <div style={{marginTop:16}}>
