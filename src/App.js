@@ -672,7 +672,7 @@ const blankJob = () => ({
 
   id:uid(), name:"", address:"", gc:"", phone:"", simproNo:"", foreman:"Koy", lead:"", flagged:false, flagNote:"",
 
-  planLink:"", redlineLink:"", lightingLink:"", panelLink:"", qcLink:"", matterportLink:"", driveFolderId:"",
+  planLink:"", redlineLink:"", lightingLink:"", panelLink:"", qcLink:"", matterportLink:"", matterportLinks:[], driveFolderId:"",
 
   uploadedFiles:[],
 
@@ -4534,19 +4534,45 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
                   borderRadius: 8, padding: "8px 10px", fontSize: 12, fontFamily: "inherit",
                   color: C.text, resize: "vertical", outline: "none", lineHeight: 1.5 }} />
             </div>
-            {/* Matterport Link */}
+            {/* Matterport links */}
             <div style={{ marginTop: 10 }}>
-              <div style={{ fontSize: 10, color: C.dim, marginBottom: 3 }}>Matterport Link</div>
-              <div style={{ display: "flex", gap: 4, alignItems: "center" }}>
-                <div style={{ flex: 1 }}>
-                  <Inp value={job.matterportLink || ""} onChange={e => u({ matterportLink: e.target.value })} placeholder="Paste Matterport URL…" />
-                </div>
-                {job.matterportLink && <a href={job.matterportLink} target="_blank" rel="noopener noreferrer"
-                  onClick={e => e.stopPropagation()}
-                  style={{ fontSize: 11, fontWeight: 700, color: "#8b5cf6", background: "#8b5cf615", border: "1px solid #8b5cf633",
-                    borderRadius: 7, padding: "6px 10px", textDecoration: "none", whiteSpace: "nowrap", cursor: "pointer" }}>
-                  Open 🔗</a>}
+              <div style={{ fontSize: 10, color: C.dim, marginBottom: 6, display: "flex", alignItems: "center", justifyContent: "space-between" }}>
+                <span>Matterport Links</span>
+                <span onClick={() => {
+                  const links = [...(job.matterportLinks || [])];
+                  if (!links.length && job.matterportLink) links.push({ label: "Main", url: job.matterportLink });
+                  links.push({ label: "", url: "" });
+                  u({ matterportLinks: links });
+                }} style={{ cursor: "pointer", fontSize: 10, fontWeight: 700, color: C.accent, padding: "2px 8px",
+                  border: `1px solid ${C.accent}33`, borderRadius: 5, background: `${C.accent}10` }}>+ Add</span>
               </div>
+              {(job.matterportLinks && job.matterportLinks.length > 0 ? job.matterportLinks : (job.matterportLink ? [{ label: "Main", url: job.matterportLink }] : [])).map((ml, mi) => (
+                <div key={mi} style={{ display: "flex", gap: 4, alignItems: "center", marginBottom: 4 }}>
+                  <Inp value={ml.label || ""} onChange={e => {
+                    const links = [...(job.matterportLinks || (job.matterportLink ? [{ label: "Main", url: job.matterportLink }] : []))];
+                    links[mi] = { ...links[mi], label: e.target.value };
+                    u({ matterportLinks: links, matterportLink: links[0]?.url || "" });
+                  }} placeholder="Label (e.g. Pool House)" style={{ width: 120, flexShrink: 0 }} />
+                  <div style={{ flex: 1 }}>
+                    <Inp value={ml.url || ""} onChange={e => {
+                      const links = [...(job.matterportLinks || (job.matterportLink ? [{ label: "Main", url: job.matterportLink }] : []))];
+                      links[mi] = { ...links[mi], url: e.target.value };
+                      u({ matterportLinks: links, matterportLink: links[0]?.url || "" });
+                    }} placeholder="Paste Matterport URL…" />
+                  </div>
+                  {ml.url && <a href={ml.url} target="_blank" rel="noopener noreferrer"
+                    onClick={e => e.stopPropagation()}
+                    style={{ fontSize: 11, fontWeight: 700, color: "#8b5cf6", background: "#8b5cf615", border: "1px solid #8b5cf633",
+                      borderRadius: 7, padding: "6px 10px", textDecoration: "none", whiteSpace: "nowrap", cursor: "pointer" }}>
+                    Open 🔗</a>}
+                  <span onClick={() => {
+                    const links = [...(job.matterportLinks || (job.matterportLink ? [{ label: "Main", url: job.matterportLink }] : []))];
+                    links.splice(mi, 1);
+                    u({ matterportLinks: links, matterportLink: links[0]?.url || "" });
+                  }} style={{ cursor: "pointer", fontSize: 14, color: "#ef4444", padding: "4px", lineHeight: 1, flexShrink: 0 }}>✕</span>
+                </div>
+              ))}
+              {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{ fontSize: 11, color: C.muted, fontStyle: "italic" }}>No Matterport links yet — click + Add</div>}
             </div>
           </div>
 
@@ -4844,19 +4870,45 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
                   borderRadius:8,color:C.text,padding:"8px 10px",fontSize:12,
                   fontFamily:"inherit",resize:"vertical",outline:"none",lineHeight:1.5}}/>
             </div>
-            {/* Matterport Link */}
+            {/* Matterport links */}
             <div style={{marginTop:10}}>
-              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Matterport Link</div>
-              <div style={{display:"flex",gap:4,alignItems:"center"}}>
-                <div style={{flex:1}}>
-                  <Inp value={job.matterportLink||""} onChange={e=>u({matterportLink:e.target.value})} placeholder="Paste Matterport URL…"/>
-                </div>
-                {job.matterportLink&&<a href={job.matterportLink} target="_blank" rel="noopener noreferrer"
-                  onClick={e=>e.stopPropagation()}
-                  style={{fontSize:11,fontWeight:700,color:"#8b5cf6",background:"#8b5cf615",border:"1px solid #8b5cf633",
-                    borderRadius:7,padding:"6px 10px",textDecoration:"none",whiteSpace:"nowrap",cursor:"pointer"}}>
-                  Open 🔗</a>}
+              <div style={{fontSize:10,color:C.dim,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                <span>Matterport Links</span>
+                <span onClick={()=>{
+                  const links=[...(job.matterportLinks||[])];
+                  if(!links.length && job.matterportLink) links.push({label:"Main",url:job.matterportLink});
+                  links.push({label:"",url:""});
+                  u({matterportLinks:links});
+                }} style={{cursor:"pointer",fontSize:10,fontWeight:700,color:C.accent,padding:"2px 8px",
+                  border:`1px solid ${C.accent}33`,borderRadius:5,background:`${C.accent}10`}}>+ Add</span>
               </div>
+              {(job.matterportLinks && job.matterportLinks.length>0 ? job.matterportLinks : (job.matterportLink ? [{label:"Main",url:job.matterportLink}] : [])).map((ml,mi)=>(
+                <div key={mi} style={{display:"flex",gap:4,alignItems:"center",marginBottom:4}}>
+                  <Inp value={ml.label||""} onChange={e=>{
+                    const links=[...(job.matterportLinks||(job.matterportLink?[{label:"Main",url:job.matterportLink}]:[]))];
+                    links[mi]={...links[mi],label:e.target.value};
+                    u({matterportLinks:links, matterportLink:links[0]?.url||""});
+                  }} placeholder="Label (e.g. Pool House)" style={{width:120,flexShrink:0}}/>
+                  <div style={{flex:1}}>
+                    <Inp value={ml.url||""} onChange={e=>{
+                      const links=[...(job.matterportLinks||(job.matterportLink?[{label:"Main",url:job.matterportLink}]:[]))];
+                      links[mi]={...links[mi],url:e.target.value};
+                      u({matterportLinks:links, matterportLink:links[0]?.url||""});
+                    }} placeholder="Paste Matterport URL…"/>
+                  </div>
+                  {ml.url&&<a href={ml.url} target="_blank" rel="noopener noreferrer"
+                    onClick={e=>e.stopPropagation()}
+                    style={{fontSize:11,fontWeight:700,color:"#8b5cf6",background:"#8b5cf615",border:"1px solid #8b5cf633",
+                      borderRadius:7,padding:"6px 10px",textDecoration:"none",whiteSpace:"nowrap",cursor:"pointer"}}>
+                    Open 🔗</a>}
+                  <span onClick={()=>{
+                    const links=[...(job.matterportLinks||(job.matterportLink?[{label:"Main",url:job.matterportLink}]:[]))];
+                    links.splice(mi,1);
+                    u({matterportLinks:links, matterportLink:links[0]?.url||""});
+                  }} style={{cursor:"pointer",fontSize:14,color:"#ef4444",padding:"4px",lineHeight:1,flexShrink:0}}>✕</span>
+                </div>
+              ))}
+              {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No Matterport links yet — click + Add</div>}
             </div>
           </div>
 
@@ -5732,21 +5784,45 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                     transition:"border-color 0.15s"}}/>
               </div>
 
-              {/* Matterport link */}
+              {/* Matterport links */}
               <div style={{marginTop:12}}>
-                <div style={{fontSize:10,color:C.dim,marginBottom:3,display:"flex",alignItems:"center",gap:6}}>
-                  MATTERPORT LINK
+                <div style={{fontSize:10,color:C.dim,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
+                  <span>MATTERPORT LINKS</span>
+                  <span onClick={()=>{
+                    const links = [...(job.matterportLinks||[])];
+                    if(!links.length && job.matterportLink) links.push({label:"Main",url:job.matterportLink});
+                    links.push({label:"",url:""});
+                    u({matterportLinks:links});
+                  }} style={{cursor:"pointer",fontSize:10,fontWeight:700,color:C.accent,padding:"2px 8px",
+                    border:`1px solid ${C.accent}33`,borderRadius:5,background:`${C.accent}10`}}>+ Add</span>
                 </div>
-                <div style={{display:"flex",gap:4,alignItems:"center"}}>
-                  <div style={{flex:1}}>
-                    <Inp value={job.matterportLink||""} onChange={e=>u({matterportLink:e.target.value})} placeholder="Paste Matterport URL…"/>
+                {(job.matterportLinks && job.matterportLinks.length > 0 ? job.matterportLinks : (job.matterportLink ? [{label:"Main",url:job.matterportLink}] : [])).map((ml,mi)=>(
+                  <div key={mi} style={{display:"flex",gap:4,alignItems:"center",marginBottom:4}}>
+                    <Inp value={ml.label||""} onChange={e=>{
+                      const links=[...(job.matterportLinks||(job.matterportLink?[{label:"Main",url:job.matterportLink}]:[]))];
+                      links[mi]={...links[mi],label:e.target.value};
+                      u({matterportLinks:links, matterportLink:links[0]?.url||""});
+                    }} placeholder="Label (e.g. Pool House)" style={{width:120,flexShrink:0}}/>
+                    <div style={{flex:1}}>
+                      <Inp value={ml.url||""} onChange={e=>{
+                        const links=[...(job.matterportLinks||(job.matterportLink?[{label:"Main",url:job.matterportLink}]:[]))];
+                        links[mi]={...links[mi],url:e.target.value};
+                        u({matterportLinks:links, matterportLink:links[0]?.url||""});
+                      }} placeholder="Paste Matterport URL…"/>
+                    </div>
+                    {ml.url&&<a href={ml.url} target="_blank" rel="noopener noreferrer"
+                      onClick={e=>e.stopPropagation()}
+                      style={{fontSize:11,fontWeight:700,color:"#8b5cf6",background:"#8b5cf615",border:"1px solid #8b5cf633",
+                        borderRadius:7,padding:"6px 10px",textDecoration:"none",whiteSpace:"nowrap",cursor:"pointer"}}>
+                      Open 🔗</a>}
+                    <span onClick={()=>{
+                      const links=[...(job.matterportLinks||(job.matterportLink?[{label:"Main",url:job.matterportLink}]:[]))];
+                      links.splice(mi,1);
+                      u({matterportLinks:links, matterportLink:links[0]?.url||""});
+                    }} style={{cursor:"pointer",fontSize:14,color:"#ef4444",padding:"4px",lineHeight:1,flexShrink:0}}>✕</span>
                   </div>
-                  {job.matterportLink&&<a href={job.matterportLink} target="_blank" rel="noopener noreferrer"
-                    onClick={e=>e.stopPropagation()}
-                    style={{fontSize:11,fontWeight:700,color:"#8b5cf6",background:"#8b5cf615",border:"1px solid #8b5cf633",
-                      borderRadius:7,padding:"6px 10px",textDecoration:"none",whiteSpace:"nowrap",cursor:"pointer"}}>
-                    Open 🔗</a>}
-                </div>
+                ))}
+                {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No Matterport links yet — click + Add</div>}
               </div>
 
               <div style={{marginTop:16}}>
