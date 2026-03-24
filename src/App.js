@@ -9818,7 +9818,9 @@ function App() {
           const mergeData = {updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
           // Build dot-notation paths for changed fields within the data map
           Object.entries(sanitize(accumulated)).forEach(([k,v]) => { mergeData["data."+k] = v; });
-          await updateDoc(doc(db,"jobs",job.id), mergeData);
+          // setDoc with mergeFields is safer than updateDoc — it creates the doc if it doesn't exist yet
+          // (fixes race condition on new jobs) AND only touches specified fields (safe for concurrency)
+          await setDoc(doc(db,"jobs",job.id), mergeData, {mergeFields: Object.keys(mergeData)});
         } else {
           // No accumulated patches — either a new job or a code path that didn't pass a patch.
           // SAFETY: Check if the document already exists. If it does, use merge to avoid wiping concurrent changes.
@@ -9876,7 +9878,7 @@ function App() {
       if(accumulated && Object.keys(accumulated).length > 0) {
         const mergeData = {updated_at:new Date().toISOString()};
         Object.entries(sanitize(accumulated)).forEach(([k,v]) => { mergeData["data."+k] = v; });
-        try { await updateDoc(doc(db,"jobs",job.id), mergeData); } catch(e){}
+        try { await setDoc(doc(db,"jobs",job.id), mergeData, {mergeFields: Object.keys(mergeData)}); } catch(e){console.error('[HE] flushJob save error:',e?.message);}
       }
       // No else — never do a full setDoc overwrite from flushJob, it can wipe other users' data
     }
@@ -9959,7 +9961,7 @@ function App() {
       if(accumulated && Object.keys(accumulated).length > 0) {
         const mergeData = {updated_at:new Date().toISOString()};
         Object.entries(sanitize(accumulated)).forEach(([k,v]) => { mergeData["data."+k] = v; });
-        updateDoc(doc(db,"jobs",job.id), mergeData).catch(e=>console.error(e));
+        setDoc(doc(db,"jobs",job.id), mergeData, {mergeFields: Object.keys(mergeData)}).catch(e=>console.error('[HE] flushSaves error:',e?.message));
       }
       // If no accumulated patches, skip — don't overwrite with potentially stale data
 
