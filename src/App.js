@@ -3612,7 +3612,7 @@ async function syncDriveFoldersToJobs(jobs, updateJob) {
   // 3. Apply matches
   for (const match of results.matched) {
     const job = jobs.find(j => j.name === match.jobName);
-    if (job) updateJob({ ...job, driveFolderId: match.folderId });
+    if (job) { const patch = { driveFolderId: match.folderId }; updateJob({ ...job, ...patch }, patch); }
   }
 
   return { total: driveFolders.length, ...results };
@@ -5045,7 +5045,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
 
       const snap = await getDoc(doc(db,"jobs",job.id));
 
-      if(snap.exists()&&snap.data()?.data) onUpdate(snap.data().data);
+      if(snap.exists()&&snap.data()?.data) {
+        // Only update local state — do NOT write back to Firestore (it's already there)
+        const fresh = normalizeJob(snap.data().data);
+        jobRef.current = fresh;
+        setJob(fresh);
+      }
 
     } catch(e){ console.error(e); }
 
@@ -6454,7 +6459,7 @@ function TempPedCard({ job, onOpen, onUpdate, onDelete }) {
   const foreman = job.foreman||"Koy";
   const fc = (({"Koy":"#3b82f6","Vasa":"#f97316","Colby":"#22c55e","Keegan":"#3b82f6","Gage":"#3b82f6","Daegan":"#3b82f6","Braden":"#22c55e","Treycen":"#22c55e","Jon":"#22c55e","Vasa":"#f97316","Abe":"#f97316","Louis":"#f97316","Jacob":"#6b7280"})[foreman]||"#6b7280") || "#6b7280";
 
-  const upd = (patch) => onUpdate({...job, ...patch});
+  const upd = (patch) => onUpdate({...job, ...patch}, patch);
 
   return (
     <div style={{
@@ -8895,10 +8900,10 @@ function BulkEditTable({ jobs, foremenList, leadsList, onUpdateJob }) {
               <tr key={job.id} style={{borderBottom:`1px solid ${C.border}22`}}>
                 <td style={{padding:"8px 12px",color:C.text,fontWeight:600}}>{job.name||"(untitled)"}</td>
                 <td style={{padding:"6px 8px"}}>
-                  <Sel value={job.foreman||""} onChange={e=>onUpdateJob({...job, foreman:e.target.value})} options={[...(foremenList||[]),"Unassigned"]}/>
+                  <Sel value={job.foreman||""} onChange={e=>{const patch={foreman:e.target.value}; onUpdateJob({...job,...patch},patch);}} options={[...(foremenList||[]),"Unassigned"]}/>
                 </td>
                 <td style={{padding:"6px 8px"}}>
-                  <Sel value={job.lead||""} onChange={e=>onUpdateJob({...job, lead:e.target.value})} options={["Lead TBD",...(leadsList||[])]}/>
+                  <Sel value={job.lead||""} onChange={e=>{const patch={lead:e.target.value}; onUpdateJob({...job,...patch},patch);}} options={["Lead TBD",...(leadsList||[])]}/>
                 </td>
               </tr>
             ))}
@@ -9590,20 +9595,9 @@ function App() {
             if(j.lead)    { const fixed = normalizeName(j.lead);    if(fixed !== j.lead)    j.lead = fixed; }
           });
 
-          // One-time fix v2: clear tempPed:true from any job that has a foreman assigned
-          // Real temp peds never have a foreman — they're standalone cards
-          const TEMPPED_FIX_KEY = "heTempPedFixed_v3";
-          if(!localStorage.getItem(TEMPPED_FIX_KEY)) {
-            const toFix = loaded.filter(j => j.tempPed === true && j.foreman && j.foreman !== "");
-            if(toFix.length > 0) {
-              toFix.forEach(job => {
-                const fixed = {...job, tempPed:false, hasTempPed: job.hasTempPed||false};
-                setDoc(doc(db,"jobs",job.id),{data:sanitize(fixed),updated_at:new Date().toISOString()}).catch(()=>{});
-              });
-              console.log(`[HE] v3: Cleared tempPed flag from ${toFix.length} job(s) with foreman assigned`);
-            }
-            localStorage.setItem(TEMPPED_FIX_KEY,"1");
-          }
+          // One-time fix v2: DISABLED — was using setDoc (full overwrite) which can wipe data
+          // when localStorage is cleared and the fix re-runs. If needed, use updateDoc with dot-notation.
+          // The fix has already run on all devices, so this is safe to leave disabled.
 
           // Merge snapshot data with any pending local edits
           // Jobs with active save timers should keep their local version
@@ -9652,8 +9646,7 @@ function App() {
               if(!d) return;
               const daysBetween = Math.floor((Date.now() - d.getTime()) / (1000*60*60*24));
               if(daysBetween >= 60) {
-                const patch = { finishStatus: "waiting_date" };
-                setDoc(doc(db,"jobs",job.id),{data:sanitize({...job,...patch}),updated_at:new Date().toISOString()}).catch(()=>{});
+                updateDoc(doc(db,"jobs",job.id),{"data.finishStatus":"waiting_date",updated_at:new Date().toISOString()}).catch(()=>{});
                 advancedCount++;
               }
             });
@@ -9816,7 +9809,8 @@ function App() {
           Object.entries(sanitize(accumulated)).forEach(([k,v]) => { mergeData["data."+k] = v; });
           await updateDoc(doc(db,"jobs",job.id), mergeData);
         } else {
-          // Full write mode: new job or no patch tracking (e.g. from promote, bulk edit)
+          // No accumulated patches — either a new job or a code path that didn't pass a patch.
+          // SAFETY: Check if the document already exists. If it does, use merge to avoid wiping concurrent changes.
           const payload = {data:sanitize(job),updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
           // Check estimated size before saving
           const estimatedSize = JSON.stringify(payload).length;
@@ -9829,7 +9823,9 @@ function App() {
               return;
             }
           }
-          await setDoc(doc(db,"jobs",job.id),payload);
+          // Use {merge:true} so existing fields in Firestore that aren't in this payload are preserved
+          // This prevents stale local data from wiping fields another user just set
+          await setDoc(doc(db,"jobs",job.id),payload,{merge:true});
         }
 
         isDirty.current = false;
@@ -9870,10 +9866,8 @@ function App() {
         const mergeData = {updated_at:new Date().toISOString()};
         Object.entries(sanitize(accumulated)).forEach(([k,v]) => { mergeData["data."+k] = v; });
         try { await updateDoc(doc(db,"jobs",job.id), mergeData); } catch(e){}
-      } else {
-        const latest = jobsRef.current.find(j=>j.id===job.id) || job;
-        try { await setDoc(doc(db,"jobs",latest.id),{data:sanitize(latest),updated_at:new Date().toISOString()}); } catch(e){}
       }
+      // No else — never do a full setDoc overwrite from flushJob, it can wipe other users' data
     }
   };
 
@@ -9948,7 +9942,15 @@ function App() {
       clearTimeout(saveTimers.current[job.id]);
       saveTimers.current[job.id] = null;
 
-      setDoc(doc(db,"jobs",job.id),{data:sanitize(job),updated_at:new Date().toISOString()}).catch(e=>console.error(e));
+      // Use accumulated patches if available — never do full setDoc overwrite
+      const accumulated = pendingPatches.current[job.id];
+      delete pendingPatches.current[job.id];
+      if(accumulated && Object.keys(accumulated).length > 0) {
+        const mergeData = {updated_at:new Date().toISOString()};
+        Object.entries(sanitize(accumulated)).forEach(([k,v]) => { mergeData["data."+k] = v; });
+        updateDoc(doc(db,"jobs",job.id), mergeData).catch(e=>console.error(e));
+      }
+      // If no accumulated patches, skip — don't overwrite with potentially stale data
 
       try {
 
@@ -10210,7 +10212,7 @@ function App() {
 
             {_foremen.filter(f=>f!==foreman).map(f2=>(
 
-              <button key={f2} onClick={e=>{e.stopPropagation();updateJob({...job,foreman:f2});}}
+              <button key={f2} onClick={e=>{e.stopPropagation();const patch={foreman:f2};updateJob({...job,...patch},patch);}}
 
                 style={{background:"none",border:`1px solid ${_foremanColors[f2]}44`,borderRadius:6,
 
@@ -10755,9 +10757,9 @@ function App() {
                           {/* Jobs under this lead */}
                           {leadMap[lead].map(job=>(
                             job.quickJob
-                              ? <QuickJobCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }}/>
+                              ? <QuickJobCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
                               : job.tempPed
-                              ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }}/>
+                              ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
                               : <JobRow key={job.id} job={job} fc={fc2} showForeman={false}/>
                           ))}
                         </div>
@@ -10791,7 +10793,7 @@ function App() {
                   (j.foreman||"").toLowerCase().includes(s)||
                   (j.simproNo||"").toLowerCase().includes(s)
                 ) : jobs;
-                return <StageSectionList jobs={homeFiltered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>;
+                return <StageSectionList jobs={homeFiltered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>;
               })()}
             </div>
 
@@ -10961,7 +10963,7 @@ function App() {
                   </div>
                 ):(
                   <>
-                  <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={false}/>
+                  <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={false}/>
               {(()=>{
                 const invoiceJobs = filtered.filter(j=>effRS(j)==="invoice"||effFS(j)==="invoice");
                 return invoiceJobs.length>0?(
@@ -10981,7 +10983,7 @@ function App() {
                     {invoiceJobs.map(job=>(
                       <div key={job.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,marginBottom:6}}>
                         <div style={{flex:1}}><JobRow job={job}/></div>
-                        <button onClick={()=>{ updateJob({...job,...invoiceSentPatch(job)}); }}
+                        <button onClick={()=>{ const patch=invoiceSentPatch(job); updateJob({...job,...patch},patch); }}
                           style={{flexShrink:0,fontSize:11,fontWeight:700,color:"#fff",background:"#ea580c",
                             border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
                           ✓ Invoice Sent
@@ -11017,7 +11019,7 @@ function App() {
                     manualTasks={manualTasks}
                     onManualTasksChange={(next)=>{ next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); }); manualTasks.forEach(t=>{ if(!next.find(m=>m.id===t.id)) deleteManualTask(t.id); }); setManualTasks(next); }}
                     onSelectJob={(job)=>setSelected(job)}
-                    onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch}); }}
+                    onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
                     activeForeman={activeForeman}
                     foremenList={_foremen}
                   />
@@ -11051,7 +11053,7 @@ function App() {
             setManualTasks(next);
           }}
           onSelectJob={(job)=>setSelected(job)}
-          onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch}); }}
+          onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
           foremenList={_foremen}
         />
       )}
