@@ -9039,6 +9039,17 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upco
                   display:"flex",alignItems:"center",gap:8}}>
                 {restoring?"⏳ Restoring...":"📂 Restore from File"}
               </button>
+              <button onClick={async()=>{
+                if(!window.confirm("This will force every device using the app to reload and get the latest version. Continue?")) return;
+                try {
+                  await setDoc(doc(db,"config","app"),{version:"force-update-"+Date.now()});
+                  alert("Done! All devices will reload in a few seconds.");
+                } catch(e) { alert("Failed: "+e.message); }
+              }} style={{padding:"10px 20px",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer",
+                fontFamily:"inherit",background:"#dc2626",color:"#fff",border:"none",
+                display:"flex",alignItems:"center",gap:8}}>
+                🔄 Force Update All Devices
+              </button>
             </>
           )}
         </div>
