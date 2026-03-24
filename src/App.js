@@ -9823,10 +9823,11 @@ function App() {
           await setDoc(doc(db,"jobs",job.id), mergeData, {mergeFields: Object.keys(mergeData)});
         } else {
           // No accumulated patches — either a new job or a code path that didn't pass a patch.
-          // SAFETY: Check if the document already exists. If it does, use merge to avoid wiping concurrent changes.
-          const payload = {data:sanitize(job),updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
+          // SAFETY: Convert all fields to dot-notation mergeFields so we never wipe Firestore fields
+          // that another user added and we don't have in our local snapshot.
+          const sanitized = sanitize(job);
           // Check estimated size before saving
-          const estimatedSize = JSON.stringify(payload).length;
+          const estimatedSize = JSON.stringify(sanitized).length;
           if(estimatedSize > 900000) {
             console.warn(`[HE] Job ${job.name} is ${Math.round(estimatedSize/1024)}KB — approaching Firestore 1MB limit`);
             if(estimatedSize > 1000000) {
@@ -9836,9 +9837,12 @@ function App() {
               return;
             }
           }
-          // Use {merge:true} so existing fields in Firestore that aren't in this payload are preserved
-          // This prevents stale local data from wiping fields another user just set
-          await setDoc(doc(db,"jobs",job.id),payload,{merge:true});
+          // Use dot-notation + mergeFields — identical safety to the patch path above.
+          // Creates the doc if it doesn't exist (safe for new jobs) and never overwrites
+          // Firestore fields that aren't present in our local snapshot.
+          const mergeData = {updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
+          Object.entries(sanitized).forEach(([k,v]) => { mergeData["data."+k] = v; });
+          await setDoc(doc(db,"jobs",job.id), mergeData, {mergeFields: Object.keys(mergeData)});
         }
 
         isDirty.current = false;
