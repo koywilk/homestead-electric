@@ -1061,18 +1061,68 @@ function Section({label, color=C.dim, action=null, defaultOpen=false, children})
 }
 
 
-const Inp = ({value,onChange,placeholder,style={}}) => (
+// Detect mobile once at module level
+const ON_MOBILE = /iphone|ipad|ipod|android/i.test(navigator.userAgent);
 
-  <input value={value??""} onChange={onChange} placeholder={placeholder}
-
-    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
-
-      padding:"6px 10px",fontSize:12,fontFamily:"inherit",width:"100%",outline:"none",...style}}
-
-    onFocus={e=>e.target.style.borderColor=C.accent}
-
-    onBlur={e=>e.target.style.borderColor=C.border}/>
+// Bottom-sheet editor that pops up on mobile so text fields are easy to use
+const MobileTextModal = ({value, onChange, placeholder, multiline, onDone, onCancel}) => (
+  <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:99999,
+    display:"flex",flexDirection:"column",justifyContent:"flex-end",
+    WebkitTapHighlightColor:"transparent"}}
+    onClick={e=>{if(e.target===e.currentTarget) onCancel();}}>
+    <div style={{background:C.surface,borderTopLeftRadius:18,borderTopRightRadius:18,
+      overflow:"hidden",boxShadow:"0 -8px 40px rgba(0,0,0,0.45)"}}>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+        padding:"14px 16px",borderBottom:`1px solid ${C.border}`}}>
+        <button onClick={onCancel}
+          style={{background:"none",border:"none",color:C.dim,fontSize:15,
+            fontFamily:"inherit",fontWeight:600,cursor:"pointer",padding:"2px 8px"}}>
+          Cancel
+        </button>
+        <button onClick={onDone}
+          style={{background:C.accent,border:"none",color:"#fff",fontSize:15,
+            fontFamily:"inherit",fontWeight:700,cursor:"pointer",
+            padding:"6px 22px",borderRadius:8}}>
+          Done
+        </button>
+      </div>
+      {multiline
+        ? <textarea autoFocus value={value} onChange={e=>onChange(e.target.value)}
+            placeholder={placeholder} rows={6}
+            style={{display:"block",width:"100%",boxSizing:"border-box",
+              padding:"16px",fontSize:17,fontFamily:"inherit",
+              background:"transparent",border:"none",outline:"none",
+              color:C.text,resize:"none",lineHeight:1.65,minHeight:160,maxHeight:260}}/>
+        : <input autoFocus value={value} onChange={e=>onChange(e.target.value)}
+            placeholder={placeholder}
+            style={{display:"block",width:"100%",boxSizing:"border-box",
+              padding:"16px",fontSize:17,fontFamily:"inherit",
+              background:"transparent",border:"none",outline:"none",color:C.text}}/>
+      }
+      <div style={{height:"env(safe-area-inset-bottom,16px)"}}/>
+    </div>
+  </div>
 );
+
+const Inp = ({value,onChange,placeholder,style={}}) => {
+  const [modal,setModal] = useState(false);
+  const [draft,setDraft] = useState("");
+  return (
+    <>
+      <input value={value??""} onChange={onChange} placeholder={placeholder}
+        style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+          padding:"6px 10px",fontSize:12,fontFamily:"inherit",width:"100%",outline:"none",...style}}
+        onFocus={e=>{
+          e.target.style.borderColor=C.accent;
+          if(ON_MOBILE){e.target.blur();setDraft(value??"");setModal(true);}
+        }}
+        onBlur={e=>e.target.style.borderColor=C.border}/>
+      {modal&&<MobileTextModal value={draft} onChange={setDraft} placeholder={placeholder} multiline={false}
+        onDone={()=>{onChange({target:{value:draft}});setModal(false);}}
+        onCancel={()=>setModal(false)}/>}
+    </>
+  );
+};
 
 // Time ago helper for "updated X ago" display
 const timeAgo = (isoStr) => {
@@ -1148,19 +1198,25 @@ const Sel = ({value,onChange,options:rawOpts,style={}}) => {
 };
 
 
-const TA = ({value,onChange,placeholder,rows=3}) => (
-
-  <textarea value={value??""} onChange={onChange} placeholder={placeholder} rows={rows}
-
-    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
-
-      padding:"7px 10px",fontSize:12,fontFamily:"inherit",width:"100%",outline:"none",resize:"vertical"}}
-
-    onFocus={e=>e.target.style.borderColor=C.accent}
-
-    onBlur={e=>e.target.style.borderColor=C.border}/>
-
-);
+const TA = ({value,onChange,placeholder,rows=3}) => {
+  const [modal,setModal] = useState(false);
+  const [draft,setDraft] = useState("");
+  return (
+    <>
+      <textarea value={value??""} onChange={onChange} placeholder={placeholder} rows={rows}
+        style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+          padding:"7px 10px",fontSize:12,fontFamily:"inherit",width:"100%",outline:"none",resize:"vertical"}}
+        onFocus={e=>{
+          e.target.style.borderColor=C.accent;
+          if(ON_MOBILE){e.target.blur();setDraft(value??"");setModal(true);}
+        }}
+        onBlur={e=>e.target.style.borderColor=C.border}/>
+      {modal&&<MobileTextModal value={draft} onChange={setDraft} placeholder={placeholder} multiline={true}
+        onDone={()=>{onChange({target:{value:draft}});setModal(false);}}
+        onCancel={()=>setModal(false)}/>}
+    </>
+  );
+};
 
 
 // Clickable address that opens in Google Maps or Apple Maps (user choice)
