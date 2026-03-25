@@ -1,7 +1,7 @@
 // BUILD_v9_FIXED
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
+import { getFirestore, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, deleteField } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 
@@ -318,6 +318,8 @@ const PERMISSIONS = {
   "settings.view":   ["admin","manager"],
   "users.manage":    ["admin","manager"],
   "job.delete":      ["admin"],
+  "quotes.view":     ["admin","manager","standard"],
+  "quotes.convert":  ["admin"],
 };
 
 // Resolve access level from user object (supports legacy role-only users)
@@ -717,6 +719,15 @@ const blankJob = () => ({
   tapeLights:[], loadMappingNotes:"",
 
 });
+
+// Generate the next quote number (Q-001, Q-002, …) based on existing quotes
+const nextQuoteNumber = (allJobs) => {
+  const nums = (allJobs||[])
+    .filter(j => j.type==="quote" && j.quoteNumber)
+    .map(j => parseInt((j.quoteNumber||"").replace(/\D/g,""))||0);
+  const n = nums.length ? Math.max(...nums)+1 : 1;
+  return `Q-${String(n).padStart(3,"0")}`;
+};
 
 
 const blankQuickJob = (type = "service") => ({
@@ -5264,7 +5275,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
   );
 }
 
-function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
+function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
@@ -5395,6 +5406,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
 
             <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>
 
+              {job.type==="quote"&&<span style={{fontSize:12,color:"#000",fontFamily:"'DM Sans',sans-serif",fontWeight:700,letterSpacing:"0.05em",marginRight:8,background:C.accent,borderRadius:5,padding:"2px 7px"}}>{job.quoteNumber||"QUOTE"}</span>}
+
               {job.simproNo&&<span style={{fontSize:13,color:C.dim,fontFamily:"'DM Sans',sans-serif",fontWeight:600,letterSpacing:"0.05em",marginRight:8}}>#{job.simproNo}</span>}
 
               {job.name||"New Job"}
@@ -5430,6 +5443,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
             {qcCount>0&&<Pill label={`${qcCount} QC item${qcCount!==1?"s":""}`} color={C.red}/>}
 
             
+
+            {job.type==="quote"&&canConvertQuote&&(
+              <button onClick={()=>onConvertQuote&&onConvertQuote(job)}
+                style={{background:C.accent,color:"#000",border:"none",borderRadius:8,
+                  padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer",
+                  fontFamily:"inherit",letterSpacing:"0.03em"}}>
+                Convert to Job
+              </button>
+            )}
 
             <button onClick={refreshJob} title="Refresh"
 
@@ -11017,6 +11039,8 @@ function App() {
 
             <div style={{display:"flex",alignItems:"center",gap:7}}>
 
+              {job.type==="quote"&&<span style={{fontSize:10,fontWeight:700,color:"#000",background:C.accent,borderRadius:4,padding:"1px 6px",flexShrink:0}}>{job.quoteNumber||"Q"}</span>}
+
               <span style={{fontWeight:600,fontSize:13,color:C.text}}>{job.name||"Untitled Job"}</span>
 
             </div>
@@ -11165,6 +11189,7 @@ function App() {
               {key:"home",label:"Job Board"},
               {key:"schedule",label:"Forecast"},
               {key:"upcoming",label:"Upcoming"},
+              ...(can(identity,"quotes.view")?[{key:"quotes",label:"Quotes"}]:[]),
               {key:"tasks",label:"Tasks"},
               ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors"}]:[]),
               ...(can(identity,"settings.view")?[{key:"settings",label:"⚙ Settings"}]:[]),
@@ -11172,7 +11197,7 @@ function App() {
         ).map(({key,label})=>{
           const active = view===key;
           return (
-            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="tasks"?openTasks:key==="subcontractors"?openSubcontractor:openSettings}
+            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="tasks"?openTasks:key==="subcontractors"?openSubcontractor:openSettings}
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
@@ -11681,13 +11706,13 @@ function App() {
               </div>
               {(()=>{
                 const s = search.toLowerCase();
-                const homeFiltered = s ? jobs.filter(j=>
+                const homeFiltered = (s ? jobs.filter(j=>
                   (j.name||"").toLowerCase().includes(s)||
                   (j.address||"").toLowerCase().includes(s)||
                   (j.gc||"").toLowerCase().includes(s)||
                   (j.foreman||"").toLowerCase().includes(s)||
                   (j.simproNo||"").toLowerCase().includes(s)
-                ) : jobs;
+                ) : jobs).filter(j=>j.type!=="quote");
                 return <StageSectionList jobs={homeFiltered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>;
               })()}
             </div>
@@ -11932,7 +11957,18 @@ function App() {
         ? <QuickJobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen} leadsList={_leads}/>
         : selected.tempPed
         ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen}/>
-        : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen} leadsList={_leads}/>)}
+        : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen} leadsList={_leads}
+            canConvertQuote={can(identity,"quotes.convert")}
+            onConvertQuote={(q)=>{
+              // Strip type from local state — keeps quoteNumber as a reference trail
+              const updated={...q};
+              delete updated.type;
+              setJobs(js=>js.map(j=>j.id===q.id?updated:j));
+              // Use deleteField() so Firestore actually removes the "type" field
+              saveJob(updated,{type:deleteField()});
+              setSelected(updated);
+            }}
+          />)}
 
       {/* ── SUBCONTRACTORS TAB ── */}
       {view==="subcontractors"&&(()=>{
@@ -12020,7 +12056,7 @@ function App() {
 
       {view==="tasks"&&can(identity,"tasks.view")&&(
         <Tasks
-          jobs={jobs}
+          jobs={jobs.filter(j=>j.type!=="quote")}
           manualTasks={manualTasks}
           onManualTasksChange={(next)=>{
             next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); });
@@ -12031,6 +12067,37 @@ function App() {
           onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
           foremenList={_foremen}
         />
+      )}
+
+      {view==="quotes"&&can(identity,"quotes.view")&&(
+        <div style={{padding:"18px 16px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16,flexWrap:"wrap"}}>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:C.accent,lineHeight:1}}>Quotes</div>
+            <div style={{fontSize:11,color:C.dim}}>{jobs.filter(j=>j.type==="quote").length} quote{jobs.filter(j=>j.type==="quote").length!==1?"s":""}</div>
+            {can(identity,"quotes.view")&&(
+              <button onClick={()=>{
+                const j=blankJob();
+                j.type="quote";
+                j.quoteNumber=nextQuoteNumber(jobs);
+                j.foreman="Unassigned";
+                setJobs(js=>[j,...js]);
+                setSelected(j);
+              }}
+                style={{marginLeft:"auto",background:C.accent,color:"#000",border:"none",borderRadius:8,
+                  padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                  letterSpacing:"0.03em"}}>+ New Quote</button>
+            )}
+          </div>
+          <StageSectionList
+            jobs={jobs.filter(j=>j.type==="quote")}
+            JobRow={JobRow}
+            TempPedCard={TempPedCard}
+            onSelectJob={(j)=>setSelected(j)}
+            onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}
+            onDeleteJob={(id)=>deleteJob(id)}
+            startCollapsed={false}
+          />
+        </div>
       )}
 
       {view==="upcoming"&&can(identity,"pipeline.view")&&(
