@@ -245,7 +245,7 @@ const newHRRow     = (num) => ({ id:uid(), num, wire:"", name:"", status:"", pan
 
 const newCP4Row    = (num) => ({ id:uid(), num, name:"", module:"", status:"" });
 
-const newKPRow     = (num) => ({ id:uid(), num, name:"" });
+const newKPRow     = (num) => ({ id:uid(), num, name:"", status:"" });
 
 const emptyPunch   = ()    => ({ upper:[], main:[], basement:[] });
 
@@ -3291,11 +3291,15 @@ function KeypadSection({loads,onChange,label}) {
 
   const delRow = (id) => onChange(loads.filter(r=>r.id!==id).map((r,i)=>({...r,num:i+1})));
 
+  const namedRows = loads.filter(r=>r.name.trim());
+  const pulledCount = namedRows.filter(r=>r.status==="Pulled").length;
+  const pct = namedRows.length>0 ? Math.round((pulledCount/namedRows.length)*100) : 0;
+
   return (
 
     <div style={{marginBottom:22}}>
 
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
 
         <div style={{fontSize:12,color:C.purple,fontWeight:700}}>{label}</div>
 
@@ -3303,9 +3307,22 @@ function KeypadSection({loads,onChange,label}) {
 
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"36px 1fr 28px",gap:6,marginBottom:6}}>
+      {/* Pull progress — only shown when there are named rows */}
+      {namedRows.length>0&&(
+        <div style={{marginBottom:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+            <span style={{fontSize:10,color:C.dim}}>Pull progress</span>
+            <span style={{fontSize:11,fontWeight:700,color:pct===100?C.green:C.purple}}>{pulledCount}/{namedRows.length} — {pct}%</span>
+          </div>
+          <div style={{height:5,background:C.border,borderRadius:99,overflow:"hidden"}}>
+            <div style={{height:"100%",width:`${pct}%`,background:pct===100?C.green:C.purple,borderRadius:99,transition:"width 0.4s"}}/>
+          </div>
+        </div>
+      )}
 
-        {["#","Keypad Load Name",""].map((h,i)=>(
+      <div style={{display:"grid",gridTemplateColumns:"36px 1fr 80px 28px",gap:6,marginBottom:6}}>
+
+        {["#","Keypad Load Name","Status",""].map((h,i)=>(
 
           <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
 
@@ -3315,11 +3332,16 @@ function KeypadSection({loads,onChange,label}) {
 
       {loads.map(r=>(
 
-        <div key={r.id} style={{display:"grid",gridTemplateColumns:"36px 1fr 28px",gap:6,marginBottom:4,alignItems:"center"}}>
+        <div key={r.id} style={{display:"grid",gridTemplateColumns:"36px 1fr 80px 28px",gap:6,marginBottom:4,alignItems:"center",
+          borderRadius:6,padding:"3px 0",
+          background:r.status==="Pulled"?"rgba(34,197,94,0.08)":r.status==="Need Specs"?"rgba(239,68,68,0.08)":"transparent"}}>
 
           <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:6}}>{r.num}.</span>
 
           <Inp value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"/>
+
+          <Sel value={r.status||""} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
+            style={{color:r.status==="Pulled"?C.green:r.status==="Need Specs"?C.red:C.text,fontSize:10}}/>
 
           <button onClick={()=>delRow(r.id)}
 
