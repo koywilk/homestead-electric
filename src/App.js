@@ -287,8 +287,8 @@ const TITLE_OPTIONS = ["admin","foreman","lead","crew"];
 const TITLE_LABELS  = { admin:"Admin", foreman:"Foreman", lead:"Lead", crew:"Crew" };
 
 // ── Access = what they can do in the app ─────────────────────
-const ACCESS_OPTIONS = ["admin","manager","standard","limited"];
-const ACCESS_LABELS  = { admin:"Admin", manager:"Manager", standard:"Standard", limited:"Limited" };
+const ACCESS_OPTIONS = ["admin","manager","standard","limited","contractor"];
+const ACCESS_LABELS  = { admin:"Admin", manager:"Manager", standard:"Standard", limited:"Limited", contractor:"Contractor" };
 
 // Legacy role field compat (old users only have role, not title+access)
 const ROLE_LABELS = {
@@ -10687,11 +10687,21 @@ function App() {
 
   const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
   const [crewView, setCrewView] = useState(null); // foreman name or null
-  const goHome       = () =>  { setView("home");     setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
-  const openSchedule = () =>  { setView("schedule"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
-  const openUpcoming = () =>  { setView("upcoming"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
-  const openTasks    = () =>  { setView("tasks");    setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
-  const openSettings = () =>  { setView("settings"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const goHome            = () =>  { setView("home");           setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openSchedule      = () =>  { setView("schedule");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openUpcoming      = () =>  { setView("upcoming");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openTasks         = () =>  { setView("tasks");         setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openSettings      = () =>  { setView("settings");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openSubcontractor = () =>  { setView("subcontractors");setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+
+  // ── Contractor users + access helpers ─────────────────────────
+  const contractorUsers = (users||[]).filter(u => getAccess(u) === "contractor");
+  const isContractor = getAccess(identity) === "contractor";
+
+  // Force contractors to subcontractor view (lock them out of all other views)
+  useEffect(() => {
+    if(isContractor) setView("subcontractors");
+  }, [isContractor]);
 
 
   const viewJobs = view==="foreman" ? jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):matchesForeman(j,activeForeman)) : jobs;
@@ -10896,6 +10906,8 @@ function App() {
   }
 
 
+
+
   return (
 
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
@@ -10909,10 +10921,20 @@ function App() {
 
       {/* ── TOP NAV BAR ── */}
       <div style={{display:"flex",gap:6,padding:"8px 10px",borderBottom:`1px solid ${C.border}`,background:C.card,position:"sticky",top:0,zIndex:90,overflowX:"auto",scrollbarWidth:"none",alignItems:"center"}}>
-        {[{key:"home",label:"Job Board"},{key:"schedule",label:"Forecast"},{key:"upcoming",label:"Upcoming"},{key:"tasks",label:"Tasks"},...(can(identity,"settings.view")?[{key:"settings",label:"⚙ Settings"}]:[])].map(({key,label})=>{
+        {(isContractor
+          ? [{key:"subcontractors", label:"My Jobs"}]
+          : [
+              {key:"home",label:"Job Board"},
+              {key:"schedule",label:"Forecast"},
+              {key:"upcoming",label:"Upcoming"},
+              {key:"tasks",label:"Tasks"},
+              ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors"}]:[]),
+              ...(can(identity,"settings.view")?[{key:"settings",label:"⚙ Settings"}]:[]),
+            ]
+        ).map(({key,label})=>{
           const active = view===key;
           return (
-            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="tasks"?openTasks:openSettings}
+            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="tasks"?openTasks:key==="subcontractors"?openSubcontractor:openSettings}
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
@@ -11673,6 +11695,86 @@ function App() {
         : selected.tempPed
         ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen}/>
         : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen} leadsList={_leads}/>)}
+
+      {/* ── SUBCONTRACTORS TAB ── */}
+      {view==="subcontractors"&&(()=>{
+        // Which contractors to show: contractors see only themselves; admins see all
+        const visibleContractors = isContractor
+          ? contractorUsers.filter(u=>(u.name||"").toLowerCase()===(identity.name||"").toLowerCase())
+          : contractorUsers;
+
+        if(visibleContractors.length===0) return (
+          <div style={{textAlign:"center",padding:"60px 0",color:C.dim}}>
+            <div style={{fontSize:22,marginBottom:8}}>👷</div>
+            <div style={{fontSize:14,fontWeight:600,marginBottom:6}}>No subcontractors yet</div>
+            <div style={{fontSize:12}}>Add a user with "Contractor" access in Settings, then assign jobs to them.</div>
+          </div>
+        );
+
+        return (
+          <div>
+            {visibleContractors.map(contractor => {
+              const cColor = getFC(contractor.name) || "#6b7280";
+              const cJobs = jobs.filter(j =>
+                !j.tempPed &&
+                (j.foreman||"").toLowerCase() === (contractor.name||"").toLowerCase()
+              );
+              const firstName = contractor.name.split(" ")[0];
+
+              return (
+                <div key={contractor.id}>
+                  {/* Section header */}
+                  <div style={{padding:"18px 26px 0",borderBottom:`1px solid ${C.border}`}}>
+                    <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:16,flexWrap:"wrap"}}>
+                      <div style={{width:10,height:10,borderRadius:"50%",background:cColor,flexShrink:0}}/>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",
+                        color:cColor,lineHeight:1}}>{contractor.name}</div>
+                      <div style={{fontSize:11,color:C.dim}}>{cJobs.length} job{cJobs.length!==1?"s":""}</div>
+                      {!isContractor&&(
+                        <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
+                          <span style={{fontSize:11,color:syncColor}}>{syncLabel}</span>
+                          <button onClick={()=>{const j=blankJob();j.foreman=contractor.name;setJobs(js=>[j,...js]);setSelected(j);}}
+                            style={{background:cColor,border:"none",borderRadius:9,color:"#fff",
+                              fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+                            + New Job
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Job list */}
+                  <div style={{padding:"14px 26px"}}>
+                    {cJobs.length===0 ? (
+                      <div style={{textAlign:"center",padding:"40px 0",color:C.dim}}>
+                        <div style={{fontSize:13,marginBottom:16}}>No jobs assigned to {firstName} yet</div>
+                        {!isContractor&&(
+                          <button onClick={()=>{const j=blankJob();j.foreman=contractor.name;setJobs(js=>[j,...js]);setSelected(j);}}
+                            style={{background:cColor,border:"none",borderRadius:9,color:"#fff",
+                              fontWeight:700,padding:"10px 24px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+                            + Assign First Job
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <StageSectionList
+                        jobs={cJobs}
+                        JobRow={JobRow}
+                        TempPedCard={TempPedCard}
+                        onSelectJob={(j)=>setSelected(j)}
+                        onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}
+                        onDeleteJob={isContractor?null:(id)=>deleteJob(id)}
+                        fc={cColor}
+                        startCollapsed={false}
+                      />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {view==="schedule"&&can(identity,"schedule.view")&&(
         <SchedulingForecast jobs={jobs} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)} foremenList={_foremen}/>
