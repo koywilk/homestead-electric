@@ -1135,6 +1135,8 @@ const RichText = ({html, style={}}) => {
 const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minRows=3}) => {
   const ref = useRef(null);
   const focused = useRef(false);
+  const savedRange = useRef(null);
+  const [active, setActive] = useState({});
 
   // Sync prop → DOM only when the user isn't actively typing
   useEffect(()=>{
@@ -1144,22 +1146,52 @@ const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minR
     }
   },[htmlValue]);
 
-  // Handle autoFocus (contentEditable divs don't support the autoFocus attribute)
   useEffect(()=>{ if(autoFocus && ref.current) ref.current.focus(); },[]);
 
+  // Save selection + update active-format state whenever user moves cursor or selects text
+  const syncState = () => {
+    const sel = window.getSelection();
+    if(sel?.rangeCount > 0 && ref.current?.contains(sel.anchorNode)){
+      savedRange.current = sel.getRangeAt(0).cloneRange();
+    }
+    try {
+      setActive({
+        bold:      document.queryCommandState('bold'),
+        italic:    document.queryCommandState('italic'),
+        underline: document.queryCommandState('underline'),
+        ul:        document.queryCommandState('insertUnorderedList'),
+        ol:        document.queryCommandState('insertOrderedList'),
+      });
+    } catch(e){}
+  };
+
+  // Restore saved selection then run the command — fixes iOS losing selection on toolbar tap
   const exec = (cmd, val) => {
-    ref.current?.focus();
+    const el = ref.current;
+    if(!el) return;
+    el.focus();
+    if(savedRange.current){
+      const sel = window.getSelection();
+      sel?.removeAllRanges();
+      sel?.addRange(savedRange.current);
+    }
     document.execCommand(cmd, false, val ?? null);
-    onHtmlChange(ref.current?.innerHTML || "");
+    onHtmlChange(el.innerHTML || "");
+    setTimeout(syncState, 0);
   };
 
   const empty = !htmlValue?.replace(/<[^>]*>/g,"")?.trim();
 
-  const TB = ({label, title, action, s={}}) => (
+  const TB = ({label, title, action, on=false, s={}}) => (
     <button title={title} onPointerDown={e=>{e.preventDefault(); action();}}
-      style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,
-        color:C.text,fontSize:11,fontFamily:"inherit",cursor:"pointer",
-        padding:"3px 7px",lineHeight:1.3,whiteSpace:"nowrap",...s}}>
+      style={{
+        background: on ? C.accent+"28" : "none",
+        border: `1px solid ${on ? C.accent : C.border}`,
+        borderRadius:5, color: on ? C.accent : C.text,
+        fontSize:11, fontFamily:"inherit", cursor:"pointer",
+        padding:"3px 7px", lineHeight:1.3, whiteSpace:"nowrap",
+        transition:"all 0.1s", ...s
+      }}>
       {label}
     </button>
   );
@@ -1169,12 +1201,12 @@ const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minR
       {/* Formatting toolbar */}
       <div style={{display:"flex",gap:4,padding:"5px 8px",flexWrap:"wrap",alignItems:"center",
         borderBottom:`1px solid ${C.border}`}}>
-        <TB label="B"      title="Bold"      action={()=>exec('bold')}      s={{fontWeight:900}}/>
-        <TB label="I"      title="Italic"    action={()=>exec('italic')}    s={{fontStyle:"italic"}}/>
-        <TB label="U"      title="Underline" action={()=>exec('underline')} s={{textDecoration:"underline"}}/>
+        <TB label="B" title="Bold"      action={()=>exec('bold')}      on={active.bold}      s={{fontWeight:900}}/>
+        <TB label="I" title="Italic"    action={()=>exec('italic')}    on={active.italic}    s={{fontStyle:"italic"}}/>
+        <TB label="U" title="Underline" action={()=>exec('underline')} on={active.underline} s={{textDecoration:"underline"}}/>
         <div style={{width:1,height:16,background:C.border,margin:"0 2px",flexShrink:0}}/>
-        <TB label="• List"  title="Bullet list"   action={()=>exec('insertUnorderedList')}/>
-        <TB label="1. List" title="Numbered list" action={()=>exec('insertOrderedList')}/>
+        <TB label="• List"  title="Bullet list"   action={()=>exec('insertUnorderedList')} on={active.ul}/>
+        <TB label="1. List" title="Numbered list" action={()=>exec('insertOrderedList')}   on={active.ol}/>
         <div style={{width:1,height:16,background:C.border,margin:"0 2px",flexShrink:0}}/>
         <span style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginRight:2}}>COLOR</span>
         {RICH_COLORS.map(c=>(
@@ -1195,6 +1227,10 @@ const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minR
           onFocus={()=>{focused.current=true;}}
           onBlur={()=>{focused.current=false;}}
           onInput={()=>onHtmlChange(ref.current?.innerHTML||"")}
+          onSelect={syncState}
+          onKeyUp={syncState}
+          onMouseUp={syncState}
+          onTouchEnd={syncState}
           style={{minHeight:minRows*22,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
             color:C.text,outline:"none",lineHeight:1.6,wordBreak:"break-word"}}/>
       </div>
