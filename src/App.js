@@ -1156,7 +1156,7 @@ const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minR
   const empty = !htmlValue?.replace(/<[^>]*>/g,"")?.trim();
 
   const TB = ({label, title, action, s={}}) => (
-    <button title={title} onMouseDown={e=>{e.preventDefault(); action();}}
+    <button title={title} onPointerDown={e=>{e.preventDefault(); action();}}
       style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,
         color:C.text,fontSize:11,fontFamily:"inherit",cursor:"pointer",
         padding:"3px 7px",lineHeight:1.3,whiteSpace:"nowrap",...s}}>
@@ -1178,7 +1178,7 @@ const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minR
         <div style={{width:1,height:16,background:C.border,margin:"0 2px",flexShrink:0}}/>
         <span style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginRight:2}}>COLOR</span>
         {RICH_COLORS.map(c=>(
-          <button key={c} onMouseDown={e=>{e.preventDefault(); exec('foreColor',c);}}
+          <button key={c} onPointerDown={e=>{e.preventDefault(); exec('foreColor',c);}}
             style={{width:14,height:14,borderRadius:99,background:c,flexShrink:0,
               border:"1.5px solid rgba(255,255,255,0.2)",cursor:"pointer",padding:0}}/>
         ))}
