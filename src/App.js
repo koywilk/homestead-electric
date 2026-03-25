@@ -1064,49 +1064,121 @@ function Section({label, color=C.dim, action=null, defaultOpen=false, children})
 // Detect mobile once at module level
 const ON_MOBILE = /iphone|ipad|ipod|android/i.test(navigator.userAgent);
 
-// Bottom-sheet editor that pops up on mobile so text fields are easy to use
-const MobileTextModal = ({value, onChange, placeholder, multiline, onDone, onCancel}) => (
-  <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:99999,
-    display:"flex",flexDirection:"column",justifyContent:"flex-end",
-    WebkitTapHighlightColor:"transparent"}}
-    onClick={e=>{if(e.target===e.currentTarget) onCancel();}}>
-    <div style={{background:C.surface,borderTopLeftRadius:18,borderTopRightRadius:18,
-      overflow:"hidden",boxShadow:"0 -8px 40px rgba(0,0,0,0.45)"}}>
-      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-        padding:"14px 16px",borderBottom:`1px solid ${C.border}`}}>
-        <button onClick={onCancel}
-          style={{background:"none",border:"none",color:C.dim,fontSize:15,
-            fontFamily:"inherit",fontWeight:600,cursor:"pointer",padding:"2px 8px"}}>
-          Cancel
-        </button>
-        <button onClick={onDone}
-          style={{background:C.accent,border:"none",color:"#fff",fontSize:15,
-            fontFamily:"inherit",fontWeight:700,cursor:"pointer",
-            padding:"6px 22px",borderRadius:8}}>
-          Done
-        </button>
-      </div>
-      {multiline
-        ? <textarea autoFocus value={value} onChange={e=>onChange(e.target.value)}
-            placeholder={placeholder} rows={6}
-            style={{display:"block",width:"100%",boxSizing:"border-box",
-              padding:"16px",fontSize:17,fontFamily:"inherit",
-              background:"transparent",border:"none",outline:"none",
-              color:C.text,resize:"none",lineHeight:1.65,minHeight:160,maxHeight:260}}/>
-        : <input autoFocus value={value} onChange={e=>onChange(e.target.value)}
-            placeholder={placeholder}
-            style={{display:"block",width:"100%",boxSizing:"border-box",
-              padding:"16px",fontSize:17,fontFamily:"inherit",
-              background:"transparent",border:"none",outline:"none",color:C.text}}/>
-      }
-      <div style={{height:"env(safe-area-inset-bottom,16px)"}}/>
-    </div>
-  </div>
-);
+// Bottom-sheet editor — pops up on mobile for comfortable text editing
+// addMode: changes "Done" to "Add" so users know tapping it submits the item
+const MobileTextModal = ({initialValue, placeholder, multiline, onDone, onCancel, addMode}) => {
+  const [draft, setDraft] = useState(initialValue || "");
+  const taRef = useRef(null);
 
-const Inp = ({value,onChange,placeholder,style={}}) => {
-  const [modal,setModal] = useState(false);
-  const [draft,setDraft] = useState("");
+  // Insert text around cursor (or selection)
+  const insertAt = (before, after="") => {
+    const el = taRef.current;
+    if (!el) { setDraft(d => d + before); return; }
+    const start = el.selectionStart ?? draft.length;
+    const end   = el.selectionEnd   ?? draft.length;
+    const sel   = draft.slice(start, end);
+    const next  = draft.slice(0, start) + before + sel + after + draft.slice(end);
+    setDraft(next);
+    setTimeout(() => {
+      el.focus();
+      el.selectionStart = sel ? start + before.length : start + before.length + after.length;
+      el.selectionEnd   = sel ? start + before.length + sel.length : start + before.length + after.length;
+    }, 0);
+  };
+
+  // Prepend a prefix at the start of the current line
+  const linePrefix = (prefix) => {
+    const el = taRef.current;
+    const pos = el ? (el.selectionStart ?? 0) : draft.length;
+    const ls  = draft.lastIndexOf("\n", pos - 1) + 1;
+    setDraft(draft.slice(0, ls) + prefix + draft.slice(ls));
+    setTimeout(() => { if(el){ el.focus(); el.selectionStart = el.selectionEnd = pos + prefix.length; } }, 0);
+  };
+
+  const bulletBtn = () => linePrefix("• ");
+  const numberBtn = () => {
+    const el = taRef.current;
+    const pos = el ? (el.selectionStart ?? 0) : 0;
+    const lines = draft.slice(0, pos).split("\n");
+    let n = 1;
+    for (let i = lines.length - 2; i >= 0; i--) {
+      const m = lines[i].match(/^(\d+)\.\s/);
+      if (m) { n = parseInt(m[1]) + 1; break; }
+      if (lines[i].trim()) break;
+    }
+    linePrefix(`${n}. `);
+  };
+  const boldBtn = () => insertAt("**", "**");
+
+  const FmtBtn = ({label, onPress, extraStyle={}}) => (
+    <button onMouseDown={e=>{e.preventDefault(); onPress();}}
+      style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+        color:C.text,fontSize:13,fontFamily:"inherit",fontWeight:600,
+        cursor:"pointer",padding:"5px 10px",lineHeight:1,...extraStyle}}>
+      {label}
+    </button>
+  );
+
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:99999,
+      display:"flex",flexDirection:"column",justifyContent:"flex-end",
+      WebkitTapHighlightColor:"transparent"}}
+      onClick={e=>{if(e.target===e.currentTarget) onCancel();}}>
+      <div style={{background:C.surface,borderTopLeftRadius:18,borderTopRightRadius:18,
+        overflow:"hidden",boxShadow:"0 -8px 40px rgba(0,0,0,0.45)"}}>
+
+        {/* Header */}
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+          padding:"13px 16px",borderBottom:`1px solid ${C.border}`}}>
+          <button onClick={onCancel}
+            style={{background:"none",border:"none",color:C.dim,fontSize:15,
+              fontFamily:"inherit",fontWeight:600,cursor:"pointer",padding:"2px 8px"}}>
+            Cancel
+          </button>
+          <button onClick={()=>onDone(draft)}
+            style={{background:C.accent,border:"none",color:"#fff",fontSize:15,
+              fontFamily:"inherit",fontWeight:700,cursor:"pointer",
+              padding:"6px 22px",borderRadius:8}}>
+            {addMode ? "Add" : "Done"}
+          </button>
+        </div>
+
+        {/* Formatting toolbar — multiline only */}
+        {multiline && (
+          <div style={{display:"flex",gap:6,padding:"8px 14px",
+            borderBottom:`1px solid ${C.border}`,flexWrap:"wrap",alignItems:"center"}}>
+            <FmtBtn label="• List"  onPress={bulletBtn}/>
+            <FmtBtn label="1. List" onPress={numberBtn}/>
+            <FmtBtn label="B" onPress={boldBtn} extraStyle={{fontWeight:900,fontStyle:"italic"}}/>
+            {["🔴","🟡","🟢","🔵"].map(dot=>(
+              <FmtBtn key={dot} label={dot} onPress={()=>insertAt(dot+" ")}/>
+            ))}
+          </div>
+        )}
+
+        {/* Input */}
+        {multiline
+          ? <textarea ref={taRef} autoFocus value={draft} onChange={e=>setDraft(e.target.value)}
+              placeholder={placeholder} rows={6}
+              style={{display:"block",width:"100%",boxSizing:"border-box",
+                padding:"16px",fontSize:17,fontFamily:"inherit",
+                background:"transparent",border:"none",outline:"none",
+                color:C.text,resize:"none",lineHeight:1.65,minHeight:160,maxHeight:260}}/>
+          : <input autoFocus value={draft} onChange={e=>setDraft(e.target.value)}
+              placeholder={placeholder}
+              style={{display:"block",width:"100%",boxSizing:"border-box",
+                padding:"16px",fontSize:17,fontFamily:"inherit",
+                background:"transparent",border:"none",outline:"none",color:C.text}}/>
+        }
+        <div style={{height:"env(safe-area-inset-bottom,16px)"}}/>
+      </div>
+    </div>
+  );
+};
+
+// onAdd: optional — when provided, button label becomes "Add" and fires onAdd after saving
+const Inp = ({value, onChange, placeholder, style={}, onAdd}) => {
+  const [modal, setModal] = useState(false);
   return (
     <>
       <input value={value??""} onChange={onChange} placeholder={placeholder}
@@ -1114,11 +1186,12 @@ const Inp = ({value,onChange,placeholder,style={}}) => {
           padding:"6px 10px",fontSize:12,fontFamily:"inherit",width:"100%",outline:"none",...style}}
         onFocus={e=>{
           e.target.style.borderColor=C.accent;
-          if(ON_MOBILE){e.target.blur();setDraft(value??"");setModal(true);}
+          if(ON_MOBILE){e.target.blur();setModal(true);}
         }}
         onBlur={e=>e.target.style.borderColor=C.border}/>
-      {modal&&<MobileTextModal value={draft} onChange={setDraft} placeholder={placeholder} multiline={false}
-        onDone={()=>{onChange({target:{value:draft}});setModal(false);}}
+      {modal&&<MobileTextModal initialValue={value??""} placeholder={placeholder} multiline={false}
+        addMode={!!onAdd}
+        onDone={v=>{onChange({target:{value:v}});if(onAdd)onAdd();setModal(false);}}
         onCancel={()=>setModal(false)}/>}
     </>
   );
@@ -1198,9 +1271,8 @@ const Sel = ({value,onChange,options:rawOpts,style={}}) => {
 };
 
 
-const TA = ({value,onChange,placeholder,rows=3}) => {
-  const [modal,setModal] = useState(false);
-  const [draft,setDraft] = useState("");
+const TA = ({value, onChange, placeholder, rows=3, onAdd}) => {
+  const [modal, setModal] = useState(false);
   return (
     <>
       <textarea value={value??""} onChange={onChange} placeholder={placeholder} rows={rows}
@@ -1208,11 +1280,12 @@ const TA = ({value,onChange,placeholder,rows=3}) => {
           padding:"7px 10px",fontSize:12,fontFamily:"inherit",width:"100%",outline:"none",resize:"vertical"}}
         onFocus={e=>{
           e.target.style.borderColor=C.accent;
-          if(ON_MOBILE){e.target.blur();setDraft(value??"");setModal(true);}
+          if(ON_MOBILE){e.target.blur();setModal(true);}
         }}
         onBlur={e=>e.target.style.borderColor=C.border}/>
-      {modal&&<MobileTextModal value={draft} onChange={setDraft} placeholder={placeholder} multiline={true}
-        onDone={()=>{onChange({target:{value:draft}});setModal(false);}}
+      {modal&&<MobileTextModal initialValue={value??""} placeholder={placeholder} multiline={true}
+        addMode={!!onAdd}
+        onDone={v=>{onChange({target:{value:v}});if(onAdd)onAdd();setModal(false);}}
         onCancel={()=>setModal(false)}/>}
     </>
   );
