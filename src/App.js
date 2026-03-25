@@ -1,7 +1,7 @@
 // BUILD_v9_FIXED
 import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, deleteField } from "firebase/firestore";
+import { getFirestore, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 
 
@@ -11960,12 +11960,10 @@ function App() {
         : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen} leadsList={_leads}
             canConvertQuote={can(identity,"quotes.convert")}
             onConvertQuote={(q)=>{
-              // Strip type from local state — keeps quoteNumber as a reference trail
-              const updated={...q};
-              delete updated.type;
+              // Clear type so it's no longer treated as a quote; keep quoteNumber as a reference trail
+              const updated={...q, type:""};
               setJobs(js=>js.map(j=>j.id===q.id?updated:j));
-              // Use deleteField() so Firestore actually removes the "type" field
-              saveJob(updated,{type:deleteField()});
+              saveJob(updated,{type:""});
               setSelected(updated);
             }}
           />)}
