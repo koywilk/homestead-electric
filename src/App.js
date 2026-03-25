@@ -7799,7 +7799,7 @@ function computeTasks(jobs) {
     });
 
     // Pre Job Prep — always assigned to Koy regardless of job foreman
-    if(!job.tempPed && (job.prepStage||"") !== "Job Prep Complete") {
+    if(!job.tempPed && job.type!=="quote" && (job.prepStage||"") !== "Job Prep Complete") {
       tasks.push({
         id: job.id+"_prep", jobId: job.id, jobName: job.name,
         type: "auto", category: "prep", foreman: "Koy",
@@ -11026,9 +11026,10 @@ function App() {
     const BG    = {red:"rgba(220,38,38,0.18)",purple:"rgba(139,92,246,0.10)",invoice:"rgba(234,88,12,0.10)",hold:"rgba(234,179,8,0.12)",sched:"rgba(37,99,235,0.08)",ready:"rgba(202,138,4,0.08)",none:C.card};
     const LBORD = {red:"#dc2626",purple:"#8b5cf6",invoice:"#ea580c",hold:"#ca8a04",sched:"#2563eb",ready:"#ca8a04",none:rowFc};
     const BORD  = {red:"2px solid #dc2626",purple:"2px solid #8b5cf6",invoice:"2px solid #ea580c",hold:"1px dashed #ca8a04",sched:"1px dashed #2563eb",ready:"1px dashed #ca8a04",none:`1px solid ${C.border}`};
-    const rowBg    = BG[priority];
-    const rowLbord = LBORD[priority];
-    const rowBord  = BORD[priority];
+    const isQuote  = job.type==="quote";
+    const rowBg    = isQuote ? `rgba(232,144,26,0.07)` : BG[priority];
+    const rowLbord = isQuote ? C.accent : LBORD[priority];
+    const rowBord  = isQuote ? `1px dashed ${C.accent}` : BORD[priority];
 
     return (
 
@@ -11048,6 +11049,8 @@ function App() {
             </div>
 
             <div style={{fontSize:11,color:C.dim,marginTop:1}}>
+
+              {isQuote&&<span style={{color:C.accent,fontWeight:700,marginRight:6,letterSpacing:"0.04em"}}>QUOTE</span>}
 
               {showForeman&&<span style={{color:rowFc,fontWeight:600,marginRight:6}}>{foreman}</span>}
 
@@ -11714,7 +11717,7 @@ function App() {
                   (j.gc||"").toLowerCase().includes(s)||
                   (j.foreman||"").toLowerCase().includes(s)||
                   (j.simproNo||"").toLowerCase().includes(s)
-                ) : jobs).filter(j=>j.type!=="quote");
+                ) : jobs);
                 return <StageSectionList jobs={homeFiltered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>;
               })()}
             </div>
@@ -12056,7 +12059,7 @@ function App() {
 
       {view==="tasks"&&can(identity,"tasks.view")&&(
         <Tasks
-          jobs={jobs.filter(j=>j.type!=="quote")}
+          jobs={jobs}
           manualTasks={manualTasks}
           onManualTasksChange={(next)=>{
             next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); });
