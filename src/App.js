@@ -10639,23 +10639,27 @@ function App() {
     const today = new Date().toISOString().split("T")[0];
     const key = `he_daily_backup_${today}`;
     if(!localStorage.getItem(key)) {
-      // Clean up old backups FIRST to free space, then save today's
-      const cutoff = new Date(Date.now() - 3*86400000).toISOString().split("T")[0];
+      // Wipe ALL previous daily backups to free space before saving today's
       const keysToRemove = [];
       for(let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
-        if(k?.startsWith("he_daily_backup_") && k !== key) {
-          const d = k.replace("he_daily_backup_","");
-          if(d < cutoff) keysToRemove.push(k);
-        }
+        if(k?.startsWith("he_daily_backup_") && k !== key) keysToRemove.push(k);
       }
       keysToRemove.forEach(k => { try { localStorage.removeItem(k); } catch(e){} });
-      // Save a compact version (no uploaded file blobs) to avoid quota issues
-      const compact = jobs.map(j => {const c={...j}; delete c.uploadedFiles; return c;});
+      // Also clear the rolling hejobs_backup to reclaim space — Firestore is the source of truth
+      try { localStorage.removeItem('hejobs_backup'); } catch(e){}
+      // Save a minimal version: just id, name, type, quoteNumber, foreman, roughStatus, finishStatus
+      const compact = jobs.map(j => ({
+        id:j.id, name:j.name, address:j.address, gc:j.gc, foreman:j.foreman,
+        type:j.type, quoteNumber:j.quoteNumber, simproNo:j.simproNo,
+        roughStatus:j.roughStatus, finishStatus:j.finishStatus,
+        roughStage:j.roughStage, finishStage:j.finishStage,
+        prepStage:j.prepStage, updated_at:j.updated_at,
+      }));
       try {
         localStorage.setItem(key, JSON.stringify({savedAt: new Date().toISOString(), count: jobs.length, jobs: compact}));
         console.log(`[HE] Daily safety backup saved: ${jobs.length} jobs (${today})`);
-      } catch(e) { console.warn("[HE] Daily backup failed (storage still full after cleanup):", e); }
+      } catch(e) { console.warn("[HE] Daily backup failed:", e); }
     }
   }, [jobs.length > 0]);
 
