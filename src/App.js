@@ -5295,6 +5295,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const [tab, setTab] = useState("Job Info");
   const [newLightingFloor, setNewLightingFloor] = useState("");
   const [emailData, setEmailData] = useState(null);
+  const [convertPrompt, setConvertPrompt] = useState(false);
+  const [convertJobNo, setConvertJobNo] = useState("");
   const [gcAnswers, setGcAnswers] = useState(null); // answers submitted by GC/homeowner via share link
   const [lvCollab, setLvCollab] = useState(null); // lighting collab data from LV company
 
@@ -5445,12 +5447,42 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             
 
             {job.type==="quote"&&canConvertQuote&&(
-              <button onClick={()=>onConvertQuote&&onConvertQuote(job)}
-                style={{background:C.accent,color:"#000",border:"none",borderRadius:8,
-                  padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer",
-                  fontFamily:"inherit",letterSpacing:"0.03em"}}>
-                Convert to Job
-              </button>
+              convertPrompt ? (
+                <div style={{display:"flex",alignItems:"center",gap:8,background:C.card,
+                  border:`2px solid ${C.accent}`,borderRadius:10,padding:"8px 12px"}}>
+                  <div style={{fontSize:11,fontWeight:700,color:C.accent,whiteSpace:"nowrap"}}>Simpro Job #</div>
+                  <input
+                    autoFocus
+                    value={convertJobNo}
+                    onChange={e=>setConvertJobNo(e.target.value)}
+                    onKeyDown={e=>{
+                      if(e.key==="Enter"&&convertJobNo.trim()) { onConvertQuote&&onConvertQuote({...job,simproNo:convertJobNo.trim()}); setConvertPrompt(false); setConvertJobNo(""); }
+                      if(e.key==="Escape") { setConvertPrompt(false); setConvertJobNo(""); }
+                    }}
+                    placeholder="Enter job number…"
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                      color:C.text,padding:"6px 10px",fontSize:13,fontFamily:"inherit",
+                      outline:"none",width:160}}
+                  />
+                  <button
+                    onClick={()=>{ if(convertJobNo.trim()){ onConvertQuote&&onConvertQuote({...job,simproNo:convertJobNo.trim()}); setConvertPrompt(false); setConvertJobNo(""); } }}
+                    disabled={!convertJobNo.trim()}
+                    style={{background:convertJobNo.trim()?C.accent:"#555",color:"#000",border:"none",
+                      borderRadius:7,padding:"6px 14px",fontSize:12,fontWeight:700,
+                      cursor:convertJobNo.trim()?"pointer":"not-allowed",fontFamily:"inherit"}}>
+                    Convert
+                  </button>
+                  <button onClick={()=>{ setConvertPrompt(false); setConvertJobNo(""); }}
+                    style={{background:"none",border:"none",color:C.dim,fontSize:16,cursor:"pointer",padding:"0 4px"}}>✕</button>
+                </div>
+              ) : (
+                <button onClick={()=>setConvertPrompt(true)}
+                  style={{background:C.accent,color:"#000",border:"none",borderRadius:8,
+                    padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer",
+                    fontFamily:"inherit",letterSpacing:"0.03em"}}>
+                  Convert to Job
+                </button>
+              )
             )}
 
             <button onClick={refreshJob} title="Refresh"
@@ -11965,10 +11997,10 @@ function App() {
         : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen} leadsList={_leads}
             canConvertQuote={can(identity,"quotes.convert")}
             onConvertQuote={(q)=>{
-              // Clear type so it's no longer treated as a quote; keep quoteNumber as a reference trail
+              // q already has simproNo set from the prompt
               const updated={...q, type:""};
               setJobs(js=>js.map(j=>j.id===q.id?updated:j));
-              saveJob(updated,{type:""});
+              saveJob(updated,{type:"", simproNo:q.simproNo||""});
               setSelected(updated);
             }}
           />)}
