@@ -1492,13 +1492,13 @@ const StageBar = ({stages,current,color}) => {
 
 function normFloor(v) {
 
-  if (v && typeof v === 'object' && !Array.isArray(v) && ('general' in v || 'rooms' in v)) {
+  if (v && typeof v === 'object' && !Array.isArray(v) && ('general' in v || 'rooms' in v || 'hotcheck' in v)) {
 
-    return { general: Array.isArray(v.general) ? v.general : [], rooms: Array.isArray(v.rooms) ? v.rooms : [] };
+    return { general: Array.isArray(v.general) ? v.general : [], rooms: Array.isArray(v.rooms) ? v.rooms : [], hotcheck: Array.isArray(v.hotcheck) ? v.hotcheck : [] };
 
   }
 
-  return { general: Array.isArray(v) ? v : [], rooms: [] };
+  return { general: Array.isArray(v) ? v : [], rooms: [], hotcheck: [] };
 
 }
 
@@ -1649,7 +1649,7 @@ function RoomNameEdit({name, onSave}) {
 }
 
 
-function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor }) {
+function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false }) {
 
   const data = normFloor(floorData);
 
@@ -1659,11 +1659,12 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
 
   const openCount = data.general.filter(i => !i.done).length +
-
+    (showHotcheck ? data.hotcheck.filter(i => !i.done).length : 0) +
     data.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done).length : 0), 0);
 
 
   const setGeneral = (general) => onFloorChange(floorKey, { ...data, general });
+  const setHotcheck = (hotcheck) => onFloorChange(floorKey, { ...data, hotcheck });
 
   const addRoom = () => {
 
@@ -1717,6 +1718,20 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
           <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: '0.08em', marginBottom: 6 }}>GENERAL</div>
 
           <PunchItems items={data.general} onChange={setGeneral} />
+
+          {showHotcheck && (
+            <div style={{ marginTop: 12, background: `rgba(220,38,38,0.06)`, border: `1px solid rgba(220,38,38,0.25)`, borderRadius: 8, padding: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 10, fontWeight: 800, color: '#dc2626', letterSpacing: '0.08em' }}>⚡ HOT CHECK</span>
+                {data.hotcheck.filter(i => !i.done).length > 0 && (
+                  <span style={{ fontSize: 10, background: 'rgba(220,38,38,0.15)', color: '#dc2626', borderRadius: 99, padding: '2px 7px', fontWeight: 700 }}>
+                    {data.hotcheck.filter(i => !i.done).length} open
+                  </span>
+                )}
+              </div>
+              <PunchItems items={data.hotcheck} onChange={setHotcheck} />
+            </div>
+          )}
 
           {data.rooms.map(room => (
 
@@ -1775,7 +1790,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 }
 
 
-function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
+function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false }) {
 
   const upper    = normFloor(punch.upper);
   const main     = normFloor(punch.main);
@@ -1816,6 +1831,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
   };
 
   const countOpen = (f) => f.general.filter(i => !i.done).length +
+    (showHotcheck ? (f.hotcheck||[]).filter(i => !i.done).length : 0) +
     f.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done).length : 0), 0);
 
   const totalOpen = countOpen(upper) + countOpen(main) + countOpen(basement) +
@@ -1854,11 +1870,11 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
 
       </div>
 
-      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}/>
+      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck}/>
 
-      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}/>
+      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck}/>
 
-      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}/>
+      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck}/>
 
       {extras.map((e,i)=>(
         <div key={e.key} style={{position:"relative"}}>
@@ -1867,7 +1883,8 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
             floorData={normFloor(punch[e.key])}
             onFloorChange={handleFloorChange}
             floorLabel={e.label}
-            floorColor={FLOOR_COLORS[i % FLOOR_COLORS.length]}/>
+            floorColor={FLOOR_COLORS[i % FLOOR_COLORS.length]}
+            showHotcheck={showHotcheck}/>
           <button onClick={()=>removeFloor(e.key)}
             style={{position:"absolute",top:6,right:0,background:"none",border:"none",
               color:C.muted,cursor:"pointer",fontSize:12,padding:"2px 6px",fontFamily:"inherit"}}>
@@ -6135,7 +6152,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               })()}
 
               <Section label="QC Walk Checklist" color={C.teal} defaultOpen={true}>
-                <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }}/>
+                <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }} showHotcheck={true}/>
               </Section>
 
               <div style={{marginTop:16,padding:"14px 16px",background:job.qcSignedOff?`${C.green}10`:C.surface,border:`1px solid ${job.qcSignedOff?C.green+"55":C.border}`,borderRadius:10}}>
@@ -11040,7 +11057,7 @@ function App() {
 
     const pendRT    = (job.returnTrips||[]).filter(r=>!r.signedOff).length;
 
-    const countQCFloor = (f) => { if(!f) return 0; return (f.general||[]).filter(i=>!i.done).length + (f.rooms||[]).reduce((a,r)=>a+(r.items||[]).filter(i=>!i.done).length,0); };
+    const countQCFloor = (f) => { if(!f) return 0; return (f.general||[]).filter(i=>!i.done).length + (f.hotcheck||[]).filter(i=>!i.done).length + (f.rooms||[]).reduce((a,r)=>a+(r.items||[]).filter(i=>!i.done).length,0); };
 
     const qcItems = countQCFloor(job.qcPunch?.upper) + countQCFloor(job.qcPunch?.main) + countQCFloor(job.qcPunch?.basement) + ((job.qcPunch?.extras||[]).reduce((s,e)=>s+countQCFloor(job.qcPunch?.[e.key]),0));
 
