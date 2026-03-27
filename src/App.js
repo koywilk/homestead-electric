@@ -11279,6 +11279,17 @@ function App() {
   };
 
 
+  // ── Foreground push notification toast ───────────────────────────────────
+  const [pushToast, setPushToast] = useState(null);
+  useEffect(() => {
+    const handler = e => {
+      setPushToast(e.detail);
+      setTimeout(() => setPushToast(null), 5000);
+    };
+    window.addEventListener("he-push", handler);
+    return () => window.removeEventListener("he-push", handler);
+  }, []);
+
   // ── Identity gate — show UserPicker if no identity saved ────
   if(!identity) {
     return <UserPicker users={users}
@@ -11290,20 +11301,6 @@ function App() {
       }}
     />;
   }
-
-
-
-
-  // ── Foreground push notification toast ───────────────────────────────────
-  const [pushToast, setPushToast] = useState(null);
-  useEffect(() => {
-    const handler = e => {
-      setPushToast(e.detail);
-      setTimeout(() => setPushToast(null), 5000);
-    };
-    window.addEventListener("he-push", handler);
-    return () => window.removeEventListener("he-push", handler);
-  }, []);
 
   return (
 
