@@ -32,18 +32,17 @@ async function getUsers() {
 async function sendFCM(token, { title, body }) {
   if (!token) return;
   try {
+    // Send as data-only — no notification field.
+    // This prevents the browser from auto-showing a system notification
+    // while the app is open (which would cause a double notification alongside
+    // the in-app toast). The service worker and onMessage handler both read
+    // from payload.data and display the notification themselves.
     await messaging.send({
       token,
-      notification: { title, body },
-      webpush: {
-        notification: {
-          icon: "https://homestead-electric.vercel.app/logo192.png",
-          badge: "https://homestead-electric.vercel.app/logo192.png",
-        },
-      },
+      data: { title: title || "", body: body || "" },
+      webpush: { headers: { Urgency: "high" } },
     });
   } catch (e) {
-    // Token may be stale — log but don't throw
     functions.logger.warn("FCM send failed", { token: token.slice(0, 20), error: e.message });
   }
 }
@@ -65,12 +64,31 @@ async function sendToName(name, notification) {
 
 /**
  * Send to all users whose title matches any value in the roles array.
+ * Excludes tokens already sent to (prevents double-notifying foreman who is also admin).
  * Roles: "admin", "manager", "foreman", "lead", "crew"
  */
-async function sendToRoles(roles, notification) {
+async function sendToRoles(roles, notification, excludeTokens = []) {
   const users = await getUsers();
   const targets = users.filter(u => roles.includes(u.title) || roles.includes(u.role));
-  await Promise.all(targets.filter(u => u.fcmToken).map(u => sendFCM(u.fcmToken, notification)));
+  await Promise.all(
+    targets
+      .filter(u => u.fcmToken && !excludeTokens.includes(u.fcmToken))
+      .map(u => sendFCM(u.fcmToken, notification))
+  );
+}
+
+/**
+ * Get the FCM token for a named user (used to build excludeTokens lists).
+ */
+async function getTokenForName(name) {
+  if (!name || name === "Unassigned") return null;
+  const users = await getUsers();
+  const n = name.toLowerCase().trim();
+  const user = users.find(u => {
+    const un = (u.name || "").toLowerCase();
+    return un === n || un.startsWith(n + " ") || n.startsWith(un.split(" ")[0]);
+  });
+  return user?.fcmToken || null;
 }
 
 /**
@@ -100,10 +118,24 @@ function isDaysAway(dateStr, daysAway) {
   return diff === daysAway;
 }
 
-/** Count total items in a questions object {upper:[], main:[], basement:[]} */
-function countQuestions(q) {
-  if (!q || typeof q !== "object") return 0;
-  return (q.upper || []).length + (q.main || []).length + (q.basement || []).length;
+/** Get all question IDs from a questions object {upper:[], main:[], basement:[]} */
+function getQuestionIds(q) {
+  if (!q || typeof q !== "object") return new Set();
+  const ids = new Set();
+  ["upper", "main", "basement"].forEach(f =>
+    (q[f] || []).forEach(item => { if (item.id) ids.add(item.id); })
+  );
+  return ids;
+}
+
+/** Returns true if afterQ has any question IDs that weren't in beforeQ */
+function hasNewQuestions(beforeQ, afterQ) {
+  const beforeIds = getQuestionIds(beforeQ);
+  const afterIds  = getQuestionIds(afterQ);
+  for (const id of afterIds) {
+    if (!beforeIds.has(id)) return true;
+  }
+  return false;
 }
 
 // ─────────────────────────────────────────────────────────────
@@ -138,14 +170,16 @@ exports.onJobUpdate = functions.firestore
 
     // ── 3. Ready to invoice ───────────────────────────────────
     if (!before.readyToInvoice && after.readyToInvoice) {
+      const foremanToken = await getTokenForName(after.foreman);
       tasks.push(sendToName(after.foreman, {
         title: "💰 Ready to Invoice",
         body:  `${name} is ready to invoice`,
       }));
+      // Exclude foreman's token so they don't get it twice if they're also admin
       tasks.push(sendToRoles(["admin", "manager"], {
         title: "💰 Ready to Invoice",
         body:  `${name} is ready to invoice`,
-      }));
+      }, foremanToken ? [foremanToken] : []));
     }
 
     // ── 4. Quote converted to job ─────────────────────────────
@@ -158,14 +192,16 @@ exports.onJobUpdate = functions.firestore
 
     // ── 5. Job prep complete ──────────────────────────────────
     if (before.prepStage !== PREP_COMPLETE && after.prepStage === PREP_COMPLETE) {
+      const foremanToken = await getTokenForName(after.foreman);
       tasks.push(sendToName(after.foreman, {
         title: "✅ Job Prep Complete",
         body:  `Prep is done on ${name} — ready to roll`,
       }));
+      // Exclude foreman's token so they don't get it twice if they're also admin
       tasks.push(sendToRoles(["admin", "manager"], {
         title: "✅ Job Prep Complete",
         body:  `${name} prep is complete`,
-      }));
+      }, foremanToken ? [foremanToken] : []));
     }
 
     // ── 6. QC walk needs to be scheduled ─────────────────────
@@ -236,19 +272,14 @@ exports.onJobUpdate = functions.firestore
       }
     });
 
-    // ── 9. Questions added ────────────────────────────────────
-    const beforeRoughQ  = countQuestions(before.roughQuestions);
-    const afterRoughQ   = countQuestions(after.roughQuestions);
-    const beforeFinishQ = countQuestions(before.finishQuestions);
-    const afterFinishQ  = countQuestions(after.finishQuestions);
-
-    if (afterRoughQ > beforeRoughQ) {
+    // ── 9. Questions added (ID-based to prevent double-firing) ───
+    if (hasNewQuestions(before.roughQuestions, after.roughQuestions)) {
       tasks.push(sendToName(after.foreman, {
         title: "❓ New Question on Job",
         body:  `A new rough question was added on ${name}`,
       }));
     }
-    if (afterFinishQ > beforeFinishQ) {
+    if (hasNewQuestions(before.finishQuestions, after.finishQuestions)) {
       tasks.push(sendToName(after.foreman, {
         title: "❓ New Question on Job",
         body:  `A new finish question was added on ${name}`,

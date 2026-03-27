@@ -72,11 +72,12 @@ async function registerFCMToken(userId) {
 }
 
 // Handle foreground messages (app is open) — show a brief alert-style banner
+// Reads from payload.data since we send data-only messages to prevent double notifications
 if (messaging) {
   onMessage(messaging, payload => {
-    const { title, body } = payload.notification || {};
+    const title = payload.data?.title || payload.notification?.title;
+    const body  = payload.data?.body  || payload.notification?.body;
     if (title || body) {
-      // Simple non-blocking toast — uses the existing app notification style
       const ev = new CustomEvent("he-push", { detail: { title, body } });
       window.dispatchEvent(ev);
     }

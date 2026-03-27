@@ -17,11 +17,13 @@ firebase.initializeApp({
 const messaging = firebase.messaging();
 
 // Handle background messages (app closed or in background)
+// Reads from payload.data since we send data-only messages to prevent double notifications
 messaging.onBackgroundMessage(payload => {
-  const { title, body, icon } = payload.notification || {};
-  self.registration.showNotification(title || 'Homestead Electric', {
-    body:  body  || '',
-    icon:  icon  || '/logo192.png',
+  const title = payload.data?.title || 'Homestead Electric';
+  const body  = payload.data?.body  || '';
+  self.registration.showNotification(title, {
+    body,
+    icon:  '/logo192.png',
     badge: '/logo192.png',
     data:  payload.data || {},
   });
