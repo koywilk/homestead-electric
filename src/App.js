@@ -3,6 +3,12 @@ import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { getMessaging, getToken, onMessage } from "firebase/messaging";
+
+// ── FCM setup ─────────────────────────────────────────────────────────────────
+// VAPID key — generate in Firebase Console → Project Settings → Cloud Messaging
+// → Web Push certificates → Generate key pair, then paste it here.
+const VAPID_KEY = "BH3basT0whtC0V2OkJ0vdbcGBvPC1W5Qo6hqFMr1Hg0KX07Vvj_wtuiMDlcf28wp5x0dN8s0Frep7Tnr1xlujuc";
 
 
 // Register service worker for offline support
@@ -37,8 +43,45 @@ const firebaseConfig = {
 
 const firebaseApp = initializeApp(firebaseConfig);
 
-const db = getFirestore(firebaseApp);
-const storage = getStorage(firebaseApp);
+const db        = getFirestore(firebaseApp);
+const storage   = getStorage(firebaseApp);
+const messaging = ("serviceWorker" in navigator) ? getMessaging(firebaseApp) : null;
+
+/**
+ * Request notification permission, get FCM token, and save it to the user's
+ * record in Firestore (settings/users → list[].fcmToken).
+ * Called once after the user selects their identity at login.
+ */
+async function registerFCMToken(userId) {
+  if (!messaging || !VAPID_KEY || VAPID_KEY === "PASTE_YOUR_VAPID_KEY_HERE") return;
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") return;
+    const token = await getToken(messaging, { vapidKey: VAPID_KEY });
+    if (!token) return;
+    // Update this user's fcmToken in the shared users list
+    const snap = await getDoc(doc(db, "settings", "users"));
+    if (!snap.exists()) return;
+    const list = (snap.data().list || []).map(u =>
+      u.id === userId ? { ...u, fcmToken: token } : u
+    );
+    await setDoc(doc(db, "settings", "users"), { list });
+  } catch (e) {
+    console.warn("[HE] FCM registration skipped:", e.message);
+  }
+}
+
+// Handle foreground messages (app is open) — show a brief alert-style banner
+if (messaging) {
+  onMessage(messaging, payload => {
+    const { title, body } = payload.notification || {};
+    if (title || body) {
+      // Simple non-blocking toast — uses the existing app notification style
+      const ev = new CustomEvent("he-push", { detail: { title, body } });
+      window.dispatchEvent(ev);
+    }
+  });
+}
 window.__HE_DB = db;
 
 // Check what Firestore ACTUALLY has for a job
@@ -11239,7 +11282,7 @@ function App() {
   // ── Identity gate — show UserPicker if no identity saved ────
   if(!identity) {
     return <UserPicker users={users}
-      onSelect={m => { saveIdentity(m); setIdentity(m); }}
+      onSelect={m => { saveIdentity(m); setIdentity(m); registerFCMToken(m.id); }}
       onSavePin={async (updated) => {
         // Save the new PIN into the users list in Firestore
         const newList = users.map(u => u.id===updated.id ? updated : u);
@@ -11251,9 +11294,33 @@ function App() {
 
 
 
+  // ── Foreground push notification toast ───────────────────────────────────
+  const [pushToast, setPushToast] = useState(null);
+  useEffect(() => {
+    const handler = e => {
+      setPushToast(e.detail);
+      setTimeout(() => setPushToast(null), 5000);
+    };
+    window.addEventListener("he-push", handler);
+    return () => window.removeEventListener("he-push", handler);
+  }, []);
+
   return (
 
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
+      {/* Push notification foreground toast */}
+      {pushToast && (
+        <div onClick={() => setPushToast(null)} style={{
+          position:"fixed", top:16, left:"50%", transform:"translateX(-50%)",
+          zIndex:99999, background:"#1e293b", color:"#f8fafc",
+          borderRadius:12, padding:"12px 18px", maxWidth:360, width:"90%",
+          boxShadow:"0 8px 32px #0008", cursor:"pointer",
+          display:"flex", flexDirection:"column", gap:2,
+        }}>
+          <div style={{fontWeight:700, fontSize:14}}>{pushToast.title}</div>
+          {pushToast.body && <div style={{fontSize:13, color:"#cbd5e1"}}>{pushToast.body}</div>}
+        </div>
+      )}
 
       <div style={{position:"fixed",inset:0,backgroundImage:"url(/icon-192.png)",
 
