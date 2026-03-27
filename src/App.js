@@ -5383,9 +5383,16 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     if (Array.isArray(f)) return f.filter(i=>!i.done).length;
 
     return (f.general||[]).filter(i=>!i.done).length +
-
+      (f.hotcheck||[]).filter(i=>!i.done).length +
       (f.rooms||[]).reduce((a,r)=>a+(Array.isArray(r.items)?r.items.filter(i=>!i.done).length:0),0);
 
+  };
+
+  // Total open items across all floors of a punch object
+  const punchOpen = (punch) => {
+    if(!punch) return 0;
+    const floors = ['upper','main','basement',...(punch.extras||[]).map(e=>e.key)];
+    return floors.reduce((t,k) => t + countFloor(punch[k]), 0);
   };
 
   const openCount = ['roughPunch','finishPunch'].reduce((total,key)=>{
@@ -5609,6 +5616,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                         <select value={job.roughStatus||""} onChange={e=>{
                           const v=e.target.value;
+                          if(v==="complete"){
+                            const open=punchOpen(job.roughPunch);
+                            if(open>0){alert(`Cannot mark Rough as complete — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}
+                          }
                           const def=getStatusDef(ROUGH_STATUSES,v);
                           u({roughStatus:v, roughOnHold:v==="waiting", roughScheduled:v==="scheduled",
                             roughStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting"||v==="invoice")?job.roughStartConfirmed:false,
@@ -5647,7 +5658,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     </div>
                   );
                 })()}
-                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};u({roughStage:v,...qcFire,...prepDone,...(v==="100%"?{roughStatus:"complete",readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
+                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const open=punchOpen(job.roughPunch);if(open>0){alert(`Cannot set Rough to 100% — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}}const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};u({roughStage:v,...qcFire,...prepDone,...(v==="100%"?{roughStatus:"complete",readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
 
                 <div style={{marginTop:8,marginBottom:20}}>
 
@@ -5759,6 +5770,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                         <select value={job.finishStatus||""} onChange={e=>{
                           const v=e.target.value;
+                          if(v==="complete"){
+                            const finishOpen=punchOpen(job.finishPunch);
+                            const qcOpen=punchOpen(job.qcPunch);
+                            const total=finishOpen+qcOpen;
+                            if(total>0){
+                              const parts=[];
+                              if(finishOpen>0) parts.push(`${finishOpen} finish punch item${finishOpen!==1?"s":""}`);
+                              if(qcOpen>0) parts.push(`${qcOpen} QC item${qcOpen!==1?"s":""}`);
+                              alert(`Cannot mark Finish as complete — ${parts.join(" and ")} still open. Clear them first.`);
+                              return;
+                            }
+                          }
                           const def=getStatusDef(FINISH_STATUSES,v);
                           u({finishStatus:v, finishOnHold:v==="waiting", finishScheduled:v==="scheduled",
                             finishStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting"||v==="invoice")?job.finishStartConfirmed:false,
@@ -5797,7 +5820,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     </div>
                   );
                 })()}
-                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;u({finishStage:v,...(v==="100%"?{finishStatus:"complete",readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
+                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const finishOpen=punchOpen(job.finishPunch);const qcOpen=punchOpen(job.qcPunch);const total=finishOpen+qcOpen;if(total>0){const parts=[];if(finishOpen>0)parts.push(`${finishOpen} finish punch item${finishOpen!==1?"s":""}`);if(qcOpen>0)parts.push(`${qcOpen} QC item${qcOpen!==1?"s":""}`);alert(`Cannot set Finish to 100% — ${parts.join(" and ")} still open. Clear them first.`);return;}}u({finishStage:v,...(v==="100%"?{finishStatus:"complete",readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
                 <div style={{marginTop:8,marginBottom:20}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
               </Section>
 
