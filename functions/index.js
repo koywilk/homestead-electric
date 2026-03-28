@@ -26,8 +26,21 @@ async function getUsers() {
 }
 
 /**
+ * Return all FCM tokens for a user record.
+ * Handles both the new array field (fcmTokens) and the legacy single-token
+ * field (fcmToken) so existing data keeps working during the transition.
+ */
+function getTokens(user) {
+  const tokens = [];
+  if (Array.isArray(user.fcmTokens)) tokens.push(...user.fcmTokens);
+  // Backward compat: include legacy single-token field if not already present
+  if (user.fcmToken && !tokens.includes(user.fcmToken)) tokens.push(user.fcmToken);
+  return tokens.filter(Boolean);
+}
+
+/**
  * Send a push notification to a single FCM token.
- * Silently skips if the token is missing.
+ * Silently skips if the token is missing or invalid.
  */
 async function sendFCM(token, { title, body }) {
   if (!token) return;
@@ -48,7 +61,8 @@ async function sendFCM(token, { title, body }) {
 }
 
 /**
- * Send to a user by their first name or full name
+ * Send to a user by their first name or full name.
+ * Sends to ALL of their registered devices.
  * (job.foreman / job.lead are stored as display names like "Koy" or "Koy Wilkinson").
  */
 async function sendToName(name, notification) {
@@ -59,36 +73,41 @@ async function sendToName(name, notification) {
     const un = (u.name || "").toLowerCase();
     return un === n || un.startsWith(n + " ") || n.startsWith(un.split(" ")[0]);
   });
-  if (user?.fcmToken) await sendFCM(user.fcmToken, notification);
+  if (!user) return;
+  await Promise.all(getTokens(user).map(t => sendFCM(t, notification)));
 }
 
 /**
  * Send to all users whose title matches any value in the roles array.
+ * Sends to ALL devices per user.
  * Excludes tokens already sent to (prevents double-notifying foreman who is also admin).
  * Roles: "admin", "manager", "foreman", "lead", "crew"
  */
 async function sendToRoles(roles, notification, excludeTokens = []) {
   const users = await getUsers();
   const targets = users.filter(u => roles.includes(u.title) || roles.includes(u.role));
-  await Promise.all(
-    targets
-      .filter(u => u.fcmToken && !excludeTokens.includes(u.fcmToken))
-      .map(u => sendFCM(u.fcmToken, notification))
-  );
+  const sends = [];
+  for (const u of targets) {
+    for (const t of getTokens(u)) {
+      if (!excludeTokens.includes(t)) sends.push(sendFCM(t, notification));
+    }
+  }
+  await Promise.all(sends);
 }
 
 /**
- * Get the FCM token for a named user (used to build excludeTokens lists).
+ * Get ALL FCM tokens for a named user (used to build excludeTokens lists).
+ * Returns an array (empty if user not found or has no tokens).
  */
 async function getTokenForName(name) {
-  if (!name || name === "Unassigned") return null;
+  if (!name || name === "Unassigned") return [];
   const users = await getUsers();
   const n = name.toLowerCase().trim();
   const user = users.find(u => {
     const un = (u.name || "").toLowerCase();
     return un === n || un.startsWith(n + " ") || n.startsWith(un.split(" ")[0]);
   });
-  return user?.fcmToken || null;
+  return user ? getTokens(user) : [];
 }
 
 /**
@@ -170,16 +189,16 @@ exports.onJobUpdate = functions.firestore
 
     // ── 3. Ready to invoice ───────────────────────────────────
     if (!before.readyToInvoice && after.readyToInvoice) {
-      const foremanToken = await getTokenForName(after.foreman);
+      const foremanTokens = await getTokenForName(after.foreman);
       tasks.push(sendToName(after.foreman, {
         title: "💰 Ready to Invoice",
         body:  `${name} is ready to invoice`,
       }));
-      // Exclude foreman's token so they don't get it twice if they're also admin
+      // Exclude foreman's tokens so they don't get it twice if they're also admin
       tasks.push(sendToRoles(["admin", "manager"], {
         title: "💰 Ready to Invoice",
         body:  `${name} is ready to invoice`,
-      }, foremanToken ? [foremanToken] : []));
+      }, foremanTokens));
     }
 
     // ── 4. Quote converted to job ─────────────────────────────
@@ -192,16 +211,16 @@ exports.onJobUpdate = functions.firestore
 
     // ── 5. Job prep complete ──────────────────────────────────
     if (before.prepStage !== PREP_COMPLETE && after.prepStage === PREP_COMPLETE) {
-      const foremanToken = await getTokenForName(after.foreman);
+      const foremanTokens = await getTokenForName(after.foreman);
       tasks.push(sendToName(after.foreman, {
         title: "✅ Job Prep Complete",
         body:  `Prep is done on ${name} — ready to roll`,
       }));
-      // Exclude foreman's token so they don't get it twice if they're also admin
+      // Exclude foreman's tokens so they don't get it twice if they're also admin
       tasks.push(sendToRoles(["admin", "manager"], {
         title: "✅ Job Prep Complete",
         body:  `${name} prep is complete`,
-      }, foremanToken ? [foremanToken] : []));
+      }, foremanTokens));
     }
 
     // ── 6. QC walk needs to be scheduled ─────────────────────

@@ -49,7 +49,9 @@ const messaging = ("serviceWorker" in navigator) ? getMessaging(firebaseApp) : n
 
 /**
  * Request notification permission, get FCM token, and save it to the user's
- * record in Firestore (settings/users → list[].fcmToken).
+ * record in Firestore (settings/users → list[].fcmTokens).
+ * Tokens are stored as an array so every device the user logs in on gets
+ * notifications. Capped at 10 tokens to avoid unbounded growth.
  * Called once after the user selects their identity at login.
  */
 async function registerFCMToken(userId) {
@@ -59,12 +61,17 @@ async function registerFCMToken(userId) {
     if (permission !== "granted") return;
     const token = await getToken(messaging, { vapidKey: VAPID_KEY });
     if (!token) return;
-    // Update this user's fcmToken in the shared users list
     const snap = await getDoc(doc(db, "settings", "users"));
     if (!snap.exists()) return;
-    const list = (snap.data().list || []).map(u =>
-      u.id === userId ? { ...u, fcmToken: token } : u
-    );
+    const list = (snap.data().list || []).map(u => {
+      if (u.id !== userId) return u;
+      // Collect all existing tokens (support legacy single-token field)
+      const existing = Array.isArray(u.fcmTokens) ? u.fcmTokens
+        : u.fcmToken ? [u.fcmToken] : [];
+      // Add new token if not already present, cap at 10
+      const merged = existing.includes(token) ? existing : [...existing, token];
+      return { ...u, fcmTokens: merged.slice(-10) };
+    });
     await setDoc(doc(db, "settings", "users"), { list });
   } catch (e) {
     console.warn("[HE] FCM registration skipped:", e.message);
