@@ -10511,7 +10511,9 @@ function PunchSharePage({ jobId, stage }) {
   // Optional item filter — when link was generated with PunchPicker (?ids=id1,id2,...)
   const filterIds = (() => {
     const raw = new URLSearchParams(window.location.search).get('ids');
-    return raw ? new Set(raw.split(',').filter(Boolean)) : null;
+    if (!raw) return null;
+    const s = new Set(raw.split(',').filter(Boolean));
+    return s.size > 0 ? s : null; // empty set → no filter (show everything)
   })();
 
   const normF = (f) => f && typeof f==='object' ? f : {};
@@ -10636,7 +10638,9 @@ function QuestionsSharePage({ jobId }) {
   // Optional ID filter — when link was generated with SELECT & SHARE (?ids=id1,id2,...)
   const filterIds = (() => {
     const raw = new URLSearchParams(window.location.search).get('ids');
-    return raw ? new Set(raw.split(',').filter(Boolean)) : null;
+    if (!raw) return null;
+    const s = new Set(raw.split(',').filter(Boolean));
+    return s.size > 0 ? s : null; // empty set → no filter (show everything)
   })();
 
   // Live listener — questions update in real-time as crew adds them

@@ -246,9 +246,11 @@ exports.onJobUpdate = functions.firestore
       });
     }
 
-    // Existing CO status changed
+    // Existing CO status changed — match by ID so deletions don't cause misfires
+    const beforeCOMap = {};
+    beforeCOs.forEach(co => { if (co.id) beforeCOMap[co.id] = co; });
     afterCOs.forEach((co, i) => {
-      const prev = beforeCOs[i];
+      const prev = co.id ? beforeCOMap[co.id] : beforeCOs[i];
       if (!prev) return;
       if (prev.coStatus !== "approved" && co.coStatus === "approved") {
         // CO approved → notify lead
@@ -270,8 +272,12 @@ exports.onJobUpdate = functions.firestore
     const beforeRTs = before.returnTrips || [];
     const afterRTs  = after.returnTrips  || [];
 
+    // Match by ID so deletions don't shift indices and cause misfires
+    const beforeRTMap = {};
+    beforeRTs.forEach(rt => { if (rt.id) beforeRTMap[rt.id] = rt; });
+
     afterRTs.forEach((rt, i) => {
-      const prev = beforeRTs[i];
+      const prev = rt.id ? beforeRTMap[rt.id] : beforeRTs[i];
 
       // Return trip assigned to a lead
       const prevAssigned = prev?.assignedTo || "";
