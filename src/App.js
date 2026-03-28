@@ -286,6 +286,13 @@ const WIRE_TEXT = {
 
 const PULLED_OPTS   = ["","Pulled","Need Specs"];
 
+const C4_MODULE_TYPES   = ["","8-Ch Dimmer","8-Ch Relay","0-10V Dimmer"];
+const LUT_MODULE_TYPES  = ["","LQSE-2ECO","LQSE-4A","LQSE-S8","LQSE-T5","LQSE-2DAL"];
+const CRES_MODULE_TYPES = ["","ZUMNET-200","ZUMLINK-200"];
+const SAV_MODULE_TYPES  = ["","LMD-8120","LMD-4120","SPM-Q2APD10","SPM-Q4FHD10"];
+const LOAD_TYPES        = ["","MLV","ELV","LED","Fluorescent","Relay","0-10V"];
+const PHASE_OPTS        = ["","A","B","C"];
+
 const DRIVER_SIZES  = ["","20W","40W","60W","96W","192W","288W"];
 
 
@@ -313,7 +320,27 @@ const uid = () => String(++_uid);
 
 const newHRRow     = (num) => ({ id:uid(), num, wire:"", name:"", status:"", panel:"" });
 
-const newCP4Row    = (num) => ({ id:uid(), num, name:"", module:"", status:"" });
+const newCP4Row    = (num) => ({ id:uid(), num, name:"", moduleType:"", mod:"", ch:"", loadType:"", watts:"", keypad:"", bus:"", pdu:"", chainPos:"", panel:"", breaker:"", phase:"", status:"" });
+
+const newLoadRow   = (num) => ({ id:uid(), num, name:"", ch:"", loadType:"", watts:"", keypad:"", pulled:false });
+
+const newModuleObj = (modNum) => ({ id:uid(), modNum:String(modNum), moduleType:"", panel:"", breaker:"", phase:"", bus:"", pdu:"", chainPos:"", loads:[newLoadRow(1)] });
+
+// Migrates old flat-row format → new module-block format (safe to run on already-migrated data)
+const migrateFloorToModules = (arr) => {
+  if (!arr || arr.length===0) return [];
+  if (arr[0]?.loads !== undefined) return arr; // already new format
+  const map={}, order=[];
+  arr.forEach(r=>{
+    const key = r.mod||r.module||"1";
+    if(!map[key]){
+      map[key]={ id:uid(), modNum:key, moduleType:r.moduleType||"", panel:r.panel||"", breaker:r.breaker||"", phase:r.phase||"", bus:r.bus||"", pdu:r.pdu||"", chainPos:r.chainPos||"", loads:[] };
+      order.push(key);
+    }
+    if(r.name||r.ch) map[key].loads.push({ id:r.id||uid(), num:map[key].loads.length+1, name:r.name||"", ch:r.ch||"", loadType:r.loadType||"", watts:r.watts||"", keypad:r.keypad||"", pulled:r.status==="Pulled"||r.pulled||false });
+  });
+  return order.map(k=>({ ...map[k], loads: map[k].loads.length ? map[k].loads : [newLoadRow(1)] }));
+};
 
 const newKPRow     = (num) => ({ id:uid(), num, name:"", status:"" });
 
@@ -3672,62 +3699,124 @@ function KeypadSection({loads,onChange,label}) {
 }
 
 
-function CP4LoadsSection({loads,onChange}) {
+function PanelModulesSection({modules,onChange,system}) {
 
-  const upd    = (id,p) => onChange(loads.map(r=>r.id===id?{...r,...p}:r));
+  const sys = system||"Control 4";
+  const isSav = sys==="Savant", isLut = sys==="Lutron", isCres = sys==="Crestron";
+  const devLabel = isCres?"Device":"Module";
 
-  const addRow = () => onChange([...loads, newCP4Row(loads.length+1)]);
+  const updMod  = (mid,p) => onChange(modules.map(m=>m.id===mid?{...m,...p}:m));
+  const delMod  = (mid)   => onChange(modules.filter(m=>m.id!==mid));
+  const addMod  = ()      => onChange([...modules, newModuleObj(modules.length+1)]);
 
-  const delRow = (id) => onChange(loads.filter(r=>r.id!==id).map((r,i)=>({...r,num:i+1})));
+  const updLoad = (mid,lid,p) => onChange(modules.map(m=>m.id===mid?{...m,loads:m.loads.map(l=>l.id===lid?{...l,...p}:l)}:m));
+  const delLoad = (mid,lid)   => onChange(modules.map(m=>m.id===mid?{...m,loads:m.loads.filter(l=>l.id!==lid).map((l,i)=>({...l,num:i+1}))}:m));
+  const addLoad = (mid)       => onChange(modules.map(m=>m.id===mid?{...m,loads:[...m.loads,newLoadRow(m.loads.length+1)]}:m));
+
+  const moduleTypes = isLut?LUT_MODULE_TYPES:isCres?CRES_MODULE_TYPES:isSav?SAV_MODULE_TYPES:C4_MODULE_TYPES;
+
+  const chCap = (type) => ({
+    "8-Ch Dimmer":8,"8-Ch Relay":8,"LMD-8120":8,"LQSE-S8":8,
+    "0-10V Dimmer":2,"LQSE-2ECO":2,"LQSE-2DAL":2,
+    "LQSE-4A":4,"LMD-4120":4,"LQSE-T5":5,
+  }[type]||null);
+
+  const showKeypad = !isSav&&!isLut&&!isCres;
+  const rowGrid = `16px 22px 1fr 36px 70px 52px${showKeypad?" 70px":""} 20px`;
+  const rowHeaders = ["","#","Load Name","Ch","Load Type","Watts",...(showKeypad?["Keypad"]:[""])];
 
   return (
+    <div style={{marginBottom:16}}>
+      {modules.map(mod=>{
+        const cap = chCap(mod.moduleType);
+        const named = mod.loads.filter(l=>l.name.trim());
+        const pulled = named.filter(l=>l.pulled);
+        return (
+          <div key={mod.id} style={{border:`1px solid ${C.purple}33`,borderRadius:8,marginBottom:12,overflow:"hidden"}}>
 
-    <div style={{marginBottom:22}}>
+            {/* ── Module header ── */}
+            <div style={{background:`${C.purple}0d`,padding:"7px 10px",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",borderBottom:`1px solid ${C.purple}22`}}>
 
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+              {!isSav&&(
+                <>
+                  <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase",whiteSpace:"nowrap"}}>{devLabel}</span>
+                  <Inp value={mod.modNum} onChange={e=>updMod(mod.id,{modNum:e.target.value})}
+                    style={{width:36,textAlign:"center",fontSize:10,fontWeight:700,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
+                </>
+              )}
 
-        <div style={{fontSize:12,color:C.purple,fontWeight:700}}>Lighting Control Panel Loads (Control 4)</div>
+              <Sel value={mod.moduleType} onChange={e=>updMod(mod.id,{moduleType:e.target.value})} options={moduleTypes}
+                style={{fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`,width:isSav?"110px":"auto"}}/>
 
-        <Btn onClick={addRow} variant="add" style={{fontSize:11,padding:"3px 10px"}}>+ Add Row</Btn>
+              {isSav&&<>
+                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>Panel</span>
+                <Inp value={mod.panel||""} onChange={e=>updMod(mod.id,{panel:e.target.value})} placeholder="Panel"
+                  style={{width:64,fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
+                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>Bkr</span>
+                <Inp value={mod.breaker||""} onChange={e=>updMod(mod.id,{breaker:e.target.value})} placeholder="Bkr"
+                  style={{width:44,fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
+                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>Phase</span>
+                <Sel value={mod.phase||""} onChange={e=>updMod(mod.id,{phase:e.target.value})} options={PHASE_OPTS}
+                  style={{fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`,width:52}}/>
+              </>}
 
-      </div>
+              {isLut&&<>
+                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>Bus</span>
+                <Inp value={mod.bus||""} onChange={e=>updMod(mod.id,{bus:e.target.value})} placeholder="Bus"
+                  style={{width:36,textAlign:"center",fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
+                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>PDU</span>
+                <Inp value={mod.pdu||""} onChange={e=>updMod(mod.id,{pdu:e.target.value})} placeholder="PDU"
+                  style={{width:64,fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
+              </>}
 
-      <div style={{display:"grid",gridTemplateColumns:"36px 1fr 90px 90px 28px",gap:6,marginBottom:6}}>
+              {isCres&&<>
+                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>Chain pos</span>
+                <Inp value={mod.chainPos||""} onChange={e=>updMod(mod.id,{chainPos:e.target.value})} placeholder="Pos"
+                  style={{width:36,textAlign:"center",fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
+              </>}
 
-        {["#","Load Name","Module #","Status",""].map((h,i)=>(
+              <span style={{fontSize:10,color:`${C.purple}88`,marginLeft:"auto",whiteSpace:"nowrap"}}>
+                {named.length}{cap?`/${cap}`:""} ch{pulled.length>0?` · ${pulled.length} pulled`:""}
+              </span>
+              <button onClick={()=>delMod(mod.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"0 2px",flexShrink:0}}>✕</button>
+            </div>
 
-          <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
+            {/* ── Load rows ── */}
+            <div style={{padding:"6px 10px 4px"}}>
+              <div style={{display:"grid",gridTemplateColumns:rowGrid,gap:4,marginBottom:4}}>
+                {rowHeaders.map((h,i)=><div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em"}}>{h}</div>)}
+              </div>
+              {mod.loads.map(load=>(
+                <div key={load.id} style={{display:"grid",gridTemplateColumns:rowGrid,gap:4,marginBottom:3,
+                  alignItems:"center",borderRadius:6,padding:"2px 0",
+                  background:load.pulled?"rgba(34,197,94,0.08)":"transparent"}}>
+                  <input type="checkbox" checked={!!load.pulled} onChange={e=>updLoad(mod.id,load.id,{pulled:e.target.checked})}
+                    style={{width:15,height:15,accentColor:C.purple,cursor:"pointer",margin:0}}/>
+                  <span style={{fontSize:11,color:C.muted,textAlign:"center",fontWeight:700}}>{load.num}</span>
+                  <Inp value={load.name} onChange={e=>updLoad(mod.id,load.id,{name:e.target.value})} placeholder="Load name…"/>
+                  <Inp value={load.ch||""} onChange={e=>updLoad(mod.id,load.id,{ch:e.target.value})} placeholder="Ch" style={{textAlign:"center",fontSize:10}}/>
+                  <Sel value={load.loadType||""} onChange={e=>updLoad(mod.id,load.id,{loadType:e.target.value})} options={LOAD_TYPES} style={{fontSize:10}}/>
+                  <Inp value={load.watts||""} onChange={e=>updLoad(mod.id,load.id,{watts:e.target.value})} placeholder="W" style={{textAlign:"center",fontSize:10}}/>
+                  {showKeypad&&<Inp value={load.keypad||""} onChange={e=>updLoad(mod.id,load.id,{keypad:e.target.value})} placeholder="Keypad" style={{fontSize:10}}/>}
+                  <button onClick={()=>delLoad(mod.id,load.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+                </div>
+              ))}
+              <button onClick={()=>addLoad(mod.id)}
+                style={{background:"none",border:"none",color:C.purple,fontSize:10,fontWeight:700,fontFamily:"inherit",
+                  cursor:"pointer",padding:"4px 2px",letterSpacing:"0.04em",opacity:0.75}}>
+                + Add Row to {devLabel} {mod.modNum||mod.moduleType}
+              </button>
+            </div>
+          </div>
+        );
+      })}
 
-        ))}
-
-      </div>
-
-      {loads.map(r=>(
-
-        <div key={r.id} style={{display:"grid",gridTemplateColumns:"36px 1fr 90px 90px 28px",
-
-          gap:6,marginBottom:4,alignItems:"center"}}>
-
-          <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:6}}>{r.num}.</span>
-
-          <Inp value={r.name}   onChange={e=>upd(r.id,{name:e.target.value})}   placeholder="Load name…"/>
-
-          <Inp value={r.module} onChange={e=>upd(r.id,{module:e.target.value})} placeholder="Module…"/>
-
-          <Sel value={r.status} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
-
-            style={{color:r.status==="Pulled"?C.green:C.text}}/>
-
-          <button onClick={()=>delRow(r.id)}
-
-            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
-
-        </div>
-
-      ))}
-
+      <button onClick={addMod}
+        style={{background:"none",border:`1px dashed ${C.purple}44`,color:`${C.purple}88`,borderRadius:7,
+          padding:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"100%",letterSpacing:"0.04em",marginTop:4}}>
+        + New {devLabel}
+      </button>
     </div>
-
   );
 
 }
@@ -5987,6 +6076,20 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               {/* Lighting Control System Selector */}
 
+              {(()=>{
+                const sysUrls={"Control 4":"https://www.control4.com/solutions/smart-lighting","Lutron":"https://residential.lutron.com/us/en/homeworks","Savant":"https://www.savant.com/lighting/","Crestron":"https://www.crestron.com/Products/Featured-Solutions/Zum-Lighting-Control-Systems"};
+                const url=sysUrls[job.lightingSystem||"Control 4"];
+                return url?(
+                  <div style={{marginBottom:10,display:"flex",alignItems:"center",gap:6}}>
+                    <a href={url} target="_blank" rel="noopener noreferrer"
+                      style={{fontSize:11,color:C.purple,textDecoration:"none",fontWeight:600,
+                        background:`${C.purple}10`,border:`1px solid ${C.purple}33`,
+                        borderRadius:6,padding:"3px 10px",display:"inline-flex",alignItems:"center",gap:4}}>
+                      {job.lightingSystem||"Control 4"} docs ↗
+                    </a>
+                  </div>
+                ):null;
+              })()}
 
               <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
 
@@ -6050,13 +6153,25 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               <SectionHead label={`${job.lightingSystem||"Control 4"} Panel Loads`} color={C.purple}/>
 
-              {["upper","main","basement"].map(floor=>(
+              {[
+                {floor:"upper", defaultLabel:"Upper Level"},
+                {floor:"main",  defaultLabel:"Main Level"},
+                {floor:"basement", defaultLabel:"Basement"},
+              ].map(({floor,defaultLabel})=>(
                 <div key={floor} style={{marginBottom:16}}>
-                  <div style={{fontSize:11,color:C.dim,fontWeight:700,letterSpacing:"0.08em",
-                    textTransform:"uppercase",marginBottom:8,paddingBottom:4,
-                    borderBottom:`1px solid ${C.border}`}}>{floor}</div>
-                  <CP4LoadsSection
-                    loads={(job.panelizedLighting.cp4Loads?.[floor])||[]}
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                    marginBottom:8,paddingBottom:4,borderBottom:`1px solid ${C.border}`}}>
+                    <input
+                      value={job.plSectionLabels?.[floor]||""}
+                      onChange={e=>u({plSectionLabels:{...(job.plSectionLabels||{}),[floor]:e.target.value}})}
+                      placeholder={defaultLabel}
+                      style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.purple,
+                        background:"none",border:"none",outline:"none",cursor:"text",
+                        textTransform:"uppercase",fontFamily:"inherit",flex:1}}/>
+                  </div>
+                  <PanelModulesSection
+                    system={job.lightingSystem||"Control 4"}
+                    modules={migrateFloorToModules((job.panelizedLighting.cp4Loads?.[floor])||[])}
                     onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
                       cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}/>
                 </div>
@@ -6066,17 +6181,25 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <div key={ef.key} style={{marginBottom:16}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
                     marginBottom:8,paddingBottom:4,borderBottom:`1px solid ${C.border}`}}>
-                    <div style={{fontSize:11,color:C.purple,fontWeight:700,letterSpacing:"0.08em",
-                      textTransform:"uppercase"}}>{ef.label}</div>
+                    <input
+                      value={ef.label}
+                      onChange={e=>{
+                        const newExtras=(job.panelizedLighting.extraFloors||[]).map(f=>f.key===ef.key?{...f,label:e.target.value}:f);
+                        u({panelizedLighting:{...job.panelizedLighting,extraFloors:newExtras}});
+                      }}
+                      style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.purple,
+                        background:"none",border:"none",outline:"none",cursor:"text",
+                        textTransform:"uppercase",fontFamily:"inherit",flex:1}}/>
                     <button onClick={()=>{
                       const newExtras=(job.panelizedLighting.extraFloors||[]).filter(e=>e.key!==ef.key);
                       const updated={...job.panelizedLighting,extraFloors:newExtras};
                       delete updated[ef.key+"_keypad"];
                       u({panelizedLighting:updated});
-                    }} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
+                    }} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>Remove</button>
                   </div>
-                  <CP4LoadsSection
-                    loads={(job.panelizedLighting[ef.key])||[]}
+                  <PanelModulesSection
+                    system={job.lightingSystem||"Control 4"}
+                    modules={migrateFloorToModules((job.panelizedLighting[ef.key])||[])}
                     onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}/>
                 </div>
               ))}
@@ -6094,7 +6217,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   <div style={{display:"flex",gap:8,alignItems:"center",marginTop:8,flexWrap:"wrap"}}>
                     <input value={newLightingFloor} onChange={e=>setNewLightingFloor(e.target.value)}
                       onKeyDown={e=>e.key==="Enter"&&addFloor()}
-                      placeholder="Add floor / area…"
+                      placeholder="Add panel / area…"
                       style={{flex:1,minWidth:160,background:C.surface,border:`1px solid ${C.border}`,
                         borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
                         outline:"none",color:C.text}}/>
@@ -6102,7 +6225,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       style={{background:C.purple,color:"#fff",border:"none",borderRadius:7,
                         padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",
                         fontFamily:"inherit",whiteSpace:"nowrap"}}>
-                      + Add Floor / Area
+                      + Add Panel / Area
                     </button>
                   </div>
                 );
@@ -10094,7 +10217,7 @@ function LightingSharePage({ jobId }) {
     ...((pl.extraFloors||[]).map(ef=>({key:ef.key+'_keypad',label:`${ef.label} Keypad`}))),
   ];
   const panelFloors = ['main','basement','upper',...((pl.extraFloors||[]).map(ef=>ef.key))];
-  const floorLabel = (k) => k==='main'?'Main Level':k==='basement'?'Basement':k==='upper'?'Upper Level':k;
+  const floorLabel = (k) => job?.plSectionLabels?.[k] || (k==='main'?'Main Level':k==='basement'?'Basement':k==='upper'?'Upper Level':k);
 
   const inputStyle = {background:'#f9fafb',border:'1px solid #e5e7eb',borderRadius:6,padding:'5px 8px',fontSize:12,fontFamily:'inherit',outline:'none',width:'100%',boxSizing:'border-box'};
   const lvRowStyle = {background:'#faf5ff',border:'1px solid #a78bfa44',borderRadius:8,padding:'8px 10px',marginBottom:6,display:'flex',gap:8,alignItems:'flex-start'};
@@ -10178,7 +10301,7 @@ function LightingSharePage({ jobId }) {
                     <div key={r.id} style={{display:'flex',gap:8,alignItems:'center',padding:'5px 0',borderBottom:i<existingRows.length-1?'1px solid #f3f4f6':'none'}}>
                       <span style={{fontSize:11,color:'#9ca3af',width:20}}>{r.num}.</span>
                       <span style={{flex:1,fontSize:12,color:'#374151',fontWeight:500}}>{r.name}</span>
-                      {r.module&&<span style={{fontSize:11,color:'#7c3aed',background:'#faf5ff',borderRadius:4,padding:'1px 6px'}}>{r.module}</span>}
+                      {(r.mod||r.module)&&<span style={{fontSize:11,color:'#7c3aed',background:'#faf5ff',borderRadius:4,padding:'1px 6px'}}>{r.mod||r.module}</span>}
                     </div>
                   ))}
                 </div>
