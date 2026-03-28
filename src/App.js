@@ -157,12 +157,11 @@ const C = {
 
 const ROUGH_STATUSES = [
   {value:"",           label:"— set status —",                        color:null},
-  {value:"waiting_date",label:"Waiting for Start Date Confirmation",  color:"#ca8a04"},
-  {value:"date_confirmed",label:"Start Date Confirmed — Needs to Schedule", color:"#f97316", hasDate:true},
+  {value:"waiting_date",label:"Awaiting Start Date",                  color:"#ca8a04"},
+  {value:"date_confirmed",label:"Start Date Set",                     color:"#f97316", hasDate:true},
   {value:"scheduled",  label:"Scheduled",                            color:"#2563eb", hasDate:true},
-  {value:"waiting",    label:"Waiting on Items",                     color:"#ca8a04", dashed:true},
   {value:"inprogress", label:"In Progress",                          color:"#7dd3fc", hasDate:true},
-  {value:"invoice",    label:"Ready to Invoice",                     color:"#ea580c"},
+  {value:"waiting",    label:"On Hold",                              color:"#ca8a04", dashed:true},
   {value:"complete",   label:"Complete",                             color:"#22c55e"},
 ];
 const FINISH_STATUSES = ROUGH_STATUSES;
@@ -212,6 +211,20 @@ const getStatusDef = (arr, val) => arr.find(x=>x.value===val)||{};
 
 const PREP_STAGES   = ['Redline Walk Scheduled','Redline Walk Completed','Redline CO Doc Made','Redline Plans Made','Redline CO Sent','Redline CO Signed','Redline Plans Need to be Updated','Job Prep Complete'];
 const PREP_STAGE_ALERT = 'Redline Plans Need to be Updated';
+const PREP_CHECKLIST_ITEMS = [
+  {key:"redlinePlans",   label:"Redline Plans Up to Date"},
+  {key:"cabinetPlans",   label:"Cabinet Plans Received"},
+  {key:"applianceSpecs", label:"Appliance Specs Received"},
+  {key:"plansUploaded",  label:"Plans Uploaded to App & SimPro"},
+  {key:"readyToHandOff", label:"Ready to Hand Off to Foreman"},
+];
+const allPrepDone = (job) => {
+  if (job.prepChecklist) {
+    const c = job.prepChecklist;
+    return !!(c.redlinePlans && c.cabinetPlans && c.applianceSpecs && c.plansUploaded && c.readyToHandOff);
+  }
+  return (job.prepStage||"") === "Job Prep Complete";
+};
 
 const ROUGH_STAGES  = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
 
@@ -5673,15 +5686,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           }
                           const def=getStatusDef(ROUGH_STATUSES,v);
                           u({roughStatus:v, roughOnHold:v==="waiting", roughScheduled:v==="scheduled",
-                            roughStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting"||v==="invoice")?job.roughStartConfirmed:false,
+                            roughStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting")?job.roughStartConfirmed:false,
                             roughStatusDate:def.hasDate?job.roughStatusDate:"",
-                            readyToInvoice:v==="invoice"?true:(job.roughStatus==="invoice"?false:job.readyToInvoice),
-                            ...(v==="invoice"&&!job.readyToInvoice?{readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{}),
                             roughProjectedStart:v==="scheduled"?job.roughProjectedStart:job.roughProjectedStart,
                             // Reset deposit dismissed when rescheduled so task reappears
                             ...(v==="scheduled"?{roughDepositDismissed:false}:{}),
-                            // Reset invoice dismissed when status changes away from complete/invoice
-                            ...((v!=="complete"&&v!=="invoice")?{roughInvoiceDismissed:false}:{}),
                           });
                         }} style={{background:rsDef.color?`${rsDef.color}18`:C.surface,
                           color:rsDef.color||C.dim, border:`1px solid ${rsDef.color||C.border}`,
@@ -5709,7 +5718,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     </div>
                   );
                 })()}
-                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const open=punchOpen(job.roughPunch);if(open>0){alert(`Cannot set Rough to 100% — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}}const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};u({roughStage:v,...qcFire,...prepDone,...(v==="100%"?{roughStatus:"complete",readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
+                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const open=punchOpen(job.roughPunch);if(open>0){alert(`Cannot set Rough to 100% — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}}const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};const invoiceFire=pct>=85&&!job.roughInvoiceFired?{roughInvoiceFired:true,roughInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{roughInvoiceFired:false,roughInvoiceDismissed:false}:{};u({roughStage:v,...qcFire,...prepDone,...invoiceFire,...invoiceReset,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
 
                 <div style={{marginTop:8,marginBottom:20}}>
 
@@ -5832,15 +5841,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           }
                           const def=getStatusDef(FINISH_STATUSES,v);
                           u({finishStatus:v, finishOnHold:v==="waiting", finishScheduled:v==="scheduled",
-                            finishStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting"||v==="invoice")?job.finishStartConfirmed:false,
+                            finishStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting")?job.finishStartConfirmed:false,
                             finishStatusDate:def.hasDate?job.finishStatusDate:"",
-                            readyToInvoice:v==="invoice"?true:(job.finishStatus==="invoice"?false:job.readyToInvoice),
-                            ...(v==="invoice"&&!job.readyToInvoice?{readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{}),
                             finishProjectedStart:v==="scheduled"?job.finishProjectedStart:job.finishProjectedStart,
                             // Reset deposit dismissed when rescheduled so task reappears
                             ...(v==="scheduled"?{finishDepositDismissed:false}:{}),
-                            // Reset invoice dismissed when status changes away from complete/invoice
-                            ...((v!=="complete"&&v!=="invoice")?{finishInvoiceDismissed:false}:{}),
                           });
                         }} style={{background:fsDef.color?`${fsDef.color}18`:C.surface,
                           color:fsDef.color||C.dim, border:`1px solid ${fsDef.color||C.border}`,
@@ -5868,7 +5873,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     </div>
                   );
                 })()}
-                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const finishOpen=punchOpen(job.finishPunch);const qcOpen=punchOpen(job.qcPunch);const total=finishOpen+qcOpen;if(total>0){const parts=[];if(finishOpen>0)parts.push(`${finishOpen} finish punch item${finishOpen!==1?"s":""}`);if(qcOpen>0)parts.push(`${qcOpen} QC item${qcOpen!==1?"s":""}`);alert(`Cannot set Finish to 100% — ${parts.join(" and ")} still open. Clear them first.`);return;}}u({finishStage:v,...(v==="100%"?{finishStatus:"complete",readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
+                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const finishOpen=punchOpen(job.finishPunch);const qcOpen=punchOpen(job.qcPunch);const total=finishOpen+qcOpen;if(total>0){const parts=[];if(finishOpen>0)parts.push(`${finishOpen} finish punch item${finishOpen!==1?"s":""}`);if(qcOpen>0)parts.push(`${qcOpen} QC item${qcOpen!==1?"s":""}`);alert(`Cannot set Finish to 100% — ${parts.join(" and ")} still open. Clear them first.`);return;}}const invoiceFire=pct>=85&&!job.finishInvoiceFired?{finishInvoiceFired:true,finishInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{finishInvoiceFired:false,finishInvoiceDismissed:false}:{};u({finishStage:v,...invoiceFire,...invoiceReset,...(v==="100%"?{finishStatus:"complete"}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
                 <div style={{marginTop:8,marginBottom:20}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
               </Section>
 
@@ -6222,7 +6227,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <Section label="QC Walk Checklist" color={C.teal} defaultOpen={true} action={
                 <PunchPicker punch={job.qcPunch||{}} jobId={job.id} stage="QC" color={C.teal} showHotcheck={true}/>
               }>
-                <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }} showHotcheck={true}/>
+                <PunchSection punch={job.qcPunch} onChange={v=>{const allClear=punchOpen(v)===0;u({qcPunch:v,...(job.qcStatus==="fail"&&allClear?{qcStatus:"pass"}:{})});}} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }} showHotcheck={true}/>
               </Section>
 
               <div style={{marginTop:16,padding:"14px 16px",background:job.qcSignedOff?`${C.green}10`:C.surface,border:`1px solid ${job.qcSignedOff?C.green+"55":C.border}`,borderRadius:10}}>
@@ -6364,36 +6369,30 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </div>
 
               <div style={{marginTop:16}}>
-                <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.1em",marginBottom:8}}>PRE JOB PREP STAGE</div>
-                <select value={job.prepStage||""} onChange={e=>u({prepStage:e.target.value,...(e.target.value===PREP_STAGE_ALERT?{readyToSchedule:false}:{})})}
-                  style={{background:job.prepStage===PREP_STAGE_ALERT?"#fef2f2":C.surface,
-                    color:job.prepStage===PREP_STAGE_ALERT?"#dc2626":job.prepStage?C.text:C.dim,
-                    border:`1px solid ${job.prepStage===PREP_STAGE_ALERT?"#dc2626":C.border}`,
-                    borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
-                    fontWeight:job.prepStage===PREP_STAGE_ALERT?700:400,
-                    outline:"none",width:"100%",cursor:"pointer"}}>
-                  <option value="">— select stage —</option>
-                  {PREP_STAGES.map(s=>(
-                    <option key={s} value={s}
-                      style={{color:s===PREP_STAGE_ALERT?"#dc2626":"inherit",
-                        fontWeight:s===PREP_STAGE_ALERT?700:400}}>
-                      {s===PREP_STAGE_ALERT?"⚠ "+s:s}
-                    </option>
-                  ))}
-                </select>
-                {job.prepStage&&(
-                  <div style={{marginTop:10,display:"flex",gap:6,alignItems:"flex-start",flexWrap:"wrap"}}>
-                    {PREP_STAGES.map((s,i)=>(
-                      <div key={s} style={{display:"flex",alignItems:"center",gap:4}}>
-                        <div style={{width:10,height:10,borderRadius:"50%",flexShrink:0,
-                          background:s===PREP_STAGE_ALERT&&job.prepStage===s?"#dc2626":PREP_STAGES.indexOf(job.prepStage)>=i?C.teal:C.border}}/>
-                        <span style={{fontSize:10,
-                          color:s===PREP_STAGE_ALERT&&job.prepStage===s?"#dc2626":PREP_STAGES.indexOf(job.prepStage)>=i?C.teal:C.dim,
-                          fontWeight:PREP_STAGES.indexOf(job.prepStage)===i?700:400}}>{s===PREP_STAGE_ALERT?"⚠ "+s:s}</span>
-                        {i<PREP_STAGES.length-1&&<span style={{color:C.border,fontSize:10}}>›</span>}
-                      </div>
-                    ))}
-                  </div>
+                <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.1em",marginBottom:10}}>PRE JOB PREP</div>
+                <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                  {PREP_CHECKLIST_ITEMS.map((item,i)=>{
+                    const checked=!!((job.prepChecklist||{})[item.key]);
+                    const isLast=item.key==="readyToHandOff";
+                    return(
+                      <label key={item.key} style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",
+                        ...(isLast?{marginTop:6,paddingTop:10,borderTop:`1px solid ${C.border}`}:{})}}>
+                        <input type="checkbox" checked={checked}
+                          onChange={e=>{
+                            const newChecklist={...(job.prepChecklist||{}),[item.key]:e.target.checked};
+                            u({prepChecklist:newChecklist});
+                          }}
+                          style={{accentColor:C.teal,width:16,height:16,flexShrink:0}}/>
+                        <span style={{fontSize:13,color:checked?C.teal:C.text,fontWeight:checked?600:400,
+                          textDecoration:checked&&!isLast?"line-through":"none"}}>
+                          {item.label}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {allPrepDone(job)&&(
+                  <div style={{marginTop:10,fontSize:11,fontWeight:700,color:C.teal}}>✓ Prep Complete — Handed Off to Foreman</div>
                 )}
               </div>
 
@@ -7135,10 +7134,10 @@ const STAGE_SECTIONS = [
 
   // Full Jobs
   { key:"prep",         label:"Pre Job Prep",              color:"#0d9488",
-    test: j => !j.tempPed && !j.quickJob && (j.prepStage||"") !== "Job Prep Complete" },
+    test: j => !j.tempPed && !j.quickJob && !allPrepDone(j) },
 
   { key:"roughNotStarted", label:"Rough — Not Started",   color:"#64748b",
-    test: j => { const rs=effRS(j); return !j.tempPed && !j.quickJob && (j.prepStage||"")==="Job Prep Complete" && (!rs||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"); } },
+    test: j => { const rs=effRS(j); return !j.tempPed && !j.quickJob && allPrepDone(j) && (!rs||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"); } },
 
   { key:"roughHold",    label:"Rough — On Hold",           color:"#ca8a04",
     test: j => !j.tempPed && !j.quickJob && effRS(j) === "waiting" },
@@ -7147,7 +7146,7 @@ const STAGE_SECTIONS = [
     test: j => !j.tempPed && !j.quickJob && effRS(j) === "inprogress" },
 
   { key:"roughInvoice", label:"Rough — Ready to Invoice",  color:"#ea580c",
-    test: j => !j.tempPed && !j.quickJob && effRS(j) === "invoice" },
+    test: j => !j.tempPed && !j.quickJob && (parseInt(j.roughStage)||0) >= 85 && effRS(j) !== "complete" },
 
   { key:"between",      label:"In Between",                color:"#e8a020",
     test: j => { if(j.tempPed||j.quickJob) return false; const rs=effRS(j); const fs=effFS(j); return rs==="complete"&&(!fs||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"); } },
@@ -7159,7 +7158,7 @@ const STAGE_SECTIONS = [
     test: j => !j.tempPed && !j.quickJob && effFS(j) === "inprogress" },
 
   { key:"finishInvoice",label:"Finish — Ready to Invoice", color:"#ea580c",
-    test: j => !j.tempPed && !j.quickJob && effFS(j) === "invoice" },
+    test: j => !j.tempPed && !j.quickJob && (parseInt(j.finishStage)||0) >= 85 && effFS(j) !== "complete" },
 
   { key:"complete",     label:"Completed",                 color:"#22c55e",
     test: j => !j.tempPed && !j.quickJob && effFS(j) === "complete" },
@@ -7796,21 +7795,21 @@ function computeTasks(jobs) {
       color: "#ea580c", cleared: false,
     });
 
-    // Rough complete → invoice rough-in task
-    if((rs==="complete"||rs==="invoice") && !job.roughInvoiceDismissed) tasks.push({
+    // Rough 85%+ → invoice rough-in task
+    if((parseInt(job.roughStage)||0) >= 85 && !job.roughInvoiceDismissed) tasks.push({
       id: job.id+"_rough_invoice", jobId: job.id, jobName: job.name,
       type: "auto", category: "invoice", foreman,
       title: "Invoice Rough-In",
-      desc: "Rough is complete — ready to invoice rough-in",
+      desc: "Rough is at 85% — ready to invoice rough-in",
       color: "#ea580c", cleared: false,
     });
 
-    // Finish complete → invoice finish task
-    if((fs==="complete"||fs==="invoice") && !job.finishInvoiceDismissed) tasks.push({
+    // Finish 85%+ → invoice finish task
+    if((parseInt(job.finishStage)||0) >= 85 && !job.finishInvoiceDismissed) tasks.push({
       id: job.id+"_finish_invoice", jobId: job.id, jobName: job.name,
       type: "auto", category: "invoice", foreman,
       title: "Invoice Finish",
-      desc: "Finish is complete — ready to invoice finish",
+      desc: "Finish is at 85% — ready to invoice finish",
       color: "#ea580c", cleared: false,
     });
 
@@ -7918,13 +7917,17 @@ function computeTasks(jobs) {
     });
 
     // Pre Job Prep — always assigned to Koy regardless of job foreman
-    if(!job.tempPed && job.type!=="quote" && (job.prepStage||"") !== "Job Prep Complete") {
+    if(!job.tempPed && job.type!=="quote" && !allPrepDone(job)) {
+      const c=job.prepChecklist||{};
+      const items=PREP_CHECKLIST_ITEMS;
+      const doneCount=items.filter(i=>c[i.key]).length;
+      const nextItem=items.find(i=>!c[i.key]);
       tasks.push({
         id: job.id+"_prep", jobId: job.id, jobName: job.name,
         type: "auto", category: "prep", foreman: "Koy",
         prepStage: job.prepStage||"",
         title: `Pre Job Prep: ${job.name||"Untitled"}`,
-        desc: job.prepStage ? `Stage: ${job.prepStage}` : "Not started",
+        desc: doneCount===0?"Not started":`${doneCount}/${items.length} complete${nextItem?` — Next: ${nextItem.label}`:""}`,
         color: "#0d9488", cleared: false,
       });
     }

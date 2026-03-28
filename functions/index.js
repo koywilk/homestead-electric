@@ -15,6 +15,15 @@ const TZ = "America/Denver"; // Mountain Time
 // ─── Prep stage that means "done" ────────────────────────────
 const PREP_COMPLETE = "Job Prep Complete";
 
+/** Returns true if all 5 prep checklist items are checked (backward compat with old prepStage) */
+function allPrepDone(job) {
+  if (job.prepChecklist) {
+    const c = job.prepChecklist;
+    return !!(c.redlinePlans && c.cabinetPlans && c.applianceSpecs && c.plansUploaded && c.readyToHandOff);
+  }
+  return (job.prepStage || "") === PREP_COMPLETE;
+}
+
 // ─────────────────────────────────────────────────────────────
 // HELPERS
 // ─────────────────────────────────────────────────────────────
@@ -210,7 +219,7 @@ exports.onJobUpdate = functions.firestore
     }
 
     // ── 5. Job prep complete ──────────────────────────────────
-    if (before.prepStage !== PREP_COMPLETE && after.prepStage === PREP_COMPLETE) {
+    if (!allPrepDone(before) && allPrepDone(after)) {
       const foremanTokens = await getTokenForName(after.foreman);
       tasks.push(sendToName(after.foreman, {
         title: "✅ Job Prep Complete",
@@ -228,6 +237,19 @@ exports.onJobUpdate = functions.firestore
       tasks.push(sendToName(after.foreman, {
         title: "🔍 QC Walk Ready to Schedule",
         body:  `${name} is ready for a QC walk — please schedule it`,
+      }));
+    }
+
+    // ── 6b. QC passed (auto-cleared after fail) ───────────────
+    if (before.qcStatus === "fail" && after.qcStatus === "pass") {
+      const foremanTokens = await getTokenForName(after.foreman);
+      tasks.push(sendToRoles(["admin", "manager"], {
+        title: "✅ QC Passed",
+        body:  `${name} — all QC items resolved, QC is now passing`,
+      }, foremanTokens));
+      tasks.push(sendToName(after.foreman, {
+        title: "✅ QC Passed",
+        body:  `${name} — all QC items resolved, QC is now passing`,
       }));
     }
 
@@ -379,40 +401,16 @@ exports.dailyMorningChecks = functions.pubsub
 
       const name = job.name;
 
-      // ── Rough inspection date reminders ────────────────────
-      if (job.roughScheduledDate) {
-        if (isDaysAway(job.roughScheduledDate, 7)) {
-          tasks.push(sendToName(job.foreman, {
-            title: "📅 Rough Inspection in 1 Week",
-            body:  `${name} rough inspection is in 7 days`,
-          }));
-        }
-        if (isDaysAway(job.roughScheduledDate, 2)) {
-          tasks.push(sendToName(job.foreman, {
-            title: "⚠️ Rough Inspection in 2 Days",
-            body:  `${name} rough inspection is in 2 days`,
-          }));
-        }
-      }
-
-      // ── Finish inspection date reminders ───────────────────
-      if (job.finishScheduledDate) {
-        if (isDaysAway(job.finishScheduledDate, 7)) {
-          tasks.push(sendToName(job.foreman, {
-            title: "📅 Finish Inspection in 1 Week",
-            body:  `${name} finish inspection is in 7 days`,
-          }));
-        }
-        if (isDaysAway(job.finishScheduledDate, 2)) {
-          tasks.push(sendToName(job.foreman, {
-            title: "⚠️ Finish Inspection in 2 Days",
-            body:  `${name} finish inspection is in 2 days`,
-          }));
-        }
+      // ── Plans check reminder 2 days before start ───────────
+      if (job.roughScheduledDate && isDaysAway(job.roughScheduledDate, 2)) {
+        tasks.push(sendToName("Koy", {
+          title: "📋 Plans Check — Job Starts in 2 Days",
+          body:  `${name} — verify plans are uploaded to app & SimPro`,
+        }));
       }
 
       // ── Job start warnings (rough scheduled date) for Koy ──
-      const prepDone = job.prepStage === PREP_COMPLETE;
+      const prepDone = allPrepDone(job);
       if (job.roughScheduledDate && !prepDone) {
         if (isDaysAway(job.roughScheduledDate, 7)) {
           tasks.push(sendToName("Koy", {
