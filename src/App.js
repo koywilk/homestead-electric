@@ -5713,7 +5713,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </Section>
 
               <Section label="Punch List" color={C.rough} action={
-                <button onClick={()=>{const link=`${window.location.origin}/?roughpunch=${job.id}`;navigator.clipboard.writeText(link).then(()=>alert('Rough punch list link copied!\n\n'+link)).catch(()=>alert('Link:\n'+link));}} style={{fontSize:10,fontWeight:700,color:'#fff',background:C.rough,border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.04em'}}>📤 SHARE LINK</button>
+                <PunchPicker punch={job.roughPunch||{}} jobId={job.id} stage="Rough" color={C.rough} showHotcheck={false}/>
               }>
 
                 <PunchSection punch={job.roughPunch} onChange={v=>u({roughPunch:v})}
@@ -5866,7 +5866,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </Section>
 
               <Section label="Punch List" color={C.finish} action={
-                <button onClick={()=>{const link=`${window.location.origin}/?finishpunch=${job.id}`;navigator.clipboard.writeText(link).then(()=>alert('Finish punch list link copied!\n\n'+link)).catch(()=>alert('Link:\n'+link));}} style={{fontSize:10,fontWeight:700,color:'#fff',background:C.finish,border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.04em'}}>📤 SHARE LINK</button>
+                <PunchPicker punch={job.finishPunch||{}} jobId={job.id} stage="Finish" color={C.finish} showHotcheck={false}/>
               }>
                 <PunchSection punch={job.finishPunch} onChange={v=>u({finishPunch:v})} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}/>
               </Section>
@@ -6213,7 +6213,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               })()}
 
               <Section label="QC Walk Checklist" color={C.teal} defaultOpen={true} action={
-                <button onClick={()=>{const link=`${window.location.origin}/?qcpunch=${job.id}`;navigator.clipboard.writeText(link).then(()=>alert('QC punch list link copied!\n\n'+link)).catch(()=>alert('Link:\n'+link));}} style={{fontSize:10,fontWeight:700,color:'#fff',background:C.teal,border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.04em'}}>📤 SHARE LINK</button>
+                <PunchPicker punch={job.qcPunch||{}} jobId={job.id} stage="QC" color={C.teal} showHotcheck={true}/>
               }>
                 <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }} showHotcheck={true}/>
               </Section>
@@ -10247,9 +10247,10 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color }) {
   return (
     <>
       <button onClick={openPicker}
-        style={{fontSize:10,fontWeight:700,color:'#fff',background:color,border:'none',borderRadius:6,
-          padding:'4px 10px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.04em'}}>
-        📤 SELECT &amp; SHARE
+        style={{background:`${color}15`,border:`1px solid ${color}55`,borderRadius:6,
+          color,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',
+          fontFamily:'inherit',letterSpacing:'0.05em'}}>
+        Share ↗
       </button>
 
       {open&&(
@@ -10296,6 +10297,190 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color }) {
   );
 }
 
+// ─── Punch Picker (selective punch list share modal) ────────────────────────
+function PunchPicker({ punch, jobId, stage, color, showHotcheck }) {
+  const [open,     setOpen]     = useState(false);
+  const [selected, setSelected] = useState(new Set());
+
+  const normF = (f) => (f && typeof f === 'object' ? f : {});
+
+  const FLOOR_KEYS = [
+    ['upper',    'Upper Level'],
+    ['main',     'Main Level'],
+    ['basement', 'Basement'],
+    ...((punch.extras||[]).map(e=>[e.key, e.label])),
+  ];
+
+  const stageParam = stage.toLowerCase() + 'punch';
+
+  // Flatten every item with its floor + section labels
+  const getAllItems = () => {
+    const out = [];
+    FLOOR_KEYS.forEach(([k, floorLabel]) => {
+      const f = normF(punch[k]);
+      (f.general||[]).forEach(item =>
+        out.push({...item, floorKey:k, floorLabel, section:'General'})
+      );
+      if(showHotcheck) {
+        (f.hotcheck||[]).forEach(item =>
+          out.push({...item, floorKey:k, floorLabel, section:'Hot Check'})
+        );
+      }
+      (f.rooms||[]).forEach(room =>
+        (room.items||[]).forEach(item =>
+          out.push({...item, floorKey:k, floorLabel, section:room.name})
+        )
+      );
+    });
+    return out;
+  };
+
+  const allItems = getAllItems();
+
+  const openPicker = () => {
+    setSelected(new Set(allItems.map(i=>i.id)));
+    setOpen(true);
+  };
+
+  const toggle = (id) => setSelected(prev => {
+    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
+  });
+
+  const toggleFloor = (ids) => setSelected(prev => {
+    const n   = new Set(prev);
+    const all = ids.every(id=>n.has(id));
+    ids.forEach(id => all ? n.delete(id) : n.add(id));
+    return n;
+  });
+
+  const copyLink = () => {
+    if(!selected.size){ alert('Select at least one item.'); return; }
+    const ids  = [...selected].join(',');
+    const link = `${window.location.origin}/?${stageParam}=${jobId}&ids=${ids}`;
+    navigator.clipboard.writeText(link)
+      .then(()=>alert('Link copied!\n\n'+link))
+      .catch(()=>alert('Link:\n'+link));
+    setOpen(false);
+  };
+
+  if(!allItems.length) return null;
+
+  // Group items by floor for display
+  const byFloor = FLOOR_KEYS.map(([k, floorLabel]) => {
+    const items = allItems.filter(i=>i.floorKey===k);
+    return { k, floorLabel, items };
+  }).filter(g=>g.items.length>0);
+
+  return (
+    <>
+      <button onClick={openPicker}
+        style={{background:`${color}15`,border:`1px solid ${color}55`,borderRadius:6,
+          color,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',
+          fontFamily:'inherit',letterSpacing:'0.05em'}}>
+        Share ↗
+      </button>
+
+      {open&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:9999,
+          display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+          onClick={e=>{if(e.target===e.currentTarget)setOpen(false);}}>
+          <div style={{background:'#fff',borderRadius:14,width:'100%',maxWidth:500,
+            maxHeight:'88vh',display:'flex',flexDirection:'column',overflow:'hidden',
+            boxShadow:'0 24px 64px rgba(0,0,0,0.25)'}}>
+
+            {/* Header */}
+            <div style={{padding:'18px 22px 14px',borderBottom:'1px solid #e5e7eb',flexShrink:0}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:4}}>
+                <div style={{fontSize:15,fontWeight:700,color:'#111'}}>Share {stage} Punch List</div>
+                <button onClick={()=>setOpen(false)}
+                  style={{background:'none',border:'none',fontSize:18,cursor:'pointer',
+                    color:'#9ca3af',lineHeight:1,padding:'0 2px'}}>✕</button>
+              </div>
+              <div style={{fontSize:12,color:'#9ca3af'}}>
+                {selected.size} of {allItems.length} items selected — recipient sees only what you choose
+              </div>
+            </div>
+
+            {/* Item list */}
+            <div style={{overflowY:'auto',flex:1,padding:'14px 22px'}}>
+              {byFloor.map(({k, floorLabel, items})=>{
+                const ids   = items.map(i=>i.id);
+                const allOn = ids.every(id=>selected.has(id));
+                // Group within floor by section
+                const sections = [...new Set(items.map(i=>i.section))];
+                return (
+                  <div key={k} style={{marginBottom:18}}>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',
+                      marginBottom:8,paddingBottom:6,borderBottom:`1.5px solid ${color}33`}}>
+                      <span style={{fontSize:11,fontWeight:700,color,letterSpacing:'0.07em'}}>
+                        {floorLabel.toUpperCase()}
+                      </span>
+                      <button onClick={()=>toggleFloor(ids)}
+                        style={{fontSize:10,color,background:'none',border:`1px solid ${color}44`,
+                          borderRadius:4,padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',fontWeight:600}}>
+                        {allOn?'Deselect All':'Select All'}
+                      </button>
+                    </div>
+                    {sections.map(sec=>{
+                      const secItems = items.filter(i=>i.section===sec);
+                      const showSec  = sections.length > 1;
+                      return (
+                        <div key={sec}>
+                          {showSec&&(
+                            <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,
+                              letterSpacing:'0.06em',marginBottom:4,marginTop:6}}>
+                              {sec.toUpperCase()}
+                            </div>
+                          )}
+                          {secItems.map(item=>(
+                            <div key={item.id} onClick={()=>toggle(item.id)}
+                              style={{display:'flex',alignItems:'flex-start',gap:10,
+                                padding:'7px 10px',marginBottom:3,borderRadius:7,cursor:'pointer',
+                                background:selected.has(item.id)?`${color}0d`:'#f9fafb',
+                                border:`1px solid ${selected.has(item.id)?color+'33':'#e5e7eb'}`}}>
+                              <div style={{width:15,height:15,borderRadius:3,flexShrink:0,marginTop:1,
+                                border:`2px solid ${selected.has(item.id)?color:'#d1d5db'}`,
+                                background:selected.has(item.id)?color:'#fff',
+                                display:'flex',alignItems:'center',justifyContent:'center'}}>
+                                {selected.has(item.id)&&
+                                  <span style={{color:'#fff',fontSize:8,fontWeight:900,lineHeight:1}}>✓</span>}
+                              </div>
+                              <span style={{fontSize:12,color:item.done?'#9ca3af':'#1f2937',
+                                textDecoration:item.done?'line-through':'none',lineHeight:1.45}}>
+                                {item.text}
+                                {item.done&&<span style={{marginLeft:6,fontSize:10,color:'#6ee7b7',fontWeight:600}}>✓ done</span>}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Footer */}
+            <div style={{padding:'12px 22px',borderTop:'1px solid #e5e7eb',
+              display:'flex',gap:8,flexShrink:0}}>
+              <button onClick={copyLink}
+                style={{flex:1,background:'#1e3a5f',color:'#fff',border:'none',borderRadius:8,
+                  padding:'10px 16px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
+                Copy Link — {selected.size} item{selected.size!==1?'s':''}
+              </button>
+              <button onClick={()=>setOpen(false)}
+                style={{background:'#f3f4f6',color:'#6b7280',border:'none',borderRadius:8,
+                  padding:'10px 14px',fontSize:13,cursor:'pointer',fontFamily:'inherit'}}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
 // ─── Punch List Share Page (read-only for contractors) ───────────────────────
 function PunchSharePage({ jobId, stage }) {
   const [job,     setJob]     = useState(null);
@@ -10316,6 +10501,12 @@ function PunchSharePage({ jobId, stage }) {
   const showHotcheck = stage==='QC';
   const punch        = job?.[punchKey] || {};
 
+  // Optional item filter — when link was generated with PunchPicker (?ids=id1,id2,...)
+  const filterIds = (() => {
+    const raw = new URLSearchParams(window.location.search).get('ids');
+    return raw ? new Set(raw.split(',').filter(Boolean)) : null;
+  })();
+
   const normF = (f) => f && typeof f==='object' ? f : {};
   const FLOOR_KEYS = [
     ['upper','Upper Level'],
@@ -10324,15 +10515,16 @@ function PunchSharePage({ jobId, stage }) {
     ...((punch.extras||[]).map(e=>[e.key, e.label])),
   ];
 
+  const vis  = (items) => filterIds ? (items||[]).filter(i=>filterIds.has(i.id)) : (items||[]);
   const countFloorItems = (f) => {
     const nf = normF(f);
-    return (nf.general||[]).length + (showHotcheck?(nf.hotcheck||[]).length:0) +
-      (nf.rooms||[]).reduce((s,r)=>s+(r.items||[]).length, 0);
+    return vis(nf.general).length + (showHotcheck?vis(nf.hotcheck).length:0) +
+      (nf.rooms||[]).reduce((s,r)=>s+vis(r.items).length, 0);
   };
   const countDone = (f) => {
     const nf = normF(f);
-    return (nf.general||[]).filter(i=>i.done).length + (showHotcheck?(nf.hotcheck||[]).filter(i=>i.done).length:0) +
-      (nf.rooms||[]).reduce((s,r)=>s+(r.items||[]).filter(i=>i.done).length, 0);
+    return vis(nf.general).filter(i=>i.done).length + (showHotcheck?vis(nf.hotcheck).filter(i=>i.done).length:0) +
+      (nf.rooms||[]).reduce((s,r)=>s+vis(r.items).filter(i=>i.done).length, 0);
   };
   const totalItems = FLOOR_KEYS.reduce((s,[k])=>s+countFloorItems(punch[k]),0);
   const doneItems  = FLOOR_KEYS.reduce((s,[k])=>s+countDone(punch[k]),0);
@@ -10380,12 +10572,12 @@ function PunchSharePage({ jobId, stage }) {
       ) : (
         FLOOR_KEYS.map(([k, label]) => {
           const f = normF(punch[k]);
-          const general   = f.general  || [];
-          const hotcheck  = showHotcheck ? (f.hotcheck || []) : [];
-          const rooms     = (f.rooms   || []).filter(r=>(r.items||[]).length>0);
+          const general   = vis(f.general);
+          const hotcheck  = showHotcheck ? vis(f.hotcheck) : [];
+          const rooms     = (f.rooms||[]).map(r=>({...r,items:vis(r.items)})).filter(r=>r.items.length>0);
           if(!general.length && !hotcheck.length && !rooms.length) return null;
-          const floorTotal = general.length + hotcheck.length + rooms.reduce((s,r)=>s+(r.items||[]).length,0);
-          const floorDone  = general.filter(i=>i.done).length + hotcheck.filter(i=>i.done).length + rooms.reduce((s,r)=>s+(r.items||[]).filter(i=>i.done).length,0);
+          const floorTotal = general.length + hotcheck.length + rooms.reduce((s,r)=>s+r.items.length,0);
+          const floorDone  = general.filter(i=>i.done).length + hotcheck.filter(i=>i.done).length + rooms.reduce((s,r)=>s+r.items.filter(i=>i.done).length,0);
           return (
             <div key={k} style={{background:'#fff',borderRadius:12,marginBottom:14,overflow:'hidden',boxShadow:'0 1px 3px rgba(0,0,0,0.06)'}}>
               <div style={{background:stageColor,padding:'9px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
