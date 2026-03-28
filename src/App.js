@@ -5712,7 +5712,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               </Section>
 
-              <Section label="Punch List" color={C.rough}>
+              <Section label="Punch List" color={C.rough} action={
+                <button onClick={()=>{const link=`${window.location.origin}/?roughpunch=${job.id}`;navigator.clipboard.writeText(link).then(()=>alert('Rough punch list link copied!\n\n'+link)).catch(()=>alert('Link:\n'+link));}} style={{fontSize:10,fontWeight:700,color:'#fff',background:C.rough,border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.04em'}}>📤 SHARE LINK</button>
+              }>
 
                 <PunchSection punch={job.roughPunch} onChange={v=>u({roughPunch:v})}
 
@@ -5736,12 +5738,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               <div style={{marginTop:20}}>
                 <Section label="Questions" color={C.rough} action={
-                  <button onClick={()=>{
-                    const link=`${window.location.origin}/?questions=${job.id}`;
-                    navigator.clipboard.writeText(link).then(()=>alert('Link copied! Send this to your GC or homeowner:\n\n'+link)).catch(()=>alert('Link:\n'+link));
-                  }} style={{fontSize:10,fontWeight:700,color:'#fff',background:C.rough,border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.04em'}}>
-                    📤 SHARE LINK
-                  </button>
+                  <QuestionPicker roughQuestions={job.roughQuestions} finishQuestions={job.finishQuestions} jobId={job.id} color={C.rough}/>
                 }>
                   {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{if(a.answer&&!((job.roughQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m}/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#16a34a',marginTop:6}}>✅ Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
@@ -5868,7 +5865,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <div style={{marginTop:8,marginBottom:20}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
               </Section>
 
-              <Section label="Punch List" color={C.finish}>
+              <Section label="Punch List" color={C.finish} action={
+                <button onClick={()=>{const link=`${window.location.origin}/?finishpunch=${job.id}`;navigator.clipboard.writeText(link).then(()=>alert('Finish punch list link copied!\n\n'+link)).catch(()=>alert('Link:\n'+link));}} style={{fontSize:10,fontWeight:700,color:'#fff',background:C.finish,border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.04em'}}>📤 SHARE LINK</button>
+              }>
                 <PunchSection punch={job.finishPunch} onChange={v=>u({finishPunch:v})} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}/>
               </Section>
 
@@ -5890,12 +5889,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               <div style={{marginTop:20}}>
                 <Section label="Questions" color={C.finish} action={
-                  <button onClick={()=>{
-                    const link=`${window.location.origin}/?questions=${job.id}`;
-                    navigator.clipboard.writeText(link).then(()=>alert('Link copied! Send this to your GC or homeowner:\n\n'+link)).catch(()=>alert('Link:\n'+link));
-                  }} style={{fontSize:10,fontWeight:700,color:'#fff',background:C.finish,border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.04em'}}>
-                    📤 SHARE LINK
-                  </button>
+                  <QuestionPicker roughQuestions={job.roughQuestions} finishQuestions={job.finishQuestions} jobId={job.id} color={C.finish}/>
                 }>
                   {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{if(a.answer&&!((job.finishQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m}/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#16a34a',marginTop:6}}>✅ Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
@@ -6218,7 +6212,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 );
               })()}
 
-              <Section label="QC Walk Checklist" color={C.teal} defaultOpen={true}>
+              <Section label="QC Walk Checklist" color={C.teal} defaultOpen={true} action={
+                <button onClick={()=>{const link=`${window.location.origin}/?qcpunch=${job.id}`;navigator.clipboard.writeText(link).then(()=>alert('QC punch list link copied!\n\n'+link)).catch(()=>alert('Link:\n'+link));}} style={{fontSize:10,fontWeight:700,color:'#fff',background:C.teal,border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.04em'}}>📤 SHARE LINK</button>
+              }>
                 <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }} showHotcheck={true}/>
               </Section>
 
@@ -10154,6 +10150,279 @@ function LightingSharePage({ jobId }) {
   );
 }
 
+// ─── Question Picker (selective share modal) ─────────────────────────────────
+function QuestionPicker({ roughQuestions, finishQuestions, jobId, color }) {
+  const [open,     setOpen]     = useState(false);
+  const [selected, setSelected] = useState(new Set());
+
+  const flatQs = (qs, phase) => {
+    if(!qs || typeof qs !== 'object') return [];
+    return [
+      ...(qs.upper||[]).map(q=>({...q, phase, floor:'Upper Level'})),
+      ...(qs.main||[]).map(q=>({...q, phase, floor:'Main Level'})),
+      ...(qs.basement||[]).map(q=>({...q, phase, floor:'Basement'})),
+    ];
+  };
+
+  const allQs = [
+    ...flatQs(roughQuestions, 'rough'),
+    ...flatQs(finishQuestions, 'finish'),
+  ];
+
+  const openPicker = () => {
+    // Pre-select all by default
+    setSelected(new Set(allQs.map(q=>q.id)));
+    setOpen(true);
+  };
+
+  const toggle = (id) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAll = (ids) => {
+    setSelected(prev => {
+      const allOn = ids.every(id=>prev.has(id));
+      const next = new Set(prev);
+      ids.forEach(id => allOn ? next.delete(id) : next.add(id));
+      return next;
+    });
+  };
+
+  const copyLink = () => {
+    if(!selected.size){ alert('Select at least one question.'); return; }
+    const ids = [...selected].join(',');
+    const link = `${window.location.origin}/?questions=${jobId}&ids=${ids}`;
+    navigator.clipboard.writeText(link)
+      .then(()=>alert('Link copied! Send this to your contact:\n\n'+link))
+      .catch(()=>alert('Link:\n'+link));
+    setOpen(false);
+  };
+
+  if(!allQs.length) return null;
+
+  const roughQs  = allQs.filter(q=>q.phase==='rough');
+  const finishQs = allQs.filter(q=>q.phase==='finish');
+  const phaseColor = { rough:'#2563eb', finish:'#0ea5e9' };
+
+  const renderGroup = (qs, label, pc) => {
+    if(!qs.length) return null;
+    const ids = qs.map(q=>q.id);
+    const allOn = ids.every(id=>selected.has(id));
+    return (
+      <div style={{marginBottom:16}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',
+          borderBottom:`2px solid ${pc}33`,paddingBottom:5,marginBottom:8}}>
+          <span style={{fontSize:11,fontWeight:700,color:pc,letterSpacing:'0.08em'}}>{label}</span>
+          <button onClick={()=>toggleAll(ids)}
+            style={{fontSize:10,color:pc,background:'none',border:`1px solid ${pc}55`,borderRadius:4,
+              padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',fontWeight:600}}>
+            {allOn?'Deselect All':'Select All'}
+          </button>
+        </div>
+        {qs.map((q,i)=>(
+          <div key={q.id} onClick={()=>toggle(q.id)}
+            style={{display:'flex',alignItems:'flex-start',gap:10,padding:'8px 10px',marginBottom:4,
+              borderRadius:7,cursor:'pointer',
+              background:selected.has(q.id)?`${pc}10`:'#f9fafb',
+              border:`1px solid ${selected.has(q.id)?pc+'44':'#e5e7eb'}`}}>
+            <div style={{width:16,height:16,borderRadius:4,border:`2px solid ${selected.has(q.id)?pc:'#d1d5db'}`,
+              background:selected.has(q.id)?pc:'#fff',flexShrink:0,marginTop:1,
+              display:'flex',alignItems:'center',justifyContent:'center'}}>
+              {selected.has(q.id)&&<span style={{color:'#fff',fontSize:9,fontWeight:900}}>✓</span>}
+            </div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginBottom:1}}>{q.floor}</div>
+              <div style={{fontSize:13,color:'#1f2937',lineHeight:1.4}}>Q{i+1}: {q.question}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  return (
+    <>
+      <button onClick={openPicker}
+        style={{fontSize:10,fontWeight:700,color:'#fff',background:color,border:'none',borderRadius:6,
+          padding:'4px 10px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.04em'}}>
+        📤 SELECT &amp; SHARE
+      </button>
+
+      {open&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',zIndex:9999,
+          display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+          onClick={e=>{if(e.target===e.currentTarget)setOpen(false);}}>
+          <div style={{background:'#fff',borderRadius:14,width:'100%',maxWidth:520,
+            maxHeight:'85vh',display:'flex',flexDirection:'column',overflow:'hidden',
+            boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+            {/* Modal header */}
+            <div style={{padding:'16px 20px',borderBottom:'1px solid #e5e7eb',display:'flex',
+              alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
+              <div>
+                <div style={{fontSize:15,fontWeight:700,color:'#111'}}>Select Questions to Share</div>
+                <div style={{fontSize:11,color:'#9ca3af',marginTop:2}}>
+                  {selected.size} of {allQs.length} selected · recipient will only see chosen questions
+                </div>
+              </div>
+              <button onClick={()=>setOpen(false)}
+                style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:'#9ca3af',padding:'0 4px',lineHeight:1}}>✕</button>
+            </div>
+            {/* Question list */}
+            <div style={{padding:'16px 20px',overflowY:'auto',flex:1}}>
+              {renderGroup(roughQs, '⚡ ROUGH PHASE', phaseColor.rough)}
+              {renderGroup(finishQs, '🏁 FINISH PHASE', phaseColor.finish)}
+            </div>
+            {/* Footer */}
+            <div style={{padding:'12px 20px',borderTop:'1px solid #e5e7eb',display:'flex',gap:8,flexShrink:0}}>
+              <button onClick={copyLink}
+                style={{flex:1,background:'#1e3a5f',color:'#fff',border:'none',borderRadius:8,
+                  padding:'10px 16px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
+                📋 Copy Link ({selected.size} question{selected.size!==1?'s':''})
+              </button>
+              <button onClick={()=>setOpen(false)}
+                style={{background:'#f3f4f6',color:'#6b7280',border:'none',borderRadius:8,
+                  padding:'10px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ─── Punch List Share Page (read-only for contractors) ───────────────────────
+function PunchSharePage({ jobId, stage }) {
+  const [job,     setJob]     = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState(null);
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
+      if(!snap.exists()){ setError('This punch list is not available.'); setLoading(false); return; }
+      setJob(snap.data().data);
+      setLoading(false);
+    }, () => { setError('Failed to load. Please try again.'); setLoading(false); });
+    return () => unsub();
+  }, [jobId]);
+
+  const stageColor   = stage==='Rough' ? '#2563eb' : stage==='Finish' ? '#0ea5e9' : '#0d9488';
+  const punchKey     = stage==='Rough' ? 'roughPunch' : stage==='Finish' ? 'finishPunch' : 'qcPunch';
+  const showHotcheck = stage==='QC';
+  const punch        = job?.[punchKey] || {};
+
+  const normF = (f) => f && typeof f==='object' ? f : {};
+  const FLOOR_KEYS = [
+    ['upper','Upper Level'],
+    ['main','Main Level'],
+    ['basement','Basement'],
+    ...((punch.extras||[]).map(e=>[e.key, e.label])),
+  ];
+
+  const countFloorItems = (f) => {
+    const nf = normF(f);
+    return (nf.general||[]).length + (showHotcheck?(nf.hotcheck||[]).length:0) +
+      (nf.rooms||[]).reduce((s,r)=>s+(r.items||[]).length, 0);
+  };
+  const countDone = (f) => {
+    const nf = normF(f);
+    return (nf.general||[]).filter(i=>i.done).length + (showHotcheck?(nf.hotcheck||[]).filter(i=>i.done).length:0) +
+      (nf.rooms||[]).reduce((s,r)=>s+(r.items||[]).filter(i=>i.done).length, 0);
+  };
+  const totalItems = FLOOR_KEYS.reduce((s,[k])=>s+countFloorItems(punch[k]),0);
+  const doneItems  = FLOOR_KEYS.reduce((s,[k])=>s+countDone(punch[k]),0);
+  const pct = totalItems>0 ? Math.round(doneItems/totalItems*100) : 0;
+
+  const renderItems = (items) => (items||[]).map(item=>(
+    <div key={item.id} style={{display:'flex',alignItems:'flex-start',gap:8,padding:'8px 0',borderBottom:'1px solid #f3f4f6'}}>
+      <div style={{width:16,height:16,borderRadius:4,border:`2px solid ${item.done?stageColor:'#d1d5db'}`,
+        background:item.done?stageColor:'#fff',flexShrink:0,marginTop:1,display:'flex',alignItems:'center',justifyContent:'center'}}>
+        {item.done&&<span style={{color:'#fff',fontSize:9,fontWeight:900,lineHeight:1}}>✓</span>}
+      </div>
+      <span style={{fontSize:13,color:item.done?'#9ca3af':'#1f2937',textDecoration:item.done?'line-through':'none',lineHeight:1.45}}>{item.text}</span>
+    </div>
+  ));
+
+  if(loading) return <div style={{textAlign:'center',padding:60,color:'#9ca3af',fontFamily:'system-ui,sans-serif'}}>Loading…</div>;
+  if(error)   return <div style={{textAlign:'center',padding:60,color:'#ef4444',fontFamily:'system-ui,sans-serif'}}>{error}</div>;
+
+  return (
+    <div style={{maxWidth:640,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#f3f4f6',minHeight:'100vh'}}>
+      {/* Header */}
+      <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:22}}>
+        <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>
+          HOMESTEAD ELECTRIC · {stage.toUpperCase()} PUNCH LIST
+        </div>
+        <div style={{fontSize:19,fontWeight:700,color:'#fff',marginBottom:2}}>{job?.name||'Project'}</div>
+        {job?.address&&<div style={{fontSize:12,color:'rgba(255,255,255,0.65)',marginBottom:8}}>{job.address}</div>}
+        {/* Progress bar */}
+        <div style={{marginTop:10}}>
+          <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'rgba(255,255,255,0.7)',marginBottom:5}}>
+            <span>{doneItems} of {totalItems} items complete</span>
+            <span style={{fontWeight:700,color:pct===100?'#4ade80':'rgba(255,255,255,0.9)'}}>{pct}%</span>
+          </div>
+          <div style={{background:'rgba(255,255,255,0.15)',borderRadius:4,height:6}}>
+            <div style={{background:pct===100?'#4ade80':stageColor,width:`${pct}%`,height:6,borderRadius:4,transition:'width 0.3s'}}/>
+          </div>
+        </div>
+      </div>
+
+      {totalItems===0 ? (
+        <div style={{textAlign:'center',padding:'48px 20px',color:'#9ca3af',background:'#fff',borderRadius:12}}>
+          <div style={{fontSize:32,marginBottom:12}}>📋</div>
+          No punch list items yet. Check back later — this page updates automatically.
+        </div>
+      ) : (
+        FLOOR_KEYS.map(([k, label]) => {
+          const f = normF(punch[k]);
+          const general   = f.general  || [];
+          const hotcheck  = showHotcheck ? (f.hotcheck || []) : [];
+          const rooms     = (f.rooms   || []).filter(r=>(r.items||[]).length>0);
+          if(!general.length && !hotcheck.length && !rooms.length) return null;
+          const floorTotal = general.length + hotcheck.length + rooms.reduce((s,r)=>s+(r.items||[]).length,0);
+          const floorDone  = general.filter(i=>i.done).length + hotcheck.filter(i=>i.done).length + rooms.reduce((s,r)=>s+(r.items||[]).filter(i=>i.done).length,0);
+          return (
+            <div key={k} style={{background:'#fff',borderRadius:12,marginBottom:14,overflow:'hidden',boxShadow:'0 1px 3px rgba(0,0,0,0.06)'}}>
+              <div style={{background:stageColor,padding:'9px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <span style={{fontSize:12,fontWeight:700,color:'#fff',letterSpacing:'0.07em'}}>{label.toUpperCase()}</span>
+                <span style={{fontSize:11,color:'rgba(255,255,255,0.8)'}}>{floorDone}/{floorTotal} done</span>
+              </div>
+              <div style={{padding:'4px 16px 10px'}}>
+                {general.length>0&&(
+                  <>
+                    {(hotcheck.length>0||rooms.length>0)&&<div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginTop:10,marginBottom:0,letterSpacing:'0.06em'}}>GENERAL</div>}
+                    {renderItems(general)}
+                  </>
+                )}
+                {hotcheck.length>0&&(
+                  <>
+                    <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginTop:10,marginBottom:0,letterSpacing:'0.06em'}}>⚡ HOT CHECK</div>
+                    {renderItems(hotcheck)}
+                  </>
+                )}
+                {rooms.map(room=>(
+                  <div key={room.id||room.name}>
+                    <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginTop:10,marginBottom:0,letterSpacing:'0.06em'}}>{(room.name||'').toUpperCase()}</div>
+                    {renderItems(room.items)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })
+      )}
+      <div style={{textAlign:'center',fontSize:11,color:'#9ca3af',marginTop:8}}>
+        This list updates in real time as items are completed.
+      </div>
+    </div>
+  );
+}
+
 function QuestionsSharePage({ jobId }) {
   const [job,            setJob]           = useState(null);
   const [loading,        setLoading]       = useState(true);
@@ -10164,6 +10433,12 @@ function QuestionsSharePage({ jobId }) {
   const [respondentName, setRespondentName]= useState('');
   const [nameErr,        setNameErr]       = useState(false);
   const [prevAnsweredBy, setPrevAnsweredBy]= useState('');
+
+  // Optional ID filter — when link was generated with SELECT & SHARE (?ids=id1,id2,...)
+  const filterIds = (() => {
+    const raw = new URLSearchParams(window.location.search).get('ids');
+    return raw ? new Set(raw.split(',').filter(Boolean)) : null;
+  })();
 
   // Live listener — questions update in real-time as crew adds them
   useEffect(() => {
@@ -10195,23 +10470,45 @@ function QuestionsSharePage({ jobId }) {
   const handleSubmit = async () => {
     if(!respondentName.trim()){ setNameErr(true); return; }
     setSubmitting(true);
-    const buildPhase = (qs) => {
-      const r = {};
-      ['upper','main','basement'].forEach(floor => {
-        r[floor] = (qs?.[floor] || []).map(q => ({id:q.id, question:q.question, answer:answers[q.id]||''}));
-      });
-      return r;
-    };
-    const questionAnswers = {
-      rough: buildPhase(job?.roughQuestions),
-      finish: buildPhase(job?.finishQuestions),
-      answeredBy: respondentName.trim(),
-      answeredAt: new Date().toISOString(),
-    };
     try {
+      // Always fetch existing doc first so we can safely merge answers
       const ex = await getDoc(doc(db,'homeowner_requests',jobId));
+      const existingData = ex.exists() ? ex.data() : {};
+      const existingQA   = existingData.questionAnswers || {};
+
+      // mergeFloor: for each question, use the new answer only if it was shown
+      // to this recipient (i.e., it's in filterIds, or no filter was applied).
+      // Questions that weren't shown keep whatever answer was already saved.
+      const mergeFloor = (allQs, existingFloor) => {
+        const exMap = {};
+        (existingFloor || []).forEach(a => { exMap[a.id] = a; });
+        return (allQs || []).map(q => {
+          if(!filterIds || filterIds.has(q.id)) {
+            return { id:q.id, question:q.question, answer:answers[q.id]||'' };
+          }
+          // Not shown to this recipient — preserve existing answer
+          return exMap[q.id] || { id:q.id, question:q.question, answer:'' };
+        });
+      };
+
+      const questionAnswers = {
+        ...existingQA,
+        rough: {
+          upper:    mergeFloor(job?.roughQuestions?.upper,    existingQA.rough?.upper),
+          main:     mergeFloor(job?.roughQuestions?.main,     existingQA.rough?.main),
+          basement: mergeFloor(job?.roughQuestions?.basement, existingQA.rough?.basement),
+        },
+        finish: {
+          upper:    mergeFloor(job?.finishQuestions?.upper,    existingQA.finish?.upper),
+          main:     mergeFloor(job?.finishQuestions?.main,     existingQA.finish?.main),
+          basement: mergeFloor(job?.finishQuestions?.basement, existingQA.finish?.basement),
+        },
+        answeredBy: respondentName.trim(),
+        answeredAt: new Date().toISOString(),
+      };
+
       await setDoc(doc(db,'homeowner_requests',jobId), {
-        ...(ex.exists()?ex.data():{}),
+        ...existingData,
         jobId, jobName:job?.name||'', questionAnswers,
       });
       setSubmitted(true);
@@ -10219,16 +10516,16 @@ function QuestionsSharePage({ jobId }) {
     setSubmitting(false);
   };
 
-  const roughQs = job ? [
+  const roughQs = (job ? [
     ...(job.roughQuestions?.upper||[]).map(q=>({...q,floor:'Upper Level'})),
     ...(job.roughQuestions?.main||[]).map(q=>({...q,floor:'Main Level'})),
     ...(job.roughQuestions?.basement||[]).map(q=>({...q,floor:'Basement'})),
-  ] : [];
-  const finishQs = job ? [
+  ] : []).filter(q=>!filterIds || filterIds.has(q.id));
+  const finishQs = (job ? [
     ...(job.finishQuestions?.upper||[]).map(q=>({...q,floor:'Upper Level'})),
     ...(job.finishQuestions?.main||[]).map(q=>({...q,floor:'Main Level'})),
     ...(job.finishQuestions?.basement||[]).map(q=>({...q,floor:'Basement'})),
-  ] : [];
+  ] : []).filter(q=>!filterIds || filterIds.has(q.id));
   const hasQs = roughQs.length+finishQs.length > 0;
 
   const cardStyle = {background:'#fff',border:'1px solid #e5e7eb',borderRadius:10,padding:16,marginBottom:12};
@@ -10323,6 +10620,14 @@ function App() {
   // Lighting collab share page route — ?lighting=JOB_ID
   const ltParam = new URLSearchParams(window.location.search).get("lighting");
   if(ltParam) return <LightingSharePage jobId={ltParam}/>;
+
+  // Punch list share page routes — ?roughpunch / ?finishpunch / ?qcpunch
+  const rpParam = new URLSearchParams(window.location.search).get("roughpunch");
+  if(rpParam) return <PunchSharePage jobId={rpParam} stage="Rough"/>;
+  const fpParam = new URLSearchParams(window.location.search).get("finishpunch");
+  if(fpParam) return <PunchSharePage jobId={fpParam} stage="Finish"/>;
+  const qcpParam = new URLSearchParams(window.location.search).get("qcpunch");
+  if(qcpParam) return <PunchSharePage jobId={qcpParam} stage="QC"/>;
 
   // ── Identity ──────────────────────────────────────────────────
   const [identity, setIdentity] = useState(()=>getIdentity());
