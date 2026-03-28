@@ -188,6 +188,12 @@ const QC_STATUSES = [
   {value:"pass",      label:"QC Pass",               color:"#22c55e"},
   {value:"fail",      label:"QC Fail",               color:"#dc2626"},
 ];
+const MATTERPORT_STATUSES = [
+  {value:"",          label:"— set status —",           color:null},
+  {value:"needs",     label:"Needs to be Scheduled",    color:"#dc2626"},
+  {value:"scheduled", label:"Scan Scheduled",           color:"#2563eb", hasDate:true},
+  {value:"complete",  label:"Scan Complete",            color:"#22c55e"},
+];
 const TEMP_PED_STATUSES = [
   {value:"",          label:"— set status —",       color:null},
   {value:"ready",     label:"Ready to Schedule",    color:"#ca8a04"},
@@ -3513,9 +3519,9 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
         <button onClick={()=>{
           const link=`${window.location.origin}/?homeruns=${jobId}`;
           navigator.clipboard.writeText(link).then(()=>alert('✓ Live view link copied!\n\nAnyone with this link can see Home Runs in real time (view only).')).catch(()=>alert('Link:\n'+link));
-        }} style={{background:`${C.blue}15`,border:`1px solid ${C.blue}44`,borderRadius:8,
-          color:C.blue,fontSize:12,fontWeight:700,padding:'7px 14px',cursor:'pointer',fontFamily:'inherit'}}>
-          📤 Share Live View
+        }} style={{background:`${C.blue}15`,border:`1px solid ${C.blue}55`,borderRadius:6,
+          color:C.blue,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.05em'}}>
+          Share ↗
         </button>
         <span style={{fontSize:11,color:C.dim}}>Anyone with the link can see pull status in real time</span>
       </div>
@@ -5728,6 +5734,39 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               </Section>
 
+              <Section label="Matterport Scan" color={C.rough}>
+                {(()=>{
+                  const mpDef=getStatusDef(MATTERPORT_STATUSES,job.matterportStatus||"");
+                  return(
+                    <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                      <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                        <select value={job.matterportStatus||""} onChange={e=>{
+                          const v=e.target.value;
+                          const def=getStatusDef(MATTERPORT_STATUSES,v);
+                          u({matterportStatus:v,matterportStatusDate:def.hasDate?job.matterportStatusDate:""});
+                        }} style={{background:mpDef.color?`${mpDef.color}18`:C.surface,
+                          color:mpDef.color||C.dim,border:`1px solid ${mpDef.color||C.border}`,
+                          borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
+                          fontWeight:mpDef.color?700:400,outline:"none",cursor:"pointer"}}>
+                          {MATTERPORT_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+                        </select>
+                        {mpDef.hasDate&&(
+                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:mpDef.color}}>SCAN DATE</div>
+                            <DateInp value={job.matterportStatusDate||""} onChange={e=>u({matterportStatusDate:e.target.value})}
+                              style={{width:130,fontSize:12,borderColor:mpDef.color+"55",background:`${mpDef.color}08`}}/>
+                          </div>
+                        )}
+                      </div>
+                      {job.matterportLink&&(
+                        <a href={job.matterportLink} target="_blank" rel="noreferrer"
+                          style={{fontSize:12,color:C.rough,fontWeight:600}}>View Matterport →</a>
+                      )}
+                    </div>
+                  );
+                })()}
+              </Section>
+
               <Section label="Punch List" color={C.rough} action={
                 <PunchPicker punch={job.roughPunch||{}} jobId={job.id} stage="Rough" color={C.rough} showHotcheck={false}/>
               }>
@@ -5939,9 +5978,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <button onClick={()=>{
                   const link=`${window.location.origin}/?lighting=${job.id}`;
                   navigator.clipboard.writeText(link).then(()=>alert('✓ Lighting collab link copied!\n\nThe low voltage company can view assignments and add their module/channel info.')).catch(()=>alert('Link:\n'+link));
-                }} style={{background:`${C.purple}15`,border:`1px solid ${C.purple}44`,borderRadius:8,
-                  color:C.purple,fontSize:12,fontWeight:700,padding:'7px 14px',cursor:'pointer',fontFamily:'inherit'}}>
-                  📤 Share with LV Company
+                }} style={{background:`${C.purple}15`,border:`1px solid ${C.purple}55`,borderRadius:6,
+                  color:C.purple,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.05em'}}>
+                  Share ↗
                 </button>
                 <span style={{fontSize:11,color:C.dim}}>LV company can add module/channel assignments</span>
               </div>
@@ -7811,6 +7850,17 @@ function computeTasks(jobs) {
       title: "Invoice Finish",
       desc: "Finish is at 85% — ready to invoice finish",
       color: "#ea580c", cleared: false,
+    });
+
+    // Rough complete → Matterport scan task (assigned to foreman)
+    if(effRS(job)==="complete" && (job.matterportStatus||"")!=="complete") tasks.push({
+      id: job.id+"_matterport", jobId: job.id, jobName: job.name,
+      type: "auto", category: "matterport", foreman,
+      title: "Schedule Matterport Scan",
+      desc: job.matterportStatus==="scheduled"
+        ? `Scan scheduled${job.matterportStatusDate?" for "+job.matterportStatusDate:""}`
+        : "Rough is complete — schedule the Matterport scan",
+      color: C.rough, cleared: false,
     });
 
     // CO individually completed → merge/invoice task

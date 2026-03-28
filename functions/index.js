@@ -253,6 +253,15 @@ exports.onJobUpdate = functions.firestore
       }));
     }
 
+    // ── 6c. Matterport scan complete ──────────────────────────
+    if (before.matterportStatus !== "complete" && after.matterportStatus === "complete") {
+      const foremanTokens = await getTokenForName(after.foreman);
+      tasks.push(sendToRoles(["admin", "manager"], {
+        title: "📷 Matterport Scan Complete",
+        body:  `${name} — Matterport scan is done`,
+      }, foremanTokens));
+    }
+
     // ── 7. Change Orders ──────────────────────────────────────
     const beforeCOs = before.changeOrders || [];
     const afterCOs  = after.changeOrders  || [];
