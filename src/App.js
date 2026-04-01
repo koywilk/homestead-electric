@@ -10917,12 +10917,17 @@ function QuestionsSharePage({ jobId }) {
   const [job,            setJob]           = useState(null);
   const [loading,        setLoading]       = useState(true);
   const [error,          setError]         = useState(null);
-  const [answers,        setAnswers]       = useState({});
+  const draftKey = `he_qdraft_${jobId}_${new URLSearchParams(window.location.search).get('share')||'x'}`;
+  const [answers,        setAnswers]       = useState(() => { try { return JSON.parse(localStorage.getItem(draftKey)||'{}'); } catch(e) { return {}; } });
   const [submitting,     setSubmitting]    = useState(false);
   const [submitted,      setSubmitted]     = useState(false);
   const [respondentName, setRespondentName]= useState('');
   const [nameErr,        setNameErr]       = useState(false);
   const [prevAnsweredBy, setPrevAnsweredBy]= useState('');
+
+  useEffect(() => {
+    if(Object.keys(answers).length) localStorage.setItem(draftKey, JSON.stringify(answers));
+  }, [answers]);
 
   // Optional ID filter — when link was generated with SELECT & SHARE (?ids=id1,id2,...)
   const filterIds = (() => {
@@ -11003,6 +11008,7 @@ function QuestionsSharePage({ jobId }) {
         ...existingData,
         jobId, jobName:job?.name||'', questionAnswers,
       });
+      try { localStorage.removeItem(draftKey); } catch(e){}
       setSubmitted(true);
     } catch(e){ alert('Failed to submit. Please try again.'); }
     setSubmitting(false);
