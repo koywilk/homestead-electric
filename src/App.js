@@ -3,6 +3,12 @@ import { useState, useEffect, useRef } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { getMessaging, getToken, onMessage } from "firebase/messaging";
+
+// ── FCM setup ─────────────────────────────────────────────────────────────────
+// VAPID key — generate in Firebase Console → Project Settings → Cloud Messaging
+// → Web Push certificates → Generate key pair, then paste it here.
+const VAPID_KEY = "BH3basT0whtC0V2OkJ0vdbcGBvPC1W5Qo6hqFMr1Hg0KX07Vvj_wtuiMDlcf28wp5x0dN8s0Frep7Tnr1xlujuc";
 
 
 // Register service worker for offline support
@@ -37,8 +43,53 @@ const firebaseConfig = {
 
 const firebaseApp = initializeApp(firebaseConfig);
 
-const db = getFirestore(firebaseApp);
-const storage = getStorage(firebaseApp);
+const db        = getFirestore(firebaseApp);
+const storage   = getStorage(firebaseApp);
+const messaging = ("serviceWorker" in navigator) ? getMessaging(firebaseApp) : null;
+
+/**
+ * Request notification permission, get FCM token, and save it to the user's
+ * record in Firestore (settings/users → list[].fcmTokens).
+ * Tokens are stored as an array so every device the user logs in on gets
+ * notifications. Capped at 10 tokens to avoid unbounded growth.
+ * Called once after the user selects their identity at login.
+ */
+async function registerFCMToken(userId) {
+  if (!messaging || !VAPID_KEY || VAPID_KEY === "PASTE_YOUR_VAPID_KEY_HERE") return;
+  try {
+    const permission = await Notification.requestPermission();
+    if (permission !== "granted") return;
+    const token = await getToken(messaging, { vapidKey: VAPID_KEY });
+    if (!token) return;
+    const snap = await getDoc(doc(db, "settings", "users"));
+    if (!snap.exists()) return;
+    const list = (snap.data().list || []).map(u => {
+      if (u.id !== userId) return u;
+      // Collect all existing tokens (support legacy single-token field)
+      const existing = Array.isArray(u.fcmTokens) ? u.fcmTokens
+        : u.fcmToken ? [u.fcmToken] : [];
+      // Add new token if not already present, cap at 10
+      const merged = existing.includes(token) ? existing : [...existing, token];
+      return { ...u, fcmTokens: merged.slice(-10) };
+    });
+    await setDoc(doc(db, "settings", "users"), { list });
+  } catch (e) {
+    console.warn("[HE] FCM registration skipped:", e.message);
+  }
+}
+
+// Handle foreground messages (app is open) — show a brief alert-style banner
+// Reads from payload.data since we send data-only messages to prevent double notifications
+if (messaging) {
+  onMessage(messaging, payload => {
+    const title = payload.data?.title || payload.notification?.title;
+    const body  = payload.data?.body  || payload.notification?.body;
+    if (title || body) {
+      const ev = new CustomEvent("he-push", { detail: { title, body } });
+      window.dispatchEvent(ev);
+    }
+  });
+}
 window.__HE_DB = db;
 
 // Check what Firestore ACTUALLY has for a job
@@ -106,17 +157,17 @@ const C = {
 
 const ROUGH_STATUSES = [
   {value:"",           label:"— set status —",                        color:null},
-  {value:"waiting_date",label:"Waiting for Start Date Confirmation",  color:"#ca8a04"},
-  {value:"date_confirmed",label:"Start Date Confirmed — Needs to Schedule", color:"#f97316", hasDate:true},
+  {value:"waiting_date",label:"Awaiting Start Date",                  color:"#ca8a04"},
+  {value:"date_confirmed",label:"Start Date Set",                     color:"#f97316", hasDate:true},
   {value:"scheduled",  label:"Scheduled",                            color:"#2563eb", hasDate:true},
-  {value:"waiting",    label:"Waiting on Items",                     color:"#ca8a04", dashed:true},
   {value:"inprogress", label:"In Progress",                          color:"#7dd3fc", hasDate:true},
-  {value:"invoice",    label:"Ready to Invoice",                     color:"#ea580c"},
+  {value:"waiting",    label:"On Hold",                              color:"#ca8a04", dashed:true},
   {value:"complete",   label:"Complete",                             color:"#22c55e"},
 ];
 const FINISH_STATUSES = ROUGH_STATUSES;
 const CO_STATUSES_NEW = [
   {value:"needs_sending", label:"Needs to be Sent",       color:"#dc2626"},
+  {value:"simpro_task",   label:"Task Made in SimPro",     color:"#f97316"},
   {value:"pending",       label:"Sent — Pending Approval", color:"#ca8a04"},
   {value:"approved",      label:"Approved",                color:"#16a34a"},
   {value:"scheduled",     label:"Scheduled",               color:"#2563eb", hasDate:true},
@@ -126,7 +177,7 @@ const CO_STATUSES_NEW = [
 ];
 const RT_STATUSES = [
   {value:"",          label:"— set status —",        color:null},
-  {value:"needs",     label:"Needs to be Scheduled", color:"#dc2626", hasDate:true},
+  {value:"needs",     label:"Needs to be Scheduled", color:"#dc2626"},
   {value:"scheduled", label:"Scheduled",             color:"#8b5cf6", hasDate:true},
   {value:"complete",  label:"Complete",              color:"#22c55e"},
 ];
@@ -137,6 +188,12 @@ const QC_STATUSES = [
   {value:"completed", label:"QC Completed",          color:"#8b5cf6", hasDate:true},
   {value:"pass",      label:"QC Pass",               color:"#22c55e"},
   {value:"fail",      label:"QC Fail",               color:"#dc2626"},
+];
+const MATTERPORT_STATUSES = [
+  {value:"",          label:"— set status —",           color:null},
+  {value:"needs",     label:"Needs to be Scheduled",    color:"#dc2626", hasDate:true},
+  {value:"scheduled", label:"Scan Scheduled",           color:"#2563eb", hasDate:true},
+  {value:"complete",  label:"Scan Complete",            color:"#22c55e"},
 ];
 const TEMP_PED_STATUSES = [
   {value:"",          label:"— set status —",       color:null},
@@ -161,6 +218,20 @@ const getStatusDef = (arr, val) => arr.find(x=>x.value===val)||{};
 
 const PREP_STAGES   = ['Redline Walk Scheduled','Redline Walk Completed','Redline CO Doc Made','Redline Plans Made','Redline CO Sent','Redline CO Signed','Redline Plans Need to be Updated','Job Prep Complete'];
 const PREP_STAGE_ALERT = 'Redline Plans Need to be Updated';
+const PREP_CHECKLIST_ITEMS = [
+  {key:"redlinePlans",   label:"Redline Plans Up to Date"},
+  {key:"cabinetPlans",   label:"Cabinet Plans Received"},
+  {key:"applianceSpecs", label:"Appliance Specs Received"},
+  {key:"plansUploaded",  label:"Plans Uploaded to App & SimPro"},
+  {key:"readyToHandOff", label:"Ready to Hand Off to Foreman"},
+];
+const allPrepDone = (job) => {
+  if (job.prepChecklist) {
+    const c = job.prepChecklist;
+    return !!(c.redlinePlans && c.cabinetPlans && c.applianceSpecs && c.plansUploaded && c.readyToHandOff);
+  }
+  return (job.prepStage||"") === "Job Prep Complete";
+};
 
 const ROUGH_STAGES  = ['0%', '5%', '10%', '15%', '20%', '25%', '30%', '35%', '40%', '45%', '50%', '55%', '60%', '65%', '70%', '75%', '80%', '85%', '90%', '95%', '100%'];
 
@@ -216,6 +287,13 @@ const WIRE_TEXT = {
 
 const PULLED_OPTS   = ["","Pulled","Need Specs"];
 
+const C4_MODULE_TYPES   = ["","8-Ch Dimmer","8-Ch Relay","0-10V Dimmer"];
+const LUT_MODULE_TYPES  = ["","LQSE-2ECO","LQSE-4A","LQSE-S8","LQSE-T5","LQSE-2DAL"];
+const CRES_MODULE_TYPES = ["","ZUMNET-200","ZUMLINK-200"];
+const SAV_MODULE_TYPES  = ["","LMD-8120","LMD-4120","SPM-Q2APD10","SPM-Q4FHD10"];
+const LOAD_TYPES        = ["","MLV","ELV","LED","Fluorescent","Relay","0-10V"];
+const PHASE_OPTS        = ["","A","B","C"];
+
 const DRIVER_SIZES  = ["","20W","40W","60W","96W","192W","288W"];
 
 
@@ -243,9 +321,29 @@ const uid = () => String(++_uid);
 
 const newHRRow     = (num) => ({ id:uid(), num, wire:"", name:"", status:"", panel:"" });
 
-const newCP4Row    = (num) => ({ id:uid(), num, name:"", module:"", status:"" });
+const newCP4Row    = (num) => ({ id:uid(), num, name:"", moduleType:"", mod:"", ch:"", loadType:"", watts:"", keypad:"", bus:"", pdu:"", chainPos:"", panel:"", breaker:"", phase:"", status:"" });
 
-const newKPRow     = (num) => ({ id:uid(), num, name:"" });
+const newLoadRow   = (num) => ({ id:uid(), num, name:"", ch:"", loadType:"", watts:"", keypad:"", pulled:false });
+
+const newModuleObj = (modNum) => ({ id:uid(), modNum:String(modNum), moduleType:"", panel:"", breaker:"", phase:"", bus:"", pdu:"", chainPos:"", loads:[newLoadRow(1)] });
+
+// Migrates old flat-row format → new module-block format (safe to run on already-migrated data)
+const migrateFloorToModules = (arr) => {
+  if (!arr || arr.length===0) return [];
+  if (arr[0]?.loads !== undefined) return arr; // already new format
+  const map={}, order=[];
+  arr.forEach(r=>{
+    const key = r.mod||r.module||"1";
+    if(!map[key]){
+      map[key]={ id:uid(), modNum:key, moduleType:r.moduleType||"", panel:r.panel||"", breaker:r.breaker||"", phase:r.phase||"", bus:r.bus||"", pdu:r.pdu||"", chainPos:r.chainPos||"", loads:[] };
+      order.push(key);
+    }
+    if(r.name||r.ch) map[key].loads.push({ id:r.id||uid(), num:map[key].loads.length+1, name:r.name||"", ch:r.ch||"", loadType:r.loadType||"", watts:r.watts||"", keypad:r.keypad||"", pulled:r.status==="Pulled"||r.pulled||false });
+  });
+  return order.map(k=>({ ...map[k], loads: map[k].loads.length ? map[k].loads : [newLoadRow(1)] }));
+};
+
+const newKPRow     = (num) => ({ id:uid(), num, name:"", status:"" });
 
 const emptyPunch   = ()    => ({ upper:[], main:[], basement:[] });
 
@@ -287,8 +385,8 @@ const TITLE_OPTIONS = ["admin","foreman","lead","crew"];
 const TITLE_LABELS  = { admin:"Admin", foreman:"Foreman", lead:"Lead", crew:"Crew" };
 
 // ── Access = what they can do in the app ─────────────────────
-const ACCESS_OPTIONS = ["admin","manager","standard","limited"];
-const ACCESS_LABELS  = { admin:"Admin", manager:"Manager", standard:"Standard", limited:"Limited" };
+const ACCESS_OPTIONS = ["admin","manager","standard","limited","contractor"];
+const ACCESS_LABELS  = { admin:"Admin", manager:"Manager", standard:"Standard", limited:"Limited", contractor:"Contractor" };
 
 // Legacy role field compat (old users only have role, not title+access)
 const ROLE_LABELS = {
@@ -318,6 +416,8 @@ const PERMISSIONS = {
   "settings.view":   ["admin","manager"],
   "users.manage":    ["admin","manager"],
   "job.delete":      ["admin"],
+  "quotes.view":     ["admin","manager","standard"],
+  "quotes.convert":  ["admin"],
 };
 
 // Resolve access level from user object (supports legacy role-only users)
@@ -686,7 +786,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], roughStatus:"", roughStatusDate:"", roughScheduledEnd:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishScheduledEnd:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, roughStartConfirmed:false, finishStartConfirmed:false, roughNeedsHardDate:false, roughNeedsByStart:"", roughNeedsByEnd:"", finishNeedsHardDate:false, finishNeedsByStart:"", finishNeedsByEnd:"", readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, taskDueDates:{}, roughOnHold:false, finishOnHold:false, tempPed:false, hasTempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
+  changeOrders:[], returnTrips:[], roughInspectionResult:"", roughInspectionDate:"", roughInspectionItems:[], finalInspectionResult:"", finalInspectionDate:"", finalInspectionItems:[], roughStatus:"", roughStatusDate:"", roughScheduledEnd:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishScheduledEnd:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, roughStartConfirmed:false, finishStartConfirmed:false, roughNeedsHardDate:false, roughNeedsByStart:"", roughNeedsByEnd:"", finishNeedsHardDate:false, finishNeedsByStart:"", finishNeedsByEnd:"", readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, matterportDismissed:false, taskDueDates:{}, roughOnHold:false, finishOnHold:false, tempPed:false, hasTempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
 
   homeRuns:{
 
@@ -717,6 +817,15 @@ const blankJob = () => ({
   tapeLights:[], loadMappingNotes:"",
 
 });
+
+// Generate the next quote number (Q-001, Q-002, …) based on existing quotes
+const nextQuoteNumber = (allJobs) => {
+  const nums = (allJobs||[])
+    .filter(j => j.type==="quote" && j.quoteNumber)
+    .map(j => parseInt((j.quoteNumber||"").replace(/\D/g,""))||0);
+  const n = nums.length ? Math.max(...nums)+1 : 1;
+  return `Q-${String(n).padStart(3,"0")}`;
+};
 
 
 const blankQuickJob = (type = "service") => ({
@@ -1061,18 +1170,239 @@ function Section({label, color=C.dim, action=null, defaultOpen=false, children})
 }
 
 
-const Inp = ({value,onChange,placeholder,style={}}) => (
+// Detect mobile once at module level
+const ON_MOBILE = /iphone|ipad|ipod|android/i.test(navigator.userAgent);
 
-  <input value={value??""} onChange={onChange} placeholder={placeholder}
+// Plain-text bottom-sheet for single-line Inp fields on mobile
+const MobileInpSheet = ({initialValue, placeholder, onDone, onCancel, addMode}) => {
+  const [draft, setDraft] = useState(initialValue || "");
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:99999,
+      display:"flex",flexDirection:"column",justifyContent:"flex-end",
+      WebkitTapHighlightColor:"transparent"}}
+      onClick={e=>{if(e.target===e.currentTarget) onCancel();}}>
+      <div style={{background:C.surface,borderTopLeftRadius:18,borderTopRightRadius:18,
+        overflow:"hidden",boxShadow:"0 -8px 40px rgba(0,0,0,0.45)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+          padding:"13px 16px",borderBottom:`1px solid ${C.border}`}}>
+          <button onClick={onCancel}
+            style={{background:"none",border:"none",color:C.dim,fontSize:15,
+              fontFamily:"inherit",fontWeight:600,cursor:"pointer",padding:"2px 8px"}}>
+            Cancel
+          </button>
+          <button onClick={()=>onDone(draft)}
+            style={{background:C.accent,border:"none",color:"#fff",fontSize:15,
+              fontFamily:"inherit",fontWeight:700,cursor:"pointer",padding:"6px 22px",borderRadius:8}}>
+            {addMode ? "Add" : "Done"}
+          </button>
+        </div>
+        <input autoFocus value={draft} onChange={e=>setDraft(e.target.value)}
+          placeholder={placeholder}
+          style={{display:"block",width:"100%",boxSizing:"border-box",padding:"16px",fontSize:17,
+            fontFamily:"inherit",background:"transparent",border:"none",outline:"none",color:C.text}}/>
+        <div style={{height:"env(safe-area-inset-bottom,16px)"}}/>
+      </div>
+    </div>
+  );
+};
 
-    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+// onAdd: optional — when provided, button label becomes "Add" and fires onAdd after saving
+const Inp = ({value, onChange, placeholder, style={}, onAdd}) => {
+  const [modal, setModal] = useState(false);
+  return (
+    <>
+      <input value={value??""} onChange={onChange} placeholder={placeholder}
+        style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+          padding:"6px 10px",fontSize:12,fontFamily:"inherit",width:"100%",outline:"none",...style}}
+        onFocus={e=>{
+          e.target.style.borderColor=C.accent;
+          if(ON_MOBILE){e.target.blur();setModal(true);}
+        }}
+        onBlur={e=>e.target.style.borderColor=C.border}/>
+      {modal&&<MobileInpSheet initialValue={value??""} placeholder={placeholder}
+        addMode={!!onAdd}
+        onDone={v=>{onChange({target:{value:v}});if(onAdd)onAdd();setModal(false);}}
+        onCancel={()=>setModal(false)}/>}
+    </>
+  );
+};
 
-      padding:"6px 10px",fontSize:12,fontFamily:"inherit",width:"100%",outline:"none",...style}}
+// ── Rich Text ─────────────────────────────────────────────────
+// Preset colors available in the toolbar
+const RICH_COLORS = ["#ef4444","#f97316","#eab308","#22c55e","#3b82f6","#8b5cf6","#ec4899","#94a3b8"];
 
-    onFocus={e=>e.target.style.borderColor=C.accent}
+// Display helper — renders stored HTML safely; falls back to plain text for old values
+const RichText = ({html, style={}}) => {
+  if(!html) return null;
+  return html.includes("<")
+    ? <span dangerouslySetInnerHTML={{__html:html}} style={style}/>
+    : <span style={style}>{html}</span>;
+};
 
-    onBlur={e=>e.target.style.borderColor=C.border}/>
-);
+// Core rich text editor: contenteditable div + formatting toolbar
+// Works inline on desktop AND inside the mobile sheet
+const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minRows=3}) => {
+  const ref = useRef(null);
+  const focused = useRef(false);
+  const savedRange = useRef(null);
+  const [active, setActive] = useState({});
+
+  // Sync prop → DOM only when the user isn't actively typing
+  useEffect(()=>{
+    if(ref.current && !focused.current){
+      const html = htmlValue || "";
+      if(ref.current.innerHTML !== html) ref.current.innerHTML = html;
+    }
+  },[htmlValue]);
+
+  useEffect(()=>{ if(autoFocus && ref.current) ref.current.focus(); },[]);
+
+  // Save selection + update active-format state whenever user moves cursor or selects text
+  const syncState = () => {
+    const sel = window.getSelection();
+    if(sel?.rangeCount > 0 && ref.current?.contains(sel.anchorNode)){
+      savedRange.current = sel.getRangeAt(0).cloneRange();
+    }
+    try {
+      setActive({
+        bold:      document.queryCommandState('bold'),
+        italic:    document.queryCommandState('italic'),
+        underline: document.queryCommandState('underline'),
+        ul:        document.queryCommandState('insertUnorderedList'),
+        ol:        document.queryCommandState('insertOrderedList'),
+      });
+    } catch(e){}
+  };
+
+  // Restore saved selection then run the command — fixes iOS losing selection on toolbar tap
+  const exec = (cmd, val) => {
+    const el = ref.current;
+    if(!el) return;
+    el.focus();
+    const run = () => {
+      if(savedRange.current){
+        try{ const sel=window.getSelection(); sel?.removeAllRanges(); sel?.addRange(savedRange.current); }catch(e){}
+      }
+      try{ document.execCommand(cmd, false, val ?? null); }catch(e){}
+      onHtmlChange(el.innerHTML || "");
+      setTimeout(syncState, 0);
+    };
+    if(ON_MOBILE) setTimeout(run, 20); else run();
+  };
+
+  // List commands fail silently on iOS WebKit — use insertHTML as fallback
+  const execList = (cmd) => {
+    const el = ref.current;
+    if(!el) return;
+    el.focus();
+    const run = () => {
+      if(savedRange.current){
+        try{ const sel=window.getSelection(); sel?.removeAllRanges(); sel?.addRange(savedRange.current); }catch(e){}
+      }
+      try{ document.execCommand(cmd, false, null); }catch(e){}
+      if(ON_MOBILE && !document.queryCommandState(cmd)){
+        try{ const tag=cmd==='insertUnorderedList'?'ul':'ol'; document.execCommand('insertHTML',false,`<${tag}><li><br></li></${tag}>`); }catch(e){}
+      }
+      onHtmlChange(el.innerHTML || "");
+      setTimeout(syncState, 0);
+    };
+    if(ON_MOBILE) setTimeout(run, 20); else run();
+  };
+
+  const empty = !htmlValue?.replace(/<[^>]*>/g,"")?.trim();
+  const btnPad = ON_MOBILE ? "6px 11px" : "3px 7px";
+  const btnFont = ON_MOBILE ? 13 : 11;
+  const swatchSize = ON_MOBILE ? 22 : 14;
+
+  const TB = ({label, title, action, on=false, s={}}) => (
+    <button title={title} onPointerDown={e=>{e.preventDefault(); e.stopPropagation(); action();}}
+      style={{
+        background: on ? C.accent+"28" : "none",
+        border: `1px solid ${on ? C.accent : C.border}`,
+        borderRadius:5, color: on ? C.accent : C.text,
+        fontSize:btnFont, fontFamily:"inherit", cursor:"pointer",
+        padding:btnPad, lineHeight:1.3, whiteSpace:"nowrap",
+        transition:"all 0.1s", WebkitTapHighlightColor:"transparent", ...s
+      }}>
+      {label}
+    </button>
+  );
+
+  return (
+    <div style={{border:`1px solid ${C.border}`,borderRadius:7,overflow:"hidden",background:C.surface}}>
+      <div onPointerDown={e=>e.stopPropagation()}
+        style={{display:"flex",gap:4,padding:"5px 8px",flexWrap:"wrap",alignItems:"center",
+        borderBottom:`1px solid ${C.border}`}}>
+        <TB label="B" title="Bold"      action={()=>exec('bold')}      on={active.bold}      s={{fontWeight:900}}/>
+        <TB label="I" title="Italic"    action={()=>exec('italic')}    on={active.italic}    s={{fontStyle:"italic"}}/>
+        <TB label="U" title="Underline" action={()=>exec('underline')} on={active.underline} s={{textDecoration:"underline"}}/>
+        <div style={{width:1,height:16,background:C.border,margin:"0 2px",flexShrink:0}}/>
+        <TB label="• List"  title="Bullet list"   action={()=>execList('insertUnorderedList')} on={active.ul}/>
+        <TB label="1. List" title="Numbered list" action={()=>execList('insertOrderedList')}   on={active.ol}/>
+        <div style={{width:1,height:16,background:C.border,margin:"0 2px",flexShrink:0}}/>
+        <span style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginRight:2}}>COLOR</span>
+        {RICH_COLORS.map(c=>(
+          <button key={c} onPointerDown={e=>{e.preventDefault(); e.stopPropagation(); exec('foreColor',c);}}
+            style={{width:swatchSize,height:swatchSize,borderRadius:99,background:c,flexShrink:0,
+              border:"1.5px solid rgba(255,255,255,0.2)",cursor:"pointer",padding:0,
+              WebkitTapHighlightColor:"transparent"}}/>
+        ))}
+        <div style={{width:1,height:16,background:C.border,margin:"0 2px",flexShrink:0}}/>
+        <TB label="✕ clear" title="Clear formatting" action={()=>exec('removeFormat')} s={{color:C.dim,fontSize:ON_MOBILE?11:10}}/>
+      </div>
+      <div style={{position:"relative"}}>
+        {empty&&<div style={{position:"absolute",inset:0,padding:"7px 10px",fontSize:12,
+          color:C.dim,pointerEvents:"none",fontFamily:"inherit",lineHeight:1.6}}>
+          {placeholder}
+        </div>}
+        <div ref={ref} contentEditable suppressContentEditableWarning
+          onFocus={()=>{focused.current=true;}}
+          onBlur={()=>{
+            const sel=window.getSelection();
+            if(sel?.rangeCount>0&&ref.current?.contains(sel.anchorNode)) savedRange.current=sel.getRangeAt(0).cloneRange();
+            focused.current=false;
+          }}
+          onInput={()=>onHtmlChange(ref.current?.innerHTML||"")}
+          onSelect={syncState} onKeyUp={syncState} onMouseUp={syncState} onPointerUp={syncState} onTouchEnd={syncState}
+          style={{minHeight:minRows*22,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
+            color:C.text,outline:"none",lineHeight:1.6,wordBreak:"break-word"}}/>
+      </div>
+    </div>
+  );
+};
+
+// Mobile sheet wrapping the rich editor for TA fields
+const RichMobileSheet = ({initialHtml, placeholder, onDone, onCancel, addMode}) => {
+  const [html, setHtml] = useState(initialHtml || "");
+  return (
+    <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:99999,
+      display:"flex",flexDirection:"column",justifyContent:"flex-end",
+      WebkitTapHighlightColor:"transparent"}}
+      onClick={e=>{if(e.target===e.currentTarget) onCancel();}}>
+      <div style={{background:C.surface,borderTopLeftRadius:18,borderTopRightRadius:18,
+        maxHeight:"85vh",display:"flex",flexDirection:"column",
+        boxShadow:"0 -8px 40px rgba(0,0,0,0.45)",overflow:"hidden"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+          padding:"13px 16px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
+          <button onClick={onCancel}
+            style={{background:"none",border:"none",color:C.dim,fontSize:15,
+              fontFamily:"inherit",fontWeight:600,cursor:"pointer",padding:"2px 8px"}}>
+            Cancel
+          </button>
+          <button onClick={()=>onDone(html)}
+            style={{background:C.accent,border:"none",color:"#fff",fontSize:15,
+              fontFamily:"inherit",fontWeight:700,cursor:"pointer",padding:"6px 22px",borderRadius:8}}>
+            {addMode ? "Add" : "Done"}
+          </button>
+        </div>
+        <div style={{overflow:"auto",padding:12,flexGrow:1}}>
+          <RichEditor htmlValue={html} onHtmlChange={setHtml} placeholder={placeholder} autoFocus minRows={6}/>
+        </div>
+        <div style={{height:"env(safe-area-inset-bottom,12px)",flexShrink:0}}/>
+      </div>
+    </div>
+  );
+};
 
 // Time ago helper for "updated X ago" display
 const timeAgo = (isoStr) => {
@@ -1148,19 +1478,38 @@ const Sel = ({value,onChange,options:rawOpts,style={}}) => {
 };
 
 
-const TA = ({value,onChange,placeholder,rows=3}) => (
+// TA: full rich text area — toolbar always visible on desktop, sheet on mobile
+const TA = ({value, onChange, placeholder, rows=3, onAdd}) => {
+  const [modal, setModal] = useState(false);
 
-  <textarea value={value??""} onChange={onChange} placeholder={placeholder} rows={rows}
+  if(ON_MOBILE) return (
+    <>
+      {/* Tap target shows rendered content */}
+      <div onClick={()=>setModal(true)}
+        style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+          minHeight:rows*22,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
+          cursor:"text",lineHeight:1.6,wordBreak:"break-word",
+          color:value?.replace(/<[^>]*>/g,"")?.trim() ? C.text : C.dim}}>
+        {value?.replace(/<[^>]*>/g,"")?.trim()
+          ? <span dangerouslySetInnerHTML={{__html:value}}/>
+          : (placeholder || "Tap to edit…")}
+      </div>
+      {modal&&<RichMobileSheet initialHtml={value||""} placeholder={placeholder}
+        addMode={!!onAdd}
+        onDone={html=>{onChange({target:{value:html}});if(onAdd)onAdd();setModal(false);}}
+        onCancel={()=>setModal(false)}/>}
+    </>
+  );
 
-    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
-
-      padding:"7px 10px",fontSize:12,fontFamily:"inherit",width:"100%",outline:"none",resize:"vertical"}}
-
-    onFocus={e=>e.target.style.borderColor=C.accent}
-
-    onBlur={e=>e.target.style.borderColor=C.border}/>
-
-);
+  // Desktop: inline rich editor with toolbar always visible
+  return (
+    <RichEditor
+      htmlValue={value||""}
+      onHtmlChange={html=>onChange({target:{value:html}})}
+      placeholder={placeholder}
+      minRows={rows}/>
+  );
+};
 
 
 // Clickable address that opens in Google Maps or Apple Maps (user choice)
@@ -1265,13 +1614,13 @@ const StageBar = ({stages,current,color}) => {
 
 function normFloor(v) {
 
-  if (v && typeof v === 'object' && !Array.isArray(v) && ('general' in v || 'rooms' in v)) {
+  if (v && typeof v === 'object' && !Array.isArray(v) && ('general' in v || 'rooms' in v || 'hotcheck' in v)) {
 
-    return { general: Array.isArray(v.general) ? v.general : [], rooms: Array.isArray(v.rooms) ? v.rooms : [] };
+    return { general: Array.isArray(v.general) ? v.general : [], rooms: Array.isArray(v.rooms) ? v.rooms : [], hotcheck: Array.isArray(v.hotcheck) ? v.hotcheck : [] };
 
   }
 
-  return { general: Array.isArray(v) ? v : [], rooms: [] };
+  return { general: Array.isArray(v) ? v : [], rooms: [], hotcheck: [] };
 
 }
 
@@ -1348,7 +1697,7 @@ function PunchItems({ items, onChange }) {
 
               onMouseLeave={e=>e.target.style.background='transparent'}>
 
-              {item.text}
+              <RichText html={item.text}/>
 
             </span>
 
@@ -1422,7 +1771,7 @@ function RoomNameEdit({name, onSave}) {
 }
 
 
-function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor }) {
+function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false }) {
 
   const data = normFloor(floorData);
 
@@ -1432,11 +1781,12 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
 
   const openCount = data.general.filter(i => !i.done).length +
-
+    (showHotcheck ? data.hotcheck.filter(i => !i.done).length : 0) +
     data.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done).length : 0), 0);
 
 
   const setGeneral = (general) => onFloorChange(floorKey, { ...data, general });
+  const setHotcheck = (hotcheck) => onFloorChange(floorKey, { ...data, hotcheck });
 
   const addRoom = () => {
 
@@ -1490,6 +1840,20 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
           <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: '0.08em', marginBottom: 6 }}>GENERAL</div>
 
           <PunchItems items={data.general} onChange={setGeneral} />
+
+          {showHotcheck && (
+            <div style={{ marginTop: 12, background: `rgba(220,38,38,0.06)`, border: `1px solid rgba(220,38,38,0.25)`, borderRadius: 8, padding: 10 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+                <span style={{ fontSize: 10, fontWeight: 800, color: '#dc2626', letterSpacing: '0.08em' }}>⚡ HOT CHECK</span>
+                {data.hotcheck.filter(i => !i.done).length > 0 && (
+                  <span style={{ fontSize: 10, background: 'rgba(220,38,38,0.15)', color: '#dc2626', borderRadius: 99, padding: '2px 7px', fontWeight: 700 }}>
+                    {data.hotcheck.filter(i => !i.done).length} open
+                  </span>
+                )}
+              </div>
+              <PunchItems items={data.hotcheck} onChange={setHotcheck} />
+            </div>
+          )}
 
           {data.rooms.map(room => (
 
@@ -1548,7 +1912,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 }
 
 
-function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
+function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false }) {
 
   const upper    = normFloor(punch.upper);
   const main     = normFloor(punch.main);
@@ -1589,6 +1953,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
   };
 
   const countOpen = (f) => f.general.filter(i => !i.done).length +
+    (showHotcheck ? (f.hotcheck||[]).filter(i => !i.done).length : 0) +
     f.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done).length : 0), 0);
 
   const totalOpen = countOpen(upper) + countOpen(main) + countOpen(basement) +
@@ -1627,11 +1992,11 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
 
       </div>
 
-      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}/>
+      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck}/>
 
-      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}/>
+      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck}/>
 
-      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}/>
+      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck}/>
 
       {extras.map((e,i)=>(
         <div key={e.key} style={{position:"relative"}}>
@@ -1640,7 +2005,8 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail }) {
             floorData={normFloor(punch[e.key])}
             onFloorChange={handleFloorChange}
             floorLabel={e.label}
-            floorColor={FLOOR_COLORS[i % FLOOR_COLORS.length]}/>
+            floorColor={FLOOR_COLORS[i % FLOOR_COLORS.length]}
+            showHotcheck={showHotcheck}/>
           <button onClick={()=>removeFloor(e.key)}
             style={{position:"absolute",top:6,right:0,background:"none",border:"none",
               color:C.muted,cursor:"pointer",fontSize:12,padding:"2px 6px",fontFamily:"inherit"}}>
@@ -3200,6 +3566,18 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
         </div>
       )}
 
+      {/* Share Live View */}
+      <div style={{marginBottom:16,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+        <button onClick={()=>{
+          const link=`${window.location.origin}/?homeruns=${jobId}`;
+          navigator.clipboard.writeText(link).then(()=>alert('✓ Live view link copied!\n\nAnyone with this link can see Home Runs in real time (view only).')).catch(()=>alert('Link:\n'+link));
+        }} style={{background:`${C.blue}15`,border:`1px solid ${C.blue}55`,borderRadius:6,
+          color:C.blue,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.05em'}}>
+          Share ↗
+        </button>
+        <span style={{fontSize:11,color:C.dim}}>Anyone with the link can see pull status in real time</span>
+      </div>
+
       {/* Panels */}
       {(()=>{
         const cP=homeRuns.customPanels||DEFAULT_PANELS;
@@ -3279,11 +3657,15 @@ function KeypadSection({loads,onChange,label}) {
 
   const delRow = (id) => onChange(loads.filter(r=>r.id!==id).map((r,i)=>({...r,num:i+1})));
 
+  const namedRows = loads.filter(r=>r.name.trim());
+  const pulledCount = namedRows.filter(r=>r.status==="Pulled").length;
+  const pct = namedRows.length>0 ? Math.round((pulledCount/namedRows.length)*100) : 0;
+
   return (
 
     <div style={{marginBottom:22}}>
 
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
 
         <div style={{fontSize:12,color:C.purple,fontWeight:700}}>{label}</div>
 
@@ -3291,9 +3673,22 @@ function KeypadSection({loads,onChange,label}) {
 
       </div>
 
-      <div style={{display:"grid",gridTemplateColumns:"36px 1fr 28px",gap:6,marginBottom:6}}>
+      {/* Pull progress — only shown when there are named rows */}
+      {namedRows.length>0&&(
+        <div style={{marginBottom:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+            <span style={{fontSize:10,color:C.dim}}>Pull progress</span>
+            <span style={{fontSize:11,fontWeight:700,color:pct===100?C.green:C.purple}}>{pulledCount}/{namedRows.length} — {pct}%</span>
+          </div>
+          <div style={{height:5,background:C.border,borderRadius:99,overflow:"hidden"}}>
+            <div style={{height:"100%",width:`${pct}%`,background:pct===100?C.green:C.purple,borderRadius:99,transition:"width 0.4s"}}/>
+          </div>
+        </div>
+      )}
 
-        {["#","Keypad Load Name",""].map((h,i)=>(
+      <div style={{display:"grid",gridTemplateColumns:"36px 1fr 80px 28px",gap:6,marginBottom:6}}>
+
+        {["#","Keypad Load Name","Status",""].map((h,i)=>(
 
           <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
 
@@ -3303,11 +3698,16 @@ function KeypadSection({loads,onChange,label}) {
 
       {loads.map(r=>(
 
-        <div key={r.id} style={{display:"grid",gridTemplateColumns:"36px 1fr 28px",gap:6,marginBottom:4,alignItems:"center"}}>
+        <div key={r.id} style={{display:"grid",gridTemplateColumns:"36px 1fr 80px 28px",gap:6,marginBottom:4,alignItems:"center",
+          borderRadius:6,padding:"3px 0",
+          background:r.status==="Pulled"?"rgba(34,197,94,0.08)":r.status==="Need Specs"?"rgba(239,68,68,0.08)":"transparent"}}>
 
           <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:6}}>{r.num}.</span>
 
           <Inp value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"/>
+
+          <Sel value={r.status||""} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
+            style={{color:r.status==="Pulled"?C.green:r.status==="Need Specs"?C.red:C.text,fontSize:10}}/>
 
           <button onClick={()=>delRow(r.id)}
 
@@ -3324,62 +3724,145 @@ function KeypadSection({loads,onChange,label}) {
 }
 
 
-function CP4LoadsSection({loads,onChange}) {
+function PanelModulesSection({modules,onChange,system}) {
 
-  const upd    = (id,p) => onChange(loads.map(r=>r.id===id?{...r,...p}:r));
+  const sys = system||"Control 4";
+  const isSav = sys==="Savant", isLut = sys==="Lutron", isCres = sys==="Crestron";
+  const devLabel = isCres?"Device":"Module";
 
-  const addRow = () => onChange([...loads, newCP4Row(loads.length+1)]);
+  const updMod  = (mid,p) => onChange(modules.map(m=>m.id===mid?{...m,...p}:m));
+  const delMod  = (mid)   => onChange(modules.filter(m=>m.id!==mid));
+  const addMod  = ()      => onChange([...modules, newModuleObj(modules.length+1)]);
 
-  const delRow = (id) => onChange(loads.filter(r=>r.id!==id).map((r,i)=>({...r,num:i+1})));
+  const updLoad  = (mid,lid,p) => onChange(modules.map(m=>m.id===mid?{...m,loads:m.loads.map(l=>l.id===lid?{...l,...p}:l)}:m));
+  const delLoad  = (mid,lid)   => onChange(modules.map(m=>m.id===mid?{...m,loads:m.loads.filter(l=>l.id!==lid).map((l,i)=>({...l,num:i+1}))}:m));
+  const addLoad  = (mid)       => onChange(modules.map(m=>m.id===mid?{...m,loads:[...m.loads,newLoadRow(m.loads.length+1)]}:m));
+  const moveLoad = (fromMid,lid,toMid) => {
+    if(fromMid===toMid) return;
+    const load = modules.find(m=>m.id===fromMid)?.loads.find(l=>l.id===lid);
+    if(!load) return;
+    onChange(modules.map(m=>{
+      if(m.id===fromMid) return {...m,loads:m.loads.filter(l=>l.id!==lid).map((l,i)=>({...l,num:i+1}))};
+      if(m.id===toMid)   return {...m,loads:[...m.loads,{...load,num:m.loads.length+1}]};
+      return m;
+    }));
+  };
+
+  const moduleTypes = isLut?LUT_MODULE_TYPES:isCres?CRES_MODULE_TYPES:isSav?SAV_MODULE_TYPES:C4_MODULE_TYPES;
+
+  const chCap = (type) => ({
+    "8-Ch Dimmer":8,"8-Ch Relay":8,"LMD-8120":8,"LQSE-S8":8,
+    "0-10V Dimmer":2,"LQSE-2ECO":2,"LQSE-2DAL":2,
+    "LQSE-4A":4,"LMD-4120":4,"LQSE-T5":5,
+  }[type]||null);
+
+  const showKeypad = !isSav&&!isLut&&!isCres;
+  const showMove = modules.length > 1;
+  const rowGrid = `16px 22px 1fr 36px 70px 52px${showKeypad?" 70px":""}${showMove?" 44px":""} 20px`;
+  const rowHeaders = ["","#","Load Name","Ch","Load Type","Watts",...(showKeypad?["Keypad"]:[]),...(showMove?["↗ Mod"]:[]),""];
 
   return (
+    <div style={{marginBottom:16}}>
+      {modules.map(mod=>{
+        const cap = chCap(mod.moduleType);
+        const named = mod.loads.filter(l=>l.name.trim());
+        const pulled = named.filter(l=>l.pulled);
+        return (
+          <div key={mod.id} style={{border:`1px solid ${C.purple}33`,borderRadius:8,marginBottom:12,overflow:"hidden"}}>
 
-    <div style={{marginBottom:22}}>
+            {/* ── Module header ── */}
+            <div style={{background:`${C.purple}0d`,padding:"7px 10px",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",borderBottom:`1px solid ${C.purple}22`}}>
 
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+              {!isSav&&(
+                <>
+                  <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase",whiteSpace:"nowrap"}}>{devLabel}</span>
+                  <Inp value={mod.modNum} onChange={e=>updMod(mod.id,{modNum:e.target.value})}
+                    style={{width:36,textAlign:"center",fontSize:10,fontWeight:700,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
+                </>
+              )}
 
-        <div style={{fontSize:12,color:C.purple,fontWeight:700}}>Lighting Control Panel Loads (Control 4)</div>
+              <Sel value={mod.moduleType} onChange={e=>updMod(mod.id,{moduleType:e.target.value})} options={moduleTypes}
+                style={{fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`,width:isSav?"110px":"auto"}}/>
 
-        <Btn onClick={addRow} variant="add" style={{fontSize:11,padding:"3px 10px"}}>+ Add Row</Btn>
+              {isSav&&<>
+                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>Panel</span>
+                <Inp value={mod.panel||""} onChange={e=>updMod(mod.id,{panel:e.target.value})} placeholder="Panel"
+                  style={{width:64,fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
+                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>Bkr</span>
+                <Inp value={mod.breaker||""} onChange={e=>updMod(mod.id,{breaker:e.target.value})} placeholder="Bkr"
+                  style={{width:44,fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
+                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>Phase</span>
+                <Sel value={mod.phase||""} onChange={e=>updMod(mod.id,{phase:e.target.value})} options={PHASE_OPTS}
+                  style={{fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`,width:52}}/>
+              </>}
 
-      </div>
+              {isLut&&<>
+                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>Bus</span>
+                <Inp value={mod.bus||""} onChange={e=>updMod(mod.id,{bus:e.target.value})} placeholder="Bus"
+                  style={{width:36,textAlign:"center",fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
+                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>PDU</span>
+                <Inp value={mod.pdu||""} onChange={e=>updMod(mod.id,{pdu:e.target.value})} placeholder="PDU"
+                  style={{width:64,fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
+              </>}
 
-      <div style={{display:"grid",gridTemplateColumns:"36px 1fr 90px 90px 28px",gap:6,marginBottom:6}}>
+              {isCres&&<>
+                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>Chain pos</span>
+                <Inp value={mod.chainPos||""} onChange={e=>updMod(mod.id,{chainPos:e.target.value})} placeholder="Pos"
+                  style={{width:36,textAlign:"center",fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
+              </>}
 
-        {["#","Load Name","Module #","Status",""].map((h,i)=>(
+              <span style={{fontSize:10,color:`${C.purple}88`,marginLeft:"auto",whiteSpace:"nowrap"}}>
+                {named.length}{cap?`/${cap}`:""} ch{pulled.length>0?` · ${pulled.length} pulled`:""}
+              </span>
+              <button onClick={()=>delMod(mod.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"0 2px",flexShrink:0}}>✕</button>
+            </div>
 
-          <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
+            {/* ── Load rows ── */}
+            <div style={{padding:"6px 10px 4px"}}>
+              <div style={{display:"grid",gridTemplateColumns:rowGrid,gap:4,marginBottom:4}}>
+                {rowHeaders.map((h,i)=><div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em"}}>{h}</div>)}
+              </div>
+              {mod.loads.map(load=>(
+                <div key={load.id} style={{display:"grid",gridTemplateColumns:rowGrid,gap:4,marginBottom:3,
+                  alignItems:"center",borderRadius:6,padding:"2px 0",
+                  background:load.pulled?"rgba(34,197,94,0.08)":"transparent"}}>
+                  <input type="checkbox" checked={!!load.pulled} onChange={e=>updLoad(mod.id,load.id,{pulled:e.target.checked})}
+                    style={{width:15,height:15,accentColor:C.purple,cursor:"pointer",margin:0}}/>
+                  <span style={{fontSize:11,color:C.muted,textAlign:"center",fontWeight:700}}>{load.num}</span>
+                  <Inp value={load.name} onChange={e=>updLoad(mod.id,load.id,{name:e.target.value})} placeholder="Load name…"/>
+                  <Inp value={load.ch||""} onChange={e=>updLoad(mod.id,load.id,{ch:e.target.value})} placeholder="Ch" style={{textAlign:"center",fontSize:10}}/>
+                  <Sel value={load.loadType||""} onChange={e=>updLoad(mod.id,load.id,{loadType:e.target.value})} options={LOAD_TYPES} style={{fontSize:10}}/>
+                  <Inp value={load.watts||""} onChange={e=>updLoad(mod.id,load.id,{watts:e.target.value})} placeholder="W" style={{textAlign:"center",fontSize:10}}/>
+                  {showKeypad&&<Inp value={load.keypad||""} onChange={e=>updLoad(mod.id,load.id,{keypad:e.target.value})} placeholder="Keypad" style={{fontSize:10}}/>}
+                  {showMove&&(
+                    <select value={mod.id} onChange={e=>moveLoad(mod.id,load.id,e.target.value)}
+                      title="Move to module"
+                      style={{fontSize:9,border:`1px solid ${C.border}`,borderRadius:4,padding:"2px 1px",
+                        background:"#fff",color:C.muted,cursor:"pointer",width:"100%",fontFamily:"inherit"}}>
+                      {modules.map(m=>(
+                        <option key={m.id} value={m.id}>{m.id===mod.id?"(here)":m.modNum||m.moduleType||"?"}</option>
+                      ))}
+                    </select>
+                  )}
+                  <button onClick={()=>delLoad(mod.id,load.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+                </div>
+              ))}
+              <button onClick={()=>addLoad(mod.id)}
+                style={{background:"none",border:"none",color:C.purple,fontSize:10,fontWeight:700,fontFamily:"inherit",
+                  cursor:"pointer",padding:"4px 2px",letterSpacing:"0.04em",opacity:0.75}}>
+                + Add Row to {devLabel} {mod.modNum||mod.moduleType}
+              </button>
+            </div>
+          </div>
+        );
+      })}
 
-        ))}
-
-      </div>
-
-      {loads.map(r=>(
-
-        <div key={r.id} style={{display:"grid",gridTemplateColumns:"36px 1fr 90px 90px 28px",
-
-          gap:6,marginBottom:4,alignItems:"center"}}>
-
-          <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:6}}>{r.num}.</span>
-
-          <Inp value={r.name}   onChange={e=>upd(r.id,{name:e.target.value})}   placeholder="Load name…"/>
-
-          <Inp value={r.module} onChange={e=>upd(r.id,{module:e.target.value})} placeholder="Module…"/>
-
-          <Sel value={r.status} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
-
-            style={{color:r.status==="Pulled"?C.green:C.text}}/>
-
-          <button onClick={()=>delRow(r.id)}
-
-            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
-
-        </div>
-
-      ))}
-
+      <button onClick={addMod}
+        style={{background:"none",border:`1px dashed ${C.purple}44`,color:`${C.purple}88`,borderRadius:7,
+          padding:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"100%",letterSpacing:"0.04em",marginTop:4}}>
+        + New {devLabel}
+      </button>
     </div>
-
   );
 
 }
@@ -4302,9 +4785,9 @@ function PlansTab({job, onUpdate}) {
 }
 
 
-const TABS = ["Job Info","Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
+const TABS = ["Job Info","Plans & Links","Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
 
-              "Change Orders","Return Trips","Plans & Links","QC"];
+              "Change Orders","Return Trips","QC"];
 
 
 const sanitize = (obj) => {
@@ -5014,7 +5497,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
   );
 }
 
-function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
+function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
@@ -5034,8 +5517,47 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
   const [tab, setTab] = useState("Job Info");
   const [newLightingFloor, setNewLightingFloor] = useState("");
   const [emailData, setEmailData] = useState(null);
+  const [convertPrompt, setConvertPrompt] = useState(false);
+  const [convertJobNo, setConvertJobNo] = useState("");
+  const [gcAnswers, setGcAnswers] = useState(null); // answers submitted by GC/homeowner via share link
+  const [lvCollab, setLvCollab] = useState(null); // lighting collab data from LV company
 
   const [refreshing, setRefreshing] = useState(false);
+
+  // Live listener for GC question answers + LV lighting collab
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,'homeowner_requests',job.id), snap => {
+      if(snap.exists() && snap.data().questionAnswers) setGcAnswers(snap.data().questionAnswers);
+      else setGcAnswers(null);
+      if(snap.exists() && snap.data().lightingCollab) setLvCollab(snap.data().lightingCollab);
+      else setLvCollab(null);
+    }, ()=>{});
+    return ()=>unsub();
+  }, [job.id]);
+
+  // Auto-apply GC answers — mark each answered question as done and fill in the answer
+  const appliedGcRef = useRef(null);
+  useEffect(() => {
+    if(!gcAnswers?.answeredAt) return;
+    if(appliedGcRef.current === gcAnswers.answeredAt) return; // already applied this batch
+    appliedGcRef.current = gcAnswers.answeredAt;
+    const applyPhase = (current, gcPhase) => {
+      let changed = false;
+      const updated = {};
+      ['upper','main','basement'].forEach(floor => {
+        updated[floor] = (current?.[floor]||[]).map(q => {
+          const gcAns = (gcPhase?.[floor]||[]).find(a=>a.id===q.id);
+          if(gcAns?.answer && !q.done) { changed=true; return {...q, answer:gcAns.answer, done:true, gcAnswered:true}; }
+          return q;
+        });
+      });
+      return {updated, changed};
+    };
+    const {updated:newRough, changed:rc} = applyPhase(jobRef.current.roughQuestions, gcAnswers.rough);
+    const {updated:newFinish, changed:fc} = applyPhase(jobRef.current.finishQuestions, gcAnswers.finish);
+    if(rc) u({roughQuestions: newRough});
+    if(fc) u({finishQuestions: newFinish});
+  }, [gcAnswers?.answeredAt]);
 
   const refreshJob = async () => {
 
@@ -5066,9 +5588,16 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
     if (Array.isArray(f)) return f.filter(i=>!i.done).length;
 
     return (f.general||[]).filter(i=>!i.done).length +
-
+      (f.hotcheck||[]).filter(i=>!i.done).length +
       (f.rooms||[]).reduce((a,r)=>a+(Array.isArray(r.items)?r.items.filter(i=>!i.done).length:0),0);
 
+  };
+
+  // Total open items across all floors of a punch object
+  const punchOpen = (punch) => {
+    if(!punch) return 0;
+    const floors = ['upper','main','basement',...(punch.extras||[]).map(e=>e.key)];
+    return floors.reduce((t,k) => t + countFloor(punch[k]), 0);
   };
 
   const openCount = ['roughPunch','finishPunch'].reduce((total,key)=>{
@@ -5108,6 +5637,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
 
             <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>
 
+              {job.type==="quote"&&<span style={{fontSize:12,color:"#000",fontFamily:"'DM Sans',sans-serif",fontWeight:700,letterSpacing:"0.05em",marginRight:8,background:C.accent,borderRadius:5,padding:"2px 7px"}}>{job.quoteNumber||"QUOTE"}</span>}
+
               {job.simproNo&&<span style={{fontSize:13,color:C.dim,fontFamily:"'DM Sans',sans-serif",fontWeight:600,letterSpacing:"0.05em",marginRight:8}}>#{job.simproNo}</span>}
 
               {job.name||"New Job"}
@@ -5124,7 +5655,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
               <div style={{display:"inline-flex",alignItems:"center",gap:5,marginTop:4,
                 fontSize:11,color:"#92400e",background:"#fef3c7",
                 border:"1px solid #fde68a",borderRadius:7,padding:"3px 9px"}}>
-                {job.accessNote}
+                <RichText html={job.accessNote}/>
               </div>
             )}
 
@@ -5143,6 +5674,45 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
             {qcCount>0&&<Pill label={`${qcCount} QC item${qcCount!==1?"s":""}`} color={C.red}/>}
 
             
+
+            {job.type==="quote"&&canConvertQuote&&(
+              convertPrompt ? (
+                <div style={{display:"flex",alignItems:"center",gap:8,background:C.card,
+                  border:`2px solid ${C.accent}`,borderRadius:10,padding:"8px 12px"}}>
+                  <div style={{fontSize:11,fontWeight:700,color:C.accent,whiteSpace:"nowrap"}}>Simpro Job #</div>
+                  <input
+                    autoFocus
+                    value={convertJobNo}
+                    onChange={e=>setConvertJobNo(e.target.value)}
+                    onKeyDown={e=>{
+                      if(e.key==="Enter"&&convertJobNo.trim()) { onConvertQuote&&onConvertQuote({...job,simproNo:convertJobNo.trim()}); setConvertPrompt(false); setConvertJobNo(""); }
+                      if(e.key==="Escape") { setConvertPrompt(false); setConvertJobNo(""); }
+                    }}
+                    placeholder="Enter job number…"
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                      color:C.text,padding:"6px 10px",fontSize:13,fontFamily:"inherit",
+                      outline:"none",width:160}}
+                  />
+                  <button
+                    onClick={()=>{ if(convertJobNo.trim()){ onConvertQuote&&onConvertQuote({...job,simproNo:convertJobNo.trim()}); setConvertPrompt(false); setConvertJobNo(""); } }}
+                    disabled={!convertJobNo.trim()}
+                    style={{background:convertJobNo.trim()?C.accent:"#555",color:"#000",border:"none",
+                      borderRadius:7,padding:"6px 14px",fontSize:12,fontWeight:700,
+                      cursor:convertJobNo.trim()?"pointer":"not-allowed",fontFamily:"inherit"}}>
+                    Convert
+                  </button>
+                  <button onClick={()=>{ setConvertPrompt(false); setConvertJobNo(""); }}
+                    style={{background:"none",border:"none",color:C.dim,fontSize:16,cursor:"pointer",padding:"0 4px"}}>✕</button>
+                </div>
+              ) : (
+                <button onClick={()=>setConvertPrompt(true)}
+                  style={{background:C.accent,color:"#000",border:"none",borderRadius:8,
+                    padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer",
+                    fontFamily:"inherit",letterSpacing:"0.03em"}}>
+                  Convert to Job
+                </button>
+              )
+            )}
 
             <button onClick={refreshJob} title="Refresh"
 
@@ -5229,29 +5799,39 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                               {job.roughStartConfirmed ? "✓ CONFIRMED" : "○ CONFIRM"}
                             </button>
                           </div>
-                          <DateInp value={job.roughProjectedStart||""} onChange={e=>u({roughProjectedStart:e.target.value})}
+                          <DateInp value={job.roughProjectedStart||""} onChange={e=>{
+                              const patch={roughProjectedStart:e.target.value};
+                              // Auto-advance to "Waiting for Start Date Confirmation" when a date is entered and no status is set yet
+                              if(e.target.value && !job.roughStatus) patch.roughStatus="waiting_date";
+                              u(patch);
+                            }}
                             style={{fontSize:13,fontWeight:700,
                               borderColor:(job.roughStartConfirmed?"#16a34a":C.rough)+"55",
                               background:job.roughStartConfirmed?"#16a34a08":`${C.rough}08`,
                               color:job.roughStartConfirmed?"#16a34a":C.rough}}/>
                           {job.roughStartConfirmed&&<div style={{fontSize:9,color:"#16a34a",fontWeight:700,marginTop:3,letterSpacing:"0.06em"}}>✓ START DATE CONFIRMED</div>}
                         </div>
+                        <div style={{flex:1,minWidth:140}}>
+                          <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>4-WAY TARGET DATE</div>
+                          <DateInp value={job.fourWayTargetDate||""} onChange={e=>u({fourWayTargetDate:e.target.value})}
+                            style={{fontSize:13,fontWeight:700,borderColor:C.rough+"55",background:`${C.rough}08`,color:C.rough}}/>
+                        </div>
                       </div>
                       <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
                       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                         <select value={job.roughStatus||""} onChange={e=>{
                           const v=e.target.value;
+                          if(v==="complete"){
+                            const open=punchOpen(job.roughPunch);
+                            if(open>0){alert(`Cannot mark Rough as complete — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}
+                          }
                           const def=getStatusDef(ROUGH_STATUSES,v);
                           u({roughStatus:v, roughOnHold:v==="waiting", roughScheduled:v==="scheduled",
-                            roughStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting"||v==="invoice")?job.roughStartConfirmed:false,
+                            roughStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting")?job.roughStartConfirmed:false,
                             roughStatusDate:def.hasDate?job.roughStatusDate:"",
-                            readyToInvoice:v==="invoice"?true:(job.roughStatus==="invoice"?false:job.readyToInvoice),
-                            ...(v==="invoice"&&!job.readyToInvoice?{readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{}),
                             roughProjectedStart:v==="scheduled"?job.roughProjectedStart:job.roughProjectedStart,
                             // Reset deposit dismissed when rescheduled so task reappears
                             ...(v==="scheduled"?{roughDepositDismissed:false}:{}),
-                            // Reset invoice dismissed when status changes away from complete/invoice
-                            ...((v!=="complete"&&v!=="invoice")?{roughInvoiceDismissed:false}:{}),
                           });
                         }} style={{background:rsDef.color?`${rsDef.color}18`:C.surface,
                           color:rsDef.color||C.dim, border:`1px solid ${rsDef.color||C.border}`,
@@ -5279,7 +5859,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                     </div>
                   );
                 })()}
-                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};u({roughStage:v,...qcFire,...prepDone,...(v==="100%"?{roughStatus:"complete",readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
+                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const open=punchOpen(job.roughPunch);if(open>0){alert(`Cannot set Rough to 100% — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}}const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};const invoiceFire=pct>=85&&!job.roughInvoiceFired?{roughInvoiceFired:true,roughInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{roughInvoiceFired:false,roughInvoiceDismissed:false}:{};u({roughStage:v,...qcFire,...prepDone,...invoiceFire,...invoiceReset,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
 
                 <div style={{marginTop:8,marginBottom:20}}>
 
@@ -5289,7 +5869,87 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
 
               </Section>
 
-              <Section label="Punch List" color={C.rough}>
+              <Section label="Matterport Scan" color={C.rough}>
+                {(()=>{
+                  const mpDef=getStatusDef(MATTERPORT_STATUSES,job.matterportStatus||"");
+                  return(
+                    <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                      <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
+                        <select value={job.matterportStatus||""} onChange={e=>{
+                          const v=e.target.value;
+                          const def=getStatusDef(MATTERPORT_STATUSES,v);
+                          u({matterportStatus:v,matterportStatusDate:def.hasDate?job.matterportStatusDate:""});
+                        }} style={{background:mpDef.color?`${mpDef.color}18`:C.surface,
+                          color:mpDef.color||C.dim,border:`1px solid ${mpDef.color||C.border}`,
+                          borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
+                          fontWeight:mpDef.color?700:400,outline:"none",cursor:"pointer"}}>
+                          {MATTERPORT_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+                        </select>
+                        {mpDef.hasDate&&(
+                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:mpDef.color}}>SCAN DATE</div>
+                            <DateInp value={job.matterportStatusDate||""} onChange={e=>u({matterportStatusDate:e.target.value})}
+                              style={{width:130,fontSize:12,borderColor:mpDef.color+"55",background:`${mpDef.color}08`}}/>
+                          </div>
+                        )}
+                      </div>
+                      {job.matterportLink&&(
+                        <a href={job.matterportLink} target="_blank" rel="noreferrer"
+                          style={{fontSize:12,color:C.rough,fontWeight:600}}>View Matterport →</a>
+                      )}
+                    </div>
+                  );
+                })()}
+              </Section>
+
+              <Section label="Rough Inspection" color={C.rough}>
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                    <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginRight:4}}>RESULT</div>
+                    {["pass","fail"].map(r=>(
+                      <button key={r} onClick={()=>u({roughInspectionResult:job.roughInspectionResult===r?"":r})}
+                        style={{padding:"5px 14px",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer",border:"none",
+                          background:job.roughInspectionResult===r?(r==="pass"?"#16a34a":"#dc2626"):(r==="pass"?"#16a34a18":"#dc262618"),
+                          color:job.roughInspectionResult===r?"#fff":(r==="pass"?"#16a34a":"#dc2626")}}>
+                        {r==="pass"?"✓ Pass":"✗ Fail"}
+                      </button>
+                    ))}
+                    <DateInp value={job.roughInspectionDate||""} onChange={e=>u({roughInspectionDate:e.target.value})} style={{fontSize:12,width:130}}/>
+                  </div>
+                  {job.roughInspectionResult==="fail"&&(
+                    <div style={{borderTop:`1px solid ${C.border}`,paddingTop:10}}>
+                      <div style={{fontSize:10,color:"#dc2626",fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>FAILED ITEMS</div>
+                      {(job.roughInspectionItems||[]).map((item,i)=>(
+                        <div key={item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
+                          <input type="checkbox" checked={!!item.done} onChange={()=>{const items=[...(job.roughInspectionItems||[])];items[i]={...items[i],done:!items[i].done};u({roughInspectionItems:items});}}/>
+                          <input value={item.text} onChange={e=>{const items=[...(job.roughInspectionItems||[])];items[i]={...items[i],text:e.target.value};u({roughInspectionItems:items});}}
+                            style={{flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,fontSize:13,color:C.text,padding:"2px 4px",outline:"none",textDecoration:item.done?"line-through":"none",opacity:item.done?0.5:1}}/>
+                          <button onClick={()=>u({roughInspectionItems:(job.roughInspectionItems||[]).filter((_,j)=>j!==i)})}
+                            style={{background:"none",border:"none",color:C.dim,fontSize:16,cursor:"pointer",padding:"0 4px",lineHeight:1}}>×</button>
+                        </div>
+                      ))}
+                      <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
+                        <button onClick={()=>u({roughInspectionItems:[...(job.roughInspectionItems||[]),{id:uid(),text:"",done:false}]})}
+                          style={{fontSize:12,padding:"4px 10px",borderRadius:5,background:C.surface,border:`1px solid ${C.border}`,color:C.text,cursor:"pointer"}}>+ Add Item</button>
+                        {(job.roughInspectionItems||[]).filter(x=>!x.done).length>0&&(
+                          <button onClick={()=>{
+                            const open=(job.roughInspectionItems||[]).filter(x=>!x.done);
+                            const newRT={id:uid(),date:"",scope:"Failed rough inspection items",material:"",punch:open.map(x=>({id:uid(),text:x.text,done:false})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};
+                            u({returnTrips:[...(job.returnTrips||[]),newRT]});
+                            alert("Return trip created with "+open.length+" inspection item"+(open.length!==1?"s":"")+".");
+                          }} style={{fontSize:12,padding:"4px 12px",borderRadius:5,background:"#dc262618",border:"1px solid #dc262633",color:"#dc2626",cursor:"pointer",fontWeight:700}}>
+                            → Create Return Trip
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </Section>
+
+              <Section label="Punch List" color={C.rough} action={
+                <PunchPicker punch={job.roughPunch||{}} jobId={job.id} stage="Rough" color={C.rough} showHotcheck={false}/>
+              }>
 
                 <PunchSection punch={job.roughPunch} onChange={v=>u({roughPunch:v})}
 
@@ -5312,11 +5972,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
               </Section>
 
               <div style={{marginTop:20}}>
-
-                <Section label="Questions" color={C.rough}>
-                <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough}/>
-              </Section>
-
+                <Section label="Questions" color={C.rough} action={
+                  <QuestionPicker roughQuestions={job.roughQuestions} finishQuestions={job.finishQuestions} jobId={job.id} color={C.rough}/>
+                }>
+                  {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{if(a.answer&&!((job.roughQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m}/>;})()}
+                  {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#16a34a',marginTop:6}}>✅ Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
+                  </div>}
+                </Section>
               </div>
 
               <div style={{marginTop:20}}>
@@ -5362,29 +6024,47 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                               {job.finishStartConfirmed ? "✓ CONFIRMED" : "○ CONFIRM"}
                             </button>
                           </div>
-                          <DateInp value={job.finishProjectedStart||""} onChange={e=>u({finishProjectedStart:e.target.value})}
+                          <DateInp value={job.finishProjectedStart||""} onChange={e=>{
+                              const patch={finishProjectedStart:e.target.value};
+                              // Auto-advance to "Waiting for Start Date Confirmation" when a date is entered and no status is set yet
+                              if(e.target.value && !job.finishStatus) patch.finishStatus="waiting_date";
+                              u(patch);
+                            }}
                             style={{fontSize:13,fontWeight:700,
                               borderColor:(job.finishStartConfirmed?"#16a34a":C.finish)+"55",
                               background:job.finishStartConfirmed?"#16a34a08":`${C.finish}08`,
                               color:job.finishStartConfirmed?"#16a34a":C.finish}}/>
                           {job.finishStartConfirmed&&<div style={{fontSize:9,color:"#16a34a",fontWeight:700,marginTop:3,letterSpacing:"0.06em"}}>✓ START DATE CONFIRMED</div>}
                         </div>
+                        <div style={{flex:1,minWidth:140}}>
+                          <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>FINAL INSPECTION TARGET DATE</div>
+                          <DateInp value={job.finalInspectionTargetDate||""} onChange={e=>u({finalInspectionTargetDate:e.target.value})}
+                            style={{fontSize:13,fontWeight:700,borderColor:C.finish+"55",background:`${C.finish}08`,color:C.finish}}/>
+                        </div>
                       </div>
                       <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
                       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                         <select value={job.finishStatus||""} onChange={e=>{
                           const v=e.target.value;
+                          if(v==="complete"){
+                            const finishOpen=punchOpen(job.finishPunch);
+                            const qcOpen=punchOpen(job.qcPunch);
+                            const total=finishOpen+qcOpen;
+                            if(total>0){
+                              const parts=[];
+                              if(finishOpen>0) parts.push(`${finishOpen} finish punch item${finishOpen!==1?"s":""}`);
+                              if(qcOpen>0) parts.push(`${qcOpen} QC item${qcOpen!==1?"s":""}`);
+                              alert(`Cannot mark Finish as complete — ${parts.join(" and ")} still open. Clear them first.`);
+                              return;
+                            }
+                          }
                           const def=getStatusDef(FINISH_STATUSES,v);
                           u({finishStatus:v, finishOnHold:v==="waiting", finishScheduled:v==="scheduled",
-                            finishStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting"||v==="invoice")?job.finishStartConfirmed:false,
+                            finishStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting")?job.finishStartConfirmed:false,
                             finishStatusDate:def.hasDate?job.finishStatusDate:"",
-                            readyToInvoice:v==="invoice"?true:(job.finishStatus==="invoice"?false:job.readyToInvoice),
-                            ...(v==="invoice"&&!job.readyToInvoice?{readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{}),
                             finishProjectedStart:v==="scheduled"?job.finishProjectedStart:job.finishProjectedStart,
                             // Reset deposit dismissed when rescheduled so task reappears
                             ...(v==="scheduled"?{finishDepositDismissed:false}:{}),
-                            // Reset invoice dismissed when status changes away from complete/invoice
-                            ...((v!=="complete"&&v!=="invoice")?{finishInvoiceDismissed:false}:{}),
                           });
                         }} style={{background:fsDef.color?`${fsDef.color}18`:C.surface,
                           color:fsDef.color||C.dim, border:`1px solid ${fsDef.color||C.border}`,
@@ -5412,11 +6092,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                     </div>
                   );
                 })()}
-                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;u({finishStage:v,...(v==="100%"?{finishStatus:"complete",readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
+                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const finishOpen=punchOpen(job.finishPunch);const qcOpen=punchOpen(job.qcPunch);const total=finishOpen+qcOpen;if(total>0){const parts=[];if(finishOpen>0)parts.push(`${finishOpen} finish punch item${finishOpen!==1?"s":""}`);if(qcOpen>0)parts.push(`${qcOpen} QC item${qcOpen!==1?"s":""}`);alert(`Cannot set Finish to 100% — ${parts.join(" and ")} still open. Clear them first.`);return;}}const invoiceFire=pct>=85&&!job.finishInvoiceFired?{finishInvoiceFired:true,finishInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{finishInvoiceFired:false,finishInvoiceDismissed:false}:{};u({finishStage:v,...invoiceFire,...invoiceReset,...(v==="100%"?{finishStatus:"complete"}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
                 <div style={{marginTop:8,marginBottom:20}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
               </Section>
 
-              <Section label="Punch List" color={C.finish}>
+              <Section label="Punch List" color={C.finish} action={
+                <PunchPicker punch={job.finishPunch||{}} jobId={job.id} stage="Finish" color={C.finish} showHotcheck={false}/>
+              }>
                 <PunchSection punch={job.finishPunch} onChange={v=>u({finishPunch:v})} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}/>
               </Section>
 
@@ -5437,11 +6119,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
               </div>
 
               <div style={{marginTop:20}}>
-
-                <Section label="Questions" color={C.finish}>
-                <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish}/>
-              </Section>
-
+                <Section label="Questions" color={C.finish} action={
+                  <QuestionPicker roughQuestions={job.roughQuestions} finishQuestions={job.finishQuestions} jobId={job.id} color={C.finish}/>
+                }>
+                  {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{if(a.answer&&!((job.finishQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m}/>;})()}
+                  {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#16a34a',marginTop:6}}>✅ Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
+                  </div>}
+                </Section>
               </div>
 
               <div style={{marginTop:20}}>
@@ -5469,8 +6153,34 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
 
             <div>
 
+              {/* Share Collab Link */}
+              <div style={{marginBottom:16,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
+                <button onClick={()=>{
+                  const link=`${window.location.origin}/?lighting=${job.id}`;
+                  navigator.clipboard.writeText(link).then(()=>alert('✓ Lighting collab link copied!\n\nThe low voltage company can view assignments and add their module/channel info.')).catch(()=>alert('Link:\n'+link));
+                }} style={{background:`${C.purple}15`,border:`1px solid ${C.purple}55`,borderRadius:6,
+                  color:C.purple,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.05em'}}>
+                  Share ↗
+                </button>
+                <span style={{fontSize:11,color:C.dim}}>LV company can add module/channel assignments</span>
+              </div>
+
               {/* Lighting Control System Selector */}
 
+              {(()=>{
+                const sysUrls={"Control 4":"https://www.control4.com/solutions/smart-lighting","Lutron":"https://residential.lutron.com/us/en/homeworks","Savant":"https://www.savant.com/lighting/","Crestron":"https://www.crestron.com/Products/Featured-Solutions/Zum-Lighting-Control-Systems"};
+                const url=sysUrls[job.lightingSystem||"Control 4"];
+                return url?(
+                  <div style={{marginBottom:10,display:"flex",alignItems:"center",gap:6}}>
+                    <a href={url} target="_blank" rel="noopener noreferrer"
+                      style={{fontSize:11,color:C.purple,textDecoration:"none",fontWeight:600,
+                        background:`${C.purple}10`,border:`1px solid ${C.purple}33`,
+                        borderRadius:6,padding:"3px 10px",display:"inline-flex",alignItems:"center",gap:4}}>
+                      {job.lightingSystem||"Control 4"} docs ↗
+                    </a>
+                  </div>
+                ):null;
+              })()}
 
               <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
 
@@ -5534,13 +6244,25 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
 
               <SectionHead label={`${job.lightingSystem||"Control 4"} Panel Loads`} color={C.purple}/>
 
-              {["upper","main","basement"].map(floor=>(
+              {[
+                {floor:"upper", defaultLabel:"Upper Level"},
+                {floor:"main",  defaultLabel:"Main Level"},
+                {floor:"basement", defaultLabel:"Basement"},
+              ].map(({floor,defaultLabel})=>(
                 <div key={floor} style={{marginBottom:16}}>
-                  <div style={{fontSize:11,color:C.dim,fontWeight:700,letterSpacing:"0.08em",
-                    textTransform:"uppercase",marginBottom:8,paddingBottom:4,
-                    borderBottom:`1px solid ${C.border}`}}>{floor}</div>
-                  <CP4LoadsSection
-                    loads={(job.panelizedLighting.cp4Loads?.[floor])||[]}
+                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                    marginBottom:8,paddingBottom:4,borderBottom:`1px solid ${C.border}`}}>
+                    <input
+                      value={job.plSectionLabels?.[floor]||""}
+                      onChange={e=>u({plSectionLabels:{...(job.plSectionLabels||{}),[floor]:e.target.value}})}
+                      placeholder={defaultLabel}
+                      style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.purple,
+                        background:"none",border:"none",outline:"none",cursor:"text",
+                        textTransform:"uppercase",fontFamily:"inherit",flex:1}}/>
+                  </div>
+                  <PanelModulesSection
+                    system={job.lightingSystem||"Control 4"}
+                    modules={migrateFloorToModules((job.panelizedLighting.cp4Loads?.[floor])||[])}
                     onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
                       cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}/>
                 </div>
@@ -5550,17 +6272,25 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                 <div key={ef.key} style={{marginBottom:16}}>
                   <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
                     marginBottom:8,paddingBottom:4,borderBottom:`1px solid ${C.border}`}}>
-                    <div style={{fontSize:11,color:C.purple,fontWeight:700,letterSpacing:"0.08em",
-                      textTransform:"uppercase"}}>{ef.label}</div>
+                    <input
+                      value={ef.label}
+                      onChange={e=>{
+                        const newExtras=(job.panelizedLighting.extraFloors||[]).map(f=>f.key===ef.key?{...f,label:e.target.value}:f);
+                        u({panelizedLighting:{...job.panelizedLighting,extraFloors:newExtras}});
+                      }}
+                      style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.purple,
+                        background:"none",border:"none",outline:"none",cursor:"text",
+                        textTransform:"uppercase",fontFamily:"inherit",flex:1}}/>
                     <button onClick={()=>{
                       const newExtras=(job.panelizedLighting.extraFloors||[]).filter(e=>e.key!==ef.key);
                       const updated={...job.panelizedLighting,extraFloors:newExtras};
                       delete updated[ef.key+"_keypad"];
                       u({panelizedLighting:updated});
-                    }} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
+                    }} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>Remove</button>
                   </div>
-                  <CP4LoadsSection
-                    loads={(job.panelizedLighting[ef.key])||[]}
+                  <PanelModulesSection
+                    system={job.lightingSystem||"Control 4"}
+                    modules={migrateFloorToModules((job.panelizedLighting[ef.key])||[])}
                     onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}/>
                 </div>
               ))}
@@ -5578,7 +6308,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                   <div style={{display:"flex",gap:8,alignItems:"center",marginTop:8,flexWrap:"wrap"}}>
                     <input value={newLightingFloor} onChange={e=>setNewLightingFloor(e.target.value)}
                       onKeyDown={e=>e.key==="Enter"&&addFloor()}
-                      placeholder="Add floor / area…"
+                      placeholder="Add panel / area…"
                       style={{flex:1,minWidth:160,background:C.surface,border:`1px solid ${C.border}`,
                         borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
                         outline:"none",color:C.text}}/>
@@ -5586,8 +6316,67 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                       style={{background:C.purple,color:"#fff",border:"none",borderRadius:7,
                         padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",
                         fontFamily:"inherit",whiteSpace:"nowrap"}}>
-                      + Add Floor / Area
+                      + Add Panel / Area
                     </button>
+                  </div>
+                );
+              })()}
+
+              {/* LV Company Additions */}
+              {lvCollab&&(()=>{
+                const hasAny = [
+                  ...(lvCollab.mainKeypad||[]),
+                  ...(lvCollab.basementKeypad||[]),
+                  ...(lvCollab.upperKeypad||[]),
+                  ...(Object.keys(lvCollab).filter(k=>k.startsWith('pl_')).flatMap(k=>lvCollab[k]||[])),
+                  ...(lvCollab.generalNotes?[1]:[]),
+                ].length > 0;
+                if(!hasAny) return null;
+                const LVBadge = ()=><span style={{fontSize:9,fontWeight:800,color:'#2563eb',background:'#ede9fe',borderRadius:4,padding:'1px 5px',marginRight:6,flexShrink:0}}>LV</span>;
+                const renderLVRows = (rows) => rows&&rows.length>0?(
+                  <div style={{marginBottom:8}}>
+                    {rows.map((r,i)=>(
+                      <div key={i} style={{display:'flex',alignItems:'flex-start',gap:8,padding:'5px 10px',
+                        background:'#eff6ff',border:'1px solid #c4b5fd44',borderRadius:7,marginBottom:4}}>
+                        <LVBadge/>
+                        <div style={{flex:1}}>
+                          <div style={{fontSize:12,color:'#6d28d9',fontWeight:600}}>{r.name||'—'}</div>
+                          {r.module&&<div style={{fontSize:11,color:'#2563eb',marginTop:1}}>Module/Ch: {r.module}</div>}
+                          {r.notes&&<div style={{fontSize:11,color:'#8b5cf6',fontStyle:'italic',marginTop:1}}>"{r.notes}"</div>}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                ):null;
+                const sectionLabels = {mainKeypad:'Main Keypad',basementKeypad:'Basement Keypad',upperKeypad:'Upper Keypad'};
+                const sections = ['mainKeypad','basementKeypad','upperKeypad',
+                  ...Object.keys(lvCollab).filter(k=>k.startsWith('pl_'))];
+                return (
+                  <div style={{marginTop:20,padding:'14px 16px',background:'#eff6ff',
+                    border:'1px solid #c4b5fd',borderRadius:12}}>
+                    <div style={{fontSize:12,fontWeight:700,color:'#2563eb',marginBottom:12,display:'flex',alignItems:'center',gap:6}}>
+                      <LVBadge/>
+                      LV Company Additions
+                      {lvCollab.companyName&&<span style={{fontSize:11,color:'#8b5cf6',fontWeight:400}}>· {lvCollab.companyName}</span>}
+                    </div>
+                    {sections.map(key=>{
+                      const rows = lvCollab[key];
+                      if(!rows||!rows.length) return null;
+                      const label = sectionLabels[key]||(key.startsWith('pl_')?key.replace(/^pl_/,'').replace(/_\d+$/,'').replace(/_/g,' '):'Other');
+                      return (
+                        <div key={key} style={{marginBottom:10}}>
+                          <div style={{fontSize:10,color:'#8b5cf6',fontWeight:700,letterSpacing:'0.07em',
+                            textTransform:'uppercase',marginBottom:6}}>{label}</div>
+                          {renderLVRows(rows)}
+                        </div>
+                      );
+                    })}
+                    {lvCollab.generalNotes&&(
+                      <div style={{marginTop:6,paddingTop:10,borderTop:'1px solid #c4b5fd55'}}>
+                        <div style={{fontSize:10,color:'#8b5cf6',fontWeight:700,letterSpacing:'0.07em',marginBottom:4}}>NOTES</div>
+                        <div style={{fontSize:12,color:'#6d28d9',fontStyle:'italic',whiteSpace:'pre-wrap'}}>{lvCollab.generalNotes}</div>
+                      </div>
+                    )}
                   </div>
                 );
               })()}
@@ -5688,8 +6477,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
                 );
               })()}
 
-              <Section label="QC Walk Checklist" color={C.teal} defaultOpen={true}>
-                <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }}/>
+              <Section label="QC Walk Checklist" color={C.teal} defaultOpen={true} action={
+                <PunchPicker punch={job.qcPunch||{}} jobId={job.id} stage="QC" color={C.teal} showHotcheck={true}/>
+              }>
+                <PunchSection punch={job.qcPunch} onChange={v=>{const allClear=punchOpen(v)===0;u({qcPunch:v,...(job.qcStatus==="fail"&&allClear?{qcStatus:"pass"}:{})});}} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }} showHotcheck={true}/>
               </Section>
 
               <div style={{marginTop:16,padding:"14px 16px",background:job.qcSignedOff?`${C.green}10`:C.surface,border:`1px solid ${job.qcSignedOff?C.green+"55":C.border}`,borderRadius:10}}>
@@ -5831,36 +6622,30 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList}) {
               </div>
 
               <div style={{marginTop:16}}>
-                <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.1em",marginBottom:8}}>PRE JOB PREP STAGE</div>
-                <select value={job.prepStage||""} onChange={e=>u({prepStage:e.target.value,...(e.target.value===PREP_STAGE_ALERT?{readyToSchedule:false}:{})})}
-                  style={{background:job.prepStage===PREP_STAGE_ALERT?"#fef2f2":C.surface,
-                    color:job.prepStage===PREP_STAGE_ALERT?"#dc2626":job.prepStage?C.text:C.dim,
-                    border:`1px solid ${job.prepStage===PREP_STAGE_ALERT?"#dc2626":C.border}`,
-                    borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
-                    fontWeight:job.prepStage===PREP_STAGE_ALERT?700:400,
-                    outline:"none",width:"100%",cursor:"pointer"}}>
-                  <option value="">— select stage —</option>
-                  {PREP_STAGES.map(s=>(
-                    <option key={s} value={s}
-                      style={{color:s===PREP_STAGE_ALERT?"#dc2626":"inherit",
-                        fontWeight:s===PREP_STAGE_ALERT?700:400}}>
-                      {s===PREP_STAGE_ALERT?"⚠ "+s:s}
-                    </option>
-                  ))}
-                </select>
-                {job.prepStage&&(
-                  <div style={{marginTop:10,display:"flex",gap:6,alignItems:"flex-start",flexWrap:"wrap"}}>
-                    {PREP_STAGES.map((s,i)=>(
-                      <div key={s} style={{display:"flex",alignItems:"center",gap:4}}>
-                        <div style={{width:10,height:10,borderRadius:"50%",flexShrink:0,
-                          background:s===PREP_STAGE_ALERT&&job.prepStage===s?"#dc2626":PREP_STAGES.indexOf(job.prepStage)>=i?C.teal:C.border}}/>
-                        <span style={{fontSize:10,
-                          color:s===PREP_STAGE_ALERT&&job.prepStage===s?"#dc2626":PREP_STAGES.indexOf(job.prepStage)>=i?C.teal:C.dim,
-                          fontWeight:PREP_STAGES.indexOf(job.prepStage)===i?700:400}}>{s===PREP_STAGE_ALERT?"⚠ "+s:s}</span>
-                        {i<PREP_STAGES.length-1&&<span style={{color:C.border,fontSize:10}}>›</span>}
-                      </div>
-                    ))}
-                  </div>
+                <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.1em",marginBottom:10}}>PRE JOB PREP</div>
+                <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                  {PREP_CHECKLIST_ITEMS.map((item,i)=>{
+                    const checked=!!((job.prepChecklist||{})[item.key]);
+                    const isLast=item.key==="readyToHandOff";
+                    return(
+                      <label key={item.key} style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",
+                        ...(isLast?{marginTop:6,paddingTop:10,borderTop:`1px solid ${C.border}`}:{})}}>
+                        <input type="checkbox" checked={checked}
+                          onChange={e=>{
+                            const newChecklist={...(job.prepChecklist||{}),[item.key]:e.target.checked};
+                            u({prepChecklist:newChecklist});
+                          }}
+                          style={{accentColor:C.teal,width:16,height:16,flexShrink:0}}/>
+                        <span style={{fontSize:13,color:checked?C.teal:C.text,fontWeight:checked?600:400,
+                          textDecoration:checked&&!isLast?"line-through":"none"}}>
+                          {item.label}
+                        </span>
+                      </label>
+                    );
+                  })}
+                </div>
+                {allPrepDone(job)&&(
+                  <div style={{marginTop:10,fontSize:11,fontWeight:700,color:C.teal}}>✓ Prep Complete — Handed Off to Foreman</div>
                 )}
               </div>
 
@@ -5971,7 +6756,7 @@ function QAInlineEdit({value, done, label, onSave}) {
 }
 
 
-function QAList({questions: _questions, onChange, color}) {
+function QAList({questions: _questions, onChange, color, gcAnswerMap={}}) {
 
   // guard: old data may be a string instead of array
 
@@ -6047,8 +6832,19 @@ function QAList({questions: _questions, onChange, color}) {
 
       {q.done&&q.answer&&(
 
-        <div style={{marginLeft:22,marginTop:4,fontSize:11,color:C.dim,fontStyle:"italic"}}>{q.answer}</div>
+        <div style={{marginLeft:22,marginTop:4,fontSize:11,color:C.dim,fontStyle:"italic",display:"flex",alignItems:"flex-start",gap:6}}>
+          {q.gcAnswered&&<span style={{fontSize:9,fontWeight:700,color:"#16a34a",background:"#dcfce7",borderRadius:4,padding:"1px 5px",flexShrink:0,marginTop:1}}>GC</span>}
+          <span>{q.answer}</span>
+        </div>
 
+      )}
+
+      {/* If GC has answered but it hasn't been applied yet, show a pending indicator */}
+      {!q.done&&gcAnswerMap[q.id]&&(
+        <div style={{marginLeft:22,marginTop:6,background:"#f0fdf4",border:"1px solid #16a34a44",borderRadius:6,padding:"6px 10px",fontSize:11}}>
+          <span style={{fontSize:9,fontWeight:700,color:"#16a34a",background:"#dcfce7",borderRadius:4,padding:"1px 5px",marginRight:6}}>GC</span>
+          <span style={{color:"#15803d",fontStyle:"italic"}}>{gcAnswerMap[q.id]}</span>
+        </div>
       )}
 
     </div>
@@ -6104,7 +6900,7 @@ function QAList({questions: _questions, onChange, color}) {
 }
 
 
-function QASection({questions: _questions, onChange, color}) {
+function QASection({questions: _questions, onChange, color, gcAnswerMap={}}) {
 
   // guard: normalize questions to always be object with array values
 
@@ -6128,7 +6924,8 @@ function QASection({questions: _questions, onChange, color}) {
 
             onChange={v=>onChange({...questions,[k]:v})}
 
-            color={color}/>
+            color={color}
+            gcAnswerMap={gcAnswerMap}/>
 
         </div>
 
@@ -6582,7 +7379,7 @@ const STAGE_SECTIONS = [
   { key:"tempPedReady",    label:"Temp Peds — Ready to Schedule", color:"#8b5cf6",
     test: j => !!j.tempPed && (!j.tempPedStatus||j.tempPedStatus==="ready") },
 
-  { key:"tempPedScheduled", label:"Temp Peds — Scheduled",           color:"#7c3aed",
+  { key:"tempPedScheduled", label:"Temp Peds — Scheduled",           color:"#2563eb",
     test: j => !!j.tempPed && j.tempPedStatus==="scheduled" },
 
   { key:"tempPedDone",     label:"Temp Peds — Completed",            color:"#16a34a",
@@ -6590,19 +7387,16 @@ const STAGE_SECTIONS = [
 
   // Full Jobs
   { key:"prep",         label:"Pre Job Prep",              color:"#0d9488",
-    test: j => !j.tempPed && !j.quickJob && (j.prepStage||"") !== "Job Prep Complete" },
+    test: j => !j.tempPed && !j.quickJob && !allPrepDone(j) },
 
   { key:"roughNotStarted", label:"Rough — Not Started",   color:"#64748b",
-    test: j => { const rs=effRS(j); return !j.tempPed && !j.quickJob && (j.prepStage||"")==="Job Prep Complete" && (!rs||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"); } },
+    test: j => { const rs=effRS(j); return !j.tempPed && !j.quickJob && allPrepDone(j) && (!rs||rs==="waiting_date"||rs==="date_confirmed"||rs==="scheduled"); } },
 
   { key:"roughHold",    label:"Rough — On Hold",           color:"#ca8a04",
     test: j => !j.tempPed && !j.quickJob && effRS(j) === "waiting" },
 
   { key:"rough",        label:"Rough In Progress",         color:"#2563eb",
     test: j => !j.tempPed && !j.quickJob && effRS(j) === "inprogress" },
-
-  { key:"roughInvoice", label:"Rough — Ready to Invoice",  color:"#ea580c",
-    test: j => !j.tempPed && !j.quickJob && effRS(j) === "invoice" },
 
   { key:"between",      label:"In Between",                color:"#e8a020",
     test: j => { if(j.tempPed||j.quickJob) return false; const rs=effRS(j); const fs=effFS(j); return rs==="complete"&&(!fs||fs==="waiting_date"||fs==="date_confirmed"||fs==="scheduled"); } },
@@ -6612,9 +7406,6 @@ const STAGE_SECTIONS = [
 
   { key:"finish",       label:"Finish In Progress",        color:"#0ea5e9",
     test: j => !j.tempPed && !j.quickJob && effFS(j) === "inprogress" },
-
-  { key:"finishInvoice",label:"Finish — Ready to Invoice", color:"#ea580c",
-    test: j => !j.tempPed && !j.quickJob && effFS(j) === "invoice" },
 
   { key:"complete",     label:"Completed",                 color:"#22c55e",
     test: j => !j.tempPed && !j.quickJob && effFS(j) === "complete" },
@@ -6850,7 +7641,7 @@ const SEED_UPCOMING = [
   {id:"seed13", name:"#1809 - Tuhaye Hollow",                                          city:"Kamas",               sales:"Josh",   customer:"The Housley Group",        notes:"",                                                   lastFollowUp:"",         foreman:""},
 ];
 
-function UpcomingJobs({ upcoming, onChange, onPromote, canManage=false, foremenList }) {
+function UpcomingJobs({ upcoming, onChange, onPromote, onPromoteToQuote, canManage=false, foremenList }) {
   const [editingId, setEditingId] = useState(null);
   const add = () => { if(!canManage) return; const j=blankUpcoming(); onChange([j,...upcoming]); setEditingId(j.id); };
   const upd = (id,patch) => { if(!canManage) return; onChange(upcoming.map(u=>u.id===id?{...u,...patch}:u)); };
@@ -6905,6 +7696,7 @@ function UpcomingJobs({ upcoming, onChange, onPromote, canManage=false, foremenL
                   <div style={{display:"flex",gap:8,marginTop:2}}>
                     <button onClick={()=>setEditingId(null)} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
                     <button onClick={()=>{if(window.confirm("Promote to active job?"))onPromote(u);}} style={{background:"none",border:`1px solid ${C.green}`,borderRadius:7,color:C.green,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✓ Promote to Job</button>
+                    <button onClick={()=>{if(window.confirm("Convert to quote?"))onPromoteToQuote(u);}} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:7,color:C.accent,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>→ Quote</button>
                     <button onClick={()=>del(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>Remove</button>
                   </div>
                 </div>
@@ -6921,6 +7713,7 @@ function UpcomingJobs({ upcoming, onChange, onPromote, canManage=false, foremenL
                   <div style={{flex:1.1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.lastFollowUp||"—"}</div>
                   <div style={{width:110,flexShrink:0,display:"flex",gap:6,justifyContent:"flex-end"}}>
                     <button onClick={()=>setEditingId(u.id)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Edit</button>
+                    <button onClick={()=>{if(window.confirm("Convert to quote?"))onPromoteToQuote(u);}} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:6,color:C.accent,fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Q</button>
                     <button onClick={()=>{if(window.confirm("Promote to active job?"))onPromote(u);}} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✓</button>
                   </div>
                 </>
@@ -7249,22 +8042,17 @@ function computeTasks(jobs) {
       color: "#ea580c", cleared: false,
     });
 
-    // Rough complete → invoice rough-in task
-    if((rs==="complete"||rs==="invoice") && !job.roughInvoiceDismissed) tasks.push({
-      id: job.id+"_rough_invoice", jobId: job.id, jobName: job.name,
-      type: "auto", category: "invoice", foreman,
-      title: "Invoice Rough-In",
-      desc: "Rough is complete — ready to invoice rough-in",
-      color: "#ea580c", cleared: false,
-    });
+    // (Rough/Finish invoice tasks consolidated into the single "Ready to Invoice" task above)
 
-    // Finish complete → invoice finish task
-    if((fs==="complete"||fs==="invoice") && !job.finishInvoiceDismissed) tasks.push({
-      id: job.id+"_finish_invoice", jobId: job.id, jobName: job.name,
-      type: "auto", category: "invoice", foreman,
-      title: "Invoice Finish",
-      desc: "Finish is complete — ready to invoice finish",
-      color: "#ea580c", cleared: false,
+    // Rough complete → Matterport scan task (assigned to foreman)
+    if((effRS(job)==="complete" || job.matterportStatus==="needs") && (job.matterportStatus||"")!=="complete" && !(job.matterportLinks?.length || job.matterportLink) && !job.matterportDismissed) tasks.push({
+      id: job.id+"_matterport", jobId: job.id, jobName: job.name,
+      type: "auto", category: "matterport", foreman,
+      title: "Schedule Matterport Scan",
+      desc: job.matterportStatus==="scheduled"
+        ? `Scan scheduled${job.matterportStatusDate?" for "+job.matterportStatusDate:""}`
+        : job.matterportStatus==="needs"&&job.matterportStatusDate ? "Needs scheduled by "+job.matterportStatusDate : "Rough is complete — schedule the Matterport scan",
+      color: C.rough, cleared: false,
     });
 
     // CO individually completed → merge/invoice task
@@ -7371,13 +8159,17 @@ function computeTasks(jobs) {
     });
 
     // Pre Job Prep — always assigned to Koy regardless of job foreman
-    if(!job.tempPed && (job.prepStage||"") !== "Job Prep Complete") {
+    if(!job.tempPed && job.type!=="quote" && !allPrepDone(job)) {
+      const c=job.prepChecklist||{};
+      const items=PREP_CHECKLIST_ITEMS;
+      const doneCount=items.filter(i=>c[i.key]).length;
+      const nextItem=items.find(i=>!c[i.key]);
       tasks.push({
         id: job.id+"_prep", jobId: job.id, jobName: job.name,
         type: "auto", category: "prep", foreman: "Koy",
         prepStage: job.prepStage||"",
         title: `Pre Job Prep: ${job.name||"Untitled"}`,
-        desc: job.prepStage ? `Stage: ${job.prepStage}` : "Not started",
+        desc: doneCount===0?"Not started":`${doneCount}/${items.length} complete${nextItem?` — Next: ${nextItem.label}`:""}`,
         color: "#0d9488", cleared: false,
       });
     }
@@ -7512,6 +8304,7 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
               </button>
             </div>
           )}
+          {task.foreman&&task.foreman!=="Unassigned"&&(()=>{const fc=getFC(task.foreman)||"#6b7280";return(<span style={{fontSize:9,fontWeight:700,color:fc,background:`${fc}18`,borderRadius:99,padding:"2px 7px",border:`1px solid ${fc}33`,letterSpacing:"0.04em"}}>{task.foreman.split(" ")[0]}</span>);})()}
           {task.type==="manual"&&<span style={{fontSize:9,color:"#6b7280",letterSpacing:"0.06em",fontWeight:600}}>MANUAL</span>}
         </div>
 
@@ -7539,8 +8332,8 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
             </span>
           </div>
         )}
-        {task.desc&&!task.windowLabel&&<div style={{fontSize:11,color:"var(--dim)",fontStyle:"italic",lineHeight:1.4}}>{task.desc}</div>}
-        {task.notes&&<div style={{fontSize:11,color:"var(--dim)",marginTop:2,lineHeight:1.4}}>{task.notes}</div>}
+        {task.desc&&!task.windowLabel&&<div style={{fontSize:11,color:"var(--dim)",fontStyle:"italic",lineHeight:1.4}}><RichText html={task.desc}/></div>}
+        {task.notes&&<div style={{fontSize:11,color:"var(--dim)",marginTop:2,lineHeight:1.4}}><RichText html={task.notes}/></div>}
 
         {task.category==="prep"&&task.prepStage&&(
           <div style={{marginTop:6}}>
@@ -7806,6 +8599,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
   const dismissFinishDeposit = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{finishDepositDismissed:true}); };
   const dismissRoughInvoice  = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{roughInvoiceDismissed:true}); };
   const dismissFinishInvoice = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{finishInvoiceDismissed:true}); };
+  const dismissMatterport    = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{matterportDismissed:true}); };
   const handleManualClear    = (jobId, clearedTasks) => { if(onUpdateJob) onUpdateJob(jobId,{clearedTasks}); };
   const dismissCODoneTask    = (jobId,coId)=> { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{coDoneDismissed:[...(job.coDoneDismissed||[]),coId]}); };
   const dismissRTDoneTask    = (jobId,rtId)=> { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{rtDoneDismissed:[...(job.rtDoneDismissed||[]),rtId]}); };
@@ -7857,6 +8651,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
     task.id.endsWith("_rough_invoice")      ? ()=>dismissRoughInvoice(task.jobId) :
     task.id.endsWith("_finish_invoice")     ? ()=>dismissFinishInvoice(task.jobId) :
     task.category==="invoice"               ? ()=>dismissInvoiceTask(task.jobId) :
+    task.id.endsWith("_matterport")         ? ()=>dismissMatterport(task.jobId) :
     task.id.endsWith("_done")&&task.coId   ? ()=>dismissCODoneTask(task.jobId,task.coId) :
     task.id.endsWith("_done")&&task.rtId   ? ()=>dismissRTDoneTask(task.jobId,task.rtId) :
     null;
@@ -7996,13 +8791,6 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
         {/* Regular tasks — shown unless filtered to "invoice" */}
         {catFilter!=="invoice"&&(
           <>
-            {!filterForeman&&(
-              <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:14}}>
-                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",color:"var(--dim)"}}>ALL TASKS</div>
-                {!showAdd&&<button onClick={()=>setShowAdd(true)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>+ Add Task</button>}
-              </div>
-            )}
-
             {totalOther===0&&(
               <div style={{textAlign:"center",padding:"40px 0",color:"var(--muted)"}}>
                 <div style={{fontSize:22,marginBottom:6}}>✓</div>
@@ -8012,35 +8800,43 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
 
             {filterForeman ? (
               <div>
-                {filterForeman&&<div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
                   <div style={{fontSize:11,fontWeight:700,color:"var(--dim)",letterSpacing:"0.06em"}}>TASKS</div>
                   <button onClick={()=>setShowAdd(v=>!v)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"4px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>+ Add Task</button>
-                </div>}
-                {showAdd&&filterForeman&&<AddTaskForm defaultForeman={filterForeman} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList}/>}
+                </div>
+                {showAdd&&<AddTaskForm defaultForeman={filterForeman} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList}/>}
                 {sorted.map(task=>(
                   <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
                     onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear}/>
                 ))}
               </div>
             ) : (
-              foremanList.map(f=>{
-                const fc=getFC(f)||"#6b7280";
-                const fTasks=sorted.filter(t=>t.foreman===f);
-                const fOverdue=fTasks.filter(t=>{ const u=URGENCY_FN(t.dueDate); return u&&u.days<0; }).length;
-                if(fTasks.length===0) return null;
-                const fCollapsed=!!collapsedForemen[f];
+              [
+                {key:'scheduling', label:'Scheduling',      icon:'📅', color:'#2563eb', cats:['rough','finish','schedule','tempped','matterport']},
+                {key:'rt',         label:'Return Trips',    icon:'🔄', color:'#8b5cf6', cats:['rt']},
+                {key:'co',         label:'Change Orders',   icon:'📋', color:'#dc2626', cats:['co']},
+                {key:'qc',         label:'QC Walks',        icon:'✅', color:'#0d9488', cats:['qc']},
+                {key:'po',         label:'Purchase Orders', icon:'📦', color:'#2563eb', cats:['po']},
+                {key:'punch',      label:'Open Punch',      icon:'⚠️', color:'#ea580c', cats:['punch']},
+                {key:'manual',     label:'Manual Tasks',    icon:'📝', color:'#6b7280', cats:['manual']},
+              ].map(group=>{
+                const groupTasks = sorted.filter(t=>group.cats.includes(t.category));
+                if(groupTasks.length===0) return null;
+                const gc = group.color;
+                const isCollapsed = !!collapsedForemen[group.key];
+                const overdue = groupTasks.filter(t=>{ const u=URGENCY_FN(t.dueDate); return u&&u.days<0; }).length;
                 return (
-                  <div key={f} style={{marginBottom:28}}>
-                    <div onClick={()=>toggleForeman(f)}
-                      style={{display:"flex",alignItems:"center",gap:8,marginBottom:fCollapsed?0:12,
-                        paddingBottom:8,borderBottom:`2px solid ${fc}33`,cursor:"pointer",userSelect:"none"}}>
-                      <div style={{width:9,height:9,borderRadius:"50%",background:fc}}/>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:fc}}>{f}</div>
-                      <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:fc,fontWeight:700}}>{fTasks.length}</div>
-                      {fOverdue>0&&<div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>⚠ {fOverdue} overdue</div>}
-                      <div style={{marginLeft:"auto",fontSize:12,color:fc,opacity:0.7,paddingRight:4}}>{fCollapsed?"▸":"▾"}</div>
+                  <div key={group.key} style={{marginBottom:28}}>
+                    <div onClick={()=>toggleForeman(group.key)}
+                      style={{display:"flex",alignItems:"center",gap:8,marginBottom:isCollapsed?0:12,
+                        paddingBottom:8,borderBottom:`2px solid ${gc}33`,cursor:"pointer",userSelect:"none"}}>
+                      <span style={{fontSize:14,lineHeight:1}}>{group.icon}</span>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:gc}}>{group.label}</div>
+                      <div style={{background:`${gc}18`,border:`1px solid ${gc}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:gc,fontWeight:700}}>{groupTasks.length}</div>
+                      {overdue>0&&<div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>⚠ {overdue} overdue</div>}
+                      <div style={{marginLeft:"auto",fontSize:12,color:gc,opacity:0.7,paddingRight:4}}>{isCollapsed?"▸":"▾"}</div>
                     </div>
-                    {!fCollapsed&&fTasks.map(task=>(
+                    {!isCollapsed&&groupTasks.map(task=>(
                       <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
                         onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear}/>
                     ))}
@@ -8290,7 +9086,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
           overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.job.name||"Untitled"}</div>
         {ev.desc&&ev.type!=="rough"&&ev.type!=="finish"&&
           <div style={{fontSize:11,color:"var(--dim)",marginBottom:4,overflow:"hidden",
-            textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.desc}</div>}
+            textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.desc.replace(/<[^>]*>/g,"")}</div>}
         <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginTop:2}}>
           <span style={{fontSize:10,fontWeight:700,color:ev.statusLabel?col:"var(--dim)"}}>{ev.statusLabel}</span>
           {ev.startDate&&(
@@ -9035,9 +9831,20 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upco
               }}/>
               <button disabled={restoring} onClick={()=>fileInputRef.current?.click()}
                 style={{padding:"10px 20px",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer",
-                  fontFamily:"inherit",background:restoring?"#9ca3af":"#7c3aed",color:"#fff",border:"none",
+                  fontFamily:"inherit",background:restoring?"#9ca3af":"#2563eb",color:"#fff",border:"none",
                   display:"flex",alignItems:"center",gap:8}}>
                 {restoring?"⏳ Restoring...":"📂 Restore from File"}
+              </button>
+              <button onClick={async()=>{
+                if(!window.confirm("This will force every device using the app to reload and get the latest version. Continue?")) return;
+                try {
+                  await setDoc(doc(db,"config","app"),{version:"force-update-"+Date.now()});
+                  alert("Done! All devices will reload in a few seconds.");
+                } catch(e) { alert("Failed: "+e.message); }
+              }} style={{padding:"10px 20px",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer",
+                fontFamily:"inherit",background:"#dc2626",color:"#fff",border:"none",
+                display:"flex",alignItems:"center",gap:8}}>
+                🔄 Force Update All Devices
               </button>
             </>
           )}
@@ -9128,7 +9935,7 @@ function HomeownerPage({ jobId }) {
       try {
         const jsnap = await getDoc(doc(db,'jobs',jobId));
         if(!jsnap.exists()){ setError('Job not found.'); setLoading(false); return; }
-        setJob(jsnap.data().data);
+        setJob(jsnap.data()?.data);
         const rsnap = await getDoc(doc(db,'homeowner_requests',jobId));
         if(rsnap.exists()&&rsnap.data().submitted){
           setSubmitted(true);
@@ -9338,10 +10145,981 @@ function HomeownerPage({ jobId }) {
 }
 
 
+// ── Questions Share Page (public) ─────────────────────────────
+// ── Home Runs Share Page (view-only) ──────────────────────────
+function HomeRunsSharePage({ jobId }) {
+  const [job, setJob] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
+      if(!snap.exists()){ setError('Not found.'); setLoading(false); return; }
+      setJob(snap.data()?.data);
+      setLoading(false);
+    }, () => { setError('Failed to load.'); setLoading(false); });
+    return () => unsub();
+  }, [jobId]);
+
+  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6b7280',fontSize:14}}>Loading…</div>;
+  if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#dc2626',fontSize:14}}>{error}</div>;
+
+  const hr = job?.homeRuns || {};
+  const floors = [
+    {key:'main', label:'Main Level'},
+    {key:'basement', label:'Basement'},
+    {key:'upper', label:'Upper Level'},
+    ...((hr.extraFloors||[]).map(ef=>({key:ef.key, label:ef.label}))),
+  ];
+  const allRows = floors.flatMap(f => hr[f.key]||[]);
+  const pulled = allRows.filter(r=>r.status==='Pulled').length;
+  const pct = allRows.length>0 ? Math.round((pulled/allRows.length)*100) : 0;
+
+  const wireChip = (wire) => {
+    const bg = WIRE_COLORS[wire]||'#f1f5f9';
+    const col = WIRE_TEXT[wire]||'#0f172a';
+    return wire ? <span style={{background:bg,color:col,borderRadius:5,padding:'1px 7px',fontSize:11,fontWeight:700}}>{wire}</span> : null;
+  };
+
+  return (
+    <div style={{maxWidth:700,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#f3f4f6',minHeight:'100vh'}}>
+      <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:22}}>
+        <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>HOMESTEAD ELECTRIC — HOME RUNS</div>
+        <div style={{fontSize:19,fontWeight:700,color:'#fff',marginBottom:2}}>{job?.name||'Job'}</div>
+        {job?.address&&<div style={{fontSize:12,color:'rgba(255,255,255,0.65)'}}>{job.address}</div>}
+      </div>
+
+      {allRows.length>0&&(
+        <div style={{background:'#fff',border:'1px solid #e5e7eb',borderRadius:10,padding:'14px 16px',marginBottom:16}}>
+          <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',marginBottom:8}}>
+            <span style={{fontSize:12,fontWeight:700,color:'#111'}}>Pull Progress</span>
+            <span style={{fontSize:13,fontWeight:700,color:pct===100?'#16a34a':'#2563eb'}}>{pulled} / {allRows.length} — {pct}%</span>
+          </div>
+          <div style={{height:8,background:'#e5e7eb',borderRadius:99,overflow:'hidden'}}>
+            <div style={{height:'100%',width:`${pct}%`,background:pct===100?'#16a34a':'#2563eb',borderRadius:99,transition:'width 0.4s'}}/>
+          </div>
+        </div>
+      )}
+
+      {floors.map(f => {
+        const rows = (hr[f.key]||[]).filter(r=>r.name||r.panel||r.wire);
+        if(!rows.length) return null;
+        return (
+          <div key={f.key} style={{background:'#fff',border:'1px solid #e5e7eb',borderRadius:10,marginBottom:12,overflow:'hidden'}}>
+            <div style={{background:'#2563eb',padding:'8px 16px'}}>
+              <span style={{fontSize:11,fontWeight:700,color:'#fff',letterSpacing:'0.08em'}}>{f.label.toUpperCase()}</span>
+            </div>
+            <div style={{padding:'0 4px'}}>
+              {rows.map((r,i) => (
+                <div key={r.id} style={{display:'flex',alignItems:'center',gap:8,padding:'9px 12px',borderBottom:i<rows.length-1?'1px solid #f3f4f6':'none',background:r.status==='Pulled'?'#f0fdf4':'#fff'}}>
+                  <span style={{fontSize:11,color:'#9ca3af',width:22,flexShrink:0,textAlign:'right'}}>{r.num}.</span>
+                  <span style={{flex:1,fontSize:13,fontWeight:600,color:'#111'}}>{r.name||<span style={{color:'#9ca3af',fontStyle:'italic'}}>Unnamed</span>}</span>
+                  {r.panel&&<span style={{fontSize:11,color:'#6b7280',background:'#f3f4f6',borderRadius:5,padding:'2px 7px'}}>{r.panel}</span>}
+                  {wireChip(r.wire)}
+                  {r.status==='Pulled'&&<span style={{fontSize:11,fontWeight:700,color:'#16a34a'}}>✓</span>}
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+
+      {allRows.length===0&&<div style={{textAlign:'center',padding:'48px 20px',color:'#9ca3af',background:'#fff',borderRadius:12}}>No home runs have been added yet.</div>}
+    </div>
+  );
+}
+
+// ── Lighting Collab Share Page ─────────────────────────────────
+function LightingSharePage({ jobId }) {
+  const [job,        setJob]       = useState(null);
+  const [loading,    setLoading]   = useState(true);
+  const [error,      setError]     = useState(null);
+  const [collab,     setCollab]    = useState({sections:{},notes:'',submittedBy:''});
+  const [saving,     setSaving]    = useState(false);
+  const [savedAt,    setSavedAt]   = useState(null);
+  const saveTimer = useRef(null);
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
+      if(!snap.exists()){ setError('Not found.'); setLoading(false); return; }
+      setJob(snap.data()?.data);
+      setLoading(false);
+    }, () => { setError('Failed to load.'); setLoading(false); });
+    return () => unsub();
+  }, [jobId]);
+
+  useEffect(() => {
+    getDoc(doc(db,'homeowner_requests',jobId)).then(snap => {
+      if(snap.exists()&&snap.data().lightingCollab) setCollab(snap.data().lightingCollab);
+    }).catch(()=>{});
+  }, [jobId]);
+
+  const saveCollab = (next) => {
+    setCollab(next);
+    clearTimeout(saveTimer.current);
+    setSaving(true);
+    saveTimer.current = setTimeout(async()=>{
+      try {
+        const ex = await getDoc(doc(db,'homeowner_requests',jobId));
+        await setDoc(doc(db,'homeowner_requests',jobId),{
+          ...(ex.exists()?ex.data():{}),
+          jobId, jobName:job?.name||'',
+          lightingCollab:{...next, savedAt:new Date().toISOString()},
+        });
+        setSavedAt(new Date());
+      } catch(e){}
+      setSaving(false);
+    },800);
+  };
+
+  const getSection = (key) => collab.sections?.[key] || [];
+  const setSection = (key, rows) => saveCollab({...collab, sections:{...collab.sections,[key]:rows}});
+  const addRow = (key) => setSection(key,[...getSection(key),{id:uid(),name:'',module:'',notes:'',addedByLV:true}]);
+  const updRow = (key,id,patch) => setSection(key,getSection(key).map(r=>r.id===id?{...r,...patch}:r));
+  const delRow = (key,id) => setSection(key,getSection(key).filter(r=>r.id!==id));
+
+  const sys = job?.lightingSystem||'Control 4';
+  const pl = job?.panelizedLighting||{};
+
+  const keypadSections = [
+    {key:'mainKeypad',     label:'Main Level Keypad'},
+    {key:'basementKeypad', label:'Basement Keypad'},
+    {key:'upperKeypad',    label:'Upper Level Keypad'},
+    ...((pl.extraFloors||[]).map(ef=>({key:ef.key+'_keypad',label:`${ef.label} Keypad`}))),
+  ];
+  const panelFloors = ['main','basement','upper',...((pl.extraFloors||[]).map(ef=>ef.key))];
+  const floorLabel = (k) => job?.plSectionLabels?.[k] || (k==='main'?'Main Level':k==='basement'?'Basement':k==='upper'?'Upper Level':k);
+
+  const SP = { accent:'#0ea5e9', accentDark:'#0284c7', accentBg:'#f0f9ff', accentBorder:'#7dd3fc',
+               bg:'#f1f5f9', card:'#ffffff', border:'#e2e8f0', text:'#0f172a', dim:'#64748b', muted:'#94a3b8',
+               green:'#16a34a', amber:'#d97706' };
+  const inputStyle = {background:SP.bg,border:`1px solid ${SP.border}`,borderRadius:6,padding:'5px 8px',fontSize:12,fontFamily:'inherit',outline:'none',width:'100%',boxSizing:'border-box',color:SP.text};
+  const lvRowStyle = {background:SP.accentBg,border:`1px solid ${SP.accentBorder}55`,borderRadius:8,padding:'8px 10px',marginBottom:6,display:'flex',gap:8,alignItems:'flex-start'};
+
+  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6b7280'}}>Loading…</div>;
+  if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#dc2626'}}>{error}</div>;
+
+  return (
+    <div style={{maxWidth:680,margin:'0 auto',padding:'28px 16px',fontFamily:"'DM Sans',system-ui,sans-serif",background:SP.bg,minHeight:'100vh'}}>
+      {/* Header */}
+      <div style={{background:SP.text,borderRadius:14,padding:'20px 22px',marginBottom:6}}>
+        <div style={{fontSize:10,color:'rgba(255,255,255,0.45)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>HOMESTEAD ELECTRIC — {sys.toUpperCase()} LIGHTING</div>
+        <div style={{fontSize:19,fontWeight:700,color:'#fff',marginBottom:2}}>{job?.name||'Job'}</div>
+        {job?.address&&<div style={{fontSize:12,color:'rgba(255,255,255,0.55)'}}>{job.address}</div>}
+        <div style={{marginTop:8,display:'inline-block',background:SP.accent,borderRadius:6,padding:'2px 10px',fontSize:10,fontWeight:700,color:'#fff',letterSpacing:'0.06em'}}>{sys}</div>
+      </div>
+      <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 4px 14px'}}>
+        <div style={{fontSize:11,color:SP.dim}}>Add your module assignments and circuit additions below. Changes save automatically.</div>
+        <div style={{fontSize:11,fontWeight:600,color:saving?SP.muted:SP.green}}>{saving?'Saving…':savedAt?`✓ Saved ${savedAt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`:''}</div>
+      </div>
+
+      {/* Name field */}
+      <div style={{background:SP.card,border:`1px solid ${SP.border}`,borderRadius:10,padding:14,marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:SP.dim,marginBottom:6,letterSpacing:'0.07em'}}>YOUR NAME / COMPANY</div>
+        <input value={collab.submittedBy||''} onChange={e=>saveCollab({...collab,submittedBy:e.target.value})}
+          placeholder="e.g. John Smith — LV Solutions" style={{...inputStyle,fontSize:13}}/>
+      </div>
+
+      {/* Keypad sections */}
+      {keypadSections.map(({key,label}) => {
+        const existingRows = (pl[key]||[]).filter(r=>r.name);
+        const lvRows = getSection(key);
+        return (
+          <div key={key} style={{background:SP.card,border:`1px solid ${SP.border}`,borderRadius:10,marginBottom:12,overflow:'hidden'}}>
+            <div style={{background:SP.accent,padding:'8px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <span style={{fontSize:11,fontWeight:700,color:'#fff',letterSpacing:'0.08em'}}>{label.toUpperCase()}</span>
+            </div>
+            <div style={{padding:'10px 12px'}}>
+              {existingRows.length>0&&(
+                <div style={{marginBottom:10}}>
+                  <div style={{fontSize:10,color:SP.muted,fontWeight:700,marginBottom:6,letterSpacing:'0.07em'}}>PLANNED BUTTONS</div>
+                  {existingRows.map((r,i)=>(
+                    <div key={r.id} style={{display:'flex',gap:8,alignItems:'center',padding:'5px 0',borderBottom:i<existingRows.length-1?`1px solid ${SP.border}`:'none'}}>
+                      <span style={{fontSize:11,color:SP.muted,width:20}}>{r.num}.</span>
+                      <span style={{flex:1,fontSize:12,color:SP.text,fontWeight:500}}>{r.name}</span>
+                    </div>
+                  ))}
+                </div>
+              )}
+              <div style={{fontSize:10,color:SP.accent,fontWeight:700,marginBottom:6,marginTop:existingRows.length?8:0,letterSpacing:'0.07em'}}>YOUR ADDITIONS / ASSIGNMENTS</div>
+              {lvRows.map(r=>(
+                <div key={r.id} style={lvRowStyle}>
+                  <div style={{flex:2}}><input value={r.name||''} onChange={e=>updRow(key,r.id,{name:e.target.value})} placeholder="Circuit / button name…" style={inputStyle}/></div>
+                  <div style={{flex:1}}><input value={r.module||''} onChange={e=>updRow(key,r.id,{module:e.target.value})} placeholder="Module / channel…" style={inputStyle}/></div>
+                  <div style={{flex:2}}><input value={r.notes||''} onChange={e=>updRow(key,r.id,{notes:e.target.value})} placeholder="Notes…" style={inputStyle}/></div>
+                  <button onClick={()=>delRow(key,r.id)} style={{background:'none',border:'none',color:SP.muted,cursor:'pointer',fontSize:13,flexShrink:0}}>✕</button>
+                </div>
+              ))}
+              <button onClick={()=>addRow(key)} style={{fontSize:11,fontWeight:700,color:SP.accent,background:SP.accentBg,border:`1px dashed ${SP.accentBorder}`,borderRadius:6,padding:'5px 14px',cursor:'pointer',fontFamily:'inherit',width:'100%',marginTop:4}}>+ Add Row</button>
+            </div>
+          </div>
+        );
+      })}
+
+      {/* Panel load sections — module-block layout */}
+      {panelFloors.map(floor => {
+        const rawLoads = pl.cp4Loads?.[floor]||[];
+        const extraFloorRaw = pl[floor]||[];
+        const rawData = rawLoads.length ? rawLoads : extraFloorRaw;
+        const mods = migrateFloorToModules(rawData);
+        const hasAnyLoad = mods.some(m=>m.loads.some(l=>l.name));
+        const lvKey = 'cp4_'+floor;
+        const lvRows = getSection(lvKey);
+        if(!hasAnyLoad&&!lvRows.length) return null;
+
+        const isSav=sys==='Savant',isLut=sys==='Lutron',isCres=sys==='Crestron';
+        const devLabel=isCres?'Device':'Module';
+
+        return (
+          <div key={floor} style={{background:SP.card,border:`1px solid ${SP.border}`,borderRadius:10,marginBottom:12,overflow:'hidden'}}>
+            <div style={{background:SP.text,padding:'8px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <span style={{fontSize:11,fontWeight:700,color:'#fff',letterSpacing:'0.08em'}}>{floorLabel(floor).toUpperCase()} — PANEL LOADS</span>
+              <span style={{background:SP.accent,borderRadius:5,padding:'1px 8px',fontSize:10,fontWeight:700,color:'#fff'}}>{sys}</span>
+            </div>
+            <div style={{padding:'10px 12px'}}>
+              {hasAnyLoad&&(
+                <div style={{marginBottom:12}}>
+                  {mods.map(mod=>{
+                    const namedLoads = mod.loads.filter(l=>l.name);
+                    if(!namedLoads.length) return null;
+                    const pulled = namedLoads.filter(l=>l.pulled).length;
+                    return (
+                      <div key={mod.id} style={{border:`1px solid ${SP.accentBorder}88`,borderRadius:8,marginBottom:8,overflow:'hidden'}}>
+                        {/* Module header */}
+                        <div style={{background:SP.accentBg,padding:'6px 10px',display:'flex',alignItems:'center',gap:8,flexWrap:'wrap',borderBottom:`1px solid ${SP.accentBorder}55`}}>
+                          {!isSav&&<span style={{fontSize:10,fontWeight:700,color:SP.accentDark}}>{devLabel} {mod.modNum}</span>}
+                          {mod.moduleType&&<span style={{fontSize:10,color:SP.accentDark,background:`${SP.accentBorder}44`,borderRadius:4,padding:'1px 6px',fontWeight:600}}>{mod.moduleType}</span>}
+                          {isSav&&mod.panel&&<span style={{fontSize:10,color:SP.dim}}>Panel <b>{mod.panel}</b></span>}
+                          {isSav&&mod.breaker&&<span style={{fontSize:10,color:SP.dim}}>Bkr <b>{mod.breaker}</b></span>}
+                          {isSav&&mod.phase&&<span style={{fontSize:10,color:SP.dim}}>Phase <b>{mod.phase}</b></span>}
+                          {isLut&&mod.bus&&<span style={{fontSize:10,color:SP.dim}}>Bus <b>{mod.bus}</b></span>}
+                          {isLut&&mod.pdu&&<span style={{fontSize:10,color:SP.dim}}>PDU <b>{mod.pdu}</b></span>}
+                          {isCres&&mod.chainPos&&<span style={{fontSize:10,color:SP.dim}}>Chain <b>{mod.chainPos}</b></span>}
+                          <span style={{fontSize:10,color:SP.muted,marginLeft:'auto'}}>{namedLoads.length} ch{pulled>0?` · ${pulled} pulled`:''}</span>
+                        </div>
+                        {/* Load rows */}
+                        <div style={{padding:'4px 10px 6px'}}>
+                          {namedLoads.map(load=>(
+                            <div key={load.id} style={{display:'grid',gridTemplateColumns:'18px 24px 1fr 36px 70px 52px',gap:6,
+                              alignItems:'center',padding:'3px 0',borderBottom:`1px solid ${SP.border}`,
+                              background:load.pulled?'rgba(22,163,74,0.06)':'transparent',borderRadius:4}}>
+                              <span style={{fontSize:13,color:load.pulled?SP.green:SP.border,textAlign:'center'}}>{load.pulled?'✓':'○'}</span>
+                              <span style={{fontSize:11,color:SP.muted,textAlign:'center',fontWeight:700}}>{load.num}</span>
+                              <span style={{fontSize:12,color:SP.text,fontWeight:load.pulled?600:400}}>{load.name}</span>
+                              {load.ch&&<span style={{fontSize:10,color:SP.dim,textAlign:'center',background:SP.bg,borderRadius:4,padding:'1px 4px'}}>Ch {load.ch}</span>}
+                              {load.loadType&&<span style={{fontSize:10,color:SP.dim}}>{load.loadType}</span>}
+                              {load.watts&&<span style={{fontSize:10,color:SP.dim}}>{load.watts}W</span>}
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* LV company additions */}
+              <div style={{fontSize:10,color:SP.accent,fontWeight:700,marginBottom:6,marginTop:hasAnyLoad?8:0,letterSpacing:'0.07em'}}>YOUR ADDITIONS / NOTES</div>
+              {lvRows.map(r=>(
+                <div key={r.id} style={lvRowStyle}>
+                  <div style={{flex:2}}><input value={r.name||''} onChange={e=>updRow(lvKey,r.id,{name:e.target.value})} placeholder="Load name…" style={inputStyle}/></div>
+                  <div style={{flex:1}}><input value={r.module||''} onChange={e=>updRow(lvKey,r.id,{module:e.target.value})} placeholder="Module…" style={inputStyle}/></div>
+                  <div style={{flex:2}}><input value={r.notes||''} onChange={e=>updRow(lvKey,r.id,{notes:e.target.value})} placeholder="Notes…" style={inputStyle}/></div>
+                  <button onClick={()=>delRow(lvKey,r.id)} style={{background:'none',border:'none',color:SP.muted,cursor:'pointer',fontSize:13,flexShrink:0}}>✕</button>
+                </div>
+              ))}
+              <button onClick={()=>addRow(lvKey)} style={{fontSize:11,fontWeight:700,color:SP.accent,background:SP.accentBg,border:`1px dashed ${SP.accentBorder}`,borderRadius:6,padding:'5px 14px',cursor:'pointer',fontFamily:'inherit',width:'100%',marginTop:4}}>+ Add Row</button>
+            </div>
+          </div>
+        );
+      })}
+
+      {/* General notes */}
+      <div style={{background:SP.card,border:`1px solid ${SP.border}`,borderRadius:10,padding:14,marginBottom:16}}>
+        <div style={{fontSize:11,fontWeight:700,color:SP.dim,marginBottom:6,letterSpacing:'0.07em'}}>GENERAL NOTES</div>
+        <textarea value={collab.notes||''} onChange={e=>saveCollab({...collab,notes:e.target.value})}
+          placeholder="Any additional notes, questions, or specifications for Homestead Electric…" rows={4}
+          style={{width:'100%',border:`1px solid ${SP.border}`,borderRadius:7,padding:'8px 10px',fontSize:13,fontFamily:'inherit',resize:'vertical',boxSizing:'border-box',outline:'none',color:SP.text,background:SP.bg}}/>
+      </div>
+      <div style={{textAlign:'center',fontSize:11,color:SP.muted}}>Changes save automatically as you type.</div>
+    </div>
+  );
+}
+
+// ─── Question Picker (selective share modal) ─────────────────────────────────
+function QuestionPicker({ roughQuestions, finishQuestions, jobId, color }) {
+  const [open,     setOpen]     = useState(false);
+  const [selected, setSelected] = useState(new Set());
+
+  const flatQs = (qs, phase) => {
+    if(!qs || typeof qs !== 'object') return [];
+    return [
+      ...(qs.upper||[]).map(q=>({...q, phase, floor:'Upper Level'})),
+      ...(qs.main||[]).map(q=>({...q, phase, floor:'Main Level'})),
+      ...(qs.basement||[]).map(q=>({...q, phase, floor:'Basement'})),
+    ];
+  };
+
+  const allQs = [
+    ...flatQs(roughQuestions, 'rough'),
+    ...flatQs(finishQuestions, 'finish'),
+  ];
+
+  const openPicker = () => {
+    // Pre-select all by default
+    setSelected(new Set(allQs.map(q=>q.id)));
+    setOpen(true);
+  };
+
+  const toggle = (id) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      next.has(id) ? next.delete(id) : next.add(id);
+      return next;
+    });
+  };
+
+  const toggleAll = (ids) => {
+    setSelected(prev => {
+      const allOn = ids.every(id=>prev.has(id));
+      const next = new Set(prev);
+      ids.forEach(id => allOn ? next.delete(id) : next.add(id));
+      return next;
+    });
+  };
+
+  const copyLink = () => {
+    if(!selected.size){ alert('Select at least one question.'); return; }
+    const ids = [...selected].join(',');
+    const link = `${window.location.origin}/?questions=${jobId}&ids=${ids}`;
+    navigator.clipboard.writeText(link)
+      .then(()=>alert('Link copied! Send this to your contact:\n\n'+link))
+      .catch(()=>alert('Link:\n'+link));
+    setOpen(false);
+  };
+
+  if(!allQs.length) return null;
+
+  const roughQs  = allQs.filter(q=>q.phase==='rough');
+  const finishQs = allQs.filter(q=>q.phase==='finish');
+  const phaseColor = { rough:'#2563eb', finish:'#0ea5e9' };
+
+  const renderGroup = (qs, label, pc) => {
+    if(!qs.length) return null;
+    const ids = qs.map(q=>q.id);
+    const allOn = ids.every(id=>selected.has(id));
+    return (
+      <div style={{marginBottom:16}}>
+        <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',
+          borderBottom:`2px solid ${pc}33`,paddingBottom:5,marginBottom:8}}>
+          <span style={{fontSize:11,fontWeight:700,color:pc,letterSpacing:'0.08em'}}>{label}</span>
+          <button onClick={()=>toggleAll(ids)}
+            style={{fontSize:10,color:pc,background:'none',border:`1px solid ${pc}55`,borderRadius:4,
+              padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',fontWeight:600}}>
+            {allOn?'Deselect All':'Select All'}
+          </button>
+        </div>
+        {qs.map((q,i)=>(
+          <div key={q.id} onClick={()=>toggle(q.id)}
+            style={{display:'flex',alignItems:'flex-start',gap:10,padding:'8px 10px',marginBottom:4,
+              borderRadius:7,cursor:'pointer',
+              background:selected.has(q.id)?`${pc}10`:'#f9fafb',
+              border:`1px solid ${selected.has(q.id)?pc+'44':'#e5e7eb'}`}}>
+            <div style={{width:16,height:16,borderRadius:4,border:`2px solid ${selected.has(q.id)?pc:'#d1d5db'}`,
+              background:selected.has(q.id)?pc:'#fff',flexShrink:0,marginTop:1,
+              display:'flex',alignItems:'center',justifyContent:'center'}}>
+              {selected.has(q.id)&&<span style={{color:'#fff',fontSize:9,fontWeight:900}}>✓</span>}
+            </div>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginBottom:1}}>{q.floor}</div>
+              <div style={{fontSize:13,color:'#1f2937',lineHeight:1.4}}>Q{i+1}: {q.question}</div>
+            </div>
+          </div>
+        ))}
+      </div>
+    );
+  };
+
+  return (
+    <>
+      <button onClick={openPicker}
+        style={{background:`${color}15`,border:`1px solid ${color}55`,borderRadius:6,
+          color,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',
+          fontFamily:'inherit',letterSpacing:'0.05em'}}>
+        Share ↗
+      </button>
+
+      {open&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',zIndex:9999,
+          display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+          onClick={e=>{if(e.target===e.currentTarget)setOpen(false);}}>
+          <div style={{background:'#fff',borderRadius:14,width:'100%',maxWidth:520,
+            maxHeight:'85vh',display:'flex',flexDirection:'column',overflow:'hidden',
+            boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
+            {/* Modal header */}
+            <div style={{padding:'16px 20px',borderBottom:'1px solid #e5e7eb',display:'flex',
+              alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
+              <div>
+                <div style={{fontSize:15,fontWeight:700,color:'#111'}}>Select Questions to Share</div>
+                <div style={{fontSize:11,color:'#9ca3af',marginTop:2}}>
+                  {selected.size} of {allQs.length} selected · recipient will only see chosen questions
+                </div>
+              </div>
+              <button onClick={()=>setOpen(false)}
+                style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:'#9ca3af',padding:'0 4px',lineHeight:1}}>✕</button>
+            </div>
+            {/* Question list */}
+            <div style={{padding:'16px 20px',overflowY:'auto',flex:1}}>
+              {renderGroup(roughQs, '⚡ ROUGH PHASE', phaseColor.rough)}
+              {renderGroup(finishQs, '🏁 FINISH PHASE', phaseColor.finish)}
+            </div>
+            {/* Footer */}
+            <div style={{padding:'12px 20px',borderTop:'1px solid #e5e7eb',display:'flex',gap:8,flexShrink:0}}>
+              <button onClick={copyLink}
+                style={{flex:1,background:'#1e3a5f',color:'#fff',border:'none',borderRadius:8,
+                  padding:'10px 16px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
+                📋 Copy Link ({selected.size} question{selected.size!==1?'s':''})
+              </button>
+              <button onClick={()=>setOpen(false)}
+                style={{background:'#f3f4f6',color:'#6b7280',border:'none',borderRadius:8,
+                  padding:'10px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ─── Punch Picker (selective punch list share modal) ────────────────────────
+function PunchPicker({ punch, jobId, stage, color, showHotcheck }) {
+  const [open,     setOpen]     = useState(false);
+  const [selected, setSelected] = useState(new Set());
+
+  const normF = (f) => (f && typeof f === 'object' ? f : {});
+
+  const FLOOR_KEYS = [
+    ['upper',    'Upper Level'],
+    ['main',     'Main Level'],
+    ['basement', 'Basement'],
+    ...((punch.extras||[]).map(e=>[e.key, e.label])),
+  ];
+
+  const stageParam = stage.toLowerCase() + 'punch';
+
+  // Flatten every item with its floor + section labels
+  const getAllItems = () => {
+    const out = [];
+    FLOOR_KEYS.forEach(([k, floorLabel]) => {
+      const f = normF(punch[k]);
+      (f.general||[]).forEach(item =>
+        out.push({...item, floorKey:k, floorLabel, section:'General'})
+      );
+      if(showHotcheck) {
+        (f.hotcheck||[]).forEach(item =>
+          out.push({...item, floorKey:k, floorLabel, section:'Hot Check'})
+        );
+      }
+      (f.rooms||[]).forEach(room =>
+        (room.items||[]).forEach(item =>
+          out.push({...item, floorKey:k, floorLabel, section:room.name})
+        )
+      );
+    });
+    return out;
+  };
+
+  const allItems = getAllItems();
+
+  const openPicker = () => {
+    setSelected(new Set(allItems.map(i=>i.id)));
+    setOpen(true);
+  };
+
+  const toggle = (id) => setSelected(prev => {
+    const n = new Set(prev); n.has(id) ? n.delete(id) : n.add(id); return n;
+  });
+
+  const toggleFloor = (ids) => setSelected(prev => {
+    const n   = new Set(prev);
+    const all = ids.every(id=>n.has(id));
+    ids.forEach(id => all ? n.delete(id) : n.add(id));
+    return n;
+  });
+
+  const copyLink = () => {
+    if(!selected.size){ alert('Select at least one item.'); return; }
+    const ids  = [...selected].join(',');
+    const link = `${window.location.origin}/?${stageParam}=${jobId}&ids=${ids}`;
+    navigator.clipboard.writeText(link)
+      .then(()=>alert('Link copied!\n\n'+link))
+      .catch(()=>alert('Link:\n'+link));
+    setOpen(false);
+  };
+
+  if(!allItems.length) return null;
+
+  // Group items by floor for display
+  const byFloor = FLOOR_KEYS.map(([k, floorLabel]) => {
+    const items = allItems.filter(i=>i.floorKey===k);
+    return { k, floorLabel, items };
+  }).filter(g=>g.items.length>0);
+
+  return (
+    <>
+      <button onClick={openPicker}
+        style={{background:`${color}15`,border:`1px solid ${color}55`,borderRadius:6,
+          color,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',
+          fontFamily:'inherit',letterSpacing:'0.05em'}}>
+        Share ↗
+      </button>
+
+      {open&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.5)',zIndex:9999,
+          display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+          onClick={e=>{if(e.target===e.currentTarget)setOpen(false);}}>
+          <div style={{background:'#fff',borderRadius:14,width:'100%',maxWidth:500,
+            maxHeight:'88vh',display:'flex',flexDirection:'column',overflow:'hidden',
+            boxShadow:'0 24px 64px rgba(0,0,0,0.25)'}}>
+
+            {/* Header */}
+            <div style={{padding:'18px 22px 14px',borderBottom:'1px solid #e5e7eb',flexShrink:0}}>
+              <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:4}}>
+                <div style={{fontSize:15,fontWeight:700,color:'#111'}}>Share {stage} Punch List</div>
+                <button onClick={()=>setOpen(false)}
+                  style={{background:'none',border:'none',fontSize:18,cursor:'pointer',
+                    color:'#9ca3af',lineHeight:1,padding:'0 2px'}}>✕</button>
+              </div>
+              <div style={{fontSize:12,color:'#9ca3af'}}>
+                {selected.size} of {allItems.length} items selected — recipient sees only what you choose
+              </div>
+            </div>
+
+            {/* Item list */}
+            <div style={{overflowY:'auto',flex:1,padding:'14px 22px'}}>
+              {byFloor.map(({k, floorLabel, items})=>{
+                const ids   = items.map(i=>i.id);
+                const allOn = ids.every(id=>selected.has(id));
+                // Group within floor by section
+                const sections = [...new Set(items.map(i=>i.section))];
+                return (
+                  <div key={k} style={{marginBottom:18}}>
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',
+                      marginBottom:8,paddingBottom:6,borderBottom:`1.5px solid ${color}33`}}>
+                      <span style={{fontSize:11,fontWeight:700,color,letterSpacing:'0.07em'}}>
+                        {floorLabel.toUpperCase()}
+                      </span>
+                      <button onClick={()=>toggleFloor(ids)}
+                        style={{fontSize:10,color,background:'none',border:`1px solid ${color}44`,
+                          borderRadius:4,padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',fontWeight:600}}>
+                        {allOn?'Deselect All':'Select All'}
+                      </button>
+                    </div>
+                    {sections.map(sec=>{
+                      const secItems = items.filter(i=>i.section===sec);
+                      const showSec  = sections.length > 1;
+                      return (
+                        <div key={sec}>
+                          {showSec&&(
+                            <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,
+                              letterSpacing:'0.06em',marginBottom:4,marginTop:6}}>
+                              {sec.toUpperCase()}
+                            </div>
+                          )}
+                          {secItems.map(item=>(
+                            <div key={item.id} onClick={()=>toggle(item.id)}
+                              style={{display:'flex',alignItems:'flex-start',gap:10,
+                                padding:'7px 10px',marginBottom:3,borderRadius:7,cursor:'pointer',
+                                background:selected.has(item.id)?`${color}0d`:'#f9fafb',
+                                border:`1px solid ${selected.has(item.id)?color+'33':'#e5e7eb'}`}}>
+                              <div style={{width:15,height:15,borderRadius:3,flexShrink:0,marginTop:1,
+                                border:`2px solid ${selected.has(item.id)?color:'#d1d5db'}`,
+                                background:selected.has(item.id)?color:'#fff',
+                                display:'flex',alignItems:'center',justifyContent:'center'}}>
+                                {selected.has(item.id)&&
+                                  <span style={{color:'#fff',fontSize:8,fontWeight:900,lineHeight:1}}>✓</span>}
+                              </div>
+                              <span style={{fontSize:12,color:item.done?'#9ca3af':'#1f2937',
+                                textDecoration:item.done?'line-through':'none',lineHeight:1.45}}>
+                                {item.text}
+                                {item.done&&<span style={{marginLeft:6,fontSize:10,color:'#6ee7b7',fontWeight:600}}>✓ done</span>}
+                              </span>
+                            </div>
+                          ))}
+                        </div>
+                      );
+                    })}
+                  </div>
+                );
+              })}
+            </div>
+
+            {/* Footer */}
+            <div style={{padding:'12px 22px',borderTop:'1px solid #e5e7eb',
+              display:'flex',gap:8,flexShrink:0}}>
+              <button onClick={copyLink}
+                style={{flex:1,background:'#1e3a5f',color:'#fff',border:'none',borderRadius:8,
+                  padding:'10px 16px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
+                Copy Link — {selected.size} item{selected.size!==1?'s':''}
+              </button>
+              <button onClick={()=>setOpen(false)}
+                style={{background:'#f3f4f6',color:'#6b7280',border:'none',borderRadius:8,
+                  padding:'10px 14px',fontSize:13,cursor:'pointer',fontFamily:'inherit'}}>
+                Cancel
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
+    </>
+  );
+}
+
+// ─── Punch List Share Page (read-only for contractors) ───────────────────────
+function PunchSharePage({ jobId, stage }) {
+  const [job,     setJob]     = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState(null);
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
+      if(!snap.exists()){ setError('This punch list is not available.'); setLoading(false); return; }
+      setJob(snap.data()?.data);
+      setLoading(false);
+    }, () => { setError('Failed to load. Please try again.'); setLoading(false); });
+    return () => unsub();
+  }, [jobId]);
+
+  const stageColor   = stage==='Rough' ? '#2563eb' : stage==='Finish' ? '#0ea5e9' : '#0d9488';
+  const punchKey     = stage==='Rough' ? 'roughPunch' : stage==='Finish' ? 'finishPunch' : 'qcPunch';
+  const showHotcheck = stage==='QC';
+  const punch        = job?.[punchKey] || {};
+
+  // Optional item filter — when link was generated with PunchPicker (?ids=id1,id2,...)
+  const filterIds = (() => {
+    const raw = new URLSearchParams(window.location.search).get('ids');
+    if (!raw) return null;
+    const s = new Set(raw.split(',').filter(Boolean));
+    return s.size > 0 ? s : null; // empty set → no filter (show everything)
+  })();
+
+  const normF = (f) => f && typeof f==='object' ? f : {};
+  const FLOOR_KEYS = [
+    ['upper','Upper Level'],
+    ['main','Main Level'],
+    ['basement','Basement'],
+    ...((punch.extras||[]).map(e=>[e.key, e.label])),
+  ];
+
+  const vis  = (items) => filterIds ? (items||[]).filter(i=>filterIds.has(i.id)) : (items||[]);
+  const countFloorItems = (f) => {
+    const nf = normF(f);
+    return vis(nf.general).length + (showHotcheck?vis(nf.hotcheck).length:0) +
+      (nf.rooms||[]).reduce((s,r)=>s+vis(r.items).length, 0);
+  };
+  const countDone = (f) => {
+    const nf = normF(f);
+    return vis(nf.general).filter(i=>i.done).length + (showHotcheck?vis(nf.hotcheck).filter(i=>i.done).length:0) +
+      (nf.rooms||[]).reduce((s,r)=>s+vis(r.items).filter(i=>i.done).length, 0);
+  };
+  const totalItems = FLOOR_KEYS.reduce((s,[k])=>s+countFloorItems(punch[k]),0);
+  const doneItems  = FLOOR_KEYS.reduce((s,[k])=>s+countDone(punch[k]),0);
+  const pct = totalItems>0 ? Math.round(doneItems/totalItems*100) : 0;
+
+  const renderItems = (items) => (items||[]).map(item=>(
+    <div key={item.id} style={{display:'flex',alignItems:'flex-start',gap:8,padding:'8px 0',borderBottom:'1px solid #f3f4f6'}}>
+      <div style={{width:16,height:16,borderRadius:4,border:`2px solid ${item.done?stageColor:'#d1d5db'}`,
+        background:item.done?stageColor:'#fff',flexShrink:0,marginTop:1,display:'flex',alignItems:'center',justifyContent:'center'}}>
+        {item.done&&<span style={{color:'#fff',fontSize:9,fontWeight:900,lineHeight:1}}>✓</span>}
+      </div>
+      <span style={{fontSize:13,color:item.done?'#9ca3af':'#1f2937',textDecoration:item.done?'line-through':'none',lineHeight:1.45}}>{item.text}</span>
+    </div>
+  ));
+
+  if(loading) return <div style={{textAlign:'center',padding:60,color:'#9ca3af',fontFamily:'system-ui,sans-serif'}}>Loading…</div>;
+  if(error)   return <div style={{textAlign:'center',padding:60,color:'#ef4444',fontFamily:'system-ui,sans-serif'}}>{error}</div>;
+
+  return (
+    <div style={{maxWidth:640,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#f3f4f6',minHeight:'100vh'}}>
+      {/* Header */}
+      <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:22}}>
+        <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>
+          HOMESTEAD ELECTRIC · {stage.toUpperCase()} PUNCH LIST
+        </div>
+        <div style={{fontSize:19,fontWeight:700,color:'#fff',marginBottom:2}}>{job?.name||'Project'}</div>
+        {job?.address&&<div style={{fontSize:12,color:'rgba(255,255,255,0.65)',marginBottom:8}}>{job.address}</div>}
+        {/* Progress bar */}
+        <div style={{marginTop:10}}>
+          <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'rgba(255,255,255,0.7)',marginBottom:5}}>
+            <span>{doneItems} of {totalItems} items complete</span>
+            <span style={{fontWeight:700,color:pct===100?'#4ade80':'rgba(255,255,255,0.9)'}}>{pct}%</span>
+          </div>
+          <div style={{background:'rgba(255,255,255,0.15)',borderRadius:4,height:6}}>
+            <div style={{background:pct===100?'#4ade80':stageColor,width:`${pct}%`,height:6,borderRadius:4,transition:'width 0.3s'}}/>
+          </div>
+        </div>
+      </div>
+
+      {totalItems===0 ? (
+        <div style={{textAlign:'center',padding:'48px 20px',color:'#9ca3af',background:'#fff',borderRadius:12}}>
+          <div style={{fontSize:32,marginBottom:12}}>📋</div>
+          No punch list items yet. Check back later — this page updates automatically.
+        </div>
+      ) : (
+        FLOOR_KEYS.map(([k, label]) => {
+          const f = normF(punch[k]);
+          const general   = vis(f.general);
+          const hotcheck  = showHotcheck ? vis(f.hotcheck) : [];
+          const rooms     = (f.rooms||[]).map(r=>({...r,items:vis(r.items)})).filter(r=>r.items.length>0);
+          if(!general.length && !hotcheck.length && !rooms.length) return null;
+          const floorTotal = general.length + hotcheck.length + rooms.reduce((s,r)=>s+r.items.length,0);
+          const floorDone  = general.filter(i=>i.done).length + hotcheck.filter(i=>i.done).length + rooms.reduce((s,r)=>s+r.items.filter(i=>i.done).length,0);
+          return (
+            <div key={k} style={{background:'#fff',borderRadius:12,marginBottom:14,overflow:'hidden',boxShadow:'0 1px 3px rgba(0,0,0,0.06)'}}>
+              <div style={{background:stageColor,padding:'9px 16px',display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+                <span style={{fontSize:12,fontWeight:700,color:'#fff',letterSpacing:'0.07em'}}>{label.toUpperCase()}</span>
+                <span style={{fontSize:11,color:'rgba(255,255,255,0.8)'}}>{floorDone}/{floorTotal} done</span>
+              </div>
+              <div style={{padding:'4px 16px 10px'}}>
+                {general.length>0&&(
+                  <>
+                    {(hotcheck.length>0||rooms.length>0)&&<div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginTop:10,marginBottom:0,letterSpacing:'0.06em'}}>GENERAL</div>}
+                    {renderItems(general)}
+                  </>
+                )}
+                {hotcheck.length>0&&(
+                  <>
+                    <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginTop:10,marginBottom:0,letterSpacing:'0.06em'}}>⚡ HOT CHECK</div>
+                    {renderItems(hotcheck)}
+                  </>
+                )}
+                {rooms.map(room=>(
+                  <div key={room.id||room.name}>
+                    <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginTop:10,marginBottom:0,letterSpacing:'0.06em'}}>{(room.name||'').toUpperCase()}</div>
+                    {renderItems(room.items)}
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })
+      )}
+      <div style={{textAlign:'center',fontSize:11,color:'#9ca3af',marginTop:8}}>
+        This list updates in real time as items are completed.
+      </div>
+    </div>
+  );
+}
+
+function QuestionsSharePage({ jobId }) {
+  const [job,            setJob]           = useState(null);
+  const [loading,        setLoading]       = useState(true);
+  const [error,          setError]         = useState(null);
+  const [answers,        setAnswers]       = useState({});
+  const [submitting,     setSubmitting]    = useState(false);
+  const [submitted,      setSubmitted]     = useState(false);
+  const [respondentName, setRespondentName]= useState('');
+  const [nameErr,        setNameErr]       = useState(false);
+  const [prevAnsweredBy, setPrevAnsweredBy]= useState('');
+
+  // Optional ID filter — when link was generated with SELECT & SHARE (?ids=id1,id2,...)
+  const filterIds = (() => {
+    const raw = new URLSearchParams(window.location.search).get('ids');
+    if (!raw) return null;
+    const s = new Set(raw.split(',').filter(Boolean));
+    return s.size > 0 ? s : null; // empty set → no filter (show everything)
+  })();
+
+  // Live listener — questions update in real-time as crew adds them
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
+      if(!snap.exists()){ setError('This questions form is not available.'); setLoading(false); return; }
+      setJob(snap.data()?.data);
+      setLoading(false);
+    }, () => { setError('Failed to load. Please try again.'); setLoading(false); });
+    return () => unsub();
+  }, [jobId]);
+
+  // Pre-load any previously submitted answers
+  useEffect(() => {
+    getDoc(doc(db,'homeowner_requests',jobId)).then(snap => {
+      if(snap.exists() && snap.data().questionAnswers) {
+        const qa = snap.data().questionAnswers;
+        setPrevAnsweredBy(qa.answeredBy || '');
+        const ans = {};
+        ['rough','finish'].forEach(phase => {
+          ['upper','main','basement'].forEach(floor => {
+            (qa[phase]?.[floor] || []).forEach(a => { if(a.answer) ans[a.id] = a.answer; });
+          });
+        });
+        setAnswers(ans);
+      }
+    }).catch(()=>{});
+  }, [jobId]);
+
+  const handleSubmit = async () => {
+    if(!respondentName.trim()){ setNameErr(true); return; }
+    setSubmitting(true);
+    try {
+      // Always fetch existing doc first so we can safely merge answers
+      const ex = await getDoc(doc(db,'homeowner_requests',jobId));
+      const existingData = ex.exists() ? ex.data() : {};
+      const existingQA   = existingData.questionAnswers || {};
+
+      // mergeFloor: for each question, use the new answer only if it was shown
+      // to this recipient (i.e., it's in filterIds, or no filter was applied).
+      // Questions that weren't shown keep whatever answer was already saved.
+      const mergeFloor = (allQs, existingFloor) => {
+        const exMap = {};
+        (existingFloor || []).forEach(a => { exMap[a.id] = a; });
+        return (allQs || []).map(q => {
+          if(!filterIds || filterIds.has(q.id)) {
+            return { id:q.id, question:q.question, answer:answers[q.id]||'' };
+          }
+          // Not shown to this recipient — preserve existing answer
+          return exMap[q.id] || { id:q.id, question:q.question, answer:'' };
+        });
+      };
+
+      const questionAnswers = {
+        ...existingQA,
+        rough: {
+          upper:    mergeFloor(job?.roughQuestions?.upper,    existingQA.rough?.upper),
+          main:     mergeFloor(job?.roughQuestions?.main,     existingQA.rough?.main),
+          basement: mergeFloor(job?.roughQuestions?.basement, existingQA.rough?.basement),
+        },
+        finish: {
+          upper:    mergeFloor(job?.finishQuestions?.upper,    existingQA.finish?.upper),
+          main:     mergeFloor(job?.finishQuestions?.main,     existingQA.finish?.main),
+          basement: mergeFloor(job?.finishQuestions?.basement, existingQA.finish?.basement),
+        },
+        answeredBy: respondentName.trim(),
+        answeredAt: new Date().toISOString(),
+      };
+
+      await setDoc(doc(db,'homeowner_requests',jobId), {
+        ...existingData,
+        jobId, jobName:job?.name||'', questionAnswers,
+      });
+      setSubmitted(true);
+    } catch(e){ alert('Failed to submit. Please try again.'); }
+    setSubmitting(false);
+  };
+
+  const roughQs = (job ? [
+    ...(job.roughQuestions?.upper||[]).map(q=>({...q,floor:'Upper Level'})),
+    ...(job.roughQuestions?.main||[]).map(q=>({...q,floor:'Main Level'})),
+    ...(job.roughQuestions?.basement||[]).map(q=>({...q,floor:'Basement'})),
+  ] : []).filter(q=>!filterIds || filterIds.has(q.id));
+  const finishQs = (job ? [
+    ...(job.finishQuestions?.upper||[]).map(q=>({...q,floor:'Upper Level'})),
+    ...(job.finishQuestions?.main||[]).map(q=>({...q,floor:'Main Level'})),
+    ...(job.finishQuestions?.basement||[]).map(q=>({...q,floor:'Basement'})),
+  ] : []).filter(q=>!filterIds || filterIds.has(q.id));
+  const hasQs = roughQs.length+finishQs.length > 0;
+
+  const cardStyle = {background:'#fff',border:'1px solid #e5e7eb',borderRadius:10,padding:16,marginBottom:12};
+  const taStyle = {width:'100%',border:'1px solid #d1d5db',borderRadius:7,padding:'8px 10px',fontSize:13,fontFamily:'inherit',resize:'vertical',boxSizing:'border-box',outline:'none'};
+
+  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6b7280',fontSize:14}}>Loading…</div>;
+  if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#dc2626',fontSize:14,padding:24,textAlign:'center'}}>{error}</div>;
+  if(submitted) return (
+    <div style={{maxWidth:600,margin:'0 auto',padding:'60px 24px',textAlign:'center',fontFamily:'system-ui,sans-serif'}}>
+      <div style={{fontSize:48,marginBottom:16}}>✅</div>
+      <div style={{fontSize:22,fontWeight:700,color:'#111',marginBottom:8}}>Answers Submitted</div>
+      <div style={{fontSize:14,color:'#6b7280',lineHeight:1.6}}>Thank you, {respondentName}. Homestead Electric has received your responses and will follow up if needed.</div>
+    </div>
+  );
+
+  return (
+    <div style={{maxWidth:640,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#f3f4f6',minHeight:'100vh'}}>
+      <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:22}}>
+        <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>HOMESTEAD ELECTRIC</div>
+        <div style={{fontSize:19,fontWeight:700,color:'#fff',marginBottom:2}}>{job?.name||'Project Questions'}</div>
+        {job?.address&&<div style={{fontSize:12,color:'rgba(255,255,255,0.65)'}}>{job.address}</div>}
+      </div>
+
+      {prevAnsweredBy&&<div style={{background:'#fef3c7',border:'1px solid #f59e0b',borderRadius:8,padding:'10px 14px',marginBottom:16,fontSize:12,color:'#92400e'}}>✏️ You previously submitted answers as <b>{prevAnsweredBy}</b>. You can update them below and resubmit.</div>}
+
+      {!hasQs ? (
+        <div style={{textAlign:'center',padding:'48px 20px',color:'#9ca3af',background:'#fff',borderRadius:12}}>
+          <div style={{fontSize:32,marginBottom:12}}>📋</div>
+          No questions have been added yet. Check back later — this page updates automatically.
+        </div>
+      ) : (
+        <>
+          <div style={{fontSize:13,color:'#6b7280',marginBottom:18,lineHeight:1.6}}>Please answer the questions below. Your responses go directly to our team. This page updates automatically if new questions are added.</div>
+
+          {roughQs.length>0&&(
+            <div style={{marginBottom:20}}>
+              <div style={{fontSize:11,fontWeight:700,color:'#2563eb',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #2563eb33'}}>⚡ ROUGH PHASE</div>
+              {roughQs.map((q,i)=>(
+                <div key={q.id} style={{...cardStyle,borderLeft:'3px solid #2563eb'}}>
+                  <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginBottom:3}}>{q.floor}</div>
+                  <div style={{fontSize:14,fontWeight:600,color:'#111',marginBottom:10}}>Q{i+1}: {q.question}</div>
+                  <textarea value={answers[q.id]||''} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))} placeholder="Type your answer here…" rows={3} style={taStyle}/>
+                </div>
+              ))}
+            </div>
+          )}
+
+          {finishQs.length>0&&(
+            <div style={{marginBottom:20}}>
+              <div style={{fontSize:11,fontWeight:700,color:'#0ea5e9',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #0ea5e933'}}>🏁 FINISH PHASE</div>
+              {finishQs.map((q,i)=>(
+                <div key={q.id} style={{...cardStyle,borderLeft:'3px solid #0ea5e9'}}>
+                  <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginBottom:3}}>{q.floor}</div>
+                  <div style={{fontSize:14,fontWeight:600,color:'#111',marginBottom:10}}>Q{i+1}: {q.question}</div>
+                  <textarea value={answers[q.id]||''} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))} placeholder="Type your answer here…" rows={3} style={taStyle}/>
+                </div>
+              ))}
+            </div>
+          )}
+
+          <div style={{...cardStyle,marginBottom:12}}>
+            <div style={{fontSize:11,fontWeight:700,color:'#374151',marginBottom:6}}>YOUR NAME *</div>
+            <input value={respondentName} onChange={e=>{setRespondentName(e.target.value);setNameErr(false);}} placeholder="Enter your name before submitting"
+              style={{width:'100%',border:`1px solid ${nameErr?'#dc2626':'#d1d5db'}`,borderRadius:7,padding:'8px 10px',fontSize:13,fontFamily:'inherit',outline:'none',boxSizing:'border-box'}}/>
+            {nameErr&&<div style={{color:'#dc2626',fontSize:11,marginTop:4}}>Please enter your name</div>}
+          </div>
+
+          <button onClick={handleSubmit} disabled={submitting}
+            style={{width:'100%',background:'#1e3a5f',color:'#fff',border:'none',borderRadius:10,padding:14,fontSize:15,fontWeight:700,cursor:submitting?'not-allowed':'pointer',fontFamily:'inherit',opacity:submitting?0.7:1,marginBottom:16}}>
+            {submitting?'Submitting…':'Submit Answers'}
+          </button>
+          <div style={{textAlign:'center',fontSize:11,color:'#9ca3af'}}>Questions update live — new questions added by our team will appear here automatically.</div>
+        </>
+      )}
+    </div>
+  );
+}
+
 function App() {
   // Homeowner page route — ?homeowner=JOB_ID
   const hoParam = new URLSearchParams(window.location.search).get("homeowner");
   if(hoParam) return <HomeownerPage jobId={hoParam}/>;
+
+  // Questions share page route — ?questions=JOB_ID
+  const qParam = new URLSearchParams(window.location.search).get("questions");
+  if(qParam) return <QuestionsSharePage jobId={qParam}/>;
+
+  // Home Runs share page route — ?homeruns=JOB_ID
+  const hrParam = new URLSearchParams(window.location.search).get("homeruns");
+  if(hrParam) return <HomeRunsSharePage jobId={hrParam}/>;
+
+  // Lighting collab share page route — ?lighting=JOB_ID
+  const ltParam = new URLSearchParams(window.location.search).get("lighting");
+  if(ltParam) return <LightingSharePage jobId={ltParam}/>;
+
+  // Punch list share page routes — ?roughpunch / ?finishpunch / ?qcpunch
+  const rpParam = new URLSearchParams(window.location.search).get("roughpunch");
+  if(rpParam) return <PunchSharePage jobId={rpParam} stage="Rough"/>;
+  const fpParam = new URLSearchParams(window.location.search).get("finishpunch");
+  if(fpParam) return <PunchSharePage jobId={fpParam} stage="Finish"/>;
+  const qcpParam = new URLSearchParams(window.location.search).get("qcpunch");
+  if(qcpParam) return <PunchSharePage jobId={qcpParam} stage="QC"/>;
 
   // ── Identity ──────────────────────────────────────────────────
   const [identity, setIdentity] = useState(()=>getIdentity());
@@ -9742,20 +11520,29 @@ function App() {
     const today = new Date().toISOString().split("T")[0];
     const key = `he_daily_backup_${today}`;
     if(!localStorage.getItem(key)) {
-      try { localStorage.setItem(key, JSON.stringify({savedAt: new Date().toISOString(), count: jobs.length, jobs})); } catch(e) { console.warn("[HE] Daily backup failed (storage full?):", e); }
-      // Clean up backups older than 7 days
+      // Wipe ALL previous daily backups to free space before saving today's
+      const keysToRemove = [];
       for(let i = 0; i < localStorage.length; i++) {
         const k = localStorage.key(i);
-        if(k?.startsWith("he_daily_backup_") && k !== key) {
-          try {
-            const d = k.replace("he_daily_backup_","");
-            if(d < new Date(Date.now() - 7*86400000).toISOString().split("T")[0]) localStorage.removeItem(k);
-          } catch(e){}
-        }
+        if(k?.startsWith("he_daily_backup_") && k !== key) keysToRemove.push(k);
       }
-      console.log(`[HE] Daily safety backup saved: ${jobs.length} jobs (${today})`);
+      keysToRemove.forEach(k => { try { localStorage.removeItem(k); } catch(e){} });
+      // Also clear the rolling hejobs_backup to reclaim space — Firestore is the source of truth
+      try { localStorage.removeItem('hejobs_backup'); } catch(e){}
+      // Save a minimal version: just id, name, type, quoteNumber, foreman, roughStatus, finishStatus
+      const compact = jobs.map(j => ({
+        id:j.id, name:j.name, address:j.address, gc:j.gc, foreman:j.foreman,
+        type:j.type, quoteNumber:j.quoteNumber, simproNo:j.simproNo,
+        roughStatus:j.roughStatus, finishStatus:j.finishStatus,
+        roughStage:j.roughStage, finishStage:j.finishStage,
+        prepStage:j.prepStage, updated_at:j.updated_at,
+      }));
+      try {
+        localStorage.setItem(key, JSON.stringify({savedAt: new Date().toISOString(), count: jobs.length, jobs: compact}));
+        console.log(`[HE] Daily safety backup saved: ${jobs.length} jobs (${today})`);
+      } catch(e) { console.warn("[HE] Daily backup failed:", e); }
     }
-  }, [jobs.length > 0]);
+  }, [jobs.length]);
 
 
   // Save a single job — uses field-level merge when a patch is provided
@@ -9803,17 +11590,25 @@ function App() {
         delete pendingPatches.current[job.id];
 
         if(accumulated && Object.keys(accumulated).length > 0) {
-          // Merge mode: only write the changed fields — other users' changes to other fields are preserved
-          const mergeData = {updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
-          // Build dot-notation paths for changed fields within the data map
-          Object.entries(sanitize(accumulated)).forEach(([k,v]) => { mergeData["data."+k] = v; });
-          await updateDoc(doc(db,"jobs",job.id), mergeData);
+          // Patch mode: only write the fields that changed.
+          // updateDoc with dot-notation is the correct Firebase API for this — it touches ONLY
+          // the specified nested fields and leaves everything else in Firestore untouched.
+          const patch = {updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
+          Object.entries(sanitize(accumulated)).forEach(([k,v]) => { patch["data."+k] = v; });
+          try {
+            await updateDoc(doc(db,"jobs",job.id), patch);
+          } catch(notFound) {
+            // Document doesn't exist yet (new job created but first setDoc hasn't landed) — create it now
+            if(notFound?.code === 'not-found') {
+              await setDoc(doc(db,"jobs",job.id), {data:sanitize(job), updated_at:patch.updated_at, saved_by:patch.saved_by, device:patch.device});
+            } else { throw notFound; }
+          }
         } else {
-          // No accumulated patches — either a new job or a code path that didn't pass a patch.
-          // SAFETY: Check if the document already exists. If it does, use merge to avoid wiping concurrent changes.
-          const payload = {data:sanitize(job),updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
+          // No patch — new job or unpatch'd save path. Write all current fields via dot-notation updateDoc
+          // so we never wipe Firestore fields another user added that aren't in our local snapshot.
+          const sanitized = sanitize(job);
           // Check estimated size before saving
-          const estimatedSize = JSON.stringify(payload).length;
+          const estimatedSize = JSON.stringify(sanitized).length;
           if(estimatedSize > 900000) {
             console.warn(`[HE] Job ${job.name} is ${Math.round(estimatedSize/1024)}KB — approaching Firestore 1MB limit`);
             if(estimatedSize > 1000000) {
@@ -9823,9 +11618,17 @@ function App() {
               return;
             }
           }
-          // Use {merge:true} so existing fields in Firestore that aren't in this payload are preserved
-          // This prevents stale local data from wiping fields another user just set
-          await setDoc(doc(db,"jobs",job.id),payload,{merge:true});
+          const meta = {updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
+          const fullPatch = {...meta};
+          Object.entries(sanitized).forEach(([k,v]) => { fullPatch["data."+k] = v; });
+          try {
+            await updateDoc(doc(db,"jobs",job.id), fullPatch);
+          } catch(notFound) {
+            // New document — create it with full structure
+            if(notFound?.code === 'not-found') {
+              await setDoc(doc(db,"jobs",job.id), {data:sanitized, ...meta});
+            } else { throw notFound; }
+          }
         }
 
         isDirty.current = false;
@@ -9863,11 +11666,18 @@ function App() {
       const accumulated = pendingPatches.current[job.id];
       delete pendingPatches.current[job.id];
       if(accumulated && Object.keys(accumulated).length > 0) {
-        const mergeData = {updated_at:new Date().toISOString()};
-        Object.entries(sanitize(accumulated)).forEach(([k,v]) => { mergeData["data."+k] = v; });
-        try { await updateDoc(doc(db,"jobs",job.id), mergeData); } catch(e){}
+        const patch = {updated_at:new Date().toISOString()};
+        Object.entries(sanitize(accumulated)).forEach(([k,v]) => { patch["data."+k] = v; });
+        try {
+          await updateDoc(doc(db,"jobs",job.id), patch);
+        } catch(e) {
+          if(e?.code === 'not-found') {
+            // New doc — create it
+            try { await setDoc(doc(db,"jobs",job.id), {data:sanitize(job), updated_at:patch.updated_at}); } catch(e2){console.error('[HE] flushJob create error:',e2?.message);}
+          } else { console.error('[HE] flushJob save error:',e?.message); }
+        }
       }
-      // No else — never do a full setDoc overwrite from flushJob, it can wipe other users' data
+      // No else — never do a full overwrite from flushJob, it can wipe other users' data
     }
   };
 
@@ -9942,13 +11752,17 @@ function App() {
       clearTimeout(saveTimers.current[job.id]);
       saveTimers.current[job.id] = null;
 
-      // Use accumulated patches if available — never do full setDoc overwrite
+      // Use accumulated patches if available — never do full overwrite
       const accumulated = pendingPatches.current[job.id];
       delete pendingPatches.current[job.id];
       if(accumulated && Object.keys(accumulated).length > 0) {
-        const mergeData = {updated_at:new Date().toISOString()};
-        Object.entries(sanitize(accumulated)).forEach(([k,v]) => { mergeData["data."+k] = v; });
-        updateDoc(doc(db,"jobs",job.id), mergeData).catch(e=>console.error(e));
+        const patch = {updated_at:new Date().toISOString()};
+        Object.entries(sanitize(accumulated)).forEach(([k,v]) => { patch["data."+k] = v; });
+        updateDoc(doc(db,"jobs",job.id), patch).catch(e => {
+          if(e?.code === 'not-found') {
+            setDoc(doc(db,"jobs",job.id), {data:sanitize(job), updated_at:patch.updated_at}).catch(e2=>console.error('[HE] flushSaves create error:',e2?.message));
+          } else { console.error('[HE] flushSaves error:',e?.message); }
+        });
       }
       // If no accumulated patches, skip — don't overwrite with potentially stale data
 
@@ -10052,11 +11866,21 @@ function App() {
 
   const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
   const [crewView, setCrewView] = useState(null); // foreman name or null
-  const goHome       = () =>  { setView("home");     setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
-  const openSchedule = () =>  { setView("schedule"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
-  const openUpcoming = () =>  { setView("upcoming"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
-  const openTasks    = () =>  { setView("tasks");    setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
-  const openSettings = () =>  { setView("settings"); setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const goHome            = () =>  { setView("home");           setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openSchedule      = () =>  { setView("schedule");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openUpcoming      = () =>  { setView("upcoming");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openTasks         = () =>  { setView("tasks");         setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openSettings      = () =>  { setView("settings");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openSubcontractor = () =>  { setView("subcontractors");setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+
+  // ── Contractor users + access helpers ─────────────────────────
+  const contractorUsers = (users||[]).filter(u => getAccess(u) === "contractor");
+  const isContractor = getAccess(identity) === "contractor";
+
+  // Force contractors to subcontractor view (lock them out of all other views)
+  useEffect(() => {
+    if(isContractor) setView("subcontractors");
+  }, [isContractor]);
 
 
   const viewJobs = view==="foreman" ? jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):matchesForeman(j,activeForeman)) : jobs;
@@ -10097,7 +11921,7 @@ function App() {
 
     const pendRT    = (job.returnTrips||[]).filter(r=>!r.signedOff).length;
 
-    const countQCFloor = (f) => { if(!f) return 0; return (f.general||[]).filter(i=>!i.done).length + (f.rooms||[]).reduce((a,r)=>a+(r.items||[]).filter(i=>!i.done).length,0); };
+    const countQCFloor = (f) => { if(!f) return 0; return (f.general||[]).filter(i=>!i.done).length + (f.hotcheck||[]).filter(i=>!i.done).length + (f.rooms||[]).reduce((a,r)=>a+(r.items||[]).filter(i=>!i.done).length,0); };
 
     const qcItems = countQCFloor(job.qcPunch?.upper) + countQCFloor(job.qcPunch?.main) + countQCFloor(job.qcPunch?.basement) + ((job.qcPunch?.extras||[]).reduce((s,e)=>s+countQCFloor(job.qcPunch?.[e.key]),0));
 
@@ -10119,9 +11943,10 @@ function App() {
     const BG    = {red:"rgba(220,38,38,0.18)",purple:"rgba(139,92,246,0.10)",invoice:"rgba(234,88,12,0.10)",hold:"rgba(234,179,8,0.12)",sched:"rgba(37,99,235,0.08)",ready:"rgba(202,138,4,0.08)",none:C.card};
     const LBORD = {red:"#dc2626",purple:"#8b5cf6",invoice:"#ea580c",hold:"#ca8a04",sched:"#2563eb",ready:"#ca8a04",none:rowFc};
     const BORD  = {red:"2px solid #dc2626",purple:"2px solid #8b5cf6",invoice:"2px solid #ea580c",hold:"1px dashed #ca8a04",sched:"1px dashed #2563eb",ready:"1px dashed #ca8a04",none:`1px solid ${C.border}`};
-    const rowBg    = BG[priority];
-    const rowLbord = LBORD[priority];
-    const rowBord  = BORD[priority];
+    const isQuote  = job.type==="quote";
+    const rowBg    = isQuote ? `rgba(232,144,26,0.07)` : BG[priority];
+    const rowLbord = isQuote ? C.accent : LBORD[priority];
+    const rowBord  = isQuote ? `1px dashed ${C.accent}` : BORD[priority];
 
     return (
 
@@ -10134,11 +11959,15 @@ function App() {
 
             <div style={{display:"flex",alignItems:"center",gap:7}}>
 
+              {job.type==="quote"&&<span style={{fontSize:10,fontWeight:700,color:"#000",background:C.accent,borderRadius:4,padding:"1px 6px",flexShrink:0}}>{job.quoteNumber||"Q"}</span>}
+
               <span style={{fontWeight:600,fontSize:13,color:C.text}}>{job.name||"Untitled Job"}</span>
 
             </div>
 
             <div style={{fontSize:11,color:C.dim,marginTop:1}}>
+
+              {isQuote&&<span style={{color:C.accent,fontWeight:700,marginRight:6,letterSpacing:"0.04em"}}>QUOTE</span>}
 
               {showForeman&&<span style={{color:rowFc,fontWeight:600,marginRight:6}}>{foreman}</span>}
 
@@ -10196,6 +12025,7 @@ function App() {
             {hasRTSch&&!hasRT&&<Pill label="Return trip scheduled" color="#8b5cf6"/>}
             {rs&&!(rs==="complete"&&fs&&fs!=="waiting_date"&&fs!=="date_confirmed")&&<Pill label={rs==="scheduled"&&job.roughStatusDate?"Rough: "+fmtDisplay(job.roughStatusDate):rs==="date_confirmed"&&job.roughStatusDate?"Rough: "+fmtDisplay(job.roughStatusDate):("Rough: "+(getStatusDef(ROUGH_STATUSES,rs).label||rs))} color={getStatusDef(ROUGH_STATUSES,rs).color||C.dim}/>}
             {fs&&<Pill label={fs==="scheduled"&&job.finishStatusDate?"Finish: "+fmtDisplay(job.finishStatusDate):("Finish: "+(getStatusDef(FINISH_STATUSES,fs).label||fs))} color={getStatusDef(FINISH_STATUSES,fs).color||C.dim}/>}
+            {job.matterportStatus&&job.matterportStatus!=="complete"&&<Pill label={job.matterportStatus==="scheduled"&&job.matterportStatusDate?"Matterport: "+fmtDisplay(job.matterportStatusDate):("Matterport: "+(getStatusDef(MATTERPORT_STATUSES,job.matterportStatus).label||job.matterportStatus))} color={getStatusDef(MATTERPORT_STATUSES,job.matterportStatus).color||C.dim}/>}
             {open>0   &&<Pill label={`${open} open`} color={C.red}/>}
 
             {pendCO>0 &&<Pill label={`${pendCO} CO`} color={C.orange}/>}
@@ -10248,10 +12078,21 @@ function App() {
   };
 
 
+  // ── Foreground push notification toast ───────────────────────────────────
+  const [pushToast, setPushToast] = useState(null);
+  useEffect(() => {
+    const handler = e => {
+      setPushToast(e.detail);
+      setTimeout(() => setPushToast(null), 5000);
+    };
+    window.addEventListener("he-push", handler);
+    return () => window.removeEventListener("he-push", handler);
+  }, []);
+
   // ── Identity gate — show UserPicker if no identity saved ────
   if(!identity) {
     return <UserPicker users={users}
-      onSelect={m => { saveIdentity(m); setIdentity(m); }}
+      onSelect={m => { saveIdentity(m); setIdentity(m); registerFCMToken(m.id); }}
       onSavePin={async (updated) => {
         // Save the new PIN into the users list in Firestore
         const newList = users.map(u => u.id===updated.id ? updated : u);
@@ -10260,10 +12101,22 @@ function App() {
     />;
   }
 
-
   return (
 
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
+      {/* Push notification foreground toast */}
+      {pushToast && (
+        <div onClick={() => setPushToast(null)} style={{
+          position:"fixed", top:16, left:"50%", transform:"translateX(-50%)",
+          zIndex:99999, background:"#1e293b", color:"#f8fafc",
+          borderRadius:12, padding:"12px 18px", maxWidth:360, width:"90%",
+          boxShadow:"0 8px 32px #0008", cursor:"pointer",
+          display:"flex", flexDirection:"column", gap:2,
+        }}>
+          <div style={{fontWeight:700, fontSize:14}}>{pushToast.title}</div>
+          {pushToast.body && <div style={{fontSize:13, color:"#cbd5e1"}}>{pushToast.body}</div>}
+        </div>
+      )}
 
       <div style={{position:"fixed",inset:0,backgroundImage:"url(/icon-192.png)",
 
@@ -10274,10 +12127,21 @@ function App() {
 
       {/* ── TOP NAV BAR ── */}
       <div style={{display:"flex",gap:6,padding:"8px 10px",borderBottom:`1px solid ${C.border}`,background:C.card,position:"sticky",top:0,zIndex:90,overflowX:"auto",scrollbarWidth:"none",alignItems:"center"}}>
-        {[{key:"home",label:"Job Board"},{key:"schedule",label:"Forecast"},{key:"upcoming",label:"Upcoming"},{key:"tasks",label:"Tasks"},...(can(identity,"settings.view")?[{key:"settings",label:"⚙ Settings"}]:[])].map(({key,label})=>{
+        {(isContractor
+          ? [{key:"subcontractors", label:"My Jobs"}]
+          : [
+              {key:"home",label:"Job Board"},
+              {key:"schedule",label:"Forecast"},
+              {key:"upcoming",label:"Upcoming"},
+              ...(can(identity,"quotes.view")?[{key:"quotes",label:"Quotes"}]:[]),
+              {key:"tasks",label:"Tasks"},
+              ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors"}]:[]),
+              ...(can(identity,"settings.view")?[{key:"settings",label:"⚙ Settings"}]:[]),
+            ]
+        ).map(({key,label})=>{
           const active = view===key;
           return (
-            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="tasks"?openTasks:openSettings}
+            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="tasks"?openTasks:key==="subcontractors"?openSubcontractor:openSettings}
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
@@ -10786,13 +12650,13 @@ function App() {
               </div>
               {(()=>{
                 const s = search.toLowerCase();
-                const homeFiltered = s ? jobs.filter(j=>
+                const homeFiltered = (s ? jobs.filter(j=>
                   (j.name||"").toLowerCase().includes(s)||
                   (j.address||"").toLowerCase().includes(s)||
                   (j.gc||"").toLowerCase().includes(s)||
                   (j.foreman||"").toLowerCase().includes(s)||
                   (j.simproNo||"").toLowerCase().includes(s)
-                ) : jobs;
+                ) : jobs);
                 return <StageSectionList jobs={homeFiltered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>;
               })()}
             </div>
@@ -10902,10 +12766,11 @@ function App() {
             {/* ── Jobs | Tasks tab bar ── */}
             {(()=>{
               const isKoy = activeForeman === "Koy";
+              const _clearedTab = new Set(jobs.flatMap(j=>j.clearedTasks||[]));
               const fTasks = computeTasks(jobs)
-                .filter(t=>t.foreman===activeForeman && t.category!=="prep")
+                .filter(t=>t.foreman===activeForeman && t.category!=="prep" && !_clearedTab.has(t.id))
                 .concat((manualTasks||[]).filter(t=>t.foreman===activeForeman));
-              const prepTasks = computeTasks(jobs).filter(t=>t.foreman==="Koy"&&t.category==="prep");
+              const prepTasks = computeTasks(jobs).filter(t=>t.foreman==="Koy"&&t.category==="prep"&&!_clearedTab.has(t.id));
               const taskCount = isKoy ? fTasks.length + prepTasks.length : fTasks.length;
               const fc = _foremanColors[activeForeman]||"#6b7280";
               return (
@@ -10963,7 +12828,7 @@ function App() {
                   </div>
                 ):(
                   <>
-                  <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={false}/>
+                  <StageSectionList jobs={filtered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} fc={_foremanColors[activeForeman]} startCollapsed={true}/>
               {(()=>{
                 const invoiceJobs = filtered.filter(j=>effRS(j)==="invoice"||effFS(j)==="invoice");
                 return invoiceJobs.length>0?(
@@ -11006,10 +12871,11 @@ function App() {
             <div style={{padding:"14px 26px"}}>
               {(()=>{
                 const isKoy = activeForeman === "Koy";
+                const _clearedFTC = new Set(jobs.flatMap(j=>j.clearedTasks||[]));
                 const fTasks = computeTasks(jobs)
-                  .filter(t=>t.foreman===activeForeman && t.category!=="prep")
+                  .filter(t=>t.foreman===activeForeman && t.category!=="prep" && !_clearedFTC.has(t.id))
                   .concat((manualTasks||[]).filter(t=>t.foreman===activeForeman));
-                const prepTasks = computeTasks(jobs).filter(t=>t.foreman==="Koy"&&t.category==="prep");
+                const prepTasks = computeTasks(jobs).filter(t=>t.foreman==="Koy"&&t.category==="prep"&&!_clearedFTC.has(t.id));
                 return (
                   <ForemanTaskCard
                     isKoy={isKoy}
@@ -11037,7 +12903,96 @@ function App() {
         ? <QuickJobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen} leadsList={_leads}/>
         : selected.tempPed
         ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen}/>
-        : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen} leadsList={_leads}/>)}
+        : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen} leadsList={_leads}
+            canConvertQuote={can(identity,"quotes.convert")}
+            onConvertQuote={(q)=>{
+              // q already has simproNo set from the prompt
+              const updated={...q, type:""};
+              setJobs(js=>js.map(j=>j.id===q.id?updated:j));
+              saveJob(updated,{type:"", simproNo:q.simproNo||""});
+              setSelected(updated);
+            }}
+          />)}
+
+      {/* ── SUBCONTRACTORS TAB ── */}
+      {view==="subcontractors"&&(()=>{
+        // Which contractors to show: contractors see only themselves; admins see all
+        const visibleContractors = isContractor
+          ? contractorUsers.filter(u=>(u.name||"").toLowerCase()===(identity.name||"").toLowerCase())
+          : contractorUsers;
+
+        if(visibleContractors.length===0) return (
+          <div style={{textAlign:"center",padding:"60px 0",color:C.dim}}>
+            <div style={{fontSize:22,marginBottom:8}}>👷</div>
+            <div style={{fontSize:14,fontWeight:600,marginBottom:6}}>No subcontractors yet</div>
+            <div style={{fontSize:12}}>Add a user with "Contractor" access in Settings, then assign jobs to them.</div>
+          </div>
+        );
+
+        return (
+          <div>
+            {visibleContractors.map(contractor => {
+              const cColor = getFC(contractor.name) || "#6b7280";
+              const cJobs = jobs.filter(j =>
+                !j.tempPed &&
+                (j.foreman||"").toLowerCase() === (contractor.name||"").toLowerCase()
+              );
+              const firstName = contractor.name.split(" ")[0];
+
+              return (
+                <div key={contractor.id}>
+                  {/* Section header */}
+                  <div style={{padding:"18px 26px 0",borderBottom:`1px solid ${C.border}`}}>
+                    <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:16,flexWrap:"wrap"}}>
+                      <div style={{width:10,height:10,borderRadius:"50%",background:cColor,flexShrink:0}}/>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",
+                        color:cColor,lineHeight:1}}>{contractor.name}</div>
+                      <div style={{fontSize:11,color:C.dim}}>{cJobs.length} job{cJobs.length!==1?"s":""}</div>
+                      {!isContractor&&(
+                        <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
+                          <span style={{fontSize:11,color:syncColor}}>{syncLabel}</span>
+                          <button onClick={()=>{const j=blankJob();j.foreman=contractor.name;setJobs(js=>[j,...js]);setSelected(j);}}
+                            style={{background:cColor,border:"none",borderRadius:9,color:"#fff",
+                              fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+                            + New Job
+                          </button>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+
+                  {/* Job list */}
+                  <div style={{padding:"14px 26px"}}>
+                    {cJobs.length===0 ? (
+                      <div style={{textAlign:"center",padding:"40px 0",color:C.dim}}>
+                        <div style={{fontSize:13,marginBottom:16}}>No jobs assigned to {firstName} yet</div>
+                        {!isContractor&&(
+                          <button onClick={()=>{const j=blankJob();j.foreman=contractor.name;setJobs(js=>[j,...js]);setSelected(j);}}
+                            style={{background:cColor,border:"none",borderRadius:9,color:"#fff",
+                              fontWeight:700,padding:"10px 24px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
+                            + Assign First Job
+                          </button>
+                        )}
+                      </div>
+                    ) : (
+                      <StageSectionList
+                        jobs={cJobs}
+                        JobRow={JobRow}
+                        TempPedCard={TempPedCard}
+                        onSelectJob={(j)=>setSelected(j)}
+                        onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}
+                        onDeleteJob={isContractor?null:(id)=>deleteJob(id)}
+                        fc={cColor}
+                        startCollapsed={true}
+                      />
+                    )}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })()}
 
       {view==="schedule"&&can(identity,"schedule.view")&&(
         <SchedulingForecast jobs={jobs} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)} foremenList={_foremen}/>
@@ -11056,6 +13011,37 @@ function App() {
           onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
           foremenList={_foremen}
         />
+      )}
+
+      {view==="quotes"&&can(identity,"quotes.view")&&(
+        <div style={{padding:"18px 16px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:16,flexWrap:"wrap"}}>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:C.accent,lineHeight:1}}>Quotes</div>
+            <div style={{fontSize:11,color:C.dim}}>{jobs.filter(j=>j.type==="quote").length} quote{jobs.filter(j=>j.type==="quote").length!==1?"s":""}</div>
+            {can(identity,"quotes.view")&&(
+              <button onClick={()=>{
+                const j=blankJob();
+                j.type="quote";
+                j.quoteNumber=nextQuoteNumber(jobs);
+                j.foreman="Unassigned";
+                setJobs(js=>[j,...js]);
+                setSelected(j);
+              }}
+                style={{marginLeft:"auto",background:C.accent,color:"#000",border:"none",borderRadius:8,
+                  padding:"8px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                  letterSpacing:"0.03em"}}>+ New Quote</button>
+            )}
+          </div>
+          <StageSectionList
+            jobs={jobs.filter(j=>j.type==="quote")}
+            JobRow={JobRow}
+            TempPedCard={TempPedCard}
+            onSelectJob={(j)=>setSelected(j)}
+            onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}
+            onDeleteJob={(id)=>deleteJob(id)}
+            startCollapsed={true}
+          />
+        </div>
       )}
 
       {view==="upcoming"&&can(identity,"pipeline.view")&&(
@@ -11077,13 +13063,18 @@ function App() {
             setJobs(js=>[j,...js]); setSelected(j); setUpcoming(prev=>prev.filter(x=>x.id!==u.id));
             setView("home"); saveJob(j); deleteUpcomingItem(u.id);
           }}
+          onPromoteToQuote={(u)=>{
+            const j=blankJob();
+            j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman=u.foreman||"Unassigned";
+            j.type="quote"; j.quoteNumber=nextQuoteNumber(jobs);
+            setJobs(js=>[j,...js]); setSelected(j); setUpcoming(prev=>prev.filter(x=>x.id!==u.id));
+            setView("quotes"); saveJob(j); deleteUpcomingItem(u.id);
+          }}
         />
       )}
 
       {view==="settings"&&can(identity,"settings.view")&&(
         <div>
-          <BulkEditTable jobs={jobs} foremenList={_foremen} leadsList={_leads} onUpdateJob={updateJob}/>
-          <div style={{height:1,background:C.border,margin:"0 26px"}}/>
           <ActivityLog jobs={jobs}/>
           <div style={{height:1,background:C.border,margin:"0 26px"}}/>
           <SettingsPage
