@@ -1,0 +1,50 @@
+rules_version = '2';
+
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // ── JOBS ──────────────────────────────────────────────────────────────────
+    // Reads are open so share links (punch, home runs, questions, lighting)
+    // work without login. Writes are validated to prevent garbage data.
+    match /jobs/{jobId} {
+      allow read: if true;
+
+      // Only allow writes that include a valid data map and updated_at timestamp.
+      // This stops anyone from bulk-wiping or injecting junk via the API key.
+      allow write: if request.resource.data.keys().hasAll(['data', 'updated_at'])
+                   && request.resource.data.data is map
+                   && request.resource.data.updated_at is timestamp;
+    }
+
+    // ── HOMEOWNER REQUESTS ────────────────────────────────────────────────────
+    // Share link recipients submit answers here — allow creates from anyone.
+    // Only the app reads these back, so reads are also open for now.
+    match /homeowner_requests/{docId} {
+      allow create: if request.resource.data.keys().hasAll(['jobId', 'submittedAt'])
+                    && request.resource.data.jobId is string;
+      allow read: if true;
+      allow update, delete: if false;
+    }
+
+    // ── QUESTION SHARES ───────────────────────────────────────────────────────
+    // Stores live share sessions for the Questions share feature.
+    // Reads are open so recipients can see which questions are included.
+    // Creates are open so the app can generate new sessions.
+    // Updates allowed so the sender can add/remove questions after the fact.
+    match /question_shares/{shareId} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['jobId', 'questionIds', 'createdAt'])
+                    && request.resource.data.jobId is string
+                    && request.resource.data.questionIds is list;
+      allow update: if request.resource.data.keys().hasAll(['questionIds', 'updatedAt'])
+                    && request.resource.data.questionIds is list;
+      allow delete: if false;
+    }
+
+    // ── EVERYTHING ELSE ───────────────────────────────────────────────────────
+    // Deny all access to any other collection by default.
+    match /{document=**} {
+      allow read, write: if false;
+    }
+  }
+}
