@@ -1,5 +1,5 @@
 // BUILD_v9_FIXED
-import { useState, useEffect, useRef } from "react";
+import { useState, useEffect, useRef, useCallback } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
@@ -78,14 +78,17 @@ async function registerFCMToken(userId) {
   }
 }
 
-// Handle foreground messages (app is open) — show a brief alert-style banner
-// Reads from payload.data since we send data-only messages to prevent double notifications
+// Handle foreground messages (app is open) — show a brief alert-style banner.
+// Reads from payload.data since we send data-only messages to prevent double notifications.
+// Also forwards jobId + section so the toast can deep-link on tap.
 if (messaging) {
   onMessage(messaging, payload => {
-    const title = payload.data?.title || payload.notification?.title;
-    const body  = payload.data?.body  || payload.notification?.body;
+    const title   = payload.data?.title   || payload.notification?.title;
+    const body    = payload.data?.body    || payload.notification?.body;
+    const jobId   = payload.data?.jobId   || "";
+    const section = payload.data?.section || "";
     if (title || body) {
-      const ev = new CustomEvent("he-push", { detail: { title, body } });
+      const ev = new CustomEvent("he-push", { detail: { title, body, jobId, section } });
       window.dispatchEvent(ev);
     }
   });
@@ -1629,30 +1632,25 @@ function PunchItems({ items, onChange }) {
 
   const safeItems = Array.isArray(items) ? items : [];
 
-  const [draft, setDraft] = useState('');
+  const [addHtml,    setAddHtml]    = useState('');
+  const [addOpen,    setAddOpen]    = useState(false);
+  const [editingId,  setEditingId]  = useState(null);
+  const [editHtml,   setEditHtml]   = useState('');
+  const [mobileSheet,setMobileSheet]= useState(null); // null | {mode:'add'} | {mode:'edit',id,html}
 
-  const [editingId, setEditingId] = useState(null);
-
-  const [editText, setEditText] = useState('');
-
-  const add = () => {
-
-    if (!draft.trim()) return;
-
-    onChange([...safeItems, { id: uid(), text: draft, done: false }]);
-
-    setDraft('');
-
+  const commitAdd = (html) => {
+    if (!(html||"").replace(/<[^>]*>/g,"").trim()) return;
+    onChange([...safeItems, { id: uid(), text: html, done: false }]);
+    setAddHtml('');
+    setAddOpen(false);
+    setMobileSheet(null);
   };
 
-  const startEdit = (item) => { setEditingId(item.id); setEditText(item.text); };
-
-  const commitEdit = (id) => {
-
-    if (editText.trim()) onChange(safeItems.map(i => i.id === id ? { ...i, text: editText.trim() } : i));
-
+  const commitEdit = (id, html) => {
+    if ((html||"").replace(/<[^>]*>/g,"").trim())
+      onChange(safeItems.map(i => i.id === id ? { ...i, text: html } : i));
     setEditingId(null);
-
+    setMobileSheet(null);
   };
 
   return (
@@ -1661,67 +1659,71 @@ function PunchItems({ items, onChange }) {
 
       {safeItems.map(item => (
 
-        <div key={item.id} style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 5 }}>
+        <div key={item.id} style={{ display: 'flex', alignItems: editingId===item.id ? 'flex-start' : 'center', gap: 8, marginBottom: 5 }}>
 
           <input type="checkbox" checked={!!item.done}
-
             onChange={() => onChange(safeItems.map(i => i.id === item.id ? { ...i, done: !i.done } : i))}
+            style={{ accentColor: C.green, width: 14, height: 14, cursor: 'pointer', flexShrink: 0,
+              marginTop: editingId===item.id ? 3 : 0 }} />
 
-            style={{ accentColor: C.green, width: 14, height: 14, cursor: 'pointer', flexShrink: 0 }} />
-
-          {editingId === item.id ? (
-
-            <input autoFocus value={editText} onChange={e=>setEditText(e.target.value)}
-
-              onBlur={()=>commitEdit(item.id)} onKeyDown={e=>{if(e.key==='Enter')commitEdit(item.id);if(e.key==='Escape')setEditingId(null);}}
-
-              style={{flex:1,fontSize:12,background:C.surface,border:`1px solid ${C.blue}`,borderRadius:6,
-
-                padding:'3px 7px',color:C.text,fontFamily:'inherit',outline:'none'}}/>
-
+          {editingId === item.id && !ON_MOBILE ? (
+            <div style={{ flex: 1 }}
+              onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) commitEdit(item.id, editHtml); }}>
+              <RichEditor htmlValue={editHtml} onHtmlChange={setEditHtml} autoFocus minRows={2} placeholder="Edit item…"/>
+              <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                <Btn onClick={() => commitEdit(item.id, editHtml)} variant="primary" style={{ fontSize: 11, padding: '3px 12px' }}>Save</Btn>
+                <button onClick={() => setEditingId(null)}
+                  style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+              </div>
+            </div>
           ) : (
-
-            <span onClick={()=>!item.done&&startEdit(item)}
-
+            <span onClick={() => {
+              if (item.done) return;
+              if (ON_MOBILE) { setMobileSheet({ mode: 'edit', id: item.id, html: item.text }); }
+              else           { setEditingId(item.id); setEditHtml(item.text); }
+            }}
               style={{ flex: 1, fontSize: 12, color: item.done ? C.muted : C.text,
-
                 textDecoration: item.done ? 'line-through' : 'none',
-
                 cursor: item.done ? 'default' : 'text',
-
-                borderRadius: 4, padding: '2px 4px',
-
-                transition: 'background 0.1s' }}
-
+                borderRadius: 4, padding: '2px 4px', transition: 'background 0.1s' }}
               onMouseEnter={e=>{if(!item.done)e.target.style.background=C.border+'66'}}
-
               onMouseLeave={e=>e.target.style.background='transparent'}>
-
               <RichText html={item.text}/>
-
             </span>
-
           )}
 
           <button onClick={() => onChange(safeItems.filter(i => i.id !== item.id))}
-
-            style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12 }}>✕</button>
+            style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12, flexShrink: 0 }}>✕</button>
 
         </div>
 
       ))}
 
-      <div style={{ display: 'flex', gap: 6, marginTop: 4 }}>
+      {addOpen && !ON_MOBILE ? (
+        <div style={{ marginTop: 6 }}
+          onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) commitAdd(addHtml); }}>
+          <RichEditor htmlValue={addHtml} onHtmlChange={setAddHtml} placeholder="Add punch item…" autoFocus minRows={2}/>
+          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+            <Btn onClick={() => commitAdd(addHtml)} variant="primary" style={{ fontSize: 11, padding: '3px 12px' }}>Add</Btn>
+            <button onClick={() => { setAddOpen(false); setAddHtml(''); }}
+              style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+          </div>
+        </div>
+      ) : !addOpen && (
+        <Btn onClick={() => {
+          if (ON_MOBILE) setMobileSheet({ mode: 'add' });
+          else           { setAddOpen(true); setAddHtml(''); }
+        }} variant="add" style={{ fontSize: 11, padding: '4px 12px', marginTop: 4 }}>+ Add Item</Btn>
+      )}
 
-        <Inp value={draft} onChange={e => setDraft(e.target.value)}
-
-          placeholder="Add item…" style={{ flex: 1 }}
-
-          onKeyDown={e => e.key === 'Enter' && add()} />
-
-        <Btn onClick={add} variant="primary">+</Btn>
-
-      </div>
+      {mobileSheet && (
+        <RichMobileSheet
+          initialHtml={mobileSheet.mode === 'edit' ? mobileSheet.html : ''}
+          placeholder={mobileSheet.mode === 'add' ? "Add punch item…" : "Edit item…"}
+          addMode={mobileSheet.mode === 'add'}
+          onDone={html => mobileSheet.mode === 'add' ? commitAdd(html) : commitEdit(mobileSheet.id, html)}
+          onCancel={() => setMobileSheet(null)}/>
+      )}
 
     </div>
 
@@ -1959,9 +1961,11 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
   const totalOpen = countOpen(upper) + countOpen(main) + countOpen(basement) +
     extras.reduce((sum,e) => sum + countOpen(normFloor(punch[e.key])), 0);
 
+  const stripHtml = (html) => (html||"").replace(/<[^>]*>/g,"").replace(/&nbsp;/g," ").replace(/&amp;/g,"&").trim();
+
   const flatItems = (f, label) => [
-    ...f.general.filter(i => !i.done).map(i => `[${label}] ${i.text}`),
-    ...f.rooms.flatMap(r => (r.items||[]).filter(i => !i.done).map(i => `[${label} - ${r.name}] ${i.text}`)),
+    ...f.general.filter(i => !i.done).map(i => `[${label}] ${stripHtml(i.text)}`),
+    ...f.rooms.flatMap(r => (r.items||[]).filter(i => !i.done).map(i => `[${label} - ${r.name}] ${stripHtml(i.text)}`)),
   ];
 
   const handleEmail = () => {
@@ -2191,7 +2195,8 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
           <Inp value={d.text} onChange={e=>setD(p=>({...p,text:e.target.value}))}
 
-            placeholder="Key items completed and where the job is at…"/>
+            placeholder="Key items completed and where the job is at…"
+            onBlur={add}/>
 
         </div>
 
@@ -2474,15 +2479,17 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId}) {
   const del = (id)   => onChange(trips.filter(t=>t.id!==id));
 
 
+  const stripPunchHtml = (html) => (html||"").replace(/<[^>]*>/g,"").replace(/&nbsp;/g," ").replace(/&amp;/g,"&").trim();
+
   const chatTrip = (t,i) => {
-    const punchOpen = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n") || "None";
+    const punchOpen = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${stripPunchHtml(p.text)}`).join("\n") || "None";
     const msg = `Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}\n\nhttps://homestead-electric.vercel.app/`;
     openGoogleChat(msg);
   };
 
   const emailTrip = (t,i) => {
 
-    const punchLines = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n") || "None";
+    const punchLines = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${stripPunchHtml(p.text)}`).join("\n") || "None";
 
     const subject = `${jobName} — Return Trip #${i+1}`;
 
@@ -2591,7 +2598,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId}) {
             <div style={{display:"flex",gap:8}}>
 
               {jobSimproNo&&<Btn onClick={()=>{
-                const punchOpen=(t.punch||[]).filter(p=>!p.done).map(p=>`• ${p.text}`).join("\n")||"None";
+                const punchOpen=(t.punch||[]).filter(p=>!p.done).map(p=>`• ${stripPunchHtml(p.text)}`).join("\n")||"None";
                 const msg=`Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}`;
                 navigator.clipboard.writeText(msg).catch(()=>{});
                 window.open(`https://homesteadelectric.simprosuite.com/staff/editProject.php?jobID=${jobSimproNo}`,"_blank");
@@ -4108,6 +4115,7 @@ function DriveFilesSection({ job, onUpdate }) {
   const [viewFile, setViewFile] = useState(null);
   const [folderInput, setFolderInput] = useState(job.driveFolderId || "");
   const [editingFolder, setEditingFolder] = useState(!job.driveFolderId);
+  const [collapsedFolders, setCollapsedFolders] = useState(new Set());
 
   const folderId = extractDriveFolderId(job.driveFolderId);
 
@@ -4120,6 +4128,11 @@ function DriveFilesSection({ job, onUpdate }) {
       .then(allFiles => {
         if (cancelled) return;
         setDriveFiles(allFiles);
+        // Auto-collapse any Archive folders
+        const archiveFolders = [...new Set(allFiles.map(f => f._folder))].filter(isArchiveFolder);
+        if (archiveFolders.length > 0) {
+          setCollapsedFolders(new Set(archiveFolders));
+        }
         setLoading(false);
       })
       .catch(e => {
@@ -4147,12 +4160,27 @@ function DriveFilesSection({ job, onUpdate }) {
   const isImage = (f) => (f.mimeType || "").startsWith("image/");
   const isPDF = (f) => f.mimeType === "application/pdf" || /\.pdf$/i.test(f.name);
   const fileIcon = (f) => isPDF(f) ? "📄" : isImage(f) ? "🖼" : "📎";
+  const isArchiveFolder = (name) => /archive/i.test(name);
+
+  const toggleFolder = (name) => {
+    setCollapsedFolders(prev => {
+      const next = new Set(prev);
+      if (next.has(name)) next.delete(name);
+      else next.add(name);
+      return next;
+    });
+  };
 
   const previewUrl = (f) => `https://drive.google.com/file/d/${f.id}/preview`;
   const thumbUrl = (f) => f.thumbnailLink ? f.thumbnailLink.replace(/=s\d+/, "=s400") : `https://drive.google.com/thumbnail?id=${f.id}&sz=w400`;
 
-  // Group files by sub-folder
-  const folderNames = [...new Set(driveFiles.map(f => f._folder))];
+  // Group files by sub-folder — Root first, Archive folders last
+  const allFolderNames = [...new Set(driveFiles.map(f => f._folder))];
+  const folderNames = [
+    ...allFolderNames.filter(n => n === "Root"),
+    ...allFolderNames.filter(n => n !== "Root" && !isArchiveFolder(n)).sort(),
+    ...allFolderNames.filter(n => isArchiveFolder(n)).sort(),
+  ];
   const images = driveFiles.filter(f => isImage(f));
   const docs = driveFiles.filter(f => !isImage(f));
 
@@ -4237,67 +4265,91 @@ function DriveFilesSection({ job, onUpdate }) {
         const folderImages = images.filter(f => f._folder === folder);
         const folderDocs = docs.filter(f => f._folder === folder);
         if (folderImages.length === 0 && folderDocs.length === 0) return null;
+        const isArchive = isArchiveFolder(folder);
+        const isCollapsed = collapsedFolders.has(folder);
+        const fileCount = folderImages.length + folderDocs.length;
         return (
           <div key={folder} style={{ marginBottom: 16 }}>
-            {/* Folder header — only show if there are multiple folders */}
+            {/* Folder header — clickable toggle, always shown when multiple folders */}
             {folderNames.length > 1 && (
-              <div style={{ fontSize: 10, color: C.accent, fontWeight: 700, letterSpacing: "0.06em",
-                marginBottom: 8, paddingBottom: 4, borderBottom: `1px solid ${C.border}` }}>
-                📁 {folder === "Root" ? "Top Level" : folder}
+              <div onClick={() => toggleFolder(folder)}
+                style={{ display: "flex", alignItems: "center", gap: 6, fontSize: 10,
+                  color: isArchive ? C.muted : C.accent,
+                  fontWeight: 700, letterSpacing: "0.06em",
+                  marginBottom: isCollapsed ? 0 : 8,
+                  paddingBottom: isCollapsed ? 0 : 4,
+                  borderBottom: isCollapsed ? "none" : `1px solid ${C.border}`,
+                  cursor: "pointer", userSelect: "none",
+                  opacity: isArchive ? 0.65 : 1 }}>
+                <span style={{ fontSize: 11, lineHeight: 1, flexShrink: 0 }}>{isCollapsed ? "▸" : "▾"}</span>
+                <span>📁 {folder === "Root" ? "Top Level" : folder}</span>
+                {isArchive && (
+                  <span style={{ fontStyle: "italic", fontWeight: 400, color: C.muted, letterSpacing: 0 }}>
+                    — archived plans
+                  </span>
+                )}
+                <span style={{ marginLeft: "auto", fontWeight: 400, color: C.muted, fontStyle: "normal", letterSpacing: 0 }}>
+                  {fileCount} file{fileCount === 1 ? "" : "s"}
+                </span>
               </div>
             )}
 
-            {/* Images grid */}
-            {folderImages.length > 0 && (
-              <div style={{ marginBottom: 10 }}>
-                <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>IMAGES</div>
-                <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(100px,1fr))", gap: 8 }}>
-                  {folderImages.map(f => (
-                    <div key={f.id} style={{ position: "relative", cursor: "pointer" }} onClick={() => setViewFile(f)}>
-                      <img src={thumbUrl(f)} alt={f.name}
-                        style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 8,
-                          border: `1px solid ${C.border}`, background: C.surface }} />
-                      <div style={{ fontSize: 9, color: C.dim, marginTop: 3, overflow: "hidden",
-                        textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+            {/* Collapsible content */}
+            {!isCollapsed && (<>
+
+              {/* Images grid */}
+              {folderImages.length > 0 && (
+                <div style={{ marginBottom: 10 }}>
+                  <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>IMAGES</div>
+                  <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fill,minmax(100px,1fr))", gap: 8 }}>
+                    {folderImages.map(f => (
+                      <div key={f.id} style={{ position: "relative", cursor: "pointer" }} onClick={() => setViewFile(f)}>
+                        <img src={thumbUrl(f)} alt={f.name}
+                          style={{ width: "100%", aspectRatio: "1", objectFit: "cover", borderRadius: 8,
+                            border: `1px solid ${C.border}`, background: C.surface }} />
+                        <div style={{ fontSize: 9, color: C.dim, marginTop: 3, overflow: "hidden",
+                          textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              )}
+
+              {/* Documents list */}
+              {folderDocs.length > 0 && (
+                <div>
+                  <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>DOCUMENTS</div>
+                  {folderDocs.map(f => (
+                    <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
+                      background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 6 }}>
+                      <span style={{ fontSize: 18, flexShrink: 0 }}>{fileIcon(f)}</span>
+                      <div style={{ flex: 1, minWidth: 0 }}>
+                        <div style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden",
+                          textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
+                        <div style={{ fontSize: 10, color: C.muted }}>
+                          {f.size ? (Number(f.size) < 1024 * 1024 ? Math.round(Number(f.size) / 1024) + " KB" : (Number(f.size) / (1024 * 1024)).toFixed(1) + " MB") : ""}
+                        </div>
+                      </div>
+                      {(isPDF(f) || isImage(f)) && (
+                        <button onClick={() => setViewFile(f)}
+                          style={{ fontSize: 11, fontWeight: 600, color: C.accent, background: `${C.accent}12`,
+                            border: `1px solid ${C.accent}44`, borderRadius: 7, padding: "5px 10px",
+                            cursor: "pointer", flexShrink: 0, fontFamily: "inherit" }}>
+                          View
+                        </button>
+                      )}
+                      <a href={f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`} target="_blank" rel="noreferrer"
+                        style={{ fontSize: 11, fontWeight: 600, color: C.blue, textDecoration: "none",
+                          border: `1px solid ${C.blue}44`, borderRadius: 7, padding: "5px 10px",
+                          flexShrink: 0 }}>
+                        Open ↗
+                      </a>
                     </div>
                   ))}
                 </div>
-              </div>
-            )}
+              )}
 
-            {/* Documents list */}
-            {folderDocs.length > 0 && (
-              <div>
-                <div style={{ fontSize: 9, color: C.dim, fontWeight: 700, letterSpacing: "0.08em", marginBottom: 8 }}>DOCUMENTS</div>
-                {folderDocs.map(f => (
-                  <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
-                    background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 6 }}>
-                    <span style={{ fontSize: 18, flexShrink: 0 }}>{fileIcon(f)}</span>
-                    <div style={{ flex: 1, minWidth: 0 }}>
-                      <div style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden",
-                        textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
-                      <div style={{ fontSize: 10, color: C.muted }}>
-                        {f.size ? (Number(f.size) < 1024 * 1024 ? Math.round(Number(f.size) / 1024) + " KB" : (Number(f.size) / (1024 * 1024)).toFixed(1) + " MB") : ""}
-                      </div>
-                    </div>
-                    {(isPDF(f) || isImage(f)) && (
-                      <button onClick={() => setViewFile(f)}
-                        style={{ fontSize: 11, fontWeight: 600, color: C.accent, background: `${C.accent}12`,
-                          border: `1px solid ${C.accent}44`, borderRadius: 7, padding: "5px 10px",
-                          cursor: "pointer", flexShrink: 0, fontFamily: "inherit" }}>
-                        View
-                      </button>
-                    )}
-                    <a href={f.webViewLink || `https://drive.google.com/file/d/${f.id}/view`} target="_blank" rel="noreferrer"
-                      style={{ fontSize: 11, fontWeight: 600, color: C.blue, textDecoration: "none",
-                        border: `1px solid ${C.blue}44`, borderRadius: 7, padding: "5px 10px",
-                        flexShrink: 0 }}>
-                      Open ↗
-                    </a>
-                  </div>
-                ))}
-              </div>
-            )}
+            </>)}
           </div>
         );
       })}
@@ -5497,7 +5549,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
   );
 }
 
-function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote}) {
+function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, initialTab}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
@@ -5514,7 +5566,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     onUpdate(updated, patch);
   };
 
-  const [tab, setTab] = useState("Job Info");
+  const [tab, setTab] = useState(()=>initialTab && TABS.includes(initialTab) ? initialTab : "Job Info");
   const [newLightingFloor, setNewLightingFloor] = useState("");
   const [emailData, setEmailData] = useState(null);
   const [convertPrompt, setConvertPrompt] = useState(false);
@@ -5817,6 +5869,33 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             style={{fontSize:13,fontWeight:700,borderColor:C.rough+"55",background:`${C.rough}08`,color:C.rough}}/>
                         </div>
                       </div>
+                      {/* Matterport — inline row below dates */}
+                      {(()=>{
+                        const mpDef=getStatusDef(MATTERPORT_STATUSES,job.matterportStatus||"");
+                        return(
+                          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginTop:6}}>
+                            <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginRight:2}}>MATTERPORT</div>
+                            <select value={job.matterportStatus||""} onChange={e=>{
+                              const v=e.target.value;
+                              const def=getStatusDef(MATTERPORT_STATUSES,v);
+                              u({matterportStatus:v,matterportStatusDate:def.hasDate?job.matterportStatusDate:""});
+                            }} style={{background:mpDef.color?`${mpDef.color}18`:C.surface,
+                              color:mpDef.color||C.dim,border:`1px solid ${mpDef.color||C.border}`,
+                              borderRadius:6,padding:"5px 8px",fontSize:12,fontFamily:"inherit",
+                              fontWeight:mpDef.color?700:400,outline:"none",cursor:"pointer"}}>
+                              {MATTERPORT_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+                            </select>
+                            {mpDef.hasDate&&(
+                              <DateInp value={job.matterportStatusDate||""} onChange={e=>u({matterportStatusDate:e.target.value})}
+                                style={{width:130,fontSize:12,borderColor:mpDef.color+"55",background:`${mpDef.color}08`}}/>
+                            )}
+                            {job.matterportLink&&(
+                              <a href={job.matterportLink} target="_blank" rel="noreferrer"
+                                style={{fontSize:12,color:C.rough,fontWeight:600,marginLeft:4}}>View →</a>
+                            )}
+                          </div>
+                        );
+                      })()}
                       <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
                       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                         <select value={job.roughStatus||""} onChange={e=>{
@@ -5867,84 +5946,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                 </div>
 
-              </Section>
-
-              <Section label="Matterport Scan" color={C.rough}>
-                {(()=>{
-                  const mpDef=getStatusDef(MATTERPORT_STATUSES,job.matterportStatus||"");
-                  return(
-                    <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                      <div style={{display:"flex",gap:10,alignItems:"center",flexWrap:"wrap"}}>
-                        <select value={job.matterportStatus||""} onChange={e=>{
-                          const v=e.target.value;
-                          const def=getStatusDef(MATTERPORT_STATUSES,v);
-                          u({matterportStatus:v,matterportStatusDate:def.hasDate?job.matterportStatusDate:""});
-                        }} style={{background:mpDef.color?`${mpDef.color}18`:C.surface,
-                          color:mpDef.color||C.dim,border:`1px solid ${mpDef.color||C.border}`,
-                          borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
-                          fontWeight:mpDef.color?700:400,outline:"none",cursor:"pointer"}}>
-                          {MATTERPORT_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
-                        </select>
-                        {mpDef.hasDate&&(
-                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
-                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:mpDef.color}}>SCAN DATE</div>
-                            <DateInp value={job.matterportStatusDate||""} onChange={e=>u({matterportStatusDate:e.target.value})}
-                              style={{width:130,fontSize:12,borderColor:mpDef.color+"55",background:`${mpDef.color}08`}}/>
-                          </div>
-                        )}
-                      </div>
-                      {job.matterportLink&&(
-                        <a href={job.matterportLink} target="_blank" rel="noreferrer"
-                          style={{fontSize:12,color:C.rough,fontWeight:600}}>View Matterport →</a>
-                      )}
-                    </div>
-                  );
-                })()}
-              </Section>
-
-              <Section label="Rough Inspection" color={C.rough}>
-                <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                  <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                    <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginRight:4}}>RESULT</div>
-                    {["pass","fail"].map(r=>(
-                      <button key={r} onClick={()=>u({roughInspectionResult:job.roughInspectionResult===r?"":r})}
-                        style={{padding:"5px 14px",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer",border:"none",
-                          background:job.roughInspectionResult===r?(r==="pass"?"#16a34a":"#dc2626"):(r==="pass"?"#16a34a18":"#dc262618"),
-                          color:job.roughInspectionResult===r?"#fff":(r==="pass"?"#16a34a":"#dc2626")}}>
-                        {r==="pass"?"✓ Pass":"✗ Fail"}
-                      </button>
-                    ))}
-                    <DateInp value={job.roughInspectionDate||""} onChange={e=>u({roughInspectionDate:e.target.value})} style={{fontSize:12,width:130}}/>
-                  </div>
-                  {job.roughInspectionResult==="fail"&&(
-                    <div style={{borderTop:`1px solid ${C.border}`,paddingTop:10}}>
-                      <div style={{fontSize:10,color:"#dc2626",fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>FAILED ITEMS</div>
-                      {(job.roughInspectionItems||[]).map((item,i)=>(
-                        <div key={item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
-                          <input type="checkbox" checked={!!item.done} onChange={()=>{const items=[...(job.roughInspectionItems||[])];items[i]={...items[i],done:!items[i].done};u({roughInspectionItems:items});}}/>
-                          <input value={item.text} onChange={e=>{const items=[...(job.roughInspectionItems||[])];items[i]={...items[i],text:e.target.value};u({roughInspectionItems:items});}}
-                            style={{flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,fontSize:13,color:C.text,padding:"2px 4px",outline:"none",textDecoration:item.done?"line-through":"none",opacity:item.done?0.5:1}}/>
-                          <button onClick={()=>u({roughInspectionItems:(job.roughInspectionItems||[]).filter((_,j)=>j!==i)})}
-                            style={{background:"none",border:"none",color:C.dim,fontSize:16,cursor:"pointer",padding:"0 4px",lineHeight:1}}>×</button>
-                        </div>
-                      ))}
-                      <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
-                        <button onClick={()=>u({roughInspectionItems:[...(job.roughInspectionItems||[]),{id:uid(),text:"",done:false}]})}
-                          style={{fontSize:12,padding:"4px 10px",borderRadius:5,background:C.surface,border:`1px solid ${C.border}`,color:C.text,cursor:"pointer"}}>+ Add Item</button>
-                        {(job.roughInspectionItems||[]).filter(x=>!x.done).length>0&&(
-                          <button onClick={()=>{
-                            const open=(job.roughInspectionItems||[]).filter(x=>!x.done);
-                            const newRT={id:uid(),date:"",scope:"Failed rough inspection items",material:"",punch:open.map(x=>({id:uid(),text:x.text,done:false})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};
-                            u({returnTrips:[...(job.returnTrips||[]),newRT]});
-                            alert("Return trip created with "+open.length+" inspection item"+(open.length!==1?"s":"")+".");
-                          }} style={{fontSize:12,padding:"4px 12px",borderRadius:5,background:"#dc262618",border:"1px solid #dc262633",color:"#dc2626",cursor:"pointer",fontWeight:700}}>
-                            → Create Return Trip
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
               </Section>
 
               <Section label="Punch List" color={C.rough} action={
@@ -6483,6 +6484,100 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <PunchSection punch={job.qcPunch} onChange={v=>{const allClear=punchOpen(v)===0;u({qcPunch:v,...(job.qcStatus==="fail"&&allClear?{qcStatus:"pass"}:{})});}} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }} showHotcheck={true}/>
               </Section>
 
+              {/* ── 4-Way Inspection ── */}
+              <Section label="4-Way Inspection" color={C.teal} defaultOpen={true}>
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                    <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginRight:4}}>DATE</div>
+                    <DateInp value={job.roughInspectionDate||""} onChange={e=>u({roughInspectionDate:e.target.value})} style={{fontSize:12,width:130}}/>
+                    <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginLeft:8,marginRight:4}}>RESULT</div>
+                    {["pass","fail"].map(r=>(
+                      <button key={r} onClick={()=>u({roughInspectionResult:job.roughInspectionResult===r?"":r})}
+                        style={{padding:"5px 14px",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer",border:"none",
+                          background:job.roughInspectionResult===r?(r==="pass"?"#16a34a":"#dc2626"):(r==="pass"?"#16a34a18":"#dc262618"),
+                          color:job.roughInspectionResult===r?"#fff":(r==="pass"?"#16a34a":"#dc2626")}}>
+                        {r==="pass"?"✓ Pass":"✗ Fail"}
+                      </button>
+                    ))}
+                  </div>
+                  {job.roughInspectionResult==="fail"&&(
+                    <div style={{borderTop:`1px solid ${C.border}`,paddingTop:10}}>
+                      <div style={{fontSize:10,color:"#dc2626",fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>FAILED ITEMS</div>
+                      {(job.roughInspectionItems||[]).map((item,i)=>(
+                        <div key={item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
+                          <input type="checkbox" checked={!!item.done} onChange={()=>{const items=[...(job.roughInspectionItems||[])];items[i]={...items[i],done:!items[i].done};u({roughInspectionItems:items});}}/>
+                          <input value={item.text} onChange={e=>{const items=[...(job.roughInspectionItems||[])];items[i]={...items[i],text:e.target.value};u({roughInspectionItems:items});}}
+                            style={{flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,fontSize:13,color:C.text,padding:"2px 4px",outline:"none",textDecoration:item.done?"line-through":"none",opacity:item.done?0.5:1}}/>
+                          <button onClick={()=>u({roughInspectionItems:(job.roughInspectionItems||[]).filter((_,j)=>j!==i)})}
+                            style={{background:"none",border:"none",color:C.dim,fontSize:16,cursor:"pointer",padding:"0 4px",lineHeight:1}}>×</button>
+                        </div>
+                      ))}
+                      <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
+                        <button onClick={()=>u({roughInspectionItems:[...(job.roughInspectionItems||[]),{id:uid(),text:"",done:false}]})}
+                          style={{fontSize:12,padding:"4px 10px",borderRadius:5,background:C.surface,border:`1px solid ${C.border}`,color:C.text,cursor:"pointer"}}>+ Add Item</button>
+                        {(job.roughInspectionItems||[]).filter(x=>!x.done).length>0&&(
+                          <button onClick={()=>{
+                            const open=(job.roughInspectionItems||[]).filter(x=>!x.done);
+                            const newRT={id:uid(),date:"",scope:"Failed 4-way inspection items",material:"",punch:open.map(x=>({id:uid(),text:x.text,done:false})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};
+                            u({returnTrips:[...(job.returnTrips||[]),newRT]});
+                            alert("Return trip created with "+open.length+" inspection item"+(open.length!==1?"s":"")+".");
+                          }} style={{fontSize:12,padding:"4px 12px",borderRadius:5,background:"#dc262618",border:"1px solid #dc262633",color:"#dc2626",cursor:"pointer",fontWeight:700}}>
+                            → Create Return Trip
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </Section>
+
+              {/* ── Final Inspection ── */}
+              <Section label="Final Inspection" color={C.teal} defaultOpen={true}>
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                    <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginRight:4}}>DATE</div>
+                    <DateInp value={job.finalInspectionTargetDate||""} onChange={e=>u({finalInspectionTargetDate:e.target.value})} style={{fontSize:12,width:130}}/>
+                    <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginLeft:8,marginRight:4}}>RESULT</div>
+                    {["pass","fail"].map(r=>(
+                      <button key={r} onClick={()=>u({finalInspectionResult:job.finalInspectionResult===r?"":r})}
+                        style={{padding:"5px 14px",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer",border:"none",
+                          background:job.finalInspectionResult===r?(r==="pass"?"#16a34a":"#dc2626"):(r==="pass"?"#16a34a18":"#dc262618"),
+                          color:job.finalInspectionResult===r?"#fff":(r==="pass"?"#16a34a":"#dc2626")}}>
+                        {r==="pass"?"✓ Pass":"✗ Fail"}
+                      </button>
+                    ))}
+                  </div>
+                  {job.finalInspectionResult==="fail"&&(
+                    <div style={{borderTop:`1px solid ${C.border}`,paddingTop:10}}>
+                      <div style={{fontSize:10,color:"#dc2626",fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>FAILED ITEMS</div>
+                      {(job.finalInspectionItems||[]).map((item,i)=>(
+                        <div key={item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
+                          <input type="checkbox" checked={!!item.done} onChange={()=>{const items=[...(job.finalInspectionItems||[])];items[i]={...items[i],done:!items[i].done};u({finalInspectionItems:items});}}/>
+                          <input value={item.text} onChange={e=>{const items=[...(job.finalInspectionItems||[])];items[i]={...items[i],text:e.target.value};u({finalInspectionItems:items});}}
+                            style={{flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,fontSize:13,color:C.text,padding:"2px 4px",outline:"none",textDecoration:item.done?"line-through":"none",opacity:item.done?0.5:1}}/>
+                          <button onClick={()=>u({finalInspectionItems:(job.finalInspectionItems||[]).filter((_,j)=>j!==i)})}
+                            style={{background:"none",border:"none",color:C.dim,fontSize:16,cursor:"pointer",padding:"0 4px",lineHeight:1}}>×</button>
+                        </div>
+                      ))}
+                      <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
+                        <button onClick={()=>u({finalInspectionItems:[...(job.finalInspectionItems||[]),{id:uid(),text:"",done:false}]})}
+                          style={{fontSize:12,padding:"4px 10px",borderRadius:5,background:C.surface,border:`1px solid ${C.border}`,color:C.text,cursor:"pointer"}}>+ Add Item</button>
+                        {(job.finalInspectionItems||[]).filter(x=>!x.done).length>0&&(
+                          <button onClick={()=>{
+                            const open=(job.finalInspectionItems||[]).filter(x=>!x.done);
+                            const newRT={id:uid(),date:"",scope:"Failed final inspection items",material:"",punch:open.map(x=>({id:uid(),text:x.text,done:false})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};
+                            u({returnTrips:[...(job.returnTrips||[]),newRT]});
+                            alert("Return trip created with "+open.length+" inspection item"+(open.length!==1?"s":"")+".");
+                          }} style={{fontSize:12,padding:"4px 12px",borderRadius:5,background:"#dc262618",border:"1px solid #dc262633",color:"#dc2626",cursor:"pointer",fontWeight:700}}>
+                            → Create Return Trip
+                          </button>
+                        )}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              </Section>
+
               <div style={{marginTop:16,padding:"14px 16px",background:job.qcSignedOff?`${C.green}10`:C.surface,border:`1px solid ${job.qcSignedOff?C.green+"55":C.border}`,borderRadius:10}}>
                 <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:job.qcSignedOff?C.green:C.dim,marginBottom:10}}>QC SIGN-OFF</div>
                 {job.qcSignedOff?(
@@ -6887,7 +6982,8 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}}) {
 
           placeholder="Add a question…" style={{flex:1}}
 
-          onKeyDown={e=>e.key==='Enter'&&add()}/>
+          onKeyDown={e=>e.key==='Enter'&&add()}
+          onBlur={add}/>
 
         <Btn onClick={add} variant="primary">+</Btn>
 
@@ -7711,10 +7807,11 @@ function UpcomingJobs({ upcoming, onChange, onPromote, onPromoteToQuote, canMana
                   <div style={{flex:1.5,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.customer||"—"}</div>
                   <div style={{flex:3,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.notes||"—"}</div>
                   <div style={{flex:1.1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.lastFollowUp||"—"}</div>
-                  <div style={{width:110,flexShrink:0,display:"flex",gap:6,justifyContent:"flex-end"}}>
+                  <div style={{width:130,flexShrink:0,display:"flex",gap:6,justifyContent:"flex-end"}}>
                     <button onClick={()=>setEditingId(u.id)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Edit</button>
                     <button onClick={()=>{if(window.confirm("Convert to quote?"))onPromoteToQuote(u);}} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:6,color:C.accent,fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Q</button>
                     <button onClick={()=>{if(window.confirm("Promote to active job?"))onPromote(u);}} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✓</button>
+                    {canManage&&<button onClick={()=>{if(window.confirm("Remove this upcoming job?"))del(u.id);}} style={{background:"none",border:"none",color:C.muted,fontSize:16,padding:"2px 4px",cursor:"pointer",lineHeight:1,fontFamily:"inherit"}}>×</button>}
                   </div>
                 </>
               )}
@@ -12084,6 +12181,52 @@ function App() {
   };
 
 
+  // ── Notification deep-link state ─────────────────────────────────────────
+  // openTab: passed as initialTab to JobDetail when opening via a notification
+  const [openTab, setOpenTab] = useState(null);
+
+  // ── Helper: open a job by ID and jump to a section ───────────────────────
+  const openJobById = useCallback((jobId, section) => {
+    if (!jobId) return;
+    const job = jobs.find(j => j.id === jobId);
+    if (job) {
+      setOpenTab(section || null);
+      setSelected(job);
+    }
+  }, [jobs]);
+
+  // ── On mount: check URL params for deep-link (background notification tap) ─
+  const [pendingNav, setPendingNav] = useState(() => {
+    const p = new URLSearchParams(window.location.search);
+    const jobId   = p.get("jobId");
+    const section = p.get("section") || "";
+    if (jobId) {
+      // Clean the URL so refreshing doesn't re-trigger navigation
+      const clean = window.location.pathname;
+      window.history.replaceState({}, "", clean);
+      return { jobId, section };
+    }
+    return null;
+  });
+
+  // Once jobs are loaded, apply any pending navigation from URL params
+  useEffect(() => {
+    if (!pendingNav || !jobs.length) return;
+    openJobById(pendingNav.jobId, pendingNav.section);
+    setPendingNav(null);
+  }, [jobs, pendingNav, openJobById]);
+
+  // ── Listen for postMessage from SW (app was already open when notif tapped) ─
+  useEffect(() => {
+    const handler = e => {
+      if (e.data?.type === "HE_NOTIF_CLICK" && e.data.jobId) {
+        openJobById(e.data.jobId, e.data.section);
+      }
+    };
+    navigator.serviceWorker?.addEventListener("message", handler);
+    return () => navigator.serviceWorker?.removeEventListener("message", handler);
+  }, [openJobById]);
+
   // ── Foreground push notification toast ───────────────────────────────────
   const [pushToast, setPushToast] = useState(null);
   useEffect(() => {
@@ -12110,9 +12253,12 @@ function App() {
   return (
 
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
-      {/* Push notification foreground toast */}
+      {/* Push notification foreground toast — tap to open the relevant job */}
       {pushToast && (
-        <div onClick={() => setPushToast(null)} style={{
+        <div onClick={() => {
+          if (pushToast.jobId) openJobById(pushToast.jobId, pushToast.section);
+          setPushToast(null);
+        }} style={{
           position:"fixed", top:16, left:"50%", transform:"translateX(-50%)",
           zIndex:99999, background:"#1e293b", color:"#f8fafc",
           borderRadius:12, padding:"12px 18px", maxWidth:360, width:"90%",
@@ -12121,6 +12267,7 @@ function App() {
         }}>
           <div style={{fontWeight:700, fontSize:14}}>{pushToast.title}</div>
           {pushToast.body && <div style={{fontSize:13, color:"#cbd5e1"}}>{pushToast.body}</div>}
+          {pushToast.jobId && <div style={{fontSize:11, color:"#94a3b8", marginTop:2}}>Tap to open →</div>}
         </div>
       )}
 
@@ -12909,8 +13056,9 @@ function App() {
         ? <QuickJobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen} leadsList={_leads}/>
         : selected.tempPed
         ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen}/>
-        : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen} leadsList={_leads}
+        : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);setOpenTab(null);}} foremenList={_foremen} leadsList={_leads}
             canConvertQuote={can(identity,"quotes.convert")}
+            initialTab={openTab}
             onConvertQuote={(q)=>{
               // q already has simproNo set from the prompt
               const updated={...q, type:""};
