@@ -2195,8 +2195,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
           <Inp value={d.text} onChange={e=>setD(p=>({...p,text:e.target.value}))}
 
-            placeholder="Key items completed and where the job is at…"
-            onBlur={add}/>
+            placeholder="Key items completed and where the job is at…"/>
 
         </div>
 
@@ -2251,11 +2250,16 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
 function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughStatus, finishStatus}) {
 
-  const add = () => onChange([...orders, {
-    id:uid(), date:"", desc:"", task:"", material:"", time:"", sendTo:"",
-    coStatus:"needs_sending", coStatusDate:"",
-    needsHardDate:false, needsByStart:"", needsByEnd:"",
-  }]);
+  const add = () => {
+    const creator = getIdentity();
+    onChange([...orders, {
+      id:uid(), date:"", desc:"", task:"", material:"", time:"", sendTo:"",
+      coStatus:"needs_sending", coStatusDate:"",
+      needsHardDate:false, needsByStart:"", needsByEnd:"",
+      createdBy: creator?.name || "",
+      createdAt: new Date().toLocaleDateString("en-US"),
+    }]);
+  };
 
   const upd = (id, p) => onChange(orders.map(o => o.id===id ? {...o,...p} : o));
   const del = (id)    => onChange(orders.filter(o => o.id!==id));
@@ -2317,9 +2321,10 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
 
             {/* Header */}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
-              <div style={{display:"flex",alignItems:"center",gap:8}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                 <span style={{fontSize:12,color:"var(--accent)",fontWeight:700}}>Change Order #{i+1}</span>
                 {isConverted&&<span style={{fontSize:10,fontWeight:700,color:"#6b7280",background:"#6b728018",borderRadius:99,padding:"2px 8px",border:"1px solid #6b728033"}}>CONVERTED TO RT</span>}
+                {o.createdBy&&<span style={{fontSize:10,color:"var(--dim)"}}>created by <b>{o.createdBy}</b>{o.createdAt?" · "+o.createdAt:""}</span>}
               </div>
               <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
                 {!isConverted&&jobSimproNo&&<Btn onClick={()=>{
@@ -5869,33 +5874,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             style={{fontSize:13,fontWeight:700,borderColor:C.rough+"55",background:`${C.rough}08`,color:C.rough}}/>
                         </div>
                       </div>
-                      {/* Matterport — inline row below dates */}
-                      {(()=>{
-                        const mpDef=getStatusDef(MATTERPORT_STATUSES,job.matterportStatus||"");
-                        return(
-                          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginTop:6}}>
-                            <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginRight:2}}>MATTERPORT</div>
-                            <select value={job.matterportStatus||""} onChange={e=>{
-                              const v=e.target.value;
-                              const def=getStatusDef(MATTERPORT_STATUSES,v);
-                              u({matterportStatus:v,matterportStatusDate:def.hasDate?job.matterportStatusDate:""});
-                            }} style={{background:mpDef.color?`${mpDef.color}18`:C.surface,
-                              color:mpDef.color||C.dim,border:`1px solid ${mpDef.color||C.border}`,
-                              borderRadius:6,padding:"5px 8px",fontSize:12,fontFamily:"inherit",
-                              fontWeight:mpDef.color?700:400,outline:"none",cursor:"pointer"}}>
-                              {MATTERPORT_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
-                            </select>
-                            {mpDef.hasDate&&(
-                              <DateInp value={job.matterportStatusDate||""} onChange={e=>u({matterportStatusDate:e.target.value})}
-                                style={{width:130,fontSize:12,borderColor:mpDef.color+"55",background:`${mpDef.color}08`}}/>
-                            )}
-                            {job.matterportLink&&(
-                              <a href={job.matterportLink} target="_blank" rel="noreferrer"
-                                style={{fontSize:12,color:C.rough,fontWeight:600,marginLeft:4}}>View →</a>
-                            )}
-                          </div>
-                        );
-                      })()}
                       <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
                       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                         <select value={job.roughStatus||""} onChange={e=>{
@@ -5946,6 +5924,51 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                 </div>
 
+              </Section>
+
+              <Section label="4-Way Inspection Date" color={C.rough}>
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
+                  {/* Inspection date + result badge */}
+                  <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                    <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>TARGET DATE</div>
+                    <DateInp value={job.roughInspectionDate||""} onChange={e=>u({roughInspectionDate:e.target.value})} style={{fontSize:12,width:130}}/>
+                    {job.roughInspectionResult&&(
+                      <div style={{fontSize:11,fontWeight:700,color:job.roughInspectionResult==="pass"?"#16a34a":"#dc2626",
+                        background:job.roughInspectionResult==="pass"?"#16a34a18":"#dc262618",
+                        border:`1px solid ${job.roughInspectionResult==="pass"?"#16a34a33":"#dc262633"}`,
+                        borderRadius:6,padding:"3px 10px"}}>
+                        {job.roughInspectionResult==="pass"?"✓ Passed":"✗ Failed"} · see QC tab
+                      </div>
+                    )}
+                  </div>
+                  {/* Matterport scan — compact inline row */}
+                  {(()=>{
+                    const mpDef=getStatusDef(MATTERPORT_STATUSES,job.matterportStatus||"");
+                    return(
+                      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",paddingTop:8,borderTop:`1px solid ${C.border}`}}>
+                        <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginRight:2}}>MATTERPORT</div>
+                        <select value={job.matterportStatus||""} onChange={e=>{
+                          const v=e.target.value;
+                          const def=getStatusDef(MATTERPORT_STATUSES,v);
+                          u({matterportStatus:v,matterportStatusDate:def.hasDate?job.matterportStatusDate:""});
+                        }} style={{background:mpDef.color?`${mpDef.color}18`:C.surface,
+                          color:mpDef.color||C.dim,border:`1px solid ${mpDef.color||C.border}`,
+                          borderRadius:6,padding:"5px 8px",fontSize:12,fontFamily:"inherit",
+                          fontWeight:mpDef.color?700:400,outline:"none",cursor:"pointer"}}>
+                          {MATTERPORT_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+                        </select>
+                        {mpDef.hasDate&&(
+                          <DateInp value={job.matterportStatusDate||""} onChange={e=>u({matterportStatusDate:e.target.value})}
+                            style={{width:130,fontSize:12,borderColor:mpDef.color+"55",background:`${mpDef.color}08`}}/>
+                        )}
+                        {job.matterportLink&&(
+                          <a href={job.matterportLink} target="_blank" rel="noreferrer"
+                            style={{fontSize:12,color:C.rough,fontWeight:600,marginLeft:4}}>View →</a>
+                        )}
+                      </div>
+                    );
+                  })()}
+                </div>
               </Section>
 
               <Section label="Punch List" color={C.rough} action={
@@ -7807,11 +7830,10 @@ function UpcomingJobs({ upcoming, onChange, onPromote, onPromoteToQuote, canMana
                   <div style={{flex:1.5,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.customer||"—"}</div>
                   <div style={{flex:3,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.notes||"—"}</div>
                   <div style={{flex:1.1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.lastFollowUp||"—"}</div>
-                  <div style={{width:130,flexShrink:0,display:"flex",gap:6,justifyContent:"flex-end"}}>
+                  <div style={{width:110,flexShrink:0,display:"flex",gap:6,justifyContent:"flex-end"}}>
                     <button onClick={()=>setEditingId(u.id)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Edit</button>
                     <button onClick={()=>{if(window.confirm("Convert to quote?"))onPromoteToQuote(u);}} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:6,color:C.accent,fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Q</button>
                     <button onClick={()=>{if(window.confirm("Promote to active job?"))onPromote(u);}} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✓</button>
-                    {canManage&&<button onClick={()=>{if(window.confirm("Remove this upcoming job?"))del(u.id);}} style={{background:"none",border:"none",color:C.muted,fontSize:16,padding:"2px 4px",cursor:"pointer",lineHeight:1,fontFamily:"inherit"}}>×</button>}
                   </div>
                 </>
               )}
@@ -11021,6 +11043,12 @@ function QuestionsSharePage({ jobId }) {
   const [respondentName, setRespondentName]= useState('');
   const [nameErr,        setNameErr]       = useState(false);
   const [prevAnsweredBy, setPrevAnsweredBy]= useState('');
+  // Track which questions have a committed answer (updated on textarea blur, not every keystroke)
+  // so cards don't jump around while you're mid-sentence.
+  const [answeredIds, setAnsweredIds] = useState(() => {
+    try { const d=JSON.parse(localStorage.getItem(draftKey)||'{}'); return new Set(Object.keys(d).filter(id=>d[id]?.trim())); }
+    catch(e){ return new Set(); }
+  });
 
   useEffect(() => {
     if(Object.keys(answers).length) localStorage.setItem(draftKey, JSON.stringify(answers));
@@ -11051,12 +11079,16 @@ function QuestionsSharePage({ jobId }) {
         const qa = snap.data().questionAnswers;
         setPrevAnsweredBy(qa.answeredBy || '');
         const ans = {};
+        const aSet = new Set();
         ['rough','finish'].forEach(phase => {
           ['upper','main','basement'].forEach(floor => {
-            (qa[phase]?.[floor] || []).forEach(a => { if(a.answer) ans[a.id] = a.answer; });
+            (qa[phase]?.[floor] || []).forEach(a => {
+              if(a.answer) { ans[a.id] = a.answer; if(a.answer.trim()) aSet.add(a.id); }
+            });
           });
         });
         setAnswers(ans);
+        setAnsweredIds(prev => new Set([...prev, ...aSet]));
       }
     }).catch(()=>{});
   }, [jobId]);
@@ -11158,26 +11190,42 @@ function QuestionsSharePage({ jobId }) {
           {roughQs.length>0&&(
             <div style={{marginBottom:20}}>
               <div style={{fontSize:11,fontWeight:700,color:'#2563eb',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #2563eb33'}}>⚡ ROUGH PHASE</div>
-              {roughQs.map((q,i)=>(
-                <div key={q.id} style={{...cardStyle,borderLeft:'3px solid #2563eb'}}>
-                  <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginBottom:3}}>{q.floor}</div>
-                  <div style={{fontSize:14,fontWeight:600,color:'#111',marginBottom:10}}>Q{i+1}: {q.question}</div>
-                  <textarea value={answers[q.id]||''} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))} placeholder="Type your answer here…" rows={3} style={taStyle}/>
-                </div>
-              ))}
+              {[...roughQs].sort((a,b)=>((answeredIds.has(a.id)||!!a.done||!!(a.answer?.trim()))?1:0)-((answeredIds.has(b.id)||!!b.done||!!(b.answer?.trim()))?1:0)).map((q,i)=>{
+                const isAns=answeredIds.has(q.id)||!!q.done||!!(q.answer?.trim());
+                return (
+                  <div key={q.id} style={{...cardStyle,borderLeft:`3px solid ${isAns?'#16a34a':'#2563eb'}`,opacity:isAns?0.72:1,transition:'opacity 0.2s,border-color 0.2s'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:3}}>
+                      <div style={{fontSize:10,color:'#9ca3af',fontWeight:600}}>{q.floor}</div>
+                      {isAns&&<div style={{fontSize:10,fontWeight:700,color:'#16a34a',background:'#dcfce7',borderRadius:99,padding:'1px 8px'}}>✓ Answered</div>}
+                    </div>
+                    <div style={{fontSize:14,fontWeight:600,color:'#111',marginBottom:10}}>Q{i+1}: {q.question}</div>
+                    <textarea value={answers[q.id]||''} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))}
+                      onBlur={e=>{if(e.target.value.trim())setAnsweredIds(s=>new Set([...s,q.id]));else setAnsweredIds(s=>{const n=new Set(s);n.delete(q.id);return n;});}}
+                      placeholder="Type your answer here…" rows={3} style={taStyle}/>
+                  </div>
+                );
+              })}
             </div>
           )}
 
           {finishQs.length>0&&(
             <div style={{marginBottom:20}}>
               <div style={{fontSize:11,fontWeight:700,color:'#0ea5e9',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #0ea5e933'}}>🏁 FINISH PHASE</div>
-              {finishQs.map((q,i)=>(
-                <div key={q.id} style={{...cardStyle,borderLeft:'3px solid #0ea5e9'}}>
-                  <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginBottom:3}}>{q.floor}</div>
-                  <div style={{fontSize:14,fontWeight:600,color:'#111',marginBottom:10}}>Q{i+1}: {q.question}</div>
-                  <textarea value={answers[q.id]||''} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))} placeholder="Type your answer here…" rows={3} style={taStyle}/>
-                </div>
-              ))}
+              {[...finishQs].sort((a,b)=>((answeredIds.has(a.id)||!!a.done||!!(a.answer?.trim()))?1:0)-((answeredIds.has(b.id)||!!b.done||!!(b.answer?.trim()))?1:0)).map((q,i)=>{
+                const isAns=answeredIds.has(q.id)||!!q.done||!!(q.answer?.trim());
+                return (
+                  <div key={q.id} style={{...cardStyle,borderLeft:`3px solid ${isAns?'#16a34a':'#0ea5e9'}`,opacity:isAns?0.72:1,transition:'opacity 0.2s,border-color 0.2s'}}>
+                    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:3}}>
+                      <div style={{fontSize:10,color:'#9ca3af',fontWeight:600}}>{q.floor}</div>
+                      {isAns&&<div style={{fontSize:10,fontWeight:700,color:'#16a34a',background:'#dcfce7',borderRadius:99,padding:'1px 8px'}}>✓ Answered</div>}
+                    </div>
+                    <div style={{fontSize:14,fontWeight:600,color:'#111',marginBottom:10}}>Q{i+1}: {q.question}</div>
+                    <textarea value={answers[q.id]||''} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))}
+                      onBlur={e=>{if(e.target.value.trim())setAnsweredIds(s=>new Set([...s,q.id]));else setAnsweredIds(s=>{const n=new Set(s);n.delete(q.id);return n;});}}
+                      placeholder="Type your answer here…" rows={3} style={taStyle}/>
+                  </div>
+                );
+              })}
             </div>
           )}
 
