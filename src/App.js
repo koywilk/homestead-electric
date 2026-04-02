@@ -2132,6 +2132,86 @@ function MaterialOrders({orders,onChange}) {
 }
 
 
+// ── Material Tally ────────────────────────────────────────────
+// Field-use count list: add items by name, tap +/− to count, copy all as "Nx Item"
+function MaterialTally({items, onChange}) {
+  const safe = Array.isArray(items) ? items : [];
+  const [draft, setDraft] = useState("");
+  const [copied, setCopied] = useState(false);
+
+  const addItem = (nameArg) => {
+    const name = typeof nameArg === "string" ? nameArg : draft;
+    if (!name.trim()) return;
+    onChange([...safe, {id: uid(), name: name.trim(), count: 0}]);
+    setDraft("");
+  };
+
+  const updCount = (id, delta) =>
+    onChange(safe.map(i => i.id === id ? {...i, count: Math.max(0, (i.count||0) + delta)} : i));
+
+  const updName = (id, name) =>
+    onChange(safe.map(i => i.id === id ? {...i, name} : i));
+
+  const del = (id) => onChange(safe.filter(i => i.id !== id));
+
+  const copyList = () => {
+    const text = safe.map(i => `${i.count||0}x ${i.name}`).join("\n");
+    navigator.clipboard.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    }).catch(() => {});
+  };
+
+  const btnBase = {
+    width: ON_MOBILE ? 44 : 36, height: ON_MOBILE ? 44 : 36,
+    borderRadius: 8, fontSize: ON_MOBILE ? 22 : 18, fontWeight: 700,
+    cursor: "pointer", fontFamily: "inherit", lineHeight: 1,
+    display: "flex", alignItems: "center", justifyContent: "center", flexShrink: 0,
+  };
+
+  return (
+    <div>
+      <div style={{display:"flex",gap:6,marginBottom:10}}>
+        <Inp value={draft} onChange={e=>setDraft(e.target.value)}
+          placeholder="Add item…" style={{flex:1}}
+          onBlur={addItem}
+          onKeyDown={e=>e.key==="Enter"&&addItem()}/>
+        <Btn onClick={addItem} variant="primary" style={{padding:"6px 14px",flexShrink:0}}>+</Btn>
+      </div>
+
+      {safe.map(item=>(
+        <div key={item.id} style={{display:"flex",gap:8,alignItems:"center",marginBottom:7,
+          padding:"8px 10px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
+          <input value={item.name} onChange={e=>updName(item.id,e.target.value)}
+            style={{flex:1,background:"transparent",border:"none",fontSize:13,color:C.text,
+              outline:"none",fontFamily:"inherit",minWidth:0}}
+            placeholder="Item name"/>
+          <button onClick={()=>updCount(item.id,-1)}
+            style={{...btnBase,border:`1px solid ${C.border}`,background:C.card,color:C.text}}>−</button>
+          <span style={{fontSize:ON_MOBILE?18:16,fontWeight:700,color:C.text,
+            minWidth:ON_MOBILE?36:28,textAlign:"center"}}>{item.count||0}</span>
+          <button onClick={()=>updCount(item.id,1)}
+            style={{...btnBase,border:`1px solid ${C.accent}`,background:`${C.accent}18`,color:C.accent}}>+</button>
+          <button onClick={()=>del(item.id)}
+            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+              fontSize:16,padding:"0 2px",lineHeight:1,flexShrink:0}}>×</button>
+        </div>
+      ))}
+
+      {safe.length>0&&(
+        <button onClick={copyList}
+          style={{marginTop:6,width:"100%",padding:"10px",borderRadius:8,
+            border:`1px solid ${copied?"#16a34a55":C.border}`,
+            background:copied?"#16a34a18":C.surface,
+            color:copied?"#16a34a":C.dim,fontSize:12,fontWeight:700,
+            cursor:"pointer",fontFamily:"inherit",transition:"all 0.2s"}}>
+          {copied?"✓ Copied to clipboard":"📋 Copy List"}
+        </button>
+      )}
+    </div>
+  );
+}
+
 // ── Daily Updates ─────────────────────────────────────────────
 
 function DailyUpdates({updates,onChange,jobName,onEmail}) {
@@ -6001,9 +6081,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </Section>
 
               <Section label="Material Tracking" color={C.rough}>
-
                 <MaterialOrders orders={job.roughMaterials} onChange={v=>u({roughMaterials:v})}/>
-
+                <div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
+                  <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:C.dim,marginBottom:8}}>COUNT LIST</div>
+                  <MaterialTally items={job.roughTally||[]} onChange={v=>u({roughTally:v})}/>
+                </div>
               </Section>
 
               <Section label="Daily Job Updates" color={C.rough}>
@@ -6178,8 +6260,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <div style={{marginTop:20}}>
 
                 <Section label="Finish Material Tracking" color={C.finish}>
-                <MaterialOrders orders={job.finishMaterials} onChange={v=>u({finishMaterials:v})}/>
-              </Section>
+                  <MaterialOrders orders={job.finishMaterials} onChange={v=>u({finishMaterials:v})}/>
+                  <div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
+                    <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:C.dim,marginBottom:8}}>COUNT LIST</div>
+                    <MaterialTally items={job.finishTally||[]} onChange={v=>u({finishTally:v})}/>
+                  </div>
+                </Section>
 
               </div>
 
