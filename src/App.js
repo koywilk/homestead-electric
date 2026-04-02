@@ -2194,7 +2194,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
           <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Update</div>
 
           <Inp value={d.text} onChange={e=>setD(p=>({...p,text:e.target.value}))}
-
+            onBlur={add}
             placeholder="Key items completed and where the job is at…"/>
 
         </div>
@@ -6939,9 +6939,8 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}}) {
           <div style={{fontSize:10,color:color,fontWeight:700,marginBottom:4,letterSpacing:"0.08em"}}>ANSWER</div>
 
           <TA value={q.answer} rows={2}
-
             onChange={e=>upd(q.id,{answer:e.target.value})}
-
+            onBlur={e=>upd(q.id,{answer:e.target.value})}
             placeholder="Type answer here…"/>
 
         </div>
@@ -7830,10 +7829,11 @@ function UpcomingJobs({ upcoming, onChange, onPromote, onPromoteToQuote, canMana
                   <div style={{flex:1.5,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.customer||"—"}</div>
                   <div style={{flex:3,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.notes||"—"}</div>
                   <div style={{flex:1.1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.lastFollowUp||"—"}</div>
-                  <div style={{width:110,flexShrink:0,display:"flex",gap:6,justifyContent:"flex-end"}}>
+                  <div style={{width:130,flexShrink:0,display:"flex",gap:6,justifyContent:"flex-end",alignItems:"center"}}>
                     <button onClick={()=>setEditingId(u.id)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Edit</button>
                     <button onClick={()=>{if(window.confirm("Convert to quote?"))onPromoteToQuote(u);}} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:6,color:C.accent,fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Q</button>
                     <button onClick={()=>{if(window.confirm("Promote to active job?"))onPromote(u);}} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✓</button>
+                    <button onClick={()=>{if(window.confirm("Remove " + (u.name||"this job") + " from upcoming?"))del(u.id);}} style={{background:"none",border:"none",color:C.muted,fontSize:16,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
                   </div>
                 </>
               )}
@@ -12382,10 +12382,10 @@ function App() {
           : [
               {key:"home",label:"Job Board"},
               {key:"schedule",label:"Forecast"},
+              {key:"nav",label:"📍 Nav"},
               {key:"upcoming",label:"Upcoming"},
               ...(can(identity,"quotes.view")?[{key:"quotes",label:"Quotes"}]:[]),
               {key:"tasks",label:"Tasks"},
-              {key:"nav",label:"📍 Nav"},
               ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors"}]:[]),
               ...(can(identity,"settings.view")?[{key:"settings",label:"⚙ Settings"}]:[]),
             ]
