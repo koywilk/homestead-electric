@@ -2099,17 +2099,18 @@ function MaterialOrders({orders,onChange}) {
 
           <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
 
-            {[["date","Date Ordered","MM/DD/YY"],["po","PO #","PO-001"],["pickupDate","Pick Up Date","MM/DD/YY"]].map(([k,l,ph])=>(
-
-              <div key={k}>
-
-                <div style={{fontSize:10,color:C.dim,marginBottom:3}}>{l}</div>
-
-                <Inp value={o[k]} onChange={e=>upd(o.id,{[k]:e.target.value})} placeholder={ph}/>
-
-              </div>
-
-            ))}
+            <div>
+              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Ordered</div>
+              <DateInp value={o.date} onChange={v=>upd(o.id,{date:v})}/>
+            </div>
+            <div>
+              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>PO #</div>
+              <Inp value={o.po} onChange={e=>upd(o.id,{po:e.target.value})} placeholder="PO-001"/>
+            </div>
+            <div>
+              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Pick Up Date</div>
+              <DateInp value={o.pickupDate} onChange={v=>upd(o.id,{pickupDate:v})}/>
+            </div>
 
           </div>
 
