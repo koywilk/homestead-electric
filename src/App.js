@@ -8970,6 +8970,54 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
   );
 }
 
+// ── Nav View ──────────────────────────────────────────────────
+
+function NavView({ jobs }) {
+  const [search, setSearch] = useState("");
+  const s = search.toLowerCase().trim();
+
+  const active = jobs
+    .filter(j => j.address)
+    .filter(j => !s || (j.name||"").toLowerCase().includes(s) || (j.address||"").toLowerCase().includes(s) || (j.foreman||"").toLowerCase().includes(s) || (j.gc||"").toLowerCase().includes(s))
+    .sort((a,b) => (a.name||"").localeCompare(b.name||""));
+
+  return (
+    <div style={{maxWidth:700,margin:"0 auto",padding:"20px 16px"}}>
+      <div style={{fontSize:20,fontWeight:700,color:C.text,marginBottom:4}}>Navigate</div>
+      <div style={{fontSize:12,color:C.dim,marginBottom:16}}>All job addresses — tap to open in Maps</div>
+
+      <input value={search} onChange={e=>setSearch(e.target.value)}
+        placeholder="Search jobs, address, foreman…"
+        style={{width:"100%",boxSizing:"border-box",background:C.surface,border:`1px solid ${C.border}`,
+          borderRadius:9,padding:"9px 14px",fontSize:13,fontFamily:"inherit",color:C.text,
+          outline:"none",marginBottom:16}}/>
+
+      {active.length===0&&(
+        <div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:13,fontStyle:"italic"}}>
+          {search ? "No jobs match that search." : "No jobs with addresses yet."}
+        </div>
+      )}
+
+      {active.map(j=>(
+        <div key={j.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,
+          padding:"12px 16px",marginBottom:8,display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+          <div style={{flex:1,minWidth:160}}>
+            <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:2}}>{j.name||"Unnamed"}</div>
+            {j.foreman&&<div style={{fontSize:11,color:C.dim}}>{j.foreman}</div>}
+          </div>
+          <AddressLink address={j.address} style={{fontSize:13,color:C.accent,fontWeight:600}}>
+            {j.address} <span style={{fontSize:11,opacity:0.7}}>📍</span>
+          </AddressLink>
+        </div>
+      ))}
+
+      <div style={{textAlign:"center",fontSize:11,color:C.muted,marginTop:16}}>
+        {active.length} job{active.length!==1?"s":""} with addresses
+      </div>
+    </div>
+  );
+}
+
 // ── Scheduling Forecast ───────────────────────────────────────
 
 function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
@@ -12021,6 +12069,7 @@ function App() {
   const openSchedule      = () =>  { setView("schedule");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openUpcoming      = () =>  { setView("upcoming");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openTasks         = () =>  { setView("tasks");         setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const openNav           = () =>  { setView("nav");           setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openSettings      = () =>  { setView("settings");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openSubcontractor = () =>  { setView("subcontractors");setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
 
@@ -12336,13 +12385,14 @@ function App() {
               {key:"upcoming",label:"Upcoming"},
               ...(can(identity,"quotes.view")?[{key:"quotes",label:"Quotes"}]:[]),
               {key:"tasks",label:"Tasks"},
+              {key:"nav",label:"📍 Nav"},
               ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors"}]:[]),
               ...(can(identity,"settings.view")?[{key:"settings",label:"⚙ Settings"}]:[]),
             ]
         ).map(({key,label})=>{
           const active = view===key;
           return (
-            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="tasks"?openTasks:key==="subcontractors"?openSubcontractor:openSettings}
+            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="tasks"?openTasks:key==="nav"?openNav:key==="subcontractors"?openSubcontractor:openSettings}
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
@@ -13245,6 +13295,8 @@ function App() {
           />
         </div>
       )}
+
+      {view==="nav"&&<NavView jobs={jobs}/>}
 
       {view==="upcoming"&&can(identity,"pipeline.view")&&(
         <UpcomingJobs
