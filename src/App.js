@@ -5892,8 +5892,49 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         </div>
                         <div style={{flex:1,minWidth:140}}>
                           <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>4-WAY TARGET DATE</div>
-                          <DateInp value={job.fourWayTargetDate||""} onChange={e=>u({fourWayTargetDate:e.target.value})}
-                            style={{fontSize:13,fontWeight:700,borderColor:C.rough+"55",background:`${C.rough}08`,color:C.rough}}/>
+                          <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginBottom:5}}>
+                            <DateInp value={job.fourWayTargetDate||""} onChange={e=>u({fourWayTargetDate:e.target.value})}
+                              style={{fontSize:13,fontWeight:700,borderColor:C.rough+"55",background:`${C.rough}08`,color:C.rough}}/>
+                            {["pass","fail"].map(r=>(
+                              <button key={r} onClick={()=>u({roughInspectionResult:job.roughInspectionResult===r?"":r})}
+                                style={{padding:"5px 12px",borderRadius:6,fontSize:11,fontWeight:700,cursor:"pointer",border:"none",fontFamily:"inherit",
+                                  background:job.roughInspectionResult===r?(r==="pass"?"#16a34a":"#dc2626"):(r==="pass"?"#16a34a18":"#dc262618"),
+                                  color:job.roughInspectionResult===r?"#fff":(r==="pass"?"#16a34a":"#dc2626")}}>
+                                {r==="pass"?"✓ Pass":"✗ Fail"}
+                              </button>
+                            ))}
+                          </div>
+                          {(()=>{const mpDef=getStatusDef(MATTERPORT_STATUSES,job.matterportStatus||"");return(
+                            <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:2}}>
+                              <div style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>MATTERPORT</div>
+                              <select value={job.matterportStatus||""} onChange={e=>{const v=e.target.value;const def=getStatusDef(MATTERPORT_STATUSES,v);u({matterportStatus:v,matterportStatusDate:def.hasDate?job.matterportStatusDate:""});}}
+                                style={{background:mpDef.color?`${mpDef.color}18`:C.surface,color:mpDef.color||C.dim,border:`1px solid ${mpDef.color||C.border}`,borderRadius:6,padding:"3px 7px",fontSize:11,fontFamily:"inherit",fontWeight:mpDef.color?700:400,outline:"none",cursor:"pointer"}}>
+                                {MATTERPORT_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+                              </select>
+                              {mpDef.hasDate&&<DateInp value={job.matterportStatusDate||""} onChange={e=>u({matterportStatusDate:e.target.value})} style={{width:120,fontSize:11,borderColor:mpDef.color+"55",background:`${mpDef.color}08`}}/>}
+                              {job.matterportLink&&<a href={job.matterportLink} target="_blank" rel="noreferrer" style={{fontSize:11,color:C.rough,fontWeight:600}}>View →</a>}
+                            </div>
+                          );})()}
+                          {job.roughInspectionResult==="fail"&&(
+                            <div style={{marginTop:8,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262622",borderRadius:7}}>
+                              <div style={{fontSize:10,color:"#dc2626",fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>FAILED ITEMS</div>
+                              {(job.roughInspectionItems||[]).map((item,i)=>(
+                                <div key={item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:5}}>
+                                  <input type="checkbox" checked={!!item.done} onChange={()=>{const items=[...(job.roughInspectionItems||[])];items[i]={...items[i],done:!items[i].done};u({roughInspectionItems:items});}}/>
+                                  <input value={item.text} onChange={e=>{const items=[...(job.roughInspectionItems||[])];items[i]={...items[i],text:e.target.value};u({roughInspectionItems:items});}}
+                                    style={{flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,fontSize:12,color:C.text,padding:"2px 4px",outline:"none",fontFamily:"inherit",textDecoration:item.done?"line-through":"none",opacity:item.done?0.5:1}}/>
+                                  <button onClick={()=>u({roughInspectionItems:(job.roughInspectionItems||[]).filter((_,j)=>j!==i)})} style={{background:"none",border:"none",color:C.dim,fontSize:14,cursor:"pointer",padding:"0 2px",lineHeight:1}}>×</button>
+                                </div>
+                              ))}
+                              <div style={{display:"flex",gap:6,marginTop:5,flexWrap:"wrap"}}>
+                                <button onClick={()=>u({roughInspectionItems:[...(job.roughInspectionItems||[]),{id:uid(),text:"",done:false}]})} style={{fontSize:11,padding:"3px 8px",borderRadius:5,background:C.surface,border:`1px solid ${C.border}`,color:C.text,cursor:"pointer",fontFamily:"inherit"}}>+ Item</button>
+                                {(job.roughInspectionItems||[]).filter(x=>!x.done).length>0&&(
+                                  <button onClick={()=>{const open=(job.roughInspectionItems||[]).filter(x=>!x.done);const newRT={id:uid(),date:"",scope:"Failed 4-way inspection items",material:"",punch:open.map(x=>({id:uid(),text:x.text,done:false})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};u({returnTrips:[...(job.returnTrips||[]),newRT]});}}
+                                    style={{fontSize:11,padding:"3px 10px",borderRadius:5,background:"#dc262618",border:"1px solid #dc262633",color:"#dc2626",cursor:"pointer",fontWeight:700,fontFamily:"inherit"}}>→ Create Return Trip</button>
+                                )}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
                       <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
@@ -5948,50 +5989,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               </Section>
 
-              <Section label="4-Way Inspection Date" color={C.rough}>
-                <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                  {/* Inspection date + result badge */}
-                  <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
-                    <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>TARGET DATE</div>
-                    <DateInp value={job.roughInspectionDate||""} onChange={e=>u({roughInspectionDate:e.target.value})} style={{fontSize:12,width:130}}/>
-                    {job.roughInspectionResult&&(
-                      <div style={{fontSize:11,fontWeight:700,color:job.roughInspectionResult==="pass"?"#16a34a":"#dc2626",
-                        background:job.roughInspectionResult==="pass"?"#16a34a18":"#dc262618",
-                        border:`1px solid ${job.roughInspectionResult==="pass"?"#16a34a33":"#dc262633"}`,
-                        borderRadius:6,padding:"3px 10px"}}>
-                        {job.roughInspectionResult==="pass"?"✓ Passed":"✗ Failed"} · see QC tab
-                      </div>
-                    )}
-                  </div>
-                  {/* Matterport scan — compact inline row */}
-                  {(()=>{
-                    const mpDef=getStatusDef(MATTERPORT_STATUSES,job.matterportStatus||"");
-                    return(
-                      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",paddingTop:8,borderTop:`1px solid ${C.border}`}}>
-                        <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginRight:2}}>MATTERPORT</div>
-                        <select value={job.matterportStatus||""} onChange={e=>{
-                          const v=e.target.value;
-                          const def=getStatusDef(MATTERPORT_STATUSES,v);
-                          u({matterportStatus:v,matterportStatusDate:def.hasDate?job.matterportStatusDate:""});
-                        }} style={{background:mpDef.color?`${mpDef.color}18`:C.surface,
-                          color:mpDef.color||C.dim,border:`1px solid ${mpDef.color||C.border}`,
-                          borderRadius:6,padding:"5px 8px",fontSize:12,fontFamily:"inherit",
-                          fontWeight:mpDef.color?700:400,outline:"none",cursor:"pointer"}}>
-                          {MATTERPORT_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
-                        </select>
-                        {mpDef.hasDate&&(
-                          <DateInp value={job.matterportStatusDate||""} onChange={e=>u({matterportStatusDate:e.target.value})}
-                            style={{width:130,fontSize:12,borderColor:mpDef.color+"55",background:`${mpDef.color}08`}}/>
-                        )}
-                        {job.matterportLink&&(
-                          <a href={job.matterportLink} target="_blank" rel="noreferrer"
-                            style={{fontSize:12,color:C.rough,fontWeight:600,marginLeft:4}}>View →</a>
-                        )}
-                      </div>
-                    );
-                  })()}
-                </div>
-              </Section>
 
               <Section label="Punch List" color={C.rough} action={
                 <PunchPicker punch={job.roughPunch||{}} jobId={job.id} stage="Rough" color={C.rough} showHotcheck={false}/>
@@ -6084,8 +6081,38 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         </div>
                         <div style={{flex:1,minWidth:140}}>
                           <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>FINAL INSPECTION TARGET DATE</div>
-                          <DateInp value={job.finalInspectionTargetDate||""} onChange={e=>u({finalInspectionTargetDate:e.target.value})}
-                            style={{fontSize:13,fontWeight:700,borderColor:C.finish+"55",background:`${C.finish}08`,color:C.finish}}/>
+                          <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginBottom:5}}>
+                            <DateInp value={job.finalInspectionTargetDate||""} onChange={e=>u({finalInspectionTargetDate:e.target.value})}
+                              style={{fontSize:13,fontWeight:700,borderColor:C.finish+"55",background:`${C.finish}08`,color:C.finish}}/>
+                            {["pass","fail"].map(r=>(
+                              <button key={r} onClick={()=>u({finalInspectionResult:job.finalInspectionResult===r?"":r})}
+                                style={{padding:"5px 12px",borderRadius:6,fontSize:11,fontWeight:700,cursor:"pointer",border:"none",fontFamily:"inherit",
+                                  background:job.finalInspectionResult===r?(r==="pass"?"#16a34a":"#dc2626"):(r==="pass"?"#16a34a18":"#dc262618"),
+                                  color:job.finalInspectionResult===r?"#fff":(r==="pass"?"#16a34a":"#dc2626")}}>
+                                {r==="pass"?"✓ Pass":"✗ Fail"}
+                              </button>
+                            ))}
+                          </div>
+                          {job.finalInspectionResult==="fail"&&(
+                            <div style={{marginTop:4,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262622",borderRadius:7}}>
+                              <div style={{fontSize:10,color:"#dc2626",fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>FAILED ITEMS</div>
+                              {(job.finalInspectionItems||[]).map((item,i)=>(
+                                <div key={item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:5}}>
+                                  <input type="checkbox" checked={!!item.done} onChange={()=>{const items=[...(job.finalInspectionItems||[])];items[i]={...items[i],done:!items[i].done};u({finalInspectionItems:items});}}/>
+                                  <input value={item.text} onChange={e=>{const items=[...(job.finalInspectionItems||[])];items[i]={...items[i],text:e.target.value};u({finalInspectionItems:items});}}
+                                    style={{flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,fontSize:12,color:C.text,padding:"2px 4px",outline:"none",fontFamily:"inherit",textDecoration:item.done?"line-through":"none",opacity:item.done?0.5:1}}/>
+                                  <button onClick={()=>u({finalInspectionItems:(job.finalInspectionItems||[]).filter((_,j)=>j!==i)})} style={{background:"none",border:"none",color:C.dim,fontSize:14,cursor:"pointer",padding:"0 2px",lineHeight:1}}>×</button>
+                                </div>
+                              ))}
+                              <div style={{display:"flex",gap:6,marginTop:5,flexWrap:"wrap"}}>
+                                <button onClick={()=>u({finalInspectionItems:[...(job.finalInspectionItems||[]),{id:uid(),text:"",done:false}]})} style={{fontSize:11,padding:"3px 8px",borderRadius:5,background:C.surface,border:`1px solid ${C.border}`,color:C.text,cursor:"pointer",fontFamily:"inherit"}}>+ Item</button>
+                                {(job.finalInspectionItems||[]).filter(x=>!x.done).length>0&&(
+                                  <button onClick={()=>{const open=(job.finalInspectionItems||[]).filter(x=>!x.done);const newRT={id:uid(),date:"",scope:"Failed final inspection items",material:"",punch:open.map(x=>({id:uid(),text:x.text,done:false})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};u({returnTrips:[...(job.returnTrips||[]),newRT]});}}
+                                    style={{fontSize:11,padding:"3px 10px",borderRadius:5,background:"#dc262618",border:"1px solid #dc262633",color:"#dc2626",cursor:"pointer",fontWeight:700,fontFamily:"inherit"}}>→ Create Return Trip</button>
+                                )}
+                              </div>
+                            </div>
+                          )}
                         </div>
                       </div>
                       <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
@@ -6529,99 +6556,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <PunchSection punch={job.qcPunch} onChange={v=>{const allClear=punchOpen(v)===0;u({qcPunch:v,...(job.qcStatus==="fail"&&allClear?{qcStatus:"pass"}:{})});}} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }} showHotcheck={true}/>
               </Section>
 
-              {/* ── 4-Way Inspection ── */}
-              <Section label="4-Way Inspection" color={C.teal} defaultOpen={true}>
-                <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                  <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                    <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginRight:4}}>DATE</div>
-                    <DateInp value={job.roughInspectionDate||""} onChange={e=>u({roughInspectionDate:e.target.value})} style={{fontSize:12,width:130}}/>
-                    <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginLeft:8,marginRight:4}}>RESULT</div>
-                    {["pass","fail"].map(r=>(
-                      <button key={r} onClick={()=>u({roughInspectionResult:job.roughInspectionResult===r?"":r})}
-                        style={{padding:"5px 14px",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer",border:"none",
-                          background:job.roughInspectionResult===r?(r==="pass"?"#16a34a":"#dc2626"):(r==="pass"?"#16a34a18":"#dc262618"),
-                          color:job.roughInspectionResult===r?"#fff":(r==="pass"?"#16a34a":"#dc2626")}}>
-                        {r==="pass"?"✓ Pass":"✗ Fail"}
-                      </button>
-                    ))}
-                  </div>
-                  {job.roughInspectionResult==="fail"&&(
-                    <div style={{borderTop:`1px solid ${C.border}`,paddingTop:10}}>
-                      <div style={{fontSize:10,color:"#dc2626",fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>FAILED ITEMS</div>
-                      {(job.roughInspectionItems||[]).map((item,i)=>(
-                        <div key={item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
-                          <input type="checkbox" checked={!!item.done} onChange={()=>{const items=[...(job.roughInspectionItems||[])];items[i]={...items[i],done:!items[i].done};u({roughInspectionItems:items});}}/>
-                          <input value={item.text} onChange={e=>{const items=[...(job.roughInspectionItems||[])];items[i]={...items[i],text:e.target.value};u({roughInspectionItems:items});}}
-                            style={{flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,fontSize:13,color:C.text,padding:"2px 4px",outline:"none",textDecoration:item.done?"line-through":"none",opacity:item.done?0.5:1}}/>
-                          <button onClick={()=>u({roughInspectionItems:(job.roughInspectionItems||[]).filter((_,j)=>j!==i)})}
-                            style={{background:"none",border:"none",color:C.dim,fontSize:16,cursor:"pointer",padding:"0 4px",lineHeight:1}}>×</button>
-                        </div>
-                      ))}
-                      <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
-                        <button onClick={()=>u({roughInspectionItems:[...(job.roughInspectionItems||[]),{id:uid(),text:"",done:false}]})}
-                          style={{fontSize:12,padding:"4px 10px",borderRadius:5,background:C.surface,border:`1px solid ${C.border}`,color:C.text,cursor:"pointer"}}>+ Add Item</button>
-                        {(job.roughInspectionItems||[]).filter(x=>!x.done).length>0&&(
-                          <button onClick={()=>{
-                            const open=(job.roughInspectionItems||[]).filter(x=>!x.done);
-                            const newRT={id:uid(),date:"",scope:"Failed 4-way inspection items",material:"",punch:open.map(x=>({id:uid(),text:x.text,done:false})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};
-                            u({returnTrips:[...(job.returnTrips||[]),newRT]});
-                            alert("Return trip created with "+open.length+" inspection item"+(open.length!==1?"s":"")+".");
-                          }} style={{fontSize:12,padding:"4px 12px",borderRadius:5,background:"#dc262618",border:"1px solid #dc262633",color:"#dc2626",cursor:"pointer",fontWeight:700}}>
-                            → Create Return Trip
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </Section>
-
-              {/* ── Final Inspection ── */}
-              <Section label="Final Inspection" color={C.teal} defaultOpen={true}>
-                <div style={{display:"flex",flexDirection:"column",gap:10}}>
-                  <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
-                    <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginRight:4}}>DATE</div>
-                    <DateInp value={job.finalInspectionTargetDate||""} onChange={e=>u({finalInspectionTargetDate:e.target.value})} style={{fontSize:12,width:130}}/>
-                    <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginLeft:8,marginRight:4}}>RESULT</div>
-                    {["pass","fail"].map(r=>(
-                      <button key={r} onClick={()=>u({finalInspectionResult:job.finalInspectionResult===r?"":r})}
-                        style={{padding:"5px 14px",borderRadius:6,fontSize:12,fontWeight:700,cursor:"pointer",border:"none",
-                          background:job.finalInspectionResult===r?(r==="pass"?"#16a34a":"#dc2626"):(r==="pass"?"#16a34a18":"#dc262618"),
-                          color:job.finalInspectionResult===r?"#fff":(r==="pass"?"#16a34a":"#dc2626")}}>
-                        {r==="pass"?"✓ Pass":"✗ Fail"}
-                      </button>
-                    ))}
-                  </div>
-                  {job.finalInspectionResult==="fail"&&(
-                    <div style={{borderTop:`1px solid ${C.border}`,paddingTop:10}}>
-                      <div style={{fontSize:10,color:"#dc2626",fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>FAILED ITEMS</div>
-                      {(job.finalInspectionItems||[]).map((item,i)=>(
-                        <div key={item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:6}}>
-                          <input type="checkbox" checked={!!item.done} onChange={()=>{const items=[...(job.finalInspectionItems||[])];items[i]={...items[i],done:!items[i].done};u({finalInspectionItems:items});}}/>
-                          <input value={item.text} onChange={e=>{const items=[...(job.finalInspectionItems||[])];items[i]={...items[i],text:e.target.value};u({finalInspectionItems:items});}}
-                            style={{flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,fontSize:13,color:C.text,padding:"2px 4px",outline:"none",textDecoration:item.done?"line-through":"none",opacity:item.done?0.5:1}}/>
-                          <button onClick={()=>u({finalInspectionItems:(job.finalInspectionItems||[]).filter((_,j)=>j!==i)})}
-                            style={{background:"none",border:"none",color:C.dim,fontSize:16,cursor:"pointer",padding:"0 4px",lineHeight:1}}>×</button>
-                        </div>
-                      ))}
-                      <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
-                        <button onClick={()=>u({finalInspectionItems:[...(job.finalInspectionItems||[]),{id:uid(),text:"",done:false}]})}
-                          style={{fontSize:12,padding:"4px 10px",borderRadius:5,background:C.surface,border:`1px solid ${C.border}`,color:C.text,cursor:"pointer"}}>+ Add Item</button>
-                        {(job.finalInspectionItems||[]).filter(x=>!x.done).length>0&&(
-                          <button onClick={()=>{
-                            const open=(job.finalInspectionItems||[]).filter(x=>!x.done);
-                            const newRT={id:uid(),date:"",scope:"Failed final inspection items",material:"",punch:open.map(x=>({id:uid(),text:x.text,done:false})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};
-                            u({returnTrips:[...(job.returnTrips||[]),newRT]});
-                            alert("Return trip created with "+open.length+" inspection item"+(open.length!==1?"s":"")+".");
-                          }} style={{fontSize:12,padding:"4px 12px",borderRadius:5,background:"#dc262618",border:"1px solid #dc262633",color:"#dc2626",cursor:"pointer",fontWeight:700}}>
-                            → Create Return Trip
-                          </button>
-                        )}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </Section>
 
               <div style={{marginTop:16,padding:"14px 16px",background:job.qcSignedOff?`${C.green}10`:C.surface,border:`1px solid ${job.qcSignedOff?C.green+"55":C.border}`,borderRadius:10}}>
                 <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:job.qcSignedOff?C.green:C.dim,marginBottom:10}}>QC SIGN-OFF</div>
@@ -7791,9 +7725,10 @@ const SEED_UPCOMING = [
 
 function UpcomingJobs({ upcoming, onChange, onPromote, onPromoteToQuote, canManage=false, foremenList }) {
   const [editingId, setEditingId] = useState(null);
+  const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const add = () => { if(!canManage) return; const j=blankUpcoming(); onChange([j,...upcoming]); setEditingId(j.id); };
   const upd = (id,patch) => { if(!canManage) return; onChange(upcoming.map(u=>u.id===id?{...u,...patch}:u)); };
-  const del = (id) => { onChange(upcoming.filter(u=>u.id!==id)); setEditingId(null); };
+  const del = (id) => { onChange(upcoming.filter(u=>u.id!==id)); setEditingId(null); setConfirmDeleteId(null); };
   const COL = {
     name:{label:"Job Name",flex:2.5}, city:{label:"City",flex:1.2},
     sales:{label:"Sales",flex:1}, customer:{label:"Customer / GC",flex:1.5},
@@ -7843,8 +7778,8 @@ function UpcomingJobs({ upcoming, onChange, onPromote, onPromoteToQuote, canMana
                   <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes</div><TA value={u.notes} onChange={e=>upd(u.id,{notes:e.target.value})} placeholder="Status, timeline, notes…" rows={2}/></div>
                   <div style={{display:"flex",gap:8,marginTop:2}}>
                     <button onClick={()=>setEditingId(null)} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
-                    <button onClick={()=>{if(window.confirm("Promote to active job?"))onPromote(u);}} style={{background:"none",border:`1px solid ${C.green}`,borderRadius:7,color:C.green,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✓ Promote to Job</button>
-                    <button onClick={()=>{if(window.confirm("Convert to quote?"))onPromoteToQuote(u);}} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:7,color:C.accent,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>→ Quote</button>
+                    <button onClick={()=>onPromote(u)} style={{background:"none",border:`1px solid ${C.green}`,borderRadius:7,color:C.green,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✓ Promote to Job</button>
+                    <button onClick={()=>onPromoteToQuote(u)} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:7,color:C.accent,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>→ Quote</button>
                     <button onClick={()=>del(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>Remove</button>
                   </div>
                 </div>
@@ -7861,9 +7796,17 @@ function UpcomingJobs({ upcoming, onChange, onPromote, onPromoteToQuote, canMana
                   <div style={{flex:1.1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.lastFollowUp||"—"}</div>
                   <div style={{width:130,flexShrink:0,display:"flex",gap:6,justifyContent:"flex-end",alignItems:"center"}}>
                     <button onClick={()=>setEditingId(u.id)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Edit</button>
-                    <button onClick={()=>{if(window.confirm("Convert to quote?"))onPromoteToQuote(u);}} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:6,color:C.accent,fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Q</button>
-                    <button onClick={()=>{if(window.confirm("Promote to active job?"))onPromote(u);}} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✓</button>
-                    <button onClick={()=>{if(window.confirm("Remove " + (u.name||"this job") + " from upcoming?"))del(u.id);}} style={{background:"none",border:"none",color:C.muted,fontSize:16,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
+                    <button onClick={()=>onPromoteToQuote(u)} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:6,color:C.accent,fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Q</button>
+                    <button onClick={()=>onPromote(u)} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✓</button>
+                    {confirmDeleteId===u.id ? (
+                      <>
+                        <span style={{fontSize:10,color:C.muted,whiteSpace:"nowrap"}}>Remove?</span>
+                        <button onClick={()=>del(u.id)} style={{background:"#ef4444",border:"none",borderRadius:5,color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>Yes</button>
+                        <button onClick={()=>setConfirmDeleteId(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,color:C.dim,fontSize:11,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>No</button>
+                      </>
+                    ) : (
+                      <button onClick={()=>setConfirmDeleteId(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:16,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
+                    )}
                   </div>
                 </>
               )}
