@@ -7793,7 +7793,7 @@ function UpcomingJobs({ upcoming, onChange, onPromote, onPromoteToQuote, canMana
   const [editingId, setEditingId] = useState(null);
   const add = () => { if(!canManage) return; const j=blankUpcoming(); onChange([j,...upcoming]); setEditingId(j.id); };
   const upd = (id,patch) => { if(!canManage) return; onChange(upcoming.map(u=>u.id===id?{...u,...patch}:u)); };
-  const del = (id) => { if(!canManage) return; onChange(upcoming.filter(u=>u.id!==id)); setEditingId(null); };
+  const del = (id) => { onChange(upcoming.filter(u=>u.id!==id)); setEditingId(null); };
   const COL = {
     name:{label:"Job Name",flex:2.5}, city:{label:"City",flex:1.2},
     sales:{label:"Sales",flex:1}, customer:{label:"Customer / GC",flex:1.5},
