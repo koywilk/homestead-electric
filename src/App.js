@@ -1630,7 +1630,7 @@ function normFloor(v) {
 }
 
 
-function PunchItems({ items, onChange }) {
+function PunchItems({ items, onChange, filterIds=null }) {
 
   const safeItems = Array.isArray(items) ? items : [];
 
@@ -1702,10 +1702,15 @@ function PunchItems({ items, onChange }) {
                 onMouseLeave={e=>e.target.style.background='transparent'}>
                 <RichText html={item.text}/>
               </span>
-              {(item.addedBy||item.checkedBy)&&(
-                <span style={{fontSize:9,color:C.dim,paddingLeft:4}}>
+              {(item.addedBy||item.checkedBy||(filterIds!=null))&&(
+                <span style={{fontSize:9,color:C.dim,paddingLeft:4,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
                   {item.addedBy&&!item.done&&<span>added by {item.addedBy}</span>}
                   {item.checkedBy&&item.done&&<span style={{color:C.green}}>✓ checked by {item.checkedBy}{item.checkedAt?" · "+item.checkedAt:""}</span>}
+                  {filterIds!=null&&<span style={{fontWeight:700,borderRadius:99,padding:'1px 6px',lineHeight:1.6,
+                    background:filterIds.has(item.id)?'#dcfce7':'#f3f4f6',
+                    color:filterIds.has(item.id)?'#16a34a':'#9ca3af'}}>
+                    {filterIds.has(item.id)?'Shared':'Not shared'}
+                  </span>}
                 </span>
               )}
             </div>
@@ -1792,7 +1797,7 @@ function RoomNameEdit({name, onSave}) {
 }
 
 
-function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false }) {
+function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null }) {
 
   const data = normFloor(floorData);
 
@@ -1860,7 +1865,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
           <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: '0.08em', marginBottom: 6 }}>GENERAL</div>
 
-          <PunchItems items={data.general} onChange={setGeneral} />
+          <PunchItems items={data.general} onChange={setGeneral} filterIds={filterIds}/>
 
           {showHotcheck && (
             <div style={{ marginTop: 12, background: `rgba(220,38,38,0.06)`, border: `1px solid rgba(220,38,38,0.25)`, borderRadius: 8, padding: 10 }}>
@@ -1872,7 +1877,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                   </span>
                 )}
               </div>
-              <PunchItems items={data.hotcheck} onChange={setHotcheck} />
+              <PunchItems items={data.hotcheck} onChange={setHotcheck} filterIds={filterIds}/>
             </div>
           )}
 
@@ -1904,7 +1909,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
               <PunchItems items={Array.isArray(room.items) ? room.items : []}
 
-                onChange={v => setRoomItems(room.id, v)} />
+                onChange={v => setRoomItems(room.id, v)} filterIds={filterIds}/>
 
             </div>
 
@@ -1933,7 +1938,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 }
 
 
-function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false }) {
+function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false, filterIds=null }) {
 
   const upper    = normFloor(punch.upper);
   const main     = normFloor(punch.main);
@@ -1980,6 +1985,21 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
   const totalOpen = countOpen(upper) + countOpen(main) + countOpen(basement) +
     extras.reduce((sum,e) => sum + countOpen(normFloor(punch[e.key])), 0);
 
+  const getAllItemIds = () => {
+    const ids = [];
+    const addFloor = (f) => {
+      const d = normFloor(f);
+      d.general.forEach(i=>ids.push(i.id));
+      if(showHotcheck) (d.hotcheck||[]).forEach(i=>ids.push(i.id));
+      d.rooms.forEach(r=>(r.items||[]).forEach(i=>ids.push(i.id)));
+    };
+    addFloor(punch.upper); addFloor(punch.main); addFloor(punch.basement);
+    (punch.extras||[]).forEach(e=>addFloor(punch[e.key]));
+    return ids;
+  };
+  const allItemIds = getAllItemIds();
+  const sharedCount = filterIds ? allItemIds.filter(id=>filterIds.has(id)).length : 0;
+
   const stripHtml = (html) => (html||"").replace(/<[^>]*>/g,"").replace(/&nbsp;/g," ").replace(/&amp;/g,"&").trim();
 
   const flatItems = (f, label) => [
@@ -2001,7 +2021,13 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
     <div>
 
-      <div style={{ display: 'flex', justifyContent: 'flex-end', marginBottom: 8 }}>
+      <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
+
+        {filterIds!=null ? (
+          <span style={{fontSize:10,fontWeight:600,color:sharedCount===allItemIds.length?C.green:C.muted}}>
+            {sharedCount} of {allItemIds.length} shared
+          </span>
+        ) : <span/>}
 
         {totalOpen > 0 && (
 
@@ -2015,11 +2041,11 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
       </div>
 
-      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck}/>
+      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck} filterIds={filterIds}/>
 
-      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck}/>
+      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck} filterIds={filterIds}/>
 
-      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck}/>
+      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds}/>
 
       {extras.map((e,i)=>(
         <div key={e.key} style={{position:"relative"}}>
@@ -2029,7 +2055,8 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
             onFloorChange={handleFloorChange}
             floorLabel={e.label}
             floorColor={FLOOR_COLORS[i % FLOOR_COLORS.length]}
-            showHotcheck={showHotcheck}/>
+            showHotcheck={showHotcheck}
+            filterIds={filterIds}/>
           <button onClick={()=>removeFloor(e.key)}
             style={{position:"absolute",top:6,right:0,background:"none",border:"none",
               color:C.muted,cursor:"pointer",fontSize:12,padding:"2px 6px",fontFamily:"inherit"}}>
@@ -6072,12 +6099,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
 
               <Section label="Punch List" color={C.rough} action={
-                <PunchPicker punch={job.roughPunch||{}} jobId={job.id} stage="Rough" color={C.rough} showHotcheck={false}/>
+                <PunchPicker punch={job.roughPunch||{}} jobId={job.id} stage="Rough" color={C.rough} showHotcheck={false}
+                  filter={job.roughPunchFilter||null} onSaveFilter={v=>u({roughPunchFilter:v})}/>
               }>
 
                 <PunchSection punch={job.roughPunch} onChange={v=>u({roughPunch:v})}
 
-                  jobName={job.name||"This Job"} phase="Rough" onEmail={setEmailData}/>
+                  jobName={job.name||"This Job"} phase="Rough" onEmail={setEmailData}
+                  filterIds={job.roughPunchFilter ? new Set(job.roughPunchFilter) : null}/>
 
               </Section>
 
@@ -6099,9 +6128,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               <div style={{marginTop:20}}>
                 <Section label="Questions" color={C.rough} action={
-                  <QuestionPicker roughQuestions={job.roughQuestions} finishQuestions={job.finishQuestions} jobId={job.id} color={C.rough}/>
+                  <QuestionPicker roughQuestions={job.roughQuestions} finishQuestions={job.finishQuestions} jobId={job.id} color={C.rough}
+                    filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}/>
                 }>
-                  {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{if(a.answer&&!((job.roughQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m}/>;})()}
+                  {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{if(a.answer&&!((job.roughQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null}/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#16a34a',marginTop:6}}>✅ Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
@@ -6253,9 +6283,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </Section>
 
               <Section label="Punch List" color={C.finish} action={
-                <PunchPicker punch={job.finishPunch||{}} jobId={job.id} stage="Finish" color={C.finish} showHotcheck={false}/>
+                <PunchPicker punch={job.finishPunch||{}} jobId={job.id} stage="Finish" color={C.finish} showHotcheck={false}
+                  filter={job.finishPunchFilter||null} onSaveFilter={v=>u({finishPunchFilter:v})}/>
               }>
-                <PunchSection punch={job.finishPunch} onChange={v=>u({finishPunch:v})} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}/>
+                <PunchSection punch={job.finishPunch} onChange={v=>u({finishPunch:v})} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}
+                  filterIds={job.finishPunchFilter ? new Set(job.finishPunchFilter) : null}/>
               </Section>
 
               <div style={{marginTop:20}}>
@@ -6280,9 +6312,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               <div style={{marginTop:20}}>
                 <Section label="Questions" color={C.finish} action={
-                  <QuestionPicker roughQuestions={job.roughQuestions} finishQuestions={job.finishQuestions} jobId={job.id} color={C.finish}/>
+                  <QuestionPicker roughQuestions={job.roughQuestions} finishQuestions={job.finishQuestions} jobId={job.id} color={C.finish}
+                    filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}/>
                 }>
-                  {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{if(a.answer&&!((job.finishQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m}/>;})()}
+                  {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{if(a.answer&&!((job.finishQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null}/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#16a34a',marginTop:6}}>✅ Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
@@ -6638,9 +6671,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               })()}
 
               <Section label="QC Walk Checklist" color={C.teal} defaultOpen={true} action={
-                <PunchPicker punch={job.qcPunch||{}} jobId={job.id} stage="QC" color={C.teal} showHotcheck={true}/>
+                <PunchPicker punch={job.qcPunch||{}} jobId={job.id} stage="QC" color={C.teal} showHotcheck={true}
+                  filter={job.qcPunchFilter||null} onSaveFilter={v=>u({qcPunchFilter:v})}/>
               }>
-                <PunchSection punch={job.qcPunch} onChange={v=>{const allClear=punchOpen(v)===0;u({qcPunch:v,...(job.qcStatus==="fail"&&allClear?{qcStatus:"pass"}:{})});}} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }} showHotcheck={true}/>
+                <PunchSection punch={job.qcPunch} onChange={v=>{const allClear=punchOpen(v)===0;u({qcPunch:v,...(job.qcStatus==="fail"&&allClear?{qcStatus:"pass"}:{})});}} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }} showHotcheck={true}
+                  filterIds={job.qcPunchFilter ? new Set(job.qcPunchFilter) : null}/>
               </Section>
 
 
@@ -6917,7 +6952,7 @@ function QAInlineEdit({value, done, label, onSave}) {
 }
 
 
-function QAList({questions: _questions, onChange, color, gcAnswerMap={}}) {
+function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterIds=null}) {
 
   // guard: old data may be a string instead of array
 
@@ -6973,6 +7008,11 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}}) {
             onSave={v=>upd(q.id,{question:v})}/>
 
           {q.addedBy&&<span style={{fontSize:9,color:C.dim}}>added by {q.addedBy}</span>}
+          {filterIds!=null&&<span style={{fontWeight:700,borderRadius:99,padding:'1px 6px',lineHeight:1.6,fontSize:9,
+            background:filterIds.has(q.id)?'#dcfce7':'#f3f4f6',
+            color:filterIds.has(q.id)?'#16a34a':'#9ca3af',alignSelf:'flex-start'}}>
+            {filterIds.has(q.id)?'Shared':'Not shared'}
+          </span>}
         </div>
 
         <button onClick={()=>del(q.id)}
@@ -7069,7 +7109,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}}) {
 }
 
 
-function QASection({questions: _questions, onChange, color, gcAnswerMap={}}) {
+function QASection({questions: _questions, onChange, color, gcAnswerMap={}, filterIds=null}) {
 
   // guard: normalize questions to always be object with array values
 
@@ -7077,9 +7117,20 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}}) {
 
     ? _questions : {upper:[], main:[], basement:[]};
 
+  const allQIds = filterIds!=null ? [
+    ...(questions.upper||[]), ...(questions.main||[]), ...(questions.basement||[])
+  ].map(q=>q.id) : [];
+  const sharedQCount = filterIds!=null ? allQIds.filter(id=>filterIds.has(id)).length : 0;
+
   return (
 
     <div>
+
+      {filterIds!=null&&allQIds.length>0&&(
+        <div style={{fontSize:10,fontWeight:600,color:sharedQCount===allQIds.length?C.green:C.muted,marginBottom:8}}>
+          {sharedQCount} of {allQIds.length} shared
+        </div>
+      )}
 
       {[["upper","Upper Level"],["main","Main Level"],["basement","Basement"]].map(([k,l])=>(
 
@@ -7094,7 +7145,8 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}}) {
             onChange={v=>onChange({...questions,[k]:v})}
 
             color={color}
-            gcAnswerMap={gcAnswerMap}/>
+            gcAnswerMap={gcAnswerMap}
+            filterIds={filterIds}/>
 
         </div>
 
@@ -10674,7 +10726,7 @@ function LightingSharePage({ jobId }) {
 }
 
 // ─── Question Picker (selective share modal) ─────────────────────────────────
-function QuestionPicker({ roughQuestions, finishQuestions, jobId, color }) {
+function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=null, onSaveFilter }) {
   const [open,     setOpen]     = useState(false);
   const [selected, setSelected] = useState(new Set());
 
@@ -10693,8 +10745,9 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color }) {
   ];
 
   const openPicker = () => {
-    // Pre-select all by default
-    setSelected(new Set(allQs.map(q=>q.id)));
+    // Pre-select from saved filter if one exists, otherwise select all
+    const initIds = filter ? new Set(filter) : new Set(allQs.map(q=>q.id));
+    setSelected(initIds);
     setOpen(true);
   };
 
@@ -10715,13 +10768,18 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color }) {
     });
   };
 
-  const copyLink = () => {
+  const saveFilter = () => {
     if(!selected.size){ alert('Select at least one question.'); return; }
-    const ids = [...selected].join(',');
-    const link = `${window.location.origin}/?questions=${jobId}&ids=${ids}`;
+    if(onSaveFilter) onSaveFilter([...selected]);
+    const link = `${window.location.origin}/?questions=${jobId}`;
     navigator.clipboard.writeText(link)
-      .then(()=>alert('Link copied! Send this to your contact:\n\n'+link))
-      .catch(()=>alert('Link:\n'+link));
+      .then(()=>alert('Filter saved! Link copied to clipboard.'))
+      .catch(()=>alert('Filter saved!'));
+    setOpen(false);
+  };
+
+  const clearFilter = () => {
+    if(onSaveFilter) onSaveFilter(null);
     setOpen(false);
   };
 
@@ -10773,7 +10831,7 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color }) {
         style={{background:`${color}15`,border:`1px solid ${color}55`,borderRadius:6,
           color,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',
           fontFamily:'inherit',letterSpacing:'0.05em'}}>
-        Share ↗
+        {filter ? `Shared (${filter.length}) ↗` : 'Share ↗'}
       </button>
 
       {open&&(
@@ -10802,11 +10860,18 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color }) {
             </div>
             {/* Footer */}
             <div style={{padding:'12px 20px',borderTop:'1px solid #e5e7eb',display:'flex',gap:8,flexShrink:0}}>
-              <button onClick={copyLink}
+              <button onClick={saveFilter}
                 style={{flex:1,background:'#1e3a5f',color:'#fff',border:'none',borderRadius:8,
                   padding:'10px 16px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
-                📋 Copy Link ({selected.size} question{selected.size!==1?'s':''})
+                Save & Copy Link ({selected.size} question{selected.size!==1?'s':''})
               </button>
+              {filter&&(
+                <button onClick={clearFilter}
+                  style={{background:'#fef2f2',color:'#dc2626',border:'1px solid #fecaca',borderRadius:8,
+                    padding:'10px 12px',fontSize:12,cursor:'pointer',fontFamily:'inherit',fontWeight:600}}>
+                  Share All
+                </button>
+              )}
               <button onClick={()=>setOpen(false)}
                 style={{background:'#f3f4f6',color:'#6b7280',border:'none',borderRadius:8,
                   padding:'10px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
@@ -10821,7 +10886,7 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color }) {
 }
 
 // ─── Punch Picker (selective punch list share modal) ────────────────────────
-function PunchPicker({ punch, jobId, stage, color, showHotcheck }) {
+function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, onSaveFilter }) {
   const [open,     setOpen]     = useState(false);
   const [selected, setSelected] = useState(new Set());
 
@@ -10861,7 +10926,9 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck }) {
   const allItems = getAllItems();
 
   const openPicker = () => {
-    setSelected(new Set(allItems.map(i=>i.id)));
+    // Pre-select from saved filter if one exists, otherwise select all
+    const initIds = filter ? new Set(filter) : new Set(allItems.map(i=>i.id));
+    setSelected(initIds);
     setOpen(true);
   };
 
@@ -10876,13 +10943,18 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck }) {
     return n;
   });
 
-  const copyLink = () => {
+  const saveFilter = () => {
     if(!selected.size){ alert('Select at least one item.'); return; }
-    const ids  = [...selected].join(',');
-    const link = `${window.location.origin}/?${stageParam}=${jobId}&ids=${ids}`;
+    if(onSaveFilter) onSaveFilter([...selected]);
+    const link = `${window.location.origin}/?${stageParam}=${jobId}`;
     navigator.clipboard.writeText(link)
-      .then(()=>alert('Link copied!\n\n'+link))
-      .catch(()=>alert('Link:\n'+link));
+      .then(()=>alert('Filter saved! Link copied to clipboard.'))
+      .catch(()=>alert('Filter saved!'));
+    setOpen(false);
+  };
+
+  const clearFilter = () => {
+    if(onSaveFilter) onSaveFilter(null);
     setOpen(false);
   };
 
@@ -10900,7 +10972,7 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck }) {
         style={{background:`${color}15`,border:`1px solid ${color}55`,borderRadius:6,
           color,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',
           fontFamily:'inherit',letterSpacing:'0.05em'}}>
-        Share ↗
+        {filter ? `Shared (${filter.length}) ↗` : 'Share ↗'}
       </button>
 
       {open&&(
@@ -10985,12 +11057,19 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck }) {
 
             {/* Footer */}
             <div style={{padding:'12px 22px',borderTop:'1px solid #e5e7eb',
-              display:'flex',gap:8,flexShrink:0}}>
-              <button onClick={copyLink}
+              display:'flex',gap:8,flexShrink:0,flexWrap:'wrap'}}>
+              <button onClick={saveFilter}
                 style={{flex:1,background:'#1e3a5f',color:'#fff',border:'none',borderRadius:8,
                   padding:'10px 16px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
-                Copy Link — {selected.size} item{selected.size!==1?'s':''}
+                Save & Copy Link — {selected.size} item{selected.size!==1?'s':''}
               </button>
+              {filter&&(
+                <button onClick={clearFilter}
+                  style={{background:'#fef2f2',color:'#dc2626',border:'1px solid #fecaca',borderRadius:8,
+                    padding:'10px 12px',fontSize:12,cursor:'pointer',fontFamily:'inherit',fontWeight:600}}>
+                  Share All
+                </button>
+              )}
               <button onClick={()=>setOpen(false)}
                 style={{background:'#f3f4f6',color:'#6b7280',border:'none',borderRadius:8,
                   padding:'10px 14px',fontSize:13,cursor:'pointer',fontFamily:'inherit'}}>
@@ -11024,12 +11103,11 @@ function PunchSharePage({ jobId, stage }) {
   const showHotcheck = stage==='QC';
   const punch        = job?.[punchKey] || {};
 
-  // Optional item filter — when link was generated with PunchPicker (?ids=id1,id2,...)
+  // Filter from Firestore — saved by crew via Share picker
   const filterIds = (() => {
-    const raw = new URLSearchParams(window.location.search).get('ids');
-    if (!raw) return null;
-    const s = new Set(raw.split(',').filter(Boolean));
-    return s.size > 0 ? s : null; // empty set → no filter (show everything)
+    const raw = job?.[punchKey + 'Filter'];
+    if (!Array.isArray(raw) || raw.length === 0) return null;
+    return new Set(raw);
   })();
 
   const normF = (f) => f && typeof f==='object' ? f : {};
@@ -11162,12 +11240,11 @@ function QuestionsSharePage({ jobId }) {
     if(Object.keys(answers).length) localStorage.setItem(draftKey, JSON.stringify(answers));
   }, [answers]);
 
-  // Optional ID filter — when link was generated with SELECT & SHARE (?ids=id1,id2,...)
+  // Filter from Firestore — saved by crew via Share picker
   const filterIds = (() => {
-    const raw = new URLSearchParams(window.location.search).get('ids');
-    if (!raw) return null;
-    const s = new Set(raw.split(',').filter(Boolean));
-    return s.size > 0 ? s : null; // empty set → no filter (show everything)
+    const raw = job?.questionsFilter;
+    if (!Array.isArray(raw) || raw.length === 0) return null;
+    return new Set(raw);
   })();
 
   // Live listener — questions update in real-time as crew adds them
