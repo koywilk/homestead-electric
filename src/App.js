@@ -11139,7 +11139,7 @@ function PunchSharePage({ jobId, stage }) {
         background:item.done?stageColor:'#fff',flexShrink:0,marginTop:1,display:'flex',alignItems:'center',justifyContent:'center'}}>
         {item.done&&<span style={{color:'#fff',fontSize:9,fontWeight:900,lineHeight:1}}>✓</span>}
       </div>
-      <span style={{fontSize:13,color:item.done?'#9ca3af':'#1f2937',textDecoration:item.done?'line-through':'none',lineHeight:1.45}}>{item.text}</span>
+      <span style={{fontSize:13,color:item.done?'#9ca3af':'#1f2937',textDecoration:item.done?'line-through':'none',lineHeight:1.45}} dangerouslySetInnerHTML={{__html:item.text}}/>
     </div>
   ));
 
