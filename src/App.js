@@ -1210,7 +1210,7 @@ const MobileInpSheet = ({initialValue, placeholder, onDone, onCancel, addMode}) 
 };
 
 // onAdd: optional — when provided, button label becomes "Add" and fires onAdd after saving
-const Inp = ({value, onChange, placeholder, style={}, onAdd}) => {
+const Inp = ({value, onChange, placeholder, style={}, onAdd, onBlur}) => {
   const [modal, setModal] = useState(false);
   return (
     <>
@@ -1221,10 +1221,10 @@ const Inp = ({value, onChange, placeholder, style={}, onAdd}) => {
           e.target.style.borderColor=C.accent;
           if(ON_MOBILE){e.target.blur();setModal(true);}
         }}
-        onBlur={e=>e.target.style.borderColor=C.border}/>
+        onBlur={e=>{e.target.style.borderColor=C.border; onBlur&&onBlur(e);}}/>
       {modal&&<MobileInpSheet initialValue={value??""} placeholder={placeholder}
         addMode={!!onAdd}
-        onDone={v=>{onChange({target:{value:v}});if(onAdd)onAdd();setModal(false);}}
+        onDone={v=>{onChange({target:{value:v}});if(onAdd)onAdd();if(onBlur)onBlur(v);setModal(false);}}
         onCancel={()=>setModal(false)}/>}
     </>
   );
@@ -1244,7 +1244,7 @@ const RichText = ({html, style={}}) => {
 
 // Core rich text editor: contenteditable div + formatting toolbar
 // Works inline on desktop AND inside the mobile sheet
-const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minRows=3}) => {
+const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minRows=3, onBlur}) => {
   const ref = useRef(null);
   const focused = useRef(false);
   const savedRange = useRef(null);
@@ -1364,6 +1364,7 @@ const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minR
             const sel=window.getSelection();
             if(sel?.rangeCount>0&&ref.current?.contains(sel.anchorNode)) savedRange.current=sel.getRangeAt(0).cloneRange();
             focused.current=false;
+            onBlur&&onBlur(ref.current?.innerHTML||"");
           }}
           onInput={()=>onHtmlChange(ref.current?.innerHTML||"")}
           onSelect={syncState} onKeyUp={syncState} onMouseUp={syncState} onPointerUp={syncState} onTouchEnd={syncState}
@@ -1482,7 +1483,7 @@ const Sel = ({value,onChange,options:rawOpts,style={}}) => {
 
 
 // TA: full rich text area — toolbar always visible on desktop, sheet on mobile
-const TA = ({value, onChange, placeholder, rows=3, onAdd}) => {
+const TA = ({value, onChange, placeholder, rows=3, onAdd, onBlur}) => {
   const [modal, setModal] = useState(false);
 
   if(ON_MOBILE) return (
@@ -1499,7 +1500,7 @@ const TA = ({value, onChange, placeholder, rows=3, onAdd}) => {
       </div>
       {modal&&<RichMobileSheet initialHtml={value||""} placeholder={placeholder}
         addMode={!!onAdd}
-        onDone={html=>{onChange({target:{value:html}});if(onAdd)onAdd();setModal(false);}}
+        onDone={html=>{onChange({target:{value:html}});if(onAdd)onAdd();if(onBlur)onBlur(html);setModal(false);}}
         onCancel={()=>setModal(false)}/>}
     </>
   );
@@ -1510,7 +1511,8 @@ const TA = ({value, onChange, placeholder, rows=3, onAdd}) => {
       htmlValue={value||""}
       onHtmlChange={html=>onChange({target:{value:html}})}
       placeholder={placeholder}
-      minRows={rows}/>
+      minRows={rows}
+      onBlur={onBlur}/>
   );
 };
 
@@ -1640,7 +1642,8 @@ function PunchItems({ items, onChange }) {
 
   const commitAdd = (html) => {
     if (!(html||"").replace(/<[^>]*>/g,"").trim()) return;
-    onChange([...safeItems, { id: uid(), text: html, done: false }]);
+    const who = getIdentity();
+    onChange([...safeItems, { id: uid(), text: html, done: false, addedBy: who?.name||"" }]);
     setAddHtml('');
     setAddOpen(false);
     setMobileSheet(null);
@@ -1662,7 +1665,15 @@ function PunchItems({ items, onChange }) {
         <div key={item.id} style={{ display: 'flex', alignItems: editingId===item.id ? 'flex-start' : 'center', gap: 8, marginBottom: 5 }}>
 
           <input type="checkbox" checked={!!item.done}
-            onChange={() => onChange(safeItems.map(i => i.id === item.id ? { ...i, done: !i.done } : i))}
+            onChange={() => {
+              const nowDone = !item.done;
+              const who = getIdentity();
+              onChange(safeItems.map(i => i.id === item.id ? {
+                ...i, done: nowDone,
+                checkedBy: nowDone ? (who?.name||"") : "",
+                checkedAt: nowDone ? new Date().toLocaleDateString("en-US") : "",
+              } : i));
+            }}
             style={{ accentColor: C.green, width: 14, height: 14, cursor: 'pointer', flexShrink: 0,
               marginTop: editingId===item.id ? 3 : 0 }} />
 
@@ -1677,19 +1688,27 @@ function PunchItems({ items, onChange }) {
               </div>
             </div>
           ) : (
-            <span onClick={() => {
-              if (item.done) return;
-              if (ON_MOBILE) { setMobileSheet({ mode: 'edit', id: item.id, html: item.text }); }
-              else           { setEditingId(item.id); setEditHtml(item.text); }
-            }}
-              style={{ flex: 1, fontSize: 12, color: item.done ? C.muted : C.text,
-                textDecoration: item.done ? 'line-through' : 'none',
-                cursor: item.done ? 'default' : 'text',
-                borderRadius: 4, padding: '2px 4px', transition: 'background 0.1s' }}
-              onMouseEnter={e=>{if(!item.done)e.target.style.background=C.border+'66'}}
-              onMouseLeave={e=>e.target.style.background='transparent'}>
-              <RichText html={item.text}/>
-            </span>
+            <div style={{flex:1,display:"flex",flexDirection:"column",gap:1}}>
+              <span onClick={() => {
+                if (item.done) return;
+                if (ON_MOBILE) { setMobileSheet({ mode: 'edit', id: item.id, html: item.text }); }
+                else           { setEditingId(item.id); setEditHtml(item.text); }
+              }}
+                style={{ fontSize: 12, color: item.done ? C.muted : C.text,
+                  textDecoration: item.done ? 'line-through' : 'none',
+                  cursor: item.done ? 'default' : 'text',
+                  borderRadius: 4, padding: '2px 4px', transition: 'background 0.1s' }}
+                onMouseEnter={e=>{if(!item.done)e.target.style.background=C.border+'66'}}
+                onMouseLeave={e=>e.target.style.background='transparent'}>
+                <RichText html={item.text}/>
+              </span>
+              {(item.addedBy||item.checkedBy)&&(
+                <span style={{fontSize:9,color:C.dim,paddingLeft:4}}>
+                  {item.addedBy&&!item.done&&<span>added by {item.addedBy}</span>}
+                  {item.checkedBy&&item.done&&<span style={{color:C.green}}>✓ checked by {item.checkedBy}{item.checkedAt?" · "+item.checkedAt:""}</span>}
+                </span>
+              )}
+            </div>
           )}
 
           <button onClick={() => onChange(safeItems.filter(i => i.id !== item.id))}
@@ -2123,7 +2142,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
   const [selected,setSelected]     = useState([]);
 
-  const add = () => { if(!d.text.trim()) return; onChange([{id:uid(),...d},...updates]); setD({date:"",text:""}); };
+  const add = (textArg) => { const text = typeof textArg==='string' ? textArg : d.text; if(!text.trim()) return; const who=getIdentity(); onChange([{id:uid(),date:d.date,text,addedBy:who?.name||""},...updates]); setD({date:"",text:""}); };
 
   const toggleSelect = (id) => setSelected(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
 
@@ -2227,7 +2246,10 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
           )}
 
-          <span style={{fontSize:11,color:C.accent,whiteSpace:"nowrap",fontWeight:600,flexShrink:0}}>{u.date||"—"}</span>
+          <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",flexShrink:0,gap:2}}>
+            <span style={{fontSize:11,color:C.accent,whiteSpace:"nowrap",fontWeight:600}}>{u.date||"—"}</span>
+            {u.addedBy&&<span style={{fontSize:9,color:C.dim,whiteSpace:"nowrap"}}>by {u.addedBy}</span>}
+          </div>
 
           <span style={{flex:1,fontSize:12,color:C.text,lineHeight:1.5}}>{u.text}</span>
 
@@ -6882,11 +6904,15 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}}) {
 
   const [draft, setDraft] = useState("");
 
-  const add = () => {
+  const add = (textArg) => {
 
-    if(!draft.trim()) return;
+    const q = typeof textArg==='string' ? textArg : draft;
 
-    onChange([...questions, {id:uid(), question:draft, answer:"", done:false}]);
+    if(!q.trim()) return;
+
+    const who = getIdentity();
+
+    onChange([...questions, {id:uid(), question:q, answer:"", done:false, addedBy:who?.name||""}]);
 
     setDraft("");
 
@@ -6914,15 +6940,19 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}}) {
 
           style={{accentColor:C.green,width:14,height:14,cursor:"pointer",flexShrink:0,marginTop:2}}/>
 
-        <QAInlineEdit
+        <div style={{flex:1,display:"flex",flexDirection:"column",gap:2}}>
+          <QAInlineEdit
 
-          value={q.question}
+            value={q.question}
 
-          done={q.done}
+            done={q.done}
 
-          label={`Q${globalIdx+1}: `}
+            label={`Q${globalIdx+1}: `}
 
-          onSave={v=>upd(q.id,{question:v})}/>
+            onSave={v=>upd(q.id,{question:v})}/>
+
+          {q.addedBy&&<span style={{fontSize:9,color:C.dim}}>added by {q.addedBy}</span>}
+        </div>
 
         <button onClick={()=>del(q.id)}
 
@@ -6940,7 +6970,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}}) {
 
           <TA value={q.answer} rows={2}
             onChange={e=>upd(q.id,{answer:e.target.value})}
-            onBlur={e=>upd(q.id,{answer:e.target.value})}
+            onBlur={html=>upd(q.id,{answer:html})}
             placeholder="Type answer here…"/>
 
         </div>
@@ -11672,19 +11702,9 @@ function App() {
 
     // Load upcoming jobs from Firestore
     const unsubUpcoming = onSnapshot(collection(db,"upcoming"),
-      async (snap) => {
+      (snap) => {
         const loaded = snap.docs.map(d=>d.data().data).filter(Boolean);
-        // Merge seed jobs in — add any seed job not already present by id
-        const loadedIds = new Set(loaded.map(u=>u.id));
-        const missing = SEED_UPCOMING.filter(s=>!loadedIds.has(s.id));
-        if(missing.length > 0) {
-          for(const item of missing) {
-            try { await setDoc(doc(db,"upcoming",item.id),{data:item,updated_at:new Date().toISOString()}); } catch(e){}
-          }
-          // snapshot will re-fire with the new docs, so no need to setUpcoming here
-        } else {
-          setUpcoming(loaded);
-        }
+        setUpcoming(loaded);
       },
       (err) => { console.error("Upcoming snapshot error:",err); }
     );
