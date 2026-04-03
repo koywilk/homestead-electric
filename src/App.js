@@ -1237,14 +1237,14 @@ const RICH_COLORS = ["#ef4444","#f97316","#eab308","#22c55e","#3b82f6","#8b5cf6"
 // Display helper — renders stored HTML safely; falls back to plain text for old values
 const RichText = ({html, style={}}) => {
   if(!html) return null;
-  return html.includes("<")
+  return (html.includes("<") || html.includes("&"))
     ? <span dangerouslySetInnerHTML={{__html:html}} style={style}/>
     : <span style={style}>{html}</span>;
 };
 
 // Core rich text editor: contenteditable div + formatting toolbar
 // Works inline on desktop AND inside the mobile sheet
-const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minRows=3, onBlur}) => {
+const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minRows=3, onBlur, onEnterKey}) => {
   const ref = useRef(null);
   const focused = useRef(false);
   const savedRange = useRef(null);
@@ -1367,6 +1367,12 @@ const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minR
             onBlur&&onBlur(ref.current?.innerHTML||"");
           }}
           onInput={()=>onHtmlChange(ref.current?.innerHTML||"")}
+          onKeyDown={e=>{
+            if(e.key==='Enter' && !e.shiftKey && onEnterKey && !active.ul && !active.ol){
+              e.preventDefault();
+              onEnterKey(ref.current?.innerHTML||"");
+            }
+          }}
           onSelect={syncState} onKeyUp={syncState} onMouseUp={syncState} onPointerUp={syncState} onTouchEnd={syncState}
           style={{minHeight:minRows*22,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
             color:C.text,outline:"none",lineHeight:1.6,wordBreak:"break-word"}}/>
@@ -1636,17 +1642,22 @@ function PunchItems({ items, onChange, filterIds=null }) {
 
   const [addHtml,    setAddHtml]    = useState('');
   const [addOpen,    setAddOpen]    = useState(false);
+  const [addKey,     setAddKey]     = useState(0);
   const [editingId,  setEditingId]  = useState(null);
   const [editHtml,   setEditHtml]   = useState('');
   const [mobileSheet,setMobileSheet]= useState(null); // null | {mode:'add'} | {mode:'edit',id,html}
 
-  const commitAdd = (html) => {
+  const commitAdd = (html, keepOpen=false) => {
     if (!(html||"").replace(/<[^>]*>/g,"").trim()) return;
     const who = getIdentity();
     onChange([...safeItems, { id: uid(), text: html, done: false, addedBy: who?.name||"" }]);
     setAddHtml('');
-    setAddOpen(false);
-    setMobileSheet(null);
+    if (keepOpen) {
+      setAddKey(k => k + 1); // remount editor so autoFocus fires again
+    } else {
+      setAddOpen(false);
+      setMobileSheet(null);
+    }
   };
 
   const commitEdit = (id, html) => {
@@ -1726,11 +1737,13 @@ function PunchItems({ items, onChange, filterIds=null }) {
       {addOpen && !ON_MOBILE ? (
         <div style={{ marginTop: 6 }}
           onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) commitAdd(addHtml); }}>
-          <RichEditor htmlValue={addHtml} onHtmlChange={setAddHtml} placeholder="Add punch item…" autoFocus minRows={2}/>
-          <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+          <RichEditor key={addKey} htmlValue={addHtml} onHtmlChange={setAddHtml} placeholder="Add punch item… (Enter to save and add next)" autoFocus minRows={2}
+            onEnterKey={html => commitAdd(html, true)}/>
+          <div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems:'center' }}>
             <Btn onClick={() => commitAdd(addHtml)} variant="primary" style={{ fontSize: 11, padding: '3px 12px' }}>Add</Btn>
             <button onClick={() => { setAddOpen(false); setAddHtml(''); }}
               style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+            <span style={{fontSize:10,color:C.muted,marginLeft:2}}>↵ Enter = save &amp; next · Shift+Enter = new line</span>
           </div>
         </div>
       ) : !addOpen && (
