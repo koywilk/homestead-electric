@@ -11037,11 +11037,12 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
                                 {selected.has(item.id)&&
                                   <span style={{color:'#fff',fontSize:8,fontWeight:900,lineHeight:1}}>✓</span>}
                               </div>
-                              <span style={{fontSize:12,color:item.done?'#9ca3af':'#1f2937',
-                                textDecoration:item.done?'line-through':'none',lineHeight:1.45}}>
-                                {item.text}
+                              <div style={{flex:1}}>
+                                <span style={{fontSize:12,color:item.done?'#9ca3af':'#1f2937',
+                                  textDecoration:item.done?'line-through':'none',lineHeight:1.45}}
+                                  dangerouslySetInnerHTML={{__html:item.text}}/>
                                 {item.done&&<span style={{marginLeft:6,fontSize:10,color:'#6ee7b7',fontWeight:600}}>✓ done</span>}
-                              </span>
+                              </div>
                             </div>
                           ))}
                         </div>
@@ -11109,9 +11110,9 @@ function ExternalPunchSection({ items, label, onChange, color }) {
           </div>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:13,color:it.done?C.muted:C.text,
-              textDecoration:it.done?'line-through':'none',lineHeight:1.45,wordBreak:'break-word'}}>
-              {it.text}
-            </div>
+              textDecoration:it.done?'line-through':'none',lineHeight:1.45,wordBreak:'break-word'}}
+              dangerouslySetInnerHTML={{__html:it.text}}/>
+
             <div style={{fontSize:9,color:C.muted,marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
               <span>added by <b>{it.addedBy||label}</b>{it.addedAt?' · '+it.addedAt:''}</span>
               {it.done&&it.checkedBy&&(
@@ -11333,11 +11334,12 @@ function PunchSharePage({ jobId, stage }) {
                       display:'flex',alignItems:'center',justifyContent:'center'}}>
                       {it.done&&<span style={{color:'#fff',fontSize:7,fontWeight:900}}>✓</span>}
                     </div>
-                    <span style={{fontSize:12,color:it.done?'#9ca3af':'#374151',
-                      textDecoration:it.done?'line-through':'none',lineHeight:1.4}}>
-                      {it.text}
+                    <div style={{flex:1}}>
+                      <span style={{fontSize:12,color:it.done?'#9ca3af':'#374151',
+                        textDecoration:it.done?'line-through':'none',lineHeight:1.4}}
+                        dangerouslySetInnerHTML={{__html:it.text}}/>
                       {it.done&&<span style={{marginLeft:6,fontSize:10,color:'#6ee7b7',fontWeight:600}}> ✓ resolved</span>}
-                    </span>
+                    </div>
                   </div>
                 ))}
               </div>
