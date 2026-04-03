@@ -1,7 +1,7 @@
 // BUILD_v9_FIXED
 import { useState, useEffect, useRef, useCallback } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot } from "firebase/firestore";
+import { getFirestore, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { getMessaging, getToken, onMessage } from "firebase/messaging";
 
@@ -6073,7 +6073,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               <Section label="Punch List" color={C.rough} action={
                 <PunchPicker punch={job.roughPunch||{}} jobId={job.id} stage="Rough" color={C.rough} showHotcheck={false}
-                  filter={job.roughPunchFilter||null} onSaveFilter={v=>u({roughPunchFilter:v})}/>
+                  filter={job.roughPunchFilter||null} filterLabel={job.roughPunchFilterLabel||''} onSaveFilter={(v,lbl)=>u({roughPunchFilter:v,roughPunchFilterLabel:lbl})}/>
               }>
 
                 <PunchSection punch={job.roughPunch} onChange={v=>u({roughPunch:v})}
@@ -6082,6 +6082,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   filterIds={job.roughPunchFilter ? new Set(job.roughPunchFilter) : null}/>
 
               </Section>
+
+              {(job.roughPunchExternal?.length>0)&&(
+                <ExternalPunchSection items={job.roughPunchExternal||[]}
+                  label={job.roughPunchFilterLabel||'GC'}
+                  onChange={v=>u({roughPunchExternal:v})}
+                  color={C.rough}/>
+              )}
 
               <Section label="Material Tracking" color={C.rough}>
                 <MaterialOrders orders={job.roughMaterials} onChange={v=>u({roughMaterials:v})}/>
@@ -6241,11 +6248,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               <Section label="Punch List" color={C.finish} action={
                 <PunchPicker punch={job.finishPunch||{}} jobId={job.id} stage="Finish" color={C.finish} showHotcheck={false}
-                  filter={job.finishPunchFilter||null} onSaveFilter={v=>u({finishPunchFilter:v})}/>
+                  filter={job.finishPunchFilter||null} filterLabel={job.finishPunchFilterLabel||''} onSaveFilter={(v,lbl)=>u({finishPunchFilter:v,finishPunchFilterLabel:lbl})}/>
               }>
                 <PunchSection punch={job.finishPunch} onChange={v=>u({finishPunch:v})} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}
                   filterIds={job.finishPunchFilter ? new Set(job.finishPunchFilter) : null}/>
               </Section>
+
+              {(job.finishPunchExternal?.length>0)&&(
+                <ExternalPunchSection items={job.finishPunchExternal||[]}
+                  label={job.finishPunchFilterLabel||'GC'}
+                  onChange={v=>u({finishPunchExternal:v})}
+                  color={C.finish}/>
+              )}
 
               <div style={{marginTop:20}}>
 
@@ -6629,12 +6643,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               <Section label="QC Walk Checklist" color={C.teal} defaultOpen={true} action={
                 <PunchPicker punch={job.qcPunch||{}} jobId={job.id} stage="QC" color={C.teal} showHotcheck={true}
-                  filter={job.qcPunchFilter||null} onSaveFilter={v=>u({qcPunchFilter:v})}/>
+                  filter={job.qcPunchFilter||null} filterLabel={job.qcPunchFilterLabel||''} onSaveFilter={(v,lbl)=>u({qcPunchFilter:v,qcPunchFilterLabel:lbl})}/>
               }>
                 <PunchSection punch={job.qcPunch} onChange={v=>{const allClear=punchOpen(v)===0;u({qcPunch:v,...(job.qcStatus==="fail"&&allClear?{qcStatus:"pass"}:{})});}} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }} showHotcheck={true}
                   filterIds={job.qcPunchFilter ? new Set(job.qcPunchFilter) : null}/>
               </Section>
 
+              {(job.qcPunchExternal?.length>0)&&(
+                <ExternalPunchSection items={job.qcPunchExternal||[]}
+                  label={job.qcPunchFilterLabel||'GC'}
+                  onChange={v=>u({qcPunchExternal:v})}
+                  color={C.teal}/>
+              )}
 
               <div style={{marginTop:16,padding:"14px 16px",background:job.qcSignedOff?`${C.green}10`:C.surface,border:`1px solid ${job.qcSignedOff?C.green+"55":C.border}`,borderRadius:10}}>
                 <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:job.qcSignedOff?C.green:C.dim,marginBottom:10}}>QC SIGN-OFF</div>
@@ -10853,9 +10873,10 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
 }
 
 // ─── Punch Picker (selective punch list share modal) ────────────────────────
-function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, onSaveFilter }) {
+function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, filterLabel='', onSaveFilter }) {
   const [open,     setOpen]     = useState(false);
   const [selected, setSelected] = useState(new Set());
+  const [label,    setLabel]    = useState('');
 
   const normF = (f) => (f && typeof f === 'object' ? f : {});
 
@@ -10896,6 +10917,7 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, on
     // Pre-select from saved filter if one exists, otherwise select all
     const initIds = filter ? new Set(filter) : new Set(allItems.map(i=>i.id));
     setSelected(initIds);
+    setLabel(filterLabel || '');
     setOpen(true);
   };
 
@@ -10912,7 +10934,7 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, on
 
   const saveFilter = () => {
     if(!selected.size){ alert('Select at least one item.'); return; }
-    if(onSaveFilter) onSaveFilter([...selected]);
+    if(onSaveFilter) onSaveFilter([...selected], label.trim() || 'GC');
     const link = `${window.location.origin}/?${stageParam}=${jobId}`;
     navigator.clipboard.writeText(link)
       .then(()=>alert('Filter saved! Link copied to clipboard.'))
@@ -10957,6 +10979,14 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, on
                 <button onClick={()=>setOpen(false)}
                   style={{background:'none',border:'none',fontSize:18,cursor:'pointer',
                     color:'#9ca3af',lineHeight:1,padding:'0 2px'}}>✕</button>
+              </div>
+              <div style={{marginBottom:10}}>
+                <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,letterSpacing:'0.06em',marginBottom:4}}>RECIPIENT NAME</div>
+                <input value={label} onChange={e=>setLabel(e.target.value)} placeholder="e.g. GC, Smith Framing…"
+                  style={{width:'100%',boxSizing:'border-box',border:'1px solid #e5e7eb',borderRadius:7,
+                    padding:'7px 10px',fontSize:12,fontFamily:'inherit',outline:'none',color:'#111',
+                    background:'#f9fafb'}}/>
+                <div style={{fontSize:10,color:'#9ca3af',marginTop:4}}>This name labels their punch list in the app and on their page.</div>
               </div>
               <div style={{fontSize:12,color:'#9ca3af'}}>
                 {selected.size} of {allItems.length} items selected — recipient sees only what you choose
@@ -11050,11 +11080,62 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, on
   );
 }
 
+// ─── External Punch Section (items added by GC / recipient via share page) ───
+function ExternalPunchSection({ items, label, onChange, color }) {
+  if(!items||!items.length) return null;
+  const identity = getIdentity();
+  const checkOff = (id) => {
+    const now = new Date().toLocaleDateString('en-US');
+    onChange(items.map(it => it.id===id
+      ? {...it, done:true, checkedBy:identity?.name||'', checkedAt:now}
+      : it
+    ));
+  };
+  const uncheck = (id) => onChange(items.map(it => it.id===id ? {...it,done:false,checkedBy:'',checkedAt:''} : it));
+  const remove  = (id) => onChange(items.filter(it=>it.id!==id));
+  const open    = items.filter(it=>!it.done).length;
+  return (
+    <Section label={`${label}'s Punch List`} color={color} defaultOpen={open>0}
+      action={open>0 ? <span style={{fontSize:11,color:color,fontWeight:700}}>{open} open</span> : null}>
+      {items.map(it=>(
+        <div key={it.id} style={{display:'flex',alignItems:'flex-start',gap:10,padding:'9px 0',
+          borderBottom:`1px solid ${C.border}`}}>
+          <div onClick={()=>it.done?uncheck(it.id):checkOff(it.id)}
+            style={{width:18,height:18,borderRadius:4,flexShrink:0,marginTop:1,cursor:'pointer',
+              border:`2px solid ${it.done?color:C.border}`,
+              background:it.done?color:'transparent',
+              display:'flex',alignItems:'center',justifyContent:'center'}}>
+            {it.done&&<span style={{color:'#fff',fontSize:9,fontWeight:900}}>✓</span>}
+          </div>
+          <div style={{flex:1,minWidth:0}}>
+            <div style={{fontSize:13,color:it.done?C.muted:C.text,
+              textDecoration:it.done?'line-through':'none',lineHeight:1.45,wordBreak:'break-word'}}>
+              {it.text}
+            </div>
+            <div style={{fontSize:9,color:C.muted,marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
+              <span>added by <b>{it.addedBy||label}</b>{it.addedAt?' · '+it.addedAt:''}</span>
+              {it.done&&it.checkedBy&&(
+                <span style={{color:C.green}}>✓ checked by {it.checkedBy}{it.checkedAt?' · '+it.checkedAt:''}</span>
+              )}
+            </div>
+          </div>
+          <button onClick={()=>remove(it.id)}
+            style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:13,
+              flexShrink:0,padding:'0 2px',lineHeight:1}}>✕</button>
+        </div>
+      ))}
+    </Section>
+  );
+}
+
 // ─── Punch List Share Page (read-only for contractors) ───────────────────────
 function PunchSharePage({ jobId, stage }) {
-  const [job,     setJob]     = useState(null);
-  const [loading, setLoading] = useState(true);
-  const [error,   setError]   = useState(null);
+  const [job,          setJob]          = useState(null);
+  const [loading,      setLoading]      = useState(true);
+  const [error,        setError]        = useState(null);
+  const [newItemText,  setNewItemText]  = useState('');
+  const [addingItem,   setAddingItem]   = useState(false);
+  const [addedCount,   setAddedCount]   = useState(0);
 
   useEffect(() => {
     const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
@@ -11181,6 +11262,89 @@ function PunchSharePage({ jobId, stage }) {
       <div style={{textAlign:'center',fontSize:11,color:'#9ca3af',marginTop:8}}>
         This list updates in real time as items are completed.
       </div>
+
+      {/* ── Add Item Section ── */}
+      {(()=>{
+        const externalKey = punchKey + 'External';
+        const labelKey    = punchKey + 'FilterLabel';
+        const myLabel     = job?.[labelKey] || 'GC';
+        const existingExternal = job?.[externalKey] || [];
+
+        const submitItem = async () => {
+          const text = newItemText.trim();
+          if(!text) return;
+          setAddingItem(true);
+          try {
+            const newItem = {
+              id: Math.random().toString(36).slice(2)+Date.now().toString(36),
+              text,
+              addedBy: myLabel,
+              addedAt: new Date().toLocaleDateString('en-US'),
+              done: false, checkedBy: '', checkedAt: '',
+            };
+            await updateDoc(doc(db,'jobs',jobId), {
+              [`data.${externalKey}`]: arrayUnion(newItem),
+            });
+            setNewItemText('');
+            setAddedCount(c=>c+1);
+          } catch(e) {
+            alert('Failed to submit. Check your connection and try again.');
+          }
+          setAddingItem(false);
+        };
+
+        return (
+          <div style={{background:'#fff',borderRadius:12,marginTop:20,padding:'18px 18px',
+            boxShadow:'0 1px 3px rgba(0,0,0,0.06)'}}>
+            <div style={{fontSize:13,fontWeight:700,color:'#1e293b',marginBottom:4}}>Add an Item</div>
+            <div style={{fontSize:12,color:'#9ca3af',marginBottom:12}}>
+              Items you add here will appear as <b style={{color:'#1e293b'}}>{myLabel}'s Punch List</b> in the app for the Homestead team.
+            </div>
+            <textarea value={newItemText} onChange={e=>setNewItemText(e.target.value)}
+              placeholder="Describe the item…"
+              rows={3}
+              style={{width:'100%',boxSizing:'border-box',border:'1px solid #e5e7eb',borderRadius:8,
+                padding:'10px 12px',fontSize:13,fontFamily:'system-ui,sans-serif',
+                color:'#1f2937',resize:'vertical',outline:'none',lineHeight:1.5,
+                background:'#f9fafb',marginBottom:10}}/>
+            <button onClick={submitItem} disabled={addingItem||!newItemText.trim()}
+              style={{width:'100%',background:newItemText.trim()?stageColor:'#d1d5db',
+                border:'none',borderRadius:8,color:'#fff',fontWeight:700,
+                fontSize:13,padding:'11px',cursor:newItemText.trim()?'pointer':'not-allowed',
+                fontFamily:'system-ui,sans-serif',opacity:addingItem?0.6:1}}>
+              {addingItem?'Submitting…':'Submit Item'}
+            </button>
+            {addedCount>0&&(
+              <div style={{textAlign:'center',fontSize:12,color:'#16a34a',fontWeight:600,marginTop:10}}>
+                ✓ {addedCount} item{addedCount!==1?'s':''} submitted — Homestead will see {addedCount!==1?'them':'it'} right away.
+              </div>
+            )}
+            {existingExternal.length>0&&(
+              <div style={{marginTop:16,borderTop:'1px solid #f3f4f6',paddingTop:14}}>
+                <div style={{fontSize:10,fontWeight:700,color:'#9ca3af',letterSpacing:'0.08em',marginBottom:8}}>
+                  YOUR SUBMITTED ITEMS ({existingExternal.length})
+                </div>
+                {existingExternal.map(it=>(
+                  <div key={it.id} style={{display:'flex',alignItems:'flex-start',gap:8,
+                    padding:'7px 0',borderBottom:'1px solid #f9fafb'}}>
+                    <div style={{width:14,height:14,borderRadius:3,flexShrink:0,marginTop:2,
+                      border:`2px solid ${it.done?stageColor:'#d1d5db'}`,
+                      background:it.done?stageColor:'transparent',
+                      display:'flex',alignItems:'center',justifyContent:'center'}}>
+                      {it.done&&<span style={{color:'#fff',fontSize:7,fontWeight:900}}>✓</span>}
+                    </div>
+                    <span style={{fontSize:12,color:it.done?'#9ca3af':'#374151',
+                      textDecoration:it.done?'line-through':'none',lineHeight:1.4}}>
+                      {it.text}
+                      {it.done&&<span style={{marginLeft:6,fontSize:10,color:'#6ee7b7',fontWeight:600}}> ✓ resolved</span>}
+                    </span>
+                  </div>
+                ))}
+              </div>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
