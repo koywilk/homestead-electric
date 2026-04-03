@@ -5965,88 +5965,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   const rsDef = getStatusDef(ROUGH_STATUSES, job.roughStatus);
                   return (
                     <div style={{marginBottom:12}}>
-                      <div style={{display:"flex",gap:16,marginBottom:12,flexWrap:"wrap"}}>
-                        <div style={{flex:1,minWidth:140}}>
-                          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
-                            <span style={{fontSize:10,color:job.roughStartConfirmed?"#16a34a":C.dim,fontWeight:700,letterSpacing:"0.08em"}}>
-                              {job.roughStartConfirmed ? "READY TO START" : "PROJECTED START"}
-                            </span>
-                            <button onClick={()=>{
-                              const confirm=!job.roughStartConfirmed;
-                              u({roughStartConfirmed:confirm,
-                                ...(confirm?{roughStatus:"date_confirmed"}:
-                                  (job.roughStatus==="date_confirmed"?{roughStatus:"waiting_date"}:{}))
-                              });
-                            }}
-                              style={{display:"flex",alignItems:"center",gap:4,padding:"2px 8px",borderRadius:99,
-                                fontSize:9,fontWeight:700,cursor:"pointer",fontFamily:"inherit",border:"none",
-                                background:job.roughStartConfirmed?"#16a34a18":"#6b728018",
-                                color:job.roughStartConfirmed?"#16a34a":"#6b7280",
-                                transition:"all 0.15s"}}>
-                              {job.roughStartConfirmed ? "✓ CONFIRMED" : "○ CONFIRM"}
-                            </button>
-                          </div>
-                          <DateInp value={job.roughProjectedStart||""} onChange={e=>{
-                              const patch={roughProjectedStart:e.target.value};
-                              // Auto-advance to "Waiting for Start Date Confirmation" when a date is entered and no status is set yet
-                              if(e.target.value && !job.roughStatus) patch.roughStatus="waiting_date";
-                              u(patch);
-                            }}
-                            style={{fontSize:13,fontWeight:700,
-                              borderColor:(job.roughStartConfirmed?"#16a34a":C.rough)+"55",
-                              background:job.roughStartConfirmed?"#16a34a08":`${C.rough}08`,
-                              color:job.roughStartConfirmed?"#16a34a":C.rough}}/>
-                          {job.roughStartConfirmed&&<div style={{fontSize:9,color:"#16a34a",fontWeight:700,marginTop:3,letterSpacing:"0.06em"}}>✓ START DATE CONFIRMED</div>}
-                        </div>
-                        <div style={{flex:1,minWidth:140}}>
-                          <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>4-WAY TARGET DATE</div>
-                          <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginBottom:5}}>
-                            <DateInp value={job.fourWayTargetDate||""} onChange={e=>u({fourWayTargetDate:e.target.value})}
-                              style={{fontSize:13,fontWeight:700,borderColor:C.rough+"55",background:`${C.rough}08`,color:C.rough}}/>
-                            {["pass","fail"].map(r=>(
-                              <button key={r} onClick={()=>u({roughInspectionResult:job.roughInspectionResult===r?"":r})}
-                                style={{padding:"5px 12px",borderRadius:6,fontSize:11,fontWeight:700,cursor:"pointer",border:"none",fontFamily:"inherit",
-                                  background:job.roughInspectionResult===r?(r==="pass"?"#16a34a":"#dc2626"):(r==="pass"?"#16a34a18":"#dc262618"),
-                                  color:job.roughInspectionResult===r?"#fff":(r==="pass"?"#16a34a":"#dc2626")}}>
-                                {r==="pass"?"✓ Pass":"✗ Fail"}
-                              </button>
-                            ))}
-                          </div>
-                          {(()=>{const mpDef=getStatusDef(MATTERPORT_STATUSES,job.matterportStatus||"");return(
-                            <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:2}}>
-                              <div style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>MATTERPORT</div>
-                              <select value={job.matterportStatus||""} onChange={e=>{const v=e.target.value;const def=getStatusDef(MATTERPORT_STATUSES,v);u({matterportStatus:v,matterportStatusDate:def.hasDate?job.matterportStatusDate:""});}}
-                                style={{background:mpDef.color?`${mpDef.color}18`:C.surface,color:mpDef.color||C.dim,border:`1px solid ${mpDef.color||C.border}`,borderRadius:6,padding:"3px 7px",fontSize:11,fontFamily:"inherit",fontWeight:mpDef.color?700:400,outline:"none",cursor:"pointer"}}>
-                                {MATTERPORT_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
-                              </select>
-                              {mpDef.hasDate&&<DateInp value={job.matterportStatusDate||""} onChange={e=>u({matterportStatusDate:e.target.value})} style={{width:120,fontSize:11,borderColor:mpDef.color+"55",background:`${mpDef.color}08`}}/>}
-                              {job.matterportLink&&<a href={job.matterportLink} target="_blank" rel="noreferrer" style={{fontSize:11,color:C.rough,fontWeight:600}}>View →</a>}
-                            </div>
-                          );})()}
-                          {job.roughInspectionResult==="fail"&&(
-                            <div style={{marginTop:8,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262622",borderRadius:7}}>
-                              <div style={{fontSize:10,color:"#dc2626",fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>FAILED ITEMS</div>
-                              {(job.roughInspectionItems||[]).map((item,i)=>(
-                                <div key={item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:5}}>
-                                  <input type="checkbox" checked={!!item.done} onChange={()=>{const items=[...(job.roughInspectionItems||[])];items[i]={...items[i],done:!items[i].done};u({roughInspectionItems:items});}}/>
-                                  <input value={item.text} onChange={e=>{const items=[...(job.roughInspectionItems||[])];items[i]={...items[i],text:e.target.value};u({roughInspectionItems:items});}}
-                                    style={{flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,fontSize:12,color:C.text,padding:"2px 4px",outline:"none",fontFamily:"inherit",textDecoration:item.done?"line-through":"none",opacity:item.done?0.5:1}}/>
-                                  <button onClick={()=>u({roughInspectionItems:(job.roughInspectionItems||[]).filter((_,j)=>j!==i)})} style={{background:"none",border:"none",color:C.dim,fontSize:14,cursor:"pointer",padding:"0 2px",lineHeight:1}}>×</button>
-                                </div>
-                              ))}
-                              <div style={{display:"flex",gap:6,marginTop:5,flexWrap:"wrap"}}>
-                                <button onClick={()=>u({roughInspectionItems:[...(job.roughInspectionItems||[]),{id:uid(),text:"",done:false}]})} style={{fontSize:11,padding:"3px 8px",borderRadius:5,background:C.surface,border:`1px solid ${C.border}`,color:C.text,cursor:"pointer",fontFamily:"inherit"}}>+ Item</button>
-                                {(job.roughInspectionItems||[]).filter(x=>!x.done).length>0&&(
-                                  <button onClick={()=>{const open=(job.roughInspectionItems||[]).filter(x=>!x.done);const newRT={id:uid(),date:"",scope:"Failed 4-way inspection items",material:"",punch:open.map(x=>({id:uid(),text:x.text,done:false})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};u({returnTrips:[...(job.returnTrips||[]),newRT]});}}
-                                    style={{fontSize:11,padding:"3px 10px",borderRadius:5,background:"#dc262618",border:"1px solid #dc262633",color:"#dc2626",cursor:"pointer",fontWeight:700,fontFamily:"inherit"}}>→ Create Return Trip</button>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
-                      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+
+                      {/* STATUS — top */}
+                      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:10}}>
                         <select value={job.roughStatus||""} onChange={e=>{
                           const v=e.target.value;
                           if(v==="complete"){
@@ -6058,7 +5979,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             roughStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting")?job.roughStartConfirmed:false,
                             roughStatusDate:def.hasDate?job.roughStatusDate:"",
                             roughProjectedStart:v==="scheduled"?job.roughProjectedStart:job.roughProjectedStart,
-                            // Reset deposit dismissed when rescheduled so task reappears
                             ...(v==="scheduled"?{roughDepositDismissed:false}:{}),
                           });
                         }} style={{background:rsDef.color?`${rsDef.color}18`:C.surface,
@@ -6083,6 +6003,59 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         )}
                       </div>
 
+                      {/* Compact date strip */}
+                      <div style={{background:"#f3f4f6",borderRadius:8,padding:"8px 12px",display:"flex",gap:16,alignItems:"center",flexWrap:"wrap",marginBottom:10}}>
+                        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                          <span style={{fontSize:10,color:job.roughStartConfirmed?"#16a34a":C.dim,fontWeight:700,letterSpacing:"0.07em",whiteSpace:"nowrap"}}>
+                            {job.roughStartConfirmed?"READY TO START":"PROJ. START"}
+                          </span>
+                          <DateInp value={job.roughProjectedStart||""} onChange={e=>{
+                            const patch={roughProjectedStart:e.target.value};
+                            if(e.target.value && !job.roughStatus) patch.roughStatus="waiting_date";
+                            u(patch);
+                          }} style={{fontSize:11,fontWeight:700,borderColor:(job.roughStartConfirmed?"#16a34a":C.rough)+"55",background:job.roughStartConfirmed?"#16a34a08":`${C.rough}08`,color:job.roughStartConfirmed?"#16a34a":C.rough}}/>
+                          <button onClick={()=>{const confirm=!job.roughStartConfirmed;u({roughStartConfirmed:confirm,...(confirm?{roughStatus:"date_confirmed"}:(job.roughStatus==="date_confirmed"?{roughStatus:"waiting_date"}:{}))});}}
+                            style={{display:"flex",alignItems:"center",gap:3,padding:"2px 7px",borderRadius:99,fontSize:9,fontWeight:700,cursor:"pointer",fontFamily:"inherit",border:"none",background:job.roughStartConfirmed?"#16a34a18":"#6b728018",color:job.roughStartConfirmed?"#16a34a":"#6b7280"}}>
+                            {job.roughStartConfirmed?"✓ CONFIRMED":"○ CONFIRM"}
+                          </button>
+                        </div>
+                        <div style={{width:1,height:20,background:C.border,flexShrink:0}}/>
+                        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                          <span style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em",whiteSpace:"nowrap"}}>4-WAY TARGET</span>
+                          <DateInp value={job.fourWayTargetDate||""} onChange={e=>u({fourWayTargetDate:e.target.value})}
+                            style={{fontSize:11,fontWeight:700,borderColor:C.rough+"55",background:`${C.rough}08`,color:C.rough}}/>
+                          {["pass","fail"].map(r=>(
+                            <button key={r} onClick={()=>u({roughInspectionResult:job.roughInspectionResult===r?"":r})}
+                              style={{padding:"3px 9px",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer",border:"none",fontFamily:"inherit",
+                                background:job.roughInspectionResult===r?(r==="pass"?"#16a34a":"#dc2626"):(r==="pass"?"#16a34a18":"#dc262618"),
+                                color:job.roughInspectionResult===r?"#fff":(r==="pass"?"#16a34a":"#dc2626")}}>
+                              {r==="pass"?"✓ Pass":"✗ Fail"}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Failed items */}
+                      {job.roughInspectionResult==="fail"&&(
+                        <div style={{marginBottom:10,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262622",borderRadius:7}}>
+                          <div style={{fontSize:10,color:"#dc2626",fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>FAILED ITEMS</div>
+                          {(job.roughInspectionItems||[]).map((item,i)=>(
+                            <div key={item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:5}}>
+                              <input type="checkbox" checked={!!item.done} onChange={()=>{const items=[...(job.roughInspectionItems||[])];items[i]={...items[i],done:!items[i].done};u({roughInspectionItems:items});}}/>
+                              <input value={item.text} onChange={e=>{const items=[...(job.roughInspectionItems||[])];items[i]={...items[i],text:e.target.value};u({roughInspectionItems:items});}}
+                                style={{flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,fontSize:12,color:C.text,padding:"2px 4px",outline:"none",fontFamily:"inherit",textDecoration:item.done?"line-through":"none",opacity:item.done?0.5:1}}/>
+                              <button onClick={()=>u({roughInspectionItems:(job.roughInspectionItems||[]).filter((_,j)=>j!==i)})} style={{background:"none",border:"none",color:C.dim,fontSize:14,cursor:"pointer",padding:"0 2px",lineHeight:1}}>×</button>
+                            </div>
+                          ))}
+                          <div style={{display:"flex",gap:6,marginTop:5,flexWrap:"wrap"}}>
+                            <button onClick={()=>u({roughInspectionItems:[...(job.roughInspectionItems||[]),{id:uid(),text:"",done:false}]})} style={{fontSize:11,padding:"3px 8px",borderRadius:5,background:C.surface,border:`1px solid ${C.border}`,color:C.text,cursor:"pointer",fontFamily:"inherit"}}>+ Item</button>
+                            {(job.roughInspectionItems||[]).filter(x=>!x.done).length>0&&(
+                              <button onClick={()=>{const open=(job.roughInspectionItems||[]).filter(x=>!x.done);const newRT={id:uid(),date:"",scope:"Failed 4-way inspection items",material:"",punch:open.map(x=>({id:uid(),text:x.text,done:false})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};u({returnTrips:[...(job.returnTrips||[]),newRT]});}}
+                                style={{fontSize:11,padding:"3px 10px",borderRadius:5,background:"#dc262618",border:"1px solid #dc262633",color:"#dc2626",cursor:"pointer",fontWeight:700,fontFamily:"inherit"}}>→ Create Return Trip</button>
+                            )}
+                          </div>
+                        </div>
+                      )}
 
                     </div>
                   );
@@ -6159,77 +6132,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   const fsDef = getStatusDef(FINISH_STATUSES, job.finishStatus);
                   return (
                     <div style={{marginBottom:12}}>
-                      <div style={{display:"flex",gap:16,marginBottom:12,flexWrap:"wrap"}}>
-                        <div style={{flex:1,minWidth:140}}>
-                          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:5}}>
-                            <span style={{fontSize:10,color:job.finishStartConfirmed?"#16a34a":C.dim,fontWeight:700,letterSpacing:"0.08em"}}>
-                              {job.finishStartConfirmed ? "READY TO START" : "PROJECTED START"}
-                            </span>
-                            <button onClick={()=>{
-                              const confirm=!job.finishStartConfirmed;
-                              u({finishStartConfirmed:confirm,
-                                ...(confirm?{finishStatus:"date_confirmed"}:
-                                  (job.finishStatus==="date_confirmed"?{finishStatus:"waiting_date"}:{}))
-                              });
-                            }}
-                              style={{display:"flex",alignItems:"center",gap:4,padding:"2px 8px",borderRadius:99,
-                                fontSize:9,fontWeight:700,cursor:"pointer",fontFamily:"inherit",border:"none",
-                                background:job.finishStartConfirmed?"#16a34a18":"#6b728018",
-                                color:job.finishStartConfirmed?"#16a34a":"#6b7280",
-                                transition:"all 0.15s"}}>
-                              {job.finishStartConfirmed ? "✓ CONFIRMED" : "○ CONFIRM"}
-                            </button>
-                          </div>
-                          <DateInp value={job.finishProjectedStart||""} onChange={e=>{
-                              const patch={finishProjectedStart:e.target.value};
-                              // Auto-advance to "Waiting for Start Date Confirmation" when a date is entered and no status is set yet
-                              if(e.target.value && !job.finishStatus) patch.finishStatus="waiting_date";
-                              u(patch);
-                            }}
-                            style={{fontSize:13,fontWeight:700,
-                              borderColor:(job.finishStartConfirmed?"#16a34a":C.finish)+"55",
-                              background:job.finishStartConfirmed?"#16a34a08":`${C.finish}08`,
-                              color:job.finishStartConfirmed?"#16a34a":C.finish}}/>
-                          {job.finishStartConfirmed&&<div style={{fontSize:9,color:"#16a34a",fontWeight:700,marginTop:3,letterSpacing:"0.06em"}}>✓ START DATE CONFIRMED</div>}
-                        </div>
-                        <div style={{flex:1,minWidth:140}}>
-                          <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>FINAL INSPECTION TARGET DATE</div>
-                          <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginBottom:5}}>
-                            <DateInp value={job.finalInspectionTargetDate||""} onChange={e=>u({finalInspectionTargetDate:e.target.value})}
-                              style={{fontSize:13,fontWeight:700,borderColor:C.finish+"55",background:`${C.finish}08`,color:C.finish}}/>
-                            {["pass","fail"].map(r=>(
-                              <button key={r} onClick={()=>u({finalInspectionResult:job.finalInspectionResult===r?"":r})}
-                                style={{padding:"5px 12px",borderRadius:6,fontSize:11,fontWeight:700,cursor:"pointer",border:"none",fontFamily:"inherit",
-                                  background:job.finalInspectionResult===r?(r==="pass"?"#16a34a":"#dc2626"):(r==="pass"?"#16a34a18":"#dc262618"),
-                                  color:job.finalInspectionResult===r?"#fff":(r==="pass"?"#16a34a":"#dc2626")}}>
-                                {r==="pass"?"✓ Pass":"✗ Fail"}
-                              </button>
-                            ))}
-                          </div>
-                          {job.finalInspectionResult==="fail"&&(
-                            <div style={{marginTop:4,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262622",borderRadius:7}}>
-                              <div style={{fontSize:10,color:"#dc2626",fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>FAILED ITEMS</div>
-                              {(job.finalInspectionItems||[]).map((item,i)=>(
-                                <div key={item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:5}}>
-                                  <input type="checkbox" checked={!!item.done} onChange={()=>{const items=[...(job.finalInspectionItems||[])];items[i]={...items[i],done:!items[i].done};u({finalInspectionItems:items});}}/>
-                                  <input value={item.text} onChange={e=>{const items=[...(job.finalInspectionItems||[])];items[i]={...items[i],text:e.target.value};u({finalInspectionItems:items});}}
-                                    style={{flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,fontSize:12,color:C.text,padding:"2px 4px",outline:"none",fontFamily:"inherit",textDecoration:item.done?"line-through":"none",opacity:item.done?0.5:1}}/>
-                                  <button onClick={()=>u({finalInspectionItems:(job.finalInspectionItems||[]).filter((_,j)=>j!==i)})} style={{background:"none",border:"none",color:C.dim,fontSize:14,cursor:"pointer",padding:"0 2px",lineHeight:1}}>×</button>
-                                </div>
-                              ))}
-                              <div style={{display:"flex",gap:6,marginTop:5,flexWrap:"wrap"}}>
-                                <button onClick={()=>u({finalInspectionItems:[...(job.finalInspectionItems||[]),{id:uid(),text:"",done:false}]})} style={{fontSize:11,padding:"3px 8px",borderRadius:5,background:C.surface,border:`1px solid ${C.border}`,color:C.text,cursor:"pointer",fontFamily:"inherit"}}>+ Item</button>
-                                {(job.finalInspectionItems||[]).filter(x=>!x.done).length>0&&(
-                                  <button onClick={()=>{const open=(job.finalInspectionItems||[]).filter(x=>!x.done);const newRT={id:uid(),date:"",scope:"Failed final inspection items",material:"",punch:open.map(x=>({id:uid(),text:x.text,done:false})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};u({returnTrips:[...(job.returnTrips||[]),newRT]});}}
-                                    style={{fontSize:11,padding:"3px 10px",borderRadius:5,background:"#dc262618",border:"1px solid #dc262633",color:"#dc2626",cursor:"pointer",fontWeight:700,fontFamily:"inherit"}}>→ Create Return Trip</button>
-                                )}
-                              </div>
-                            </div>
-                          )}
-                        </div>
-                      </div>
-                      <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:6}}>STATUS</div>
-                      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+
+                      {/* STATUS — top */}
+                      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:10}}>
                         <select value={job.finishStatus||""} onChange={e=>{
                           const v=e.target.value;
                           if(v==="complete"){
@@ -6249,7 +6154,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             finishStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting")?job.finishStartConfirmed:false,
                             finishStatusDate:def.hasDate?job.finishStatusDate:"",
                             finishProjectedStart:v==="scheduled"?job.finishProjectedStart:job.finishProjectedStart,
-                            // Reset deposit dismissed when rescheduled so task reappears
                             ...(v==="scheduled"?{finishDepositDismissed:false}:{}),
                           });
                         }} style={{background:fsDef.color?`${fsDef.color}18`:C.surface,
@@ -6274,6 +6178,59 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         )}
                       </div>
 
+                      {/* Compact date strip */}
+                      <div style={{background:"#f3f4f6",borderRadius:8,padding:"8px 12px",display:"flex",gap:16,alignItems:"center",flexWrap:"wrap",marginBottom:10}}>
+                        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                          <span style={{fontSize:10,color:job.finishStartConfirmed?"#16a34a":C.dim,fontWeight:700,letterSpacing:"0.07em",whiteSpace:"nowrap"}}>
+                            {job.finishStartConfirmed?"READY TO START":"PROJ. START"}
+                          </span>
+                          <DateInp value={job.finishProjectedStart||""} onChange={e=>{
+                            const patch={finishProjectedStart:e.target.value};
+                            if(e.target.value && !job.finishStatus) patch.finishStatus="waiting_date";
+                            u(patch);
+                          }} style={{fontSize:11,fontWeight:700,borderColor:(job.finishStartConfirmed?"#16a34a":C.finish)+"55",background:job.finishStartConfirmed?"#16a34a08":`${C.finish}08`,color:job.finishStartConfirmed?"#16a34a":C.finish}}/>
+                          <button onClick={()=>{const confirm=!job.finishStartConfirmed;u({finishStartConfirmed:confirm,...(confirm?{finishStatus:"date_confirmed"}:(job.finishStatus==="date_confirmed"?{finishStatus:"waiting_date"}:{}))});}}
+                            style={{display:"flex",alignItems:"center",gap:3,padding:"2px 7px",borderRadius:99,fontSize:9,fontWeight:700,cursor:"pointer",fontFamily:"inherit",border:"none",background:job.finishStartConfirmed?"#16a34a18":"#6b728018",color:job.finishStartConfirmed?"#16a34a":"#6b7280"}}>
+                            {job.finishStartConfirmed?"✓ CONFIRMED":"○ CONFIRM"}
+                          </button>
+                        </div>
+                        <div style={{width:1,height:20,background:C.border,flexShrink:0}}/>
+                        <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                          <span style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em",whiteSpace:"nowrap"}}>FINAL INSPECTION</span>
+                          <DateInp value={job.finalInspectionTargetDate||""} onChange={e=>u({finalInspectionTargetDate:e.target.value})}
+                            style={{fontSize:11,fontWeight:700,borderColor:C.finish+"55",background:`${C.finish}08`,color:C.finish}}/>
+                          {["pass","fail"].map(r=>(
+                            <button key={r} onClick={()=>u({finalInspectionResult:job.finalInspectionResult===r?"":r})}
+                              style={{padding:"3px 9px",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer",border:"none",fontFamily:"inherit",
+                                background:job.finalInspectionResult===r?(r==="pass"?"#16a34a":"#dc2626"):(r==="pass"?"#16a34a18":"#dc262618"),
+                                color:job.finalInspectionResult===r?"#fff":(r==="pass"?"#16a34a":"#dc2626")}}>
+                              {r==="pass"?"✓ Pass":"✗ Fail"}
+                            </button>
+                          ))}
+                        </div>
+                      </div>
+
+                      {/* Failed items */}
+                      {job.finalInspectionResult==="fail"&&(
+                        <div style={{marginBottom:10,padding:"8px 10px",background:"#dc262608",border:"1px solid #dc262622",borderRadius:7}}>
+                          <div style={{fontSize:10,color:"#dc2626",fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>FAILED ITEMS</div>
+                          {(job.finalInspectionItems||[]).map((item,i)=>(
+                            <div key={item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:5}}>
+                              <input type="checkbox" checked={!!item.done} onChange={()=>{const items=[...(job.finalInspectionItems||[])];items[i]={...items[i],done:!items[i].done};u({finalInspectionItems:items});}}/>
+                              <input value={item.text} onChange={e=>{const items=[...(job.finalInspectionItems||[])];items[i]={...items[i],text:e.target.value};u({finalInspectionItems:items});}}
+                                style={{flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,fontSize:12,color:C.text,padding:"2px 4px",outline:"none",fontFamily:"inherit",textDecoration:item.done?"line-through":"none",opacity:item.done?0.5:1}}/>
+                              <button onClick={()=>u({finalInspectionItems:(job.finalInspectionItems||[]).filter((_,j)=>j!==i)})} style={{background:"none",border:"none",color:C.dim,fontSize:14,cursor:"pointer",padding:"0 2px",lineHeight:1}}>×</button>
+                            </div>
+                          ))}
+                          <div style={{display:"flex",gap:6,marginTop:5,flexWrap:"wrap"}}>
+                            <button onClick={()=>u({finalInspectionItems:[...(job.finalInspectionItems||[]),{id:uid(),text:"",done:false}]})} style={{fontSize:11,padding:"3px 8px",borderRadius:5,background:C.surface,border:`1px solid ${C.border}`,color:C.text,cursor:"pointer",fontFamily:"inherit"}}>+ Item</button>
+                            {(job.finalInspectionItems||[]).filter(x=>!x.done).length>0&&(
+                              <button onClick={()=>{const open=(job.finalInspectionItems||[]).filter(x=>!x.done);const newRT={id:uid(),date:"",scope:"Failed final inspection items",material:"",punch:open.map(x=>({id:uid(),text:x.text,done:false})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};u({returnTrips:[...(job.returnTrips||[]),newRT]});}}
+                                style={{fontSize:11,padding:"3px 10px",borderRadius:5,background:"#dc262618",border:"1px solid #dc262633",color:"#dc2626",cursor:"pointer",fontWeight:700,fontFamily:"inherit"}}>→ Create Return Trip</button>
+                            )}
+                          </div>
+                        </div>
+                      )}
 
                     </div>
                   );
@@ -6776,10 +6733,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     transition:"border-color 0.15s"}}/>
               </div>
 
-              {/* Matterport links */}
+              {/* Matterport */}
               <div style={{marginTop:12}}>
                 <div style={{fontSize:10,color:C.dim,marginBottom:6,display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                  <span>MATTERPORT LINKS</span>
+                  <span>MATTERPORT</span>
                   <span onClick={()=>{
                     const links = [...(job.matterportLinks||[])];
                     if(!links.length && job.matterportLink) links.push({label:"Main",url:job.matterportLink});
@@ -6815,10 +6772,20 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   </div>
                 ))}
                 {!(job.matterportLinks?.length) && !job.matterportLink && <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No Matterport links yet — click + Add</div>}
+                {/* Scan status */}
+                {(()=>{const mpDef=getStatusDef(MATTERPORT_STATUSES,job.matterportStatus||"");return(
+                  <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",marginTop:8}}>
+                    <span style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em"}}>SCAN STATUS</span>
+                    <select value={job.matterportStatus||""} onChange={e=>{const v=e.target.value;const def=getStatusDef(MATTERPORT_STATUSES,v);u({matterportStatus:v,matterportStatusDate:def.hasDate?job.matterportStatusDate:""});}}
+                      style={{background:mpDef.color?`${mpDef.color}18`:C.surface,color:mpDef.color||C.dim,border:`1px solid ${mpDef.color||C.border}`,borderRadius:6,padding:"4px 8px",fontSize:11,fontFamily:"inherit",fontWeight:mpDef.color?700:400,outline:"none",cursor:"pointer"}}>
+                      {MATTERPORT_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+                    </select>
+                    {mpDef.hasDate&&<DateInp value={job.matterportStatusDate||""} onChange={e=>u({matterportStatusDate:e.target.value})} style={{width:120,fontSize:11,borderColor:mpDef.color+"55",background:`${mpDef.color}08`}}/>}
+                  </div>
+                );})()}
               </div>
 
-              <div style={{marginTop:16}}>
-                <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.1em",marginBottom:10}}>PRE JOB PREP</div>
+              <Section label="Pre-Job Prep" color={C.teal} defaultOpen={!allPrepDone(job)}>
                 <div style={{display:"flex",flexDirection:"column",gap:8}}>
                   {PREP_CHECKLIST_ITEMS.map((item,i)=>{
                     const checked=!!((job.prepChecklist||{})[item.key]);
@@ -6843,46 +6810,46 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 {allPrepDone(job)&&(
                   <div style={{marginTop:10,fontSize:11,fontWeight:700,color:C.teal}}>✓ Prep Complete — Handed Off to Foreman</div>
                 )}
-              </div>
+              </Section>
 
-              <div style={{display:"flex",flexDirection:"column",gap:10,marginTop:16}}>
-                <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
-                  <input type="checkbox" checked={!!job.jobAccount} onChange={e=>u({jobAccount:e.target.checked})}
-                    style={{accentColor:C.teal,width:16,height:16}}/>
-                  <span style={{fontSize:13,color:C.text}}>Job account created</span>
-                </label>
-                <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
-                  <input type="checkbox" checked={!!job.preLien} onChange={e=>u({preLien:e.target.checked})}
-                    style={{accentColor:C.teal,width:16,height:16}}/>
-                  <span style={{fontSize:13,color:C.text}}>Pre-lien filed</span>
-                </label>
-                <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+              <Section label="Admin" color={C.dim} defaultOpen={!(job.jobAccount && job.preLien)}>
+                <div style={{display:"flex",flexDirection:"column",gap:10}}>
                   <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
-                    <input type="checkbox" checked={!!job.hasTempPed} onChange={e=>u({hasTempPed:e.target.checked,tempPedNumber:e.target.checked?job.tempPedNumber:""})}
-                      style={{accentColor:C.blue,width:16,height:16}}/>
-                    <span style={{fontSize:13,color:C.text}}>Temp pedestal on site</span>
+                    <input type="checkbox" checked={!!job.jobAccount} onChange={e=>u({jobAccount:e.target.checked})}
+                      style={{accentColor:C.teal,width:16,height:16}}/>
+                    <span style={{fontSize:13,color:C.text}}>Job account created</span>
                   </label>
-                  {job.hasTempPed&&(
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <span style={{fontSize:12,color:C.dim}}>Ped #</span>
-                      <select value={job.tempPedNumber||""} onChange={e=>u({tempPedNumber:e.target.value})}
-                        style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
-                          padding:"4px 10px",fontSize:12,fontFamily:"inherit",color:job.tempPedNumber?C.blue:C.dim,
-                          fontWeight:job.tempPedNumber?700:400,outline:"none",cursor:"pointer"}}>
-                        <option value="">— select —</option>
-                        {Array.from({length:100},(_,i)=>String(i+1)).map(n=>(
-                          <option key={n} value={n}>Ped #{n}</option>
-                        ))}
-                      </select>
-                      {job.tempPedNumber&&(
-                        <span style={{fontSize:12,color:C.blue,fontWeight:700}}>#{job.tempPedNumber}</span>
-                      )}
-                    </div>
-                  )}
+                  <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+                    <input type="checkbox" checked={!!job.preLien} onChange={e=>u({preLien:e.target.checked})}
+                      style={{accentColor:C.teal,width:16,height:16}}/>
+                    <span style={{fontSize:13,color:C.text}}>Pre-lien filed</span>
+                  </label>
+                  <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                    <label style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer"}}>
+                      <input type="checkbox" checked={!!job.hasTempPed} onChange={e=>u({hasTempPed:e.target.checked,tempPedNumber:e.target.checked?job.tempPedNumber:""})}
+                        style={{accentColor:C.blue,width:16,height:16}}/>
+                      <span style={{fontSize:13,color:C.text}}>Temp pedestal on site</span>
+                    </label>
+                    {job.hasTempPed&&(
+                      <div style={{display:"flex",alignItems:"center",gap:8}}>
+                        <span style={{fontSize:12,color:C.dim}}>Ped #</span>
+                        <select value={job.tempPedNumber||""} onChange={e=>u({tempPedNumber:e.target.value})}
+                          style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                            padding:"4px 10px",fontSize:12,fontFamily:"inherit",color:job.tempPedNumber?C.blue:C.dim,
+                            fontWeight:job.tempPedNumber?700:400,outline:"none",cursor:"pointer"}}>
+                          <option value="">— select —</option>
+                          {Array.from({length:100},(_,i)=>String(i+1)).map(n=>(
+                            <option key={n} value={n}>Ped #{n}</option>
+                          ))}
+                        </select>
+                        {job.tempPedNumber&&(
+                          <span style={{fontSize:12,color:C.blue,fontWeight:700}}>#{job.tempPedNumber}</span>
+                        )}
+                      </div>
+                    )}
+                  </div>
                 </div>
-
-
-              </div>
+              </Section>
 
             </div>
 
