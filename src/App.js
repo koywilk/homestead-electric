@@ -1367,6 +1367,27 @@ const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minR
             onBlur&&onBlur(ref.current?.innerHTML||"");
           }}
           onInput={()=>onHtmlChange(ref.current?.innerHTML||"")}
+          onPaste={e=>{
+            e.preventDefault();
+            // Strip heading tags, large fonts, and block-level formatting on paste
+            // to prevent big text from appearing when pasting from Word/web
+            let html = e.clipboardData.getData('text/html');
+            if(html) {
+              // Remove heading tags, replace with their content
+              html = html.replace(/<h[1-6][^>]*>([\s\S]*?)<\/h[1-6]>/gi, '$1<br>');
+              // Remove font-size styles
+              html = html.replace(/font-size\s*:[^;"]*/gi, '');
+              // Remove large <font size=> attributes
+              html = html.replace(/<font[^>]*size\s*=\s*["']?[4-9]["']?[^>]*>/gi, '<span>');
+              // Strip everything except basic inline tags
+              html = html.replace(/<(?!\/?(?:b|strong|i|em|u|span|br|a|ul|ol|li|div|p)\b)[^>]+>/gi, '');
+              document.execCommand('insertHTML', false, html);
+            } else {
+              const text = e.clipboardData.getData('text/plain');
+              document.execCommand('insertText', false, text);
+            }
+            onHtmlChange(ref.current?.innerHTML||"");
+          }}
           onKeyDown={e=>{
             if(e.key==='Enter' && !e.shiftKey && onEnterKey && !active.ul && !active.ol){
               e.preventDefault();
@@ -7040,9 +7061,9 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
 
       {q.done&&q.answer&&(
 
-        <div style={{marginLeft:22,marginTop:4,fontSize:11,color:C.dim,fontStyle:"italic",display:"flex",alignItems:"flex-start",gap:6}}>
+        <div style={{marginLeft:22,marginTop:4,fontSize:11,color:C.dim,display:"flex",alignItems:"flex-start",gap:6}}>
           {q.gcAnswered&&<span style={{fontSize:9,fontWeight:700,color:"#16a34a",background:"#dcfce7",borderRadius:4,padding:"1px 5px",flexShrink:0,marginTop:1}}>GC</span>}
-          <span>{q.answer}</span>
+          <div style={{fontStyle:"italic",flex:1,lineHeight:1.5}} dangerouslySetInnerHTML={{__html:q.answer}}/>
         </div>
 
       )}
@@ -7051,7 +7072,8 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
       {!q.done&&gcAnswerMap[q.id]&&(
         <div style={{marginLeft:22,marginTop:6,background:"#f0fdf4",border:"1px solid #16a34a44",borderRadius:6,padding:"6px 10px",fontSize:11}}>
           <span style={{fontSize:9,fontWeight:700,color:"#16a34a",background:"#dcfce7",borderRadius:4,padding:"1px 5px",marginRight:6}}>GC</span>
-          <span style={{color:"#15803d",fontStyle:"italic"}}>{gcAnswerMap[q.id]}</span>
+          <span style={{color:"#15803d",fontStyle:"italic"}} dangerouslySetInnerHTML={{__html:gcAnswerMap[q.id]||''}}/>
+
         </div>
       )}
 
