@@ -1403,9 +1403,9 @@ const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minR
 };
 
 // Mobile sheet wrapping the rich editor for TA fields
-const RichMobileSheet = ({initialHtml, placeholder, onDone, onCancel, addMode, showMaterial=false}) => {
+const RichMobileSheet = ({initialHtml, initialMaterial='', placeholder, onDone, onCancel, addMode, showMaterial=false}) => {
   const [html, setHtml] = useState(initialHtml || "");
-  const [material, setMaterial] = useState("");
+  const [material, setMaterial] = useState(initialMaterial || "");
 
   // Auto-save when phone locks or user switches apps
   useEffect(() => {
@@ -1700,6 +1700,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
   const [addMaterial,   setAddMaterial]   = useState('');
   const [editingId,     setEditingId]     = useState(null);
   const [editHtml,      setEditHtml]      = useState('');
+  const [editMaterial,  setEditMaterial]  = useState('');
   const [waitingEditId,   setWaitingEditId]   = useState(null);
   const [waitingText,     setWaitingText]     = useState('');
   const [materialEditId,  setMaterialEditId]  = useState(null);
@@ -1729,10 +1730,14 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
     }
   };
 
-  const commitEdit = (id, html) => {
-    if ((html||"").replace(/<[^>]*>/g,"").trim())
-      onChange(safeItems.map(i => i.id === id ? { ...i, text: html } : i));
+  const commitEdit = (id, html, material=undefined) => {
+    if ((html||"").replace(/<[^>]*>/g,"").trim()) {
+      const patch = { text: html };
+      if (material !== undefined) patch.materialNeeded = material.trim();
+      onChange(safeItems.map(i => i.id === id ? { ...i, ...patch } : i));
+    }
     setEditingId(null);
+    setEditMaterial('');
     setMobileSheet(null);
   };
 
@@ -1779,11 +1784,20 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
 
             {editingId === item.id && !ON_MOBILE ? (
               <div style={{ flex: 1 }}
-                onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) commitEdit(item.id, editHtml); }}>
+                onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) commitEdit(item.id, editHtml, editMaterial); }}>
                 <RichEditor htmlValue={editHtml} onHtmlChange={setEditHtml} autoFocus minRows={2} placeholder="Edit item…"/>
+                <div style={{display:'flex',flexDirection:'column',gap:3,marginTop:6}}>
+                  <span style={{fontSize:11,color:C.dim}}>Material needed: <span style={{fontWeight:400,opacity:0.7}}>(one item per line)</span></span>
+                  <textarea value={editMaterial} onChange={e=>setEditMaterial(e.target.value)}
+                    placeholder={"20A breaker x2\n12/2 wire 50ft"}
+                    rows={2}
+                    style={{width:'100%',boxSizing:'border-box',fontSize:11,border:`1px solid ${C.border}`,
+                      borderRadius:5,padding:'5px 8px',background:C.surface,color:C.text,
+                      outline:'none',fontFamily:'inherit',resize:'vertical',lineHeight:1.5}}/>
+                </div>
                 <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                  <Btn onClick={() => commitEdit(item.id, editHtml)} variant="primary" style={{ fontSize: 11, padding: '3px 12px' }}>Save</Btn>
-                  <button onClick={() => setEditingId(null)}
+                  <Btn onClick={() => commitEdit(item.id, editHtml, editMaterial)} variant="primary" style={{ fontSize: 11, padding: '3px 12px' }}>Save</Btn>
+                  <button onClick={() => { setEditingId(null); setEditMaterial(''); }}
                     style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
                 </div>
               </div>
@@ -1791,8 +1805,8 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
               <div style={{flex:1,display:"flex",flexDirection:"column",gap:1}}>
                 <span onClick={() => {
                   if (item.done) return;
-                  if (ON_MOBILE) { setMobileSheet({ mode: 'edit', id: item.id, html: item.text }); }
-                  else           { setEditingId(item.id); setEditHtml(item.text); }
+                  if (ON_MOBILE) { setMobileSheet({ mode: 'edit', id: item.id, html: item.text, material: item.materialNeeded||'' }); }
+                  else           { setEditingId(item.id); setEditHtml(item.text); setEditMaterial(item.materialNeeded||''); }
                 }}
                   style={{ fontSize: 12, color: item.done ? C.muted : C.text,
                     textDecoration: item.done ? 'line-through' : 'none',
@@ -1930,12 +1944,13 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
       {mobileSheet && (
         <RichMobileSheet
           initialHtml={mobileSheet.mode === 'edit' ? mobileSheet.html : ''}
+          initialMaterial={mobileSheet.material||''}
           placeholder={mobileSheet.mode === 'add' ? "Add punch item…" : "Edit item…"}
           addMode={mobileSheet.mode === 'add'}
-          showMaterial={mobileSheet.mode === 'add' && !!onAddMaterial}
+          showMaterial={mobileSheet.mode === 'add' ? !!onAddMaterial : true}
           onDone={(html, mat) => mobileSheet.mode === 'add'
             ? commitAdd(html, false, mat)
-            : commitEdit(mobileSheet.id, html)}
+            : commitEdit(mobileSheet.id, html, mat)}
           onCancel={() => setMobileSheet(null)}/>
       )}
 
@@ -8191,12 +8206,17 @@ const SEED_UPCOMING = [
   {id:"seed13", name:"#1809 - Tuhaye Hollow",                                          city:"Kamas",               sales:"Josh",   customer:"The Housley Group",        notes:"",                                                   lastFollowUp:"",         foreman:""},
 ];
 
-function UpcomingJobs({ upcoming, onChange, onPromote, onPromoteToQuote, canManage=false, foremenList }) {
+function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuote, canManage=false, foremenList }) {
   const [editingId, setEditingId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
   const add = () => { if(!canManage) return; const j=blankUpcoming(); onChange([j,...upcoming]); setEditingId(j.id); };
   const upd = (id,patch) => { if(!canManage) return; onChange(upcoming.map(u=>u.id===id?{...u,...patch}:u)); };
-  const del = (id) => { onChange(upcoming.filter(u=>u.id!==id)); setEditingId(null); setConfirmDeleteId(null); };
+  const del = (id) => {
+    onChange(upcoming.filter(u=>u.id!==id));
+    onDelete && onDelete(id);
+    setEditingId(null);
+    setConfirmDeleteId(null);
+  };
   const COL = {
     name:{label:"Job Name",flex:2.5}, city:{label:"City",flex:1.2},
     sales:{label:"Sales",flex:1}, customer:{label:"Customer / GC",flex:1.5},
@@ -13905,12 +13925,12 @@ function App() {
           upcoming={upcoming}
           canManage={can(identity,"pipeline.manage")}
           foremenList={_foremen}
+          onDelete={(id)=>{ deleteUpcomingItem(id); }}
           onChange={(next)=>{
             next.forEach(item=>{
               const prev=upcoming.find(u=>u.id===item.id);
               if(!prev||JSON.stringify(prev)!==JSON.stringify(item)) saveUpcomingItem(item);
             });
-            upcoming.forEach(item=>{ if(!next.find(u=>u.id===item.id)) deleteUpcomingItem(item.id); });
             setUpcoming(next);
           }}
           onPromote={(u)=>{
