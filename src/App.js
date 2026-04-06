@@ -1748,7 +1748,7 @@ function PunchItems({ items, onChange, filterIds=null }) {
             </div>
           )}
 
-          <button onClick={() => onChange(safeItems.filter(i => i.id !== item.id))}
+          <button onClick={() => { if(!window.confirm("Delete this punch item?")) return; onChange(safeItems.filter(i => i.id !== item.id)); }}
             style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12, flexShrink: 0 }}>✕</button>
 
         </div>
@@ -1935,7 +1935,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
                   </span>}
 
-                <button onClick={() => delRoom(room.id)}
+                <button onClick={() => { if(!window.confirm(`Remove room "${room.name}" and all its punch items?`)) return; delRoom(room.id); }}
 
                   style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 11 }}>✕</button>
 
@@ -2082,7 +2082,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
       <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds}/>
 
       {extras.map((e,i)=>(
-        <div key={e.key} style={{position:"relative"}}>
+        <div key={e.key}>
           <PunchFloor
             floorKey={e.key}
             floorData={normFloor(punch[e.key])}
@@ -2091,10 +2091,14 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
             floorColor={FLOOR_COLORS[i % FLOOR_COLORS.length]}
             showHotcheck={showHotcheck}
             filterIds={filterIds}/>
-          <button onClick={()=>removeFloor(e.key)}
-            style={{position:"absolute",top:6,right:0,background:"none",border:"none",
-              color:C.muted,cursor:"pointer",fontSize:12,padding:"2px 6px",fontFamily:"inherit"}}>
-            Remove
+          <button onClick={()=>{
+            if(!window.confirm(`Remove "${e.label}" and all its punch items? This cannot be undone.`)) return;
+            removeFloor(e.key);
+          }}
+            style={{display:"block",margin:"2px 0 6px auto",background:"none",border:"none",
+              color:C.muted,cursor:"pointer",fontSize:11,padding:"2px 8px",fontFamily:"inherit",
+              textDecoration:"underline"}}>
+            Remove {e.label}
           </button>
         </div>
       ))}
@@ -2395,7 +2399,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
           <span style={{flex:1,fontSize:12,color:C.text,lineHeight:1.5}}>{u.text}</span>
 
-          {!showPicker&&<button onClick={()=>onChange(updates.filter(x=>x.id!==u.id))}
+          {!showPicker&&<button onClick={()=>{ if(!window.confirm("Delete this daily update?")) return; onChange(updates.filter(x=>x.id!==u.id)); }}
 
             style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>✕</button>}
 
@@ -2498,7 +2502,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
                 }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>Simpro</Btn>}
                 {!isConverted&&<Btn onClick={()=>chatCO(o,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>Chat</Btn>}
                 {!isConverted&&<Btn onClick={()=>emailCO(o,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>Email CO</Btn>}
-                <button onClick={()=>del(o.id)} style={{background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontSize:11}}>Remove</button>
+                <button onClick={()=>{ if(!window.confirm("Delete this change order?")) return; del(o.id); }} style={{background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontSize:11}}>Remove</button>
               </div>
             </div>
 
@@ -2775,7 +2779,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId}) {
               <Btn onClick={()=>chatTrip(t,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>Chat</Btn>
               <Btn onClick={()=>emailTrip(t,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>Email Trip</Btn>
 
-              <button onClick={()=>del(t.id)}
+              <button onClick={()=>{ if(!window.confirm("Delete this return trip?")) return; del(t.id); }}
 
                 style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
 
@@ -7036,7 +7040,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
           </span>}
         </div>
 
-        <button onClick={()=>del(q.id)}
+        <button onClick={()=>{ if(!window.confirm("Delete this question?")) return; del(q.id); }}
 
           style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
 
