@@ -1418,17 +1418,23 @@ const RichMobileSheet = ({initialHtml, placeholder, onDone, onCancel, addMode, s
     return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, [html, material]);
 
+  // Save draft on cancel if there's content — nothing is ever discarded
+  const handleCancel = () => {
+    const hasContent = (html||"").replace(/<[^>]*>/g,"").trim() || material.trim();
+    if (hasContent) onDone(html, material);
+    else onCancel();
+  };
+
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:99999,
       display:"flex",flexDirection:"column",justifyContent:"flex-end",
-      WebkitTapHighlightColor:"transparent"}}
-      onClick={e=>{if(e.target===e.currentTarget) onCancel();}}>
+      WebkitTapHighlightColor:"transparent"}}>
       <div style={{background:C.surface,borderTopLeftRadius:18,borderTopRightRadius:18,
         maxHeight:"85vh",display:"flex",flexDirection:"column",
         boxShadow:"0 -8px 40px rgba(0,0,0,0.45)",overflow:"hidden"}}>
         <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
           padding:"13px 16px",borderBottom:`1px solid ${C.border}`,flexShrink:0}}>
-          <button onClick={onCancel}
+          <button onClick={handleCancel}
             style={{background:"none",border:"none",color:C.dim,fontSize:15,
               fontFamily:"inherit",fontWeight:600,cursor:"pointer",padding:"2px 8px"}}>
             Cancel
@@ -2422,10 +2428,11 @@ function MaterialOrders({orders,onChange}) {
 
 // ── Material Tally ────────────────────────────────────────────
 // Field-use count list: add items by name, tap +/− to count, copy all as "Nx Item"
-function MaterialTally({items, onChange}) {
+function MaterialTally({items, onChange, onAddToPO}) {
   const safe = Array.isArray(items) ? items : [];
   const [draft, setDraft] = useState("");
   const [copied, setCopied] = useState(false);
+  const [addedToPO, setAddedToPO] = useState(false);
 
   const addItem = (nameArg) => {
     const name = typeof nameArg === "string" ? nameArg : draft;
@@ -2487,21 +2494,38 @@ function MaterialTally({items, onChange}) {
       ))}
 
       {safe.length>0&&(
-        <div style={{display:"flex",gap:8,marginTop:6}}>
+        <div style={{display:"flex",gap:8,marginTop:6,flexWrap:"wrap"}}>
           <button onClick={copyList}
             style={{flex:1,padding:"10px",borderRadius:8,
               border:`1px solid ${copied?"#16a34a55":C.border}`,
               background:copied?"#16a34a18":C.surface,
               color:copied?"#16a34a":C.dim,fontSize:12,fontWeight:700,
               cursor:"pointer",fontFamily:"inherit",transition:"all 0.2s"}}>
-            {copied?"Copied to clipboard":"Copy List"}
+            {copied?"Copied":"Copy List"}
           </button>
+          {onAddToPO&&(
+            <button onClick={()=>{
+              const counted = safe.filter(i=>(i.count||0)>0);
+              if(!counted.length){ alert("No items with a count yet. Add counts first."); return; }
+              const formatted = counted.map(i=>`- ${i.count}x ${i.name}`).join('<br>');
+              onAddToPO(formatted);
+              setAddedToPO(true);
+              setTimeout(()=>setAddedToPO(false),2000);
+            }}
+              style={{flex:1,padding:"10px",borderRadius:8,
+                border:`1px solid ${addedToPO?"#16a34a55":"#3b82f644"}`,
+                background:addedToPO?"#16a34a18":"#eff6ff",
+                color:addedToPO?"#16a34a":"#1d4ed8",fontSize:12,fontWeight:700,
+                cursor:"pointer",fontFamily:"inherit",transition:"all 0.2s"}}>
+              {addedToPO?"Added to PO":"Add to PO"}
+            </button>
+          )}
           <button onClick={()=>{ if(!window.confirm("Reset all counts to zero?")) return; onChange(safe.map(i=>({...i,count:0}))); }}
             style={{padding:"10px 14px",borderRadius:8,
               border:`1px solid ${C.border}`,background:C.surface,
               color:C.muted,fontSize:12,fontWeight:700,
               cursor:"pointer",fontFamily:"inherit"}}>
-            Clear Counts
+            Clear
           </button>
         </div>
       )}
@@ -6388,7 +6412,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               <Section label="Material Count List" color={C.rough} defaultOpen={false}>
                 <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Tap + / − to count materials on the job. Copy the list to paste into Simpro.</div>
-                <MaterialTally items={job.roughTally||[]} onChange={v=>u({roughTally:v})}/>
+                <MaterialTally items={job.roughTally||[]} onChange={v=>u({roughTally:v})}
+                  onAddToPO={text=>{
+                    const orders = job.roughMaterials||[];
+                    const open = [...orders].reverse().find(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
+                    if(open) u({roughMaterials:orders.map(o=>o.id===open.id?{...o,items:o.items?o.items.replace(/(<br\s*\/?>)+$/i,'')+'<br>'+text:text}:o)});
+                    else u({roughMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",items:text,pickedUp:false,needsOrder:true}]});
+                  }}/>
               </Section>
 
               <Section label="Daily Job Updates" color={C.rough}>
@@ -6573,7 +6603,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                 <Section label="Finish Material Count List" color={C.finish} defaultOpen={false}>
                   <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Tap + / − to count materials on the job. Copy the list to paste into Simpro.</div>
-                  <MaterialTally items={job.finishTally||[]} onChange={v=>u({finishTally:v})}/>
+                  <MaterialTally items={job.finishTally||[]} onChange={v=>u({finishTally:v})}
+                    onAddToPO={text=>{
+                      const orders = job.finishMaterials||[];
+                      const open = [...orders].reverse().find(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
+                      if(open) u({finishMaterials:orders.map(o=>o.id===open.id?{...o,items:o.items?o.items.replace(/(<br\s*\/?>)+$/i,'')+'<br>'+text:text}:o)});
+                      else u({finishMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",items:text,pickedUp:false,needsOrder:true}]});
+                    }}/>
                 </Section>
 
               </div>
