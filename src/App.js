@@ -4,6 +4,7 @@ import { initializeApp } from "firebase/app";
 import { getFirestore, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { getMessaging, getToken, onMessage } from "firebase/messaging";
+import { getFunctions, httpsCallable } from "firebase/functions";
 
 // ── FCM setup ─────────────────────────────────────────────────────────────────
 // VAPID key — generate in Firebase Console → Project Settings → Cloud Messaging
@@ -46,6 +47,7 @@ const firebaseApp = initializeApp(firebaseConfig);
 const db        = getFirestore(firebaseApp);
 const storage   = getStorage(firebaseApp);
 const messaging = ("serviceWorker" in navigator) ? getMessaging(firebaseApp) : null;
+const functions = getFunctions(firebaseApp);
 
 /**
  * Request notification permission, get FCM token, and save it to the user's
@@ -2378,11 +2380,15 @@ function MaterialOrders({orders,onChange}) {
                 <span style={{fontSize:10,fontWeight:700,background:"#16a34a22",color:"#16a34a",
                   borderRadius:99,padding:"1px 8px"}}>Picked Up</span>
               )}
-              {isCollapsed && o.items && (
-                <span style={{fontSize:11,color:C.muted,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>
-                  {o.items.split('\n').filter(Boolean)[0]}
-                  {o.items.split('\n').filter(Boolean).length > 1 ? ` + ${o.items.split('\n').filter(Boolean).length - 1} more` : ''}
-                </span>
+              {isCollapsed && o.items && (()=>{
+                const plain = o.items.replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').trim();
+                const lines = plain.split('\n').map(l=>l.trim()).filter(Boolean);
+                return (
+                  <span style={{fontSize:11,color:C.muted,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>
+                    {lines[0]}{lines.length>1?` + ${lines.length-1} more`:''}
+                  </span>
+                );
+              })()
               )}
               <span style={{marginLeft:"auto",color:C.muted,fontSize:12,flexShrink:0}}>{isCollapsed ? "▸" : "▾"}</span>
               <button onClick={e=>{e.stopPropagation();del(o.id);}}
@@ -4559,6 +4565,7 @@ function DriveFilesSection({ job, onUpdate }) {
   const [folderInput, setFolderInput] = useState(job.driveFolderId || "");
   const [editingFolder, setEditingFolder] = useState(!job.driveFolderId);
   const [collapsedFolders, setCollapsedFolders] = useState(new Set());
+  const [simproSync, setSimproSync] = useState(null); // null | 'loading' | {uploaded, skipped, errors}
 
   const folderId = extractDriveFolderId(job.driveFolderId);
 
@@ -4600,6 +4607,21 @@ function DriveFilesSection({ job, onUpdate }) {
     setDriveFiles([]);
   };
 
+  const handlePushToSimpro = async () => {
+    if (!job.simproNo) return;
+    const fid = extractDriveFolderId(job.driveFolderId);
+    if (!fid) return;
+    if (!window.confirm(`Push new Drive plans to Simpro job #${job.simproNo}?\n\nThis only adds files — nothing in Simpro will be deleted.`)) return;
+    setSimproSync("loading");
+    try {
+      const pushFn = httpsCallable(functions, "pushPlansToSimpro");
+      const result = await pushFn({ simproJobNo: job.simproNo, driveFolderId: fid });
+      setSimproSync(result.data);
+    } catch (e) {
+      setSimproSync({ uploaded: [], skipped: [], errors: [{ name: "Connection", error: e.message }] });
+    }
+  };
+
   const isImage = (f) => (f.mimeType || "").startsWith("image/");
   const isPDF = (f) => f.mimeType === "application/pdf" || /\.pdf$/i.test(f.name);
   const fileIcon = (f) => isPDF(f) ? "📄" : isImage(f) ? "🖼" : "📎";
@@ -4632,7 +4654,18 @@ function DriveFilesSection({ job, onUpdate }) {
       <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 12 }}>
         <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: "0.08em" }}>GOOGLE DRIVE PLANS</div>
         {folderId && !editingFolder && (
-          <div style={{ display: "flex", gap: 6 }}>
+          <div style={{ display: "flex", gap: 6, alignItems: "center" }}>
+            {job.simproNo && (
+              <button
+                onClick={handlePushToSimpro}
+                disabled={simproSync === "loading"}
+                style={{ background: simproSync === "loading" ? "#555" : "#f97316", border: "none", borderRadius: 6,
+                  color: "#fff", cursor: simproSync === "loading" ? "not-allowed" : "pointer",
+                  fontSize: 11, fontWeight: 700, padding: "3px 9px", fontFamily: "inherit",
+                  opacity: simproSync === "loading" ? 0.6 : 1 }}>
+                {simproSync === "loading" ? "Syncing…" : "Push to Simpro"}
+              </button>
+            )}
             <button onClick={() => setEditingFolder(true)}
               style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6,
                 color: C.dim, cursor: "pointer", fontSize: 11, padding: "3px 8px", fontFamily: "inherit" }}>
@@ -4676,6 +4709,42 @@ function DriveFilesSection({ job, onUpdate }) {
             style={{ fontSize: 11, color: C.blue, fontWeight: 600, textDecoration: "none" }}>
             Open in Drive ↗
           </a>
+        </div>
+      )}
+
+      {/* Simpro sync results */}
+      {simproSync && simproSync !== "loading" && (
+        <div style={{ marginBottom: 12, padding: "10px 14px", borderRadius: 10,
+          background: simproSync.errors.length > 0 ? "rgba(239,68,68,0.06)" : "rgba(22,163,74,0.06)",
+          border: `1px solid ${simproSync.errors.length > 0 ? C.red+"44" : C.green+"44"}` }}>
+          <div style={{ display: "flex", justifyContent: "space-between", alignItems: "center", marginBottom: 4 }}>
+            <span style={{ fontSize: 11, fontWeight: 700, color: simproSync.errors.length > 0 ? C.red : C.green }}>
+              Simpro Sync Complete
+            </span>
+            <button onClick={() => setSimproSync(null)}
+              style={{ background: "none", border: "none", color: C.dim, cursor: "pointer", fontSize: 13, padding: 0 }}>✕</button>
+          </div>
+          {simproSync.uploaded.length > 0 && (
+            <div style={{ fontSize: 11, color: C.green, marginBottom: 2 }}>
+              ✓ Uploaded {simproSync.uploaded.length} file{simproSync.uploaded.length !== 1 ? "s" : ""}
+              {simproSync.uploaded.length <= 5 && (
+                <span style={{ color: C.dim }}>{": " + simproSync.uploaded.join(", ")}</span>
+              )}
+            </div>
+          )}
+          {simproSync.skipped.length > 0 && (
+            <div style={{ fontSize: 11, color: C.dim, marginBottom: 2 }}>
+              — Skipped {simproSync.skipped.length} already in Simpro
+            </div>
+          )}
+          {simproSync.errors.length > 0 && simproSync.errors.map((e, i) => (
+            <div key={i} style={{ fontSize: 11, color: C.red, marginBottom: 2 }}>
+              ✗ {e.name}: {e.error}
+            </div>
+          ))}
+          {simproSync.uploaded.length === 0 && simproSync.errors.length === 0 && (
+            <div style={{ fontSize: 11, color: C.dim }}>All files already in Simpro — nothing to add.</div>
+          )}
         </div>
       )}
 
