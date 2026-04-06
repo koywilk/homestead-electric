@@ -1657,24 +1657,33 @@ function normFloor(v) {
 }
 
 
-function PunchItems({ items, onChange, filterIds=null }) {
+function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
 
   const safeItems = Array.isArray(items) ? items : [];
 
-  const [addHtml,    setAddHtml]    = useState('');
-  const [addOpen,    setAddOpen]    = useState(false);
-  const [addKey,     setAddKey]     = useState(0);
-  const [editingId,  setEditingId]  = useState(null);
-  const [editHtml,   setEditHtml]   = useState('');
-  const [mobileSheet,setMobileSheet]= useState(null); // null | {mode:'add'} | {mode:'edit',id,html}
+  const [addHtml,       setAddHtml]       = useState('');
+  const [addOpen,       setAddOpen]       = useState(false);
+  const [addKey,        setAddKey]        = useState(0);
+  const [addMaterial,   setAddMaterial]   = useState('');
+  const [editingId,     setEditingId]     = useState(null);
+  const [editHtml,      setEditHtml]      = useState('');
+  const [waitingEditId, setWaitingEditId] = useState(null);
+  const [waitingText,   setWaitingText]   = useState('');
+  const [mobileSheet,   setMobileSheet]   = useState(null);
 
   const commitAdd = (html, keepOpen=false) => {
     if (!(html||"").replace(/<[^>]*>/g,"").trim()) return;
     const who = getIdentity();
-    onChange([...safeItems, { id: uid(), text: html, done: false, addedBy: who?.name||"" }]);
+    const newItem = { id: uid(), text: html, done: false, addedBy: who?.name||"" };
+    if (addMaterial.trim()) {
+      newItem.materialNeeded = addMaterial.trim();
+      onAddMaterial && onAddMaterial(addMaterial.trim());
+    }
+    onChange([...safeItems, newItem]);
     setAddHtml('');
+    setAddMaterial('');
     if (keepOpen) {
-      setAddKey(k => k + 1); // remount editor so autoFocus fires again
+      setAddKey(k => k + 1);
     } else {
       setAddOpen(false);
       setMobileSheet(null);
@@ -1688,68 +1697,133 @@ function PunchItems({ items, onChange, filterIds=null }) {
     setMobileSheet(null);
   };
 
+  const commitWaiting = (id, text) => {
+    onChange(safeItems.map(i => i.id === id ? { ...i, waiting: true, waitingOn: text.trim() } : i));
+    setWaitingEditId(null);
+    setWaitingText('');
+  };
+
+  const clearWaiting = (id) => {
+    onChange(safeItems.map(i => i.id === id ? { ...i, waiting: false, waitingOn: '' } : i));
+  };
+
   return (
 
     <div style={{ paddingLeft: 8 }}>
 
       {safeItems.map(item => (
 
-        <div key={item.id} style={{ display: 'flex', alignItems: editingId===item.id ? 'flex-start' : 'center', gap: 8, marginBottom: 5 }}>
+        <div key={item.id} style={{ marginBottom: 6 }}>
 
-          <input type="checkbox" checked={!!item.done}
-            onChange={() => {
-              const nowDone = !item.done;
-              const who = getIdentity();
-              onChange(safeItems.map(i => i.id === item.id ? {
-                ...i, done: nowDone,
-                checkedBy: nowDone ? (who?.name||"") : "",
-                checkedAt: nowDone ? new Date().toLocaleDateString("en-US") : "",
-              } : i));
-            }}
-            style={{ accentColor: C.green, width: 14, height: 14, cursor: 'pointer', flexShrink: 0,
-              marginTop: editingId===item.id ? 3 : 0 }} />
+          {/* ── Main item row ── */}
+          <div style={{ display: 'flex', alignItems: editingId===item.id ? 'flex-start' : 'center', gap: 8 }}>
 
-          {editingId === item.id && !ON_MOBILE ? (
-            <div style={{ flex: 1 }}
-              onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) commitEdit(item.id, editHtml); }}>
-              <RichEditor htmlValue={editHtml} onHtmlChange={setEditHtml} autoFocus minRows={2} placeholder="Edit item…"/>
-              <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
-                <Btn onClick={() => commitEdit(item.id, editHtml)} variant="primary" style={{ fontSize: 11, padding: '3px 12px' }}>Save</Btn>
-                <button onClick={() => setEditingId(null)}
-                  style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
-              </div>
-            </div>
-          ) : (
-            <div style={{flex:1,display:"flex",flexDirection:"column",gap:1}}>
-              <span onClick={() => {
-                if (item.done) return;
-                if (ON_MOBILE) { setMobileSheet({ mode: 'edit', id: item.id, html: item.text }); }
-                else           { setEditingId(item.id); setEditHtml(item.text); }
+            <input type="checkbox" checked={!!item.done}
+              onChange={() => {
+                const nowDone = !item.done;
+                const who = getIdentity();
+                onChange(safeItems.map(i => i.id === item.id ? {
+                  ...i, done: nowDone,
+                  checkedBy: nowDone ? (who?.name||"") : "",
+                  checkedAt: nowDone ? new Date().toLocaleDateString("en-US") : "",
+                  waiting: nowDone ? false : i.waiting,
+                } : i));
               }}
-                style={{ fontSize: 12, color: item.done ? C.muted : C.text,
-                  textDecoration: item.done ? 'line-through' : 'none',
-                  cursor: item.done ? 'default' : 'text',
-                  borderRadius: 4, padding: '2px 4px', transition: 'background 0.1s' }}
-                onMouseEnter={e=>{if(!item.done)e.target.style.background=C.border+'66'}}
-                onMouseLeave={e=>e.target.style.background='transparent'}>
-                <RichText html={item.text}/>
-              </span>
-              {(item.addedBy||item.checkedBy||(filterIds!=null))&&(
-                <span style={{fontSize:9,color:C.dim,paddingLeft:4,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
-                  {item.addedBy&&!item.done&&<span>added by {item.addedBy}</span>}
-                  {item.checkedBy&&item.done&&<span style={{color:C.green}}>✓ checked by {item.checkedBy}{item.checkedAt?" · "+item.checkedAt:""}</span>}
-                  {filterIds!=null&&<span style={{fontWeight:700,borderRadius:99,padding:'1px 6px',lineHeight:1.6,
-                    background:filterIds.has(item.id)?'#dcfce7':'#f3f4f6',
-                    color:filterIds.has(item.id)?'#16a34a':'#9ca3af'}}>
-                    {filterIds.has(item.id)?'Shared':'Not shared'}
-                  </span>}
+              style={{ accentColor: C.green, width: 14, height: 14, cursor: 'pointer', flexShrink: 0,
+                marginTop: editingId===item.id ? 3 : 0 }} />
+
+            {editingId === item.id && !ON_MOBILE ? (
+              <div style={{ flex: 1 }}
+                onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) commitEdit(item.id, editHtml); }}>
+                <RichEditor htmlValue={editHtml} onHtmlChange={setEditHtml} autoFocus minRows={2} placeholder="Edit item…"/>
+                <div style={{ display: 'flex', gap: 6, marginTop: 6 }}>
+                  <Btn onClick={() => commitEdit(item.id, editHtml)} variant="primary" style={{ fontSize: 11, padding: '3px 12px' }}>Save</Btn>
+                  <button onClick={() => setEditingId(null)}
+                    style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
+                </div>
+              </div>
+            ) : (
+              <div style={{flex:1,display:"flex",flexDirection:"column",gap:1}}>
+                <span onClick={() => {
+                  if (item.done) return;
+                  if (ON_MOBILE) { setMobileSheet({ mode: 'edit', id: item.id, html: item.text }); }
+                  else           { setEditingId(item.id); setEditHtml(item.text); }
+                }}
+                  style={{ fontSize: 12, color: item.done ? C.muted : C.text,
+                    textDecoration: item.done ? 'line-through' : 'none',
+                    cursor: item.done ? 'default' : 'text',
+                    borderRadius: 4, padding: '2px 4px', transition: 'background 0.1s' }}
+                  onMouseEnter={e=>{if(!item.done)e.target.style.background=C.border+'66'}}
+                  onMouseLeave={e=>e.target.style.background='transparent'}>
+                  <RichText html={item.text}/>
                 </span>
-              )}
+                {(item.addedBy||item.checkedBy||(filterIds!=null))&&(
+                  <span style={{fontSize:9,color:C.dim,paddingLeft:4,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
+                    {item.addedBy&&!item.done&&<span>added by {item.addedBy}</span>}
+                    {item.checkedBy&&item.done&&<span style={{color:C.green}}>✓ checked by {item.checkedBy}{item.checkedAt?" · "+item.checkedAt:""}</span>}
+                    {filterIds!=null&&<span style={{fontWeight:700,borderRadius:99,padding:'1px 6px',lineHeight:1.6,
+                      background:filterIds.has(item.id)?'#dcfce7':'#f3f4f6',
+                      color:filterIds.has(item.id)?'#16a34a':'#9ca3af'}}>
+                      {filterIds.has(item.id)?'Shared':'Not shared'}
+                    </span>}
+                  </span>
+                )}
+              </div>
+            )}
+
+            {/* Waiting toggle — only on open items */}
+            {!item.done && (
+              <button
+                onClick={() => item.waiting ? clearWaiting(item.id) : (setWaitingEditId(item.id), setWaitingText(''))}
+                title={item.waiting ? "Clear waiting status" : "Mark as waiting on something"}
+                style={{ background: item.waiting ? '#fef3c7' : 'none',
+                  border: item.waiting ? '1px solid #fcd34d' : '1px solid transparent',
+                  borderRadius: 4, cursor:'pointer', fontSize:10, flexShrink:0,
+                  padding:'1px 6px', color: item.waiting ? '#92400e' : C.muted,
+                  fontFamily:'inherit', fontWeight: item.waiting ? 700 : 400 }}>
+                {item.waiting ? 'Waiting ×' : 'Wait'}
+              </button>
+            )}
+
+            <button onClick={() => { if(!window.confirm("Delete this punch item?")) return; onChange(safeItems.filter(i => i.id !== item.id)); }}
+              style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12, flexShrink: 0 }}>✕</button>
+
+          </div>
+
+          {/* ── Waiting badges ── */}
+          {item.waiting && !item.done && (
+            <div style={{marginLeft:22,marginTop:2,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+              <span style={{fontSize:10,fontWeight:700,background:'#fef3c7',color:'#92400e',
+                borderRadius:99,padding:'2px 8px',border:'1px solid #fcd34d'}}>
+                {item.waitingOn ? `Waiting on: ${item.waitingOn}` : 'Waiting'}
+              </span>
+              <button onClick={()=>{setWaitingEditId(item.id);setWaitingText(item.waitingOn||'');}}
+                style={{fontSize:9,background:'none',border:'none',color:C.muted,cursor:'pointer',textDecoration:'underline',padding:0}}>
+                edit
+              </button>
+            </div>
+          )}
+          {item.materialNeeded && !item.done && (
+            <div style={{marginLeft:22,marginTop:2}}>
+              <span style={{fontSize:10,fontWeight:600,background:'#eff6ff',color:'#1d4ed8',
+                borderRadius:99,padding:'2px 8px',border:'1px solid #bfdbfe'}}>
+                Material: {item.materialNeeded}
+              </span>
             </div>
           )}
 
-          <button onClick={() => { if(!window.confirm("Delete this punch item?")) return; onChange(safeItems.filter(i => i.id !== item.id)); }}
-            style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12, flexShrink: 0 }}>✕</button>
+          {/* ── Inline waiting reason input ── */}
+          {waitingEditId === item.id && (
+            <div style={{display:'flex',gap:6,alignItems:'center',marginTop:4,marginLeft:22,
+              borderLeft:`2px solid #f59e0b`,paddingLeft:8}}>
+              <input autoFocus value={waitingText} onChange={e=>setWaitingText(e.target.value)}
+                onKeyDown={e=>{ if(e.key==='Enter'){e.preventDefault();commitWaiting(item.id,waitingText);} if(e.key==='Escape') setWaitingEditId(null); }}
+                onBlur={()=>commitWaiting(item.id,waitingText)}
+                placeholder="What are you waiting on?"
+                style={{flex:1,fontSize:11,border:`1px solid #f59e0b`,borderRadius:5,padding:'5px 8px',
+                  background:'#fffbeb',color:'#78350f',outline:'none',fontFamily:'inherit'}}/>
+            </div>
+          )}
 
         </div>
 
@@ -1760,9 +1834,17 @@ function PunchItems({ items, onChange, filterIds=null }) {
           onBlur={e => { if (!e.currentTarget.contains(e.relatedTarget)) commitAdd(addHtml); }}>
           <RichEditor key={addKey} htmlValue={addHtml} onHtmlChange={setAddHtml} placeholder="Add punch item… (Enter to save and add next)" autoFocus minRows={2}
             onEnterKey={html => commitAdd(html, true)}/>
+          {/* Material needed */}
+          <div style={{display:'flex',alignItems:'center',gap:6,marginTop:6}}>
+            <span style={{fontSize:11,color:C.dim,flexShrink:0,whiteSpace:'nowrap'}}>Material needed:</span>
+            <input value={addMaterial} onChange={e=>setAddMaterial(e.target.value)}
+              placeholder="e.g. 20A breaker x2, 12/2 wire 50ft  (auto-adds to PO)"
+              style={{flex:1,fontSize:11,border:`1px solid ${C.border}`,borderRadius:5,padding:'5px 8px',
+                background:C.surface,color:C.text,outline:'none',fontFamily:'inherit'}}/>
+          </div>
           <div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems:'center' }}>
             <Btn onClick={() => commitAdd(addHtml)} variant="primary" style={{ fontSize: 11, padding: '3px 12px' }}>Add</Btn>
-            <button onClick={() => { setAddOpen(false); setAddHtml(''); }}
+            <button onClick={() => { setAddOpen(false); setAddHtml(''); setAddMaterial(''); }}
               style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
             <span style={{fontSize:10,color:C.muted,marginLeft:2}}>↵ Enter = save &amp; next · Shift+Enter = new line</span>
           </div>
@@ -1770,7 +1852,7 @@ function PunchItems({ items, onChange, filterIds=null }) {
       ) : !addOpen && (
         <Btn onClick={() => {
           if (ON_MOBILE) setMobileSheet({ mode: 'add' });
-          else           { setAddOpen(true); setAddHtml(''); }
+          else           { setAddOpen(true); setAddHtml(''); setAddMaterial(''); }
         }} variant="add" style={{ fontSize: 11, padding: '4px 12px', marginTop: 4 }}>+ Add Item</Btn>
       )}
 
@@ -1831,7 +1913,7 @@ function RoomNameEdit({name, onSave}) {
 }
 
 
-function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null }) {
+function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null, onAddMaterial }) {
 
   const data = normFloor(floorData);
 
@@ -1840,9 +1922,12 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
   const [roomDraft, setRoomDraft] = useState('');
 
 
-  const openCount = data.general.filter(i => !i.done).length +
+  const openCount    = data.general.filter(i => !i.done).length +
     (showHotcheck ? data.hotcheck.filter(i => !i.done).length : 0) +
     data.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done).length : 0), 0);
+  const waitingCount = data.general.filter(i => !i.done && i.waiting).length +
+    (showHotcheck ? data.hotcheck.filter(i => !i.done && i.waiting).length : 0) +
+    data.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done && i.waiting).length : 0), 0);
 
 
   const setGeneral = (general) => onFloorChange(floorKey, { ...data, general });
@@ -1886,8 +1971,9 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
         <span style={{ fontWeight: 700, fontSize: 13, color: floorColor, flex: 1 }}>{floorLabel}</span>
 
         {openCount > 0 && <span style={{ fontSize: 10, background: `${C.red}22`, color: C.red,
-
           borderRadius: 99, padding: '2px 8px', fontWeight: 700 }}>{openCount} open</span>}
+        {waitingCount > 0 && <span style={{ fontSize: 10, background: '#fef3c7', color: '#92400e',
+          borderRadius: 99, padding: '2px 8px', fontWeight: 700, border: '1px solid #fcd34d' }}>{waitingCount} waiting</span>}
 
         <span style={{ color: floorColor, fontSize: 12 }}>{collapsed ? '▸' : '▾'}</span>
 
@@ -1899,7 +1985,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
           <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: '0.08em', marginBottom: 6 }}>GENERAL</div>
 
-          <PunchItems items={data.general} onChange={setGeneral} filterIds={filterIds}/>
+          <PunchItems items={data.general} onChange={setGeneral} filterIds={filterIds} onAddMaterial={onAddMaterial}/>
 
           {showHotcheck && (
             <div style={{ marginTop: 12, background: `rgba(220,38,38,0.06)`, border: `1px solid rgba(220,38,38,0.25)`, borderRadius: 8, padding: 10 }}>
@@ -1911,7 +1997,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                   </span>
                 )}
               </div>
-              <PunchItems items={data.hotcheck} onChange={setHotcheck} filterIds={filterIds}/>
+              <PunchItems items={data.hotcheck} onChange={setHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial}/>
             </div>
           )}
 
@@ -1926,24 +2012,27 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                 <RoomNameEdit name={room.name} onSave={v=>onFloorChange(floorKey,{...data,rooms:data.rooms.map(r=>r.id===room.id?{...r,name:v}:r)})}/>
 
                 {(Array.isArray(room.items) ? room.items : []).filter(i => !i.done).length > 0 &&
-
                   <span style={{ fontSize: 10, background: `${C.red}22`, color: C.red,
-
                     borderRadius: 99, padding: '2px 6px', fontWeight: 700 }}>
-
                     {room.items.filter(i => !i.done).length} open
-
                   </span>}
-
-                <button onClick={() => { if(!window.confirm(`Remove room "${room.name}" and all its punch items?`)) return; delRoom(room.id); }}
-
-                  style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 11 }}>✕</button>
+                {(Array.isArray(room.items) ? room.items : []).filter(i => !i.done && i.waiting).length > 0 &&
+                  <span style={{ fontSize: 10, background: '#fef3c7', color: '#92400e',
+                    borderRadius: 99, padding: '2px 6px', fontWeight: 700, border: '1px solid #fcd34d' }}>
+                    {room.items.filter(i => !i.done && i.waiting).length} waiting
+                  </span>}
 
               </div>
 
               <PunchItems items={Array.isArray(room.items) ? room.items : []}
 
-                onChange={v => setRoomItems(room.id, v)} filterIds={filterIds}/>
+                onChange={v => setRoomItems(room.id, v)} filterIds={filterIds} onAddMaterial={onAddMaterial}/>
+
+              <button onClick={() => { if(!window.confirm(`Remove room "${room.name}" and all its punch items?`)) return; delRoom(room.id); }}
+                style={{ display: 'block', marginTop: 6, marginLeft: 'auto', background: 'none', border: 'none',
+                  color: C.muted, cursor: 'pointer', fontSize: 11, textDecoration: 'underline', fontFamily: 'inherit' }}>
+                Remove {room.name}
+              </button>
 
             </div>
 
@@ -1972,7 +2061,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 }
 
 
-function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false, filterIds=null }) {
+function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false, filterIds=null, onAddMaterial }) {
 
   const upper    = normFloor(punch.upper);
   const main     = normFloor(punch.main);
@@ -2012,12 +2101,17 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
     onChange(updated);
   };
 
-  const countOpen = (f) => f.general.filter(i => !i.done).length +
+  const countOpen    = (f) => f.general.filter(i => !i.done).length +
     (showHotcheck ? (f.hotcheck||[]).filter(i => !i.done).length : 0) +
     f.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done).length : 0), 0);
+  const countWaiting = (f) => f.general.filter(i => !i.done && i.waiting).length +
+    (showHotcheck ? (f.hotcheck||[]).filter(i => !i.done && i.waiting).length : 0) +
+    f.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done && i.waiting).length : 0), 0);
 
-  const totalOpen = countOpen(upper) + countOpen(main) + countOpen(basement) +
+  const totalOpen    = countOpen(upper) + countOpen(main) + countOpen(basement) +
     extras.reduce((sum,e) => sum + countOpen(normFloor(punch[e.key])), 0);
+  const totalWaiting = countWaiting(upper) + countWaiting(main) + countWaiting(basement) +
+    extras.reduce((sum,e) => sum + countWaiting(normFloor(punch[e.key])), 0);
 
   const getAllItemIds = () => {
     const ids = [];
@@ -2057,11 +2151,19 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
       <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: 8 }}>
 
-        {filterIds!=null ? (
-          <span style={{fontSize:10,fontWeight:600,color:sharedCount===allItemIds.length?C.green:C.muted}}>
-            {sharedCount} of {allItemIds.length} shared
-          </span>
-        ) : <span/>}
+        <div style={{display:'flex',alignItems:'center',gap:6}}>
+          {filterIds!=null && (
+            <span style={{fontSize:10,fontWeight:600,color:sharedCount===allItemIds.length?C.green:C.muted}}>
+              {sharedCount} of {allItemIds.length} shared
+            </span>
+          )}
+          {totalWaiting > 0 && (
+            <span style={{fontSize:10,fontWeight:700,background:'#fef3c7',color:'#92400e',
+              borderRadius:99,padding:'2px 8px',border:'1px solid #fcd34d'}}>
+              {totalWaiting} waiting
+            </span>
+          )}
+        </div>
 
         {totalOpen > 0 && (
 
@@ -2075,11 +2177,11 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
       </div>
 
-      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck} filterIds={filterIds}/>
+      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial}/>
 
-      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck} filterIds={filterIds}/>
+      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial}/>
 
-      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds}/>
+      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial}/>
 
       {extras.map((e,i)=>(
         <div key={e.key}>
@@ -2090,7 +2192,8 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
             floorLabel={e.label}
             floorColor={FLOOR_COLORS[i % FLOOR_COLORS.length]}
             showHotcheck={showHotcheck}
-            filterIds={filterIds}/>
+            filterIds={filterIds}
+            onAddMaterial={onAddMaterial}/>
           <button onClick={()=>{
             if(!window.confirm(`Remove "${e.label}" and all its punch items? This cannot be undone.`)) return;
             removeFloor(e.key);
@@ -2131,70 +2234,99 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 // ── Material Orders ───────────────────────────────────────────
 
 function MaterialOrders({orders,onChange}) {
+  const safeOrders = Array.isArray(orders) ? orders : [];
 
-  const add = () => onChange([...orders,{id:uid(),date:"",po:"",pickupDate:"",items:""}]);
+  const [collapsed, setCollapsed] = useState(() => {
+    const m = {};
+    safeOrders.forEach(o => { if(o.pickedUp) m[o.id] = true; });
+    return m;
+  });
 
-  const upd = (id,p) => onChange(orders.map(o=>o.id===id?{...o,...p}:o));
+  const add = () => onChange([...safeOrders, {id:uid(),date:"",po:"",pickupDate:"",items:"",pickedUp:false,needsOrder:false}]);
 
-  const del = (id)   => onChange(orders.filter(o=>o.id!==id));
+  const upd = (id, p) => {
+    onChange(safeOrders.map(o => o.id===id ? {...o,...p} : o));
+    if(p.pickedUp === true)  setCollapsed(c => ({...c, [id]: true}));
+    if(p.pickedUp === false) setCollapsed(c => ({...c, [id]: false}));
+  };
+
+  const del = (id) => { if(!window.confirm("Remove this purchase order?")) return; onChange(safeOrders.filter(o => o.id!==id)); };
+
+  const toggle = (id) => setCollapsed(c => ({...c, [id]: !c[id]}));
 
   return (
-
     <div>
+      <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add PO</Btn>
 
-      <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add Change Order</Btn>
+      {safeOrders.map((o,i) => {
+        const isCollapsed = !!collapsed[o.id];
+        const cardBg     = o.pickedUp  ? "rgba(22,163,74,0.05)"   : o.needsOrder ? "rgba(234,88,12,0.06)"  : C.surface;
+        const cardBorder = o.pickedUp  ? "1px solid #16a34a44"    : o.needsOrder ? "1px solid #ea580c66"   : `1px solid ${C.border}`;
+        return (
+          <div key={o.id} style={{background:cardBg, border:cardBorder, borderRadius:10, marginBottom:12, overflow:"hidden"}}>
 
-      {orders.map((o,i)=>(
+            {/* ── Header (always visible, click to expand/collapse) ── */}
+            <div onClick={()=>toggle(o.id)}
+              style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",cursor:"pointer",userSelect:"none"}}>
+              <span style={{fontSize:12,color:C.accent,fontWeight:700}}>PO #{i+1}</span>
+              {o.po && <span style={{fontSize:11,color:C.muted}}>#{o.po}</span>}
+              {o.needsOrder && !o.pickedUp && (
+                <span style={{fontSize:10,fontWeight:700,background:"#ea580c22",color:"#ea580c",
+                  borderRadius:99,padding:"1px 8px"}}>⚠ Need to Order</span>
+              )}
+              {o.pickedUp && (
+                <span style={{fontSize:10,fontWeight:700,background:"#16a34a22",color:"#16a34a",
+                  borderRadius:99,padding:"1px 8px"}}>✓ Picked Up</span>
+              )}
+              <span style={{marginLeft:"auto",color:C.muted,fontSize:12}}>{isCollapsed ? "▸" : "▾"}</span>
+              <button onClick={e=>{e.stopPropagation();del(o.id);}}
+                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"0 2px"}}>Remove</button>
+            </div>
 
-        <div key={o.id} style={{background:o.needsSchedule?"rgba(220,38,38,0.06)":o.coScheduled?"rgba(22,163,74,0.06)":C.surface,
+            {/* ── Expanded body ── */}
+            {!isCollapsed && (
+              <div style={{padding:"0 14px 14px"}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
+                  <div>
+                    <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Ordered</div>
+                    <DateInp value={o.date} onChange={e=>upd(o.id,{date:e.target.value})}/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:C.dim,marginBottom:3}}>PO #</div>
+                    <Inp value={o.po} onChange={e=>upd(o.id,{po:e.target.value})} placeholder="PO-001"/>
+                  </div>
+                  <div>
+                    <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Pick Up Date</div>
+                    <DateInp value={o.pickupDate} onChange={e=>upd(o.id,{pickupDate:e.target.value})}/>
+                  </div>
+                </div>
 
-          border:o.needsSchedule?"1px solid #dc262655":o.coScheduled?"1px solid #16a34a55":`1px solid ${C.border}`,
+                <div style={{fontSize:10,color:C.dim,marginBottom:4}}>Material List <span style={{color:C.muted}}>(copy & paste into Simpro)</span></div>
+                <TA value={o.items} onChange={e=>upd(o.id,{items:e.target.value})}
+                  placeholder={"- 20A breaker x4\n- 12/2 wire 250ft"} rows={4}/>
 
-          borderRadius:10,padding:14,marginBottom:12}}>
-
-          <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
-
-            <span style={{fontSize:12,color:C.accent,fontWeight:700}}>PO #{i+1}</span>
-
-            <button onClick={()=>del(o.id)}
-
-              style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
-
+                {/* ── Status checkboxes ── */}
+                <div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>
+                  <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
+                    <input type="checkbox" checked={!!o.needsOrder} onChange={e=>upd(o.id,{needsOrder:e.target.checked})}
+                      style={{accentColor:"#ea580c",width:14,height:14,cursor:"pointer"}}/>
+                    Need to order before return
+                  </label>
+                  <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
+                    <input type="checkbox" checked={!!o.pickedUp} onChange={e=>upd(o.id,{pickedUp:e.target.checked})}
+                      style={{accentColor:"#16a34a",width:14,height:14,cursor:"pointer"}}/>
+                    Picked up
+                  </label>
+                </div>
+              </div>
+            )}
           </div>
-
-          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
-
-            <div>
-              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Ordered</div>
-              <DateInp value={o.date} onChange={e=>upd(o.id,{date:e.target.value})}/>
-            </div>
-            <div>
-              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>PO #</div>
-              <Inp value={o.po} onChange={e=>upd(o.id,{po:e.target.value})} placeholder="PO-001"/>
-            </div>
-            <div>
-              <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Pick Up Date</div>
-              <DateInp value={o.pickupDate} onChange={e=>upd(o.id,{pickupDate:e.target.value})}/>
-            </div>
-
-          </div>
-
-          <div style={{fontSize:10,color:C.dim,marginBottom:4}}>Material List <span style={{color:C.muted}}>(copy & paste into Simpro)</span></div>
-
-          <TA value={o.items} onChange={e=>upd(o.id,{items:e.target.value})}
-
-            placeholder={"- 20A breaker x4\n- 12/2 wire 250ft"} rows={4}/>
-
-        </div>
-
-      ))}
+        );
+      })}
 
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed"}}>+ Add PO</Btn>
-
     </div>
-
   );
-
 }
 
 
@@ -6115,9 +6247,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               }>
 
                 <PunchSection punch={job.roughPunch} onChange={v=>u({roughPunch:v})}
-
                   jobName={job.name||"This Job"} phase="Rough" onEmail={setEmailData}
-                  filterIds={job.roughPunchFilter ? new Set(job.roughPunchFilter) : null}/>
+                  filterIds={job.roughPunchFilter ? new Set(job.roughPunchFilter) : null}
+                  onAddMaterial={text=>u({roughMaterials:[...(job.roughMaterials||[]),{id:uid(),date:"",po:"",pickupDate:"",items:text,pickedUp:false,needsOrder:true}]})}/>
 
               </Section>
 
@@ -6289,7 +6421,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   filter={job.finishPunchFilter||null} filterLabel={job.finishPunchFilterLabel||''} onSaveFilter={(v,lbl)=>u({finishPunchFilter:v,finishPunchFilterLabel:lbl})}/>
               }>
                 <PunchSection punch={job.finishPunch} onChange={v=>u({finishPunch:v})} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}
-                  filterIds={job.finishPunchFilter ? new Set(job.finishPunchFilter) : null}/>
+                  filterIds={job.finishPunchFilter ? new Set(job.finishPunchFilter) : null}
+                  onAddMaterial={text=>u({finishMaterials:[...(job.finishMaterials||[]),{id:uid(),date:"",po:"",pickupDate:"",items:text,pickedUp:false,needsOrder:true}]})}/>
               </Section>
 
               {(job.finishPunchExternal?.length>0)&&(
