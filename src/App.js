@@ -2166,7 +2166,7 @@ function MaterialOrders({orders,onChange}) {
 
             <div>
               <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Ordered</div>
-              <DateInp value={o.date} onChange={v=>upd(o.id,{date:v})}/>
+              <DateInp value={o.date} onChange={e=>upd(o.id,{date:e.target.value})}/>
             </div>
             <div>
               <div style={{fontSize:10,color:C.dim,marginBottom:3}}>PO #</div>
@@ -2174,7 +2174,7 @@ function MaterialOrders({orders,onChange}) {
             </div>
             <div>
               <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Pick Up Date</div>
-              <DateInp value={o.pickupDate} onChange={v=>upd(o.id,{pickupDate:v})}/>
+              <DateInp value={o.pickupDate} onChange={e=>upd(o.id,{pickupDate:e.target.value})}/>
             </div>
 
           </div>
