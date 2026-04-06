@@ -1667,8 +1667,10 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
   const [addMaterial,   setAddMaterial]   = useState('');
   const [editingId,     setEditingId]     = useState(null);
   const [editHtml,      setEditHtml]      = useState('');
-  const [waitingEditId, setWaitingEditId] = useState(null);
-  const [waitingText,   setWaitingText]   = useState('');
+  const [waitingEditId,   setWaitingEditId]   = useState(null);
+  const [waitingText,     setWaitingText]     = useState('');
+  const [materialEditId,  setMaterialEditId]  = useState(null);
+  const [materialText,    setMaterialText]    = useState('');
   const [mobileSheet,   setMobileSheet]   = useState(null);
 
   const commitAdd = (html, keepOpen=false) => {
@@ -1677,7 +1679,10 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
     const newItem = { id: uid(), text: html, done: false, addedBy: who?.name||"" };
     if (addMaterial.trim()) {
       newItem.materialNeeded = addMaterial.trim();
-      onAddMaterial && onAddMaterial(addMaterial.trim());
+      // Format as list lines for the PO
+      const formatted = addMaterial.trim().split('\n').filter(Boolean)
+        .map(l => l.trim().startsWith('- ') ? l.trim() : `- ${l.trim()}`).join('\n');
+      onAddMaterial && onAddMaterial(formatted);
     }
     onChange([...safeItems, newItem]);
     setAddHtml('');
@@ -1705,6 +1710,12 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
 
   const clearWaiting = (id) => {
     onChange(safeItems.map(i => i.id === id ? { ...i, waiting: false, waitingOn: '' } : i));
+  };
+
+  const commitMaterial = (id, text) => {
+    onChange(safeItems.map(i => i.id === id ? { ...i, materialNeeded: text.trim() } : i));
+    setMaterialEditId(null);
+    setMaterialText('');
   };
 
   return (
@@ -1804,11 +1815,35 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
             </div>
           )}
           {item.materialNeeded && !item.done && (
-            <div style={{marginLeft:22,marginTop:2}}>
+            <div style={{marginLeft:22,marginTop:2,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
               <span style={{fontSize:10,fontWeight:600,background:'#eff6ff',color:'#1d4ed8',
                 borderRadius:99,padding:'2px 8px',border:'1px solid #bfdbfe'}}>
                 Material: {item.materialNeeded}
               </span>
+              <button onClick={()=>{setMaterialEditId(item.id);setMaterialText(item.materialNeeded||'');}}
+                style={{fontSize:9,background:'none',border:'none',color:C.muted,cursor:'pointer',textDecoration:'underline',padding:0}}>
+                edit
+              </button>
+            </div>
+          )}
+
+          {/* ── Inline material edit ── */}
+          {materialEditId === item.id && (
+            <div style={{display:'flex',flexDirection:'column',gap:4,marginTop:4,marginLeft:22,
+              borderLeft:`2px solid #3b82f6`,paddingLeft:8}}>
+              <textarea autoFocus value={materialText} onChange={e=>setMaterialText(e.target.value)}
+                onKeyDown={e=>{ if(e.key==='Escape') setMaterialEditId(null); }}
+                placeholder="One item per line"
+                rows={3}
+                style={{fontSize:11,border:`1px solid #93c5fd`,borderRadius:5,padding:'5px 8px',
+                  background:'#eff6ff',color:'#1e40af',outline:'none',fontFamily:'inherit',resize:'vertical',lineHeight:1.5}}/>
+              <div style={{display:'flex',gap:8}}>
+                <button onClick={()=>commitMaterial(item.id,materialText)}
+                  style={{fontSize:11,background:'#3b82f6',color:'#fff',border:'none',borderRadius:5,
+                    padding:'3px 12px',cursor:'pointer',fontFamily:'inherit'}}>Save</button>
+                <button onClick={()=>setMaterialEditId(null)}
+                  style={{fontSize:11,background:'none',border:'none',color:C.muted,cursor:'pointer',fontFamily:'inherit'}}>Cancel</button>
+              </div>
             </div>
           )}
 
@@ -6291,7 +6326,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     const openEntry = [...orders].reverse().find(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
                     if (openEntry) {
                       u({roughMaterials: orders.map(o=> o.id===openEntry.id
-                        ? {...o, items: o.items ? o.items + '\n' + text : text}
+                        ? {...o, items: o.items ? o.items.replace(/\n+$/, '') + '\n' + text : text}
                         : o)});
                     } else {
                       u({roughMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",items:text,pickedUp:false,needsOrder:true}]});
@@ -6474,7 +6509,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     const openEntry = [...orders].reverse().find(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
                     if (openEntry) {
                       u({finishMaterials: orders.map(o=> o.id===openEntry.id
-                        ? {...o, items: o.items ? o.items + '\n' + text : text}
+                        ? {...o, items: o.items ? o.items.replace(/\n+$/, '') + '\n' + text : text}
                         : o)});
                     } else {
                       u({finishMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",items:text,pickedUp:false,needsOrder:true}]});
