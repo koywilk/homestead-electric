@@ -1679,9 +1679,9 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
     const newItem = { id: uid(), text: html, done: false, addedBy: who?.name||"" };
     if (addMaterial.trim()) {
       newItem.materialNeeded = addMaterial.trim();
-      // Format as list lines for the PO
+      // Format as HTML list lines for the PO (TA component renders HTML)
       const formatted = addMaterial.trim().split('\n').filter(Boolean)
-        .map(l => l.trim().startsWith('- ') ? l.trim() : `- ${l.trim()}`).join('\n');
+        .map(l => l.trim().startsWith('- ') ? l.trim() : `- ${l.trim()}`).join('<br>');
       onAddMaterial && onAddMaterial(formatted);
     }
     onChange([...safeItems, newItem]);
@@ -6326,7 +6326,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     const openEntry = [...orders].reverse().find(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
                     if (openEntry) {
                       u({roughMaterials: orders.map(o=> o.id===openEntry.id
-                        ? {...o, items: o.items ? o.items.replace(/\n+$/, '') + '\n' + text : text}
+                        ? {...o, items: o.items ? o.items.replace(/(<br\s*\/?>)+$/i, '') + '<br>' + text : text}
                         : o)});
                     } else {
                       u({roughMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",items:text,pickedUp:false,needsOrder:true}]});
@@ -6509,7 +6509,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     const openEntry = [...orders].reverse().find(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
                     if (openEntry) {
                       u({finishMaterials: orders.map(o=> o.id===openEntry.id
-                        ? {...o, items: o.items ? o.items.replace(/\n+$/, '') + '\n' + text : text}
+                        ? {...o, items: o.items ? o.items.replace(/(<br\s*\/?>)+$/i, '') + '<br>' + text : text}
                         : o)});
                     } else {
                       u({finishMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",items:text,pickedUp:false,needsOrder:true}]});
