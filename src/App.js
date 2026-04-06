@@ -1835,12 +1835,14 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
           <RichEditor key={addKey} htmlValue={addHtml} onHtmlChange={setAddHtml} placeholder="Add punch item… (Enter to save and add next)" autoFocus minRows={2}
             onEnterKey={html => commitAdd(html, true)}/>
           {/* Material needed */}
-          <div style={{display:'flex',alignItems:'center',gap:6,marginTop:6}}>
-            <span style={{fontSize:11,color:C.dim,flexShrink:0,whiteSpace:'nowrap'}}>Material needed:</span>
-            <input value={addMaterial} onChange={e=>setAddMaterial(e.target.value)}
-              placeholder="e.g. 20A breaker x2, 12/2 wire 50ft  (auto-adds to PO)"
-              style={{flex:1,fontSize:11,border:`1px solid ${C.border}`,borderRadius:5,padding:'5px 8px',
-                background:C.surface,color:C.text,outline:'none',fontFamily:'inherit'}}/>
+          <div style={{display:'flex',flexDirection:'column',gap:3,marginTop:6}}>
+            <span style={{fontSize:11,color:C.dim,whiteSpace:'nowrap'}}>Material needed: <span style={{fontWeight:400,opacity:0.7}}>(one item per line — auto-adds to open PO)</span></span>
+            <textarea value={addMaterial} onChange={e=>setAddMaterial(e.target.value)}
+              placeholder={"20A breaker x2\n12/2 wire 50ft\nPlaster ring x4"}
+              rows={3}
+              style={{width:'100%',boxSizing:'border-box',fontSize:11,border:`1px solid ${C.border}`,borderRadius:5,
+                padding:'5px 8px',background:C.surface,color:C.text,outline:'none',
+                fontFamily:'inherit',resize:'vertical',lineHeight:1.5}}/>
           </div>
           <div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems:'center' }}>
             <Btn onClick={() => commitAdd(addHtml)} variant="primary" style={{ fontSize: 11, padding: '3px 12px' }}>Add</Btn>
@@ -2260,8 +2262,15 @@ function MaterialOrders({orders,onChange}) {
 
       {safeOrders.map((o,i) => {
         const isCollapsed = !!collapsed[o.id];
-        const cardBg     = o.pickedUp  ? "rgba(22,163,74,0.05)"   : o.needsOrder ? "rgba(234,88,12,0.06)"  : C.surface;
-        const cardBorder = o.pickedUp  ? "1px solid #16a34a44"    : o.needsOrder ? "1px solid #ea580c66"   : `1px solid ${C.border}`;
+        // Three states (in priority order): pickedUp > ordered > needsOrder
+        const cardBg     = o.pickedUp ? "rgba(22,163,74,0.05)"
+                         : o.ordered  ? "rgba(59,130,246,0.05)"
+                         : o.needsOrder ? "rgba(234,88,12,0.06)"
+                         : C.surface;
+        const cardBorder = o.pickedUp ? "1px solid #16a34a44"
+                         : o.ordered  ? "1px solid #3b82f644"
+                         : o.needsOrder ? "1px solid #ea580c66"
+                         : `1px solid ${C.border}`;
         return (
           <div key={o.id} style={{background:cardBg, border:cardBorder, borderRadius:10, marginBottom:12, overflow:"hidden"}}>
 
@@ -2270,15 +2279,25 @@ function MaterialOrders({orders,onChange}) {
               style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",cursor:"pointer",userSelect:"none"}}>
               <span style={{fontSize:12,color:C.accent,fontWeight:700}}>PO #{i+1}</span>
               {o.po && <span style={{fontSize:11,color:C.muted}}>#{o.po}</span>}
-              {o.needsOrder && !o.pickedUp && (
+              {o.needsOrder && !o.ordered && !o.pickedUp && (
                 <span style={{fontSize:10,fontWeight:700,background:"#ea580c22",color:"#ea580c",
-                  borderRadius:99,padding:"1px 8px"}}>⚠ Need to Order</span>
+                  borderRadius:99,padding:"1px 8px"}}>Need to Order</span>
+              )}
+              {o.ordered && !o.pickedUp && (
+                <span style={{fontSize:10,fontWeight:700,background:"#3b82f622",color:"#1d4ed8",
+                  borderRadius:99,padding:"1px 8px"}}>Order Sent</span>
               )}
               {o.pickedUp && (
                 <span style={{fontSize:10,fontWeight:700,background:"#16a34a22",color:"#16a34a",
-                  borderRadius:99,padding:"1px 8px"}}>✓ Picked Up</span>
+                  borderRadius:99,padding:"1px 8px"}}>Picked Up</span>
               )}
-              <span style={{marginLeft:"auto",color:C.muted,fontSize:12}}>{isCollapsed ? "▸" : "▾"}</span>
+              {isCollapsed && o.items && (
+                <span style={{fontSize:11,color:C.muted,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>
+                  {o.items.split('\n').filter(Boolean)[0]}
+                  {o.items.split('\n').filter(Boolean).length > 1 ? ` + ${o.items.split('\n').filter(Boolean).length - 1} more` : ''}
+                </span>
+              )}
+              <span style={{marginLeft:"auto",color:C.muted,fontSize:12,flexShrink:0}}>{isCollapsed ? "▸" : "▾"}</span>
               <button onClick={e=>{e.stopPropagation();del(o.id);}}
                 style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"0 2px"}}>Remove</button>
             </div>
@@ -2311,6 +2330,11 @@ function MaterialOrders({orders,onChange}) {
                     <input type="checkbox" checked={!!o.needsOrder} onChange={e=>upd(o.id,{needsOrder:e.target.checked})}
                       style={{accentColor:"#ea580c",width:14,height:14,cursor:"pointer"}}/>
                     Need to order before return
+                  </label>
+                  <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
+                    <input type="checkbox" checked={!!o.ordered} onChange={e=>upd(o.id,{ordered:e.target.checked})}
+                      style={{accentColor:"#3b82f6",width:14,height:14,cursor:"pointer"}}/>
+                    Order sent to supplier
                   </label>
                   <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
                     <input type="checkbox" checked={!!o.pickedUp} onChange={e=>upd(o.id,{pickedUp:e.target.checked})}
@@ -5963,6 +5987,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     return total + countFloor(p.upper) + countFloor(p.main) + countFloor(p.basement) + extraCount;
   },0);
 
+  const countWaitingFloor = (f) => {
+    if (!f || Array.isArray(f)) return 0;
+    return (f.general||[]).filter(i=>!i.done&&i.waiting).length +
+      (f.hotcheck||[]).filter(i=>!i.done&&i.waiting).length +
+      (f.rooms||[]).reduce((a,r)=>a+(Array.isArray(r.items)?r.items.filter(i=>!i.done&&i.waiting).length:0),0);
+  };
+  const waitingCount = ['roughPunch','finishPunch','qcPunch'].reduce((total,key)=>{
+    const p = job?.[key]||{};
+    const extraCount = (p.extras||[]).reduce((s,e)=>s+countWaitingFloor(p[e.key]||{}),0);
+    return total + countWaitingFloor(p.upper) + countWaitingFloor(p.main) + countWaitingFloor(p.basement) + extraCount;
+  },0);
+
   const pendingCOs = (job.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length;
 
   const qcCount = countFloor(job.qcPunch?.upper||{}) + countFloor(job.qcPunch?.main||{}) + countFloor(job.qcPunch?.basement||{}) +
@@ -6021,6 +6057,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
 
             {openCount>0  &&<Pill label={`${openCount} open punch`} color={C.red}/>}
+            {waitingCount>0&&<span style={{fontSize:10,fontWeight:700,letterSpacing:"0.06em",padding:"2px 8px",borderRadius:99,background:"#fef3c7",color:"#92400e",border:"1px solid #fcd34d",whiteSpace:"nowrap"}}>{waitingCount} waiting</span>}
 
             {pendingCOs>0 &&<Pill label={`${pendingCOs} CO pending`} color={C.orange}/>}
 
@@ -6249,7 +6286,17 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <PunchSection punch={job.roughPunch} onChange={v=>u({roughPunch:v})}
                   jobName={job.name||"This Job"} phase="Rough" onEmail={setEmailData}
                   filterIds={job.roughPunchFilter ? new Set(job.roughPunchFilter) : null}
-                  onAddMaterial={text=>u({roughMaterials:[...(job.roughMaterials||[]),{id:uid(),date:"",po:"",pickupDate:"",items:text,pickedUp:false,needsOrder:true}]})}/>
+                  onAddMaterial={text=>{
+                    const orders = job.roughMaterials || [];
+                    const openEntry = [...orders].reverse().find(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
+                    if (openEntry) {
+                      u({roughMaterials: orders.map(o=> o.id===openEntry.id
+                        ? {...o, items: o.items ? o.items + '\n' + text : text}
+                        : o)});
+                    } else {
+                      u({roughMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",items:text,pickedUp:false,needsOrder:true}]});
+                    }
+                  }}/>
 
               </Section>
 
@@ -6422,7 +6469,17 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               }>
                 <PunchSection punch={job.finishPunch} onChange={v=>u({finishPunch:v})} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}
                   filterIds={job.finishPunchFilter ? new Set(job.finishPunchFilter) : null}
-                  onAddMaterial={text=>u({finishMaterials:[...(job.finishMaterials||[]),{id:uid(),date:"",po:"",pickupDate:"",items:text,pickedUp:false,needsOrder:true}]})}/>
+                  onAddMaterial={text=>{
+                    const orders = job.finishMaterials || [];
+                    const openEntry = [...orders].reverse().find(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
+                    if (openEntry) {
+                      u({finishMaterials: orders.map(o=> o.id===openEntry.id
+                        ? {...o, items: o.items ? o.items + '\n' + text : text}
+                        : o)});
+                    } else {
+                      u({finishMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",items:text,pickedUp:false,needsOrder:true}]});
+                    }
+                  }}/>
               </Section>
 
               {(job.finishPunchExternal?.length>0)&&(
