@@ -1403,8 +1403,21 @@ const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minR
 };
 
 // Mobile sheet wrapping the rich editor for TA fields
-const RichMobileSheet = ({initialHtml, placeholder, onDone, onCancel, addMode}) => {
+const RichMobileSheet = ({initialHtml, placeholder, onDone, onCancel, addMode, showMaterial=false}) => {
   const [html, setHtml] = useState(initialHtml || "");
+  const [material, setMaterial] = useState("");
+
+  // Auto-save when phone locks or user switches apps
+  useEffect(() => {
+    const handleVisibility = () => {
+      if (document.visibilityState === 'hidden') {
+        onDone(html, material);
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibility);
+    return () => document.removeEventListener('visibilitychange', handleVisibility);
+  }, [html, material]);
+
   return (
     <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.72)",zIndex:99999,
       display:"flex",flexDirection:"column",justifyContent:"flex-end",
@@ -1420,7 +1433,7 @@ const RichMobileSheet = ({initialHtml, placeholder, onDone, onCancel, addMode}) 
               fontFamily:"inherit",fontWeight:600,cursor:"pointer",padding:"2px 8px"}}>
             Cancel
           </button>
-          <button onClick={()=>onDone(html)}
+          <button onClick={()=>onDone(html, material)}
             style={{background:C.accent,border:"none",color:"#fff",fontSize:15,
               fontFamily:"inherit",fontWeight:700,cursor:"pointer",padding:"6px 22px",borderRadius:8}}>
             {addMode ? "Add" : "Done"}
@@ -1428,6 +1441,20 @@ const RichMobileSheet = ({initialHtml, placeholder, onDone, onCancel, addMode}) 
         </div>
         <div style={{overflow:"auto",padding:12,flexGrow:1}}>
           <RichEditor htmlValue={html} onHtmlChange={setHtml} placeholder={placeholder} autoFocus minRows={6}/>
+          {showMaterial && (
+            <div style={{marginTop:14,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
+              <div style={{fontSize:12,color:C.dim,marginBottom:5}}>
+                Material needed: <span style={{fontWeight:400,opacity:0.7}}>one item per line — auto-adds to open PO</span>
+              </div>
+              <textarea value={material} onChange={e=>setMaterial(e.target.value)}
+                placeholder={"20A breaker x2\n12/2 wire 50ft\nPlaster ring x4"}
+                rows={3}
+                style={{width:"100%",boxSizing:"border-box",fontSize:13,
+                  border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 10px",
+                  background:C.card,color:C.text,outline:"none",
+                  fontFamily:"inherit",resize:"vertical",lineHeight:1.5}}/>
+            </div>
+          )}
         </div>
         <div style={{height:"env(safe-area-inset-bottom,12px)",flexShrink:0}}/>
       </div>
@@ -1673,14 +1700,15 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
   const [materialText,    setMaterialText]    = useState('');
   const [mobileSheet,   setMobileSheet]   = useState(null);
 
-  const commitAdd = (html, keepOpen=false) => {
+  const commitAdd = (html, keepOpen=false, materialOverride=undefined) => {
     if (!(html||"").replace(/<[^>]*>/g,"").trim()) return;
     const who = getIdentity();
     const newItem = { id: uid(), text: html, done: false, addedBy: who?.name||"" };
-    if (addMaterial.trim()) {
-      newItem.materialNeeded = addMaterial.trim();
+    const mat = (materialOverride !== undefined ? materialOverride : addMaterial) || "";
+    if (mat.trim()) {
+      newItem.materialNeeded = mat.trim();
       // Format as HTML list lines for the PO (TA component renders HTML)
-      const formatted = addMaterial.trim().split('\n').filter(Boolean)
+      const formatted = mat.trim().split('\n').filter(Boolean)
         .map(l => l.trim().startsWith('- ') ? l.trim() : `- ${l.trim()}`).join('<br>');
       onAddMaterial && onAddMaterial(formatted);
     }
@@ -1898,7 +1926,10 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
           initialHtml={mobileSheet.mode === 'edit' ? mobileSheet.html : ''}
           placeholder={mobileSheet.mode === 'add' ? "Add punch item…" : "Edit item…"}
           addMode={mobileSheet.mode === 'add'}
-          onDone={html => mobileSheet.mode === 'add' ? commitAdd(html) : commitEdit(mobileSheet.id, html)}
+          showMaterial={mobileSheet.mode === 'add' && !!onAddMaterial}
+          onDone={(html, mat) => mobileSheet.mode === 'add'
+            ? commitAdd(html, false, mat)
+            : commitEdit(mobileSheet.id, html)}
           onCancel={() => setMobileSheet(null)}/>
       )}
 
@@ -2456,14 +2487,23 @@ function MaterialTally({items, onChange}) {
       ))}
 
       {safe.length>0&&(
-        <button onClick={copyList}
-          style={{marginTop:6,width:"100%",padding:"10px",borderRadius:8,
-            border:`1px solid ${copied?"#16a34a55":C.border}`,
-            background:copied?"#16a34a18":C.surface,
-            color:copied?"#16a34a":C.dim,fontSize:12,fontWeight:700,
-            cursor:"pointer",fontFamily:"inherit",transition:"all 0.2s"}}>
-          {copied?"✓ Copied to clipboard":"📋 Copy List"}
-        </button>
+        <div style={{display:"flex",gap:8,marginTop:6}}>
+          <button onClick={copyList}
+            style={{flex:1,padding:"10px",borderRadius:8,
+              border:`1px solid ${copied?"#16a34a55":C.border}`,
+              background:copied?"#16a34a18":C.surface,
+              color:copied?"#16a34a":C.dim,fontSize:12,fontWeight:700,
+              cursor:"pointer",fontFamily:"inherit",transition:"all 0.2s"}}>
+            {copied?"Copied to clipboard":"Copy List"}
+          </button>
+          <button onClick={()=>{ if(!window.confirm("Reset all counts to zero?")) return; onChange(safe.map(i=>({...i,count:0}))); }}
+            style={{padding:"10px 14px",borderRadius:8,
+              border:`1px solid ${C.border}`,background:C.surface,
+              color:C.muted,fontSize:12,fontWeight:700,
+              cursor:"pointer",fontFamily:"inherit"}}>
+            Clear Counts
+          </button>
+        </div>
       )}
     </div>
   );
@@ -6344,10 +6384,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               <Section label="Material Tracking" color={C.rough}>
                 <MaterialOrders orders={job.roughMaterials} onChange={v=>u({roughMaterials:v})}/>
-                <div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
-                  <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:C.dim,marginBottom:8}}>COUNT LIST</div>
-                  <MaterialTally items={job.roughTally||[]} onChange={v=>u({roughTally:v})}/>
-                </div>
+              </Section>
+
+              <Section label="Material Count List" color={C.rough} defaultOpen={false}>
+                <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Tap + / − to count materials on the job. Copy the list to paste into Simpro.</div>
+                <MaterialTally items={job.roughTally||[]} onChange={v=>u({roughTally:v})}/>
               </Section>
 
               <Section label="Daily Job Updates" color={C.rough}>
@@ -6528,10 +6569,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                 <Section label="Finish Material Tracking" color={C.finish}>
                   <MaterialOrders orders={job.finishMaterials} onChange={v=>u({finishMaterials:v})}/>
-                  <div style={{marginTop:14,paddingTop:14,borderTop:`1px solid ${C.border}`}}>
-                    <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:C.dim,marginBottom:8}}>COUNT LIST</div>
-                    <MaterialTally items={job.finishTally||[]} onChange={v=>u({finishTally:v})}/>
-                  </div>
+                </Section>
+
+                <Section label="Finish Material Count List" color={C.finish} defaultOpen={false}>
+                  <div style={{fontSize:12,color:C.muted,marginBottom:10}}>Tap + / − to count materials on the job. Copy the list to paste into Simpro.</div>
+                  <MaterialTally items={job.finishTally||[]} onChange={v=>u({finishTally:v})}/>
                 </Section>
 
               </div>
