@@ -1,5 +1,5 @@
 // BUILD_v9_FIXED
-import { useState, useEffect, useRef, useCallback } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { initializeApp } from "firebase/app";
 import { getFirestore, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
@@ -2923,6 +2923,8 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
 function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId}) {
 
   const [viewPhoto, setViewPhoto] = useState(null);
+  const [expandedRTs, setExpandedRTs] = useState({}); // trip IDs manually expanded when signed off
+  const toggleExpand = (id) => setExpandedRTs(v=>({...v,[id]:!v[id]}));
 
   const add = () => onChange([...trips, {id:uid(),date:"",scope:"",material:"",punch:[],photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:false,needsScheduleDate:"",rtScheduled:false,scheduledDate:""}]);
 
@@ -2998,11 +3000,40 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId}) {
 
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add Return Trip</Btn>
 
-      {trips.map((t,i)=>(
+      {trips.map((t,i)=>{
+        // Signed-off trips collapse to a summary row unless manually expanded
+        if (t.signedOff && !expandedRTs[t.id]) {
+          return (
+            <div key={t.id} style={{display:"flex",alignItems:"center",gap:10,
+              background:`${C.green}0a`,border:`1px solid ${C.green}33`,
+              borderRadius:10,padding:"10px 14px",marginBottom:10}}>
+              <span style={{fontSize:13,color:C.green}}>✓</span>
+              <span style={{fontSize:12,fontWeight:700,color:C.dim}}>Return Trip {i+1}</span>
+              {t.scope && <span style={{fontSize:11,color:C.dim,flex:1,
+                whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                {t.scope}
+              </span>}
+              <span style={{fontSize:11,color:C.green,fontWeight:600,whiteSpace:"nowrap"}}>
+                Completed by {t.signedOffBy}
+              </span>
+              {t.signedOffDate && <span style={{fontSize:10,color:C.dim,whiteSpace:"nowrap"}}>
+                {t.signedOffDate}
+              </span>}
+              <button onClick={()=>toggleExpand(t.id)}
+                style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                  color:C.dim,fontSize:10,padding:"3px 8px",cursor:"pointer",
+                  fontFamily:"inherit",whiteSpace:"nowrap",flexShrink:0}}>
+                Show
+              </button>
+            </div>
+          );
+        }
 
-        <div key={t.id} style={{background:t.needsSchedule?"rgba(220,38,38,0.06)":t.rtScheduled?"rgba(139,92,246,0.06)":C.surface,
+        return (
 
-          border:t.needsSchedule?"1px solid #dc262655":t.rtScheduled?"1px solid #8b5cf655":`1px solid ${C.border}`,
+        <div key={t.id} style={{background:t.needsSchedule?"rgba(220,38,38,0.06)":t.rtScheduled?"rgba(139,92,246,0.06)":t.signedOff?`${C.green}0a`:C.surface,
+
+          border:t.needsSchedule?"1px solid #dc262655":t.rtScheduled?"1px solid #8b5cf655":t.signedOff?`1px solid ${C.green}33`:`1px solid ${C.border}`,
 
           borderRadius:10,padding:14,marginBottom:14}}>
 
@@ -3049,6 +3080,13 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId}) {
 
             <div style={{display:"flex",gap:8}}>
 
+              {t.signedOff&&expandedRTs[t.id]&&(
+                <button onClick={()=>toggleExpand(t.id)}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                    color:C.dim,fontSize:11,padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>
+                  Collapse
+                </button>
+              )}
               {jobSimproNo&&<Btn onClick={()=>{
                 const punchOpen=(t.punch||[]).filter(p=>!p.done).map(p=>`• ${stripPunchHtml(p.text)}`).join("\n")||"None";
                 const msg=`Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}`;
@@ -3258,7 +3296,8 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId}) {
 
         </div>
 
-      ))}
+        ); // end expanded trip
+      })}
 
 
       {viewPhoto&&(
@@ -9500,6 +9539,242 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
   );
 }
 
+// ── Simpro Crew Schedule ──────────────────────────────────────
+
+function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
+  const [schedule, setSchedule]       = useState(null);   // raw entries from Simpro
+  const [loading, setLoading]         = useState(false);
+  const [error, setError]             = useState(null);
+  const [weekOffset, setWeekOffset]   = useState(0);      // 0 = this week, 1 = next, etc.
+  const [personFilter, setPersonFilter] = useState("all");
+  const [collapsed, setCollapsed]     = useState(false);
+
+  // Compute Mon–Sun for the displayed week
+  const weekDates = useMemo(() => {
+    const now = new Date();
+    const day = now.getDay(); // 0=Sun
+    const mon = new Date(now);
+    mon.setDate(now.getDate() - (day === 0 ? 6 : day - 1) + weekOffset * 7);
+    mon.setHours(0,0,0,0);
+    return Array.from({length:7}, (_,i) => {
+      const d = new Date(mon);
+      d.setDate(mon.getDate() + i);
+      return d;
+    });
+  }, [weekOffset]);
+
+  const toYMD = d => d.toISOString().split("T")[0];
+  const dateFrom = toYMD(weekDates[0]);
+  const dateTo   = toYMD(weekDates[6]);
+
+  // Fetch when week changes
+  useEffect(() => {
+    setLoading(true);
+    setError(null);
+    const fn = httpsCallable(functions, "getSimproSchedule");
+    fn({ dateFrom, dateTo })
+      .then(res => { setSchedule(res.data); setLoading(false); })
+      .catch(e  => { setError(e.message);   setLoading(false); });
+  }, [dateFrom, dateTo]);
+
+  // Re-fetch when the user returns to the tab / unlocks phone
+  useEffect(() => {
+    const handleFocus = () => {
+      const fn = httpsCallable(functions, "getSimproSchedule");
+      fn({ dateFrom, dateTo })
+        .then(res => setSchedule(res.data))
+        .catch(() => {}); // silent — keep existing data on failure
+    };
+    window.addEventListener("focus", handleFocus);
+    document.addEventListener("visibilitychange", () => {
+      if (document.visibilityState === "visible") handleFocus();
+    });
+    return () => {
+      window.removeEventListener("focus", handleFocus);
+    };
+  }, [dateFrom, dateTo]);
+
+  // All unique staff names across job-type entries
+  const allStaff = useMemo(() => {
+    if (!schedule) return [];
+    const names = [...new Set(
+      schedule.filter(s => s.Type === "job").map(s => s.Staff?.Name).filter(Boolean)
+    )].sort();
+    return names;
+  }, [schedule]);
+
+  // Match Simpro ProjectID → app job
+  const jobBySimproNo = useMemo(() => {
+    const map = {};
+    jobs.forEach(j => { if (j.simproNo) map[String(j.simproNo)] = j; });
+    return map;
+  }, [jobs]);
+
+  // Group entries by date, filtered by person
+  const byDate = useMemo(() => {
+    if (!schedule) return {};
+    const jobEntries = schedule.filter(s => s.Type === "job");
+    const filtered   = personFilter === "all" ? jobEntries
+      : jobEntries.filter(s => s.Staff?.Name === personFilter);
+    const map = {};
+    filtered.forEach(s => {
+      if (!map[s.Date]) map[s.Date] = [];
+      map[s.Date].push(s);
+    });
+    return map;
+  }, [schedule, personFilter]);
+
+  // For each date, group by job so we can show full crew per job
+  const crewByDateAndJob = useMemo(() => {
+    if (!schedule) return {};
+    const out = {};
+    weekDates.forEach(d => {
+      const ymd = toYMD(d);
+      const dayEntries = (schedule || []).filter(s => s.Type === "job" && s.Date === ymd);
+      // Group by ProjectID
+      const jobs = {};
+      dayEntries.forEach(s => {
+        const pid = String(s.Project?.ProjectID || s.Reference);
+        if (!jobs[pid]) jobs[pid] = { entries: [], ref: s.Reference, projectId: pid, startTime: s.Blocks?.[0]?.StartTime, endTime: s.Blocks?.[s.Blocks?.length-1]?.EndTime };
+        jobs[pid].entries.push(s);
+      });
+      out[ymd] = Object.values(jobs);
+    });
+    return out;
+  }, [schedule, weekDates]);
+
+  const todayYMD = toYMD(new Date());
+
+  const fmtWeekday = d => d.toLocaleDateString("en-US", { weekday:"short" }).toUpperCase();
+  const fmtDate    = d => d.toLocaleDateString("en-US", { month:"short", day:"numeric" });
+  const fmtTime    = t => { if (!t) return ""; const [h,m] = t.split(":"); const hr=parseInt(h); return `${hr>12?hr-12:hr||12}:${m}${hr>=12?"pm":"am"}`; };
+
+  const hasAnyThisWeek = weekDates.some(d => (crewByDateAndJob[toYMD(d)]||[]).length > 0);
+
+  return (
+    <div style={{borderBottom:`1px solid ${C.border}`,background:C.card}}>
+      {/* Header row */}
+      <div onClick={()=>setCollapsed(v=>!v)}
+        style={{display:"flex",alignItems:"center",gap:10,padding:"12px 24px",cursor:"pointer",
+          userSelect:"none"}}>
+        <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.12em",color:C.accent,textTransform:"uppercase"}}>
+          Crew Schedule
+        </div>
+        {loading && <span style={{fontSize:10,color:C.dim}}>Loading…</span>}
+        {!loading && !hasAnyThisWeek && !error &&
+          <span style={{fontSize:10,color:C.dim}}>No jobs scheduled this week</span>}
+        <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
+          {/* Person filter */}
+          {allStaff.length > 0 && !collapsed && (
+            <select value={personFilter} onChange={e=>setPersonFilter(e.target.value)}
+              onClick={e=>e.stopPropagation()}
+              style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
+                color:C.text,fontSize:11,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit"}}>
+              <option value="all">Everyone</option>
+              {allStaff.map(n => <option key={n} value={n}>{n.split(" ")[0]}</option>)}
+            </select>
+          )}
+          {/* Week nav */}
+          {!collapsed && (
+            <div style={{display:"flex",alignItems:"center",gap:4}} onClick={e=>e.stopPropagation()}>
+              <button onClick={()=>setWeekOffset(v=>v-1)}
+                style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                  color:C.dim,fontSize:12,width:26,height:26,cursor:"pointer",display:"flex",
+                  alignItems:"center",justifyContent:"center"}}>‹</button>
+              <span style={{fontSize:10,color:C.dim,minWidth:80,textAlign:"center"}}>
+                {weekOffset===0?"This week":weekOffset===1?"Next week":
+                  `${fmtDate(weekDates[0])} – ${fmtDate(weekDates[6])}`}
+              </span>
+              <button onClick={()=>setWeekOffset(v=>v+1)}
+                style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                  color:C.dim,fontSize:12,width:26,height:26,cursor:"pointer",display:"flex",
+                  alignItems:"center",justifyContent:"center"}}>›</button>
+            </div>
+          )}
+          <span style={{fontSize:12,color:C.dim,transform:collapsed?"rotate(-90deg)":"rotate(90deg)",
+            display:"inline-block",transition:"transform 0.2s"}}>›</span>
+        </div>
+      </div>
+
+      {/* Schedule content */}
+      {!collapsed && (
+        <div style={{padding:"0 24px 16px",overflowX:"auto"}}>
+          {error && <div style={{color:"#ef4444",fontSize:12,padding:"8px 0"}}>{error}</div>}
+          {!error && (
+            <div style={{display:"flex",gap:8,minWidth:"max-content"}}>
+              {weekDates.map(d => {
+                const ymd    = toYMD(d);
+                const isToday = ymd === todayYMD;
+                const dayJobs = (crewByDateAndJob[ymd] || []).filter(g =>
+                  personFilter === "all" ? true : g.entries.some(e => e.Staff?.Name === personFilter)
+                );
+                return (
+                  <div key={ymd} style={{width:160,flexShrink:0}}>
+                    {/* Day header */}
+                    <div style={{marginBottom:6,padding:"4px 8px",borderRadius:6,
+                      background:isToday?C.accent:"transparent",
+                      textAlign:"center"}}>
+                      <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",
+                        color:isToday?"#000":C.dim}}>{fmtWeekday(d)}</div>
+                      <div style={{fontSize:11,fontWeight:600,color:isToday?"#000":C.text}}>
+                        {fmtDate(d)}
+                      </div>
+                    </div>
+                    {/* Job blocks */}
+                    {dayJobs.length === 0
+                      ? <div style={{fontSize:10,color:C.muted,textAlign:"center",padding:"8px 0",
+                          fontStyle:"italic"}}>—</div>
+                      : dayJobs.map(g => {
+                          const appJob = jobBySimproNo[g.projectId];
+                          const jobName = appJob?.name || `Job #${g.projectId}`;
+                          const crew = g.entries.map(e => e.Staff?.Name?.split(" ")[0]).filter(Boolean);
+                          const myEntry = personFilter !== "all"
+                            ? g.entries.find(e => e.Staff?.Name === personFilter)
+                            : g.entries[0];
+                          const start = fmtTime(myEntry?.Blocks?.[0]?.StartTime);
+                          const end   = fmtTime(myEntry?.Blocks?.[myEntry?.Blocks?.length-1]?.EndTime);
+                          return (
+                            <div key={g.projectId}
+                              onClick={()=>{ if(appJob) onSelectJob(appJob); }}
+                              style={{background:C.surface,border:`1px solid ${C.accent}44`,
+                                borderLeft:`3px solid ${C.accent}`,borderRadius:7,
+                                padding:"8px 10px",marginBottom:6,
+                                cursor:appJob?"pointer":"default",
+                                transition:"background 0.15s"}}
+                              onMouseEnter={e=>{if(appJob)e.currentTarget.style.background=`${C.accent}11`;}}
+                              onMouseLeave={e=>{e.currentTarget.style.background=C.surface;}}>
+                              <div style={{fontSize:11,fontWeight:700,color:C.text,
+                                whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",
+                                marginBottom:3}}>{jobName}</div>
+                              {(start||end) && (
+                                <div style={{fontSize:10,color:C.accent,fontWeight:600,marginBottom:4}}>
+                                  {start}{end?` – ${end}`:""}
+                                </div>
+                              )}
+                              <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
+                                {crew.map(name => (
+                                  <span key={name} style={{fontSize:9,background:`${C.accent}18`,
+                                    border:`1px solid ${C.accent}33`,borderRadius:4,
+                                    padding:"1px 5px",color:C.text,fontWeight:500}}>
+                                    {name}
+                                  </span>
+                                ))}
+                              </div>
+                            </div>
+                          );
+                        })
+                    }
+                  </div>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Nav View ──────────────────────────────────────────────────
 
 function NavView({ jobs }) {
@@ -13276,6 +13551,12 @@ function App() {
             </div>
           </div>
 
+          {/* ── SIMPRO CREW SCHEDULE ── */}
+          <SimproCrewSchedule
+            jobs={jobs}
+            identity={identity}
+            onSelectJob={(j)=>setSelected(j)}
+          />
 
           <div style={{padding:"28px 26px"}}>
 
