@@ -4216,7 +4216,6 @@ function LoadsList({loads,onChange,floorOptions,allModules=[],onAssignToModule})
               {selecting?"✕ Cancel":"Select"}
             </button>
           )}
-          <Btn onClick={add} variant="add" style={{fontSize:11,padding:"3px 10px"}}>+ Add Load</Btn>
         </div>
       </div>
 
@@ -4319,6 +4318,12 @@ function LoadsList({loads,onChange,floorOptions,allModules=[],onAssignToModule})
           </datalist>
         </>
       )}
+      <button onClick={add}
+        style={{background:"none",border:`1px dashed ${C.purple}44`,color:`${C.purple}88`,borderRadius:7,
+          padding:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"100%",
+          letterSpacing:"0.04em",marginTop:6}}>
+        + Add Load
+      </button>
     </div>
   );
 }
@@ -4344,12 +4349,8 @@ function KeypadSection({loads,onChange,label,allLoads=[]}) {
 
     <div style={{marginBottom:22}}>
 
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:6}}>
-
+      <div style={{marginBottom:6}}>
         <div style={{fontSize:12,color:C.purple,fontWeight:700}}>{label}</div>
-
-        <Btn onClick={addRow} variant="add" style={{fontSize:11,padding:"3px 10px"}}>+ Add Row</Btn>
-
       </div>
 
       {/* Pull progress — only shown when there are named rows */}
@@ -4402,6 +4403,13 @@ function KeypadSection({loads,onChange,label,allLoads=[]}) {
         </div>
 
       ))}
+
+      <button onClick={addRow}
+        style={{background:"none",border:`1px dashed ${C.purple}44`,color:`${C.purple}88`,borderRadius:7,
+          padding:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"100%",
+          letterSpacing:"0.04em",marginTop:4}}>
+        + Add Row
+      </button>
 
     </div>
 
