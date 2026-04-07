@@ -24,44 +24,29 @@ function allPrepDone(job) {
   return (job.prepStage || "") === PREP_COMPLETE;
 }
 
-// ─────────────────────────────────────────────────────────────
-// HELPERS
-// ─────────────────────────────────────────────────────────────
-
-/** Load the users list from Firestore (stored as settings/users → {list:[...]}) */
 async function getUsers() {
   const snap = await db.doc("settings/users").get();
   return (snap.exists && snap.data().list) ? snap.data().list : [];
 }
 
-/**
- * Return all FCM tokens for a user record.
- * Handles both the new array field (fcmTokens) and the legacy single-token
- * field (fcmToken) so existing data keeps working during the transition.
- */
 function getTokens(user) {
   const tokens = [];
   if (Array.isArray(user.fcmTokens)) tokens.push(...user.fcmTokens);
-  // Backward compat: include legacy single-token field if not already present
   if (user.fcmToken && !tokens.includes(user.fcmToken)) tokens.push(user.fcmToken);
   return tokens.filter(Boolean);
 }
 
-/**
- * Send a push notification to a single FCM token.
- * Silently skips if the token is missing or invalid.
- */
-async function sendFCM(token, { title, body }) {
+async function sendFCM(token, { title, body, jobId, section }) {
   if (!token) return;
   try {
-    // Send as data-only — no notification field.
-    // This prevents the browser from auto-showing a system notification
-    // while the app is open (which would cause a double notification alongside
-    // the in-app toast). The service worker and onMessage handler both read
-    // from payload.data and display the notification themselves.
     await messaging.send({
       token,
-      data: { title: title || "", body: body || "" },
+      data: {
+        title:   title   || "",
+        body:    body    || "",
+        jobId:   jobId   || "",
+        section: section || "",
+      },
       webpush: { headers: { Urgency: "high" } },
     });
   } catch (e) {
@@ -69,11 +54,6 @@ async function sendFCM(token, { title, body }) {
   }
 }
 
-/**
- * Send to a user by their first name or full name.
- * Sends to ALL of their registered devices.
- * (job.foreman / job.lead are stored as display names like "Koy" or "Koy Wilkinson").
- */
 async function sendToName(name, notification) {
   if (!name || name === "Unassigned") return;
   const users = await getUsers();
@@ -86,12 +66,6 @@ async function sendToName(name, notification) {
   await Promise.all(getTokens(user).map(t => sendFCM(t, notification)));
 }
 
-/**
- * Send to all users whose title matches any value in the roles array.
- * Sends to ALL devices per user.
- * Excludes tokens already sent to (prevents double-notifying foreman who is also admin).
- * Roles: "admin", "manager", "foreman", "lead", "crew"
- */
 async function sendToRoles(roles, notification, excludeTokens = []) {
   const users = await getUsers();
   const targets = users.filter(u => roles.includes(u.title) || roles.includes(u.role));
@@ -104,10 +78,15 @@ async function sendToRoles(roles, notification, excludeTokens = []) {
   await Promise.all(sends);
 }
 
-/**
- * Get ALL FCM tokens for a named user (used to build excludeTokens lists).
- * Returns an array (empty if user not found or has no tokens).
- */
+/** Convenience — send the same notification to a name + roles (deduped), with jobId/section. */
+async function notify(name, roles, notif, excludeTokens = []) {
+  const nameTokens = name && name !== "Unassigned" ? await getTokenForName(name) : [];
+  const tasks = [];
+  if (nameTokens.length) tasks.push(Promise.all(nameTokens.map(t => sendFCM(t, notif))));
+  tasks.push(sendToRoles(roles, notif, [...excludeTokens, ...nameTokens]));
+  await Promise.all(tasks);
+}
+
 async function getTokenForName(name) {
   if (!name || name === "Unassigned") return [];
   const users = await getUsers();
@@ -119,15 +98,9 @@ async function getTokenForName(name) {
   return user ? getTokens(user) : [];
 }
 
-/**
- * Parse a date string that may be "MM/DD/YYYY", "M/D/YYYY", or "YYYY-MM-DD".
- * Returns a Date object or null.
- */
 function parseDate(str) {
   if (!str) return null;
-  // Try YYYY-MM-DD first
   if (/^\d{4}-\d{2}-\d{2}$/.test(str)) return new Date(str + "T12:00:00");
-  // Try M/D/YYYY
   const parts = str.split("/");
   if (parts.length === 3) {
     const [m, d, y] = parts.map(Number);
@@ -136,7 +109,6 @@ function parseDate(str) {
   return null;
 }
 
-/** Return true if date is exactly `daysAway` calendar days from today (Mountain Time). */
 function isDaysAway(dateStr, daysAway) {
   const target = parseDate(dateStr);
   if (!target) return false;
@@ -146,7 +118,6 @@ function isDaysAway(dateStr, daysAway) {
   return diff === daysAway;
 }
 
-/** Get all question IDs from a questions object {upper:[], main:[], basement:[]} */
 function getQuestionIds(q) {
   if (!q || typeof q !== "object") return new Set();
   const ids = new Set();
@@ -156,7 +127,6 @@ function getQuestionIds(q) {
   return ids;
 }
 
-/** Returns true if afterQ has any question IDs that weren't in beforeQ */
 function hasNewQuestions(beforeQ, afterQ) {
   const beforeIds = getQuestionIds(beforeQ);
   const afterIds  = getQuestionIds(afterQ);
@@ -172,8 +142,8 @@ function hasNewQuestions(beforeQ, afterQ) {
 
 exports.onJobUpdate = functions.firestore
   .document("jobs/{jobId}")
-  .onUpdate(async (change) => {
-    // Job data is nested under the "data" field in Firestore
+  .onUpdate(async (change, context) => {
+    const jobId  = context.params.jobId;
     const before = change.before.data()?.data || {};
     const after  = change.after.data()?.data  || {};
     const name   = after.name || "a job";
@@ -186,10 +156,12 @@ exports.onJobUpdate = functions.firestore
       tasks.push(sendToName(after.foreman, {
         title: "🔨 Job Assigned to You",
         body:  `You've been assigned as foreman on ${name}`,
+        jobId, section: "Job Info",
       }));
       tasks.push(sendToRoles(["admin", "manager"], {
         title: "🔨 Foreman Assigned",
         body:  `${after.foreman} assigned as foreman on ${name}`,
+        jobId, section: "Job Info",
       }, foremanTokens));
     }
 
@@ -199,10 +171,12 @@ exports.onJobUpdate = functions.firestore
       tasks.push(sendToName(after.lead, {
         title: "📋 Job Assigned to You",
         body:  `You're the lead on ${name}`,
+        jobId, section: "Job Info",
       }));
       tasks.push(sendToRoles(["admin", "manager"], {
         title: "📋 Lead Assigned",
         body:  `${after.lead} assigned as lead on ${name}`,
+        jobId, section: "Job Info",
       }, leadTokens));
     }
 
@@ -212,11 +186,12 @@ exports.onJobUpdate = functions.firestore
       tasks.push(sendToName(after.foreman, {
         title: "💰 Ready to Invoice",
         body:  `${name} is ready to invoice`,
+        jobId, section: "Job Info",
       }));
-      // Exclude foreman's tokens so they don't get it twice if they're also admin
       tasks.push(sendToRoles(["admin", "manager"], {
         title: "💰 Ready to Invoice",
         body:  `${name} is ready to invoice`,
+        jobId, section: "Job Info",
       }, foremanTokens));
     }
 
@@ -225,6 +200,7 @@ exports.onJobUpdate = functions.firestore
       tasks.push(sendToRoles(["admin", "manager"], {
         title: "✅ Quote Converted to Job",
         body:  `${name} is now a job — ready for billing`,
+        jobId, section: "Job Info",
       }));
     }
 
@@ -234,11 +210,12 @@ exports.onJobUpdate = functions.firestore
       tasks.push(sendToName(after.foreman, {
         title: "✅ Job Prep Complete",
         body:  `Prep is done on ${name} — ready to roll`,
+        jobId, section: "Job Info",
       }));
-      // Exclude foreman's tokens so they don't get it twice if they're also admin
       tasks.push(sendToRoles(["admin", "manager"], {
         title: "✅ Job Prep Complete",
         body:  `${name} prep is complete`,
+        jobId, section: "Job Info",
       }, foremanTokens));
     }
 
@@ -248,23 +225,27 @@ exports.onJobUpdate = functions.firestore
       tasks.push(sendToName(after.foreman, {
         title: "🔍 QC Walk Ready to Schedule",
         body:  `${name} is ready for a QC walk — please schedule it`,
+        jobId, section: "QC",
       }));
       tasks.push(sendToRoles(["admin", "manager"], {
         title: "🔍 QC Walk Ready to Schedule",
         body:  `${name} is ready for a QC walk`,
+        jobId, section: "QC",
       }, foremanTokens));
     }
 
-    // ── 6b. QC passed (auto-cleared after fail) ───────────────
+    // ── 6b. QC passed ─────────────────────────────────────────
     if (before.qcStatus === "fail" && after.qcStatus === "pass") {
       const foremanTokens = await getTokenForName(after.foreman);
       tasks.push(sendToRoles(["admin", "manager"], {
         title: "✅ QC Passed",
         body:  `${name} — all QC items resolved, QC is now passing`,
+        jobId, section: "QC",
       }, foremanTokens));
       tasks.push(sendToName(after.foreman, {
         title: "✅ QC Passed",
         body:  `${name} — all QC items resolved, QC is now passing`,
+        jobId, section: "QC",
       }));
     }
 
@@ -274,6 +255,7 @@ exports.onJobUpdate = functions.firestore
       tasks.push(sendToRoles(["admin", "manager"], {
         title: "📷 Matterport Scan Complete",
         body:  `${name} — Matterport scan is done`,
+        jobId, section: "Rough",
       }, foremanTokens));
     }
 
@@ -281,23 +263,22 @@ exports.onJobUpdate = functions.firestore
     const beforeCOs = before.changeOrders || [];
     const afterCOs  = after.changeOrders  || [];
 
-    // New CO created
     if (afterCOs.length > beforeCOs.length) {
-      const newCOs = afterCOs.slice(beforeCOs.length);
-      for (const co of newCOs) {
+      for (const co of afterCOs.slice(beforeCOs.length)) {
         const foremanTokens = await getTokenForName(after.foreman);
         tasks.push(sendToName(after.foreman, {
           title: "📝 New Change Order",
           body:  `A new change order was created on ${name}`,
+          jobId, section: "Change Orders",
         }));
         tasks.push(sendToRoles(["admin", "manager"], {
           title: "📝 New Change Order",
           body:  `A new change order was created on ${name}`,
+          jobId, section: "Change Orders",
         }, foremanTokens));
       }
     }
 
-    // Existing CO status changed — match by ID so deletions don't cause misfires
     const beforeCOMap = {};
     beforeCOs.forEach(co => { if (co.id) beforeCOMap[co.id] = co; });
     for (let i = 0; i < afterCOs.length; i++) {
@@ -306,33 +287,36 @@ exports.onJobUpdate = functions.firestore
       if (!prev) continue;
 
       if (prev.coStatus !== "approved" && co.coStatus === "approved") {
-        // CO approved → notify lead, foreman, and admin
         const leadTokens    = await getTokenForName(after.lead);
         const foremanTokens = await getTokenForName(after.foreman);
         tasks.push(sendToName(after.lead, {
           title: "✅ Change Order Approved",
           body:  `Change Order #${i + 1} on ${name} was approved`,
+          jobId, section: "Change Orders",
         }));
         tasks.push(sendToName(after.foreman, {
           title: "✅ Change Order Approved",
           body:  `Change Order #${i + 1} on ${name} was approved`,
+          jobId, section: "Change Orders",
         }));
         tasks.push(sendToRoles(["admin", "manager"], {
           title: "✅ Change Order Approved",
           body:  `Change Order #${i + 1} on ${name} was approved`,
+          jobId, section: "Change Orders",
         }, [...leadTokens, ...foremanTokens]));
       }
 
       if (prev.coStatus !== "complete" && co.coStatus === "complete") {
-        // CO work completed → notify foreman and admin
         const foremanTokens = await getTokenForName(after.foreman);
         tasks.push(sendToName(after.foreman, {
           title: "🔨 CO Work Completed",
           body:  `Change Order #${i + 1} work is done on ${name}`,
+          jobId, section: "Change Orders",
         }));
         tasks.push(sendToRoles(["admin", "manager"], {
           title: "🔨 CO Work Completed",
           body:  `Change Order #${i + 1} work is done on ${name}`,
+          jobId, section: "Change Orders",
         }, foremanTokens));
       }
     }
@@ -340,48 +324,47 @@ exports.onJobUpdate = functions.firestore
     // ── 8. Return Trips ───────────────────────────────────────
     const beforeRTs = before.returnTrips || [];
     const afterRTs  = after.returnTrips  || [];
-
-    // Match by ID so deletions don't shift indices and cause misfires
     const beforeRTMap = {};
     beforeRTs.forEach(rt => { if (rt.id) beforeRTMap[rt.id] = rt; });
 
     for (let i = 0; i < afterRTs.length; i++) {
       const rt = afterRTs[i];
       const prev = rt.id ? beforeRTMap[rt.id] : beforeRTs[i];
-
-      // Return trip assigned to a lead
       const prevAssigned = prev?.assignedTo || "";
       if (rt.assignedTo && rt.assignedTo !== prevAssigned && rt.assignedTo !== "Unassigned") {
         const assignedTokens = await getTokenForName(rt.assignedTo);
         tasks.push(sendToName(rt.assignedTo, {
           title: "🔄 Return Trip Assigned",
           body:  `You've been assigned to a return trip on ${name}`,
+          jobId, section: "Return Trips",
         }));
         tasks.push(sendToRoles(["admin", "manager"], {
           title: "🔄 Return Trip Assigned",
           body:  `${rt.assignedTo} assigned to return trip on ${name}`,
+          jobId, section: "Return Trips",
         }, assignedTokens));
       }
-
-      // Return trip signed off
       if (!prev?.signedOff && rt.signedOff) {
         tasks.push(sendToRoles(["admin", "manager"], {
           title: "✅ Return Trip Signed Off",
           body:  `Return Trip ${i + 1} on ${name} is signed off — slot is open`,
+          jobId, section: "Return Trips",
         }));
       }
     }
 
-    // ── 9. Questions added (ID-based to prevent double-firing) ───
+    // ── 9. Questions added ────────────────────────────────────
     if (hasNewQuestions(before.roughQuestions, after.roughQuestions)) {
       const foremanTokens = await getTokenForName(after.foreman);
       tasks.push(sendToName(after.foreman, {
         title: "❓ New Question on Job",
         body:  `A new rough question was added on ${name}`,
+        jobId, section: "Rough",
       }));
       tasks.push(sendToRoles(["admin", "manager"], {
         title: "❓ New Question on Job",
         body:  `A new rough question was added on ${name}`,
+        jobId, section: "Rough",
       }, foremanTokens));
     }
     if (hasNewQuestions(before.finishQuestions, after.finishQuestions)) {
@@ -389,10 +372,12 @@ exports.onJobUpdate = functions.firestore
       tasks.push(sendToName(after.foreman, {
         title: "❓ New Question on Job",
         body:  `A new finish question was added on ${name}`,
+        jobId, section: "Finish",
       }));
       tasks.push(sendToRoles(["admin", "manager"], {
         title: "❓ New Question on Job",
         body:  `A new finish question was added on ${name}`,
+        jobId, section: "Finish",
       }, foremanTokens));
     }
 
@@ -402,15 +387,29 @@ exports.onJobUpdate = functions.firestore
     const beforeFinishUpdates = (before.finishUpdates || []).length;
     const afterFinishUpdates  = (after.finishUpdates  || []).length;
 
-    if (afterRoughUpdates > beforeRoughUpdates || afterFinishUpdates > beforeFinishUpdates) {
+    if (afterRoughUpdates > beforeRoughUpdates) {
       const foremanTokens = await getTokenForName(after.foreman);
       tasks.push(sendToName(after.foreman, {
         title: "📋 Daily Update Added",
         body:  `A daily update was added on ${name}`,
+        jobId, section: "Rough",
       }));
       tasks.push(sendToRoles(["admin", "manager"], {
         title: "📋 Daily Update Added",
         body:  `A daily update was added on ${name}`,
+        jobId, section: "Rough",
+      }, foremanTokens));
+    } else if (afterFinishUpdates > beforeFinishUpdates) {
+      const foremanTokens = await getTokenForName(after.foreman);
+      tasks.push(sendToName(after.foreman, {
+        title: "📋 Daily Update Added",
+        body:  `A daily update was added on ${name}`,
+        jobId, section: "Finish",
+      }));
+      tasks.push(sendToRoles(["admin", "manager"], {
+        title: "📋 Daily Update Added",
+        body:  `A daily update was added on ${name}`,
+        jobId, section: "Finish",
       }, foremanTokens));
     }
 
@@ -430,11 +429,9 @@ exports.onQuestionAnswered = functions.firestore
     const before = change.before.exists ? change.before.data() : {};
     const after  = change.after.exists  ? change.after.data()  : {};
 
-    // Check if any new answers appeared
     const beforeAnswers = before.questionAnswers || {};
     const afterAnswers  = after.questionAnswers  || {};
 
-    // Count total answers in a questionAnswers map
     const countAnswers = (qa) => {
       let n = 0;
       Object.values(qa || {}).forEach(stage => {
@@ -447,7 +444,6 @@ exports.onQuestionAnswered = functions.firestore
 
     if (countAnswers(afterAnswers) <= countAnswers(beforeAnswers)) return null;
 
-    // Look up the job to get the lead's name
     const jobSnap = await db.doc(`jobs/${jobId}`).get();
     if (!jobSnap.exists) return null;
     const job = jobSnap.data()?.data || {};
@@ -458,12 +454,14 @@ exports.onQuestionAnswered = functions.firestore
       await sendToName(job.lead, {
         title: "💬 Question Answered",
         body:  `A question was answered on ${job.name || "your job"}`,
+        jobId, section: "Rough",
       });
     }
 
     await sendToRoles(["admin", "manager"], {
       title: "💬 Question Answered",
       body:  `A question was answered on ${job.name || "a job"}`,
+      jobId, section: "Rough",
     }, leadTokens);
 
     return null;
@@ -471,9 +469,6 @@ exports.onQuestionAnswered = functions.firestore
 
 // ─────────────────────────────────────────────────────────────
 // SCHEDULED — Daily 7am Mountain Time
-// • Rough/Finish inspection date reminders (1 week, 2 days)
-// • Job start within 1 week with incomplete prep → notify Koy
-// • Job start within 2 days → urgent notify Koy
 // ─────────────────────────────────────────────────────────────
 
 exports.dailyMorningChecks = functions.pubsub
@@ -486,10 +481,8 @@ exports.dailyMorningChecks = functions.pubsub
     snap.docs.forEach(doc => {
       const job = doc.data()?.data || {};
       if (!job.name) return;
-
       const name = job.name;
 
-      // ── Plans check reminder 2 days before start ───────────
       if (job.roughScheduledDate && isDaysAway(job.roughScheduledDate, 2)) {
         tasks.push(sendToName("Koy", {
           title: "📋 Plans Check — Job Starts in 2 Days",
@@ -497,7 +490,6 @@ exports.dailyMorningChecks = functions.pubsub
         }));
       }
 
-      // ── Job start warnings (rough scheduled date) for Koy ──
       const prepDone = allPrepDone(job);
       if (job.roughScheduledDate && !prepDone) {
         if (isDaysAway(job.roughScheduledDate, 7)) {
@@ -521,7 +513,6 @@ exports.dailyMorningChecks = functions.pubsub
 
 // ─────────────────────────────────────────────────────────────
 // SCHEDULED — Weekdays at 1:00pm Mountain Time
-// Notify all leads to submit their POs
 // ─────────────────────────────────────────────────────────────
 
 exports.dailyPOReminder = functions.pubsub
@@ -537,7 +528,6 @@ exports.dailyPOReminder = functions.pubsub
 
 // ─────────────────────────────────────────────────────────────
 // SCHEDULED — Weekdays at 4:30pm Mountain Time
-// Notify all leads to enter their daily job update
 // ─────────────────────────────────────────────────────────────
 
 exports.dailyUpdateReminder = functions.pubsub
@@ -550,3 +540,185 @@ exports.dailyUpdateReminder = functions.pubsub
     });
     return null;
   });
+
+// ─────────────────────────────────────────────────────────────
+// HTTPS CALLABLE — Push Drive plans to Simpro (additive only)
+// ─────────────────────────────────────────────────────────────
+// Called from the app when user clicks "Push to Simpro" on a job.
+// Downloads files from Google Drive and uploads them to Simpro.
+// Never deletes anything from Simpro.
+
+const SIMPRO_TOKEN = "402222413e886be0bda7bd5173aa8e215d34bcdb";
+const SIMPRO_BASE  = "https://homesteadelectric.simprosuite.com/api/v1.0/companies/0";
+const DRIVE_KEY    = "AIzaSyAQl6V74U502_ZHF3h_1W0yYDuKr2mLI5Q";
+const MAX_FILE_BYTES = 15 * 1024 * 1024; // 15 MB per-file cap
+
+async function simproReq(method, path, body) {
+  const opts = {
+    method,
+    headers: { "Authorization": `Bearer ${SIMPRO_TOKEN}`, "Content-Type": "application/json" },
+  };
+  if (body) opts.body = JSON.stringify(body);
+  const r = await fetch(`${SIMPRO_BASE}${path}`, opts);
+  const text = await r.text();
+  try { return { ok: r.ok, status: r.status, data: JSON.parse(text) }; }
+  catch { return { ok: r.ok, status: r.status, data: text }; }
+}
+
+async function listDriveItems(folderId, parentFolderName, depth, driveKey) {
+  if (depth > 3) return [];
+  const url = `https://www.googleapis.com/drive/v3/files` +
+    `?q=%27${folderId}%27+in+parents+and+trashed=false` +
+    `&key=${driveKey}&fields=files(id,name,mimeType,size)` +
+    `&pageSize=200&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=name`;
+  const r = await fetch(url);
+  const data = await r.json();
+  if (data.error) throw new Error(data.error.message || "Drive listing failed");
+  const items = data.files || [];
+
+  const files = items
+    .filter(f => f.mimeType !== "application/vnd.google-apps.folder")
+    .filter(f => !f.mimeType.startsWith("application/vnd.google-apps."))
+    .map(f => ({ ...f, _folder: parentFolderName }));
+
+  const subfolders = items.filter(f => f.mimeType === "application/vnd.google-apps.folder");
+  const nested = await Promise.all(
+    subfolders.map(sf => listDriveItems(sf.id, sf.name, depth + 1, driveKey))
+  );
+  return [...files, ...nested.flat()];
+}
+
+exports.pushPlansToSimpro = functions
+  .runWith({ timeoutSeconds: 300, memory: "512MB" })
+  .https.onCall(async (data) => {
+    const { simproJobNo, driveFolderId } = data || {};
+    if (!simproJobNo) throw new functions.https.HttpsError("invalid-argument", "Missing simproJobNo");
+    if (!driveFolderId) throw new functions.https.HttpsError("invalid-argument", "Missing driveFolderId");
+
+    // 1. Fetch existing Simpro files (flat list, check by filename)
+    const filesRes = await simproReq("GET", `/jobs/${simproJobNo}/attachments/files/`);
+    const existingFiles = Array.isArray(filesRes.data) ? filesRes.data : [];
+    const existingFilenames = new Set(existingFiles.map(f => f.Filename));
+
+    // 2. Fetch existing Simpro folders
+    const foldersRes = await simproReq("GET", `/jobs/${simproJobNo}/attachments/folders/`);
+    const existingFolders = Array.isArray(foldersRes.data) ? foldersRes.data : [];
+    const simpFolderMap = {}; // folder name → Simpro folder ID
+    existingFolders.forEach(f => { simpFolderMap[f.Name] = f.ID; });
+
+    // 3. Recursively list Drive files
+    const driveFiles = await listDriveItems(driveFolderId, "Root", 0, DRIVE_KEY);
+
+    // 4. Upload new files to Simpro
+    const uploaded = [], skipped = [], errors = [];
+
+    for (const f of driveFiles) {
+      if (existingFilenames.has(f.name)) {
+        skipped.push(f.name);
+        continue;
+      }
+
+      const fileSize = parseInt(f.size || "0", 10);
+      if (fileSize > MAX_FILE_BYTES) {
+        errors.push({ name: f.name, error: `Too large (${Math.round(fileSize / 1024 / 1024)}MB, max 15MB)` });
+        continue;
+      }
+
+      // Create Simpro folder if needed
+      let folderIdInSimpro = null;
+      if (f._folder && f._folder !== "Root") {
+        if (simpFolderMap[f._folder]) {
+          folderIdInSimpro = simpFolderMap[f._folder];
+        } else {
+          const fr = await simproReq("POST", `/jobs/${simproJobNo}/attachments/folders/`, { Name: f._folder });
+          if (fr.ok && fr.data && fr.data.ID) {
+            simpFolderMap[f._folder] = fr.data.ID;
+            folderIdInSimpro = fr.data.ID;
+          }
+        }
+      }
+
+      // Download from Drive
+      const dlUrl = `https://www.googleapis.com/drive/v3/files/${f.id}?alt=media&key=${DRIVE_KEY}&supportsAllDrives=true`;
+      let fileBuffer;
+      try {
+        const dlRes = await fetch(dlUrl);
+        if (!dlRes.ok) { errors.push({ name: f.name, error: `Drive download failed (${dlRes.status})` }); continue; }
+        fileBuffer = await dlRes.arrayBuffer();
+      } catch (e) {
+        errors.push({ name: f.name, error: `Drive error: ${e.message}` });
+        continue;
+      }
+
+      // Upload to Simpro
+      const base64 = Buffer.from(fileBuffer).toString("base64");
+      const uploadBody = { Filename: f.name, Base64Data: base64 };
+      if (folderIdInSimpro) uploadBody.Folder = folderIdInSimpro;
+
+      const upRes = await simproReq("POST", `/jobs/${simproJobNo}/attachments/files/`, uploadBody);
+      if (upRes.ok) {
+        uploaded.push(f.name);
+        existingFilenames.add(f.name);
+      } else {
+        const errMsg = upRes.data && upRes.data.errors
+          ? upRes.data.errors.map(e => e.message).join("; ")
+          : String(upRes.data).slice(0, 120);
+        errors.push({ name: f.name, error: errMsg });
+      }
+    }
+
+    return { uploaded, skipped, errors };
+  });
+
+// ─── Get Simpro Job Financials ────────────────────────────────────────────────
+exports.getSimproJobFinancials = functions.https.onCall(async (data) => {
+  const { simproJobNo } = data || {};
+  if (!simproJobNo) throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
+
+  const resp = await fetch(
+    `${SIMPRO_BASE}/jobs/?ID=${encodeURIComponent(simproJobNo)}&pageSize=1&columns=ID,Totals`,
+    { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } }
+  );
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new functions.https.HttpsError("internal", `Simpro error: ${resp.status} ${body.slice(0,200)}`);
+  }
+  const results = await resp.json();
+  const job = Array.isArray(results) ? results[0] : null;
+  if (!job) throw new functions.https.HttpsError("not-found", `No job found for No=${simproJobNo}`);
+
+  const t = job.Totals || {};
+  const actual   = t.NettMargin?.Actual   ?? null;
+  const estimate = t.NettMargin?.Estimate ?? null;
+
+  // actual === 100 means no real costs have been tracked yet in Simpro
+  const hasRealActual = actual !== null && actual !== 100;
+
+  return {
+    margin:    hasRealActual ? actual : estimate,
+    isEstimate: !hasRealActual,
+    laborHoursActual:   t.ResourcesCost?.LaborHours?.Actual   ?? null,
+    laborHoursEstimate: t.ResourcesCost?.LaborHours?.Estimate ?? null,
+  };
+});
+
+// ─── Get Simpro Schedule ──────────────────────────────────────────────────────
+exports.getSimproSchedule = functions.https.onCall(async (data) => {
+  const { dateFrom, dateTo } = data || {};
+
+  const url = `${SIMPRO_BASE}/schedules/?pageSize=250`;
+  const resp = await fetch(url, {
+    headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` },
+  });
+  if (!resp.ok) {
+    throw new functions.https.HttpsError("internal", `Simpro error: ${resp.status}`);
+  }
+
+  let schedules = await resp.json();
+
+  if (dateFrom) schedules = schedules.filter(s => s.Date >= dateFrom);
+  if (dateTo)   schedules = schedules.filter(s => s.Date <= dateTo);
+
+  return schedules;
+});
+
