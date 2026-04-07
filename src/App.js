@@ -9547,7 +9547,12 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
   const [error, setError]             = useState(null);
   const [weekOffset, setWeekOffset]   = useState(0);      // 0 = this week, 1 = next, etc.
   const [personFilter, setPersonFilter] = useState("all");
-  const [collapsed, setCollapsed]     = useState(false);
+  // Collapsed by default for admin/manager — their primary view is the job board.
+  // Crew members (limited) default open since schedule is their main focus.
+  const [collapsed, setCollapsed]     = useState(() => {
+    const access = identity?.access || identity?.role || "";
+    return access !== "limited";
+  });
 
   // Compute Mon–Sun for the displayed week
   const weekDates = useMemo(() => {
@@ -9602,6 +9607,18 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
     )].sort();
     return names;
   }, [schedule]);
+
+  // Auto-select the current user's name when schedule loads
+  useEffect(() => {
+    if (!allStaff.length || !identity?.name) return;
+    // Already manually set to something other than all — don't override
+    if (personFilter !== "all") return;
+    const identityName = (identity.name || "").toLowerCase();
+    // Try exact match first, then first-name match
+    const match = allStaff.find(n => n.toLowerCase() === identityName)
+      || allStaff.find(n => n.toLowerCase().startsWith(identityName.split(" ")[0]));
+    if (match) setPersonFilter(match);
+  }, [allStaff]);
 
   // Match Simpro ProjectID → app job
   const jobBySimproNo = useMemo(() => {
@@ -9671,7 +9688,11 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
               style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
                 color:C.text,fontSize:11,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit"}}>
               <option value="all">Everyone</option>
-              {allStaff.map(n => <option key={n} value={n}>{n.split(" ")[0]}</option>)}
+              {allStaff.map(n => {
+                const parts = n.split(" ");
+                const label = parts.length > 1 ? `${parts[0]} ${parts[parts.length-1][0]}.` : parts[0];
+                return <option key={n} value={n}>{label}</option>;
+              })}
             </select>
           )}
           {/* Week nav */}
@@ -9727,7 +9748,10 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
                       : dayJobs.map(g => {
                           const appJob = jobBySimproNo[g.projectId];
                           const jobName = appJob?.name || `Job #${g.projectId}`;
-                          const crew = g.entries.map(e => e.Staff?.Name?.split(" ")[0]).filter(Boolean);
+                          const crew = g.entries.map(e => {
+                            const parts = (e.Staff?.Name || "").split(" ");
+                            return parts.length > 1 ? `${parts[0]} ${parts[parts.length-1][0]}.` : parts[0];
+                          }).filter(Boolean);
                           const myEntry = personFilter !== "all"
                             ? g.entries.find(e => e.Staff?.Name === personFilter)
                             : g.entries[0];
