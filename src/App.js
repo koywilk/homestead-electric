@@ -4153,26 +4153,98 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
 // ── Panelized Lighting ────────────────────────────────────────
 
 // ── Central Loads List ────────────────────────────────────────
-function LoadsList({loads,onChange,floorOptions}) {
-  const upd = (id,p) => onChange(loads.map(l=>l.id===id?{...l,...p}:l));
-  const del = (id)   => onChange(loads.filter(l=>l.id!==id));
-  const add = ()     => onChange([...loads, newCentralLoad()]);
-
-  const byLocation = {};
-  loads.forEach(l=>{
-    const loc = l.location||"Unassigned";
-    if(!byLocation[loc]) byLocation[loc]=[];
-    byLocation[loc].push(l);
+function LoadsList({loads,onChange,floorOptions,allModules=[],onAssignToModule}) {
+  const sortByType = (arr) => [...arr].sort((a,b)=>{
+    const ai = LOAD_TYPES.indexOf(a.loadType||""), bi = LOAD_TYPES.indexOf(b.loadType||"");
+    return (ai<0?999:ai)-(bi<0?999:bi);
   });
+  const upd = (id,p) => {
+    const updated = loads.map(l=>l.id===id?{...l,...p}:l);
+    onChange("loadType" in p ? sortByType(updated) : updated);
+  };
+  const del = (id)   => onChange(loads.filter(l=>l.id!==id));
+
+  const [selected,  setSelected]  = useState(new Set());
+  const [focusLast, setFocusLast] = useState(false);
+  const [batchLoc,  setBatchLoc]  = useState("");
+  const [batchMod,  setBatchMod]  = useState("");
+  const lastRef = useRef(null);
+
+  const add = () => { onChange([...loads, newCentralLoad()]); setFocusLast(true); };
+
+  useEffect(()=>{
+    if(focusLast && lastRef.current){ lastRef.current.focus(); setFocusLast(false); }
+  },[loads.length, focusLast]);
+
+  const toggleSel  = (id) => setSelected(s=>{ const n=new Set(s); n.has(id)?n.delete(id):n.add(id); return n; });
+  const allSel     = loads.length>0 && loads.every(l=>selected.has(l.id));
+  const toggleAll  = () => setSelected(allSel ? new Set() : new Set(loads.map(l=>l.id)));
+
+  const applyBatchLoc = () => {
+    if(!batchLoc.trim()) return;
+    onChange(loads.map(l=>selected.has(l.id)?{...l,location:batchLoc.trim()}:l));
+    setSelected(new Set()); setBatchLoc("");
+  };
+  const applyBatchMod = () => {
+    if(!batchMod||!onAssignToModule) return;
+    const [floorKey,modNum,isExtraStr] = batchMod.split("|");
+    onAssignToModule([...selected], modNum, floorKey, isExtraStr==="1");
+    setSelected(new Set()); setBatchMod("");
+  };
+
+  const COL = "20px 24px 1fr 100px 72px 52px 20px";
 
   return (
     <div style={{marginBottom:22}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
         <span style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em",textTransform:"uppercase"}}>
-          All Loads&nbsp;<span style={{color:`${C.purple}99`,fontWeight:400,textTransform:"none"}}>— define here, then assign to keypads &amp; modules below</span>
+          All Loads&nbsp;<span style={{color:`${C.purple}99`,fontWeight:400,textTransform:"none"}}>— define here, assign to keypads &amp; modules below</span>
         </span>
         <Btn onClick={add} variant="add" style={{fontSize:11,padding:"3px 10px"}}>+ Add Load</Btn>
       </div>
+
+      {/* ── Action bar (visible when rows selected) ── */}
+      {selected.size>0&&(
+        <div style={{background:`${C.purple}0d`,border:`1px solid ${C.purple}33`,borderRadius:8,
+          padding:"8px 10px",marginBottom:10,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
+          <span style={{fontSize:11,fontWeight:700,color:C.purple,whiteSpace:"nowrap"}}>{selected.size} selected</span>
+          {/* Set location */}
+          <input list="pl-floor-batch" value={batchLoc} onChange={e=>setBatchLoc(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&applyBatchLoc()} placeholder="Set location…"
+            style={{background:"#fff",border:`1px solid ${C.purple}44`,borderRadius:6,
+              padding:"4px 8px",fontSize:11,fontFamily:"inherit",outline:"none",color:C.text,width:130}}/>
+          <datalist id="pl-floor-batch">{(floorOptions||[]).map(f=><option key={f} value={f}/>)}</datalist>
+          <button onClick={applyBatchLoc}
+            style={{background:C.purple,color:"#fff",border:"none",borderRadius:6,
+              padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+            Set Location
+          </button>
+          {/* Add to module */}
+          {allModules.length>0&&<>
+            <select value={batchMod} onChange={e=>setBatchMod(e.target.value)}
+              style={{background:"#fff",border:`1px solid ${C.purple}44`,borderRadius:6,
+                padding:"4px 8px",fontSize:11,fontFamily:"inherit",outline:"none",
+                color:batchMod?C.text:C.dim,flex:1,minWidth:160}}>
+              <option value="">Add to module…</option>
+              {allModules.map(m=>(
+                <option key={`${m.floorKey}|${m.modNum}`} value={`${m.floorKey}|${m.modNum}|${m.isExtra?1:0}`}>
+                  {m.label}
+                </option>
+              ))}
+            </select>
+            <button onClick={applyBatchMod} disabled={!batchMod}
+              style={{background:batchMod?C.purple:`${C.purple}44`,color:"#fff",border:"none",borderRadius:6,
+                padding:"4px 10px",fontSize:11,fontWeight:700,cursor:batchMod?"pointer":"default",
+                fontFamily:"inherit",whiteSpace:"nowrap"}}>
+              Add to Module
+            </button>
+          </>}
+          <button onClick={()=>setSelected(new Set())}
+            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>
+            Clear
+          </button>
+        </div>
+      )}
 
       {loads.length===0 ? (
         <div style={{fontSize:11,color:C.dim,textAlign:"center",padding:"14px 0",
@@ -4181,19 +4253,28 @@ function LoadsList({loads,onChange,floorOptions}) {
         </div>
       ) : (
         <>
-          <div style={{display:"grid",gridTemplateColumns:"28px 1fr 100px 72px 52px 24px",gap:6,marginBottom:4,paddingBottom:4,borderBottom:`1px solid ${C.border}`}}>
+          <div style={{display:"grid",gridTemplateColumns:COL,gap:6,marginBottom:4,paddingBottom:4,borderBottom:`1px solid ${C.border}`,alignItems:"center"}}>
+            <input type="checkbox" checked={allSel} onChange={toggleAll}
+              style={{width:14,height:14,accentColor:C.purple,cursor:"pointer",margin:0}}/>
             {["#","Load Name","Location","Type","Watts",""].map((h,i)=>(
               <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em"}}>{h}</div>
             ))}
           </div>
           {loads.map((l,li)=>(
-            <div key={l.id} style={{display:"grid",gridTemplateColumns:"28px 1fr 100px 72px 52px 24px",gap:6,marginBottom:4,alignItems:"center"}}>
-              <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:4}}>{li+1}.</span>
-              <Inp value={l.name} onChange={e=>upd(l.id,{name:e.target.value})} placeholder="Load name…"
-                onKeyDown={e=>e.key==="Enter"&&add()} onAdd={add}/>
+            <div key={l.id} style={{display:"grid",gridTemplateColumns:COL,gap:6,marginBottom:4,alignItems:"center",
+              borderRadius:6,padding:"2px 0",
+              background:selected.has(l.id)?`${C.purple}0d`:"transparent"}}>
+              <input type="checkbox" checked={selected.has(l.id)} onChange={()=>toggleSel(l.id)}
+                style={{width:14,height:14,accentColor:C.purple,cursor:"pointer",margin:0}}/>
+              <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:2}}>{li+1}.</span>
               <input
+                ref={li===loads.length-1?lastRef:null}
                 list="pl-floor-opts"
-                value={l.location||""} onChange={e=>upd(l.id,{location:e.target.value})}
+                value={l.name} onChange={e=>upd(l.id,{name:e.target.value})} placeholder="Load name…"
+                onKeyDown={e=>e.key==="Enter"&&add()}
+                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+                  padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
+              <input list="pl-floor-opts" value={l.location||""} onChange={e=>upd(l.id,{location:e.target.value})}
                 placeholder="Floor / area"
                 style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
                   padding:"6px 8px",fontSize:11,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
@@ -4216,7 +4297,11 @@ function KeypadSection({loads,onChange,label,allLoads=[]}) {
   const dlId   = `kp-dl-${label.replace(/\W+/g,'-')}`;
   const upd    = (id,p) => onChange(loads.map(r=>r.id===id?{...r,...p}:r));
 
-  const addRow = () => onChange([...loads, newKPRow(loads.length+1)]);
+  const [focusLast, setFocusLast] = useState(false);
+  const lastRef = useRef(null);
+  useEffect(()=>{ if(focusLast&&lastRef.current){lastRef.current.focus();setFocusLast(false);} },[loads.length,focusLast]);
+
+  const addRow = () => { onChange([...loads, newKPRow(loads.length+1)]); setFocusLast(true); };
 
   const delRow = (id) => onChange(loads.filter(r=>r.id!==id).map((r,i)=>({...r,num:i+1})));
 
@@ -4261,7 +4346,7 @@ function KeypadSection({loads,onChange,label,allLoads=[]}) {
 
       </div>
 
-      {loads.map(r=>(
+      {loads.map((r,ri)=>(
 
         <div key={r.id} style={{display:"grid",gridTemplateColumns:"36px 1fr 80px 28px",gap:6,marginBottom:4,alignItems:"center",
           borderRadius:6,padding:"3px 0",
@@ -4269,7 +4354,8 @@ function KeypadSection({loads,onChange,label,allLoads=[]}) {
 
           <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:6}}>{r.num}.</span>
 
-          <input list={allLoads.length>0?dlId:undefined}
+          <input ref={ri===loads.length-1?lastRef:null}
+            list={allLoads.length>0?dlId:undefined}
             value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"
             onKeyDown={e=>e.key==="Enter"&&addRow()}
             style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
@@ -4305,7 +4391,12 @@ function PanelModulesSection({modules,onChange,system,allLoads=[]}) {
 
   const updLoad  = (mid,lid,p) => onChange(modules.map(m=>m.id===mid?{...m,loads:m.loads.map(l=>l.id===lid?{...l,...p}:l)}:m));
   const delLoad  = (mid,lid)   => onChange(modules.map(m=>m.id===mid?{...m,loads:m.loads.filter(l=>l.id!==lid).map((l,i)=>({...l,num:i+1}))}:m));
-  const addLoad  = (mid)       => onChange(modules.map(m=>m.id===mid?{...m,loads:[...m.loads,newLoadRow(m.loads.length+1)]}:m));
+
+  const pendingFocusMid = useRef(null);
+  const addLoad  = (mid) => {
+    onChange(modules.map(m=>m.id===mid?{...m,loads:[...m.loads,newLoadRow(m.loads.length+1)]}:m));
+    pendingFocusMid.current = mid;
+  };
   const moveLoad = (fromMid,lid,toMid) => {
     if(fromMid===toMid) return;
     const load = modules.find(m=>m.id===fromMid)?.loads.find(l=>l.id===lid);
@@ -4392,14 +4483,16 @@ function PanelModulesSection({modules,onChange,system,allLoads=[]}) {
               <div style={{display:"grid",gridTemplateColumns:rowGrid,gap:4,marginBottom:4}}>
                 {rowHeaders.map((h,i)=><div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em"}}>{h}</div>)}
               </div>
-              {mod.loads.map(load=>(
+              {mod.loads.map((load,li)=>(
                 <div key={load.id} style={{display:"grid",gridTemplateColumns:rowGrid,gap:4,marginBottom:3,
                   alignItems:"center",borderRadius:6,padding:"2px 0",
                   background:load.pulled?"rgba(34,197,94,0.08)":"transparent"}}>
                   <input type="checkbox" checked={!!load.pulled} onChange={e=>updLoad(mod.id,load.id,{pulled:e.target.checked})}
                     style={{width:15,height:15,accentColor:C.purple,cursor:"pointer",margin:0}}/>
                   <span style={{fontSize:11,color:C.muted,textAlign:"center",fontWeight:700}}>{load.num}</span>
-                  <input list={allLoads.length>0?`mod-dl-${mod.id}`:undefined}
+                  <input
+                    ref={el=>{ if(pendingFocusMid.current===mod.id&&li===mod.loads.length-1&&el){el.focus();pendingFocusMid.current=null;} }}
+                    list={allLoads.length>0?`mod-dl-${mod.id}`:undefined}
                     value={load.name} onChange={e=>updLoad(mod.id,load.id,{name:e.target.value})} placeholder="Load name…"
                     onKeyDown={e=>e.key==="Enter"&&addLoad(mod.id)}
                     style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
@@ -6957,13 +7050,44 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               <SectionHead label="Loads" color={C.purple}/>
 
-              <LoadsList
-                loads={job.panelizedLighting.loads||[]}
-                onChange={v=>u({panelizedLighting:{...job.panelizedLighting,loads:v}})}
-                floorOptions={[
-                  "Main Level","Basement","Upper Level",
-                  ...(job.panelizedLighting.extraFloors||[]).map(ef=>ef.label),
-                ]}/>
+              {(()=>{
+                const pl = job.panelizedLighting;
+                const stdFloors = [{k:"main",l:"Main"},{k:"basement",l:"Basement"},{k:"upper",l:"Upper"}];
+                const allModules = [];
+                stdFloors.forEach(({k,l})=>{
+                  migrateFloorToModules(pl.cp4Loads?.[k]||[]).filter(m=>m.modNum||m.moduleType).forEach(m=>{
+                    allModules.push({modNum:m.modNum,floorKey:k,isExtra:false,
+                      label:`Mod ${m.modNum}${m.moduleType?` · ${m.moduleType}`:""} — ${l}`});
+                  });
+                });
+                (pl.extraFloors||[]).forEach(ef=>{
+                  migrateFloorToModules(pl[ef.key]||[]).filter(m=>m.modNum||m.moduleType).forEach(m=>{
+                    allModules.push({modNum:m.modNum,floorKey:ef.key,isExtra:true,
+                      label:`Mod ${m.modNum}${m.moduleType?` · ${m.moduleType}`:""} — ${ef.label}`});
+                  });
+                });
+                const onAssignToModule = (selectedIds, modNum, floorKey, isExtra) => {
+                  const selLoads = (pl.loads||[]).filter(l=>selectedIds.includes(l.id));
+                  const raw = isExtra ? (pl[floorKey]||[]) : (pl.cp4Loads?.[floorKey]||[]);
+                  const mods = migrateFloorToModules(raw);
+                  const updated = mods.map(m=>{
+                    if(String(m.modNum)!==String(modNum)) return m;
+                    const base = m.loads.filter(l=>l.name.trim()).length===0 ? [] : m.loads;
+                    const newRows = selLoads.map((sl,i)=>({...newLoadRow(base.length+i+1),name:sl.name,loadType:sl.loadType||"",watts:sl.watts||""}));
+                    return {...m,loads:[...base,...newRows].map((l,i)=>({...l,num:i+1}))};
+                  });
+                  if(isExtra) u({panelizedLighting:{...pl,[floorKey]:updated}});
+                  else u({panelizedLighting:{...pl,cp4Loads:{...(pl.cp4Loads||{}),[floorKey]:updated}}});
+                };
+                return (
+                  <LoadsList
+                    loads={pl.loads||[]}
+                    onChange={v=>u({panelizedLighting:{...pl,loads:v}})}
+                    floorOptions={["Main Level","Basement","Upper Level",...(pl.extraFloors||[]).map(ef=>ef.label)]}
+                    allModules={allModules}
+                    onAssignToModule={onAssignToModule}/>
+                );
+              })()}
 
               <SectionHead label={`${job.lightingSystem||"Control 4"} Keypads`} color={C.purple}/>
 
