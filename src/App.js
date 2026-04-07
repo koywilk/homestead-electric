@@ -2324,6 +2324,14 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
 // ── Material Orders ───────────────────────────────────────────
 
+function poItemsPreview(items) {
+  const plain = (items||"").replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]*>/g,'')
+    .replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').trim();
+  const lines = plain.split('\n').map(l=>l.trim()).filter(Boolean);
+  if (!lines.length) return "";
+  return lines.length > 1 ? `${lines[0]} + ${lines.length-1} more` : lines[0];
+}
+
 function MaterialOrders({orders,onChange}) {
   const safeOrders = Array.isArray(orders) ? orders : [];
 
@@ -2380,15 +2388,10 @@ function MaterialOrders({orders,onChange}) {
                 <span style={{fontSize:10,fontWeight:700,background:"#16a34a22",color:"#16a34a",
                   borderRadius:99,padding:"1px 8px"}}>Picked Up</span>
               )}
-              {isCollapsed && o.items && (()=>{
-                const plain = o.items.replace(/<br\s*\/?>/gi,'\n').replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').trim();
-                const lines = plain.split('\n').map(l=>l.trim()).filter(Boolean);
-                return (
-                  <span style={{fontSize:11,color:C.muted,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>
-                    {lines[0]}{lines.length>1?` + ${lines.length-1} more`:''}
-                  </span>
-                );
-              })()
+              {isCollapsed && o.items && (
+                <span style={{fontSize:11,color:C.muted,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>
+                  {poItemsPreview(o.items)}
+                </span>
               )}
               <span style={{marginLeft:"auto",color:C.muted,fontSize:12,flexShrink:0}}>{isCollapsed ? "▸" : "▾"}</span>
               <button onClick={e=>{e.stopPropagation();del(o.id);}}
