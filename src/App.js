@@ -296,7 +296,7 @@ const C4_MODULE_TYPES   = ["","8-Ch Dimmer","8-Ch Relay","0-10V Dimmer"];
 const LUT_MODULE_TYPES  = ["","LQSE-2ECO","LQSE-4A","LQSE-S8","LQSE-T5","LQSE-2DAL"];
 const CRES_MODULE_TYPES = ["","ZUMNET-200","ZUMLINK-200"];
 const SAV_MODULE_TYPES  = ["","LMD-8120","LMD-4120","SPM-Q2APD10","SPM-Q4FHD10"];
-const LOAD_TYPES        = ["","MLV","ELV","LED","Fluorescent","Relay","0-10V"];
+const LOAD_TYPES        = ["","Dimming","Switching","MLV","ELV","LED","Fluorescent","Relay","0-10V"];
 const PHASE_OPTS        = ["","A","B","C"];
 
 const DRIVER_SIZES  = ["","20W","40W","60W","96W","192W","288W"];
@@ -1215,7 +1215,7 @@ const MobileInpSheet = ({initialValue, placeholder, onDone, onCancel, addMode}) 
 };
 
 // onAdd: optional — when provided, button label becomes "Add" and fires onAdd after saving
-const Inp = ({value, onChange, placeholder, style={}, onAdd, onBlur}) => {
+const Inp = ({value, onChange, placeholder, style={}, onAdd, onBlur, onKeyDown}) => {
   const [modal, setModal] = useState(false);
   return (
     <>
@@ -1226,7 +1226,8 @@ const Inp = ({value, onChange, placeholder, style={}, onAdd, onBlur}) => {
           e.target.style.borderColor=C.accent;
           if(ON_MOBILE){e.target.blur();setModal(true);}
         }}
-        onBlur={e=>{e.target.style.borderColor=C.border; onBlur&&onBlur(e);}}/>
+        onBlur={e=>{e.target.style.borderColor=C.border; onBlur&&onBlur(e);}}
+        onKeyDown={onKeyDown}/>
       {modal&&<MobileInpSheet initialValue={value??""} placeholder={placeholder}
         addMode={!!onAdd}
         onDone={v=>{onChange({target:{value:v}});if(onAdd)onAdd();if(onBlur)onBlur(v);setModal(false);}}
@@ -3400,7 +3401,8 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
       {/* Row 2: load name + status */}
       <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px",gap:4,alignItems:"center"}}>
         <span/>
-        <Inp value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"/>
+        <Inp value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"
+          onKeyDown={e=>e.key==="Enter"&&addRow()} onAdd={addRow}/>
         <Sel value={r.status} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
           style={{color:r.status==="Pulled"?C.green:r.status==="Need Specs"?C.red:C.text,fontSize:10}}/>
       </div>
@@ -4179,14 +4181,16 @@ function LoadsList({loads,onChange,floorOptions}) {
         </div>
       ) : (
         <>
-          <div style={{display:"grid",gridTemplateColumns:"1fr 100px 72px 52px 24px",gap:6,marginBottom:4,paddingBottom:4,borderBottom:`1px solid ${C.border}`}}>
-            {["Load Name","Location","Type","Watts",""].map((h,i)=>(
+          <div style={{display:"grid",gridTemplateColumns:"28px 1fr 100px 72px 52px 24px",gap:6,marginBottom:4,paddingBottom:4,borderBottom:`1px solid ${C.border}`}}>
+            {["#","Load Name","Location","Type","Watts",""].map((h,i)=>(
               <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em"}}>{h}</div>
             ))}
           </div>
-          {loads.map(l=>(
-            <div key={l.id} style={{display:"grid",gridTemplateColumns:"1fr 100px 72px 52px 24px",gap:6,marginBottom:4,alignItems:"center"}}>
-              <Inp value={l.name} onChange={e=>upd(l.id,{name:e.target.value})} placeholder="Load name…"/>
+          {loads.map((l,li)=>(
+            <div key={l.id} style={{display:"grid",gridTemplateColumns:"28px 1fr 100px 72px 52px 24px",gap:6,marginBottom:4,alignItems:"center"}}>
+              <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:4}}>{li+1}.</span>
+              <Inp value={l.name} onChange={e=>upd(l.id,{name:e.target.value})} placeholder="Load name…"
+                onKeyDown={e=>e.key==="Enter"&&add()} onAdd={add}/>
               <input
                 list="pl-floor-opts"
                 value={l.location||""} onChange={e=>upd(l.id,{location:e.target.value})}
@@ -4267,6 +4271,7 @@ function KeypadSection({loads,onChange,label,allLoads=[]}) {
 
           <input list={allLoads.length>0?dlId:undefined}
             value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"
+            onKeyDown={e=>e.key==="Enter"&&addRow()}
             style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
               padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
 
@@ -4396,6 +4401,7 @@ function PanelModulesSection({modules,onChange,system,allLoads=[]}) {
                   <span style={{fontSize:11,color:C.muted,textAlign:"center",fontWeight:700}}>{load.num}</span>
                   <input list={allLoads.length>0?`mod-dl-${mod.id}`:undefined}
                     value={load.name} onChange={e=>updLoad(mod.id,load.id,{name:e.target.value})} placeholder="Load name…"
+                    onKeyDown={e=>e.key==="Enter"&&addLoad(mod.id)}
                     style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
                       padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
                   <Inp value={load.ch||""} onChange={e=>updLoad(mod.id,load.id,{ch:e.target.value})} placeholder="Ch" style={{textAlign:"center",fontSize:10}}/>
@@ -4514,7 +4520,8 @@ function TapeLightSection({lights,onChange}) {
 
               <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Load Name</div>
 
-              <Inp value={l.loadName} onChange={e=>upd(l.id,{loadName:e.target.value})} placeholder="e.g. Kitchen Under-Cabinet"/>
+              <Inp value={l.loadName} onChange={e=>upd(l.id,{loadName:e.target.value})} placeholder="e.g. Kitchen Under-Cabinet"
+                onKeyDown={e=>e.key==="Enter"&&add()} onAdd={add}/>
 
             </div>
 
