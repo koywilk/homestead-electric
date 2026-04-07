@@ -9547,6 +9547,7 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
   const [error, setError]             = useState(null);
   const [weekOffset, setWeekOffset]   = useState(0);      // 0 = this week, 1 = next, etc.
   const [personFilter, setPersonFilter] = useState("all");
+  const [foremanFilter, setForemanFilter] = useState("all");
   // Collapsed by default for admin/manager — their primary view is the job board.
   // Crew members (limited) default open since schedule is their main focus.
   const [collapsed, setCollapsed]     = useState(() => {
@@ -9627,11 +9628,24 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
     return map;
   }, [jobs]);
 
-  // Group entries by date, filtered by person
+  // All unique foremen from jobs that have a simproNo (so they can appear in schedule)
+  const allForemen = useMemo(() => {
+    const names = [...new Set(jobs.filter(j=>j.simproNo&&j.foreman).map(j=>j.foreman))].sort();
+    return names;
+  }, [jobs]);
+
+  // SimproNos belonging to the selected foreman
+  const foremanSimproNos = useMemo(() => {
+    if (foremanFilter === "all") return null;
+    return new Set(jobs.filter(j=>j.foreman===foremanFilter&&j.simproNo).map(j=>String(j.simproNo)));
+  }, [jobs, foremanFilter]);
+
+  // Group entries by date, filtered by person + foreman
   const byDate = useMemo(() => {
     if (!schedule) return {};
-    const jobEntries = schedule.filter(s => s.Type === "job");
-    const filtered   = personFilter === "all" ? jobEntries
+    let jobEntries = schedule.filter(s => s.Type === "job");
+    if (foremanSimproNos) jobEntries = jobEntries.filter(s => foremanSimproNos.has(String(s.Project?.ProjectID)));
+    const filtered = personFilter === "all" ? jobEntries
       : jobEntries.filter(s => s.Staff?.Name === personFilter);
     const map = {};
     filtered.forEach(s => {
@@ -9639,7 +9653,7 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
       map[s.Date].push(s);
     });
     return map;
-  }, [schedule, personFilter]);
+  }, [schedule, personFilter, foremanSimproNos]);
 
   // For each date, group by job so we can show full crew per job
   const crewByDateAndJob = useMemo(() => {
@@ -9647,18 +9661,19 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
     const out = {};
     weekDates.forEach(d => {
       const ymd = toYMD(d);
-      const dayEntries = (schedule || []).filter(s => s.Type === "job" && s.Date === ymd);
+      let dayEntries = (schedule || []).filter(s => s.Type === "job" && s.Date === ymd);
+      if (foremanSimproNos) dayEntries = dayEntries.filter(s => foremanSimproNos.has(String(s.Project?.ProjectID)));
       // Group by ProjectID
-      const jobs = {};
+      const jobMap = {};
       dayEntries.forEach(s => {
         const pid = String(s.Project?.ProjectID || s.Reference);
-        if (!jobs[pid]) jobs[pid] = { entries: [], ref: s.Reference, projectId: pid, startTime: s.Blocks?.[0]?.StartTime, endTime: s.Blocks?.[s.Blocks?.length-1]?.EndTime };
-        jobs[pid].entries.push(s);
+        if (!jobMap[pid]) jobMap[pid] = { entries: [], ref: s.Reference, projectId: pid, startTime: s.Blocks?.[0]?.StartTime, endTime: s.Blocks?.[s.Blocks?.length-1]?.EndTime };
+        jobMap[pid].entries.push(s);
       });
-      out[ymd] = Object.values(jobs);
+      out[ymd] = Object.values(jobMap);
     });
     return out;
-  }, [schedule, weekDates]);
+  }, [schedule, weekDates, foremanSimproNos]);
 
   const todayYMD = toYMD(new Date());
 
@@ -9682,18 +9697,31 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
           <span style={{fontSize:10,color:C.dim}}>No jobs scheduled this week</span>}
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
           {/* Person filter */}
-          {allStaff.length > 0 && !collapsed && (
-            <select value={personFilter} onChange={e=>setPersonFilter(e.target.value)}
-              onClick={e=>e.stopPropagation()}
-              style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
-                color:C.text,fontSize:11,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit"}}>
-              <option value="all">Everyone</option>
-              {allStaff.map(n => {
-                const parts = n.split(" ");
-                const label = parts.length > 1 ? `${parts[0]} ${parts[parts.length-1][0]}.` : parts[0];
-                return <option key={n} value={n}>{label}</option>;
-              })}
-            </select>
+          {!collapsed && (
+            <div style={{display:"flex",gap:6,alignItems:"center"}} onClick={e=>e.stopPropagation()}>
+              {/* Foreman filter */}
+              {allForemen.length > 0 && (
+                <select value={foremanFilter} onChange={e=>setForemanFilter(e.target.value)}
+                  style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
+                    color:C.text,fontSize:11,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit"}}>
+                  <option value="all">All Foremen</option>
+                  {allForemen.map(f => <option key={f} value={f}>{f.split(" ")[0]}</option>)}
+                </select>
+              )}
+              {/* Person filter */}
+              {allStaff.length > 0 && (
+                <select value={personFilter} onChange={e=>setPersonFilter(e.target.value)}
+                  style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
+                    color:C.text,fontSize:11,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit"}}>
+                  <option value="all">Everyone</option>
+                  {allStaff.map(n => {
+                    const parts = n.split(" ");
+                    const label = parts.length > 1 ? `${parts[0]} ${parts[parts.length-1][0]}.` : parts[0];
+                    return <option key={n} value={n}>{label}</option>;
+                  })}
+                </select>
+              )}
+            </div>
           )}
           {/* Week nav */}
           {!collapsed && (
@@ -9729,6 +9757,19 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
                 const dayJobs = (crewByDateAndJob[ymd] || []).filter(g =>
                   personFilter === "all" ? true : g.entries.some(e => e.Staff?.Name === personFilter)
                 );
+                // Forecast gaps: jobs marked scheduled in the app for this date but not in Simpro
+                const scheduledSimproNos = new Set(dayJobs.map(g => g.projectId));
+                const forecastGaps = jobs.filter(j => {
+                  if (!j.simproNo) return false;
+                  if (scheduledSimproNos.has(String(j.simproNo))) return false;
+                  if (foremanFilter !== "all" && j.foreman !== foremanFilter) return false;
+                  const roughDate = j.roughStatusDate || j.roughProjectedStart || "";
+                  const finishDate = j.finishStatusDate || j.finishProjectedStart || "";
+                  const rs = j.roughStatus || ""; const fs = j.finishStatus || "";
+                  const roughScheduled = (rs === "scheduled" || rs === "inprogress") && roughDate === ymd;
+                  const finishScheduled = (fs === "scheduled" || fs === "inprogress") && finishDate === ymd;
+                  return roughScheduled || finishScheduled;
+                });
                 return (
                   <div key={ymd} style={{width:160,flexShrink:0}}>
                     {/* Day header */}
@@ -9742,7 +9783,7 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
                       </div>
                     </div>
                     {/* Job blocks */}
-                    {dayJobs.length === 0
+                    {dayJobs.length === 0 && forecastGaps.length === 0
                       ? <div style={{fontSize:10,color:C.muted,textAlign:"center",padding:"8px 0",
                           fontStyle:"italic"}}>—</div>
                       : dayJobs.map(g => {
@@ -9788,6 +9829,27 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
                           );
                         })
                     }
+                    {/* Forecast gaps — scheduled in app but not in Simpro */}
+                    {forecastGaps.map(j => (
+                      <div key={j.id}
+                        onClick={()=>onSelectJob(j)}
+                        style={{background:"transparent",border:`1px dashed ${C.orange}66`,
+                          borderLeft:`3px dashed ${C.orange}`,borderRadius:7,
+                          padding:"8px 10px",marginBottom:6,cursor:"pointer",
+                          opacity:0.7,transition:"opacity 0.15s"}}
+                        onMouseEnter={e=>e.currentTarget.style.opacity="1"}
+                        onMouseLeave={e=>e.currentTarget.style.opacity="0.7"}>
+                        <div style={{fontSize:10,color:C.orange,fontWeight:700,
+                          letterSpacing:"0.06em",marginBottom:2}}>NOT IN SIMPRO</div>
+                        <div style={{fontSize:11,fontWeight:700,color:C.dim,
+                          whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                          {j.name}
+                        </div>
+                        <div style={{fontSize:9,color:C.dim,marginTop:2}}>
+                          {(j.roughStatus==="scheduled"||j.roughStatus==="inprogress")?"Rough":"Finish"} scheduled
+                        </div>
+                      </div>
+                    ))}
                   </div>
                 );
               })}
@@ -9854,6 +9916,30 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
   const [viewMode,   setViewMode]   = useState("calendar"); // kanban | week | attention | calendar
   const [calMonth,   setCalMonth]   = useState(() => { const d=new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
   const [calDayDetail, setCalDayDetail] = useState(null); // date string YYYY-MM-DD for expanded day
+
+  // Simpro schedule data for crew count overlay
+  const [simproSchedule, setSimproSchedule] = useState([]);
+  useEffect(() => {
+    const year  = calMonth.getFullYear();
+    const month = String(calMonth.getMonth()+1).padStart(2,"0");
+    const lastDay = new Date(year, calMonth.getMonth()+1, 0).getDate();
+    const dateFrom = `${year}-${month}-01`;
+    const dateTo   = `${year}-${month}-${lastDay}`;
+    const fn = httpsCallable(functions, "getSimproSchedule");
+    fn({ dateFrom, dateTo })
+      .then(res => setSimproSchedule((res.data||[]).filter(s=>s.Type==="job")))
+      .catch(() => {}); // silent — crew counts are supplementary
+  }, [calMonth]);
+
+  // Count unique crew members per date
+  const crewCountByDate = useMemo(() => {
+    const map = {};
+    simproSchedule.forEach(s => {
+      if (!map[s.Date]) map[s.Date] = new Set();
+      if (s.Staff?.Name) map[s.Date].add(s.Staff.Name);
+    });
+    return Object.fromEntries(Object.entries(map).map(([k,v])=>[k,v.size]));
+  }, [simproSchedule]);
 
   const today = new Date(); today.setHours(0,0,0,0);
   const todayStr = today.toISOString().split("T")[0];
@@ -10174,8 +10260,18 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4}}>
                   <span style={{fontSize:11,fontWeight:isToday?800:600,
                     color:isToday?C.accent:isWeekend?"var(--muted)":"var(--text)"}}>{day}</span>
-                  {isToday&&<span style={{fontSize:8,color:C.accent,fontWeight:800,letterSpacing:"0.08em"}}>TODAY</span>}
-                  {dayEvs.length>0&&!isToday&&<span style={{fontSize:9,fontWeight:700,color:"var(--dim)"}}>{dayEvs.length}</span>}
+                  <div style={{display:"flex",alignItems:"center",gap:4}}>
+                    {crewCountByDate[dateStr]>0&&(
+                      <span title={`${crewCountByDate[dateStr]} crew assigned in Simpro`}
+                        style={{fontSize:8,fontWeight:800,color:C.blue,background:`${C.blue}18`,
+                          border:`1px solid ${C.blue}33`,borderRadius:99,padding:"1px 5px",
+                          letterSpacing:"0.04em"}}>
+                        {crewCountByDate[dateStr]} crew
+                      </span>
+                    )}
+                    {isToday&&<span style={{fontSize:8,color:C.accent,fontWeight:800,letterSpacing:"0.08em"}}>TODAY</span>}
+                    {dayEvs.length>0&&!isToday&&<span style={{fontSize:9,fontWeight:700,color:"var(--dim)"}}>{dayEvs.length}</span>}
+                  </div>
                 </div>
                 {dayEvs.slice(0,3).map(ev=><EventPill key={ev.id} ev={ev} mini/>)}
                 {dayEvs.length>3&&<div style={{fontSize:9,color:"var(--muted)",paddingLeft:4}}>+{dayEvs.length-3} more</div>}
