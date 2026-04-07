@@ -8009,18 +8009,12 @@ const STAGE_SECTIONS = [
   { key:"quickInProgress", label:"Quick Jobs — In Progress",      color:"#0ea5e9",
     test: j => !!j.quickJob && j.quickJobStatus==="inprogress" },
 
-  { key:"quickComplete",   label:"Quick Jobs — Complete",         color:"#22c55e",
-    test: j => !!j.quickJob && (j.quickJobStatus==="complete"||j.quickJobStatus==="invoice") },
-
   // Temp Peds
   { key:"tempPedReady",    label:"Temp Peds — Ready to Schedule", color:"#8b5cf6",
     test: j => !!j.tempPed && (!j.tempPedStatus||j.tempPedStatus==="ready") },
 
   { key:"tempPedScheduled", label:"Temp Peds — Scheduled",           color:"#2563eb",
     test: j => !!j.tempPed && j.tempPedStatus==="scheduled" },
-
-  { key:"tempPedDone",     label:"Temp Peds — Completed",            color:"#16a34a",
-    test: j => !!j.tempPed && j.tempPedStatus==="completed" },
 
   // Full Jobs
   { key:"prep",         label:"Pre Job Prep",              color:"#0d9488",
@@ -8044,8 +8038,11 @@ const STAGE_SECTIONS = [
   { key:"finish",       label:"Finish In Progress",        color:"#0ea5e9",
     test: j => !j.tempPed && !j.quickJob && effFS(j) === "inprogress" },
 
+  // All completed — quick jobs, temp peds, and full jobs in one section
   { key:"complete",     label:"Completed",                 color:"#22c55e",
-    test: j => !j.tempPed && !j.quickJob && effFS(j) === "complete" },
+    test: j => (j.quickJob && (j.quickJobStatus==="complete"||j.quickJobStatus==="invoice")) ||
+               (j.tempPed && j.tempPedStatus==="completed") ||
+               (!j.tempPed && !j.quickJob && effFS(j) === "complete") },
 
 ];
 
@@ -12759,6 +12756,7 @@ function App() {
 
   const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
   const [crewView, setCrewView] = useState(null); // foreman name or null
+  const [showUtilMenu, setShowUtilMenu] = useState(false);
   const goHome            = () =>  { setView("home");           setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openSchedule      = () =>  { setView("schedule");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openUpcoming      = () =>  { setView("upcoming");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
@@ -13198,45 +13196,63 @@ function App() {
               {/* Action buttons */}
               <div style={{display:"flex",gap:6,alignItems:"center"}}>
 
-                <button onClick={()=>{localStorage.removeItem("he_identity");setIdentity(null);}}
-                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
-                    color:C.dim,fontSize:11,fontWeight:600,padding:"6px 12px",cursor:"pointer",
-                    fontFamily:"inherit"}}>
-                  🔒 Lock
-                </button>
-                <button onClick={backupByEmail}
-                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
-                    color:C.dim,fontSize:11,fontWeight:600,padding:"6px 12px",cursor:"pointer",
-                    fontFamily:"inherit"}}>
-                  Backup
-                </button>
-                <button onClick={()=>window.location.reload()}
-                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
-                    color:C.dim,fontSize:14,fontWeight:700,padding:"6px 10px",cursor:"pointer",
-                    fontFamily:"inherit"}}>
-                  ↻
-                </button>
-                {getAccess(identity)==="admin"&&(
-                <button onClick={async()=>{
-                    try {
-                      const btn = document.activeElement; if(btn) btn.disabled = true;
-                      const result = await syncDriveFoldersToJobs(jobs, updateJob);
-                      const msg = `Drive Sync Complete!\n\n` +
-                        `${result.matched.length} new match${result.matched.length===1?"":"es"} linked` +
-                        (result.matched.length > 0 ? ":\n" + result.matched.map(m=>`  ${m.folderName} → ${m.jobName}`).join("\n") : "") +
-                        `\n${result.skipped.length} already linked` +
-                        (result.ambiguous.length > 0 ? `\n${result.ambiguous.length} ambiguous (skipped):\n` + result.ambiguous.map(a=>`  ${a.jobName}: ${a.folders.join(", ")}`).join("\n") : "") +
-                        `\n\n${result.total} Drive folders scanned`;
-                      alert(msg);
-                      if(btn) btn.disabled = false;
-                    } catch(e) { alert("Drive sync failed: " + e.message); }
-                  }}
-                  style={{background:"none",border:`1px solid ${C.blue}44`,borderRadius:8,
-                    color:C.blue,fontSize:11,fontWeight:600,padding:"6px 12px",cursor:"pointer",
-                    fontFamily:"inherit"}}>
-                  Sync Drive
-                </button>
-                )}
+                {/* ⋯ utility menu */}
+                <div style={{position:"relative"}}>
+                  <button onClick={()=>setShowUtilMenu(v=>!v)}
+                    style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                      color:C.dim,fontSize:16,fontWeight:700,padding:"6px 12px",cursor:"pointer",
+                      fontFamily:"inherit",lineHeight:1}}>
+                    ⋯
+                  </button>
+                  {showUtilMenu&&(
+                    <>
+                      <div style={{position:"fixed",inset:0,zIndex:49}} onClick={()=>setShowUtilMenu(false)}/>
+                      <div style={{position:"absolute",right:0,top:"calc(100% + 6px)",zIndex:50,
+                        background:C.card,border:`1px solid ${C.border}`,borderRadius:10,
+                        boxShadow:"0 8px 24px rgba(0,0,0,0.3)",minWidth:160,overflow:"hidden"}}>
+                        <button onClick={()=>{setShowUtilMenu(false);localStorage.removeItem("he_identity");setIdentity(null);}}
+                          style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",
+                            borderBottom:`1px solid ${C.border}`,color:C.text,fontSize:12,fontWeight:600,
+                            padding:"10px 16px",cursor:"pointer",fontFamily:"inherit"}}>
+                          🔒 Lock
+                        </button>
+                        <button onClick={()=>{setShowUtilMenu(false);backupByEmail();}}
+                          style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",
+                            borderBottom:`1px solid ${C.border}`,color:C.text,fontSize:12,fontWeight:600,
+                            padding:"10px 16px",cursor:"pointer",fontFamily:"inherit"}}>
+                          Backup
+                        </button>
+                        <button onClick={()=>{setShowUtilMenu(false);window.location.reload();}}
+                          style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",
+                            borderBottom:getAccess(identity)==="admin"?`1px solid ${C.border}`:"none",
+                            color:C.text,fontSize:12,fontWeight:600,
+                            padding:"10px 16px",cursor:"pointer",fontFamily:"inherit"}}>
+                          ↻ Refresh
+                        </button>
+                        {getAccess(identity)==="admin"&&(
+                          <button onClick={async()=>{
+                              setShowUtilMenu(false);
+                              try {
+                                const result = await syncDriveFoldersToJobs(jobs, updateJob);
+                                const msg = `Drive Sync Complete!\n\n` +
+                                  `${result.matched.length} new match${result.matched.length===1?"":"es"} linked` +
+                                  (result.matched.length > 0 ? ":\n" + result.matched.map(m=>`  ${m.folderName} → ${m.jobName}`).join("\n") : "") +
+                                  `\n${result.skipped.length} already linked` +
+                                  (result.ambiguous.length > 0 ? `\n${result.ambiguous.length} ambiguous (skipped):\n` + result.ambiguous.map(a=>`  ${a.jobName}: ${a.folders.join(", ")}`).join("\n") : "") +
+                                  `\n\n${result.total} Drive folders scanned`;
+                                alert(msg);
+                              } catch(e) { alert("Drive sync failed: " + e.message); }
+                            }}
+                            style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",
+                              color:C.blue,fontSize:12,fontWeight:600,
+                              padding:"10px 16px",cursor:"pointer",fontFamily:"inherit"}}>
+                            Sync Drive
+                          </button>
+                        )}
+                      </div>
+                    </>
+                  )}
+                </div>
                 <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);}}
                   style={{background:C.accent,border:"none",borderRadius:8,color:"#000",
                     fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
