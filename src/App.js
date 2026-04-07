@@ -6273,15 +6273,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 {job.name||"New Job"}
 
               </div>
-              {simproFinancials && (()=>{
-                const m = simproFinancials.hasActualCosts
-                  ? simproFinancials.marginActual
-                  : simproFinancials.marginEstimate;
-                if (m == null) return null;
-                const isEst = !simproFinancials.hasActualCosts;
+              {simproFinancials?.margin != null && (()=>{
+                const m = simproFinancials.margin;
+                const isEst = simproFinancials.isEstimate;
                 const mc = m >= 15 ? "#22c55e" : m >= 10 ? C.orange : C.red;
                 return (
-                  <span title={`${isEst ? "Estimated" : "Actual"} net margin (Simpro) · Goal: 15%`}
+                  <span title={`${isEst ? "Estimated" : "Actual"} net margin · Goal: 15%`}
                     style={{fontSize:11,fontWeight:800,color:mc,background:`${mc}18`,
                       border:`1px solid ${mc}44`,borderRadius:99,padding:"2px 9px",
                       fontFamily:"'DM Sans',sans-serif",letterSpacing:"0.04em",flexShrink:0}}>
