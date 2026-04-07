@@ -11959,12 +11959,22 @@ function PunchSharePage({ jobId, stage }) {
   const pct = totalItems>0 ? Math.round(doneItems/totalItems*100) : 0;
 
   const renderItems = (items) => (items||[]).map(item=>(
-    <div key={item.id} style={{display:'flex',alignItems:'flex-start',gap:8,padding:'8px 0',borderBottom:'1px solid #f3f4f6'}}>
-      <div style={{width:16,height:16,borderRadius:4,border:`2px solid ${item.done?stageColor:'#d1d5db'}`,
-        background:item.done?stageColor:'#fff',flexShrink:0,marginTop:1,display:'flex',alignItems:'center',justifyContent:'center'}}>
-        {item.done&&<span style={{color:'#fff',fontSize:9,fontWeight:900,lineHeight:1}}>✓</span>}
+    <div key={item.id} style={{padding:'8px 0',borderBottom:'1px solid #f3f4f6'}}>
+      <div style={{display:'flex',alignItems:'flex-start',gap:8}}>
+        <div style={{width:16,height:16,borderRadius:4,border:`2px solid ${item.done?stageColor:'#d1d5db'}`,
+          background:item.done?stageColor:'#fff',flexShrink:0,marginTop:1,display:'flex',alignItems:'center',justifyContent:'center'}}>
+          {item.done&&<span style={{color:'#fff',fontSize:9,fontWeight:900,lineHeight:1}}>✓</span>}
+        </div>
+        <span style={{fontSize:13,color:item.done?'#9ca3af':'#1f2937',textDecoration:item.done?'line-through':'none',lineHeight:1.45}} dangerouslySetInnerHTML={{__html:item.text}}/>
       </div>
-      <span style={{fontSize:13,color:item.done?'#9ca3af':'#1f2937',textDecoration:item.done?'line-through':'none',lineHeight:1.45}} dangerouslySetInnerHTML={{__html:item.text}}/>
+      {item.waiting && !item.done && (
+        <div style={{marginLeft:24,marginTop:4}}>
+          <span style={{fontSize:11,fontWeight:700,background:'#fef3c7',color:'#92400e',
+            borderRadius:99,padding:'2px 9px',border:'1px solid #fcd34d'}}>
+            ⏳ {item.waitingOn ? `Waiting on: ${item.waitingOn}` : 'Waiting'}
+          </span>
+        </div>
+      )}
     </div>
   ));
 
