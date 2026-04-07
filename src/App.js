@@ -349,7 +349,7 @@ const migrateFloorToModules = (arr) => {
 };
 
 const newKPRow         = (num) => ({ id:uid(), num, name:"", status:"" });
-const newCentralLoad   = ()    => ({ id:uid(), name:"", location:"", loadType:"", watts:"" });
+const newCentralLoad   = ()    => ({ id:uid(), name:"", location:"", loadType:"", watts:"", pulled:false });
 
 const emptyPunch   = ()    => ({ upper:[], main:[], basement:[] });
 
@@ -4164,6 +4164,7 @@ function LoadsList({loads,onChange,floorOptions,allModules=[],onAssignToModule})
   };
   const del = (id)   => onChange(loads.filter(l=>l.id!==id));
 
+  const [selecting, setSelecting] = useState(false);
   const [selected,  setSelected]  = useState(new Set());
   const [focusLast, setFocusLast] = useState(false);
   const [batchLoc,  setBatchLoc]  = useState("");
@@ -4171,6 +4172,8 @@ function LoadsList({loads,onChange,floorOptions,allModules=[],onAssignToModule})
   const lastRef = useRef(null);
 
   const add = () => { onChange([...loads, newCentralLoad()]); setFocusLast(true); };
+
+  const exitSelect = () => { setSelecting(false); setSelected(new Set()); setBatchLoc(""); setBatchMod(""); };
 
   useEffect(()=>{
     if(focusLast && lastRef.current){ lastRef.current.focus(); setFocusLast(false); }
@@ -4192,7 +4195,10 @@ function LoadsList({loads,onChange,floorOptions,allModules=[],onAssignToModule})
     setSelected(new Set()); setBatchMod("");
   };
 
-  const COL = "20px 24px 1fr 100px 72px 52px 20px";
+  const namedLoads  = loads.filter(l=>l.name.trim());
+  const pulledCount = namedLoads.filter(l=>l.pulled).length;
+  const pullPct     = namedLoads.length>0 ? Math.round((pulledCount/namedLoads.length)*100) : 0;
+  const COL = selecting ? "20px 16px 24px 1fr 100px 72px 52px 20px" : "16px 24px 1fr 100px 72px 52px 20px";
 
   return (
     <div style={{marginBottom:22}}>
@@ -4200,11 +4206,22 @@ function LoadsList({loads,onChange,floorOptions,allModules=[],onAssignToModule})
         <span style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em",textTransform:"uppercase"}}>
           All Loads&nbsp;<span style={{color:`${C.purple}99`,fontWeight:400,textTransform:"none"}}>— define here, assign to keypads &amp; modules below</span>
         </span>
-        <Btn onClick={add} variant="add" style={{fontSize:11,padding:"3px 10px"}}>+ Add Load</Btn>
+        <div style={{display:"flex",gap:6}}>
+          {loads.length>0&&(
+            <button onClick={selecting?exitSelect:()=>setSelecting(true)}
+              style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:99,cursor:"pointer",fontFamily:"inherit",
+                background:selecting?`${C.purple}18`:"none",
+                border:`1px solid ${selecting?C.purple:C.border}`,
+                color:selecting?C.purple:C.dim}}>
+              {selecting?"✕ Cancel":"Select"}
+            </button>
+          )}
+          <Btn onClick={add} variant="add" style={{fontSize:11,padding:"3px 10px"}}>+ Add Load</Btn>
+        </div>
       </div>
 
-      {/* ── Action bar (visible when rows selected) ── */}
-      {selected.size>0&&(
+      {/* ── Action bar (visible in select mode with rows selected) ── */}
+      {selecting&&selected.size>0&&(
         <div style={{background:`${C.purple}0d`,border:`1px solid ${C.purple}33`,borderRadius:8,
           padding:"8px 10px",marginBottom:10,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
           <span style={{fontSize:11,fontWeight:700,color:C.purple,whiteSpace:"nowrap"}}>{selected.size} selected</span>
@@ -4239,7 +4256,7 @@ function LoadsList({loads,onChange,floorOptions,allModules=[],onAssignToModule})
               Add to Module
             </button>
           </>}
-          <button onClick={()=>setSelected(new Set())}
+          <button onClick={exitSelect}
             style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>
             Clear
           </button>
@@ -4253,19 +4270,33 @@ function LoadsList({loads,onChange,floorOptions,allModules=[],onAssignToModule})
         </div>
       ) : (
         <>
+          {namedLoads.length>0&&(
+            <div style={{marginBottom:10}}>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                <span style={{fontSize:10,color:C.dim}}>Pull progress</span>
+                <span style={{fontSize:11,fontWeight:700,color:pullPct===100?C.green:C.purple}}>{pulledCount}/{namedLoads.length} — {pullPct}%</span>
+              </div>
+              <div style={{height:5,background:C.border,borderRadius:99,overflow:"hidden"}}>
+                <div style={{height:"100%",width:`${pullPct}%`,background:pullPct===100?C.green:C.purple,borderRadius:99,transition:"width 0.4s"}}/>
+              </div>
+            </div>
+          )}
           <div style={{display:"grid",gridTemplateColumns:COL,gap:6,marginBottom:4,paddingBottom:4,borderBottom:`1px solid ${C.border}`,alignItems:"center"}}>
-            <input type="checkbox" checked={allSel} onChange={toggleAll}
-              style={{width:14,height:14,accentColor:C.purple,cursor:"pointer",margin:0}}/>
-            {["#","Load Name","Location","Type","Watts",""].map((h,i)=>(
-              <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em"}}>{h}</div>
+            {selecting&&<input type="checkbox" checked={allSel} onChange={toggleAll}
+              style={{width:14,height:14,accentColor:C.purple,cursor:"pointer",margin:0}}/>}
+            {["✓","#","Load Name","Location","Type","Watts",""].map((h,i)=>(
+              <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em",textAlign:i===0?"center":"left"}}>{h}</div>
             ))}
           </div>
           {loads.map((l,li)=>(
             <div key={l.id} style={{display:"grid",gridTemplateColumns:COL,gap:6,marginBottom:4,alignItems:"center",
               borderRadius:6,padding:"2px 0",
-              background:selected.has(l.id)?`${C.purple}0d`:"transparent"}}>
-              <input type="checkbox" checked={selected.has(l.id)} onChange={()=>toggleSel(l.id)}
-                style={{width:14,height:14,accentColor:C.purple,cursor:"pointer",margin:0}}/>
+              background:l.pulled?"rgba(34,197,94,0.08)":selecting&&selected.has(l.id)?`${C.purple}0d`:"transparent"}}>
+              {selecting&&<input type="checkbox" checked={selected.has(l.id)} onChange={()=>toggleSel(l.id)}
+                style={{width:14,height:14,accentColor:C.purple,cursor:"pointer",margin:0}}/>}
+              <input type="checkbox" checked={!!l.pulled} onChange={e=>upd(l.id,{pulled:e.target.checked})}
+                title="Mark as pulled"
+                style={{width:15,height:15,accentColor:C.green,cursor:"pointer",margin:"0 auto",display:"block"}}/>
               <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:2}}>{li+1}.</span>
               <input
                 ref={li===loads.length-1?lastRef:null}
