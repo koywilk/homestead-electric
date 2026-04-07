@@ -9868,14 +9868,17 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
       .catch(() => {}); // silent — crew counts are supplementary
   }, [calMonth]);
 
-  // Set of Simpro ProjectIDs (as strings) that have any schedule entry this month
-  const simproScheduledNos = useMemo(() => {
-    const s = new Set();
+  // Map of date (YYYY-MM-DD) → Set of Simpro ProjectIDs scheduled that day
+  const simproByDate = useMemo(() => {
+    const map = new Map();
     simproSchedule.forEach(entry => {
       const pid = entry.Project?.ProjectID;
-      if (pid) s.add(String(pid));
+      const date = entry.Date; // "YYYY-MM-DD"
+      if (!pid || !date) return;
+      if (!map.has(date)) map.set(date, new Set());
+      map.get(date).add(String(pid));
     });
-    return s;
+    return map;
   }, [simproSchedule]);
 
   const today = new Date(); today.setHours(0,0,0,0);
@@ -10064,7 +10067,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
     const over=isOverdue(ev.startDate,ev.status);
     const col=over?C.red:ev.color;
     const sno=ev.job.simproNo?String(ev.job.simproNo):null;
-    const inSimpro=sno&&simproScheduledNos.has(sno);
+    const inSimpro=sno&&ev.startDate&&(simproByDate.get(ev.startDate)?.has(sno)||false);
     const notScheduled=sno&&!inSimpro;
     return (
       <div onClick={e=>{e.stopPropagation();onSelectJob(ev.job);}}
@@ -10095,7 +10098,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
     const col=over?C.red:ev.color;
     const fc=ev.fc;
     const sno=ev.job.simproNo?String(ev.job.simproNo):null;
-    const inSimpro=sno&&simproScheduledNos.has(sno);
+    const inSimpro=sno&&ev.startDate&&(simproByDate.get(ev.startDate)?.has(sno)||false);
     const notScheduled=sno&&!inSimpro;
     return (
       <div onClick={()=>onSelectJob(ev.job)}
