@@ -4269,17 +4269,42 @@ function LoadsList({loads,onChange,floorOptions,allModules=[],onAssignToModule})
         </div>
       ) : (
         <>
-          {namedLoads.length>0&&(
-            <div style={{marginBottom:10}}>
-              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
-                <span style={{fontSize:10,color:C.dim}}>Pull progress</span>
-                <span style={{fontSize:11,fontWeight:700,color:pullPct===100?C.green:C.purple}}>{pulledCount}/{namedLoads.length} — {pullPct}%</span>
+          {namedLoads.length>0&&(()=>{
+            // Build per-floor counts
+            const byFloor = {};
+            namedLoads.forEach(l=>{
+              const fl = l.location||"Unassigned";
+              if(!byFloor[fl]) byFloor[fl]={total:0,pulled:0};
+              byFloor[fl].total++;
+              if(l.pulled) byFloor[fl].pulled++;
+            });
+            const floors = Object.entries(byFloor);
+            return (
+              <div style={{marginBottom:10}}>
+                {/* Total bar */}
+                <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
+                  <span style={{fontSize:10,color:C.dim,fontWeight:700}}>Total</span>
+                  <span style={{fontSize:11,fontWeight:700,color:pullPct===100?C.green:C.purple}}>{pulledCount}/{namedLoads.length} — {pullPct}%</span>
+                </div>
+                <div style={{height:5,background:C.border,borderRadius:99,overflow:"hidden",marginBottom:8}}>
+                  <div style={{height:"100%",width:`${pullPct}%`,background:pullPct===100?C.green:C.purple,borderRadius:99,transition:"width 0.4s"}}/>
+                </div>
+                {/* Per-floor rows */}
+                {floors.length>1&&floors.map(([fl,{total,pulled:p}])=>{
+                  const pct = Math.round((p/total)*100);
+                  return (
+                    <div key={fl} style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                      <span style={{fontSize:10,color:C.dim,width:90,flexShrink:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{fl}</span>
+                      <div style={{flex:1,height:4,background:C.border,borderRadius:99,overflow:"hidden"}}>
+                        <div style={{height:"100%",width:`${pct}%`,background:pct===100?C.green:`${C.purple}99`,borderRadius:99,transition:"width 0.4s"}}/>
+                      </div>
+                      <span style={{fontSize:10,fontWeight:700,color:pct===100?C.green:C.dim,whiteSpace:"nowrap"}}>{p}/{total}</span>
+                    </div>
+                  );
+                })}
               </div>
-              <div style={{height:5,background:C.border,borderRadius:99,overflow:"hidden"}}>
-                <div style={{height:"100%",width:`${pullPct}%`,background:pullPct===100?C.green:C.purple,borderRadius:99,transition:"width 0.4s"}}/>
-              </div>
-            </div>
-          )}
+            );
+          })()}
           <div style={{display:"grid",gridTemplateColumns:COL,gap:6,marginBottom:4,paddingBottom:4,borderBottom:`1px solid ${C.border}`,alignItems:"center"}}>
             {selecting&&<input type="checkbox" checked={allSel} onChange={toggleAll}
               style={{width:14,height:14,accentColor:C.purple,cursor:"pointer",margin:0}}/>}
