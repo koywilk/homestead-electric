@@ -6141,7 +6141,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     setFinancialsError(null);
     const fn = httpsCallable(functions, "getSimproJobFinancials");
     fn({ simproJobNo: job.simproNo })
-      .then(res => { setFinancials(res.data); setFinancialsLoading(false); })
+      .then(res => { console.log("SIMPRO JOB DATA:", res.data?._raw); setFinancials(res.data); setFinancialsLoading(false); })
       .catch(e => { setFinancialsError(e?.message || "Failed"); setFinancialsLoading(false); });
   }, [job.simproNo]);
 
