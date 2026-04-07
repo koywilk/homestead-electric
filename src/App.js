@@ -5929,6 +5929,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
           {/* Job Info */}
           <div style={{marginBottom:24}}>
             <div style={{fontSize:10,fontWeight:800,color:C.dim,letterSpacing:"0.12em",marginBottom:12}}>JOB INFO</div>
+
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
               {[["name","Job Name"],["address","Address"],["gc","General Contractor"],["phone","GC Phone"],["simproNo","Simpro Job #"],["lead","Lead"]].map(([k,l])=>(
                 <div key={k}>
@@ -6130,6 +6131,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
   const [refreshing, setRefreshing] = useState(false);
 
+  // Simpro financials — fetched on open if job has a simproNo
+  const [financials, setFinancials] = useState(null);
+  const [financialsLoading, setFinancialsLoading] = useState(false);
+  useEffect(() => {
+    if (!job.simproNo) { setFinancials(null); return; }
+    setFinancialsLoading(true);
+    const fn = httpsCallable(functions, "getSimproJobFinancials");
+    fn({ simproJobNo: job.simproNo })
+      .then(res => { setFinancials(res.data); setFinancialsLoading(false); })
+      .catch(() => { setFinancialsLoading(false); });
+  }, [job.simproNo]);
+
   // Live listener for GC question answers + LV lighting collab
   useEffect(() => {
     const unsub = onSnapshot(doc(db,'homeowner_requests',job.id), snap => {
@@ -6253,14 +6266,28 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
           <div>
 
-            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>
 
-              {job.type==="quote"&&<span style={{fontSize:12,color:"#000",fontFamily:"'DM Sans',sans-serif",fontWeight:700,letterSpacing:"0.05em",marginRight:8,background:C.accent,borderRadius:5,padding:"2px 7px"}}>{job.quoteNumber||"QUOTE"}</span>}
+                {job.type==="quote"&&<span style={{fontSize:12,color:"#000",fontFamily:"'DM Sans',sans-serif",fontWeight:700,letterSpacing:"0.05em",marginRight:8,background:C.accent,borderRadius:5,padding:"2px 7px"}}>{job.quoteNumber||"QUOTE"}</span>}
 
-              {job.simproNo&&<span style={{fontSize:13,color:C.dim,fontFamily:"'DM Sans',sans-serif",fontWeight:600,letterSpacing:"0.05em",marginRight:8}}>#{job.simproNo}</span>}
+                {job.simproNo&&<span style={{fontSize:13,color:C.dim,fontFamily:"'DM Sans',sans-serif",fontWeight:600,letterSpacing:"0.05em",marginRight:8}}>#{job.simproNo}</span>}
 
-              {job.name||"New Job"}
+                {job.name||"New Job"}
 
+              </div>
+              {financials?.margin != null && (()=>{
+                const m = financials.margin;
+                const mc = m >= 15 ? "#22c55e" : m >= 10 ? C.orange : C.red;
+                return (
+                  <span title={`Net margin · Goal: 15%`}
+                    style={{fontSize:11,fontWeight:800,color:mc,background:`${mc}18`,
+                      border:`1px solid ${mc}44`,borderRadius:99,padding:"2px 9px",
+                      fontFamily:"'DM Sans',sans-serif",letterSpacing:"0.04em",flexShrink:0}}>
+                    {m.toFixed(1)}%
+                  </span>
+                );
+              })()}
             </div>
 
             <div style={{fontSize:11,color:C.dim,marginTop:2}}>
