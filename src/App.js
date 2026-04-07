@@ -6370,7 +6370,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     if (!job.simproNo) { setSimproFinancials(null); return; }
     const fn = httpsCallable(functions, "getSimproJobFinancials");
     fn({ simproJobNo: job.simproNo })
-      .then(res => setSimproFinancials(res.data))
+      .then(res => {
+        setSimproFinancials(res.data);
+        // Cache on the job doc so the job board can show it without an extra call
+        u({ simproMargin: res.data.margin, simproMarginIsEst: res.data.isEstimate });
+      })
       .catch(() => setSimproFinancials(null));
   }, [job.simproNo]);
 
@@ -13517,6 +13521,16 @@ function App() {
               {job.type==="quote"&&<span style={{fontSize:10,fontWeight:700,color:"#000",background:C.accent,borderRadius:4,padding:"1px 6px",flexShrink:0}}>{job.quoteNumber||"Q"}</span>}
 
               <span style={{fontWeight:600,fontSize:13,color:C.text}}>{job.name||"Untitled Job"}</span>
+
+              {job.simproMargin!=null&&(()=>{
+                const m=job.simproMargin, isEst=job.simproMarginIsEst;
+                const mc=m>=15?"#22c55e":m>=10?C.orange:C.red;
+                return <span title={`${isEst?"Estimated":"Actual"} net margin · Goal: 15%`}
+                  style={{fontSize:10,fontWeight:800,color:mc,background:`${mc}18`,
+                    border:`1px solid ${mc}44`,borderRadius:99,padding:"1px 7px",flexShrink:0}}>
+                  {m.toFixed(1)}%{isEst?" est":""}
+                </span>;
+              })()}
 
             </div>
 
