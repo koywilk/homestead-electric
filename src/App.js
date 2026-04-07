@@ -348,7 +348,8 @@ const migrateFloorToModules = (arr) => {
   return order.map(k=>({ ...map[k], loads: map[k].loads.length ? map[k].loads : [newLoadRow(1)] }));
 };
 
-const newKPRow     = (num) => ({ id:uid(), num, name:"", status:"" });
+const newKPRow         = (num) => ({ id:uid(), num, name:"", status:"" });
+const newCentralLoad   = ()    => ({ id:uid(), name:"", location:"", loadType:"", watts:"" });
 
 const emptyPunch   = ()    => ({ upper:[], main:[], basement:[] });
 
@@ -806,6 +807,8 @@ const blankJob = () => ({
   panelCounts:{ meter:"", panelA:"", panelB:"", dedicated:"" },
 
   panelizedLighting:{
+
+    loads:          [],
 
     mainKeypad:     Array.from({length:10},(_,i)=>newKPRow(i+1)),
 
@@ -4147,8 +4150,66 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
 
 // ── Panelized Lighting ────────────────────────────────────────
 
-function KeypadSection({loads,onChange,label}) {
+// ── Central Loads List ────────────────────────────────────────
+function LoadsList({loads,onChange,floorOptions}) {
+  const upd = (id,p) => onChange(loads.map(l=>l.id===id?{...l,...p}:l));
+  const del = (id)   => onChange(loads.filter(l=>l.id!==id));
+  const add = ()     => onChange([...loads, newCentralLoad()]);
 
+  const byLocation = {};
+  loads.forEach(l=>{
+    const loc = l.location||"Unassigned";
+    if(!byLocation[loc]) byLocation[loc]=[];
+    byLocation[loc].push(l);
+  });
+
+  return (
+    <div style={{marginBottom:22}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
+        <span style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em",textTransform:"uppercase"}}>
+          All Loads&nbsp;<span style={{color:`${C.purple}99`,fontWeight:400,textTransform:"none"}}>— define here, then assign to keypads &amp; modules below</span>
+        </span>
+        <Btn onClick={add} variant="add" style={{fontSize:11,padding:"3px 10px"}}>+ Add Load</Btn>
+      </div>
+
+      {loads.length===0 ? (
+        <div style={{fontSize:11,color:C.dim,textAlign:"center",padding:"14px 0",
+          border:`1px dashed ${C.border}`,borderRadius:8,background:C.surface}}>
+          No loads yet — add loads, then assign them to keypads and modules
+        </div>
+      ) : (
+        <>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 100px 72px 52px 24px",gap:6,marginBottom:4,paddingBottom:4,borderBottom:`1px solid ${C.border}`}}>
+            {["Load Name","Location","Type","Watts",""].map((h,i)=>(
+              <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em"}}>{h}</div>
+            ))}
+          </div>
+          {loads.map(l=>(
+            <div key={l.id} style={{display:"grid",gridTemplateColumns:"1fr 100px 72px 52px 24px",gap:6,marginBottom:4,alignItems:"center"}}>
+              <Inp value={l.name} onChange={e=>upd(l.id,{name:e.target.value})} placeholder="Load name…"/>
+              <input
+                list="pl-floor-opts"
+                value={l.location||""} onChange={e=>upd(l.id,{location:e.target.value})}
+                placeholder="Floor / area"
+                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+                  padding:"6px 8px",fontSize:11,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
+              <Sel value={l.loadType||""} onChange={e=>upd(l.id,{loadType:e.target.value})} options={LOAD_TYPES} style={{fontSize:10}}/>
+              <Inp value={l.watts||""} onChange={e=>upd(l.id,{watts:e.target.value})} placeholder="W" style={{textAlign:"center",fontSize:10}}/>
+              <button onClick={()=>del(l.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+            </div>
+          ))}
+          <datalist id="pl-floor-opts">
+            {(floorOptions||[]).map(f=><option key={f} value={f}/>)}
+          </datalist>
+        </>
+      )}
+    </div>
+  );
+}
+
+function KeypadSection({loads,onChange,label,allLoads=[]}) {
+
+  const dlId   = `kp-dl-${label.replace(/\W+/g,'-')}`;
   const upd    = (id,p) => onChange(loads.map(r=>r.id===id?{...r,...p}:r));
 
   const addRow = () => onChange([...loads, newKPRow(loads.length+1)]);
@@ -4184,6 +4245,8 @@ function KeypadSection({loads,onChange,label}) {
         </div>
       )}
 
+      {allLoads.length>0&&<datalist id={dlId}>{allLoads.filter(l=>l.name.trim()).map(l=><option key={l.id} value={l.name}/>)}</datalist>}
+
       <div style={{display:"grid",gridTemplateColumns:"36px 1fr 80px 28px",gap:6,marginBottom:6}}>
 
         {["#","Keypad Load Name","Status",""].map((h,i)=>(
@@ -4202,7 +4265,10 @@ function KeypadSection({loads,onChange,label}) {
 
           <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:6}}>{r.num}.</span>
 
-          <Inp value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"/>
+          <input list={allLoads.length>0?dlId:undefined}
+            value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"
+            style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+              padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
 
           <Sel value={r.status||""} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
             style={{color:r.status==="Pulled"?C.green:r.status==="Need Specs"?C.red:C.text,fontSize:10}}/>
@@ -4222,7 +4288,7 @@ function KeypadSection({loads,onChange,label}) {
 }
 
 
-function PanelModulesSection({modules,onChange,system}) {
+function PanelModulesSection({modules,onChange,system,allLoads=[]}) {
 
   const sys = system||"Control 4";
   const isSav = sys==="Savant", isLut = sys==="Lutron", isCres = sys==="Crestron";
@@ -4317,6 +4383,7 @@ function PanelModulesSection({modules,onChange,system}) {
 
             {/* ── Load rows ── */}
             <div style={{padding:"6px 10px 4px"}}>
+              {allLoads.length>0&&<datalist id={`mod-dl-${mod.id}`}>{allLoads.filter(l=>l.name.trim()).map(l=><option key={l.id} value={l.name}>{l.location?`(${l.location})`:""}</option>)}</datalist>}
               <div style={{display:"grid",gridTemplateColumns:rowGrid,gap:4,marginBottom:4}}>
                 {rowHeaders.map((h,i)=><div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em"}}>{h}</div>)}
               </div>
@@ -4327,7 +4394,10 @@ function PanelModulesSection({modules,onChange,system}) {
                   <input type="checkbox" checked={!!load.pulled} onChange={e=>updLoad(mod.id,load.id,{pulled:e.target.checked})}
                     style={{width:15,height:15,accentColor:C.purple,cursor:"pointer",margin:0}}/>
                   <span style={{fontSize:11,color:C.muted,textAlign:"center",fontWeight:700}}>{load.num}</span>
-                  <Inp value={load.name} onChange={e=>updLoad(mod.id,load.id,{name:e.target.value})} placeholder="Load name…"/>
+                  <input list={allLoads.length>0?`mod-dl-${mod.id}`:undefined}
+                    value={load.name} onChange={e=>updLoad(mod.id,load.id,{name:e.target.value})} placeholder="Load name…"
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+                      padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
                   <Inp value={load.ch||""} onChange={e=>updLoad(mod.id,load.id,{ch:e.target.value})} placeholder="Ch" style={{textAlign:"center",fontSize:10}}/>
                   <Sel value={load.loadType||""} onChange={e=>updLoad(mod.id,load.id,{loadType:e.target.value})} options={LOAD_TYPES} style={{fontSize:10}}/>
                   <Inp value={load.watts||""} onChange={e=>updLoad(mod.id,load.id,{watts:e.target.value})} placeholder="W" style={{textAlign:"center",fontSize:10}}/>
@@ -6878,25 +6948,43 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               )}
 
+              <SectionHead label="Loads" color={C.purple}/>
+
+              <LoadsList
+                loads={job.panelizedLighting.loads||[]}
+                onChange={v=>u({panelizedLighting:{...job.panelizedLighting,loads:v}})}
+                floorOptions={[
+                  "Main Level","Basement","Upper Level",
+                  ...(job.panelizedLighting.extraFloors||[]).map(ef=>ef.label),
+                ]}/>
+
               <SectionHead label={`${job.lightingSystem||"Control 4"} Keypads`} color={C.purple}/>
+
+              {(()=>{const al=job.panelizedLighting.loads||[]; return (<>
 
               <KeypadSection label="Main Level Keypad Loads"
                 loads={job.panelizedLighting.mainKeypad}
+                allLoads={al}
                 onChange={v=>u({panelizedLighting:{...job.panelizedLighting,mainKeypad:v}})}/>
 
               <KeypadSection label="Basement Keypad Loads"
                 loads={job.panelizedLighting.basementKeypad}
+                allLoads={al}
                 onChange={v=>u({panelizedLighting:{...job.panelizedLighting,basementKeypad:v}})}/>
 
               <KeypadSection label="Upper Level Keypad Loads"
                 loads={job.panelizedLighting.upperKeypad}
+                allLoads={al}
                 onChange={v=>u({panelizedLighting:{...job.panelizedLighting,upperKeypad:v}})}/>
 
               {(job.panelizedLighting.extraFloors||[]).map(ef=>(
                 <KeypadSection key={ef.key} label={`${ef.label} Keypad Loads`}
                   loads={(job.panelizedLighting[ef.key+"_keypad"])||[]}
+                  allLoads={al}
                   onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key+"_keypad"]:v}})}/>
               ))}
+
+              </>);})()}
 
               <SectionHead label={`${job.lightingSystem||"Control 4"} Panel Loads`} color={C.purple}/>
 
@@ -6918,6 +7006,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   </div>
                   <PanelModulesSection
                     system={job.lightingSystem||"Control 4"}
+                    allLoads={job.panelizedLighting.loads||[]}
                     modules={migrateFloorToModules((job.panelizedLighting.cp4Loads?.[floor])||[])}
                     onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
                       cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}/>
@@ -6946,6 +7035,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   </div>
                   <PanelModulesSection
                     system={job.lightingSystem||"Control 4"}
+                    allLoads={job.panelizedLighting.loads||[]}
                     modules={migrateFloorToModules((job.panelizedLighting[ef.key])||[])}
                     onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}/>
                 </div>
