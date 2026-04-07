@@ -6134,13 +6134,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // Simpro financials — fetched on open if job has a simproNo
   const [financials, setFinancials] = useState(null);
   const [financialsLoading, setFinancialsLoading] = useState(false);
+  const [financialsError, setFinancialsError] = useState(null);
   useEffect(() => {
-    if (!job.simproNo) { setFinancials(null); return; }
+    if (!job.simproNo) { setFinancials(null); setFinancialsError(null); return; }
     setFinancialsLoading(true);
+    setFinancialsError(null);
     const fn = httpsCallable(functions, "getSimproJobFinancials");
     fn({ simproJobNo: job.simproNo })
       .then(res => { setFinancials(res.data); setFinancialsLoading(false); })
-      .catch(() => { setFinancialsLoading(false); });
+      .catch(e => { setFinancialsError(e?.message || "Failed"); setFinancialsLoading(false); });
   }, [job.simproNo]);
 
   // Live listener for GC question answers + LV lighting collab
@@ -6276,7 +6278,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 {job.name||"New Job"}
 
               </div>
-              {financials?.margin != null && (()=>{
+              {financialsLoading && (
+                <span style={{fontSize:10,color:C.muted,fontStyle:"italic",flexShrink:0}}>loading margin…</span>
+              )}
+              {financialsError && (
+                <span title={financialsError} style={{fontSize:10,color:C.red,flexShrink:0}}>margin error</span>
+              )}
+              {!financialsLoading && !financialsError && financials?.margin != null && (()=>{
                 const m = financials.margin;
                 const mc = m >= 15 ? "#22c55e" : m >= 10 ? C.orange : C.red;
                 return (
