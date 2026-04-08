@@ -6605,6 +6605,20 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   </span>
                 );
               })()}
+              {(simproFinancials?.laborHoursActual != null || simproFinancials?.laborHoursEstimate != null) && (()=>{
+                const ha = simproFinancials.laborHoursActual;
+                const he = simproFinancials.laborHoursEstimate;
+                const over = ha != null && he != null && ha > he;
+                const hc = over ? C.red : "#8b5cf6";
+                return (
+                  <span title="Total labor hours: used / estimated"
+                    style={{fontSize:11,fontWeight:800,color:hc,background:`${hc}18`,
+                      border:`1px solid ${hc}44`,borderRadius:99,padding:"2px 9px",
+                      fontFamily:"'DM Sans',sans-serif",letterSpacing:"0.04em",flexShrink:0}}>
+                    ⏱ {ha != null ? `${Math.round(ha)}` : "?"}h / {he != null ? `${Math.round(he)}` : "?"}h est
+                  </span>
+                );
+              })()}
             </div>
 
             <div style={{fontSize:11,color:C.dim,marginTop:2}}>
@@ -6744,6 +6758,20 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                       {/* STATUS — top */}
                       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:10}}>
+                        {(simproFinancials?.roughHoursActual != null || simproFinancials?.roughHoursEstimate != null) && (()=>{
+                          const ha = simproFinancials.roughHoursActual;
+                          const he = simproFinancials.roughHoursEstimate;
+                          const over = ha != null && he != null && ha > he;
+                          const hc = over ? C.red : "#8b5cf6";
+                          return (
+                            <span title="Rough labor hours: used / estimated"
+                              style={{fontSize:11,fontWeight:800,color:hc,background:`${hc}18`,
+                                border:`1px solid ${hc}44`,borderRadius:99,padding:"2px 8px",
+                                fontFamily:"'DM Sans',sans-serif",letterSpacing:"0.04em",flexShrink:0}}>
+                              ⏱ {ha != null ? `${Math.round(ha)}` : "?"}h / {he != null ? `${Math.round(he)}` : "?"}h est
+                            </span>
+                          );
+                        })()}
                         <select value={job.roughStatus||""} onChange={e=>{
                           const v=e.target.value;
                           if(v==="complete"){
@@ -6935,6 +6963,20 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                       {/* STATUS — top */}
                       <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",marginBottom:10}}>
+                        {(simproFinancials?.finishHoursActual != null || simproFinancials?.finishHoursEstimate != null) && (()=>{
+                          const ha = simproFinancials.finishHoursActual;
+                          const he = simproFinancials.finishHoursEstimate;
+                          const over = ha != null && he != null && ha > he;
+                          const hc = over ? C.red : "#8b5cf6";
+                          return (
+                            <span title="Finish labor hours: used / estimated"
+                              style={{fontSize:11,fontWeight:800,color:hc,background:`${hc}18`,
+                                border:`1px solid ${hc}44`,borderRadius:99,padding:"2px 8px",
+                                fontFamily:"'DM Sans',sans-serif",letterSpacing:"0.04em",flexShrink:0}}>
+                              ⏱ {ha != null ? `${Math.round(ha)}` : "?"}h / {he != null ? `${Math.round(he)}` : "?"}h est
+                            </span>
+                          );
+                        })()}
                         <select value={job.finishStatus||""} onChange={e=>{
                           const v=e.target.value;
                           if(v==="complete"){
