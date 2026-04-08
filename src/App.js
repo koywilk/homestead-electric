@@ -12995,6 +12995,7 @@ function App() {
 
   const initialLoad  = useRef(true);
   const pendingUpcomingDeletes = useRef(new Set());
+  const pendingUpcomingSaves   = useRef(new Map()); // id → item, for in-flight saves
 
 
   const jobsRef   = useRef(jobs);
@@ -13156,13 +13157,26 @@ function App() {
       (snap) => {
         // Use d.id (Firestore doc ID) as the authoritative item ID so that
         // deleteDoc(item.id) always targets the correct document.
-        // Filter out any items whose delete is still in-flight so the snapshot
-        // doesn't race and re-add them before the server confirms the removal.
-        const loaded = snap.docs
+        const fromServer = snap.docs
           .map(d=>{ const data=d.data().data; if(!data) return null; return {...data, id:d.id}; })
-          .filter(Boolean)
-          .filter(item => !pendingUpcomingDeletes.current.has(item.id));
-        setUpcoming(loaded);
+          .filter(Boolean);
+
+        // Build merged list:
+        // 1. Skip items whose delete is in-flight (pendingUpcomingDeletes)
+        // 2. For items whose save is in-flight, use the local version (pendingUpcomingSaves)
+        //    so edits don't revert while the write is pending
+        // 3. Append any locally-created items not yet confirmed by Firestore
+        const serverIds = new Set(fromServer.map(i=>i.id));
+        const merged = fromServer
+          .filter(item => !pendingUpcomingDeletes.current.has(item.id))
+          .map(item => pendingUpcomingSaves.current.has(item.id)
+            ? pendingUpcomingSaves.current.get(item.id)
+            : item);
+        // New items added locally but not yet in Firestore
+        pendingUpcomingSaves.current.forEach((item, id) => {
+          if (!serverIds.has(id) && !pendingUpcomingDeletes.current.has(id)) merged.push(item);
+        });
+        setUpcoming(merged);
       },
       (err) => { console.error("Upcoming snapshot error:",err); }
     );
@@ -13381,7 +13395,10 @@ function App() {
   };
 
   const saveUpcomingItem = async (item) => {
+    // Track in-flight saves so the snapshot handler doesn't overwrite local edits mid-save
+    pendingUpcomingSaves.current.set(item.id, item);
     try { await setDoc(doc(db,"upcoming",item.id),{data:item,updated_at:new Date().toISOString()}); } catch(e){ console.error("saveUpcoming error:",e); }
+    pendingUpcomingSaves.current.delete(item.id);
   };
   const deleteUpcomingItem = async (id) => {
     // Mark as pending so snapshot doesn't race and re-add this item while delete is in-flight
