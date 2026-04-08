@@ -4153,7 +4153,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
 // ── Panelized Lighting ────────────────────────────────────────
 
 // ── Central Loads List ────────────────────────────────────────
-function LoadsList({loads,onChange,floorOptions,allModules=[],onAssignToModule}) {
+function LoadsList({loads,onChange,floorOptions,allModules=[],assignedModMap=new Map(),onAssignToModule}) {
   const sortByType = (arr) => [...arr].sort((a,b)=>{
     const ai = LOAD_TYPES.indexOf(a.loadType||""), bi = LOAD_TYPES.indexOf(b.loadType||"");
     return (ai<0?999:ai)-(bi<0?999:bi);
@@ -4312,35 +4312,70 @@ function LoadsList({loads,onChange,floorOptions,allModules=[],onAssignToModule})
               <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em",textAlign:i===0?"center":"left"}}>{h}</div>
             ))}
           </div>
-          {loads.map((l,li)=>(
-            <div key={l.id} style={{display:"grid",gridTemplateColumns:COL,gap:6,marginBottom:4,alignItems:"center",
-              borderRadius:6,padding:"2px 0",
-              background:l.pulled?"rgba(34,197,94,0.08)":selecting&&selected.has(l.id)?`${C.purple}0d`:"transparent"}}>
-              {selecting&&<input type="checkbox" checked={selected.has(l.id)} onChange={()=>toggleSel(l.id)}
-                style={{width:14,height:14,accentColor:C.purple,cursor:"pointer",margin:0}}/>}
-              <input type="checkbox" checked={!!l.pulled} onChange={e=>upd(l.id,{pulled:e.target.checked})}
-                title="Mark as pulled"
-                style={{width:15,height:15,accentColor:C.green,cursor:"pointer",margin:"0 auto",display:"block"}}/>
-              <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:2}}>{li+1}.</span>
-              <input
-                ref={li===loads.length-1?lastRef:null}
-                list="pl-floor-opts"
-                value={l.name} onChange={e=>upd(l.id,{name:e.target.value})} placeholder="Load name…"
-                onKeyDown={e=>e.key==="Enter"&&add()}
-                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
-                  padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
-              <input list="pl-floor-opts" value={l.location||""} onChange={e=>upd(l.id,{location:e.target.value})}
-                placeholder="Floor / area"
-                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
-                  padding:"6px 8px",fontSize:11,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
-              <Sel value={l.loadType||""} onChange={e=>upd(l.id,{loadType:e.target.value})} options={LOAD_TYPES} style={{fontSize:10}}/>
-              <Inp value={l.watts||""} onChange={e=>upd(l.id,{watts:e.target.value})} placeholder="W" style={{textAlign:"center",fontSize:10}}/>
-              <button onClick={()=>del(l.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
-            </div>
-          ))}
-          <datalist id="pl-floor-opts">
-            {(floorOptions||[]).map(f=><option key={f} value={f}/>)}
-          </datalist>
+          {(()=>{
+            // Group by floor, Unassigned first, then alpha; loads alpha within each floor
+            const groups = {};
+            loads.forEach(l=>{ const fl=(l.location||"").trim()||"Unassigned"; if(!groups[fl])groups[fl]=[]; groups[fl].push(l); });
+            const sortedFloors = Object.keys(groups).sort((a,b)=>a==="Unassigned"?-1:b==="Unassigned"?1:a.localeCompare(b));
+            sortedFloors.forEach(fl=>groups[fl].sort((a,b)=>(a.name||"").localeCompare(b.name||"")));
+            const flatSorted = sortedFloors.flatMap(fl=>groups[fl]);
+            const multiFloor = sortedFloors.length>1||(sortedFloors.length===1&&sortedFloors[0]!=="Unassigned");
+            return (
+              <>
+                {sortedFloors.map(fl=>(
+                  <div key={fl}>
+                    {multiFloor&&(
+                      <div style={{display:"flex",alignItems:"center",gap:8,margin:"10px 0 4px"}}>
+                        <span style={{fontSize:10,fontWeight:800,color:C.purple,letterSpacing:"0.08em",textTransform:"uppercase",whiteSpace:"nowrap"}}>{fl}</span>
+                        <div style={{flex:1,height:1,background:`${C.purple}28`}}/>
+                        <span style={{fontSize:10,color:C.dim,whiteSpace:"nowrap"}}>{groups[fl].length} load{groups[fl].length!==1?"s":""}</span>
+                      </div>
+                    )}
+                    {groups[fl].map(l=>{
+                      const li=flatSorted.indexOf(l);
+                      return (
+                        <div key={l.id} style={{display:"grid",gridTemplateColumns:COL,gap:6,marginBottom:4,alignItems:"center",
+                          borderRadius:6,padding:"2px 0",
+                          background:l.pulled?"rgba(34,197,94,0.08)":selecting&&selected.has(l.id)?`${C.purple}0d`:"transparent"}}>
+                          {selecting&&<input type="checkbox" checked={selected.has(l.id)} onChange={()=>toggleSel(l.id)}
+                            style={{width:14,height:14,accentColor:C.purple,cursor:"pointer",margin:0}}/>}
+                          <input type="checkbox" checked={!!l.pulled} onChange={e=>upd(l.id,{pulled:e.target.checked})}
+                            title="Mark as pulled"
+                            style={{width:15,height:15,accentColor:C.green,cursor:"pointer",margin:"0 auto",display:"block"}}/>
+                          <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:2}}>{li+1}.</span>
+                          <div style={{position:"relative",display:"flex",alignItems:"center",gap:4}}>
+                          <input
+                            ref={li===flatSorted.length-1?lastRef:null}
+                            value={l.name} onChange={e=>upd(l.id,{name:e.target.value})} placeholder="Load name…"
+                            onKeyDown={e=>e.key==="Enter"&&add()}
+                            style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+                              padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box",
+                              flex:1}}/>
+                          {assignedModMap.has(l.name?.trim())&&(
+                            <span title={assignedModMap.get(l.name.trim()).join(", ")}
+                              style={{fontSize:9,fontWeight:800,color:C.purple,background:`${C.purple}15`,
+                                border:`1px solid ${C.purple}33`,borderRadius:99,padding:"2px 6px",
+                                whiteSpace:"nowrap",flexShrink:0,cursor:"default"}}>
+                              ✓ {assignedModMap.get(l.name.trim())[0]}
+                            </span>
+                          )}
+                          </div>
+                          <input list="pl-floor-opts" value={l.location||""} onChange={e=>upd(l.id,{location:e.target.value})}
+                            placeholder="Floor / area"
+                            style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+                              padding:"6px 8px",fontSize:11,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
+                          <Sel value={l.loadType||""} onChange={e=>upd(l.id,{loadType:e.target.value})} options={LOAD_TYPES} style={{fontSize:10}}/>
+                          <Inp value={l.watts||""} onChange={e=>upd(l.id,{watts:e.target.value})} placeholder="W" style={{textAlign:"center",fontSize:10}}/>
+                          <button onClick={()=>del(l.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+                        </div>
+                      );
+                    })}
+                  </div>
+                ))}
+                <datalist id="pl-floor-opts">{(floorOptions||[]).map(f=><option key={f} value={f}/>)}</datalist>
+              </>
+            );
+          })()}
         </>
       )}
       <button onClick={add}
@@ -7134,6 +7169,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       label:`Mod ${m.modNum}${m.moduleType?` · ${m.moduleType}`:""} — ${ef.label}`});
                   });
                 });
+                // Build map of load name → "Mod X — Floor" label for assignment badges
+                const assignedModMap = new Map();
+                const _allFloorData = [
+                  ...stdFloors.map(({k,l})=>({mods:migrateFloorToModules(pl.cp4Loads?.[k]||[]),fl:l})),
+                  ...(pl.extraFloors||[]).map(ef=>({mods:migrateFloorToModules(pl[ef.key]||[]),fl:ef.label})),
+                ];
+                _allFloorData.forEach(({mods,fl})=>mods.forEach(m=>m.loads.forEach(l=>{
+                  if(!l.name?.trim()) return;
+                  const key=l.name.trim();
+                  if(!assignedModMap.has(key)) assignedModMap.set(key,[]);
+                  assignedModMap.get(key).push(`Mod ${m.modNum} · ${fl}`);
+                })));
                 const onAssignToModule = (selectedIds, modNum, floorKey, isExtra) => {
                   const selLoads = (pl.loads||[]).filter(l=>selectedIds.includes(l.id));
                   const raw = isExtra ? (pl[floorKey]||[]) : (pl.cp4Loads?.[floorKey]||[]);
@@ -7153,13 +7200,22 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     onChange={v=>u({panelizedLighting:{...pl,loads:v}})}
                     floorOptions={["Main Level","Basement","Upper Level",...(pl.extraFloors||[]).map(ef=>ef.label)]}
                     allModules={allModules}
+                    assignedModMap={assignedModMap}
                     onAssignToModule={onAssignToModule}/>
                 );
               })()}
 
               <SectionHead label={`${job.lightingSystem||"Control 4"} Keypads`} color={C.purple}/>
 
-              {(()=>{const al=job.panelizedLighting.loads||[]; return (<>
+              {(()=>{
+                // Build assigned names set to filter from keypad/module suggestions
+                const _pl=job.panelizedLighting;
+                const _assignedNames=new Set();
+                const _stdF=[{k:"main"},{k:"basement"},{k:"upper"}];
+                _stdF.forEach(({k})=>migrateFloorToModules(_pl.cp4Loads?.[k]||[]).forEach(m=>m.loads.forEach(l=>{if(l.name?.trim())_assignedNames.add(l.name.trim());})));
+                (_pl.extraFloors||[]).forEach(ef=>migrateFloorToModules(_pl[ef.key]||[]).forEach(m=>m.loads.forEach(l=>{if(l.name?.trim())_assignedNames.add(l.name.trim());})));
+                const al=(_pl.loads||[]).filter(l=>!_assignedNames.has(l.name?.trim()||""));
+                return (<>
 
               <KeypadSection label="Main Level Keypad Loads"
                 loads={job.panelizedLighting.mainKeypad}
@@ -7187,58 +7243,68 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               <SectionHead label={`${job.lightingSystem||"Control 4"} Panel Loads`} color={C.purple}/>
 
-              {[
-                {floor:"upper", defaultLabel:"Upper Level"},
-                {floor:"main",  defaultLabel:"Main Level"},
-                {floor:"basement", defaultLabel:"Basement"},
-              ].map(({floor,defaultLabel})=>(
-                <div key={floor} style={{marginBottom:16}}>
-                  <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
-                    marginBottom:8,paddingBottom:4,borderBottom:`1px solid ${C.border}`}}>
-                    <input
-                      value={job.plSectionLabels?.[floor]||""}
-                      onChange={e=>u({plSectionLabels:{...(job.plSectionLabels||{}),[floor]:e.target.value}})}
-                      placeholder={defaultLabel}
-                      style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.purple,
-                        background:"none",border:"none",outline:"none",cursor:"text",
-                        textTransform:"uppercase",fontFamily:"inherit",flex:1}}/>
+              {(()=>{
+                // Filtered allLoads for module suggestions — exclude loads already in a module
+                const _plM=job.panelizedLighting;
+                const _anM=new Set();
+                [{k:"main"},{k:"basement"},{k:"upper"}].forEach(({k})=>migrateFloorToModules(_plM.cp4Loads?.[k]||[]).forEach(m=>m.loads.forEach(l=>{if(l.name?.trim())_anM.add(l.name.trim());})));
+                (_plM.extraFloors||[]).forEach(ef=>migrateFloorToModules(_plM[ef.key]||[]).forEach(m=>m.loads.forEach(l=>{if(l.name?.trim())_anM.add(l.name.trim());})));
+                const alMod=(_plM.loads||[]).filter(l=>!_anM.has(l.name?.trim()||""));
+                return (<>
+                {[
+                  {floor:"upper", defaultLabel:"Upper Level"},
+                  {floor:"main",  defaultLabel:"Main Level"},
+                  {floor:"basement", defaultLabel:"Basement"},
+                ].map(({floor,defaultLabel})=>(
+                  <div key={floor} style={{marginBottom:16}}>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                      marginBottom:8,paddingBottom:4,borderBottom:`1px solid ${C.border}`}}>
+                      <input
+                        value={job.plSectionLabels?.[floor]||""}
+                        onChange={e=>u({plSectionLabels:{...(job.plSectionLabels||{}),[floor]:e.target.value}})}
+                        placeholder={defaultLabel}
+                        style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.purple,
+                          background:"none",border:"none",outline:"none",cursor:"text",
+                          textTransform:"uppercase",fontFamily:"inherit",flex:1}}/>
+                    </div>
+                    <PanelModulesSection
+                      system={job.lightingSystem||"Control 4"}
+                      allLoads={alMod}
+                      modules={migrateFloorToModules((job.panelizedLighting.cp4Loads?.[floor])||[])}
+                      onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
+                        cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}/>
                   </div>
-                  <PanelModulesSection
-                    system={job.lightingSystem||"Control 4"}
-                    allLoads={job.panelizedLighting.loads||[]}
-                    modules={migrateFloorToModules((job.panelizedLighting.cp4Loads?.[floor])||[])}
-                    onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
-                      cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}/>
-                </div>
-              ))}
+                ))}
 
-              {(job.panelizedLighting.extraFloors||[]).map(ef=>(
-                <div key={ef.key} style={{marginBottom:16}}>
-                  <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
-                    marginBottom:8,paddingBottom:4,borderBottom:`1px solid ${C.border}`}}>
-                    <input
-                      value={ef.label}
-                      onChange={e=>{
-                        const newExtras=(job.panelizedLighting.extraFloors||[]).map(f=>f.key===ef.key?{...f,label:e.target.value}:f);
-                        u({panelizedLighting:{...job.panelizedLighting,extraFloors:newExtras}});
-                      }}
-                      style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.purple,
-                        background:"none",border:"none",outline:"none",cursor:"text",
-                        textTransform:"uppercase",fontFamily:"inherit",flex:1}}/>
-                    <button onClick={()=>{
-                      const newExtras=(job.panelizedLighting.extraFloors||[]).filter(e=>e.key!==ef.key);
-                      const updated={...job.panelizedLighting,extraFloors:newExtras};
-                      delete updated[ef.key+"_keypad"];
-                      u({panelizedLighting:updated});
-                    }} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>Remove</button>
+                {(job.panelizedLighting.extraFloors||[]).map(ef=>(
+                  <div key={ef.key} style={{marginBottom:16}}>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
+                      marginBottom:8,paddingBottom:4,borderBottom:`1px solid ${C.border}`}}>
+                      <input
+                        value={ef.label}
+                        onChange={e=>{
+                          const newExtras=(job.panelizedLighting.extraFloors||[]).map(f=>f.key===ef.key?{...f,label:e.target.value}:f);
+                          u({panelizedLighting:{...job.panelizedLighting,extraFloors:newExtras}});
+                        }}
+                        style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.purple,
+                          background:"none",border:"none",outline:"none",cursor:"text",
+                          textTransform:"uppercase",fontFamily:"inherit",flex:1}}/>
+                      <button onClick={()=>{
+                        const newExtras=(job.panelizedLighting.extraFloors||[]).filter(e=>e.key!==ef.key);
+                        const updated={...job.panelizedLighting,extraFloors:newExtras};
+                        delete updated[ef.key+"_keypad"];
+                        u({panelizedLighting:updated});
+                      }} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>Remove</button>
+                    </div>
+                    <PanelModulesSection
+                      system={job.lightingSystem||"Control 4"}
+                      allLoads={alMod}
+                      modules={migrateFloorToModules((job.panelizedLighting[ef.key])||[])}
+                      onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}/>
                   </div>
-                  <PanelModulesSection
-                    system={job.lightingSystem||"Control 4"}
-                    allLoads={job.panelizedLighting.loads||[]}
-                    modules={migrateFloorToModules((job.panelizedLighting[ef.key])||[])}
-                    onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}/>
-                </div>
-              ))}
+                ))}
+                </>);
+              })()}
 
               {(()=>{
                 const addFloor = () => {
