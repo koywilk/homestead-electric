@@ -13151,16 +13151,12 @@ function App() {
 
     );
 
-    // Load upcoming jobs from Firestore — one-time fetch, then manage state locally.
-    // Using onSnapshot caused constant snapshot races that re-added deleted items;
-    // upcoming is managed by one person so real-time sync is not needed.
-    getDocs(collection(db,"upcoming")).then(snap => {
-      const loaded = snap.docs
-        .map(d=>{ const data=d.data().data; if(!data) return null; return {...data, id:d.id}; })
-        .filter(Boolean);
-      setUpcoming(loaded);
+    // Load upcoming jobs — stored as a single doc in settings/upcoming_jobs
+    // (avoids per-document delete permission issues; entire array is just overwritten on change)
+    getDoc(doc(db,"settings","upcoming_jobs")).then(snap => {
+      if(snap.exists()) setUpcoming(snap.data().items || []);
     }).catch(err => console.error("Upcoming load error:", err));
-    const unsubUpcoming = () => {}; // no-op unsub since we're not using onSnapshot
+    const unsubUpcoming = () => {};
 
     // Load manual tasks from Firestore
     const unsubTasks = onSnapshot(collection(db,"manualTasks"),
@@ -13375,13 +13371,14 @@ function App() {
     try { await deleteDoc(doc(db,"manualTasks",id)); } catch(e){}
   };
 
-  const saveUpcomingItem = async (item) => {
-    try { await setDoc(doc(db,"upcoming",item.id),{data:item,updated_at:new Date().toISOString()}); } catch(e){ console.error("saveUpcoming error:",e); }
+  // Save the entire upcoming list as one document — no per-item deletes needed
+  const saveAllUpcoming = async (list) => {
+    try { await setDoc(doc(db,"settings","upcoming_jobs"),{items:list,updated_at:new Date().toISOString()}); }
+    catch(e){ console.error("saveAllUpcoming error:",e); }
   };
-  const deleteUpcomingItem = async (id) => {
-    // State is already updated optimistically by the caller; just persist the delete
-    try { await deleteDoc(doc(db,"upcoming",id)); } catch(e){ console.error("deleteUpcoming error:",id,e); }
-  };
+  // Keep these names for call-site compatibility but they now just save the full list
+  const saveUpcomingItem = (_item) => {}; // no-op — caller uses onChange which calls saveAllUpcoming
+  const deleteUpcomingItem = (_id) => {};  // no-op — deletion is handled via onChange → saveAllUpcoming
 
   // Flush all pending saves immediately
 
@@ -14814,27 +14811,23 @@ function App() {
           foremenList={_foremen}
           onDelete={(id)=>{ deleteUpcomingItem(id); }}
           onChange={(next)=>{
-            // Upcoming uses local state management (one-time load from Firestore on mount).
-            // No snapshot listener, so this is the sole source of truth in the browser.
             setUpcoming(next);
-            // Persist new or changed items to Firestore
-            next.forEach(item=>{
-              const prev=upcoming.find(u=>u.id===item.id);
-              if(!prev||JSON.stringify(prev)!==JSON.stringify(item)) saveUpcomingItem(item);
-            });
+            saveAllUpcoming(next);
           }}
           onPromote={(u)=>{
             const j=blankJob();
             j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman=u.foreman||"Unassigned";
-            setJobs(js=>[j,...js]); setSelected(j); setUpcoming(prev=>prev.filter(x=>x.id!==u.id));
-            setView("home"); saveJob(j); deleteUpcomingItem(u.id);
+            const next=upcoming.filter(x=>x.id!==u.id);
+            setJobs(js=>[j,...js]); setSelected(j); setUpcoming(next);
+            setView("home"); saveJob(j); saveAllUpcoming(next);
           }}
           onPromoteToQuote={(u)=>{
             const j=blankJob();
             j.name=u.name||""; j.address=u.city||""; j.gc=u.customer||""; j.foreman=u.foreman||"Unassigned";
             j.type="quote"; j.quoteNumber=nextQuoteNumber(jobs);
-            setJobs(js=>[j,...js]); setSelected(j); setUpcoming(prev=>prev.filter(x=>x.id!==u.id));
-            setView("quotes"); saveJob(j); deleteUpcomingItem(u.id);
+            const next=upcoming.filter(x=>x.id!==u.id);
+            setJobs(js=>[j,...js]); setSelected(j); setUpcoming(next);
+            setView("quotes"); saveJob(j); saveAllUpcoming(next);
           }}
         />
       )}
