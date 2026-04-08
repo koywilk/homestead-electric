@@ -13151,10 +13151,24 @@ function App() {
 
     );
 
-    // Load upcoming jobs — stored as a single doc in settings/upcoming_jobs
-    // (avoids per-document delete permission issues; entire array is just overwritten on change)
-    getDoc(doc(db,"settings","upcoming_jobs")).then(snap => {
-      if(snap.exists()) setUpcoming(snap.data().items || []);
+    // Load upcoming jobs — stored as a single doc in settings/upcoming_jobs.
+    // On first load after migration, fall back to reading the old per-document upcoming collection
+    // and immediately re-save to the new location.
+    getDoc(doc(db,"settings","upcoming_jobs")).then(async snap => {
+      if(snap.exists() && (snap.data().items||[]).length > 0) {
+        setUpcoming(snap.data().items || []);
+      } else {
+        // Migrate from old upcoming collection
+        const oldSnap = await getDocs(collection(db,"upcoming"));
+        const migrated = oldSnap.docs
+          .map(d=>{ const data=d.data().data; if(!data) return null; return {...data, id:d.id}; })
+          .filter(Boolean);
+        if(migrated.length > 0) {
+          setUpcoming(migrated);
+          // Save to new location so future loads use settings/upcoming_jobs
+          setDoc(doc(db,"settings","upcoming_jobs"),{items:migrated,updated_at:new Date().toISOString()});
+        }
+      }
     }).catch(err => console.error("Upcoming load error:", err));
     const unsubUpcoming = () => {};
 
