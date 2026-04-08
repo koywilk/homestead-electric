@@ -12994,6 +12994,7 @@ function App() {
   const saveTimer    = useRef(null);
 
   const initialLoad  = useRef(true);
+  const pendingUpcomingDeletes = useRef(new Set());
 
 
   const jobsRef   = useRef(jobs);
@@ -13153,10 +13154,14 @@ function App() {
     // Load upcoming jobs from Firestore
     const unsubUpcoming = onSnapshot(collection(db,"upcoming"),
       (snap) => {
-        // Use d.id (Firestore doc ID) as the authoritative item ID.
-        // Seeded docs may have been uploaded with auto-generated doc IDs that
-        // don't match data.id, causing deleteDoc(item.id) to silently miss.
-        const loaded = snap.docs.map(d=>{ const data=d.data().data; if(!data) return null; return {...data, id:d.id}; }).filter(Boolean);
+        // Use d.id (Firestore doc ID) as the authoritative item ID so that
+        // deleteDoc(item.id) always targets the correct document.
+        // Filter out any items whose delete is still in-flight so the snapshot
+        // doesn't race and re-add them before the server confirms the removal.
+        const loaded = snap.docs
+          .map(d=>{ const data=d.data().data; if(!data) return null; return {...data, id:d.id}; })
+          .filter(Boolean)
+          .filter(item => !pendingUpcomingDeletes.current.has(item.id));
         setUpcoming(loaded);
       },
       (err) => { console.error("Upcoming snapshot error:",err); }
@@ -13376,10 +13381,22 @@ function App() {
   };
 
   const saveUpcomingItem = async (item) => {
-    try { await setDoc(doc(db,"upcoming",item.id),{data:item,updated_at:new Date().toISOString()}); } catch(e){ console.error(e); }
+    try { await setDoc(doc(db,"upcoming",item.id),{data:item,updated_at:new Date().toISOString()}); } catch(e){ console.error("saveUpcoming error:",e); }
   };
   const deleteUpcomingItem = async (id) => {
-    try { await deleteDoc(doc(db,"upcoming",id)); } catch(e){}
+    // Mark as pending so snapshot doesn't race and re-add this item while delete is in-flight
+    pendingUpcomingDeletes.current.add(id);
+    // Optimistic removal from local state immediately
+    setUpcoming(prev => prev.filter(u=>u.id!==id));
+    try {
+      await deleteDoc(doc(db,"upcoming",id));
+    } catch(e){
+      console.error("deleteUpcoming error:", id, e);
+      // Rollback: remove from pending so snapshot can show it again
+      pendingUpcomingDeletes.current.delete(id);
+      return;
+    }
+    pendingUpcomingDeletes.current.delete(id);
   };
 
   // Flush all pending saves immediately
@@ -14813,16 +14830,13 @@ function App() {
           foremenList={_foremen}
           onDelete={(id)=>{ deleteUpcomingItem(id); }}
           onChange={(next)=>{
-            // Save changed/new items
+            // Optimistic local update — snapshot listener may lag so set state immediately
+            setUpcoming(next);
+            // Persist any changed or new items (deletions go through onDelete, not here)
             next.forEach(item=>{
               const prev=upcoming.find(u=>u.id===item.id);
               if(!prev||JSON.stringify(prev)!==JSON.stringify(item)) saveUpcomingItem(item);
             });
-            // Delete items that were removed from the list
-            upcoming.forEach(item=>{
-              if(!next.find(u=>u.id===item.id)) deleteUpcomingItem(item.id);
-            });
-            setUpcoming(next);
           }}
           onPromote={(u)=>{
             const j=blankJob();
