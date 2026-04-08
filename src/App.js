@@ -12994,8 +12994,7 @@ function App() {
   const saveTimer    = useRef(null);
 
   const initialLoad  = useRef(true);
-  const pendingUpcomingDeletes = useRef(new Set());
-  const pendingUpcomingSaves   = useRef(new Map()); // id → item, for in-flight saves
+  // pendingUpcomingDeletes / pendingUpcomingSaves no longer needed — upcoming uses one-time load
 
 
   const jobsRef   = useRef(jobs);
@@ -13152,34 +13151,16 @@ function App() {
 
     );
 
-    // Load upcoming jobs from Firestore
-    const unsubUpcoming = onSnapshot(collection(db,"upcoming"),
-      (snap) => {
-        // Use d.id (Firestore doc ID) as the authoritative item ID so that
-        // deleteDoc(item.id) always targets the correct document.
-        const fromServer = snap.docs
-          .map(d=>{ const data=d.data().data; if(!data) return null; return {...data, id:d.id}; })
-          .filter(Boolean);
-
-        // Build merged list:
-        // 1. Skip items whose delete is in-flight (pendingUpcomingDeletes)
-        // 2. For items whose save is in-flight, use the local version (pendingUpcomingSaves)
-        //    so edits don't revert while the write is pending
-        // 3. Append any locally-created items not yet confirmed by Firestore
-        const serverIds = new Set(fromServer.map(i=>i.id));
-        const merged = fromServer
-          .filter(item => !pendingUpcomingDeletes.current.has(item.id))
-          .map(item => pendingUpcomingSaves.current.has(item.id)
-            ? pendingUpcomingSaves.current.get(item.id)
-            : item);
-        // New items added locally but not yet in Firestore
-        pendingUpcomingSaves.current.forEach((item, id) => {
-          if (!serverIds.has(id) && !pendingUpcomingDeletes.current.has(id)) merged.push(item);
-        });
-        setUpcoming(merged);
-      },
-      (err) => { console.error("Upcoming snapshot error:",err); }
-    );
+    // Load upcoming jobs from Firestore — one-time fetch, then manage state locally.
+    // Using onSnapshot caused constant snapshot races that re-added deleted items;
+    // upcoming is managed by one person so real-time sync is not needed.
+    getDocs(collection(db,"upcoming")).then(snap => {
+      const loaded = snap.docs
+        .map(d=>{ const data=d.data().data; if(!data) return null; return {...data, id:d.id}; })
+        .filter(Boolean);
+      setUpcoming(loaded);
+    }).catch(err => console.error("Upcoming load error:", err));
+    const unsubUpcoming = () => {}; // no-op unsub since we're not using onSnapshot
 
     // Load manual tasks from Firestore
     const unsubTasks = onSnapshot(collection(db,"manualTasks"),
@@ -13395,25 +13376,11 @@ function App() {
   };
 
   const saveUpcomingItem = async (item) => {
-    // Track in-flight saves so the snapshot handler doesn't overwrite local edits mid-save
-    pendingUpcomingSaves.current.set(item.id, item);
     try { await setDoc(doc(db,"upcoming",item.id),{data:item,updated_at:new Date().toISOString()}); } catch(e){ console.error("saveUpcoming error:",e); }
-    pendingUpcomingSaves.current.delete(item.id);
   };
   const deleteUpcomingItem = async (id) => {
-    // Mark as pending so snapshot doesn't race and re-add this item while delete is in-flight
-    pendingUpcomingDeletes.current.add(id);
-    // Optimistic removal from local state immediately
-    setUpcoming(prev => prev.filter(u=>u.id!==id));
-    try {
-      await deleteDoc(doc(db,"upcoming",id));
-    } catch(e){
-      console.error("deleteUpcoming error:", id, e);
-      // Rollback: remove from pending so snapshot can show it again
-      pendingUpcomingDeletes.current.delete(id);
-      return;
-    }
-    pendingUpcomingDeletes.current.delete(id);
+    // State is already updated optimistically by the caller; just persist the delete
+    try { await deleteDoc(doc(db,"upcoming",id)); } catch(e){ console.error("deleteUpcoming error:",id,e); }
   };
 
   // Flush all pending saves immediately
@@ -14847,9 +14814,10 @@ function App() {
           foremenList={_foremen}
           onDelete={(id)=>{ deleteUpcomingItem(id); }}
           onChange={(next)=>{
-            // Optimistic local update — snapshot listener may lag so set state immediately
+            // Upcoming uses local state management (one-time load from Firestore on mount).
+            // No snapshot listener, so this is the sole source of truth in the browser.
             setUpcoming(next);
-            // Persist any changed or new items (deletions go through onDelete, not here)
+            // Persist new or changed items to Firestore
             next.forEach(item=>{
               const prev=upcoming.find(u=>u.id===item.id);
               if(!prev||JSON.stringify(prev)!==JSON.stringify(item)) saveUpcomingItem(item);
