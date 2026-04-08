@@ -3402,7 +3402,7 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
       <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px",gap:4,alignItems:"center"}}>
         <span/>
         <Inp value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"
-          onKeyDown={e=>e.key==="Enter"&&addRow()} onAdd={addRow}/>
+          onKeyDown={e=>e.key==="Enter"&&addRow()}/>
         <Sel value={r.status} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
           style={{color:r.status==="Pulled"?C.green:r.status==="Need Specs"?C.red:C.text,fontSize:10}}/>
       </div>
@@ -6452,11 +6452,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     const fn = httpsCallable(functions, "getSimproJobFinancials");
     fn({ simproJobNo: job.simproNo })
       .then(res => {
+        console.log("[simproFinancials]", res.data);
         setSimproFinancials(res.data);
         // Cache on the job doc so the job board can show it without an extra call
         u({ simproMargin: res.data.margin, simproMarginIsEst: res.data.isEstimate });
       })
-      .catch(() => setSimproFinancials(null));
+      .catch(e => { console.error("[simproFinancials error]", e); setSimproFinancials(null); });
   }, [job.simproNo]);
 
   // Live listener for GC question answers + LV lighting collab
@@ -13193,26 +13194,25 @@ function App() {
 
     );
 
-    // Load upcoming jobs — stored as a single doc in settings/upcoming_jobs.
-    // On first load after migration, fall back to reading the old per-document upcoming collection
-    // and immediately re-save to the new location.
-    getDoc(doc(db,"settings","upcoming_jobs")).then(async snap => {
+    // Upcoming jobs stored as a single doc — real-time listener so all users stay in sync.
+    // Single doc means deletions/edits are atomic (no per-document race).
+    const unsubUpcoming = onSnapshot(doc(db,"settings","upcoming_jobs"), async snap => {
       if(snap.exists() && (snap.data().items||[]).length > 0) {
         setUpcoming(snap.data().items || []);
-      } else {
-        // Migrate from old upcoming collection
-        const oldSnap = await getDocs(collection(db,"upcoming"));
-        const migrated = oldSnap.docs
-          .map(d=>{ const data=d.data().data; if(!data) return null; return {...data, id:d.id}; })
-          .filter(Boolean);
-        if(migrated.length > 0) {
-          setUpcoming(migrated);
-          // Save to new location so future loads use settings/upcoming_jobs
-          setDoc(doc(db,"settings","upcoming_jobs"),{items:migrated,updated_at:new Date().toISOString()});
-        }
+      } else if(!snap.exists()) {
+        // First-time migration: pull from old per-document upcoming collection
+        try {
+          const oldSnap = await getDocs(collection(db,"upcoming"));
+          const migrated = oldSnap.docs
+            .map(d=>{ const data=d.data().data; if(!data) return null; return {...data, id:d.id}; })
+            .filter(Boolean);
+          if(migrated.length > 0) {
+            setUpcoming(migrated);
+            setDoc(doc(db,"settings","upcoming_jobs"),{items:migrated,updated_at:new Date().toISOString()});
+          }
+        } catch(e){ console.error("Upcoming migration error:", e); }
       }
-    }).catch(err => console.error("Upcoming load error:", err));
-    const unsubUpcoming = () => {};
+    }, err => console.error("Upcoming listener error:", err));
 
     // Load manual tasks from Firestore
     const unsubTasks = onSnapshot(collection(db,"manualTasks"),
