@@ -2753,9 +2753,21 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
     onChange(orders.map(co => co.id===o.id ? {...co, coStatus:"converted"} : co), newRT, true); // true = add to top
   };
 
+  // Sort newest first — use createdAt date desc, fall back to insertion order (reversed)
+  const sortedOrders = [...orders]
+    .map((o, idx) => ({...o, _idx: idx}))
+    .sort((a, b) => {
+      const da = a.createdAt ? new Date(a.createdAt) : null;
+      const db = b.createdAt ? new Date(b.createdAt) : null;
+      if (da && db) return db - da;
+      if (da) return -1;
+      if (db) return 1;
+      return b._idx - a._idx; // no dates — reverse insertion order (newer = higher index)
+    });
+
   return (
     <div>
-      {orders.map((o, i) => {
+      {sortedOrders.map((o, i) => {
         const coDef = getStatusDef(CO_STATUSES_NEW, o.coStatus||"pending");
         const isConverted = o.coStatus === "converted";
         const isApproved  = o.coStatus === "approved";
@@ -3004,7 +3016,19 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId}) {
 
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add Return Trip</Btn>
 
-      {trips.map((t,i)=>{
+      {[...trips]
+        .sort((a, b) => {
+          // Active trips first, signed-off to bottom
+          if (a.signedOff !== b.signedOff) return a.signedOff ? 1 : -1;
+          // Within active: sort by rtStatusDate/date ascending (soonest first), undated last
+          const da = a.rtStatusDate || a.date || "";
+          const db = b.rtStatusDate || b.date || "";
+          if (da && db) return new Date(da) - new Date(db);
+          if (da) return -1;
+          if (db) return 1;
+          return 0;
+        })
+        .map((t,i)=>{
         // Signed-off trips collapse to a summary row unless manually expanded
         if (t.signedOff && !expandedRTs[t.id]) {
           return (
