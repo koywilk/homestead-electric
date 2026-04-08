@@ -13153,7 +13153,10 @@ function App() {
     // Load upcoming jobs from Firestore
     const unsubUpcoming = onSnapshot(collection(db,"upcoming"),
       (snap) => {
-        const loaded = snap.docs.map(d=>d.data().data).filter(Boolean);
+        // Use d.id (Firestore doc ID) as the authoritative item ID.
+        // Seeded docs may have been uploaded with auto-generated doc IDs that
+        // don't match data.id, causing deleteDoc(item.id) to silently miss.
+        const loaded = snap.docs.map(d=>{ const data=d.data().data; if(!data) return null; return {...data, id:d.id}; }).filter(Boolean);
         setUpcoming(loaded);
       },
       (err) => { console.error("Upcoming snapshot error:",err); }
@@ -14810,9 +14813,14 @@ function App() {
           foremenList={_foremen}
           onDelete={(id)=>{ deleteUpcomingItem(id); }}
           onChange={(next)=>{
+            // Save changed/new items
             next.forEach(item=>{
               const prev=upcoming.find(u=>u.id===item.id);
               if(!prev||JSON.stringify(prev)!==JSON.stringify(item)) saveUpcomingItem(item);
+            });
+            // Delete items that were removed from the list
+            upcoming.forEach(item=>{
+              if(!next.find(u=>u.id===item.id)) deleteUpcomingItem(item.id);
             });
             setUpcoming(next);
           }}
