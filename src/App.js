@@ -1425,25 +1425,27 @@ const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minR
 };
 
 // Mobile sheet wrapping the rich editor for TA fields
-const RichMobileSheet = ({initialHtml, initialMaterial='', placeholder, onDone, onCancel, addMode, showMaterial=false}) => {
+const MAT_SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","Other"];
+const RichMobileSheet = ({initialHtml, initialMaterial='', initialMatSource='', placeholder, onDone, onCancel, addMode, showMaterial=false}) => {
   const [html, setHtml] = useState(initialHtml || "");
   const [material, setMaterial] = useState(initialMaterial || "");
+  const [matSource, setMatSource] = useState(initialMatSource || "");
 
   // Auto-save when phone locks or user switches apps
   useEffect(() => {
     const handleVisibility = () => {
       if (document.visibilityState === 'hidden') {
-        onDone(html, material);
+        onDone(html, material, matSource);
       }
     };
     document.addEventListener('visibilitychange', handleVisibility);
     return () => document.removeEventListener('visibilitychange', handleVisibility);
-  }, [html, material]);
+  }, [html, material, matSource]);
 
   // Save draft on cancel if there's content — nothing is ever discarded
   const handleCancel = () => {
     const hasContent = (html||"").replace(/<[^>]*>/g,"").trim() || material.trim();
-    if (hasContent) onDone(html, material);
+    if (hasContent) onDone(html, material, matSource);
     else onCancel();
   };
 
@@ -1461,7 +1463,7 @@ const RichMobileSheet = ({initialHtml, initialMaterial='', placeholder, onDone, 
               fontFamily:"inherit",fontWeight:600,cursor:"pointer",padding:"2px 8px"}}>
             Cancel
           </button>
-          <button onClick={()=>onDone(html, material)}
+          <button onClick={()=>onDone(html, material, matSource)}
             style={{background:C.accent,border:"none",color:"#fff",fontSize:15,
               fontFamily:"inherit",fontWeight:700,cursor:"pointer",padding:"6px 22px",borderRadius:8}}>
             {addMode ? "Add" : "Done"}
@@ -1471,8 +1473,16 @@ const RichMobileSheet = ({initialHtml, initialMaterial='', placeholder, onDone, 
           <RichEditor htmlValue={html} onHtmlChange={setHtml} placeholder={placeholder} autoFocus minRows={6}/>
           {showMaterial && (
             <div style={{marginTop:14,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
-              <div style={{fontSize:12,color:C.dim,marginBottom:5}}>
-                Material needed: <span style={{fontWeight:400,opacity:0.7}}>one item per line — auto-adds to open PO</span>
+              <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:5}}>
+                <div style={{fontSize:12,color:C.dim}}>
+                  Material needed: <span style={{fontWeight:400,opacity:0.7}}>one item per line</span>
+                </div>
+                <select value={matSource} onChange={e=>setMatSource(e.target.value)}
+                  style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                    color:matSource?C.accent:C.dim,padding:"4px 8px",fontSize:11,
+                    fontFamily:"inherit",outline:"none",cursor:"pointer"}}>
+                  {MAT_SOURCES.map(s=><option key={s} value={s}>{s||"— source —"}</option>)}
+                </select>
               </div>
               <textarea value={material} onChange={e=>setMaterial(e.target.value)}
                 placeholder={"20A breaker x2\n12/2 wire 50ft\nPlaster ring x4"}
@@ -1720,22 +1730,26 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
   const [addOpen,       setAddOpen]       = useState(false);
   const [addKey,        setAddKey]        = useState(0);
   const [addMaterial,   setAddMaterial]   = useState('');
+  const [addMatSource,  setAddMatSource]  = useState('');
   const [editingId,     setEditingId]     = useState(null);
   const [editHtml,      setEditHtml]      = useState('');
   const [editMaterial,  setEditMaterial]  = useState('');
+  const [editMatSource, setEditMatSource] = useState('');
   const [waitingEditId,   setWaitingEditId]   = useState(null);
   const [waitingText,     setWaitingText]     = useState('');
   const [materialEditId,  setMaterialEditId]  = useState(null);
   const [materialText,    setMaterialText]    = useState('');
   const [mobileSheet,   setMobileSheet]   = useState(null);
 
-  const commitAdd = (html, keepOpen=false, materialOverride=undefined) => {
+  const commitAdd = (html, keepOpen=false, materialOverride=undefined, matSourceOverride=undefined) => {
     if (!(html||"").replace(/<[^>]*>/g,"").trim()) return;
     const who = getIdentity();
     const newItem = { id: uid(), text: html, done: false, addedBy: who?.name||"" };
     const mat = (materialOverride !== undefined ? materialOverride : addMaterial) || "";
+    const src = (matSourceOverride !== undefined ? matSourceOverride : addMatSource) || "";
     if (mat.trim()) {
       newItem.materialNeeded = mat.trim();
+      if (src) newItem.materialSource = src;
       // Format as HTML list lines for the PO (TA component renders HTML)
       const formatted = mat.trim().split('\n').filter(Boolean)
         .map(l => l.trim().startsWith('- ') ? l.trim() : `- ${l.trim()}`).join('<br>');
@@ -1752,14 +1766,16 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
     }
   };
 
-  const commitEdit = (id, html, material=undefined) => {
+  const commitEdit = (id, html, material=undefined, matSource=undefined) => {
     if ((html||"").replace(/<[^>]*>/g,"").trim()) {
       const patch = { text: html };
       if (material !== undefined) patch.materialNeeded = material.trim();
+      if (matSource !== undefined) patch.materialSource = matSource;
       onChange(safeItems.map(i => i.id === id ? { ...i, ...patch } : i));
     }
     setEditingId(null);
     setEditMaterial('');
+    setEditMatSource('');
     setMobileSheet(null);
   };
 
@@ -1890,6 +1906,12 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
                 borderRadius:99,padding:'2px 8px',border:'1px solid #bfdbfe'}}>
                 Material: {item.materialNeeded}
               </span>
+              {item.materialSource && (
+                <span style={{fontSize:10,fontWeight:700,background:`${C.accent}18`,color:C.accent,
+                  borderRadius:99,padding:'2px 8px'}}>
+                  {item.materialSource}
+                </span>
+              )}
               <button onClick={()=>{setMaterialEditId(item.id);setMaterialText(item.materialNeeded||'');}}
                 style={{fontSize:9,background:'none',border:'none',color:C.muted,cursor:'pointer',textDecoration:'underline',padding:0}}>
                 edit
@@ -1941,7 +1963,15 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
             onEnterKey={html => commitAdd(html, true)}/>
           {/* Material needed */}
           <div style={{display:'flex',flexDirection:'column',gap:3,marginTop:6}}>
-            <span style={{fontSize:11,color:C.dim,whiteSpace:'nowrap'}}>Material needed: <span style={{fontWeight:400,opacity:0.7}}>(one item per line — auto-adds to open PO)</span></span>
+            <div style={{display:'flex',justifyContent:'space-between',alignItems:'center'}}>
+              <span style={{fontSize:11,color:C.dim,whiteSpace:'nowrap'}}>Material needed: <span style={{fontWeight:400,opacity:0.7}}>(one item per line)</span></span>
+              <select value={addMatSource} onChange={e=>setAddMatSource(e.target.value)}
+                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
+                  color:addMatSource?C.accent:C.dim,padding:"3px 7px",fontSize:10,
+                  fontFamily:"inherit",outline:"none",cursor:"pointer"}}>
+                {MAT_SOURCES.map(s=><option key={s} value={s}>{s||"— source —"}</option>)}
+              </select>
+            </div>
             <textarea value={addMaterial} onChange={e=>setAddMaterial(e.target.value)}
               placeholder={"20A breaker x2\n12/2 wire 50ft\nPlaster ring x4"}
               rows={3}
@@ -1951,7 +1981,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
           </div>
           <div style={{ display: 'flex', gap: 6, marginTop: 6, alignItems:'center' }}>
             <Btn onClick={() => commitAdd(addHtml)} variant="primary" style={{ fontSize: 11, padding: '3px 12px' }}>Add</Btn>
-            <button onClick={() => { setAddOpen(false); setAddHtml(''); setAddMaterial(''); }}
+            <button onClick={() => { setAddOpen(false); setAddHtml(''); setAddMaterial(''); setAddMatSource(''); }}
               style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12 }}>Cancel</button>
             <span style={{fontSize:10,color:C.muted,marginLeft:2}}>↵ Enter = save &amp; next · Shift+Enter = new line</span>
           </div>
@@ -1959,7 +1989,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
       ) : !addOpen && (
         <Btn onClick={() => {
           if (ON_MOBILE) setMobileSheet({ mode: 'add' });
-          else           { setAddOpen(true); setAddHtml(''); setAddMaterial(''); }
+          else           { setAddOpen(true); setAddHtml(''); setAddMaterial(''); setAddMatSource(''); }
         }} variant="add" style={{ fontSize: 11, padding: '4px 12px', marginTop: 4 }}>+ Add Item</Btn>
       )}
 
@@ -1970,9 +2000,10 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
           placeholder={mobileSheet.mode === 'add' ? "Add punch item…" : "Edit item…"}
           addMode={mobileSheet.mode === 'add'}
           showMaterial={mobileSheet.mode === 'add' ? !!onAddMaterial : true}
-          onDone={(html, mat) => mobileSheet.mode === 'add'
-            ? commitAdd(html, false, mat)
-            : commitEdit(mobileSheet.id, html, mat)}
+          initialMatSource={mobileSheet.matSource||''}
+          onDone={(html, mat, src) => mobileSheet.mode === 'add'
+            ? commitAdd(html, false, mat, src)
+            : commitEdit(mobileSheet.id, html, mat, src)}
           onCancel={() => setMobileSheet(null)}/>
       )}
 
@@ -2988,7 +3019,15 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
                     <TA value={o.task||""} onChange={e=>upd(o.id,{task:e.target.value})} placeholder={"- Task 1\n- Task 2"} rows={3}/>
                   </div>
                   <div>
-                    <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Material Needed</div>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+                      <div style={{fontSize:10,color:"var(--dim)"}}>Material Needed</div>
+                      <select value={o.materialSource||""} onChange={e=>upd(o.id,{materialSource:e.target.value})}
+                        style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
+                          color:o.materialSource?C.accent:C.dim,padding:"3px 7px",fontSize:10,
+                          fontFamily:"inherit",outline:"none",cursor:"pointer"}}>
+                        {MAT_SOURCES.map(s=><option key={s} value={s}>{s||"— source —"}</option>)}
+                      </select>
+                    </div>
                     <TA value={o.material||""} onChange={e=>upd(o.id,{material:e.target.value})} placeholder={"- Item 1\n- Item 2"} rows={3}/>
                   </div>
                 </div>
@@ -3211,8 +3250,15 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId}) {
 
           <div style={{marginBottom:8}}>
 
-            <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Material Needed</div>
-
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:3}}>
+              <div style={{fontSize:10,color:C.dim}}>Material Needed</div>
+              <select value={t.materialSource||""} onChange={e=>upd(t.id,{materialSource:e.target.value})}
+                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
+                  color:t.materialSource?C.accent:C.dim,padding:"3px 7px",fontSize:10,
+                  fontFamily:"inherit",outline:"none",cursor:"pointer"}}>
+                {MAT_SOURCES.map(s=><option key={s} value={s}>{s||"— source —"}</option>)}
+              </select>
+            </div>
             <TA value={t.material} onChange={e=>upd(t.id,{material:e.target.value})} placeholder="List materials needed…" rows={2}/>
 
           </div>
