@@ -4592,7 +4592,7 @@ function KeypadSection({loads,onChange,label,allLoads=[]}) {
 }
 
 
-function PanelModulesSection({modules,onChange,system,allLoads=[]}) {
+function PanelModulesSection({modules,onChange,system,allLoads=[],identity}) {
 
   const sys = system||"Control 4";
   const isSav = sys==="Savant", isLut = sys==="Lutron", isCres = sys==="Crestron";
@@ -4702,7 +4702,8 @@ function PanelModulesSection({modules,onChange,system,allLoads=[]}) {
                   alignItems:"center",borderRadius:6,padding:"2px 0",
                   background:load.pulled?"rgba(34,197,94,0.08)":"transparent"}}>
                   <input type="checkbox" checked={!!load.pulled} onChange={e=>{
-                    const val=e.target.checked; const who=getIdentity();
+                    const val=e.target.checked;
+                    const who=identity||getIdentity();
                     updLoad(mod.id,load.id,{pulled:val,pulledBy:val?(who?.name||""):"",pulledAt:val?new Date().toLocaleDateString("en-US"):""});
                   }}
                     style={{width:15,height:15,accentColor:C.purple,cursor:"pointer",margin:0}}/>
@@ -7437,6 +7438,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     <PanelModulesSection
                       system={job.lightingSystem||"Control 4"}
                       allLoads={alMod}
+                      identity={identity}
                       modules={migrateFloorToModules((job.panelizedLighting.cp4Loads?.[floor])||[])}
                       onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
                         cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}/>
@@ -7466,6 +7468,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     <PanelModulesSection
                       system={job.lightingSystem||"Control 4"}
                       allLoads={alMod}
+                      identity={identity}
                       modules={migrateFloorToModules((job.panelizedLighting[ef.key])||[])}
                       onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}/>
                   </div>
