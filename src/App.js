@@ -10182,15 +10182,22 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
   useEffect(() => {
     if (!allStaff.length || !identity?.name) return;
     if (personFilter !== "all") return;
+    // Foreman → show their own crew
     if (iAmForeman) {
       setPersonFilter("mycrew");
       return;
     }
+    // Crew member with a foreman assigned → show that foreman's whole crew
+    if (identity.foremanId) {
+      setPersonFilter("crew_" + identity.foremanId);
+      return;
+    }
+    // Fallback: filter to just this person
     const identityName = (identity.name || "").toLowerCase();
     const match = allStaff.find(n => n.toLowerCase() === identityName)
       || allStaff.find(n => n.toLowerCase().startsWith(identityName.split(" ")[0]));
     if (match) setPersonFilter(match);
-  }, [allStaff, iAmForeman]);
+  }, [allStaff, iAmForeman, identity?.foremanId]);
 
   // Match Simpro ProjectID → app job
   const jobBySimproNo = useMemo(() => {
@@ -10216,20 +10223,54 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
     return map;
   }, [schedule, personFilter, myCrewNames]);
 
-  // For each date, group by job so we can show full crew per job
+  // For each date, build time-aware blocks per job.
+  // Each unique start time on a job creates a block showing EVERYONE present at that time
+  // (i.e. anyone whose shift started at or before that time and ends after it).
   const crewByDateAndJob = useMemo(() => {
     if (!schedule) return {};
     const out = {};
     weekDates.forEach(d => {
       const ymd = toYMD(d);
       const dayEntries = (schedule || []).filter(s => s.Type === "job" && s.Date === ymd);
-      const jobMap = {};
+
+      // Group all entries by projectId first
+      const byProject = {};
       dayEntries.forEach(s => {
         const pid = String(s.Project?.ProjectID || s.Reference);
-        if (!jobMap[pid]) jobMap[pid] = { entries: [], ref: s.Reference, projectId: pid, startTime: s.Blocks?.[0]?.StartTime, endTime: s.Blocks?.[s.Blocks?.length-1]?.EndTime };
-        jobMap[pid].entries.push(s);
+        if (!byProject[pid]) byProject[pid] = [];
+        byProject[pid].push(s);
       });
-      out[ymd] = Object.values(jobMap);
+
+      const blocks = [];
+      Object.entries(byProject).forEach(([pid, entries]) => {
+        // Collect all unique start times for this job
+        const startTimes = [...new Set(
+          entries.map(s => s.Blocks?.[0]?.StartTime || "").filter(Boolean)
+        )].sort();
+
+        if (startTimes.length === 0) {
+          // No time info — just show everyone in one block
+          blocks.push({ entries, ref: entries[0].Reference, projectId: pid, startTime: "", endTime: "" });
+          return;
+        }
+
+        startTimes.forEach(blockStart => {
+          // Include every entry that is active at this blockStart time:
+          // their shift starts at or before blockStart AND ends after blockStart
+          const present = entries.filter(s => {
+            const sStart = s.Blocks?.[0]?.StartTime || "";
+            const sEnd   = s.Blocks?.[s.Blocks?.length-1]?.EndTime || "";
+            return sStart <= blockStart && (sEnd > blockStart || !sEnd);
+          });
+          if (present.length === 0) return;
+          // End time = latest end among present crew
+          const endTime = present.map(s => s.Blocks?.[s.Blocks?.length-1]?.EndTime||"").sort().pop() || "";
+          blocks.push({ entries: present, ref: entries[0].Reference, projectId: pid, startTime: blockStart, endTime });
+        });
+      });
+
+      // Sort by start time chronologically
+      out[ymd] = blocks.sort((a,b) => (a.startTime||"").localeCompare(b.startTime||""));
     });
     return out;
   }, [schedule, weekDates]);
