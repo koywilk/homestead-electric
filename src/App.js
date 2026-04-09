@@ -4697,23 +4697,15 @@ function PanelModulesSection({modules,onChange,system,allLoads=[]}) {
                 {rowHeaders.map((h,i)=><div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em"}}>{h}</div>)}
               </div>
               {mod.loads.map((load,li)=>(
-                <div key={load.id} style={{display:"grid",gridTemplateColumns:rowGrid,gap:4,marginBottom:3,
+                <div key={load.id} style={{marginBottom:3}}>
+                <div style={{display:"grid",gridTemplateColumns:rowGrid,gap:4,
                   alignItems:"center",borderRadius:6,padding:"2px 0",
                   background:load.pulled?"rgba(34,197,94,0.08)":"transparent"}}>
-                  <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
-                    <input type="checkbox" checked={!!load.pulled} onChange={e=>{
-                      const val=e.target.checked; const who=getIdentity();
-                      updLoad(mod.id,load.id,{pulled:val,pulledBy:val?(who?.name||""):"",pulledAt:val?new Date().toLocaleDateString("en-US"):""});
-                    }}
-                      style={{width:15,height:15,accentColor:C.purple,cursor:"pointer",margin:0}}/>
-                    {load.pulled&&load.pulledBy&&(
-                      <span title={`Pulled by ${load.pulledBy}${load.pulledAt?" · "+load.pulledAt:""}`}
-                        style={{fontSize:8,color:C.green,fontWeight:600,textAlign:"center",maxWidth:50,
-                          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                        {load.pulledBy.split(" ")[0]}
-                      </span>
-                    )}
-                  </div>
+                  <input type="checkbox" checked={!!load.pulled} onChange={e=>{
+                    const val=e.target.checked; const who=getIdentity();
+                    updLoad(mod.id,load.id,{pulled:val,pulledBy:val?(who?.name||""):"",pulledAt:val?new Date().toLocaleDateString("en-US"):""});
+                  }}
+                    style={{width:15,height:15,accentColor:C.purple,cursor:"pointer",margin:0}}/>
                   <span style={{fontSize:11,color:C.muted,textAlign:"center",fontWeight:700}}>{load.num}</span>
                   <input
                     ref={el=>{ if(pendingFocusMid.current===mod.id&&li===mod.loads.length-1&&el){el.focus();pendingFocusMid.current=null;} }}
@@ -4737,6 +4729,12 @@ function PanelModulesSection({modules,onChange,system,allLoads=[]}) {
                     </select>
                   )}
                   <button onClick={()=>delLoad(mod.id,load.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+                </div>
+                {load.pulled&&load.pulledBy&&(
+                  <div style={{paddingLeft:4,marginTop:1}}>
+                    <span style={{fontSize:9,color:C.green,fontWeight:600}}>✓ pulled by {load.pulledBy}{load.pulledAt?" · "+load.pulledAt:""}</span>
+                  </div>
+                )}
                 </div>
               ))}
               <button onClick={()=>addLoad(mod.id)}
