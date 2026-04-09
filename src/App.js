@@ -10223,9 +10223,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
     return map;
   }, [schedule, personFilter, myCrewNames]);
 
-  // For each date, build time-aware blocks per job.
-  // Each unique start time on a job creates a block showing EVERYONE present at that time
-  // (i.e. anyone whose shift started at or before that time and ends after it).
+  // For each date, one block per job showing all crew with earliest start → latest end
   const crewByDateAndJob = useMemo(() => {
     if (!schedule) return {};
     const out = {};
@@ -10233,7 +10231,6 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
       const ymd = toYMD(d);
       const dayEntries = (schedule || []).filter(s => s.Type === "job" && s.Date === ymd);
 
-      // Group all entries by projectId first
       const byProject = {};
       dayEntries.forEach(s => {
         const pid = String(s.Project?.ProjectID || s.Reference);
@@ -10241,35 +10238,14 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
         byProject[pid].push(s);
       });
 
-      const blocks = [];
-      Object.entries(byProject).forEach(([pid, entries]) => {
-        // Collect all unique start times for this job
-        const startTimes = [...new Set(
-          entries.map(s => s.Blocks?.[0]?.StartTime || "").filter(Boolean)
-        )].sort();
-
-        if (startTimes.length === 0) {
-          // No time info — just show everyone in one block
-          blocks.push({ entries, ref: entries[0].Reference, projectId: pid, startTime: "", endTime: "" });
-          return;
-        }
-
-        startTimes.forEach(blockStart => {
-          // Include every entry that is active at this blockStart time:
-          // their shift starts at or before blockStart AND ends after blockStart
-          const present = entries.filter(s => {
-            const sStart = s.Blocks?.[0]?.StartTime || "";
-            const sEnd   = s.Blocks?.[s.Blocks?.length-1]?.EndTime || "";
-            return sStart <= blockStart && (sEnd > blockStart || !sEnd);
-          });
-          if (present.length === 0) return;
-          // End time = latest end among present crew
-          const endTime = present.map(s => s.Blocks?.[s.Blocks?.length-1]?.EndTime||"").sort().pop() || "";
-          blocks.push({ entries: present, ref: entries[0].Reference, projectId: pid, startTime: blockStart, endTime });
-        });
+      const blocks = Object.entries(byProject).map(([pid, entries]) => {
+        const startTimes = entries.map(s => s.Blocks?.[0]?.StartTime || "").filter(Boolean).sort();
+        const endTimes   = entries.map(s => s.Blocks?.[s.Blocks?.length-1]?.EndTime || "").filter(Boolean).sort();
+        const startTime  = startTimes[0] || "";
+        const endTime    = endTimes[endTimes.length-1] || "";
+        return { entries, ref: entries[0].Reference, projectId: pid, startTime, endTime };
       });
 
-      // Sort by start time chronologically
       out[ymd] = blocks.sort((a,b) => (a.startTime||"").localeCompare(b.startTime||""));
     });
     return out;
@@ -10374,12 +10350,8 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                             const parts = (e.Staff?.Name || "").split(" ");
                             return parts.length > 1 ? `${parts[0]} ${parts[parts.length-1][0]}.` : parts[0];
                           }).filter(Boolean);
-                          const myEntry = personFilter === "all" ? g.entries[0]
-                            : personFilter === "mycrew" ? (g.entries.find(e => myCrewNames.includes(e.Staff?.Name)) || g.entries[0])
-                            : personFilter.startsWith("crew_") ? (g.entries.find(e => (foremanCrews.find(fc=>"crew_"+fc.foremanId===personFilter)?.staffNames||[]).includes(e.Staff?.Name)) || g.entries[0])
-                            : (g.entries.find(e => e.Staff?.Name === personFilter) || g.entries[0]);
-                          const start = fmtTime(myEntry?.Blocks?.[0]?.StartTime);
-                          const end   = fmtTime(myEntry?.Blocks?.[myEntry?.Blocks?.length-1]?.EndTime);
+                          const start = fmtTime(g.startTime);
+                          const end   = fmtTime(g.endTime);
                           // Determine block accent color: use foreman color of first crew member found
                           const blockColor = (() => {
                             for (const e of g.entries) {
