@@ -2447,16 +2447,30 @@ function MaterialOrders({orders,onChange}) {
                       style={{accentColor:"#ea580c",width:14,height:14,cursor:"pointer"}}/>
                     Need to order before return
                   </label>
-                  <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
-                    <input type="checkbox" checked={!!o.ordered} onChange={e=>upd(o.id,{ordered:e.target.checked})}
-                      style={{accentColor:"#3b82f6",width:14,height:14,cursor:"pointer"}}/>
-                    Order sent to supplier
-                  </label>
-                  <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
-                    <input type="checkbox" checked={!!o.pickedUp} onChange={e=>upd(o.id,{pickedUp:e.target.checked})}
-                      style={{accentColor:"#16a34a",width:14,height:14,cursor:"pointer"}}/>
-                    Picked up
-                  </label>
+                  <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                    <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
+                      <input type="checkbox" checked={!!o.ordered} onChange={e=>{
+                        const val=e.target.checked; const who=getIdentity();
+                        upd(o.id,{ordered:val,orderedBy:val?(who?.name||""):"",orderedAt:val?new Date().toLocaleDateString("en-US"):""});
+                      }} style={{accentColor:"#3b82f6",width:14,height:14,cursor:"pointer"}}/>
+                      Order sent to supplier
+                    </label>
+                    {o.ordered&&o.orderedBy&&(
+                      <span style={{fontSize:9,color:"#3b82f6",fontWeight:600,paddingLeft:20}}>✓ by {o.orderedBy}{o.orderedAt?" · "+o.orderedAt:""}</span>
+                    )}
+                  </div>
+                  <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                    <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
+                      <input type="checkbox" checked={!!o.pickedUp} onChange={e=>{
+                        const val=e.target.checked; const who=getIdentity();
+                        upd(o.id,{pickedUp:val,pickedUpBy:val?(who?.name||""):"",pickedUpAt:val?new Date().toLocaleDateString("en-US"):""});
+                      }} style={{accentColor:"#16a34a",width:14,height:14,cursor:"pointer"}}/>
+                      Picked up
+                    </label>
+                    {o.pickedUp&&o.pickedUpBy&&(
+                      <span style={{fontSize:9,color:"#16a34a",fontWeight:600,paddingLeft:20}}>✓ by {o.pickedUpBy}{o.pickedUpAt?" · "+o.pickedUpAt:""}</span>
+                    )}
+                  </div>
                 </div>
               </div>
             )}
@@ -3443,9 +3457,23 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
         <span/>
         <Inp value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"
           onKeyDown={e=>e.key==="Enter"&&addRow()}/>
-        <Sel value={r.status} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
+        <Sel value={r.status} onChange={e=>{
+          const val=e.target.value;
+          const who=getIdentity();
+          upd(r.id,{status:val,
+            statusBy:val?(who?.name||""):"",
+            statusAt:val?new Date().toLocaleDateString("en-US"):"",
+          });
+        }} options={PULLED_OPTS}
           style={{color:r.status==="Pulled"?C.green:r.status==="Need Specs"?C.red:C.text,fontSize:10}}/>
       </div>
+      {r.status&&r.statusBy&&(
+        <div style={{paddingLeft:22,marginTop:2}}>
+          <span style={{fontSize:9,color:r.status==="Pulled"?C.green:C.red,fontWeight:600}}>
+            {r.status==="Pulled"?"✓":"!"} {r.statusBy}{r.statusAt?" · "+r.statusAt:""}
+          </span>
+        </div>
+      )}
     </div>
   );
 
@@ -4672,8 +4700,20 @@ function PanelModulesSection({modules,onChange,system,allLoads=[]}) {
                 <div key={load.id} style={{display:"grid",gridTemplateColumns:rowGrid,gap:4,marginBottom:3,
                   alignItems:"center",borderRadius:6,padding:"2px 0",
                   background:load.pulled?"rgba(34,197,94,0.08)":"transparent"}}>
-                  <input type="checkbox" checked={!!load.pulled} onChange={e=>updLoad(mod.id,load.id,{pulled:e.target.checked})}
-                    style={{width:15,height:15,accentColor:C.purple,cursor:"pointer",margin:0}}/>
+                  <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:2}}>
+                    <input type="checkbox" checked={!!load.pulled} onChange={e=>{
+                      const val=e.target.checked; const who=getIdentity();
+                      updLoad(mod.id,load.id,{pulled:val,pulledBy:val?(who?.name||""):"",pulledAt:val?new Date().toLocaleDateString("en-US"):""});
+                    }}
+                      style={{width:15,height:15,accentColor:C.purple,cursor:"pointer",margin:0}}/>
+                    {load.pulled&&load.pulledBy&&(
+                      <span title={`Pulled by ${load.pulledBy}${load.pulledAt?" · "+load.pulledAt:""}`}
+                        style={{fontSize:8,color:C.green,fontWeight:600,textAlign:"center",maxWidth:50,
+                          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                        {load.pulledBy.split(" ")[0]}
+                      </span>
+                    )}
+                  </div>
                   <span style={{fontSize:11,color:C.muted,textAlign:"center",fontWeight:700}}>{load.num}</span>
                   <input
                     ref={el=>{ if(pendingFocusMid.current===mod.id&&li===mod.loads.length-1&&el){el.focus();pendingFocusMid.current=null;} }}
