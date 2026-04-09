@@ -2361,7 +2361,8 @@ function MaterialOrders({orders,onChange}) {
     return m;
   });
 
-  const add = () => onChange([...safeOrders, {id:uid(),date:"",po:"",pickupDate:"",items:"",pickedUp:false,needsOrder:false}]);
+  const SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","Other"];
+  const add = () => onChange([...safeOrders, {id:uid(),date:"",po:"",pickupDate:"",source:"",items:"",pickedUp:false,needsOrder:false}]);
 
   const upd = (id, p) => {
     onChange(safeOrders.map(o => o.id===id ? {...o,...p} : o));
@@ -2408,6 +2409,10 @@ function MaterialOrders({orders,onChange}) {
                 <span style={{fontSize:10,fontWeight:700,background:"#16a34a22",color:"#16a34a",
                   borderRadius:99,padding:"1px 8px"}}>Picked Up</span>
               )}
+              {o.source && (
+                <span style={{fontSize:10,fontWeight:700,background:`${C.accent}18`,color:C.accent,
+                  borderRadius:99,padding:"1px 8px"}}>{o.source}</span>
+              )}
               {isCollapsed && o.items && (
                 <span style={{fontSize:11,color:C.muted,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>
                   {poItemsPreview(o.items)}
@@ -2421,7 +2426,16 @@ function MaterialOrders({orders,onChange}) {
             {/* ── Expanded body ── */}
             {!isCollapsed && (
               <div style={{padding:"0 14px 14px"}}>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:10}}>
+                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8,marginBottom:10}}>
+                  <div>
+                    <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Source</div>
+                    <select value={o.source||""} onChange={e=>upd(o.id,{source:e.target.value})}
+                      style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                        color:o.source?C.accent:C.dim,padding:"6px 8px",fontSize:12,
+                        fontFamily:"inherit",outline:"none",width:"100%",cursor:"pointer"}}>
+                      {SOURCES.map(s=><option key={s} value={s}>{s||"— source —"}</option>)}
+                    </select>
+                  </div>
                   <div>
                     <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Ordered</div>
                     <DateInp value={o.date} onChange={e=>upd(o.id,{date:e.target.value})}/>
@@ -4592,7 +4606,7 @@ function KeypadSection({loads,onChange,label,allLoads=[]}) {
 }
 
 
-function PanelModulesSection({modules,onChange,system,allLoads=[],identity}) {
+function PanelModulesSection({modules,onChange,system,allLoads=[]}) {
 
   const sys = system||"Control 4";
   const isSav = sys==="Savant", isLut = sys==="Lutron", isCres = sys==="Crestron";
@@ -4703,7 +4717,7 @@ function PanelModulesSection({modules,onChange,system,allLoads=[],identity}) {
                   background:load.pulled?"rgba(34,197,94,0.08)":"transparent"}}>
                   <input type="checkbox" checked={!!load.pulled} onChange={e=>{
                     const val=e.target.checked;
-                    const who=identity||getIdentity();
+                    const who=getIdentity();
                     updLoad(mod.id,load.id,{pulled:val,pulledBy:val?(who?.name||""):"",pulledAt:val?new Date().toLocaleDateString("en-US"):""});
                   }}
                     style={{width:15,height:15,accentColor:C.purple,cursor:"pointer",margin:0}}/>
@@ -7438,7 +7452,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     <PanelModulesSection
                       system={job.lightingSystem||"Control 4"}
                       allLoads={alMod}
-                      identity={identity}
                       modules={migrateFloorToModules((job.panelizedLighting.cp4Loads?.[floor])||[])}
                       onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
                         cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}/>
@@ -7468,7 +7481,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     <PanelModulesSection
                       system={job.lightingSystem||"Control 4"}
                       allLoads={alMod}
-                      identity={identity}
                       modules={migrateFloorToModules((job.panelizedLighting[ef.key])||[])}
                       onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}/>
                   </div>
