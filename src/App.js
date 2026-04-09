@@ -10374,9 +10374,10 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                             const parts = (e.Staff?.Name || "").split(" ");
                             return parts.length > 1 ? `${parts[0]} ${parts[parts.length-1][0]}.` : parts[0];
                           }).filter(Boolean);
-                          const myEntry = personFilter !== "all"
-                            ? g.entries.find(e => e.Staff?.Name === personFilter)
-                            : g.entries[0];
+                          const myEntry = personFilter === "all" ? g.entries[0]
+                            : personFilter === "mycrew" ? (g.entries.find(e => myCrewNames.includes(e.Staff?.Name)) || g.entries[0])
+                            : personFilter.startsWith("crew_") ? (g.entries.find(e => (foremanCrews.find(fc=>"crew_"+fc.foremanId===personFilter)?.staffNames||[]).includes(e.Staff?.Name)) || g.entries[0])
+                            : (g.entries.find(e => e.Staff?.Name === personFilter) || g.entries[0]);
                           const start = fmtTime(myEntry?.Blocks?.[0]?.StartTime);
                           const end   = fmtTime(myEntry?.Blocks?.[myEntry?.Blocks?.length-1]?.EndTime);
                           // Determine block accent color: use foreman color of first crew member found
