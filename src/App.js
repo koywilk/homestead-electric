@@ -2456,35 +2456,60 @@ function MaterialOrders({orders,onChange}) {
 
                 {/* ── Status checkboxes ── */}
                 <div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>
-                  <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
-                    <input type="checkbox" checked={!!o.needsOrder} onChange={e=>upd(o.id,{needsOrder:e.target.checked})}
-                      style={{accentColor:"#ea580c",width:14,height:14,cursor:"pointer"}}/>
-                    Need to order before return
-                  </label>
-                  <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                  {o.source==="Shop" ? (<>
                     <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
-                      <input type="checkbox" checked={!!o.ordered} onChange={e=>{
-                        const val=e.target.checked; const who=getIdentity();
-                        upd(o.id,{ordered:val,orderedBy:val?(who?.name||""):"",orderedAt:val?new Date().toLocaleDateString("en-US"):""});
-                      }} style={{accentColor:"#3b82f6",width:14,height:14,cursor:"pointer"}}/>
-                      Order sent to supplier
+                      <input type="checkbox" checked={!!o.needsOrder} onChange={e=>upd(o.id,{needsOrder:e.target.checked})}
+                        style={{accentColor:"#ea580c",width:14,height:14,cursor:"pointer"}}/>
+                      Needs to be picked up
                     </label>
-                    {o.ordered&&o.orderedBy&&(
-                      <span style={{fontSize:9,color:"#3b82f6",fontWeight:600,paddingLeft:20}}>✓ by {o.orderedBy}{o.orderedAt?" · "+o.orderedAt:""}</span>
-                    )}
-                  </div>
-                  <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                    <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                      <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
+                        <input type="checkbox" checked={!!o.pickedUp} onChange={e=>{
+                          const val=e.target.checked; const who=getIdentity();
+                          upd(o.id,{pickedUp:val,pickedUpBy:val?(who?.name||""):"",pickedUpAt:val?new Date().toLocaleDateString("en-US"):""});
+                        }} style={{accentColor:"#16a34a",width:14,height:14,cursor:"pointer"}}/>
+                        Picked up
+                      </label>
+                      {o.pickedUp&&o.pickedUpBy&&(
+                        <span style={{fontSize:9,color:"#16a34a",fontWeight:600,paddingLeft:20}}>✓ by {o.pickedUpBy}{o.pickedUpAt?" · "+o.pickedUpAt:""}</span>
+                      )}
+                    </div>
+                  </>) : (<>
                     <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
-                      <input type="checkbox" checked={!!o.pickedUp} onChange={e=>{
-                        const val=e.target.checked; const who=getIdentity();
-                        upd(o.id,{pickedUp:val,pickedUpBy:val?(who?.name||""):"",pickedUpAt:val?new Date().toLocaleDateString("en-US"):""});
-                      }} style={{accentColor:"#16a34a",width:14,height:14,cursor:"pointer"}}/>
-                      Picked up
+                      <input type="checkbox" checked={!!o.needsOrder} onChange={e=>upd(o.id,{needsOrder:e.target.checked})}
+                        style={{accentColor:"#ea580c",width:14,height:14,cursor:"pointer"}}/>
+                      Need to order before return
                     </label>
-                    {o.pickedUp&&o.pickedUpBy&&(
-                      <span style={{fontSize:9,color:"#16a34a",fontWeight:600,paddingLeft:20}}>✓ by {o.pickedUpBy}{o.pickedUpAt?" · "+o.pickedUpAt:""}</span>
-                    )}
-                  </div>
+                    <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
+                      <input type="checkbox" checked={!!o.deliveredToShop} onChange={e=>upd(o.id,{deliveredToShop:e.target.checked})}
+                        style={{accentColor:"#8b5cf6",width:14,height:14,cursor:"pointer"}}/>
+                      Delivered to shop
+                    </label>
+                    <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                      <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
+                        <input type="checkbox" checked={!!o.ordered} onChange={e=>{
+                          const val=e.target.checked; const who=getIdentity();
+                          upd(o.id,{ordered:val,orderedBy:val?(who?.name||""):"",orderedAt:val?new Date().toLocaleDateString("en-US"):""});
+                        }} style={{accentColor:"#3b82f6",width:14,height:14,cursor:"pointer"}}/>
+                        Order sent to supplier
+                      </label>
+                      {o.ordered&&o.orderedBy&&(
+                        <span style={{fontSize:9,color:"#3b82f6",fontWeight:600,paddingLeft:20}}>✓ by {o.orderedBy}{o.orderedAt?" · "+o.orderedAt:""}</span>
+                      )}
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                      <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
+                        <input type="checkbox" checked={!!o.pickedUp} onChange={e=>{
+                          const val=e.target.checked; const who=getIdentity();
+                          upd(o.id,{pickedUp:val,pickedUpBy:val?(who?.name||""):"",pickedUpAt:val?new Date().toLocaleDateString("en-US"):""});
+                        }} style={{accentColor:"#16a34a",width:14,height:14,cursor:"pointer"}}/>
+                        Picked up
+                      </label>
+                      {o.pickedUp&&o.pickedUpBy&&(
+                        <span style={{fontSize:9,color:"#16a34a",fontWeight:600,paddingLeft:20}}>✓ by {o.pickedUpBy}{o.pickedUpAt?" · "+o.pickedUpAt:""}</span>
+                      )}
+                    </div>
+                  </>)}
                 </div>
               </div>
             )}
