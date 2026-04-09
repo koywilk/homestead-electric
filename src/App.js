@@ -10055,7 +10055,6 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState(null);
   const [weekOffset, setWeekOffset]   = useState(0);      // 0 = this week, 1 = next, etc.
-  const [personFilter, setPersonFilter] = useState("all");
   const [collapsed, setCollapsed]     = useState(false); // always start open
 
   // Compute Mon–Sun for the displayed week
@@ -10150,16 +10149,28 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
     return map;
   }, [users, foremanColors, allStaff]);
 
-  // Find crew members for the current user if they are a foreman
+  // Build "my crew" names — works for both foremen and crew members
   const myCrewNames = useMemo(() => {
     if (!identity?.id) return [];
-    const crew = users.filter(u => u.foremanId === identity.id).map(u => (u.name||"").split(" ")[0].toLowerCase());
-    if (!crew.length) return [];
-    // Match to actual SimPro staff names
-    return allStaff.filter(n => crew.some(c => n.toLowerCase().startsWith(c)));
+    let firstNames = [];
+    // Am I a foreman? (crew members have me as their foremanId)
+    const asForeman = users.filter(u => u.foremanId === identity.id).map(u => (u.name||"").split(" ")[0].toLowerCase());
+    if (asForeman.length > 0) {
+      // Include self + all my crew
+      firstNames = [...new Set([(identity.name||"").split(" ")[0].toLowerCase(), ...asForeman])];
+    } else if (identity.foremanId) {
+      // I'm a crew member — include my foreman + all their crew
+      const foreman = users.find(u => u.id === identity.foremanId);
+      const crewmates = users.filter(u => u.foremanId === identity.foremanId).map(u => (u.name||"").split(" ")[0].toLowerCase());
+      const foremanFirst = foreman ? (foreman.name||"").split(" ")[0].toLowerCase() : null;
+      firstNames = [...new Set([...(foremanFirst ? [foremanFirst] : []), ...crewmates, (identity.name||"").split(" ")[0].toLowerCase()])];
+    }
+    if (!firstNames.length) return [];
+    return allStaff.filter(n => firstNames.some(c => n.toLowerCase().startsWith(c)));
   }, [users, identity, allStaff]);
 
-  const iAmForeman = myCrewNames.length > 0;
+  const iAmForeman = users.some(u => u.foremanId === identity?.id);
+  const hasMyCrew  = myCrewNames.length > 0;
 
   // Build a list of all foreman crews for the dropdown — {foremanId, foremanName, color, staffNames[]}
   const foremanCrews = useMemo(() => {
@@ -10178,26 +10189,21 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
     }).filter(fc => fc.staffNames.length > 0);
   }, [users, foremanColors, allStaff]);
 
-  // Auto-select: foremen get "mycrew", others get their own name
+  const [personFilter, setPersonFilter] = useState("all");
+
+  // Auto-default to your own foreman's crew
   useEffect(() => {
-    if (!allStaff.length || !identity?.name) return;
     if (personFilter !== "all") return;
-    // Foreman → show their own crew
-    if (iAmForeman) {
-      setPersonFilter("mycrew");
-      return;
-    }
-    // Crew member with a foreman assigned → show that foreman's whole crew
+    if (!identity?.id) return;
+    // Am I a foreman? Find my own crew entry
+    const myForeman = foremanCrews.find(fc => fc.foremanId === identity.id);
+    if (myForeman) { setPersonFilter("crew_" + myForeman.foremanId); return; }
+    // Am I a crew member? Find the foreman I'm assigned to
     if (identity.foremanId) {
-      setPersonFilter("crew_" + identity.foremanId);
-      return;
+      const myBoss = foremanCrews.find(fc => fc.foremanId === identity.foremanId);
+      if (myBoss) { setPersonFilter("crew_" + myBoss.foremanId); return; }
     }
-    // Fallback: filter to just this person
-    const identityName = (identity.name || "").toLowerCase();
-    const match = allStaff.find(n => n.toLowerCase() === identityName)
-      || allStaff.find(n => n.toLowerCase().startsWith(identityName.split(" ")[0]));
-    if (match) setPersonFilter(match);
-  }, [allStaff, iAmForeman, identity?.foremanId]);
+  }, [foremanCrews, identity?.id, identity?.foremanId]);
 
   // Match Simpro ProjectID → app job
   const jobBySimproNo = useMemo(() => {
@@ -10272,22 +10278,16 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
         {!loading && !hasAnyThisWeek && !error &&
           <span style={{fontSize:10,color:C.dim}}>No jobs scheduled this week</span>}
         <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:8}}>
-          {/* Person filter */}
-          {allStaff.length > 0 && !collapsed && (
+          {/* Crew filter */}
+          {!collapsed && foremanCrews.length > 0 && (
             <select value={personFilter} onChange={e=>setPersonFilter(e.target.value)}
               onClick={e=>e.stopPropagation()}
               style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
                 color:C.text,fontSize:11,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit"}}>
               <option value="all">Everyone</option>
-              {iAmForeman && <option value="mycrew">My Crew</option>}
               {foremanCrews.map(fc => (
                 <option key={fc.foremanId} value={"crew_"+fc.foremanId}>{fc.foremanName}'s Crew</option>
               ))}
-              {allStaff.map(n => {
-                const parts = n.split(" ");
-                const label = parts.length > 1 ? `${parts[0]} ${parts[parts.length-1][0]}.` : parts[0];
-                return <option key={n} value={n}>{label}</option>;
-              })}
             </select>
           )}
           {/* Week nav */}
@@ -10321,11 +10321,12 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
               {weekDates.map(d => {
                 const ymd    = toYMD(d);
                 const isToday = ymd === todayYMD;
+                const activeCrew = personFilter.startsWith("crew_")
+                  ? (foremanCrews.find(fc => "crew_"+fc.foremanId === personFilter)?.staffNames || [])
+                  : [];
                 const dayJobs = (crewByDateAndJob[ymd] || []).filter(g =>
                   personFilter === "all" ? true
-                  : personFilter === "mycrew" ? g.entries.some(e => myCrewNames.includes(e.Staff?.Name))
-                  : personFilter.startsWith("crew_") ? g.entries.some(e => (foremanCrews.find(fc=>"crew_"+fc.foremanId===personFilter)?.staffNames||[]).includes(e.Staff?.Name))
-                  : g.entries.some(e => e.Staff?.Name === personFilter)
+                  : g.entries.some(e => activeCrew.includes(e.Staff?.Name))
                 );
                 return (
                   <div key={ymd} style={{width:160,flexShrink:0}}>
@@ -10344,17 +10345,18 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                       ? <div style={{fontSize:10,color:C.muted,textAlign:"center",padding:"8px 0",
                           fontStyle:"italic"}}>—</div>
                       : dayJobs.map(g => {
-                          const appJob = jobBySimproNo[g.projectId];
-                          const jobName = appJob?.name || `Job #${g.projectId}`;
-                          const crew = g.entries.map(e => {
-                            const parts = (e.Staff?.Name || "").split(" ");
-                            return parts.length > 1 ? `${parts[0]} ${parts[parts.length-1][0]}.` : parts[0];
-                          }).filter(Boolean);
-                          const start = fmtTime(g.startTime);
-                          const end   = fmtTime(g.endTime);
-                          // Determine block accent color: use foreman color of first crew member found
+                          const appJob   = jobBySimproNo[g.projectId];
+                          const jobName  = appJob?.name || g.ref || `Job #${g.projectId}`;
+                          // Filter entries to only the active crew when filtered
+                          const visibleEntries = personFilter === "all"
+                            ? g.entries
+                            : g.entries.filter(e => activeCrew.includes(e.Staff?.Name));
+                          // Sort entries by start time
+                          const sortedEntries = [...visibleEntries].sort((a,b) =>
+                            (a.Blocks?.[0]?.StartTime||"").localeCompare(b.Blocks?.[0]?.StartTime||""));
+                          // Block color from first visible entry
                           const blockColor = (() => {
-                            for (const e of g.entries) {
+                            for (const e of sortedEntries) {
                               const c = staffColorMap[e.Staff?.Name];
                               if (c) return c;
                             }
@@ -10372,27 +10374,26 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                               onMouseLeave={e=>{e.currentTarget.style.background=C.surface;}}>
                               <div style={{fontSize:11,fontWeight:700,color:C.text,
                                 whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",
-                                marginBottom:3}}>{jobName}</div>
-                              {(start||end) && (
-                                <div style={{fontSize:10,color:blockColor,fontWeight:600,marginBottom:4}}>
-                                  {start}{end?` – ${end}`:""}
-                                </div>
-                              )}
-                              <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
-                                {g.entries.map(e => {
-                                  const fullName = e.Staff?.Name || "";
-                                  const parts = fullName.split(" ");
-                                  const shortName = parts.length > 1 ? `${parts[0]} ${parts[parts.length-1][0]}.` : parts[0];
-                                  const chipColor = staffColorMap[fullName] || C.accent;
-                                  return shortName ? (
-                                    <span key={fullName} style={{fontSize:9,background:`${chipColor}22`,
-                                      border:`1px solid ${chipColor}44`,borderRadius:4,
-                                      padding:"1px 5px",color:chipColor,fontWeight:700}}>
-                                      {shortName}
-                                    </span>
-                                  ) : null;
-                                })}
-                              </div>
+                                marginBottom:5}}>{jobName}</div>
+                              {sortedEntries.map(e => {
+                                const fullName  = e.Staff?.Name || "";
+                                const parts     = fullName.split(" ");
+                                const shortName = parts.length > 1 ? `${parts[0]} ${parts[parts.length-1][0]}.` : parts[0];
+                                const nameColor = staffColorMap[fullName] || C.accent;
+                                const eStart    = fmtTime(e.Blocks?.[0]?.StartTime);
+                                const eEnd      = fmtTime(e.Blocks?.[e.Blocks?.length-1]?.EndTime);
+                                return shortName ? (
+                                  <div key={fullName} style={{display:"flex",justifyContent:"space-between",
+                                    alignItems:"center",marginBottom:3}}>
+                                    <span style={{fontSize:10,fontWeight:700,color:nameColor}}>{shortName}</span>
+                                    {(eStart||eEnd) && (
+                                      <span style={{fontSize:9,color:C.dim,fontWeight:500}}>
+                                        {eStart}{eEnd?`–${eEnd}`:""}
+                                      </span>
+                                    )}
+                                  </div>
+                                ) : null;
+                              })}
                             </div>
                           );
                         })
