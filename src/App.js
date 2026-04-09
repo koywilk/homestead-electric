@@ -695,6 +695,22 @@ function UserManagement({ users, onSave }) {
                     {access==="standard" && "Can view all cards, add tasks, see schedule and pipeline (no manage)"}
                     {access==="limited"  && "Home screen and job editing only — no settings, pipeline, or tasks"}
                   </div>
+                  {/* Foreman assignment — for crew/lead */}
+                  {(title==="crew"||title==="lead") && (
+                    <div>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>FOREMAN (crew assignment)</div>
+                      <select value={u.foremanId||""} onChange={e=>upd(u.id,{foremanId:e.target.value})}
+                        style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
+                          borderRadius:7,color:C.text,padding:"8px 10px",fontSize:13,
+                          fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}>
+                        <option value="">— Unassigned —</option>
+                        {list.filter(f=>(f.title||f.role)==="foreman"||f.role==="foreman").map(f=>(
+                          <option key={f.id} value={f.id}>{f.name}</option>
+                        ))}
+                      </select>
+                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Which foreman's crew they belong to</div>
+                    </div>
+                  )}
                   {/* PIN */}
                   <div>
                     <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>PIN (4 digits)</div>
@@ -10034,7 +10050,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
 
 // ── Simpro Crew Schedule ──────────────────────────────────────
 
-function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
+function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSelectJob }) {
   const [schedule, setSchedule]       = useState(null);   // raw entries from Simpro
   const [loading, setLoading]         = useState(false);
   const [error, setError]             = useState(null);
@@ -10101,17 +10117,68 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
     return names;
   }, [schedule]);
 
-  // Auto-select the current user's name when schedule loads
+  // Build staff name → crew color map using foremanId linkage
+  // Each crew member's name maps to their foreman's color
+  const staffColorMap = useMemo(() => {
+    const map = {};
+    // Map foreman user IDs → their color
+    const foremanColorById = {};
+    users.forEach(u => {
+      const firstName = (u.name || "").split(" ")[0];
+      const color = foremanColors[u.name] || foremanColors[firstName];
+      if (color) foremanColorById[u.id] = color;
+    });
+    // For each user with a foremanId, map their name to that foreman's color
+    users.forEach(u => {
+      if (u.foremanId && foremanColorById[u.foremanId]) {
+        // Match by first name or full name against SimPro staff names
+        const firstName = (u.name || "").split(" ")[0].toLowerCase();
+        allStaff.forEach(staffName => {
+          if (staffName.toLowerCase().startsWith(firstName)) {
+            map[staffName] = foremanColorById[u.foremanId];
+          }
+        });
+      }
+    });
+    // Foremen get their own color too
+    users.forEach(u => {
+      const firstName = (u.name || "").split(" ")[0];
+      const color = foremanColors[u.name] || foremanColors[firstName];
+      if (color) {
+        allStaff.forEach(staffName => {
+          if (staffName.toLowerCase().startsWith(firstName.toLowerCase())) {
+            map[staffName] = color;
+          }
+        });
+      }
+    });
+    return map;
+  }, [users, foremanColors, allStaff]);
+
+  // Find crew members for the current user if they are a foreman
+  const myCrewNames = useMemo(() => {
+    if (!identity?.id) return [];
+    const crew = users.filter(u => u.foremanId === identity.id).map(u => (u.name||"").split(" ")[0].toLowerCase());
+    if (!crew.length) return [];
+    // Match to actual SimPro staff names
+    return allStaff.filter(n => crew.some(c => n.toLowerCase().startsWith(c)));
+  }, [users, identity, allStaff]);
+
+  const iAmForeman = myCrewNames.length > 0;
+
+  // Auto-select: foremen get "mycrew", others get their own name
   useEffect(() => {
     if (!allStaff.length || !identity?.name) return;
-    // Already manually set to something other than all — don't override
     if (personFilter !== "all") return;
+    if (iAmForeman) {
+      setPersonFilter("mycrew");
+      return;
+    }
     const identityName = (identity.name || "").toLowerCase();
-    // Try exact match first, then first-name match
     const match = allStaff.find(n => n.toLowerCase() === identityName)
       || allStaff.find(n => n.toLowerCase().startsWith(identityName.split(" ")[0]));
     if (match) setPersonFilter(match);
-  }, [allStaff]);
+  }, [allStaff, iAmForeman]);
 
   // Match Simpro ProjectID → app job
   const jobBySimproNo = useMemo(() => {
@@ -10125,6 +10192,7 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
     if (!schedule) return {};
     const jobEntries = schedule.filter(s => s.Type === "job");
     const filtered = personFilter === "all" ? jobEntries
+      : personFilter === "mycrew" ? jobEntries.filter(s => myCrewNames.includes(s.Staff?.Name))
       : jobEntries.filter(s => s.Staff?.Name === personFilter);
     const map = {};
     filtered.forEach(s => {
@@ -10132,7 +10200,7 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
       map[s.Date].push(s);
     });
     return map;
-  }, [schedule, personFilter]);
+  }, [schedule, personFilter, myCrewNames]);
 
   // For each date, group by job so we can show full crew per job
   const crewByDateAndJob = useMemo(() => {
@@ -10180,6 +10248,7 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
               style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
                 color:C.text,fontSize:11,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit"}}>
               <option value="all">Everyone</option>
+              {iAmForeman && <option value="mycrew">My Crew</option>}
               {allStaff.map(n => {
                 const parts = n.split(" ");
                 const label = parts.length > 1 ? `${parts[0]} ${parts[parts.length-1][0]}.` : parts[0];
@@ -10219,7 +10288,9 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
                 const ymd    = toYMD(d);
                 const isToday = ymd === todayYMD;
                 const dayJobs = (crewByDateAndJob[ymd] || []).filter(g =>
-                  personFilter === "all" ? true : g.entries.some(e => e.Staff?.Name === personFilter)
+                  personFilter === "all" ? true
+                  : personFilter === "mycrew" ? g.entries.some(e => myCrewNames.includes(e.Staff?.Name))
+                  : g.entries.some(e => e.Staff?.Name === personFilter)
                 );
                 return (
                   <div key={ymd} style={{width:160,flexShrink:0}}>
@@ -10249,32 +10320,46 @@ function SimproCrewSchedule({ jobs, identity, onSelectJob }) {
                             : g.entries[0];
                           const start = fmtTime(myEntry?.Blocks?.[0]?.StartTime);
                           const end   = fmtTime(myEntry?.Blocks?.[myEntry?.Blocks?.length-1]?.EndTime);
+                          // Determine block accent color: use foreman color of first crew member found
+                          const blockColor = (() => {
+                            for (const e of g.entries) {
+                              const c = staffColorMap[e.Staff?.Name];
+                              if (c) return c;
+                            }
+                            return C.accent;
+                          })();
                           return (
                             <div key={g.projectId}
                               onClick={()=>{ if(appJob) onSelectJob(appJob); }}
-                              style={{background:C.surface,border:`1px solid ${C.accent}44`,
-                                borderLeft:`3px solid ${C.accent}`,borderRadius:7,
+                              style={{background:C.surface,border:`1px solid ${blockColor}44`,
+                                borderLeft:`3px solid ${blockColor}`,borderRadius:7,
                                 padding:"8px 10px",marginBottom:6,
                                 cursor:appJob?"pointer":"default",
                                 transition:"background 0.15s"}}
-                              onMouseEnter={e=>{if(appJob)e.currentTarget.style.background=`${C.accent}11`;}}
+                              onMouseEnter={e=>{if(appJob)e.currentTarget.style.background=`${blockColor}11`;}}
                               onMouseLeave={e=>{e.currentTarget.style.background=C.surface;}}>
                               <div style={{fontSize:11,fontWeight:700,color:C.text,
                                 whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",
                                 marginBottom:3}}>{jobName}</div>
                               {(start||end) && (
-                                <div style={{fontSize:10,color:C.accent,fontWeight:600,marginBottom:4}}>
+                                <div style={{fontSize:10,color:blockColor,fontWeight:600,marginBottom:4}}>
                                   {start}{end?` – ${end}`:""}
                                 </div>
                               )}
                               <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
-                                {crew.map(name => (
-                                  <span key={name} style={{fontSize:9,background:`${C.accent}18`,
-                                    border:`1px solid ${C.accent}33`,borderRadius:4,
-                                    padding:"1px 5px",color:C.text,fontWeight:500}}>
-                                    {name}
-                                  </span>
-                                ))}
+                                {g.entries.map(e => {
+                                  const fullName = e.Staff?.Name || "";
+                                  const parts = fullName.split(" ");
+                                  const shortName = parts.length > 1 ? `${parts[0]} ${parts[parts.length-1][0]}.` : parts[0];
+                                  const chipColor = staffColorMap[fullName] || C.accent;
+                                  return shortName ? (
+                                    <span key={fullName} style={{fontSize:9,background:`${chipColor}22`,
+                                      border:`1px solid ${chipColor}44`,borderRadius:4,
+                                      padding:"1px 5px",color:chipColor,fontWeight:700}}>
+                                      {shortName}
+                                    </span>
+                                  ) : null;
+                                })}
                               </div>
                             </div>
                           );
@@ -14152,6 +14237,8 @@ function App() {
           <SimproCrewSchedule
             jobs={jobs}
             identity={identity}
+            users={users}
+            foremanColors={_foremanColors}
             onSelectJob={(j)=>setSelected(j)}
           />
 
