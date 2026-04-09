@@ -10056,12 +10056,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
   const [error, setError]             = useState(null);
   const [weekOffset, setWeekOffset]   = useState(0);      // 0 = this week, 1 = next, etc.
   const [personFilter, setPersonFilter] = useState("all");
-  // Collapsed by default for admin/manager — their primary view is the job board.
-  // Crew members (limited) default open since schedule is their main focus.
-  const [collapsed, setCollapsed]     = useState(() => {
-    const access = identity?.access || identity?.role || "";
-    return access !== "limited";
-  });
+  const [collapsed, setCollapsed]     = useState(false); // always start open
 
   // Compute Mon–Sun for the displayed week
   const weekDates = useMemo(() => {
@@ -10166,6 +10161,23 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
 
   const iAmForeman = myCrewNames.length > 0;
 
+  // Build a list of all foreman crews for the dropdown — {foremanId, foremanName, color, staffNames[]}
+  const foremanCrews = useMemo(() => {
+    const foremen = users.filter(u => {
+      const t = u.title || u.role || "";
+      return t === "foreman";
+    });
+    return foremen.map(f => {
+      const firstName = (f.name||"").split(" ")[0];
+      const color = foremanColors[f.name] || foremanColors[firstName] || C.accent;
+      const crewFirstNames = users
+        .filter(u => u.foremanId === f.id)
+        .map(u => (u.name||"").split(" ")[0].toLowerCase());
+      const staffNames = allStaff.filter(n => crewFirstNames.some(c => n.toLowerCase().startsWith(c)));
+      return { foremanId: f.id, foremanName: firstName, color, staffNames };
+    }).filter(fc => fc.staffNames.length > 0);
+  }, [users, foremanColors, allStaff]);
+
   // Auto-select: foremen get "mycrew", others get their own name
   useEffect(() => {
     if (!allStaff.length || !identity?.name) return;
@@ -10191,8 +10203,10 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
   const byDate = useMemo(() => {
     if (!schedule) return {};
     const jobEntries = schedule.filter(s => s.Type === "job");
+    const crewMatch = personFilter.startsWith("crew_") ? foremanCrews.find(fc => "crew_"+fc.foremanId === personFilter) : null;
     const filtered = personFilter === "all" ? jobEntries
       : personFilter === "mycrew" ? jobEntries.filter(s => myCrewNames.includes(s.Staff?.Name))
+      : crewMatch ? jobEntries.filter(s => crewMatch.staffNames.includes(s.Staff?.Name))
       : jobEntries.filter(s => s.Staff?.Name === personFilter);
     const map = {};
     filtered.forEach(s => {
@@ -10249,6 +10263,9 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                 color:C.text,fontSize:11,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit"}}>
               <option value="all">Everyone</option>
               {iAmForeman && <option value="mycrew">My Crew</option>}
+              {foremanCrews.map(fc => (
+                <option key={fc.foremanId} value={"crew_"+fc.foremanId}>{fc.foremanName}'s Crew</option>
+              ))}
               {allStaff.map(n => {
                 const parts = n.split(" ");
                 const label = parts.length > 1 ? `${parts[0]} ${parts[parts.length-1][0]}.` : parts[0];
@@ -10290,6 +10307,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                 const dayJobs = (crewByDateAndJob[ymd] || []).filter(g =>
                   personFilter === "all" ? true
                   : personFilter === "mycrew" ? g.entries.some(e => myCrewNames.includes(e.Staff?.Name))
+                  : personFilter.startsWith("crew_") ? g.entries.some(e => (foremanCrews.find(fc=>"crew_"+fc.foremanId===personFilter)?.staffNames||[]).includes(e.Staff?.Name))
                   : g.entries.some(e => e.Staff?.Name === personFilter)
                 );
                 return (
