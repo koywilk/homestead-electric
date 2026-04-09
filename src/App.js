@@ -12869,7 +12869,9 @@ function App() {
 
   // ── Identity ──────────────────────────────────────────────────
   const [identity, setIdentity] = useState(()=>getIdentity());
-  // Legacy auth stubs removed — identity system handles this now
+  // Re-register FCM token on every load so token refreshes are always captured.
+  // Previously only ran on explicit login — missed token changes on already-logged-in devices.
+  useEffect(()=>{ if(identity?.id) registerFCMToken(identity.id); }, [identity?.id]);
 
   // ── Users (team members) — loaded from Firestore ─────────────
   const [users, setUsers] = useState(DEFAULT_USERS);
