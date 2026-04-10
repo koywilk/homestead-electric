@@ -2393,7 +2393,7 @@ function MaterialOrders({orders,onChange}) {
   });
 
   const SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","Other"];
-  const add = () => onChange([...safeOrders, {id:uid(),date:"",po:"",pickupDate:"",source:"",items:"",pickedUp:false,needsOrder:false}]);
+  const add = () => onChange([...safeOrders, {id:uid(),date:"",po:"",pickupDate:"",source:"",items:"",pickedUp:false,needsOrder:true}]);
 
   const upd = (id, p) => {
     onChange(safeOrders.map(o => o.id===id ? {...o,...p} : o));
@@ -2430,7 +2430,7 @@ function MaterialOrders({orders,onChange}) {
               {o.po && <span style={{fontSize:11,color:C.muted}}>#{o.po}</span>}
               {o.needsOrder && !o.ordered && !o.pickedUp && (
                 <span style={{fontSize:10,fontWeight:700,background:"#ea580c22",color:"#ea580c",
-                  borderRadius:99,padding:"1px 8px"}}>Need to Order</span>
+                  borderRadius:99,padding:"1px 8px"}}>{o.source==="Shop" ? "Needs to be Picked Up" : "Need to Order"}</span>
               )}
               {o.ordered && !o.pickedUp && (
                 <span style={{fontSize:10,fontWeight:700,background:"#3b82f622",color:"#1d4ed8",
