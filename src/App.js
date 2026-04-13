@@ -2885,18 +2885,18 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
             {/* Header */}
             <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
               <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                <span style={{fontSize:12,color:"var(--accent)",fontWeight:700}}>Change Order #{i+1}</span>
+                <span style={{fontSize:12,color:"var(--accent)",fontWeight:700}}>Change Order #{o._idx+1}</span>
                 {isConverted&&<span style={{fontSize:10,fontWeight:700,color:"#6b7280",background:"#6b728018",borderRadius:99,padding:"2px 8px",border:"1px solid #6b728033"}}>CONVERTED TO RT</span>}
                 {o.createdBy&&<span style={{fontSize:10,color:"var(--dim)"}}>created by <b>{o.createdBy}</b>{o.createdAt?" · "+o.createdAt:""}</span>}
               </div>
               <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
                 {!isConverted&&jobSimproNo&&<Btn onClick={()=>{
-                  const msg=`Change Order #${i+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||"Pending"}`;
+                  const msg=`Change Order #${o._idx+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||"Pending"}`;
                   navigator.clipboard.writeText(msg).catch(()=>{});
                   window.open(`https://homesteadelectric.simprosuite.com/staff/editProject.php?jobID=${jobSimproNo}`,"_blank");
                 }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>Simpro</Btn>}
-                {!isConverted&&<Btn onClick={()=>chatCO(o,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>Chat</Btn>}
-                {!isConverted&&<Btn onClick={()=>emailCO(o,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>Email CO</Btn>}
+                {!isConverted&&<Btn onClick={()=>chatCO(o,o._idx)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>Chat</Btn>}
+                {!isConverted&&<Btn onClick={()=>emailCO(o,o._idx)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>Email CO</Btn>}
                 <button onClick={()=>{ if(!window.confirm("Delete this change order?")) return; del(o.id); }} style={{background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontSize:11}}>Remove</button>
               </div>
             </div>
@@ -2968,7 +2968,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
                         <div style={{fontSize:11,fontWeight:700,color:"#f97316",marginBottom:6}}>
                           ⚠ Crew not on site — convert to Return Trip to schedule
                         </div>
-                        <button onClick={()=>convertToRT(o,i)} style={{
+                        <button onClick={()=>convertToRT(o,o._idx)} style={{
                           background:"#8b5cf618",border:"1px solid #8b5cf633",
                           borderRadius:8,color:"#8b5cf6",fontSize:11,fontWeight:700,
                           padding:"7px 14px",cursor:"pointer",fontFamily:"inherit",
@@ -3562,24 +3562,25 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
     </div>
   );
 
-  // Flat list with indices for drag tracking
-  const flatRows = rows.map((r,i)=>({r,i}));
+  const colHeaders = (
+    <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px 22px",gap:4,marginBottom:4,padding:"0 2px"}}>
+      {["#","Panel","Wire",""].map((h,i)=>(
+        <div key={i} style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
+      ))}
+    </div>
+  );
 
   return (
     <div style={{marginBottom:24}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
         <div style={{fontSize:12,color:C.blue,fontWeight:700,letterSpacing:"0.06em"}}>{label}</div>
       </div>
-      <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px 22px",gap:4,marginBottom:4,padding:"0 2px"}}>
-        {["#","Panel","Wire",""].map((h,i)=>(
-          <div key={i} style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
-        ))}
-      </div>
 
-      {flatRows.map(({r,i})=>renderRow(r,i))}
+      {colHeaders}
+      {rows.map((r,i)=>renderRow(r,i))}
       {rows.length===0&&<div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No rows yet</div>}
-      <Btn onClick={addRow} variant="add" style={{fontSize:11,padding:"3px 10px",marginTop:6}}>+ Add Row</Btn>
 
+      <Btn onClick={addRow} variant="add" style={{fontSize:11,padding:"3px 10px",marginTop:6}}>+ Add Row</Btn>
     </div>
   );
 
@@ -4683,6 +4684,14 @@ function PanelModulesSection({modules,onChange,system,allLoads=[]}) {
   const isSav = sys==="Savant", isLut = sys==="Lutron", isCres = sys==="Crestron";
   const devLabel = isCres?"Device":"Module";
 
+  const [winW, setWinW] = useState(window.innerWidth);
+  useEffect(()=>{
+    const handle=()=>setWinW(window.innerWidth);
+    window.addEventListener("resize",handle);
+    return ()=>window.removeEventListener("resize",handle);
+  },[]);
+  const narrow = winW < 640;
+
   const updMod  = (mid,p) => onChange(modules.map(m=>m.id===mid?{...m,...p}:m));
   const delMod  = (mid)   => onChange(modules.filter(m=>m.id!==mid));
   const addMod  = ()      => onChange([...modules, newModuleObj(modules.length+1)]);
@@ -4778,51 +4787,123 @@ function PanelModulesSection({modules,onChange,system,allLoads=[]}) {
             {/* ── Load rows ── */}
             <div style={{padding:"6px 10px 4px"}}>
               {allLoads.length>0&&<datalist id={`mod-dl-${mod.id}`}>{allLoads.filter(l=>l.name.trim()).map(l=><option key={l.id} value={l.name}>{l.location?`(${l.location})`:""}</option>)}</datalist>}
-              <div style={{display:"grid",gridTemplateColumns:rowGrid,gap:4,marginBottom:4}}>
-                {rowHeaders.map((h,i)=><div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em"}}>{h}</div>)}
-              </div>
-              {mod.loads.map((load,li)=>(
-                <div key={load.id} style={{marginBottom:3}}>
-                <div style={{display:"grid",gridTemplateColumns:rowGrid,gap:4,
-                  alignItems:"center",borderRadius:6,padding:"2px 0",
-                  background:load.pulled?"rgba(34,197,94,0.08)":"transparent"}}>
-                  <input type="checkbox" checked={!!load.pulled} onChange={e=>{
-                    const val=e.target.checked;
-                    const who=getIdentity();
-                    updLoad(mod.id,load.id,{pulled:val,pulledBy:val?(who?.name||""):"",pulledAt:val?new Date().toLocaleDateString("en-US"):""});
-                  }}
-                    style={{width:15,height:15,accentColor:C.purple,cursor:"pointer",margin:0}}/>
-                  <span style={{fontSize:11,color:C.muted,textAlign:"center",fontWeight:700}}>{load.num}</span>
-                  <input
-                    ref={el=>{ if(pendingFocusMid.current===mod.id&&li===mod.loads.length-1&&el){el.focus();pendingFocusMid.current=null;} }}
-                    list={allLoads.length>0?`mod-dl-${mod.id}`:undefined}
-                    value={load.name} onChange={e=>updLoad(mod.id,load.id,{name:e.target.value})} placeholder="Load name…"
-                    onKeyDown={e=>e.key==="Enter"&&addLoad(mod.id)}
-                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
-                      padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
-                  <Inp value={load.ch||""} onChange={e=>updLoad(mod.id,load.id,{ch:e.target.value})} placeholder="Ch" style={{textAlign:"center",fontSize:10}}/>
-                  <Sel value={load.loadType||""} onChange={e=>updLoad(mod.id,load.id,{loadType:e.target.value})} options={LOAD_TYPES} style={{fontSize:10}}/>
-                  <Inp value={load.watts||""} onChange={e=>updLoad(mod.id,load.id,{watts:e.target.value})} placeholder="W" style={{textAlign:"center",fontSize:10}}/>
-                  {showKeypad&&<Inp value={load.keypad||""} onChange={e=>updLoad(mod.id,load.id,{keypad:e.target.value})} placeholder="Keypad" style={{fontSize:10}}/>}
-                  {showMove&&(
-                    <select value={mod.id} onChange={e=>moveLoad(mod.id,load.id,e.target.value)}
-                      title="Move to module"
-                      style={{fontSize:9,border:`1px solid ${C.border}`,borderRadius:4,padding:"2px 1px",
-                        background:"#fff",color:C.muted,cursor:"pointer",width:"100%",fontFamily:"inherit"}}>
-                      {modules.map(m=>(
-                        <option key={m.id} value={m.id}>{m.id===mod.id?"(here)":m.modNum||m.moduleType||"?"}</option>
-                      ))}
-                    </select>
-                  )}
-                  <button onClick={()=>delLoad(mod.id,load.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
-                </div>
-                {load.pulled&&load.pulledBy&&(
-                  <div style={{paddingLeft:4,marginTop:1}}>
-                    <span style={{fontSize:9,color:C.green,fontWeight:600}}>✓ pulled by {load.pulledBy}{load.pulledAt?" · "+load.pulledAt:""}</span>
+
+              {narrow ? (
+                /* Mobile: card per load */
+                mod.loads.map((load,li)=>(
+                  <div key={load.id} style={{
+                    background:load.pulled?"rgba(34,197,94,0.08)":C.surface,
+                    border:`1px solid ${load.pulled?C.green+"44":C.border}`,
+                    borderRadius:8,padding:"10px 10px 8px",marginBottom:8}}>
+                    {/* Row 1: checkbox + number + name + delete */}
+                    <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                      <input type="checkbox" checked={!!load.pulled} onChange={e=>{
+                        const val=e.target.checked;
+                        const who=getIdentity();
+                        updLoad(mod.id,load.id,{pulled:val,pulledBy:val?(who?.name||""):"",pulledAt:val?new Date().toLocaleDateString("en-US"):""});
+                      }} style={{width:18,height:18,accentColor:C.purple,cursor:"pointer",margin:0,flexShrink:0}}/>
+                      <span style={{fontSize:11,color:C.muted,fontWeight:700,flexShrink:0}}>#{load.num}</span>
+                      <input
+                        ref={el=>{ if(pendingFocusMid.current===mod.id&&li===mod.loads.length-1&&el){el.focus();pendingFocusMid.current=null;} }}
+                        list={allLoads.length>0?`mod-dl-${mod.id}`:undefined}
+                        value={load.name} onChange={e=>updLoad(mod.id,load.id,{name:e.target.value})} placeholder="Load name…"
+                        onKeyDown={e=>e.key==="Enter"&&addLoad(mod.id)}
+                        style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+                          padding:"7px 10px",fontSize:13,fontFamily:"inherit",outline:"none",minWidth:0,boxSizing:"border-box"}}/>
+                      <button onClick={()=>delLoad(mod.id,load.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:16,padding:"0 2px",flexShrink:0}}>✕</button>
+                    </div>
+                    {/* Row 2: Ch, Load Type, Watts */}
+                    <div style={{display:"grid",gridTemplateColumns:"60px 1fr 60px",gap:6,marginBottom:showKeypad||showMove?6:0}}>
+                      <div>
+                        <div style={{fontSize:9,color:C.dim,fontWeight:700,marginBottom:2}}>CH</div>
+                        <Inp value={load.ch||""} onChange={e=>updLoad(mod.id,load.id,{ch:e.target.value})} placeholder="Ch" style={{textAlign:"center",fontSize:12}}/>
+                      </div>
+                      <div>
+                        <div style={{fontSize:9,color:C.dim,fontWeight:700,marginBottom:2}}>LOAD TYPE</div>
+                        <Sel value={load.loadType||""} onChange={e=>updLoad(mod.id,load.id,{loadType:e.target.value})} options={LOAD_TYPES} style={{fontSize:12,width:"100%"}}/>
+                      </div>
+                      <div>
+                        <div style={{fontSize:9,color:C.dim,fontWeight:700,marginBottom:2}}>WATTS</div>
+                        <Inp value={load.watts||""} onChange={e=>updLoad(mod.id,load.id,{watts:e.target.value})} placeholder="W" style={{textAlign:"center",fontSize:12}}/>
+                      </div>
+                    </div>
+                    {/* Row 3: Keypad + Move (if applicable) */}
+                    {(showKeypad||showMove)&&(
+                      <div style={{display:"flex",gap:8}}>
+                        {showKeypad&&<div style={{flex:1}}>
+                          <div style={{fontSize:9,color:C.dim,fontWeight:700,marginBottom:2}}>KEYPAD</div>
+                          <Inp value={load.keypad||""} onChange={e=>updLoad(mod.id,load.id,{keypad:e.target.value})} placeholder="Keypad" style={{fontSize:12}}/>
+                        </div>}
+                        {showMove&&<div style={{flex:1}}>
+                          <div style={{fontSize:9,color:C.dim,fontWeight:700,marginBottom:2}}>MOVE TO</div>
+                          <select value={mod.id} onChange={e=>moveLoad(mod.id,load.id,e.target.value)}
+                            style={{fontSize:12,border:`1px solid ${C.border}`,borderRadius:7,padding:"6px 8px",
+                              background:C.surface,color:C.text,cursor:"pointer",width:"100%",fontFamily:"inherit"}}>
+                            {modules.map(m=>(
+                              <option key={m.id} value={m.id}>{m.id===mod.id?"(here)":m.modNum||m.moduleType||"?"}</option>
+                            ))}
+                          </select>
+                        </div>}
+                      </div>
+                    )}
+                    {/* Pulled by */}
+                    {load.pulled&&load.pulledBy&&(
+                      <div style={{marginTop:6}}>
+                        <span style={{fontSize:10,color:C.green,fontWeight:600}}>✓ pulled by {load.pulledBy}{load.pulledAt?" · "+load.pulledAt:""}</span>
+                      </div>
+                    )}
                   </div>
-                )}
-                </div>
-              ))}
+                ))
+              ) : (
+                /* Desktop: grid table */
+                <>
+                  <div style={{display:"grid",gridTemplateColumns:rowGrid,gap:4,marginBottom:4}}>
+                    {rowHeaders.map((h,i)=><div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em"}}>{h}</div>)}
+                  </div>
+                  {mod.loads.map((load,li)=>(
+                    <div key={load.id} style={{marginBottom:3}}>
+                      <div style={{display:"grid",gridTemplateColumns:rowGrid,gap:4,
+                        alignItems:"center",borderRadius:6,padding:"2px 0",
+                        background:load.pulled?"rgba(34,197,94,0.08)":"transparent"}}>
+                        <input type="checkbox" checked={!!load.pulled} onChange={e=>{
+                          const val=e.target.checked;
+                          const who=getIdentity();
+                          updLoad(mod.id,load.id,{pulled:val,pulledBy:val?(who?.name||""):"",pulledAt:val?new Date().toLocaleDateString("en-US"):""});
+                        }} style={{width:15,height:15,accentColor:C.purple,cursor:"pointer",margin:0}}/>
+                        <span style={{fontSize:11,color:C.muted,textAlign:"center",fontWeight:700}}>{load.num}</span>
+                        <input
+                          ref={el=>{ if(pendingFocusMid.current===mod.id&&li===mod.loads.length-1&&el){el.focus();pendingFocusMid.current=null;} }}
+                          list={allLoads.length>0?`mod-dl-${mod.id}`:undefined}
+                          value={load.name} onChange={e=>updLoad(mod.id,load.id,{name:e.target.value})} placeholder="Load name…"
+                          onKeyDown={e=>e.key==="Enter"&&addLoad(mod.id)}
+                          style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+                            padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
+                        <Inp value={load.ch||""} onChange={e=>updLoad(mod.id,load.id,{ch:e.target.value})} placeholder="Ch" style={{textAlign:"center",fontSize:10}}/>
+                        <Sel value={load.loadType||""} onChange={e=>updLoad(mod.id,load.id,{loadType:e.target.value})} options={LOAD_TYPES} style={{fontSize:10}}/>
+                        <Inp value={load.watts||""} onChange={e=>updLoad(mod.id,load.id,{watts:e.target.value})} placeholder="W" style={{textAlign:"center",fontSize:10}}/>
+                        {showKeypad&&<Inp value={load.keypad||""} onChange={e=>updLoad(mod.id,load.id,{keypad:e.target.value})} placeholder="Keypad" style={{fontSize:10}}/>}
+                        {showMove&&(
+                          <select value={mod.id} onChange={e=>moveLoad(mod.id,load.id,e.target.value)}
+                            title="Move to module"
+                            style={{fontSize:9,border:`1px solid ${C.border}`,borderRadius:4,padding:"2px 1px",
+                              background:"#fff",color:C.muted,cursor:"pointer",width:"100%",fontFamily:"inherit"}}>
+                            {modules.map(m=>(
+                              <option key={m.id} value={m.id}>{m.id===mod.id?"(here)":m.modNum||m.moduleType||"?"}</option>
+                            ))}
+                          </select>
+                        )}
+                        <button onClick={()=>delLoad(mod.id,load.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+                      </div>
+                      {load.pulled&&load.pulledBy&&(
+                        <div style={{paddingLeft:4,marginTop:1}}>
+                          <span style={{fontSize:9,color:C.green,fontWeight:600}}>✓ pulled by {load.pulledBy}{load.pulledAt?" · "+load.pulledAt:""}</span>
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </>
+              )}
+
               <button onClick={()=>addLoad(mod.id)}
                 style={{background:"none",border:"none",color:C.purple,fontSize:10,fontWeight:700,fontFamily:"inherit",
                   cursor:"pointer",padding:"4px 2px",letterSpacing:"0.04em",opacity:0.75}}>
@@ -8956,6 +9037,14 @@ const SEED_UPCOMING = [
 function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuote, canManage=false, foremenList }) {
   const [editingId, setEditingId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
+  const [winW, setWinW] = useState(window.innerWidth);
+  useEffect(()=>{
+    const handle=()=>setWinW(window.innerWidth);
+    window.addEventListener("resize",handle);
+    return ()=>window.removeEventListener("resize",handle);
+  },[]);
+  const narrow = winW < 700;
+
   const add = () => { if(!canManage) return; const j=blankUpcoming(); onChange([j,...upcoming]); setEditingId(j.id); };
   const upd = (id,patch) => { if(!canManage) return; onChange(upcoming.map(u=>u.id===id?{...u,...patch}:u)); };
   const del = (id) => {
@@ -8970,6 +9059,33 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
     notes:{label:"Notes",flex:3}, lastFollowUp:{label:"Last Follow Up",flex:1.1},
   };
   const colKeys = Object.keys(COL);
+
+  // Shared edit form used in both layouts
+  const EditForm = ({u}) => (
+    <div style={{flex:1,display:"flex",flexDirection:"column",gap:10}}>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+        <div style={{flex:2.5,minWidth:160}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Job Name</div><Inp value={u.name} onChange={e=>upd(u.id,{name:e.target.value})} placeholder="Job name"/></div>
+        <div style={{flex:1.2,minWidth:100}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>City</div><Inp value={u.city} onChange={e=>upd(u.id,{city:e.target.value})} placeholder="City"/></div>
+        <div style={{flex:1,minWidth:90}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Sales</div><Inp value={u.sales} onChange={e=>upd(u.id,{sales:e.target.value})} placeholder="Sales rep"/></div>
+        <div style={{flex:1.5,minWidth:130}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Customer / GC</div><Inp value={u.customer} onChange={e=>upd(u.id,{customer:e.target.value})} placeholder="Customer or GC"/></div>
+        <div style={{flex:1.1,minWidth:110}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Last Follow Up</div><DateInp value={u.lastFollowUp} onChange={e=>upd(u.id,{lastFollowUp:e.target.value})}/></div>
+        <div style={{flex:1,minWidth:120}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
+          <select value={u.foreman||""} onChange={e=>upd(u.id,{foreman:e.target.value})} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
+            <option value="">— unassigned —</option>
+            {(foremenList||getForemenList()).map(f=><option key={f} value={f}>{f}</option>)}
+          </select>
+        </div>
+      </div>
+      <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes</div><TA value={u.notes} onChange={e=>upd(u.id,{notes:e.target.value})} placeholder="Status, timeline, notes…" rows={2}/></div>
+      <div style={{display:"flex",gap:8,marginTop:2,flexWrap:"wrap"}}>
+        <button onClick={()=>setEditingId(null)} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
+        <button onClick={()=>onPromote(u)} style={{background:"none",border:`1px solid ${C.green}`,borderRadius:7,color:C.green,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✓ Promote to Job</button>
+        <button onClick={()=>onPromoteToQuote(u)} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:7,color:C.accent,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>→ Quote</button>
+        <button onClick={()=>del(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>Remove</button>
+      </div>
+    </div>
+  );
+
   return (
     <div>
       <div style={{padding:"24px 26px 16px",borderBottom:`1px solid ${C.border}`}}>
@@ -8981,74 +9097,100 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
           {canManage&&<button onClick={add} style={{background:C.accent,border:"none",borderRadius:9,color:"#000",fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Job</button>}
         </div>
       </div>
-      <div style={{padding:"16px 26px"}}>
-        <div style={{display:"flex",alignItems:"center",gap:0,padding:"6px 12px",marginBottom:4,borderBottom:`1px solid ${C.border}`}}>
-          {colKeys.map(k=>(
-            <div key={k} style={{flex:COL[k].flex,fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase",paddingRight:12}}>{COL[k].label}</div>
-          ))}
-          <div style={{width:110,flexShrink:0}}/>
-        </div>
-        {upcoming.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:13,fontStyle:"italic"}}>No upcoming jobs yet — add one above.</div>}
-        {upcoming.map(u=>{
-          const isEditing=editingId===u.id;
-          return (
-            <div key={u.id} style={{display:"flex",alignItems:isEditing?"flex-start":"center",gap:0,padding:"8px 12px",borderRadius:8,marginBottom:2,background:isEditing?C.surface:"none",border:isEditing?`1px solid ${C.border}`:"1px solid transparent"}}
-              onMouseEnter={e=>{if(!isEditing)e.currentTarget.style.background=C.surface;}}
-              onMouseLeave={e=>{if(!isEditing)e.currentTarget.style.background="none";}}>
-              {isEditing?(
-                <div style={{flex:1,display:"flex",flexDirection:"column",gap:10}}>
-                  <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-                    <div style={{flex:2.5,minWidth:160}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Job Name</div><Inp value={u.name} onChange={e=>upd(u.id,{name:e.target.value})} placeholder="Job name"/></div>
-                    <div style={{flex:1.2,minWidth:100}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>City</div><Inp value={u.city} onChange={e=>upd(u.id,{city:e.target.value})} placeholder="City"/></div>
-                    <div style={{flex:1,minWidth:90}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Sales</div><Inp value={u.sales} onChange={e=>upd(u.id,{sales:e.target.value})} placeholder="Sales rep"/></div>
-                    <div style={{flex:1.5,minWidth:130}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Customer / GC</div><Inp value={u.customer} onChange={e=>upd(u.id,{customer:e.target.value})} placeholder="Customer or GC"/></div>
-                    <div style={{flex:1.1,minWidth:110}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Last Follow Up</div><DateInp value={u.lastFollowUp} onChange={e=>upd(u.id,{lastFollowUp:e.target.value})}/></div>
-                    <div style={{flex:1,minWidth:120}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
-                      <select value={u.foreman||""} onChange={e=>upd(u.id,{foreman:e.target.value})} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
-                        <option value="">— unassigned —</option>
-                        {(foremenList||getForemenList()).map(f=><option key={f} value={f}>{f}</option>)}
-                      </select>
+
+      {/* ── Mobile card layout ── */}
+      {narrow ? (
+        <div style={{padding:"12px 14px"}}>
+          {upcoming.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:13,fontStyle:"italic"}}>No upcoming jobs yet — add one above.</div>}
+          {upcoming.map(u=>{
+            const isEditing=editingId===u.id;
+            const fc=getFC(u.foreman)||"#6b7280";
+            return (
+              <div key={u.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:11,padding:14,marginBottom:10}}>
+                {isEditing ? <EditForm u={u}/> : (
+                  <>
+                    <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:2}}>
+                          {u.name||<span style={{color:C.muted,fontStyle:"italic"}}>Untitled</span>}
+                        </div>
+                        {u.foreman&&<span style={{fontSize:10,fontWeight:700,color:fc,background:`${fc}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${fc}33`}}>{u.foreman}</span>}
+                      </div>
+                      <div style={{display:"flex",gap:5,alignItems:"center",marginLeft:8,flexShrink:0}}>
+                        {canManage&&<button onClick={()=>setEditingId(u.id)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Edit</button>}
+                        <button onClick={()=>onPromoteToQuote(u)} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:6,color:C.accent,fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Q</button>
+                        <button onClick={()=>onPromote(u)} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✓</button>
+                        {confirmDeleteId===u.id ? (
+                          <>
+                            <button onClick={()=>del(u.id)} style={{background:"#ef4444",border:"none",borderRadius:5,color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>Yes</button>
+                            <button onClick={()=>setConfirmDeleteId(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,color:C.dim,fontSize:11,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>No</button>
+                          </>
+                        ) : (
+                          canManage&&<button onClick={()=>setConfirmDeleteId(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:18,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
+                        )}
+                      </div>
                     </div>
-                  </div>
-                  <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes</div><TA value={u.notes} onChange={e=>upd(u.id,{notes:e.target.value})} placeholder="Status, timeline, notes…" rows={2}/></div>
-                  <div style={{display:"flex",gap:8,marginTop:2}}>
-                    <button onClick={()=>setEditingId(null)} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
-                    <button onClick={()=>onPromote(u)} style={{background:"none",border:`1px solid ${C.green}`,borderRadius:7,color:C.green,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✓ Promote to Job</button>
-                    <button onClick={()=>onPromoteToQuote(u)} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:7,color:C.accent,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>→ Quote</button>
-                    <button onClick={()=>del(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>Remove</button>
-                  </div>
-                </div>
-              ):(
-                <>
-                  <div style={{flex:2.5,paddingRight:12,fontSize:13,fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                    {u.name||<span style={{color:C.muted,fontStyle:"italic"}}>Untitled</span>}
-                    {u.foreman&&<span style={{marginLeft:8,fontSize:10,fontWeight:700,color:getFC(u.foreman)||"#6b7280",background:`${getFC(u.foreman)||"#6b7280"}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${getFC(u.foreman)||"#6b7280"}33`}}>{u.foreman}</span>}
-                  </div>
-                  <div style={{flex:1.2,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.city||"—"}</div>
-                  <div style={{flex:1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.sales||"—"}</div>
-                  <div style={{flex:1.5,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.customer||"—"}</div>
-                  <div style={{flex:3,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.notes||"—"}</div>
-                  <div style={{flex:1.1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.lastFollowUp||"—"}</div>
-                  <div style={{width:130,flexShrink:0,display:"flex",gap:6,justifyContent:"flex-end",alignItems:"center"}}>
-                    <button onClick={()=>setEditingId(u.id)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Edit</button>
-                    <button onClick={()=>onPromoteToQuote(u)} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:6,color:C.accent,fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Q</button>
-                    <button onClick={()=>onPromote(u)} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✓</button>
-                    {confirmDeleteId===u.id ? (
-                      <>
-                        <span style={{fontSize:10,color:C.muted,whiteSpace:"nowrap"}}>Remove?</span>
-                        <button onClick={()=>del(u.id)} style={{background:"#ef4444",border:"none",borderRadius:5,color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>Yes</button>
-                        <button onClick={()=>setConfirmDeleteId(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,color:C.dim,fontSize:11,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>No</button>
-                      </>
-                    ) : (
-                      <button onClick={()=>setConfirmDeleteId(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:16,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
-                    )}
-                  </div>
-                </>
-              )}
-            </div>
-          );
-        })}
-      </div>
+                    <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 12px",marginBottom:u.notes?6:0}}>
+                      {u.city&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.muted,fontSize:10}}>City </span>{u.city}</div>}
+                      {u.customer&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.muted,fontSize:10}}>Customer </span>{u.customer}</div>}
+                      {u.sales&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.muted,fontSize:10}}>Sales </span>{u.sales}</div>}
+                      {u.lastFollowUp&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.muted,fontSize:10}}>Follow Up </span>{u.lastFollowUp}</div>}
+                    </div>
+                    {u.notes&&<div style={{fontSize:12,color:C.dim,marginTop:4,lineHeight:1.4}}>{u.notes}</div>}
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      ) : (
+        /* ── Desktop table layout ── */
+        <div style={{padding:"16px 26px"}}>
+          <div style={{display:"flex",alignItems:"center",gap:0,padding:"6px 12px",marginBottom:4,borderBottom:`1px solid ${C.border}`}}>
+            {colKeys.map(k=>(
+              <div key={k} style={{flex:COL[k].flex,fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase",paddingRight:12}}>{COL[k].label}</div>
+            ))}
+            <div style={{width:110,flexShrink:0}}/>
+          </div>
+          {upcoming.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:13,fontStyle:"italic"}}>No upcoming jobs yet — add one above.</div>}
+          {upcoming.map(u=>{
+            const isEditing=editingId===u.id;
+            return (
+              <div key={u.id} style={{display:"flex",alignItems:isEditing?"flex-start":"center",gap:0,padding:"8px 12px",borderRadius:8,marginBottom:2,background:isEditing?C.surface:"none",border:isEditing?`1px solid ${C.border}`:"1px solid transparent"}}
+                onMouseEnter={e=>{if(!isEditing)e.currentTarget.style.background=C.surface;}}
+                onMouseLeave={e=>{if(!isEditing)e.currentTarget.style.background="none";}}>
+                {isEditing ? <EditForm u={u}/> : (
+                  <>
+                    <div style={{flex:2.5,paddingRight:12,fontSize:13,fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {u.name||<span style={{color:C.muted,fontStyle:"italic"}}>Untitled</span>}
+                      {u.foreman&&<span style={{marginLeft:8,fontSize:10,fontWeight:700,color:getFC(u.foreman)||"#6b7280",background:`${getFC(u.foreman)||"#6b7280"}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${getFC(u.foreman)||"#6b7280"}33`}}>{u.foreman}</span>}
+                    </div>
+                    <div style={{flex:1.2,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.city||"—"}</div>
+                    <div style={{flex:1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.sales||"—"}</div>
+                    <div style={{flex:1.5,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.customer||"—"}</div>
+                    <div style={{flex:3,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.notes||"—"}</div>
+                    <div style={{flex:1.1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.lastFollowUp||"—"}</div>
+                    <div style={{width:130,flexShrink:0,display:"flex",gap:6,justifyContent:"flex-end",alignItems:"center"}}>
+                      <button onClick={()=>setEditingId(u.id)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Edit</button>
+                      <button onClick={()=>onPromoteToQuote(u)} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:6,color:C.accent,fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Q</button>
+                      <button onClick={()=>onPromote(u)} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✓</button>
+                      {confirmDeleteId===u.id ? (
+                        <>
+                          <span style={{fontSize:10,color:C.muted,whiteSpace:"nowrap"}}>Remove?</span>
+                          <button onClick={()=>del(u.id)} style={{background:"#ef4444",border:"none",borderRadius:5,color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>Yes</button>
+                          <button onClick={()=>setConfirmDeleteId(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,color:C.dim,fontSize:11,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>No</button>
+                        </>
+                      ) : (
+                        <button onClick={()=>setConfirmDeleteId(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:16,cursor:"pointer",padding:"0 2px",lineHeight:1,fontFamily:"inherit"}} title="Remove">×</button>
+                      )}
+                    </div>
+                  </>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
     </div>
   );
 }
