@@ -2457,7 +2457,7 @@ function MaterialOrders({orders,onChange}) {
             {/* ── Expanded body ── */}
             {!isCollapsed && (
               <div style={{padding:"0 14px 14px"}}>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr 1fr",gap:8,marginBottom:10}}>
+                <div style={{display:"grid",gridTemplateColumns:ON_MOBILE?"1fr 1fr":"1fr 1fr 1fr 1fr",gap:8,marginBottom:10}}>
                   <div>
                     <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Source</div>
                     <select value={o.source||""} onChange={e=>upd(o.id,{source:e.target.value})}
@@ -3009,7 +3009,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
                   <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Description of Task</div>
                   <Inp value={o.desc||""} onChange={e=>upd(o.id,{desc:e.target.value})} placeholder="Describe the change order…"/>
                 </div>
-                <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:8,marginBottom:8}}>
+                <div style={{display:"grid",gridTemplateColumns:ON_MOBILE?"1fr":"1fr 1fr 1fr",gap:8,marginBottom:8}}>
                   <div>
                     <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Estimated Time</div>
                     <Inp value={o.time||""} onChange={e=>upd(o.id,{time:e.target.value})} placeholder="e.g. 3 hrs"/>
