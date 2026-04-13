@@ -2801,6 +2801,9 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
 function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughStatus, finishStatus}) {
 
+  const [expandedCOs, setExpandedCOs] = useState({});
+  const toggleCO = (id) => setExpandedCOs(v=>({...v,[id]:!v[id]}));
+
   const add = () => {
     const creator = getIdentity();
     onChange([...orders, {
@@ -2869,37 +2872,60 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
     <div>
       {sortedOrders.map((o, i) => {
         const coDef = getStatusDef(CO_STATUSES_NEW, o.coStatus||"pending");
-        const isConverted = o.coStatus === "converted";
-        const isApproved  = o.coStatus === "approved";
-        const showConvert = (isApproved || o.coStatus==="needs") && !crewOnSite;
+        const isConverted  = o.coStatus === "converted";
+        const isCompleted  = o.coStatus === "completed";
+        const isApproved   = o.coStatus === "approved";
+        const showConvert  = (isApproved || o.coStatus==="needs") && !crewOnSite;
+        // Completed COs collapse by default; converted ones always show their note
+        const isCollapsed  = isCompleted && !expandedCOs[o.id];
 
         return (
           <div key={o.id} style={{
-            background: isConverted ? "var(--surface)" : "var(--card)",
-            border:`1px solid ${isConverted?"var(--border)":coDef.color?coDef.color+"33":"var(--border)"}`,
-            borderLeft:`3px solid ${isConverted?"#6b7280":coDef.color||"var(--border)"}`,
+            background: isCompleted ? "#16a34a0a" : isConverted ? "var(--surface)" : "var(--card)",
+            border:`1px solid ${isCompleted?"#16a34a44":isConverted?"var(--border)":coDef.color?coDef.color+"33":"var(--border)"}`,
+            borderLeft:`3px solid ${isCompleted?"#16a34a":isConverted?"#6b7280":coDef.color||"var(--border)"}`,
             borderRadius:11, padding:14, marginBottom:12,
             opacity: isConverted ? 0.6 : 1,
           }}>
 
             {/* Header */}
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,flexWrap:"wrap",gap:8}}>
+            <div
+              onClick={isCompleted ? ()=>toggleCO(o.id) : undefined}
+              style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:isCollapsed?0:10,flexWrap:"wrap",gap:8,cursor:isCompleted?"pointer":"default"}}>
               <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-                <span style={{fontSize:12,color:"var(--accent)",fontWeight:700}}>Change Order #{o._idx+1}</span>
+                <span style={{fontSize:12,color:isCompleted?"#16a34a":"var(--accent)",fontWeight:700}}>Change Order #{o._idx+1}</span>
+                {isCompleted&&<span style={{fontSize:10,fontWeight:700,color:"#16a34a",background:"#16a34a18",borderRadius:99,padding:"2px 8px",border:"1px solid #16a34a33"}}>✓ WORK COMPLETED</span>}
                 {isConverted&&<span style={{fontSize:10,fontWeight:700,color:"#6b7280",background:"#6b728018",borderRadius:99,padding:"2px 8px",border:"1px solid #6b728033"}}>CONVERTED TO RT</span>}
-                {o.createdBy&&<span style={{fontSize:10,color:"var(--dim)"}}>created by <b>{o.createdBy}</b>{o.createdAt?" · "+o.createdAt:""}</span>}
+                {o.desc&&isCollapsed&&<span style={{fontSize:11,color:"var(--dim)",fontStyle:"italic"}}>{o.desc}</span>}
+                {!isCollapsed&&o.createdBy&&<span style={{fontSize:10,color:"var(--dim)"}}>created by <b>{o.createdBy}</b>{o.createdAt?" · "+o.createdAt:""}</span>}
               </div>
               <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
-                {!isConverted&&jobSimproNo&&<Btn onClick={()=>{
+                {isCompleted&&<span style={{fontSize:11,color:"#16a34a88"}}>{isCollapsed?"▸":"▾"}</span>}
+                {!isConverted&&!isCompleted&&jobSimproNo&&<Btn onClick={()=>{
                   const msg=`Change Order #${o._idx+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||"Pending"}`;
                   navigator.clipboard.writeText(msg).catch(()=>{});
                   window.open(`https://homesteadelectric.simprosuite.com/staff/editProject.php?jobID=${jobSimproNo}`,"_blank");
                 }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>Simpro</Btn>}
-                {!isConverted&&<Btn onClick={()=>chatCO(o,o._idx)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>Chat</Btn>}
-                {!isConverted&&<Btn onClick={()=>emailCO(o,o._idx)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>Email CO</Btn>}
-                <button onClick={()=>{ if(!window.confirm("Delete this change order?")) return; del(o.id); }} style={{background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontSize:11}}>Remove</button>
+                {!isConverted&&!isCompleted&&<Btn onClick={()=>chatCO(o,o._idx)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>Chat</Btn>}
+                {!isConverted&&!isCompleted&&<Btn onClick={()=>emailCO(o,o._idx)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>Email CO</Btn>}
+                {!isCollapsed&&<button onClick={e=>{e.stopPropagation(); if(!window.confirm("Delete this change order?")) return; del(o.id); }} style={{background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontSize:11}}>Remove</button>}
               </div>
             </div>
+
+            {/* Collapsed completed view — just shows the undo button */}
+            {isCollapsed&&(
+              <div style={{marginTop:6,display:"flex",justifyContent:"flex-end"}}>
+                <button onClick={e=>{e.stopPropagation();upd(o.id,{coStatus:"approved"});}}
+                  style={{background:"none",border:"1px solid #16a34a44",borderRadius:7,
+                    color:"#16a34a",fontSize:11,padding:"3px 10px",cursor:"pointer",
+                    fontFamily:"inherit",fontWeight:600}}>
+                  ↩ Undo Complete
+                </button>
+              </div>
+            )}
+
+            {/* Body — hidden when collapsed */}
+            {!isCollapsed&&<>
 
             {/* Status row */}
             {!isConverted&&(
@@ -3033,6 +3059,8 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
                 </div>
               </>
             )}
+
+            </>} {/* end !isCollapsed body */}
           </div>
         );
       })}
