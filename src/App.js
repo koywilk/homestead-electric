@@ -9114,13 +9114,29 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
     </div>
   );
 
+  const signedCount = upcoming.filter(u=>u.signed).length;
+
+  // Signed toggle — saves to Firestore via parent onChange
+  const toggleSigned = (u) => upd(u.id, {signed: !u.signed});
+
+  // Signed badge used in both layouts
+  const SignedBadge = () => (
+    <span style={{fontSize:10,fontWeight:700,color:C.green,background:`${C.green}18`,
+      borderRadius:99,padding:"2px 8px",border:`1px solid ${C.green}44`,whiteSpace:"nowrap"}}>
+      ✓ SIGNED — ON BOARD
+    </span>
+  );
+
   return (
     <div>
       <div style={{padding:"24px 26px 16px",borderBottom:`1px solid ${C.border}`}}>
         <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
           <div>
             <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>UPCOMING JOBS</div>
-            <div style={{fontSize:11,color:C.dim,marginTop:3}}>{upcoming.length} job{upcoming.length!==1?"s":""} in pipeline</div>
+            <div style={{fontSize:11,color:C.dim,marginTop:3}}>
+              {upcoming.length} job{upcoming.length!==1?"s":""} in pipeline
+              {signedCount>0&&<span style={{marginLeft:8,color:C.green,fontWeight:700}}>· {signedCount} signed</span>}
+            </div>
           </div>
           {canManage&&<button onClick={add} style={{background:C.accent,border:"none",borderRadius:9,color:"#000",fontWeight:700,padding:"9px 20px",fontSize:13,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>+ Add Job</button>}
         </div>
@@ -9133,21 +9149,36 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
           {upcoming.map(u=>{
             const isEditing=editingId===u.id;
             const fc=getFC(u.foreman)||"#6b7280";
+            const isSigned=!!u.signed;
             return (
-              <div key={u.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:11,padding:14,marginBottom:10}}>
+              <div key={u.id} style={{
+                background: isSigned ? `${C.green}08` : C.card,
+                border: `1px solid ${isSigned ? C.green+"55" : C.border}`,
+                borderLeft: `3px solid ${isSigned ? C.green : C.border}`,
+                borderRadius:11, padding:14, marginBottom:10,
+              }}>
                 {isEditing ? <EditForm u={u}/> : (
                   <>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
                       <div style={{flex:1,minWidth:0}}>
-                        <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:2}}>
+                        <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:4}}>
                           {u.name||<span style={{color:C.muted,fontStyle:"italic"}}>Untitled</span>}
                         </div>
-                        {u.foreman&&<span style={{fontSize:10,fontWeight:700,color:fc,background:`${fc}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${fc}33`}}>{u.foreman}</span>}
+                        <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+                          {isSigned&&<SignedBadge/>}
+                          {u.foreman&&<span style={{fontSize:10,fontWeight:700,color:fc,background:`${fc}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${fc}33`}}>{u.foreman}</span>}
+                        </div>
                       </div>
-                      <div style={{display:"flex",gap:5,alignItems:"center",marginLeft:8,flexShrink:0}}>
+                      <div style={{display:"flex",gap:5,alignItems:"center",marginLeft:8,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                        {canManage&&<button onClick={()=>toggleSigned(u)} style={{
+                          background: isSigned?`${C.green}18`:"none",
+                          border:`1px solid ${isSigned?C.green:C.border}`,
+                          borderRadius:6,color:isSigned?C.green:C.dim,fontSize:11,
+                          padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",fontWeight:isSigned?700:400,
+                        }}>{isSigned?"✓ Signed":"Sign"}</button>}
                         {canManage&&<button onClick={()=>setEditingId(u.id)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Edit</button>}
                         <button onClick={()=>onPromoteToQuote(u)} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:6,color:C.accent,fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Q</button>
-                        <button onClick={()=>onPromote(u)} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✓</button>
+                        <button onClick={()=>onPromote(u)} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Move to Board</button>
                         {confirmDeleteId===u.id ? (
                           <>
                             <button onClick={()=>del(u.id)} style={{background:"#ef4444",border:"none",borderRadius:5,color:"#fff",fontSize:11,fontWeight:700,cursor:"pointer",padding:"3px 8px",fontFamily:"inherit"}}>Yes</button>
@@ -9178,30 +9209,46 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
             {colKeys.map(k=>(
               <div key={k} style={{flex:COL[k].flex,fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase",paddingRight:12}}>{COL[k].label}</div>
             ))}
-            <div style={{width:110,flexShrink:0}}/>
+            <div style={{width:160,flexShrink:0}}/>
           </div>
           {upcoming.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:13,fontStyle:"italic"}}>No upcoming jobs yet — add one above.</div>}
           {upcoming.map(u=>{
             const isEditing=editingId===u.id;
+            const isSigned=!!u.signed;
             return (
-              <div key={u.id} style={{display:"flex",alignItems:isEditing?"flex-start":"center",gap:0,padding:"8px 12px",borderRadius:8,marginBottom:2,background:isEditing?C.surface:"none",border:isEditing?`1px solid ${C.border}`:"1px solid transparent"}}
-                onMouseEnter={e=>{if(!isEditing)e.currentTarget.style.background=C.surface;}}
-                onMouseLeave={e=>{if(!isEditing)e.currentTarget.style.background="none";}}>
+              <div key={u.id} style={{
+                display:"flex", alignItems:isEditing?"flex-start":"center", gap:0,
+                padding:"6px 12px", borderRadius:8, marginBottom:3,
+                background: isEditing ? C.surface : isSigned ? `${C.green}08` : "none",
+                border: isEditing ? `1px solid ${C.border}` : isSigned ? `1px solid ${C.green}44` : "1px solid transparent",
+                borderLeft: isSigned&&!isEditing ? `3px solid ${C.green}` : isEditing ? `1px solid ${C.border}` : "1px solid transparent",
+              }}
+                onMouseEnter={e=>{if(!isEditing)e.currentTarget.style.background=isSigned?`${C.green}12`:C.surface;}}
+                onMouseLeave={e=>{if(!isEditing)e.currentTarget.style.background=isSigned?`${C.green}08`:"none";}}>
                 {isEditing ? <EditForm u={u}/> : (
                   <>
-                    <div style={{flex:2.5,paddingRight:12,fontSize:13,fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                      {u.name||<span style={{color:C.muted,fontStyle:"italic"}}>Untitled</span>}
-                      {u.foreman&&<span style={{marginLeft:8,fontSize:10,fontWeight:700,color:getFC(u.foreman)||"#6b7280",background:`${getFC(u.foreman)||"#6b7280"}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${getFC(u.foreman)||"#6b7280"}33`}}>{u.foreman}</span>}
+                    <div style={{flex:2.5,paddingRight:12,overflow:"hidden"}}>
+                      <div style={{fontSize:13,fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                        {u.name||<span style={{color:C.muted,fontStyle:"italic"}}>Untitled</span>}
+                        {u.foreman&&<span style={{marginLeft:8,fontSize:10,fontWeight:700,color:getFC(u.foreman)||"#6b7280",background:`${getFC(u.foreman)||"#6b7280"}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${getFC(u.foreman)||"#6b7280"}33`}}>{u.foreman}</span>}
+                      </div>
+                      {isSigned&&<div style={{marginTop:2}}><SignedBadge/></div>}
                     </div>
                     <div style={{flex:1.2,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.city||"—"}</div>
                     <div style={{flex:1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.sales||"—"}</div>
                     <div style={{flex:1.5,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.customer||"—"}</div>
                     <div style={{flex:3,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.notes||"—"}</div>
                     <div style={{flex:1.1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.lastFollowUp||"—"}</div>
-                    <div style={{width:130,flexShrink:0,display:"flex",gap:6,justifyContent:"flex-end",alignItems:"center"}}>
-                      <button onClick={()=>setEditingId(u.id)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Edit</button>
-                      <button onClick={()=>onPromoteToQuote(u)} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:6,color:C.accent,fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Q</button>
-                      <button onClick={()=>onPromote(u)} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✓</button>
+                    <div style={{width:160,flexShrink:0,display:"flex",gap:5,justifyContent:"flex-end",alignItems:"center"}}>
+                      <button onClick={()=>toggleSigned(u)} title={isSigned?"Remove signed status":"Mark as signed / on job board"} style={{
+                        background: isSigned?`${C.green}18`:"none",
+                        border:`1px solid ${isSigned?C.green:C.border}`,
+                        borderRadius:6,color:isSigned?C.green:C.dim,fontSize:11,
+                        padding:"3px 8px",cursor:"pointer",fontFamily:"inherit",fontWeight:isSigned?700:400,whiteSpace:"nowrap",
+                      }}>{isSigned?"✓ Signed":"Sign"}</button>
+                      <button onClick={()=>setEditingId(u.id)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,fontSize:11,padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>Edit</button>
+                      <button onClick={()=>onPromoteToQuote(u)} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:6,color:C.accent,fontSize:11,fontWeight:700,padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>Q</button>
+                      <button onClick={()=>onPromote(u)} style={{background:C.green,border:"none",borderRadius:6,color:"#fff",fontSize:11,fontWeight:700,padding:"3px 8px",cursor:"pointer",fontFamily:"inherit"}}>✓</button>
                       {confirmDeleteId===u.id ? (
                         <>
                           <span style={{fontSize:10,color:C.muted,whiteSpace:"nowrap"}}>Remove?</span>
