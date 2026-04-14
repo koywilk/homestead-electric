@@ -1772,6 +1772,65 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
 };
 
 
+function PhaseInstructions({items, onChange, color, placeholder}) {
+  const list = Array.isArray(items) ? items : [];
+  const add  = () => onChange([...list, {id:uid(), label:'', text:''}]);
+  const upd  = (id, p) => onChange(list.map(e => e.id===id ? {...e,...p} : e));
+  const del  = (id) => onChange(list.filter(e => e.id!==id));
+
+  const QUICK_LABELS = ['Plate Colors','Devices','All Rooms','Master Bath','Kitchen','Living Room','Master Bed','Garage','Basement','Exterior'];
+
+  return (
+    <div>
+      {list.map((entry, i) => (
+        <div key={entry.id} style={{marginBottom:10, border:`1.5px solid ${entry.text||entry.label ? color+'55' : C.border}`,
+          borderLeft:`3px solid ${entry.text||entry.label ? color : C.border}`,
+          borderRadius:8, overflow:'hidden',
+          background: entry.text||entry.label ? color+'08' : C.surface}}>
+          {/* Label row */}
+          <div style={{display:'flex',alignItems:'center',gap:6,padding:'6px 10px',
+            borderBottom:`1px solid ${entry.text||entry.label ? color+'33' : C.border}`}}>
+            <input value={entry.label} onChange={e=>upd(entry.id,{label:e.target.value})}
+              placeholder="Label / Room…"
+              style={{flex:1,background:'transparent',border:'none',outline:'none',
+                fontSize:12,fontWeight:700,color:entry.label?C.text:C.dim,fontFamily:'inherit'}}/>
+            <button onClick={()=>del(entry.id)}
+              style={{background:'none',border:'none',cursor:'pointer',color:C.dim,
+                fontSize:13,lineHeight:1,padding:'0 2px',fontFamily:'inherit'}}>×</button>
+          </div>
+          {/* Quick label chips (only if label is empty) */}
+          {!entry.label && (
+            <div style={{display:'flex',flexWrap:'wrap',gap:4,padding:'5px 10px',
+              borderBottom:`1px solid ${C.border}`}}>
+              {QUICK_LABELS.map(l=>(
+                <button key={l} onClick={()=>upd(entry.id,{label:l})}
+                  style={{fontSize:9,padding:'2px 7px',borderRadius:99,border:`1px solid ${color}44`,
+                    background:`${color}10`,color:color,cursor:'pointer',fontFamily:'inherit',fontWeight:600}}>
+                  {l}
+                </button>
+              ))}
+            </div>
+          )}
+          {/* Text body */}
+          <textarea value={entry.text} onChange={e=>upd(entry.id,{text:e.target.value})}
+            placeholder="Notes, colors, device placement, instructions…"
+            rows={Math.max(2, (entry.text||'').split('\n').length + 1)}
+            style={{width:'100%',boxSizing:'border-box',background:'transparent',border:'none',
+              outline:'none',padding:'8px 11px',fontSize:12,fontFamily:'inherit',
+              color:C.text,resize:'vertical',lineHeight:1.55}}/>
+        </div>
+      ))}
+      <button onClick={add}
+        style={{width:'100%',background:'transparent',border:`1px dashed ${color}55`,
+          borderRadius:8,padding:'7px',fontSize:11,fontWeight:700,color:color,
+          cursor:'pointer',fontFamily:'inherit',marginTop:list.length?0:2}}>
+        + Add Instruction / Note
+      </button>
+    </div>
+  );
+}
+
+
 const StageBar = ({stages,current,color}) => {
 
   const isScheduled = current === "Scheduled";
@@ -2161,18 +2220,48 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
   const data = normFloor(floorData);
 
-  const [collapsed,      setCollapsed]      = useState(false);
-  const [roomDraft,      setRoomDraft]      = useState('');
-  const [questionDraft,  setQuestionDraft]  = useState('');
-  const [qAdded,         setQAdded]         = useState(false);
+  const [collapsed,       setCollapsed]      = useState(false);
+  const [roomDraft,       setRoomDraft]      = useState('');
+  const [openQFor,        setOpenQFor]       = useState(null); // 'general' | room.id | null
+  const [questionDraft,   setQuestionDraft]  = useState('');
+  const [qConfirmedFor,   setQConfirmedFor]  = useState(null);
 
-  const submitQuestion = () => {
+  const submitQuestion = (sectionId) => {
     if (!questionDraft.trim() || !onAddQuestion) return;
     onAddQuestion(questionDraft.trim());
     setQuestionDraft('');
-    setQAdded(true);
-    setTimeout(() => setQAdded(false), 2500);
+    setOpenQFor(null);
+    setQConfirmedFor(sectionId);
+    setTimeout(() => setQConfirmedFor(null), 2500);
   };
+
+  const qBtn = (sectionId) => onAddQuestion ? (
+    <button onClick={e=>{e.stopPropagation();setOpenQFor(openQFor===sectionId?null:sectionId);setQuestionDraft('');}}
+      style={{background:'none',border:`1px solid ${C.orange}66`,borderRadius:99,cursor:'pointer',
+        color:C.orange,fontSize:9,fontWeight:800,padding:'1px 6px',fontFamily:'inherit',lineHeight:1.4,
+        opacity: openQFor===sectionId ? 1 : 0.65}}>
+      ? Q
+    </button>
+  ) : null;
+
+  const qInput = (sectionId) => openQFor===sectionId ? (
+    <div style={{display:'flex',gap:5,margin:'5px 0 8px'}}>
+      <Inp value={questionDraft} autoFocus
+        onChange={e=>setQuestionDraft(e.target.value)}
+        placeholder="Type question and press Enter…"
+        style={{flex:1,fontSize:11}}
+        onKeyDown={e=>{
+          if(e.key==='Enter') submitQuestion(sectionId);
+          if(e.key==='Escape'){setOpenQFor(null);setQuestionDraft('');}
+        }}/>
+      <Btn onClick={()=>submitQuestion(sectionId)} variant="ghost"
+        style={{fontSize:10,padding:'3px 8px',borderColor:C.orange,color:C.orange,whiteSpace:'nowrap'}}>
+        Add
+      </Btn>
+      <button onClick={()=>{setOpenQFor(null);setQuestionDraft('');}}
+        style={{background:'none',border:'none',color:C.dim,cursor:'pointer',fontSize:13,padding:'0 2px'}}>✕</button>
+    </div>
+  ) : null;
 
 
   const openCount    = data.general.filter(i => !i.done).length +
@@ -2236,7 +2325,12 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
         <div style={{ padding: '12px 14px' }}>
 
-          <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: '0.08em', marginBottom: 6 }}>GENERAL</div>
+          <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:4}}>
+            <span style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: '0.08em' }}>GENERAL</span>
+            {qBtn('general')}
+            {qConfirmedFor==='general'&&<span style={{fontSize:9,fontWeight:700,color:'#16a34a'}}>✓ added</span>}
+          </div>
+          {qInput('general')}
 
           <PunchItems items={data.general} onChange={setGeneral} filterIds={filterIds} onAddMaterial={onAddMaterial}/>
 
@@ -2260,7 +2354,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
               border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
 
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
 
                 <RoomNameEdit name={room.name} onSave={v=>onFloorChange(floorKey,{...data,rooms:data.rooms.map(r=>r.id===room.id?{...r,name:v}:r)})}/>
 
@@ -2274,8 +2368,11 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                     borderRadius: 99, padding: '2px 6px', fontWeight: 700, border: '1px solid #fcd34d' }}>
                     {room.items.filter(i => !i.done && i.waiting).length} waiting
                   </span>}
+                {qBtn(room.id)}
+                {qConfirmedFor===room.id&&<span style={{fontSize:9,fontWeight:700,color:'#16a34a'}}>✓ added</span>}
 
               </div>
+              {qInput(room.id)}
 
               <PunchItems items={Array.isArray(room.items) ? room.items : []}
 
@@ -2303,26 +2400,6 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
           </div>
 
-          {onAddQuestion && (
-            <div style={{ marginTop: 8 }}>
-              <div style={{ display: 'flex', gap: 6 }}>
-                <Inp value={questionDraft} onChange={e => setQuestionDraft(e.target.value)}
-                  placeholder="Add question for this floor…" style={{ flex: 1 }}
-                  onKeyDown={e => e.key === 'Enter' && submitQuestion()} />
-                <Btn onClick={submitQuestion} variant="ghost"
-                  style={{ whiteSpace: 'nowrap', borderColor: C.orange, color: C.orange }}>
-                  ? Question
-                </Btn>
-              </div>
-              {qAdded && (
-                <div style={{ marginTop: 4, fontSize: 10, fontWeight: 700, color: '#16a34a',
-                  background: '#16a34a12', border: '1px solid #16a34a33',
-                  borderRadius: 5, padding: '3px 8px' }}>
-                  ✓ Question added to {floorLabel}
-                </div>
-              )}
-            </div>
-          )}
 
         </div>
 
@@ -7489,11 +7566,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 })()}
                 <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const open=punchOpen(job.roughPunch);if(open>0){alert(`Cannot set Rough to 100% — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}}const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};const invoiceFire=pct>=85&&!job.roughInvoiceFired?{roughInvoiceFired:true,roughInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{roughInvoiceFired:false,roughInvoiceDismissed:false}:{};u({roughStage:v,...qcFire,...prepDone,...invoiceFire,...invoiceReset,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
 
-                <div style={{marginTop:8,marginBottom:20}}>
-
+                <div style={{marginTop:8,marginBottom:12}}>
                   <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough}/>
-
                 </div>
+                <PhaseInstructions items={job.roughInstructions} onChange={v=>u({roughInstructions:v})} color={C.rough}/>
 
               </Section>
 
@@ -7710,7 +7786,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   );
                 })()}
                 <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const finishOpen=punchOpen(job.finishPunch);const qcOpen=punchOpen(job.qcPunch);const total=finishOpen+qcOpen;if(total>0){const parts=[];if(finishOpen>0)parts.push(`${finishOpen} finish punch item${finishOpen!==1?"s":""}`);if(qcOpen>0)parts.push(`${qcOpen} QC item${qcOpen!==1?"s":""}`);alert(`Cannot set Finish to 100% — ${parts.join(" and ")} still open. Clear them first.`);return;}}const invoiceFire=pct>=85&&!job.finishInvoiceFired?{finishInvoiceFired:true,finishInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{finishInvoiceFired:false,finishInvoiceDismissed:false}:{};u({finishStage:v,...invoiceFire,...invoiceReset,...(v==="100%"?{finishStatus:"complete"}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
-                <div style={{marginTop:8,marginBottom:20}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
+                <div style={{marginTop:8,marginBottom:12}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
+                <PhaseInstructions items={job.finishInstructions} onChange={v=>u({finishInstructions:v})} color={C.finish}/>
               </Section>
 
               <Section label="Punch List" color={C.finish} action={
