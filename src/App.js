@@ -3707,9 +3707,27 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
       </div>
 
       {colHeaders}
-      {rows.map((r,i)=>renderRow(r,i))}
-      {rows.length===0&&<div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No rows yet</div>}
-
+      {(()=>{
+        const unpulled=rows.filter(r=>r.status!=="Pulled");
+        const pulled=rows.filter(r=>r.status==="Pulled");
+        return (<>
+          {unpulled.map((r,i)=>renderRow(r,i))}
+          {unpulled.length===0&&rows.length>0&&<div style={{fontSize:11,color:C.green,fontStyle:"italic",marginBottom:6}}>✓ All pulled</div>}
+          {pulled.length>0&&(
+            <>
+              <div style={{display:'flex',alignItems:'center',gap:8,margin:'8px 0 6px'}}>
+                <div style={{flex:1,height:1,background:'rgba(34,197,94,0.25)'}}/>
+                <span style={{fontSize:9,fontWeight:700,color:C.green,letterSpacing:'0.08em',textTransform:'uppercase'}}>
+                  Pulled ({pulled.length})
+                </span>
+                <div style={{flex:1,height:1,background:'rgba(34,197,94,0.25)'}}/>
+              </div>
+              {pulled.map((r,i)=>renderRow(r,i))}
+            </>
+          )}
+          {rows.length===0&&<div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No rows yet</div>}
+        </>);
+      })()}
       <Btn onClick={addRow} variant="add" style={{fontSize:11,padding:"3px 10px",marginTop:6}}>+ Add Row</Btn>
     </div>
   );
