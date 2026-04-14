@@ -2157,13 +2157,22 @@ function RoomNameEdit({name, onSave}) {
 }
 
 
-function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null, onAddMaterial }) {
+function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion }) {
 
   const data = normFloor(floorData);
 
-  const [collapsed, setCollapsed] = useState(false);
+  const [collapsed,      setCollapsed]      = useState(false);
+  const [roomDraft,      setRoomDraft]      = useState('');
+  const [questionDraft,  setQuestionDraft]  = useState('');
+  const [qAdded,         setQAdded]         = useState(false);
 
-  const [roomDraft, setRoomDraft] = useState('');
+  const submitQuestion = () => {
+    if (!questionDraft.trim() || !onAddQuestion) return;
+    onAddQuestion(questionDraft.trim());
+    setQuestionDraft('');
+    setQAdded(true);
+    setTimeout(() => setQAdded(false), 2500);
+  };
 
 
   const openCount    = data.general.filter(i => !i.done).length +
@@ -2294,6 +2303,27 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
           </div>
 
+          {onAddQuestion && (
+            <div style={{ marginTop: 8 }}>
+              <div style={{ display: 'flex', gap: 6 }}>
+                <Inp value={questionDraft} onChange={e => setQuestionDraft(e.target.value)}
+                  placeholder="Add question for this floor…" style={{ flex: 1 }}
+                  onKeyDown={e => e.key === 'Enter' && submitQuestion()} />
+                <Btn onClick={submitQuestion} variant="ghost"
+                  style={{ whiteSpace: 'nowrap', borderColor: C.orange, color: C.orange }}>
+                  ? Question
+                </Btn>
+              </div>
+              {qAdded && (
+                <div style={{ marginTop: 4, fontSize: 10, fontWeight: 700, color: '#16a34a',
+                  background: '#16a34a12', border: '1px solid #16a34a33',
+                  borderRadius: 5, padding: '3px 8px' }}>
+                  ✓ Question added to {floorLabel}
+                </div>
+              )}
+            </div>
+          )}
+
         </div>
 
       )}
@@ -2305,7 +2335,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 }
 
 
-function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false, filterIds=null, onAddMaterial }) {
+function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion }) {
 
   const upper    = normFloor(punch.upper);
   const main     = normFloor(punch.main);
@@ -2421,11 +2451,11 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
       </div>
 
-      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial}/>
+      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? t=>onAddQuestion('upper',t) : null}/>
 
-      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial}/>
+      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? t=>onAddQuestion('main',t) : null}/>
 
-      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial}/>
+      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? t=>onAddQuestion('basement',t) : null}/>
 
       {extras.map((e,i)=>(
         <div key={e.key}>
@@ -2437,7 +2467,8 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
             floorColor={FLOOR_COLORS[i % FLOOR_COLORS.length]}
             showHotcheck={showHotcheck}
             filterIds={filterIds}
-            onAddMaterial={onAddMaterial}/>
+            onAddMaterial={onAddMaterial}
+            onAddQuestion={onAddQuestion ? t=>onAddQuestion('main',t) : null}/>
           <button onClick={()=>{
             if(!window.confirm(`Remove "${e.label}" and all its punch items? This cannot be undone.`)) return;
             removeFloor(e.key);
@@ -7488,6 +7519,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     } else {
                       u({roughMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",source:source||"",items:text,pickedUp:false,needsOrder:true}]});
                     }
+                  }}
+                  onAddQuestion={(floor, text)=>{
+                    const who = getIdentity();
+                    const q = {id:uid(), question:text, answer:"", done:false, addedBy:who?.name||""};
+                    const qs = job.roughQuestions || {upper:[],main:[],basement:[]};
+                    u({roughQuestions:{...qs, [floor]:[...(qs[floor]||[]), q]}});
                   }}/>
 
               </Section>
@@ -7695,6 +7732,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     } else {
                       u({finishMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",source:source||"",items:text,pickedUp:false,needsOrder:true}]});
                     }
+                  }}
+                  onAddQuestion={(floor, text)=>{
+                    const who = getIdentity();
+                    const q = {id:uid(), question:text, answer:"", done:false, addedBy:who?.name||""};
+                    const qs = job.finishQuestions || {upper:[],main:[],basement:[]};
+                    u({finishQuestions:{...qs, [floor]:[...(qs[floor]||[]), q]}});
                   }}/>
               </Section>
 
