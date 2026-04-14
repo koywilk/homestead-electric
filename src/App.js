@@ -606,6 +606,52 @@ function UserPicker({ users, onSelect, onSavePin }) {
 }
 
 // ── User Management (inside Settings) ───────────────────────
+// ── Notification preferences ──────────────────────────────────
+const NOTIF_CATEGORIES = [
+  { label:"Job Assignments", items:[
+    { key:"job_assigned",      label:"Job assigned to you",                  roles:["foreman","lead","crew"] },
+    { key:"lead_assigned",     label:"Lead assigned to job",                 roles:["admin","manager","foreman"] },
+    { key:"quote_converted",   label:"Quote converted to job",               roles:["admin","manager"] },
+  ]},
+  { label:"Job Status", items:[
+    { key:"ready_invoice",     label:"Ready to invoice",                     roles:["admin","manager","foreman"] },
+    { key:"prep_complete",     label:"Job prep complete",                    roles:["admin","manager","foreman"] },
+  ]},
+  { label:"QC & Inspections", items:[
+    { key:"qc_ready",          label:"QC walk ready to schedule",            roles:["admin","manager"] },
+    { key:"qc_passed",         label:"QC passed",                            roles:["admin","manager","foreman"] },
+    { key:"matterport",        label:"Matterport scan complete",             roles:["admin","manager"] },
+  ]},
+  { label:"Change Orders", items:[
+    { key:"co_new",            label:"New change order created",             roles:["admin","manager","foreman"] },
+    { key:"co_approved",       label:"Change order approved",                roles:["admin","manager","foreman","lead"] },
+    { key:"co_completed",      label:"Change order work completed",          roles:["admin","manager"] },
+  ]},
+  { label:"Return Trips", items:[
+    { key:"rt_assigned",       label:"Return trip assigned",                 roles:["admin","manager","foreman"] },
+    { key:"rt_signed",         label:"Return trip signed off",               roles:["admin","manager"] },
+  ]},
+  { label:"Updates & Questions", items:[
+    { key:"job_question",      label:"New question on job",                  roles:["admin","manager","foreman"] },
+    { key:"daily_update",      label:"Daily update added",                   roles:["admin","manager"] },
+    { key:"question_answered", label:"Question answered",                    roles:["admin","manager","foreman","lead"] },
+  ]},
+  { label:"Reminders", items:[
+    { key:"reminder_plans",    label:"Plans check (2 days before start)",    roles:["admin","manager"] },
+    { key:"reminder_prep",     label:"Prep incomplete reminder",             roles:["admin","manager"] },
+    { key:"reminder_po",       label:"Daily PO reminder (1 PM weekdays)",    roles:["lead"] },
+    { key:"reminder_daily",    label:"Daily update reminder (4:30 PM)",      roles:["lead"] },
+  ]},
+];
+
+const getNotifDefaults = (title) => {
+  const prefs = {};
+  NOTIF_CATEGORIES.forEach(cat => cat.items.forEach(item => {
+    prefs[item.key] = item.roles.includes(title||"crew");
+  }));
+  return prefs;
+};
+
 function UserManagement({ users, onSave }) {
   const [list,    setList]    = useState(users);
   const [editing, setEditing] = useState(null);
@@ -614,7 +660,7 @@ function UserManagement({ users, onSave }) {
   useEffect(()=>setList(users),[users]);
 
   const newUser = () => {
-    const u = { id:"u_"+Date.now(), name:"", title:"foreman", access:"standard", pin:"" };
+    const u = { id:"u_"+Date.now(), name:"", title:"foreman", access:"standard", pin:"", notifPrefs: getNotifDefaults("foreman") };
     setList(l=>[...l,u]);
     setEditing(u.id);
   };
@@ -731,6 +777,62 @@ function UserManagement({ users, onSave }) {
                     </div>
                     <div style={{fontSize:10,color:C.muted,marginTop:4}}>Leave blank for no PIN required</div>
                   </div>
+                  {/* Notification Preferences */}
+                  {(()=>{
+                    const prefs = u.notifPrefs || getNotifDefaults(title);
+                    const setKey = (key, val) => upd(u.id, {notifPrefs:{...prefs,[key]:val}});
+                    const applyDefaults = () => upd(u.id, {notifPrefs: getNotifDefaults(title)});
+                    const allOn  = NOTIF_CATEGORIES.every(cat=>cat.items.every(item=>prefs[item.key]!==false));
+                    const allOff = NOTIF_CATEGORIES.every(cat=>cat.items.every(item=>prefs[item.key]===false));
+                    return (
+                      <div style={{border:`1px solid ${C.border}`,borderRadius:9,overflow:"hidden"}}>
+                        <div style={{background:C.surface,padding:"8px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
+                          <span style={{fontSize:11,fontWeight:700,color:C.text,letterSpacing:"0.04em"}}>🔔 Notifications</span>
+                          <div style={{display:"flex",gap:6}}>
+                            <button onClick={applyDefaults}
+                              style={{fontSize:10,padding:"3px 9px",borderRadius:6,border:`1px solid ${C.border}`,
+                                background:"none",color:C.dim,cursor:"pointer",fontFamily:"inherit"}}>
+                              Reset to role defaults
+                            </button>
+                            <button onClick={()=>{ const all={}; NOTIF_CATEGORIES.forEach(c=>c.items.forEach(i=>all[i.key]=true)); upd(u.id,{notifPrefs:all}); }}
+                              style={{fontSize:10,padding:"3px 9px",borderRadius:6,border:`1px solid ${C.border}`,
+                                background:allOn?`${C.accent}18`:"none",color:allOn?C.accent:C.dim,cursor:"pointer",fontFamily:"inherit"}}>
+                              All on
+                            </button>
+                            <button onClick={()=>{ const all={}; NOTIF_CATEGORIES.forEach(c=>c.items.forEach(i=>all[i.key]=false)); upd(u.id,{notifPrefs:all}); }}
+                              style={{fontSize:10,padding:"3px 9px",borderRadius:6,border:`1px solid ${C.border}`,
+                                background:allOff?`${C.red}18`:"none",color:allOff?C.red:C.dim,cursor:"pointer",fontFamily:"inherit"}}>
+                              All off
+                            </button>
+                          </div>
+                        </div>
+                        <div style={{padding:"10px 12px",display:"flex",flexDirection:"column",gap:10}}>
+                          {NOTIF_CATEGORIES.map(cat=>(
+                            <div key={cat.label}>
+                              <div style={{fontSize:9,fontWeight:800,color:C.dim,letterSpacing:"0.1em",
+                                textTransform:"uppercase",marginBottom:5}}>{cat.label}</div>
+                              <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                                {cat.items.map(item=>{
+                                  const on = prefs[item.key] !== false;
+                                  const isDefault = item.roles.includes(title);
+                                  return (
+                                    <label key={item.key} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
+                                      <input type="checkbox" checked={on} onChange={e=>setKey(item.key,e.target.checked)}
+                                        style={{width:14,height:14,accentColor:C.accent,cursor:"pointer",flexShrink:0}}/>
+                                      <span style={{fontSize:11,color:on?C.text:C.muted}}>{item.label}</span>
+                                      {!isDefault&&on&&<span style={{fontSize:9,color:C.orange,fontWeight:700}}>custom</span>}
+                                      {isDefault&&!on&&<span style={{fontSize:9,color:C.dim,fontWeight:700}}>off</span>}
+                                    </label>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      </div>
+                    );
+                  })()}
+
                   <div style={{display:"flex",gap:8,marginTop:4}}>
                     <button onClick={save}
                       style={{background:C.accent,border:"none",borderRadius:8,color:"#000",
