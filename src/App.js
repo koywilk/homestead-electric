@@ -4134,6 +4134,8 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
   const [copied,          setCopied]          = useState(false);
   const [editingBreakers, setEditingBreakers] = useState(null); // panel name currently in edit mode
   const [addingPO,        setAddingPO]        = useState({});  // { [panelName]: selectedSource }
+  const [poConfirm,       setPoConfirm]       = useState({});  // { [panelName]: confirmMessage }
+  const showPOConfirm = (p, msg) => { setPoConfirm(v=>({...v,[p]:msg})); setTimeout(()=>setPoConfirm(v=>({...v,[p]:null})),3000); };
 
   const hoLink = `https://homestead-electric.vercel.app/?homeowner=${jobId}`;
 
@@ -4540,7 +4542,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                         outline:'none',color:C.text,boxSizing:'border-box',marginBottom:6}}/>
 
                     {/* Add to PO */}
-                    {onMatChange&&(!addingPO[p]?(
+                    {onMatChange&&(addingPO[p]===undefined?(
                       <button onClick={()=>setAddingPO(v=>({...v,[p]:""}))}
                         style={{width:'100%',background:`${C.blue}18`,border:`1px solid ${C.blue}44`,
                           borderRadius:5,padding:'4px 6px',fontSize:10,fontWeight:700,color:C.blue,
@@ -4565,14 +4567,15 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                             const lines=activeGroups.map(g=>`${g.count}× ${g.amps}A ${g.poles===2?"2-pole":"1-pole"}`).join('<br>');
                             const newItems=`<b>Breakers — ${p}</b><br>${lines}`;
                             const mats=Array.isArray(roughMaterials)?[...roughMaterials]:[];
-                            // Find newest unsent PO for this supplier (last match wins)
                             let targetIdx=-1;
                             mats.forEach((o,i)=>{ if(o.source===src&&!o.ordered&&!o.pickedUp) targetIdx=i; });
                             if(targetIdx>=0){
                               mats[targetIdx]={...mats[targetIdx],
                                 items:(mats[targetIdx].items?mats[targetIdx].items+'<br><br>':'')+newItems};
+                              showPOConfirm(p,`✓ Added to existing ${src} PO`);
                             } else {
                               mats.push({id:uid(),date:"",po:"",pickupDate:"",source:src,items:newItems,pickedUp:false,needsOrder:true,ordered:false});
+                              showPOConfirm(p,`✓ Created new ${src} PO`);
                             }
                             onMatChange(mats);
                             setAddingPO(v=>({...v,[p]:undefined}));
@@ -4590,6 +4593,13 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                         </div>
                       </div>
                     ))}
+                    {poConfirm[p]&&(
+                      <div style={{marginTop:6,fontSize:10,fontWeight:700,color:'#16a34a',
+                        background:'#16a34a12',border:'1px solid #16a34a33',
+                        borderRadius:5,padding:'4px 8px',textAlign:'center'}}>
+                        {poConfirm[p]}
+                      </div>
+                    )}
                   </div>
                 );})}
               </div>
