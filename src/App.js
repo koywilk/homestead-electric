@@ -4125,13 +4125,15 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
   );
 }
 
-function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName}) {
-  const [newPanelName, setNewPanelName] = useState('');
-  const [genLoads,     setGenLoads]     = useState([]);
-  const [hoResponse,   setHoResponse]   = useState(null);
-  const [showModal,    setShowModal]    = useState(false);
-  const [sending,      setSending]      = useState(false);
-  const [copied,       setCopied]       = useState(false);
+function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, roughMaterials, onMatChange, breakerOverrides, onBreakersChange}) {
+  const [newPanelName,    setNewPanelName]    = useState('');
+  const [genLoads,        setGenLoads]        = useState([]);
+  const [hoResponse,      setHoResponse]      = useState(null);
+  const [showModal,       setShowModal]       = useState(false);
+  const [sending,         setSending]         = useState(false);
+  const [copied,          setCopied]          = useState(false);
+  const [editingBreakers, setEditingBreakers] = useState(null); // panel name currently in edit mode
+  const [addingPO,        setAddingPO]        = useState({});  // { [panelName]: selectedSource }
 
   const hoLink = `https://homestead-electric.vercel.app/?homeowner=${jobId}`;
 
@@ -4409,9 +4411,10 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           const extraRows=(homeRuns.extraFloors||[]).flatMap(ef=>homeRuns[ef.key]||[]);
           const allHRRows=[...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[]),...extraRows];
           const panels=getPanelOpts(cp).filter(p=>p!==""&&p!=="Meter");
+          const bOvr=breakerOverrides||{};
           const panelData=panels.map(p=>{
             const rows=allHRRows.filter(r=>r.panel===p&&WIRE_BREAKER[r.wire]);
-            if(!rows.length) return null;
+            if(!rows.length && !bOvr[p]) return null;
             const groups={};
             rows.forEach(r=>{
               const {amps,poles}=WIRE_BREAKER[r.wire];
@@ -4419,49 +4422,176 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
               if(!groups[key]) groups[key]={amps,poles,count:0,spaces:0};
               groups[key].count++; groups[key].spaces+=poles;
             });
-            const totalSpaces=Object.values(groups).reduce((s,v)=>s+v.spaces,0);
+            const autoGroups=Object.entries(groups).sort((a,b)=>a[1].amps-b[1].amps);
+            const isManual=!!bOvr[p];
+            // activeGroups: [{id,amps,poles,count}] — manual override or derived from auto
+            const activeGroups=isManual ? bOvr[p] : autoGroups.map(([,g])=>({id:uid(),amps:g.amps,poles:g.poles,count:g.count}));
+            const calcSpaces=activeGroups.reduce((s,g)=>s+(g.poles*g.count),0);
             const override=panelCounts?.[p]||"";
-            const displaySpaces=override?parseInt(override,10)||totalSpaces:totalSpaces;
-            const breakerGroups=Object.entries(groups).sort((a,b)=>a[1].amps-b[1].amps);
-            return {p,totalSpaces,displaySpaces,override,breakerGroups};
+            const displaySpaces=override?parseInt(override,10)||calcSpaces:calcSpaces;
+            return {p,displaySpaces,override,activeGroups,autoGroups,isManual};
           }).filter(Boolean);
+
+          // helpers for breaker override editing
+          const saveBreakers=(p,groups)=>{ if(onBreakersChange) onBreakersChange({...bOvr,[p]:groups}); };
+          const resetBreakers=(p)=>{ if(onBreakersChange){ const n={...bOvr}; delete n[p]; onBreakersChange(n); } };
+          const updBreaker=(p,id,patch)=>saveBreakers(p,(bOvr[p]||[]).map(g=>g.id===id?{...g,...patch}:g));
+          const delBreaker=(p,id)=>saveBreakers(p,(bOvr[p]||[]).filter(g=>g.id!==id));
+          const addBreaker=(p,currentGroups)=>saveBreakers(p,[...currentGroups,{id:uid(),amps:20,poles:1,count:1}]);
+          const enterEdit=(p,activeGroups)=>{ if(!bOvr[p]) saveBreakers(p,activeGroups.map(g=>({...g,id:uid()}))); setEditingBreakers(p); };
 
           return (
             <>
             {/* Panel summary cards */}
             {panelData.length>0&&(
               <div style={{display:'flex',flexWrap:'wrap',gap:8,marginBottom:14}}>
-                {panelData.map(({p,totalSpaces,displaySpaces,override,breakerGroups})=>(
-                  <div key={p} style={{background:`${C.blue}0a`,border:`1px solid ${C.blue}33`,
-                    borderRadius:9,padding:'8px 12px',minWidth:140}}>
-                    <div style={{fontSize:10,fontWeight:800,color:C.blue,letterSpacing:'0.08em',
-                      textTransform:'uppercase',marginBottom:4}}>{p}</div>
+                {panelData.map(({p,displaySpaces,override,activeGroups,autoGroups,isManual})=>{
+                  const isEditing=editingBreakers===p;
+                  const editGroups=bOvr[p]||activeGroups;
+                  return (
+                  <div key={p} style={{background:`${C.blue}0a`,border:`1px solid ${isManual?C.orange:C.blue}33`,
+                    borderRadius:9,padding:'8px 12px',minWidth:160}}>
+
+                    {/* Header row */}
+                    <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',marginBottom:4}}>
+                      <span style={{fontSize:10,fontWeight:800,color:C.blue,letterSpacing:'0.08em',textTransform:'uppercase'}}>{p}</span>
+                      <div style={{display:'flex',gap:4,alignItems:'center'}}>
+                        {isManual&&<span style={{fontSize:8,fontWeight:700,color:C.orange,background:`${C.orange}18`,
+                          borderRadius:99,padding:'1px 5px'}}>MANUAL</span>}
+                        <button onClick={()=>isEditing?setEditingBreakers(null):enterEdit(p,activeGroups)}
+                          style={{fontSize:9,background:'none',border:'none',cursor:'pointer',color:C.dim,padding:'0 2px'}}>
+                          {isEditing?'✓ Done':'✏ Edit'}
+                        </button>
+                      </div>
+                    </div>
+
+                    {/* Space count */}
                     <div style={{fontSize:18,fontWeight:700,color:C.text,lineHeight:1,marginBottom:6}}>
                       {displaySpaces}
                       <span style={{fontSize:10,fontWeight:400,color:C.dim,marginLeft:4}}>spaces</span>
-                      {override&&<span style={{fontSize:9,color:C.orange,marginLeft:4}}>manual</span>}
+                      {override&&<span style={{fontSize:9,color:C.orange,marginLeft:4}}>override</span>}
                     </div>
-                    <div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:7}}>
-                      {breakerGroups.map(([key,{amps,poles,count}])=>{
-                        const chipColor=amps>=50?C.orange:amps>=30?C.blue:'#888';
-                        return (
-                          <div key={key} style={{display:'inline-flex',alignItems:'center',gap:3,
-                            background:`${chipColor}18`,border:`1px solid ${chipColor}55`,
-                            borderRadius:5,padding:'3px 7px'}}>
-                            <span style={{fontSize:13,fontWeight:800,color:chipColor,lineHeight:1}}>{amps}A</span>
-                            <span style={{fontSize:9,fontWeight:600,color:chipColor,opacity:0.7}}>{poles===2?'2P':'1P'}</span>
-                            <span style={{fontSize:10,fontWeight:500,color:C.text,marginLeft:1}}>×{count}</span>
-                          </div>
-                        );
-                      })}
-                    </div>
+
+                    {/* Chips (view mode) or edit rows (edit mode) */}
+                    {!isEditing?(
+                      <div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:7}}>
+                        {activeGroups.map((g)=>{
+                          const chipColor=g.amps>=50?C.orange:g.amps>=30?C.blue:'#888';
+                          return (
+                            <div key={g.id} style={{display:'inline-flex',alignItems:'center',gap:3,
+                              background:`${chipColor}18`,border:`1px solid ${chipColor}55`,
+                              borderRadius:5,padding:'3px 7px'}}>
+                              <span style={{fontSize:13,fontWeight:800,color:chipColor,lineHeight:1}}>{g.amps}A</span>
+                              <span style={{fontSize:9,fontWeight:600,color:chipColor,opacity:0.7}}>{g.poles===2?'2P':'1P'}</span>
+                              <span style={{fontSize:10,fontWeight:500,color:C.text,marginLeft:1}}>×{g.count}</span>
+                            </div>
+                          );
+                        })}
+                      </div>
+                    ):(
+                      <div style={{marginBottom:7}}>
+                        {editGroups.map((g)=>{
+                          const chipColor=g.amps>=50?C.orange:g.amps>=30?C.blue:'#888';
+                          return (
+                            <div key={g.id} style={{display:'flex',alignItems:'center',gap:4,marginBottom:5}}>
+                              <input type="number" value={g.amps} min={15} max={200} step={5}
+                                onChange={e=>updBreaker(p,g.id,{amps:parseInt(e.target.value)||20})}
+                                style={{width:44,background:C.surface,border:`1px solid ${chipColor}66`,borderRadius:4,
+                                  padding:'3px 4px',fontSize:12,fontWeight:700,color:chipColor,textAlign:'center',fontFamily:'inherit'}}/>
+                              <span style={{fontSize:10,color:C.dim}}>A</span>
+                              <button onClick={()=>updBreaker(p,g.id,{poles:g.poles===1?2:1})}
+                                style={{fontSize:9,fontWeight:700,padding:'3px 6px',borderRadius:4,cursor:'pointer',fontFamily:'inherit',
+                                  background:`${chipColor}18`,border:`1px solid ${chipColor}55`,color:chipColor}}>
+                                {g.poles===2?'2P':'1P'}
+                              </button>
+                              <span style={{fontSize:10,color:C.dim}}>×</span>
+                              <input type="number" value={g.count} min={1} max={99}
+                                onChange={e=>updBreaker(p,g.id,{count:parseInt(e.target.value)||1})}
+                                style={{width:36,background:C.surface,border:`1px solid ${C.border}`,borderRadius:4,
+                                  padding:'3px 4px',fontSize:12,fontWeight:600,color:C.text,textAlign:'center',fontFamily:'inherit'}}/>
+                              <button onClick={()=>delBreaker(p,g.id)}
+                                style={{background:'none',border:'none',cursor:'pointer',color:C.dim,fontSize:14,
+                                  lineHeight:1,padding:'0 2px',fontWeight:700,fontFamily:'inherit'}}>×</button>
+                            </div>
+                          );
+                        })}
+                        <div style={{display:'flex',gap:5,marginTop:2}}>
+                          <button onClick={()=>addBreaker(p,editGroups)}
+                            style={{fontSize:9,fontWeight:700,padding:'3px 8px',borderRadius:4,cursor:'pointer',fontFamily:'inherit',
+                              background:`${C.blue}18`,border:`1px solid ${C.blue}44`,color:C.blue}}>
+                            + Add Breaker
+                          </button>
+                          {isManual&&(
+                            <button onClick={()=>{resetBreakers(p);setEditingBreakers(null);}}
+                              style={{fontSize:9,padding:'3px 8px',borderRadius:4,cursor:'pointer',fontFamily:'inherit',
+                                background:'none',border:`1px solid ${C.border}`,color:C.dim}}>
+                              ↺ Reset to Auto
+                            </button>
+                          )}
+                        </div>
+                      </div>
+                    )}
+
+                    {/* Space count override input */}
                     <input value={override} onChange={e=>onCountChange({...panelCounts,[p]:e.target.value})}
-                      placeholder="Override…"
+                      placeholder="Space count override…"
                       style={{width:'100%',background:C.surface,border:`1px solid ${C.border}`,
                         borderRadius:5,padding:'3px 6px',fontSize:10,fontFamily:'inherit',
-                        outline:'none',color:C.text,boxSizing:'border-box'}}/>
+                        outline:'none',color:C.text,boxSizing:'border-box',marginBottom:6}}/>
+
+                    {/* Add to PO */}
+                    {onMatChange&&(!addingPO[p]?(
+                      <button onClick={()=>setAddingPO(v=>({...v,[p]:""}))}
+                        style={{width:'100%',background:`${C.blue}18`,border:`1px solid ${C.blue}44`,
+                          borderRadius:5,padding:'4px 6px',fontSize:10,fontWeight:700,color:C.blue,
+                          cursor:'pointer',fontFamily:'inherit'}}>
+                        + Add to PO
+                      </button>
+                    ):(
+                      <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,padding:'8px'}}>
+                        <div style={{fontSize:10,fontWeight:700,color:C.text,marginBottom:5}}>Supplier</div>
+                        <select value={addingPO[p]} onChange={e=>setAddingPO(v=>({...v,[p]:e.target.value}))}
+                          style={{width:'100%',background:C.surface,border:`1px solid ${C.border}`,borderRadius:5,
+                            padding:'4px 6px',fontSize:11,color:addingPO[p]?C.text:C.dim,fontFamily:'inherit',marginBottom:6}}>
+                          <option value="">— choose supplier —</option>
+                          {["Shop","Home Depot","CED","Platt","Amazon","Other"].map(s=>(
+                            <option key={s} value={s}>{s}</option>
+                          ))}
+                        </select>
+                        <div style={{display:'flex',gap:5}}>
+                          <button onClick={()=>{
+                            const src=addingPO[p];
+                            if(!src) return;
+                            const lines=activeGroups.map(g=>`${g.count}× ${g.amps}A ${g.poles===2?"2-pole":"1-pole"}`).join('<br>');
+                            const newItems=`<b>Breakers — ${p}</b><br>${lines}`;
+                            const mats=Array.isArray(roughMaterials)?[...roughMaterials]:[];
+                            // Find newest unsent PO for this supplier (last match wins)
+                            let targetIdx=-1;
+                            mats.forEach((o,i)=>{ if(o.source===src&&!o.ordered&&!o.pickedUp) targetIdx=i; });
+                            if(targetIdx>=0){
+                              mats[targetIdx]={...mats[targetIdx],
+                                items:(mats[targetIdx].items?mats[targetIdx].items+'<br><br>':'')+newItems};
+                            } else {
+                              mats.push({id:uid(),date:"",po:"",pickupDate:"",source:src,items:newItems,pickedUp:false,needsOrder:true,ordered:false});
+                            }
+                            onMatChange(mats);
+                            setAddingPO(v=>({...v,[p]:undefined}));
+                          }} disabled={!addingPO[p]}
+                            style={{flex:1,background:`${C.blue}18`,border:`1px solid ${C.blue}44`,borderRadius:5,
+                              padding:'4px 6px',fontSize:10,fontWeight:700,color:addingPO[p]?C.blue:C.dim,
+                              cursor:addingPO[p]?'pointer':'default',fontFamily:'inherit'}}>
+                            Add
+                          </button>
+                          <button onClick={()=>setAddingPO(v=>({...v,[p]:undefined}))}
+                            style={{background:'none',border:`1px solid ${C.border}`,borderRadius:5,
+                              padding:'4px 8px',fontSize:10,color:C.dim,cursor:'pointer',fontFamily:'inherit'}}>
+                            Cancel
+                          </button>
+                        </div>
+                      </div>
+                    ))}
                   </div>
-                ))}
+                );})}
               </div>
             )}
 
@@ -7601,7 +7731,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           {tab==="Home Runs"&&(
 
             <HomeRunsTab homeRuns={job.homeRuns} panelCounts={job.panelCounts} jobId={job.id} jobName={job.name}
-              onHRChange={v=>u({homeRuns:v})} onCountChange={v=>u({panelCounts:v})}/>
+              onHRChange={v=>u({homeRuns:v})} onCountChange={v=>u({panelCounts:v})}
+              roughMaterials={job.roughMaterials} onMatChange={v=>u({roughMaterials:v})}
+              breakerOverrides={job.breakerOverrides} onBreakersChange={v=>u({breakerOverrides:v})}/>
 
           )}
 
