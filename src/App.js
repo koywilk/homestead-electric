@@ -3672,7 +3672,7 @@ const WIRE_BREAKER = {
 
   "12/2": {amps:20,  poles:1}, "12/3": {amps:20,  poles:2},
 
-  "10/2": {amps:30,  poles:1}, "10/3": {amps:30,  poles:2},
+  "10/2": {amps:30,  poles:2}, "10/3": {amps:30,  poles:2},
 
   "8/2":  {amps:40,  poles:2}, "8/3":  {amps:40,  poles:2},
 
@@ -4300,33 +4300,79 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
       })()}
 
       <Section label="Home Runs" color={C.blue} defaultOpen={true}>
-        {(()=>{ const cp=homeRuns.customPanels||DEFAULT_PANELS; return (
-          <>
-          {[['main','Main Level Loads'],['basement','Basement Level Loads'],['upper','Upper Level Loads']].map(([k,l])=>(
-            <HomeRunLevel key={k} label={l} rows={homeRuns[k]||[]} customPanels={cp} onChange={v=>onHRChange({...homeRuns,[k]:v})}/>
-          ))}
-          {(homeRuns.extraFloors||[]).map((ef)=>(
-            <div key={ef.key} style={{position:'relative'}}>
-              <HomeRunLevel label={ef.label} rows={homeRuns[ef.key]||[]} customPanels={cp}
-                onChange={v=>onHRChange({...homeRuns,[ef.key]:v})}/>
-              <button onClick={()=>{ const ne=(homeRuns.extraFloors||[]).filter(e=>e.key!==ef.key); const u={...homeRuns,extraFloors:ne}; delete u[ef.key]; onHRChange(u); }}
-                style={{position:'absolute',top:0,right:0,background:'none',border:'none',
-                  color:C.muted,cursor:'pointer',fontSize:11,padding:'2px 6px',fontFamily:'inherit'}}>
-                Remove
-              </button>
-            </div>
-          ))}
-          <HRAddFloor homeRuns={homeRuns} onHRChange={onHRChange}/>
-          </>
-        ); })()}
+        {(()=>{
+          const cp=homeRuns.customPanels||DEFAULT_PANELS;
+
+          // ── Inline panel breaker summary ──
+          const extraRows=(homeRuns.extraFloors||[]).flatMap(ef=>homeRuns[ef.key]||[]);
+          const allHRRows=[...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[]),...extraRows];
+          const panels=getPanelOpts(cp).filter(p=>p!==""&&p!=="Meter");
+          const panelData=panels.map(p=>{
+            const rows=allHRRows.filter(r=>r.panel===p&&WIRE_BREAKER[r.wire]);
+            if(!rows.length) return null;
+            const groups={};
+            rows.forEach(r=>{
+              const {amps,poles}=WIRE_BREAKER[r.wire];
+              const key=`${amps}A ${poles===1?"1P":"2P"}`;
+              if(!groups[key]) groups[key]={amps,poles,count:0,spaces:0};
+              groups[key].count++; groups[key].spaces+=poles;
+            });
+            const totalSpaces=Object.values(groups).reduce((s,v)=>s+v.spaces,0);
+            const override=panelCounts?.[p]||"";
+            const displaySpaces=override?parseInt(override,10)||totalSpaces:totalSpaces;
+            const summary=Object.entries(groups).sort((a,b)=>a[1].amps-b[1].amps)
+              .map(([k,{count}])=>`${count}×${k}`).join(' · ');
+            return {p,totalSpaces,displaySpaces,override,summary};
+          }).filter(Boolean);
+
+          return (
+            <>
+            {/* Panel summary cards */}
+            {panelData.length>0&&(
+              <div style={{display:'flex',flexWrap:'wrap',gap:8,marginBottom:14}}>
+                {panelData.map(({p,totalSpaces,displaySpaces,override,summary})=>(
+                  <div key={p} style={{background:`${C.blue}0a`,border:`1px solid ${C.blue}33`,
+                    borderRadius:9,padding:'8px 12px',minWidth:120}}>
+                    <div style={{fontSize:10,fontWeight:800,color:C.blue,letterSpacing:'0.08em',
+                      textTransform:'uppercase',marginBottom:3}}>{p}</div>
+                    <div style={{fontSize:18,fontWeight:700,color:C.text,lineHeight:1,marginBottom:2}}>
+                      {displaySpaces}
+                      <span style={{fontSize:10,fontWeight:400,color:C.dim,marginLeft:4}}>spaces</span>
+                      {override&&<span style={{fontSize:9,color:C.orange,marginLeft:4}}>manual</span>}
+                    </div>
+                    <div style={{fontSize:10,color:C.dim,marginBottom:6}}>{summary}</div>
+                    <input value={override} onChange={e=>onCountChange({...panelCounts,[p]:e.target.value})}
+                      placeholder="Override…"
+                      style={{width:'100%',background:C.surface,border:`1px solid ${C.border}`,
+                        borderRadius:5,padding:'3px 6px',fontSize:10,fontFamily:'inherit',
+                        outline:'none',color:C.text,boxSizing:'border-box'}}/>
+                  </div>
+                ))}
+              </div>
+            )}
+
+            {[['main','Main Level Loads'],['basement','Basement Level Loads'],['upper','Upper Level Loads']].map(([k,l])=>(
+              <HomeRunLevel key={k} label={l} rows={homeRuns[k]||[]} customPanels={cp} onChange={v=>onHRChange({...homeRuns,[k]:v})}/>
+            ))}
+            {(homeRuns.extraFloors||[]).map((ef)=>(
+              <div key={ef.key} style={{position:'relative'}}>
+                <HomeRunLevel label={ef.label} rows={homeRuns[ef.key]||[]} customPanels={cp}
+                  onChange={v=>onHRChange({...homeRuns,[ef.key]:v})}/>
+                <button onClick={()=>{ const ne=(homeRuns.extraFloors||[]).filter(e=>e.key!==ef.key); const u={...homeRuns,extraFloors:ne}; delete u[ef.key]; onHRChange(u); }}
+                  style={{position:'absolute',top:0,right:0,background:'none',border:'none',
+                    color:C.muted,cursor:'pointer',fontSize:11,padding:'2px 6px',fontFamily:'inherit'}}>
+                  Remove
+                </button>
+              </div>
+            ))}
+            <HRAddFloor homeRuns={homeRuns} onHRChange={onHRChange}/>
+            </>
+          );
+        })()}
       </Section>
 
       <Section label="Load Mapping Notes" color={C.blue}>
         <TA value={homeRuns.loadMappingNotes||''} onChange={e=>onHRChange({...homeRuns,loadMappingNotes:e.target.value})} placeholder="Load mapping notes…" rows={5}/>
-      </Section>
-
-      <Section label="Panel Breaker Counts" color={C.blue}>
-        <BreakerCounts homeRuns={homeRuns} panelCounts={panelCounts} onCountChange={onCountChange}/>
       </Section>
     </div>
   );
