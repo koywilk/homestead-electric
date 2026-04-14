@@ -4125,7 +4125,7 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
   );
 }
 
-function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, roughMaterials, onMatChange, breakerOverrides, onBreakersChange}) {
+function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, finishMaterials, onMatChange, breakerOverrides, onBreakersChange}) {
   const [newPanelName,    setNewPanelName]    = useState('');
   const [genLoads,        setGenLoads]        = useState([]);
   const [hoResponse,      setHoResponse]      = useState(null);
@@ -4566,7 +4566,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                             if(!src) return;
                             const lines=activeGroups.map(g=>`${g.count}× ${g.amps}A ${g.poles===2?"2-pole":"1-pole"}`).join('<br>');
                             const newItems=`<b>Breakers — ${p}</b><br>${lines}`;
-                            const mats=Array.isArray(roughMaterials)?[...roughMaterials]:[];
+                            const mats=Array.isArray(finishMaterials)?[...finishMaterials]:[];
                             let targetIdx=-1;
                             mats.forEach((o,i)=>{ if(o.source===src&&!o.ordered&&!o.pickedUp) targetIdx=i; });
                             if(targetIdx>=0){
@@ -7742,7 +7742,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
             <HomeRunsTab homeRuns={job.homeRuns} panelCounts={job.panelCounts} jobId={job.id} jobName={job.name}
               onHRChange={v=>u({homeRuns:v})} onCountChange={v=>u({panelCounts:v})}
-              roughMaterials={job.roughMaterials} onMatChange={v=>u({roughMaterials:v})}
+              finishMaterials={job.finishMaterials} onMatChange={v=>u({finishMaterials:v})}
               breakerOverrides={job.breakerOverrides} onBreakersChange={v=>u({breakerOverrides:v})}/>
 
           )}
