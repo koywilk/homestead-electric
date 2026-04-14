@@ -4422,9 +4422,8 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
             const totalSpaces=Object.values(groups).reduce((s,v)=>s+v.spaces,0);
             const override=panelCounts?.[p]||"";
             const displaySpaces=override?parseInt(override,10)||totalSpaces:totalSpaces;
-            const summary=Object.entries(groups).sort((a,b)=>a[1].amps-b[1].amps)
-              .map(([k,{count}])=>`${count}×${k}`).join(' · ');
-            return {p,totalSpaces,displaySpaces,override,summary};
+            const breakerGroups=Object.entries(groups).sort((a,b)=>a[1].amps-b[1].amps);
+            return {p,totalSpaces,displaySpaces,override,breakerGroups};
           }).filter(Boolean);
 
           return (
@@ -4432,17 +4431,30 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
             {/* Panel summary cards */}
             {panelData.length>0&&(
               <div style={{display:'flex',flexWrap:'wrap',gap:8,marginBottom:14}}>
-                {panelData.map(({p,totalSpaces,displaySpaces,override,summary})=>(
+                {panelData.map(({p,totalSpaces,displaySpaces,override,breakerGroups})=>(
                   <div key={p} style={{background:`${C.blue}0a`,border:`1px solid ${C.blue}33`,
-                    borderRadius:9,padding:'8px 12px',minWidth:120}}>
+                    borderRadius:9,padding:'8px 12px',minWidth:140}}>
                     <div style={{fontSize:10,fontWeight:800,color:C.blue,letterSpacing:'0.08em',
-                      textTransform:'uppercase',marginBottom:3}}>{p}</div>
-                    <div style={{fontSize:18,fontWeight:700,color:C.text,lineHeight:1,marginBottom:2}}>
+                      textTransform:'uppercase',marginBottom:4}}>{p}</div>
+                    <div style={{fontSize:18,fontWeight:700,color:C.text,lineHeight:1,marginBottom:6}}>
                       {displaySpaces}
                       <span style={{fontSize:10,fontWeight:400,color:C.dim,marginLeft:4}}>spaces</span>
                       {override&&<span style={{fontSize:9,color:C.orange,marginLeft:4}}>manual</span>}
                     </div>
-                    <div style={{fontSize:10,color:C.dim,marginBottom:6}}>{summary}</div>
+                    <div style={{display:'flex',flexWrap:'wrap',gap:4,marginBottom:7}}>
+                      {breakerGroups.map(([key,{amps,poles,count}])=>{
+                        const chipColor=amps>=50?C.orange:amps>=30?C.blue:'#888';
+                        return (
+                          <div key={key} style={{display:'inline-flex',alignItems:'center',gap:3,
+                            background:`${chipColor}18`,border:`1px solid ${chipColor}55`,
+                            borderRadius:5,padding:'3px 7px'}}>
+                            <span style={{fontSize:13,fontWeight:800,color:chipColor,lineHeight:1}}>{amps}A</span>
+                            <span style={{fontSize:9,fontWeight:600,color:chipColor,opacity:0.7}}>{poles===2?'2P':'1P'}</span>
+                            <span style={{fontSize:10,fontWeight:500,color:C.text,marginLeft:1}}>×{count}</span>
+                          </div>
+                        );
+                      })}
+                    </div>
                     <input value={override} onChange={e=>onCountChange({...panelCounts,[p]:e.target.value})}
                       placeholder="Override…"
                       style={{width:'100%',background:C.surface,border:`1px solid ${C.border}`,
