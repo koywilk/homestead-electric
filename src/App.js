@@ -3554,7 +3554,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
 
 // ── Return Trips ──────────────────────────────────────────────
 
-function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId}) {
+function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[]}) {
 
   const [viewPhoto, setViewPhoto] = useState(null);
   const [expandedRTs, setExpandedRTs] = useState({}); // trip IDs manually expanded when signed off
@@ -3854,9 +3854,21 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId}) {
 
             <div style={{fontSize:10,color:C.purple,fontWeight:700,marginBottom:6,letterSpacing:"0.08em"}}>ASSIGNED TO</div>
 
-            <Inp value={t.assignedTo||""} onChange={e=>upd(t.id,{assignedTo:e.target.value})}
-
-              placeholder="Technician name…"/>
+            {(()=>{
+              const crew = users.filter(u=>{const ti=u.title||(u.role||""); return ti==="foreman"||ti==="lead";}).map(u=>u.name).filter(Boolean).sort();
+              if(crew.length===0) return (
+                <Inp value={t.assignedTo||""} onChange={e=>upd(t.id,{assignedTo:e.target.value})} placeholder="Technician name…"/>
+              );
+              return (
+                <select value={t.assignedTo||""} onChange={e=>upd(t.id,{assignedTo:e.target.value})}
+                  style={{width:'100%',background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                    padding:"6px 8px",fontSize:12,fontFamily:'inherit',outline:'none',
+                    color:t.assignedTo?C.text:C.dim}}>
+                  <option value="">— assign to —</option>
+                  {crew.map(name=><option key={name} value={name}>{name}</option>)}
+                </select>
+              );
+            })()}
 
           </div>
 
@@ -8525,7 +8537,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             <div>
 
               <Section label="Return Trips" color={C.purple} defaultOpen={true}>
-                <ReturnTrips trips={job.returnTrips} onChange={v=>u({returnTrips:v})} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData} jobId={job.id}/>
+                <ReturnTrips trips={job.returnTrips} onChange={v=>u({returnTrips:v})} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData} jobId={job.id} users={users}/>
               </Section>
 
             </div>
