@@ -1772,6 +1772,198 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
 };
 
 
+function NeedsAttention({jobs, onSelectJob}) {
+  const [open, setOpen] = useState(true);
+
+  const today = new Date(); today.setHours(0,0,0,0);
+  const daysAway = (dateStr) => {
+    if(!dateStr) return null;
+    const d = new Date(dateStr); d.setHours(0,0,0,0);
+    return Math.round((d-today)/(1000*60*60*24));
+  };
+
+  const flatPunchWaiting = (punch) => {
+    const items = [];
+    ['upper','main','basement'].forEach(floor => {
+      const f = punch?.[floor] || {};
+      const gen = f.general||[];
+      const hc  = f.hotcheck||[];
+      const rooms = f.rooms||[];
+      [...gen,...hc].forEach(i=>{ if(!i.done&&i.waiting) items.push({text:i.text,floor,room:null,waitingOn:i.waitingOn}); });
+      rooms.forEach(r=>(r.items||[]).forEach(i=>{ if(!i.done&&i.waiting) items.push({text:i.text,floor,room:r.name,waitingOn:i.waitingOn}); }));
+    });
+    return items;
+  };
+
+  const flatQuestions = (qs) => {
+    const items = [];
+    ['upper','main','basement'].forEach(floor => {
+      (qs?.[floor]||[]).forEach(q=>{ if(!q.done && !(q.answer||'').trim()) items.push({question:q.question,floor}); });
+    });
+    return items;
+  };
+
+  const stripHtml = (s) => (s||'').replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').trim();
+
+  // Gather all attention items
+  const startingSoon=[], unanswered=[], unsentPOs=[], waitingItems=[], pendingCOs=[], unscheduledRTs=[];
+
+  jobs.forEach(job => {
+    if(parseStage(job.finishStage)===100) return; // skip completed jobs
+
+    const name = job.name||'Unnamed';
+
+    // Starting soon — rough scheduled within 14 days, prep not done
+    const da = daysAway(job.roughScheduledDate);
+    if(da!==null && da>=0 && da<=14 && (job.prepStage||'')!=='Job Prep Complete') {
+      startingSoon.push({job, name, label: da===0?'TODAY':da===1?'Tomorrow':`${da} days`, urgent: da<=2});
+    }
+
+    // Unanswered questions
+    const rqs = flatQuestions(job.roughQuestions);
+    const fqs = flatQuestions(job.finishQuestions);
+    if(rqs.length) unanswered.push({job, name, count:rqs.length, phase:'Rough', questions:rqs});
+    if(fqs.length) unanswered.push({job, name, count:fqs.length, phase:'Finish', questions:fqs});
+
+    // Unsent POs
+    const roughPOs = (job.roughMaterials||[]).filter(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
+    const finPOs   = (job.finishMaterials||[]).filter(o=>o.needsOrder&&!o.ordered&&!o.pickedUp);
+    if(roughPOs.length) unsentPOs.push({job, name, count:roughPOs.length, phase:'Rough', orders:roughPOs});
+    if(finPOs.length)   unsentPOs.push({job, name, count:finPOs.length, phase:'Finish', orders:finPOs});
+
+    // Waiting punch items
+    const rw = flatPunchWaiting(job.roughPunch);
+    const fw = flatPunchWaiting(job.finishPunch);
+    const qw = flatPunchWaiting(job.qcPunch);
+    if(rw.length) waitingItems.push({job, name, count:rw.length, phase:'Rough', items:rw});
+    if(fw.length) waitingItems.push({job, name, count:fw.length, phase:'Finish', items:fw});
+    if(qw.length) waitingItems.push({job, name, count:qw.length, phase:'QC', items:qw});
+
+    // Pending COs — needs_sending or pending, not approved/completed/converted
+    const pendCOs = (job.changeOrders||[]).filter(co=>{
+      const s = co.coStatus||'needs_sending';
+      return s==='needs_sending'||s==='pending'||s==='needs';
+    });
+    if(pendCOs.length) pendingCOs.push({job, name, count:pendCOs.length, cos:pendCOs});
+
+    // Unscheduled return trips
+    const urt = (job.returnTrips||[]).filter(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
+    if(urt.length) unscheduledRTs.push({job, name, count:urt.length, trips:urt});
+  });
+
+  const total = startingSoon.length+unanswered.length+unsentPOs.length+waitingItems.length+pendingCOs.length+unscheduledRTs.length;
+
+  const SectionHeader = ({icon, label, count, color}) => count===0 ? null : (
+    <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:8,marginTop:14}}>
+      <span style={{fontSize:12}}>{icon}</span>
+      <span style={{fontSize:11,fontWeight:800,color,letterSpacing:'0.06em',textTransform:'uppercase'}}>{label}</span>
+      <span style={{fontSize:10,fontWeight:700,background:`${color}22`,color,borderRadius:99,padding:'1px 7px',border:`1px solid ${color}44`}}>{count}</span>
+    </div>
+  );
+
+  const JobRow = ({job, name, badge, badgeColor, detail, urgent}) => (
+    <div onClick={()=>onSelectJob(job)}
+      style={{display:'flex',alignItems:'flex-start',gap:10,padding:'8px 12px',marginBottom:5,
+        background: urgent?'rgba(220,38,38,0.05)':C.surface,
+        border:`1px solid ${urgent?'rgba(220,38,38,0.3)':C.border}`,
+        borderLeft:`3px solid ${badgeColor}`,
+        borderRadius:8,cursor:'pointer',transition:'background 0.1s'}}
+      onMouseEnter={e=>e.currentTarget.style.background=urgent?'rgba(220,38,38,0.08)':`${C.border}66`}
+      onMouseLeave={e=>e.currentTarget.style.background=urgent?'rgba(220,38,38,0.05)':C.surface}>
+      <div style={{flex:1,minWidth:0}}>
+        <div style={{fontSize:12,fontWeight:700,color:C.text,marginBottom:2}}>{name}</div>
+        {detail&&<div style={{fontSize:10,color:C.dim,lineHeight:1.4}}>{detail}</div>}
+      </div>
+      {badge&&<span style={{fontSize:10,fontWeight:700,background:`${badgeColor}20`,color:badgeColor,
+        borderRadius:99,padding:'2px 8px',border:`1px solid ${badgeColor}44`,whiteSpace:'nowrap',flexShrink:0}}>
+        {badge}
+      </span>}
+    </div>
+  );
+
+  if(total===0) return (
+    <div style={{padding:'14px 26px 0'}}>
+      <div style={{background:'rgba(22,163,74,0.06)',border:'1px solid rgba(22,163,74,0.25)',
+        borderRadius:10,padding:'12px 16px',display:'flex',alignItems:'center',gap:10}}>
+        <span style={{fontSize:16}}>✅</span>
+        <span style={{fontSize:13,fontWeight:600,color:'#16a34a'}}>All clear — nothing needs attention right now</span>
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{padding:'16px 26px 0'}}>
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,overflow:'hidden'}}>
+        {/* Header */}
+        <div onClick={()=>setOpen(o=>!o)} style={{display:'flex',alignItems:'center',gap:10,
+          padding:'12px 16px',cursor:'pointer',userSelect:'none',
+          background:'rgba(220,38,38,0.04)',borderBottom:open?`1px solid ${C.border}`:'none'}}>
+          <span style={{fontSize:16}}>🔔</span>
+          <span style={{fontSize:13,fontWeight:800,color:C.text,flex:1}}>Needs Attention</span>
+          <span style={{fontSize:12,fontWeight:700,background:'rgba(220,38,38,0.15)',color:'#dc2626',
+            borderRadius:99,padding:'2px 10px',border:'1px solid rgba(220,38,38,0.3)'}}>{total}</span>
+          <span style={{color:C.dim,fontSize:12}}>{open?'▾':'▸'}</span>
+        </div>
+
+        {open&&(
+          <div style={{padding:'4px 16px 16px'}}>
+
+            {/* Starting Soon */}
+            <SectionHeader icon="🚀" label="Starting Soon — Prep Incomplete" count={startingSoon.length} color="#dc2626"/>
+            {startingSoon.map(({job,name,label,urgent})=>(
+              <JobRow key={job.id} job={job} name={name}
+                badge={label} badgeColor="#dc2626" urgent={urgent}
+                detail={`Rough scheduled · Prep stage: ${job.prepStage||'Not started'}`}/>
+            ))}
+
+            {/* Unanswered Questions */}
+            <SectionHeader icon="❓" label="Unanswered Questions" count={unanswered.length} color={C.orange}/>
+            {unanswered.map(({job,name,count,phase,questions})=>(
+              <JobRow key={job.id+phase} job={job} name={name}
+                badge={`${count} ${phase}`} badgeColor={C.orange}
+                detail={questions.slice(0,2).map(q=>stripHtml(q.question)).filter(Boolean).join(' · ')+(questions.length>2?` +${questions.length-2} more`:'')}/>
+            ))}
+
+            {/* Unsent POs */}
+            <SectionHeader icon="📦" label="Unsent Purchase Orders" count={unsentPOs.length} color={C.blue}/>
+            {unsentPOs.map(({job,name,count,phase,orders})=>(
+              <JobRow key={job.id+phase} job={job} name={name}
+                badge={`${count} PO${count>1?'s':''} · ${phase}`} badgeColor={C.blue}
+                detail={orders.map(o=>o.source||'No supplier').join(', ')}/>
+            ))}
+
+            {/* Waiting Punch Items */}
+            <SectionHeader icon="⏸" label="On Hold — Waiting on Something" count={waitingItems.length} color="#ca8a04"/>
+            {waitingItems.map(({job,name,count,phase,items})=>(
+              <JobRow key={job.id+phase} job={job} name={name}
+                badge={`${count} waiting · ${phase}`} badgeColor="#ca8a04"
+                detail={items.slice(0,2).map(i=>i.waitingOn||stripHtml(i.text)).filter(Boolean).join(' · ')+(items.length>2?` +${items.length-2} more`:'')}/>
+            ))}
+
+            {/* Pending COs */}
+            <SectionHeader icon="📋" label="Change Orders Pending" count={pendingCOs.length} color={C.purple||'#7c3aed'}/>
+            {pendingCOs.map(({job,name,count,cos})=>(
+              <JobRow key={job.id} job={job} name={name}
+                badge={`${count} CO${count>1?'s':''}`} badgeColor={C.purple||'#7c3aed'}
+                detail={cos.slice(0,2).map(co=>co.desc||co.task||'No description').filter(Boolean).join(' · ')}/>
+            ))}
+
+            {/* Unscheduled Return Trips */}
+            <SectionHeader icon="🔄" label="Unscheduled Return Trips" count={unscheduledRTs.length} color={C.teal||'#0d9488'}/>
+            {unscheduledRTs.map(({job,name,count,trips})=>(
+              <JobRow key={job.id} job={job} name={name}
+                badge={`${count} RT${count>1?'s':''}`} badgeColor={C.teal||'#0d9488'}
+                detail={trips.slice(0,2).map(t=>t.scope||'No scope').filter(Boolean).join(' · ')}/>
+            ))}
+
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+
 function PhaseInstructions({items, onChange, color, placeholder}) {
   const list = Array.isArray(items) ? items : [];
   const add  = () => onChange([...list, {id:uid(), label:'', text:''}]);
@@ -1883,7 +2075,7 @@ function normFloor(v) {
 }
 
 
-function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
+function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId }) {
 
   const safeItems = Array.isArray(items) ? items : [];
 
@@ -1901,6 +2093,33 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
   const [materialEditId,  setMaterialEditId]  = useState(null);
   const [materialText,    setMaterialText]    = useState('');
   const [mobileSheet,   setMobileSheet]   = useState(null);
+  const [uploadingId,   setUploadingId]   = useState(null);
+  const [lightboxPhoto, setLightboxPhoto] = useState(null);
+
+  const handlePhotoUpload = async (itemId, files) => {
+    if(!files||!files.length||!jobId) return;
+    setUploadingId(itemId);
+    const newPhotos = [];
+    for(const file of Array.from(files)) {
+      try {
+        const photoId = uid();
+        const ext = file.name.split('.').pop()||'jpg';
+        const storagePath = `jobs/${jobId}/punch-photos/${itemId}/${photoId}.${ext}`;
+        const storageRef = ref(storage, storagePath);
+        await uploadBytes(storageRef, file);
+        const url = await getDownloadURL(storageRef);
+        newPhotos.push({id:photoId, name:file.name, url, storagePath});
+      } catch(e) { console.error('Punch photo upload failed:', e); }
+    }
+    if(newPhotos.length) {
+      onChange(safeItems.map(i => i.id===itemId ? {...i, photos:[...(i.photos||[]),...newPhotos]} : i));
+    }
+    setUploadingId(null);
+  };
+
+  const removePhoto = (itemId, photoId) => {
+    onChange(safeItems.map(i => i.id===itemId ? {...i, photos:(i.photos||[]).filter(p=>p.id!==photoId)} : i));
+  };
 
   const commitAdd = (html, keepOpen=false, materialOverride=undefined, matSourceOverride=undefined) => {
     if (!(html||"").replace(/<[^>]*>/g,"").trim()) return;
@@ -2043,6 +2262,19 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
               </button>
             )}
 
+            {/* Photo upload button */}
+            {jobId && (
+              <label title="Add photo" style={{cursor:'pointer',flexShrink:0,lineHeight:1}}>
+                <input type="file" accept="image/*" multiple style={{display:'none'}}
+                  onChange={e=>handlePhotoUpload(item.id, e.target.files)}/>
+                <span style={{fontSize:13,opacity:uploadingId===item.id?0.4:((item.photos||[]).length>0?1:0.4),
+                  filter:(item.photos||[]).length>0?'none':'grayscale(1)'}}>
+                  {uploadingId===item.id ? '⏳' : '📷'}
+                  {(item.photos||[]).length>0&&<sup style={{fontSize:8,fontWeight:700,color:C.blue}}>{(item.photos||[]).length}</sup>}
+                </span>
+              </label>
+            )}
+
             <button onClick={() => { if(!window.confirm("Delete this punch item?")) return; onChange(safeItems.filter(i => i.id !== item.id)); }}
               style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12, flexShrink: 0 }}>✕</button>
 
@@ -2113,6 +2345,32 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
             </div>
           )}
 
+          {/* ── Photo thumbnails ── */}
+          {(item.photos||[]).length>0&&(
+            <div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:6,marginLeft:22}}>
+              {(item.photos||[]).map(photo=>(
+                <div key={photo.id} style={{position:'relative',borderRadius:6,overflow:'hidden',
+                  border:`1px solid ${C.border}`,flexShrink:0}}>
+                  <img src={photo.url} alt={photo.name}
+                    onClick={()=>setLightboxPhoto(photo.url)}
+                    style={{width:64,height:64,objectFit:'cover',cursor:'pointer',display:'block'}}/>
+                  <button onClick={()=>removePhoto(item.id,photo.id)}
+                    style={{position:'absolute',top:1,right:1,background:'rgba(0,0,0,0.55)',
+                      border:'none',borderRadius:99,width:16,height:16,cursor:'pointer',
+                      color:'#fff',fontSize:10,lineHeight:1,padding:0,display:'flex',
+                      alignItems:'center',justifyContent:'center'}}>×</button>
+                </div>
+              ))}
+              <label style={{width:64,height:64,border:`1px dashed ${C.border}`,borderRadius:6,
+                display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',
+                fontSize:20,color:C.dim,flexShrink:0}}>
+                <input type="file" accept="image/*" multiple style={{display:'none'}}
+                  onChange={e=>handlePhotoUpload(item.id, e.target.files)}/>
+                +
+              </label>
+            </div>
+          )}
+
         </div>
 
       ))}
@@ -2168,6 +2426,20 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial }) {
           onCancel={() => setMobileSheet(null)}/>
       )}
 
+      {/* Lightbox */}
+      {lightboxPhoto&&(
+        <div onClick={()=>setLightboxPhoto(null)}
+          style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.85)',zIndex:9999,
+            display:'flex',alignItems:'center',justifyContent:'center',cursor:'zoom-out'}}>
+          <img src={lightboxPhoto} alt="punch photo"
+            style={{maxWidth:'94vw',maxHeight:'90vh',borderRadius:8,objectFit:'contain'}}/>
+          <button onClick={()=>setLightboxPhoto(null)}
+            style={{position:'absolute',top:16,right:20,background:'rgba(255,255,255,0.15)',
+              border:'none',color:'#fff',fontSize:24,cursor:'pointer',borderRadius:99,
+              width:36,height:36,display:'flex',alignItems:'center',justifyContent:'center'}}>×</button>
+        </div>
+      )}
+
     </div>
 
   );
@@ -2216,7 +2488,7 @@ function RoomNameEdit({name, onSave}) {
 }
 
 
-function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion }) {
+function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId }) {
 
   const data = normFloor(floorData);
 
@@ -2332,7 +2604,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
           </div>
           {qInput('general')}
 
-          <PunchItems items={data.general} onChange={setGeneral} filterIds={filterIds} onAddMaterial={onAddMaterial}/>
+          <PunchItems items={data.general} onChange={setGeneral} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId}/>
 
           {showHotcheck && (
             <div style={{ marginTop: 12, background: `rgba(220,38,38,0.06)`, border: `1px solid rgba(220,38,38,0.25)`, borderRadius: 8, padding: 10 }}>
@@ -2344,7 +2616,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                   </span>
                 )}
               </div>
-              <PunchItems items={data.hotcheck} onChange={setHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial}/>
+              <PunchItems items={data.hotcheck} onChange={setHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId}/>
             </div>
           )}
 
@@ -2376,7 +2648,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
               <PunchItems items={Array.isArray(room.items) ? room.items : []}
 
-                onChange={v => setRoomItems(room.id, v)} filterIds={filterIds} onAddMaterial={onAddMaterial}/>
+                onChange={v => setRoomItems(room.id, v)} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId}/>
 
               <button onClick={() => { if(!window.confirm(`Remove room "${room.name}" and all its punch items?`)) return; delRoom(room.id); }}
                 style={{ display: 'block', marginTop: 6, marginLeft: 'auto', background: 'none', border: 'none',
@@ -2412,7 +2684,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 }
 
 
-function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion }) {
+function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId }) {
 
   const upper    = normFloor(punch.upper);
   const main     = normFloor(punch.main);
@@ -2528,11 +2800,11 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
       </div>
 
-      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? t=>onAddQuestion('upper',t) : null}/>
+      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? t=>onAddQuestion('upper',t) : null} jobId={jobId}/>
 
-      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? t=>onAddQuestion('main',t) : null}/>
+      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? t=>onAddQuestion('main',t) : null} jobId={jobId}/>
 
-      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? t=>onAddQuestion('basement',t) : null}/>
+      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? t=>onAddQuestion('basement',t) : null} jobId={jobId}/>
 
       {extras.map((e,i)=>(
         <div key={e.key}>
@@ -2545,7 +2817,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
             showHotcheck={showHotcheck}
             filterIds={filterIds}
             onAddMaterial={onAddMaterial}
-            onAddQuestion={onAddQuestion ? t=>onAddQuestion('main',t) : null}/>
+            onAddQuestion={onAddQuestion ? t=>onAddQuestion('main',t) : null} jobId={jobId}/>
           <button onClick={()=>{
             if(!window.confirm(`Remove "${e.label}" and all its punch items? This cannot be undone.`)) return;
             removeFloor(e.key);
@@ -7601,7 +7873,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     const q = {id:uid(), question:text, answer:"", done:false, addedBy:who?.name||""};
                     const qs = job.roughQuestions || {upper:[],main:[],basement:[]};
                     u({roughQuestions:{...qs, [floor]:[...(qs[floor]||[]), q]}});
-                  }}/>
+                  }}
+                  jobId={job.id}/>
 
               </Section>
 
@@ -7815,7 +8088,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     const q = {id:uid(), question:text, answer:"", done:false, addedBy:who?.name||""};
                     const qs = job.finishQuestions || {upper:[],main:[],basement:[]};
                     u({finishQuestions:{...qs, [floor]:[...(qs[floor]||[]), q]}});
-                  }}/>
+                  }}
+                  jobId={job.id}/>
               </Section>
 
               {(job.finishPunchExternal?.length>0)&&(
@@ -15061,6 +15335,8 @@ function App() {
             foremanColors={_foremanColors}
             onSelectJob={(j)=>setSelected(j)}
           />
+
+          <NeedsAttention jobs={jobs} onSelectJob={(j)=>setSelected(j)}/>
 
           <div style={{padding:"28px 26px"}}>
 
