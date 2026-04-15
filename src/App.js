@@ -56,27 +56,51 @@ const functions = getFunctions(firebaseApp);
  * notifications. Capped at 10 tokens to avoid unbounded growth.
  * Called once after the user selects their identity at login.
  */
-async function registerFCMToken(userId) {
-  if (!messaging || !VAPID_KEY || VAPID_KEY === "PASTE_YOUR_VAPID_KEY_HERE") return;
+async function registerFCMToken(userId, force=false) {
+  if (!messaging || !VAPID_KEY || VAPID_KEY === "PASTE_YOUR_VAPID_KEY_HERE") return "no_messaging";
   try {
+    // On iOS, Notification API may not exist unless added to Home Screen as PWA
+    if (!("Notification" in window)) return "no_notification_api";
+
     const permission = await Notification.requestPermission();
-    if (permission !== "granted") return;
-    const token = await getToken(messaging, { vapidKey: VAPID_KEY });
-    if (!token) return;
+    if (permission !== "granted") return "permission_denied";
+
+    // Explicitly register the Firebase messaging SW and wait for it to activate.
+    // Passing serviceWorkerRegistration to getToken is required for reliable
+    // token generation on mobile (especially Android Chrome & iOS Safari PWA).
+    let swReg = null;
+    if ("serviceWorker" in navigator) {
+      try {
+        swReg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+        // Force update so stale SWs don't serve old token logic
+        await swReg.update().catch(() => {});
+        // Wait for the SW to be active
+        await navigator.serviceWorker.ready;
+      } catch(e) {
+        console.warn("[HE] SW register failed:", e.message);
+      }
+    }
+
+    const tokenOptions = { vapidKey: VAPID_KEY };
+    if (swReg) tokenOptions.serviceWorkerRegistration = swReg;
+
+    const token = await getToken(messaging, tokenOptions);
+    if (!token) return "no_token";
+
     const snap = await getDoc(doc(db, "settings", "users"));
-    if (!snap.exists()) return;
+    if (!snap.exists()) return "no_user_doc";
     const list = (snap.data().list || []).map(u => {
       if (u.id !== userId) return u;
-      // Collect all existing tokens (support legacy single-token field)
       const existing = Array.isArray(u.fcmTokens) ? u.fcmTokens
         : u.fcmToken ? [u.fcmToken] : [];
-      // Add new token if not already present, cap at 10
       const merged = existing.includes(token) ? existing : [...existing, token];
       return { ...u, fcmTokens: merged.slice(-10) };
     });
     await setDoc(doc(db, "settings", "users"), { list });
+    return "ok";
   } catch (e) {
     console.warn("[HE] FCM registration skipped:", e.message);
+    return "error:" + e.message;
   }
 }
 
@@ -14059,9 +14083,18 @@ function App() {
 
   // ── Identity ──────────────────────────────────────────────────
   const [identity, setIdentity] = useState(()=>getIdentity());
+  const [notifStatus, setNotifStatus] = useState(null); // null | 'loading' | 'ok' | string
   // Re-register FCM token on every load so token refreshes are always captured.
   // Previously only ran on explicit login — missed token changes on already-logged-in devices.
   useEffect(()=>{ if(identity?.id) registerFCMToken(identity.id); }, [identity?.id]);
+
+  const handleEnableNotifs = async () => {
+    if(!identity?.id) return;
+    setNotifStatus('loading');
+    const result = await registerFCMToken(identity.id, true);
+    setNotifStatus(result);
+    setTimeout(()=>setNotifStatus(null), 5000);
+  };
 
   // ── Users (team members) — loaded from Firestore ─────────────
   const [users, setUsers] = useState(DEFAULT_USERS);
@@ -15164,6 +15197,7 @@ function App() {
             borderRadius:99,padding:"4px 12px",whiteSpace:"nowrap"}}>
             {identity.name} · {ACCESS_LABELS[getAccess(identity)]||getAccess(identity)}
           </span>
+
           <button onClick={()=>{localStorage.removeItem("he_identity");setIdentity(null);}}
             style={{fontSize:11,color:C.dim,background:"none",border:`1px solid ${C.border}`,
               borderRadius:99,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}
@@ -15172,6 +15206,18 @@ function App() {
           </button>
         </div>
       </div>
+
+      {/* Notification status banner */}
+      {notifStatus && notifStatus !== 'loading' && notifStatus !== 'ok' && (
+        <div style={{background:'rgba(220,38,38,0.08)',borderBottom:'1px solid rgba(220,38,38,0.2)',
+          padding:'8px 16px',fontSize:11,color:'#dc2626',display:'flex',alignItems:'center',gap:8}}>
+          <span style={{fontWeight:700}}>🔔 Notifications not set up on this device.</span>
+          {notifStatus==='permission_denied'&&<span>Tap the 🔔 button again — you may need to allow notifications in your browser settings.</span>}
+          {notifStatus==='no_notification_api'&&<span>On iPhone, you need to <strong>Add to Home Screen</strong> first: tap Share → Add to Home Screen, then open from there.</span>}
+          {notifStatus==='no_token'&&<span>Could not get a push token. Try reloading the page and tapping 🔔 again.</span>}
+          {notifStatus.startsWith?.('error:')&&<span>Error: {notifStatus.replace('error:','')}. Try reloading.</span>}
+        </div>
+      )}
 
       {/* iOS Chrome banner */}
 
@@ -15286,10 +15332,19 @@ function App() {
                         </button>
                         <button onClick={()=>{setShowUtilMenu(false);window.location.reload();}}
                           style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",
-                            borderBottom:getAccess(identity)==="admin"?`1px solid ${C.border}`:"none",
+                            borderBottom:`1px solid ${C.border}`,
                             color:C.text,fontSize:12,fontWeight:600,
                             padding:"10px 16px",cursor:"pointer",fontFamily:"inherit"}}>
                           ↻ Refresh
+                        </button>
+                        <button onClick={()=>{setShowUtilMenu(false);handleEnableNotifs();}}
+                          disabled={notifStatus==='loading'}
+                          style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",
+                            borderBottom:getAccess(identity)==="admin"?`1px solid ${C.border}`:"none",
+                            color:notifStatus==='ok'?'#16a34a':notifStatus&&notifStatus!=='loading'?'#dc2626':C.text,
+                            fontSize:12,fontWeight:600,
+                            padding:"10px 16px",cursor:"pointer",fontFamily:"inherit"}}>
+                          {notifStatus==='loading'?'⏳ Registering…':notifStatus==='ok'?'🔔 Notifications On':'🔔 Enable Notifications'}
                         </button>
                         {getAccess(identity)==="admin"&&(
                           <button onClick={async()=>{
