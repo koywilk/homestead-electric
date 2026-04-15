@@ -7425,7 +7425,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
   );
 }
 
-function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, initialTab}) {
+function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, initialTab, users=[]}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
@@ -14083,10 +14083,20 @@ function App() {
 
   // ── Identity ──────────────────────────────────────────────────
   const [identity, setIdentity] = useState(()=>getIdentity());
-  const [notifStatus, setNotifStatus] = useState(null); // null | 'loading' | 'ok' | string
-  // Re-register FCM token on every load so token refreshes are always captured.
-  // Previously only ran on explicit login — missed token changes on already-logged-in devices.
-  useEffect(()=>{ if(identity?.id) registerFCMToken(identity.id); }, [identity?.id]);
+  const [notifStatus,  setNotifStatus]  = useState(null); // null | 'loading' | 'ok' | string
+  const [showNotifPrompt, setShowNotifPrompt] = useState(false);
+
+  // On login: if permission already granted, register silently.
+  // If not yet asked, show the prompt banner so user can tap once to enable.
+  useEffect(()=>{
+    if(!identity?.id) return;
+    const perm = ("Notification" in window) ? Notification.permission : "denied";
+    if(perm === "granted") {
+      registerFCMToken(identity.id);
+    } else if(perm === "default") {
+      setShowNotifPrompt(true);
+    }
+  }, [identity?.id]);
 
   const handleEnableNotifs = async () => {
     if(!identity?.id) return;
@@ -15207,6 +15217,26 @@ function App() {
         </div>
       </div>
 
+      {/* Notification permission prompt — shown once after login if not yet granted */}
+      {showNotifPrompt && !notifStatus && (
+        <div style={{background:'rgba(59,130,246,0.08)',borderBottom:`1px solid rgba(59,130,246,0.25)`,
+          padding:'10px 16px',display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+          <span style={{fontSize:12,fontWeight:600,color:C.text,flex:1}}>
+            🔔 Enable push notifications to get job updates on this device
+          </span>
+          <button onClick={()=>{ setShowNotifPrompt(false); handleEnableNotifs(); }}
+            style={{fontSize:11,fontWeight:700,background:C.blue,color:'#fff',border:'none',
+              borderRadius:7,padding:'6px 14px',cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>
+            Enable
+          </button>
+          <button onClick={()=>setShowNotifPrompt(false)}
+            style={{fontSize:11,background:'none',border:'none',color:C.dim,cursor:'pointer',
+              fontFamily:'inherit',padding:'4px'}}>
+            Not now
+          </button>
+        </div>
+      )}
+
       {/* Notification status banner */}
       {notifStatus && notifStatus !== 'loading' && notifStatus !== 'ok' && (
         <div style={{background:'rgba(220,38,38,0.08)',borderBottom:'1px solid rgba(220,38,38,0.2)',
@@ -15993,7 +16023,7 @@ function App() {
         ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen}/>
         : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);setOpenTab(null);}} foremenList={_foremen} leadsList={_leads}
             canConvertQuote={can(identity,"quotes.convert")}
-            initialTab={openTab}
+            initialTab={openTab} users={users}
             onConvertQuote={(q)=>{
               // q already has simproNo set from the prompt
               const updated={...q, type:""};
