@@ -1773,7 +1773,7 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
 
 
 function NeedsAttention({jobs, onSelectJob}) {
-  const [open, setOpen] = useState(true);
+  const [open, setOpen] = useState(false);
 
   const today = new Date(); today.setHours(0,0,0,0);
   const daysAway = (dateStr) => {
