@@ -3618,6 +3618,10 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[]}
     setUploading(false);
   };
 
+  const crewOptions = (Array.isArray(users) ? users : [])
+    .filter(usr => { const ti = usr.title||(usr.role||""); return ti==="foreman"||ti==="lead"; })
+    .map(usr => usr.name).filter(Boolean).sort();
+
   const deletePhoto = async (tripId, photo) => {
     // Delete from Firebase Storage if it has a storagePath (new photos)
     if(photo.storagePath) {
@@ -3854,21 +3858,16 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[]}
 
             <div style={{fontSize:10,color:C.purple,fontWeight:700,marginBottom:6,letterSpacing:"0.08em"}}>ASSIGNED TO</div>
 
-            {(()=>{
-              const crew = users.filter(u=>{const ti=u.title||(u.role||""); return ti==="foreman"||ti==="lead";}).map(u=>u.name).filter(Boolean).sort();
-              if(crew.length===0) return (
-                <Inp value={t.assignedTo||""} onChange={e=>upd(t.id,{assignedTo:e.target.value})} placeholder="Technician name…"/>
-              );
-              return (
-                <select value={t.assignedTo||""} onChange={e=>upd(t.id,{assignedTo:e.target.value})}
+            {crewOptions.length===0
+              ? <Inp value={t.assignedTo||""} onChange={e=>upd(t.id,{assignedTo:e.target.value})} placeholder="Technician name…"/>
+              : <select value={t.assignedTo||""} onChange={e=>upd(t.id,{assignedTo:e.target.value})}
                   style={{width:'100%',background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
                     padding:"6px 8px",fontSize:12,fontFamily:'inherit',outline:'none',
                     color:t.assignedTo?C.text:C.dim}}>
                   <option value="">— assign to —</option>
-                  {crew.map(name=><option key={name} value={name}>{name}</option>)}
+                  {crewOptions.map(name=><option key={name} value={name}>{name}</option>)}
                 </select>
-              );
-            })()}
+            }
 
           </div>
 
