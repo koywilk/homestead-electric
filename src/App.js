@@ -2184,6 +2184,17 @@ const StageBar = ({stages,current,color}) => {
   );
 
 };
+function normFloor(v) {
+
+  if (v && typeof v === 'object' && !Array.isArray(v) && ('general' in v || 'rooms' in v || 'hotcheck' in v)) {
+
+    return { general: Array.isArray(v.general) ? v.general : [], rooms: Array.isArray(v.rooms) ? v.rooms : [], hotcheck: Array.isArray(v.hotcheck) ? v.hotcheck : [] };
+
+  }
+
+  return { general: Array.isArray(v) ? v : [], rooms: [], hotcheck: [] };
+
+}
 
 
 function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId }) {
