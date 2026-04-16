@@ -1992,19 +1992,14 @@ function NeedsAttention({jobs, onSelectJob}) {
 
 function PhaseInstructionEntry({entry, onUpd, onDel, color, onAddMaterial}) {
   const [open,         setOpen]         = useState(false); // starts collapsed
-  const [editing,      setEditing]      = useState(false);
   const [draft,        setDraft]        = useState(entry.text || '');
   const [matOpen,      setMatOpen]      = useState(false);
   const [matText,      setMatText]      = useState('');
   const [matSource,    setMatSource]    = useState('');
   const [matConfirmed, setMatConfirmed] = useState(false);
 
-  useEffect(() => { if (!editing) setDraft(entry.text || ''); }, [entry.text, editing]);
-
-  const commit = () => {
-    setEditing(false);
-    if (draft !== (entry.text || '')) onUpd({ text: draft });
-  };
+  // Keep draft in sync when entry changes externally (e.g. another tab)
+  useEffect(() => { setDraft(entry.text || ''); }, [entry.text]);
 
   const submitMaterial = () => {
     if (!matText.trim() || !onAddMaterial) return;
@@ -2054,31 +2049,16 @@ function PhaseInstructionEntry({entry, onUpd, onDel, color, onAddMaterial}) {
             fontSize:13,lineHeight:1,padding:'0 2px',fontFamily:'inherit'}}>×</button>
       </div>
 
-      {/* Body: only shown when open */}
-      {open && editing ? (
+      {/* Body: RichEditor always visible when open — saves on every keystroke */}
+      {open && (
         <div style={{padding:'8px 10px'}}>
           <RichEditor
             htmlValue={draft}
-            onHtmlChange={setDraft}
+            onHtmlChange={v=>{ setDraft(v); onUpd({text:v}); }}
             placeholder="Notes, colors, device placement, instructions…"
-            autoFocus
             minRows={3}/>
-          <div style={{display:'flex',gap:6,marginTop:6,justifyContent:'flex-end'}}>
-            <Btn onClick={commit} variant="primary" style={{fontSize:11,padding:'4px 14px'}}>Save</Btn>
-            <button onClick={()=>{setEditing(false);setDraft(entry.text||'');}}
-              style={{background:'none',border:'none',color:C.dim,cursor:'pointer',
-                fontSize:11,fontFamily:'inherit'}}>Cancel</button>
-          </div>
         </div>
-      ) : open ? (
-        <div onClick={()=>setEditing(true)}
-          style={{padding:'8px 11px',minHeight:36,cursor:'text',
-            fontSize:12,color:entry.text?C.text:C.dim,lineHeight:1.55}}>
-          {entry.text
-            ? <RichText html={entry.text}/>
-            : <span style={{fontStyle:'italic',opacity:0.5}}>Click to add notes…</span>}
-        </div>
-      ) : null}
+      )}
 
       {/* Material Needed footer — only visible when expanded */}
       {open && onAddMaterial && (
