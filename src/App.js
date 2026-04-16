@@ -2151,6 +2151,40 @@ function PhaseInstructions({items, onChange, color, placeholder, onAddMaterial})
   );
 }
 
+const StageBar = ({stages,current,color}) => {
+
+  const isScheduled = current === "Scheduled";
+
+  const pct = isScheduled ? 0 : (parseInt(current)||0);
+
+  // interpolate red(0%) -> yellow(50%) -> green(100%)
+
+  const r = pct < 50 ? 220 : Math.round(220 - (pct-50)/50 * 186);
+
+  const g = pct < 50 ? Math.round(40 + (pct/50) * 175) : 215;
+
+  const b = 40;
+
+  const barColor = isScheduled ? "#f97316" : `rgb(${r},${g},${b})`;
+
+  return (
+
+    <div style={{display:"flex",gap:6,alignItems:"center"}}>
+
+      <div style={{flex:1,height:5,background:C.border,borderRadius:99,overflow:"hidden"}}>
+
+        <div style={{height:"100%",width:isScheduled?"100%":`${pct}%`,background:isScheduled?"rgba(249,115,22,0.25)":barColor,borderRadius:99,transition:"width 0.4s, background 0.4s"}}/>
+
+      </div>
+
+      <span style={{fontSize:10,color:barColor,whiteSpace:"nowrap",fontWeight:600,minWidth:28,textAlign:"right"}}>{current}</span>
+
+    </div>
+
+  );
+
+};
+
 
 function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId }) {
 
