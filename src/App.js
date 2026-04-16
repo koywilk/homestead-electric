@@ -2998,6 +2998,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
   const [lightboxPhoto,setLightboxPhoto]= useState(null);
   const [editingItem,  setEditingItem]  = useState(null); // {fk, roomId, itemId}
   const [editText,     setEditText]     = useState('');
+  const [undoToast,    setUndoToast]    = useState(null); // {fk, roomId, item, index, timer}
 
   const safePunch = punch || {};
   const extras    = safePunch.extras || [];
@@ -3072,14 +3073,44 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
   };
 
   const deleteItem = (floorKey, roomId, itemId) => {
-    if(!window.confirm("Remove this QC item?")) return;
     const floor = getFloor(floorKey);
+    let sourceList;
+    if(roomId==='general')       sourceList = floor.general;
+    else if(roomId==='hotcheck') sourceList = floor.hotcheck||[];
+    else                         sourceList = floor.rooms.find(r=>r.id===roomId)?.items||[];
+    const index = sourceList.findIndex(i=>i.id===itemId);
+    const removed = sourceList[index];
+    if(!removed) return;
+
     const fil = items => items.filter(i=>i.id!==itemId);
     let newFloor;
     if(roomId==='general')       newFloor={...floor, general:fil(floor.general)};
     else if(roomId==='hotcheck') newFloor={...floor, hotcheck:fil(floor.hotcheck||[])};
     else newFloor={...floor, rooms:floor.rooms.map(r=>r.id===roomId?{...r,items:fil(r.items||[])}:r)};
     writeFloor(floorKey, newFloor);
+
+    // Show undo banner for 8 seconds
+    if(undoToast?.timer) clearTimeout(undoToast.timer);
+    const timer = setTimeout(()=>setUndoToast(null), 8000);
+    setUndoToast({floorKey, roomId, item:removed, index, timer});
+  };
+
+  const commitUndo = () => {
+    if(!undoToast) return;
+    const {floorKey, roomId, item, index, timer} = undoToast;
+    if(timer) clearTimeout(timer);
+    const floor = getFloor(floorKey);
+    const ins = items => {
+      const next = [...items];
+      next.splice(Math.min(index, next.length), 0, item);
+      return next;
+    };
+    let newFloor;
+    if(roomId==='general')       newFloor={...floor, general:ins(floor.general)};
+    else if(roomId==='hotcheck') newFloor={...floor, hotcheck:ins(floor.hotcheck||[])};
+    else newFloor={...floor, rooms:floor.rooms.map(r=>r.id===roomId?{...r,items:ins(r.items||[])}:r)};
+    writeFloor(floorKey, newFloor);
+    setUndoToast(null);
   };
 
   const commitEdit = (floorKey, roomId, itemId, newText) => {
@@ -3154,28 +3185,40 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
             style={{flex:1,fontSize:12,border:`1px solid ${C.border}`,borderRadius:5,padding:'4px 6px',
               background:C.surface,color:C.text,outline:'none',fontFamily:'inherit',resize:'vertical',lineHeight:1.4}}/>
         ) : (
-          <span onClick={()=>{if(item.done)return;setEditingItem({fk,roomId,itemId:item.id});setEditText(item.text);}}
+          <span onClick={()=>{setEditingItem({fk,roomId,itemId:item.id});setEditText(item.text);}}
+            title="Click to edit"
             style={{flex:1,fontSize:12,color:item.done?C.muted:C.text,
               textDecoration:item.done?'line-through':'none',lineHeight:1.4,
-              cursor:item.done?'default':'text',borderRadius:4,padding:'2px 4px',
+              cursor:'text',borderRadius:4,padding:'2px 4px',
               transition:'background 0.1s'}}
-            onMouseEnter={e=>{if(!item.done)e.target.style.background=C.border+'66'}}
+            onMouseEnter={e=>{e.target.style.background=C.border+'66'}}
             onMouseLeave={e=>e.target.style.background='transparent'}>
             {item.text}
           </span>
         )}
-        {jobId&&(
-          <label title="Add photo" style={{cursor:'pointer',flexShrink:0,lineHeight:1}}>
-            <input type="file" accept="image/*" multiple style={{display:'none'}}
-              onChange={e=>addPhoto(fk,roomId,item.id,e.target.files)}/>
-            <span style={{fontSize:13,
-              opacity:uploadingId===item.id?0.4:((item.photos||[]).length>0?1:0.4),
-              filter:(item.photos||[]).length>0?'none':'grayscale(1)'}}>
-              {uploadingId===item.id?'⏳':'📷'}
-              {(item.photos||[]).length>0&&<sup style={{fontSize:8,fontWeight:700,color:C.blue}}>{(item.photos||[]).length}</sup>}
-            </span>
-          </label>
-        )}
+        {jobId&&(()=>{
+          const n = (item.photos||[]).length;
+          const uploading = uploadingId===item.id;
+          return (
+            <label title={n>0?`${n} photo${n===1?'':'s'} — add more`:'Add photo'}
+              style={{cursor:'pointer',flexShrink:0,lineHeight:1}}>
+              <input type="file" accept="image/*" multiple style={{display:'none'}}
+                onChange={e=>addPhoto(fk,roomId,item.id,e.target.files)}/>
+              {n>0 ? (
+                <span style={{display:'inline-flex',alignItems:'center',gap:3,
+                  background:`${C.blue}18`,border:`1px solid ${C.blue}44`,color:C.blue,
+                  borderRadius:99,padding:'2px 7px',fontSize:10,fontWeight:700,
+                  opacity:uploading?0.5:1}}>
+                  {uploading?'⏳':'📷'} {n}
+                </span>
+              ) : (
+                <span style={{fontSize:13,opacity:uploading?0.4:0.35,filter:'grayscale(1)'}}>
+                  {uploading?'⏳':'📷'}
+                </span>
+              )}
+            </label>
+          );
+        })()}
         <button onClick={()=>deleteItem(fk,roomId,item.id)}
           style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:12,flexShrink:0,padding:'0 2px'}}>✕</button>
       </div>
@@ -3277,6 +3320,26 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
           {items.map(item=>renderQCItem(fk,roomId,item))}
         </div>
       ))}
+
+      {undoToast&&(
+        <div style={{position:'sticky',bottom:12,zIndex:50,marginTop:10,
+          display:'flex',alignItems:'center',gap:10,
+          background:'#1f2937',color:'#f1f5f9',borderRadius:9,
+          padding:'8px 12px',border:`1px solid ${C.border}`,
+          boxShadow:'0 8px 24px rgba(0,0,0,0.35)',fontSize:12}}>
+          <span style={{flexShrink:0,opacity:0.75}}>🗑</span>
+          <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+            Deleted: <em style={{opacity:0.85}}>{undoToast.item.text}</em>
+          </span>
+          <button onClick={commitUndo}
+            style={{background:C.blue,color:'#fff',border:'none',borderRadius:6,
+              padding:'4px 12px',fontWeight:700,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
+            Undo
+          </button>
+          <button onClick={()=>{if(undoToast.timer)clearTimeout(undoToast.timer);setUndoToast(null);}}
+            style={{background:'none',border:'none',color:'#94a3b8',cursor:'pointer',fontSize:14,padding:'0 4px'}}>✕</button>
+        </div>
+      )}
 
       {lightboxPhoto&&(
         <div onClick={()=>setLightboxPhoto(null)}
@@ -7918,6 +7981,28 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     if(fc) u({finishQuestions: newFinish});
   }, [gcAnswers?.answeredAt]);
 
+  // Auto-pass QC when all fromQC items are checked, even if the user didn't just
+  // toggle one (e.g. job reopens with all items already done from a prior session).
+  // Only fires when qcStatus is in a pre-pass state — never overrides a manual pass/fail/completed.
+  useEffect(() => {
+    const collectQC = p => {
+      const out = [];
+      ['upper','main','basement',...(p?.extras||[]).map(e=>e.key)].forEach(fk=>{
+        const f = normFloor(p?.[fk]);
+        [...f.general,...f.rooms.flatMap(r=>r.items||[]),...(f.hotcheck||[])]
+          .forEach(i=>{ if(i.fromQC) out.push(i); });
+      });
+      return out;
+    };
+    const all = [...collectQC(job.roughPunch), ...collectQC(job.finishPunch)];
+    if(all.length === 0) return;
+    if(!all.every(i=>i.done)) return;
+    // Only auto-advance from walk-active states; leave manual pass/fail/completed/fixed alone
+    const advanceable = ["", "needs", "scheduled", "fail"];
+    if(!advanceable.includes(job.qcStatus||"")) return;
+    u({qcStatus:'fixed'});
+  }, [job.roughPunch, job.finishPunch, job.qcStatus]);
+
   const refreshJob = async () => {
 
     setRefreshing(true);
@@ -9060,9 +9145,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               {(rqc.total>0||fqc.total>0)&&(
                 <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap'}}>
                   {rqc.total>0&&(
-                    <div style={{flex:1,minWidth:120,padding:'10px 14px',borderRadius:9,
+                    <div onClick={()=>{document.getElementById('qc-walk-rough')?.scrollIntoView({behavior:'smooth',block:'start'});}}
+                      title="Jump to Rough QC Walk"
+                      style={{flex:1,minWidth:120,padding:'10px 14px',borderRadius:9,cursor:'pointer',
                       background:rqc.done===rqc.total?`${C.green}12`:`${C.blue}10`,
-                      border:`1px solid ${rqc.done===rqc.total?C.green+'44':C.blue+'44'}`}}>
+                      border:`1px solid ${rqc.done===rqc.total?C.green+'44':C.blue+'44'}`,
+                      transition:'transform 0.08s'}}
+                      onMouseDown={e=>e.currentTarget.style.transform='scale(0.98)'}
+                      onMouseUp={e=>e.currentTarget.style.transform='scale(1)'}
+                      onMouseLeave={e=>e.currentTarget.style.transform='scale(1)'}>
                       <div style={{fontSize:9,fontWeight:700,letterSpacing:'0.07em',
                         color:rqc.done===rqc.total?C.green:C.blue,marginBottom:4}}>ROUGH QC WALK</div>
                       <div style={{fontSize:20,fontWeight:800,
@@ -9075,9 +9166,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     </div>
                   )}
                   {fqc.total>0&&(
-                    <div style={{flex:1,minWidth:120,padding:'10px 14px',borderRadius:9,
+                    <div onClick={()=>{document.getElementById('qc-walk-finish')?.scrollIntoView({behavior:'smooth',block:'start'});}}
+                      title="Jump to Finish QC Walk"
+                      style={{flex:1,minWidth:120,padding:'10px 14px',borderRadius:9,cursor:'pointer',
                       background:fqc.done===fqc.total?`${C.green}12`:`${C.purple}10`,
-                      border:`1px solid ${fqc.done===fqc.total?C.green+'44':C.purple+'44'}`}}>
+                      border:`1px solid ${fqc.done===fqc.total?C.green+'44':C.purple+'44'}`,
+                      transition:'transform 0.08s'}}
+                      onMouseDown={e=>e.currentTarget.style.transform='scale(0.98)'}
+                      onMouseUp={e=>e.currentTarget.style.transform='scale(1)'}
+                      onMouseLeave={e=>e.currentTarget.style.transform='scale(1)'}>
                       <div style={{fontSize:9,fontWeight:700,letterSpacing:'0.07em',
                         color:fqc.done===fqc.total?C.green:C.purple,marginBottom:4}}>FINISH QC WALK</div>
                       <div style={{fontSize:20,fontWeight:800,
@@ -9092,6 +9189,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </div>
               )}
 
+              <div id="qc-walk-rough" style={{scrollMarginTop:12}}>
               <Section label="Rough QC Walk" color={C.blue} defaultOpen={true}>
                 <QCWalkSection phase="Rough" punch={job.roughPunch} jobId={job.id}
                   onChange={v=>u({roughPunch:v})}
@@ -9107,6 +9205,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     if(finQC.length===0||finQC.every(i=>i.done)) u({qcStatus:'fixed'});
                   }}/>
               </Section>
+              </div>
+              <div id="qc-walk-finish" style={{scrollMarginTop:12}}>
               <Section label="Finish QC Walk" color={C.purple} defaultOpen={true}>
                 <QCWalkSection phase="Finish" punch={job.finishPunch} jobId={job.id}
                   showHotcheck={true}
@@ -9122,6 +9222,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     if(rghQC.length===0||rghQC.every(i=>i.done)) u({qcStatus:'fixed'});
                   }}/>
               </Section>
+              </div>
               {job.qcPunch&&punchOpen(job.qcPunch)>0&&(
                 <Section label="Legacy QC Items" color={C.teal} defaultOpen={false}>
                   <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC"
