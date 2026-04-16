@@ -1990,62 +1990,156 @@ function NeedsAttention({jobs, onSelectJob}) {
 }
 
 
-function PhaseInstructions({items, onChange, color, placeholder}) {
+function PhaseInstructionEntry({entry, onUpd, onDel, color, onAddMaterial}) {
+  const [open,         setOpen]         = useState(false); // starts collapsed
+  const [editing,      setEditing]      = useState(false);
+  const [draft,        setDraft]        = useState(entry.text || '');
+  const [matOpen,      setMatOpen]      = useState(false);
+  const [matText,      setMatText]      = useState('');
+  const [matSource,    setMatSource]    = useState('');
+  const [matConfirmed, setMatConfirmed] = useState(false);
+
+  useEffect(() => { if (!editing) setDraft(entry.text || ''); }, [entry.text, editing]);
+
+  const commit = () => {
+    setEditing(false);
+    if (draft !== (entry.text || '')) onUpd({ text: draft });
+  };
+
+  const submitMaterial = () => {
+    if (!matText.trim() || !onAddMaterial) return;
+    const formatted = matText.trim().split('\n').filter(Boolean)
+      .map(l => l.trim().startsWith('- ') ? l.trim() : `- ${l.trim()}`).join('\n');
+    onAddMaterial(formatted, matSource);
+    setMatText('');
+    setMatSource('');
+    setMatOpen(false);
+    setMatConfirmed(true);
+    setTimeout(() => setMatConfirmed(false), 2500);
+  };
+
+  return (
+    <div style={{marginBottom:10, border:`1.5px solid ${entry.text||entry.label ? color+'55' : C.border}`,
+      borderLeft:`3px solid ${entry.urgent ? '#dc2626' : (entry.text||entry.label ? color : C.border)}`,
+      borderRadius:8, overflow:'hidden',
+      background: entry.urgent ? 'rgba(220,38,38,0.04)' : (entry.text||entry.label ? color+'08' : C.surface)}}>
+
+      {/* Header row: click to collapse/expand */}
+      <div style={{display:'flex',alignItems:'center',gap:6,padding:'6px 10px',cursor:'pointer',
+        borderBottom: open ? `1px solid ${entry.text||entry.label ? color+'33' : C.border}` : 'none'}}
+        onClick={()=>setOpen(o=>!o)}>
+        <span style={{fontSize:11,color:C.dim,flexShrink:0,lineHeight:1,userSelect:'none'}}>
+          {open ? '▾' : '▸'}
+        </span>
+        <input value={entry.label||''} onChange={e=>{e.stopPropagation();onUpd({label:e.target.value});}}
+          onClick={e=>e.stopPropagation()}
+          placeholder="Label (e.g. Master Bath, Plate Colors)…"
+          style={{flex:1,background:'transparent',border:'none',outline:'none',
+            fontSize:12,fontWeight:700,color:entry.label?C.text:C.dim,fontFamily:'inherit',cursor:'text'}}/>
+        {entry.urgent && (
+          <span style={{fontSize:9,fontWeight:800,color:'#dc2626',background:'rgba(220,38,38,0.12)',
+            border:'1px solid rgba(220,38,38,0.35)',borderRadius:99,padding:'1px 7px',flexShrink:0,
+            whiteSpace:'nowrap'}}>⚠ Urgent</span>
+        )}
+        <button onClick={e=>{e.stopPropagation();onUpd({urgent:!entry.urgent});}}
+          style={{fontSize:10,fontWeight:700,flexShrink:0,
+            background:entry.urgent?'rgba(220,38,38,0.12)':'transparent',
+            border:`1px solid ${entry.urgent?'rgba(220,38,38,0.5)':C.border}`,
+            borderRadius:99,padding:'2px 9px',cursor:'pointer',fontFamily:'inherit',
+            color:entry.urgent?'#dc2626':C.dim}}>
+          {entry.urgent ? '⚠ Urgent' : '⚠'}
+        </button>
+        <button onClick={e=>{e.stopPropagation();onDel();}}
+          style={{background:'none',border:'none',cursor:'pointer',color:C.dim,
+            fontSize:13,lineHeight:1,padding:'0 2px',fontFamily:'inherit'}}>×</button>
+      </div>
+
+      {/* Body: only shown when open */}
+      {open && editing ? (
+        <div style={{padding:'8px 10px'}}>
+          <RichEditor
+            htmlValue={draft}
+            onHtmlChange={setDraft}
+            placeholder="Notes, colors, device placement, instructions…"
+            autoFocus
+            minRows={3}/>
+          <div style={{display:'flex',gap:6,marginTop:6,justifyContent:'flex-end'}}>
+            <Btn onClick={commit} variant="primary" style={{fontSize:11,padding:'4px 14px'}}>Save</Btn>
+            <button onClick={()=>{setEditing(false);setDraft(entry.text||'');}}
+              style={{background:'none',border:'none',color:C.dim,cursor:'pointer',
+                fontSize:11,fontFamily:'inherit'}}>Cancel</button>
+          </div>
+        </div>
+      ) : open ? (
+        <div onClick={()=>setEditing(true)}
+          style={{padding:'8px 11px',minHeight:36,cursor:'text',
+            fontSize:12,color:entry.text?C.text:C.dim,lineHeight:1.55}}>
+          {entry.text
+            ? <RichText html={entry.text}/>
+            : <span style={{fontStyle:'italic',opacity:0.5}}>Click to add notes…</span>}
+        </div>
+      ) : null}
+
+      {/* Material Needed footer — only visible when expanded */}
+      {open && onAddMaterial && (
+        <div style={{borderTop:`1px solid ${C.border}`,padding:'5px 10px'}}>
+          {!matOpen ? (
+            <div style={{display:'flex',alignItems:'center',gap:8}}>
+              <button onClick={()=>setMatOpen(true)}
+                style={{background:'none',border:`1px solid ${C.border}`,borderRadius:99,
+                  padding:'2px 10px',fontSize:10,fontWeight:700,color:C.dim,
+                  cursor:'pointer',fontFamily:'inherit'}}>
+                + Material Needed
+              </button>
+              {matConfirmed && <span style={{fontSize:10,color:'#16a34a',fontWeight:700}}>✓ Added to PO</span>}
+            </div>
+          ) : (
+            <div style={{display:'flex',flexDirection:'column',gap:6}}>
+              <textarea value={matText} onChange={e=>setMatText(e.target.value)}
+                autoFocus
+                placeholder="List materials (one per line)…"
+                rows={3}
+                style={{width:'100%',boxSizing:'border-box',background:C.surface,
+                  border:`1px solid ${C.border}`,borderRadius:7,padding:'6px 9px',
+                  fontSize:11,fontFamily:'inherit',color:C.text,resize:'vertical',outline:'none'}}/>
+              <div style={{display:'flex',gap:6,alignItems:'center'}}>
+                <select value={matSource} onChange={e=>setMatSource(e.target.value)}
+                  style={{flex:1,background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                    padding:'5px 8px',fontSize:11,color:matSource?C.text:C.dim,
+                    fontFamily:'inherit',outline:'none',cursor:'pointer'}}>
+                  {MAT_SOURCES.map(s=><option key={s} value={s}>{s||'— source —'}</option>)}
+                </select>
+                <Btn onClick={submitMaterial} variant="primary"
+                  style={{fontSize:11,padding:'4px 14px',whiteSpace:'nowrap'}}>
+                  Add to PO
+                </Btn>
+                <button onClick={()=>{setMatOpen(false);setMatText('');setMatSource('');}}
+                  style={{background:'none',border:'none',color:C.dim,cursor:'pointer',
+                    fontSize:13,padding:'0 2px',fontFamily:'inherit'}}>✕</button>
+              </div>
+              <span style={{fontSize:9,color:C.dim}}>Adds to newest open PO for that source, or creates a new one</span>
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
+function PhaseInstructions({items, onChange, color, placeholder, onAddMaterial}) {
   const list = Array.isArray(items) ? items : [];
   const add  = () => onChange([...list, {id:uid(), label:'', text:''}]);
   const upd  = (id, p) => onChange(list.map(e => e.id===id ? {...e,...p} : e));
   const del  = (id) => onChange(list.filter(e => e.id!==id));
 
-  const QUICK_LABELS = ['Plate Colors','Devices','All Rooms','Master Bath','Kitchen','Living Room','Master Bed','Garage','Basement','Exterior'];
-
   return (
     <div>
-      {list.map((entry, i) => (
-        <div key={entry.id} style={{marginBottom:10, border:`1.5px solid ${entry.text||entry.label ? color+'55' : C.border}`,
-          borderLeft:`3px solid ${entry.text||entry.label ? color : C.border}`,
-          borderRadius:8, overflow:'hidden',
-          background: entry.text||entry.label ? color+'08' : C.surface}}>
-          {/* Label row */}
-          <div style={{display:'flex',alignItems:'center',gap:6,padding:'6px 10px',
-            borderBottom:`1px solid ${entry.text||entry.label ? color+'33' : C.border}`}}>
-            <input value={entry.label} onChange={e=>upd(entry.id,{label:e.target.value})}
-              placeholder="Label / Room…"
-              style={{flex:1,background:'transparent',border:'none',outline:'none',
-                fontSize:12,fontWeight:700,color:entry.label?C.text:C.dim,fontFamily:'inherit'}}/>
-            <button onClick={()=>del(entry.id)}
-              style={{background:'none',border:'none',cursor:'pointer',color:C.dim,
-                fontSize:13,lineHeight:1,padding:'0 2px',fontFamily:'inherit'}}>×</button>
-          </div>
-          {/* Quick label chips (only if label is empty) */}
-          {!entry.label && (
-            <div style={{display:'flex',flexWrap:'wrap',gap:4,padding:'5px 10px',
-              borderBottom:`1px solid ${C.border}`}}>
-              {QUICK_LABELS.map(l=>(
-                <button key={l} onClick={()=>upd(entry.id,{label:l})}
-                  style={{fontSize:9,padding:'2px 7px',borderRadius:99,border:`1px solid ${color}44`,
-                    background:`${color}10`,color:color,cursor:'pointer',fontFamily:'inherit',fontWeight:600}}>
-                  {l}
-                </button>
-              ))}
-            </div>
-          )}
-          {/* Urgent toggle + text body */}
-          <div style={{display:'flex',alignItems:'center',gap:6,padding:'4px 10px 0',justifyContent:'flex-end'}}>
-            <button onClick={()=>upd(entry.id,{urgent:!entry.urgent})}
-              style={{fontSize:10,fontWeight:700,background:entry.urgent?'rgba(220,38,38,0.12)':'transparent',
-                border:`1px solid ${entry.urgent?'rgba(220,38,38,0.5)':C.border}`,
-                borderRadius:99,padding:'2px 9px',cursor:'pointer',fontFamily:'inherit',
-                color:entry.urgent?'#dc2626':C.dim}}>
-              {entry.urgent ? '⚠ Urgent' : '⚠ Mark Urgent'}
-            </button>
-          </div>
-          <textarea value={entry.text} onChange={e=>upd(entry.id,{text:e.target.value})}
-            placeholder="Notes, colors, device placement, instructions…"
-            rows={Math.max(2, (entry.text||'').split('\n').length + 1)}
-            style={{width:'100%',boxSizing:'border-box',background:'transparent',border:'none',
-              outline:'none',padding:'8px 11px',fontSize:12,fontFamily:'inherit',
-              color:C.text,resize:'vertical',lineHeight:1.55}}/>
-        </div>
+      {list.map((entry) => (
+        <PhaseInstructionEntry key={entry.id} entry={entry}
+          onUpd={p=>upd(entry.id,p)}
+          onDel={()=>del(entry.id)}
+          color={color}
+          onAddMaterial={onAddMaterial}/>
       ))}
       <button onClick={add}
         style={{width:'100%',background:'transparent',border:`1px dashed ${color}55`,
@@ -2527,7 +2621,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
   const data = normFloor(floorData);
 
-  const [collapsed,       setCollapsed]      = useState(false);
+  const [collapsed,       setCollapsed]      = useState(true);
   const [roomDraft,       setRoomDraft]      = useState('');
   const [openQFor,        setOpenQFor]       = useState(null); // 'general' | room.id | null
   const [questionDraft,   setQuestionDraft]  = useState('');
@@ -2535,7 +2629,13 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
   const submitQuestion = (sectionId) => {
     if (!questionDraft.trim() || !onAddQuestion) return;
-    onAddQuestion(questionDraft.trim());
+    // Build a source label so the question shows where it came from
+    let sourceName = 'General';
+    if (sectionId !== 'general') {
+      const room = data.rooms.find(r => r.id === sectionId);
+      if (room) sourceName = room.name;
+    }
+    onAddQuestion(questionDraft.trim(), sourceName);
     setQuestionDraft('');
     setOpenQFor(null);
     setQConfirmedFor(sectionId);
@@ -2835,11 +2935,11 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
       </div>
 
-      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? t=>onAddQuestion('upper',t) : null} jobId={jobId}/>
+      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('upper',t,`Upper Level – ${src}`) : null} jobId={jobId}/>
 
-      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? t=>onAddQuestion('main',t) : null} jobId={jobId}/>
+      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('main',t,`Main Level – ${src}`) : null} jobId={jobId}/>
 
-      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? t=>onAddQuestion('basement',t) : null} jobId={jobId}/>
+      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('basement',t,`Basement – ${src}`) : null} jobId={jobId}/>
 
       {extras.map((e,i)=>(
         <div key={e.key}>
@@ -2852,7 +2952,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
             showHotcheck={showHotcheck}
             filterIds={filterIds}
             onAddMaterial={onAddMaterial}
-            onAddQuestion={onAddQuestion ? t=>onAddQuestion('main',t) : null} jobId={jobId}/>
+            onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion(e.key,t,`${e.label} – ${src}`) : null} jobId={jobId}/>
           <button onClick={()=>{
             if(!window.confirm(`Remove "${e.label}" and all its punch items? This cannot be undone.`)) return;
             removeFloor(e.key);
@@ -7887,7 +7987,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <div style={{marginTop:8,marginBottom:12}}>
                   <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough}/>
                 </div>
-                <PhaseInstructions items={job.roughInstructions} onChange={v=>u({roughInstructions:v})} color={C.rough}/>
+
+                <PhaseInstructions items={job.roughInstructions} onChange={v=>u({roughInstructions:v})} color={C.rough}
+                  onAddMaterial={(text,source)=>{
+                    const orders = job.roughMaterials||[];
+                    const openEntry = [...orders].reverse().find(o=>o.needsOrder&&!o.ordered&&!o.pickedUp&&(source?(o.source||"")===(source||""):true));
+                    if(openEntry){ u({roughMaterials:orders.map(o=>o.id===openEntry.id?{...o,items:o.items?o.items.replace(/(<br\s*\/?>)+$/i,'')+'\n'+text:text}:o)}); }
+                    else { u({roughMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",source:source||"",items:text,pickedUp:false,needsOrder:true}]}); }
+                  }}/>
 
               </Section>
 
@@ -7914,9 +8021,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       u({roughMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",source:source||"",items:text,pickedUp:false,needsOrder:true}]});
                     }
                   }}
-                  onAddQuestion={(floor, text)=>{
+                  onAddQuestion={(floor, text, source)=>{
                     const who = getIdentity();
-                    const q = {id:uid(), question:text, answer:"", done:false, addedBy:who?.name||""};
+                    const q = {id:uid(), question:text, answer:"", done:false, addedBy:who?.name||"", source:source||""};
                     const qs = job.roughQuestions || {upper:[],main:[],basement:[]};
                     u({roughQuestions:{...qs, [floor]:[...(qs[floor]||[]), q]}});
                   }}
@@ -8106,7 +8213,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 })()}
                 <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const finishOpen=punchOpen(job.finishPunch);const qcOpen=punchOpen(job.qcPunch);const total=finishOpen+qcOpen;if(total>0){const parts=[];if(finishOpen>0)parts.push(`${finishOpen} finish punch item${finishOpen!==1?"s":""}`);if(qcOpen>0)parts.push(`${qcOpen} QC item${qcOpen!==1?"s":""}`);alert(`Cannot set Finish to 100% — ${parts.join(" and ")} still open. Clear them first.`);return;}}const invoiceFire=pct>=85&&!job.finishInvoiceFired?{finishInvoiceFired:true,finishInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{finishInvoiceFired:false,finishInvoiceDismissed:false}:{};u({finishStage:v,...invoiceFire,...invoiceReset,...(v==="100%"?{finishStatus:"complete"}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
                 <div style={{marginTop:8,marginBottom:12}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
-                <PhaseInstructions items={job.finishInstructions} onChange={v=>u({finishInstructions:v})} color={C.finish}/>
+
+                <PhaseInstructions items={job.finishInstructions} onChange={v=>u({finishInstructions:v})} color={C.finish}
+                  onAddMaterial={(text,source)=>{
+                    const orders = job.finishMaterials||[];
+                    const openEntry = [...orders].reverse().find(o=>o.needsOrder&&!o.ordered&&!o.pickedUp&&(source?(o.source||"")===(source||""):true));
+                    if(openEntry){ u({finishMaterials:orders.map(o=>o.id===openEntry.id?{...o,items:o.items?o.items.replace(/(<br\s*\/?>)+$/i,'')+'\n'+text:text}:o)}); }
+                    else { u({finishMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",source:source||"",items:text,pickedUp:false,needsOrder:true}]}); }
+                  }}/>
+
               </Section>
 
               <Section label="Punch List" color={C.finish} action={
@@ -8129,9 +8244,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       u({finishMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",source:source||"",items:text,pickedUp:false,needsOrder:true}]});
                     }
                   }}
-                  onAddQuestion={(floor, text)=>{
+                  onAddQuestion={(floor, text, source)=>{
                     const who = getIdentity();
-                    const q = {id:uid(), question:text, answer:"", done:false, addedBy:who?.name||""};
+                    const q = {id:uid(), question:text, answer:"", done:false, addedBy:who?.name||"", source:source||""};
                     const qs = job.finishQuestions || {upper:[],main:[],basement:[]};
                     u({finishQuestions:{...qs, [floor]:[...(qs[floor]||[]), q]}});
                   }}
@@ -8969,6 +9084,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
 
             onSave={v=>upd(q.id,{question:v})}/>
 
+          {q.source&&<span style={{fontSize:9,fontWeight:700,color:C.orange,background:`${C.orange}18`,border:`1px solid ${C.orange}33`,borderRadius:99,padding:'1px 7px',alignSelf:'flex-start'}}>📍 {q.source}</span>}
           {q.addedBy&&<span style={{fontSize:9,color:C.dim}}>added by {q.addedBy}</span>}
           {filterIds!=null&&<span style={{fontWeight:700,borderRadius:99,padding:'1px 6px',lineHeight:1.6,fontSize:9,
             background:filterIds.has(q.id)?'#dcfce7':'#f3f4f6',
