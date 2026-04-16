@@ -218,6 +218,7 @@ const QC_STATUSES = [
   {value:"scheduled", label:"QC Scheduled",          color:"#2563eb", hasDate:true},
   {value:"completed", label:"QC Completed",          color:"#8b5cf6", hasDate:true},
   {value:"pass",      label:"QC Pass",               color:"#22c55e"},
+  {value:"fixed",     label:"QC Items Fixed — Pass", color:"#22c55e"},
   {value:"fail",      label:"QC Fail",               color:"#dc2626"},
 ];
 const MATTERPORT_STATUSES = [
@@ -2350,6 +2351,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId }) {
                   <span style={{fontSize:9,color:C.dim,paddingLeft:4,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
                     {item.addedBy&&!item.done&&<span>added by {item.addedBy}</span>}
                     {item.checkedBy&&item.done&&<span style={{color:C.green}}>✓ checked by {item.checkedBy}{item.checkedAt?" · "+item.checkedAt:""}</span>}
+                    {item.fromQC&&<span style={{fontSize:9,fontWeight:700,background:'#fff7ed',color:'#c2410c',borderRadius:99,padding:'1px 6px',border:'1px solid #fed7aa',lineHeight:1.6}}>QC</span>}
                     {filterIds!=null&&<span style={{fontWeight:700,borderRadius:99,padding:'1px 6px',lineHeight:1.6,
                       background:filterIds.has(item.id)?'#dcfce7':'#f3f4f6',
                       color:filterIds.has(item.id)?'#16a34a':'#9ca3af'}}>
@@ -2970,6 +2972,282 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
   );
 
+}
+
+
+
+// ── QC Walk Section ──────────────────────────────────────────────────────────
+
+function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAllDone }) {
+  const [addOpen,      setAddOpen]      = useState(false);
+  const [addFloor,     setAddFloor]     = useState('main');
+  const [addTarget,    setAddTarget]    = useState('general');
+  const [addText,      setAddText]      = useState('');
+  const [newRoomName,  setNewRoomName]  = useState('');
+  const [uploadingId,  setUploadingId]  = useState(null);
+  const [lightboxPhoto,setLightboxPhoto]= useState(null);
+
+  const safePunch = punch || {};
+  const extras    = safePunch.extras || [];
+
+  const FLOOR_LABELS = { upper:'Upper Level', main:'Main Level', basement:'Basement' };
+  const floorKeys   = ['upper','main','basement',...extras.map(e=>e.key)];
+  const floorLabel  = k => FLOOR_LABELS[k] || extras.find(e=>e.key===k)?.label || k;
+
+  const getFloor = k => normFloor(safePunch[k]);
+
+  const writeFloor = (floorKey, newFloorData) => {
+    const extraData = {};
+    extras.forEach(e => { extraData[e.key] = normFloor(safePunch[e.key]); });
+    const updated = {
+      upper:    normFloor(safePunch.upper),
+      main:     normFloor(safePunch.main),
+      basement: normFloor(safePunch.basement),
+      extras,
+      ...extraData,
+      [floorKey]: newFloorData,
+    };
+    onChange(updated);
+    const allQC = [];
+    floorKeys.forEach(fk => {
+      const f = normFloor(fk===floorKey ? newFloorData : safePunch[fk]);
+      allQC.push(...f.general.filter(i=>i.fromQC));
+      f.rooms.forEach(r => allQC.push(...(r.items||[]).filter(i=>i.fromQC)));
+      if(showHotcheck) allQC.push(...(f.hotcheck||[]).filter(i=>i.fromQC));
+    });
+    if(allQC.length > 0 && allQC.every(i=>i.done)) onAllDone && onAllDone();
+  };
+
+  const toggleItem = (floorKey, roomId, itemId) => {
+    const floor = getFloor(floorKey);
+    const who = getIdentity();
+    const upd = items => items.map(i => i.id===itemId ? {
+      ...i, done:!i.done,
+      checkedBy: !i.done ? (who?.name||"") : "",
+      checkedAt: !i.done ? new Date().toLocaleDateString("en-US") : "",
+    } : i);
+    let newFloor;
+    if(roomId==='general')       newFloor = {...floor, general:upd(floor.general)};
+    else if(roomId==='hotcheck') newFloor = {...floor, hotcheck:upd(floor.hotcheck||[])};
+    else newFloor = {...floor, rooms:floor.rooms.map(r=>r.id===roomId?{...r,items:upd(r.items||[])}:r)};
+    writeFloor(floorKey, newFloor);
+  };
+
+  const addPhoto = async (floorKey, roomId, itemId, files) => {
+    if(!files?.length || !jobId) return;
+    setUploadingId(itemId);
+    const newPhotos = [];
+    for(const file of Array.from(files)) {
+      try {
+        const photoId = uid();
+        const ext = file.name.split('.').pop()||'jpg';
+        const storageRef = ref(storage, `jobs/${jobId}/punch-photos/${itemId}/${photoId}.${ext}`);
+        await uploadBytes(storageRef, file);
+        const url = await getDownloadURL(storageRef);
+        newPhotos.push({id:photoId, name:file.name, url});
+      } catch(e) { console.error('QC photo upload failed:', e); }
+    }
+    if(newPhotos.length) {
+      const floor = getFloor(floorKey);
+      const addPh = items => items.map(i=>i.id===itemId?{...i,photos:[...(i.photos||[]),...newPhotos]}:i);
+      let newFloor;
+      if(roomId==='general')       newFloor={...floor, general:addPh(floor.general)};
+      else if(roomId==='hotcheck') newFloor={...floor, hotcheck:addPh(floor.hotcheck||[])};
+      else newFloor={...floor, rooms:floor.rooms.map(r=>r.id===roomId?{...r,items:addPh(r.items||[])}:r)};
+      writeFloor(floorKey, newFloor);
+    }
+    setUploadingId(null);
+  };
+
+  const deleteItem = (floorKey, roomId, itemId) => {
+    if(!window.confirm("Remove this QC item?")) return;
+    const floor = getFloor(floorKey);
+    const fil = items => items.filter(i=>i.id!==itemId);
+    let newFloor;
+    if(roomId==='general')       newFloor={...floor, general:fil(floor.general)};
+    else if(roomId==='hotcheck') newFloor={...floor, hotcheck:fil(floor.hotcheck||[])};
+    else newFloor={...floor, rooms:floor.rooms.map(r=>r.id===roomId?{...r,items:fil(r.items||[])}:r)};
+    writeFloor(floorKey, newFloor);
+  };
+
+  const commitAdd = () => {
+    const txt = addText.trim();
+    if(!txt) return;
+    const floorKey = addFloor;
+    const floor = getFloor(floorKey);
+    const newItem = { id:uid(), text:txt, done:false, fromQC:true, addedBy:getIdentity()?.name||"" };
+    let newFloor;
+    if(addTarget==='general') {
+      newFloor = {...floor, general:[...floor.general, newItem]};
+    } else if(addTarget==='hotcheck') {
+      newFloor = {...floor, hotcheck:[...(floor.hotcheck||[]), newItem]};
+    } else if(addTarget==='__new__') {
+      if(!newRoomName.trim()) return;
+      const newRoom = {id:uid(), name:newRoomName.trim(), items:[newItem]};
+      newFloor = {...floor, rooms:[...floor.rooms, newRoom]};
+    } else {
+      newFloor = {...floor, rooms:floor.rooms.map(r=>r.id===addTarget?{...r,items:[...(r.items||[]),newItem]}:r)};
+    }
+    writeFloor(floorKey, newFloor);
+    setAddText('');
+    setNewRoomName('');
+    setAddOpen(false);
+  };
+
+  const qcGroups = [];
+  floorKeys.forEach(fk => {
+    const floor = getFloor(fk);
+    const genQC = floor.general.filter(i=>i.fromQC);
+    if(genQC.length) qcGroups.push({fk, roomId:'general', roomName:`${floorLabel(fk)} — General`, items:genQC});
+    floor.rooms.forEach(r => {
+      const rQC = (r.items||[]).filter(i=>i.fromQC);
+      if(rQC.length) qcGroups.push({fk, roomId:r.id, roomName:`${floorLabel(fk)} — ${r.name}`, items:rQC});
+    });
+    if(showHotcheck) {
+      const hQC = (floor.hotcheck||[]).filter(i=>i.fromQC);
+      if(hQC.length) qcGroups.push({fk, roomId:'hotcheck', roomName:'Hot Check', items:hQC});
+    }
+  });
+
+  const totalQC = qcGroups.reduce((s,g)=>s+g.items.length,0);
+  const doneQC  = qcGroups.reduce((s,g)=>s+g.items.filter(i=>i.done).length,0);
+  const phaseColor = phase==='Rough' ? C.blue : C.purple;
+
+  const renderQCItem = (fk, roomId, item) => (
+    <div key={item.id} style={{marginBottom:8,border:`1px solid ${item.done?C.border+'88':C.border}`,
+      borderRadius:8,padding:'8px 10px',background:item.done?C.surface+'88':C.surface,opacity:item.done?0.8:1}}>
+      <div style={{display:'flex',alignItems:'center',gap:8}}>
+        <input type="checkbox" checked={!!item.done}
+          onChange={()=>toggleItem(fk,roomId,item.id)}
+          style={{accentColor:C.green,width:14,height:14,cursor:'pointer',flexShrink:0}}/>
+        <span style={{flex:1,fontSize:12,color:item.done?C.muted:C.text,
+          textDecoration:item.done?'line-through':'none',lineHeight:1.4}}>
+          {item.text}
+        </span>
+        {jobId&&(
+          <label title="Add photo" style={{cursor:'pointer',flexShrink:0,lineHeight:1}}>
+            <input type="file" accept="image/*" multiple style={{display:'none'}}
+              onChange={e=>addPhoto(fk,roomId,item.id,e.target.files)}/>
+            <span style={{fontSize:13,
+              opacity:uploadingId===item.id?0.4:((item.photos||[]).length>0?1:0.4),
+              filter:(item.photos||[]).length>0?'none':'grayscale(1)'}}>
+              {uploadingId===item.id?'\u23f3':'\U0001f4f7'}
+              {(item.photos||[]).length>0&&<sup style={{fontSize:8,fontWeight:700,color:C.blue}}>{(item.photos||[]).length}</sup>}
+            </span>
+          </label>
+        )}
+        <button onClick={()=>deleteItem(fk,roomId,item.id)}
+          style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:12,flexShrink:0,padding:'0 2px'}}>\u2715</button>
+      </div>
+      {(item.addedBy||item.checkedBy)&&(
+        <div style={{fontSize:9,color:C.dim,marginLeft:22,marginTop:2,display:'flex',gap:5,flexWrap:'wrap'}}>
+          {item.addedBy&&!item.done&&<span>added by {item.addedBy}</span>}
+          {item.checkedBy&&item.done&&<span style={{color:C.green}}>\u2713 checked by {item.checkedBy}{item.checkedAt?` \u00b7 ${item.checkedAt}`:''}</span>}
+        </div>
+      )}
+      {(item.photos||[]).length>0&&(
+        <div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:6,marginLeft:22}}>
+          {(item.photos||[]).map(photo=>(
+            <div key={photo.id} style={{position:'relative',borderRadius:6,overflow:'hidden',
+              border:`1px solid ${C.border}`,flexShrink:0}}>
+              <img src={photo.url} alt={photo.name}
+                onClick={()=>setLightboxPhoto(photo.url)}
+                style={{width:64,height:64,objectFit:'cover',cursor:'pointer',display:'block'}}/>
+            </div>
+          ))}
+        </div>
+      )}
+    </div>
+  );
+
+  return (
+    <div>
+      <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+        {totalQC>0&&(
+          <span style={{fontSize:11,fontWeight:700,
+            background:doneQC===totalQC?`${C.green}20`:`${phaseColor}18`,
+            color:doneQC===totalQC?C.green:phaseColor,borderRadius:99,padding:'2px 10px'}}>
+            {doneQC}/{totalQC} done
+          </span>
+        )}
+        <button onClick={()=>setAddOpen(o=>!o)} style={{marginLeft:'auto',
+          background:phaseColor+'18',border:`1px solid ${phaseColor}44`,color:phaseColor,
+          borderRadius:7,padding:'5px 12px',fontSize:11,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
+          + Add QC Item
+        </button>
+      </div>
+
+      {addOpen&&(
+        <div style={{background:C.surface,border:`1px solid ${phaseColor}44`,
+          borderRadius:9,padding:'12px 14px',marginBottom:12}}>
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:8}}>
+            <select value={addFloor} onChange={e=>{setAddFloor(e.target.value);setAddTarget('general');}}
+              style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
+                color:C.text,padding:'5px 8px',fontSize:11,fontFamily:'inherit',outline:'none',cursor:'pointer'}}>
+              {floorKeys.map(fk=><option key={fk} value={fk}>{floorLabel(fk)}</option>)}
+            </select>
+            <select value={addTarget} onChange={e=>setAddTarget(e.target.value)}
+              style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
+                color:C.text,padding:'5px 8px',fontSize:11,fontFamily:'inherit',outline:'none',
+                cursor:'pointer',flex:1,minWidth:120}}>
+              <option value="general">General</option>
+              {getFloor(addFloor).rooms.map(r=><option key={r.id} value={r.id}>{r.name}</option>)}
+              {showHotcheck&&<option value="hotcheck">Hot Check</option>}
+              <option value="__new__">+ New Room...</option>
+            </select>
+          </div>
+          {addTarget==='__new__'&&(
+            <input value={newRoomName} onChange={e=>setNewRoomName(e.target.value)}
+              placeholder="Room name..."
+              style={{width:'100%',boxSizing:'border-box',fontSize:11,border:`1px solid ${C.border}`,
+                borderRadius:6,padding:'5px 8px',background:C.surface,color:C.text,outline:'none',
+                fontFamily:'inherit',marginBottom:8}}/>
+          )}
+          <textarea value={addText} onChange={e=>setAddText(e.target.value)}
+            autoFocus
+            placeholder="Describe the issue found..."
+            rows={2}
+            onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();commitAdd();}}}
+            style={{width:'100%',boxSizing:'border-box',fontSize:12,border:`1px solid ${C.border}`,
+              borderRadius:6,padding:'6px 8px',background:C.surface,color:C.text,outline:'none',
+              fontFamily:'inherit',resize:'vertical',lineHeight:1.5,marginBottom:8}}/>
+          <div style={{display:'flex',gap:8,alignItems:'center'}}>
+            <Btn onClick={commitAdd} variant="primary" style={{fontSize:11,padding:'4px 14px'}}>Add</Btn>
+            <button onClick={()=>{setAddOpen(false);setAddText('');setNewRoomName('');}}
+              style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:12,fontFamily:'inherit'}}>Cancel</button>
+            <span style={{fontSize:10,color:C.muted}}>\u21b5 Enter to add</span>
+          </div>
+        </div>
+      )}
+
+      {qcGroups.length===0&&!addOpen&&(
+        <div style={{textAlign:'center',padding:'20px 12px',color:C.muted,fontSize:12,
+          border:`1px dashed ${C.border}`,borderRadius:8}}>
+          No {phase.toLowerCase()} QC items yet \u2014 tap "+ Add QC Item" to log issues.
+        </div>
+      )}
+
+      {qcGroups.map(({fk,roomId,roomName,items})=>(
+        <div key={`${fk}-${roomId}`} style={{marginBottom:14}}>
+          <div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:'0.07em',
+            marginBottom:6,paddingBottom:4,borderBottom:`1px solid ${C.border}55`,
+            textTransform:'uppercase'}}>
+            {roomName}
+          </div>
+          {items.map(item=>renderQCItem(fk,roomId,item))}
+        </div>
+      ))}
+
+      {lightboxPhoto&&(
+        <div onClick={()=>setLightboxPhoto(null)}
+          style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.85)',zIndex:9999,
+            display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer'}}>
+          <img src={lightboxPhoto} alt="QC photo"
+            style={{maxWidth:'90vw',maxHeight:'90vh',borderRadius:8,objectFit:'contain'}}/>
+        </div>
+      )}
+    </div>
+  );
 }
 
 
@@ -8716,14 +8994,42 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 );
               })()}
 
-              <Section label="QC Walk Checklist" color={C.teal} defaultOpen={true} action={
-                <PunchPicker punch={job.qcPunch||{}} jobId={job.id} stage="QC" color={C.teal} showHotcheck={true}
-                  filter={job.qcPunchFilter||null} filterLabel={job.qcPunchFilterLabel||''} onSaveFilter={(v,lbl)=>u({qcPunchFilter:v,qcPunchFilterLabel:lbl})}/>
-              }>
-                <PunchSection punch={job.qcPunch} onChange={v=>{const allClear=punchOpen(v)===0;u({qcPunch:v,...(job.qcStatus==="fail"&&allClear?{qcStatus:"pass"}:{})});}} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }} showHotcheck={true}
-                  filterIds={job.qcPunchFilter ? new Set(job.qcPunchFilter) : null}
-                  jobId={job.id}/>
+              <Section label="Rough QC Walk" color={C.blue} defaultOpen={true}>
+                <QCWalkSection phase="Rough" punch={job.roughPunch} jobId={job.id}
+                  onChange={v=>u({roughPunch:v})}
+                  onAllDone={()=>{
+                    const finQC=[];
+                    const fp=job.finishPunch||{};
+                    ['upper','main','basement',...(fp.extras||[]).map(e=>e.key)].forEach(fk=>{
+                      const fl=normFloor(fp[fk]);
+                      finQC.push(...fl.general.filter(i=>i.fromQC));
+                      fl.rooms.forEach(r=>finQC.push(...(r.items||[]).filter(i=>i.fromQC)));
+                      finQC.push(...(fl.hotcheck||[]).filter(i=>i.fromQC));
+                    });
+                    if(finQC.length===0||finQC.every(i=>i.done)) u({qcStatus:'fixed'});
+                  }}/>
               </Section>
+              <Section label="Finish QC Walk" color={C.purple} defaultOpen={true}>
+                <QCWalkSection phase="Finish" punch={job.finishPunch} jobId={job.id}
+                  showHotcheck={true}
+                  onChange={v=>u({finishPunch:v})}
+                  onAllDone={()=>{
+                    const rghQC=[];
+                    const rp=job.roughPunch||{};
+                    ['upper','main','basement',...(rp.extras||[]).map(e=>e.key)].forEach(fk=>{
+                      const fl=normFloor(rp[fk]);
+                      rghQC.push(...fl.general.filter(i=>i.fromQC));
+                      fl.rooms.forEach(r=>rghQC.push(...(r.items||[]).filter(i=>i.fromQC)));
+                    });
+                    if(rghQC.length===0||rghQC.every(i=>i.done)) u({qcStatus:'fixed'});
+                  }}/>
+              </Section>
+              {job.qcPunch&&punchOpen(job.qcPunch)>0&&(
+                <Section label="Legacy QC Items" color={C.teal} defaultOpen={false}>
+                  <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC"
+                    onEmail={({subject,body})=>{openEmail("",subject,body);}} showHotcheck={true} jobId={job.id}/>
+                </Section>
+              )}
 
               {(job.qcPunchExternal?.length>0)&&(
                 <ExternalPunchSection items={job.qcPunchExternal||[]}
