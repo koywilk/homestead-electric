@@ -2143,64 +2143,12 @@ function PhaseInstructions({items, onChange, color, placeholder, onAddMaterial})
       ))}
       <button onClick={add}
         style={{width:'100%',background:'transparent',border:`1px dashed ${color}55`,
-          borderRadius:8,padding:'7px',fontSize:11,fontWeight:700,color:color,
-          cursor:'pointer',fontFamily:'inherit',marginTop:list.length?0:2}}>
+          borderRadius:8,padding:'7px 0',fontSize:11,fontWeight:600,color:color,
+          cursor:'pointer',fontFamily:'inherit',marginTop:4}}>
         + Add Instruction / Note
       </button>
     </div>
   );
-}
-
-
-const StageBar = ({stages,current,color}) => {
-
-  const isScheduled = current === "Scheduled";
-
-  const pct = isScheduled ? 0 : (parseInt(current)||0);
-
-  // interpolate red(0%) -> yellow(50%) -> green(100%)
-
-  const r = pct < 50 ? 220 : Math.round(220 - (pct-50)/50 * 186);
-
-  const g = pct < 50 ? Math.round(40 + (pct/50) * 175) : 215;
-
-  const b = 40;
-
-  const barColor = isScheduled ? "#f97316" : `rgb(${r},${g},${b})`;
-
-  return (
-
-    <div style={{display:"flex",gap:6,alignItems:"center"}}>
-
-      <div style={{flex:1,height:5,background:C.border,borderRadius:99,overflow:"hidden"}}>
-
-        <div style={{height:"100%",width:isScheduled?"100%":`${pct}%`,background:isScheduled?"rgba(249,115,22,0.25)":barColor,borderRadius:99,transition:"width 0.4s, background 0.4s"}}/>
-
-      </div>
-
-      <span style={{fontSize:10,color:barColor,whiteSpace:"nowrap",fontWeight:600,minWidth:28,textAlign:"right"}}>{current}</span>
-
-    </div>
-
-  );
-
-};
-
-
-// ── Punch List ────────────────────────────────────────────────
-
-// Simple helpers to ensure data is always the right shape
-
-function normFloor(v) {
-
-  if (v && typeof v === 'object' && !Array.isArray(v) && ('general' in v || 'rooms' in v || 'hotcheck' in v)) {
-
-    return { general: Array.isArray(v.general) ? v.general : [], rooms: Array.isArray(v.rooms) ? v.rooms : [], hotcheck: Array.isArray(v.hotcheck) ? v.hotcheck : [] };
-
-  }
-
-  return { general: Array.isArray(v) ? v : [], rooms: [], hotcheck: [] };
-
 }
 
 
@@ -2952,7 +2900,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
             showHotcheck={showHotcheck}
             filterIds={filterIds}
             onAddMaterial={onAddMaterial}
-            onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion(e.key,t,`${e.label} – ${src}`) : null} jobId={jobId}/>
+            onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('main',t,`Main Level – ${src}`) : null} jobId={jobId}/>
           <button onClick={()=>{
             if(!window.confirm(`Remove "${e.label}" and all its punch items? This cannot be undone.`)) return;
             removeFloor(e.key);
@@ -7987,7 +7935,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <div style={{marginTop:8,marginBottom:12}}>
                   <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough}/>
                 </div>
-
                 <PhaseInstructions items={job.roughInstructions} onChange={v=>u({roughInstructions:v})} color={C.rough}
                   onAddMaterial={(text,source)=>{
                     const orders = job.roughMaterials||[];
@@ -8213,7 +8160,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 })()}
                 <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const finishOpen=punchOpen(job.finishPunch);const qcOpen=punchOpen(job.qcPunch);const total=finishOpen+qcOpen;if(total>0){const parts=[];if(finishOpen>0)parts.push(`${finishOpen} finish punch item${finishOpen!==1?"s":""}`);if(qcOpen>0)parts.push(`${qcOpen} QC item${qcOpen!==1?"s":""}`);alert(`Cannot set Finish to 100% — ${parts.join(" and ")} still open. Clear them first.`);return;}}const invoiceFire=pct>=85&&!job.finishInvoiceFired?{finishInvoiceFired:true,finishInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{finishInvoiceFired:false,finishInvoiceDismissed:false}:{};u({finishStage:v,...invoiceFire,...invoiceReset,...(v==="100%"?{finishStatus:"complete"}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
                 <div style={{marginTop:8,marginBottom:12}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
-
                 <PhaseInstructions items={job.finishInstructions} onChange={v=>u({finishInstructions:v})} color={C.finish}
                   onAddMaterial={(text,source)=>{
                     const orders = job.finishMaterials||[];
@@ -8221,7 +8167,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     if(openEntry){ u({finishMaterials:orders.map(o=>o.id===openEntry.id?{...o,items:o.items?o.items.replace(/(<br\s*\/?>)+$/i,'')+'\n'+text:text}:o)}); }
                     else { u({finishMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",source:source||"",items:text,pickedUp:false,needsOrder:true}]}); }
                   }}/>
-
               </Section>
 
               <Section label="Punch List" color={C.finish} action={
