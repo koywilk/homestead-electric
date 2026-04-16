@@ -1,7 +1,7 @@
 // BUILD_v9_FIXED
 import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { initializeApp } from "firebase/app";
-import { getFirestore, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { getMessaging, getToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable } from "firebase/functions";
@@ -44,7 +44,9 @@ const firebaseConfig = {
 
 const firebaseApp = initializeApp(firebaseConfig);
 
-const db        = getFirestore(firebaseApp);
+const db        = initializeFirestore(firebaseApp, {
+  localCache: persistentLocalCache({ tabManager: persistentMultipleTabManager() })
+});
 const storage   = getStorage(firebaseApp);
 const messaging = ("serviceWorker" in navigator) ? getMessaging(firebaseApp) : null;
 const functions = getFunctions(firebaseApp);
@@ -2027,7 +2029,16 @@ function PhaseInstructions({items, onChange, color, placeholder}) {
               ))}
             </div>
           )}
-          {/* Text body */}
+          {/* Urgent toggle + text body */}
+          <div style={{display:'flex',alignItems:'center',gap:6,padding:'4px 10px 0',justifyContent:'flex-end'}}>
+            <button onClick={()=>upd(entry.id,{urgent:!entry.urgent})}
+              style={{fontSize:10,fontWeight:700,background:entry.urgent?'rgba(220,38,38,0.12)':'transparent',
+                border:`1px solid ${entry.urgent?'rgba(220,38,38,0.5)':C.border}`,
+                borderRadius:99,padding:'2px 9px',cursor:'pointer',fontFamily:'inherit',
+                color:entry.urgent?'#dc2626':C.dim}}>
+              {entry.urgent ? '⚠ Urgent' : '⚠ Mark Urgent'}
+            </button>
+          </div>
           <textarea value={entry.text} onChange={e=>upd(entry.id,{text:e.target.value})}
             placeholder="Notes, colors, device placement, instructions…"
             rows={Math.max(2, (entry.text||'').split('\n').length + 1)}
@@ -14085,6 +14096,15 @@ function App() {
   const [identity, setIdentity] = useState(()=>getIdentity());
   const [notifStatus,  setNotifStatus]  = useState(null); // null | 'loading' | 'ok' | string
   const [showNotifPrompt, setShowNotifPrompt] = useState(false);
+  const [isOnline, setIsOnline] = useState(navigator.onLine);
+
+  useEffect(()=>{
+    const up   = () => setIsOnline(true);
+    const down = () => setIsOnline(false);
+    window.addEventListener('online',  up);
+    window.addEventListener('offline', down);
+    return () => { window.removeEventListener('online', up); window.removeEventListener('offline', down); };
+  }, []);
 
   // On login: if permission already granted, register silently.
   // If not yet asked, show the prompt banner so user can tap once to enable.
@@ -15033,6 +15053,17 @@ function App() {
 
             {(job.uploadedFiles||[]).length>0&&<Pill label={`${job.uploadedFiles.length} files`} color={C.green}/>}
 
+            {[...(job.roughInstructions||[]),...(job.finishInstructions||[])]
+              .filter(e=>e.urgent&&e.label)
+              .map(e=>(
+                <span key={e.id} style={{fontSize:9,fontWeight:800,color:'#dc2626',
+                  background:'rgba(220,38,38,0.12)',border:'1px solid rgba(220,38,38,0.35)',
+                  borderRadius:99,padding:'1px 7px',whiteSpace:'nowrap',flexShrink:0}}>
+                  ⚠ {e.label}
+                </span>
+              ))
+            }
+
           </div>
 
           <div style={{display:"flex",alignItems:"center",gap:6,marginLeft:"auto",flexShrink:0}}>
@@ -15216,6 +15247,14 @@ function App() {
           </button>
         </div>
       </div>
+
+      {/* Offline banner */}
+      {!isOnline && (
+        <div style={{background:'#ca8a04',color:'#000',padding:'8px 16px',
+          display:'flex',alignItems:'center',gap:8,fontSize:12,fontWeight:700}}>
+          <span>📵 No connection — changes are saved locally and will sync when you're back online</span>
+        </div>
+      )}
 
       {/* Notification permission prompt — shown once after login if not yet granted */}
       {showNotifPrompt && !notifStatus && (
