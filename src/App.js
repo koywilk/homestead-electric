@@ -2006,6 +2006,7 @@ function PhaseInstructionEntry({entry, onUpd, onDel, color, onAddMaterial}) {
     const formatted = matText.trim().split('\n').filter(Boolean)
       .map(l => l.trim().startsWith('- ') ? l.trim() : `- ${l.trim()}`).join('<br>');
     onAddMaterial(formatted, matSource);
+    onUpd({materialAdded: true});
     setMatText('');
     setMatSource('');
     setMatOpen(false);
@@ -2035,6 +2036,13 @@ function PhaseInstructionEntry({entry, onUpd, onDel, color, onAddMaterial}) {
           <span style={{fontSize:9,fontWeight:800,color:'#dc2626',background:'rgba(220,38,38,0.12)',
             border:'1px solid rgba(220,38,38,0.35)',borderRadius:99,padding:'1px 7px',flexShrink:0,
             whiteSpace:'nowrap'}}>⚠ Urgent</span>
+        )}
+        {entry.materialAdded && (
+          <span style={{fontSize:9,fontWeight:700,color:'#16a34a',background:'rgba(22,163,74,0.1)',
+            border:'1px solid rgba(22,163,74,0.3)',borderRadius:99,padding:'1px 7px',flexShrink:0,
+            whiteSpace:'nowrap',cursor:'pointer'}} title="Click to clear"
+            onClick={e=>{e.stopPropagation();onUpd({materialAdded:false});}}
+          >✓ Materials added</span>
         )}
         <button onClick={e=>{e.stopPropagation();onUpd({urgent:!entry.urgent});}}
           style={{fontSize:10,fontWeight:700,flexShrink:0,
@@ -2283,7 +2291,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId }) {
 
       {safeItems.map(item => (
 
-        <div key={item.id} style={{ marginBottom: 6 }}>
+        <div key={item.id} style={{ marginBottom: 10, border:`1px solid ${item.done ? C.border+'88' : C.border}`, borderRadius:8, padding:'8px 10px', background: item.done ? C.surface+'88' : C.surface, opacity: item.done ? 0.75 : 1 }}>
 
           {/* ── Main item row ── */}
           <div style={{ display: 'flex', alignItems: editingId===item.id ? 'flex-start' : 'center', gap: 8 }}>
