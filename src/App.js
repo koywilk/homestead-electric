@@ -3131,18 +3131,18 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
             <span style={{fontSize:13,
               opacity:uploadingId===item.id?0.4:((item.photos||[]).length>0?1:0.4),
               filter:(item.photos||[]).length>0?'none':'grayscale(1)'}}>
-              {uploadingId===item.id?'\u23f3':'\U0001f4f7'}
+              {uploadingId===item.id?'⏳':'📷'}
               {(item.photos||[]).length>0&&<sup style={{fontSize:8,fontWeight:700,color:C.blue}}>{(item.photos||[]).length}</sup>}
             </span>
           </label>
         )}
         <button onClick={()=>deleteItem(fk,roomId,item.id)}
-          style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:12,flexShrink:0,padding:'0 2px'}}>\u2715</button>
+          style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:12,flexShrink:0,padding:'0 2px'}}>✕</button>
       </div>
       {(item.addedBy||item.checkedBy)&&(
         <div style={{fontSize:9,color:C.dim,marginLeft:22,marginTop:2,display:'flex',gap:5,flexWrap:'wrap'}}>
           {item.addedBy&&!item.done&&<span>added by {item.addedBy}</span>}
-          {item.checkedBy&&item.done&&<span style={{color:C.green}}>\u2713 checked by {item.checkedBy}{item.checkedAt?` \u00b7 ${item.checkedAt}`:''}</span>}
+          {item.checkedBy&&item.done&&<span style={{color:C.green}}>✓ checked by {item.checkedBy}{item.checkedAt?` · ${item.checkedAt}`:''}</span>}
         </div>
       )}
       {(item.photos||[]).length>0&&(
@@ -3215,7 +3215,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
             <Btn onClick={commitAdd} variant="primary" style={{fontSize:11,padding:'4px 14px'}}>Add</Btn>
             <button onClick={()=>{setAddOpen(false);setAddText('');setNewRoomName('');}}
               style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:12,fontFamily:'inherit'}}>Cancel</button>
-            <span style={{fontSize:10,color:C.muted}}>\u21b5 Enter to add</span>
+            <span style={{fontSize:10,color:C.muted}}>↵ Enter to add</span>
           </div>
         </div>
       )}
@@ -3223,7 +3223,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
       {qcGroups.length===0&&!addOpen&&(
         <div style={{textAlign:'center',padding:'20px 12px',color:C.muted,fontSize:12,
           border:`1px dashed ${C.border}`,borderRadius:8}}>
-          No {phase.toLowerCase()} QC items yet \u2014 tap "+ Add QC Item" to log issues.
+          No {phase.toLowerCase()} QC items yet — tap "+ Add QC Item" to log issues.
         </div>
       )}
 
