@@ -74,9 +74,9 @@ async function registerFCMToken(userId, force=false) {
     if ("serviceWorker" in navigator) {
       try {
         swReg = await navigator.serviceWorker.register("/firebase-messaging-sw.js");
-        // Force update so stale SWs don't serve old token logic
+        // Force update so stale SWs don't serve old token logic — critical for
+        // keeping the SW current after deployments.
         await swReg.update().catch(() => {});
-        // Wait for the SW to be active
         await navigator.serviceWorker.ready;
       } catch(e) {
         console.warn("[HE] SW register failed:", e.message);
@@ -95,13 +95,23 @@ async function registerFCMToken(userId, force=false) {
       if (u.id !== userId) return u;
       const existing = Array.isArray(u.fcmTokens) ? u.fcmTokens
         : u.fcmToken ? [u.fcmToken] : [];
-      const merged = existing.includes(token) ? existing : [...existing, token];
+      // On force refresh: replace this device's previous token with the fresh one.
+      // This prevents the array from growing with duplicate or rotated tokens.
+      let merged;
+      if (force && existing.length > 0) {
+        // Keep all tokens except the last one (this device), add the fresh token
+        merged = [...existing.slice(0, -1), token];
+        if (!merged.includes(token)) merged = [...existing, token];
+      } else {
+        merged = existing.includes(token) ? existing : [...existing, token];
+      }
       return { ...u, fcmTokens: merged.slice(-10) };
     });
     await setDoc(doc(db, "settings", "users"), { list });
+    console.log("[HE] FCM token registered" + (force ? " (forced refresh)" : ""));
     return "ok";
   } catch (e) {
-    console.warn("[HE] FCM registration skipped:", e.message);
+    console.warn("[HE] FCM registration failed:", e.message);
     return "error:" + e.message;
   }
 }
@@ -7972,6 +7982,22 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const qcCount = countFloor(job.qcPunch?.upper||{}) + countFloor(job.qcPunch?.main||{}) + countFloor(job.qcPunch?.basement||{}) +
     (job.qcPunch?.extras||[]).reduce((s,e)=>s+countFloor(job.qcPunch?.[e.key]||{}),0);
 
+  // Count fromQC items across roughPunch + finishPunch for the QC walk summary pill
+  const countQCWalk = (punch) => {
+    let total=0, done=0;
+    ['upper','main','basement',...(punch?.extras||[]).map(e=>e.key)].forEach(fk=>{
+      const f = normFloor(punch?.[fk]);
+      [...f.general,...f.rooms.flatMap(r=>r.items||[]),...(f.hotcheck||[])].forEach(i=>{
+        if(i.fromQC){ total++; if(i.done) done++; }
+      });
+    });
+    return {total,done};
+  };
+  const rqc = countQCWalk(job.roughPunch);
+  const fqc = countQCWalk(job.finishPunch);
+  const qcWalkTotal = rqc.total + fqc.total;
+  const qcWalkDone  = rqc.done  + fqc.done;
+
 
   return (
 
@@ -8062,7 +8088,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               <Pill label={`${(job.returnTrips||[]).filter(r=>!r.signedOff).length} return trip${(job.returnTrips||[]).filter(r=>!r.signedOff).length>1?"s":""} pending`} color={C.red}/>}
 
-            {qcCount>0&&<Pill label={`${qcCount} QC item${qcCount!==1?"s":""}`} color={C.red}/>}
+            {qcWalkTotal>0&&(
+              <Pill
+                label={qcWalkDone===qcWalkTotal
+                  ? `✓ ${qcWalkTotal} QC resolved`
+                  : `${qcWalkDone}/${qcWalkTotal} QC resolved`}
+                color={qcWalkDone===qcWalkTotal ? C.green : C.orange}/>
+            )}
+            {qcWalkTotal===0&&qcCount>0&&<Pill label={`${qcCount} QC item${qcCount!==1?"s":""}`} color={C.red}/>}
 
             
 
@@ -9023,6 +9056,41 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   </div>
                 );
               })()}
+
+              {(rqc.total>0||fqc.total>0)&&(
+                <div style={{display:'flex',gap:10,marginBottom:14,flexWrap:'wrap'}}>
+                  {rqc.total>0&&(
+                    <div style={{flex:1,minWidth:120,padding:'10px 14px',borderRadius:9,
+                      background:rqc.done===rqc.total?`${C.green}12`:`${C.blue}10`,
+                      border:`1px solid ${rqc.done===rqc.total?C.green+'44':C.blue+'44'}`}}>
+                      <div style={{fontSize:9,fontWeight:700,letterSpacing:'0.07em',
+                        color:rqc.done===rqc.total?C.green:C.blue,marginBottom:4}}>ROUGH QC WALK</div>
+                      <div style={{fontSize:20,fontWeight:800,
+                        color:rqc.done===rqc.total?C.green:C.blue,lineHeight:1}}>
+                        {rqc.done}<span style={{fontSize:12,fontWeight:400,color:C.muted}}>/{rqc.total}</span>
+                      </div>
+                      <div style={{fontSize:10,color:C.muted,marginTop:2}}>
+                        {rqc.done===rqc.total?'all resolved':`${rqc.total-rqc.done} remaining`}
+                      </div>
+                    </div>
+                  )}
+                  {fqc.total>0&&(
+                    <div style={{flex:1,minWidth:120,padding:'10px 14px',borderRadius:9,
+                      background:fqc.done===fqc.total?`${C.green}12`:`${C.purple}10`,
+                      border:`1px solid ${fqc.done===fqc.total?C.green+'44':C.purple+'44'}`}}>
+                      <div style={{fontSize:9,fontWeight:700,letterSpacing:'0.07em',
+                        color:fqc.done===fqc.total?C.green:C.purple,marginBottom:4}}>FINISH QC WALK</div>
+                      <div style={{fontSize:20,fontWeight:800,
+                        color:fqc.done===fqc.total?C.green:C.purple,lineHeight:1}}>
+                        {fqc.done}<span style={{fontSize:12,fontWeight:400,color:C.muted}}>/{fqc.total}</span>
+                      </div>
+                      <div style={{fontSize:10,color:C.muted,marginTop:2}}>
+                        {fqc.done===fqc.total?'all resolved':`${fqc.total-fqc.done} remaining`}
+                      </div>
+                    </div>
+                  )}
+                </div>
+              )}
 
               <Section label="Rough QC Walk" color={C.blue} defaultOpen={true}>
                 <QCWalkSection phase="Rough" punch={job.roughPunch} jobId={job.id}
@@ -14550,7 +14618,15 @@ function App() {
     if(!identity?.id) return;
     const perm = ("Notification" in window) ? Notification.permission : "denied";
     if(perm === "granted") {
-      registerFCMToken(identity.id);
+      // Always register on login. Also force-refresh once per day so tokens
+      // never go stale — FCM tokens can rotate and expired ones fail silently.
+      const storageKey = `he_fcm_refresh_${identity.id}`;
+      const lastRefresh = parseInt(localStorage.getItem(storageKey)||"0", 10);
+      const oneDayMs = 24 * 60 * 60 * 1000;
+      const needsRefresh = Date.now() - lastRefresh > oneDayMs;
+      registerFCMToken(identity.id, needsRefresh).then(result => {
+        if(result === "ok") localStorage.setItem(storageKey, String(Date.now()));
+      });
     } else if(perm === "default") {
       setShowNotifPrompt(true);
     }
