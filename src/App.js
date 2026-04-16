@@ -1554,6 +1554,8 @@ const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minR
 
 // Mobile sheet wrapping the rich editor for TA fields
 const MAT_SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","Other"];
+const stripHtml = (s) => (s||'').replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/\s+/g,' ').trim();
+
 const RichMobileSheet = ({initialHtml, initialMaterial='', initialMatSource='', placeholder, onDone, onCancel, addMode, showMaterial=false}) => {
   const [html, setHtml] = useState(initialHtml || "");
   const [material, setMaterial] = useState(initialMaterial || "");
@@ -3424,13 +3426,13 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
   const crewOnSite = roughStatus==="inprogress" || finishStatus==="inprogress";
 
   const chatCO = (o, i) => {
-    const msg = `Change Order #${i+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||"Pending"}\n\nhttps://homestead-electric.vercel.app/`;
+    const msg = `Change Order #${i+1} — ${jobName}\n\nDescription: ${stripHtml(o.desc)||"—"}\nTask: ${stripHtml(o.task)||"—"}\nMaterial: ${stripHtml(o.material)||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||"Pending"}\n\nhttps://homestead-electric.vercel.app/`;
     openGoogleChat(msg);
   };
 
   const emailCO = (o, i) => {
     const subject = `${jobName} — Change Order #${i+1}`;
-    const body = `Change Order #${i+1} — ${jobName}\n\nDate: ${o.date||"—"}\nSend CO To: ${o.sendTo||"—"}\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial Needed: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nStatus: ${o.coStatus||"Pending"}\n\nPlease review and confirm.\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
+    const body = `Change Order #${i+1} — ${jobName}\n\nDate: ${o.date||"—"}\nSend CO To: ${o.sendTo||"—"}\nDescription: ${stripHtml(o.desc)||"—"}\nTask: ${stripHtml(o.task)||"—"}\nMaterial Needed: ${stripHtml(o.material)||"—"}\nEstimated Time: ${o.time||"—"}\nStatus: ${o.coStatus||"Pending"}\n\nPlease review and confirm.\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
     onEmail({subject, body});
   };
 
@@ -3505,7 +3507,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
               <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
                 {isCompleted&&<span style={{fontSize:11,color:"#16a34a88"}}>{isCollapsed?"▸":"▾"}</span>}
                 {!isConverted&&!isCompleted&&jobSimproNo&&<Btn onClick={()=>{
-                  const msg=`Change Order #${o._idx+1} — ${jobName}\n\nDescription: ${o.desc||"—"}\nTask: ${o.task||"—"}\nMaterial: ${o.material||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||"Pending"}`;
+                  const msg=`Change Order #${o._idx+1} — ${jobName}\n\nDescription: ${stripHtml(o.desc)||"—"}\nTask: ${stripHtml(o.task)||"—"}\nMaterial: ${stripHtml(o.material)||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||"Pending"}`;
                   navigator.clipboard.writeText(msg).catch(()=>{});
                   window.open(`https://homesteadelectric.simprosuite.com/staff/editProject.php?jobID=${jobSimproNo}`,"_blank");
                 }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>Simpro</Btn>}
@@ -3692,7 +3694,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[]}
 
   const chatTrip = (t,i) => {
     const punchOpen = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${stripPunchHtml(p.text)}`).join("\n") || "None";
-    const msg = `Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}\n\nhttps://homestead-electric.vercel.app/`;
+    const msg = `Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${stripHtml(t.scope)||"—"}\nMaterial Needed: ${stripHtml(t.material)||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}\n\nhttps://homestead-electric.vercel.app/`;
     openGoogleChat(msg);
   };
 
@@ -3702,7 +3704,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[]}
 
     const subject = `${jobName} — Return Trip #${i+1}`;
 
-    const body = `Return Trip #${i+1} — ${jobName}\n\nDate: ${t.date||"—"}\nScope of Work:\n${t.scope||"—"}\n\nMaterial Needed:\n${t.material||"—"}\n\nPunch List:\n${punchLines}\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
+    const body = `Return Trip #${i+1} — ${jobName}\n\nDate: ${t.date||"—"}\nScope of Work:\n${stripHtml(t.scope)||"—"}\n\nMaterial Needed:\n${stripHtml(t.material)||"—"}\n\nPunch List:\n${punchLines}\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
 
     onEmail({subject, body});
 
@@ -3860,7 +3862,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[]}
               )}
               {jobSimproNo&&<Btn onClick={()=>{
                 const punchOpen=(t.punch||[]).filter(p=>!p.done).map(p=>`• ${stripPunchHtml(p.text)}`).join("\n")||"None";
-                const msg=`Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${t.scope||"—"}\nMaterial Needed: ${t.material||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}`;
+                const msg=`Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${stripHtml(t.scope)||"—"}\nMaterial Needed: ${stripHtml(t.material)||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}`;
                 navigator.clipboard.writeText(msg).catch(()=>{});
                 window.open(`https://homesteadelectric.simprosuite.com/staff/editProject.php?jobID=${jobSimproNo}`,"_blank");
               }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>Simpro</Btn>}
@@ -8719,7 +8721,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   filter={job.qcPunchFilter||null} filterLabel={job.qcPunchFilterLabel||''} onSaveFilter={(v,lbl)=>u({qcPunchFilter:v,qcPunchFilterLabel:lbl})}/>
               }>
                 <PunchSection punch={job.qcPunch} onChange={v=>{const allClear=punchOpen(v)===0;u({qcPunch:v,...(job.qcStatus==="fail"&&allClear?{qcStatus:"pass"}:{})});}} jobName={job.name||"Job"} phase="QC" onEmail={({subject,body})=>{ openEmail("", subject, body); }} showHotcheck={true}
-                  filterIds={job.qcPunchFilter ? new Set(job.qcPunchFilter) : null}/>
+                  filterIds={job.qcPunchFilter ? new Set(job.qcPunchFilter) : null}
+                  jobId={job.id}/>
               </Section>
 
               {(job.qcPunchExternal?.length>0)&&(
