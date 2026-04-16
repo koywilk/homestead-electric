@@ -2986,7 +2986,7 @@ function MaterialOrders({orders,onChange}) {
 
   const [collapsed, setCollapsed] = useState(() => {
     const m = {};
-    safeOrders.forEach(o => { if(o.pickedUp) m[o.id] = true; });
+    safeOrders.forEach(o => { m[o.id] = true; }); // all start collapsed
     return m;
   });
 
@@ -3007,7 +3007,12 @@ function MaterialOrders({orders,onChange}) {
     <div>
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add PO</Btn>
 
-      {safeOrders.map((o,i) => {
+      {[...safeOrders]
+        .sort((a,b) => {
+          const rank = o => o.pickedUp ? 2 : (!o.ordered && o.needsOrder) ? 0 : 1;
+          return rank(a) - rank(b);
+        })
+        .map((o,i) => {
         const isCollapsed = !!collapsed[o.id];
         // Three states (in priority order): pickedUp > ordered > needsOrder
         const cardBg     = o.pickedUp ? "rgba(22,163,74,0.05)"
