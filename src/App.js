@@ -2004,7 +2004,7 @@ function PhaseInstructionEntry({entry, onUpd, onDel, color, onAddMaterial}) {
   const submitMaterial = () => {
     if (!matText.trim() || !onAddMaterial) return;
     const formatted = matText.trim().split('\n').filter(Boolean)
-      .map(l => l.trim().startsWith('- ') ? l.trim() : `- ${l.trim()}`).join('\n');
+      .map(l => l.trim().startsWith('- ') ? l.trim() : `- ${l.trim()}`).join('<br>');
     onAddMaterial(formatted, matSource);
     setMatText('');
     setMatSource('');
@@ -7964,7 +7964,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   onAddMaterial={(text,source)=>{
                     const orders = job.roughMaterials||[];
                     const openEntry = [...orders].reverse().find(o=>o.needsOrder&&!o.ordered&&!o.pickedUp&&(source?(o.source||"")===(source||""):true));
-                    if(openEntry){ u({roughMaterials:orders.map(o=>o.id===openEntry.id?{...o,items:o.items?o.items.replace(/(<br\s*\/?>)+$/i,'')+'\n'+text:text}:o)}); }
+                    if(openEntry){ u({roughMaterials:orders.map(o=>o.id===openEntry.id?{...o,items:o.items?o.items.replace(/(<br\s*\/?>)+$/i,'')+'<br>'+text:text}:o)}); }
                     else { u({roughMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",source:source||"",items:text,pickedUp:false,needsOrder:true}]}); }
                   }}/>
 
@@ -8189,7 +8189,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   onAddMaterial={(text,source)=>{
                     const orders = job.finishMaterials||[];
                     const openEntry = [...orders].reverse().find(o=>o.needsOrder&&!o.ordered&&!o.pickedUp&&(source?(o.source||"")===(source||""):true));
-                    if(openEntry){ u({finishMaterials:orders.map(o=>o.id===openEntry.id?{...o,items:o.items?o.items.replace(/(<br\s*\/?>)+$/i,'')+'\n'+text:text}:o)}); }
+                    if(openEntry){ u({finishMaterials:orders.map(o=>o.id===openEntry.id?{...o,items:o.items?o.items.replace(/(<br\s*\/?>)+$/i,'')+'<br>'+text:text}:o)}); }
                     else { u({finishMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",source:source||"",items:text,pickedUp:false,needsOrder:true}]}); }
                   }}/>
               </Section>
