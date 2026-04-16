@@ -2986,6 +2986,8 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
   const [newRoomName,  setNewRoomName]  = useState('');
   const [uploadingId,  setUploadingId]  = useState(null);
   const [lightboxPhoto,setLightboxPhoto]= useState(null);
+  const [editingItem,  setEditingItem]  = useState(null); // {fk, roomId, itemId}
+  const [editText,     setEditText]     = useState('');
 
   const safePunch = punch || {};
   const extras    = safePunch.extras || [];
@@ -3070,6 +3072,19 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
     writeFloor(floorKey, newFloor);
   };
 
+  const commitEdit = (floorKey, roomId, itemId, newText) => {
+    if(!newText.trim()) return;
+    const floor = getFloor(floorKey);
+    const upd = items => items.map(i=>i.id===itemId?{...i,text:newText.trim()}:i);
+    let newFloor;
+    if(roomId==='general')       newFloor={...floor, general:upd(floor.general)};
+    else if(roomId==='hotcheck') newFloor={...floor, hotcheck:upd(floor.hotcheck||[])};
+    else newFloor={...floor, rooms:floor.rooms.map(r=>r.id===roomId?{...r,items:upd(r.items||[])}:r)};
+    writeFloor(floorKey, newFloor);
+    setEditingItem(null);
+    setEditText('');
+  };
+
   const commitAdd = () => {
     const txt = addText.trim();
     if(!txt) return;
@@ -3120,10 +3135,25 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
         <input type="checkbox" checked={!!item.done}
           onChange={()=>toggleItem(fk,roomId,item.id)}
           style={{accentColor:C.green,width:14,height:14,cursor:'pointer',flexShrink:0}}/>
-        <span style={{flex:1,fontSize:12,color:item.done?C.muted:C.text,
-          textDecoration:item.done?'line-through':'none',lineHeight:1.4}}>
-          {item.text}
-        </span>
+        {editingItem?.itemId===item.id ? (
+          <textarea autoFocus value={editText}
+            onChange={e=>setEditText(e.target.value)}
+            onKeyDown={e=>{if(e.key==='Enter'&&!e.shiftKey){e.preventDefault();commitEdit(fk,roomId,item.id,editText);}if(e.key==='Escape'){setEditingItem(null);setEditText('');}}}
+            onBlur={()=>commitEdit(fk,roomId,item.id,editText)}
+            rows={2}
+            style={{flex:1,fontSize:12,border:`1px solid ${C.border}`,borderRadius:5,padding:'4px 6px',
+              background:C.surface,color:C.text,outline:'none',fontFamily:'inherit',resize:'vertical',lineHeight:1.4}}/>
+        ) : (
+          <span onClick={()=>{if(item.done)return;setEditingItem({fk,roomId,itemId:item.id});setEditText(item.text);}}
+            style={{flex:1,fontSize:12,color:item.done?C.muted:C.text,
+              textDecoration:item.done?'line-through':'none',lineHeight:1.4,
+              cursor:item.done?'default':'text',borderRadius:4,padding:'2px 4px',
+              transition:'background 0.1s'}}
+            onMouseEnter={e=>{if(!item.done)e.target.style.background=C.border+'66'}}
+            onMouseLeave={e=>e.target.style.background='transparent'}>
+            {item.text}
+          </span>
+        )}
         {jobId&&(
           <label title="Add photo" style={{cursor:'pointer',flexShrink:0,lineHeight:1}}>
             <input type="file" accept="image/*" multiple style={{display:'none'}}
