@@ -13395,6 +13395,64 @@ function Scoreboard({ jobs, users=[] }) {
     return n;
   };
 
+  // Business-day iterator between two YMD dates (inclusive, Mon-Fri only).
+  const businessDaysBetween = (startYMD, endYMD) => {
+    const out = new Set();
+    if (!startYMD || !endYMD || startYMD > endYMD) return out;
+    const [sy,sm,sd] = startYMD.split("-").map(Number);
+    const [ey,em,ed] = endYMD.split("-").map(Number);
+    const s = new Date(sy, sm-1, sd);
+    const e = new Date(ey, em-1, ed);
+    const cur = new Date(s);
+    while (cur <= e) {
+      const dow = cur.getDay();
+      if (dow !== 0 && dow !== 6) {
+        const y = cur.getFullYear();
+        const mm = String(cur.getMonth()+1).padStart(2,"0");
+        const dd = String(cur.getDate()).padStart(2,"0");
+        out.add(`${y}-${mm}-${dd}`);
+      }
+      cur.setDate(cur.getDate() + 1);
+    }
+    return out;
+  };
+
+  const todayYMD = (() => {
+    const d = new Date();
+    const y = d.getFullYear();
+    const mm = String(d.getMonth()+1).padStart(2,"0");
+    const dd = String(d.getDate()).padStart(2,"0");
+    return `${y}-${mm}-${dd}`;
+  })();
+
+  // The active window for a job, clamped to [anchor, today].
+  // Start: earliest of (roughStartDate, roughScheduledDate, roughStatusDate, prepStartDate)
+  //        that falls on/after the anchor.
+  // End:   if finish complete → finishStatusDate; else if rough complete and no
+  //        finish started → roughStatusDate; else today.
+  const activeWindowForJob = (job) => {
+    const candidates = [
+      job.roughStartDate, job.roughScheduledDate, job.roughStatusDate,
+      job.prepStartDate, job.finishStartDate, job.finishScheduledDate,
+    ].map(_toYMDScore).filter(Boolean).sort();
+    if (!candidates.length) return null;
+    let start = candidates[0];
+    if (start < SCOREBOARD_ANCHOR_YMD) start = SCOREBOARD_ANCHOR_YMD;
+
+    let end = todayYMD;
+    const fComplete = job.finishStatus === "complete";
+    const rComplete = job.roughStatus === "complete";
+    if (fComplete && job.finishStatusDate) {
+      const f = _toYMDScore(job.finishStatusDate);
+      if (f) end = f < todayYMD ? f : todayYMD;
+    } else if (rComplete && !job.finishStatus && job.roughStatusDate) {
+      const r = _toYMDScore(job.roughStatusDate);
+      if (r) end = r < todayYMD ? r : todayYMD;
+    }
+    if (start > end) return null;
+    return { start, end };
+  };
+
   // Synthesize attempts from pre-existing inspection state if the
   // attempts array is empty. This pulls in all results captured
   // before we started logging attempt history, so the scoreboard
@@ -13428,9 +13486,13 @@ function Scoreboard({ jobs, users=[] }) {
     const firstR = rAtt[0];
     const firstF = fAtt[0];
 
-    // Daily updates authored by anyone on this job, in the window.
+    // Daily updates authored on this job, in the window.
     const updates = [...(job.roughUpdates||[]), ...(job.finishUpdates||[])];
     const inWindow = updates.filter(u => u && _toYMDScore(u.date) >= SCOREBOARD_ANCHOR_YMD);
+
+    // Active business-day window for this job. Used as the compliance denominator.
+    const win = activeWindowForJob(job);
+    const activeDays = win ? businessDaysBetween(win.start, win.end) : new Set();
 
     return {
       roughFirstTryClean: firstR && firstR.result === "pass" && (firstR.items||[]).length === 0 ? 1 : 0,
@@ -13441,8 +13503,8 @@ function Scoreboard({ jobs, users=[] }) {
       finishQC: collectQCCount(job.finishPunch),
       roughAttempted: rAtt.length > 0 ? 1 : 0,
       finalAttempted: fAtt.length > 0 ? 1 : 0,
-      // Raw per-update records for aggregation (need name-level attribution below).
       _updates: inWindow,
+      _activeDays: activeDays,
     };
   };
 
@@ -13461,7 +13523,11 @@ function Scoreboard({ jobs, users=[] }) {
       roughItemsCalled: 0, finalItemsCalled: 0,
       roughQC: 0, finishQC: 0,
       roughAttempted: 0, finalAttempted: 0,
-      updatesPosted: 0, uniqueUpdateDays: new Set(),
+      updatesPosted: 0,
+      postedDays: new Set(),
+      activeDays: new Set(),
+      _margins: [],       // list of numeric simproMargin values for this person's jobs
+      _marginsEst: 0,     // how many of those were flagged as estimate-only
     };
     const s = statsForJob(j);
     agg[groupKey].jobs++;
@@ -13469,6 +13535,14 @@ function Scoreboard({ jobs, users=[] }) {
      "roughQC","finishQC","roughAttempted","finalAttempted"].forEach(k => {
       agg[groupKey][k] += s[k];
     });
+    // Profit margin — pull from the per-job cache that getSimproJobFinancials
+    // writes when someone opens a job detail pane. Coverage is therefore
+    // partial: a job that's never been opened will have no margin and is
+    // simply excluded from this person's average/denominator.
+    if (typeof j.simproMargin === "number" && !isNaN(j.simproMargin)) {
+      agg[groupKey]._margins.push(j.simproMargin);
+      if (j.simproMarginIsEst) agg[groupKey]._marginsEst++;
+    }
     // Update attribution differs by mode:
     //   lead    → only count updates authored BY this lead
     //   foreman → count every update on jobs they foreman (whole crew)
@@ -13476,22 +13550,50 @@ function Scoreboard({ jobs, users=[] }) {
       if (mode === "lead" && upd.addedBy !== groupKey) return;
       agg[groupKey].updatesPosted++;
       const d = _toYMDScore(upd.date);
-      if (d) agg[groupKey].uniqueUpdateDays.add(d);
+      // Only count weekdays toward "posted days" so the denominator/numerator align.
+      if (d) {
+        const [yy,mm,dd] = d.split("-").map(Number);
+        const dow = new Date(yy, mm-1, dd).getDay();
+        if (dow !== 0 && dow !== 6) agg[groupKey].postedDays.add(d);
+      }
     });
+    // Active business days for THIS job contribute to the group's denominator.
+    s._activeDays.forEach(d => agg[groupKey].activeDays.add(d));
   });
 
   const rows = Object.values(agg)
-    .map(r => ({...r, uniqueUpdateDays: r.uniqueUpdateDays.size}))
+    .map(r => {
+      const mCount = r._margins.length;
+      const avgMargin = mCount ? (r._margins.reduce((a,x)=>a+x,0) / mCount) : null;
+      const jobsOverGoal = r._margins.filter(m => m >= 15).length;
+      return {
+        ...r,
+        postedDays:   r.postedDays.size,
+        activeDays:   r.activeDays.size,
+        marginCount:  mCount,
+        avgMargin,
+        jobsOverGoal,
+        marginEst:    r._marginsEst,
+      };
+    })
     .sort((a,b) => {
-      // Rank by first-try-clean count desc, then update days desc, then name.
+      // Rank by first-try-clean count desc, then posted days desc, then name.
       const bScore = b.roughFirstTryClean + b.finalFirstTryClean;
       const aScore = a.roughFirstTryClean + a.finalFirstTryClean;
       if (bScore !== aScore) return bScore - aScore;
-      if (b.uniqueUpdateDays !== a.uniqueUpdateDays) return b.uniqueUpdateDays - a.uniqueUpdateDays;
+      if (b.postedDays !== a.postedDays) return b.postedDays - a.postedDays;
       return a.name.localeCompare(b.name);
     });
 
   const pct = (hit, tot) => tot > 0 ? Math.round((hit/tot)*100) : 0;
+  const pctColor = (p) => p >= 90 ? "#16a34a" : p >= 70 ? "#f59e0b" : "#dc2626";
+  const pctBg    = (p) => p >= 90 ? "#dcfce7" : p >= 70 ? "#fef3c7" : "#fee2e2";
+  const rankBadge = (i) => {
+    if (i === 0) return {label:"1st",bg:"#fbbf24",fg:"#78350f"};
+    if (i === 1) return {label:"2nd",bg:"#cbd5e1",fg:"#334155"};
+    if (i === 2) return {label:"3rd",bg:"#fb923c",fg:"#7c2d12"};
+    return null;
+  };
 
   const Th = ({children, title}) => (
     <th title={title} style={{padding:"10px 12px",fontSize:10,fontWeight:700,letterSpacing:"0.08em",
@@ -13517,14 +13619,16 @@ function Scoreboard({ jobs, users=[] }) {
   // Each metric's meaning, in plain language.
   const metricDefs = [
     { name:"Jobs", body:"Active jobs where this person is the assigned lead (or foreman, in foreman view)." },
-    { name:"4-Way First Try", body:"Jobs where the very first 4-way attempt was a pass AND zero items were called. Shown as clean/attempted + percentage." },
+    { name:"4-Way First Try", body:"Jobs where the very first 4-way attempt was a pass AND zero items were called. Shown as clean/attempted + percentage. Green ≥90%, amber ≥70%, red below." },
     { name:"Final First Try", body:"Jobs where the very first final attempt was a pass AND zero items were called. Shown as clean/attempted + percentage." },
     { name:"4-Way Items", body:"Total items called by the inspector across every 4-way attempt on this person's jobs. Includes items from failed attempts that later got resolved." },
     { name:"Final Items", body:"Same idea as 4-Way Items, but for final inspections." },
     { name:"Rough QC", body:"Items called during a rough QC walk. Counts entries flagged fromQC on the rough punch list." },
     { name:"Finish QC", body:"Items called during a finish QC walk. Counts entries flagged fromQC on the finish punch list." },
-    { name:"Updates Posted", body:"Daily update entries authored on this person's jobs. In Lead view, only credits updates the lead personally posted. In Foreman view, credits every update on the foreman's jobs, regardless of who posted — so you can see the crew's overall diligence." },
-    { name:"Days Posted", body:"Unique calendar days on which this person (or their crew, in foreman view) posted at least one daily update. A fairer cadence signal than raw Updates Posted." },
+    { name:"Updates Posted", body:"Total daily update entries in the window. Lead view credits only updates the lead authored. Foreman view counts every update on the foreman's jobs (whole crew)." },
+    { name:"Daily Updates", body:"Days posted / business days their jobs were active, plus a percentage. Active days = business days between the job's earliest start and today (or its complete date), unioned across all the person's jobs. Green ≥90%, amber ≥70%, red below." },
+    { name:"Avg Margin", body:"Average net profit margin across this person's jobs, pulled from Simpro. Green if the average hits the 15% goal, red below. An asterisk (*) after the number means some of that person's jobs only have estimated margins (no real costs tracked yet)." },
+    { name:"≥15% Jobs", body:"Jobs hitting the 15% profit goal, out of jobs with margin data available. Coverage is partial — a job gets margin data once someone opens its detail pane (or it auto-refreshes on open). Jobs with no cached margin yet aren't in the denominator." },
   ];
 
   return (
@@ -13568,10 +13672,10 @@ function Scoreboard({ jobs, users=[] }) {
         </div>
       )}
 
-      <div style={{background:"#fff",border:"1px solid #cbd5e1",borderRadius:12,overflowX:"auto"}}>
-        <table style={{width:"100%",borderCollapse:"collapse",minWidth:1020}}>
+      <div style={{background:"#fff",border:"1px solid #cbd5e1",borderRadius:12,overflowX:"auto",boxShadow:"0 1px 3px rgba(15,23,42,0.04)"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",minWidth:1100}}>
           <thead>
-            <tr>
+            <tr style={{background:"#f8fafc"}}>
               <Th>{mode==="lead" ? "Lead" : "Foreman"}</Th>
               <Th title="Active jobs assigned to this person">Jobs</Th>
               <Th title="4-ways passed on the very first attempt with zero items called">4-Way First Try</Th>
@@ -13580,33 +13684,101 @@ function Scoreboard({ jobs, users=[] }) {
               <Th title="Total items called across every final attempt">Final Items</Th>
               <Th title="Rough QC walk items (fromQC)">Rough QC</Th>
               <Th title="Finish QC walk items (fromQC)">Finish QC</Th>
-              <Th title="Daily updates posted in the window">Updates Posted</Th>
-              <Th title="Unique days with at least one daily update posted">Days Posted</Th>
+              <Th title="Daily updates posted in the window (total count)">Updates Posted</Th>
+              <Th title="Days posted / business days their jobs were active">Daily Updates</Th>
+              <Th title="Average Simpro net profit margin across this person's jobs (15% goal)">Avg Margin</Th>
+              <Th title="Jobs hitting the 15% profit goal / jobs with margin data">≥15% Jobs</Th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={10} style={{padding:"22px",textAlign:"center",color:"#475569",fontSize:13}}>
+                <td colSpan={12} style={{padding:"22px",textAlign:"center",color:"#475569",fontSize:13}}>
                   No jobs with a {mode==="lead" ? "lead" : "foreman"} assigned yet.
                 </td>
               </tr>
             )}
-            {rows.map(r => {
-              const rCleanPct = r.roughAttempted > 0 ? ` · ${pct(r.roughFirstTryClean, r.roughAttempted)}%` : "";
-              const fCleanPct = r.finalAttempted > 0 ? ` · ${pct(r.finalFirstTryClean, r.finalAttempted)}%` : "";
+            {rows.map((r, i) => {
+              const rP = pct(r.roughFirstTryClean, r.roughAttempted);
+              const fP = pct(r.finalFirstTryClean, r.finalAttempted);
+              const dP = pct(r.postedDays, r.activeDays);
+              const rank = rankBadge(i);
+              const rowBg = i === 0 ? "#fffbeb" : "transparent";
+              // Small pill for ratio + percent, colored by pct bucket.
+              const ratioPill = (num, den, p, showPct) => {
+                if (den === 0) return <span style={{color:"#94a3b8",fontSize:12}}>—</span>;
+                return (
+                  <span style={{
+                    display:"inline-flex",alignItems:"center",gap:5,
+                    background:pctBg(p),color:pctColor(p),
+                    padding:"3px 9px",borderRadius:99,fontWeight:700,fontSize:12,
+                    border:`1px solid ${pctColor(p)}33`,
+                  }}>
+                    {num}/{den}{showPct ? <span style={{fontWeight:600,fontSize:11,opacity:0.85}}>· {p}%</span> : null}
+                  </span>
+                );
+              };
               return (
-                <tr key={r.name}>
-                  <Td align="left" bold>{r.name}</Td>
-                  <Td>{r.jobs}</Td>
-                  <Td bold>{r.roughFirstTryClean}/{r.roughAttempted}<span style={{fontWeight:500,color:"#475569",fontSize:11}}>{rCleanPct}</span></Td>
-                  <Td bold>{r.finalFirstTryClean}/{r.finalAttempted}<span style={{fontWeight:500,color:"#475569",fontSize:11}}>{fCleanPct}</span></Td>
-                  <Td>{r.roughItemsCalled}</Td>
-                  <Td>{r.finalItemsCalled}</Td>
-                  <Td>{r.roughQC}</Td>
-                  <Td>{r.finishQC}</Td>
-                  <Td bold>{r.updatesPosted}</Td>
-                  <Td>{r.uniqueUpdateDays}</Td>
+                <tr key={r.name} style={{background:rowBg}}>
+                  <Td align="left" bold>
+                    <span style={{display:"inline-flex",alignItems:"center",gap:8}}>
+                      {rank && (
+                        <span style={{
+                          fontSize:10,fontWeight:800,letterSpacing:"0.04em",
+                          background:rank.bg,color:rank.fg,padding:"2px 7px",
+                          borderRadius:99,minWidth:28,textAlign:"center",
+                        }}>{rank.label}</span>
+                      )}
+                      {r.name}
+                    </span>
+                  </Td>
+                  <Td>
+                    <span style={{background:"#f1f5f9",color:"#334155",padding:"2px 9px",borderRadius:99,fontSize:12,fontWeight:700}}>{r.jobs}</span>
+                  </Td>
+                  <Td>{ratioPill(r.roughFirstTryClean, r.roughAttempted, rP, true)}</Td>
+                  <Td>{ratioPill(r.finalFirstTryClean, r.finalAttempted, fP, true)}</Td>
+                  <Td><span style={{color:r.roughItemsCalled>0?"#dc2626":"#64748b",fontWeight:700}}>{r.roughItemsCalled}</span></Td>
+                  <Td><span style={{color:r.finalItemsCalled>0?"#dc2626":"#64748b",fontWeight:700}}>{r.finalItemsCalled}</span></Td>
+                  <Td><span style={{color:r.roughQC>0?"#b45309":"#64748b",fontWeight:700}}>{r.roughQC}</span></Td>
+                  <Td><span style={{color:r.finishQC>0?"#b45309":"#64748b",fontWeight:700}}>{r.finishQC}</span></Td>
+                  <Td bold><span style={{color:"#334155"}}>{r.updatesPosted}</span></Td>
+                  <Td>{ratioPill(r.postedDays, r.activeDays, dP, true)}</Td>
+                  <Td>
+                    {r.avgMargin == null
+                      ? <span style={{color:"#94a3b8",fontSize:12}}>—</span>
+                      : (() => {
+                          const hitGoal = r.avgMargin >= 15;
+                          const color = hitGoal ? "#16a34a" : "#dc2626";
+                          const bg    = hitGoal ? "#dcfce7" : "#fee2e2";
+                          return (
+                            <span style={{
+                              display:"inline-flex",alignItems:"center",gap:4,
+                              background:bg,color,
+                              padding:"3px 10px",borderRadius:99,fontWeight:700,fontSize:12,
+                              border:`1px solid ${color}33`,
+                            }}>
+                              {r.avgMargin.toFixed(1)}%{r.marginEst > 0 ? <span title="Some jobs have estimated margins only" style={{fontSize:11,opacity:0.85}}>*</span> : null}
+                            </span>
+                          );
+                        })()}
+                  </Td>
+                  <Td>
+                    {r.marginCount === 0
+                      ? <span style={{color:"#94a3b8",fontSize:12}}>—</span>
+                      : (() => {
+                          const p = pct(r.jobsOverGoal, r.marginCount);
+                          return (
+                            <span style={{
+                              display:"inline-flex",alignItems:"center",gap:5,
+                              background:pctBg(p),color:pctColor(p),
+                              padding:"3px 9px",borderRadius:99,fontWeight:700,fontSize:12,
+                              border:`1px solid ${pctColor(p)}33`,
+                            }}>
+                              {r.jobsOverGoal}/{r.marginCount}<span style={{fontWeight:600,fontSize:11,opacity:0.85}}>· {p}%</span>
+                            </span>
+                          );
+                        })()}
+                  </Td>
                 </tr>
               );
             })}
@@ -13620,6 +13792,12 @@ function Scoreboard({ jobs, users=[] }) {
         comparison. Pre-existing inspection results from before attempt-logging shipped are pulled in as a single
         synthetic attempt so the board isn't empty. New inspections logged after today will have accurate first-try
         history.
+        <div style={{marginTop:8,fontSize:11,color:"#475569"}}>
+          <b style={{color:"#334155"}}>Profit note.</b> Margins come from Simpro and are cached per job when its detail
+          pane is opened. Jobs that haven't been opened recently won't show up in the margin average or denominator.
+          A <b>*</b> next to the average means some of that person's jobs only have estimated margins (no real costs
+          tracked in Simpro yet).
+        </div>
       </div>
     </div>
   );
