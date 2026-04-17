@@ -36,21 +36,72 @@ function getTokens(user) {
   return tokens.filter(Boolean);
 }
 
+// Token error codes that mean the token is permanently dead and should be purged.
+const STALE_TOKEN_CODES = [
+  "messaging/registration-token-not-registered",
+  "messaging/invalid-registration-token",
+  "messaging/mismatched-credential",
+];
+
+/** Remove a single bad token from every user record in settings/users. */
+async function removeStaleToken(token) {
+  try {
+    const snap = await db.doc("settings/users").get();
+    if (!snap.exists) return;
+    const list = (snap.data().list || []).map(u => ({
+      ...u,
+      fcmTokens: (u.fcmTokens || []).filter(t => t !== token),
+      fcmToken:  u.fcmToken === token ? "" : (u.fcmToken || ""),
+    }));
+    await db.doc("settings/users").set({ list });
+    functions.logger.info("Removed stale FCM token", { token: token.slice(0, 20) });
+  } catch (e) {
+    functions.logger.warn("Failed to remove stale token", { error: e.message });
+  }
+}
+
 async function sendFCM(token, { title, body, jobId, section }) {
   if (!token) return;
   try {
     await messaging.send({
       token,
+      // data payload — always present so the SW can handle it
       data: {
         title:   title   || "",
         body:    body    || "",
         jobId:   jobId   || "",
         section: section || "",
       },
-      webpush: { headers: { Urgency: "high" } },
+      // notification payload — required for background delivery on Android & iOS
+      notification: { title: title || "", body: body || "" },
+      webpush: {
+        headers: { Urgency: "high" },
+        notification: {
+          title: title || "",
+          body:  body  || "",
+          icon:  "/icon-192.png",
+          badge: "/icon-192.png",
+          requireInteraction: false,
+        },
+      },
+      android: {
+        priority: "high",
+        notification: { sound: "default", channelId: "homestead_default" },
+      },
+      apns: {
+        headers: { "apns-priority": "10" },
+        payload: { aps: { sound: "default", badge: 1, "content-available": 1 } },
+      },
     });
   } catch (e) {
-    functions.logger.warn("FCM send failed", { token: token.slice(0, 20), error: e.message });
+    const isStale = STALE_TOKEN_CODES.some(
+      code => e.code === code || (e.message || "").includes(code)
+    );
+    if (isStale) {
+      await removeStaleToken(token);
+    } else {
+      functions.logger.warn("FCM send failed", { token: token.slice(0, 20), error: e.message });
+    }
   }
 }
 
@@ -234,8 +285,10 @@ exports.onJobUpdate = functions.firestore
       }, foremanTokens));
     }
 
-    // ── 6b. QC passed ─────────────────────────────────────────
-    if (before.qcStatus === "fail" && after.qcStatus === "pass") {
+    // ── 6b. QC passed (pass or fixed) ────────────────────────
+    const wasPass = after.qcStatus === "pass" || after.qcStatus === "fixed";
+    const wasPassBefore = before.qcStatus === "pass" || before.qcStatus === "fixed";
+    if (!wasPassBefore && wasPass) {
       const foremanTokens = await getTokenForName(after.foreman);
       tasks.push(sendToRoles(["admin", "manager"], {
         title: "✅ QC Passed",
@@ -721,4 +774,410 @@ exports.getSimproSchedule = functions.https.onCall(async (data) => {
 
   return schedules;
 });
+
+// ─────────────────────────────────────────────────────────────
+// SCHEDULED — Thursday 5pm Mountain Time
+// Friday Scheduling & Strategy Packet — uploaded as a Google Doc
+// to a Drive folder and announced via FCM push to Koy.
+// Read-only on jobs; writes one new Google Doc per run.
+// ─────────────────────────────────────────────────────────────
+
+// Drive folder ID where weekly packets are saved.
+// Koy must share this folder with the service account
+// (<project>@appspot.gserviceaccount.com) as Editor before deploy.
+// See setup notes at bottom of this block.
+const PACKET_DRIVE_FOLDER_ID = "1cDkt_N-TA6Z4gggjR6ywooz6GDh6OlDb";
+
+const { google } = require("googleapis");
+
+function _daysBetween(a, b) {
+  return Math.round((a - b) / (1000 * 60 * 60 * 24));
+}
+
+function _mtNow() {
+  return new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
+}
+
+function _fmtShortDate(d) {
+  if (!d) return "";
+  const dt = typeof d === "string" ? parseDate(d) : d;
+  if (!dt) return String(d);
+  return dt.toLocaleDateString("en-US", { month: "short", day: "numeric" });
+}
+
+function _esc(s) {
+  return String(s == null ? "" : s).replace(/[&<>"']/g, c => ({
+    "&": "&amp;", "<": "&lt;", ">": "&gt;", "\"": "&quot;", "'": "&#39;",
+  }[c]));
+}
+
+function _stripHtml(s) {
+  return String(s || "").replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim();
+}
+
+function _flatPunchWaiting(punch) {
+  const out = [];
+  ["upper", "main", "basement"].forEach(floor => {
+    const f = (punch && punch[floor]) || {};
+    const gen = f.general || [];
+    const hc  = f.hotcheck || [];
+    const rooms = f.rooms || [];
+    [...gen, ...hc].forEach(i => {
+      if (!i.done && i.waiting) out.push({ text: i.text, waitingOn: i.waitingOn });
+    });
+    rooms.forEach(r => (r.items || []).forEach(i => {
+      if (!i.done && i.waiting) out.push({ text: i.text, waitingOn: i.waitingOn });
+    }));
+  });
+  return out;
+}
+
+function _flatQuestions(qs) {
+  const out = [];
+  ["upper", "main", "basement"].forEach(floor => {
+    ((qs || {})[floor] || []).forEach(q => {
+      if (!q.done && !(q.answer || "").trim()) out.push(q.question);
+    });
+  });
+  return out;
+}
+
+exports.thursdayPacket = functions.pubsub
+  .schedule("0 17 * * 4")
+  .timeZone(TZ)
+  .onRun(async () => {
+    const snap = await db.collection("jobs").get();
+    const jobs = snap.docs
+      .map(d => {
+        const raw = d.data() || {};
+        const data = raw.data || {};
+        return { id: d.id, ...data };
+      })
+      .filter(j => j && j.name);
+
+    const isComplete = (j) =>
+      j.finishStatus === "complete" || parseInt(j.finishStage) === 100;
+    const active     = jobs.filter(j => !isComplete(j));
+    const activeJobs = active.filter(j => j.type !== "quote");
+    const quotes     = active.filter(j => j.type === "quote");
+
+    const now   = _mtNow();
+    const today = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+
+    // ── SECTION 1: NEEDS SCHEDULING ───────────────────────────
+
+    // 1a. Jobs with no start date (not in progress / not complete)
+    const noStartDate = activeJobs.filter(j => {
+      if (j.roughScheduledDate || j.roughStatusDate) return false;
+      const rs = j.roughStatus || "";
+      if (rs === "inprogress" || rs === "complete") return false;
+      return true;
+    });
+
+    // 1b. Approved COs awaiting schedule
+    const approvedCOsNotScheduled = [];
+    activeJobs.forEach(j => {
+      (j.changeOrders || []).forEach((co, i) => {
+        if (co.coStatus === "approved") {
+          approvedCOsNotScheduled.push({
+            jobName: j.name,
+            coNum:   i + 1,
+            coDesc:  _stripHtml(co.description).slice(0, 80),
+          });
+        }
+      });
+    });
+
+    // 1c. Return trips needing schedule
+    const rtsNeedingSchedule = [];
+    activeJobs.forEach(j => {
+      (j.returnTrips || []).forEach((rt, i) => {
+        if (rt.signedOff || rt.rtScheduled) return;
+        const needs = rt.rtStatus === "needs" || rt.needsSchedule === true;
+        if (needs) {
+          rtsNeedingSchedule.push({
+            jobName: j.name,
+            rtNum:   i + 1,
+            scope:   (rt.scope || "").slice(0, 80),
+          });
+        }
+      });
+    });
+
+    // 1d. QC walks needed
+    const qcWalksNeeded = activeJobs.filter(j => j.qcStatus === "needs");
+
+    // 1e. Matterport pending on rough-complete / finish-active jobs
+    const matterportPending = activeJobs.filter(j => {
+      if (j.matterportStatus === "complete") return false;
+      const rs = j.roughStatus || "";
+      const fs = j.finishStatus || "";
+      return rs === "complete" || fs === "inprogress" ||
+             fs === "scheduled" || fs === "complete";
+    });
+
+    // 1f. Finish date missing — ONLY if rough-complete 50+ days
+    const finishDateMissingLong = activeJobs.filter(j => {
+      if (j.finishScheduledDate || j.finishStatusDate) return false;
+      if (j.roughStatus !== "complete") return false;
+      const roughEnd = parseDate(j.roughStatusDate);
+      if (!roughEnd) return false;
+      return _daysBetween(today, roughEnd) >= 50;
+    });
+
+    // ── SECTION 2: PIPELINE / STRATEGY ────────────────────────
+
+    // 2a. Quotes aging (oldest first; unknown age sinks to the bottom)
+    const quotesAging = quotes
+      .map(q => {
+        const created = q.createdAt ? new Date(q.createdAt) : null;
+        const days = (created && !isNaN(created))
+          ? _daysBetween(today, new Date(created.getFullYear(), created.getMonth(), created.getDate()))
+          : null;
+        return { ...q, _ageDays: days };
+      })
+      .sort((a, b) => (b._ageDays == null ? -1 : b._ageDays) - (a._ageDays == null ? -1 : a._ageDays));
+
+    // 2b. Ready to invoice
+    const readyToInvoice = activeJobs.filter(j => j.readyToInvoice);
+
+    // 2c. Flagged
+    const flagged = activeJobs.filter(j => j.flagged);
+
+    // 2d. Waiting items clustered by reason
+    const waitingByReason = {};
+    activeJobs.forEach(j => {
+      ["roughPunch", "finishPunch", "qcPunch"].forEach(phase => {
+        _flatPunchWaiting(j[phase]).forEach(item => {
+          const reason = (item.waitingOn || "").trim() || "Unspecified";
+          if (!waitingByReason[reason]) waitingByReason[reason] = [];
+          waitingByReason[reason].push({
+            jobName: j.name,
+            text:    _stripHtml(item.text).slice(0, 80),
+          });
+        });
+      });
+    });
+
+    // 2e. Unassigned foreman or lead
+    const unassigned = activeJobs.filter(j => {
+      const noForeman = !j.foreman || j.foreman === "Unassigned";
+      const noLead    = !j.lead    || j.lead    === "Unassigned";
+      return noForeman || noLead;
+    });
+
+    // 2f. Jobs with unanswered questions
+    const unansweredQs = [];
+    activeJobs.forEach(j => {
+      const r = _flatQuestions(j.roughQuestions);
+      const f = _flatQuestions(j.finishQuestions);
+      if (r.length + f.length > 0) {
+        unansweredQs.push({ jobName: j.name, roughCount: r.length, finishCount: f.length });
+      }
+    });
+
+    // ── SECTION 3: FORWARD LOOKING ────────────────────────────
+
+    const dayOfWeek   = today.getDay();
+    const diffToMon   = dayOfWeek === 0 ? -6 : 1 - dayOfWeek;
+    const mondayThis  = new Date(today);
+    mondayThis.setDate(today.getDate() + diffToMon);
+
+    const weekBuckets = [0, 1, 2, 3].map(w => ({ weekOffset: w, jobs: [] }));
+    activeJobs.forEach(j => {
+      const d = parseDate(j.roughScheduledDate) || parseDate(j.finishScheduledDate);
+      if (!d) return;
+      const diffDays = _daysBetween(d, mondayThis);
+      const weekIdx  = Math.floor(diffDays / 7);
+      if (weekIdx >= 0 && weekIdx < 4) {
+        weekBuckets[weekIdx].jobs.push(j);
+      }
+    });
+
+    // 3b. Conflicts — same person on 2+ jobs same week
+    const conflicts = [];
+    weekBuckets.forEach(b => {
+      const group = (role) => {
+        const m = {};
+        b.jobs.forEach(j => {
+          const who = j[role];
+          if (!who || who === "Unassigned") return;
+          m[who] = m[who] || [];
+          m[who].push(j.name);
+        });
+        return m;
+      };
+      Object.entries(group("foreman")).forEach(([p, js]) => {
+        if (js.length > 1) conflicts.push({ weekOffset: b.weekOffset, role: "Foreman", person: p, jobs: js });
+      });
+      Object.entries(group("lead")).forEach(([p, js]) => {
+        if (js.length > 1) conflicts.push({ weekOffset: b.weekOffset, role: "Lead", person: p, jobs: js });
+      });
+    });
+
+    // 3c. This week — completions & slips
+    const completedThisWeek = jobs.filter(j => {
+      if (j.finishStatus !== "complete") return false;
+      const d = parseDate(j.finishStatusDate);
+      return d && _daysBetween(today, d) >= 0 && _daysBetween(today, d) <= 7;
+    });
+    const slippedThisWeek = activeJobs.filter(j => {
+      const d = parseDate(j.roughScheduledDate);
+      if (!d) return false;
+      const da = _daysBetween(today, d);
+      if (da > 7 || da < 0) return false;
+      const rs = j.roughStatus || "";
+      return rs !== "inprogress" && rs !== "complete";
+    });
+
+    // ── BUILD HTML ────────────────────────────────────────────
+
+    const section = (title, count, body) => {
+      const badge = count > 0
+        ? `<span style="background:#dc262620;color:#dc2626;padding:2px 8px;border-radius:99px;font-size:11px;margin-left:8px">${count}</span>`
+        : `<span style="background:#16a34a20;color:#16a34a;padding:2px 8px;border-radius:99px;font-size:11px;margin-left:8px">0</span>`;
+      return `<h3 style="font-size:13px;text-transform:uppercase;letter-spacing:0.05em;margin:18px 0 8px;color:#111">${title}${badge}</h3>${body}`;
+    };
+
+    const list = (items, render) => {
+      if (!items.length) return `<div style="color:#9ca3af;font-size:12px;padding:2px 0 6px">None.</div>`;
+      return `<ul style="margin:0;padding:0 0 0 18px;font-size:13px;line-height:1.55;color:#111">${items.map(i => `<li style="margin-bottom:2px">${render(i)}</li>`).join("")}</ul>`;
+    };
+
+    const bigHeader = (t) => `<h2 style="font-size:15px;margin:28px 0 2px;padding-top:14px;border-top:2px solid #111;color:#111">${t}</h2>`;
+
+    const weekBucketsHtml = weekBuckets.map(b => {
+      const weekMon = new Date(mondayThis); weekMon.setDate(mondayThis.getDate() + b.weekOffset * 7);
+      const label = b.weekOffset === 0 ? "This week"
+                  : b.weekOffset === 1 ? "Next week"
+                  : `Week of ${weekMon.toLocaleDateString("en-US", { month: "short", day: "numeric" })}`;
+      if (b.jobs.length === 0) return `<div style="margin:4px 0;color:#9ca3af;font-size:12px"><b style="color:#111">${label}:</b> nothing scheduled</div>`;
+      return `<div style="margin:4px 0;font-size:13px;line-height:1.55"><b>${label}</b> <span style="color:#6b7280">(${b.jobs.length})</span>: ${b.jobs.map(j => _esc(j.name)).join(", ")}</div>`;
+    }).join("");
+
+    const waitingHtml = Object.keys(waitingByReason).length
+      ? Object.entries(waitingByReason).map(([reason, items]) =>
+          `<div style="margin:6px 0 10px"><div style="font-size:13px;font-weight:700;margin-bottom:2px">${_esc(reason)} <span style="color:#6b7280;font-weight:normal">(${items.length})</span></div><ul style="margin:0;padding:0 0 0 18px;font-size:12px;line-height:1.5;color:#374151">${items.map(i => `<li>${_esc(i.jobName)} — ${_esc(i.text)}</li>`).join("")}</ul></div>`
+        ).join("")
+      : `<div style="color:#9ca3af;font-size:12px;padding:2px 0 6px">None.</div>`;
+
+    const html = `
+<div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:720px;margin:0 auto;padding:24px;color:#111">
+<h1 style="font-size:22px;margin:0 0 4px">Friday Scheduling &amp; Strategy Packet</h1>
+<div style="color:#6b7280;font-size:12px;margin-bottom:8px">${today.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</div>
+
+${bigHeader("Needs Scheduling")}
+${section("No start date set", noStartDate.length, list(noStartDate, j => `<b>${_esc(j.name)}</b>${j.foreman ? ` · ${_esc(j.foreman)}` : ""}${j.simproNo ? ` · #${_esc(j.simproNo)}` : ""}`))}
+${section("Approved COs awaiting schedule", approvedCOsNotScheduled.length, list(approvedCOsNotScheduled, c => `<b>${_esc(c.jobName)}</b> · CO #${c.coNum}${c.coDesc ? ` — ${_esc(c.coDesc)}` : ""}`))}
+${section("Return trips needing schedule", rtsNeedingSchedule.length, list(rtsNeedingSchedule, r => `<b>${_esc(r.jobName)}</b> · RT #${r.rtNum}${r.scope ? ` — ${_esc(r.scope)}` : ""}`))}
+${section("QC walks needed", qcWalksNeeded.length, list(qcWalksNeeded, j => `<b>${_esc(j.name)}</b>${j.foreman ? ` · ${_esc(j.foreman)}` : ""}`))}
+${section("Matterport scans pending", matterportPending.length, list(matterportPending, j => `<b>${_esc(j.name)}</b>${j.foreman ? ` · ${_esc(j.foreman)}` : ""}`))}
+${section("Finish date missing (rough complete 50+ days)", finishDateMissingLong.length, list(finishDateMissingLong, j => {
+      const re = parseDate(j.roughStatusDate);
+      const d  = re ? _daysBetween(today, re) : 0;
+      return `<b>${_esc(j.name)}</b> · ${d}d since rough complete`;
+    }))}
+
+${bigHeader("Pipeline & Strategy")}
+${section("Quotes aging", quotesAging.length, list(quotesAging, q => `<b>${_esc(q.name)}</b>${q.quoteNumber ? ` · ${_esc(q.quoteNumber)}` : ""}${q._ageDays != null ? ` · ${q._ageDays}d old` : " · age unknown"}`))}
+${section("Ready to invoice", readyToInvoice.length, list(readyToInvoice, j => `<b>${_esc(j.name)}</b>${j.foreman ? ` · ${_esc(j.foreman)}` : ""}`))}
+${section("Flagged jobs", flagged.length, list(flagged, j => `<b>${_esc(j.name)}</b>${j.flagNote ? ` — ${_esc(j.flagNote)}` : ""}`))}
+${section("Jobs missing foreman or lead", unassigned.length, list(unassigned, j => {
+      const m = [];
+      if (!j.foreman || j.foreman === "Unassigned") m.push("foreman");
+      if (!j.lead    || j.lead    === "Unassigned") m.push("lead");
+      return `<b>${_esc(j.name)}</b> · missing ${m.join(" + ")}`;
+    }))}
+${section("Jobs with unanswered questions", unansweredQs.length, list(unansweredQs, u => `<b>${_esc(u.jobName)}</b> · ${u.roughCount ? `${u.roughCount} rough` : ""}${u.roughCount && u.finishCount ? " · " : ""}${u.finishCount ? `${u.finishCount} finish` : ""}`))}
+${section("Waiting on — clustered by reason", Object.keys(waitingByReason).length, waitingHtml)}
+
+${bigHeader("Next 4 Weeks")}
+${weekBucketsHtml}
+${section("Conflicts (same person, same week)", conflicts.length, list(conflicts, c => {
+      const weekLbl = c.weekOffset === 0 ? "this week" : c.weekOffset === 1 ? "next week" : `week ${c.weekOffset + 1}`;
+      return `${c.role} <b>${_esc(c.person)}</b> on ${c.jobs.length} jobs ${weekLbl}: ${c.jobs.map(_esc).join(", ")}`;
+    }))}
+
+${bigHeader("This Week")}
+${section("Completed", completedThisWeek.length, list(completedThisWeek, j => `<b>${_esc(j.name)}</b>${j.foreman ? ` · ${_esc(j.foreman)}` : ""}`))}
+${section("Slipped (scheduled but didn't start)", slippedThisWeek.length, list(slippedThisWeek, j => `<b>${_esc(j.name)}</b> · scheduled ${_fmtShortDate(j.roughScheduledDate)}`))}
+
+${bigHeader("Last Week's Decisions")}
+<div style="color:#9ca3af;font-size:12px;padding:2px 0 6px;font-style:italic">Decision tracking is on the list — nothing captured yet.</div>
+
+<div style="margin-top:32px;padding-top:14px;border-top:1px solid #e5e7eb;color:#9ca3af;font-size:11px">Generated ${now.toLocaleString("en-US", { timeZone: TZ, dateStyle: "medium", timeStyle: "short" })} MT · Homestead Electric app</div>
+</div>`;
+
+    const docTitle = `Friday Packet — ${today.toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" })}`;
+
+    // ── Upload to Drive as a Google Doc ───────────────────────
+    let docLink = "";
+    let docId   = "";
+    try {
+      if (!PACKET_DRIVE_FOLDER_ID || PACKET_DRIVE_FOLDER_ID === "REPLACE_WITH_FOLDER_ID") {
+        throw new Error("PACKET_DRIVE_FOLDER_ID not configured in functions/index.js");
+      }
+
+      const auth = new google.auth.GoogleAuth({
+        scopes: ["https://www.googleapis.com/auth/drive.file"],
+      });
+      const drive = google.drive({ version: "v3", auth });
+
+      const createRes = await drive.files.create({
+        requestBody: {
+          name:     docTitle,
+          parents:  [PACKET_DRIVE_FOLDER_ID],
+          mimeType: "application/vnd.google-apps.document",
+        },
+        media: {
+          mimeType: "text/html",
+          body:     html,
+        },
+        fields: "id, webViewLink",
+        supportsAllDrives: true,
+      });
+      docId   = createRes.data.id || "";
+      docLink = createRes.data.webViewLink || "";
+    } catch (e) {
+      functions.logger.error("thursdayPacket Drive upload failed", { error: e.message });
+      // Fall through — we still notify Koy with the failure so it's visible.
+      await sendToName("Koy", {
+        title: "⚠️ Thursday Packet Failed",
+        body:  `Drive upload error: ${e.message.slice(0, 120)}`,
+      });
+      return null;
+    }
+
+    // ── Notify Koy with a link to the doc ─────────────────────
+    await sendToName("Koy", {
+      title: "📋 Friday Packet Ready",
+      body:  `${docTitle} is in Drive — tap to open`,
+      // Reuse existing push shape; link is included in data payload so
+      // the SW / client can route the user to it.
+      jobId:   "",
+      section: docLink,
+    });
+
+    functions.logger.info("thursdayPacket saved to Drive", {
+      docId,
+      docLink,
+      noStartDate:        noStartDate.length,
+      approvedCOs:        approvedCOsNotScheduled.length,
+      rts:                rtsNeedingSchedule.length,
+      qc:                 qcWalksNeeded.length,
+      matterport:         matterportPending.length,
+      finishMissing50:    finishDateMissingLong.length,
+      quotesAging:        quotesAging.length,
+      readyToInvoice:     readyToInvoice.length,
+      flagged:            flagged.length,
+      unassigned:         unassigned.length,
+      unanswered:         unansweredQs.length,
+      waitingReasons:     Object.keys(waitingByReason).length,
+      conflicts:          conflicts.length,
+      completed:          completedThisWeek.length,
+      slipped:            slippedThisWeek.length,
+    });
+
+    return null;
+  });
 
