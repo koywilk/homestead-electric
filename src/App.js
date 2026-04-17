@@ -6120,7 +6120,17 @@ function KeypadSection({loads,onChange,label,allLoads=[]}) {
 }
 
 
-function PanelModulesSection({modules,onChange,system,allLoads=[]}) {
+function PanelModulesSection({
+  modules, onChange, system, allLoads=[],
+  // Optional cross-panel move support — when provided, the Move dropdown
+  // lists every module across every panel section and cross-section moves
+  // are routed through onCrossPanelMove so the parent can update both
+  // source + target top-level arrays in a single setState.
+  allModulesForMove = null,  // [{floorKey, isExtra, modId, modNum, moduleType, panelLabel}]
+  onCrossPanelMove = null,   // (fromModId, lid, toFloorKey, toIsExtra, toModId) => void
+  currentFloorKey = "",
+  currentIsExtra  = false,
+}) {
 
   const sys = system||"Control 4";
   const isSav = sys==="Savant", isLut = sys==="Lutron", isCres = sys==="Crestron";
@@ -6157,6 +6167,50 @@ function PanelModulesSection({modules,onChange,system,allLoads=[]}) {
     }));
   };
 
+  // Cross-panel aware move handler. Parses the option value; if the target
+  // module is in this same panel section, do a local move; otherwise hand
+  // off to the parent so both panel arrays update atomically.
+  const useCrossMove = !!(allModulesForMove && onCrossPanelMove);
+  const handleRowMove = (fromMid, lid, optionValue) => {
+    if (!useCrossMove) { moveLoad(fromMid, lid, optionValue); return; }
+    const [fk, extStr, tmid] = String(optionValue).split("|");
+    const ext = extStr === "1";
+    if (fk === currentFloorKey && ext === currentIsExtra) {
+      moveLoad(fromMid, lid, tmid);
+    } else {
+      onCrossPanelMove(fromMid, lid, fk, ext, tmid);
+    }
+  };
+  const moveValueFor = (mod) =>
+    useCrossMove ? `${currentFloorKey}|${currentIsExtra?1:0}|${mod.id}` : mod.id;
+  const renderMoveOptions = (mod) => {
+    if (!useCrossMove) {
+      return modules.map(m => (
+        <option key={m.id} value={m.id}>{m.id===mod.id?"(here)":(m.modNum||m.moduleType||"?")}</option>
+      ));
+    }
+    // Group by panel label for clarity
+    const groups = {};
+    allModulesForMove.forEach(m => {
+      const label = m.panelLabel || "(unnamed)";
+      if (!groups[label]) groups[label] = [];
+      groups[label].push(m);
+    });
+    return Object.entries(groups).map(([label, items]) => (
+      <optgroup key={label} label={label}>
+        {items.map(m => {
+          const val = `${m.floorKey}|${m.isExtra?1:0}|${m.modId}`;
+          const isHere = m.modId === mod.id;
+          return (
+            <option key={m.modId} value={val}>
+              {isHere ? "(here)" : `Mod ${m.modNum||"?"}${m.moduleType?` · ${m.moduleType}`:""}`}
+            </option>
+          );
+        })}
+      </optgroup>
+    ));
+  };
+
   const moduleTypes = isLut?LUT_MODULE_TYPES:isCres?CRES_MODULE_TYPES:isSav?SAV_MODULE_TYPES:C4_MODULE_TYPES;
 
   const chCap = (type) => ({
@@ -6166,7 +6220,7 @@ function PanelModulesSection({modules,onChange,system,allLoads=[]}) {
   }[type]||null);
 
   const showKeypad = !isSav&&!isLut&&!isCres;
-  const showMove = modules.length > 1;
+  const showMove = useCrossMove ? (allModulesForMove.length > 1) : (modules.length > 1);
   const rowGrid = `16px 22px 1fr 36px 70px 52px${showKeypad?" 70px":""}${showMove?" 44px":""} 20px`;
   const rowHeaders = ["","#","Load Name","Ch","Load Type","Watts",...(showKeypad?["Keypad"]:[]),...(showMove?["↗ Mod"]:[]),""];
 
@@ -6278,12 +6332,10 @@ function PanelModulesSection({modules,onChange,system,allLoads=[]}) {
                         </div>}
                         {showMove&&<div style={{flex:1}}>
                           <div style={{fontSize:9,color:C.dim,fontWeight:700,marginBottom:2}}>MOVE TO</div>
-                          <select value={mod.id} onChange={e=>moveLoad(mod.id,load.id,e.target.value)}
+                          <select value={moveValueFor(mod)} onChange={e=>handleRowMove(mod.id,load.id,e.target.value)}
                             style={{fontSize:12,border:`1px solid ${C.border}`,borderRadius:7,padding:"6px 8px",
                               background:C.surface,color:C.text,cursor:"pointer",width:"100%",fontFamily:"inherit"}}>
-                            {modules.map(m=>(
-                              <option key={m.id} value={m.id}>{m.id===mod.id?"(here)":m.modNum||m.moduleType||"?"}</option>
-                            ))}
+                            {renderMoveOptions(mod)}
                           </select>
                         </div>}
                       </div>
@@ -6325,13 +6377,11 @@ function PanelModulesSection({modules,onChange,system,allLoads=[]}) {
                         <Inp value={load.watts||""} onChange={e=>updLoad(mod.id,load.id,{watts:e.target.value})} placeholder="W" style={{textAlign:"center",fontSize:10}}/>
                         {showKeypad&&<Inp value={load.keypad||""} onChange={e=>updLoad(mod.id,load.id,{keypad:e.target.value})} placeholder="Keypad" style={{fontSize:10}}/>}
                         {showMove&&(
-                          <select value={mod.id} onChange={e=>moveLoad(mod.id,load.id,e.target.value)}
-                            title="Move to module"
+                          <select value={moveValueFor(mod)} onChange={e=>handleRowMove(mod.id,load.id,e.target.value)}
+                            title="Move to module (across any panel section)"
                             style={{fontSize:9,border:`1px solid ${C.border}`,borderRadius:4,padding:"2px 1px",
                               background:"#fff",color:C.muted,cursor:"pointer",width:"100%",fontFamily:"inherit"}}>
-                            {modules.map(m=>(
-                              <option key={m.id} value={m.id}>{m.id===mod.id?"(here)":m.modNum||m.moduleType||"?"}</option>
-                            ))}
+                            {renderMoveOptions(mod)}
                           </select>
                         )}
                         <button onClick={()=>delLoad(mod.id,load.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
@@ -9105,12 +9155,83 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 [{k:"main"},{k:"basement"},{k:"upper"}].forEach(({k})=>migrateFloorToModules(_plM.cp4Loads?.[k]||[]).forEach(m=>m.loads.forEach(l=>{if(l.name?.trim())_anM.add(l.name.trim());})));
                 (_plM.extraFloors||[]).forEach(ef=>migrateFloorToModules(_plM[ef.key]||[]).forEach(m=>m.loads.forEach(l=>{if(l.name?.trim())_anM.add(l.name.trim());})));
                 const alMod=(_plM.loads||[]).filter(l=>!_anM.has(l.name?.trim()||""));
-                return (<>
-                {[
-                  {floor:"upper", defaultLabel:"Upper Level"},
-                  {floor:"main",  defaultLabel:"Main Level"},
+
+                // Build flat list of every module across every panel section
+                // so the per-row "Move to Module" dropdown can span panels.
+                // Panels physically hold mixed-floor loads, so the dropdown
+                // must not be floor-scoped.
+                const _allModulesForMove = [];
+                const _stdPanels = [
+                  {floor:"upper",    defaultLabel:"Upper Level"},
+                  {floor:"main",     defaultLabel:"Main Level"},
                   {floor:"basement", defaultLabel:"Basement"},
-                ].map(({floor,defaultLabel})=>(
+                ];
+                _stdPanels.forEach(({floor, defaultLabel})=>{
+                  const panelLabel = (job.plSectionLabels?.[floor]||"").trim() || defaultLabel;
+                  migrateFloorToModules(_plM.cp4Loads?.[floor]||[]).forEach(m=>{
+                    _allModulesForMove.push({floorKey:floor, isExtra:false,
+                      modId:m.id, modNum:m.modNum, moduleType:m.moduleType, panelLabel});
+                  });
+                });
+                (_plM.extraFloors||[]).forEach(ef=>{
+                  migrateFloorToModules(_plM[ef.key]||[]).forEach(m=>{
+                    _allModulesForMove.push({floorKey:ef.key, isExtra:true,
+                      modId:m.id, modNum:m.modNum, moduleType:m.moduleType, panelLabel:ef.label});
+                  });
+                });
+
+                // Cross-panel move handler — updates both the source and
+                // target panel arrays in a single `u()` call so we don't
+                // drop the load mid-flight if React batches intermediates.
+                const _getMods = (fk, ext) =>
+                  migrateFloorToModules(ext ? (_plM[fk]||[]) : (_plM.cp4Loads?.[fk]||[]));
+                const _onCrossPanelMove = (fromModId, lid, toFloorKey, toIsExtra, toModId) => {
+                  // Locate source panel by scanning for the from-module
+                  let srcFloorKey=null, srcIsExtra=false;
+                  const _panelsToScan = [
+                    ..._stdPanels.map(({floor})=>({floor, isExtra:false})),
+                    ...((_plM.extraFloors||[]).map(ef=>({floor:ef.key, isExtra:true}))),
+                  ];
+                  for (const p of _panelsToScan) {
+                    const mods = _getMods(p.floor, p.isExtra);
+                    if (mods.some(m=>m.id===fromModId)) {
+                      srcFloorKey = p.floor; srcIsExtra = p.isExtra; break;
+                    }
+                  }
+                  if (!srcFloorKey) return;
+                  const srcMods = _getMods(srcFloorKey, srcIsExtra);
+                  const load = srcMods.find(m=>m.id===fromModId)?.loads.find(l=>l.id===lid);
+                  if (!load) return;
+                  const newSrcMods = srcMods.map(m => m.id===fromModId
+                    ? {...m, loads:m.loads.filter(l=>l.id!==lid).map((l,i)=>({...l,num:i+1}))}
+                    : m);
+                  // Same-panel move: reorder in one array
+                  if (srcFloorKey===toFloorKey && srcIsExtra===toIsExtra) {
+                    const combined = newSrcMods.map(m => m.id===toModId
+                      ? {...m, loads:[...m.loads, {...load, num:m.loads.length+1}]}
+                      : m);
+                    if (srcIsExtra) u({panelizedLighting:{..._plM, [srcFloorKey]:combined}});
+                    else u({panelizedLighting:{..._plM,
+                      cp4Loads:{...(_plM.cp4Loads||{}), [srcFloorKey]:combined}}});
+                    return;
+                  }
+                  // Cross-panel move: update both arrays in one go
+                  const tgtMods = _getMods(toFloorKey, toIsExtra);
+                  const newTgtMods = tgtMods.map(m => m.id===toModId
+                    ? {...m, loads:[...m.loads, {...load, num:m.loads.length+1}]}
+                    : m);
+                  let updated = {..._plM};
+                  if (srcIsExtra) updated = {...updated, [srcFloorKey]:newSrcMods};
+                  else updated = {...updated,
+                    cp4Loads:{...(updated.cp4Loads||{}), [srcFloorKey]:newSrcMods}};
+                  if (toIsExtra)  updated = {...updated, [toFloorKey]:newTgtMods};
+                  else updated = {...updated,
+                    cp4Loads:{...(updated.cp4Loads||{}), [toFloorKey]:newTgtMods}};
+                  u({panelizedLighting:updated});
+                };
+
+                return (<>
+                {_stdPanels.map(({floor,defaultLabel})=>(
                   <div key={floor} style={{marginBottom:16}}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
                       marginBottom:8,paddingBottom:4,borderBottom:`1px solid ${C.border}`}}>
@@ -9127,7 +9248,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       allLoads={alMod}
                       modules={migrateFloorToModules((job.panelizedLighting.cp4Loads?.[floor])||[])}
                       onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
-                        cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}/>
+                        cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}
+                      allModulesForMove={_allModulesForMove}
+                      onCrossPanelMove={_onCrossPanelMove}
+                      currentFloorKey={floor}
+                      currentIsExtra={false}/>
                   </div>
                 ))}
 
@@ -9155,7 +9280,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       system={job.lightingSystem||"Control 4"}
                       allLoads={alMod}
                       modules={migrateFloorToModules((job.panelizedLighting[ef.key])||[])}
-                      onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}/>
+                      onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}
+                      allModulesForMove={_allModulesForMove}
+                      onCrossPanelMove={_onCrossPanelMove}
+                      currentFloorKey={ef.key}
+                      currentIsExtra={true}/>
                   </div>
                 ))}
                 </>);
