@@ -8592,6 +8592,16 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           if (res.data?._debugFetchStats) {
             console.log("[simproCostCenters _debugFetchStats] — per-kind fetch counts:");
             console.table(res.data._debugFetchStats);
+            // Flatten statusBreakdown per kind so we can actually see the codes.
+            Object.entries(res.data._debugFetchStats).forEach(([kind, stats]) => {
+              console.log(`  ${kind} statusBreakdown:`, stats.statusBreakdown);
+            });
+          }
+          if (res.data?._debugFirstFailure) {
+            console.log("[simproCostCenters _debugFirstFailure] — first failing URL per kind:");
+            console.log("  catalog:", res.data._debugFirstFailure.catalog);
+            console.log("  oneOff: ", res.data._debugFirstFailure.oneOff);
+            console.log("  prebuild:", res.data._debugFirstFailure.prebuild);
           }
           setSimproCostCenters(res.data);
           setSimproCostCentersRefreshing(false);

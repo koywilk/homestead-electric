@@ -964,6 +964,8 @@ exports.getSimproJobCostCenters = functions
       oneOff:   { attempts: 0, ok: 0, emptyWithCols: 0, fellBackToDefault: 0, defaultAlsoEmpty: 0, withItems: 0, totalItems: 0, statusBreakdown: {} },
       prebuild: { attempts: 0, ok: 0, emptyWithCols: 0, fellBackToDefault: 0, defaultAlsoEmpty: 0, withItems: 0, totalItems: 0, statusBreakdown: {} },
     };
+    // First failing URL + body per kind, so we can see what Simpro is rejecting.
+    const firstFailure = { catalog: null, oneOff: null, prebuild: null };
     const tasks = [];
     flat.forEach(cc => {
       ITEM_KINDS.forEach(kind => {
@@ -994,8 +996,19 @@ exports.getSimproJobCostCenters = functions
             }
           }
           if (!r.ok) {
+            if (!firstFailure[kind.key]) {
+              firstFailure[kind.key] = {
+                url: baseUrl + colsParam,
+                status: r.status,
+                body: typeof r.data === "string" ? r.data.slice(0, 400) :
+                      (r.data ? JSON.stringify(r.data).slice(0, 400) : null),
+              };
+            }
             functions.logger.warn("getSimproJobCostCenters: item fetch failed", {
               kind: kind.key, sectionId: cc.sectionId, costCenterId: cc.id, status: r.status,
+              url: baseUrl + colsParam,
+              body: typeof r.data === "string" ? r.data.slice(0, 200) :
+                    (r.data ? JSON.stringify(r.data).slice(0, 200) : null),
             });
             return { cc, kind: kind.key, items: [] };
           }
@@ -1082,6 +1095,7 @@ exports.getSimproJobCostCenters = functions
       fetchedAt: new Date().toISOString(),
       _debugFirstItems: debugSamples, // temporary — remove once qty mapping is confirmed
       _debugFetchStats: debugStats,   // temporary — diagnose empty-item cases
+      _debugFirstFailure: firstFailure, // temporary — first failing URL per kind
     };
   });
 
