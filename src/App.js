@@ -3864,7 +3864,26 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
   const [selected,setSelected]     = useState([]);
 
-  const add = (textArg) => { const text = typeof textArg==='string' ? textArg : d.text; if(!text.trim()) return; const who=getIdentity(); onChange([{id:uid(),date:d.date,text,addedBy:who?.name||""},...updates]); setD({date:"",text:""}); };
+  const add = (textArg) => {
+    const text = typeof textArg==='string' ? textArg : d.text;
+    if(!text.trim()) return;
+    const who = getIdentity();
+    // If the user didn't pick a date, stamp today so the update has a valid
+    // date (otherwise the Scoreboard filter drops it and credit disappears).
+    // We also record createdAt as the save timestamp — scoreboard uses it as
+    // a fallback for legacy updates that were saved without a date.
+    const _t = new Date();
+    const _todayYMD = `${_t.getFullYear()}-${String(_t.getMonth()+1).padStart(2,"0")}-${String(_t.getDate()).padStart(2,"0")}`;
+    const updateDate = d.date && d.date.trim() ? d.date : _todayYMD;
+    onChange([{
+      id: uid(),
+      date: updateDate,
+      text,
+      addedBy: who?.name || "",
+      createdAt: _t.toISOString(),
+    }, ...updates]);
+    setD({date:"",text:""});
+  };
 
   const toggleSelect = (id) => setSelected(s=>s.includes(id)?s.filter(x=>x!==id):[...s,id]);
 
@@ -13552,10 +13571,15 @@ function Scoreboard({ jobs, users=[], identity }) {
     const firstF = fAtt[0];
 
     // Daily updates authored on this job, in the window.
+    // Prefer the self-reported date the user picked in the form. Fall back to
+    // the save-time createdAt stamp so entries typed without a date (common —
+    // the date input is easy to skip) still get credited. Without the fallback,
+    // every dateless entry was silently filtered out of the scoreboard.
+    const updateYMD = (u) => _toYMDScore(u?.date) || _toYMDScore(u?.createdAt);
     const updates = [...(job.roughUpdates||[]), ...(job.finishUpdates||[])];
     const inWindow = updates.filter(u => {
       if (!u) return false;
-      const d = _toYMDScore(u.date);
+      const d = updateYMD(u);
       return d && d >= effStart && d <= effEnd;
     });
 
@@ -13567,7 +13591,7 @@ function Scoreboard({ jobs, users=[], identity }) {
     const win = activeWindowForJob(job);
     const activeDays = win ? businessDaysBetween(win.start, win.end) : new Set();
     inWindow.forEach(u => {
-      const d = _toYMDScore(u.date);
+      const d = updateYMD(u);
       if (!d) return;
       const [yy,mm,dd] = d.split("-").map(Number);
       const dow = new Date(yy, mm-1, dd).getDay();
@@ -13629,7 +13653,10 @@ function Scoreboard({ jobs, users=[], identity }) {
     // Same logic for foreman view.
     s._updates.forEach(upd => {
       agg[groupKey].updatesPosted++;
-      const d = _toYMDScore(upd.date);
+      // Same fallback as the filter above: date first, createdAt second. Without
+      // this, any blank-date update was getting counted in updatesPosted by the
+      // filter but then dropped here on postedDays, pulling the ratio down.
+      const d = _toYMDScore(upd?.date) || _toYMDScore(upd?.createdAt);
       // Only count weekdays toward "posted days" so the denominator/numerator align.
       if (d) {
         const [yy,mm,dd] = d.split("-").map(Number);
@@ -13852,8 +13879,8 @@ function Scoreboard({ jobs, users=[], identity }) {
     { name:"Final Items", body:"Same idea as 4-Way Items, but for final inspections." },
     { name:"Rough QC", body:"Items called during a rough QC walk (rough punch, flagged fromQC). Filtered to the selected date range by each item's addedAt stamp. Items created before date stamps shipped don't have one and always count." },
     { name:"Finish QC", body:"Items called during a finish QC walk (finish punch, flagged fromQC). Filtered the same way as Rough QC." },
-    { name:"Updates Posted", body:"Total daily update entries on this person's scheduled jobs, in the window. Every update counts regardless of who typed it — leads can delegate." },
-    { name:"Daily Updates", body:"Days posted / business days their jobs were active, plus a percentage. Active days = business days between the job's earliest start and today (or its complete date), plus any weekday an update was posted — so posting on a job automatically makes that day count toward the denominator. Green ≥90%, amber ≥70%, red below." },
+    { name:"Updates Posted", body:"Total daily update entries on this person's scheduled jobs, in the window. Every update counts regardless of who typed it — leads can delegate. Entries saved without a date fall back to the save timestamp, so blank-date posts still count." },
+    { name:"Daily Updates", body:"Days posted / business days their jobs were active, plus a percentage. Active days = business days between the job's earliest start and today (or its complete date), plus any weekday an update was posted — so posting on a job automatically makes that day count toward the denominator. Updates without a user-picked date use the save timestamp instead, so leaving the date blank no longer makes a posting invisible. Green ≥90%, amber ≥70%, red below." },
     { name:"Avg Margin", body:"Average net profit margin across this person's jobs, pulled from Simpro. Green if the average hits the 15% goal, red below. An asterisk (*) after the number means some of that person's jobs only have estimated margins (no real costs tracked yet)." },
     { name:"≥15% Jobs", body:"Jobs hitting the 15% profit goal, out of jobs with margin data available. Coverage is partial — a job gets margin data once someone opens its detail pane (or it auto-refreshes on open). Jobs with no cached margin yet aren't in the denominator." },
   ];
