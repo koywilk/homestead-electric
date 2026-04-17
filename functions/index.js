@@ -1148,6 +1148,30 @@ exports.thursdayPacket = functions.pubsub
       if (j.simproNo) jobBySimproNo[String(j.simproNo)] = j;
     });
 
+    // Normalize app-side update dates to YYYY-MM-DD so they compare
+    // cleanly against Simpro's s.Date. The app's DateInp stores dates
+    // as M/D/YYYY (e.g. "4/16/2026"), not YYYY-MM-DD.
+    const _toYMD = (raw) => {
+      if (!raw) return "";
+      const s = String(raw).trim();
+      if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+      const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+      if (m) {
+        const mm = m[1].padStart(2, "0");
+        const dd = m[2].padStart(2, "0");
+        return `${m[3]}-${mm}-${dd}`;
+      }
+      // Fallback: parse as Date and format
+      const d = new Date(s);
+      if (!isNaN(d.getTime())) {
+        const y = d.getFullYear();
+        const mm = String(d.getMonth() + 1).padStart(2, "0");
+        const dd = String(d.getDate()).padStart(2, "0");
+        return `${y}-${mm}-${dd}`;
+      }
+      return s;
+    };
+
     const oppsByLead = {};   // leadName → Set<"YYYY-MM-DD|simproNo">
     const hitsByLead = {};   // same shape — subset where job had ANY update that day
     scheduleEntries.forEach(s => {
@@ -1163,7 +1187,7 @@ exports.thursdayPacket = functions.pubsub
       if (!oppsByLead[staffName]) oppsByLead[staffName] = new Set();
       oppsByLead[staffName].add(key);
       const updates = [...(job.roughUpdates || []), ...(job.finishUpdates || [])];
-      if (updates.some(u => u && u.date === date)) {
+      if (updates.some(u => u && _toYMD(u.date) === date)) {
         if (!hitsByLead[staffName]) hitsByLead[staffName] = new Set();
         hitsByLead[staffName].add(key);
       }
