@@ -818,11 +818,28 @@ exports.getSimproJobFinancials = functions.https.onCall(async (data) => {
 });
 
 // ─── Get Simpro Job Cost Centers ──────────────────────────────────────────────
-// Returns the flat list of cost centers (bid line items) for a job, grouped
-// under their section. Used by the "Is this in the bid?" panel so the field
-// team can quickly check whether a piece of work was scoped vs. needs a CO.
+// Returns the flat list of cost centers + the items inside each cost center
+// (catalogs, one-offs, prebuilds) so the "Is this in the bid?" search can
+// match against actual bid item names, not just cost-center headings.
+// Concurrency-limited so we don't hammer Simpro's rate limit.
+async function _pLimit(tasks, limit) {
+  const results = new Array(tasks.length);
+  let i = 0;
+  async function worker() {
+    while (true) {
+      const idx = i++;
+      if (idx >= tasks.length) return;
+      try { results[idx] = await tasks[idx](); }
+      catch (e) { results[idx] = { __error: e.message || String(e) }; }
+    }
+  }
+  const n = Math.min(limit, tasks.length);
+  await Promise.all(Array.from({length:n}, worker));
+  return results;
+}
+
 exports.getSimproJobCostCenters = functions
-  .runWith({ timeoutSeconds: 60, memory: "256MB" })
+  .runWith({ timeoutSeconds: 300, memory: "512MB" })
   .https.onCall(async (data) => {
     const { simproJobNo } = data || {};
     if (!simproJobNo) throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
@@ -839,23 +856,49 @@ exports.getSimproJobCostCenters = functions
     const sections = Array.isArray(sectionsRes.data) ? sectionsRes.data : [];
 
     // 2. Fetch cost centers for every section in parallel.
+    //    No `columns=` param — Simpro rejects some column names silently on
+    //    this endpoint (returns an empty array). Pulling all fields and
+    //    trimming here is the safer path.
+    let loggedFirst = false;
     const ccResults = await Promise.all(
       sections.map(async (s) => {
         const r = await simproReq(
           "GET",
-          `/jobs/${encodeURIComponent(simproJobNo)}/sections/${s.ID}/costCenters/` +
-          `?columns=ID,Name,Total,ClaimedUpTo,Setup&pageSize=200`
+          `/jobs/${encodeURIComponent(simproJobNo)}/sections/${s.ID}/costCenters/?pageSize=250`
         );
-        if (!r.ok) return { sectionId: s.ID, sectionName: s.Name, costCenters: [], error: `${r.status}` };
+        if (!r.ok) {
+          functions.logger.warn("getSimproJobCostCenters: section fetch failed", {
+            sectionId: s.ID, status: r.status, body: typeof r.data === "string" ? r.data.slice(0,200) : r.data,
+          });
+          return { sectionId: s.ID, sectionName: s.Name, costCenters: [], error: `${r.status}` };
+        }
         const rows = Array.isArray(r.data) ? r.data : [];
-        const costCenters = rows.map(cc => ({
-          id: cc.ID,
-          name: cc.Name || "",
-          totalExTax:  cc.Total?.ExTax   ?? null,
-          totalIncTax: cc.Total?.IncTax  ?? null,
-          claimedPct:  cc.ClaimedUpTo    ?? null,
-          setupHours:  cc.Setup?.Hours   ?? null,
-        }));
+        if (!loggedFirst && rows.length) {
+          loggedFirst = true;
+          functions.logger.info("getSimproJobCostCenters: sample cost center shape", { sample: rows[0] });
+        }
+        const costCenters = rows.map(cc => {
+          // Simpro shapes we've seen across tenants: Total can be {ExTax,IncTax},
+          // or flat ExTax/IncTax numbers. Be defensive.
+          const totalExTax =
+            cc?.Total?.ExTax ??
+            cc?.Totals?.ExTax ??
+            cc?.ExTax ??
+            null;
+          const totalIncTax =
+            cc?.Total?.IncTax ??
+            cc?.Totals?.IncTax ??
+            cc?.IncTax ??
+            null;
+          return {
+            id: cc.ID ?? cc.Id ?? cc.id ?? null,
+            name: cc.Name ?? cc.name ?? "",
+            totalExTax,
+            totalIncTax,
+            claimedPct:  cc.ClaimedUpTo ?? cc.Claimed ?? null,
+            setupHours:  cc?.Setup?.Hours ?? cc?.Hours ?? null,
+          };
+        });
         return { sectionId: s.ID, sectionName: s.Name || "", costCenters };
       })
     );
@@ -870,6 +913,87 @@ exports.getSimproJobCostCenters = functions
         });
       }
     }
+
+    // 3. For every cost center, pull the items inside (catalogs, one-offs,
+    //    prebuilds). These are what field folks actually search — "island
+    //    pendant", "4s box", "can light", etc. are item names, not cost
+    //    center names.
+    const ITEM_KINDS = [
+      { key: "catalog",  path: "catalogs" },
+      { key: "oneOff",   path: "oneOffs" },
+      { key: "prebuild", path: "prebuilds" },
+    ];
+
+    let sampleLogged = false;
+    const tasks = [];
+    flat.forEach(cc => {
+      ITEM_KINDS.forEach(kind => {
+        tasks.push(async () => {
+          const r = await simproReq(
+            "GET",
+            `/jobs/${encodeURIComponent(simproJobNo)}/sections/${cc.sectionId}` +
+            `/costCenters/${cc.id}/${kind.path}/?pageSize=250`
+          );
+          if (!r.ok) {
+            functions.logger.warn("getSimproJobCostCenters: item fetch failed", {
+              kind: kind.key, sectionId: cc.sectionId, costCenterId: cc.id, status: r.status,
+            });
+            return { cc, kind: kind.key, items: [] };
+          }
+          const rows = Array.isArray(r.data) ? r.data : [];
+          if (!sampleLogged && rows.length) {
+            sampleLogged = true;
+            functions.logger.info("getSimproJobCostCenters: sample item shape", {
+              kind: kind.key, sample: rows[0],
+            });
+          }
+          const items = rows.map(it => {
+            // Item names live in different fields across Simpro item types:
+            //   - catalog items:  it.Catalog.Name or it.Name
+            //   - one-offs:       it.Name
+            //   - prebuilds:      it.Prebuild.Name or it.Name
+            const name =
+              it?.Catalog?.Name ??
+              it?.Prebuild?.Name ??
+              it?.Name ??
+              it?.Description ??
+              "(unnamed)";
+            const qty = it?.Quantity ?? it?.Qty ?? null;
+            const totalExTax =
+              it?.Total?.ExTax ??
+              it?.Totals?.ExTax ??
+              it?.ExTax ??
+              null;
+            const unitPrice =
+              it?.Price ??
+              it?.UnitPrice ??
+              it?.Cost ??
+              null;
+            return {
+              kind: kind.key,
+              id: it?.ID ?? it?.Id ?? it?.id ?? null,
+               name,
+              qty,
+              unitPrice,
+              totalExTax,
+            };
+          });
+          return { cc, kind: kind.key, items };
+        });
+      });
+    });
+
+    const itemResults = await _pLimit(tasks, 10);
+
+    // Attach items back to each cost center.
+    const ccById = new Map(flat.map(cc => [`${cc.sectionId}-${cc.id}`, cc]));
+    flat.forEach(cc => { cc.items = []; });
+    itemResults.forEach(res => {
+      if (!res || res.__error) return;
+      const key = `${res.cc.sectionId}-${res.cc.id}`;
+      const target = ccById.get(key);
+      if (target) target.items.push(...res.items);
+    });
 
     return {
       sections: ccResults.map(s => ({ id: s.sectionId, name: s.sectionName })),

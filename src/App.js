@@ -4082,11 +4082,13 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
 
 // ── Bid Items (Simpro Cost Centers) ───────────────────────────
-// "Is this in the bid?" panel. Reads the job's Simpro cost centers and
-// lets the field team search/filter them to decide whether a piece of
-// work is scoped or needs a CO.
+// "Is this in the bid?" panel. Reads the job's Simpro cost centers plus
+// the individual items inside each cost center (catalogs, one-offs,
+// prebuilds). Field team can search by any item name — if nothing
+// matches, they know it's a change order.
 function BidItemsPanel({simproNo, data, error}) {
   const [q, setQ] = useState("");
+  const [expanded, setExpanded] = useState({}); // ccKey -> bool
 
   if (!simproNo) {
     return (
@@ -4105,7 +4107,7 @@ function BidItemsPanel({simproNo, data, error}) {
     }
     return (
       <div style={{fontSize:12,color:C.dim,fontStyle:"italic",padding:"8px 2px"}}>
-        Loading cost centers from Simpro…
+        Loading bid items from Simpro… (first load can take a few seconds)
       </div>
     );
   }
@@ -4119,22 +4121,30 @@ function BidItemsPanel({simproNo, data, error}) {
     );
   }
 
-  // Fuzzy match on name + section name (lowercase substring, token-any match).
   const norm = (s) => String(s||"").toLowerCase();
   const tokens = norm(q).split(/\s+/).filter(Boolean);
-  const matches = tokens.length
-    ? costCenters.filter(cc => {
-        const hay = norm(cc.name) + " " + norm(cc.sectionName);
-        return tokens.every(t => hay.includes(t));
-      })
-    : costCenters;
+  const matchTokens = (hay) => tokens.every(t => hay.includes(t));
 
-  // Group by section for display.
+  // When searching, a cost center is "relevant" if its name matches OR any
+  // of its items match. We also track which specific items match so we can
+  // highlight just those under each cost center.
+  const scored = costCenters.map(cc => {
+    const ccHay = norm(cc.name) + " " + norm(cc.sectionName);
+    const items = Array.isArray(cc.items) ? cc.items : [];
+    const itemMatches = items.filter(it => matchTokens(norm(it.name)));
+    const ccMatches = matchTokens(ccHay);
+    return { cc, items, itemMatches, ccMatches };
+  });
+
+  const visible = tokens.length
+    ? scored.filter(s => s.ccMatches || s.itemMatches.length > 0)
+    : scored;
+
   const bySection = new Map();
-  matches.forEach(cc => {
-    const key = cc.sectionName || "(no section)";
+  visible.forEach(entry => {
+    const key = entry.cc.sectionName || "(no section)";
     if (!bySection.has(key)) bySection.set(key, []);
-    bySection.get(key).push(cc);
+    bySection.get(key).push(entry);
   });
 
   const fmtMoney = (n) => {
@@ -4142,7 +4152,32 @@ function BidItemsPanel({simproNo, data, error}) {
     return "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0});
   };
   const totalBid = costCenters.reduce((s,cc) => s + (Number(cc.totalExTax)||0), 0);
-  const visibleTotal = matches.reduce((s,cc) => s + (Number(cc.totalExTax)||0), 0);
+  const visibleTotal = visible.reduce((s,e) => s + (Number(e.cc.totalExTax)||0), 0);
+  const totalItems = costCenters.reduce((s,cc) => s + (Array.isArray(cc.items) ? cc.items.length : 0), 0);
+  const totalItemMatches = tokens.length
+    ? visible.reduce((s,e) => s + e.itemMatches.length, 0)
+    : totalItems;
+
+  const toggle = (key) => setExpanded(v => ({...v, [key]: !v[key]}));
+
+  const kindPill = (k) => {
+    const bg = k==="catalog" ? "#0ea5e922"
+            : k==="oneOff" ? "#f59e0b22"
+            : k==="prebuild" ? "#a855f722"
+            : "#88888822";
+    const fg = k==="catalog" ? "#0ea5e9"
+            : k==="oneOff" ? "#f59e0b"
+            : k==="prebuild" ? "#a855f7"
+            : "#888";
+    const label = k==="catalog" ? "Catalog"
+              : k==="oneOff" ? "One-off"
+              : k==="prebuild" ? "Prebuild"
+              : k;
+    return (
+      <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",
+        padding:"1px 6px",borderRadius:99,background:bg,color:fg,marginRight:6}}>{label}</span>
+    );
+  };
 
   return (
     <div>
@@ -4150,48 +4185,99 @@ function BidItemsPanel({simproNo, data, error}) {
         <input
           value={q}
           onChange={e=>setQ(e.target.value)}
-          placeholder="Is this in the bid? Search cost centers…"
-          style={{flex:"1 1 220px",minWidth:0,padding:"8px 10px",fontSize:13,
+          placeholder="Is this in the bid? Search cost centers or items…"
+          style={{flex:"1 1 260px",minWidth:0,padding:"8px 10px",fontSize:13,
             background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text}}
         />
         <div style={{fontSize:11,color:C.dim,whiteSpace:"nowrap"}}>
           {tokens.length
-            ? `${matches.length} of ${costCenters.length} match${matches.length===1?"":"es"}`
-            : `${costCenters.length} cost center${costCenters.length===1?"":"s"} · total ${fmtMoney(totalBid)}`}
-          {tokens.length ? ` · ${fmtMoney(visibleTotal)}` : ""}
+            ? `${visible.length} / ${costCenters.length} CCs · ${totalItemMatches} item${totalItemMatches===1?"":"s"} · ${fmtMoney(visibleTotal)}`
+            : `${costCenters.length} cost center${costCenters.length===1?"":"s"} · ${totalItems} items · ${fmtMoney(totalBid)}`}
         </div>
       </div>
 
-      {matches.length === 0 && (
-        <div style={{fontSize:12,color:C.red,padding:"10px 12px",
-          border:`1px solid ${C.red}44`,borderRadius:6,background:"rgba(239,68,68,0.06)"}}>
+      {tokens.length > 0 && visible.length === 0 && (
+        <div style={{fontSize:13,color:C.red,padding:"10px 12px",marginBottom:10,
+          border:`1px solid ${C.red}44`,borderRadius:6,background:"rgba(239,68,68,0.06)",fontWeight:600}}>
           No match — looks like this would be a <b>change order</b>.
         </div>
       )}
 
-      {[...bySection.entries()].map(([sectionName, rows]) => (
-        <div key={sectionName} style={{marginBottom:12}}>
+      {[...bySection.entries()].map(([sectionName, entries]) => (
+        <div key={sectionName} style={{marginBottom:14}}>
           <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",textTransform:"uppercase",
             color:C.dim,marginBottom:4,borderBottom:`1px solid ${C.border}`,paddingBottom:3}}>
             {sectionName}
           </div>
-          {rows.map(cc => (
-            <div key={`${cc.sectionId}-${cc.id}`}
-              style={{display:"flex",justifyContent:"space-between",gap:12,
-                padding:"5px 2px",borderBottom:`1px solid ${C.border}22`,fontSize:12}}>
-              <div style={{color:C.text,flex:"1 1 auto",minWidth:0,overflow:"hidden",textOverflow:"ellipsis"}}>
-                {cc.name || "(unnamed)"}
-                {cc.claimedPct != null && cc.claimedPct > 0 && (
-                  <span style={{marginLeft:8,fontSize:10,color:C.dim}}>
-                    · {Math.round(cc.claimedPct)}% claimed
-                  </span>
+          {entries.map(({cc, items, itemMatches}) => {
+            const key = `${cc.sectionId}-${cc.id}`;
+            // Auto-expand when there are item matches under a search.
+            const isOpen = tokens.length && itemMatches.length
+              ? true
+              : !!expanded[key];
+            const itemsToShow = tokens.length && itemMatches.length ? itemMatches : items;
+            const itemCount = items.length;
+            return (
+              <div key={key} style={{borderBottom:`1px solid ${C.border}22`,paddingBottom:4,marginBottom:4}}>
+                <div
+                  onClick={() => toggle(key)}
+                  style={{display:"flex",justifyContent:"space-between",gap:12,
+                    padding:"6px 2px",fontSize:12,cursor:itemCount?"pointer":"default",userSelect:"none"}}
+                >
+                  <div style={{color:C.text,flex:"1 1 auto",minWidth:0,display:"flex",alignItems:"center",gap:6}}>
+                    <span style={{color:C.dim,fontSize:10,width:10,display:"inline-block"}}>
+                      {itemCount ? (isOpen ? "▾" : "▸") : ""}
+                    </span>
+                    <span style={{overflow:"hidden",textOverflow:"ellipsis"}}>
+                      {cc.name || "(unnamed)"}
+                    </span>
+                    {itemCount > 0 && (
+                      <span style={{fontSize:10,color:C.dim,whiteSpace:"nowrap"}}>
+                        · {tokens.length && itemMatches.length
+                            ? `${itemMatches.length}/${itemCount} items`
+                            : `${itemCount} item${itemCount===1?"":"s"}`}
+                      </span>
+                    )}
+                    {cc.claimedPct != null && cc.claimedPct > 0 && (
+                      <span style={{fontSize:10,color:C.dim,whiteSpace:"nowrap"}}>
+                        · {Math.round(cc.claimedPct)}% claimed
+                      </span>
+                    )}
+                  </div>
+                  <div style={{color:C.dim,whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums"}}>
+                    {fmtMoney(cc.totalExTax)}
+                  </div>
+                </div>
+
+                {isOpen && itemsToShow.length > 0 && (
+                  <div style={{marginLeft:16,marginTop:2,marginBottom:4}}>
+                    {itemsToShow.map((it, i) => (
+                      <div key={`${key}-${it.kind}-${it.id ?? i}`}
+                        style={{display:"flex",justifyContent:"space-between",gap:10,
+                          padding:"3px 2px",fontSize:11,color:C.text}}>
+                        <div style={{flex:"1 1 auto",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",display:"flex",alignItems:"center"}}>
+                          {kindPill(it.kind)}
+                          <span>{it.name || "(unnamed)"}</span>
+                          {it.qty != null && (
+                            <span style={{color:C.dim,marginLeft:6,whiteSpace:"nowrap"}}>× {it.qty}</span>
+                          )}
+                        </div>
+                        <div style={{color:C.dim,whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums"}}>
+                          {fmtMoney(it.totalExTax)}
+                        </div>
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                {isOpen && itemsToShow.length === 0 && (
+                  <div style={{marginLeft:16,marginTop:2,fontSize:11,color:C.dim,fontStyle:"italic"}}>
+                    No items in this cost center.
+                  </div>
                 )}
               </div>
-              <div style={{color:C.dim,whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums"}}>
-                {fmtMoney(cc.totalExTax)}
-              </div>
-            </div>
-          ))}
+            );
+          })}
         </div>
       ))}
     </div>
@@ -7418,11 +7504,22 @@ function FileUploadSection({ jobId, files, onChange }) {
   );
 }
 
-function PlansTab({job, onUpdate}) {
+function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr}) {
 
   return (
 
     <div>
+
+      {/* Bid Items — "Is this in the bid?" search at the top of the tab.
+          Lives here because it's the first place the field team checks
+          before scheduling material, pulling wire, or writing a CO. */}
+      <Section label="Bid Items (Simpro)" color={C.blue||"#3b82f6"} defaultOpen={true}>
+        <BidItemsPanel
+          simproNo={job.simproNo}
+          data={simproCostCenters}
+          error={simproCostCentersErr}
+        />
+      </Section>
 
       {/* Google Drive Plans */}
       <DriveFilesSection job={job} onUpdate={onUpdate} />
@@ -9675,14 +9772,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
             <div>
 
-              <Section label="Bid Items (Simpro)" color={C.blue||"#3b82f6"} defaultOpen={false}>
-                <BidItemsPanel
-                  simproNo={job.simproNo}
-                  data={simproCostCenters}
-                  error={simproCostCentersErr}
-                />
-              </Section>
-
               <Section label="Change Order Log" color={C.accent} defaultOpen={true}>
                 <ChangeOrders
                   orders={job.changeOrders}
@@ -9721,7 +9810,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
           {tab==="Plans & Links"&&(
 
-            <PlansTab job={job} onUpdate={u}/>
+            <PlansTab
+              job={job}
+              onUpdate={u}
+              simproCostCenters={simproCostCenters}
+              simproCostCentersErr={simproCostCentersErr}
+            />
 
           )}
 
