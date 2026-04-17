@@ -8603,6 +8603,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             console.log("  oneOff: ", res.data._debugFirstFailure.oneOff);
             console.log("  prebuild:", res.data._debugFirstFailure.prebuild);
           }
+          // Per-CC item counts as the CLIENT actually sees them, so we can tell
+          // if items are being dropped between server response and render.
+          if (Array.isArray(res.data?.costCenters)) {
+            const ccItemCounts = res.data.costCenters.map(cc => ({
+              section: cc.sectionName,
+              cc: cc.name,
+              itemCount: Array.isArray(cc.items) ? cc.items.length : "MISSING",
+              firstItemName: Array.isArray(cc.items) && cc.items[0] ? cc.items[0].name : null,
+            }));
+            console.log("[simproCostCenters per-CC item counts]:");
+            console.table(ccItemCounts);
+          }
           setSimproCostCenters(res.data);
           setSimproCostCentersRefreshing(false);
           // Persist cache on the job doc. This is the only write and it's
