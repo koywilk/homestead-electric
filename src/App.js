@@ -2334,7 +2334,57 @@ function PhaseInstructions({items, onChange, color, placeholder, onAddMaterial})
   const list = Array.isArray(items) ? items : [];
   const add  = () => onChange([...list, {id:uid(), label:'', text:''}]);
   const upd  = (id, p) => onChange(list.map(e => e.id===id ? {...e,...p} : e));
-  const del  = (id) => onChange(list.filter(e => e.id!==id));
+
+  // Undo toast state — holds the most recently deleted entry so we can
+  // restore it. Auto-dismisses after 10s. Same shape as QCWalkSection's
+  // undoToast so the UX feels consistent.
+  const [undoToast, setUndoToast] = useState(null); // {entry, index, timer}
+  useEffect(() => () => { if (undoToast?.timer) clearTimeout(undoToast.timer); }, [undoToast]);
+
+  // Strip HTML so a long rich-text block becomes a short, readable preview
+  // for the confirm dialog.
+  const plain = (html) => (html||'').replace(/<[^>]+>/g,' ').replace(/\s+/g,' ').trim();
+
+  const del = async (id) => {
+    const idx   = list.findIndex(e => e.id === id);
+    if (idx < 0) return;
+    const entry = list[idx];
+    // Empty scratch row? Delete silently — no confirm, no undo needed.
+    const hasLabel = !!(entry.label||'').trim();
+    const hasText  = !!plain(entry.text).length;
+    if (!hasLabel && !hasText) {
+      onChange(list.filter((_,i) => i !== idx));
+      return;
+    }
+    // Entry has content — require an explicit confirm with a preview so
+    // it's clear what's about to disappear (this is what protects long
+    // lists like "Fixture heights" from a stray tap on the × button).
+    const preview = plain(entry.text).slice(0, 140);
+    const label   = (entry.label||'').trim() || 'this instruction';
+    const ok = await showConfirm(
+      `Delete "${label}"?` + (preview ? `\n\n${preview}${plain(entry.text).length > 140 ? '…' : ''}` : '') +
+      `\n\nYou'll have 10 seconds to undo.`);
+    if (!ok) return;
+
+    // Remove & stage for undo.
+    const next = list.filter((_,i) => i !== idx);
+    onChange(next);
+    if (undoToast?.timer) clearTimeout(undoToast.timer);
+    const timer = setTimeout(() => setUndoToast(null), 10000);
+    setUndoToast({ entry, index: idx, timer });
+  };
+
+  const commitUndo = () => {
+    if (!undoToast) return;
+    const { entry, index, timer } = undoToast;
+    if (timer) clearTimeout(timer);
+    // Restore at original index if possible — keeps ordering stable.
+    const restored = [...list];
+    const insertAt = Math.min(index, restored.length);
+    restored.splice(insertAt, 0, entry);
+    onChange(restored);
+    setUndoToast(null);
+  };
 
   return (
     <div>
@@ -2351,6 +2401,28 @@ function PhaseInstructions({items, onChange, color, placeholder, onAddMaterial})
           cursor:'pointer',fontFamily:'inherit',marginTop:4}}>
         + Add Instruction / Note
       </button>
+
+      {undoToast && (
+        <div style={{position:'sticky',bottom:12,zIndex:50,marginTop:10,
+          display:'flex',alignItems:'center',gap:10,
+          background:'#1f2937',color:'#f1f5f9',borderRadius:9,
+          padding:'8px 12px',border:`1px solid ${C.border}`,
+          boxShadow:'0 8px 24px rgba(0,0,0,0.35)',fontSize:12}}>
+          <span style={{flexShrink:0,opacity:0.75,display:'inline-flex',alignItems:'center'}}>
+            <Icon name="trash" size={13}/>
+          </span>
+          <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
+            Deleted: <em style={{opacity:0.85}}>{(undoToast.entry.label||'').trim() || plain(undoToast.entry.text).slice(0,60) || 'instruction'}</em>
+          </span>
+          <button onClick={commitUndo}
+            style={{background:C.blue,color:'#fff',border:'none',borderRadius:6,
+              padding:'4px 12px',fontWeight:700,fontSize:11,cursor:'pointer',fontFamily:'inherit'}}>
+            Undo
+          </button>
+          <button onClick={()=>{ if(undoToast.timer) clearTimeout(undoToast.timer); setUndoToast(null); }}
+            style={{background:'none',border:'none',color:'#94a3b8',cursor:'pointer',fontSize:14,padding:'0 4px'}}>✕</button>
+        </div>
+      )}
     </div>
   );
 }
@@ -8440,6 +8512,17 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
           <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
 
+            {/* QC FAIL — loud pill so the status can't be missed at a glance. */}
+            {/* Stays red until qcStatus moves off "fail" (e.g. back to "fixed" */}
+            {/* or "pass") and pairs with the auto-created return trip below.  */}
+            {job.qcStatus==="fail"&&(
+              <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.08em",
+                padding:"3px 10px",borderRadius:99,background:"#dc2626",color:"#fff",
+                border:"1px solid #b91c1c",whiteSpace:"nowrap",
+                boxShadow:"0 0 0 2px #fee2e2",textTransform:"uppercase"}}>
+                QC Fail
+              </span>
+            )}
             {openCount>0  &&<Pill label={`${openCount} open punch`} color={C.red}/>}
             {waitingCount>0&&<span style={{fontSize:10,fontWeight:700,letterSpacing:"0.06em",padding:"2px 8px",borderRadius:99,background:"#fef3c7",color:"#92400e",border:"1px solid #fcd34d",whiteSpace:"nowrap"}}>{waitingCount} waiting</span>}
 
@@ -9508,7 +9591,46 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                       <select value={job.qcStatus||""} onChange={e=>{
                         const v=e.target.value;
-                        u({qcStatus:v,qcStatusDate:getStatusDef(QC_STATUSES,v).hasDate?job.qcStatusDate:""});
+                        const patch={qcStatus:v,qcStatusDate:getStatusDef(QC_STATUSES,v).hasDate?job.qcStatusDate:""};
+                        // QC Fail → auto-create an unscheduled return trip if one
+                        // isn't already open. This is the bit that makes the fail
+                        // show up on the schedule (Unscheduled Return Trips
+                        // section) so it can't get forgotten. We gather every
+                        // open fromQC item from rough + finish punch across all
+                        // floors and seed them as the RT's punch list.
+                        if (v==="fail") {
+                          const existingQCFailRT = (job.returnTrips||[]).some(r =>
+                            !r.signedOff && typeof r.scope==="string" && r.scope.startsWith("QC Fail"));
+                          if (!existingQCFailRT) {
+                            const openQC = [];
+                            const grab = (punch) => {
+                              if (!punch) return;
+                              const allFloors = [...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
+                                ...(Array.isArray(punch.extraFloors)?punch.extraFloors:[])];
+                              allFloors.forEach(fl => {
+                                if (!fl) return;
+                                (fl.general||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push(i); });
+                                (fl.rooms||[]).forEach(r=> (r.items||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push(i); }));
+                                (fl.hotcheck||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push(i); });
+                              });
+                            };
+                            grab(job.roughPunch); grab(job.finishPunch);
+                            const newRT = {
+                              id:uid(), date:"", scope:"QC Fail — return trip needed",
+                              material:"",
+                              punch: openQC.map(x=>({id:uid(),text:x.text||"",done:false,fromQC:true})),
+                              photos:[], assignedTo:"",
+                              signedOff:false, signedOffBy:"", signedOffDate:"",
+                              needsSchedule:true, needsScheduleDate:"",
+                              rtScheduled:false, scheduledDate:"",
+                              rtStatus:"needs",
+                              fromQCFail:true,
+                            };
+                            patch.returnTrips=[...(job.returnTrips||[]), newRT];
+                            toast.success(`QC Fail logged — return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
+                          }
+                        }
+                        u(patch);
                       }} style={{background:qcDef.color?`${qcDef.color}18`:C.surface,
                         color:qcDef.color||C.dim,border:`1px solid ${qcDef.color||C.border}`,
                         borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
@@ -9523,6 +9645,63 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         </div>
                       )}
                     </div>
+                  </div>
+                );
+              })()}
+
+              {/* QC FAIL BANNER — rendered whenever qcStatus is "fail". */}
+              {/* Shows open fromQC items + the state of the auto-created   */}
+              {/* return trip so the foreman can see at a glance whether    */}
+              {/* the RT is still unscheduled or already on the books.      */}
+              {job.qcStatus==="fail"&&(()=>{
+                const qcRTs = (job.returnTrips||[]).filter(r =>
+                  !r.signedOff && typeof r.scope==="string" && r.scope.startsWith("QC Fail"));
+                const anyScheduled = qcRTs.some(r => r.rtScheduled && r.scheduledDate);
+                const anyUnscheduled = qcRTs.some(r => !r.rtScheduled);
+                return (
+                  <div style={{marginBottom:16,padding:"14px 16px",
+                    background:"#fef2f2",border:"2px solid #dc2626",borderRadius:10,
+                    display:"flex",alignItems:"flex-start",gap:12,flexWrap:"wrap"}}>
+                    <div style={{flex:"1 1 260px",minWidth:0}}>
+                      <div style={{fontSize:11,fontWeight:800,letterSpacing:"0.1em",
+                        color:"#991b1b",marginBottom:4}}>QC FAIL — RETURN TRIP REQUIRED</div>
+                      <div style={{fontSize:13,color:"#7f1d1d",lineHeight:1.5}}>
+                        {qcRTs.length===0
+                          ? "No return trip has been created yet for this failure. Add one in the Return Trips tab so it appears on the schedule."
+                          : anyScheduled
+                            ? `Return trip scheduled for ${qcRTs.find(r=>r.scheduledDate)?.scheduledDate || "a date below"}. Keep this job flagged until the RT is signed off.`
+                            : anyUnscheduled
+                              ? "A return trip is queued but needs a date. It will stay on the Unscheduled Return Trips list until scheduled."
+                              : "A return trip is tracked for this failure — open Return Trips to review."}
+                      </div>
+                    </div>
+                    {qcRTs.length===0 && (
+                      <button onClick={()=>{
+                        const openQC=[];
+                        const grab=(punch)=>{
+                          if(!punch) return;
+                          const allFloors=[...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
+                            ...(Array.isArray(punch.extraFloors)?punch.extraFloors:[])];
+                          allFloors.forEach(fl=>{
+                            if(!fl) return;
+                            (fl.general||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push(i); });
+                            (fl.rooms||[]).forEach(r=>(r.items||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push(i); }));
+                            (fl.hotcheck||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push(i); });
+                          });
+                        };
+                        grab(job.roughPunch); grab(job.finishPunch);
+                        const newRT={id:uid(),date:"",scope:"QC Fail — return trip needed",material:"",
+                          punch:openQC.map(x=>({id:uid(),text:x.text||"",done:false,fromQC:true})),
+                          photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",
+                          needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:"",
+                          rtStatus:"needs",fromQCFail:true};
+                        u({returnTrips:[...(job.returnTrips||[]),newRT]});
+                        toast.success(`Return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
+                      }} style={{background:"#dc2626",color:"#fff",border:"none",borderRadius:8,
+                        padding:"8px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                        Create Return Trip
+                      </button>
+                    )}
                   </div>
                 );
               })()}
