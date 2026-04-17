@@ -461,6 +461,7 @@ const PERMISSIONS = {
   "job.delete":      ["admin"],
   "quotes.view":     ["admin","manager","standard"],
   "quotes.convert":  ["admin"],
+  "scoreboard.view": ["admin"],
 };
 
 // Resolve access level from user object (supports legacy role-only users)
@@ -947,7 +948,7 @@ const blankJob = () => ({
 
   finishQuestions:{ upper:[], main:[], basement:[] },
 
-  changeOrders:[], returnTrips:[], roughInspectionResult:"", roughInspectionDate:"", roughInspectionItems:[], finalInspectionResult:"", finalInspectionDate:"", finalInspectionItems:[], roughStatus:"", roughStatusDate:"", roughScheduledEnd:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishScheduledEnd:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, roughStartConfirmed:false, finishStartConfirmed:false, roughNeedsHardDate:false, roughNeedsByStart:"", roughNeedsByEnd:"", finishNeedsHardDate:false, finishNeedsByStart:"", finishNeedsByEnd:"", readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, matterportDismissed:false, taskDueDates:{}, roughOnHold:false, finishOnHold:false, tempPed:false, hasTempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
+  changeOrders:[], returnTrips:[], roughInspectionResult:"", roughInspectionDate:"", roughInspectionItems:[], roughInspectionAttempts:[], finalInspectionResult:"", finalInspectionDate:"", finalInspectionItems:[], finalInspectionAttempts:[], roughStatus:"", roughStatusDate:"", roughScheduledEnd:"", roughProjectedStart:"", finishStatus:"", finishStatusDate:"", finishScheduledEnd:"", finishProjectedStart:"", qcStatus:"", qcStatusDate:"", qcSignedOff:false, qcSignedOffBy:"", qcSignedOffDate:"", roughQCTaskFired:false, roughStartConfirmed:false, finishStartConfirmed:false, roughNeedsHardDate:false, roughNeedsByStart:"", roughNeedsByEnd:"", finishNeedsHardDate:false, finishNeedsByStart:"", finishNeedsByEnd:"", readyToSchedule:false, readyToInvoice:false, invoiceDismissed:false, matterportDismissed:false, taskDueDates:{}, roughOnHold:false, finishOnHold:false, tempPed:false, hasTempPed:false, tempPedNumber:"", tempPedStatus:"", tempPedScheduledDate:"",
 
   homeRuns:{
 
@@ -8612,7 +8613,23 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           <DateInp value={job.fourWayTargetDate||""} onChange={e=>u({fourWayTargetDate:e.target.value})}
                             style={{fontSize:11,fontWeight:700,borderColor:C.rough+"55",background:`${C.rough}08`,color:C.rough}}/>
                           {["pass","fail"].map(r=>(
-                            <button key={r} onClick={()=>u({roughInspectionResult:job.roughInspectionResult===r?"":r})}
+                            <button key={r} onClick={()=>{
+                              const newResult = job.roughInspectionResult===r ? "" : r;
+                              const patch = { roughInspectionResult: newResult };
+                              // Log a new attempt only when transitioning INTO pass/fail
+                              // (not when toggling off). Snapshots current items, date, and user.
+                              if (newResult && newResult !== job.roughInspectionResult) {
+                                const who = getIdentity();
+                                const now = new Date();
+                                const ymd = `${now.getMonth()+1}/${now.getDate()}/${now.getFullYear()}`;
+                                const snapshot = (job.roughInspectionItems||[]).map(x=>({text:x.text||""}));
+                                patch.roughInspectionAttempts = [
+                                  ...(job.roughInspectionAttempts||[]),
+                                  { id:uid(), date:ymd, result:newResult, items:snapshot, by:who?.name||"" },
+                                ];
+                              }
+                              u(patch);
+                            }}
                               style={{padding:"3px 9px",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer",border:"none",fontFamily:"inherit",
                                 background:job.roughInspectionResult===r?(r==="pass"?"#16a34a":"#dc2626"):(r==="pass"?"#16a34a18":"#dc262618"),
                                 color:job.roughInspectionResult===r?"#fff":(r==="pass"?"#16a34a":"#dc2626")}}>
@@ -8840,7 +8857,21 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           <DateInp value={job.finalInspectionTargetDate||""} onChange={e=>u({finalInspectionTargetDate:e.target.value})}
                             style={{fontSize:11,fontWeight:700,borderColor:C.finish+"55",background:`${C.finish}08`,color:C.finish}}/>
                           {["pass","fail"].map(r=>(
-                            <button key={r} onClick={()=>u({finalInspectionResult:job.finalInspectionResult===r?"":r})}
+                            <button key={r} onClick={()=>{
+                              const newResult = job.finalInspectionResult===r ? "" : r;
+                              const patch = { finalInspectionResult: newResult };
+                              if (newResult && newResult !== job.finalInspectionResult) {
+                                const who = getIdentity();
+                                const now = new Date();
+                                const ymd = `${now.getMonth()+1}/${now.getDate()}/${now.getFullYear()}`;
+                                const snapshot = (job.finalInspectionItems||[]).map(x=>({text:x.text||""}));
+                                patch.finalInspectionAttempts = [
+                                  ...(job.finalInspectionAttempts||[]),
+                                  { id:uid(), date:ymd, result:newResult, items:snapshot, by:who?.name||"" },
+                                ];
+                              }
+                              u(patch);
+                            }}
                               style={{padding:"3px 9px",borderRadius:6,fontSize:10,fontWeight:700,cursor:"pointer",border:"none",fontFamily:"inherit",
                                 background:job.finalInspectionResult===r?(r==="pass"?"#16a34a":"#dc2626"):(r==="pass"?"#16a34a18":"#dc262618"),
                                 color:job.finalInspectionResult===r?"#fff":(r==="pass"?"#16a34a":"#dc2626")}}>
@@ -13316,6 +13347,160 @@ function SettingsPersonRow({user, color, colorOptions, onColorChange}) {
   );
 }
 
+// ── Scoreboard ──────────────────────────────────────────────
+// Admin-only running tracker of inspection + QC performance.
+// Two views: per-lead (assigned lead owns each job's numbers) and
+// per-foreman (aggregates all jobs where someone is the foreman,
+// so you can compare crews).
+function Scoreboard({ jobs, users=[] }) {
+  const [mode, setMode] = useState("lead"); // "lead" | "foreman"
+
+  // Pull QC item counts directly from the punch lists (fromQC-tagged).
+  const collectQCCount = (p) => {
+    if (!p) return 0;
+    let n = 0;
+    const floors = ["upper","main","basement",...((p.extras||[]).map(e=>e.key))];
+    floors.forEach(fk => {
+      const f = p[fk]; if (!f) return;
+      const buckets = [
+        ...(f.general||[]),
+        ...((f.rooms||[]).flatMap(r=>r.items||[])),
+        ...(f.hotcheck||[]),
+      ];
+      buckets.forEach(i => { if (i && i.fromQC) n++; });
+    });
+    return n;
+  };
+
+  // Per-job metric rollup (assumes attempt-history has been kept).
+  const statsForJob = (job) => {
+    const rAtt = job.roughInspectionAttempts || [];
+    const fAtt = job.finalInspectionAttempts || [];
+    const firstR = rAtt[0];
+    const firstF = fAtt[0];
+    return {
+      roughFirstTryClean: firstR && firstR.result === "pass" && (firstR.items||[]).length === 0 ? 1 : 0,
+      finalFirstTryClean: firstF && firstF.result === "pass" && (firstF.items||[]).length === 0 ? 1 : 0,
+      roughItemsCalled: rAtt.reduce((a,x)=>a+((x.items||[]).length),0),
+      finalItemsCalled: fAtt.reduce((a,x)=>a+((x.items||[]).length),0),
+      roughQC: collectQCCount(job.roughPunch),
+      finishQC: collectQCCount(job.finishPunch),
+      roughAttempted: rAtt.length > 0 ? 1 : 0,
+      finalAttempted: fAtt.length > 0 ? 1 : 0,
+    };
+  };
+
+  // Aggregate across jobs keyed by either lead or foreman.
+  const agg = {};
+  jobs.forEach(j => {
+    const key = mode === "lead" ? (j.lead||"") : (j.foreman||"");
+    if (!key || key === "Unassigned") return;
+    if (!agg[key]) agg[key] = {
+      name: key, jobs: 0,
+      roughFirstTryClean: 0, finalFirstTryClean: 0,
+      roughItemsCalled: 0, finalItemsCalled: 0,
+      roughQC: 0, finishQC: 0,
+      roughAttempted: 0, finalAttempted: 0,
+    };
+    const s = statsForJob(j);
+    agg[key].jobs++;
+    Object.keys(s).forEach(k => { agg[key][k] += s[k]; });
+  });
+
+  const rows = Object.values(agg).sort((a,b) => {
+    // Rank by combined first-try-clean count desc, then by name
+    const bScore = b.roughFirstTryClean + b.finalFirstTryClean;
+    const aScore = a.roughFirstTryClean + a.finalFirstTryClean;
+    if (bScore !== aScore) return bScore - aScore;
+    return a.name.localeCompare(b.name);
+  });
+
+  const pct = (hit, tot) => tot > 0 ? Math.round((hit/tot)*100) : 0;
+
+  const Th = ({children, title}) => (
+    <th title={title} style={{padding:"8px 10px",fontSize:10,fontWeight:700,letterSpacing:"0.08em",
+      textTransform:"uppercase",color:"#64748b",borderBottom:"2px solid #e2e8f0",textAlign:"center",whiteSpace:"nowrap"}}>
+      {children}
+    </th>
+  );
+  const Td = ({children, bold, align="center"}) => (
+    <td style={{padding:"10px",fontSize:13,color:"#0f172a",borderBottom:"1px solid #f1f5f9",
+      textAlign:align,fontWeight:bold?700:500,whiteSpace:"nowrap"}}>{children}</td>
+  );
+
+  const tabBtn = (key, label) => (
+    <button onClick={()=>setMode(key)}
+      style={{padding:"6px 14px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer",
+        border:"none",borderRadius:7,letterSpacing:"0.04em",
+        background: mode===key ? "#0f172a" : "transparent",
+        color: mode===key ? "#fff" : "#64748b"}}>
+      {label}
+    </button>
+  );
+
+  return (
+    <div style={{padding:"24px 28px",maxWidth:1200,margin:"0 auto"}}>
+      <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:18}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,letterSpacing:"0.04em",color:"#0f172a"}}>
+          Scoreboard
+        </div>
+        <div style={{fontSize:11,color:"#64748b",background:"#f1f5f9",borderRadius:99,padding:"3px 10px",fontWeight:700,letterSpacing:"0.06em"}}>
+          ADMIN ONLY
+        </div>
+      </div>
+
+      <div style={{display:"inline-flex",gap:4,background:"#f1f5f9",padding:4,borderRadius:9,marginBottom:16}}>
+        {tabBtn("lead","Leads")}
+        {tabBtn("foreman","Foremen (by crew)")}
+      </div>
+
+      <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:12,overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",minWidth:860}}>
+          <thead>
+            <tr>
+              <Th>{mode==="lead" ? "Lead" : "Foreman"}</Th>
+              <Th title="Active jobs assigned to this person">Jobs</Th>
+              <Th title="4-ways passed on the very first attempt with zero items called">4-Way First Try</Th>
+              <Th title="Finals passed on the very first attempt with zero items called">Final First Try</Th>
+              <Th title="Total items called across every 4-way attempt">4-Way Items</Th>
+              <Th title="Total items called across every final attempt">Final Items</Th>
+              <Th title="Rough QC walk items">Rough QC</Th>
+              <Th title="Finish QC walk items">Finish QC</Th>
+            </tr>
+          </thead>
+          <tbody>
+            {rows.length === 0 && (
+              <tr><Td align="center"><span style={{color:"#94a3b8",fontStyle:"italic"}}>No data yet — inspections logged after this ships will populate the board.</span></Td></tr>
+            )}
+            {rows.map(r => {
+              const rClean = r.roughAttempted > 0 ? ` · ${pct(r.roughFirstTryClean, r.roughAttempted)}%` : "";
+              const fClean = r.finalAttempted > 0 ? ` · ${pct(r.finalFirstTryClean, r.finalAttempted)}%` : "";
+              return (
+                <tr key={r.name}>
+                  <Td align="left" bold>{r.name}</Td>
+                  <Td>{r.jobs}</Td>
+                  <Td bold>{r.roughFirstTryClean}/{r.roughAttempted}<span style={{fontWeight:500,color:"#64748b",fontSize:11}}>{rClean}</span></Td>
+                  <Td bold>{r.finalFirstTryClean}/{r.finalAttempted}<span style={{fontWeight:500,color:"#64748b",fontSize:11}}>{fClean}</span></Td>
+                  <Td>{r.roughItemsCalled}</Td>
+                  <Td>{r.finalItemsCalled}</Td>
+                  <Td>{r.roughQC}</Td>
+                  <Td>{r.finishQC}</Td>
+                </tr>
+              );
+            })}
+          </tbody>
+        </table>
+      </div>
+
+      <div style={{fontSize:11,color:"#94a3b8",marginTop:14,fontStyle:"italic",lineHeight:1.5}}>
+        First-try stats only count inspections logged after this feature shipped. Pre-existing pass/fail results don't
+        contribute because their attempt history isn't captured. Foreman view sums every job's stats where that person is
+        the foreman, aggregating whichever lead ran the job.
+      </div>
+    </div>
+  );
+}
+
 function ActivityLog({ jobs }) {
   const [filter, setFilter] = useState("");
   // Sort by most recently updated
@@ -16180,12 +16365,13 @@ function App() {
               ...(can(identity,"quotes.view")?[{key:"quotes",label:"Quotes"}]:[]),
               {key:"tasks",label:"Tasks"},
               ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors"}]:[]),
+              ...(can(identity,"scoreboard.view")?[{key:"scoreboard",label:"Scoreboard"}]:[]),
               ...(can(identity,"settings.view")?[{key:"settings",label:"Settings",icon:"settings"}]:[]),
             ]
         ).map(({key,label,icon})=>{
           const active = view===key;
           return (
-            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="tasks"?openTasks:key==="nav"?openNav:key==="subcontractors"?openSubcontractor:openSettings}
+            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="tasks"?openTasks:key==="nav"?openNav:key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):openSettings}
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
@@ -17203,6 +17389,10 @@ function App() {
             setView("quotes"); saveJob(j); saveAllUpcoming(next);
           }}
         />
+      )}
+
+      {view==="scoreboard"&&can(identity,"scoreboard.view")&&(
+        <Scoreboard jobs={jobs} users={users}/>
       )}
 
       {view==="settings"&&can(identity,"settings.view")&&(

@@ -1092,30 +1092,55 @@ exports.thursdayPacket = functions.pubsub
       return rs !== "inprogress" && rs !== "complete";
     });
 
-    // ── COMPLIANCE: daily-update compliance last 7 days ────────
-    // Rule (per Koy 2026-04-16): for each (lead, date, job) where the lead
-    // was scheduled on that job in Simpro, check if the job has ANY daily
-    // update for that date (regardless of who added it). Count unique
-    // (date, simproNo) tuples per lead.
+    // ── COMPLIANCE: daily-update compliance (weekly + yearly) ────────
+    // Attribution rule (per Koy 2026-04-17):
+    //   For each (date, simproNo) where any staff was scheduled in Simpro:
+    //     • If the job's assigned lead was present that day → responsibility
+    //       belongs to the assigned lead (only).
+    //     • If the assigned lead was NOT present but other lead(s) were →
+    //       responsibility falls to those present lead(s).
+    //     • If no leads present → no attribution (skip).
+    //   Hit = the job has ANY daily update (rough or finish) for that date,
+    //   regardless of who added it. Counted as unique (date, simproNo)
+    //   tuples per lead ("job-days").
     const complianceWindow = 7;
     const complianceEnd = new Date(today);
-    const complianceStart = new Date(today);
-    complianceStart.setDate(today.getDate() - (complianceWindow - 1));
+    const weeklyStart = new Date(today);
+    weeklyStart.setDate(today.getDate() - (complianceWindow - 1));
+
+    // Yearly tally anchor (per Koy 2026-04-17):
+    //   • Initial rollout: start 1 month back from today (so there's
+    //     history to look at the first time we see the tally).
+    //   • On Jan 1, 2027: reset — the anchor becomes Jan 1 of the
+    //     current calendar year, rolling each New Year after that.
+    // The initial anchor (2026-03-17) is frozen; we don't slide it
+    // forward day-by-day or the denominator would never grow.
+    const YEARLY_INITIAL_ANCHOR = new Date(2026, 2, 17); // Mar 17, 2026
+    let yearlyStart;
+    if (today.getFullYear() >= 2027) {
+      yearlyStart = new Date(today.getFullYear(), 0, 1);
+    } else {
+      yearlyStart = YEARLY_INITIAL_ANCHOR;
+    }
+
     const _ymdLocal = (d) => {
       const y = d.getFullYear();
       const m = String(d.getMonth() + 1).padStart(2, "0");
       const day = String(d.getDate()).padStart(2, "0");
       return `${y}-${m}-${day}`;
     };
-    const windowStartYMD = _ymdLocal(complianceStart);
-    const windowEndYMD   = _ymdLocal(complianceEnd);
+    const weeklyStartYMD = _ymdLocal(weeklyStart);
+    const weeklyEndYMD   = _ymdLocal(complianceEnd);
+    const yearlyStartYMD = _ymdLocal(yearlyStart);
+    const yearlyEndYMD   = _ymdLocal(complianceEnd);
 
     let scheduleEntries = [];
     try {
-      // Paginate through Simpro schedules, filter to window client-side
-      // (matches existing getSimproSchedule callable behavior).
+      // Paginate through Simpro schedules, filter to yearly window
+      // client-side (matches existing getSimproSchedule callable behavior).
+      // Bumped cap to 60 pages to accommodate a full year of data.
       let page = 1;
-      while (page <= 20) {
+      while (page <= 60) {
         const resp = await fetch(`${SIMPRO_BASE}/schedules/?pageSize=250&page=${page}`, {
           headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` },
         });
@@ -1130,7 +1155,7 @@ exports.thursdayPacket = functions.pubsub
         page++;
       }
       scheduleEntries = scheduleEntries.filter(s =>
-        s && s.Date && s.Date >= windowStartYMD && s.Date <= windowEndYMD
+        s && s.Date && s.Date >= yearlyStartYMD && s.Date <= yearlyEndYMD
       );
     } catch (e) {
       functions.logger.warn("thursdayPacket simpro schedule fetch error", { error: e.message });
@@ -1172,33 +1197,77 @@ exports.thursdayPacket = functions.pubsub
       return s;
     };
 
-    const oppsByLead = {};   // leadName → Set<"YYYY-MM-DD|simproNo">
-    const hitsByLead = {};   // same shape — subset where job had ANY update that day
+    // Group schedule entries by (date, simproNo) → Set<staffName present that day>
+    const presenceByDateJob = new Map();  // key "YYYY-MM-DD|simproNo"
     scheduleEntries.forEach(s => {
       if (s.Type !== "job") return;
       const date = s.Date;
       const pid = String((s.Project && s.Project.ProjectID) || "");
       const staffName = (s.Staff && s.Staff.Name) || "";
       if (!date || !pid || !staffName) return;
-      if (!leadSet.has(staffName)) return;
-      const job = jobBySimproNo[pid];
-      if (!job) return;
       const key = `${date}|${pid}`;
-      if (!oppsByLead[staffName]) oppsByLead[staffName] = new Set();
-      oppsByLead[staffName].add(key);
-      const updates = [...(job.roughUpdates || []), ...(job.finishUpdates || [])];
-      if (updates.some(u => u && _toYMD(u.date) === date)) {
-        if (!hitsByLead[staffName]) hitsByLead[staffName] = new Set();
-        hitsByLead[staffName].add(key);
-      }
+      if (!presenceByDateJob.has(key)) presenceByDateJob.set(key, new Set());
+      presenceByDateJob.get(key).add(staffName);
     });
 
-    const complianceRows = Object.keys(oppsByLead).map(lead => {
-      const total = oppsByLead[lead].size;
-      const hits  = (hitsByLead[lead] || new Set()).size;
-      const pct   = total > 0 ? Math.round((hits / total) * 100) : 0;
-      return { lead, hits, total, pct };
-    }).sort((a, b) => b.pct - a.pct || a.lead.localeCompare(b.lead));
+    const oppsByLead   = {}; // weekly opportunities per lead → Set<key>
+    const hitsByLead   = {}; // weekly hits
+    const oppsByLeadYr = {}; // yearly opportunities
+    const hitsByLeadYr = {}; // yearly hits
+
+    presenceByDateJob.forEach((staffSet, key) => {
+      const [date, pid] = key.split("|");
+      const job = jobBySimproNo[pid];
+      if (!job) return; // only count jobs we track in the app
+
+      // Determine who's responsible per the attribution rule.
+      const assignedLead = job.lead && job.lead !== "Unassigned" ? job.lead : null;
+      let responsibleLeads = [];
+      if (assignedLead && staffSet.has(assignedLead)) {
+        // Assigned lead was there → they own it.
+        responsibleLeads = [assignedLead];
+      } else {
+        // Assigned lead absent → any other present leads share responsibility.
+        responsibleLeads = [...staffSet].filter(s => leadSet.has(s));
+      }
+      if (responsibleLeads.length === 0) return;
+
+      const updates = [...(job.roughUpdates || []), ...(job.finishUpdates || [])];
+      const hit = updates.some(u => u && _toYMD(u.date) === date);
+
+      const inWeekly = date >= weeklyStartYMD && date <= weeklyEndYMD;
+      const inYearly = date >= yearlyStartYMD && date <= yearlyEndYMD;
+
+      responsibleLeads.forEach(lead => {
+        if (inYearly) {
+          if (!oppsByLeadYr[lead]) oppsByLeadYr[lead] = new Set();
+          oppsByLeadYr[lead].add(key);
+          if (hit) {
+            if (!hitsByLeadYr[lead]) hitsByLeadYr[lead] = new Set();
+            hitsByLeadYr[lead].add(key);
+          }
+        }
+        if (inWeekly) {
+          if (!oppsByLead[lead]) oppsByLead[lead] = new Set();
+          oppsByLead[lead].add(key);
+          if (hit) {
+            if (!hitsByLead[lead]) hitsByLead[lead] = new Set();
+            hitsByLead[lead].add(key);
+          }
+        }
+      });
+    });
+
+    const _buildRows = (opps, hits) =>
+      Object.keys(opps).map(lead => {
+        const total = opps[lead].size;
+        const h     = (hits[lead] || new Set()).size;
+        const pct   = total > 0 ? Math.round((h / total) * 100) : 0;
+        return { lead, hits: h, total, pct };
+      }).sort((a, b) => b.pct - a.pct || a.lead.localeCompare(b.lead));
+
+    const complianceRows   = _buildRows(oppsByLead,   hitsByLead);
+    const complianceRowsYr = _buildRows(oppsByLeadYr, hitsByLeadYr);
 
     // ── BUILD HTML ────────────────────────────────────────────
 
@@ -1231,12 +1300,24 @@ exports.thursdayPacket = functions.pubsub
         ).join("")
       : `<div style="color:#9ca3af;font-size:12px;padding:2px 0 6px">None.</div>`;
 
-    const complianceHtml = complianceRows.length === 0
-      ? `<div style="color:#9ca3af;font-size:12px;padding:2px 0 6px">No lead schedule entries found for the last ${complianceWindow} days.</div>`
-      : `<ul style="margin:0;padding:0 0 0 18px;font-size:13px;line-height:1.55;color:#111">${complianceRows.map(r => {
+    const _renderComplianceRows = (rows, emptyLabel) => rows.length === 0
+      ? `<div style="color:#9ca3af;font-size:12px;padding:2px 0 6px">${emptyLabel}</div>`
+      : `<ul style="margin:0;padding:0 0 0 18px;font-size:13px;line-height:1.55;color:#111">${rows.map(r => {
           const color = r.pct >= 90 ? "#16a34a" : r.pct >= 70 ? "#f59e0b" : "#dc2626";
-          return `<li style="margin-bottom:2px"><b>${_esc(r.lead)}</b>: ${r.hits}/${r.total} days <span style="color:${color};font-weight:700">(${r.pct}%)</span></li>`;
+          return `<li style="margin-bottom:2px"><b>${_esc(r.lead)}</b>: ${r.hits}/${r.total} job-days <span style="color:${color};font-weight:700">(${r.pct}%)</span></li>`;
         }).join("")}</ul>`;
+
+    const complianceHtml   = _renderComplianceRows(
+      complianceRows,
+      `No lead schedule entries found for the last ${complianceWindow} days.`,
+    );
+    const _yearlyStartLabel = yearlyStart.toLocaleDateString("en-US", {
+      month: "short", day: "numeric", year: "numeric",
+    });
+    const complianceYrHtml = _renderComplianceRows(
+      complianceRowsYr,
+      `No lead schedule entries found since ${_yearlyStartLabel}.`,
+    );
 
     const html = `
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:720px;margin:0 auto;padding:24px;color:#111">
@@ -1245,6 +1326,10 @@ exports.thursdayPacket = functions.pubsub
 
 ${bigHeader(`Daily Update Compliance · last ${complianceWindow} days`)}
 ${complianceHtml}
+<div style="color:#6b7280;font-size:11px;margin-top:6px;font-style:italic">A "job-day" = one (lead, date, job) where the lead was on-site in Simpro. Assigned lead owns it if present; otherwise other present leads share it. Hit = the job got any daily update for that date.</div>
+
+<h3 style="font-size:12px;text-transform:uppercase;letter-spacing:0.05em;margin:18px 0 6px;color:#374151">Year-to-date · since ${_yearlyStartLabel}</h3>
+${complianceYrHtml}
 
 ${bigHeader("Needs Scheduling")}
 ${section("No start date set", noStartDate.length, list(noStartDate, j => `<b>${_esc(j.name)}</b>${j.foreman ? ` · ${_esc(j.foreman)}` : ""}${j.simproNo ? ` · #${_esc(j.simproNo)}` : ""}`))}
@@ -1356,7 +1441,8 @@ ${bigHeader("Last Week's Decisions")}
       conflicts:          conflicts.length,
       completed:          completedThisWeek.length,
       slipped:            slippedThisWeek.length,
-      complianceLeads:    complianceRows.length,
+      complianceLeadsWeek: complianceRows.length,
+      complianceLeadsYear: complianceRowsYr.length,
       complianceScheduleEntries: scheduleEntries.length,
     });
 
