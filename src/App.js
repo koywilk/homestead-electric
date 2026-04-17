@@ -461,7 +461,8 @@ const PERMISSIONS = {
   "job.delete":      ["admin"],
   "quotes.view":     ["admin","manager","standard"],
   "quotes.convert":  ["admin"],
-  "scoreboard.view": ["admin"],
+  "scoreboard.view":        ["admin"],
+  "scoreboard.editWeights": ["admin"],
 };
 
 // Resolve access level from user object (supports legacy role-only users)
@@ -13378,7 +13379,8 @@ const _toYMDScore = (raw) => {
   }
   return "";
 };
-function Scoreboard({ jobs, users=[] }) {
+function Scoreboard({ jobs, users=[], identity }) {
+  const canEditWeights = can(identity, "scoreboard.editWeights");
   const [mode, setMode]   = useState("lead"); // "lead" | "foreman"
   const [showHelp, setHelp] = useState(false);
 
@@ -13661,7 +13663,9 @@ function Scoreboard({ jobs, users=[] }) {
   // with zero inspections yet isn't dragged down to 50%. Weights are
   // persisted to localStorage so admin tweaks survive a reload; they're
   // per-browser, not team-wide.
-  const DEFAULT_SCORE_WEIGHTS = {
+  // Built-in fallbacks. These are only used if no team default exists in
+  // Firestore (e.g. first run) AND this browser has never saved its own copy.
+  const BUILTIN_WEIGHTS = {
     inspection: 25,  // first-try-clean rate (rough + final combined)
     items:      10,  // items called on inspections (fewer = higher)
     qc:         10,  // QC walk items (fewer = higher)
@@ -13670,28 +13674,81 @@ function Scoreboard({ jobs, users=[] }) {
     goal:       15,  // % of jobs hitting the 15% goal
   };
   const WEIGHTS_STORAGE_KEY = "scoreboard.weights.v1";
-  const [SCORE_WEIGHTS, setScoreWeights] = useState(() => {
+  // Start from localStorage if present, else built-in. Team defaults (from
+  // Firestore) are layered in below via effect — they override built-in
+  // unless the user has their own browser-local tweak.
+  const [teamDefault, setTeamDefault]   = useState(null);   // last fetched team default
+  const [teamSaving,  setTeamSaving]    = useState(false);
+  const [teamSaveMsg, setTeamSaveMsg]   = useState("");
+  const [localTweak,  setLocalTweak]    = useState(() => {
     try {
       const raw = typeof localStorage !== "undefined" && localStorage.getItem(WEIGHTS_STORAGE_KEY);
-      if (!raw) return DEFAULT_SCORE_WEIGHTS;
-      const parsed = JSON.parse(raw);
-      // Backfill any missing keys from defaults so an old shape doesn't break scoring.
-      return { ...DEFAULT_SCORE_WEIGHTS, ...parsed };
-    } catch { return DEFAULT_SCORE_WEIGHTS; }
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
   });
+  // Pull the team default once on mount. Failure (doc missing / rules / offline)
+  // is silent — we just stay with built-in + any local tweak.
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, "settings", "scoreboardWeights"));
+        if (cancelled) return;
+        if (snap.exists()) {
+          const d = snap.data() || {};
+          if (d.weights && typeof d.weights === "object") setTeamDefault(d.weights);
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  // Effective defaults = team default if present, else built-in. Active weights
+  // = localTweak on top of those, falling back key-by-key.
+  const effectiveDefault = { ...BUILTIN_WEIGHTS, ...(teamDefault||{}) };
+  const SCORE_WEIGHTS    = { ...effectiveDefault, ...(localTweak||{}) };
+
   const [showWeights, setShowWeights] = useState(false);
-  // Persist weight changes.
   const updateWeight = (key, val) => {
+    if (!canEditWeights) return;
     const n = Math.max(0, Math.min(100, Math.round(Number(val) || 0)));
     const next = { ...SCORE_WEIGHTS, [key]: n };
-    setScoreWeights(next);
+    setLocalTweak(next);
     try { if (typeof localStorage !== "undefined") localStorage.setItem(WEIGHTS_STORAGE_KEY, JSON.stringify(next)); } catch {}
   };
+  // "Reset" drops the browser-local tweak so the row falls back to team default
+  // (or built-in if no team default exists). It does NOT touch the team default.
   const resetWeights = () => {
-    setScoreWeights(DEFAULT_SCORE_WEIGHTS);
+    if (!canEditWeights) return;
+    setLocalTweak(null);
     try { if (typeof localStorage !== "undefined") localStorage.removeItem(WEIGHTS_STORAGE_KEY); } catch {}
   };
+  // "Save as team default" pushes the current weights to Firestore. All admins
+  // on other browsers will inherit them on next Scoreboard load. The local
+  // tweak is cleared afterward so this admin's view also matches the new
+  // default (otherwise the tweak would keep shadowing the saved value).
+  const saveAsTeamDefault = async () => {
+    if (!canEditWeights) return;
+    setTeamSaving(true); setTeamSaveMsg("");
+    try {
+      const payload = {
+        weights: SCORE_WEIGHTS,
+        updatedAt: new Date().toISOString(),
+        updatedBy: identity?.name || "",
+      };
+      await setDoc(doc(db, "settings", "scoreboardWeights"), payload);
+      setTeamDefault(SCORE_WEIGHTS);
+      setLocalTweak(null);
+      try { if (typeof localStorage !== "undefined") localStorage.removeItem(WEIGHTS_STORAGE_KEY); } catch {}
+      setTeamSaveMsg("Saved — other admins will see these on next load.");
+      setTimeout(() => setTeamSaveMsg(""), 4000);
+    } catch (err) {
+      setTeamSaveMsg("Couldn't save — " + (err?.message || "unknown error"));
+    } finally {
+      setTeamSaving(false);
+    }
+  };
   const weightTotal = Object.values(SCORE_WEIGHTS).reduce((a,b)=>a+b,0);
+  const hasLocalTweak = !!localTweak;
   // Centered at the 15% goal = 80, slope 2pts per margin percentage point.
   const marginScore = (m) => Math.max(0, Math.min(100, 80 + (m - 15) * 2));
   const clamp100 = (v) => Math.max(0, Math.min(100, v));
@@ -13711,20 +13768,31 @@ function Scoreboard({ jobs, users=[] }) {
     if (r.jobs > 0) {
       // 0 QC/job = 100, 10+ QC/job = 0
       parts.qc         = { value: clamp100(100 - (qc / r.jobs) * 10), weight: SCORE_WEIGHTS.qc, label: "QC items" };
-    }
-    if (r.activeDays > 0) {
-      parts.updates    = { value: (r.postedDays / r.activeDays) * 100, weight: SCORE_WEIGHTS.updates, label: "Daily updates" };
+      // Include updates pillar whenever the person has jobs. If they have jobs
+      // but activeDays is 0 (or they posted nothing), that's a real 0, not a
+      // missing-data situation — this is the accountability lever.
+      const ratio = r.activeDays > 0 ? (r.postedDays / r.activeDays) : 0;
+      parts.updates    = { value: clamp100(ratio * 100), weight: SCORE_WEIGHTS.updates, label: "Daily updates" };
     }
     if (r.marginCount > 0) {
       parts.margin     = { value: marginScore(r.avgMargin), weight: SCORE_WEIGHTS.margin, label: "Avg margin" };
       parts.goal       = { value: (r.jobsOverGoal / r.marginCount) * 100, weight: SCORE_WEIGHTS.goal, label: "≥15% jobs" };
     }
 
+    // Denominator is the FULL weight total, not just the pillars that have
+    // data. A pillar with no data effectively scores 0 on the composite.
+    // This is intentional: keeping the app up to date (logging inspections,
+    // posting daily updates, etc.) is part of the score, so a lead with only
+    // margin populated can't auto-rank above a lead with full coverage.
+    const totalPossibleW = Object.values(SCORE_WEIGHTS).reduce((a,b) => a + b, 0);
     const entries = Object.entries(parts);
-    const totalW = entries.reduce((a,[,p]) => a + p.weight, 0);
+    const coveredW = entries.reduce((a,[,p]) => a + p.weight, 0);
     const weighted = entries.reduce((a,[,p]) => a + p.value * p.weight, 0);
-    const score = totalW > 0 ? weighted / totalW : null;
-    return { score, parts, totalW };
+    // Score is null only if literally no pillars have data — otherwise we
+    // compute against the full possible weight so misses cost real points.
+    const score = coveredW > 0 && totalPossibleW > 0 ? weighted / totalPossibleW : null;
+    const coverage = totalPossibleW > 0 ? (coveredW / totalPossibleW) * 100 : 0;
+    return { score, parts, totalW: totalPossibleW, coverage };
   };
 
   rows.forEach(r => {
@@ -13732,6 +13800,7 @@ function Scoreboard({ jobs, users=[] }) {
     r.composite = c.score;
     r.scoreParts = c.parts;
     r.scoreTotalWeight = c.totalW;
+    r.scoreCoverage = c.coverage;
   });
   rows.sort((a,b) => {
     // Rows with no scorable pillars sink to the bottom.
@@ -13775,7 +13844,7 @@ function Scoreboard({ jobs, users=[] }) {
 
   // Each metric's meaning, in plain language.
   const metricDefs = [
-    { name:"Score", body:`Weighted composite, 0-100. Higher is better. Pillars: Inspection first-try (${SCORE_WEIGHTS.inspection}%), Items called (${SCORE_WEIGHTS.items}%), QC items (${SCORE_WEIGHTS.qc}%), Daily updates (${SCORE_WEIGHTS.updates}%), Avg margin (${SCORE_WEIGHTS.margin}%), ≥15% jobs (${SCORE_WEIGHTS.goal}%). If someone has no data for a pillar (e.g. no inspections yet), that pillar is skipped and the remaining weights renormalize — new leads aren't auto-penalized. Hover the score on a row to see the pillar breakdown. Green ≥80, amber ≥65, red below. Ranking badges and row tint follow this score.` },
+    { name:"Score", body:`Weighted composite, 0-100. Higher is better. Pillars: Inspection first-try (${SCORE_WEIGHTS.inspection}%), Items called (${SCORE_WEIGHTS.items}%), QC items (${SCORE_WEIGHTS.qc}%), Daily updates (${SCORE_WEIGHTS.updates}%), Avg margin (${SCORE_WEIGHTS.margin}%), ≥15% jobs (${SCORE_WEIGHTS.goal}%). Pillars with no data count as 0 — keeping info in the app up to date is part of the score, so a row with only one or two pillars populated can't auto-rank above someone with full coverage. Hover the score on a row to see the pillar breakdown, missing pillars, and coverage %. Green ≥80, amber ≥65, red below. Ranking badges and row tint follow this score.` },
     { name:"Jobs", body:"Active jobs where this person is the assigned lead (or foreman, in foreman view)." },
     { name:"4-Way First Try", body:"Jobs where the very first 4-way attempt was a pass AND zero items were called. Shown as clean/attempted + percentage. Green ≥90%, amber ≥70%, red below." },
     { name:"Final First Try", body:"Jobs where the very first final attempt was a pass AND zero items were called. Shown as clean/attempted + percentage." },
@@ -13822,23 +13891,51 @@ function Scoreboard({ jobs, users=[] }) {
         </button>
       </div>
 
-      {/* Score weight editor — raw inputs per pillar. Weights are always */}
-      {/* renormalized at compute time, so totals don't have to sum to 100. */}
+      {/* Score weight editor. Visible to anyone who can see the Scoreboard, */}
+      {/* but inputs are only editable for users with scoreboard.editWeights. */}
+      {/* Two layers: team default (Firestore, shared) and local tweak        */}
+      {/* (browser-only, shadows the team default). Missing-data penalty:     */}
+      {/* pillars with no data score 0, so weight totals are the max possible */}
+      {/* score rather than being renormalized.                               */}
       {showWeights && (
         <div style={{background:"#fff",border:"1px solid #cbd5e1",borderRadius:12,padding:"14px 16px",marginBottom:16}}>
           <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
             <div style={{fontSize:13,fontWeight:700,color:"#0f172a"}}>Score weights</div>
             <div style={{fontSize:11,color:"#475569"}}>
-              Each pillar's pull on the composite. Doesn't have to sum to 100 — weights
-              renormalize automatically. Changes save to this browser only.
+              Each pillar's pull on the composite. Pillars with no data count
+              as 0 — missing info costs score (that's the accountability lever).{" "}
+              {canEditWeights ? (
+                hasLocalTweak
+                  ? <span style={{color:"#b45309",fontWeight:600}}>Editing locally in your browser only.</span>
+                  : <span>Current values come from the {teamDefault ? "team default" : "built-in default"}.</span>
+              ) : <span style={{color:"#64748b",fontWeight:600}}>Read-only — admins can edit.</span>}
             </div>
-            <button onClick={resetWeights}
-              style={{marginLeft:"auto",padding:"5px 10px",fontSize:11,fontWeight:700,
-                fontFamily:"inherit",cursor:"pointer",background:"#f1f5f9",color:"#334155",
-                border:"1px solid #cbd5e1",borderRadius:7}}>
-              Reset to defaults
-            </button>
+            {canEditWeights && (
+              <div style={{marginLeft:"auto",display:"inline-flex",gap:6,flexWrap:"wrap"}}>
+                <button onClick={resetWeights} disabled={!hasLocalTweak}
+                  title="Drop your local tweaks and snap back to the team default"
+                  style={{padding:"5px 10px",fontSize:11,fontWeight:700,
+                    fontFamily:"inherit",cursor:hasLocalTweak?"pointer":"not-allowed",
+                    background:"#f1f5f9",color:hasLocalTweak?"#334155":"#94a3b8",
+                    border:"1px solid #cbd5e1",borderRadius:7,opacity:hasLocalTweak?1:0.7}}>
+                  Reset my tweaks
+                </button>
+                <button onClick={saveAsTeamDefault} disabled={teamSaving}
+                  title="Publish current weights as the team-wide default — all admins will inherit them"
+                  style={{padding:"5px 12px",fontSize:11,fontWeight:700,
+                    fontFamily:"inherit",cursor:teamSaving?"wait":"pointer",
+                    background:"#0f172a",color:"#fff",border:"1px solid #0f172a",borderRadius:7}}>
+                  {teamSaving ? "Saving…" : "Save as new default"}
+                </button>
+              </div>
+            )}
           </div>
+          {teamSaveMsg && (
+            <div style={{fontSize:11,color:teamSaveMsg.startsWith("Saved")?"#15803d":"#b45309",
+              marginBottom:10,fontWeight:600}}>
+              {teamSaveMsg}
+            </div>
+          )}
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:"10px 16px"}}>
             {[
               ["inspection","Inspection first-try","First-try-clean rate across 4-way + final"],
@@ -13854,9 +13951,12 @@ function Scoreboard({ jobs, users=[] }) {
                   <span style={{fontSize:12,fontWeight:700,color:"#0f172a",flex:1}}>{label}</span>
                   <input type="number" min={0} max={100}
                     value={SCORE_WEIGHTS[k]}
+                    disabled={!canEditWeights}
                     onChange={e=>updateWeight(k, e.target.value)}
                     style={{width:60,padding:"4px 6px",fontSize:13,fontWeight:700,fontFamily:"inherit",
-                      border:"1px solid #cbd5e1",borderRadius:6,textAlign:"right",color:"#0f172a"}}/>
+                      border:"1px solid #cbd5e1",borderRadius:6,textAlign:"right",color:"#0f172a",
+                      background:canEditWeights?"#fff":"#f1f5f9",
+                      cursor:canEditWeights?"text":"not-allowed"}}/>
                   <span style={{fontSize:11,color:"#64748b",fontWeight:600}}>pts</span>
                 </div>
                 <div style={{fontSize:11,color:"#64748b",lineHeight:1.4}}>{hint}</div>
@@ -13874,11 +13974,11 @@ function Scoreboard({ jobs, users=[] }) {
           </div>
           <div style={{marginTop:10,fontSize:11,color:"#475569"}}>
             Total points entered: <b style={{color:"#0f172a"}}>{weightTotal}</b>
-            {weightTotal !== 100 && (
-              <span style={{color:"#b45309",marginLeft:6}}>
-                (doesn't sum to 100 — that's fine, the math renormalizes)
-              </span>
-            )}
+            <span style={{marginLeft:6}}>
+              — that's the max possible score. A pillar with no data scores 0
+              of its own weight, so partial coverage can't hide behind a
+              renormalized average.
+            </span>
           </div>
         </div>
       )}
@@ -14015,11 +14115,32 @@ function Scoreboard({ jobs, users=[] }) {
                           const s = Math.round(r.composite);
                           const color = s >= 80 ? "#16a34a" : s >= 65 ? "#f59e0b" : "#dc2626";
                           const bg    = s >= 80 ? "#dcfce7" : s >= 65 ? "#fef3c7" : "#fee2e2";
-                          // Plain-text breakdown tooltip.
-                          const breakdown = Object.entries(r.scoreParts).map(([k,p]) =>
-                            `${p.label} (${p.weight}%): ${Math.round(p.value)}`
-                          ).join("\n");
-                          const tip = `${breakdown}\n──────────\nComposite: ${s} / 100`;
+                          // Plain-text breakdown tooltip. Shows each pillar that had data,
+                          // plus a "missing" line for any pillar scoring 0 from no data —
+                          // that's where points are being left on the table.
+                          const allPillars = [
+                            ["inspection","Inspection first-try"],
+                            ["items","Items called"],
+                            ["qc","QC items"],
+                            ["updates","Daily updates"],
+                            ["margin","Avg margin"],
+                            ["goal","≥15% jobs"],
+                          ];
+                          const covered = [];
+                          const missing = [];
+                          allPillars.forEach(([k,label]) => {
+                            const p = r.scoreParts[k];
+                            if (p) covered.push(`${p.label} (${p.weight}%): ${Math.round(p.value)}`);
+                            else   missing.push(`${label} (${SCORE_WEIGHTS[k]}%): — no data`);
+                          });
+                          const cov = Math.round(r.scoreCoverage);
+                          const tip = [
+                            ...covered,
+                            ...(missing.length ? ["", ...missing] : []),
+                            "──────────",
+                            `Coverage: ${cov}% of pillars have data`,
+                            `Composite: ${s} / 100`,
+                          ].join("\n");
                           return (
                             <span title={tip} style={{
                               display:"inline-flex",alignItems:"center",gap:4,
@@ -14096,9 +14217,10 @@ function Scoreboard({ jobs, users=[] }) {
         <div style={{marginTop:8,fontSize:11,color:"#475569"}}>
           <b style={{color:"#334155"}}>Ranking.</b> Rows are sorted by the composite Score column — a weighted average
           across every pillar (inspection {SCORE_WEIGHTS.inspection}%, items {SCORE_WEIGHTS.items}%, QC {SCORE_WEIGHTS.qc}%,
-          updates {SCORE_WEIGHTS.updates}%, margin {SCORE_WEIGHTS.margin}%, ≥15% jobs {SCORE_WEIGHTS.goal}%). Pillars with no data
-          for that person are skipped and the remaining weights renormalize, so a brand-new lead isn't auto-penalized.
-          Hover a score to see the pillar-by-pillar breakdown.
+          updates {SCORE_WEIGHTS.updates}%, margin {SCORE_WEIGHTS.margin}%, ≥15% jobs {SCORE_WEIGHTS.goal}%). Pillars with
+          no data count as 0 — keeping info in the app up to date is part of the score, so a row with only one or two
+          pillars populated will rank below a row with full coverage. Hover a score to see the pillar-by-pillar
+          breakdown, which pillars are missing, and the coverage %.
         </div>
         <div style={{marginTop:8,fontSize:11,color:"#475569"}}>
           <b style={{color:"#334155"}}>Profit note.</b> Margins come from Simpro and are cached per job when its detail
@@ -18002,7 +18124,7 @@ function App() {
       )}
 
       {view==="scoreboard"&&can(identity,"scoreboard.view")&&(
-        <Scoreboard jobs={jobs} users={users}/>
+        <Scoreboard jobs={jobs} users={users} identity={identity}/>
       )}
 
       {view==="settings"&&can(identity,"settings.view")&&(
