@@ -676,8 +676,31 @@ async function simproReq(method, path, body) {
   if (body) opts.body = JSON.stringify(body);
   const r = await fetch(`${SIMPRO_BASE}${path}`, opts);
   const text = await r.text();
-  try { return { ok: r.ok, status: r.status, data: JSON.parse(text) }; }
-  catch { return { ok: r.ok, status: r.status, data: text }; }
+  const retryAfter = r.headers.get("retry-after");
+  try { return { ok: r.ok, status: r.status, retryAfter, data: JSON.parse(text) }; }
+  catch { return { ok: r.ok, status: r.status, retryAfter, data: text }; }
+}
+
+// Retry-aware wrapper. Simpro's public API rate-limits at ~60 req/min per
+// token; bulk fetches trip 429s easily. On 429 we back off (honoring
+// Retry-After when present) and retry up to 5 attempts with jittered
+// exponential backoff. 5xx also retries. Everything else returns as-is.
+async function simproReqWithRetry(method, path, body, {maxAttempts = 5} = {}) {
+  let lastRes = null;
+  for (let attempt = 1; attempt <= maxAttempts; attempt++) {
+    const r = await simproReq(method, path, body);
+    lastRes = r;
+    const shouldRetry = r.status === 429 || (r.status >= 500 && r.status < 600);
+    if (!shouldRetry) return r;
+    if (attempt === maxAttempts) break;
+    const headerWait = Number(r.retryAfter);
+    // Exponential backoff: 1s, 2s, 4s, 8s (+ jitter). Cap at 15s.
+    const backoff = Math.min(15000, 1000 * Math.pow(2, attempt - 1));
+    const jitter = Math.floor(Math.random() * 400);
+    const waitMs = (Number.isFinite(headerWait) && headerWait > 0 ? headerWait * 1000 : backoff) + jitter;
+    await new Promise(res => setTimeout(res, waitMs));
+  }
+  return lastRes;
 }
 
 async function listDriveItems(folderId, parentFolderName, depth, driveKey) {
@@ -845,7 +868,7 @@ exports.getSimproJobCostCenters = functions
     if (!simproJobNo) throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
 
     // 1. Pull sections for the job.
-    const sectionsRes = await simproReq(
+    const sectionsRes = await simproReqWithRetry(
       "GET",
       `/jobs/${encodeURIComponent(simproJobNo)}/sections/?columns=ID,Name&pageSize=100`
     );
@@ -862,7 +885,7 @@ exports.getSimproJobCostCenters = functions
     let loggedFirst = false;
     const ccResults = await Promise.all(
       sections.map(async (s) => {
-        const r = await simproReq(
+        const r = await simproReqWithRetry(
           "GET",
           `/jobs/${encodeURIComponent(simproJobNo)}/sections/${s.ID}/costCenters/?pageSize=250`
         );
@@ -924,12 +947,13 @@ exports.getSimproJobCostCenters = functions
       { key: "prebuild", path: "prebuilds" },
     ];
 
-    let sampleLogged = false;
+    // Log one sample per kind so we can see the true shape in Cloud Function logs.
+    const sampleLogged = { catalog: false, oneOff: false, prebuild: false };
     const tasks = [];
     flat.forEach(cc => {
       ITEM_KINDS.forEach(kind => {
         tasks.push(async () => {
-          const r = await simproReq(
+          const r = await simproReqWithRetry(
             "GET",
             `/jobs/${encodeURIComponent(simproJobNo)}/sections/${cc.sectionId}` +
             `/costCenters/${cc.id}/${kind.path}/?pageSize=250`
@@ -941,10 +965,12 @@ exports.getSimproJobCostCenters = functions
             return { cc, kind: kind.key, items: [] };
           }
           const rows = Array.isArray(r.data) ? r.data : [];
-          if (!sampleLogged && rows.length) {
-            sampleLogged = true;
+          if (!sampleLogged[kind.key] && rows.length) {
+            sampleLogged[kind.key] = true;
             functions.logger.info("getSimproJobCostCenters: sample item shape", {
-              kind: kind.key, sample: rows[0],
+              kind: kind.key,
+              keys: Object.keys(rows[0] || {}),
+              sample: rows[0],
             });
           }
           const items = rows.map(it => {
@@ -958,7 +984,20 @@ exports.getSimproJobCostCenters = functions
               it?.Name ??
               it?.Description ??
               "(unnamed)";
-            const qty = it?.Quantity ?? it?.Qty ?? null;
+            // Quantity — Simpro exposes this under many shapes depending on
+            // tenant + item type. Be exhaustive so field folks can always
+            // see "how many of this thing was bid".
+            const qty =
+              (typeof it?.Quantity === "number" ? it.Quantity : null) ??
+              it?.Quantity?.Value ??
+              it?.Quantity?.Billable ??
+              it?.Quantity?.Invoiced ??
+              it?.Quantity?.Complete ??
+              it?.Qty ??
+              it?.QuantityOrdered ??
+              it?.BillableQuantity ??
+              it?.ItemQuantity ??
+              null;
             const totalExTax =
               it?.Total?.ExTax ??
               it?.Totals?.ExTax ??
@@ -972,7 +1011,7 @@ exports.getSimproJobCostCenters = functions
             return {
               kind: kind.key,
               id: it?.ID ?? it?.Id ?? it?.id ?? null,
-               name,
+              name,
               qty,
               unitPrice,
               totalExTax,
@@ -983,7 +1022,11 @@ exports.getSimproJobCostCenters = functions
       });
     });
 
-    const itemResults = await _pLimit(tasks, 10);
+    // Concurrency 3 for item fetches — Simpro's public API rate-limits at
+    // ~60 req/min per token and bulk fetches trip 429s easily. The retry
+    // wrapper handles transient spikes; the low concurrency keeps us under
+    // the sustained limit.
+    const itemResults = await _pLimit(tasks, 3);
 
     // Attach items back to each cost center.
     const ccById = new Map(flat.map(cc => [`${cc.sectionId}-${cc.id}`, cc]));

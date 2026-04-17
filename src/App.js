@@ -4086,7 +4086,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 // the individual items inside each cost center (catalogs, one-offs,
 // prebuilds). Field team can search by any item name — if nothing
 // matches, they know it's a change order.
-function BidItemsPanel({simproNo, data, error}) {
+function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
   const [q, setQ] = useState("");
   const [expanded, setExpanded] = useState({}); // ccKey -> bool
 
@@ -4102,12 +4102,18 @@ function BidItemsPanel({simproNo, data, error}) {
       return (
         <div style={{fontSize:12,color:C.red,padding:"8px 2px"}}>
           Couldn't load cost centers from Simpro: {error}
+          {onRefresh && (
+            <button onClick={onRefresh} style={{marginLeft:10,fontSize:11,padding:"3px 10px",
+              background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,cursor:"pointer"}}>
+              Retry
+            </button>
+          )}
         </div>
       );
     }
     return (
       <div style={{fontSize:12,color:C.dim,fontStyle:"italic",padding:"8px 2px"}}>
-        Loading bid items from Simpro… (first load can take a few seconds)
+        Loading bid items from Simpro… (first load can take 30–60 seconds on large jobs)
       </div>
     );
   }
@@ -4179,6 +4185,19 @@ function BidItemsPanel({simproNo, data, error}) {
     );
   };
 
+  const fetchedAtLabel = data?.fetchedAt
+    ? (() => {
+        const dt = new Date(data.fetchedAt);
+        const now = new Date();
+        const diffMin = Math.round((now - dt) / 60000);
+        if (diffMin < 1) return "just now";
+        if (diffMin < 60) return `${diffMin}m ago`;
+        const diffH = Math.round(diffMin / 60);
+        if (diffH < 24) return `${diffH}h ago`;
+        return `${Math.round(diffH/24)}d ago`;
+      })()
+    : "";
+
   return (
     <div>
       <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:10,flexWrap:"wrap"}}>
@@ -4194,6 +4213,18 @@ function BidItemsPanel({simproNo, data, error}) {
             ? `${visible.length} / ${costCenters.length} CCs · ${totalItemMatches} item${totalItemMatches===1?"":"s"} · ${fmtMoney(visibleTotal)}`
             : `${costCenters.length} cost center${costCenters.length===1?"":"s"} · ${totalItems} items · ${fmtMoney(totalBid)}`}
         </div>
+        {onRefresh && (
+          <button
+            onClick={onRefresh}
+            disabled={refreshing}
+            title={fetchedAtLabel ? `Last synced ${fetchedAtLabel}` : ""}
+            style={{fontSize:11,padding:"6px 12px",borderRadius:6,cursor:refreshing?"default":"pointer",
+              background:refreshing?C.surface:C.card,border:`1px solid ${C.border}`,color:C.text,
+              opacity:refreshing?0.6:1,whiteSpace:"nowrap"}}
+          >
+            {refreshing ? "Syncing…" : `Refresh${fetchedAtLabel ? ` · ${fetchedAtLabel}` : ""}`}
+          </button>
+        )}
       </div>
 
       {tokens.length > 0 && visible.length === 0 && (
@@ -7504,7 +7535,7 @@ function FileUploadSection({ jobId, files, onChange }) {
   );
 }
 
-function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr}) {
+function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simproCostCentersRefreshing, onRefreshSimproCostCenters}) {
 
   return (
 
@@ -7518,6 +7549,8 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr}) {
           simproNo={job.simproNo}
           data={simproCostCenters}
           error={simproCostCentersErr}
+          refreshing={simproCostCentersRefreshing}
+          onRefresh={onRefreshSimproCostCenters}
         />
       </Section>
 
@@ -8509,25 +8542,66 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       .catch(e => { console.error("[simproFinancials error]", e); setSimproFinancials(null); });
   }, [job.simproNo]);
 
-  // Simpro cost centers — bid line items used by the "Is this in the bid?" panel
+  // Simpro cost centers — bid line items used by the "Is this in the bid?"
+  // panel. We cache the full response on the job doc so subsequent loads
+  // are instant; a manual refresh (or a cache older than 12h) triggers a
+  // background refetch. Data-safety: cache is a single additive field on
+  // the job doc, never overwrites other job fields, and a failed refetch
+  // leaves the existing cache intact.
+  const CC_CACHE_TTL_MS = 12 * 60 * 60 * 1000; // 12h
   const [simproCostCenters, setSimproCostCenters] = useState(null); // null | 'loading' | {sections, costCenters, fetchedAt}
   const [simproCostCentersErr, setSimproCostCentersErr] = useState(null);
+  const [simproCostCentersRefreshing, setSimproCostCentersRefreshing] = useState(false);
+  const [simproCostCentersTick, setSimproCostCentersTick] = useState(0); // bump to force refetch
+
+  const refetchSimproCostCenters = () => setSimproCostCentersTick(n => n + 1);
+
   useEffect(() => {
-    if (!job.simproNo) { setSimproCostCenters(null); setSimproCostCentersErr(null); return; }
-    setSimproCostCenters("loading");
+    if (!job.simproNo) {
+      setSimproCostCenters(null);
+      setSimproCostCentersErr(null);
+      return;
+    }
+
+    const cached = job.simproCostCentersCache;
+    const fetchedAt = cached?.fetchedAt ? Date.parse(cached.fetchedAt) : 0;
+    const isStale = !fetchedAt || (Date.now() - fetchedAt) > CC_CACHE_TTL_MS;
+    const forced = simproCostCentersTick > 0;
+
+    // If we have a cache, surface it immediately for instant render.
+    if (cached && Array.isArray(cached.costCenters)) {
+      setSimproCostCenters(cached);
+    } else {
+      setSimproCostCenters("loading");
+    }
     setSimproCostCentersErr(null);
-    const fn = httpsCallable(functions, "getSimproJobCostCenters");
-    fn({ simproJobNo: job.simproNo })
-      .then(res => {
-        console.log("[simproCostCenters]", res.data);
-        setSimproCostCenters(res.data);
-      })
-      .catch(e => {
-        console.error("[simproCostCenters error]", e);
-        setSimproCostCenters(null);
-        setSimproCostCentersErr(e.message || "Failed to load cost centers");
-      });
-  }, [job.simproNo]);
+
+    // Only hit Simpro when cache is missing, stale, or a refresh was requested.
+    if (!cached || isStale || forced) {
+      setSimproCostCentersRefreshing(!!cached); // only show "refreshing" chip when we already have data
+      const fn = httpsCallable(functions, "getSimproJobCostCenters");
+      fn({ simproJobNo: job.simproNo })
+        .then(res => {
+          console.log("[simproCostCenters]", res.data);
+          setSimproCostCenters(res.data);
+          setSimproCostCentersRefreshing(false);
+          // Persist cache on the job doc. This is the only write and it's
+          // additive — no other field on the job is touched.
+          u({ simproCostCentersCache: res.data });
+        })
+        .catch(e => {
+          console.error("[simproCostCenters error]", e);
+          setSimproCostCentersRefreshing(false);
+          setSimproCostCentersErr(e.message || "Failed to load cost centers");
+          // If we had a cached copy, keep showing it; otherwise clear.
+          if (!cached) setSimproCostCenters(null);
+        });
+    }
+    // job.simproCostCentersCache is intentionally NOT in deps — we don't
+    // want the cache write to re-run this effect and loop. simproNo +
+    // refresh tick are the only triggers.
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [job.simproNo, simproCostCentersTick]);
 
   // Live listener for GC question answers + LV lighting collab
   useEffect(() => {
@@ -9815,6 +9889,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               onUpdate={u}
               simproCostCenters={simproCostCenters}
               simproCostCentersErr={simproCostCentersErr}
+              simproCostCentersRefreshing={simproCostCentersRefreshing}
+              onRefreshSimproCostCenters={refetchSimproCostCenters}
             />
 
           )}
