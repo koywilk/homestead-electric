@@ -3333,7 +3333,11 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
     if(!txt) return;
     const floorKey = addFloor;
     const floor = getFloor(floorKey);
-    const newItem = { id:uid(), text:txt, done:false, fromQC:true, addedBy:getIdentity()?.name||"" };
+    // addedAt is ISO (YYYY-MM-DD) so the Scoreboard date range can filter QC counts.
+    // Legacy items from before this shipped won't have it — Scoreboard treats those as "always in range".
+    const _now = new Date();
+    const _addedAt = `${_now.getFullYear()}-${String(_now.getMonth()+1).padStart(2,"0")}-${String(_now.getDate()).padStart(2,"0")}`;
+    const newItem = { id:uid(), text:txt, done:false, fromQC:true, addedBy:getIdentity()?.name||"", addedAt:_addedAt };
     let newFloor;
     if(addTarget==='general') {
       newFloor = {...floor, general:[...floor.general, newItem]};
@@ -13378,7 +13382,60 @@ function Scoreboard({ jobs, users=[] }) {
   const [mode, setMode]   = useState("lead"); // "lead" | "foreman"
   const [showHelp, setHelp] = useState(false);
 
-  // QC item counts (fromQC-tagged entries in the punch lists).
+  // ── Date range state ─────────────────────────────────────
+  // Default range: since the anchor, through today. Changing these inputs
+  // re-filters every metric that has a date. The yearly anchor/reset logic
+  // is independent — this is a view-time filter, not a mutation.
+  const _todayYMDInit = (() => {
+    const d = new Date();
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  })();
+  const [startYMD, setStartYMD] = useState(SCOREBOARD_ANCHOR_YMD);
+  const [endYMD,   setEndYMD]   = useState(_todayYMDInit);
+  const [activePreset, setActivePreset] = useState("sinceAnchor");
+
+  // Apply a named preset — all relative to "today" at click time.
+  const applyPreset = (key) => {
+    const d = new Date();
+    const ymd = (dd) => `${dd.getFullYear()}-${String(dd.getMonth()+1).padStart(2,"0")}-${String(dd.getDate()).padStart(2,"0")}`;
+    const todayS = ymd(d);
+    let s = SCOREBOARD_ANCHOR_YMD, e = todayS;
+    if (key === "sinceAnchor") {
+      s = SCOREBOARD_ANCHOR_YMD; e = todayS;
+    } else if (key === "last7") {
+      const a = new Date(d); a.setDate(a.getDate()-6); s = ymd(a);
+    } else if (key === "last30") {
+      const a = new Date(d); a.setDate(a.getDate()-29); s = ymd(a);
+    } else if (key === "mtd") {
+      s = ymd(new Date(d.getFullYear(), d.getMonth(), 1));
+    } else if (key === "qtd") {
+      const qStart = Math.floor(d.getMonth()/3) * 3;
+      s = ymd(new Date(d.getFullYear(), qStart, 1));
+    } else if (key === "ytd") {
+      s = ymd(new Date(d.getFullYear(), 0, 1));
+    } else if (key === "lastWeek") {
+      // Previous Mon-Sun.
+      const day = d.getDay() || 7; // Sun=0 → 7
+      const thisMon = new Date(d); thisMon.setDate(d.getDate() - (day-1));
+      const lastMon = new Date(thisMon); lastMon.setDate(thisMon.getDate()-7);
+      const lastSun = new Date(lastMon); lastSun.setDate(lastMon.getDate()+6);
+      s = ymd(lastMon); e = ymd(lastSun);
+    } else if (key === "lastMonth") {
+      const lm = new Date(d.getFullYear(), d.getMonth()-1, 1);
+      const lmEnd = new Date(d.getFullYear(), d.getMonth(), 0);
+      s = ymd(lm); e = ymd(lmEnd);
+    }
+    setStartYMD(s); setEndYMD(e); setActivePreset(key);
+  };
+
+  // Clamp the raw input range to the scoreboard anchor — earlier dates have no data anyway.
+  const effStart = startYMD < SCOREBOARD_ANCHOR_YMD ? SCOREBOARD_ANCHOR_YMD : startYMD;
+  const effEnd   = endYMD;
+
+  // QC item counts (fromQC-tagged entries in the punch lists). When a date
+  // range is supplied, items with an addedAt stamp get filtered to that
+  // range; legacy items with no addedAt are always counted (treated as
+  // "always in range" so historical data doesn't disappear).
   const collectQCCount = (p) => {
     if (!p) return 0;
     let n = 0;
@@ -13390,7 +13447,14 @@ function Scoreboard({ jobs, users=[] }) {
         ...((f.rooms||[]).flatMap(r=>r.items||[])),
         ...(f.hotcheck||[]),
       ];
-      buckets.forEach(i => { if (i && i.fromQC) n++; });
+      buckets.forEach(i => {
+        if (!i || !i.fromQC) return;
+        if (i.addedAt) {
+          const ymd = _toYMDScore(i.addedAt);
+          if (ymd && (ymd < effStart || ymd > effEnd)) return;
+        }
+        n++;
+      });
     });
     return n;
   };
@@ -13417,19 +13481,11 @@ function Scoreboard({ jobs, users=[] }) {
     return out;
   };
 
-  const todayYMD = (() => {
-    const d = new Date();
-    const y = d.getFullYear();
-    const mm = String(d.getMonth()+1).padStart(2,"0");
-    const dd = String(d.getDate()).padStart(2,"0");
-    return `${y}-${mm}-${dd}`;
-  })();
-
-  // The active window for a job, clamped to [anchor, today].
+  // The active window for a job, clamped to [effStart, effEnd].
   // Start: earliest of (roughStartDate, roughScheduledDate, roughStatusDate, prepStartDate)
-  //        that falls on/after the anchor.
+  //        that falls on/after the selected start.
   // End:   if finish complete → finishStatusDate; else if rough complete and no
-  //        finish started → roughStatusDate; else today.
+  //        finish started → roughStatusDate; else the selected end.
   const activeWindowForJob = (job) => {
     const candidates = [
       job.roughStartDate, job.roughScheduledDate, job.roughStatusDate,
@@ -13437,19 +13493,22 @@ function Scoreboard({ jobs, users=[] }) {
     ].map(_toYMDScore).filter(Boolean).sort();
     if (!candidates.length) return null;
     let start = candidates[0];
-    if (start < SCOREBOARD_ANCHOR_YMD) start = SCOREBOARD_ANCHOR_YMD;
+    if (start < effStart) start = effStart;
 
-    let end = todayYMD;
+    let end = effEnd;
     const fComplete = job.finishStatus === "complete";
     const rComplete = job.roughStatus === "complete";
     if (fComplete && job.finishStatusDate) {
       const f = _toYMDScore(job.finishStatusDate);
-      if (f) end = f < todayYMD ? f : todayYMD;
+      if (f) end = f < effEnd ? f : effEnd;
     } else if (rComplete && !job.finishStatus && job.roughStatusDate) {
       const r = _toYMDScore(job.roughStatusDate);
-      if (r) end = r < todayYMD ? r : todayYMD;
+      if (r) end = r < effEnd ? r : effEnd;
     }
     if (start > end) return null;
+    // If the job's candidate range ends before the selected window, skip it.
+    const last = candidates[candidates.length-1];
+    if (last && last < effStart) return null;
     return { start, end };
   };
 
@@ -13477,18 +13536,26 @@ function Scoreboard({ jobs, users=[] }) {
     }];
   };
 
-  // Per-job metric rollup for the scoreboard window.
+  // Per-job metric rollup for the scoreboard window. Filters attempts and
+  // updates to the selected [effStart, effEnd] range. Attempts with no date
+  // stamp are kept (treated as "always in range") so pre-existing synthetic
+  // records and any untimestamped attempts don't disappear.
   const statsForJob = (job) => {
+    const inRange = (ymd) => !ymd || (ymd >= effStart && ymd <= effEnd);
     const rAtt = attemptsOrSynthesized(job, "rough")
-                   .filter(a => !a.date || _toYMDScore(a.date) >= SCOREBOARD_ANCHOR_YMD);
+                   .filter(a => inRange(_toYMDScore(a.date)));
     const fAtt = attemptsOrSynthesized(job, "final")
-                   .filter(a => !a.date || _toYMDScore(a.date) >= SCOREBOARD_ANCHOR_YMD);
+                   .filter(a => inRange(_toYMDScore(a.date)));
     const firstR = rAtt[0];
     const firstF = fAtt[0];
 
     // Daily updates authored on this job, in the window.
     const updates = [...(job.roughUpdates||[]), ...(job.finishUpdates||[])];
-    const inWindow = updates.filter(u => u && _toYMDScore(u.date) >= SCOREBOARD_ANCHOR_YMD);
+    const inWindow = updates.filter(u => {
+      if (!u) return false;
+      const d = _toYMDScore(u.date);
+      return d && d >= effStart && d <= effEnd;
+    });
 
     // Active business-day window for this job. Used as the compliance denominator.
     const win = activeWindowForJob(job);
@@ -13623,8 +13690,8 @@ function Scoreboard({ jobs, users=[] }) {
     { name:"Final First Try", body:"Jobs where the very first final attempt was a pass AND zero items were called. Shown as clean/attempted + percentage." },
     { name:"4-Way Items", body:"Total items called by the inspector across every 4-way attempt on this person's jobs. Includes items from failed attempts that later got resolved." },
     { name:"Final Items", body:"Same idea as 4-Way Items, but for final inspections." },
-    { name:"Rough QC", body:"Items called during a rough QC walk. Counts entries flagged fromQC on the rough punch list." },
-    { name:"Finish QC", body:"Items called during a finish QC walk. Counts entries flagged fromQC on the finish punch list." },
+    { name:"Rough QC", body:"Items called during a rough QC walk (rough punch, flagged fromQC). Filtered to the selected date range by each item's addedAt stamp. Items created before date stamps shipped don't have one and always count." },
+    { name:"Finish QC", body:"Items called during a finish QC walk (finish punch, flagged fromQC). Filtered the same way as Rough QC." },
     { name:"Updates Posted", body:"Total daily update entries in the window. Lead view credits only updates the lead authored. Foreman view counts every update on the foreman's jobs (whole crew)." },
     { name:"Daily Updates", body:"Days posted / business days their jobs were active, plus a percentage. Active days = business days between the job's earliest start and today (or its complete date), unioned across all the person's jobs. Green ≥90%, amber ≥70%, red below." },
     { name:"Avg Margin", body:"Average net profit margin across this person's jobs, pulled from Simpro. Green if the average hits the 15% goal, red below. An asterisk (*) after the number means some of that person's jobs only have estimated margins (no real costs tracked yet)." },
@@ -13641,11 +13708,11 @@ function Scoreboard({ jobs, users=[] }) {
           ADMIN ONLY
         </div>
         <div style={{fontSize:12,color:"#475569",fontWeight:500}}>
-          Counting since <b style={{color:"#0f172a"}}>March 17, 2026</b> · resets Jan 1, 2027
+          Data anchored at <b style={{color:"#0f172a"}}>March 17, 2026</b> · yearly totals reset Jan 1, 2027
         </div>
       </div>
 
-      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,flexWrap:"wrap"}}>
         <div style={{display:"inline-flex",gap:4,background:"#f1f5f9",padding:4,borderRadius:9}}>
           {tabBtn("lead","Leads")}
           {tabBtn("foreman","Foremen (by crew)")}
@@ -13656,6 +13723,56 @@ function Scoreboard({ jobs, users=[] }) {
             display:"inline-flex",alignItems:"center",gap:6}}>
           {showHelp ? "▾ Hide definitions" : "▸ What do these mean?"}
         </button>
+      </div>
+
+      {/* Date range controls — presets + custom inputs. All metrics re-filter on change. */}
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap",
+        background:"#f8fafc",border:"1px solid #e2e8f0",borderRadius:10,padding:"10px 12px"}}>
+        <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",textTransform:"uppercase",color:"#475569"}}>
+          Range
+        </span>
+        <div style={{display:"inline-flex",gap:4,flexWrap:"wrap"}}>
+          {[
+            ["sinceAnchor","Since Mar 17"],
+            ["ytd","YTD"],
+            ["qtd","QTD"],
+            ["mtd","MTD"],
+            ["last30","Last 30 days"],
+            ["last7","Last 7 days"],
+            ["lastWeek","Last week"],
+            ["lastMonth","Last month"],
+          ].map(([k,label]) => {
+            const on = activePreset === k;
+            return (
+              <button key={k} onClick={()=>applyPreset(k)}
+                style={{padding:"5px 10px",fontSize:11,fontWeight:700,fontFamily:"inherit",cursor:"pointer",
+                  border:on?"1px solid #0f172a":"1px solid #cbd5e1",borderRadius:7,
+                  background:on?"#0f172a":"#fff",color:on?"#fff":"#334155",letterSpacing:"0.02em"}}>
+                {label}
+              </button>
+            );
+          })}
+        </div>
+        <span style={{fontSize:11,color:"#94a3b8"}}>·</span>
+        <label style={{fontSize:11,fontWeight:600,color:"#475569",display:"inline-flex",alignItems:"center",gap:5}}>
+          From
+          <input type="date" value={startYMD}
+            min={SCOREBOARD_ANCHOR_YMD} max={endYMD}
+            onChange={e=>{ setStartYMD(e.target.value); setActivePreset("custom"); }}
+            style={{padding:"4px 7px",fontSize:12,border:"1px solid #cbd5e1",borderRadius:6,color:"#0f172a",fontFamily:"inherit"}}/>
+        </label>
+        <label style={{fontSize:11,fontWeight:600,color:"#475569",display:"inline-flex",alignItems:"center",gap:5}}>
+          To
+          <input type="date" value={endYMD}
+            min={startYMD} max={_todayYMDInit}
+            onChange={e=>{ setEndYMD(e.target.value); setActivePreset("custom"); }}
+            style={{padding:"4px 7px",fontSize:12,border:"1px solid #cbd5e1",borderRadius:6,color:"#0f172a",fontFamily:"inherit"}}/>
+        </label>
+        {startYMD < SCOREBOARD_ANCHOR_YMD && (
+          <span style={{fontSize:11,color:"#b45309",fontWeight:600}}>
+            (clamped to Mar 17 — no data before then)
+          </span>
+        )}
       </div>
 
       {showHelp && (
