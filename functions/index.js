@@ -978,21 +978,31 @@ exports.getSimproJobCostCenters = functions
           const colsParam = kind.columns ? `&columns=${encodeURIComponent(kind.columns)}` : "";
           let r = await simproReqWithRetry("GET", baseUrl + colsParam);
           stats.statusBreakdown[r.status] = (stats.statusBreakdown[r.status] || 0) + 1;
-          // Simpro silently rejects invalid column names by returning []. If
-          // we asked for columns and got nothing, retry without columns so
-          // items at least render with default fields.
-          if (r.ok && Array.isArray(r.data) && r.data.length === 0 && colsParam) {
-            stats.emptyWithCols++;
+          // Simpro rejects invalid column names in two ways:
+          //   - 422 "Invalid columns found" with the offending names in body
+          //   - 200 OK with an empty array (on some endpoints)
+          // In either case, retry without any columns param so items at least
+          // render with the default column set. Quantity will be null on the
+          // fallback path — we can surface it per-item with a detail fetch
+          // once the list layer is proven to work.
+          const columnsRejected =
+            colsParam && (
+              r.status === 422 ||
+              (r.ok && Array.isArray(r.data) && r.data.length === 0)
+            );
+          if (columnsRejected) {
+            if (r.ok) stats.emptyWithCols++;
             const r2 = await simproReqWithRetry("GET", baseUrl);
             stats.statusBreakdown[`fb-${r2.status}`] = (stats.statusBreakdown[`fb-${r2.status}`] || 0) + 1;
             if (r2.ok && Array.isArray(r2.data) && r2.data.length > 0) {
               stats.fellBackToDefault++;
               functions.logger.info("getSimproJobCostCenters: columns rejected, using defaults", {
-                kind: kind.key, sectionId: cc.sectionId, costCenterId: cc.id,
+                kind: kind.key, sectionId: cc.sectionId, costCenterId: cc.id, originalStatus: r.status,
               });
               r = r2;
             } else if (r2.ok) {
               stats.defaultAlsoEmpty++;
+              r = r2; // treat as success-with-empty so we don't count it as failed below
             }
           }
           if (!r.ok) {
