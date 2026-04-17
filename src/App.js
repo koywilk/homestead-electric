@@ -13659,8 +13659,9 @@ function Scoreboard({ jobs, users=[] }) {
   // Each pillar produces a 0-100 sub-score. The composite is a weighted
   // average, but ONLY over pillars the person has data for — so a new lead
   // with zero inspections yet isn't dragged down to 50%. Weights are
-  // centralized here and easy to tweak.
-  const SCORE_WEIGHTS = {
+  // persisted to localStorage so admin tweaks survive a reload; they're
+  // per-browser, not team-wide.
+  const DEFAULT_SCORE_WEIGHTS = {
     inspection: 25,  // first-try-clean rate (rough + final combined)
     items:      10,  // items called on inspections (fewer = higher)
     qc:         10,  // QC walk items (fewer = higher)
@@ -13668,6 +13669,29 @@ function Scoreboard({ jobs, users=[] }) {
     margin:     25,  // avg margin vs 15% goal
     goal:       15,  // % of jobs hitting the 15% goal
   };
+  const WEIGHTS_STORAGE_KEY = "scoreboard.weights.v1";
+  const [SCORE_WEIGHTS, setScoreWeights] = useState(() => {
+    try {
+      const raw = typeof localStorage !== "undefined" && localStorage.getItem(WEIGHTS_STORAGE_KEY);
+      if (!raw) return DEFAULT_SCORE_WEIGHTS;
+      const parsed = JSON.parse(raw);
+      // Backfill any missing keys from defaults so an old shape doesn't break scoring.
+      return { ...DEFAULT_SCORE_WEIGHTS, ...parsed };
+    } catch { return DEFAULT_SCORE_WEIGHTS; }
+  });
+  const [showWeights, setShowWeights] = useState(false);
+  // Persist weight changes.
+  const updateWeight = (key, val) => {
+    const n = Math.max(0, Math.min(100, Math.round(Number(val) || 0)));
+    const next = { ...SCORE_WEIGHTS, [key]: n };
+    setScoreWeights(next);
+    try { if (typeof localStorage !== "undefined") localStorage.setItem(WEIGHTS_STORAGE_KEY, JSON.stringify(next)); } catch {}
+  };
+  const resetWeights = () => {
+    setScoreWeights(DEFAULT_SCORE_WEIGHTS);
+    try { if (typeof localStorage !== "undefined") localStorage.removeItem(WEIGHTS_STORAGE_KEY); } catch {}
+  };
+  const weightTotal = Object.values(SCORE_WEIGHTS).reduce((a,b)=>a+b,0);
   // Centered at the 15% goal = 80, slope 2pts per margin percentage point.
   const marginScore = (m) => Math.max(0, Math.min(100, 80 + (m - 15) * 2));
   const clamp100 = (v) => Math.max(0, Math.min(100, v));
@@ -13790,7 +13814,74 @@ function Scoreboard({ jobs, users=[] }) {
             display:"inline-flex",alignItems:"center",gap:6}}>
           {showHelp ? "▾ Hide definitions" : "▸ What do these mean?"}
         </button>
+        <button onClick={()=>setShowWeights(!showWeights)}
+          style={{padding:"7px 12px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer",
+            background:"#fff",border:"1px solid #cbd5e1",borderRadius:8,color:"#334155",
+            display:"inline-flex",alignItems:"center",gap:6}}>
+          {showWeights ? "▾ Hide weights" : "⚖  Adjust score weights"}
+        </button>
       </div>
+
+      {/* Score weight editor — raw inputs per pillar. Weights are always */}
+      {/* renormalized at compute time, so totals don't have to sum to 100. */}
+      {showWeights && (
+        <div style={{background:"#fff",border:"1px solid #cbd5e1",borderRadius:12,padding:"14px 16px",marginBottom:16}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
+            <div style={{fontSize:13,fontWeight:700,color:"#0f172a"}}>Score weights</div>
+            <div style={{fontSize:11,color:"#475569"}}>
+              Each pillar's pull on the composite. Doesn't have to sum to 100 — weights
+              renormalize automatically. Changes save to this browser only.
+            </div>
+            <button onClick={resetWeights}
+              style={{marginLeft:"auto",padding:"5px 10px",fontSize:11,fontWeight:700,
+                fontFamily:"inherit",cursor:"pointer",background:"#f1f5f9",color:"#334155",
+                border:"1px solid #cbd5e1",borderRadius:7}}>
+              Reset to defaults
+            </button>
+          </div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:"10px 16px"}}>
+            {[
+              ["inspection","Inspection first-try","First-try-clean rate across 4-way + final"],
+              ["items","Items called","Fewer inspection items = higher sub-score"],
+              ["qc","QC items","Fewer QC walk items = higher sub-score"],
+              ["updates","Daily updates","Posted days / active days"],
+              ["margin","Avg margin","Centered on 15% goal, +2 pts per margin point"],
+              ["goal","≥15% jobs","% of jobs hitting the 15% profit goal"],
+            ].map(([k,label,hint]) => (
+              <label key={k} style={{display:"block",padding:"8px 10px",background:"#f8fafc",
+                border:"1px solid #e2e8f0",borderRadius:8}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
+                  <span style={{fontSize:12,fontWeight:700,color:"#0f172a",flex:1}}>{label}</span>
+                  <input type="number" min={0} max={100}
+                    value={SCORE_WEIGHTS[k]}
+                    onChange={e=>updateWeight(k, e.target.value)}
+                    style={{width:60,padding:"4px 6px",fontSize:13,fontWeight:700,fontFamily:"inherit",
+                      border:"1px solid #cbd5e1",borderRadius:6,textAlign:"right",color:"#0f172a"}}/>
+                  <span style={{fontSize:11,color:"#64748b",fontWeight:600}}>pts</span>
+                </div>
+                <div style={{fontSize:11,color:"#64748b",lineHeight:1.4}}>{hint}</div>
+                <div style={{marginTop:4,height:4,background:"#e2e8f0",borderRadius:4,overflow:"hidden"}}>
+                  <div style={{
+                    width: weightTotal > 0 ? `${(SCORE_WEIGHTS[k]/weightTotal)*100}%` : "0%",
+                    height:"100%",background:"#0f172a",
+                  }}/>
+                </div>
+                <div style={{fontSize:10,color:"#475569",marginTop:2,textAlign:"right"}}>
+                  {weightTotal > 0 ? `${Math.round((SCORE_WEIGHTS[k]/weightTotal)*100)}% of composite` : "—"}
+                </div>
+              </label>
+            ))}
+          </div>
+          <div style={{marginTop:10,fontSize:11,color:"#475569"}}>
+            Total points entered: <b style={{color:"#0f172a"}}>{weightTotal}</b>
+            {weightTotal !== 100 && (
+              <span style={{color:"#b45309",marginLeft:6}}>
+                (doesn't sum to 100 — that's fine, the math renormalizes)
+              </span>
+            )}
+          </div>
+        </div>
+      )}
 
       {/* Date range controls — presets + custom inputs. All metrics re-filter on change. */}
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap",
