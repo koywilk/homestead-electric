@@ -4081,6 +4081,124 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 }
 
 
+// ── Bid Items (Simpro Cost Centers) ───────────────────────────
+// "Is this in the bid?" panel. Reads the job's Simpro cost centers and
+// lets the field team search/filter them to decide whether a piece of
+// work is scoped or needs a CO.
+function BidItemsPanel({simproNo, data, error}) {
+  const [q, setQ] = useState("");
+
+  if (!simproNo) {
+    return (
+      <div style={{fontSize:12,color:C.dim,fontStyle:"italic",padding:"8px 2px"}}>
+        Add a Simpro Job # to this job to see bid items.
+      </div>
+    );
+  }
+  if (data === "loading" || data == null) {
+    if (error) {
+      return (
+        <div style={{fontSize:12,color:C.red,padding:"8px 2px"}}>
+          Couldn't load cost centers from Simpro: {error}
+        </div>
+      );
+    }
+    return (
+      <div style={{fontSize:12,color:C.dim,fontStyle:"italic",padding:"8px 2px"}}>
+        Loading cost centers from Simpro…
+      </div>
+    );
+  }
+
+  const costCenters = Array.isArray(data.costCenters) ? data.costCenters : [];
+  if (!costCenters.length) {
+    return (
+      <div style={{fontSize:12,color:C.dim,fontStyle:"italic",padding:"8px 2px"}}>
+        No cost centers found on Simpro job #{simproNo}.
+      </div>
+    );
+  }
+
+  // Fuzzy match on name + section name (lowercase substring, token-any match).
+  const norm = (s) => String(s||"").toLowerCase();
+  const tokens = norm(q).split(/\s+/).filter(Boolean);
+  const matches = tokens.length
+    ? costCenters.filter(cc => {
+        const hay = norm(cc.name) + " " + norm(cc.sectionName);
+        return tokens.every(t => hay.includes(t));
+      })
+    : costCenters;
+
+  // Group by section for display.
+  const bySection = new Map();
+  matches.forEach(cc => {
+    const key = cc.sectionName || "(no section)";
+    if (!bySection.has(key)) bySection.set(key, []);
+    bySection.get(key).push(cc);
+  });
+
+  const fmtMoney = (n) => {
+    if (n == null || isNaN(n)) return "—";
+    return "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0});
+  };
+  const totalBid = costCenters.reduce((s,cc) => s + (Number(cc.totalExTax)||0), 0);
+  const visibleTotal = matches.reduce((s,cc) => s + (Number(cc.totalExTax)||0), 0);
+
+  return (
+    <div>
+      <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:10,flexWrap:"wrap"}}>
+        <input
+          value={q}
+          onChange={e=>setQ(e.target.value)}
+          placeholder="Is this in the bid? Search cost centers…"
+          style={{flex:"1 1 220px",minWidth:0,padding:"8px 10px",fontSize:13,
+            background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text}}
+        />
+        <div style={{fontSize:11,color:C.dim,whiteSpace:"nowrap"}}>
+          {tokens.length
+            ? `${matches.length} of ${costCenters.length} match${matches.length===1?"":"es"}`
+            : `${costCenters.length} cost center${costCenters.length===1?"":"s"} · total ${fmtMoney(totalBid)}`}
+          {tokens.length ? ` · ${fmtMoney(visibleTotal)}` : ""}
+        </div>
+      </div>
+
+      {matches.length === 0 && (
+        <div style={{fontSize:12,color:C.red,padding:"10px 12px",
+          border:`1px solid ${C.red}44`,borderRadius:6,background:"rgba(239,68,68,0.06)"}}>
+          No match — looks like this would be a <b>change order</b>.
+        </div>
+      )}
+
+      {[...bySection.entries()].map(([sectionName, rows]) => (
+        <div key={sectionName} style={{marginBottom:12}}>
+          <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",textTransform:"uppercase",
+            color:C.dim,marginBottom:4,borderBottom:`1px solid ${C.border}`,paddingBottom:3}}>
+            {sectionName}
+          </div>
+          {rows.map(cc => (
+            <div key={`${cc.sectionId}-${cc.id}`}
+              style={{display:"flex",justifyContent:"space-between",gap:12,
+                padding:"5px 2px",borderBottom:`1px solid ${C.border}22`,fontSize:12}}>
+              <div style={{color:C.text,flex:"1 1 auto",minWidth:0,overflow:"hidden",textOverflow:"ellipsis"}}>
+                {cc.name || "(unnamed)"}
+                {cc.claimedPct != null && cc.claimedPct > 0 && (
+                  <span style={{marginLeft:8,fontSize:10,color:C.dim}}>
+                    · {Math.round(cc.claimedPct)}% claimed
+                  </span>
+                )}
+              </div>
+              <div style={{color:C.dim,whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums"}}>
+                {fmtMoney(cc.totalExTax)}
+              </div>
+            </div>
+          ))}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+
 // ── Change Orders ─────────────────────────────────────────────
 
 function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughStatus, finishStatus}) {
@@ -8294,6 +8412,26 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       .catch(e => { console.error("[simproFinancials error]", e); setSimproFinancials(null); });
   }, [job.simproNo]);
 
+  // Simpro cost centers — bid line items used by the "Is this in the bid?" panel
+  const [simproCostCenters, setSimproCostCenters] = useState(null); // null | 'loading' | {sections, costCenters, fetchedAt}
+  const [simproCostCentersErr, setSimproCostCentersErr] = useState(null);
+  useEffect(() => {
+    if (!job.simproNo) { setSimproCostCenters(null); setSimproCostCentersErr(null); return; }
+    setSimproCostCenters("loading");
+    setSimproCostCentersErr(null);
+    const fn = httpsCallable(functions, "getSimproJobCostCenters");
+    fn({ simproJobNo: job.simproNo })
+      .then(res => {
+        console.log("[simproCostCenters]", res.data);
+        setSimproCostCenters(res.data);
+      })
+      .catch(e => {
+        console.error("[simproCostCenters error]", e);
+        setSimproCostCenters(null);
+        setSimproCostCentersErr(e.message || "Failed to load cost centers");
+      });
+  }, [job.simproNo]);
+
   // Live listener for GC question answers + LV lighting collab
   useEffect(() => {
     const unsub = onSnapshot(doc(db,'homeowner_requests',job.id), snap => {
@@ -9536,6 +9674,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           {tab==="Change Orders"&&(
 
             <div>
+
+              <Section label="Bid Items (Simpro)" color={C.blue||"#3b82f6"} defaultOpen={false}>
+                <BidItemsPanel
+                  simproNo={job.simproNo}
+                  data={simproCostCenters}
+                  error={simproCostCentersErr}
+                />
+              </Section>
 
               <Section label="Change Order Log" color={C.accent} defaultOpen={true}>
                 <ChangeOrders

@@ -817,6 +817,67 @@ exports.getSimproJobFinancials = functions.https.onCall(async (data) => {
   };
 });
 
+// ─── Get Simpro Job Cost Centers ──────────────────────────────────────────────
+// Returns the flat list of cost centers (bid line items) for a job, grouped
+// under their section. Used by the "Is this in the bid?" panel so the field
+// team can quickly check whether a piece of work was scoped vs. needs a CO.
+exports.getSimproJobCostCenters = functions
+  .runWith({ timeoutSeconds: 60, memory: "256MB" })
+  .https.onCall(async (data) => {
+    const { simproJobNo } = data || {};
+    if (!simproJobNo) throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
+
+    // 1. Pull sections for the job.
+    const sectionsRes = await simproReq(
+      "GET",
+      `/jobs/${encodeURIComponent(simproJobNo)}/sections/?columns=ID,Name&pageSize=100`
+    );
+    if (!sectionsRes.ok) {
+      const body = typeof sectionsRes.data === "string" ? sectionsRes.data : JSON.stringify(sectionsRes.data);
+      throw new functions.https.HttpsError("internal", `Simpro sections error: ${sectionsRes.status} ${body.slice(0, 200)}`);
+    }
+    const sections = Array.isArray(sectionsRes.data) ? sectionsRes.data : [];
+
+    // 2. Fetch cost centers for every section in parallel.
+    const ccResults = await Promise.all(
+      sections.map(async (s) => {
+        const r = await simproReq(
+          "GET",
+          `/jobs/${encodeURIComponent(simproJobNo)}/sections/${s.ID}/costCenters/` +
+          `?columns=ID,Name,Total,ClaimedUpTo,Setup&pageSize=200`
+        );
+        if (!r.ok) return { sectionId: s.ID, sectionName: s.Name, costCenters: [], error: `${r.status}` };
+        const rows = Array.isArray(r.data) ? r.data : [];
+        const costCenters = rows.map(cc => ({
+          id: cc.ID,
+          name: cc.Name || "",
+          totalExTax:  cc.Total?.ExTax   ?? null,
+          totalIncTax: cc.Total?.IncTax  ?? null,
+          claimedPct:  cc.ClaimedUpTo    ?? null,
+          setupHours:  cc.Setup?.Hours   ?? null,
+        }));
+        return { sectionId: s.ID, sectionName: s.Name || "", costCenters };
+      })
+    );
+
+    const flat = [];
+    for (const sec of ccResults) {
+      for (const cc of sec.costCenters) {
+        flat.push({
+          sectionId: sec.sectionId,
+          sectionName: sec.sectionName,
+          ...cc,
+        });
+      }
+    }
+
+    return {
+      sections: ccResults.map(s => ({ id: s.sectionId, name: s.sectionName })),
+      costCenters: flat,
+      fetchedAt: new Date().toISOString(),
+    };
+  });
+
 // ─── Get Simpro Schedule ──────────────────────────────────────────────────────
 exports.getSimproSchedule = functions.https.onCall(async (data) => {
   const { dateFrom, dateTo } = data || {};
