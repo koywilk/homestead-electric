@@ -560,6 +560,68 @@ exports.dailyMorningChecks = functions.pubsub
       }
     });
 
+    // ── STALE-STATE BATCH (one summary push per morning) ─────
+    // Surfaces things that have been quietly rotting. Counts only;
+    // Koy can open the app to see specifics.  All reads, no writes.
+    const todayMT = new Date(new Date().toLocaleString("en-US", { timeZone: TZ }));
+    const DAY_MS  = 24 * 60 * 60 * 1000;
+
+    let staleQuotes        = 0; // quote doc with no activity > 14 days
+    let staleRoughComplete = 0; // rough complete, no finish scheduled, > 7 days
+    let staleRTs           = 0; // RT in "needs", unassigned, job idle > 5 days
+    let staleQuestions     = 0; // unanswered question on a job idle > 3 days
+
+    snap.docs.forEach(doc => {
+      const raw = doc.data() || {};
+      const job = raw.data || {};
+      if (!job.name) return;
+      const updatedAt = raw.updated_at?.toDate?.() || null;
+      const daysSinceUpdate = updatedAt ? (todayMT - updatedAt) / DAY_MS : null;
+
+      // 1. Quote with no activity > 14 days
+      if (job.type === "quote" && daysSinceUpdate != null && daysSinceUpdate > 14) {
+        staleQuotes += 1;
+      }
+
+      // 2. Rough complete, no finish scheduled, > 7 days
+      if (job.roughStatus === "complete" && !job.finishScheduledDate && !job.finishStatusDate) {
+        const re = parseDate(job.roughStatusDate);
+        if (re && (todayMT - re) / DAY_MS >= 7) staleRoughComplete += 1;
+      }
+
+      // 3. RT "needs", unassigned, job idle > 5 days
+      (job.returnTrips || []).forEach(rt => {
+        if (rt.signedOff || rt.rtScheduled) return;
+        if (rt.rtStatus !== "needs") return;
+        if (rt.assignedTo && rt.assignedTo !== "Unassigned") return;
+        if (daysSinceUpdate != null && daysSinceUpdate >= 5) staleRTs += 1;
+      });
+
+      // 4. Unanswered question on a job idle > 3 days
+      if (daysSinceUpdate != null && daysSinceUpdate > 3) {
+        ["roughQuestions", "finishQuestions"].forEach(qk => {
+          const qs = job[qk] || {};
+          ["upper", "main", "basement"].forEach(f => {
+            (qs[f] || []).forEach(q => {
+              if (!q.done && !(q.answer || "").trim()) staleQuestions += 1;
+            });
+          });
+        });
+      }
+    });
+
+    const staleLines = [];
+    if (staleQuotes)        staleLines.push(`${staleQuotes} quote${staleQuotes === 1 ? "" : "s"} >14d idle`);
+    if (staleRoughComplete) staleLines.push(`${staleRoughComplete} rough-complete no finish >7d`);
+    if (staleRTs)           staleLines.push(`${staleRTs} unassigned RT >5d`);
+    if (staleQuestions)     staleLines.push(`${staleQuestions} unanswered Q >3d`);
+    if (staleLines.length) {
+      tasks.push(sendToName("Koy", {
+        title: "📊 Stale State",
+        body:  staleLines.join(" · "),
+      }));
+    }
+
     await Promise.all(tasks);
     return null;
   });
@@ -1030,6 +1092,90 @@ exports.thursdayPacket = functions.pubsub
       return rs !== "inprogress" && rs !== "complete";
     });
 
+    // ── COMPLIANCE: daily-update compliance last 7 days ────────
+    // Rule (per Koy 2026-04-16): for each (lead, date, job) where the lead
+    // was scheduled on that job in Simpro, check if the job has ANY daily
+    // update for that date (regardless of who added it). Count unique
+    // (date, simproNo) tuples per lead.
+    const complianceWindow = 7;
+    const complianceEnd = new Date(today);
+    const complianceStart = new Date(today);
+    complianceStart.setDate(today.getDate() - (complianceWindow - 1));
+    const _ymdLocal = (d) => {
+      const y = d.getFullYear();
+      const m = String(d.getMonth() + 1).padStart(2, "0");
+      const day = String(d.getDate()).padStart(2, "0");
+      return `${y}-${m}-${day}`;
+    };
+    const windowStartYMD = _ymdLocal(complianceStart);
+    const windowEndYMD   = _ymdLocal(complianceEnd);
+
+    let scheduleEntries = [];
+    try {
+      // Paginate through Simpro schedules, filter to window client-side
+      // (matches existing getSimproSchedule callable behavior).
+      let page = 1;
+      while (page <= 20) {
+        const resp = await fetch(`${SIMPRO_BASE}/schedules/?pageSize=250&page=${page}`, {
+          headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` },
+        });
+        if (!resp.ok) {
+          functions.logger.warn("thursdayPacket simpro schedule page failed", { page, status: resp.status });
+          break;
+        }
+        const batch = await resp.json();
+        if (!Array.isArray(batch) || batch.length === 0) break;
+        scheduleEntries.push(...batch);
+        if (batch.length < 250) break;
+        page++;
+      }
+      scheduleEntries = scheduleEntries.filter(s =>
+        s && s.Date && s.Date >= windowStartYMD && s.Date <= windowEndYMD
+      );
+    } catch (e) {
+      functions.logger.warn("thursdayPacket simpro schedule fetch error", { error: e.message });
+      scheduleEntries = [];
+    }
+
+    // A "lead" is anyone assigned as .lead on any active job.
+    const leadSet = new Set();
+    activeJobs.forEach(j => {
+      if (j.lead && j.lead !== "Unassigned") leadSet.add(j.lead);
+    });
+
+    const jobBySimproNo = {};
+    activeJobs.forEach(j => {
+      if (j.simproNo) jobBySimproNo[String(j.simproNo)] = j;
+    });
+
+    const oppsByLead = {};   // leadName → Set<"YYYY-MM-DD|simproNo">
+    const hitsByLead = {};   // same shape — subset where job had ANY update that day
+    scheduleEntries.forEach(s => {
+      if (s.Type !== "job") return;
+      const date = s.Date;
+      const pid = String((s.Project && s.Project.ProjectID) || "");
+      const staffName = (s.Staff && s.Staff.Name) || "";
+      if (!date || !pid || !staffName) return;
+      if (!leadSet.has(staffName)) return;
+      const job = jobBySimproNo[pid];
+      if (!job) return;
+      const key = `${date}|${pid}`;
+      if (!oppsByLead[staffName]) oppsByLead[staffName] = new Set();
+      oppsByLead[staffName].add(key);
+      const updates = [...(job.roughUpdates || []), ...(job.finishUpdates || [])];
+      if (updates.some(u => u && u.date === date)) {
+        if (!hitsByLead[staffName]) hitsByLead[staffName] = new Set();
+        hitsByLead[staffName].add(key);
+      }
+    });
+
+    const complianceRows = Object.keys(oppsByLead).map(lead => {
+      const total = oppsByLead[lead].size;
+      const hits  = (hitsByLead[lead] || new Set()).size;
+      const pct   = total > 0 ? Math.round((hits / total) * 100) : 0;
+      return { lead, hits, total, pct };
+    }).sort((a, b) => b.pct - a.pct || a.lead.localeCompare(b.lead));
+
     // ── BUILD HTML ────────────────────────────────────────────
 
     const section = (title, count, body) => {
@@ -1061,10 +1207,20 @@ exports.thursdayPacket = functions.pubsub
         ).join("")
       : `<div style="color:#9ca3af;font-size:12px;padding:2px 0 6px">None.</div>`;
 
+    const complianceHtml = complianceRows.length === 0
+      ? `<div style="color:#9ca3af;font-size:12px;padding:2px 0 6px">No lead schedule entries found for the last ${complianceWindow} days.</div>`
+      : `<ul style="margin:0;padding:0 0 0 18px;font-size:13px;line-height:1.55;color:#111">${complianceRows.map(r => {
+          const color = r.pct >= 90 ? "#16a34a" : r.pct >= 70 ? "#f59e0b" : "#dc2626";
+          return `<li style="margin-bottom:2px"><b>${_esc(r.lead)}</b>: ${r.hits}/${r.total} days <span style="color:${color};font-weight:700">(${r.pct}%)</span></li>`;
+        }).join("")}</ul>`;
+
     const html = `
 <div style="font-family:-apple-system,BlinkMacSystemFont,'Segoe UI',Roboto,sans-serif;max-width:720px;margin:0 auto;padding:24px;color:#111">
 <h1 style="font-size:22px;margin:0 0 4px">Friday Scheduling &amp; Strategy Packet</h1>
 <div style="color:#6b7280;font-size:12px;margin-bottom:8px">${today.toLocaleDateString("en-US", { weekday: "long", month: "long", day: "numeric", year: "numeric" })}</div>
+
+${bigHeader(`Daily Update Compliance · last ${complianceWindow} days`)}
+${complianceHtml}
 
 ${bigHeader("Needs Scheduling")}
 ${section("No start date set", noStartDate.length, list(noStartDate, j => `<b>${_esc(j.name)}</b>${j.foreman ? ` · ${_esc(j.foreman)}` : ""}${j.simproNo ? ` · #${_esc(j.simproNo)}` : ""}`))}
@@ -1176,8 +1332,271 @@ ${bigHeader("Last Week's Decisions")}
       conflicts:          conflicts.length,
       completed:          completedThisWeek.length,
       slipped:            slippedThisWeek.length,
+      complianceLeads:    complianceRows.length,
+      complianceScheduleEntries: scheduleEntries.length,
     });
 
     return null;
   });
 
+// ─────────────────────────────────────────────────────────────
+// DRIVE — shared helpers for auto-folder-create & nightly sync
+// ─────────────────────────────────────────────────────────────
+
+// Parent folder in Drive where every job's folder lives.
+// Koy must share this folder with the service account
+// (<project>@appspot.gserviceaccount.com) as Editor before deploy.
+const JOBS_PARENT_FOLDER_ID = "1laC4udt1sBdV-_QUMzzbKJfD03q4_Ml3";
+
+// Normalize a name for fuzzy matching (mirrors App.js namesMatch).
+function _normalizeName(name) {
+  return String(name || "").toLowerCase()
+    .replace(/#\d+\s*[-–—]?\s*/g, "")
+    .replace(/\b(plans|residence|home|house|electrical)\b/gi, "")
+    .replace(/[^a-z0-9]/g, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function _namesMatch(driveName, jobName) {
+  const dn = _normalizeName(driveName);
+  const jn = _normalizeName(jobName);
+  if (!dn || !jn) return false;
+  if (dn.includes(jn) || jn.includes(dn)) return true;
+  const jobWords = jn.split(" ").filter(w => w.length > 2);
+  if (jobWords.length > 0 && jobWords.every(w => dn.includes(w))) return true;
+  return false;
+}
+
+// Build a Drive v3 client scoped to files this service account creates or is granted access to.
+function _driveClient() {
+  const auth = new google.auth.GoogleAuth({
+    scopes: ["https://www.googleapis.com/auth/drive.file"],
+  });
+  return google.drive({ version: "v3", auth });
+}
+
+// Build the folder name we'd create for a given job.
+// Preferred: "#<simproNo> - <name>".  Fallback: "<name>".
+function _jobFolderName(job) {
+  const n = String(job.name || "").trim();
+  const s = String(job.simproNo || "").trim();
+  if (!n) return "";
+  if (s) return `#${s} - ${n}`;
+  return n;
+}
+
+// Guard: is this job ready for a Drive folder?
+// - Has a usable name (not placeholder)
+// - Not a quote
+// - Doesn't already have a driveFolderId
+function _needsDriveFolder(job) {
+  const name = String(job.name || "").trim();
+  if (!name || name.length < 3) return false;
+  if (/^(new job|untitled|unnamed|test)$/i.test(name)) return false;
+  if (job.type === "quote") return false;
+  if (job.driveFolderId) return false;
+  return true;
+}
+
+// ─────────────────────────────────────────────────────────────
+// FIRESTORE TRIGGER — jobs/{jobId} onWrite
+// Auto-create a Drive folder when a job first appears (or is
+// promoted from quote) without a driveFolderId.
+// Idempotent: after folder is created, driveFolderId is set,
+// so the next onWrite exits early.
+// Read-only on everything except the single job doc it wrote.
+// ─────────────────────────────────────────────────────────────
+
+exports.ensureJobDriveFolder = functions.firestore
+  .document("jobs/{jobId}")
+  .onWrite(async (change, context) => {
+    const jobId = context.params.jobId;
+    if (!change.after.exists) return null; // job was deleted
+    const after = change.after.data()?.data || {};
+
+    if (!_needsDriveFolder(after)) return null;
+
+    // Try to match an existing folder in the parent before creating a new one.
+    // This handles the case where Koy already made the folder by hand.
+    let folderId = "";
+    let folderName = "";
+    let createdNew = false;
+
+    try {
+      const drive = _driveClient();
+
+      // 1. List candidate folders in the parent.
+      const listRes = await drive.files.list({
+        q: `'${JOBS_PARENT_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+        fields: "files(id,name)",
+        pageSize: 200,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      });
+      const existing = (listRes.data.files || []).filter(f => _namesMatch(f.name, after.name));
+
+      if (existing.length === 1) {
+        folderId   = existing[0].id;
+        folderName = existing[0].name;
+      } else if (existing.length === 0) {
+        // 2. Create a new folder.
+        const wantName = _jobFolderName(after);
+        const createRes = await drive.files.create({
+          requestBody: {
+            name:     wantName,
+            parents:  [JOBS_PARENT_FOLDER_ID],
+            mimeType: "application/vnd.google-apps.folder",
+          },
+          fields: "id,name",
+          supportsAllDrives: true,
+        });
+        folderId   = createRes.data.id || "";
+        folderName = createRes.data.name || wantName;
+        createdNew = true;
+      } else {
+        // Ambiguous — bail out and let nightlyDriveSync / human review resolve.
+        functions.logger.info("ensureJobDriveFolder ambiguous match", {
+          jobId, name: after.name, candidates: existing.map(e => e.name),
+        });
+        return null;
+      }
+    } catch (e) {
+      functions.logger.error("ensureJobDriveFolder failed", { jobId, error: e.message });
+      return null;
+    }
+
+    if (!folderId) return null;
+
+    // Persist the ID to the job doc.  Dotted path preserves the rest of data.
+    try {
+      await change.after.ref.update({
+        "data.driveFolderId": folderId,
+        updated_at: admin.firestore.FieldValue.serverTimestamp(),
+      });
+    } catch (e) {
+      functions.logger.error("ensureJobDriveFolder failed to save folderId", {
+        jobId, folderId, error: e.message,
+      });
+      return null;
+    }
+
+    await sendToName("Koy", {
+      title: createdNew ? "📁 Drive Folder Created" : "📁 Drive Folder Linked",
+      body:  `${after.name} → ${folderName}`,
+      jobId, section: "Job Info",
+    });
+
+    functions.logger.info("ensureJobDriveFolder done", {
+      jobId, name: after.name, folderId, folderName, createdNew,
+    });
+    return null;
+  });
+
+// ─────────────────────────────────────────────────────────────
+// SCHEDULED — Nightly Drive sync (3am Mountain Time)
+// Catch any jobs still missing a driveFolderId — match-existing
+// or create-new, same logic as ensureJobDriveFolder but as a
+// batch backstop.  Summary push to Koy.
+// Read-only on jobs except for the driveFolderId field.
+// ─────────────────────────────────────────────────────────────
+
+exports.nightlyDriveSync = functions.pubsub
+  .schedule("0 3 * * *")
+  .timeZone(TZ)
+  .onRun(async () => {
+    let driveFolders = [];
+    try {
+      const drive = _driveClient();
+      const listRes = await drive.files.list({
+        q: `'${JOBS_PARENT_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+        fields: "files(id,name)",
+        pageSize: 500,
+        supportsAllDrives: true,
+        includeItemsFromAllDrives: true,
+      });
+      driveFolders = listRes.data.files || [];
+    } catch (e) {
+      functions.logger.error("nightlyDriveSync: list folders failed", { error: e.message });
+      await sendToName("Koy", {
+        title: "⚠️ Nightly Drive Sync Failed",
+        body:  `Could not list Drive folders: ${e.message.slice(0, 120)}`,
+      });
+      return null;
+    }
+
+    const jobsSnap = await db.collection("jobs").get();
+    const jobs = jobsSnap.docs
+      .map(d => ({ id: d.id, ref: d.ref, data: d.data()?.data || {} }))
+      .filter(j => j.data && j.data.name);
+
+    const linked   = [];
+    const created  = [];
+    const ambiguous = [];
+    const errors   = [];
+
+    for (const j of jobs) {
+      if (!_needsDriveFolder(j.data)) continue;
+
+      const matches = driveFolders.filter(f => _namesMatch(f.name, j.data.name));
+
+      try {
+        if (matches.length === 1) {
+          await j.ref.update({
+            "data.driveFolderId": matches[0].id,
+            updated_at: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          linked.push({ job: j.data.name, folder: matches[0].name });
+        } else if (matches.length === 0) {
+          // Create a new folder for this job.
+          const wantName = _jobFolderName(j.data);
+          const drive = _driveClient();
+          const createRes = await drive.files.create({
+            requestBody: {
+              name:     wantName,
+              parents:  [JOBS_PARENT_FOLDER_ID],
+              mimeType: "application/vnd.google-apps.folder",
+            },
+            fields: "id,name",
+            supportsAllDrives: true,
+          });
+          await j.ref.update({
+            "data.driveFolderId": createRes.data.id,
+            updated_at: admin.firestore.FieldValue.serverTimestamp(),
+          });
+          created.push({ job: j.data.name, folder: createRes.data.name || wantName });
+          driveFolders.push({ id: createRes.data.id, name: createRes.data.name || wantName });
+        } else {
+          ambiguous.push({ job: j.data.name, folders: matches.map(m => m.name) });
+        }
+      } catch (e) {
+        errors.push({ job: j.data.name, error: e.message });
+        functions.logger.warn("nightlyDriveSync: per-job failure", {
+          job: j.data.name, error: e.message,
+        });
+      }
+    }
+
+    functions.logger.info("nightlyDriveSync summary", {
+      linked:    linked.length,
+      created:   created.length,
+      ambiguous: ambiguous.length,
+      errors:    errors.length,
+    });
+
+    // Only notify if something changed or needs attention.
+    const acted = linked.length + created.length + ambiguous.length + errors.length;
+    if (acted > 0) {
+      const parts = [];
+      if (linked.length)    parts.push(`linked ${linked.length}`);
+      if (created.length)   parts.push(`created ${created.length}`);
+      if (ambiguous.length) parts.push(`${ambiguous.length} ambiguous`);
+      if (errors.length)    parts.push(`${errors.length} errors`);
+      await sendToName("Koy", {
+        title: "🗂️ Nightly Drive Sync",
+        body:  parts.join(" · "),
+      });
+    }
+
+    return null;
+  });
