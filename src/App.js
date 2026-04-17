@@ -8597,10 +8597,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           if (!cached) setSimproCostCenters(null);
         });
     }
-    // job.simproCostCentersCache is intentionally NOT in deps — we don't
-    // want the cache write to re-run this effect and loop. simproNo +
-    // refresh tick are the only triggers.
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // NOTE: job.simproCostCentersCache is intentionally NOT in deps — we
+    // don't want the cache write to re-run this effect and loop. simproNo +
+    // refresh tick are the only triggers. Other hooks in this component
+    // (e.g. simproFinancials) follow the same pattern with bare deps.
   }, [job.simproNo, simproCostCentersTick]);
 
   // Live listener for GC question answers + LV lighting collab
