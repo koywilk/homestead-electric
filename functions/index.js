@@ -941,10 +941,18 @@ exports.getSimproJobCostCenters = functions
     //    prebuilds). These are what field folks actually search — "island
     //    pendant", "4s box", "can light", etc. are item names, not cost
     //    center names.
+    // Simpro's list endpoints return a minimal default column set — notably
+    // WITHOUT Quantity, which is what we actually want for bid items. We
+    // explicitly request the fields we need. If a column is invalid for a
+    // tenant Simpro returns an empty list for that request; the debug
+    // samples in _debugFirstItems make that obvious.
     const ITEM_KINDS = [
-      { key: "catalog",  path: "catalogs" },
-      { key: "oneOff",   path: "oneOffs" },
-      { key: "prebuild", path: "prebuilds" },
+      { key: "catalog",  path: "catalogs",
+        columns: "ID,Catalog,Description,Quantity,Price,Total,DisplayOrder" },
+      { key: "oneOff",   path: "oneOffs",
+        columns: "ID,Name,Description,Quantity,Price,Total,DisplayOrder" },
+      { key: "prebuild", path: "prebuilds",
+        columns: "ID,Prebuild,Description,Quantity,Price,Total,DisplayOrder" },
     ];
 
     // Log one sample per kind so we can see the true shape in Cloud Function logs.
@@ -956,10 +964,11 @@ exports.getSimproJobCostCenters = functions
     flat.forEach(cc => {
       ITEM_KINDS.forEach(kind => {
         tasks.push(async () => {
+          const colsParam = kind.columns ? `&columns=${encodeURIComponent(kind.columns)}` : "";
           const r = await simproReqWithRetry(
             "GET",
             `/jobs/${encodeURIComponent(simproJobNo)}/sections/${cc.sectionId}` +
-            `/costCenters/${cc.id}/${kind.path}/?pageSize=250`
+            `/costCenters/${cc.id}/${kind.path}/?pageSize=250${colsParam}`
           );
           if (!r.ok) {
             functions.logger.warn("getSimproJobCostCenters: item fetch failed", {
