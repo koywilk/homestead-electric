@@ -15308,21 +15308,21 @@ function App() {
 
     // Upcoming jobs stored as a single doc — real-time listener so all users stay in sync.
     // Single doc means deletions/edits are atomic (no per-document race).
-    const unsubUpcoming = onSnapshot(doc(db,"settings","upcoming_jobs"), async snap => {
-      if(snap.exists() && (snap.data().items||[]).length > 0) {
+    // NOTE (Phase 8 — 2026-04-16): Previous version had two data-integrity bugs:
+    //   1. The `length > 0` guard skipped setUpcoming when items was [], so clearing
+    //      the list never propagated to other clients.
+    //   2. A "first-time migration" branch read from the legacy `upcoming` collection
+    //      and re-seeded it back into settings/upcoming_jobs any time the doc read as
+    //      non-existent. That branch resurrected seed rows we had deleted long ago.
+    // Both bugs removed. Migration has been complete for weeks; the legacy `upcoming`
+    // collection is now inert (no code reads from it). The doc is the sole source of
+    // truth for the Upcoming list.
+    const unsubUpcoming = onSnapshot(doc(db,"settings","upcoming_jobs"), snap => {
+      if(snap.exists()) {
         setUpcoming(snap.data().items || []);
-      } else if(!snap.exists()) {
-        // First-time migration: pull from old per-document upcoming collection
-        try {
-          const oldSnap = await getDocs(collection(db,"upcoming"));
-          const migrated = oldSnap.docs
-            .map(d=>{ const data=d.data().data; if(!data) return null; return {...data, id:d.id}; })
-            .filter(Boolean);
-          if(migrated.length > 0) {
-            setUpcoming(migrated);
-            setDoc(doc(db,"settings","upcoming_jobs"),{items:migrated,updated_at:new Date().toISOString()});
-          }
-        } catch(e){ console.error("Upcoming migration error:", e); }
+      } else {
+        // Doc doesn't exist — treat as empty. Do NOT re-seed from anywhere.
+        setUpcoming([]);
       }
     }, err => console.error("Upcoming listener error:", err));
 
