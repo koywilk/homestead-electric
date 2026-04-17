@@ -13558,8 +13558,19 @@ function Scoreboard({ jobs, users=[] }) {
     });
 
     // Active business-day window for this job. Used as the compliance denominator.
+    // Any weekday when an update was posted also counts — if the crew posted,
+    // the job was active that day regardless of what the scheduled dates say.
+    // This guarantees postedDays ⊆ activeDays, so the Daily Updates % can never
+    // exceed 100%.
     const win = activeWindowForJob(job);
     const activeDays = win ? businessDaysBetween(win.start, win.end) : new Set();
+    inWindow.forEach(u => {
+      const d = _toYMDScore(u.date);
+      if (!d) return;
+      const [yy,mm,dd] = d.split("-").map(Number);
+      const dow = new Date(yy, mm-1, dd).getDay();
+      if (dow !== 0 && dow !== 6) activeDays.add(d);
+    });
 
     return {
       roughFirstTryClean: firstR && firstR.result === "pass" && (firstR.items||[]).length === 0 ? 1 : 0,
@@ -13749,7 +13760,7 @@ function Scoreboard({ jobs, users=[] }) {
     { name:"Rough QC", body:"Items called during a rough QC walk (rough punch, flagged fromQC). Filtered to the selected date range by each item's addedAt stamp. Items created before date stamps shipped don't have one and always count." },
     { name:"Finish QC", body:"Items called during a finish QC walk (finish punch, flagged fromQC). Filtered the same way as Rough QC." },
     { name:"Updates Posted", body:"Total daily update entries on this person's scheduled jobs, in the window. Every update counts regardless of who typed it — leads can delegate." },
-    { name:"Daily Updates", body:"Days posted / business days their jobs were active, plus a percentage. Active days = business days between the job's earliest start and today (or its complete date), unioned across all the person's jobs. Green ≥90%, amber ≥70%, red below." },
+    { name:"Daily Updates", body:"Days posted / business days their jobs were active, plus a percentage. Active days = business days between the job's earliest start and today (or its complete date), plus any weekday an update was posted — so posting on a job automatically makes that day count toward the denominator. Green ≥90%, amber ≥70%, red below." },
     { name:"Avg Margin", body:"Average net profit margin across this person's jobs, pulled from Simpro. Green if the average hits the 15% goal, red below. An asterisk (*) after the number means some of that person's jobs only have estimated margins (no real costs tracked yet)." },
     { name:"≥15% Jobs", body:"Jobs hitting the 15% profit goal, out of jobs with margin data available. Coverage is partial — a job gets margin data once someone opens its detail pane (or it auto-refreshes on open). Jobs with no cached margin yet aren't in the denominator." },
   ];
