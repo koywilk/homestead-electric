@@ -13348,14 +13348,37 @@ function SettingsPersonRow({user, color, colorOptions, onColorChange}) {
 }
 
 // ── Scoreboard ──────────────────────────────────────────────
-// Admin-only running tracker of inspection + QC performance.
+// Admin-only running tracker of inspection + QC + update performance.
 // Two views: per-lead (assigned lead owns each job's numbers) and
 // per-foreman (aggregates all jobs where someone is the foreman,
-// so you can compare crews).
+// so you can compare crews). Window anchored at 2026-03-17 to match
+// the yearly compliance tally.
+const SCOREBOARD_ANCHOR_YMD = "2026-03-17";
+// Normalize various date strings to "YYYY-MM-DD" for comparison.
+const _toYMDScore = (raw) => {
+  if (!raw) return "";
+  const s = String(raw).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) {
+    const mm = m[1].padStart(2, "0");
+    const dd = m[2].padStart(2, "0");
+    return `${m[3]}-${mm}-${dd}`;
+  }
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) {
+    const y = d.getFullYear();
+    const mm = String(d.getMonth()+1).padStart(2,"0");
+    const dd = String(d.getDate()).padStart(2,"0");
+    return `${y}-${mm}-${dd}`;
+  }
+  return "";
+};
 function Scoreboard({ jobs, users=[] }) {
-  const [mode, setMode] = useState("lead"); // "lead" | "foreman"
+  const [mode, setMode]   = useState("lead"); // "lead" | "foreman"
+  const [showHelp, setHelp] = useState(false);
 
-  // Pull QC item counts directly from the punch lists (fromQC-tagged).
+  // QC item counts (fromQC-tagged entries in the punch lists).
   const collectQCCount = (p) => {
     if (!p) return 0;
     let n = 0;
@@ -13372,12 +13395,43 @@ function Scoreboard({ jobs, users=[] }) {
     return n;
   };
 
-  // Per-job metric rollup (assumes attempt-history has been kept).
+  // Synthesize attempts from pre-existing inspection state if the
+  // attempts array is empty. This pulls in all results captured
+  // before we started logging attempt history, so the scoreboard
+  // isn't empty on day one. Uses roughInspectionDate / finalInspectionDate
+  // if set, else the job's own last-updated date as a proxy.
+  const attemptsOrSynthesized = (job, kind) => {
+    const attKey   = kind === "rough" ? "roughInspectionAttempts" : "finalInspectionAttempts";
+    const resKey   = kind === "rough" ? "roughInspectionResult"   : "finalInspectionResult";
+    const dateKey  = kind === "rough" ? "roughInspectionDate"     : "finalInspectionDate";
+    const itemsKey = kind === "rough" ? "roughInspectionItems"    : "finalInspectionItems";
+    const att = job[attKey] || [];
+    if (att.length > 0) return att;
+    if (!job[resKey]) return [];
+    // Synthetic single attempt from the current frozen state.
+    return [{
+      id: "synth-"+kind+"-"+(job.id||""),
+      date: job[dateKey] || "",
+      result: job[resKey],
+      items: (job[itemsKey]||[]).map(x=>({text:x.text||""})),
+      by: "(pre-existing)",
+      _synth: true,
+    }];
+  };
+
+  // Per-job metric rollup for the scoreboard window.
   const statsForJob = (job) => {
-    const rAtt = job.roughInspectionAttempts || [];
-    const fAtt = job.finalInspectionAttempts || [];
+    const rAtt = attemptsOrSynthesized(job, "rough")
+                   .filter(a => !a.date || _toYMDScore(a.date) >= SCOREBOARD_ANCHOR_YMD);
+    const fAtt = attemptsOrSynthesized(job, "final")
+                   .filter(a => !a.date || _toYMDScore(a.date) >= SCOREBOARD_ANCHOR_YMD);
     const firstR = rAtt[0];
     const firstF = fAtt[0];
+
+    // Daily updates authored by anyone on this job, in the window.
+    const updates = [...(job.roughUpdates||[]), ...(job.finishUpdates||[])];
+    const inWindow = updates.filter(u => u && _toYMDScore(u.date) >= SCOREBOARD_ANCHOR_YMD);
+
     return {
       roughFirstTryClean: firstR && firstR.result === "pass" && (firstR.items||[]).length === 0 ? 1 : 0,
       finalFirstTryClean: firstF && firstF.result === "pass" && (firstF.items||[]).length === 0 ? 1 : 0,
@@ -13387,44 +13441,66 @@ function Scoreboard({ jobs, users=[] }) {
       finishQC: collectQCCount(job.finishPunch),
       roughAttempted: rAtt.length > 0 ? 1 : 0,
       finalAttempted: fAtt.length > 0 ? 1 : 0,
+      // Raw per-update records for aggregation (need name-level attribution below).
+      _updates: inWindow,
     };
   };
 
-  // Aggregate across jobs keyed by either lead or foreman.
+  // Aggregate across jobs. For updates, we credit by addedBy (the
+  // person who posted) rather than by job.lead/foreman, so credit
+  // follows the actual poster — but roll into the lead/foreman group
+  // based on the current mode (lead: credit = addedBy matches that
+  // lead; foreman: sum updates on jobs where foreman is X).
   const agg = {};
   jobs.forEach(j => {
-    const key = mode === "lead" ? (j.lead||"") : (j.foreman||"");
-    if (!key || key === "Unassigned") return;
-    if (!agg[key]) agg[key] = {
-      name: key, jobs: 0,
+    const groupKey = mode === "lead" ? (j.lead||"") : (j.foreman||"");
+    if (!groupKey || groupKey === "Unassigned") return;
+    if (!agg[groupKey]) agg[groupKey] = {
+      name: groupKey, jobs: 0,
       roughFirstTryClean: 0, finalFirstTryClean: 0,
       roughItemsCalled: 0, finalItemsCalled: 0,
       roughQC: 0, finishQC: 0,
       roughAttempted: 0, finalAttempted: 0,
+      updatesPosted: 0, uniqueUpdateDays: new Set(),
     };
     const s = statsForJob(j);
-    agg[key].jobs++;
-    Object.keys(s).forEach(k => { agg[key][k] += s[k]; });
+    agg[groupKey].jobs++;
+    ["roughFirstTryClean","finalFirstTryClean","roughItemsCalled","finalItemsCalled",
+     "roughQC","finishQC","roughAttempted","finalAttempted"].forEach(k => {
+      agg[groupKey][k] += s[k];
+    });
+    // Update attribution differs by mode:
+    //   lead    → only count updates authored BY this lead
+    //   foreman → count every update on jobs they foreman (whole crew)
+    s._updates.forEach(upd => {
+      if (mode === "lead" && upd.addedBy !== groupKey) return;
+      agg[groupKey].updatesPosted++;
+      const d = _toYMDScore(upd.date);
+      if (d) agg[groupKey].uniqueUpdateDays.add(d);
+    });
   });
 
-  const rows = Object.values(agg).sort((a,b) => {
-    // Rank by combined first-try-clean count desc, then by name
-    const bScore = b.roughFirstTryClean + b.finalFirstTryClean;
-    const aScore = a.roughFirstTryClean + a.finalFirstTryClean;
-    if (bScore !== aScore) return bScore - aScore;
-    return a.name.localeCompare(b.name);
-  });
+  const rows = Object.values(agg)
+    .map(r => ({...r, uniqueUpdateDays: r.uniqueUpdateDays.size}))
+    .sort((a,b) => {
+      // Rank by first-try-clean count desc, then update days desc, then name.
+      const bScore = b.roughFirstTryClean + b.finalFirstTryClean;
+      const aScore = a.roughFirstTryClean + a.finalFirstTryClean;
+      if (bScore !== aScore) return bScore - aScore;
+      if (b.uniqueUpdateDays !== a.uniqueUpdateDays) return b.uniqueUpdateDays - a.uniqueUpdateDays;
+      return a.name.localeCompare(b.name);
+    });
 
   const pct = (hit, tot) => tot > 0 ? Math.round((hit/tot)*100) : 0;
 
   const Th = ({children, title}) => (
-    <th title={title} style={{padding:"8px 10px",fontSize:10,fontWeight:700,letterSpacing:"0.08em",
-      textTransform:"uppercase",color:"#64748b",borderBottom:"2px solid #e2e8f0",textAlign:"center",whiteSpace:"nowrap"}}>
+    <th title={title} style={{padding:"10px 12px",fontSize:10,fontWeight:700,letterSpacing:"0.08em",
+      textTransform:"uppercase",color:"#334155",borderBottom:"2px solid #cbd5e1",textAlign:"center",whiteSpace:"nowrap"}}>
       {children}
     </th>
   );
   const Td = ({children, bold, align="center"}) => (
-    <td style={{padding:"10px",fontSize:13,color:"#0f172a",borderBottom:"1px solid #f1f5f9",
+    <td style={{padding:"11px 12px",fontSize:13,color:"#0f172a",borderBottom:"1px solid #f1f5f9",
       textAlign:align,fontWeight:bold?700:500,whiteSpace:"nowrap"}}>{children}</td>
   );
 
@@ -13433,29 +13509,67 @@ function Scoreboard({ jobs, users=[] }) {
       style={{padding:"6px 14px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer",
         border:"none",borderRadius:7,letterSpacing:"0.04em",
         background: mode===key ? "#0f172a" : "transparent",
-        color: mode===key ? "#fff" : "#64748b"}}>
+        color: mode===key ? "#fff" : "#475569"}}>
       {label}
     </button>
   );
 
+  // Each metric's meaning, in plain language.
+  const metricDefs = [
+    { name:"Jobs", body:"Active jobs where this person is the assigned lead (or foreman, in foreman view)." },
+    { name:"4-Way First Try", body:"Jobs where the very first 4-way attempt was a pass AND zero items were called. Shown as clean/attempted + percentage." },
+    { name:"Final First Try", body:"Jobs where the very first final attempt was a pass AND zero items were called. Shown as clean/attempted + percentage." },
+    { name:"4-Way Items", body:"Total items called by the inspector across every 4-way attempt on this person's jobs. Includes items from failed attempts that later got resolved." },
+    { name:"Final Items", body:"Same idea as 4-Way Items, but for final inspections." },
+    { name:"Rough QC", body:"Items called during a rough QC walk. Counts entries flagged fromQC on the rough punch list." },
+    { name:"Finish QC", body:"Items called during a finish QC walk. Counts entries flagged fromQC on the finish punch list." },
+    { name:"Updates Posted", body:"Daily update entries authored on this person's jobs. In Lead view, only credits updates the lead personally posted. In Foreman view, credits every update on the foreman's jobs, regardless of who posted — so you can see the crew's overall diligence." },
+    { name:"Days Posted", body:"Unique calendar days on which this person (or their crew, in foreman view) posted at least one daily update. A fairer cadence signal than raw Updates Posted." },
+  ];
+
   return (
-    <div style={{padding:"24px 28px",maxWidth:1200,margin:"0 auto"}}>
-      <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:18}}>
+    <div style={{padding:"24px 28px",maxWidth:1280,margin:"0 auto",color:"#0f172a"}}>
+      <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:8,flexWrap:"wrap"}}>
         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:32,letterSpacing:"0.04em",color:"#0f172a"}}>
           Scoreboard
         </div>
-        <div style={{fontSize:11,color:"#64748b",background:"#f1f5f9",borderRadius:99,padding:"3px 10px",fontWeight:700,letterSpacing:"0.06em"}}>
+        <div style={{fontSize:11,color:"#334155",background:"#e2e8f0",borderRadius:99,padding:"3px 10px",fontWeight:700,letterSpacing:"0.06em"}}>
           ADMIN ONLY
+        </div>
+        <div style={{fontSize:12,color:"#475569",fontWeight:500}}>
+          Counting since <b style={{color:"#0f172a"}}>March 17, 2026</b> · resets Jan 1, 2027
         </div>
       </div>
 
-      <div style={{display:"inline-flex",gap:4,background:"#f1f5f9",padding:4,borderRadius:9,marginBottom:16}}>
-        {tabBtn("lead","Leads")}
-        {tabBtn("foreman","Foremen (by crew)")}
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+        <div style={{display:"inline-flex",gap:4,background:"#f1f5f9",padding:4,borderRadius:9}}>
+          {tabBtn("lead","Leads")}
+          {tabBtn("foreman","Foremen (by crew)")}
+        </div>
+        <button onClick={()=>setHelp(!showHelp)}
+          style={{padding:"7px 12px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer",
+            background:"#fff",border:"1px solid #cbd5e1",borderRadius:8,color:"#334155",
+            display:"inline-flex",alignItems:"center",gap:6}}>
+          {showHelp ? "▾ Hide definitions" : "▸ What do these mean?"}
+        </button>
       </div>
 
-      <div style={{background:"#fff",border:"1px solid #e2e8f0",borderRadius:12,overflowX:"auto"}}>
-        <table style={{width:"100%",borderCollapse:"collapse",minWidth:860}}>
+      {showHelp && (
+        <div style={{background:"#f8fafc",border:"1px solid #cbd5e1",borderRadius:12,padding:"16px 18px",marginBottom:18}}>
+          <div style={{fontSize:13,fontWeight:700,color:"#0f172a",marginBottom:10,letterSpacing:"0.02em"}}>Metric definitions</div>
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(260px,1fr))",gap:"10px 18px"}}>
+            {metricDefs.map(m => (
+              <div key={m.name} style={{fontSize:12,lineHeight:1.55}}>
+                <div style={{fontWeight:700,color:"#0f172a",marginBottom:2}}>{m.name}</div>
+                <div style={{color:"#334155"}}>{m.body}</div>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      <div style={{background:"#fff",border:"1px solid #cbd5e1",borderRadius:12,overflowX:"auto"}}>
+        <table style={{width:"100%",borderCollapse:"collapse",minWidth:1020}}>
           <thead>
             <tr>
               <Th>{mode==="lead" ? "Lead" : "Foreman"}</Th>
@@ -13464,27 +13578,35 @@ function Scoreboard({ jobs, users=[] }) {
               <Th title="Finals passed on the very first attempt with zero items called">Final First Try</Th>
               <Th title="Total items called across every 4-way attempt">4-Way Items</Th>
               <Th title="Total items called across every final attempt">Final Items</Th>
-              <Th title="Rough QC walk items">Rough QC</Th>
-              <Th title="Finish QC walk items">Finish QC</Th>
+              <Th title="Rough QC walk items (fromQC)">Rough QC</Th>
+              <Th title="Finish QC walk items (fromQC)">Finish QC</Th>
+              <Th title="Daily updates posted in the window">Updates Posted</Th>
+              <Th title="Unique days with at least one daily update posted">Days Posted</Th>
             </tr>
           </thead>
           <tbody>
             {rows.length === 0 && (
-              <tr><Td align="center"><span style={{color:"#94a3b8",fontStyle:"italic"}}>No data yet — inspections logged after this ships will populate the board.</span></Td></tr>
+              <tr>
+                <td colSpan={10} style={{padding:"22px",textAlign:"center",color:"#475569",fontSize:13}}>
+                  No jobs with a {mode==="lead" ? "lead" : "foreman"} assigned yet.
+                </td>
+              </tr>
             )}
             {rows.map(r => {
-              const rClean = r.roughAttempted > 0 ? ` · ${pct(r.roughFirstTryClean, r.roughAttempted)}%` : "";
-              const fClean = r.finalAttempted > 0 ? ` · ${pct(r.finalFirstTryClean, r.finalAttempted)}%` : "";
+              const rCleanPct = r.roughAttempted > 0 ? ` · ${pct(r.roughFirstTryClean, r.roughAttempted)}%` : "";
+              const fCleanPct = r.finalAttempted > 0 ? ` · ${pct(r.finalFirstTryClean, r.finalAttempted)}%` : "";
               return (
                 <tr key={r.name}>
                   <Td align="left" bold>{r.name}</Td>
                   <Td>{r.jobs}</Td>
-                  <Td bold>{r.roughFirstTryClean}/{r.roughAttempted}<span style={{fontWeight:500,color:"#64748b",fontSize:11}}>{rClean}</span></Td>
-                  <Td bold>{r.finalFirstTryClean}/{r.finalAttempted}<span style={{fontWeight:500,color:"#64748b",fontSize:11}}>{fClean}</span></Td>
+                  <Td bold>{r.roughFirstTryClean}/{r.roughAttempted}<span style={{fontWeight:500,color:"#475569",fontSize:11}}>{rCleanPct}</span></Td>
+                  <Td bold>{r.finalFirstTryClean}/{r.finalAttempted}<span style={{fontWeight:500,color:"#475569",fontSize:11}}>{fCleanPct}</span></Td>
                   <Td>{r.roughItemsCalled}</Td>
                   <Td>{r.finalItemsCalled}</Td>
                   <Td>{r.roughQC}</Td>
                   <Td>{r.finishQC}</Td>
+                  <Td bold>{r.updatesPosted}</Td>
+                  <Td>{r.uniqueUpdateDays}</Td>
                 </tr>
               );
             })}
@@ -13492,10 +13614,12 @@ function Scoreboard({ jobs, users=[] }) {
         </table>
       </div>
 
-      <div style={{fontSize:11,color:"#94a3b8",marginTop:14,fontStyle:"italic",lineHeight:1.5}}>
-        First-try stats only count inspections logged after this feature shipped. Pre-existing pass/fail results don't
-        contribute because their attempt history isn't captured. Foreman view sums every job's stats where that person is
-        the foreman, aggregating whichever lead ran the job.
+      <div style={{fontSize:12,color:"#334155",marginTop:14,lineHeight:1.6,background:"#f1f5f9",border:"1px solid #cbd5e1",borderRadius:10,padding:"12px 14px"}}>
+        <b style={{color:"#0f172a"}}>How attribution works.</b> Leads view credits each job's stats to the assigned lead. Foreman view
+        sums all jobs where someone is the foreman, aggregating whichever lead ran the job — that's the crew-vs-crew
+        comparison. Pre-existing inspection results from before attempt-logging shipped are pulled in as a single
+        synthetic attempt so the board isn't empty. New inspections logged after today will have accurate first-try
+        history.
       </div>
     </div>
   );
