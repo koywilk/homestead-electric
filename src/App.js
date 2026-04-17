@@ -13375,9 +13375,9 @@ function SettingsPersonRow({user, color, colorOptions, onColorChange}) {
 // Admin-only running tracker of inspection + QC + update performance.
 // Two views: per-lead (assigned lead owns each job's numbers) and
 // per-foreman (aggregates all jobs where someone is the foreman,
-// so you can compare crews). Window anchored at 2026-03-17 to match
+// so you can compare crews). Window anchored at 2026-03-01 to match
 // the yearly compliance tally.
-const SCOREBOARD_ANCHOR_YMD = "2026-03-17";
+const SCOREBOARD_ANCHOR_YMD = "2026-03-01";
 // Normalize various date strings to "YYYY-MM-DD" for comparison.
 const _toYMDScore = (raw) => {
   if (!raw) return "";
@@ -14052,7 +14052,7 @@ function Scoreboard({ jobs, users=[], identity }) {
           ADMIN ONLY
         </div>
         <div style={{fontSize:12,color:"#475569",fontWeight:500}}>
-          Data anchored at <b style={{color:"#0f172a"}}>March 17, 2026</b> · yearly totals reset Jan 1, 2027
+          Data anchored at <b style={{color:"#0f172a"}}>March 1, 2026</b> · yearly totals reset Jan 1, 2027
         </div>
       </div>
 
@@ -14600,17 +14600,34 @@ function Scoreboard({ jobs, users=[], identity }) {
 
 function ActivityLog({ jobs }) {
   const [filter, setFilter] = useState("");
+  // Some jobs have updated_at as a Firestore Timestamp object
+  // (legacy rows) rather than an ISO string — calling .localeCompare
+  // on an object crashes. Coerce to a comparable string up front:
+  //   - ISO string stays as-is
+  //   - Timestamp {seconds,nanoseconds} → toDate().toISOString()
+  //   - anything else → "" so it sorts to the bottom
+  const updatedAtStr = (v) => {
+    if (!v) return "";
+    if (typeof v === "string") return v;
+    if (typeof v?.toDate === "function") { try { return v.toDate().toISOString(); } catch(e) {} }
+    if (typeof v?.seconds === "number") { try { return new Date(v.seconds*1000).toISOString(); } catch(e) {} }
+    if (v instanceof Date) return v.toISOString();
+    return "";
+  };
   // Sort by most recently updated
   const sorted = [...jobs]
     .filter(j => j.updated_at)
-    .sort((a,b) => (b.updated_at||"").localeCompare(a.updated_at||""));
+    .sort((a,b) => updatedAtStr(b.updated_at).localeCompare(updatedAtStr(a.updated_at)));
   const filtered = filter
     ? sorted.filter(j => (j.name||"").toLowerCase().includes(filter.toLowerCase()) || (j._saved_by||"").toLowerCase().includes(filter.toLowerCase()))
     : sorted;
 
-  const timeAgo = (iso) => {
+  // Accept ISO string, Firestore Timestamp, or Date. Anything else → "—".
+  const timeAgo = (v) => {
+    const iso = updatedAtStr(v);
     if(!iso) return "—";
     const diff = Date.now() - new Date(iso).getTime();
+    if (isNaN(diff)) return "—";
     const mins = Math.floor(diff/60000);
     if(mins < 1) return "just now";
     if(mins < 60) return `${mins}m ago`;
@@ -14620,12 +14637,14 @@ function ActivityLog({ jobs }) {
     return `${days}d ago`;
   };
 
-  const fmtDate = (iso) => {
+  const fmtDate = (v) => {
+    const iso = updatedAtStr(v);
     if(!iso) return "—";
     try {
       const d = new Date(iso);
+      if (isNaN(d.getTime())) return "—";
       return d.toLocaleDateString("en-US",{month:"short",day:"numeric"}) + " " + d.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"});
-    } catch(e) { return iso; }
+    } catch(e) { return "—"; }
   };
 
   return (
