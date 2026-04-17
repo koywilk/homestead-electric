@@ -949,6 +949,9 @@ exports.getSimproJobCostCenters = functions
 
     // Log one sample per kind so we can see the true shape in Cloud Function logs.
     const sampleLogged = { catalog: false, oneOff: false, prebuild: false };
+    // Also stash the first raw item of each kind so the client console can
+    // print it — easier than digging through Cloud Function logs.
+    const debugSamples = { catalog: null, oneOff: null, prebuild: null };
     const tasks = [];
     flat.forEach(cc => {
       ITEM_KINDS.forEach(kind => {
@@ -967,6 +970,7 @@ exports.getSimproJobCostCenters = functions
           const rows = Array.isArray(r.data) ? r.data : [];
           if (!sampleLogged[kind.key] && rows.length) {
             sampleLogged[kind.key] = true;
+            debugSamples[kind.key] = rows[0];
             functions.logger.info("getSimproJobCostCenters: sample item shape", {
               kind: kind.key,
               keys: Object.keys(rows[0] || {}),
@@ -1042,6 +1046,7 @@ exports.getSimproJobCostCenters = functions
       sections: ccResults.map(s => ({ id: s.sectionId, name: s.sectionName })),
       costCenters: flat,
       fetchedAt: new Date().toISOString(),
+      _debugFirstItems: debugSamples, // temporary — remove once qty mapping is confirmed
     };
   });
 

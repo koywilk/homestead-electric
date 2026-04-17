@@ -8583,6 +8583,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       fn({ simproJobNo: job.simproNo })
         .then(res => {
           console.log("[simproCostCenters]", res.data);
+          if (res.data?._debugFirstItems) {
+            console.log("[simproCostCenters _debugFirstItems] — share these keys if qty is still missing:");
+            console.log("  catalog sample:", res.data._debugFirstItems.catalog);
+            console.log("  oneOff  sample:", res.data._debugFirstItems.oneOff);
+            console.log("  prebuild sample:", res.data._debugFirstItems.prebuild);
+          }
           setSimproCostCenters(res.data);
           setSimproCostCentersRefreshing(false);
           // Persist cache on the job doc. This is the only write and it's
