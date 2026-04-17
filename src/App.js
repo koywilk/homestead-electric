@@ -173,7 +173,7 @@ window.__HE_RESTORE = async()=>{
   // Verify it stuck
   console.log('Verifying...');
   await window.__HE_CHECK('Jeremy Ranch');
-  alert('Restored '+c+' jobs! Refresh the page.');
+  toast.success('Restored '+c+' jobs! Refresh the page.', {duration:8000});
 };
 
 // Offline persistence is enabled by default in Firebase v10+ web SDK
@@ -703,7 +703,7 @@ function UserManagement({ users, onSave }) {
   };
 
   const upd  = (id, patch) => setList(l=>l.map(u=>u.id===id?{...u,...patch}:u));
-  const del  = (id) => { if(!window.confirm("Remove this person?")) return; const next=list.filter(u=>u.id!==id); setList(next); onSave(next); };
+  const del  = async (id) => { if(!await showConfirm("Remove this person?")) return; const next=list.filter(u=>u.id!==id); setList(next); onSave(next); };
   const save = () => { onSave(list); setEditing(null); };
 
   // Access level colors
@@ -824,7 +824,7 @@ function UserManagement({ users, onSave }) {
                     return (
                       <div style={{border:`1px solid ${C.border}`,borderRadius:9,overflow:"hidden"}}>
                         <div style={{background:C.surface,padding:"8px 12px",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8}}>
-                          <span style={{fontSize:11,fontWeight:700,color:C.text,letterSpacing:"0.04em"}}>🔔 Notifications</span>
+                          <span style={{fontSize:11,fontWeight:700,color:C.text,letterSpacing:"0.04em",display:"inline-flex",alignItems:"center",gap:6}}><Icon name="bell" size={12}/> Notifications</span>
                           <div style={{display:"flex",gap:6}}>
                             <button onClick={applyDefaults}
                               style={{fontSize:10,padding:"3px 9px",borderRadius:6,border:`1px solid ${C.border}`,
@@ -1253,7 +1253,7 @@ function EmailModal({ subject, body, onClose }) {
 
               cursor:allRecipients.length?"pointer":"not-allowed",fontFamily:"inherit",transition:"all 0.15s"}}>
 
-            ✉ Open in Mail App
+            <span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="mail" size={13}/> Open in Mail App</span>
 
           </button>
 
@@ -1756,12 +1756,12 @@ const AddressLink = ({address, children, style={}}) => {
   const encoded = encodeURIComponent(address);
   const googleUrl = `https://www.google.com/maps/search/?api=1&query=${encoded}`;
   const appleUrl = `https://maps.apple.com/?q=${encoded}`;
-  const handleClick = (e) => {
+  const handleClick = async (e) => {
     e.stopPropagation();
     // On iOS/macOS Safari, Apple Maps is native; elsewhere default to Google
     const isApple = /iPad|iPhone|iPod|Macintosh/.test(navigator.userAgent);
     if(isApple) {
-      const choice = window.confirm("Open in Apple Maps?\n\nOK = Apple Maps\nCancel = Google Maps");
+      const choice = await showConfirm({message:"Open in Apple Maps?",confirmLabel:"Apple Maps",cancelLabel:"Google Maps"});
       window.open(choice ? appleUrl : googleUrl, "_blank");
     } else {
       window.open(googleUrl, "_blank");
@@ -1769,7 +1769,7 @@ const AddressLink = ({address, children, style={}}) => {
   };
   return (
     <span onClick={handleClick} style={{cursor:"pointer",textDecoration: children ? "none" : "underline",textDecorationStyle:"dotted",textUnderlineOffset:2,...style}}>
-      {children || <>{address} <span style={{fontSize:10,opacity:0.7}}>📍</span></>}
+      {children || <>{address} <span style={{opacity:0.7,display:"inline-flex",alignItems:"center",verticalAlign:"middle"}}><Icon name="mapPin" size={10}/></span></>}
     </span>
   );
 };
@@ -1809,6 +1809,206 @@ const Btn = ({onClick,children,variant="ghost",style={}}) => {
   );
 
 };
+
+
+// ── Icon component (Lucide-style, stroke-based SVG, replaces emoji chrome) ──
+// Usage: <Icon name="bell" size={14}/> or <Icon name="x" size={12} color={C.dim}/>
+// All icons share 24×24 viewBox and currentColor stroke so they scale + inherit color.
+const ICON_PATHS = {
+  x:            <><path d="M18 6 6 18"/><path d="m6 6 12 12"/></>,
+  check:        <path d="M20 6 9 17l-5-5"/>,
+  plus:         <><path d="M5 12h14"/><path d="M12 5v14"/></>,
+  minus:        <path d="M5 12h14"/>,
+  bell:         <><path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/></>,
+  bellOff:      <><path d="M8.7 3A6 6 0 0 1 18 8c0 1.3.1 2.4.3 3.4"/><path d="M17 17H3s3-2 3-9a6 6 0 0 1 .3-1.8"/><path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/><path d="m2 2 20 20"/></>,
+  lock:         <><rect x="3" y="11" width="18" height="11" rx="2"/><path d="M7 11V7a5 5 0 0 1 10 0v4"/></>,
+  refresh:      <><path d="M3 12a9 9 0 0 1 15-6.7L21 8"/><path d="M21 3v5h-5"/><path d="M21 12a9 9 0 0 1-15 6.7L3 16"/><path d="M3 21v-5h5"/></>,
+  rotateCw:     <><path d="M21 12a9 9 0 1 1-3-6.7L21 8"/><path d="M21 3v5h-5"/></>,
+  folder:       <path d="M20 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h9a2 2 0 0 1 2 2v9a2 2 0 0 1-2 2z"/>,
+  folderOpen:   <><path d="M6 14l1.5-2.9A2 2 0 0 1 9.24 10H20a2 2 0 0 1 1.94 2.5l-1.54 6A2 2 0 0 1 18.46 20H4a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h5l2 3h4.5"/></>,
+  file:         <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/></>,
+  fileText:     <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M8 13h8"/><path d="M8 17h8"/><path d="M8 9h2"/></>,
+  image:        <><rect x="3" y="3" width="18" height="18" rx="2"/><circle cx="9" cy="9" r="2"/><path d="m21 15-3.1-3.1a2 2 0 0 0-2.81 0L6 21"/></>,
+  camera:       <><path d="M14.5 4h-5L7 7H4a2 2 0 0 0-2 2v9a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2V9a2 2 0 0 0-2-2h-3l-2.5-3z"/><circle cx="12" cy="13" r="3"/></>,
+  paperclip:    <path d="M21.4 11.05 12 20.45a5.5 5.5 0 0 1-7.8-7.8l8.5-8.5a3.67 3.67 0 0 1 5.2 5.2l-8.5 8.5a1.84 1.84 0 0 1-2.6-2.6l7.6-7.6"/>,
+  link:         <><path d="M10 13a5 5 0 0 0 7.54.54l3-3a5 5 0 0 0-7.07-7.07l-1.72 1.71"/><path d="M14 11a5 5 0 0 0-7.54-.54l-3 3a5 5 0 0 0 7.07 7.07l1.71-1.71"/></>,
+  mail:         <><rect x="2" y="4" width="20" height="16" rx="2"/><path d="m22 7-10 5L2 7"/></>,
+  phone:        <path d="M22 16.92v3a2 2 0 0 1-2.18 2 19.79 19.79 0 0 1-8.63-3.07 19.5 19.5 0 0 1-6-6 19.79 19.79 0 0 1-3.07-8.67A2 2 0 0 1 4.11 2h3a2 2 0 0 1 2 1.72c.13.96.37 1.9.72 2.81a2 2 0 0 1-.45 2.11L8.09 9.91a16 16 0 0 0 6 6l1.27-1.27a2 2 0 0 1 2.11-.45c.91.35 1.85.59 2.81.72A2 2 0 0 1 22 16.92z"/>,
+  trash:        <><path d="M3 6h18"/><path d="M19 6v14a2 2 0 0 1-2 2H7a2 2 0 0 1-2-2V6"/><path d="M8 6V4a2 2 0 0 1 2-2h4a2 2 0 0 1 2 2v2"/></>,
+  pencil:       <path d="M17 3a2.85 2.83 0 1 1 4 4L7.5 20.5 2 22l1.5-5.5z"/>,
+  save:         <><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2z"/><path d="M17 21v-8H7v8"/><path d="M7 3v5h8"/></>,
+  download:     <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M7 10l5 5 5-5"/><path d="M12 15V3"/></>,
+  upload:       <><path d="M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4"/><path d="M17 8l-5-5-5 5"/><path d="M12 3v12"/></>,
+  inbox:        <><path d="M22 12h-6l-2 3h-4l-2-3H2"/><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11z"/></>,
+  mapPin:       <><path d="M20 10c0 7-8 13-8 13s-8-6-8-13a8 8 0 0 1 16 0z"/><circle cx="12" cy="10" r="3"/></>,
+  calendar:     <><rect x="3" y="4" width="18" height="18" rx="2"/><path d="M16 2v4"/><path d="M8 2v4"/><path d="M3 10h18"/></>,
+  clock:        <><circle cx="12" cy="12" r="10"/><path d="M12 6v6l4 2"/></>,
+  flag:         <><path d="M4 15s1-1 4-1 5 2 8 2 4-1 4-1V3s-1 1-4 1-5-2-8-2-4 1-4 1z"/><path d="M4 22V4"/></>,
+  alertTriangle:<><path d="m21.73 18-8-14a2 2 0 0 0-3.48 0l-8 14A2 2 0 0 0 4 21h16a2 2 0 0 0 1.73-3z"/><path d="M12 9v4"/><path d="M12 17h.01"/></>,
+  info:         <><circle cx="12" cy="12" r="10"/><path d="M12 16v-4"/><path d="M12 8h.01"/></>,
+  help:         <><circle cx="12" cy="12" r="10"/><path d="M9.09 9a3 3 0 0 1 5.83 1c0 2-3 3-3 3"/><path d="M12 17h.01"/></>,
+  star:         <path d="m12 2 3.09 6.26L22 9.27l-5 4.87 1.18 6.88L12 17.77l-6.18 3.25L7 14.14 2 9.27l6.91-1.01z"/>,
+  settings:     <><path d="M12.22 2h-.44a2 2 0 0 0-2 2v.18a2 2 0 0 1-1 1.73l-.43.25a2 2 0 0 1-2 0l-.15-.08a2 2 0 0 0-2.73.73l-.22.38a2 2 0 0 0 .73 2.73l.15.1a2 2 0 0 1 1 1.72v.51a2 2 0 0 1-1 1.74l-.15.09a2 2 0 0 0-.73 2.73l.22.38a2 2 0 0 0 2.73.73l.15-.08a2 2 0 0 1 2 0l.43.25a2 2 0 0 1 1 1.73V20a2 2 0 0 0 2 2h.44a2 2 0 0 0 2-2v-.18a2 2 0 0 1 1-1.73l.43-.25a2 2 0 0 1 2 0l.15.08a2 2 0 0 0 2.73-.73l.22-.39a2 2 0 0 0-.73-2.73l-.15-.08a2 2 0 0 1-1-1.74v-.5a2 2 0 0 1 1-1.74l.15-.09a2 2 0 0 0 .73-2.73l-.22-.38a2 2 0 0 0-2.73-.73l-.15.08a2 2 0 0 1-2 0l-.43-.25a2 2 0 0 1-1-1.73V4a2 2 0 0 0-2-2z"/><circle cx="12" cy="12" r="3"/></>,
+  moreHoriz:    <><circle cx="12" cy="12" r="1"/><circle cx="19" cy="12" r="1"/><circle cx="5" cy="12" r="1"/></>,
+  moreVert:     <><circle cx="12" cy="12" r="1"/><circle cx="12" cy="5" r="1"/><circle cx="12" cy="19" r="1"/></>,
+  dollar:       <><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></>,
+  zap:          <path d="M13 2 3 14h9l-1 8 10-12h-9z"/>,
+  rocket:       <><path d="M4.5 16.5c-1.5 1.26-2 5-2 5s3.74-.5 5-2c.71-.84.7-2.13-.09-2.91a2.18 2.18 0 0 0-2.91-.09z"/><path d="M12 15l-3-3a22 22 0 0 1 2-3.95A12.88 12.88 0 0 1 22 2c0 2.72-.78 7.5-6 11a22.35 22.35 0 0 1-4 2z"/><path d="M9 12H4s.55-3.03 2-4c1.62-1.08 5 0 5 0"/><path d="M12 15v5s3.03-.55 4-2c1.08-1.62 0-5 0-5"/></>,
+  chevronLeft:  <path d="m15 18-6-6 6-6"/>,
+  chevronRight: <path d="m9 18 6-6-6-6"/>,
+  arrowRight:   <><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></>,
+  arrowLeft:    <><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></>,
+  hardHat:      <><path d="M2 18a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1h-2a9 9 0 0 0-18 0H2a1 1 0 0 0-1 1v2"/><path d="M10 10V5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v5"/></>,
+  package:      <><path d="M16.5 9.4 7.55 4.24"/><path d="M21 16V8a2 2 0 0 0-1-1.73l-7-4a2 2 0 0 0-2 0l-7 4A2 2 0 0 0 3 8v8a2 2 0 0 0 1 1.73l7 4a2 2 0 0 0 2 0l7-4A2 2 0 0 0 21 16z"/><path d="M3.27 6.96 12 12.01l8.73-5.05"/><path d="M12 22.08V12"/></>,
+  clipboard:    <><rect x="8" y="2" width="8" height="4" rx="1"/><path d="M16 4h2a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2H6a2 2 0 0 1-2-2V6a2 2 0 0 1 2-2h2"/></>,
+  note:         <><path d="M15.5 3H5a2 2 0 0 0-2 2v14a2 2 0 0 0 2 2h14a2 2 0 0 0 2-2V8.5z"/><path d="M15 3v6h6"/></>,
+  pause:        <><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></>,
+  wifiOff:      <><path d="M2 2l20 20"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 4.17-2.65"/><path d="M10.66 5c4.01-.36 8.14.9 11.34 3.76"/><path d="M16.85 11.25a10 10 0 0 1 2.22 1.68"/><path d="M5 13a10 10 0 0 1 5.24-2.76"/><path d="M12 20h.01"/></>,
+  user:         <><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></>,
+  send:         <><path d="M22 2 11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></>,
+  truck:        <><path d="M1 3h15v13H1z"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></>,
+  checkCircle:  <><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></>,
+  xCircle:      <><circle cx="12" cy="12" r="10"/><path d="m15 9-6 6"/><path d="m9 9 6 6"/></>,
+  play:         <path d="M5 3v18l15-9z"/>,
+  filePdf:      <><path d="M14 2H6a2 2 0 0 0-2 2v16a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2V8z"/><path d="M14 2v6h6"/><path d="M9 13v5"/><path d="M9 13h2a1.5 1.5 0 0 1 0 3H9"/><path d="M14 13v5"/><path d="M14 13h2"/><path d="M14 15.5h1.5"/></>,
+  dollarSign:   <><path d="M12 2v20"/><path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/></>,
+  eye:          <><path d="M1 12s4-8 11-8 11 8 11 8-4 8-11 8-11-8-11-8z"/><circle cx="12" cy="12" r="3"/></>,
+  radio:        <><circle cx="12" cy="12" r="2"/><path d="M16.24 7.76a6 6 0 0 1 0 8.49"/><path d="M7.76 16.24a6 6 0 0 1 0-8.48"/><path d="M20.49 3.51a12 12 0 0 1 0 16.97"/><path d="M3.51 20.49a12 12 0 0 1 0-16.97"/></>,
+  external:     <><path d="M18 13v6a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2V8a2 2 0 0 1 2-2h6"/><path d="M15 3h6v6"/><path d="M10 14 21 3"/></>,
+};
+const Icon = ({name, size=14, color="currentColor", stroke=2, style={}, ...rest}) => {
+  const paths = ICON_PATHS[name];
+  if(!paths){ if(typeof console!=="undefined") console.warn("Unknown icon:",name); return null; }
+  return (
+    <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+      stroke={color} strokeWidth={stroke} strokeLinecap="round" strokeLinejoin="round"
+      style={{display:"inline-block",verticalAlign:"-2px",flexShrink:0,...style}}
+      {...rest}>
+      {paths}
+    </svg>
+  );
+};
+
+
+// ── Inline loading spinner (replaces ⏳ hourglass emoji) ─────────────────────
+// Size defaults to 1em so it scales with surrounding text.
+const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none"
+    style={{display:"inline-block",verticalAlign:"-2px",animation:"he-spin 0.7s linear infinite",...style}}>
+    <circle cx="12" cy="12" r="9" stroke={color} strokeWidth={stroke} strokeOpacity="0.25"/>
+    <path d="M21 12a9 9 0 0 0-9-9" stroke={color} strokeWidth={stroke} strokeLinecap="round"/>
+  </svg>
+);
+
+
+// ── In-app confirm + toast system (replaces window.confirm / alert) ──────────
+// Imperative module-level API backed by components mounted once at the App root.
+// showConfirm({message}) returns a Promise<boolean>. toast.xxx() is fire-and-forget.
+const showConfirm = (opts) => new Promise(resolve => {
+  window.dispatchEvent(new CustomEvent('he-confirm', {
+    detail: { ...(typeof opts === 'string' ? { message: opts } : opts), resolve }
+  }));
+});
+const showToast = (message, opts = {}) => {
+  window.dispatchEvent(new CustomEvent('he-toast', {
+    detail: { message, ...opts }
+  }));
+};
+const toast = {
+  info:    (m, o)=>showToast(m, {type:'info',    ...o}),
+  success: (m, o)=>showToast(m, {type:'success', ...o}),
+  error:   (m, o)=>showToast(m, {type:'error',   ...o}),
+  warn:    (m, o)=>showToast(m, {type:'warn',    ...o}),
+};
+
+function HEConfirmHost() {
+  const [state, setState] = useState(null);
+  useEffect(() => {
+    const handler = e => setState(e.detail);
+    window.addEventListener('he-confirm', handler);
+    return () => window.removeEventListener('he-confirm', handler);
+  }, []);
+  if (!state) return null;
+  const close = (result) => { state.resolve?.(result); setState(null); };
+  const danger = state.danger ?? /delete|remove|clear|discard|reset|wipe|overwrite/i.test((state.message||'')+(state.title||''));
+  const confirmLabel = state.confirmLabel || (danger ? 'Delete' : 'Confirm');
+  const cancelLabel  = state.cancelLabel  || 'Cancel';
+  return (
+    <div onClick={e=>{if(e.target===e.currentTarget) close(false);}}
+      style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.72)',zIndex:99998,
+        display:'flex',alignItems:'center',justifyContent:'center',padding:16,
+        animation:'he-fade-in 0.12s ease-out'}}>
+      <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,
+        maxWidth:420,width:'100%',boxShadow:'0 24px 64px rgba(0,0,0,0.6)',overflow:'hidden'}}>
+        <div style={{padding:'18px 20px 14px'}}>
+          {state.title && (
+            <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:6}}>{state.title}</div>
+          )}
+          <div style={{fontSize:13,color:state.title?C.dim:C.text,lineHeight:1.5,whiteSpace:'pre-wrap'}}>
+            {state.message}
+          </div>
+        </div>
+        <div style={{display:'flex',gap:8,justifyContent:'flex-end',
+          padding:'12px 16px',background:C.surface,borderTop:`1px solid ${C.border}`}}>
+          <button onClick={()=>close(false)}
+            style={{background:'none',border:`1px solid ${C.border}`,color:C.dim,
+              borderRadius:7,padding:'7px 14px',fontSize:12,cursor:'pointer',
+              fontFamily:'inherit',fontWeight:600}}>{cancelLabel}</button>
+          <button onClick={()=>close(true)} autoFocus
+            style={{background:danger?C.red:C.accent,border:'none',
+              color:danger?'#fff':'#000',borderRadius:7,padding:'7px 16px',
+              fontSize:12,cursor:'pointer',fontFamily:'inherit',fontWeight:700}}>
+            {confirmLabel}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function HEToastHost() {
+  const [toasts, setToasts] = useState([]);
+  useEffect(() => {
+    const handler = e => {
+      const id = Date.now() + Math.random();
+      const duration = e.detail.duration ?? 4000;
+      setToasts(ts => [...ts, { id, ...e.detail }]);
+      if (duration > 0) {
+        setTimeout(() => setToasts(ts => ts.filter(t => t.id !== id)), duration);
+      }
+    };
+    window.addEventListener('he-toast', handler);
+    return () => window.removeEventListener('he-toast', handler);
+  }, []);
+  if (toasts.length === 0) return null;
+  const tint = t => t==='error'?C.red : t==='success'?C.green : t==='warn'?C.orange : C.blue;
+  const iconName = t => t==='error'?'alertTriangle' : t==='success'?'check' : t==='warn'?'alertTriangle' : 'info';
+  return (
+    <div style={{position:'fixed',top:16,right:16,zIndex:99997,display:'flex',
+      flexDirection:'column',gap:8,maxWidth:380,pointerEvents:'none'}}>
+      {toasts.map(t => {
+        const c = tint(t.type);
+        return (
+          <div key={t.id}
+            style={{display:'flex',alignItems:'flex-start',gap:10,
+              background:'#1e293b',border:`1px solid ${c}66`,color:'#f1f5f9',
+              borderRadius:10,padding:'10px 12px',boxShadow:'0 10px 32px rgba(0,0,0,0.45)',
+              fontSize:13,lineHeight:1.4,pointerEvents:'auto',
+              animation:'he-slide-in 0.18s ease-out'}}>
+            <span aria-hidden style={{display:'inline-flex',alignItems:'center',justifyContent:'center',
+              width:20,height:20,borderRadius:'50%',background:c,color:'#fff',
+              flexShrink:0,marginTop:1}}><Icon name={iconName(t.type)} size={12} stroke={2.5}/></span>
+            <div style={{flex:1,whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{t.message}</div>
+            <button onClick={()=>setToasts(ts=>ts.filter(x=>x.id!==t.id))}
+              aria-label="Dismiss"
+              style={{background:'none',border:'none',color:'#94a3b8',cursor:'pointer',
+                padding:'2px',lineHeight:0,display:'inline-flex'}}><Icon name="x" size={14}/></button>
+          </div>
+        );
+      })}
+    </div>
+  );
+}
 
 
 function NeedsAttention({jobs, onSelectJob}) {
@@ -1894,7 +2094,7 @@ function NeedsAttention({jobs, onSelectJob}) {
 
   const SectionHeader = ({icon, label, count, color}) => count===0 ? null : (
     <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:8,marginTop:14}}>
-      <span style={{fontSize:12}}>{icon}</span>
+      <span style={{color,display:'inline-flex',alignItems:'center'}}><Icon name={icon} size={13} stroke={2.25}/></span>
       <span style={{fontSize:11,fontWeight:800,color,letterSpacing:'0.06em',textTransform:'uppercase'}}>{label}</span>
       <span style={{fontSize:10,fontWeight:700,background:`${color}22`,color,borderRadius:99,padding:'1px 7px',border:`1px solid ${color}44`}}>{count}</span>
     </div>
@@ -1924,7 +2124,7 @@ function NeedsAttention({jobs, onSelectJob}) {
     <div style={{padding:'14px 26px 0'}}>
       <div style={{background:'rgba(22,163,74,0.06)',border:'1px solid rgba(22,163,74,0.25)',
         borderRadius:10,padding:'12px 16px',display:'flex',alignItems:'center',gap:10}}>
-        <span style={{fontSize:16}}>✅</span>
+        <span style={{color:'#16a34a',display:'inline-flex',alignItems:'center'}}><Icon name="checkCircle" size={16} stroke={2.25}/></span>
         <span style={{fontSize:13,fontWeight:600,color:'#16a34a'}}>All clear — nothing needs attention right now</span>
       </div>
     </div>
@@ -1937,7 +2137,7 @@ function NeedsAttention({jobs, onSelectJob}) {
         <div onClick={()=>setOpen(o=>!o)} style={{display:'flex',alignItems:'center',gap:10,
           padding:'12px 16px',cursor:'pointer',userSelect:'none',
           background:'rgba(220,38,38,0.04)',borderBottom:open?`1px solid ${C.border}`:'none'}}>
-          <span style={{fontSize:16}}>🔔</span>
+          <span style={{color:'#dc2626',display:'inline-flex',alignItems:'center'}}><Icon name="bell" size={16} stroke={2.25}/></span>
           <span style={{fontSize:13,fontWeight:800,color:C.text,flex:1}}>Needs Attention</span>
           <span style={{fontSize:12,fontWeight:700,background:'rgba(220,38,38,0.15)',color:'#dc2626',
             borderRadius:99,padding:'2px 10px',border:'1px solid rgba(220,38,38,0.3)'}}>{total}</span>
@@ -1948,7 +2148,7 @@ function NeedsAttention({jobs, onSelectJob}) {
           <div style={{padding:'4px 16px 16px'}}>
 
             {/* Starting Soon */}
-            <SectionHeader icon="🚀" label="Starting Soon — Prep Incomplete" count={startingSoon.length} color="#dc2626"/>
+            <SectionHeader icon="rocket" label="Starting Soon — Prep Incomplete" count={startingSoon.length} color="#dc2626"/>
             {startingSoon.map(({job,name,label,urgent})=>(
               <JobRow key={job.id} job={job} name={name}
                 badge={label} badgeColor="#dc2626" urgent={urgent}
@@ -1956,7 +2156,7 @@ function NeedsAttention({jobs, onSelectJob}) {
             ))}
 
             {/* Unanswered Questions */}
-            <SectionHeader icon="❓" label="Unanswered Questions" count={unanswered.length} color={C.orange}/>
+            <SectionHeader icon="help" label="Unanswered Questions" count={unanswered.length} color={C.orange}/>
             {unanswered.map(({job,name,count,phase,questions})=>(
               <JobRow key={job.id+phase} job={job} name={name}
                 badge={`${count} ${phase}`} badgeColor={C.orange}
@@ -1964,7 +2164,7 @@ function NeedsAttention({jobs, onSelectJob}) {
             ))}
 
             {/* Unsent POs */}
-            <SectionHeader icon="📦" label="Unsent Purchase Orders" count={unsentPOs.length} color={C.blue}/>
+            <SectionHeader icon="package" label="Unsent Purchase Orders" count={unsentPOs.length} color={C.blue}/>
             {unsentPOs.map(({job,name,count,phase,orders})=>(
               <JobRow key={job.id+phase} job={job} name={name}
                 badge={`${count} PO${count>1?'s':''} · ${phase}`} badgeColor={C.blue}
@@ -1972,7 +2172,7 @@ function NeedsAttention({jobs, onSelectJob}) {
             ))}
 
             {/* Waiting Punch Items */}
-            <SectionHeader icon="⏸" label="On Hold — Waiting on Something" count={waitingItems.length} color="#ca8a04"/>
+            <SectionHeader icon="pause" label="On Hold — Waiting on Something" count={waitingItems.length} color="#ca8a04"/>
             {waitingItems.map(({job,name,count,phase,items})=>(
               <JobRow key={job.id+phase} job={job} name={name}
                 badge={`${count} waiting · ${phase}`} badgeColor="#ca8a04"
@@ -1980,7 +2180,7 @@ function NeedsAttention({jobs, onSelectJob}) {
             ))}
 
             {/* Pending COs */}
-            <SectionHeader icon="📋" label="Change Orders Pending" count={pendingCOs.length} color={C.purple||'#7c3aed'}/>
+            <SectionHeader icon="clipboard" label="Change Orders Pending" count={pendingCOs.length} color={C.purple||'#7c3aed'}/>
             {pendingCOs.map(({job,name,count,cos})=>(
               <JobRow key={job.id} job={job} name={name}
                 badge={`${count} CO${count>1?'s':''}`} badgeColor={C.purple||'#7c3aed'}
@@ -1988,7 +2188,7 @@ function NeedsAttention({jobs, onSelectJob}) {
             ))}
 
             {/* Unscheduled Return Trips */}
-            <SectionHeader icon="🔄" label="Unscheduled Return Trips" count={unscheduledRTs.length} color={C.teal||'#0d9488'}/>
+            <SectionHeader icon="rotateCw" label="Unscheduled Return Trips" count={unscheduledRTs.length} color={C.teal||'#0d9488'}/>
             {unscheduledRTs.map(({job,name,count,trips})=>(
               <JobRow key={job.id} job={job} name={name}
                 badge={`${count} RT${count>1?'s':''}`} badgeColor={C.teal||'#0d9488'}
@@ -2048,7 +2248,7 @@ function PhaseInstructionEntry({entry, onUpd, onDel, color, onAddMaterial}) {
         {entry.urgent && (
           <span style={{fontSize:9,fontWeight:800,color:'#dc2626',background:'rgba(220,38,38,0.12)',
             border:'1px solid rgba(220,38,38,0.35)',borderRadius:99,padding:'1px 7px',flexShrink:0,
-            whiteSpace:'nowrap'}}>⚠ Urgent</span>
+            whiteSpace:'nowrap',display:'inline-flex',alignItems:'center',gap:4}}><Icon name="alertTriangle" size={9} stroke={2.5}/> Urgent</span>
         )}
         {entry.materialAdded && (
           <span style={{fontSize:9,fontWeight:700,color:'#16a34a',background:'rgba(22,163,74,0.1)',
@@ -2062,8 +2262,9 @@ function PhaseInstructionEntry({entry, onUpd, onDel, color, onAddMaterial}) {
             background:entry.urgent?'rgba(220,38,38,0.12)':'transparent',
             border:`1px solid ${entry.urgent?'rgba(220,38,38,0.5)':C.border}`,
             borderRadius:99,padding:'2px 9px',cursor:'pointer',fontFamily:'inherit',
-            color:entry.urgent?'#dc2626':C.dim}}>
-          {entry.urgent ? '⚠ Urgent' : '⚠'}
+            color:entry.urgent?'#dc2626':C.dim,
+            display:'inline-flex',alignItems:'center',gap:4}}>
+          <Icon name="alertTriangle" size={10} stroke={2.5}/> {entry.urgent ? 'Urgent' : ''}
         </button>
         <button onClick={e=>{e.stopPropagation();onDel();}}
           style={{background:'none',border:'none',cursor:'pointer',color:C.dim,
@@ -2391,15 +2592,15 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId }) {
               <label title="Add photo" style={{cursor:'pointer',flexShrink:0,lineHeight:1}}>
                 <input type="file" accept="image/*" multiple style={{display:'none'}}
                   onChange={e=>handlePhotoUpload(item.id, e.target.files)}/>
-                <span style={{fontSize:13,opacity:uploadingId===item.id?0.4:((item.photos||[]).length>0?1:0.4),
-                  filter:(item.photos||[]).length>0?'none':'grayscale(1)'}}>
-                  {uploadingId===item.id ? '⏳' : '📷'}
-                  {(item.photos||[]).length>0&&<sup style={{fontSize:8,fontWeight:700,color:C.blue}}>{(item.photos||[]).length}</sup>}
+                <span style={{display:"inline-flex",alignItems:"center",opacity:uploadingId===item.id?0.4:((item.photos||[]).length>0?1:0.4),
+                  color:(item.photos||[]).length>0?C.text:C.dim}}>
+                  {uploadingId===item.id ? <Spinner size={14}/> : <Icon name="camera" size={14}/>}
+                  {(item.photos||[]).length>0&&<sup style={{fontSize:8,fontWeight:700,color:C.blue,marginLeft:2}}>{(item.photos||[]).length}</sup>}
                 </span>
               </label>
             )}
 
-            <button onClick={() => { if(!window.confirm("Delete this punch item?")) return; onChange(safeItems.filter(i => i.id !== item.id)); }}
+            <button onClick={async () => { if(!await showConfirm("Delete this punch item?")) return; onChange(safeItems.filter(i => i.id !== item.id)); }}
               style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12, flexShrink: 0 }}>✕</button>
 
           </div>
@@ -2739,7 +2940,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
           {showHotcheck && (
             <div style={{ marginTop: 12, background: `rgba(220,38,38,0.06)`, border: `1px solid rgba(220,38,38,0.25)`, borderRadius: 8, padding: 10 }}>
               <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 8 }}>
-                <span style={{ fontSize: 10, fontWeight: 800, color: '#dc2626', letterSpacing: '0.08em' }}>⚡ HOT CHECK</span>
+                <span style={{ fontSize: 10, fontWeight: 800, color: '#dc2626', letterSpacing: '0.08em', display:'inline-flex', alignItems:'center', gap:5 }}><Icon name="zap" size={11}/> HOT CHECK</span>
                 {data.hotcheck.filter(i => !i.done).length > 0 && (
                   <span style={{ fontSize: 10, background: 'rgba(220,38,38,0.15)', color: '#dc2626', borderRadius: 99, padding: '2px 7px', fontWeight: 700 }}>
                     {data.hotcheck.filter(i => !i.done).length} open
@@ -2780,7 +2981,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
                 onChange={v => setRoomItems(room.id, v)} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId}/>
 
-              <button onClick={() => { if(!window.confirm(`Remove room "${room.name}" and all its punch items?`)) return; delRoom(room.id); }}
+              <button onClick={async () => { if(!await showConfirm(`Remove room "${room.name}" and all its punch items?`)) return; delRoom(room.id); }}
                 style={{ display: 'block', marginTop: 6, marginLeft: 'auto', background: 'none', border: 'none',
                   color: C.muted, cursor: 'pointer', fontSize: 11, textDecoration: 'underline', fontFamily: 'inherit' }}>
                 Remove {room.name}
@@ -2922,7 +3123,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
           <Btn onClick={handleEmail} variant="email" style={{ fontSize: 11, padding: '4px 10px' }}>
 
-            ✉ Email Punch List ({totalOpen} open)
+            <span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="mail" size={12}/> Email Punch List ({totalOpen} open)</span>
 
           </Btn>
 
@@ -2948,8 +3149,8 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
             filterIds={filterIds}
             onAddMaterial={onAddMaterial}
             onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('main',t,`Main Level – ${src}`) : null} jobId={jobId}/>
-          <button onClick={()=>{
-            if(!window.confirm(`Remove "${e.label}" and all its punch items? This cannot be undone.`)) return;
+          <button onClick={async ()=>{
+            if(!await showConfirm(`Remove "${e.label}" and all its punch items? This cannot be undone.`)) return;
             removeFloor(e.key);
           }}
             style={{display:"block",margin:"2px 0 6px auto",background:"none",border:"none",
@@ -3209,11 +3410,11 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
                   background:`${C.blue}18`,border:`1px solid ${C.blue}44`,color:C.blue,
                   borderRadius:99,padding:'2px 7px',fontSize:10,fontWeight:700,
                   opacity:uploading?0.5:1}}>
-                  {uploading?'⏳':'📷'} {n}
+                  {uploading?<Spinner size={12}/>:<Icon name="camera" size={12}/>} {n}
                 </span>
               ) : (
-                <span style={{fontSize:13,opacity:uploading?0.4:0.35,filter:'grayscale(1)'}}>
-                  {uploading?'⏳':'📷'}
+                <span style={{display:'inline-flex',alignItems:'center',opacity:uploading?0.4:0.45,color:C.dim}}>
+                  {uploading?<Spinner size={14}/>:<Icon name="camera" size={14}/>}
                 </span>
               )}
             </label>
@@ -3327,7 +3528,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
           background:'#1f2937',color:'#f1f5f9',borderRadius:9,
           padding:'8px 12px',border:`1px solid ${C.border}`,
           boxShadow:'0 8px 24px rgba(0,0,0,0.35)',fontSize:12}}>
-          <span style={{flexShrink:0,opacity:0.75}}>🗑</span>
+          <span style={{flexShrink:0,opacity:0.75,display:'inline-flex',alignItems:'center'}}><Icon name="trash" size={13}/></span>
           <span style={{flex:1,overflow:'hidden',textOverflow:'ellipsis',whiteSpace:'nowrap'}}>
             Deleted: <em style={{opacity:0.85}}>{undoToast.item.text}</em>
           </span>
@@ -3382,7 +3583,7 @@ function MaterialOrders({orders,onChange}) {
     if(p.pickedUp === false) setCollapsed(c => ({...c, [id]: false}));
   };
 
-  const del = (id) => { if(!window.confirm("Remove this purchase order?")) return; onChange(safeOrders.filter(o => o.id!==id)); };
+  const del = async (id) => { if(!await showConfirm("Remove this purchase order?")) return; onChange(safeOrders.filter(o => o.id!==id)); };
 
   const toggle = (id) => setCollapsed(c => ({...c, [id]: !c[id]}));
 
@@ -3620,7 +3821,7 @@ function MaterialTally({items, onChange, onAddToPO}) {
           {onAddToPO&&(
             <button onClick={()=>{
               const counted = safe.filter(i=>(i.count||0)>0);
-              if(!counted.length){ alert("No items with a count yet. Add counts first."); return; }
+              if(!counted.length){ toast.warn("No items with a count yet. Add counts first."); return; }
               const formatted = counted.map(i=>`- ${i.count}x ${i.name}`).join('<br>');
               onAddToPO(formatted);
               setAddedToPO(true);
@@ -3634,7 +3835,7 @@ function MaterialTally({items, onChange, onAddToPO}) {
               {addedToPO?"Added to PO":"Add to PO"}
             </button>
           )}
-          <button onClick={()=>{ if(!window.confirm("Reset all counts to zero?")) return; onChange(safe.map(i=>({...i,count:0}))); }}
+          <button onClick={async ()=>{ if(!await showConfirm("Reset all counts to zero?")) return; onChange(safe.map(i=>({...i,count:0}))); }}
             style={{padding:"10px 14px",borderRadius:8,
               border:`1px solid ${C.border}`,background:C.surface,
               color:C.muted,fontSize:12,fontWeight:700,
@@ -3685,7 +3886,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
           <Btn onClick={()=>setShowPicker(p=>!p)} variant="email" style={{fontSize:11,padding:"4px 10px"}}>
 
-            ✉ {showPicker?"Cancel":"Select Updates to Email"}
+            <span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="mail" size={12}/> {showPicker?"Cancel":"Select Updates to Email"}</span>
 
           </Btn>
 
@@ -3768,7 +3969,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 
           <span style={{flex:1,fontSize:12,color:C.text,lineHeight:1.5}}>{u.text}</span>
 
-          {!showPicker&&<button onClick={()=>{ if(!window.confirm("Delete this daily update?")) return; onChange(updates.filter(x=>x.id!==u.id)); }}
+          {!showPicker&&<button onClick={async ()=>{ if(!await showConfirm("Delete this daily update?")) return; onChange(updates.filter(x=>x.id!==u.id)); }}
 
             style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>✕</button>}
 
@@ -3894,7 +4095,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
                 }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>Simpro</Btn>}
                 {!isConverted&&!isCompleted&&<Btn onClick={()=>chatCO(o,o._idx)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>Chat</Btn>}
                 {!isConverted&&!isCompleted&&<Btn onClick={()=>emailCO(o,o._idx)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>Email CO</Btn>}
-                {!isCollapsed&&<button onClick={e=>{e.stopPropagation(); if(!window.confirm("Delete this change order?")) return; del(o.id); }} style={{background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontSize:11}}>Remove</button>}
+                {!isCollapsed&&<button onClick={async e=>{e.stopPropagation(); if(!await showConfirm("Delete this change order?")) return; del(o.id); }} style={{background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontSize:11}}>Remove</button>}
               </div>
             </div>
 
@@ -3977,8 +4178,8 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
                       </>
                     ):(
                       <>
-                        <div style={{fontSize:11,fontWeight:700,color:"#f97316",marginBottom:6}}>
-                          ⚠ Crew not on site — convert to Return Trip to schedule
+                        <div style={{fontSize:11,fontWeight:700,color:"#f97316",marginBottom:6,display:"inline-flex",alignItems:"center",gap:6}}>
+                          <Icon name="alertTriangle" size={12} stroke={2.5}/> Crew not on site — convert to Return Trip to schedule
                         </div>
                         <button onClick={()=>convertToRT(o,o._idx)} style={{
                           background:"#8b5cf618",border:"1px solid #8b5cf633",
@@ -3986,7 +4187,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
                           padding:"7px 14px",cursor:"pointer",fontFamily:"inherit",
                           display:"flex",alignItems:"center",gap:6,
                         }}>
-                          🔄 Convert to Return Trip
+                          <Icon name="rotateCw" size={12}/> Convert to Return Trip
                         </button>
                       </>
                     )}
@@ -4095,7 +4296,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[]}
   const [uploading, setUploading] = useState(false);
 
   const addPhotos = async (id, files) => {
-    if(!jobId) { alert("Cannot upload photos — job ID missing. Save the job first."); return; }
+    if(!jobId) { toast.error("Cannot upload photos — job ID missing. Save the job first."); return; }
     const trip = trips.find(t=>t.id===id);
     const existing = trip?.photos||[];
     const newPhotos = [];
@@ -4112,7 +4313,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[]}
         newPhotos.push({id:photoId, name:file.name, url, storagePath});
       } catch(e) {
         console.error("RT photo upload failed:", e);
-        alert(`Failed to upload ${file.name}. Check connection.`);
+        toast.error(`Failed to upload ${file.name}. Check connection.`);
       }
     }
 
@@ -4250,7 +4451,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[]}
               <Btn onClick={()=>chatTrip(t,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>Chat</Btn>
               <Btn onClick={()=>emailTrip(t,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>Email Trip</Btn>
 
-              <button onClick={()=>{ if(!window.confirm("Delete this return trip?")) return; del(t.id); }}
+              <button onClick={async ()=>{ if(!await showConfirm("Delete this return trip?")) return; del(t.id); }}
 
                 style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11}}>Remove</button>
 
@@ -4328,14 +4529,14 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[]}
 
             {uploading&&<div style={{fontSize:11,color:C.accent,fontWeight:600,marginBottom:8,
               padding:"6px 10px",background:`${C.accent}12`,border:`1px solid ${C.accent}33`,
-              borderRadius:7}}>⏳ Uploading photos...</div>}
+              borderRadius:7,display:"flex",alignItems:"center",gap:8}}><Spinner size={12}/> Uploading photos...</div>}
 
             <div style={{display:"flex",gap:6}}>
               <label style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",
                 background:`${C.purple}12`,border:`1px dashed ${C.purple}55`,borderRadius:8,
                 cursor:uploading?"not-allowed":"pointer",opacity:uploading?0.5:1,
                 fontSize:12,color:C.purple,fontWeight:600}}>
-                📷 Add Photos
+                <Icon name="image" size={13}/> Add Photos
                 <input type="file" accept="image/*" multiple style={{display:"none"}}
                   disabled={uploading}
                   onChange={e=>{addPhotos(t.id,e.target.files);e.target.value="";}}/>
@@ -4344,7 +4545,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[]}
                 background:`${C.teal}12`,border:`1px dashed ${C.teal}55`,borderRadius:8,
                 cursor:uploading?"not-allowed":"pointer",opacity:uploading?0.5:1,
                 fontSize:12,color:C.teal,fontWeight:600}}>
-                📸 Take Photo
+                <Icon name="camera" size={13}/> Take Photo
                 <input type="file" accept="image/*" capture="environment" style={{display:"none"}}
                   disabled={uploading}
                   onChange={e=>{addPhotos(t.id,e.target.files);e.target.value="";}}/>
@@ -4847,9 +5048,9 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
 
             {panelCounts?.[p]&&(
 
-              <div style={{fontSize:10,color:C.orange,marginTop:3}}>
+              <div style={{fontSize:10,color:C.orange,marginTop:3,display:"inline-flex",alignItems:"center",gap:5}}>
 
-                ⚠ Manual: {panelCounts[p]} spaces (auto: {spaces})
+                <Icon name="alertTriangle" size={10} stroke={2.5}/> Manual: {panelCounts[p]} spaces (auto: {spaces})
 
               </div>
 
@@ -4927,7 +5128,7 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
       id: uid(), name: r.name, wire: r.wire,
       watts: wireWatts(r.wire), recommended: false, included: true,
     }));
-    if (!added.length) { alert('No new named+wired loads to import.'); return; }
+    if (!added.length) { toast.info('No new named+wired loads to import.'); return; }
     commit([...loads, ...added]);
   };
 
@@ -4952,8 +5153,8 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
       <div style={{display:'flex',gap:8,marginBottom:12,flexWrap:'wrap',alignItems:'center'}}>
         <button onClick={importFromHR}
           style={{background:`${C.blue}15`,border:`1px solid ${C.blue}44`,borderRadius:8,
-            color:C.blue,fontSize:12,fontWeight:700,padding:'7px 14px',cursor:'pointer',fontFamily:'inherit'}}>
-          ⬇ Import from Home Runs
+            color:C.blue,fontSize:12,fontWeight:700,padding:'7px 14px',cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:6}}>
+          <Icon name="download" size={12}/> Import from Home Runs
         </button>
         <button onClick={addRow}
           style={{background:`${C.green}12`,border:`1px dashed ${C.green}55`,borderRadius:8,
@@ -4961,7 +5162,7 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
           + Add Manually
         </button>
         {loads.length>0&&(
-          <button onClick={()=>{if(window.confirm('Clear all loads?')) commit([]);}}
+          <button onClick={async ()=>{if(await showConfirm('Clear all loads?')) commit([]);}}
             style={{marginLeft:'auto',background:'none',border:`1px solid ${C.border}`,borderRadius:8,
               color:C.muted,fontSize:11,padding:'6px 12px',cursor:'pointer',fontFamily:'inherit'}}>
             Clear All
@@ -5074,7 +5275,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
   };
 
   const send = async () => {
-    if (!genLoads.length) { alert('Add loads first.'); return; }
+    if (!genLoads.length) { toast.warn('Add loads first.'); return; }
     setSending(true);
     try {
       await setDoc(doc(db,'homeowner_requests',jobId),{
@@ -5084,7 +5285,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
       });
       await navigator.clipboard.writeText(hoLink);
       setCopied(true); setTimeout(()=>setCopied(false),3000);
-    } catch(e){ alert('Failed. Check connection.'); }
+    } catch(e){ toast.error('Failed. Check connection.'); }
     setSending(false);
   };
 
@@ -5092,7 +5293,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
     const msg = hoResponse?.submitted
       ? 'Homeowner already submitted. Reset and resend?'
       : 'Resend link with current load list?';
-    if (!window.confirm(msg)) return;
+    if (!await showConfirm(msg)) return;
     setSending(true);
     try {
       await setDoc(doc(db,'homeowner_requests',jobId),{
@@ -5103,7 +5304,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
       setHoResponse(null); setShowModal(false);
       await navigator.clipboard.writeText(hoLink);
       setCopied(true); setTimeout(()=>setCopied(false),3000);
-    } catch(e){ alert('Failed. Check connection.'); }
+    } catch(e){ toast.error('Failed. Check connection.'); }
     setSending(false);
   };
 
@@ -5111,8 +5312,8 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
     try {
       const snap = await getDoc(doc(db,'homeowner_requests',jobId));
       if(snap.exists()&&snap.data().submitted){ setHoResponse(snap.data()); setShowModal(true); }
-      else alert('No response yet.');
-    } catch(e){ alert('Failed to check.'); }
+      else toast.info('No response yet.');
+    } catch(e){ toast.error('Failed to check.'); }
   };
 
   const allRows=[...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[]),
@@ -5141,8 +5342,8 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
             </button>
             <button onClick={resend} disabled={sending}
               style={{background:'none',border:`1px solid ${C.border}`,borderRadius:7,
-                color:C.dim,fontSize:11,padding:'5px 12px',cursor:'pointer',fontFamily:'inherit'}}>
-              🔄 Resend
+                color:C.dim,fontSize:11,padding:'5px 12px',cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:5}}>
+              <Icon name="rotateCw" size={11}/> Resend
             </button>
           </div>
         )}
@@ -5156,14 +5357,14 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                 color:'#000',fontSize:13,fontWeight:700,padding:'10px 22px',
                 cursor:genLoads.length?'pointer':'not-allowed',fontFamily:'inherit',
                 opacity:sending?0.6:1}}>
-              {sending?'⏳ Sending…':'🔗 Send to Homeowner'}
+              {sending?<><Spinner size={12}/> Sending…</>:<><Icon name="send" size={13}/> Send to Homeowner</>}
             </button>
           ):(
             <button onClick={resend} disabled={sending}
               style={{background:'none',border:`1px solid ${C.accent}55`,borderRadius:9,
                 color:C.accent,fontSize:12,fontWeight:700,padding:'8px 18px',
                 cursor:'pointer',fontFamily:'inherit',opacity:sending?0.6:1}}>
-              {sending?'⏳ Resending…':'🔄 Reset & Resend'}
+              {sending?<><Spinner size={12}/> Resending…</>:<><Icon name="rotateCw" size={12}/> Reset & Resend</>}
             </button>
           )}
           {copied&&<span style={{fontSize:12,color:C.green,fontWeight:700}}>✓ Link copied!</span>}
@@ -5172,8 +5373,8 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
         <div style={{marginTop:10,display:'flex',gap:8,flexWrap:'wrap',alignItems:'center'}}>
           <button onClick={()=>{navigator.clipboard.writeText(hoLink);setCopied(true);setTimeout(()=>setCopied(false),2000);}}
             style={{background:'none',border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
-              fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit'}}>
-            🔗 Copy link
+              fontSize:11,padding:'3px 10px',cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:5}}>
+            <Icon name="link" size={11}/> Copy link
           </button>
           <button onClick={()=>window.open(hoLink,'_blank')}
             style={{background:'none',border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
@@ -5208,8 +5409,8 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
             </div>
             <button onClick={resend} disabled={sending}
               style={{width:'100%',marginBottom:14,background:'none',border:`1px solid ${C.border}`,
-                borderRadius:8,color:C.dim,fontSize:12,padding:'8px',cursor:'pointer',fontFamily:'inherit'}}>
-              🔄 Reset &amp; Resend
+                borderRadius:8,color:C.dim,fontSize:12,padding:'8px',cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',justifyContent:'center',gap:6}}>
+              <Icon name="rotateCw" size={12}/> Reset &amp; Resend
             </button>
 
                         <div style={{fontSize:10,fontWeight:600,color:'#94a3b8',letterSpacing:'0.08em',marginBottom:8}}>
@@ -5274,7 +5475,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
       <div style={{marginBottom:16,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
         <button onClick={()=>{
           const link=`${window.location.origin}/?homeruns=${jobId}`;
-          navigator.clipboard.writeText(link).then(()=>alert('✓ Live view link copied!\n\nAnyone with this link can see Home Runs in real time (view only).')).catch(()=>alert('Link:\n'+link));
+          navigator.clipboard.writeText(link).then(()=>toast.success('Live view link copied! Anyone with this link can see Home Runs in real time (view only).',{duration:5000})).catch(()=>toast.info('Link: '+link,{duration:8000}));
         }} style={{background:`${C.blue}15`,border:`1px solid ${C.blue}55`,borderRadius:6,
           color:C.blue,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.05em'}}>
           Share ↗
@@ -5374,8 +5575,8 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                         {isManual&&<span style={{fontSize:8,fontWeight:700,color:C.orange,background:`${C.orange}18`,
                           borderRadius:99,padding:'1px 5px'}}>MANUAL</span>}
                         <button onClick={()=>isEditing?setEditingBreakers(null):enterEdit(p,activeGroups)}
-                          style={{fontSize:9,background:'none',border:'none',cursor:'pointer',color:C.dim,padding:'0 2px'}}>
-                          {isEditing?'✓ Done':'✏ Edit'}
+                          style={{fontSize:9,background:'none',border:'none',cursor:'pointer',color:C.dim,padding:'0 2px',display:'inline-flex',alignItems:'center',gap:3}}>
+                          {isEditing?<><Icon name="check" size={10}/> Done</>:<><Icon name="pencil" size={10}/> Edit</>}
                         </button>
                       </div>
                     </div>
@@ -5439,8 +5640,8 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                           {isManual&&(
                             <button onClick={()=>{resetBreakers(p);setEditingBreakers(null);}}
                               style={{fontSize:9,padding:'3px 8px',borderRadius:4,cursor:'pointer',fontFamily:'inherit',
-                                background:'none',border:`1px solid ${C.border}`,color:C.dim}}>
-                              ↺ Reset to Auto
+                                background:'none',border:`1px solid ${C.border}`,color:C.dim,display:'inline-flex',alignItems:'center',gap:4}}>
+                              <Icon name="refresh" size={10}/> Reset to Auto
                             </button>
                           )}
                         </div>
@@ -6442,8 +6643,8 @@ function DriveFilesSection({ job, onUpdate }) {
     setEditingFolder(false);
   };
 
-  const handleRemoveFolder = () => {
-    if (!window.confirm("Remove Google Drive folder link?")) return;
+  const handleRemoveFolder = async () => {
+    if (!await showConfirm("Remove Google Drive folder link?")) return;
     onUpdate({ driveFolderId: "" });
     setFolderInput("");
     setEditingFolder(true);
@@ -6454,7 +6655,7 @@ function DriveFilesSection({ job, onUpdate }) {
     if (!job.simproNo) return;
     const fid = extractDriveFolderId(job.driveFolderId);
     if (!fid) return;
-    if (!window.confirm(`Push new Drive plans to Simpro job #${job.simproNo}?\n\nThis only adds files — nothing in Simpro will be deleted.`)) return;
+    if (!await showConfirm(`Push new Drive plans to Simpro job #${job.simproNo}? This only adds files — nothing in Simpro will be deleted.`)) return;
     setSimproSync("loading");
     try {
       const pushFn = httpsCallable(functions, "pushPlansToSimpro");
@@ -6467,7 +6668,7 @@ function DriveFilesSection({ job, onUpdate }) {
 
   const isImage = (f) => (f.mimeType || "").startsWith("image/");
   const isPDF = (f) => f.mimeType === "application/pdf" || /\.pdf$/i.test(f.name);
-  const fileIcon = (f) => isPDF(f) ? "📄" : isImage(f) ? "🖼" : "📎";
+  const fileIconName = (f) => isPDF(f) ? "fileText" : isImage(f) ? "image" : "paperclip";
   const isArchiveFolder = (name) => /archive/i.test(name);
 
   const toggleFolder = (name) => {
@@ -6543,7 +6744,7 @@ function DriveFilesSection({ job, onUpdate }) {
       {folderId && !editingFolder && (
         <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 12, padding: "8px 12px",
           background: `${C.green}10`, border: `1px solid ${C.green}33`, borderRadius: 8 }}>
-          <span style={{ fontSize: 14 }}>📁</span>
+          <span style={{ display:"inline-flex", alignItems:"center", color: C.green }}><Icon name="folder" size={14}/></span>
           <span style={{ fontSize: 11, color: C.green, fontWeight: 600, flex: 1 }}>
             Drive folder linked{driveFiles.length > 0 ? ` — ${driveFiles.length} file${driveFiles.length === 1 ? "" : "s"}` : ""}
             {folderNames.length > 1 ? ` across ${folderNames.length} folders` : ""}
@@ -6637,7 +6838,7 @@ function DriveFilesSection({ job, onUpdate }) {
                   cursor: "pointer", userSelect: "none",
                   opacity: isArchive ? 0.65 : 1 }}>
                 <span style={{ fontSize: 11, lineHeight: 1, flexShrink: 0 }}>{isCollapsed ? "▸" : "▾"}</span>
-                <span>📁 {folder === "Root" ? "Top Level" : folder}</span>
+                <span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="folder" size={13}/> {folder === "Root" ? "Top Level" : folder}</span>
                 {isArchive && (
                   <span style={{ fontStyle: "italic", fontWeight: 400, color: C.muted, letterSpacing: 0 }}>
                     — archived plans
@@ -6677,7 +6878,7 @@ function DriveFilesSection({ job, onUpdate }) {
                   {folderDocs.map(f => (
                     <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
                       background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 6 }}>
-                      <span style={{ fontSize: 18, flexShrink: 0 }}>{fileIcon(f)}</span>
+                      <span style={{ flexShrink: 0, color: C.dim, display:"inline-flex", alignItems:"center" }}><Icon name={fileIconName(f)} size={18}/></span>
                       <div style={{ flex: 1, minWidth: 0 }}>
                         <div style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden",
                           textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
@@ -6794,7 +6995,7 @@ function FileUploadSection({ jobId, files, onChange }) {
         });
       } catch (e) {
         console.error("Upload failed:", e);
-        alert(`Failed to upload ${file.name}. Check your connection and try again.`);
+        toast.error(`Failed to upload ${file.name}. Check your connection and try again.`);
       }
     }
     if (newFiles.length > 0) {
@@ -6805,7 +7006,7 @@ function FileUploadSection({ jobId, files, onChange }) {
   };
 
   const handleDelete = async (file) => {
-    if (!window.confirm(`Delete ${file.name}?`)) return;
+    if (!await showConfirm(`Delete ${file.name}?`)) return;
     try {
       if (file.storagePath) {
         const storageRef = ref(storage, file.storagePath);
@@ -6817,7 +7018,7 @@ function FileUploadSection({ jobId, files, onChange }) {
 
   const isImage = (file) => (file.type || "").startsWith("image/") || /\.(jpg|jpeg|png|gif|webp|heic)$/i.test(file.name);
   const isPDF = (file) => (file.type || "") === "application/pdf" || /\.pdf$/i.test(file.name);
-  const fileIcon = (file) => isPDF(file) ? "📄" : isImage(file) ? "🖼" : "📎";
+  const fileIconName = (file) => isPDF(file) ? "fileText" : isImage(file) ? "image" : "paperclip";
 
   return (
     <div style={{ marginBottom: 24 }}>
@@ -6830,7 +7031,7 @@ function FileUploadSection({ jobId, files, onChange }) {
             padding: "5px 12px", fontSize: 11, fontWeight: 600, color: C.blue,
             cursor: uploading ? "not-allowed" : "pointer", opacity: uploading ? 0.5 : 1,
             fontFamily: "inherit" }}>
-            📎 Upload Files
+            <Icon name="paperclip" size={12}/> Upload Files
             <input type="file" multiple accept="image/*,.pdf,.doc,.docx,.xls,.xlsx,.dwg,.dxf"
               style={{ display: "none" }} disabled={uploading}
               onChange={e => { handleUpload(e.target.files); e.target.value = ""; }} />
@@ -6841,7 +7042,7 @@ function FileUploadSection({ jobId, files, onChange }) {
             padding: "5px 12px", fontSize: 11, fontWeight: 600, color: C.teal,
             cursor: uploading ? "not-allowed" : "pointer", opacity: uploading ? 0.5 : 1,
             fontFamily: "inherit" }}>
-            📷 Take Photo
+            <Icon name="camera" size={12}/> Take Photo
             <input type="file" accept="image/*" capture="environment"
               style={{ display: "none" }} disabled={uploading}
               onChange={e => { handleUpload(e.target.files); e.target.value = ""; }} />
@@ -6853,7 +7054,7 @@ function FileUploadSection({ jobId, files, onChange }) {
         <div style={{ fontSize: 11, color: C.accent, fontWeight: 600, marginBottom: 10,
           padding: "8px 12px", background: `${C.accent}12`, border: `1px solid ${C.accent}33`,
           borderRadius: 8 }}>
-          ⏳ {uploadProgress || "Uploading..."}
+          <Spinner size={12}/> {uploadProgress || "Uploading..."}
         </div>
       )}
 
@@ -6895,7 +7096,7 @@ function FileUploadSection({ jobId, files, onChange }) {
           {(files || []).filter(f => !isImage(f)).map(f => (
             <div key={f.id} style={{ display: "flex", alignItems: "center", gap: 10, padding: "10px 12px",
               background: C.surface, border: `1px solid ${C.border}`, borderRadius: 9, marginBottom: 6 }}>
-              <span style={{ fontSize: 18, flexShrink: 0 }}>{fileIcon(f)}</span>
+              <span style={{ flexShrink: 0, color: C.dim, display:"inline-flex", alignItems:"center" }}><Icon name={fileIconName(f)} size={18}/></span>
               <div style={{ flex: 1, minWidth: 0 }}>
                 <div style={{ fontSize: 12, fontWeight: 600, color: C.text, overflow: "hidden",
                   textOverflow: "ellipsis", whiteSpace: "nowrap" }}>{f.name}</div>
@@ -6940,7 +7141,7 @@ function FileUploadSection({ jobId, files, onChange }) {
           ) : (
             <div onClick={e => e.stopPropagation()}
               style={{ background: "#fff", borderRadius: 12, padding: 24, textAlign: "center" }}>
-              <div style={{ fontSize: 48, marginBottom: 12 }}>{fileIcon(viewFile)}</div>
+              <div style={{ marginBottom: 12, color: C.dim, display: "flex", justifyContent: "center" }}><Icon name={fileIconName(viewFile)} size={48}/></div>
               <div style={{ fontSize: 14, fontWeight: 600, marginBottom: 8 }}>{viewFile.name}</div>
               <a href={viewFile.url} target="_blank" rel="noreferrer"
                 style={{ fontSize: 13, color: C.blue, fontWeight: 600 }}>Open file ↗</a>
@@ -7119,7 +7320,7 @@ function PlansTab({job, onUpdate}) {
 
               <button onClick={()=>onUpdate({customLinks:(job.customLinks||[]).filter(x=>x.id!==cl.id)})}
 
-                style={{background:"none",border:"none",color:C.red,cursor:"pointer",fontSize:13,flexShrink:0}}>🗑</button>
+                style={{background:"none",border:"none",color:C.red,cursor:"pointer",flexShrink:0,display:"inline-flex",alignItems:"center",padding:0}}><Icon name="trash" size={14}/></button>
 
             </div>
 
@@ -7290,7 +7491,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
         await uploadBytes(storageRef, file);
         const url = await getDownloadURL(storageRef);
         newPhotos.push({id:photoId, name:file.name, url, storagePath});
-      } catch(e) { console.error("Photo upload failed:", e); alert(`Failed to upload ${file.name}.`); }
+      } catch(e) { console.error("Photo upload failed:", e); toast.error(`Failed to upload ${file.name}.`); }
     }
     if(newPhotos.length > 0) u({ photos: [...existing, ...newPhotos] });
     setQjUploading(false);
@@ -7454,7 +7655,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
                     onClick={e => e.stopPropagation()}
                     style={{ fontSize: 11, fontWeight: 700, color: "#8b5cf6", background: "#8b5cf615", border: "1px solid #8b5cf633",
                       borderRadius: 7, padding: "6px 10px", textDecoration: "none", whiteSpace: "nowrap", cursor: "pointer" }}>
-                    Open 🔗</a>}
+                    <span style={{display:"inline-flex",alignItems:"center",gap:4}}>Open <Icon name="external" size={11}/></span></a>}
                   <span onClick={() => {
                     const links = [...(job.matterportLinks || (job.matterportLink ? [{ label: "Main", url: job.matterportLink }] : []))];
                     links.splice(mi, 1);
@@ -7505,7 +7706,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
             )}
             {qjUploading&&<div style={{fontSize:11,color:C.accent,fontWeight:600,marginBottom:8,
               padding:"6px 10px",background:`${C.accent}12`,border:`1px solid ${C.accent}33`,
-              borderRadius:7}}>⏳ Uploading...</div>}
+              borderRadius:7,display:"flex",alignItems:"center",gap:8}}><Spinner size={12}/> Uploading...</div>}
             <label style={{ display: "inline-flex", alignItems: "center", gap: 6,
               background: C.surface, border: `1px solid ${C.border}`, borderRadius: 8,
               padding: "7px 14px", cursor: qjUploading?"not-allowed":"pointer",
@@ -7628,7 +7829,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
         await uploadBytes(storageRef, file);
         const url = await getDownloadURL(storageRef);
         newPhotos.push({id:photoId, name:file.name, url, storagePath});
-      } catch(e) { console.error("Photo upload failed:", e); alert(`Failed to upload ${file.name}.`); }
+      } catch(e) { console.error("Photo upload failed:", e); toast.error(`Failed to upload ${file.name}.`); }
     }
     if(newPhotos.length > 0) u({tempPedPhotos:[...existing, ...newPhotos]});
     setTpUploading(false);
@@ -7791,7 +7992,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
                     onClick={e=>e.stopPropagation()}
                     style={{fontSize:11,fontWeight:700,color:"#8b5cf6",background:"#8b5cf615",border:"1px solid #8b5cf633",
                       borderRadius:7,padding:"6px 10px",textDecoration:"none",whiteSpace:"nowrap",cursor:"pointer"}}>
-                    Open 🔗</a>}
+                    <span style={{display:"inline-flex",alignItems:"center",gap:4}}>Open <Icon name="external" size={11}/></span></a>}
                   <span onClick={()=>{
                     const links=[...(job.matterportLinks||(job.matterportLink?[{label:"Main",url:job.matterportLink}]:[]))];
                     links.splice(mi,1);
@@ -7824,7 +8025,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
             )}
             {tpUploading&&<div style={{fontSize:11,color:C.accent,fontWeight:600,marginBottom:8,
               padding:"6px 10px",background:`${C.accent}12`,border:`1px solid ${C.accent}33`,
-              borderRadius:7}}>⏳ Uploading...</div>}
+              borderRadius:7,display:"flex",alignItems:"center",gap:8}}><Spinner size={12}/> Uploading...</div>}
             <label style={{display:"inline-flex",alignItems:"center",gap:6,
               background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
               padding:"7px 14px",cursor:tpUploading?"not-allowed":"pointer",
@@ -8227,11 +8428,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
 
-                color:C.dim,cursor:"pointer",padding:"5px 10px",fontSize:16,
+                color:C.dim,cursor:"pointer",padding:"5px 10px",display:"inline-flex",alignItems:"center",
 
                 opacity:refreshing?0.4:1}} disabled={refreshing}>
 
-              {refreshing?"…":"↻"}
+              {refreshing?<Spinner size={14}/>:<Icon name="rotateCw" size={14}/>}
 
             </button>
 
@@ -8308,7 +8509,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           const v=e.target.value;
                           if(v==="complete"){
                             const open=punchOpen(job.roughPunch);
-                            if(open>0){alert(`Cannot mark Rough as complete — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}
+                            if(open>0){toast.warn(`Cannot mark Rough as complete — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}
                           }
                           const def=getStatusDef(ROUGH_STATUSES,v);
                           u({roughStatus:v, roughOnHold:v==="waiting", roughScheduled:v==="scheduled",
@@ -8396,7 +8597,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     </div>
                   );
                 })()}
-                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const open=punchOpen(job.roughPunch);if(open>0){alert(`Cannot set Rough to 100% — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}}const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};const invoiceFire=pct>=85&&!job.roughInvoiceFired?{roughInvoiceFired:true,roughInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{roughInvoiceFired:false,roughInvoiceDismissed:false}:{};u({roughStage:v,...qcFire,...prepDone,...invoiceFire,...invoiceReset,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
+                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const open=punchOpen(job.roughPunch);if(open>0){toast.warn(`Cannot set Rough to 100% — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}}const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};const invoiceFire=pct>=85&&!job.roughInvoiceFired?{roughInvoiceFired:true,roughInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{roughInvoiceFired:false,roughInvoiceDismissed:false}:{};u({roughStage:v,...qcFire,...prepDone,...invoiceFire,...invoiceReset,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
 
                 <div style={{marginTop:8,marginBottom:12}}>
                   <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough}/>
@@ -8480,7 +8681,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}/>
                 }>
                   {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{if(a.answer&&!((job.roughQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null}/>;})()}
-                  {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#16a34a',marginTop:6}}>✅ Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
+                  {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#16a34a',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
               </div>
@@ -8534,7 +8735,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               const parts=[];
                               if(finishOpen>0) parts.push(`${finishOpen} finish punch item${finishOpen!==1?"s":""}`);
                               if(qcOpen>0) parts.push(`${qcOpen} QC item${qcOpen!==1?"s":""}`);
-                              alert(`Cannot mark Finish as complete — ${parts.join(" and ")} still open. Clear them first.`);
+                              toast.warn(`Cannot mark Finish as complete — ${parts.join(" and ")} still open. Clear them first.`);
                               return;
                             }
                           }
@@ -8624,7 +8825,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     </div>
                   );
                 })()}
-                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const finishOpen=punchOpen(job.finishPunch);const qcOpen=punchOpen(job.qcPunch);const total=finishOpen+qcOpen;if(total>0){const parts=[];if(finishOpen>0)parts.push(`${finishOpen} finish punch item${finishOpen!==1?"s":""}`);if(qcOpen>0)parts.push(`${qcOpen} QC item${qcOpen!==1?"s":""}`);alert(`Cannot set Finish to 100% — ${parts.join(" and ")} still open. Clear them first.`);return;}}const invoiceFire=pct>=85&&!job.finishInvoiceFired?{finishInvoiceFired:true,finishInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{finishInvoiceFired:false,finishInvoiceDismissed:false}:{};u({finishStage:v,...invoiceFire,...invoiceReset,...(v==="100%"?{finishStatus:"complete"}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
+                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const finishOpen=punchOpen(job.finishPunch);const qcOpen=punchOpen(job.qcPunch);const total=finishOpen+qcOpen;if(total>0){const parts=[];if(finishOpen>0)parts.push(`${finishOpen} finish punch item${finishOpen!==1?"s":""}`);if(qcOpen>0)parts.push(`${qcOpen} QC item${qcOpen!==1?"s":""}`);toast.warn(`Cannot set Finish to 100% — ${parts.join(" and ")} still open. Clear them first.`);return;}}const invoiceFire=pct>=85&&!job.finishInvoiceFired?{finishInvoiceFired:true,finishInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{finishInvoiceFired:false,finishInvoiceDismissed:false}:{};u({finishStage:v,...invoiceFire,...invoiceReset,...(v==="100%"?{finishStatus:"complete"}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
                 <div style={{marginTop:8,marginBottom:12}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
                 <PhaseInstructions items={job.finishInstructions} onChange={v=>u({finishInstructions:v})} color={C.finish}
                   onAddMaterial={(text,source)=>{
@@ -8704,7 +8905,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}/>
                 }>
                   {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{if(a.answer&&!((job.finishQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null}/>;})()}
-                  {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#16a34a',marginTop:6}}>✅ Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
+                  {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#16a34a',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
               </div>
@@ -8740,7 +8941,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <div style={{marginBottom:16,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
                 <button onClick={()=>{
                   const link=`${window.location.origin}/?lighting=${job.id}`;
-                  navigator.clipboard.writeText(link).then(()=>alert('✓ Lighting collab link copied!\n\nThe low voltage company can view assignments and add their module/channel info.')).catch(()=>alert('Link:\n'+link));
+                  navigator.clipboard.writeText(link).then(()=>toast.success('Lighting collab link copied! The low voltage company can view assignments and add their module/channel info.',{duration:5000})).catch(()=>toast.info('Link: '+link,{duration:8000}));
                 }} style={{background:`${C.purple}15`,border:`1px solid ${C.purple}55`,borderRadius:6,
                   color:C.purple,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.05em'}}>
                   Share ↗
@@ -9288,7 +9489,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     {k==="address" ? (
                       <div style={{display:"flex",gap:4,alignItems:"center"}}>
                         <div style={{flex:1}}><Inp value={job[k]} onChange={e=>u({[k]:e.target.value})} placeholder={l}/></div>
-                        {job.address && <AddressLink address={job.address} style={{fontSize:11,fontWeight:700,color:"#fff",background:"#2563eb",border:"none",borderRadius:7,padding:"7px 12px",cursor:"pointer",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}>📍 Maps</AddressLink>}
+                        {job.address && <AddressLink address={job.address} style={{fontSize:11,fontWeight:700,color:"#fff",background:"#2563eb",border:"none",borderRadius:7,padding:"7px 12px",cursor:"pointer",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:5,flexShrink:0}}><Icon name="mapPin" size={11} stroke={2.5}/> Maps</AddressLink>}
                       </div>
                     ) : (
                       <Inp value={job[k]} onChange={e=>u({[k]:e.target.value})} placeholder={l}/>
@@ -9364,7 +9565,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       onClick={e=>e.stopPropagation()}
                       style={{fontSize:11,fontWeight:700,color:"#8b5cf6",background:"#8b5cf615",border:"1px solid #8b5cf633",
                         borderRadius:7,padding:"6px 10px",textDecoration:"none",whiteSpace:"nowrap",cursor:"pointer"}}>
-                      Open 🔗</a>}
+                      <span style={{display:"inline-flex",alignItems:"center",gap:4}}>Open <Icon name="external" size={11}/></span></a>}
                     <span onClick={()=>{
                       const links=[...(job.matterportLinks||(job.matterportLink?[{label:"Main",url:job.matterportLink}]:[]))];
                       links.splice(mi,1);
@@ -9575,7 +9776,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
 
             onSave={v=>upd(q.id,{question:v})}/>
 
-          {q.source&&<span style={{fontSize:9,fontWeight:700,color:C.orange,background:`${C.orange}18`,border:`1px solid ${C.orange}33`,borderRadius:99,padding:'1px 7px',alignSelf:'flex-start'}}>📍 {q.source}</span>}
+          {q.source&&<span style={{fontSize:9,fontWeight:700,color:C.orange,background:`${C.orange}18`,border:`1px solid ${C.orange}33`,borderRadius:99,padding:'1px 7px',alignSelf:'flex-start',display:'inline-flex',alignItems:'center',gap:4}}><Icon name="mapPin" size={9}/> {q.source}</span>}
           {q.addedBy&&<span style={{fontSize:9,color:C.dim}}>added by {q.addedBy}</span>}
           {filterIds!=null&&<span style={{fontWeight:700,borderRadius:99,padding:'1px 6px',lineHeight:1.6,fontSize:9,
             background:filterIds.has(q.id)?'#dcfce7':'#f3f4f6',
@@ -9584,7 +9785,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
           </span>}
         </div>
 
-        <button onClick={()=>{ if(!window.confirm("Delete this question?")) return; del(q.id); }}
+        <button onClick={async ()=>{ if(!await showConfirm("Delete this question?")) return; del(q.id); }}
 
           style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
 
@@ -10030,7 +10231,7 @@ function QuickJobCard({ job, onOpen, onUpdate, onDelete }) {
             </span>
           )}
           {onDelete && (
-            <button onClick={e => { e.stopPropagation(); if (window.confirm("Delete this quick job?")) onDelete(job.id); }}
+            <button onClick={async e => { e.stopPropagation(); if (await showConfirm("Delete this quick job?")) onDelete(job.id); }}
               style={{ background: "none", border: "1px solid #dc262633", borderRadius: 6,
                 color: "#dc2626", fontSize: 10, fontWeight: 600, padding: "3px 8px",
                 cursor: "pointer", fontFamily: "inherit" }}>Delete</button>
@@ -10118,7 +10319,7 @@ function TempPedCard({ job, onOpen, onUpdate, onDelete }) {
             </div>
           )}
           {onDelete&&(
-            <button onClick={e=>{e.stopPropagation();if(window.confirm("Delete this temp ped job?")) onDelete(job.id);}}
+            <button onClick={async e=>{e.stopPropagation();if(await showConfirm("Delete this temp ped job?")) onDelete(job.id);}}
               style={{marginTop:4,background:"none",border:"1px solid #dc262633",borderRadius:6,
                 color:"#dc2626",fontSize:10,fontWeight:600,padding:"3px 8px",cursor:"pointer",
                 fontFamily:"inherit"}}>
@@ -10410,7 +10611,7 @@ function deepMergeJob(remote, local) {
 // ── Upcoming Jobs ─────────────────────────────────────────────
 
 function blankUpcoming() {
-  return { id: uid(), name:"", city:"", sales:"", customer:"", notes:"", lastFollowUp:"", foreman:"" };
+  return { id: uid(), name:"", address:"", city:"", sales:"", customer:"", notes:"", lastFollowUp:"", foreman:"" };
 }
 
 const SEED_UPCOMING = [
@@ -10471,6 +10672,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
           </select>
         </div>
       </div>
+      <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Address</div><Inp value={u.address||""} onChange={e=>upd(u.id,{address:e.target.value})} placeholder="Street address for navigation (e.g. 123 Main St, Park City UT)"/></div>
       <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes</div><TA value={u.notes} onChange={e=>upd(u.id,{notes:e.target.value})} placeholder="Status, timeline, notes…" rows={2}/></div>
       <div style={{display:"flex",gap:8,marginTop:2,flexWrap:"wrap"}}>
         <button onClick={()=>setEditingId(null)} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
@@ -10556,6 +10758,16 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                         )}
                       </div>
                     </div>
+                    {u.address&&(
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
+                        <div style={{fontSize:11,color:C.dim,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                          <span style={{color:C.muted,fontSize:10}}>Address </span>{u.address}
+                        </div>
+                        <AddressLink address={u.address} style={{fontSize:11,fontWeight:700,color:"#fff",background:"#2563eb",border:"none",borderRadius:7,padding:"6px 11px",cursor:"pointer",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:5,flexShrink:0,textDecoration:"none"}}>
+                          <Icon name="mapPin" size={11} stroke={2.5}/> Maps
+                        </AddressLink>
+                      </div>
+                    )}
                     <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:"4px 12px",marginBottom:u.notes?6:0}}>
                       {u.city&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.muted,fontSize:10}}>City </span>{u.city}</div>}
                       {u.customer&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.muted,fontSize:10}}>Customer </span>{u.customer}</div>}
@@ -10576,7 +10788,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
             {colKeys.map(k=>(
               <div key={k} style={{flex:COL[k].flex,fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase",paddingRight:12}}>{COL[k].label}</div>
             ))}
-            <div style={{width:160,flexShrink:0}}/>
+            <div style={{width:200,flexShrink:0}}/>
           </div>
           {upcoming.length===0&&<div style={{textAlign:"center",padding:"48px 0",color:C.muted,fontSize:13,fontStyle:"italic"}}>No upcoming jobs yet — add one above.</div>}
           {upcoming.map(u=>{
@@ -10599,6 +10811,7 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                         {u.name||<span style={{color:C.muted,fontStyle:"italic"}}>Untitled</span>}
                         {u.foreman&&<span style={{marginLeft:8,fontSize:10,fontWeight:700,color:getFC(u.foreman)||"#6b7280",background:`${getFC(u.foreman)||"#6b7280"}18`,borderRadius:99,padding:"1px 7px",border:`1px solid ${getFC(u.foreman)||"#6b7280"}33`}}>{u.foreman}</span>}
                       </div>
+                      {u.address&&<div style={{marginTop:2,fontSize:10,color:C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:4}}><Icon name="mapPin" size={9}/> {u.address}</div>}
                       {isSigned&&<div style={{marginTop:2}}><SignedBadge/></div>}
                     </div>
                     <div style={{flex:1.2,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.city||"—"}</div>
@@ -10606,7 +10819,12 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                     <div style={{flex:1.5,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.customer||"—"}</div>
                     <div style={{flex:3,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.notes||"—"}</div>
                     <div style={{flex:1.1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.lastFollowUp||"—"}</div>
-                    <div style={{width:160,flexShrink:0,display:"flex",gap:5,justifyContent:"flex-end",alignItems:"center"}}>
+                    <div style={{width:200,flexShrink:0,display:"flex",gap:5,justifyContent:"flex-end",alignItems:"center"}}>
+                      {u.address&&(
+                        <AddressLink address={u.address} style={{fontSize:11,fontWeight:700,color:"#fff",background:"#2563eb",border:"none",borderRadius:6,padding:"3px 9px",cursor:"pointer",display:"inline-flex",alignItems:"center",gap:4,whiteSpace:"nowrap",textDecoration:"none"}}>
+                          <Icon name="mapPin" size={10} stroke={2.5}/> Maps
+                        </AddressLink>
+                      )}
                       <button onClick={()=>toggleSigned(u)} title={isSigned?"Remove signed status":"Mark as signed / on job board"} style={{
                         background: isSigned?`${C.green}18`:"none",
                         border:`1px solid ${isSigned?C.green:C.border}`,
@@ -10926,10 +11144,10 @@ function computeTasks(jobs) {
         let coWindowLabel = "";
         if(co.needsHardDate && co.needsByStart) {
           const d = parseAnyDate(co.needsByStart);
-          coWindowLabel = d ? "🔒 "+d.toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "";
+          coWindowLabel = d ? d.toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "";
         } else if(co.needsByStart) {
           const s = parseAnyDate(co.needsByStart), e = parseAnyDate(co.needsByEnd||co.needsByStart);
-          if(s) coWindowLabel = "📅 "+s.toLocaleDateString("en-US",{month:"short",day:"numeric"})+(e&&co.needsByEnd?" – "+e.toLocaleDateString("en-US",{month:"short",day:"numeric"}):"");
+          if(s) coWindowLabel = s.toLocaleDateString("en-US",{month:"short",day:"numeric"})+(e&&co.needsByEnd?" – "+e.toLocaleDateString("en-US",{month:"short",day:"numeric"}):"");
         }
         // Scheduled task clears when coStatusDate is set
         if(!co.coStatusDate) tasks.push({
@@ -11043,10 +11261,10 @@ function computeTasks(jobs) {
         let rtWindowLabel = "";
         if(rt.needsHardDate && rt.needsByStart) {
           const d = parseAnyDate(rt.needsByStart);
-          rtWindowLabel = d ? "🔒 "+d.toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "";
+          rtWindowLabel = d ? d.toLocaleDateString("en-US",{month:"short",day:"numeric"}) : "";
         } else if(rt.needsByStart) {
           const s = parseAnyDate(rt.needsByStart), e = parseAnyDate(rt.needsByEnd||rt.needsByStart);
-          if(s) rtWindowLabel = "📅 "+s.toLocaleDateString("en-US",{month:"short",day:"numeric"})+(e&&rt.needsByEnd?" – "+e.toLocaleDateString("en-US",{month:"short",day:"numeric"}):"");
+          if(s) rtWindowLabel = s.toLocaleDateString("en-US",{month:"short",day:"numeric"})+(e&&rt.needsByEnd?" – "+e.toLocaleDateString("en-US",{month:"short",day:"numeric"}):"");
         }
         tasks.push({
           id: job.id+"_rt_"+rt.id+"_needs", jobId: job.id, jobName: job.name,
@@ -11174,9 +11392,9 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
           </span>
           {urg&&!editingDate&&(
             <span onClick={()=>{setEditingDate(true);setDateVal(task.dueDate||"");}}
-              style={{fontSize:9,fontWeight:800,color:urg.color,background:urg.bg,borderRadius:99,padding:"2px 8px",border:`1px solid ${urg.color}33`,letterSpacing:"0.07em",cursor:"pointer"}}
+              style={{fontSize:9,fontWeight:800,color:urg.color,background:urg.bg,borderRadius:99,padding:"2px 8px",border:`1px solid ${urg.color}33`,letterSpacing:"0.07em",cursor:"pointer",display:"inline-flex",alignItems:"center",gap:4}}
               title="Click to edit due date">
-              {urg.label} ✏
+              {urg.label} <Icon name="pencil" size={9}/>
             </span>
           )}
           {!urg&&!editingDate&&onSetDueDate&&(
@@ -11238,8 +11456,8 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
               color:task.needsHardDate?"#dc2626":"#ca8a04",
               background:task.needsHardDate?"#dc262615":"#ca8a0415",
               border:`1px solid ${task.needsHardDate?"#dc262644":"#ca8a0444"}`,
-              borderRadius:99,padding:"2px 10px",letterSpacing:"0.04em",whiteSpace:"nowrap"}}>
-              {task.needsHardDate?"🔒 ":"📅 "}{task.windowLabel}
+              borderRadius:99,padding:"2px 10px",letterSpacing:"0.04em",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:5}}>
+              <Icon name={task.needsHardDate?"lock":"calendar"} size={10}/> {task.windowLabel}
             </span>
           </div>
         )}
@@ -11248,8 +11466,8 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
 
         {task.category==="prep"&&task.prepStage&&(
           <div style={{marginTop:6}}>
-            <span style={{fontSize:10,fontWeight:700,color:task.prepStage===PREP_STAGE_ALERT?"#dc2626":"#0d9488",background:task.prepStage===PREP_STAGE_ALERT?"#dc262610":"#0d948810",borderRadius:99,padding:"2px 10px",border:`1px solid ${task.prepStage===PREP_STAGE_ALERT?"#dc262633":"#0d948833"}`}}>
-              {task.prepStage===PREP_STAGE_ALERT?"⚠ "+task.prepStage:task.prepStage}
+            <span style={{fontSize:10,fontWeight:700,color:task.prepStage===PREP_STAGE_ALERT?"#dc2626":"#0d9488",background:task.prepStage===PREP_STAGE_ALERT?"#dc262610":"#0d948810",borderRadius:99,padding:"2px 10px",border:`1px solid ${task.prepStage===PREP_STAGE_ALERT?"#dc262633":"#0d948833"}`,display:"inline-flex",alignItems:"center",gap:5}}>
+              {task.prepStage===PREP_STAGE_ALERT&&<Icon name="alertTriangle" size={10} stroke={2.5}/>}{task.prepStage}
             </span>
           </div>
         )}
@@ -11392,7 +11610,7 @@ function PrepTaskList({ jobs, onSelectJob, onUpdateJob }) {
             </div>
             {stage===PREP_STAGE_ALERT&&(
               <div style={{marginTop:8,fontSize:10,fontWeight:700,color:"#dc2626",display:"flex",alignItems:"center",gap:5}}>
-                <span>⚠</span> Redline Plans Need to be Updated
+                <Icon name="alertTriangle" size={11} stroke={2.5}/> Redline Plans Need to be Updated
               </div>
             )}
           </div>
@@ -11419,7 +11637,7 @@ function ForemanTaskCard({ isKoy, fTasks, prepTasks, jobs, manualTasks, onManual
       {count>0&&<div style={{background:`${color}18`,border:`1px solid ${color}33`,borderRadius:99,
         padding:"1px 8px",fontSize:11,color,fontWeight:700}}>{count}</div>}
       {overdue>0&&<div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,
-        padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>⚠ {overdue}</div>}
+        padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700,display:"inline-flex",alignItems:"center",gap:4}}><Icon name="alertTriangle" size={10} stroke={2.5}/> {overdue}</div>}
       <div style={{marginLeft:"auto",fontSize:12,color,opacity:0.6}}>{open?"▾":"▸"}</div>
     </div>
   );
@@ -11644,8 +11862,8 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:"var(--text)",lineHeight:1}}>TASKS</div>
               <div style={{display:"flex",gap:8,marginTop:4,flexWrap:"wrap",alignItems:"center"}}>
                 <span style={{fontSize:11,color:"var(--dim)"}}>{totalOther} task{totalOther!==1?"s":""}</span>
-                {totalInvoice>0&&<span style={{fontSize:11,fontWeight:700,color:"#ea580c",background:"#ea580c12",borderRadius:99,padding:"1px 8px",border:"1px solid #ea580c33"}}>💰 {totalInvoice} invoice</span>}
-                {overdueCount>0&&<span style={{fontSize:11,fontWeight:700,color:"#dc2626",background:"#dc262612",borderRadius:99,padding:"1px 8px",border:"1px solid #dc262633"}}>⚠ {overdueCount} overdue</span>}
+                {totalInvoice>0&&<span style={{fontSize:11,fontWeight:700,color:"#ea580c",background:"#ea580c12",borderRadius:99,padding:"1px 8px",border:"1px solid #ea580c33",display:"inline-flex",alignItems:"center",gap:4}}><Icon name="dollarSign" size={11}/> {totalInvoice} invoice</span>}
+                {overdueCount>0&&<span style={{fontSize:11,fontWeight:700,color:"#dc2626",background:"#dc262612",borderRadius:99,padding:"1px 8px",border:"1px solid #dc262633",display:"inline-flex",alignItems:"center",gap:4}}><Icon name="alertTriangle" size={11}/> {overdueCount} overdue</span>}
               </div>
             </div>
             <div style={{display:"flex",gap:8,alignItems:"center"}}>
@@ -11656,7 +11874,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
                   padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none",
                   fontWeight:catFilter!=="all"?700:400,cursor:"pointer"}}>
                 <option value="all">All Categories</option>
-                <option value="invoice">💰 Ready to Invoice</option>
+                <option value="invoice">$  Ready to Invoice</option>
                 <option value="other">Tasks Only</option>
               </select>
               <button onClick={()=>setShowAdd(v=>!v)}
@@ -11723,13 +11941,13 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
               </div>
             ) : (
               [
-                {key:'scheduling', label:'Scheduling',      icon:'📅', color:'#2563eb', cats:['rough','finish','schedule','tempped','matterport']},
-                {key:'rt',         label:'Return Trips',    icon:'🔄', color:'#8b5cf6', cats:['rt']},
-                {key:'co',         label:'Change Orders',   icon:'📋', color:'#dc2626', cats:['co']},
-                {key:'qc',         label:'QC Walks',        icon:'✅', color:'#0d9488', cats:['qc']},
-                {key:'po',         label:'Purchase Orders', icon:'📦', color:'#2563eb', cats:['po']},
-                {key:'punch',      label:'Open Punch',      icon:'⚠️', color:'#ea580c', cats:['punch']},
-                {key:'manual',     label:'Manual Tasks',    icon:'📝', color:'#6b7280', cats:['manual']},
+                {key:'scheduling', label:'Scheduling',      icon:'calendar',       color:'#2563eb', cats:['rough','finish','schedule','tempped','matterport']},
+                {key:'rt',         label:'Return Trips',    icon:'rotateCw',       color:'#8b5cf6', cats:['rt']},
+                {key:'co',         label:'Change Orders',   icon:'clipboard',      color:'#dc2626', cats:['co']},
+                {key:'qc',         label:'QC Walks',        icon:'checkCircle',    color:'#0d9488', cats:['qc']},
+                {key:'po',         label:'Purchase Orders', icon:'package',        color:'#2563eb', cats:['po']},
+                {key:'punch',      label:'Open Punch',      icon:'alertTriangle',  color:'#ea580c', cats:['punch']},
+                {key:'manual',     label:'Manual Tasks',    icon:'note',           color:'#6b7280', cats:['manual']},
               ].map(group=>{
                 const groupTasks = sorted.filter(t=>group.cats.includes(t.category));
                 if(groupTasks.length===0) return null;
@@ -11741,10 +11959,10 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
                     <div onClick={()=>toggleForeman(group.key)}
                       style={{display:"flex",alignItems:"center",gap:8,marginBottom:isCollapsed?0:12,
                         paddingBottom:8,borderBottom:`2px solid ${gc}33`,cursor:"pointer",userSelect:"none"}}>
-                      <span style={{fontSize:14,lineHeight:1}}>{group.icon}</span>
+                      <span style={{display:"inline-flex",alignItems:"center",color:gc}}><Icon name={group.icon} size={15} stroke={2.25}/></span>
                       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:gc}}>{group.label}</div>
                       <div style={{background:`${gc}18`,border:`1px solid ${gc}33`,borderRadius:99,padding:"1px 8px",fontSize:11,color:gc,fontWeight:700}}>{groupTasks.length}</div>
-                      {overdue>0&&<div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700}}>⚠ {overdue} overdue</div>}
+                      {overdue>0&&<div style={{background:"#dc262618",border:"1px solid #dc262633",borderRadius:99,padding:"1px 8px",fontSize:11,color:"#dc2626",fontWeight:700,display:"inline-flex",alignItems:"center",gap:4}}><Icon name="alertTriangle" size={11}/> {overdue} overdue</div>}
                       <div style={{marginLeft:"auto",fontSize:12,color:gc,opacity:0.7,paddingRight:4}}>{isCollapsed?"▸":"▾"}</div>
                     </div>
                     {!isCollapsed&&groupTasks.map(task=>(
@@ -12159,7 +12377,7 @@ function NavView({ jobs }) {
             {j.foreman&&<div style={{fontSize:11,color:C.dim}}>{j.foreman}</div>}
           </div>
           <AddressLink address={j.address} style={{fontSize:13,color:C.accent,fontWeight:600}}>
-            {j.address} <span style={{fontSize:11,opacity:0.7}}>📍</span>
+            {j.address} <span style={{opacity:0.7,display:"inline-flex",alignItems:"center",verticalAlign:"middle"}}><Icon name="mapPin" size={11}/></span>
           </AddressLink>
         </div>
       ))}
@@ -12412,7 +12630,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
           fontWeight:800,flexShrink:0,lineHeight:1}}>✓</span>}
         {notScheduled&&<span title="Not scheduled in Simpro" style={{fontSize:7,color:C.orange,
           fontWeight:800,flexShrink:0,lineHeight:1}}>!</span>}
-        {ev.hardDate&&<span style={{fontSize:8,color:col,fontWeight:800,flexShrink:0}}>🔒</span>}
+        {ev.hardDate&&<span style={{color:col,flexShrink:0,display:"inline-flex",alignItems:"center"}}><Icon name="lock" size={9} stroke={2.25}/></span>}
       </div>
     );
   };
@@ -12587,12 +12805,12 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
           <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:"var(--text)",lineHeight:1}}>SCHEDULING FORECAST</div>
           <div style={{fontSize:11,color:"var(--dim)"}}>{allEvents.length} item{allEvents.length!==1?"s":""}</div>
           <div style={{marginLeft:"auto",display:"flex",gap:4}}>
-            {[{k:"kanban",l:"Kanban"},{k:"week",l:"📋 Week"},{k:"attention",l:"⚠️ Attention"},{k:"calendar",l:"📅 Calendar"}].map(({k,l})=>(
+            {[{k:"kanban",l:"Kanban",icon:null},{k:"week",l:"Week",icon:"clipboard"},{k:"attention",l:"Attention",icon:"alertTriangle"},{k:"calendar",l:"Calendar",icon:"calendar"}].map(({k,l,icon})=>(
               <button key={k} onClick={()=>setViewMode(k)}
                 style={{padding:"6px 14px",borderRadius:8,fontSize:11,fontWeight:viewMode===k?700:500,
                   cursor:"pointer",fontFamily:"inherit",border:`1px solid ${viewMode===k?C.accent:C.border}`,
-                  background:viewMode===k?C.accent:"none",color:viewMode===k?"#fff":"var(--dim)",transition:"all 0.15s"}}>
-                {l}
+                  background:viewMode===k?C.accent:"none",color:viewMode===k?"#fff":"var(--dim)",transition:"all 0.15s",display:"inline-flex",alignItems:"center",gap:5}}>
+                {icon&&<Icon name={icon} size={11}/>} {l}
               </button>
             ))}
           </div>
@@ -12799,17 +13017,17 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
         });
 
         const sections=[
-          {key:"overdue",label:"OVERDUE",icon:"🔴",color:C.red,
+          {key:"overdue",label:"OVERDUE",icon:"alertTriangle",color:C.red,
             desc:"Past the start date with no completion",items:overdueItems},
-          {key:"needsDate",label:"NEEDS DATE",icon:"📅",color:"#ca8a04",
+          {key:"needsDate",label:"NEEDS DATE",icon:"calendar",color:"#ca8a04",
             desc:"Waiting for a start date or date confirmation",items:needsDateItems},
-          {key:"needsSched",label:"READY TO SCHEDULE",icon:"📋",color:"#f97316",
+          {key:"needsSched",label:"READY TO SCHEDULE",icon:"clipboard",color:"#f97316",
             desc:"Date confirmed — needs to be put on the schedule",items:needsScheduling},
-          {key:"invoices",label:"READY TO INVOICE",icon:"💰",color:"#ea580c",
+          {key:"invoices",label:"READY TO INVOICE",icon:"dollarSign",color:"#ea580c",
             desc:"Work complete — invoice hasn't been sent",items:invoiceItems},
-          {key:"cos",label:"PENDING CHANGE ORDERS",icon:"📝",color:C.accent,
+          {key:"cos",label:"PENDING CHANGE ORDERS",icon:"note",color:C.accent,
             desc:"Change orders waiting to be sent or approved",items:pendingCOs},
-          {key:"upcoming",label:"COMING UP THIS WEEK",icon:"⏰",color:C.green,
+          {key:"upcoming",label:"COMING UP THIS WEEK",icon:"clock",color:C.green,
             desc:"Scheduled this week but not yet started",items:thisWeekItems},
         ].filter(s=>s.items.length>0);
 
@@ -12868,7 +13086,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
               <div key={section.key} style={{marginBottom:20}}>
                 <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:10,
                   paddingBottom:8,borderBottom:`2px solid ${section.color}44`}}>
-                  <span style={{fontSize:14}}>{section.icon}</span>
+                  <span style={{display:"inline-flex",alignItems:"center",color:section.color}}><Icon name={section.icon} size={15} stroke={2.25}/></span>
                   <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,
                     letterSpacing:"0.06em",color:section.color}}>{section.label}</span>
                   <span style={{fontSize:11,fontWeight:700,color:section.color,
@@ -13145,7 +13363,7 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upco
       <div style={{marginBottom:32,padding:"16px 18px",background:"#f0fdf4",borderRadius:12,
         border:"1px solid #bbf7d0"}}>
         <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
-          <span style={{fontSize:16}}>💾</span>
+          <span style={{display:"inline-flex",alignItems:"center",color:"#166534"}}><Icon name="save" size={16} stroke={2.25}/></span>
           <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.06em",color:"#166534"}}>DATA BACKUP</div>
         </div>
         <div style={{fontSize:11,color:"#15803d",marginBottom:12,lineHeight:1.5}}>
@@ -13156,23 +13374,23 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upco
             style={{padding:"10px 20px",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer",
               fontFamily:"inherit",background:"#16a34a",color:"#fff",border:"none",
               display:"flex",alignItems:"center",gap:8}}>
-            📥 Download Backup ({(jobs||[]).length} jobs)
+            <Icon name="download" size={14}/> Download Backup ({(jobs||[]).length} jobs)
           </button>
           {onRestoreFromBackup&&(
             <button disabled={restoring} onClick={async()=>{
               const backupRaw=localStorage.getItem('hejobs_backup');
-              if(!backupRaw){alert('No backup found');return;}
+              if(!backupRaw){toast.warn('No backup found');return;}
               const backupJobs=JSON.parse(backupRaw);
-              if(!confirm(`Restore ${backupJobs.length} jobs from local backup? This will overwrite current Firestore data with your cached version.`)) return;
+              if(!await showConfirm(`Restore ${backupJobs.length} jobs from local backup? This will overwrite current Firestore data with your cached version.`)) return;
               setRestoring(true);
               const count=await onRestoreFromBackup();
               setRestoring(false);
-              if(count>0){alert(`Restored ${count} jobs! Refreshing...`);window.location.reload();}
+              if(count>0){toast.success(`Restored ${count} jobs! Refreshing...`);window.location.reload();}
             }}
               style={{padding:"10px 20px",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer",
                 fontFamily:"inherit",background:restoring?"#9ca3af":"#dc2626",color:"#fff",border:"none",
                 display:"flex",alignItems:"center",gap:8}}>
-              {restoring?"⏳ Restoring...":"🔄 Restore from Local Backup"}
+              {restoring?<><Spinner size={12} color="#fff"/> Restoring...</>:<><Icon name="rotateCw" size={14}/> Restore from Local Backup</>}
             </button>
           )}
           {onRestoreFromFile&&(
@@ -13185,31 +13403,31 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upco
                   const parsed=JSON.parse(text);
                   // Support both formats: {jobs:[...]} or raw array [...]
                   const jobsArr=Array.isArray(parsed)?parsed:(parsed.jobs||[]);
-                  if(!jobsArr.length){alert('No jobs found in file');return;}
-                  if(!confirm(`Restore ${jobsArr.length} jobs from "${file.name}"? This will overwrite current Firestore data.`)) return;
+                  if(!jobsArr.length){toast.warn('No jobs found in file');return;}
+                  if(!await showConfirm(`Restore ${jobsArr.length} jobs from "${file.name}"? This will overwrite current Firestore data.`)) return;
                   setRestoring(true);
                   const count=await onRestoreFromFile(jobsArr);
                   setRestoring(false);
-                  if(count>0){alert(`Restored ${count} jobs from file! Refreshing...`);window.location.reload();}
-                }catch(err){setRestoring(false);alert('Failed to read file: '+err.message);}
+                  if(count>0){toast.success(`Restored ${count} jobs from file! Refreshing...`);window.location.reload();}
+                }catch(err){setRestoring(false);toast.error('Failed to read file: '+err.message);}
                 e.target.value='';
               }}/>
               <button disabled={restoring} onClick={()=>fileInputRef.current?.click()}
                 style={{padding:"10px 20px",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer",
                   fontFamily:"inherit",background:restoring?"#9ca3af":"#2563eb",color:"#fff",border:"none",
                   display:"flex",alignItems:"center",gap:8}}>
-                {restoring?"⏳ Restoring...":"📂 Restore from File"}
+                {restoring?<><Spinner size={12} color="#fff"/> Restoring...</>:<><Icon name="folderOpen" size={14}/> Restore from File</>}
               </button>
               <button onClick={async()=>{
-                if(!window.confirm("This will force every device using the app to reload and get the latest version. Continue?")) return;
+                if(!await showConfirm("This will force every device using the app to reload and get the latest version. Continue?")) return;
                 try {
                   await setDoc(doc(db,"config","app"),{version:"force-update-"+Date.now()});
-                  alert("Done! All devices will reload in a few seconds.");
-                } catch(e) { alert("Failed: "+e.message); }
+                  toast.success("Done! All devices will reload in a few seconds.");
+                } catch(e) { toast.error("Failed: "+e.message); }
               }} style={{padding:"10px 20px",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer",
                 fontFamily:"inherit",background:"#dc2626",color:"#fff",border:"none",
                 display:"flex",alignItems:"center",gap:8}}>
-                🔄 Force Update All Devices
+                <Icon name="rotateCw" size={14}/> Force Update All Devices
               </button>
             </>
           )}
@@ -13350,7 +13568,7 @@ function HomeownerPage({ jobId }) {
         genLoads,
       });
       setSubmitted(true);
-    } catch(e){ alert('Failed to submit. Please try again.'); }
+    } catch(e){ toast.error('Failed to submit. Please try again.'); }
     setSubmitting(false);
   };
 
@@ -13855,12 +14073,12 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
   };
 
   const saveFilter = () => {
-    if(!selected.size){ alert('Select at least one question.'); return; }
+    if(!selected.size){ toast.warn('Select at least one question.'); return; }
     if(onSaveFilter) onSaveFilter([...selected]);
     const link = `${window.location.origin}/?questions=${jobId}`;
     navigator.clipboard.writeText(link)
-      .then(()=>alert('Filter saved! Link copied to clipboard.'))
-      .catch(()=>alert('Filter saved!'));
+      .then(()=>toast.success('Filter saved! Link copied to clipboard.'))
+      .catch(()=>toast.success('Filter saved!'));
     setOpen(false);
   };
 
@@ -13875,7 +14093,7 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
   const finishQs = allQs.filter(q=>q.phase==='finish');
   const phaseColor = { rough:'#2563eb', finish:'#0ea5e9' };
 
-  const renderGroup = (qs, label, pc) => {
+  const renderGroup = (qs, label, pc, iconName) => {
     if(!qs.length) return null;
     const ids = qs.map(q=>q.id);
     const allOn = ids.every(id=>selected.has(id));
@@ -13883,7 +14101,7 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
       <div style={{marginBottom:16}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',
           borderBottom:`2px solid ${pc}33`,paddingBottom:5,marginBottom:8}}>
-          <span style={{fontSize:11,fontWeight:700,color:pc,letterSpacing:'0.08em'}}>{label}</span>
+          <span style={{fontSize:11,fontWeight:700,color:pc,letterSpacing:'0.08em',display:'inline-flex',alignItems:'center',gap:5}}>{iconName&&<Icon name={iconName} size={12}/>} {label}</span>
           <button onClick={()=>toggleAll(ids)}
             style={{fontSize:10,color:pc,background:'none',border:`1px solid ${pc}55`,borderRadius:4,
               padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',fontWeight:600}}>
@@ -13941,8 +14159,8 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
             </div>
             {/* Question list */}
             <div style={{padding:'16px 20px',overflowY:'auto',flex:1}}>
-              {renderGroup(roughQs, '⚡ ROUGH PHASE', phaseColor.rough)}
-              {renderGroup(finishQs, '🏁 FINISH PHASE', phaseColor.finish)}
+              {renderGroup(roughQs, 'ROUGH PHASE', phaseColor.rough, 'zap')}
+              {renderGroup(finishQs, 'FINISH PHASE', phaseColor.finish, 'flag')}
             </div>
             {/* Footer */}
             <div style={{padding:'12px 20px',borderTop:'1px solid #e5e7eb',display:'flex',gap:8,flexShrink:0}}>
@@ -14032,12 +14250,12 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
   });
 
   const saveFilter = () => {
-    if(!selected.size){ alert('Select at least one item.'); return; }
+    if(!selected.size){ toast.warn('Select at least one item.'); return; }
     if(onSaveFilter) onSaveFilter([...selected], label.trim() || 'GC');
     const link = `${window.location.origin}/?${stageParam}=${jobId}`;
     navigator.clipboard.writeText(link)
-      .then(()=>alert('Filter saved! Link copied to clipboard.'))
-      .catch(()=>alert('Filter saved!'));
+      .then(()=>toast.success('Filter saved! Link copied to clipboard.'))
+      .catch(()=>toast.success('Filter saved!'));
     setOpen(false);
   };
 
@@ -14293,8 +14511,8 @@ function PunchSharePage({ jobId, stage }) {
       {item.waiting && !item.done && (
         <div style={{marginLeft:24,marginTop:4}}>
           <span style={{fontSize:11,fontWeight:700,background:'#fef3c7',color:'#92400e',
-            borderRadius:99,padding:'2px 9px',border:'1px solid #fcd34d'}}>
-            ⏳ {item.waitingOn ? `Waiting on: ${item.waitingOn}` : 'Waiting'}
+            borderRadius:99,padding:'2px 9px',border:'1px solid #fcd34d',display:'inline-flex',alignItems:'center',gap:5}}>
+            <Icon name="clock" size={11}/> {item.waitingOn ? `Waiting on: ${item.waitingOn}` : 'Waiting'}
           </span>
         </div>
       )}
@@ -14327,7 +14545,7 @@ function PunchSharePage({ jobId, stage }) {
 
       {totalItems===0 ? (
         <div style={{textAlign:'center',padding:'48px 20px',color:'#9ca3af',background:'#fff',borderRadius:12}}>
-          <div style={{fontSize:32,marginBottom:12}}>📋</div>
+          <div style={{marginBottom:12,color:'#9ca3af',display:'flex',justifyContent:'center'}}><Icon name="clipboard" size={32}/></div>
           No punch list items yet. Check back later — this page updates automatically.
         </div>
       ) : (
@@ -14354,7 +14572,7 @@ function PunchSharePage({ jobId, stage }) {
                 )}
                 {hotcheck.length>0&&(
                   <>
-                    <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginTop:10,marginBottom:0,letterSpacing:'0.06em'}}>⚡ HOT CHECK</div>
+                    <div style={{fontSize:10,color:'#9ca3af',fontWeight:600,marginTop:10,marginBottom:0,letterSpacing:'0.06em',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="zap" size={10}/> HOT CHECK</div>
                     {renderItems(hotcheck)}
                   </>
                 )}
@@ -14398,7 +14616,7 @@ function PunchSharePage({ jobId, stage }) {
             setNewItemText('');
             setAddedCount(c=>c+1);
           } catch(e) {
-            alert('Failed to submit. Check your connection and try again.');
+            toast.error('Failed to submit. Check your connection and try again.');
           }
           setAddingItem(false);
         };
@@ -14566,7 +14784,7 @@ function QuestionsSharePage({ jobId }) {
       });
       try { localStorage.removeItem(draftKey); } catch(e){}
       setSubmitted(true);
-    } catch(e){ alert('Failed to submit. Please try again.'); }
+    } catch(e){ toast.error('Failed to submit. Please try again.'); }
     setSubmitting(false);
   };
 
@@ -14589,7 +14807,7 @@ function QuestionsSharePage({ jobId }) {
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#dc2626',fontSize:14,padding:24,textAlign:'center'}}>{error}</div>;
   if(submitted) return (
     <div style={{maxWidth:600,margin:'0 auto',padding:'60px 24px',textAlign:'center',fontFamily:'system-ui,sans-serif'}}>
-      <div style={{fontSize:48,marginBottom:16}}>✅</div>
+      <div style={{marginBottom:16,color:'#16a34a',display:'flex',justifyContent:'center'}}><Icon name="checkCircle" size={48} stroke={2}/></div>
       <div style={{fontSize:22,fontWeight:700,color:'#111',marginBottom:8}}>Answers Submitted</div>
       <div style={{fontSize:14,color:'#6b7280',lineHeight:1.6}}>Thank you, {respondentName}. Homestead Electric has received your responses and will follow up if needed.</div>
     </div>
@@ -14603,11 +14821,11 @@ function QuestionsSharePage({ jobId }) {
         {job?.address&&<div style={{fontSize:12,color:'rgba(255,255,255,0.65)'}}>{job.address}</div>}
       </div>
 
-      {prevAnsweredBy&&<div style={{background:'#fef3c7',border:'1px solid #f59e0b',borderRadius:8,padding:'10px 14px',marginBottom:16,fontSize:12,color:'#92400e'}}>✏️ You previously submitted answers as <b>{prevAnsweredBy}</b>. You can update them below and resubmit.</div>}
+      {prevAnsweredBy&&<div style={{background:'#fef3c7',border:'1px solid #f59e0b',borderRadius:8,padding:'10px 14px',marginBottom:16,fontSize:12,color:'#92400e',display:'flex',alignItems:'center',gap:8}}><Icon name="pencil" size={13}/><span>You previously submitted answers as <b>{prevAnsweredBy}</b>. You can update them below and resubmit.</span></div>}
 
       {!hasQs ? (
         <div style={{textAlign:'center',padding:'48px 20px',color:'#9ca3af',background:'#fff',borderRadius:12}}>
-          <div style={{fontSize:32,marginBottom:12}}>📋</div>
+          <div style={{marginBottom:12,color:'#9ca3af',display:'flex',justifyContent:'center'}}><Icon name="clipboard" size={32}/></div>
           No questions have been added yet. Check back later — this page updates automatically.
         </div>
       ) : (
@@ -14616,7 +14834,7 @@ function QuestionsSharePage({ jobId }) {
 
           {roughQs.length>0&&(
             <div style={{marginBottom:20}}>
-              <div style={{fontSize:11,fontWeight:700,color:'#2563eb',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #2563eb33'}}>⚡ ROUGH PHASE</div>
+              <div style={{fontSize:11,fontWeight:700,color:'#2563eb',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #2563eb33',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="zap" size={12}/> ROUGH PHASE</div>
               {[...roughQs].sort((a,b)=>((answeredIds.has(a.id)||!!a.done||!!(a.answer?.trim()))?1:0)-((answeredIds.has(b.id)||!!b.done||!!(b.answer?.trim()))?1:0)).map((q,i)=>{
                 const isAns=answeredIds.has(q.id)||!!q.done||!!(q.answer?.trim());
                 return (
@@ -14637,7 +14855,7 @@ function QuestionsSharePage({ jobId }) {
 
           {finishQs.length>0&&(
             <div style={{marginBottom:20}}>
-              <div style={{fontSize:11,fontWeight:700,color:'#0ea5e9',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #0ea5e933'}}>🏁 FINISH PHASE</div>
+              <div style={{fontSize:11,fontWeight:700,color:'#0ea5e9',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #0ea5e933',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="flag" size={12}/> FINISH PHASE</div>
               {[...finishQs].sort((a,b)=>((answeredIds.has(a.id)||!!a.done||!!(a.answer?.trim()))?1:0)-((answeredIds.has(b.id)||!!b.done||!!(b.answer?.trim()))?1:0)).map((q,i)=>{
                 const isAns=answeredIds.has(q.id)||!!q.done||!!(q.answer?.trim());
                 return (
@@ -15232,7 +15450,7 @@ function App() {
             if(estimatedSize > 1000000) {
               console.error(`[HE] Job ${job.name} exceeds 1MB (${Math.round(estimatedSize/1024)}KB) — photos may need to be removed`);
               setSyncStatus("error");
-              alert(`Save failed: "${job.name}" is too large (${Math.round(estimatedSize/1024)}KB). Try removing some photos — each photo adds to the document size. Firebase Storage for photos is coming soon.`);
+              toast.error(`Save failed: "${job.name}" is too large (${Math.round(estimatedSize/1024)}KB). Try removing some photos — each photo adds to the document size.`,{duration:8000});
               return;
             }
           }
@@ -15261,7 +15479,7 @@ function App() {
         const msg = e?.message || "";
         if(msg.includes("exceeds the maximum") || msg.includes("too large") || msg.includes("INVALID_ARGUMENT")) {
           setSyncStatus("error");
-          alert(`Save failed: "${job.name}" document is too large for Firestore. Try removing photos to reduce size.`);
+          toast.error(`Save failed: "${job.name}" document is too large for Firestore. Try removing photos to reduce size.`,{duration:8000});
         } else {
           setSyncStatus("error");
         }
@@ -15428,9 +15646,9 @@ function App() {
 
   // addJob removed — inline in each button instead
 
-  const deleteJob = id => {
+  const deleteJob = async id => {
 
-    if(!window.confirm("Delete this job site?")) return;
+    if(!await showConfirm("Delete this job site?")) return;
 
     setJobs(js=>js.filter(j=>j.id!==id));
 
@@ -15614,8 +15832,8 @@ function App() {
             {job.flagged&&job.flagNote&&(
               <div style={{fontSize:11,color:C.accent,marginTop:4,fontWeight:500,
                 background:"#fffbeb",border:`1px solid ${C.accent}44`,
-                borderRadius:6,padding:"4px 8px",display:"inline-block",maxWidth:"100%"}}>
-                ⚑ {job.flagNote}
+                borderRadius:6,padding:"4px 8px",display:"inline-flex",alignItems:"center",gap:5,maxWidth:"100%"}}>
+                <Icon name="flag" size={11}/> {job.flagNote}
               </div>
             )}
 
@@ -15673,8 +15891,9 @@ function App() {
               .map(e=>(
                 <span key={e.id} style={{fontSize:9,fontWeight:800,color:'#dc2626',
                   background:'rgba(220,38,38,0.12)',border:'1px solid rgba(220,38,38,0.35)',
-                  borderRadius:99,padding:'1px 7px',whiteSpace:'nowrap',flexShrink:0}}>
-                  ⚠ {e.label}
+                  borderRadius:99,padding:'1px 7px',whiteSpace:'nowrap',flexShrink:0,
+                  display:'inline-flex',alignItems:'center',gap:4}}>
+                  <Icon name="alertTriangle" size={9} stroke={2.5}/> {e.label}
                 </span>
               ))
             }
@@ -15704,11 +15923,11 @@ function App() {
 
                 style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
 
-                  fontSize:15,padding:"4px 8px",opacity:0.45,transition:"opacity 0.15s"}}
+                  padding:"4px 8px",opacity:0.45,transition:"opacity 0.15s",display:"inline-flex",alignItems:"center"}}
 
                 onMouseEnter={e=>e.currentTarget.style.opacity="1"}
 
-                onMouseLeave={e=>e.currentTarget.style.opacity="0.45"}>🗑</button>
+                onMouseLeave={e=>e.currentTarget.style.opacity="0.45"}><Icon name="trash" size={15}/></button>
             )}
 
           </div>
@@ -15793,6 +16012,8 @@ function App() {
   return (
 
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
+      <HEConfirmHost/>
+      <HEToastHost/>
       {/* Push notification foreground toast — tap to open the relevant job */}
       {pushToast && (
         <div onClick={() => {
@@ -15825,14 +16046,14 @@ function App() {
           : [
               {key:"home",label:"Job Board"},
               {key:"schedule",label:"Forecast"},
-              {key:"nav",label:"📍 Nav"},
+              {key:"nav",label:"Nav",icon:"mapPin"},
               {key:"upcoming",label:"Upcoming"},
               ...(can(identity,"quotes.view")?[{key:"quotes",label:"Quotes"}]:[]),
               {key:"tasks",label:"Tasks"},
               ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors"}]:[]),
-              ...(can(identity,"settings.view")?[{key:"settings",label:"⚙ Settings"}]:[]),
+              ...(can(identity,"settings.view")?[{key:"settings",label:"Settings",icon:"settings"}]:[]),
             ]
-        ).map(({key,label})=>{
+        ).map(({key,label,icon})=>{
           const active = view===key;
           return (
             <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="tasks"?openTasks:key==="nav"?openNav:key==="subcontractors"?openSubcontractor:openSettings}
@@ -15843,8 +16064,9 @@ function App() {
                 color: active ? "#000" : C.dim,
                 transition:"all 0.15s",letterSpacing:"0.02em",
                 boxShadow: active ? `0 2px 8px ${C.accent}55` : "none",
+                display:"inline-flex",alignItems:"center",gap:5,
               }}>
-              {label}
+              {icon&&<Icon name={icon} size={11} stroke={2.25}/>}{label}
             </button>
           );
         })}
@@ -15856,9 +16078,10 @@ function App() {
 
           <button onClick={()=>{localStorage.removeItem("he_identity");setIdentity(null);}}
             style={{fontSize:11,color:C.dim,background:"none",border:`1px solid ${C.border}`,
-              borderRadius:99,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}
+              borderRadius:99,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",
+              display:"inline-flex",alignItems:"center",gap:5}}
             title="Switch user">
-            ↩ Switch
+            <Icon name="arrowLeft" size={11}/> Switch
           </button>
         </div>
       </div>
@@ -15867,7 +16090,8 @@ function App() {
       {!isOnline && (
         <div style={{background:'#ca8a04',color:'#000',padding:'8px 16px',
           display:'flex',alignItems:'center',gap:8,fontSize:12,fontWeight:700}}>
-          <span>📵 No connection — changes are saved locally and will sync when you're back online</span>
+          <Icon name="wifiOff" size={14} stroke={2.5}/>
+          <span>No connection — changes are saved locally and will sync when you're back online</span>
         </div>
       )}
 
@@ -15875,8 +16099,8 @@ function App() {
       {showNotifPrompt && !notifStatus && (
         <div style={{background:'rgba(59,130,246,0.08)',borderBottom:`1px solid rgba(59,130,246,0.25)`,
           padding:'10px 16px',display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-          <span style={{fontSize:12,fontWeight:600,color:C.text,flex:1}}>
-            🔔 Enable push notifications to get job updates on this device
+          <span style={{fontSize:12,fontWeight:600,color:C.text,flex:1,display:"inline-flex",alignItems:"center",gap:8}}>
+            <Icon name="bell" size={14} stroke={2.25}/> Enable push notifications to get job updates on this device
           </span>
           <button onClick={()=>{ setShowNotifPrompt(false); handleEnableNotifs(); }}
             style={{fontSize:11,fontWeight:700,background:C.blue,color:'#fff',border:'none',
@@ -15895,10 +16119,10 @@ function App() {
       {notifStatus && notifStatus !== 'loading' && notifStatus !== 'ok' && (
         <div style={{background:'rgba(220,38,38,0.08)',borderBottom:'1px solid rgba(220,38,38,0.2)',
           padding:'8px 16px',fontSize:11,color:'#dc2626',display:'flex',alignItems:'center',gap:8}}>
-          <span style={{fontWeight:700}}>🔔 Notifications not set up on this device.</span>
-          {notifStatus==='permission_denied'&&<span>Tap the 🔔 button again — you may need to allow notifications in your browser settings.</span>}
+          <span style={{fontWeight:700,display:"inline-flex",alignItems:"center",gap:6}}><Icon name="bell" size={12} stroke={2.5}/> Notifications not set up on this device.</span>
+          {notifStatus==='permission_denied'&&<span>Tap the bell button again — you may need to allow notifications in your browser settings.</span>}
           {notifStatus==='no_notification_api'&&<span>On iPhone, you need to <strong>Add to Home Screen</strong> first: tap Share → Add to Home Screen, then open from there.</span>}
-          {notifStatus==='no_token'&&<span>Could not get a push token. Try reloading the page and tapping 🔔 again.</span>}
+          {notifStatus==='no_token'&&<span>Could not get a push token. Try reloading the page and tapping the bell again.</span>}
           {notifStatus.startsWith?.('error:')&&<span>Error: {notifStatus.replace('error:','')}. Try reloading.</span>}
         </div>
       )}
@@ -15917,7 +16141,7 @@ function App() {
 
             display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
 
-            <span>⚠️ For offline install, open in <strong>Safari</strong>:</span>
+            <span style={{display:"inline-flex",alignItems:"center",gap:6}}><Icon name="alertTriangle" size={14} stroke={2.5}/> For offline install, open in <strong>Safari</strong>:</span>
 
             <span style={{fontFamily:"monospace",fontSize:11,wordBreak:"break-all"}}>
 
@@ -15943,6 +16167,10 @@ function App() {
         }
         .task-pulse { animation: taskPulse 2s ease-in-out infinite; }
         .task-warn  { animation: taskWarn 2.5s ease-in-out infinite; }
+
+        @keyframes he-fade-in { from { opacity:0; } to { opacity:1; } }
+        @keyframes he-slide-in { from { opacity:0; transform:translateY(-8px); } to { opacity:1; transform:translateY(0); } }
+        @keyframes he-spin { to { transform: rotate(360deg); } }
 
         *{box-sizing:border-box;margin:0;padding:0;}
 
@@ -16003,32 +16231,32 @@ function App() {
                         background:C.card,border:`1px solid ${C.border}`,borderRadius:10,
                         boxShadow:"0 8px 24px rgba(0,0,0,0.3)",minWidth:160,overflow:"hidden"}}>
                         <button onClick={()=>{setShowUtilMenu(false);localStorage.removeItem("he_identity");setIdentity(null);}}
-                          style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",
+                          style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",background:"none",border:"none",
                             borderBottom:`1px solid ${C.border}`,color:C.text,fontSize:12,fontWeight:600,
                             padding:"10px 16px",cursor:"pointer",fontFamily:"inherit"}}>
-                          🔒 Lock
+                          <Icon name="lock" size={13}/> Lock
                         </button>
                         <button onClick={()=>{setShowUtilMenu(false);backupByEmail();}}
-                          style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",
+                          style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",background:"none",border:"none",
                             borderBottom:`1px solid ${C.border}`,color:C.text,fontSize:12,fontWeight:600,
                             padding:"10px 16px",cursor:"pointer",fontFamily:"inherit"}}>
-                          Backup
+                          <Icon name="download" size={13}/> Backup
                         </button>
                         <button onClick={()=>{setShowUtilMenu(false);window.location.reload();}}
-                          style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",
+                          style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",background:"none",border:"none",
                             borderBottom:`1px solid ${C.border}`,
                             color:C.text,fontSize:12,fontWeight:600,
                             padding:"10px 16px",cursor:"pointer",fontFamily:"inherit"}}>
-                          ↻ Refresh
+                          <Icon name="rotateCw" size={13}/> Refresh
                         </button>
                         <button onClick={()=>{setShowUtilMenu(false);handleEnableNotifs();}}
                           disabled={notifStatus==='loading'}
-                          style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",
+                          style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",background:"none",border:"none",
                             borderBottom:getAccess(identity)==="admin"?`1px solid ${C.border}`:"none",
                             color:notifStatus==='ok'?'#16a34a':notifStatus&&notifStatus!=='loading'?'#dc2626':C.text,
                             fontSize:12,fontWeight:600,
                             padding:"10px 16px",cursor:"pointer",fontFamily:"inherit"}}>
-                          {notifStatus==='loading'?'⏳ Registering…':notifStatus==='ok'?'🔔 Notifications On':'🔔 Enable Notifications'}
+                          {notifStatus==='loading'?<><Spinner size={12}/> Registering…</>:notifStatus==='ok'?<><Icon name="bell" size={13}/> Notifications On</>:<><Icon name="bell" size={13}/> Enable Notifications</>}
                         </button>
                         {getAccess(identity)==="admin"&&(
                           <button onClick={async()=>{
@@ -16041,36 +16269,36 @@ function App() {
                                   `\n${result.skipped.length} already linked` +
                                   (result.ambiguous.length > 0 ? `\n${result.ambiguous.length} ambiguous (skipped):\n` + result.ambiguous.map(a=>`  ${a.jobName}: ${a.folders.join(", ")}`).join("\n") : "") +
                                   `\n\n${result.total} Drive folders scanned`;
-                                alert(msg);
-                              } catch(e) { alert("Drive sync failed: " + e.message); }
+                                toast.success(msg,{duration:8000});
+                              } catch(e) { toast.error("Drive sync failed: " + e.message); }
                             }}
-                            style={{display:"block",width:"100%",textAlign:"left",background:"none",border:"none",
+                            style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",background:"none",border:"none",
                               color:C.blue,fontSize:12,fontWeight:600,
                               padding:"10px 16px",cursor:"pointer",fontFamily:"inherit"}}>
-                            Sync Drive
+                            <Icon name="folder" size={13}/> Sync Drive
                           </button>
                         )}
                       </div>
                     </>
                   )}
                 </div>
+                <button onClick={()=>{const j=blankQuickJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);}}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,
+                    fontSize:12,fontWeight:600,padding:"7px 12px",cursor:"pointer",
+                    fontFamily:"inherit",letterSpacing:"0.02em"}}>
+                  + Quick
+                </button>
+                <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";j.tempPed=true;setJobs(js=>[j,...js]);setSelected(j);}}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,
+                    fontSize:12,fontWeight:600,padding:"7px 12px",cursor:"pointer",
+                    fontFamily:"inherit",letterSpacing:"0.02em"}}>
+                  + Temp Ped
+                </button>
                 <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);}}
                   style={{background:C.accent,border:"none",borderRadius:8,color:"#000",
                     fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
                     fontFamily:"inherit",boxShadow:`0 2px 8px ${C.accent}44`,letterSpacing:"0.02em"}}>
                   + New Job
-                </button>
-                <button onClick={()=>{const j=blankJob();j.foreman="Unassigned";j.tempPed=true;setJobs(js=>[j,...js]);setSelected(j);}}
-                  style={{background:"#8b5cf6",border:"none",borderRadius:8,color:"#fff",
-                    fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
-                    fontFamily:"inherit",boxShadow:"0 2px 8px #8b5cf644",letterSpacing:"0.02em"}}>
-                  + Temp Ped
-                </button>
-                <button onClick={()=>{const j=blankQuickJob();j.foreman="Unassigned";setJobs(js=>[j,...js]);setSelected(j);}}
-                  style={{background:"#f97316",border:"none",borderRadius:8,color:"#fff",
-                    fontSize:12,fontWeight:700,padding:"7px 16px",cursor:"pointer",
-                    fontFamily:"inherit",boxShadow:"0 2px 8px #f9731644",letterSpacing:"0.02em"}}>
-                  + Quick Job
                 </button>
               </div>
 
@@ -16130,15 +16358,15 @@ function App() {
 
                     <div key={l} onClick={()=>filt&&filt.length>0&&setStageModal({label:l,color:c,jobs:filt})}
 
-                      style={{background:C.card,border:`1px solid ${c}33`,borderRadius:10,
+                      style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,
 
                         padding:"10px 18px",display:"flex",gap:10,alignItems:"center",flex:"1 1 120px",
 
-                        cursor:filt&&filt.length>0?"pointer":"default",transition:"transform 0.1s,box-shadow 0.1s"}}
+                        cursor:filt&&filt.length>0?"pointer":"default",transition:"transform 0.1s,box-shadow 0.1s,border-color 0.15s"}}
 
-                      onMouseEnter={e=>{if(filt&&filt.length>0){e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow=`0 6px 20px ${c}22`;}}}
+                      onMouseEnter={e=>{if(filt&&filt.length>0){e.currentTarget.style.transform="translateY(-2px)";e.currentTarget.style.boxShadow="0 6px 20px rgba(0,0,0,0.06)";e.currentTarget.style.borderColor=`${c}66`;}}}
 
-                      onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
+                      onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";e.currentTarget.style.borderColor=C.border;}}>
 
                       <span style={{fontFamily:"'Bebas Neue'",fontSize:28,color:c,lineHeight:1}}>{v}</span>
 
@@ -16215,13 +16443,13 @@ function App() {
                   <div key={f}>
                     {/* Main card */}
                     <div className="foreman-card" onClick={()=>openForeman(f)}
-                      style={{background:C.card,border:`1px solid ${fc}33`,borderRadius:12,
+                      style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,
                         padding:"14px 16px",borderTop:`3px solid ${fc}`}}>
                       {/* Name + count */}
                       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
                         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:fc,lineHeight:1}}>{f}</div>
-                        <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,
-                          padding:"2px 9px",fontSize:10,color:fc,fontWeight:700}}>
+                        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:99,
+                          padding:"2px 9px",fontSize:10,color:C.dim,fontWeight:700}}>
                           {fJobs.length}
                         </div>
                       </div>
@@ -16256,11 +16484,11 @@ function App() {
                         </div>
                       </div>
 
-                      <div style={{marginTop:10,fontSize:10,color:fc,fontWeight:600,textAlign:"right",opacity:0.7}}>View →</div>
+                      <div style={{marginTop:10,fontSize:10,color:C.dim,fontWeight:600,textAlign:"right",opacity:0.7}}>View →</div>
                     </div>
                     {/* Crew Access */}
                     <div onClick={e=>{e.stopPropagation();setCrewView(f);}}
-                      style={{marginTop:4,background:C.surface,border:`1px dashed ${fc}44`,
+                      style={{marginTop:4,background:C.surface,border:`1px dashed ${C.border}`,
                         borderRadius:8,padding:"6px 12px",cursor:"pointer",
                         display:"flex",alignItems:"center",justifyContent:"space-between",
                         transition:"background 0.15s"}}
@@ -16281,12 +16509,12 @@ function App() {
                 return (
                   <div>
                     <div className="foreman-card" onClick={()=>openForeman("Unassigned")}
-                      style={{background:C.card,border:`1px solid ${fc}33`,borderRadius:12,
+                      style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,
                         padding:"14px 16px",borderTop:`3px solid ${fc}`}}>
                       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
                         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:fc,lineHeight:1}}>Unassigned</div>
-                        <div style={{background:`${fc}18`,border:`1px solid ${fc}33`,borderRadius:99,
-                          padding:"2px 9px",fontSize:10,color:fc,fontWeight:700}}>
+                        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:99,
+                          padding:"2px 9px",fontSize:10,color:C.dim,fontWeight:700}}>
                           {uJobs.length}
                         </div>
                       </div>
@@ -16296,7 +16524,7 @@ function App() {
                           <div style={{fontSize:9,color:C.dim,marginTop:1}}>COs</div>
                         </div>
                       </div>
-                      <div style={{fontSize:10,color:fc,fontWeight:600,textAlign:"right",opacity:0.7}}>View →</div>
+                      <div style={{fontSize:10,color:C.dim,fontWeight:600,textAlign:"right",opacity:0.7}}>View →</div>
                     </div>
                   </div>
 
@@ -16582,8 +16810,9 @@ function App() {
                     style={{background:flagOnly?`${C.accent}22`:C.surface,
                       border:`1px solid ${flagOnly?C.accent:C.border}`,borderRadius:8,
                       color:flagOnly?C.accent:C.dim,padding:"7px 14px",fontSize:12,
-                      cursor:"pointer",fontFamily:"inherit"}}>
-                    ⚑ {flagOnly?"Flagged Only":"All Jobs"}
+                      cursor:"pointer",fontFamily:"inherit",
+                      display:"inline-flex",alignItems:"center",gap:6}}>
+                    <Icon name="flag" size={12} stroke={2.25}/> {flagOnly?"Flagged Only":"All Jobs"}
                   </button>
                 </div>
               </div>
@@ -16696,7 +16925,7 @@ function App() {
 
         if(visibleContractors.length===0) return (
           <div style={{textAlign:"center",padding:"60px 0",color:C.dim}}>
-            <div style={{fontSize:22,marginBottom:8}}>👷</div>
+            <div style={{marginBottom:8,display:"flex",justifyContent:"center"}}><Icon name="hardHat" size={28} stroke={1.75}/></div>
             <div style={{fontSize:14,fontWeight:600,marginBottom:6}}>No subcontractors yet</div>
             <div style={{fontSize:12}}>Add a user with "Contractor" access in Settings, then assign jobs to them.</div>
           </div>
@@ -16862,18 +17091,18 @@ function App() {
             onRestoreFromBackup={async()=>{
               try {
                 const b=localStorage.getItem('hejobs_backup');
-                if(!b){alert('No backup found in localStorage');return 0;}
+                if(!b){toast.warn('No backup found in localStorage');return 0;}
                 const backupJobs=JSON.parse(b);
-                if(!backupJobs||!backupJobs.length){alert('Backup is empty');return 0;}
+                if(!backupJobs||!backupJobs.length){toast.warn('Backup is empty');return 0;}
                 for(const job of backupJobs){
                   await setDoc(doc(db,"jobs",job.id),{data:sanitize(job),updated_at:new Date().toISOString()});
                 }
                 return backupJobs.length;
-              }catch(e){console.error('Restore failed:',e);alert('Restore failed: '+e.message);return 0;}
+              }catch(e){console.error('Restore failed:',e);toast.error('Restore failed: '+e.message);return 0;}
             }}
             onRestoreFromFile={async(jobsArr)=>{
               try {
-                if(!jobsArr||!jobsArr.length){alert('No jobs in file');return 0;}
+                if(!jobsArr||!jobsArr.length){toast.warn('No jobs in file');return 0;}
                 const ts = new Date().toISOString();
                 for(const job of jobsArr){
                   if(job.foreman) job.foreman = normalizeName(job.foreman);
@@ -16884,7 +17113,7 @@ function App() {
                 // Bump version to force ALL other clients to reload (picks up new code + fresh data)
                 await setDoc(doc(db,"config","app"),{version:"restore-"+Date.now()});
                 return jobsArr.length;
-              }catch(e){console.error('File restore failed:',e);alert('Restore failed: '+e.message);return 0;}
+              }catch(e){console.error('File restore failed:',e);toast.error('Restore failed: '+e.message);return 0;}
             }}
           />
           {can(identity,"users.manage")&&(
