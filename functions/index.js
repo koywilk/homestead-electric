@@ -943,16 +943,14 @@ exports.getSimproJobCostCenters = functions
     //    center names.
     // Simpro's list endpoints return a minimal default column set — notably
     // WITHOUT Quantity, which is what we actually want for bid items. We
-    // explicitly request the fields we need. If a column is invalid for a
-    // tenant Simpro returns an empty list for that request; the debug
-    // samples in _debugFirstItems make that obvious.
+    // explicitly request a narrow, universally-supported set. If the column
+    // list is rejected (Simpro silently returns []), we fall back to the
+    // default (no columns param) so items still render — quantity will be
+    // null for that kind, but the names + totals still show.
     const ITEM_KINDS = [
-      { key: "catalog",  path: "catalogs",
-        columns: "ID,Catalog,Description,Quantity,Price,Total,DisplayOrder" },
-      { key: "oneOff",   path: "oneOffs",
-        columns: "ID,Name,Description,Quantity,Price,Total,DisplayOrder" },
-      { key: "prebuild", path: "prebuilds",
-        columns: "ID,Prebuild,Description,Quantity,Price,Total,DisplayOrder" },
+      { key: "catalog",  path: "catalogs",  columns: "ID,Name,Quantity,Total" },
+      { key: "oneOff",   path: "oneOffs",   columns: "ID,Name,Quantity,Total" },
+      { key: "prebuild", path: "prebuilds", columns: "ID,Name,Quantity,Total" },
     ];
 
     // Log one sample per kind so we can see the true shape in Cloud Function logs.
@@ -964,12 +962,23 @@ exports.getSimproJobCostCenters = functions
     flat.forEach(cc => {
       ITEM_KINDS.forEach(kind => {
         tasks.push(async () => {
-          const colsParam = kind.columns ? `&columns=${encodeURIComponent(kind.columns)}` : "";
-          const r = await simproReqWithRetry(
-            "GET",
+          const baseUrl =
             `/jobs/${encodeURIComponent(simproJobNo)}/sections/${cc.sectionId}` +
-            `/costCenters/${cc.id}/${kind.path}/?pageSize=250${colsParam}`
-          );
+            `/costCenters/${cc.id}/${kind.path}/?pageSize=250`;
+          const colsParam = kind.columns ? `&columns=${encodeURIComponent(kind.columns)}` : "";
+          let r = await simproReqWithRetry("GET", baseUrl + colsParam);
+          // Simpro silently rejects invalid column names by returning []. If
+          // we asked for columns and got nothing, retry without columns so
+          // items at least render with default fields.
+          if (r.ok && Array.isArray(r.data) && r.data.length === 0 && colsParam) {
+            const r2 = await simproReqWithRetry("GET", baseUrl);
+            if (r2.ok && Array.isArray(r2.data) && r2.data.length > 0) {
+              functions.logger.info("getSimproJobCostCenters: columns rejected, using defaults", {
+                kind: kind.key, sectionId: cc.sectionId, costCenterId: cc.id,
+              });
+              r = r2;
+            }
+          }
           if (!r.ok) {
             functions.logger.warn("getSimproJobCostCenters: item fetch failed", {
               kind: kind.key, sectionId: cc.sectionId, costCenterId: cc.id, status: r.status,
