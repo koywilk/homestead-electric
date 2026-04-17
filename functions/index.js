@@ -958,25 +958,39 @@ exports.getSimproJobCostCenters = functions
     // Also stash the first raw item of each kind so the client console can
     // print it — easier than digging through Cloud Function logs.
     const debugSamples = { catalog: null, oneOff: null, prebuild: null };
+    // Per-kind fetch stats so we can tell rate-limit failures from empty CCs.
+    const debugStats = {
+      catalog:  { attempts: 0, ok: 0, emptyWithCols: 0, fellBackToDefault: 0, defaultAlsoEmpty: 0, withItems: 0, totalItems: 0, statusBreakdown: {} },
+      oneOff:   { attempts: 0, ok: 0, emptyWithCols: 0, fellBackToDefault: 0, defaultAlsoEmpty: 0, withItems: 0, totalItems: 0, statusBreakdown: {} },
+      prebuild: { attempts: 0, ok: 0, emptyWithCols: 0, fellBackToDefault: 0, defaultAlsoEmpty: 0, withItems: 0, totalItems: 0, statusBreakdown: {} },
+    };
     const tasks = [];
     flat.forEach(cc => {
       ITEM_KINDS.forEach(kind => {
         tasks.push(async () => {
+          const stats = debugStats[kind.key];
+          stats.attempts++;
           const baseUrl =
             `/jobs/${encodeURIComponent(simproJobNo)}/sections/${cc.sectionId}` +
             `/costCenters/${cc.id}/${kind.path}/?pageSize=250`;
           const colsParam = kind.columns ? `&columns=${encodeURIComponent(kind.columns)}` : "";
           let r = await simproReqWithRetry("GET", baseUrl + colsParam);
+          stats.statusBreakdown[r.status] = (stats.statusBreakdown[r.status] || 0) + 1;
           // Simpro silently rejects invalid column names by returning []. If
           // we asked for columns and got nothing, retry without columns so
           // items at least render with default fields.
           if (r.ok && Array.isArray(r.data) && r.data.length === 0 && colsParam) {
+            stats.emptyWithCols++;
             const r2 = await simproReqWithRetry("GET", baseUrl);
+            stats.statusBreakdown[`fb-${r2.status}`] = (stats.statusBreakdown[`fb-${r2.status}`] || 0) + 1;
             if (r2.ok && Array.isArray(r2.data) && r2.data.length > 0) {
+              stats.fellBackToDefault++;
               functions.logger.info("getSimproJobCostCenters: columns rejected, using defaults", {
                 kind: kind.key, sectionId: cc.sectionId, costCenterId: cc.id,
               });
               r = r2;
+            } else if (r2.ok) {
+              stats.defaultAlsoEmpty++;
             }
           }
           if (!r.ok) {
@@ -985,7 +999,9 @@ exports.getSimproJobCostCenters = functions
             });
             return { cc, kind: kind.key, items: [] };
           }
+          stats.ok++;
           const rows = Array.isArray(r.data) ? r.data : [];
+          if (rows.length > 0) { stats.withItems++; stats.totalItems += rows.length; }
           if (!sampleLogged[kind.key] && rows.length) {
             sampleLogged[kind.key] = true;
             debugSamples[kind.key] = rows[0];
@@ -1065,6 +1081,7 @@ exports.getSimproJobCostCenters = functions
       costCenters: flat,
       fetchedAt: new Date().toISOString(),
       _debugFirstItems: debugSamples, // temporary — remove once qty mapping is confirmed
+      _debugFetchStats: debugStats,   // temporary — diagnose empty-item cases
     };
   });
 

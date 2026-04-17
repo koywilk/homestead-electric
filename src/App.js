@@ -8589,6 +8589,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             console.log("  oneOff  sample:", res.data._debugFirstItems.oneOff);
             console.log("  prebuild sample:", res.data._debugFirstItems.prebuild);
           }
+          if (res.data?._debugFetchStats) {
+            console.log("[simproCostCenters _debugFetchStats] — per-kind fetch counts:");
+            console.table(res.data._debugFetchStats);
+          }
           setSimproCostCenters(res.data);
           setSimproCostCentersRefreshing(false);
           // Persist cache on the job doc. This is the only write and it's
