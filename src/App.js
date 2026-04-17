@@ -13642,15 +13642,70 @@ function Scoreboard({ jobs, users=[] }) {
         jobsOverGoal,
         marginEst:    r._marginsEst,
       };
-    })
-    .sort((a,b) => {
-      // Rank by first-try-clean count desc, then posted days desc, then name.
-      const bScore = b.roughFirstTryClean + b.finalFirstTryClean;
-      const aScore = a.roughFirstTryClean + a.finalFirstTryClean;
-      if (bScore !== aScore) return bScore - aScore;
-      if (b.postedDays !== a.postedDays) return b.postedDays - a.postedDays;
-      return a.name.localeCompare(b.name);
     });
+
+  // ── Composite scoring ─────────────────────────────────────
+  // Each pillar produces a 0-100 sub-score. The composite is a weighted
+  // average, but ONLY over pillars the person has data for — so a new lead
+  // with zero inspections yet isn't dragged down to 50%. Weights are
+  // centralized here and easy to tweak.
+  const SCORE_WEIGHTS = {
+    inspection: 25,  // first-try-clean rate (rough + final combined)
+    items:      10,  // items called on inspections (fewer = higher)
+    qc:         10,  // QC walk items (fewer = higher)
+    updates:    15,  // daily-update compliance %
+    margin:     25,  // avg margin vs 15% goal
+    goal:       15,  // % of jobs hitting the 15% goal
+  };
+  // Centered at the 15% goal = 80, slope 2pts per margin percentage point.
+  const marginScore = (m) => Math.max(0, Math.min(100, 80 + (m - 15) * 2));
+  const clamp100 = (v) => Math.max(0, Math.min(100, v));
+
+  const computeComposite = (r) => {
+    const parts = {};
+    const attempts = r.roughAttempted + r.finalAttempted;
+    const cleans   = r.roughFirstTryClean + r.finalFirstTryClean;
+    const items    = r.roughItemsCalled + r.finalItemsCalled;
+    const qc       = r.roughQC + r.finishQC;
+
+    if (attempts > 0) {
+      parts.inspection = { value: (cleans / attempts) * 100, weight: SCORE_WEIGHTS.inspection, label: "Inspection first-try" };
+      // 0 items/attempt = 100, 6.67+ items/attempt = 0
+      parts.items      = { value: clamp100(100 - (items / attempts) * 15), weight: SCORE_WEIGHTS.items, label: "Items called" };
+    }
+    if (r.jobs > 0) {
+      // 0 QC/job = 100, 10+ QC/job = 0
+      parts.qc         = { value: clamp100(100 - (qc / r.jobs) * 10), weight: SCORE_WEIGHTS.qc, label: "QC items" };
+    }
+    if (r.activeDays > 0) {
+      parts.updates    = { value: (r.postedDays / r.activeDays) * 100, weight: SCORE_WEIGHTS.updates, label: "Daily updates" };
+    }
+    if (r.marginCount > 0) {
+      parts.margin     = { value: marginScore(r.avgMargin), weight: SCORE_WEIGHTS.margin, label: "Avg margin" };
+      parts.goal       = { value: (r.jobsOverGoal / r.marginCount) * 100, weight: SCORE_WEIGHTS.goal, label: "≥15% jobs" };
+    }
+
+    const entries = Object.entries(parts);
+    const totalW = entries.reduce((a,[,p]) => a + p.weight, 0);
+    const weighted = entries.reduce((a,[,p]) => a + p.value * p.weight, 0);
+    const score = totalW > 0 ? weighted / totalW : null;
+    return { score, parts, totalW };
+  };
+
+  rows.forEach(r => {
+    const c = computeComposite(r);
+    r.composite = c.score;
+    r.scoreParts = c.parts;
+    r.scoreTotalWeight = c.totalW;
+  });
+  rows.sort((a,b) => {
+    // Rows with no scorable pillars sink to the bottom.
+    if (a.composite == null && b.composite == null) return a.name.localeCompare(b.name);
+    if (a.composite == null) return 1;
+    if (b.composite == null) return -1;
+    if (b.composite !== a.composite) return b.composite - a.composite;
+    return a.name.localeCompare(b.name);
+  });
 
   const pct = (hit, tot) => tot > 0 ? Math.round((hit/tot)*100) : 0;
   const pctColor = (p) => p >= 90 ? "#16a34a" : p >= 70 ? "#f59e0b" : "#dc2626";
@@ -13685,6 +13740,7 @@ function Scoreboard({ jobs, users=[] }) {
 
   // Each metric's meaning, in plain language.
   const metricDefs = [
+    { name:"Score", body:`Weighted composite, 0-100. Higher is better. Pillars: Inspection first-try (${SCORE_WEIGHTS.inspection}%), Items called (${SCORE_WEIGHTS.items}%), QC items (${SCORE_WEIGHTS.qc}%), Daily updates (${SCORE_WEIGHTS.updates}%), Avg margin (${SCORE_WEIGHTS.margin}%), ≥15% jobs (${SCORE_WEIGHTS.goal}%). If someone has no data for a pillar (e.g. no inspections yet), that pillar is skipped and the remaining weights renormalize — new leads aren't auto-penalized. Hover the score on a row to see the pillar breakdown. Green ≥80, amber ≥65, red below. Ranking badges and row tint follow this score.` },
     { name:"Jobs", body:"Active jobs where this person is the assigned lead (or foreman, in foreman view)." },
     { name:"4-Way First Try", body:"Jobs where the very first 4-way attempt was a pass AND zero items were called. Shown as clean/attempted + percentage. Green ≥90%, amber ≥70%, red below." },
     { name:"Final First Try", body:"Jobs where the very first final attempt was a pass AND zero items were called. Shown as clean/attempted + percentage." },
@@ -13794,6 +13850,7 @@ function Scoreboard({ jobs, users=[] }) {
           <thead>
             <tr style={{background:"#f8fafc"}}>
               <Th>{mode==="lead" ? "Lead" : "Foreman"}</Th>
+              <Th title="Weighted composite of every metric — hover a row's score for the breakdown">Score</Th>
               <Th title="Active jobs assigned to this person">Jobs</Th>
               <Th title="4-ways passed on the very first attempt with zero items called">4-Way First Try</Th>
               <Th title="Finals passed on the very first attempt with zero items called">Final First Try</Th>
@@ -13810,7 +13867,7 @@ function Scoreboard({ jobs, users=[] }) {
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={12} style={{padding:"22px",textAlign:"center",color:"#475569",fontSize:13}}>
+                <td colSpan={13} style={{padding:"22px",textAlign:"center",color:"#475569",fontSize:13}}>
                   No jobs with a {mode==="lead" ? "lead" : "foreman"} assigned yet.
                 </td>
               </tr>
@@ -13848,6 +13905,30 @@ function Scoreboard({ jobs, users=[] }) {
                       )}
                       {r.name}
                     </span>
+                  </Td>
+                  <Td>
+                    {r.composite == null
+                      ? <span style={{color:"#94a3b8",fontSize:12}}>—</span>
+                      : (() => {
+                          const s = Math.round(r.composite);
+                          const color = s >= 80 ? "#16a34a" : s >= 65 ? "#f59e0b" : "#dc2626";
+                          const bg    = s >= 80 ? "#dcfce7" : s >= 65 ? "#fef3c7" : "#fee2e2";
+                          // Plain-text breakdown tooltip.
+                          const breakdown = Object.entries(r.scoreParts).map(([k,p]) =>
+                            `${p.label} (${p.weight}%): ${Math.round(p.value)}`
+                          ).join("\n");
+                          const tip = `${breakdown}\n──────────\nComposite: ${s} / 100`;
+                          return (
+                            <span title={tip} style={{
+                              display:"inline-flex",alignItems:"center",gap:4,
+                              background:bg,color,padding:"4px 12px",borderRadius:99,
+                              fontWeight:800,fontSize:14,border:`1px solid ${color}33`,
+                              cursor:"help",
+                            }}>
+                              {s}
+                            </span>
+                          );
+                        })()}
                   </Td>
                   <Td>
                     <span style={{background:"#f1f5f9",color:"#334155",padding:"2px 9px",borderRadius:99,fontSize:12,fontWeight:700}}>{r.jobs}</span>
@@ -13910,6 +13991,13 @@ function Scoreboard({ jobs, users=[] }) {
         the lead owns the job). Pre-existing inspection results from before attempt-logging shipped are pulled in as a
         single synthetic attempt so the board isn't empty. New inspections logged after today will have accurate
         first-try history.
+        <div style={{marginTop:8,fontSize:11,color:"#475569"}}>
+          <b style={{color:"#334155"}}>Ranking.</b> Rows are sorted by the composite Score column — a weighted average
+          across every pillar (inspection {SCORE_WEIGHTS.inspection}%, items {SCORE_WEIGHTS.items}%, QC {SCORE_WEIGHTS.qc}%,
+          updates {SCORE_WEIGHTS.updates}%, margin {SCORE_WEIGHTS.margin}%, ≥15% jobs {SCORE_WEIGHTS.goal}%). Pillars with no data
+          for that person are skipped and the remaining weights renormalize, so a brand-new lead isn't auto-penalized.
+          Hover a score to see the pillar-by-pillar breakdown.
+        </div>
         <div style={{marginTop:8,fontSize:11,color:"#475569"}}>
           <b style={{color:"#334155"}}>Profit note.</b> Margins come from Simpro and are cached per job when its detail
           pane is opened. Jobs that haven't been opened recently won't show up in the margin average or denominator.
