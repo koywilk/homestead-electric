@@ -13402,6 +13402,9 @@ function Scoreboard({ jobs, users=[], identity }) {
   const canEditWeights = can(identity, "scoreboard.editWeights");
   const [mode, setMode]   = useState("lead"); // "lead" | "foreman"
   const [showHelp, setHelp] = useState(false);
+  // Row clicked to drill into. Holds the aggregated row object (with _jobs
+  // attached) so the modal can render per-job detail. Null = modal closed.
+  const [drillRow, setDrillRow] = useState(null);
 
   // ── Date range state ─────────────────────────────────────
   // Default range: since the anchor, through today. Changing these inputs
@@ -13718,10 +13721,24 @@ function Scoreboard({ jobs, users=[], identity }) {
   // follows the actual poster — but roll into the lead/foreman group
   // based on the current mode (lead: credit = addedBy matches that
   // lead; foreman: sum updates on jobs where foreman is X).
+  // People who should never appear on the Scoreboard — owners / partners /
+  // placeholder assignments that happen to be stored as lead or foreman on
+  // some job records but aren't being graded. Matching is case-insensitive.
+  // Extend this list if more non-crew assignees show up.
+  const SCOREBOARD_EXCLUDE = ["Paul", "Unassigned", "To be determined"];
+  const isExcluded = (name) => {
+    const clean = (name||"").trim().toLowerCase();
+    if (!clean) return true;
+    // Any variant of "tbd" — standalone, "Lead TBD", "TBD lead", etc.
+    if (/\btbd\b/.test(clean)) return true;
+    return SCOREBOARD_EXCLUDE.some(x => x.toLowerCase() === clean);
+  };
+
   const agg = {};
   jobs.forEach(j => {
     const groupKey = mode === "lead" ? (j.lead||"") : (j.foreman||"");
     if (!groupKey || groupKey === "Unassigned") return;
+    if (isExcluded(groupKey)) return;
     if (!agg[groupKey]) agg[groupKey] = {
       name: groupKey, jobs: 0,
       roughFirstTryClean: 0, finalFirstTryClean: 0,
@@ -13735,6 +13752,7 @@ function Scoreboard({ jobs, users=[], identity }) {
       activeDays: new Set(),
       _margins: [],       // list of numeric simproMargin values for this person's jobs
       _marginsEst: 0,     // how many of those were flagged as estimate-only
+      _jobs: [],          // per-job breakdown for the click-to-drill view
     };
     const s = statsForJob(j);
     agg[groupKey].jobs++;
@@ -13744,6 +13762,29 @@ function Scoreboard({ jobs, users=[], identity }) {
      "roughQC","finishQC","roughAttempted","finalAttempted","updatesPosted",
      "openPunch","openQuestions","openPulls","activeJobs"].forEach(k => {
       agg[groupKey][k] += s[k];
+    });
+    // Drilldown row — one per job, with enough detail for Koy to click a lead
+    // and see which jobs are dragging their metrics. We also compute a "last
+    // update" YMD so a job that hasn't been touched in weeks pops visually.
+    const allUpdates = [...(j.roughUpdates||[]), ...(j.finishUpdates||[])];
+    const lastUpdateYMD = allUpdates.reduce((latest, u) => {
+      const d = _toYMDScore(u?.date) || _toYMDScore(u?.createdAt) || _toYMDScore(j.updated_at);
+      return (d && (!latest || d > latest)) ? d : latest;
+    }, null);
+    agg[groupKey]._jobs.push({
+      jobId: j.id,
+      jobName: j.name || "(unnamed)",
+      address: j.address || "",
+      finishStatus: j.finishStatus || "",
+      roughStatus:  j.roughStatus  || "",
+      openPunch:     s.openPunch,
+      openQuestions: s.openQuestions,
+      openPulls:     s.openPulls,
+      updatesPosted: s.updatesPosted,
+      postedDays:    s._postedDays.size,
+      activeDays:    s._activeDays.size,
+      lastUpdateYMD,
+      isActive:      s.activeJobs > 0,
     });
     // Profit margin — pull from the per-job cache that getSimproJobFinancials
     // writes when someone opens a job detail pane. Coverage is therefore
@@ -13889,11 +13930,14 @@ function Scoreboard({ jobs, users=[], identity }) {
     if (r.jobs > 0) {
       // 0 QC/job = 100, 10+ QC/job = 0
       parts.qc         = { value: clamp100(100 - (qc / r.jobs) * 10), weight: SCORE_WEIGHTS.qc, label: "QC items" };
-      // Include updates pillar whenever the person has jobs. If they have jobs
-      // but activeDays is 0 (or they posted nothing), that's a real 0, not a
-      // missing-data situation — this is the accountability lever.
-      const ratio = r.activeDays > 0 ? (r.postedDays / r.activeDays) : 0;
-      parts.updates    = { value: clamp100(ratio * 100), weight: SCORE_WEIGHTS.updates, label: "Daily updates" };
+      // Updates pillar — raw updates posted, normalized per active job so
+      // portfolio size doesn't distort the score. Scale: 10 posts per active
+      // job in the window = 100 (roughly 2-3 per week per job, healthy); 0 = 0.
+      // Using raw count instead of posted-days/active-days ratio because the
+      // ratio was getting dragged down by legacy dateless posts clustering onto
+      // a single fallback day per job (see feedback_firestore_rules.md).
+      const denom = Math.max(r.activeJobs, 1);
+      parts.updates    = { value: clamp100((r.updatesPosted / denom) * 10), weight: SCORE_WEIGHTS.updates, label: "Updates posted" };
     }
     if (r.jobs > 0) {
       // Open-items penalty — punch items, unanswered questions, and unpulled
@@ -13981,7 +14025,7 @@ function Scoreboard({ jobs, users=[], identity }) {
 
   // Each metric's meaning, in plain language.
   const metricDefs = [
-    { name:"Score", body:`Weighted composite, 0-100. Higher is better. Pillars: Inspection first-try (${SCORE_WEIGHTS.inspection}%), Items called (${SCORE_WEIGHTS.items}%), QC items (${SCORE_WEIGHTS.qc}%), Daily updates (${SCORE_WEIGHTS.updates}%), Open items (${SCORE_WEIGHTS.openItems}%), Avg margin (${SCORE_WEIGHTS.margin}%), ≥15% jobs (${SCORE_WEIGHTS.goal}%). Pillars with no data count as 0 — keeping info in the app up to date is part of the score, so a row with only one or two pillars populated can't auto-rank above someone with full coverage. Hover the score on a row to see the pillar breakdown, missing pillars, and coverage %. Green ≥80, amber ≥65, red below. Ranking badges and row tint follow this score.` },
+    { name:"Score", body:`Weighted composite, 0-100. Higher is better. Pillars: Inspection first-try (${SCORE_WEIGHTS.inspection}%), Items called (${SCORE_WEIGHTS.items}%), QC items (${SCORE_WEIGHTS.qc}%), Updates posted (${SCORE_WEIGHTS.updates}%), Open items (${SCORE_WEIGHTS.openItems}%), Avg margin (${SCORE_WEIGHTS.margin}%), ≥15% jobs (${SCORE_WEIGHTS.goal}%). Pillars with no data count as 0 — keeping info in the app up to date is part of the score, so a row with only one or two pillars populated can't auto-rank above someone with full coverage. Hover the score on a row to see the pillar breakdown, missing pillars, and coverage %. Green ≥80, amber ≥65, red below. Ranking badges and row tint follow this score.` },
     { name:"Jobs", body:"Active jobs where this person is the assigned lead (or foreman, in foreman view)." },
     { name:"4-Way First Try", body:"Jobs where the very first 4-way attempt was a pass AND zero items were called. Shown as clean/attempted + percentage. Green ≥90%, amber ≥70%, red below." },
     { name:"Final First Try", body:"Jobs where the very first final attempt was a pass AND zero items were called. Shown as clean/attempted + percentage." },
@@ -13989,8 +14033,7 @@ function Scoreboard({ jobs, users=[], identity }) {
     { name:"Final Items", body:"Same idea as 4-Way Items, but for final inspections." },
     { name:"Rough QC", body:"Items called during a rough QC walk (rough punch, flagged fromQC). Filtered to the selected date range by each item's addedAt stamp. Items created before date stamps shipped don't have one and always count." },
     { name:"Finish QC", body:"Items called during a finish QC walk (finish punch, flagged fromQC). Filtered the same way as Rough QC." },
-    { name:"Updates Posted", body:"Total daily update entries on this person's scheduled jobs, in the window. Every update counts regardless of who typed it — leads can delegate. Date resolution is three-tier: (1) the date the user picked in the form, (2) the save-time timestamp if the form date was blank, (3) the job's last-updated timestamp for older entries that predate the save-time stamp. No entry is invisible just because someone skipped the date field." },
-    { name:"Daily Updates", body:"Days posted / business days their jobs were active, plus a percentage. Active days = business days between the job's earliest start and today (or its complete date), plus any weekday an update was posted. For legacy posts that have no date stamp at all, the job's last-updated date is used — so those posts cluster on whichever day the job was last touched rather than disappearing entirely. Green ≥90%, amber ≥70%, red below." },
+    { name:"Updates Posted", body:"Total daily update entries on this person's scheduled jobs, in the window. Every update counts regardless of who typed it — leads can delegate. Date resolution is three-tier: (1) the date the user picked in the form, (2) the save-time timestamp if the form date was blank, (3) the job's last-updated timestamp for older entries that predate the save-time stamp. No entry is invisible just because someone skipped the date field. This is also what drives the composite's updates pillar — normalized per active job so bigger portfolios don't automatically win. 10 posts per active job in the window scores full credit on that pillar." },
     { name:"Open Punch", body:"Open punch items on active jobs (jobs that aren't finishStatus = complete). Counts every !done item in roughPunch + finishPunch across all floors — general, hotcheck, and room items. Not filtered by date — this is a right-now snapshot of what hasn't been checked off. Lower is better." },
     { name:"Open Qs", body:"Unanswered questions on active jobs. Counts every rough + finish question across upper/main/basement where !done AND the answer field is empty. Shown in red when > 0 to prompt follow-up." },
     { name:"Open Pulls", body:"Named home runs, keypads, and CP4 module loads on active jobs where the status isn't \"Pulled\" (or the pulled flag is false). Empty placeholder rows (no name typed) don't count. \"Need Specs\" counts as open — the wire isn't in yet. Lower is better." },
@@ -14082,7 +14125,7 @@ function Scoreboard({ jobs, users=[], identity }) {
               ["inspection","Inspection first-try","First-try-clean rate across 4-way + final"],
               ["items","Items called","Fewer inspection items = higher sub-score"],
               ["qc","QC items","Fewer QC walk items = higher sub-score"],
-              ["updates","Daily updates","Posted days / active days"],
+              ["updates","Updates posted","Raw count of daily updates, normalized per active job"],
               ["openItems","Open items","Open punch, questions, and unpulled loads per active job — fewer is better"],
               ["margin","Avg margin","Centered on 15% goal, +2 pts per margin point"],
               ["goal","≥15% jobs","% of jobs hitting the 15% profit goal"],
@@ -14203,7 +14246,6 @@ function Scoreboard({ jobs, users=[], identity }) {
               <Th title="Rough QC walk items (fromQC)">Rough QC</Th>
               <Th title="Finish QC walk items (fromQC)">Finish QC</Th>
               <Th title="Daily updates posted in the window (total count)">Updates Posted</Th>
-              <Th title="Days posted / business days their jobs were active">Daily Updates</Th>
               <Th title="Open punch items on active jobs (not done)">Open Punch</Th>
               <Th title="Unanswered questions on active jobs (no answer + not marked done)">Open Qs</Th>
               <Th title="Named home runs / keypads / CP4 loads on active jobs with status other than Pulled">Open Pulls</Th>
@@ -14214,7 +14256,7 @@ function Scoreboard({ jobs, users=[], identity }) {
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={16} style={{padding:"22px",textAlign:"center",color:"#475569",fontSize:13}}>
+                <td colSpan={15} style={{padding:"22px",textAlign:"center",color:"#475569",fontSize:13}}>
                   No jobs with a {mode==="lead" ? "lead" : "foreman"} assigned yet.
                 </td>
               </tr>
@@ -14222,7 +14264,6 @@ function Scoreboard({ jobs, users=[], identity }) {
             {rows.map((r, i) => {
               const rP = pct(r.roughFirstTryClean, r.roughAttempted);
               const fP = pct(r.finalFirstTryClean, r.finalAttempted);
-              const dP = pct(r.postedDays, r.activeDays);
               const rank = rankBadge(i);
               const rowBg = i === 0 ? "#fffbeb" : "transparent";
               // Small pill for ratio + percent, colored by pct bucket.
@@ -14242,7 +14283,15 @@ function Scoreboard({ jobs, users=[], identity }) {
               return (
                 <tr key={r.name} style={{background:rowBg}}>
                   <Td align="left" bold>
-                    <span style={{display:"inline-flex",alignItems:"center",gap:8}}>
+                    <button
+                      onClick={()=>setDrillRow(r)}
+                      title="Click to see this person's jobs and where their open items / updates live"
+                      style={{
+                        display:"inline-flex",alignItems:"center",gap:8,
+                        background:"none",border:"none",padding:0,margin:0,
+                        fontFamily:"inherit",fontSize:"inherit",fontWeight:"inherit",
+                        color:"#0f172a",cursor:"pointer",textAlign:"left",
+                      }}>
                       {rank && (
                         <span style={{
                           fontSize:10,fontWeight:800,letterSpacing:"0.04em",
@@ -14250,8 +14299,8 @@ function Scoreboard({ jobs, users=[], identity }) {
                           borderRadius:99,minWidth:28,textAlign:"center",
                         }}>{rank.label}</span>
                       )}
-                      {r.name}
-                    </span>
+                      <span style={{borderBottom:"1px dashed #94a3b8"}}>{r.name}</span>
+                    </button>
                   </Td>
                   <Td>
                     {r.composite == null
@@ -14267,7 +14316,7 @@ function Scoreboard({ jobs, users=[], identity }) {
                             ["inspection","Inspection first-try"],
                             ["items","Items called"],
                             ["qc","QC items"],
-                            ["updates","Daily updates"],
+                            ["updates","Updates posted"],
                             ["openItems","Open items"],
                             ["margin","Avg margin"],
                             ["goal","≥15% jobs"],
@@ -14309,7 +14358,6 @@ function Scoreboard({ jobs, users=[], identity }) {
                   <Td><span style={{color:r.roughQC>0?"#b45309":"#64748b",fontWeight:700}}>{r.roughQC}</span></Td>
                   <Td><span style={{color:r.finishQC>0?"#b45309":"#64748b",fontWeight:700}}>{r.finishQC}</span></Td>
                   <Td bold><span style={{color:"#334155"}}>{r.updatesPosted}</span></Td>
-                  <Td>{ratioPill(r.postedDays, r.activeDays, dP, true)}</Td>
                   <Td>
                     {r.activeJobs === 0
                       ? <span style={{color:"#94a3b8",fontSize:12}}>—</span>
@@ -14378,7 +14426,7 @@ function Scoreboard({ jobs, users=[], identity }) {
         <div style={{marginTop:8,fontSize:11,color:"#475569"}}>
           <b style={{color:"#334155"}}>Ranking.</b> Rows are sorted by the composite Score column — a weighted average
           across every pillar (inspection {SCORE_WEIGHTS.inspection}%, items {SCORE_WEIGHTS.items}%, QC {SCORE_WEIGHTS.qc}%,
-          updates {SCORE_WEIGHTS.updates}%, open items {SCORE_WEIGHTS.openItems}%, margin {SCORE_WEIGHTS.margin}%,
+          updates posted {SCORE_WEIGHTS.updates}%, open items {SCORE_WEIGHTS.openItems}%, margin {SCORE_WEIGHTS.margin}%,
           ≥15% jobs {SCORE_WEIGHTS.goal}%). Pillars with no data count as 0 — keeping info in the app up to date is part
           of the score, so a row with only one or two pillars populated will rank below a row with full coverage. The
           Open Items pillar is a "right now" snapshot: unchecked punch, unanswered questions, and unpulled homeruns /
@@ -14392,6 +14440,160 @@ function Scoreboard({ jobs, users=[], identity }) {
           tracked in Simpro yet).
         </div>
       </div>
+
+      {/* ── Per-person drilldown modal ──────────────────────────────────── */}
+      {/* Opens when a name in the main table is clicked. Shows a per-job    */}
+      {/* breakdown so a lead (or Koy) can see exactly which jobs are        */}
+      {/* dragging their score. Jobs with open items / no recent updates get */}
+      {/* a subtle red/amber tint so problem spots pop.                      */}
+      {drillRow && (() => {
+        const jobsList = [...(drillRow._jobs||[])];
+        // Sort: active jobs first (completed float to the bottom), then by
+        // total open items descending so the worst offenders surface.
+        jobsList.sort((a,b) => {
+          if (a.isActive !== b.isActive) return a.isActive ? -1 : 1;
+          const aOpen = a.openPunch + a.openQuestions + a.openPulls;
+          const bOpen = b.openPunch + b.openQuestions + b.openPulls;
+          if (aOpen !== bOpen) return bOpen - aOpen;
+          return (a.jobName||"").localeCompare(b.jobName||"");
+        });
+        const totals = jobsList.reduce((t,j) => ({
+          punch: t.punch + j.openPunch,
+          qs:    t.qs    + j.openQuestions,
+          pulls: t.pulls + j.openPulls,
+          updates: t.updates + j.updatesPosted,
+        }), { punch:0, qs:0, pulls:0, updates:0 });
+        const todayY = (() => { const d = new Date();
+          return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+        })();
+        // Business days between two YMDs (positive) — used to flag jobs where
+        // the last post is stale. Small helper so the modal stays self-contained.
+        const bizDaysSince = (ymd) => {
+          if (!ymd) return Infinity;
+          const [y,m,d] = ymd.split("-").map(Number);
+          const start = new Date(y, m-1, d);
+          const end = new Date();
+          if (start > end) return 0;
+          let n = 0;
+          const cur = new Date(start); cur.setDate(cur.getDate()+1);
+          while (cur <= end) {
+            const dow = cur.getDay();
+            if (dow !== 0 && dow !== 6) n++;
+            cur.setDate(cur.getDate()+1);
+          }
+          return n;
+        };
+        const stageLabel = (j) => {
+          if (j.finishStatus === "complete") return "Complete";
+          if (j.finishStatus) return `Finish: ${j.finishStatus}`;
+          if (j.roughStatus === "complete") return "Rough complete";
+          if (j.roughStatus) return `Rough: ${j.roughStatus}`;
+          return "In progress";
+        };
+        return (
+          <div
+            onClick={()=>setDrillRow(null)}
+            style={{position:"fixed",inset:0,background:"rgba(15,23,42,0.55)",
+              display:"flex",alignItems:"flex-start",justifyContent:"center",
+              zIndex:9000,padding:"40px 16px",overflowY:"auto"}}>
+            <div
+              onClick={e=>e.stopPropagation()}
+              style={{background:"#fff",borderRadius:14,maxWidth:1100,width:"100%",
+                boxShadow:"0 25px 60px rgba(15,23,42,0.35)",overflow:"hidden"}}>
+              <div style={{padding:"16px 22px",borderBottom:"1px solid #e2e8f0",
+                display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                <div>
+                  <div style={{fontSize:11,color:"#64748b",fontWeight:700,letterSpacing:"0.08em",textTransform:"uppercase"}}>
+                    {mode === "lead" ? "Lead drilldown" : "Foreman drilldown"}
+                  </div>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.03em",color:"#0f172a"}}>
+                    {drillRow.name}
+                  </div>
+                </div>
+                <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:14,fontSize:12,color:"#334155",flexWrap:"wrap"}}>
+                  <div><b style={{color:"#0f172a"}}>{drillRow.jobs}</b> jobs · <b style={{color:"#0f172a"}}>{drillRow.activeJobs}</b> active</div>
+                  <div><b style={{color:"#0f172a"}}>{totals.updates}</b> updates posted</div>
+                  <div>
+                    Open: <b style={{color:totals.punch>0?"#dc2626":"#0f172a"}}>{totals.punch}</b> punch · <b style={{color:totals.qs>0?"#dc2626":"#0f172a"}}>{totals.qs}</b> Qs · <b style={{color:totals.pulls>0?"#b45309":"#0f172a"}}>{totals.pulls}</b> pulls
+                  </div>
+                  <button onClick={()=>setDrillRow(null)}
+                    style={{background:"#0f172a",color:"#fff",border:"none",borderRadius:8,
+                      padding:"6px 14px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer"}}>
+                    Close
+                  </button>
+                </div>
+              </div>
+              <div style={{padding:"12px 22px 22px",maxHeight:"calc(100vh - 180px)",overflowY:"auto"}}>
+                {jobsList.length === 0 ? (
+                  <div style={{padding:"24px",textAlign:"center",color:"#64748b",fontSize:13}}>
+                    No jobs in this window.
+                  </div>
+                ) : (
+                  <table style={{width:"100%",borderCollapse:"collapse"}}>
+                    <thead>
+                      <tr style={{background:"#f8fafc"}}>
+                        <th style={{textAlign:"left",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Job</th>
+                        <th style={{textAlign:"left",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Stage</th>
+                        <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Open Punch</th>
+                        <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Open Qs</th>
+                        <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Open Pulls</th>
+                        <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Updates</th>
+                        <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Last Update</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {jobsList.map(j => {
+                        const openTotal = j.openPunch + j.openQuestions + j.openPulls;
+                        const staleDays = j.isActive ? bizDaysSince(j.lastUpdateYMD) : 0;
+                        const staleTint = j.isActive && staleDays > 5
+                          ? "#fff1f2"
+                          : (j.isActive && openTotal > 0 ? "#fffbeb" : "transparent");
+                        const lastLabel = !j.lastUpdateYMD
+                          ? "never"
+                          : j.lastUpdateYMD === todayY
+                            ? "today"
+                            : `${j.lastUpdateYMD} · ${staleDays}d ago`;
+                        return (
+                          <tr key={j.jobId} style={{background:staleTint}}>
+                            <td style={{padding:"10px",fontSize:13,color:"#0f172a",borderBottom:"1px solid #f1f5f9",fontWeight:600,maxWidth:320}}>
+                              <div style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{j.jobName}</div>
+                              {j.address && <div style={{fontSize:11,color:"#64748b",fontWeight:400,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{j.address}</div>}
+                            </td>
+                            <td style={{padding:"10px",fontSize:12,borderBottom:"1px solid #f1f5f9",color:j.finishStatus==="complete"?"#64748b":"#0f172a",fontWeight:500}}>
+                              {stageLabel(j)}
+                            </td>
+                            <td style={{padding:"10px",fontSize:13,textAlign:"center",borderBottom:"1px solid #f1f5f9",color:j.openPunch>0?"#dc2626":"#94a3b8",fontWeight:700}}>
+                              {j.isActive ? j.openPunch : "—"}
+                            </td>
+                            <td style={{padding:"10px",fontSize:13,textAlign:"center",borderBottom:"1px solid #f1f5f9",color:j.openQuestions>0?"#dc2626":"#94a3b8",fontWeight:700}}>
+                              {j.isActive ? j.openQuestions : "—"}
+                            </td>
+                            <td style={{padding:"10px",fontSize:13,textAlign:"center",borderBottom:"1px solid #f1f5f9",color:j.openPulls>0?"#b45309":"#94a3b8",fontWeight:700}}>
+                              {j.isActive ? j.openPulls : "—"}
+                            </td>
+                            <td style={{padding:"10px",fontSize:13,textAlign:"center",borderBottom:"1px solid #f1f5f9",color:"#334155",fontWeight:700}}>
+                              {j.updatesPosted}
+                            </td>
+                            <td style={{padding:"10px",fontSize:12,textAlign:"center",borderBottom:"1px solid #f1f5f9",color:!j.lastUpdateYMD?"#dc2626":staleDays>5?"#b45309":"#475569",fontWeight:500,whiteSpace:"nowrap"}}>
+                              {lastLabel}
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                )}
+                <div style={{marginTop:12,fontSize:11,color:"#64748b",lineHeight:1.5}}>
+                  Rows tinted red have gone more than 5 business days without an update.
+                  Amber rows are active jobs with open punch / questions / pulls. Completed
+                  jobs show "—" in the open-item columns — they're not counted against this
+                  person's Open Items score.
+                </div>
+              </div>
+            </div>
+          </div>
+        );
+      })()}
     </div>
   );
 }
