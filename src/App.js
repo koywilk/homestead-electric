@@ -13610,11 +13610,11 @@ function Scoreboard({ jobs, users=[] }) {
       agg[groupKey]._margins.push(j.simproMargin);
       if (j.simproMarginIsEst) agg[groupKey]._marginsEst++;
     }
-    // Update attribution differs by mode:
-    //   lead    → only count updates authored BY this lead
-    //   foreman → count every update on jobs they foreman (whole crew)
+    // Update attribution: every update on a person's scheduled jobs counts.
+    // Leads are allowed to delegate — the lead owns the job, so whoever on the
+    // crew actually typed the update still counts toward that lead's numbers.
+    // Same logic for foreman view.
     s._updates.forEach(upd => {
-      if (mode === "lead" && upd.addedBy !== groupKey) return;
       agg[groupKey].updatesPosted++;
       const d = _toYMDScore(upd.date);
       // Only count weekdays toward "posted days" so the denominator/numerator align.
@@ -13692,7 +13692,7 @@ function Scoreboard({ jobs, users=[] }) {
     { name:"Final Items", body:"Same idea as 4-Way Items, but for final inspections." },
     { name:"Rough QC", body:"Items called during a rough QC walk (rough punch, flagged fromQC). Filtered to the selected date range by each item's addedAt stamp. Items created before date stamps shipped don't have one and always count." },
     { name:"Finish QC", body:"Items called during a finish QC walk (finish punch, flagged fromQC). Filtered the same way as Rough QC." },
-    { name:"Updates Posted", body:"Total daily update entries in the window. Lead view credits only updates the lead authored. Foreman view counts every update on the foreman's jobs (whole crew)." },
+    { name:"Updates Posted", body:"Total daily update entries on this person's scheduled jobs, in the window. Every update counts regardless of who typed it — leads can delegate." },
     { name:"Daily Updates", body:"Days posted / business days their jobs were active, plus a percentage. Active days = business days between the job's earliest start and today (or its complete date), unioned across all the person's jobs. Green ≥90%, amber ≥70%, red below." },
     { name:"Avg Margin", body:"Average net profit margin across this person's jobs, pulled from Simpro. Green if the average hits the 15% goal, red below. An asterisk (*) after the number means some of that person's jobs only have estimated margins (no real costs tracked yet)." },
     { name:"≥15% Jobs", body:"Jobs hitting the 15% profit goal, out of jobs with margin data available. Coverage is partial — a job gets margin data once someone opens its detail pane (or it auto-refreshes on open). Jobs with no cached margin yet aren't in the denominator." },
@@ -13904,11 +13904,12 @@ function Scoreboard({ jobs, users=[] }) {
       </div>
 
       <div style={{fontSize:12,color:"#334155",marginTop:14,lineHeight:1.6,background:"#f1f5f9",border:"1px solid #cbd5e1",borderRadius:10,padding:"12px 14px"}}>
-        <b style={{color:"#0f172a"}}>How attribution works.</b> Leads view credits each job's stats to the assigned lead. Foreman view
-        sums all jobs where someone is the foreman, aggregating whichever lead ran the job — that's the crew-vs-crew
-        comparison. Pre-existing inspection results from before attempt-logging shipped are pulled in as a single
-        synthetic attempt so the board isn't empty. New inspections logged after today will have accurate first-try
-        history.
+        <b style={{color:"#0f172a"}}>How attribution works.</b> Leads view credits each job's stats to the assigned lead.
+        Foreman view sums all jobs where someone is the foreman, aggregating whichever lead ran the job — that's the
+        crew-vs-crew comparison. Daily updates count toward the lead regardless of who typed them (delegation is fine —
+        the lead owns the job). Pre-existing inspection results from before attempt-logging shipped are pulled in as a
+        single synthetic attempt so the board isn't empty. New inspections logged after today will have accurate
+        first-try history.
         <div style={{marginTop:8,fontSize:11,color:"#475569"}}>
           <b style={{color:"#334155"}}>Profit note.</b> Margins come from Simpro and are cached per job when its detail
           pane is opened. Jobs that haven't been opened recently won't show up in the margin average or denominator.
