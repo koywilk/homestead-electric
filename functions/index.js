@@ -1156,17 +1156,36 @@ exports.getSimproItemDetails = functions
         } catch (_e) { /* ignore */ }
       }
 
-      // Exhaustive qty extraction — Simpro exposes it under many shapes.
+      // Exhaustive qty extraction — Simpro v1 puts the qty in different
+      // spots depending on tenant version and item type. Known locations:
+      //   - top-level Quantity (some tenants, esp. oneOffs)
+      //   - Totals.Quantity (common on v1 job catalog link records)
+      //   - Claimed.ToDate.Quantity (progress-billing tenants)
+      //   - nested Catalog/Prebuild/OneOff.Quantity (rare but seen)
+      //   - Basic.Quantity (older schema)
+      const pickNum = (v) => (typeof v === "number" && !isNaN(v) ? v : null);
       const qty =
-        (typeof raw.Quantity === "number" ? raw.Quantity : null) ??
-        raw?.Quantity?.Value ??
-        raw?.Quantity?.Billable ??
-        raw?.Quantity?.Invoiced ??
-        raw?.Quantity?.Complete ??
-        raw?.Qty ??
-        raw?.QuantityOrdered ??
-        raw?.BillableQuantity ??
-        raw?.ItemQuantity ??
+        pickNum(raw?.Quantity) ??
+        pickNum(raw?.Quantity?.Value) ??
+        pickNum(raw?.Quantity?.Billable) ??
+        pickNum(raw?.Quantity?.Invoiced) ??
+        pickNum(raw?.Quantity?.Complete) ??
+        pickNum(raw?.Totals?.Quantity) ??
+        pickNum(raw?.Totals?.Qty) ??
+        pickNum(raw?.Totals?.Count) ??
+        pickNum(raw?.Total?.Quantity) ??
+        pickNum(raw?.Total?.Qty) ??
+        pickNum(raw?.Claimed?.Quantity) ??
+        pickNum(raw?.Claimed?.ToDate?.Quantity) ??
+        pickNum(raw?.Claimed?.Remaining?.Quantity) ??
+        pickNum(raw?.Catalog?.Quantity) ??
+        pickNum(raw?.Prebuild?.Quantity) ??
+        pickNum(raw?.OneOff?.Quantity) ??
+        pickNum(raw?.Basic?.Quantity) ??
+        pickNum(raw?.Qty) ??
+        pickNum(raw?.QuantityOrdered) ??
+        pickNum(raw?.BillableQuantity) ??
+        pickNum(raw?.ItemQuantity) ??
         null;
       return { ...it, qty };
     });

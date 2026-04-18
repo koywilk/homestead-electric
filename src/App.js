@@ -4191,13 +4191,18 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
       const detailResults = res?.data?.items || [];
       const rawDebug = res?.data?._debugRawByKind;
       if (rawDebug) {
-        // Log each kind's top-level keys + full sample body so we can see
-        // where Simpro is actually hiding Quantity on the detail endpoint.
+        // Log each kind's full sample body as a string so we can see every
+        // nested field (Catalog/Prebuild/Totals/Claimed) without needing to
+        // expand console collapsibles. Quantity is hiding in here somewhere.
         ["catalog", "oneOff", "prebuild"].forEach(k => {
           const d = rawDebug[k];
           if (!d) return;
           console.log(`[simproItemDetails raw/${k}] topKeys:`, d.topKeys);
-          console.log(`[simproItemDetails raw/${k}] sample:`, d.sample);
+          try {
+            console.log(`[simproItemDetails raw/${k}] FULL:`, JSON.stringify(d.sample, null, 2));
+          } catch (_e) {
+            console.log(`[simproItemDetails raw/${k}] sample (non-serializable):`, d.sample);
+          }
         });
       }
       const gotQty = detailResults.filter(r => r.qty != null).length;
@@ -4358,26 +4363,42 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
                   </div>
                 </div>
 
-                {isOpen && itemsToShow.length > 0 && (
-                  <div style={{marginLeft:16,marginTop:2,marginBottom:4}}>
-                    {itemsToShow.map((it, i) => {
-                      const qtyKey = `${cc.sectionId}-${cc.id}-${it.kind}-${it.id}`;
-                      const displayQty = it.qty != null ? it.qty : itemQtyMap[qtyKey];
-                      return (
-                        <div key={`${key}-${it.kind}-${it.id ?? i}`}
+                {isOpen && itemsToShow.length > 0 && (() => {
+                  // Aggregate by normalized item name — Simpro often stores
+                  // each bid unit as its own line (qty=1 implicit) rather than
+                  // one line with Quantity=N. Grouping by name sums either
+                  // explicit qty (if Simpro's detail endpoint returned one)
+                  // OR 1-per-line, giving the real "how many of this thing
+                  // was bid" answer no matter which shape we got.
+                  const groups = new Map();
+                  itemsToShow.forEach(it => {
+                    const qtyKey = `${cc.sectionId}-${cc.id}-${it.kind}-${it.id}`;
+                    const explicitQty = it.qty != null ? it.qty : itemQtyMap[qtyKey];
+                    const nameRaw = it.name || "(unnamed)";
+                    const nameKey = nameRaw.trim().toLowerCase();
+                    if (!groups.has(nameKey)) {
+                      groups.set(nameKey, { name: nameRaw, count: 0 });
+                    }
+                    groups.get(nameKey).count += (explicitQty != null ? explicitQty : 1);
+                  });
+                  const rows = [...groups.values()];
+                  return (
+                    <div style={{marginLeft:16,marginTop:2,marginBottom:4}}>
+                      {rows.map((g, i) => (
+                        <div key={`${key}-grp-${i}`}
                           style={{display:"flex",gap:10,
                             padding:"3px 2px",fontSize:11,color:C.text}}>
                           <div style={{flex:"1 1 auto",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",display:"flex",alignItems:"center"}}>
-                            <span>{it.name || "(unnamed)"}</span>
+                            <span>{g.name}</span>
                           </div>
                           <div style={{color:C.dim,whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums",minWidth:44,textAlign:"right"}}>
-                            {displayQty != null ? `× ${displayQty}` : (qtyLoading ? "…" : "—")}
+                            × {g.count}
                           </div>
                         </div>
-                      );
-                    })}
-                  </div>
-                )}
+                      ))}
+                    </div>
+                  );
+                })()}
 
                 {isOpen && itemsToShow.length === 0 && (
                   <div style={{marginLeft:16,marginTop:2,fontSize:11,color:C.dim,fontStyle:"italic"}}>
