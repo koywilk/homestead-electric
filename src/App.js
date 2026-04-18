@@ -4355,7 +4355,6 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
                           style={{display:"flex",gap:10,
                             padding:"3px 2px",fontSize:11,color:C.text}}>
                           <div style={{flex:"1 1 auto",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",display:"flex",alignItems:"center"}}>
-                            {kindPill(it.kind)}
                             <span>{it.name || "(unnamed)"}</span>
                           </div>
                           <div style={{color:C.dim,whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums",minWidth:44,textAlign:"right"}}>
