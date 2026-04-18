@@ -1124,6 +1124,10 @@ exports.getSimproItemDetails = functions
 
     const KIND_TO_PATH = { catalog: "catalogs", oneOff: "oneOffs", prebuild: "prebuilds" };
 
+    // Diagnostic: capture the first raw detail response per kind so the
+    // client can see what shape Simpro is actually returning for Quantity.
+    const _debugRawByKind = { catalog: null, oneOff: null, prebuild: null };
+
     const tasks = items.map(it => async () => {
       const path = KIND_TO_PATH[it.kind];
       if (!path || !it.sectionId || !it.ccId || !it.itemId) {
@@ -1141,6 +1145,17 @@ exports.getSimproItemDetails = functions
         return { ...it, qty: null, error: `${r.status}` };
       }
       const raw = r.data || {};
+
+      // First successful response per kind → snapshot for diagnostics.
+      if (_debugRawByKind[it.kind] == null) {
+        try {
+          _debugRawByKind[it.kind] = {
+            topKeys: Object.keys(raw),
+            sample: raw, // full body so we can inspect shape
+          };
+        } catch (_e) { /* ignore */ }
+      }
+
       // Exhaustive qty extraction — Simpro exposes it under many shapes.
       const qty =
         (typeof raw.Quantity === "number" ? raw.Quantity : null) ??
@@ -1159,7 +1174,7 @@ exports.getSimproItemDetails = functions
     // Concurrency 3 keeps us under Simpro's ~60 req/min per-token sustained
     // limit even if the user expands several cost centers at once.
     const results = await _pLimit(tasks, 3);
-    return { items: results };
+    return { items: results, _debugRawByKind };
   });
 
 // ─── Get Simpro Schedule ──────────────────────────────────────────────────────

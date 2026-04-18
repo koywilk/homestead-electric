@@ -4189,6 +4189,19 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
         })),
       });
       const detailResults = res?.data?.items || [];
+      const rawDebug = res?.data?._debugRawByKind;
+      if (rawDebug) {
+        // Log each kind's top-level keys + full sample body so we can see
+        // where Simpro is actually hiding Quantity on the detail endpoint.
+        ["catalog", "oneOff", "prebuild"].forEach(k => {
+          const d = rawDebug[k];
+          if (!d) return;
+          console.log(`[simproItemDetails raw/${k}] topKeys:`, d.topKeys);
+          console.log(`[simproItemDetails raw/${k}] sample:`, d.sample);
+        });
+      }
+      const gotQty = detailResults.filter(r => r.qty != null).length;
+      console.log(`[simproItemDetails] cc=${cc.name} fetched=${detailResults.length} withQty=${gotQty}`);
       setItemQtyMap(prev => {
         const next = {...prev};
         detailResults.forEach(r => {
