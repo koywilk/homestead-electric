@@ -4089,6 +4089,14 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
   const [q, setQ] = useState("");
   const [expanded, setExpanded] = useState({}); // ccKey -> bool
+  // Lazy-loaded qty per item. Simpro's list endpoint doesn't include Quantity,
+  // so we fetch each item's detail the first time its cost center is opened.
+  // Key: `${sectionId}-${ccId}-${kind}-${itemId}` → qty number.
+  const [itemQtyMap, setItemQtyMap] = useState({});
+  // Which CCs have we already fired qty fetches for? Tracks key so we don't
+  // refetch when the user collapses + re-expands.
+  const [qtyFetchedCcs, setQtyFetchedCcs] = useState(() => new Set());
+  const [qtyLoadingCcs, setQtyLoadingCcs] = useState(() => new Set());
 
   if (!simproNo) {
     return (
@@ -4153,18 +4161,77 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
     bySection.get(key).push(entry);
   });
 
-  const fmtMoney = (n) => {
-    if (n == null || isNaN(n)) return "—";
-    return "$" + Number(n).toLocaleString(undefined, {minimumFractionDigits:0, maximumFractionDigits:0});
-  };
-  const totalBid = costCenters.reduce((s,cc) => s + (Number(cc.totalExTax)||0), 0);
-  const visibleTotal = visible.reduce((s,e) => s + (Number(e.cc.totalExTax)||0), 0);
   const totalItems = costCenters.reduce((s,cc) => s + (Array.isArray(cc.items) ? cc.items.length : 0), 0);
   const totalItemMatches = tokens.length
     ? visible.reduce((s,e) => s + e.itemMatches.length, 0)
     : totalItems;
 
-  const toggle = (key) => setExpanded(v => ({...v, [key]: !v[key]}));
+  // Fire a lazy qty fetch for a cost center's items. No-op if already fetched.
+  const fetchQtyForCc = async (cc) => {
+    const ccKey = `${cc.sectionId}-${cc.id}`;
+    if (qtyFetchedCcs.has(ccKey) || qtyLoadingCcs.has(ccKey)) return;
+    const items = Array.isArray(cc.items) ? cc.items : [];
+    const needsQty = items.filter(it => it.qty == null && it.id != null);
+    if (needsQty.length === 0) {
+      setQtyFetchedCcs(prev => new Set(prev).add(ccKey));
+      return;
+    }
+    setQtyLoadingCcs(prev => new Set(prev).add(ccKey));
+    try {
+      const fn = httpsCallable(functions, "getSimproItemDetails");
+      const res = await fn({
+        simproJobNo: simproNo,
+        items: needsQty.map(it => ({
+          sectionId: cc.sectionId,
+          ccId: cc.id,
+          kind: it.kind,
+          itemId: it.id,
+        })),
+      });
+      const detailResults = res?.data?.items || [];
+      setItemQtyMap(prev => {
+        const next = {...prev};
+        detailResults.forEach(r => {
+          if (r.qty != null) {
+            const k = `${r.sectionId}-${r.ccId}-${r.kind}-${r.itemId}`;
+            next[k] = r.qty;
+          }
+        });
+        return next;
+      });
+    } catch (e) {
+      console.warn("[simproItemDetails error]", e);
+    } finally {
+      setQtyFetchedCcs(prev => new Set(prev).add(ccKey));
+      setQtyLoadingCcs(prev => {
+        const next = new Set(prev);
+        next.delete(ccKey);
+        return next;
+      });
+    }
+  };
+
+  const toggle = (key, cc) => {
+    setExpanded(v => {
+      const nowOpen = !v[key];
+      if (nowOpen && cc) fetchQtyForCc(cc);
+      return {...v, [key]: nowOpen};
+    });
+  };
+
+  // When a search auto-expands CCs (via item matches), kick off qty fetches
+  // for those too — otherwise users searching would see "—" until they
+  // manually collapse and re-open. fetchQtyForCc is idempotent (no-op if
+  // already fetched) so it's safe to call on every search change.
+  const prevQRef = useRef(q);
+  useEffect(() => {
+    if (prevQRef.current === q) return;
+    prevQRef.current = q;
+    if (!tokens.length) return;
+    visible.forEach(entry => {
+      if (entry.itemMatches.length > 0) fetchQtyForCc(entry.cc);
+    });
+  });
 
   const kindPill = (k) => {
     const bg = k==="catalog" ? "#0ea5e922"
@@ -4210,8 +4277,8 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
         />
         <div style={{fontSize:11,color:C.dim,whiteSpace:"nowrap"}}>
           {tokens.length
-            ? `${visible.length} / ${costCenters.length} CCs · ${totalItemMatches} item${totalItemMatches===1?"":"s"} · ${fmtMoney(visibleTotal)}`
-            : `${costCenters.length} cost center${costCenters.length===1?"":"s"} · ${totalItems} items · ${fmtMoney(totalBid)}`}
+            ? `${visible.length} / ${costCenters.length} CCs · ${totalItemMatches} item${totalItemMatches===1?"":"s"}`
+            : `${costCenters.length} cost center${costCenters.length===1?"":"s"} · ${totalItems} items`}
         </div>
         {onRefresh && (
           <button
@@ -4248,10 +4315,11 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
               : !!expanded[key];
             const itemsToShow = tokens.length && itemMatches.length ? itemMatches : items;
             const itemCount = items.length;
+            const qtyLoading = qtyLoadingCcs.has(key);
             return (
               <div key={key} style={{borderBottom:`1px solid ${C.border}22`,paddingBottom:4,marginBottom:4}}>
                 <div
-                  onClick={() => toggle(key)}
+                  onClick={() => toggle(key, cc)}
                   style={{display:"flex",justifyContent:"space-between",gap:12,
                     padding:"6px 2px",fontSize:12,cursor:itemCount?"pointer":"default",userSelect:"none"}}
                 >
@@ -4269,35 +4337,33 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
                             : `${itemCount} item${itemCount===1?"":"s"}`}
                       </span>
                     )}
-                    {cc.claimedPct != null && cc.claimedPct > 0 && (
-                      <span style={{fontSize:10,color:C.dim,whiteSpace:"nowrap"}}>
-                        · {Math.round(cc.claimedPct)}% claimed
+                    {qtyLoading && (
+                      <span style={{fontSize:10,color:C.dim,fontStyle:"italic",whiteSpace:"nowrap"}}>
+                        · loading qty…
                       </span>
                     )}
-                  </div>
-                  <div style={{color:C.dim,whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums"}}>
-                    {fmtMoney(cc.totalExTax)}
                   </div>
                 </div>
 
                 {isOpen && itemsToShow.length > 0 && (
                   <div style={{marginLeft:16,marginTop:2,marginBottom:4}}>
-                    {itemsToShow.map((it, i) => (
-                      <div key={`${key}-${it.kind}-${it.id ?? i}`}
-                        style={{display:"flex",justifyContent:"space-between",gap:10,
-                          padding:"3px 2px",fontSize:11,color:C.text}}>
-                        <div style={{flex:"1 1 auto",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",display:"flex",alignItems:"center"}}>
-                          {kindPill(it.kind)}
-                          <span>{it.name || "(unnamed)"}</span>
-                          {it.qty != null && (
-                            <span style={{color:C.dim,marginLeft:6,whiteSpace:"nowrap"}}>× {it.qty}</span>
-                          )}
+                    {itemsToShow.map((it, i) => {
+                      const qtyKey = `${cc.sectionId}-${cc.id}-${it.kind}-${it.id}`;
+                      const displayQty = it.qty != null ? it.qty : itemQtyMap[qtyKey];
+                      return (
+                        <div key={`${key}-${it.kind}-${it.id ?? i}`}
+                          style={{display:"flex",gap:10,
+                            padding:"3px 2px",fontSize:11,color:C.text}}>
+                          <div style={{flex:"1 1 auto",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",display:"flex",alignItems:"center"}}>
+                            {kindPill(it.kind)}
+                            <span>{it.name || "(unnamed)"}</span>
+                          </div>
+                          <div style={{color:C.dim,whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums",minWidth:44,textAlign:"right"}}>
+                            {displayQty != null ? `× ${displayQty}` : (qtyLoading ? "…" : "—")}
+                          </div>
                         </div>
-                        <div style={{color:C.dim,whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums"}}>
-                          {fmtMoney(it.totalExTax)}
-                        </div>
-                      </div>
-                    ))}
+                      );
+                    })}
                   </div>
                 )}
 

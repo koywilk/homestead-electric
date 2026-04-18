@@ -1109,6 +1109,59 @@ exports.getSimproJobCostCenters = functions
     };
   });
 
+// ─── Get Simpro Item Details (for lazy qty loading) ───────────────────────────
+// Simpro's cost-center item LIST endpoints don't return Quantity in the default
+// response. To get qty, we have to hit each item's detail endpoint. This
+// callable takes a batch of items and returns qty for each — called lazily
+// from the client when a cost center is expanded, so we never fetch more qty
+// than the user actually looks at.
+exports.getSimproItemDetails = functions
+  .runWith({ timeoutSeconds: 180, memory: "256MB" })
+  .https.onCall(async (data) => {
+    const { simproJobNo, items } = data || {};
+    if (!simproJobNo) throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
+    if (!Array.isArray(items) || items.length === 0) return { items: [] };
+
+    const KIND_TO_PATH = { catalog: "catalogs", oneOff: "oneOffs", prebuild: "prebuilds" };
+
+    const tasks = items.map(it => async () => {
+      const path = KIND_TO_PATH[it.kind];
+      if (!path || !it.sectionId || !it.ccId || !it.itemId) {
+        return { ...it, qty: null, error: "bad-input" };
+      }
+      const r = await simproReqWithRetry(
+        "GET",
+        `/jobs/${encodeURIComponent(simproJobNo)}/sections/${it.sectionId}` +
+        `/costCenters/${it.ccId}/${path}/${it.itemId}`
+      );
+      if (!r.ok) {
+        functions.logger.warn("getSimproItemDetails: detail fetch failed", {
+          kind: it.kind, sectionId: it.sectionId, ccId: it.ccId, itemId: it.itemId, status: r.status,
+        });
+        return { ...it, qty: null, error: `${r.status}` };
+      }
+      const raw = r.data || {};
+      // Exhaustive qty extraction — Simpro exposes it under many shapes.
+      const qty =
+        (typeof raw.Quantity === "number" ? raw.Quantity : null) ??
+        raw?.Quantity?.Value ??
+        raw?.Quantity?.Billable ??
+        raw?.Quantity?.Invoiced ??
+        raw?.Quantity?.Complete ??
+        raw?.Qty ??
+        raw?.QuantityOrdered ??
+        raw?.BillableQuantity ??
+        raw?.ItemQuantity ??
+        null;
+      return { ...it, qty };
+    });
+
+    // Concurrency 3 keeps us under Simpro's ~60 req/min per-token sustained
+    // limit even if the user expands several cost centers at once.
+    const results = await _pLimit(tasks, 3);
+    return { items: results };
+  });
+
 // ─── Get Simpro Schedule ──────────────────────────────────────────────────────
 exports.getSimproSchedule = functions.https.onCall(async (data) => {
   const { dateFrom, dateTo } = data || {};
