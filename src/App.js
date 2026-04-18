@@ -7643,7 +7643,7 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
       {/* Bid Items — "Is this in the bid?" search at the top of the tab.
           Lives here because it's the first place the field team checks
           before scheduling material, pulling wire, or writing a CO. */}
-      <Section label="Bid Items (Simpro)" color={C.blue||"#3b82f6"} defaultOpen={true}>
+      <Section label="Bid Items (Simpro)" color={C.blue||"#3b82f6"} defaultOpen={false}>
         <BidItemsPanel
           simproNo={job.simproNo}
           data={simproCostCenters}
