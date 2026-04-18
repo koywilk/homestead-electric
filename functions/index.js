@@ -1245,26 +1245,41 @@ exports.getSimproJobOrderedQty = functions
       `/jobs/${jn}/purchaseOrders/?pageSize=250`,
       `/jobs/${jn}/orders/?pageSize=250`,
     ];
-    const _debugListAttempts = [];
-    let workingListUrl = null;
-    let orders = [];
-    for (const candidate of candidateListUrls) {
-      const r = await simproReqWithRetry("GET", candidate);
-      _debugListAttempts.push({
+    // Fire all candidates in parallel with concurrency cap. Sequential was
+    // blowing the 60s callable client timeout (14 round-trips × Simpro latency
+    // = deadline-exceeded). Parallel caps total wall time to roughly the
+    // slowest single request. _pLimit keeps us under Simpro's per-token
+    // rate limit (~60 req/min sustained).
+    const listTasks = candidateListUrls.map(candidate => async () => {
+      const r = await simproReqWithRetry("GET", candidate, null, { maxAttempts: 2 });
+      return {
         url: candidate,
         status: r.status,
+        ok: r.ok,
+        data: r.ok && Array.isArray(r.data) ? r.data : null,
         count: Array.isArray(r.data) ? r.data.length : null,
-      });
-      if (r.ok && Array.isArray(r.data) && r.data.length > 0) {
-        workingListUrl = candidate;
-        orders = r.data;
+      };
+    });
+    const listResults = await _pLimit(listTasks, 6);
+    const _debugListAttempts = listResults.map(({ url, status, count }) => ({ url, status, count }));
+
+    // Prefer the first candidate (in the priority order above) that returned
+    // a non-empty array; fall back to first empty-but-200 so an empty-job case
+    // still returns cleanly instead of erroring.
+    let workingListUrl = null;
+    let orders = [];
+    for (const res of listResults) {
+      if (res.ok && Array.isArray(res.data) && res.data.length > 0) {
+        workingListUrl = res.url;
+        orders = res.data;
         break;
       }
-      // Empty-but-200 responses are also valid (job may genuinely have no POs)
-      // — keep them as a fallback so we don't error out.
-      if (r.ok && Array.isArray(r.data) && !workingListUrl) {
-        workingListUrl = candidate;
-        orders = r.data;
+    }
+    if (!workingListUrl) {
+      const emptyOk = listResults.find(r => r.ok && Array.isArray(r.data));
+      if (emptyOk) {
+        workingListUrl = emptyOk.url;
+        orders = [];
       }
     }
     if (!workingListUrl) {
@@ -1312,15 +1327,17 @@ exports.getSimproJobOrderedQty = functions
         _debugFirstOrder = { topKeys: Object.keys(order), status, sample: order };
       }
 
-      // Try v1 sub-resource paths for line items, in priority order. Some
-      // tenants expose lines at /catalogs/, others at /items/ or /lineItems/.
+      // Sub-resource for line items. /catalogs/ is the canonical Simpro v1
+      // path. Only fall through to alternatives for the FIRST order (so we
+      // don't multiply every order by 4 round-trips — that re-triggers the
+      // deadline-exceeded timeout).
       let lines = [];
       let usedSubUrl = null;
       let subAttempts = [];
-      const subPaths = ["catalogs", "items", "lineItems", "orderRequestItems"];
-      for (const sp of subPaths) {
+      const tryPaths = _debugFirstLines ? ["catalogs"] : ["catalogs", "items", "lineItems", "orderRequestItems"];
+      for (const sp of tryPaths) {
         const subUrl = `${detailBase}/${orderId}/${sp}/?pageSize=250`;
-        const sub = await simproReqWithRetry("GET", subUrl);
+        const sub = await simproReqWithRetry("GET", subUrl, null, { maxAttempts: 2 });
         subAttempts.push({ url: subUrl, status: sub.status, count: Array.isArray(sub.data) ? sub.data.length : null });
         if (sub.ok && Array.isArray(sub.data) && sub.data.length > 0) {
           lines = sub.data;

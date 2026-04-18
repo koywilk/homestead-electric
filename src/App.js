@@ -8769,7 +8769,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     const forced = simproCostCentersTick > 0;
     if (cached && cached.byCatalogId) setSimproOrderedQty(cached);
     if (!cached || isStale || forced) {
-      const fn = httpsCallable(functions, "getSimproJobOrderedQty");
+      // Client timeout bumped to 120s to match the Cloud Function's
+      // timeoutSeconds. Default client timeout is 60s, which was tripping
+      // deadline-exceeded before the server fully responded.
+      const fn = httpsCallable(functions, "getSimproJobOrderedQty", { timeout: 120000 });
       fn({ simproJobNo: job.simproNo })
         .then(res => {
           console.log("[simproOrderedQty]", res.data);
