@@ -1218,16 +1218,32 @@ exports.getSimproJobOrderedQty = functions
       throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
     }
 
-    // 1. List vendor orders (Simpro's v1 name for purchase orders). Canonical
-    //    path is /vendorOrders/?Job.ID={id}. We try a few variants in case the
-    //    tenant exposes them under a different name — first non-empty wins.
+    // 1. List vendor orders (Simpro's v1 name for purchase orders). Simpro's
+    //    tenants are inconsistent about endpoint naming and filter syntax, so
+    //    we try every variant we've seen in the wild — first non-empty wins,
+    //    empty-but-200 kept as fallback so we don't blow up on a job with no
+    //    POs yet. Query-param forms tried: dot (`Job.ID`), camel (`JobID`),
+    //    and bracket (`Job[ID]`). Resource names tried: vendorOrders,
+    //    vendorOrderRequests, purchaseOrders, orders. Plus job-scoped paths.
+    const jn = encodeURIComponent(simproJobNo);
+    const bracketJob = encodeURIComponent("Job[ID]");
     const candidateListUrls = [
-      `/vendorOrders/?Job.ID=${encodeURIComponent(simproJobNo)}&pageSize=250`,
-      `/vendorOrders/?JobID=${encodeURIComponent(simproJobNo)}&pageSize=250`,
-      `/jobs/${encodeURIComponent(simproJobNo)}/vendorOrders/?pageSize=250`,
-      `/purchaseOrders/?Job.ID=${encodeURIComponent(simproJobNo)}&pageSize=250`,
-      `/jobs/${encodeURIComponent(simproJobNo)}/purchaseOrders/?pageSize=250`,
-      `/orders/?Job.ID=${encodeURIComponent(simproJobNo)}&pageSize=250`,
+      // Global list + filter by job, in each resource name + filter style.
+      `/vendorOrders/?Job.ID=${jn}&pageSize=250`,
+      `/vendorOrders/?JobID=${jn}&pageSize=250`,
+      `/vendorOrders/?${bracketJob}=${jn}&pageSize=250`,
+      `/vendorOrderRequests/?Job.ID=${jn}&pageSize=250`,
+      `/vendorOrderRequests/?JobID=${jn}&pageSize=250`,
+      `/vendorOrderRequests/?${bracketJob}=${jn}&pageSize=250`,
+      `/purchaseOrders/?Job.ID=${jn}&pageSize=250`,
+      `/purchaseOrders/?JobID=${jn}&pageSize=250`,
+      `/purchaseOrders/?${bracketJob}=${jn}&pageSize=250`,
+      `/orders/?Job.ID=${jn}&pageSize=250`,
+      // Job-scoped subresources — try each plausible name.
+      `/jobs/${jn}/vendorOrders/?pageSize=250`,
+      `/jobs/${jn}/vendorOrderRequests/?pageSize=250`,
+      `/jobs/${jn}/purchaseOrders/?pageSize=250`,
+      `/jobs/${jn}/orders/?pageSize=250`,
     ];
     const _debugListAttempts = [];
     let workingListUrl = null;
@@ -1262,8 +1278,9 @@ exports.getSimproJobOrderedQty = functions
     }
 
     // Derive the detail base from whichever list path worked.
-    const isJobScoped = workingListUrl.includes(`/jobs/${encodeURIComponent(simproJobNo)}/`);
-    const resourceName = workingListUrl.includes("/vendorOrders/") ? "vendorOrders"
+    const isJobScoped = workingListUrl.includes(`/jobs/${jn}/`);
+    const resourceName = workingListUrl.includes("/vendorOrderRequests/") ? "vendorOrderRequests"
+                      : workingListUrl.includes("/vendorOrders/") ? "vendorOrders"
                       : workingListUrl.includes("/purchaseOrders/") ? "purchaseOrders"
                       : "orders";
     const detailBase = isJobScoped
@@ -1295,12 +1312,23 @@ exports.getSimproJobOrderedQty = functions
         _debugFirstOrder = { topKeys: Object.keys(order), status, sample: order };
       }
 
-      // Try the v1 sub-resource for catalog line items first.
+      // Try v1 sub-resource paths for line items, in priority order. Some
+      // tenants expose lines at /catalogs/, others at /items/ or /lineItems/.
       let lines = [];
-      const subCatalogs = await simproReqWithRetry("GET", `${detailBase}/${orderId}/catalogs/?pageSize=250`);
-      if (subCatalogs.ok && Array.isArray(subCatalogs.data) && subCatalogs.data.length > 0) {
-        lines = subCatalogs.data;
-      } else {
+      let usedSubUrl = null;
+      let subAttempts = [];
+      const subPaths = ["catalogs", "items", "lineItems", "orderRequestItems"];
+      for (const sp of subPaths) {
+        const subUrl = `${detailBase}/${orderId}/${sp}/?pageSize=250`;
+        const sub = await simproReqWithRetry("GET", subUrl);
+        subAttempts.push({ url: subUrl, status: sub.status, count: Array.isArray(sub.data) ? sub.data.length : null });
+        if (sub.ok && Array.isArray(sub.data) && sub.data.length > 0) {
+          lines = sub.data;
+          usedSubUrl = subUrl;
+          break;
+        }
+      }
+      if (lines.length === 0) {
         // Fall back to whatever the order body inlined.
         lines =
           order?.Catalogs ??
@@ -1313,9 +1341,9 @@ exports.getSimproJobOrderedQty = functions
 
       if (!_debugFirstLines && Array.isArray(lines) && lines.length > 0) {
         _debugFirstLines = {
-          subResourceUrl: `${detailBase}/${orderId}/catalogs/`,
-          subResourceStatus: subCatalogs.status,
-          usedSubResource: subCatalogs.ok && Array.isArray(subCatalogs.data) && subCatalogs.data.length > 0,
+          orderId,
+          subAttempts,
+          usedSubUrl,
           count: lines.length,
           topKeys: Object.keys(lines[0] || {}),
           sample: lines[0],
