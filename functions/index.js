@@ -1218,20 +1218,19 @@ exports.getSimproJobOrderedQty = functions
       throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
     }
 
-    // 1. List purchase orders for this job. Simpro's v1 canonical path is
-    //    /purchaseOrders/?Job.ID={id} — we try that first, then fall back to
-    //    a few plausible alternatives (orderRequests, job-scoped variants)
-    //    in case the tenant has them mounted differently. First non-empty
-    //    response wins. Tracks which endpoint actually worked for debugging.
+    // 1. List vendor orders (Simpro's v1 name for purchase orders). Canonical
+    //    path is /vendorOrders/?Job.ID={id}. We try a few variants in case the
+    //    tenant exposes them under a different name — first non-empty wins.
     const candidateListUrls = [
+      `/vendorOrders/?Job.ID=${encodeURIComponent(simproJobNo)}&pageSize=250`,
+      `/vendorOrders/?JobID=${encodeURIComponent(simproJobNo)}&pageSize=250`,
+      `/jobs/${encodeURIComponent(simproJobNo)}/vendorOrders/?pageSize=250`,
       `/purchaseOrders/?Job.ID=${encodeURIComponent(simproJobNo)}&pageSize=250`,
       `/jobs/${encodeURIComponent(simproJobNo)}/purchaseOrders/?pageSize=250`,
-      `/orderRequests/?Job.ID=${encodeURIComponent(simproJobNo)}&pageSize=250`,
-      `/jobs/${encodeURIComponent(simproJobNo)}/orderRequests/?pageSize=250`,
+      `/orders/?Job.ID=${encodeURIComponent(simproJobNo)}&pageSize=250`,
     ];
     const _debugListAttempts = [];
-    let listRes = null;
-    let listUrl = null;
+    let workingListUrl = null;
     let orders = [];
     for (const candidate of candidateListUrls) {
       const r = await simproReqWithRetry("GET", candidate);
@@ -1240,69 +1239,96 @@ exports.getSimproJobOrderedQty = functions
         status: r.status,
         count: Array.isArray(r.data) ? r.data.length : null,
       });
-      if (r.ok && Array.isArray(r.data)) {
-        listRes = r;
-        listUrl = candidate;
+      if (r.ok && Array.isArray(r.data) && r.data.length > 0) {
+        workingListUrl = candidate;
         orders = r.data;
-        if (r.data.length > 0) break; // found some — stop trying
+        break;
+      }
+      // Empty-but-200 responses are also valid (job may genuinely have no POs)
+      // — keep them as a fallback so we don't error out.
+      if (r.ok && Array.isArray(r.data) && !workingListUrl) {
+        workingListUrl = candidate;
+        orders = r.data;
       }
     }
-    if (!listRes) {
+    if (!workingListUrl) {
       functions.logger.warn("getSimproJobOrderedQty: all order list fetches failed", {
         simproJobNo, attempts: _debugListAttempts,
       });
-      return { byCatalogId: {}, totalOrders: 0, countedOrders: 0, _debug: { listAttempts: _debugListAttempts } };
+      return {
+        byCatalogId: {}, totalOrders: 0, countedOrders: 0,
+        _debug: { listAttempts: _debugListAttempts },
+      };
     }
-    // Derive the detail-URL prefix from whichever list path worked so the
-    // per-order detail calls hit the matching endpoint.
-    const detailBase = listUrl.startsWith("/purchaseOrders/")
-      ? "/purchaseOrders"
-      : listUrl.startsWith("/orderRequests/")
-        ? "/orderRequests"
-        : listUrl.includes("/purchaseOrders/")
-          ? `/jobs/${encodeURIComponent(simproJobNo)}/purchaseOrders`
-          : `/jobs/${encodeURIComponent(simproJobNo)}/orderRequests`;
 
-    // 2. For each order, pull the detail to get line items. Only count orders
-    //    that have actually been sent (Status != Draft / Pending cancellation).
+    // Derive the detail base from whichever list path worked.
+    const isJobScoped = workingListUrl.includes(`/jobs/${encodeURIComponent(simproJobNo)}/`);
+    const resourceName = workingListUrl.includes("/vendorOrders/") ? "vendorOrders"
+                      : workingListUrl.includes("/purchaseOrders/") ? "purchaseOrders"
+                      : "orders";
+    const detailBase = isJobScoped
+      ? `/jobs/${encodeURIComponent(simproJobNo)}/${resourceName}`
+      : `/${resourceName}`;
+
+    // 2. For each order, fetch line items. In Simpro v1, vendor order line
+    //    items live at a SUB-RESOURCE (/vendorOrders/{id}/catalogs/), not
+    //    embedded in the order detail. We try sub-resources first, fall back
+    //    to embedded fields if the order body carries them inline.
     const byCatalogId = {};
     let countedOrders = 0;
     let _debugFirstOrder = null;
-    let _debugFirstLine = null;
+    let _debugFirstLines = null;
 
     const tasks = orders.map(o => async () => {
       const orderId = o?.ID ?? o?.Id ?? o?.id;
       if (!orderId) return;
-      const detailRes = await simproReqWithRetry(
-        "GET",
-        `${detailBase}/${orderId}`
-      );
+
+      // Pull detail for status check + inline line items if present.
+      const detailRes = await simproReqWithRetry("GET", `${detailBase}/${orderId}`);
       if (!detailRes.ok) return;
       const order = detailRes.data || {};
-      const status = order?.Status?.Name || order?.Status || "";
-      // Skip drafts / cancelled / voided. Everything else counts as "ordered".
+      const status = order?.Status?.Name || order?.Stage || order?.Status || "";
       const statusLower = String(status).toLowerCase();
-      if (statusLower.includes("draft") || statusLower.includes("cancel") || statusLower.includes("void")) {
-        return;
-      }
+      if (statusLower.includes("cancel") || statusLower.includes("void")) return;
+
       if (!_debugFirstOrder) {
         _debugFirstOrder = { topKeys: Object.keys(order), status, sample: order };
       }
 
-      // Line items live under a few possible field names. Try common ones.
-      const lines =
-        order?.OrderRequestItems ??
-        order?.LineItems ??
-        order?.Items ??
-        order?.Lines ??
-        [];
+      // Try the v1 sub-resource for catalog line items first.
+      let lines = [];
+      const subCatalogs = await simproReqWithRetry("GET", `${detailBase}/${orderId}/catalogs/?pageSize=250`);
+      if (subCatalogs.ok && Array.isArray(subCatalogs.data) && subCatalogs.data.length > 0) {
+        lines = subCatalogs.data;
+      } else {
+        // Fall back to whatever the order body inlined.
+        lines =
+          order?.Catalogs ??
+          order?.LineItems ??
+          order?.Items ??
+          order?.Lines ??
+          order?.OrderRequestItems ??
+          [];
+      }
+
+      if (!_debugFirstLines && Array.isArray(lines) && lines.length > 0) {
+        _debugFirstLines = {
+          subResourceUrl: `${detailBase}/${orderId}/catalogs/`,
+          subResourceStatus: subCatalogs.status,
+          usedSubResource: subCatalogs.ok && Array.isArray(subCatalogs.data) && subCatalogs.data.length > 0,
+          count: lines.length,
+          topKeys: Object.keys(lines[0] || {}),
+          sample: lines[0],
+        };
+      }
+
       (Array.isArray(lines) ? lines : []).forEach(line => {
-        if (!_debugFirstLine) _debugFirstLine = { topKeys: Object.keys(line), sample: line };
         const catalogId =
           line?.Catalog?.ID ??
           line?.Prebuild?.ID ??
           line?.CatalogID ??
           line?.PrebuildID ??
+          line?.ID ?? // in the /catalogs/ sub-resource, top-level ID is often the catalog ID
           null;
         if (catalogId == null) return;
         const lineQty =
@@ -1310,6 +1336,7 @@ exports.getSimproJobOrderedQty = functions
           line?.Quantity?.Value ??
           line?.Qty ??
           line?.OrderedQuantity ??
+          line?.Ordered ??
           0;
         if (!lineQty) return;
         byCatalogId[catalogId] = (byCatalogId[catalogId] || 0) + lineQty;
@@ -1325,10 +1352,11 @@ exports.getSimproJobOrderedQty = functions
       countedOrders,
       fetchedAt: new Date().toISOString(),
       _debug: {
-        listUrl,
+        workingListUrl,
+        resourceName,
         listAttempts: _debugListAttempts,
         firstOrder: _debugFirstOrder,
-        firstLine: _debugFirstLine,
+        firstLines: _debugFirstLines,
       },
     };
   });
