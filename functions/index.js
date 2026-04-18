@@ -1218,17 +1218,50 @@ exports.getSimproJobOrderedQty = functions
       throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
     }
 
-    // 1. List order requests for this job. Simpro v1 exposes these at
-    //    /jobs/{id}/orderRequests/ — response is a list of OR summaries.
-    const listUrl = `/jobs/${encodeURIComponent(simproJobNo)}/orderRequests/?pageSize=250`;
-    const listRes = await simproReqWithRetry("GET", listUrl);
-    if (!listRes.ok) {
-      functions.logger.warn("getSimproJobOrderedQty: order list fetch failed", {
-        simproJobNo, status: listRes.status,
+    // 1. List purchase orders for this job. Simpro's v1 canonical path is
+    //    /purchaseOrders/?Job.ID={id} — we try that first, then fall back to
+    //    a few plausible alternatives (orderRequests, job-scoped variants)
+    //    in case the tenant has them mounted differently. First non-empty
+    //    response wins. Tracks which endpoint actually worked for debugging.
+    const candidateListUrls = [
+      `/purchaseOrders/?Job.ID=${encodeURIComponent(simproJobNo)}&pageSize=250`,
+      `/jobs/${encodeURIComponent(simproJobNo)}/purchaseOrders/?pageSize=250`,
+      `/orderRequests/?Job.ID=${encodeURIComponent(simproJobNo)}&pageSize=250`,
+      `/jobs/${encodeURIComponent(simproJobNo)}/orderRequests/?pageSize=250`,
+    ];
+    const _debugListAttempts = [];
+    let listRes = null;
+    let listUrl = null;
+    let orders = [];
+    for (const candidate of candidateListUrls) {
+      const r = await simproReqWithRetry("GET", candidate);
+      _debugListAttempts.push({
+        url: candidate,
+        status: r.status,
+        count: Array.isArray(r.data) ? r.data.length : null,
       });
-      return { byCatalogId: {}, totalOrders: 0, countedOrders: 0, _debug: { status: listRes.status } };
+      if (r.ok && Array.isArray(r.data)) {
+        listRes = r;
+        listUrl = candidate;
+        orders = r.data;
+        if (r.data.length > 0) break; // found some — stop trying
+      }
     }
-    const orders = Array.isArray(listRes.data) ? listRes.data : [];
+    if (!listRes) {
+      functions.logger.warn("getSimproJobOrderedQty: all order list fetches failed", {
+        simproJobNo, attempts: _debugListAttempts,
+      });
+      return { byCatalogId: {}, totalOrders: 0, countedOrders: 0, _debug: { listAttempts: _debugListAttempts } };
+    }
+    // Derive the detail-URL prefix from whichever list path worked so the
+    // per-order detail calls hit the matching endpoint.
+    const detailBase = listUrl.startsWith("/purchaseOrders/")
+      ? "/purchaseOrders"
+      : listUrl.startsWith("/orderRequests/")
+        ? "/orderRequests"
+        : listUrl.includes("/purchaseOrders/")
+          ? `/jobs/${encodeURIComponent(simproJobNo)}/purchaseOrders`
+          : `/jobs/${encodeURIComponent(simproJobNo)}/orderRequests`;
 
     // 2. For each order, pull the detail to get line items. Only count orders
     //    that have actually been sent (Status != Draft / Pending cancellation).
@@ -1242,7 +1275,7 @@ exports.getSimproJobOrderedQty = functions
       if (!orderId) return;
       const detailRes = await simproReqWithRetry(
         "GET",
-        `/jobs/${encodeURIComponent(simproJobNo)}/orderRequests/${orderId}`
+        `${detailBase}/${orderId}`
       );
       if (!detailRes.ok) return;
       const order = detailRes.data || {};
@@ -1291,7 +1324,12 @@ exports.getSimproJobOrderedQty = functions
       totalOrders: orders.length,
       countedOrders,
       fetchedAt: new Date().toISOString(),
-      _debug: { firstOrder: _debugFirstOrder, firstLine: _debugFirstLine },
+      _debug: {
+        listUrl,
+        listAttempts: _debugListAttempts,
+        firstOrder: _debugFirstOrder,
+        firstLine: _debugFirstLine,
+      },
     };
   });
 
