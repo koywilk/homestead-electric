@@ -1069,9 +1069,18 @@ exports.getSimproJobCostCenters = functions
               it?.UnitPrice ??
               it?.Cost ??
               null;
+            // Master catalog/prebuild ID — the key Simpro order requests use
+            // to reference catalog items. Needed for matching ordered qty
+            // back to bid items later.
+            const catalogId =
+              it?.Catalog?.ID ??
+              it?.Prebuild?.ID ??
+              it?.OneOff?.ID ??
+              null;
             return {
               kind: kind.key,
               id: it?.ID ?? it?.Id ?? it?.id ?? null,
+              catalogId,
               name,
               qty,
               unitPrice,
@@ -1194,6 +1203,96 @@ exports.getSimproItemDetails = functions
     // limit even if the user expands several cost centers at once.
     const results = await _pLimit(tasks, 3);
     return { items: results, _debugRawByKind };
+  });
+
+// ─── Get Simpro Job Ordered Quantities ────────────────────────────────────────
+// Fetches order requests (POs) for a job, aggregates ordered qty per catalog
+// ID. Field team uses this to see "× 8 bid / × 5 ordered" per item — tells
+// them at a glance if anything still needs to be ordered. Drafts are excluded
+// (we only want counts for orders actually sent to vendors).
+exports.getSimproJobOrderedQty = functions
+  .runWith({ timeoutSeconds: 120, memory: "256MB" })
+  .https.onCall(async (data) => {
+    const { simproJobNo } = data || {};
+    if (!simproJobNo) {
+      throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
+    }
+
+    // 1. List order requests for this job. Simpro v1 exposes these at
+    //    /jobs/{id}/orderRequests/ — response is a list of OR summaries.
+    const listUrl = `/jobs/${encodeURIComponent(simproJobNo)}/orderRequests/?pageSize=250`;
+    const listRes = await simproReqWithRetry("GET", listUrl);
+    if (!listRes.ok) {
+      functions.logger.warn("getSimproJobOrderedQty: order list fetch failed", {
+        simproJobNo, status: listRes.status,
+      });
+      return { byCatalogId: {}, totalOrders: 0, countedOrders: 0, _debug: { status: listRes.status } };
+    }
+    const orders = Array.isArray(listRes.data) ? listRes.data : [];
+
+    // 2. For each order, pull the detail to get line items. Only count orders
+    //    that have actually been sent (Status != Draft / Pending cancellation).
+    const byCatalogId = {};
+    let countedOrders = 0;
+    let _debugFirstOrder = null;
+    let _debugFirstLine = null;
+
+    const tasks = orders.map(o => async () => {
+      const orderId = o?.ID ?? o?.Id ?? o?.id;
+      if (!orderId) return;
+      const detailRes = await simproReqWithRetry(
+        "GET",
+        `/jobs/${encodeURIComponent(simproJobNo)}/orderRequests/${orderId}`
+      );
+      if (!detailRes.ok) return;
+      const order = detailRes.data || {};
+      const status = order?.Status?.Name || order?.Status || "";
+      // Skip drafts / cancelled / voided. Everything else counts as "ordered".
+      const statusLower = String(status).toLowerCase();
+      if (statusLower.includes("draft") || statusLower.includes("cancel") || statusLower.includes("void")) {
+        return;
+      }
+      if (!_debugFirstOrder) {
+        _debugFirstOrder = { topKeys: Object.keys(order), status, sample: order };
+      }
+
+      // Line items live under a few possible field names. Try common ones.
+      const lines =
+        order?.OrderRequestItems ??
+        order?.LineItems ??
+        order?.Items ??
+        order?.Lines ??
+        [];
+      (Array.isArray(lines) ? lines : []).forEach(line => {
+        if (!_debugFirstLine) _debugFirstLine = { topKeys: Object.keys(line), sample: line };
+        const catalogId =
+          line?.Catalog?.ID ??
+          line?.Prebuild?.ID ??
+          line?.CatalogID ??
+          line?.PrebuildID ??
+          null;
+        if (catalogId == null) return;
+        const lineQty =
+          (typeof line?.Quantity === "number" ? line.Quantity : null) ??
+          line?.Quantity?.Value ??
+          line?.Qty ??
+          line?.OrderedQuantity ??
+          0;
+        if (!lineQty) return;
+        byCatalogId[catalogId] = (byCatalogId[catalogId] || 0) + lineQty;
+      });
+      countedOrders++;
+    });
+
+    await _pLimit(tasks, 3);
+
+    return {
+      byCatalogId,
+      totalOrders: orders.length,
+      countedOrders,
+      fetchedAt: new Date().toISOString(),
+      _debug: { firstOrder: _debugFirstOrder, firstLine: _debugFirstLine },
+    };
   });
 
 // ─── Get Simpro Schedule ──────────────────────────────────────────────────────
