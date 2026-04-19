@@ -4139,27 +4139,12 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
   const tokens = norm(q).split(/\s+/).filter(Boolean);
   const matchTokens = (hay) => tokens.every(t => hay.includes(t));
 
-  // Bid-only filter. Simpro adds post-bid purchases (received PO lines, tax
-  // lines, misc purchase additions) to the job's cost center as extra lines
-  // with zero estimated cost and zero base price. We only want to show what
-  // was actually bid, so drop anything with both fields at zero. Legacy
-  // cached data may not carry these fields — in that case we keep the item
-  // (no data = no filter) rather than accidentally hiding real bid items.
-  const isBidOrigin = (it) => {
-    const hasEst = it?.estimatedCost !== undefined || it?.basePrice !== undefined;
-    if (!hasEst) return true; // legacy cache — don't filter
-    const est = Number(it?.estimatedCost) || 0;
-    const base = Number(it?.basePrice) || 0;
-    return est > 0 || base > 0;
-  };
-
   // When searching, a cost center is "relevant" if its name matches OR any
   // of its items match. We also track which specific items match so we can
   // highlight just those under each cost center.
   const scored = costCenters.map(cc => {
     const ccHay = norm(cc.name) + " " + norm(cc.sectionName);
-    const rawItems = Array.isArray(cc.items) ? cc.items : [];
-    const items = rawItems.filter(isBidOrigin);
+    const items = Array.isArray(cc.items) ? cc.items : [];
     const itemMatches = items.filter(it => matchTokens(norm(it.name)));
     const ccMatches = matchTokens(ccHay);
     return { cc, items, itemMatches, ccMatches };
@@ -4176,10 +4161,7 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
     bySection.get(key).push(entry);
   });
 
-  const totalItems = costCenters.reduce((s,cc) => {
-    const arr = Array.isArray(cc.items) ? cc.items : [];
-    return s + arr.filter(isBidOrigin).length;
-  }, 0);
+  const totalItems = costCenters.reduce((s,cc) => s + (Array.isArray(cc.items) ? cc.items.length : 0), 0);
   const totalItemMatches = tokens.length
     ? visible.reduce((s,e) => s + e.itemMatches.length, 0)
     : totalItems;
