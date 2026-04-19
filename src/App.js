@@ -13653,7 +13653,11 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
           transition:"transform 0.1s,box-shadow 0.1s"}}
         onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 12px ${col}18`;}}
         onMouseLeave={e=>{e.currentTarget.style.transform="";e.currentTarget.style.boxShadow="";}}>
-        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
+        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6,flexWrap:"wrap",rowGap:4}}>
+          {over&&<span style={{fontSize:9,fontWeight:800,color:C.red,background:C.red+"18",borderRadius:99,
+            padding:"2px 8px",border:`1px solid ${C.red}33`,letterSpacing:"0.07em",flexShrink:0,
+            whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:3}}>
+            <Icon name="alertTriangle" size={9} stroke={2.5}/> OVERDUE</span>}
           <span style={{fontSize:9,fontWeight:800,color:col,background:col+"18",borderRadius:99,
             padding:"2px 8px",border:`1px solid ${col}28`,letterSpacing:"0.07em",flexShrink:0}}>{ev.label}</span>
           <span style={{fontSize:9,fontWeight:700,color:fc,background:fc+"15",borderRadius:99,
@@ -13664,7 +13668,6 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
           {notScheduled&&<span title="Has Simpro job # but not scheduled this month" style={{fontSize:9,
             fontWeight:700,color:C.orange,background:`${C.orange}18`,borderRadius:99,
             padding:"2px 7px",border:`1px solid ${C.orange}33`,flexShrink:0}}>Not scheduled</span>}
-          {over&&<span style={{fontSize:9,fontWeight:800,color:C.red,letterSpacing:"0.07em",marginLeft:"auto"}}>OVERDUE</span>}
         </div>
         <div style={{fontWeight:700,fontSize:13,color:"var(--text)",marginBottom:3,
           overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.job.name||"Untitled"}</div>
