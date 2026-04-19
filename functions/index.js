@@ -252,6 +252,25 @@ exports.onJobUpdate = functions.firestore
       }, foremanTokens));
     }
 
+    // ── 1b. Status update changed (irregular status like "needs a lift") ──
+    // Fires on set, edit, and clear. The app shows this text on every card;
+    // we also push it so foreman + admins know right away. Cleared = goes
+    // back to normal, which we announce lightly so people stop chasing it.
+    if ((before.statusUpdate || "") !== (after.statusUpdate || "")) {
+      const foremanTokens = await getTokenForName(after.foreman);
+      const cleared = !after.statusUpdate;
+      const title   = cleared ? "✅ Status Cleared" : "⚠️ Status Update";
+      const body    = cleared
+        ? `${name} — status cleared`
+        : `${name} — ${after.statusUpdate}`;
+      tasks.push(sendToName(after.foreman, {
+        title, body, jobId, section: "Job Info",
+      }));
+      tasks.push(sendToRoles(["admin", "manager"], {
+        title, body, jobId, section: "Job Info",
+      }, foremanTokens));
+    }
+
     // ── 2. Lead assigned / changed ────────────────────────────
     if (after.lead && after.lead !== before.lead && after.lead !== "Unassigned") {
       const leadTokens = await getTokenForName(after.lead);

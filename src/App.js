@@ -8616,7 +8616,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
   );
 }
 
-function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, initialTab, users=[]}) {
+function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, initialTab, users=[], identity=null}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
@@ -9107,6 +9107,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
             </div>
 
+            {job.statusUpdate&&(
+              <div style={{display:"inline-flex",alignItems:"center",gap:6,marginTop:5,
+                fontSize:12,fontWeight:700,color:"#9a3412",background:"#fff7ed",
+                border:"2px solid #ea580c",borderRadius:8,padding:"4px 10px",
+                boxShadow:"0 0 0 2px #fed7aa55"}}>
+                <Icon name="alertTriangle" size={12} stroke={2.5} color="#ea580c"/>
+                <span>{job.statusUpdate}</span>
+              </div>
+            )}
             {job.accessNote&&(
               <div style={{display:"inline-flex",alignItems:"center",gap:5,marginTop:4,
                 fontSize:11,color:"#92400e",background:"#fef3c7",
@@ -10522,6 +10531,48 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               </div>
 
+              {/* Status Update — irregular/ephemeral status that should jump out
+                  from any view. Shows on every job card too (Board, Forecast,
+                  Upcoming) so a "needs a lift" type note is impossible to miss. */}
+              <div style={{marginTop:16}}>
+                <div style={{fontSize:10,color:C.dim,marginBottom:3,display:"flex",alignItems:"center",gap:6}}>
+                  STATUS UPDATE <span style={{color:C.muted,fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>(e.g. needs a lift, waiting on parts — shows on every card)</span>
+                  {job.statusUpdate && (
+                    <button onClick={()=>u({statusUpdate:"",statusUpdateBy:"",statusUpdateAt:""})}
+                      style={{marginLeft:"auto",background:"none",border:"1px solid #dc262633",
+                        borderRadius:5,color:"#dc2626",fontSize:9,fontWeight:700,
+                        padding:"2px 7px",cursor:"pointer",fontFamily:"inherit",
+                        textTransform:"uppercase",letterSpacing:"0.05em"}}>Clear</button>
+                  )}
+                </div>
+                <textarea
+                  value={job.statusUpdate||""}
+                  onChange={e=>{
+                    const v=e.target.value;
+                    u({
+                      statusUpdate: v,
+                      statusUpdateBy: v ? (identity?.name || job.statusUpdateBy || "") : "",
+                      statusUpdateAt: v ? new Date().toISOString() : "",
+                    });
+                  }}
+                  placeholder="e.g. Needs a lift rental · Waiting on panel · Weather delay"
+                  rows={2}
+                  style={{width:"100%",boxSizing:"border-box",
+                    background: job.statusUpdate ? "#fff7ed" : C.surface,
+                    border: `${job.statusUpdate?2:1}px solid ${job.statusUpdate?"#ea580c":C.border}`,
+                    borderRadius:8,padding:"8px 10px",
+                    fontSize: job.statusUpdate ? 13 : 12,
+                    fontWeight: job.statusUpdate ? 600 : 400,
+                    color: job.statusUpdate ? "#9a3412" : C.text,
+                    fontFamily:"inherit",resize:"vertical",outline:"none",lineHeight:1.5,
+                    transition:"all 0.15s"}}/>
+                {job.statusUpdate && job.statusUpdateBy && (
+                  <div style={{fontSize:10,color:C.dim,marginTop:4}}>
+                    Set by {job.statusUpdateBy}{job.statusUpdateAt ? ` · ${timeAgo(job.statusUpdateAt)}` : ""}
+                  </div>
+                )}
+              </div>
+
               {/* Access note — gate code, keybox, etc. */}
               <div style={{marginTop:12}}>
                 <div style={{fontSize:10,color:C.dim,marginBottom:3,display:"flex",alignItems:"center",gap:6}}>
@@ -11210,6 +11261,14 @@ function QuickJobCard({ job, onOpen, onUpdate, onDelete }) {
             <span style={{ fontWeight: 700, color: fc }}>{foreman}</span>
             {job.lead && <span style={{ color: C.accent }}>· {job.lead}</span>}
           </div>
+          {job.statusUpdate && (
+            <div style={{fontSize:10,color:"#9a3412",marginTop:4,fontWeight:700,
+              background:"#fff7ed",border:"1px solid #ea580c",borderRadius:6,
+              padding:"2px 7px",display:"inline-flex",alignItems:"center",gap:4,maxWidth:"100%"}}>
+              <Icon name="alertTriangle" size={9} stroke={2.5} color="#ea580c"/>
+              <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{job.statusUpdate}</span>
+            </div>
+          )}
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end", flexShrink: 0 }}>
@@ -11273,6 +11332,14 @@ function TempPedCard({ job, onOpen, onUpdate, onDelete }) {
             <span style={{fontWeight:700,color:fc}}>{foreman}</span>
             {job.lead&&<span style={{color:"var(--accent)"}}>· {job.lead}</span>}
           </div>
+          {job.statusUpdate&&(
+            <div style={{fontSize:10,color:"#9a3412",marginTop:4,fontWeight:700,
+              background:"#fff7ed",border:"1px solid #ea580c",borderRadius:6,
+              padding:"2px 7px",display:"inline-flex",alignItems:"center",gap:4,maxWidth:"100%"}}>
+              <Icon name="alertTriangle" size={9} stroke={2.5} color="#ea580c"/>
+              <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{job.statusUpdate}</span>
+            </div>
+          )}
         </div>
 
         {/* Right: status control */}
@@ -13678,6 +13745,14 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
         </div>
         <div style={{fontWeight:700,fontSize:13,color:"var(--text)",marginBottom:3,
           overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.job.name||"Untitled"}</div>
+        {ev.job.statusUpdate&&(
+          <div style={{fontSize:10,color:"#9a3412",marginBottom:4,fontWeight:700,
+            background:"#fff7ed",border:"1px solid #ea580c",borderRadius:6,
+            padding:"2px 7px",display:"inline-flex",alignItems:"center",gap:4,maxWidth:"100%"}}>
+            <Icon name="alertTriangle" size={9} stroke={2.5} color="#ea580c"/>
+            <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.job.statusUpdate}</span>
+          </div>
+        )}
         {ev.desc&&ev.type!=="rough"&&ev.type!=="finish"&&
           <div style={{fontSize:11,color:"var(--dim)",marginBottom:4,overflow:"hidden",
             textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.desc.replace(/<[^>]*>/g,"")}</div>}
@@ -18117,6 +18192,16 @@ function App() {
                 <Icon name="flag" size={11}/> {job.flagNote}
               </div>
             )}
+            {job.statusUpdate&&(
+              <div title={`Status set by ${job.statusUpdateBy||"someone"}${job.statusUpdateAt?` · ${timeAgo(job.statusUpdateAt)}`:""}`}
+                style={{fontSize:11,color:"#9a3412",marginTop:4,fontWeight:700,
+                background:"#fff7ed",border:"2px solid #ea580c",
+                borderRadius:7,padding:"3px 9px",display:"inline-flex",alignItems:"center",gap:5,maxWidth:"100%",
+                boxShadow:"0 0 0 1px #fed7aa88"}}>
+                <Icon name="alertTriangle" size={11} stroke={2.5} color="#ea580c"/>
+                <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:280}}>{job.statusUpdate}</span>
+              </div>
+            )}
 
           </div>
 
@@ -19197,7 +19282,7 @@ function App() {
         ? <TempPedDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);}} foremenList={_foremen}/>
         : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);setOpenTab(null);}} foremenList={_foremen} leadsList={_leads}
             canConvertQuote={can(identity,"quotes.convert")}
-            initialTab={openTab} users={users}
+            initialTab={openTab} users={users} identity={identity}
             onConvertQuote={(q)=>{
               // q already has simproNo set from the prompt
               const updated={...q, type:""};
