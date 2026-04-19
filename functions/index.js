@@ -1077,6 +1077,20 @@ exports.getSimproJobCostCenters = functions
               it?.Prebuild?.ID ??
               it?.OneOff?.ID ??
               null;
+            // Bid-origin signal. Simpro adds post-bid purchases (PO line
+            // items, tax lines, misc additions) to the job's cost center as
+            // oneOff lines with zero estimated cost/price. True bid items
+            // come in with an EstimatedCost or BasePrice > 0 from the quote.
+            const estimatedCost =
+              it?.EstimatedCost ??
+              it?.Catalog?.EstimatedCost ??
+              it?.Prebuild?.EstimatedCost ??
+              0;
+            const basePrice =
+              it?.BasePrice ??
+              it?.Catalog?.BasePrice ??
+              it?.Prebuild?.BasePrice ??
+              0;
             return {
               kind: kind.key,
               id: it?.ID ?? it?.Id ?? it?.id ?? null,
@@ -1085,6 +1099,8 @@ exports.getSimproJobCostCenters = functions
               qty,
               unitPrice,
               totalExTax,
+              estimatedCost,
+              basePrice,
             };
           });
           return { cc, kind: kind.key, items };
