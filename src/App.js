@@ -4097,6 +4097,29 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
   // refetch when the user collapses + re-expands.
   const [qtyFetchedCcs, setQtyFetchedCcs] = useState(() => new Set());
   const [qtyLoadingCcs, setQtyLoadingCcs] = useState(() => new Set());
+  // IMPORTANT: useRef and useEffect MUST live up here, above every early
+  // return below. If they lived past the `if (data=="loading") return` guard
+  // they would only run once data was ready, which means the first render
+  // sees fewer hooks than the second — React throws minified error #310
+  // ("Rendered more hooks than during the previous render"). The effect
+  // body itself is a no-op until there's data + a search query, so hoisting
+  // it is purely structural.
+  //
+  // The effect reads `tokens`/`visible`/`fetchQtyForCc` out of a ref that
+  // the render body fills in later, so the hook order stays stable even
+  // when the early returns bail out before those locals exist.
+  const prevQRef = useRef(q);
+  const searchCtxRef = useRef(null);
+  useEffect(() => {
+    const ctx = searchCtxRef.current;
+    if (!ctx) return;
+    if (prevQRef.current === ctx.q) return;
+    prevQRef.current = ctx.q;
+    if (!ctx.tokens.length) return;
+    ctx.visible.forEach(entry => {
+      if (entry.itemMatches.length > 0) ctx.fetchQtyForCc(entry.cc);
+    });
+  });
 
   if (!simproNo) {
     return (
@@ -4239,17 +4262,12 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
 
   // When a search auto-expands CCs (via item matches), kick off qty fetches
   // for those too — otherwise users searching would see "—" until they
-  // manually collapse and re-open. fetchQtyForCc is idempotent (no-op if
-  // already fetched) so it's safe to call on every search change.
-  const prevQRef = useRef(q);
-  useEffect(() => {
-    if (prevQRef.current === q) return;
-    prevQRef.current = q;
-    if (!tokens.length) return;
-    visible.forEach(entry => {
-      if (entry.itemMatches.length > 0) fetchQtyForCc(entry.cc);
-    });
-  });
+  // manually collapse and re-open. The actual useEffect lives at the top
+  // of the component (above the early returns, to keep hook order stable);
+  // here we just publish the current render's closure into a ref so that
+  // effect can see it. fetchQtyForCc is idempotent so the effect running on
+  // every render is safe.
+  searchCtxRef.current = { q, tokens, visible, fetchQtyForCc };
 
   const kindPill = (k) => {
     const bg = k==="catalog" ? "#0ea5e922"
