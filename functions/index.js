@@ -1478,7 +1478,10 @@ exports.getSimproScheduleByJob = functions
       page++;
     }
 
-    // Group Type === "job" rows by Project.ProjectID → Set<Date>
+    // Group Type === "job" rows by Project.ProjectID → { date → Set<staffName> }
+    // We track staff-per-day (not just dates) so the Scoreboard can attribute
+    // credit/miss to whichever lead was actually on the job that day, even
+    // when that isn't the assigned lead on the job doc.
     const byJob = {};
     all.forEach(s => {
       if (!s || s.Type !== "job") return;
@@ -1488,20 +1491,26 @@ exports.getSimproScheduleByJob = functions
       if (dateTo   && date > dateTo)   return;
       const pid = String((s.Project && s.Project.ProjectID) || "");
       if (!pid) return;
-      if (!byJob[pid]) byJob[pid] = new Set();
-      byJob[pid].add(date);
+      const staffName = (s.Staff && s.Staff.Name) || "";
+      if (!byJob[pid]) byJob[pid] = {};
+      if (!byJob[pid][date]) byJob[pid][date] = new Set();
+      if (staffName) byJob[pid][date].add(staffName);
     });
 
-    // Materialize sets as sorted arrays for JSON transport.
-    const byJobArr = {};
-    Object.entries(byJob).forEach(([pid, set]) => {
-      byJobArr[pid] = [...set].sort();
+    // Materialize staff-name sets as arrays for JSON transport.
+    const byJobOut = {};
+    Object.entries(byJob).forEach(([pid, dateMap]) => {
+      const outDates = {};
+      Object.entries(dateMap).forEach(([date, staffSet]) => {
+        outDates[date] = [...staffSet].sort();
+      });
+      byJobOut[pid] = outDates;
     });
 
     return {
-      byJob: byJobArr,
+      byJob: byJobOut,
       totalRows: all.length,
-      jobsCovered: Object.keys(byJobArr).length,
+      jobsCovered: Object.keys(byJobOut).length,
       fetchedAt: new Date().toISOString(),
     };
   });

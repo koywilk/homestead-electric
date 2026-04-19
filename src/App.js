@@ -14330,49 +14330,44 @@ function Scoreboard({ jobs, users=[], identity }) {
       return d && d >= effStart && d <= effEnd;
     });
 
-    // Posted-days set: unique weekdays this job's in-window updates land on.
-    // Centralized here (rather than in the aggregator) so the fallback logic
-    // above is the only place that resolves update dates.
+    // Posted-days set + per-day update count. We count EVERY update (2 posts
+    // on the same day = 2 points) but also track unique posted days for
+    // miss calculation. Centralized here so update-date resolution lives
+    // in one place.
     const postedDays = new Set();
+    const updatesByDay = {};   // ymd → count of updates that day
     inWindow.forEach(u => {
       const d = updateYMD(u);
       if (!d) return;
       const [yy,mm,dd] = d.split("-").map(Number);
       const dow = new Date(yy, mm-1, dd).getDay();
-      if (dow !== 0 && dow !== 6) postedDays.add(d);
+      if (dow === 0 || dow === 6) return; // skip weekends
+      postedDays.add(d);
+      updatesByDay[d] = (updatesByDay[d] || 0) + 1;
     });
 
-    // Active days — sourced from Simpro's schedule feed. A job is "active"
-    // on a given day if Simpro shows it scheduled that day (Type === "job").
-    // Days where an update was posted also count, so postedDays ⊆ activeDays
-    // and the Daily Updates % can never exceed 100%. Dates are already
-    // clamped to [effStart, effEnd] by the Cloud Function.
-    //
-    // Fallback: if the Simpro fetch hasn't landed yet OR the job has no
-    // simproNo, we use postedDays as the active set — meaning no misses
-    // get counted for that job. Intentional: better to under-count misses
-    // than to blame a lead when we literally don't know if their crew was
-    // supposed to be there.
-    const activeDays = new Set();
-    const simproDates = (job.simproNo && scheduleByJob)
-      ? (scheduleByJob[String(job.simproNo)] || [])
+    // Simpro-sourced schedule data for this job. `scheduleByJob[simproNo]`
+    // is now a date → staff-array map. We extract the in-range dates plus
+    // the staff-per-day table so the aggregator can do per-day attribution
+    // (assigned-lead-vs-whoever-was-actually-there) without reparsing.
+    const simproRaw = (job.simproNo && scheduleByJob)
+      ? (scheduleByJob[String(job.simproNo)] || null)
       : null;
-    if (simproDates) {
-      simproDates.forEach(d => {
-        if (d >= effStart && d <= effEnd) activeDays.add(d);
-      });
-    }
-    postedDays.forEach(d => activeDays.add(d));
-
-    // Missed days — scheduled by Simpro but no update posted. Only meaningful
-    // when Simpro schedule data is loaded; otherwise stays at 0.
-    const missedDays = new Set();
-    if (simproDates) {
-      simproDates.forEach(d => {
+    const scheduledDays = [];
+    const staffByDate = {};
+    if (simproRaw && typeof simproRaw === "object") {
+      Object.entries(simproRaw).forEach(([d, staffArr]) => {
         if (d < effStart || d > effEnd) return;
-        if (!postedDays.has(d)) missedDays.add(d);
+        scheduledDays.push(d);
+        staffByDate[d] = Array.isArray(staffArr) ? staffArr : [];
       });
+      scheduledDays.sort();
     }
+
+    // Active-days set — used only for display (drilldown shows scheduled +
+    // posted). Credit/miss attribution is handled per-day in the aggregator.
+    const activeDays = new Set(scheduledDays);
+    postedDays.forEach(d => activeDays.add(d));
 
     // Open-items snapshot — not date-filtered. Completed jobs contribute 0
     // so leads aren't dinged for items on jobs that have already wrapped.
@@ -14388,15 +14383,20 @@ function Scoreboard({ jobs, users=[], identity }) {
       finishQC: collectQCCount(job.finishPunch),
       roughAttempted: rAtt.length > 0 ? 1 : 0,
       finalAttempted: fAtt.length > 0 ? 1 : 0,
-      updatesPosted: inWindow.length,
+      // updatesPosted/missedDays are attributed per-lead in the aggregator
+      // based on who was actually on the job each day — don't use these
+      // per-job numbers as totals for a lead.
+      updatesPostedJob: inWindow.length,
       openPunch:     open.punch,
       openQuestions: open.questions,
       openPulls:     open.pulls,
       activeJobs:    isActiveJob ? 1 : 0,
-      missedDays:    missedDays.size,
       _postedDays:   postedDays,
       _activeDays:   activeDays,
-      _missedDays:   missedDays,
+      _updatesByDay: updatesByDay,
+      _scheduledDays: scheduledDays,
+      _staffByDate:  staffByDate,
+      _hasSimproSchedule: simproRaw != null,
     };
   };
 
@@ -14418,39 +14418,141 @@ function Scoreboard({ jobs, users=[], identity }) {
     return SCOREBOARD_EXCLUDE.some(x => x.toLowerCase() === clean);
   };
 
-  const agg = {};
+  // Lead set — used for day-level update/miss attribution. A "lead" here
+  // is anyone assigned as `j.lead` (or `j.foreman` in foreman mode) on
+  // any job, minus the excluded names. Matches the thursdayPacket pattern
+  // so attribution is consistent across the scoreboard and the weekly
+  // packet.
+  const leadSet = new Set();
   jobs.forEach(j => {
-    const groupKey = mode === "lead" ? (j.lead||"") : (j.foreman||"");
-    if (!groupKey || groupKey === "Unassigned") return;
-    if (isExcluded(groupKey)) return;
-    if (!agg[groupKey]) agg[groupKey] = {
-      name: groupKey, jobs: 0,
+    const key = mode === "lead" ? (j.lead||"") : (j.foreman||"");
+    if (key && key !== "Unassigned" && !isExcluded(key)) leadSet.add(key);
+  });
+
+  const agg = {};
+
+  // Helper to lazily create an agg entry so a lead who earns credit only via
+  // day-level attribution (e.g. filled in on someone else's job) still shows
+  // up on the board even if they own zero jobs themselves.
+  const ensureAgg = (name) => {
+    if (!agg[name]) agg[name] = {
+      name, jobs: 0,
       roughFirstTryClean: 0, finalFirstTryClean: 0,
       roughItemsCalled: 0, finalItemsCalled: 0,
       roughQC: 0, finishQC: 0,
       roughAttempted: 0, finalAttempted: 0,
       updatesPosted: 0,
       openPunch: 0, openQuestions: 0, openPulls: 0,
-      activeJobs: 0,   // jobs where finishStatus !== "complete" — denominator for the Open Items pillar
-      missedDays: 0,   // scheduled-by-Simpro days where no update was posted, summed across the lead's jobs
+      activeJobs: 0,
+      missedDays: 0,
+      crossCredits: 0, // updates earned on jobs they're NOT the assigned lead of
+      crossMisses:  0, // misses taken on jobs they're NOT the assigned lead of
       postedDays: new Set(),
       activeDays: new Set(),
-      _margins: [],       // list of numeric simproMargin values for this person's jobs
-      _marginsEst: 0,     // how many of those were flagged as estimate-only
-      _jobs: [],          // per-job breakdown for the click-to-drill view
+      _margins: [],
+      _marginsEst: 0,
+      _jobs: [],
     };
+    return agg[name];
+  };
+  jobs.forEach(j => {
+    const groupKey = mode === "lead" ? (j.lead||"") : (j.foreman||"");
+    if (!groupKey || groupKey === "Unassigned") return;
+    if (isExcluded(groupKey)) return;
+    ensureAgg(groupKey);
+
     const s = statsForJob(j);
     agg[groupKey].jobs++;
-    // statsForJob now returns updatesPosted and _postedDays already resolved,
-    // so the aggregator just sums and unions — no date logic here.
+    // Everything except updatesPosted/missedDays credits to the assigned
+    // lead — inspection/QC/open-items/margin don't have a per-day notion
+    // and have always been a whole-job responsibility.
     ["roughFirstTryClean","finalFirstTryClean","roughItemsCalled","finalItemsCalled",
-     "roughQC","finishQC","roughAttempted","finalAttempted","updatesPosted",
-     "openPunch","openQuestions","openPulls","activeJobs","missedDays"].forEach(k => {
+     "roughQC","finishQC","roughAttempted","finalAttempted",
+     "openPunch","openQuestions","openPulls","activeJobs"].forEach(k => {
       agg[groupKey][k] += s[k];
     });
-    // Drilldown row — one per job, with enough detail for Koy to click a lead
-    // and see which jobs are dragging their metrics. We also compute a "last
-    // update" YMD so a job that hasn't been touched in weeks pops visually.
+
+    // Day-level attribution for updates + misses.
+    // Rule (matches what Koy asked for):
+    //   • If the assigned lead was on the job that day → they own the day.
+    //   • If the assigned lead was NOT there → every OTHER lead present
+    //     that day shares the credit / the miss.
+    //   • If no lead is on site → fall back to the assigned lead so posts
+    //     still count and nothing is silently dropped.
+    // Off-schedule updates (posted on a day Simpro didn't have the job on
+    // the schedule) fall back to the assigned lead — we don't know who
+    // was there, and it's still their job.
+    //
+    // Per-job drilldown rows track what the ASSIGNED lead was credited
+    // with from this job. Cross-credits to other leads are surfaced on
+    // the lead's row as a badge (`crossCredits`) rather than inventing
+    // drilldown rows for jobs they don't own.
+    let assignedLeadUpdatesFromJob = 0;
+    let assignedLeadMissesFromJob  = 0;
+
+    if (s._hasSimproSchedule && s._scheduledDays.length > 0) {
+      const scheduledSet = new Set(s._scheduledDays);
+
+      s._scheduledDays.forEach(d => {
+        const staff = s._staffByDate[d] || [];
+        const staffSet = new Set(staff);
+        const updatesOnDay = s._updatesByDay[d] || 0;
+
+        let responsible;
+        if (j.lead && staffSet.has(j.lead)) {
+          responsible = [j.lead];
+        } else {
+          responsible = staff.filter(n => leadSet.has(n));
+          if (responsible.length === 0) {
+            // No lead on site — fall back so credit/miss isn't lost.
+            if (j.lead) responsible = [j.lead];
+          }
+        }
+
+        responsible.forEach(lead => {
+          if (isExcluded(lead)) return;
+          ensureAgg(lead);
+          if (updatesOnDay > 0) {
+            agg[lead].updatesPosted += updatesOnDay;
+          } else {
+            agg[lead].missedDays += 1;
+          }
+          if (lead === j.lead) {
+            assignedLeadUpdatesFromJob += updatesOnDay;
+            if (updatesOnDay === 0) assignedLeadMissesFromJob += 1;
+          } else {
+            // Credit earned on a job this lead doesn't own — surface it
+            // as a cross-credit/miss so their row hints at the extra
+            // responsibility they picked up (or dropped).
+            if (updatesOnDay > 0) agg[lead].crossCredits += updatesOnDay;
+            else                  agg[lead].crossMisses  += 1;
+          }
+        });
+      });
+
+      // Off-schedule posts: credit the assigned lead, since we can't see
+      // who was there on non-scheduled days.
+      Object.entries(s._updatesByDay).forEach(([d, count]) => {
+        if (scheduledSet.has(d)) return;
+        if (d < effStart || d > effEnd) return;
+        if (j.lead && !isExcluded(j.lead)) {
+          agg[j.lead].updatesPosted += count;
+          assignedLeadUpdatesFromJob += count;
+        }
+      });
+    } else {
+      // No Simpro schedule data for this job (either it has no simproNo
+      // or the schedule fetch failed / hasn't landed). Fall back to
+      // crediting every in-window update to the assigned lead and not
+      // counting any misses. Same safety principle as before: better
+      // under-attribute than blame someone incorrectly.
+      agg[groupKey].updatesPosted += s.updatesPostedJob;
+      assignedLeadUpdatesFromJob = s.updatesPostedJob;
+    }
+
+    // Drilldown row — one per job, anchored to the assigned lead.
+    // Shows what the assigned lead got credited with from this job so
+    // row numbers tie back to their header total minus any cross credits.
     const allUpdates = [...(j.roughUpdates||[]), ...(j.finishUpdates||[])];
     const lastUpdateYMD = allUpdates.reduce((latest, u) => {
       const d = _toYMDScore(u?.date) || _toYMDScore(u?.createdAt) || _toYMDScore(j.updated_at);
@@ -14465,25 +14567,23 @@ function Scoreboard({ jobs, users=[], identity }) {
       openPunch:     s.openPunch,
       openQuestions: s.openQuestions,
       openPulls:     s.openPulls,
-      updatesPosted: s.updatesPosted,
+      updatesPosted: assignedLeadUpdatesFromJob,
+      totalUpdatesOnJob: s.updatesPostedJob,
       postedDays:    s._postedDays.size,
       activeDays:    s._activeDays.size,
-      missedDays:    s.missedDays,
+      missedDays:    assignedLeadMissesFromJob,
       lastUpdateYMD,
       isActive:      s.activeJobs > 0,
     });
-    // Profit margin — pull from the per-job cache that getSimproJobFinancials
-    // writes when someone opens a job detail pane. Coverage is therefore
-    // partial: a job that's never been opened will have no margin and is
-    // simply excluded from this person's average/denominator.
+
+    // Profit margin — unchanged, always credits the assigned lead.
     if (typeof j.simproMargin === "number" && !isNaN(j.simproMargin)) {
       agg[groupKey]._margins.push(j.simproMargin);
       if (j.simproMarginIsEst) agg[groupKey]._marginsEst++;
     }
-    // Update attribution: every update on a person's scheduled jobs counts —
-    // leads are allowed to delegate, so whoever on the crew typed the post
-    // still credits the lead. postedDays already dedupes per-day within a job;
-    // unioning across a lead's jobs dedupes across their portfolio too.
+    // Posted/active day unions (display-only — show the lead's portfolio-
+    // wide coverage). Credit the assigned lead's union since these are
+    // for context, not scoring.
     s._postedDays.forEach(d => agg[groupKey].postedDays.add(d));
     s._activeDays.forEach(d => agg[groupKey].activeDays.add(d));
   });
@@ -15045,12 +15145,26 @@ function Scoreboard({ jobs, users=[], identity }) {
                   <Td><span style={{color:r.finishQC>0?"#b45309":"#64748b",fontWeight:700}}>{r.finishQC}</span></Td>
                   <Td bold>
                     <span style={{color:"#334155"}}>{r.updatesPosted}</span>
-                    {r.missedDays > 0 && (
+                    {r.crossCredits > 0 && (
+                      <span
+                        title="Updates earned filling in on jobs this lead isn't the assigned lead of"
+                        style={{
+                          fontSize:10, fontWeight:700, color:"#0369a1",
+                          background:"#e0f2fe", padding:"1px 5px",
+                          borderRadius:6, marginLeft:5, verticalAlign:"middle",
+                        }}>
+                        +{r.crossCredits} fill-in
+                      </span>
+                    )}
+                    {(r.missedDays > 0) && (
                       <div style={{
                         fontSize:11, fontWeight:600, color:"#dc2626",
                         marginTop:2, letterSpacing:0.2,
                       }}>
                         {r.missedDays} missed
+                        {r.crossMisses > 0 && (
+                          <span style={{color:"#94a3b8",fontWeight:500}}> ({r.crossMisses} fill-in)</span>
+                        )}
                       </div>
                     )}
                   </Td>
@@ -15113,12 +15227,12 @@ function Scoreboard({ jobs, users=[], identity }) {
       </div>
 
       <div style={{fontSize:12,color:"#334155",marginTop:14,lineHeight:1.6,background:"#f1f5f9",border:"1px solid #cbd5e1",borderRadius:10,padding:"12px 14px"}}>
-        <b style={{color:"#0f172a"}}>How attribution works.</b> Leads view credits each job's stats to the assigned lead.
-        Foreman view sums all jobs where someone is the foreman, aggregating whichever lead ran the job — that's the
-        crew-vs-crew comparison. Daily updates count toward the lead regardless of who typed them (delegation is fine —
-        the lead owns the job). Pre-existing inspection results from before attempt-logging shipped are pulled in as a
-        single synthetic attempt so the board isn't empty. New inspections logged after today will have accurate
-        first-try history.
+        <b style={{color:"#0f172a"}}>How attribution works.</b> Inspection, QC, open items, and margin credit the
+        assigned lead. <b>Daily updates + misses use day-level attribution:</b> if Simpro shows the assigned lead on
+        the job that day, they own the day — otherwise whichever lead <i>was</i> on site picks up the point (or the
+        miss). Fill-in credits show as a blue <b>+N fill-in</b> badge next to the updates count. Pre-existing
+        inspection results from before attempt-logging shipped are pulled in as a single synthetic attempt so the
+        board isn't empty. New inspections logged after today will have accurate first-try history.
         <div style={{marginTop:8,fontSize:11,color:"#475569"}}>
           <b style={{color:"#334155"}}>Ranking.</b> Rows are sorted by the composite Score column — a weighted average
           across every pillar (inspection {SCORE_WEIGHTS.inspection}%, items {SCORE_WEIGHTS.items}%, QC {SCORE_WEIGHTS.qc}%,
@@ -15216,10 +15330,15 @@ function Scoreboard({ jobs, users=[], identity }) {
                 <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:14,fontSize:12,color:"#334155",flexWrap:"wrap"}}>
                   <div><b style={{color:"#0f172a"}}>{drillRow.jobs}</b> jobs · <b style={{color:"#0f172a"}}>{drillRow.activeJobs}</b> active</div>
                   <div>
-                    <b style={{color:"#0f172a"}}>{totals.updates}</b> updates
-                    {totals.missed > 0 && (
+                    <b style={{color:"#0f172a"}}>{drillRow.updatesPosted}</b> updates
+                    {drillRow.crossCredits > 0 && (
+                      <span style={{color:"#0369a1",fontWeight:700,marginLeft:4}}>
+                        (+{drillRow.crossCredits} fill-in)
+                      </span>
+                    )}
+                    {drillRow.missedDays > 0 && (
                       <span style={{color:"#dc2626",fontWeight:700,marginLeft:6}}>
-                        · {totals.missed} missed
+                        · {drillRow.missedDays} missed
                       </span>
                     )}
                   </div>
@@ -15284,6 +15403,11 @@ function Scoreboard({ jobs, users=[], identity }) {
                             </td>
                             <td style={{padding:"10px",fontSize:13,textAlign:"center",borderBottom:"1px solid #f1f5f9",color:"#334155",fontWeight:700}}>
                               {j.updatesPosted}
+                              {j.totalUpdatesOnJob > j.updatesPosted && (
+                                <div style={{fontSize:10,fontWeight:500,color:"#94a3b8",marginTop:1}}>
+                                  ({j.totalUpdatesOnJob} total · rest fill-in)
+                                </div>
+                              )}
                             </td>
                             <td style={{padding:"10px",fontSize:13,textAlign:"center",borderBottom:"1px solid #f1f5f9",color:j.missedDays>0?"#dc2626":"#94a3b8",fontWeight:700}}>
                               {j.missedDays > 0 ? j.missedDays : "—"}
