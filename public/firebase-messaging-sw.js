@@ -15,49 +15,50 @@ firebase.initializeApp({
   appId:             "1:318598172684:web:b2ef548d952faabccd9e29",
 });
 
-const messaging = firebase.messaging();
+// Initialize messaging so the SDK wires up push handling in this SW.
+// We do NOT register an onBackgroundMessage handler on purpose — when the
+// server sends a `webpush.notification` payload, FCM auto-displays it using
+// the browser's native notification UI. Registering a custom handler here
+// caused a second notification to fire on Android ("double-pop"). Now the
+// native system handles display; we only intercept the tap.
+firebase.messaging();
 
-// Background message handler — shows a system notification.
-// The `data` payload includes title, body, jobId, and section.
-messaging.onBackgroundMessage(payload => {
-  const title   = payload.data?.title || payload.notification?.title || "Homestead Electric";
-  const body    = payload.data?.body  || payload.notification?.body  || "";
-  const jobId   = payload.data?.jobId   || "";
-  const section = payload.data?.section || "";
+// Activate the new SW immediately instead of waiting for every tab to close.
+// This matters after a deploy: without it, users can run the OLD SW (which
+// double-pops) alongside the NEW server payload until they manually close
+// the PWA. With skipWaiting + clients.claim, the next page load uses this SW.
+self.addEventListener("install", () => self.skipWaiting());
+self.addEventListener("activate", event => event.waitUntil(self.clients.claim()));
 
-  // Store the deep-link target so the notificationclick handler can use it.
-  // We encode it in the notification's data tag so it survives the click event.
-  return self.registration.showNotification(title, {
-    body,
-    icon:  "/icon-192.png",
-    badge: "/icon-192.png",
-    tag:   `he-${jobId}-${section}`,   // dedupes notifications for the same job+section
-    data:  { jobId, section },
-  });
-});
-
-// When the user taps a notification, open the app at the right job + section.
+// Deep-link when the user taps the notification.
+// The data payload is populated server-side via webpush.notification.data:
+//   { jobId, section }
 self.addEventListener("notificationclick", event => {
   event.notification.close();
 
-  const { jobId, section } = event.notification.data || {};
+  const data    = event.notification.data || {};
+  const jobId   = data.jobId   || (data.FCM_MSG && data.FCM_MSG.data && data.FCM_MSG.data.jobId)   || "";
+  const section = data.section || (data.FCM_MSG && data.FCM_MSG.data && data.FCM_MSG.data.section) || "";
+
   const url = jobId
-    ? `${self.location.origin}/?jobId=${encodeURIComponent(jobId)}&section=${encodeURIComponent(section || "")}`
+    ? `${self.location.origin}/?jobId=${encodeURIComponent(jobId)}&section=${encodeURIComponent(section)}`
     : self.location.origin + "/";
 
   event.waitUntil(
     clients.matchAll({ type: "window", includeUncontrolled: true }).then(windowClients => {
       const appClient = windowClients.find(c => c.url.startsWith(self.location.origin));
       if (appClient) {
-        // Use navigate() so the app reloads at the URL with jobId params — more reliable
-        // than postMessage on mobile where iOS suspends JS in backgrounded apps.
+        // If the app is already open, navigate it to the deep-link URL and focus.
+        // Fallback: focus + postMessage so the in-app listener can handle it.
         if (jobId && typeof appClient.navigate === "function") {
           return appClient.navigate(url).then(c => c && c.focus()).catch(() => {
             appClient.focus();
             appClient.postMessage({ type: "HE_NOTIF_CLICK", jobId, section });
           });
         }
-        return appClient.focus();
+        appClient.focus();
+        if (jobId) appClient.postMessage({ type: "HE_NOTIF_CLICK", jobId, section });
+        return;
       }
       // App not open — open a new window at the deep-link URL.
       return clients.openWindow(url);

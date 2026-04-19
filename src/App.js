@@ -15547,7 +15547,7 @@ function BulkEditTable({ jobs, foremenList, leadsList, onUpdateJob }) {
   );
 }
 
-function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upcoming, manualTasks, onRestoreFromBackup, onRestoreFromFile }) {
+function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upcoming, manualTasks, onRestoreFromBackup, onRestoreFromFile, identity }) {
   const [colors, setColors] = useState({...colorOverrides});
   const [saved,  setSaved]  = useState(false);
   const [restoring, setRestoring] = useState(false);
@@ -15685,6 +15685,33 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upco
             </>
           )}
         </div>
+      </div>
+
+      {/* Notification Test — verify per-device that pushes deliver and deep-link works */}
+      <div style={{marginBottom:32,padding:"16px 18px",background:"#fef3c7",borderRadius:12,
+        border:"1px solid #fde68a"}}>
+        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+          <span style={{display:"inline-flex",alignItems:"center",color:"#92400e"}}><Icon name="bell" size={16} stroke={2.25}/></span>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.06em",color:"#92400e"}}>NOTIFICATIONS</div>
+        </div>
+        <div style={{fontSize:11,color:"#a16207",marginBottom:12,lineHeight:1.5}}>
+          Send a test push to this device. Use it on each phone to confirm notifications arrive once (not duplicated) and that tapping one opens the right job.
+        </div>
+        <button onClick={async()=>{
+          if(!identity?.id){toast.warn("No user identity — re-pick your name first");return;}
+          try {
+            const fn=httpsCallable(functions,"sendTestNotification");
+            const res=await fn({userId:identity.id});
+            const d=res.data||{};
+            if(d.sent===0){toast.warn("No FCM tokens on file. Allow notifications in your browser, then log back in.");return;}
+            const pruned=d.pruned>0?` (pruned ${d.pruned} dead)`:"";
+            toast.success(`Sent ${d.sent} test push${d.sent===1?"":"es"}${pruned} — check your phone.`);
+          } catch(e) { toast.error("Test failed: "+(e.message||"unknown")); }
+        }} style={{padding:"10px 20px",borderRadius:8,fontSize:13,fontWeight:700,cursor:"pointer",
+          fontFamily:"inherit",background:"#d97706",color:"#fff",border:"none",
+          display:"inline-flex",alignItems:"center",gap:8}}>
+          <Icon name="bell" size={14}/> Send Test Notification
+        </button>
       </div>
 
       {noUsers && (
@@ -19354,6 +19381,7 @@ function App() {
             colorOverrides={_colorOverrides}
             onSave={saveSettings}
             jobs={jobs}
+            identity={identity}
             upcoming={upcoming}
             manualTasks={manualTasks}
             onRestoreFromBackup={async()=>{
