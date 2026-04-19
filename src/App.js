@@ -8615,6 +8615,156 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     onUpdate(updated, patch);
   };
 
+  // ── QC Fail ↔ Return Trip check-off sync ────────────────────────────
+  // When a QC walk fails, every open `fromQC` item in roughPunch/finishPunch
+  // gets cloned into the Return Trip's punch list, with `originItemId` and
+  // `originPhase` pointing back at the source. These wrappers keep done-state
+  // in sync both ways so the crew only has to tick the box once:
+  //   • Check an RT punch item → matching source QC item flips in rough/finish punch.
+  //   • Check a fromQC item in rough/finish punch → matching RT items flip too.
+  // Both sides dispatch a single atomic `u({...})` with all three fields so we
+  // don't race on Firestore saves. The ReturnTrips onChange already updates
+  // returnTrips, so the wrapper just layers the phase-punch patch on top.
+  const _flipInFloors = (punch, ids, doneVal, checkedBy, checkedAt) => {
+    if (!punch) return punch;
+    const hitIds = ids instanceof Set ? ids : new Set(ids);
+    if (hitIds.size === 0) return punch;
+    let changed = false;
+    const mapItem = (it) => {
+      if (!it || !hitIds.has(it.id)) return it;
+      if (!!it.done === !!doneVal) return it;
+      changed = true;
+      return { ...it,
+        done: !!doneVal,
+        checkedBy: doneVal ? (checkedBy||it.checkedBy||"") : "",
+        checkedAt: doneVal ? (checkedAt||it.checkedAt||"") : "",
+        waiting: doneVal ? false : it.waiting,
+      };
+    };
+    const mapFloor = (fl) => {
+      if (!fl) return fl;
+      return {
+        ...fl,
+        general:  (fl.general||[]).map(mapItem),
+        rooms:    (fl.rooms||[]).map(r => ({...r, items:(r.items||[]).map(mapItem)})),
+        hotcheck: (fl.hotcheck||[]).map(mapItem),
+      };
+    };
+    const out = {...punch};
+    ["upper","main","basement"].forEach(k => { if (out[k]) out[k] = mapFloor(out[k]); });
+    if (Array.isArray(out.extraFloors)) out.extraFloors = out.extraFloors.map(mapFloor);
+    return changed ? out : punch;
+  };
+
+  // Wrap the Return Trips onChange so that when an RT punch item with an
+  // originItemId flips done-state, the source item in roughPunch/finishPunch
+  // flips to match. `prev` comes from jobRef so we can diff reliably.
+  const handleReturnTripsChange = (nextTrips) => {
+    const prev = jobRef.current;
+    const prevById = new Map();
+    (prev.returnTrips||[]).forEach(rt => {
+      (rt.punch||[]).forEach(p => { if (p && p.originItemId) prevById.set(p.id, !!p.done); });
+    });
+    const roughHitsDone = new Set();
+    const roughHitsOpen = new Set();
+    const finishHitsDone = new Set();
+    const finishHitsOpen = new Set();
+    let who = "", when = "";
+    try {
+      const ident = getIdentity && getIdentity();
+      who = ident?.name || "";
+      when = new Date().toLocaleDateString("en-US");
+    } catch {}
+    nextTrips.forEach(rt => {
+      (rt.punch||[]).forEach(p => {
+        if (!p || !p.originItemId) return;
+        const prevDone = prevById.get(p.id);
+        if (prevDone === undefined || prevDone === !!p.done) return;
+        const set = p.originPhase === "finish"
+          ? (p.done ? finishHitsDone : finishHitsOpen)
+          : (p.done ? roughHitsDone  : roughHitsOpen);
+        set.add(p.originItemId);
+      });
+    });
+    const patch = { returnTrips: nextTrips };
+    let nextRough = prev.roughPunch;
+    let nextFinish = prev.finishPunch;
+    nextRough  = _flipInFloors(nextRough,  roughHitsDone,  true,  who, when);
+    nextRough  = _flipInFloors(nextRough,  roughHitsOpen,  false);
+    nextFinish = _flipInFloors(nextFinish, finishHitsDone, true,  who, when);
+    nextFinish = _flipInFloors(nextFinish, finishHitsOpen, false);
+    if (nextRough  !== prev.roughPunch)  patch.roughPunch  = nextRough;
+    if (nextFinish !== prev.finishPunch) patch.finishPunch = nextFinish;
+    u(patch);
+  };
+
+  // Wrap phase punch updates. When a `fromQC` item flips, find any RT punch
+  // entries referencing it via originItemId and flip those too. Same atomic
+  // patch pattern so Firestore only sees one write.
+  const handlePhasePunchChange = (phase, nextPunch) => {
+    const prev = jobRef.current;
+    const prevPunch = phase === "rough" ? prev.roughPunch : prev.finishPunch;
+    const prevDoneById = new Map();
+    const walk = (punch) => {
+      if (!punch) return;
+      const floors = [...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
+        ...(Array.isArray(punch.extraFloors) ? punch.extraFloors : [])];
+      floors.forEach(fl => {
+        (fl.general||[]).forEach(i => { if (i?.fromQC) prevDoneById.set(i.id, !!i.done); });
+        (fl.rooms||[]).forEach(r => (r.items||[]).forEach(i => { if (i?.fromQC) prevDoneById.set(i.id, !!i.done); }));
+        (fl.hotcheck||[]).forEach(i => { if (i?.fromQC) prevDoneById.set(i.id, !!i.done); });
+      });
+    };
+    walk(prevPunch);
+    const flipTo = new Map(); // sourceId -> newDone
+    const walkNext = (punch) => {
+      if (!punch) return;
+      const floors = [...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
+        ...(Array.isArray(punch.extraFloors) ? punch.extraFloors : [])];
+      floors.forEach(fl => {
+        const collect = (i) => {
+          if (!i?.fromQC) return;
+          const was = prevDoneById.get(i.id);
+          if (was === undefined || was === !!i.done) return;
+          flipTo.set(i.id, !!i.done);
+        };
+        (fl.general||[]).forEach(collect);
+        (fl.rooms||[]).forEach(r => (r.items||[]).forEach(collect));
+        (fl.hotcheck||[]).forEach(collect);
+      });
+    };
+    walkNext(nextPunch);
+    const patch = phase === "rough" ? { roughPunch: nextPunch } : { finishPunch: nextPunch };
+    if (flipTo.size > 0) {
+      let who = "", when = "";
+      try {
+        const ident = getIdentity && getIdentity();
+        who = ident?.name || "";
+        when = new Date().toLocaleDateString("en-US");
+      } catch {}
+      const nextTrips = (prev.returnTrips||[]).map(rt => {
+        let changed = false;
+        const newPunch = (rt.punch||[]).map(p => {
+          if (!p || !p.originItemId) return p;
+          if (!flipTo.has(p.originItemId)) return p;
+          const target = flipTo.get(p.originItemId);
+          if (!!p.done === !!target) return p;
+          changed = true;
+          return { ...p,
+            done: target,
+            checkedBy: target ? (who||p.checkedBy||"") : "",
+            checkedAt: target ? (when||p.checkedAt||"") : "",
+          };
+        });
+        return changed ? { ...rt, punch:newPunch } : rt;
+      });
+      if (nextTrips.some((rt, i) => rt !== (prev.returnTrips||[])[i])) {
+        patch.returnTrips = nextTrips;
+      }
+    }
+    u(patch);
+  };
+
   const [tab, setTab] = useState(()=>initialTab && TABS.includes(initialTab) ? initialTab : "Job Info");
   const [newLightingFloor, setNewLightingFloor] = useState("");
   const [emailData, setEmailData] = useState(null);
@@ -9231,7 +9381,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   filter={job.roughPunchFilter||null} filterLabel={job.roughPunchFilterLabel||''} onSaveFilter={(v,lbl)=>u({roughPunchFilter:v,roughPunchFilterLabel:lbl})}/>
               }>
 
-                <PunchSection punch={job.roughPunch} onChange={v=>u({roughPunch:v})}
+                <PunchSection punch={job.roughPunch} onChange={v=>handlePhasePunchChange("rough", v)}
                   jobName={job.name||"This Job"} phase="Rough" onEmail={setEmailData}
                   filterIds={job.roughPunchFilter ? new Set(job.roughPunchFilter) : null}
                   onAddMaterial={(text, source)=>{
@@ -9467,7 +9617,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <PunchPicker punch={job.finishPunch||{}} jobId={job.id} stage="Finish" color={C.finish} showHotcheck={false}
                   filter={job.finishPunchFilter||null} filterLabel={job.finishPunchFilterLabel||''} onSaveFilter={(v,lbl)=>u({finishPunchFilter:v,finishPunchFilterLabel:lbl})}/>
               }>
-                <PunchSection punch={job.finishPunch} onChange={v=>u({finishPunch:v})} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}
+                <PunchSection punch={job.finishPunch} onChange={v=>handlePhasePunchChange("finish", v)} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}
                   filterIds={job.finishPunchFilter ? new Set(job.finishPunchFilter) : null}
                   onAddMaterial={(text, source)=>{
                     const orders = job.finishMaterials || [];
@@ -10004,7 +10154,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             <div>
 
               <Section label="Return Trips" color={C.purple} defaultOpen={true}>
-                <ReturnTrips trips={job.returnTrips} onChange={v=>u({returnTrips:v})} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData} jobId={job.id} users={users}/>
+                <ReturnTrips trips={job.returnTrips} onChange={handleReturnTripsChange} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData} jobId={job.id} users={users}/>
               </Section>
 
             </div>
@@ -10049,22 +10199,36 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             !r.signedOff && typeof r.scope==="string" && r.scope.startsWith("QC Fail"));
                           if (!existingQCFailRT) {
                             const openQC = [];
-                            const grab = (punch) => {
+                            const grab = (punch, phase) => {
                               if (!punch) return;
                               const allFloors = [...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
                                 ...(Array.isArray(punch.extraFloors)?punch.extraFloors:[])];
                               allFloors.forEach(fl => {
                                 if (!fl) return;
-                                (fl.general||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push(i); });
-                                (fl.rooms||[]).forEach(r=> (r.items||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push(i); }));
-                                (fl.hotcheck||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push(i); });
+                                (fl.general||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push({...i, __phase:phase}); });
+                                (fl.rooms||[]).forEach(r=> (r.items||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push({...i, __phase:phase}); }));
+                                (fl.hotcheck||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push({...i, __phase:phase}); });
                               });
                             };
-                            grab(job.roughPunch); grab(job.finishPunch);
+                            grab(job.roughPunch, "rough"); grab(job.finishPunch, "finish");
                             const newRT = {
                               id:uid(), date:"", scope:"QC Fail — return trip needed",
                               material:"",
-                              punch: openQC.map(x=>({id:uid(),text:x.text||"",done:false,fromQC:true})),
+                              // Copy photos, materialNeeded/source, AND the source item
+                              // id onto each RT punch item so (a) crew can see the
+                              // pictures in context and (b) check-off syncs back to
+                              // the original fromQC entry in roughPunch/finishPunch.
+                              punch: openQC.map(x=>({
+                                id:uid(),
+                                text:x.text||"",
+                                done:false,
+                                fromQC:true,
+                                originItemId: x.id,
+                                originPhase: x.__phase,
+                                photos: Array.isArray(x.photos) ? x.photos.slice() : [],
+                                materialNeeded: x.materialNeeded||"",
+                                materialSource: x.materialSource||"",
+                              })),
                               photos:[], assignedTo:"",
                               signedOff:false, signedOffBy:"", signedOffDate:"",
                               needsSchedule:true, needsScheduleDate:"",
@@ -10124,20 +10288,32 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     {qcRTs.length===0 && (
                       <button onClick={()=>{
                         const openQC=[];
-                        const grab=(punch)=>{
+                        const grab=(punch,phase)=>{
                           if(!punch) return;
                           const allFloors=[...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
                             ...(Array.isArray(punch.extraFloors)?punch.extraFloors:[])];
                           allFloors.forEach(fl=>{
                             if(!fl) return;
-                            (fl.general||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push(i); });
-                            (fl.rooms||[]).forEach(r=>(r.items||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push(i); }));
-                            (fl.hotcheck||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push(i); });
+                            (fl.general||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push({...i, __phase:phase}); });
+                            (fl.rooms||[]).forEach(r=>(r.items||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push({...i, __phase:phase}); }));
+                            (fl.hotcheck||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push({...i, __phase:phase}); });
                           });
                         };
-                        grab(job.roughPunch); grab(job.finishPunch);
+                        grab(job.roughPunch,"rough"); grab(job.finishPunch,"finish");
                         const newRT={id:uid(),date:"",scope:"QC Fail — return trip needed",material:"",
-                          punch:openQC.map(x=>({id:uid(),text:x.text||"",done:false,fromQC:true})),
+                          // Photos, material, and originItemId travel over so the crew
+                          // sees the full context and check-off can sync back.
+                          punch:openQC.map(x=>({
+                            id:uid(),
+                            text:x.text||"",
+                            done:false,
+                            fromQC:true,
+                            originItemId:x.id,
+                            originPhase:x.__phase,
+                            photos:Array.isArray(x.photos)?x.photos.slice():[],
+                            materialNeeded:x.materialNeeded||"",
+                            materialSource:x.materialSource||"",
+                          })),
                           photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",
                           needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:"",
                           rtStatus:"needs",fromQCFail:true};
@@ -10202,7 +10378,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <div id="qc-walk-rough" style={{scrollMarginTop:12}}>
               <Section label="Rough QC Walk" color={C.blue} defaultOpen={true}>
                 <QCWalkSection phase="Rough" punch={job.roughPunch} jobId={job.id}
-                  onChange={v=>u({roughPunch:v})}
+                  onChange={v=>handlePhasePunchChange("rough", v)}
                   onAllDone={()=>{
                     const finQC=[];
                     const fp=job.finishPunch||{};
@@ -10220,7 +10396,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <Section label="Finish QC Walk" color={C.purple} defaultOpen={true}>
                 <QCWalkSection phase="Finish" punch={job.finishPunch} jobId={job.id}
                   showHotcheck={true}
-                  onChange={v=>u({finishPunch:v})}
+                  onChange={v=>handlePhasePunchChange("finish", v)}
                   onAllDone={()=>{
                     const rghQC=[];
                     const rp=job.roughPunch||{};
@@ -14081,40 +14257,6 @@ function Scoreboard({ jobs, users=[], identity }) {
   const effStart = startYMD < SCOREBOARD_ANCHOR_YMD ? SCOREBOARD_ANCHOR_YMD : startYMD;
   const effEnd   = endYMD;
 
-  // ── Simpro schedule-by-job fetch ─────────────────────────
-  // Pulls per-job scheduled days from Simpro so the "missed updates" count
-  // is sourced from the real crew schedule, not the app's internal window
-  // logic. Keyed by date range + mode: re-fetches when the user changes
-  // the range, but not on every render. In-memory cache only — this is
-  // a cross-job dataset so it doesn't belong on any single job doc.
-  // Data-safety: read-only. If the fetch fails we leave `scheduleByJob`
-  // null and statsForJob falls back to postedDays-as-active (no misses
-  // dinged when Simpro data is unavailable, so a flaky fetch never
-  // punishes a lead unfairly).
-  const [scheduleByJob, setScheduleByJob] = useState(null); // null | { simproNo: ["YYYY-MM-DD"] }
-  const [scheduleFetchedAt, setScheduleFetchedAt] = useState(null);
-  const [scheduleErr, setScheduleErr] = useState(null);
-  useEffect(() => {
-    let cancelled = false;
-    setScheduleErr(null);
-    (async () => {
-      try {
-        const fn = httpsCallable(functions, "getSimproScheduleByJob");
-        const res = await fn({ dateFrom: effStart, dateTo: effEnd });
-        if (cancelled) return;
-        setScheduleByJob(res.data?.byJob || {});
-        setScheduleFetchedAt(res.data?.fetchedAt || null);
-      } catch (e) {
-        if (cancelled) return;
-        console.error("[scoreboard schedule error]", e);
-        setScheduleErr(e);
-        // Leave scheduleByJob as-is — stale data is better than empty
-        // if the new window fails to load.
-      }
-    })();
-    return () => { cancelled = true; };
-  }, [effStart, effEnd]);
-
   // QC item counts (fromQC-tagged entries in the punch lists). When a date
   // range is supplied, items with an addedAt stamp get filtered to that
   // range; legacy items with no addedAt are always counted (treated as
@@ -14330,12 +14472,10 @@ function Scoreboard({ jobs, users=[], identity }) {
       return d && d >= effStart && d <= effEnd;
     });
 
-    // Posted-days set + per-day update count. We count EVERY update (2 posts
-    // on the same day = 2 points) but also track unique posted days for
-    // miss calculation. Centralized here so update-date resolution lives
-    // in one place.
+    // Posted-days set: unique weekdays this job's in-window updates land on.
+    // Updates pillar is keyed off raw count (`inWindow.length`), but postedDays
+    // is kept around for the drilldown display.
     const postedDays = new Set();
-    const updatesByDay = {};   // ymd → count of updates that day
     inWindow.forEach(u => {
       const d = updateYMD(u);
       if (!d) return;
@@ -14343,36 +14483,20 @@ function Scoreboard({ jobs, users=[], identity }) {
       const dow = new Date(yy, mm-1, dd).getDay();
       if (dow === 0 || dow === 6) return; // skip weekends
       postedDays.add(d);
-      updatesByDay[d] = (updatesByDay[d] || 0) + 1;
     });
 
-    // Simpro-sourced schedule data for this job. `scheduleByJob[simproNo]`
-    // is now a date → staff-array map. We extract the in-range dates plus
-    // the staff-per-day table so the aggregator can do per-day attribution
-    // (assigned-lead-vs-whoever-was-actually-there) without reparsing.
-    const simproRaw = (job.simproNo && scheduleByJob)
-      ? (scheduleByJob[String(job.simproNo)] || null)
-      : null;
-    const scheduledDays = [];
-    const staffByDate = {};
-    if (simproRaw && typeof simproRaw === "object") {
-      Object.entries(simproRaw).forEach(([d, staffArr]) => {
-        if (d < effStart || d > effEnd) return;
-        scheduledDays.push(d);
-        staffByDate[d] = Array.isArray(staffArr) ? staffArr : [];
-      });
-      scheduledDays.sort();
-    }
-
-    // Active-days set — used only for display (drilldown shows scheduled +
-    // posted). Credit/miss attribution is handled per-day in the aggregator.
-    const activeDays = new Set(scheduledDays);
-    postedDays.forEach(d => activeDays.add(d));
-
-    // Open-items snapshot — not date-filtered. Completed jobs contribute 0
-    // so leads aren't dinged for items on jobs that have already wrapped.
-    const open = collectOpenItems(job);
-    const isActiveJob = job.finishStatus !== "complete";
+    // Open-items snapshot — not date-filtered. Skipped for jobs still in
+    // the In-Progress section (roughStatus or finishStatus === "inprogress")
+    // because during active work those items are expected to be open — they
+    // are the work. Only count open punch against a lead once the job is
+    // between stages or wrapped. Completed jobs contribute 0 as before.
+    const rs = job.roughStatus || "";
+    const fs = job.finishStatus || "";
+    const inProgress = rs === "inprogress" || fs === "inprogress";
+    const open = (fs === "complete" || inProgress)
+      ? { punch: 0, questions: 0, pulls: 0 }
+      : collectOpenItems(job);
+    const isActiveJob = fs !== "complete";
 
     return {
       roughFirstTryClean: firstR && firstR.result === "pass" && (firstR.items||[]).length === 0 ? 1 : 0,
@@ -14383,20 +14507,12 @@ function Scoreboard({ jobs, users=[], identity }) {
       finishQC: collectQCCount(job.finishPunch),
       roughAttempted: rAtt.length > 0 ? 1 : 0,
       finalAttempted: fAtt.length > 0 ? 1 : 0,
-      // updatesPosted/missedDays are attributed per-lead in the aggregator
-      // based on who was actually on the job each day — don't use these
-      // per-job numbers as totals for a lead.
-      updatesPostedJob: inWindow.length,
+      updatesPosted: inWindow.length,
       openPunch:     open.punch,
       openQuestions: open.questions,
       openPulls:     open.pulls,
       activeJobs:    isActiveJob ? 1 : 0,
       _postedDays:   postedDays,
-      _activeDays:   activeDays,
-      _updatesByDay: updatesByDay,
-      _scheduledDays: scheduledDays,
-      _staffByDate:  staffByDate,
-      _hasSimproSchedule: simproRaw != null,
     };
   };
 
@@ -14418,25 +14534,13 @@ function Scoreboard({ jobs, users=[], identity }) {
     return SCOREBOARD_EXCLUDE.some(x => x.toLowerCase() === clean);
   };
 
-  // Lead set — used for day-level update/miss attribution. A "lead" here
-  // is anyone assigned as `j.lead` (or `j.foreman` in foreman mode) on
-  // any job, minus the excluded names. Matches the thursdayPacket pattern
-  // so attribution is consistent across the scoreboard and the weekly
-  // packet.
-  const leadSet = new Set();
-  jobs.forEach(j => {
-    const key = mode === "lead" ? (j.lead||"") : (j.foreman||"");
-    if (key && key !== "Unassigned" && !isExcluded(key)) leadSet.add(key);
-  });
-
   const agg = {};
-
-  // Helper to lazily create an agg entry so a lead who earns credit only via
-  // day-level attribution (e.g. filled in on someone else's job) still shows
-  // up on the board even if they own zero jobs themselves.
-  const ensureAgg = (name) => {
-    if (!agg[name]) agg[name] = {
-      name, jobs: 0,
+  jobs.forEach(j => {
+    const groupKey = mode === "lead" ? (j.lead||"") : (j.foreman||"");
+    if (!groupKey || groupKey === "Unassigned") return;
+    if (isExcluded(groupKey)) return;
+    if (!agg[groupKey]) agg[groupKey] = {
+      name: groupKey, jobs: 0,
       roughFirstTryClean: 0, finalFirstTryClean: 0,
       roughItemsCalled: 0, finalItemsCalled: 0,
       roughQC: 0, finishQC: 0,
@@ -14444,115 +14548,23 @@ function Scoreboard({ jobs, users=[], identity }) {
       updatesPosted: 0,
       openPunch: 0, openQuestions: 0, openPulls: 0,
       activeJobs: 0,
-      missedDays: 0,
-      crossCredits: 0, // updates earned on jobs they're NOT the assigned lead of
-      crossMisses:  0, // misses taken on jobs they're NOT the assigned lead of
       postedDays: new Set(),
-      activeDays: new Set(),
       _margins: [],
       _marginsEst: 0,
       _jobs: [],
     };
-    return agg[name];
-  };
-  jobs.forEach(j => {
-    const groupKey = mode === "lead" ? (j.lead||"") : (j.foreman||"");
-    if (!groupKey || groupKey === "Unassigned") return;
-    if (isExcluded(groupKey)) return;
-    ensureAgg(groupKey);
 
     const s = statsForJob(j);
     agg[groupKey].jobs++;
-    // Everything except updatesPosted/missedDays credits to the assigned
-    // lead — inspection/QC/open-items/margin don't have a per-day notion
-    // and have always been a whole-job responsibility.
+    // Everything credits to the assigned lead — simple per-job attribution.
     ["roughFirstTryClean","finalFirstTryClean","roughItemsCalled","finalItemsCalled",
      "roughQC","finishQC","roughAttempted","finalAttempted",
+     "updatesPosted",
      "openPunch","openQuestions","openPulls","activeJobs"].forEach(k => {
       agg[groupKey][k] += s[k];
     });
 
-    // Day-level attribution for updates + misses.
-    // Rule (matches what Koy asked for):
-    //   • If the assigned lead was on the job that day → they own the day.
-    //   • If the assigned lead was NOT there → every OTHER lead present
-    //     that day shares the credit / the miss.
-    //   • If no lead is on site → fall back to the assigned lead so posts
-    //     still count and nothing is silently dropped.
-    // Off-schedule updates (posted on a day Simpro didn't have the job on
-    // the schedule) fall back to the assigned lead — we don't know who
-    // was there, and it's still their job.
-    //
-    // Per-job drilldown rows track what the ASSIGNED lead was credited
-    // with from this job. Cross-credits to other leads are surfaced on
-    // the lead's row as a badge (`crossCredits`) rather than inventing
-    // drilldown rows for jobs they don't own.
-    let assignedLeadUpdatesFromJob = 0;
-    let assignedLeadMissesFromJob  = 0;
-
-    if (s._hasSimproSchedule && s._scheduledDays.length > 0) {
-      const scheduledSet = new Set(s._scheduledDays);
-
-      s._scheduledDays.forEach(d => {
-        const staff = s._staffByDate[d] || [];
-        const staffSet = new Set(staff);
-        const updatesOnDay = s._updatesByDay[d] || 0;
-
-        let responsible;
-        if (j.lead && staffSet.has(j.lead)) {
-          responsible = [j.lead];
-        } else {
-          responsible = staff.filter(n => leadSet.has(n));
-          if (responsible.length === 0) {
-            // No lead on site — fall back so credit/miss isn't lost.
-            if (j.lead) responsible = [j.lead];
-          }
-        }
-
-        responsible.forEach(lead => {
-          if (isExcluded(lead)) return;
-          ensureAgg(lead);
-          if (updatesOnDay > 0) {
-            agg[lead].updatesPosted += updatesOnDay;
-          } else {
-            agg[lead].missedDays += 1;
-          }
-          if (lead === j.lead) {
-            assignedLeadUpdatesFromJob += updatesOnDay;
-            if (updatesOnDay === 0) assignedLeadMissesFromJob += 1;
-          } else {
-            // Credit earned on a job this lead doesn't own — surface it
-            // as a cross-credit/miss so their row hints at the extra
-            // responsibility they picked up (or dropped).
-            if (updatesOnDay > 0) agg[lead].crossCredits += updatesOnDay;
-            else                  agg[lead].crossMisses  += 1;
-          }
-        });
-      });
-
-      // Off-schedule posts: credit the assigned lead, since we can't see
-      // who was there on non-scheduled days.
-      Object.entries(s._updatesByDay).forEach(([d, count]) => {
-        if (scheduledSet.has(d)) return;
-        if (d < effStart || d > effEnd) return;
-        if (j.lead && !isExcluded(j.lead)) {
-          agg[j.lead].updatesPosted += count;
-          assignedLeadUpdatesFromJob += count;
-        }
-      });
-    } else {
-      // No Simpro schedule data for this job (either it has no simproNo
-      // or the schedule fetch failed / hasn't landed). Fall back to
-      // crediting every in-window update to the assigned lead and not
-      // counting any misses. Same safety principle as before: better
-      // under-attribute than blame someone incorrectly.
-      agg[groupKey].updatesPosted += s.updatesPostedJob;
-      assignedLeadUpdatesFromJob = s.updatesPostedJob;
-    }
-
     // Drilldown row — one per job, anchored to the assigned lead.
-    // Shows what the assigned lead got credited with from this job so
-    // row numbers tie back to their header total minus any cross credits.
     const allUpdates = [...(j.roughUpdates||[]), ...(j.finishUpdates||[])];
     const lastUpdateYMD = allUpdates.reduce((latest, u) => {
       const d = _toYMDScore(u?.date) || _toYMDScore(u?.createdAt) || _toYMDScore(j.updated_at);
@@ -14567,11 +14579,8 @@ function Scoreboard({ jobs, users=[], identity }) {
       openPunch:     s.openPunch,
       openQuestions: s.openQuestions,
       openPulls:     s.openPulls,
-      updatesPosted: assignedLeadUpdatesFromJob,
-      totalUpdatesOnJob: s.updatesPostedJob,
+      updatesPosted: s.updatesPosted,
       postedDays:    s._postedDays.size,
-      activeDays:    s._activeDays.size,
-      missedDays:    assignedLeadMissesFromJob,
       lastUpdateYMD,
       isActive:      s.activeJobs > 0,
     });
@@ -14581,11 +14590,8 @@ function Scoreboard({ jobs, users=[], identity }) {
       agg[groupKey]._margins.push(j.simproMargin);
       if (j.simproMarginIsEst) agg[groupKey]._marginsEst++;
     }
-    // Posted/active day unions (display-only — show the lead's portfolio-
-    // wide coverage). Credit the assigned lead's union since these are
-    // for context, not scoring.
+    // Posted-day union — display-only, the lead's portfolio-wide coverage.
     s._postedDays.forEach(d => agg[groupKey].postedDays.add(d));
-    s._activeDays.forEach(d => agg[groupKey].activeDays.add(d));
   });
 
   const rows = Object.values(agg)
@@ -14596,7 +14602,6 @@ function Scoreboard({ jobs, users=[], identity }) {
       return {
         ...r,
         postedDays:   r.postedDays.size,
-        activeDays:   r.activeDays.size,
         marginCount:  mCount,
         avgMargin,
         jobsOverGoal,
@@ -15145,28 +15150,6 @@ function Scoreboard({ jobs, users=[], identity }) {
                   <Td><span style={{color:r.finishQC>0?"#b45309":"#64748b",fontWeight:700}}>{r.finishQC}</span></Td>
                   <Td bold>
                     <span style={{color:"#334155"}}>{r.updatesPosted}</span>
-                    {r.crossCredits > 0 && (
-                      <span
-                        title="Updates earned filling in on jobs this lead isn't the assigned lead of"
-                        style={{
-                          fontSize:10, fontWeight:700, color:"#0369a1",
-                          background:"#e0f2fe", padding:"1px 5px",
-                          borderRadius:6, marginLeft:5, verticalAlign:"middle",
-                        }}>
-                        +{r.crossCredits} fill-in
-                      </span>
-                    )}
-                    {(r.missedDays > 0) && (
-                      <div style={{
-                        fontSize:11, fontWeight:600, color:"#dc2626",
-                        marginTop:2, letterSpacing:0.2,
-                      }}>
-                        {r.missedDays} missed
-                        {r.crossMisses > 0 && (
-                          <span style={{color:"#94a3b8",fontWeight:500}}> ({r.crossMisses} fill-in)</span>
-                        )}
-                      </div>
-                    )}
                   </Td>
                   <Td>
                     {r.activeJobs === 0
@@ -15227,12 +15210,12 @@ function Scoreboard({ jobs, users=[], identity }) {
       </div>
 
       <div style={{fontSize:12,color:"#334155",marginTop:14,lineHeight:1.6,background:"#f1f5f9",border:"1px solid #cbd5e1",borderRadius:10,padding:"12px 14px"}}>
-        <b style={{color:"#0f172a"}}>How attribution works.</b> Inspection, QC, open items, and margin credit the
-        assigned lead. <b>Daily updates + misses use day-level attribution:</b> if Simpro shows the assigned lead on
-        the job that day, they own the day — otherwise whichever lead <i>was</i> on site picks up the point (or the
-        miss). Fill-in credits show as a blue <b>+N fill-in</b> badge next to the updates count. Pre-existing
-        inspection results from before attempt-logging shipped are pulled in as a single synthetic attempt so the
-        board isn't empty. New inspections logged after today will have accurate first-try history.
+        <b style={{color:"#0f172a"}}>How attribution works.</b> Inspection, QC, open items, daily updates, and margin
+        all credit the assigned lead on each job. Open punch / questions / unpulled loads only count once a job is
+        wrapped or between stages — while a job is still in the In-Progress section, those items are the work in
+        flight and aren't held against the lead. Pre-existing inspection results from before attempt-logging shipped
+        are pulled in as a single synthetic attempt so the board isn't empty. New inspections logged after today will
+        have accurate first-try history.
         <div style={{marginTop:8,fontSize:11,color:"#475569"}}>
           <b style={{color:"#334155"}}>Ranking.</b> Rows are sorted by the composite Score column — a weighted average
           across every pillar (inspection {SCORE_WEIGHTS.inspection}%, items {SCORE_WEIGHTS.items}%, QC {SCORE_WEIGHTS.qc}%,
@@ -15248,12 +15231,6 @@ function Scoreboard({ jobs, users=[], identity }) {
           pane is opened. Jobs that haven't been opened recently won't show up in the margin average or denominator.
           A <b>*</b> next to the average means some of that person's jobs only have estimated margins (no real costs
           tracked in Simpro yet).
-        </div>
-        <div style={{marginTop:8,fontSize:11,color:"#475569"}}>
-          <b style={{color:"#334155"}}>Missed updates.</b> "Missed" counts days a lead's job appeared on the Simpro
-          schedule but no daily update was posted. The active-day set comes straight from Simpro — if a job isn't on
-          the schedule for a given day, it can't be "missed."{scheduleByJob == null && !scheduleErr ? " Loading schedule…" : ""}
-          {scheduleErr ? " (Schedule fetch failed — misses show 0 until Simpro responds.)" : ""}
         </div>
       </div>
 
@@ -15278,8 +15255,7 @@ function Scoreboard({ jobs, users=[], identity }) {
           qs:      t.qs      + j.openQuestions,
           pulls:   t.pulls   + j.openPulls,
           updates: t.updates + j.updatesPosted,
-          missed:  t.missed  + (j.missedDays || 0),
-        }), { punch:0, qs:0, pulls:0, updates:0, missed:0 });
+        }), { punch:0, qs:0, pulls:0, updates:0 });
         const todayY = (() => { const d = new Date();
           return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
         })();
@@ -15331,16 +15307,6 @@ function Scoreboard({ jobs, users=[], identity }) {
                   <div><b style={{color:"#0f172a"}}>{drillRow.jobs}</b> jobs · <b style={{color:"#0f172a"}}>{drillRow.activeJobs}</b> active</div>
                   <div>
                     <b style={{color:"#0f172a"}}>{drillRow.updatesPosted}</b> updates
-                    {drillRow.crossCredits > 0 && (
-                      <span style={{color:"#0369a1",fontWeight:700,marginLeft:4}}>
-                        (+{drillRow.crossCredits} fill-in)
-                      </span>
-                    )}
-                    {drillRow.missedDays > 0 && (
-                      <span style={{color:"#dc2626",fontWeight:700,marginLeft:6}}>
-                        · {drillRow.missedDays} missed
-                      </span>
-                    )}
                   </div>
                   <div>
                     Open: <b style={{color:totals.punch>0?"#dc2626":"#0f172a"}}>{totals.punch}</b> punch · <b style={{color:totals.qs>0?"#dc2626":"#0f172a"}}>{totals.qs}</b> Qs · <b style={{color:totals.pulls>0?"#b45309":"#0f172a"}}>{totals.pulls}</b> pulls
@@ -15367,7 +15333,6 @@ function Scoreboard({ jobs, users=[], identity }) {
                         <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Open Qs</th>
                         <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Open Pulls</th>
                         <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Updates</th>
-                        <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Missed</th>
                         <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Last Update</th>
                       </tr>
                     </thead>
@@ -15403,14 +15368,6 @@ function Scoreboard({ jobs, users=[], identity }) {
                             </td>
                             <td style={{padding:"10px",fontSize:13,textAlign:"center",borderBottom:"1px solid #f1f5f9",color:"#334155",fontWeight:700}}>
                               {j.updatesPosted}
-                              {j.totalUpdatesOnJob > j.updatesPosted && (
-                                <div style={{fontSize:10,fontWeight:500,color:"#94a3b8",marginTop:1}}>
-                                  ({j.totalUpdatesOnJob} total · rest fill-in)
-                                </div>
-                              )}
-                            </td>
-                            <td style={{padding:"10px",fontSize:13,textAlign:"center",borderBottom:"1px solid #f1f5f9",color:j.missedDays>0?"#dc2626":"#94a3b8",fontWeight:700}}>
-                              {j.missedDays > 0 ? j.missedDays : "—"}
                             </td>
                             <td style={{padding:"10px",fontSize:12,textAlign:"center",borderBottom:"1px solid #f1f5f9",color:!j.lastUpdateYMD?"#dc2626":staleDays>5?"#b45309":"#475569",fontWeight:500,whiteSpace:"nowrap"}}>
                               {lastLabel}
@@ -18040,14 +17997,15 @@ function App() {
     const hasRT      = (job.returnTrips||[]).some(r=>!r.signedOff&&!r.rtScheduled&&(r.scope||r.date));
     const hasRTSch   = (job.returnTrips||[]).some(r=>!r.signedOff&&r.rtScheduled&&(r.scope||r.date));
     const prepAlert  = job.prepStage===PREP_STAGE_ALERT;
+    const qcFail     = job.qcStatus==="fail";
     const rs = effRS(job);
     const fs = effFS(job);
     const isInvoice  = rs==="invoice"||fs==="invoice";
     const isWaiting  = rs==="waiting"||fs==="waiting";
     const isSched    = rs==="scheduled"||fs==="scheduled";
     const isReady    = rs==="date_confirmed"||fs==="date_confirmed"||rs==="waiting_date"||fs==="waiting_date";
-    // Priority: red alerts > RT scheduled > invoice > waiting > scheduled > ready
-    const priority = (hasRT||prepAlert)?"red":hasRTSch?"purple":isInvoice?"invoice":isWaiting?"hold":isSched?"sched":isReady?"ready":"none";
+    // Priority: red alerts (QC fail / RT needed / redline prep) > RT scheduled > invoice > waiting > scheduled > ready
+    const priority = (qcFail||hasRT||prepAlert)?"red":hasRTSch?"purple":isInvoice?"invoice":isWaiting?"hold":isSched?"sched":isReady?"ready":"none";
     const BG    = {red:"rgba(220,38,38,0.18)",purple:"rgba(139,92,246,0.10)",invoice:"rgba(234,88,12,0.10)",hold:"rgba(234,179,8,0.12)",sched:"rgba(37,99,235,0.08)",ready:"rgba(202,138,4,0.08)",none:C.card};
     const LBORD = {red:"#dc2626",purple:"#8b5cf6",invoice:"#ea580c",hold:"#ca8a04",sched:"#2563eb",ready:"#ca8a04",none:rowFc};
     const BORD  = {red:"2px solid #dc2626",purple:"2px solid #8b5cf6",invoice:"2px solid #ea580c",hold:"1px dashed #ca8a04",sched:"1px dashed #2563eb",ready:"1px dashed #ca8a04",none:`1px solid ${C.border}`};
@@ -18138,6 +18096,15 @@ function App() {
 
           <div style={{display:"flex",gap:5,flexWrap:"wrap",alignItems:"center"}}>
 
+            {qcFail&&(
+              <span style={{fontSize:10,fontWeight:800,color:"#fff",
+                background:"#dc2626",border:"1px solid #991b1b",
+                borderRadius:99,padding:"2px 9px",whiteSpace:"nowrap",flexShrink:0,
+                letterSpacing:"0.06em",display:"inline-flex",alignItems:"center",gap:4,
+                boxShadow:"0 0 0 2px #fecaca"}}>
+                <Icon name="alertTriangle" size={10} stroke={2.5}/> QC FAIL
+              </span>
+            )}
             {hasRT&&<Pill label="Return trip needed" color="#dc2626"/>}
             {prepAlert&&<Pill label="Redline plans need update" color="#dc2626"/>}
             {hasRTSch&&!hasRT&&<Pill label="Return trip scheduled" color="#8b5cf6"/>}
