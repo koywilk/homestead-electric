@@ -14081,6 +14081,40 @@ function Scoreboard({ jobs, users=[], identity }) {
   const effStart = startYMD < SCOREBOARD_ANCHOR_YMD ? SCOREBOARD_ANCHOR_YMD : startYMD;
   const effEnd   = endYMD;
 
+  // ── Simpro schedule-by-job fetch ─────────────────────────
+  // Pulls per-job scheduled days from Simpro so the "missed updates" count
+  // is sourced from the real crew schedule, not the app's internal window
+  // logic. Keyed by date range + mode: re-fetches when the user changes
+  // the range, but not on every render. In-memory cache only — this is
+  // a cross-job dataset so it doesn't belong on any single job doc.
+  // Data-safety: read-only. If the fetch fails we leave `scheduleByJob`
+  // null and statsForJob falls back to postedDays-as-active (no misses
+  // dinged when Simpro data is unavailable, so a flaky fetch never
+  // punishes a lead unfairly).
+  const [scheduleByJob, setScheduleByJob] = useState(null); // null | { simproNo: ["YYYY-MM-DD"] }
+  const [scheduleFetchedAt, setScheduleFetchedAt] = useState(null);
+  const [scheduleErr, setScheduleErr] = useState(null);
+  useEffect(() => {
+    let cancelled = false;
+    setScheduleErr(null);
+    (async () => {
+      try {
+        const fn = httpsCallable(functions, "getSimproScheduleByJob");
+        const res = await fn({ dateFrom: effStart, dateTo: effEnd });
+        if (cancelled) return;
+        setScheduleByJob(res.data?.byJob || {});
+        setScheduleFetchedAt(res.data?.fetchedAt || null);
+      } catch (e) {
+        if (cancelled) return;
+        console.error("[scoreboard schedule error]", e);
+        setScheduleErr(e);
+        // Leave scheduleByJob as-is — stale data is better than empty
+        // if the new window fails to load.
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [effStart, effEnd]);
+
   // QC item counts (fromQC-tagged entries in the punch lists). When a date
   // range is supplied, items with an addedAt stamp get filtered to that
   // range; legacy items with no addedAt are always counted (treated as
@@ -14308,14 +14342,37 @@ function Scoreboard({ jobs, users=[], identity }) {
       if (dow !== 0 && dow !== 6) postedDays.add(d);
     });
 
-    // Active business-day window for this job. Used as the compliance denominator.
-    // Any weekday when an update was posted also counts — if the crew posted,
-    // the job was active that day regardless of what the scheduled dates say.
-    // This guarantees postedDays ⊆ activeDays, so the Daily Updates % can never
-    // exceed 100%.
-    const win = activeWindowForJob(job);
-    const activeDays = win ? businessDaysBetween(win.start, win.end) : new Set();
+    // Active days — sourced from Simpro's schedule feed. A job is "active"
+    // on a given day if Simpro shows it scheduled that day (Type === "job").
+    // Days where an update was posted also count, so postedDays ⊆ activeDays
+    // and the Daily Updates % can never exceed 100%. Dates are already
+    // clamped to [effStart, effEnd] by the Cloud Function.
+    //
+    // Fallback: if the Simpro fetch hasn't landed yet OR the job has no
+    // simproNo, we use postedDays as the active set — meaning no misses
+    // get counted for that job. Intentional: better to under-count misses
+    // than to blame a lead when we literally don't know if their crew was
+    // supposed to be there.
+    const activeDays = new Set();
+    const simproDates = (job.simproNo && scheduleByJob)
+      ? (scheduleByJob[String(job.simproNo)] || [])
+      : null;
+    if (simproDates) {
+      simproDates.forEach(d => {
+        if (d >= effStart && d <= effEnd) activeDays.add(d);
+      });
+    }
     postedDays.forEach(d => activeDays.add(d));
+
+    // Missed days — scheduled by Simpro but no update posted. Only meaningful
+    // when Simpro schedule data is loaded; otherwise stays at 0.
+    const missedDays = new Set();
+    if (simproDates) {
+      simproDates.forEach(d => {
+        if (d < effStart || d > effEnd) return;
+        if (!postedDays.has(d)) missedDays.add(d);
+      });
+    }
 
     // Open-items snapshot — not date-filtered. Completed jobs contribute 0
     // so leads aren't dinged for items on jobs that have already wrapped.
@@ -14336,8 +14393,10 @@ function Scoreboard({ jobs, users=[], identity }) {
       openQuestions: open.questions,
       openPulls:     open.pulls,
       activeJobs:    isActiveJob ? 1 : 0,
-      _postedDays: postedDays,
-      _activeDays: activeDays,
+      missedDays:    missedDays.size,
+      _postedDays:   postedDays,
+      _activeDays:   activeDays,
+      _missedDays:   missedDays,
     };
   };
 
@@ -14373,6 +14432,7 @@ function Scoreboard({ jobs, users=[], identity }) {
       updatesPosted: 0,
       openPunch: 0, openQuestions: 0, openPulls: 0,
       activeJobs: 0,   // jobs where finishStatus !== "complete" — denominator for the Open Items pillar
+      missedDays: 0,   // scheduled-by-Simpro days where no update was posted, summed across the lead's jobs
       postedDays: new Set(),
       activeDays: new Set(),
       _margins: [],       // list of numeric simproMargin values for this person's jobs
@@ -14385,7 +14445,7 @@ function Scoreboard({ jobs, users=[], identity }) {
     // so the aggregator just sums and unions — no date logic here.
     ["roughFirstTryClean","finalFirstTryClean","roughItemsCalled","finalItemsCalled",
      "roughQC","finishQC","roughAttempted","finalAttempted","updatesPosted",
-     "openPunch","openQuestions","openPulls","activeJobs"].forEach(k => {
+     "openPunch","openQuestions","openPulls","activeJobs","missedDays"].forEach(k => {
       agg[groupKey][k] += s[k];
     });
     // Drilldown row — one per job, with enough detail for Koy to click a lead
@@ -14408,6 +14468,7 @@ function Scoreboard({ jobs, users=[], identity }) {
       updatesPosted: s.updatesPosted,
       postedDays:    s._postedDays.size,
       activeDays:    s._activeDays.size,
+      missedDays:    s.missedDays,
       lastUpdateYMD,
       isActive:      s.activeJobs > 0,
     });
@@ -14870,7 +14931,7 @@ function Scoreboard({ jobs, users=[], identity }) {
               <Th title="Total items called across every final attempt">Final Items</Th>
               <Th title="Rough QC walk items (fromQC)">Rough QC</Th>
               <Th title="Finish QC walk items (fromQC)">Finish QC</Th>
-              <Th title="Daily updates posted in the window (total count)">Updates Posted</Th>
+              <Th title="Daily updates posted in the window (total count). 'Missed' = days Simpro shows this lead's jobs scheduled but no update was posted.">Updates Posted</Th>
               <Th title="Open punch items on active jobs (not done)">Open Punch</Th>
               <Th title="Unanswered questions on active jobs (no answer + not marked done)">Open Qs</Th>
               <Th title="Named home runs / keypads / CP4 loads on active jobs with status other than Pulled">Open Pulls</Th>
@@ -14982,7 +15043,17 @@ function Scoreboard({ jobs, users=[], identity }) {
                   <Td><span style={{color:r.finalItemsCalled>0?"#dc2626":"#64748b",fontWeight:700}}>{r.finalItemsCalled}</span></Td>
                   <Td><span style={{color:r.roughQC>0?"#b45309":"#64748b",fontWeight:700}}>{r.roughQC}</span></Td>
                   <Td><span style={{color:r.finishQC>0?"#b45309":"#64748b",fontWeight:700}}>{r.finishQC}</span></Td>
-                  <Td bold><span style={{color:"#334155"}}>{r.updatesPosted}</span></Td>
+                  <Td bold>
+                    <span style={{color:"#334155"}}>{r.updatesPosted}</span>
+                    {r.missedDays > 0 && (
+                      <div style={{
+                        fontSize:11, fontWeight:600, color:"#dc2626",
+                        marginTop:2, letterSpacing:0.2,
+                      }}>
+                        {r.missedDays} missed
+                      </div>
+                    )}
+                  </Td>
                   <Td>
                     {r.activeJobs === 0
                       ? <span style={{color:"#94a3b8",fontSize:12}}>—</span>
@@ -15064,6 +15135,12 @@ function Scoreboard({ jobs, users=[], identity }) {
           A <b>*</b> next to the average means some of that person's jobs only have estimated margins (no real costs
           tracked in Simpro yet).
         </div>
+        <div style={{marginTop:8,fontSize:11,color:"#475569"}}>
+          <b style={{color:"#334155"}}>Missed updates.</b> "Missed" counts days a lead's job appeared on the Simpro
+          schedule but no daily update was posted. The active-day set comes straight from Simpro — if a job isn't on
+          the schedule for a given day, it can't be "missed."{scheduleByJob == null && !scheduleErr ? " Loading schedule…" : ""}
+          {scheduleErr ? " (Schedule fetch failed — misses show 0 until Simpro responds.)" : ""}
+        </div>
       </div>
 
       {/* ── Per-person drilldown modal ──────────────────────────────────── */}
@@ -15083,11 +15160,12 @@ function Scoreboard({ jobs, users=[], identity }) {
           return (a.jobName||"").localeCompare(b.jobName||"");
         });
         const totals = jobsList.reduce((t,j) => ({
-          punch: t.punch + j.openPunch,
-          qs:    t.qs    + j.openQuestions,
-          pulls: t.pulls + j.openPulls,
+          punch:   t.punch   + j.openPunch,
+          qs:      t.qs      + j.openQuestions,
+          pulls:   t.pulls   + j.openPulls,
           updates: t.updates + j.updatesPosted,
-        }), { punch:0, qs:0, pulls:0, updates:0 });
+          missed:  t.missed  + (j.missedDays || 0),
+        }), { punch:0, qs:0, pulls:0, updates:0, missed:0 });
         const todayY = (() => { const d = new Date();
           return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
         })();
@@ -15137,7 +15215,14 @@ function Scoreboard({ jobs, users=[], identity }) {
                 </div>
                 <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:14,fontSize:12,color:"#334155",flexWrap:"wrap"}}>
                   <div><b style={{color:"#0f172a"}}>{drillRow.jobs}</b> jobs · <b style={{color:"#0f172a"}}>{drillRow.activeJobs}</b> active</div>
-                  <div><b style={{color:"#0f172a"}}>{totals.updates}</b> updates posted</div>
+                  <div>
+                    <b style={{color:"#0f172a"}}>{totals.updates}</b> updates
+                    {totals.missed > 0 && (
+                      <span style={{color:"#dc2626",fontWeight:700,marginLeft:6}}>
+                        · {totals.missed} missed
+                      </span>
+                    )}
+                  </div>
                   <div>
                     Open: <b style={{color:totals.punch>0?"#dc2626":"#0f172a"}}>{totals.punch}</b> punch · <b style={{color:totals.qs>0?"#dc2626":"#0f172a"}}>{totals.qs}</b> Qs · <b style={{color:totals.pulls>0?"#b45309":"#0f172a"}}>{totals.pulls}</b> pulls
                   </div>
@@ -15163,6 +15248,7 @@ function Scoreboard({ jobs, users=[], identity }) {
                         <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Open Qs</th>
                         <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Open Pulls</th>
                         <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Updates</th>
+                        <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Missed</th>
                         <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Last Update</th>
                       </tr>
                     </thead>
@@ -15198,6 +15284,9 @@ function Scoreboard({ jobs, users=[], identity }) {
                             </td>
                             <td style={{padding:"10px",fontSize:13,textAlign:"center",borderBottom:"1px solid #f1f5f9",color:"#334155",fontWeight:700}}>
                               {j.updatesPosted}
+                            </td>
+                            <td style={{padding:"10px",fontSize:13,textAlign:"center",borderBottom:"1px solid #f1f5f9",color:j.missedDays>0?"#dc2626":"#94a3b8",fontWeight:700}}>
+                              {j.missedDays > 0 ? j.missedDays : "—"}
                             </td>
                             <td style={{padding:"10px",fontSize:12,textAlign:"center",borderBottom:"1px solid #f1f5f9",color:!j.lastUpdateYMD?"#dc2626":staleDays>5?"#b45309":"#475569",fontWeight:500,whiteSpace:"nowrap"}}>
                               {lastLabel}

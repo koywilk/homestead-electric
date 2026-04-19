@@ -1442,6 +1442,70 @@ exports.getSimproSchedule = functions.https.onCall(async (data) => {
   return schedules;
 });
 
+// ─── Get Simpro Schedule grouped by Job ───────────────────────────────────────
+// Paginates the full /schedules/ feed, filters to Type === "job" and the
+// supplied date range, and groups by Simpro project ID → sorted array of
+// unique YYYY-MM-DD dates that project appeared on the schedule.
+// Used by the Scoreboard to count "active days" (days a crew was scheduled
+// on a job) so we can tell which days a daily update was missed.
+// Data-safety: read-only on Simpro. No Firestore writes. A non-OK page
+// response logs a warning and returns whatever we've accumulated so far
+// rather than throwing, so the Scoreboard degrades gracefully instead of
+// losing all miss data on a transient 429/5xx.
+exports.getSimproScheduleByJob = functions
+  .runWith({ timeoutSeconds: 120, memory: "512MB" })
+  .https.onCall(async (data) => {
+    const { dateFrom, dateTo } = data || {};
+
+    const all = [];
+    let page = 1;
+    const MAX_PAGES = 60;
+    while (page <= MAX_PAGES) {
+      const resp = await fetch(
+        `${SIMPRO_BASE}/schedules/?pageSize=250&page=${page}`,
+        { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } }
+      );
+      if (!resp.ok) {
+        functions.logger.warn("getSimproScheduleByJob page failed", {
+          page, status: resp.status,
+        });
+        break;
+      }
+      const batch = await resp.json();
+      if (!Array.isArray(batch) || batch.length === 0) break;
+      all.push(...batch);
+      if (batch.length < 250) break;
+      page++;
+    }
+
+    // Group Type === "job" rows by Project.ProjectID → Set<Date>
+    const byJob = {};
+    all.forEach(s => {
+      if (!s || s.Type !== "job") return;
+      const date = s.Date;
+      if (!date) return;
+      if (dateFrom && date < dateFrom) return;
+      if (dateTo   && date > dateTo)   return;
+      const pid = String((s.Project && s.Project.ProjectID) || "");
+      if (!pid) return;
+      if (!byJob[pid]) byJob[pid] = new Set();
+      byJob[pid].add(date);
+    });
+
+    // Materialize sets as sorted arrays for JSON transport.
+    const byJobArr = {};
+    Object.entries(byJob).forEach(([pid, set]) => {
+      byJobArr[pid] = [...set].sort();
+    });
+
+    return {
+      byJob: byJobArr,
+      totalRows: all.length,
+      jobsCovered: Object.keys(byJobArr).length,
+      fetchedAt: new Date().toISOString(),
+    };
+  });
+
 // ─────────────────────────────────────────────────────────────
 // SCHEDULED — Thursday 5pm Mountain Time
 // Friday Scheduling & Strategy Packet — uploaded as a Google Doc
