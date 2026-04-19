@@ -4086,7 +4086,7 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
 // the individual items inside each cost center (catalogs, one-offs,
 // prebuilds). Field team can search by any item name — if nothing
 // matches, they know it's a change order.
-function BidItemsPanel({simproNo, data, error, refreshing, onRefresh, orderedQty}) {
+function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
   const [q, setQ] = useState("");
   const [expanded, setExpanded] = useState({}); // ccKey -> bool
   // Lazy-loaded qty per item. Simpro's list endpoint doesn't include Quantity,
@@ -4364,10 +4364,9 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh, orderedQty
                 </div>
 
                 {isOpen && itemsToShow.length > 0 && (() => {
-                  // Aggregate by normalized item name. Each group also sums
-                  // the ordered qty across all catalog IDs that share that
-                  // name, so the field team sees bid-vs-ordered per item.
-                  const orderMap = orderedQty?.byCatalogId || {};
+                  // Aggregate by normalized item name — if Simpro stores the
+                  // same catalog item on 8 separate lines, show one row × 8
+                  // instead of 8 identical rows.
                   const groups = new Map();
                   itemsToShow.forEach(it => {
                     const qtyKey = `${cc.sectionId}-${cc.id}-${it.kind}-${it.id}`;
@@ -4375,49 +4374,26 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh, orderedQty
                     const nameRaw = it.name || "(unnamed)";
                     const nameKey = nameRaw.trim().toLowerCase();
                     if (!groups.has(nameKey)) {
-                      groups.set(nameKey, { name: nameRaw, count: 0, ordered: 0, catalogIds: new Set() });
+                      groups.set(nameKey, { name: nameRaw, count: 0 });
                     }
                     const g = groups.get(nameKey);
                     g.count += (explicitQty != null ? explicitQty : 1);
-                    if (it.catalogId != null && !g.catalogIds.has(it.catalogId)) {
-                      g.catalogIds.add(it.catalogId);
-                      g.ordered += (orderMap[it.catalogId] || 0);
-                    }
                   });
                   const rows = [...groups.values()];
                   return (
                     <div style={{marginLeft:16,marginTop:2,marginBottom:4}}>
-                      {rows.map((g, i) => {
-                        // Color the ordered badge by coverage: green if we've
-                        // ordered everything bid, yellow if partial, dim if
-                        // nothing ordered yet. Ignored when orderedQty data
-                        // hasn't loaded (show nothing rather than misleading 0).
-                        const hasOrderData = !!orderedQty;
-                        const fullyOrdered = hasOrderData && g.ordered >= g.count && g.count > 0;
-                        const partial = hasOrderData && g.ordered > 0 && g.ordered < g.count;
-                        const orderedColor = fullyOrdered ? "#16a34a"
-                                           : partial ? "#ea580c"
-                                           : C.dim;
-                        return (
-                          <div key={`${key}-grp-${i}`}
-                            style={{display:"flex",gap:10,
-                              padding:"3px 2px",fontSize:11,color:C.text}}>
-                            <div style={{flex:"1 1 auto",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",display:"flex",alignItems:"center"}}>
-                              <span>{g.name}</span>
-                            </div>
-                            <div style={{display:"flex",gap:8,whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums"}}>
-                              <span style={{color:C.dim,minWidth:44,textAlign:"right"}}>
-                                bid × {g.count}
-                              </span>
-                              {hasOrderData && (
-                                <span style={{color:orderedColor,fontWeight:fullyOrdered?700:500,minWidth:62,textAlign:"right"}}>
-                                  {fullyOrdered ? "✓ " : ""}ordered × {g.ordered}
-                                </span>
-                              )}
-                            </div>
+                      {rows.map((g, i) => (
+                        <div key={`${key}-grp-${i}`}
+                          style={{display:"flex",gap:10,
+                            padding:"3px 2px",fontSize:11,color:C.text}}>
+                          <div style={{flex:"1 1 auto",minWidth:0,overflow:"hidden",textOverflow:"ellipsis",display:"flex",alignItems:"center"}}>
+                            <span>{g.name}</span>
                           </div>
-                        );
-                      })}
+                          <div style={{whiteSpace:"nowrap",fontVariantNumeric:"tabular-nums",color:C.dim,minWidth:44,textAlign:"right"}}>
+                            bid × {g.count}
+                          </div>
+                        </div>
+                      ))}
                     </div>
                   );
                 })()}
@@ -7656,7 +7632,7 @@ function FileUploadSection({ jobId, files, onChange }) {
   );
 }
 
-function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simproCostCentersRefreshing, onRefreshSimproCostCenters, simproOrderedQty}) {
+function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simproCostCentersRefreshing, onRefreshSimproCostCenters}) {
 
   return (
 
@@ -7672,7 +7648,6 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
           error={simproCostCentersErr}
           refreshing={simproCostCentersRefreshing}
           onRefresh={onRefreshSimproCostCenters}
-          orderedQty={simproOrderedQty}
         />
       </Section>
 
@@ -8757,37 +8732,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     // (e.g. simproFinancials) follow the same pattern with bare deps.
   }, [job.simproNo, simproCostCentersTick]);
 
-  // Ordered qty per catalog ID — fetched alongside cost centers so the Bid
-  // Items panel can show "× 8 bid / × 5 ordered" per item. Same caching
-  // strategy as cost centers: 12h TTL on the job doc, refresh tick busts it.
-  const [simproOrderedQty, setSimproOrderedQty] = useState(null);
-  useEffect(() => {
-    if (!job.simproNo) { setSimproOrderedQty(null); return; }
-    const cached = job.simproOrderedQtyCache;
-    const fetchedAt = cached?.fetchedAt ? Date.parse(cached.fetchedAt) : 0;
-    const isStale = !fetchedAt || (Date.now() - fetchedAt) > CC_CACHE_TTL_MS;
-    const forced = simproCostCentersTick > 0;
-    if (cached && cached.byCatalogId) setSimproOrderedQty(cached);
-    if (!cached || isStale || forced) {
-      // Client timeout bumped to 120s to match the Cloud Function's
-      // timeoutSeconds. Default client timeout is 60s, which was tripping
-      // deadline-exceeded before the server fully responded.
-      const fn = httpsCallable(functions, "getSimproJobOrderedQty", { timeout: 120000 });
-      fn({ simproJobNo: job.simproNo })
-        .then(res => {
-          console.log("[simproOrderedQty]", res.data);
-          setSimproOrderedQty(res.data);
-          // Additive cache write — same pattern as cost centers. Only touches
-          // simproOrderedQtyCache, never other job fields.
-          u({ simproOrderedQtyCache: res.data });
-        })
-        .catch(e => {
-          console.warn("[simproOrderedQty error]", e);
-          // Non-fatal: if this fails, Bid Items panel just doesn't show
-          // ordered counts. Bid items themselves still render normally.
-        });
-    }
-  }, [job.simproNo, simproCostCentersTick]);
 
   // Live listener for GC question answers + LV lighting collab
   useEffect(() => {
@@ -10077,7 +10021,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               simproCostCentersErr={simproCostCentersErr}
               simproCostCentersRefreshing={simproCostCentersRefreshing}
               onRefreshSimproCostCenters={refetchSimproCostCenters}
-              simproOrderedQty={simproOrderedQty}
             />
 
           )}
