@@ -3,7 +3,7 @@ import { useState, useEffect, useRef, useCallback, useMemo } from "react";
 import { initializeApp } from "firebase/app";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
-import { getMessaging, getToken, onMessage } from "firebase/messaging";
+import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable } from "firebase/functions";
 
 // ── FCM setup ─────────────────────────────────────────────────────────────────
@@ -86,29 +86,45 @@ async function registerFCMToken(userId, force=false) {
     const tokenOptions = { vapidKey: VAPID_KEY };
     if (swReg) tokenOptions.serviceWorkerRegistration = swReg;
 
+    // When forcing a refresh (daily rotation, or user hit "Enable Notifications"
+    // after a failed test), delete the cached token first. Otherwise the SDK
+    // returns the same stale token that was already pruned server-side — this
+    // was the "token registered but server says no tokens" infinite loop.
+    if (force) {
+      try { await deleteToken(messaging); } catch(e) { /* fine if already gone */ }
+    }
+
     const token = await getToken(messaging, tokenOptions);
     if (!token) return "no_token";
 
+    console.log("[HE] FCM token generated (first 20):", token.slice(0,20), "userId:", userId);
+
     const snap = await getDoc(doc(db, "settings", "users"));
     if (!snap.exists()) return "no_user_doc";
-    const list = (snap.data().list || []).map(u => {
+    const rawList = snap.data().list || [];
+    const targetUser = rawList.find(u => u.id === userId);
+    if (!targetUser) {
+      console.warn("[HE] FCM registration: userId not found in users list", {
+        userId, availableIds: rawList.map(u => u.id)
+      });
+      return "user_not_in_list";
+    }
+    const list = rawList.map(u => {
       if (u.id !== userId) return u;
       const existing = Array.isArray(u.fcmTokens) ? u.fcmTokens
         : u.fcmToken ? [u.fcmToken] : [];
-      // On force refresh: replace this device's previous token with the fresh one.
-      // This prevents the array from growing with duplicate or rotated tokens.
+      // On force refresh: drop previous token(s) from this device and add the fresh one.
       let merged;
-      if (force && existing.length > 0) {
-        // Keep all tokens except the last one (this device), add the fresh token
-        merged = [...existing.slice(0, -1), token];
-        if (!merged.includes(token)) merged = [...existing, token];
+      if (force) {
+        merged = [token];
       } else {
         merged = existing.includes(token) ? existing : [...existing, token];
       }
       return { ...u, fcmTokens: merged.slice(-10) };
     });
     await setDoc(doc(db, "settings", "users"), { list });
-    console.log("[HE] FCM token registered" + (force ? " (forced refresh)" : ""));
+    console.log("[HE] FCM token registered" + (force ? " (forced refresh)" : ""),
+      "→ user now has", list.find(u=>u.id===userId)?.fcmTokens?.length || 0, "token(s)");
     return "ok";
   } catch (e) {
     console.warn("[HE] FCM registration failed:", e.message);
@@ -132,6 +148,20 @@ if (messaging) {
   });
 }
 window.__HE_DB = db;
+window.__HE_REGISTER_FCM = registerFCMToken;
+// Diagnostic: dump the current user's tokens from Firestore
+window.__HE_FCM_STATUS = async () => {
+  const identity = JSON.parse(localStorage.getItem("he_identity") || "{}");
+  const snap = await getDoc(doc(db, "settings", "users"));
+  const list = snap.data()?.list || [];
+  const me = list.find(u => u.id === identity.id);
+  console.log("identity:", identity);
+  console.log("my user record in settings/users:", me);
+  console.log("fcmTokens array length:", (me?.fcmTokens || []).length);
+  console.log("legacy fcmToken:", me?.fcmToken || "(none)");
+  console.log("available user ids:", list.map(u => u.id));
+  return me;
+};
 
 // Check what Firestore ACTUALLY has for a job
 window.__HE_CHECK = async(name)=>{
@@ -15796,6 +15826,15 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
         <button onClick={async()=>{
           if(!identity?.id){toast.warn("No user identity — re-pick your name first");return;}
           try {
+            // Force-refresh the token first so a stale-cached token can't
+            // cause the "registered but server says none" loop.
+            // registerFCMToken is exported on window for ad-hoc use.
+            const reg = window.__HE_REGISTER_FCM
+              ? await window.__HE_REGISTER_FCM(identity.id, true)
+              : "ok";
+            if (reg !== "ok" && reg !== "no_messaging") {
+              toast.warn("Token refresh: "+reg+" — sending test anyway");
+            }
             const fn=httpsCallable(functions,"sendTestNotification");
             const res=await fn({userId:identity.id});
             const d=res.data||{};
