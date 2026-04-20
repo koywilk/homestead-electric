@@ -94,9 +94,17 @@ async function sendFCM(token, { title, body, jobId, section }) {
           badge: "/icon-192.png",
           tag,                      // dedup at the browser/SW layer
           requireInteraction: false,
+          // Explicit data on the displayed notification — the SW click handler
+          // reads from event.notification.data. Without this, FCM's auto-display
+          // attaches the message to .data.FCM_MSG.data instead, and our older SW
+          // versions miss it. This makes the click target unambiguous.
+          data: {
+            jobId:   jobId   || "",
+            section: section || "",
+          },
         },
-        // fcmOptions.link is what the FCM SDK opens when the user taps the
-        // notification (FCM handles the click → focus existing tab or open new).
+        // fcmOptions.link is the URL FCM's default click handler opens —
+        // kept as a third fallback if our SW handler ever misses.
         fcmOptions: { link: linkPath },
       },
       android: {
