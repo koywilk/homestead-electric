@@ -113,13 +113,11 @@ async function registerFCMToken(userId, force=false) {
       if (u.id !== userId) return u;
       const existing = Array.isArray(u.fcmTokens) ? u.fcmTokens
         : u.fcmToken ? [u.fcmToken] : [];
-      // On force refresh: drop previous token(s) from this device and add the fresh one.
-      let merged;
-      if (force) {
-        merged = [token];
-      } else {
-        merged = existing.includes(token) ? existing : [...existing, token];
-      }
+      // Always additive — never wipe the array, even on force refresh.
+      // Other devices' tokens must be preserved. Dead tokens get pruned
+      // server-side on the next send attempt; worst case the array grows
+      // by one stale token which the .slice(-10) cap handles.
+      const merged = existing.includes(token) ? existing : [...existing, token];
       return { ...u, fcmTokens: merged.slice(-10) };
     });
     await setDoc(doc(db, "settings", "users"), { list });
@@ -15826,15 +15824,11 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
         <button onClick={async()=>{
           if(!identity?.id){toast.warn("No user identity — re-pick your name first");return;}
           try {
-            // Force-refresh the token first so a stale-cached token can't
-            // cause the "registered but server says none" loop.
-            // registerFCMToken is exported on window for ad-hoc use.
-            const reg = window.__HE_REGISTER_FCM
-              ? await window.__HE_REGISTER_FCM(identity.id, true)
-              : "ok";
-            if (reg !== "ok" && reg !== "no_messaging") {
-              toast.warn("Token refresh: "+reg+" — sending test anyway");
-            }
+            // Send to whatever tokens are on file. Don't force-refresh here —
+            // force-refresh was wiping working tokens when the SDK returned a
+            // cached dead token, leaving the user with zero tokens after pruning.
+            // If the test fails, use "Enable Notifications" on this device to
+            // register a fresh token manually.
             const fn=httpsCallable(functions,"sendTestNotification");
             const res=await fn({userId:identity.id});
             const d=res.data||{};
