@@ -13192,20 +13192,41 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
   }, [users, foremanColors, allStaff]);
 
   const [personFilter, setPersonFilter] = useState("all");
+  const [prefApplied,  setPrefApplied]  = useState(false);
 
-  // Auto-default to your own foreman's crew
+  // Auto-default: respect user's saved preference (Settings → My Preferences → Default Schedule View)
+  // Falls back to the user's own crew if no preference is set.
+  // Runs only until a default has been chosen once — after that, user selections are preserved.
   useEffect(() => {
-    if (personFilter !== "all") return;
+    if (prefApplied) return;
+    if (personFilter !== "all") { setPrefApplied(true); return; }
     if (!identity?.id) return;
-    // Am I a foreman? Find my own crew entry
+    const pref = identity.defaultScheduleView || "";
+    // Explicit "all" — leave filter on "all"
+    if (pref === "all") { setPrefApplied(true); return; }
+    // Explicit "mycrew" — only applies once myCrewNames resolves
+    if (pref === "mycrew") {
+      if (hasMyCrew) { setPersonFilter("mycrew"); setPrefApplied(true); }
+      return; // wait for crew to resolve before marking applied
+    }
+    // Explicit "crew_<foremanId>" — pick that crew
+    if (pref.startsWith("crew_")) {
+      const match = foremanCrews.find(fc => "crew_" + fc.foremanId === pref);
+      if (match) { setPersonFilter(pref); setPrefApplied(true); return; }
+      // wait for foremanCrews to populate
+      if (foremanCrews.length === 0) return;
+      // foremanCrews loaded but crew not found — fall through to auto
+    }
+    // Auto (no preference or invalid preference) — my own crew
     const myForeman = foremanCrews.find(fc => fc.foremanId === identity.id);
-    if (myForeman) { setPersonFilter("crew_" + myForeman.foremanId); return; }
-    // Am I a crew member? Find the foreman I'm assigned to
+    if (myForeman) { setPersonFilter("crew_" + myForeman.foremanId); setPrefApplied(true); return; }
     if (identity.foremanId) {
       const myBoss = foremanCrews.find(fc => fc.foremanId === identity.foremanId);
-      if (myBoss) { setPersonFilter("crew_" + myBoss.foremanId); return; }
+      if (myBoss) { setPersonFilter("crew_" + myBoss.foremanId); setPrefApplied(true); return; }
     }
-  }, [foremanCrews, identity?.id, identity?.foremanId]);
+    // foremanCrews populated but no match — give up and leave "all"
+    if (foremanCrews.length > 0) setPrefApplied(true);
+  }, [foremanCrews, identity?.id, identity?.foremanId, identity?.defaultScheduleView, hasMyCrew, prefApplied, personFilter]);
 
   // Match Simpro ProjectID → app job
   const jobBySimproNo = useMemo(() => {
@@ -15622,7 +15643,7 @@ function BulkEditTable({ jobs, foremenList, leadsList, onUpdateJob }) {
   );
 }
 
-function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upcoming, manualTasks, onRestoreFromBackup, onRestoreFromFile, identity }) {
+function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverrides, jobs, upcoming, manualTasks, onRestoreFromBackup, onRestoreFromFile, identity }) {
   const [colors, setColors] = useState({...colorOverrides});
   const [saved,  setSaved]  = useState(false);
   const [restoring, setRestoring] = useState(false);
@@ -15788,6 +15809,52 @@ function SettingsPage({ COLOR_OPTIONS, onSave, users, colorOverrides, jobs, upco
           <Icon name="bell" size={14}/> Send Test Notification
         </button>
       </div>
+
+      {/* My Preferences — personal defaults (scoped to the current user) */}
+      {identity?.id && onSaveUsers && (
+        <div style={{marginBottom:32,padding:"16px 18px",background:"#eff6ff",borderRadius:12,
+          border:"1px solid #bfdbfe"}}>
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
+            <span style={{display:"inline-flex",alignItems:"center",color:"#1e40af"}}><Icon name="user" size={16} stroke={2.25}/></span>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.06em",color:"#1e40af"}}>MY PREFERENCES</div>
+          </div>
+          <div style={{fontSize:11,color:"#1d4ed8",marginBottom:12,lineHeight:1.5}}>
+            Only affects your view — everyone else keeps their own defaults.
+          </div>
+
+          <label style={{display:"block",fontSize:10,color:"#1e40af",fontWeight:700,
+            letterSpacing:"0.05em",textTransform:"uppercase",marginBottom:4}}>
+            Default Schedule View
+          </label>
+          <select
+            value={identity.defaultScheduleView||""}
+            onChange={async (e)=>{
+              const v = e.target.value;
+              const updatedList = (users||[]).map(u =>
+                u.id === identity.id ? {...u, defaultScheduleView: v} : u
+              );
+              try {
+                await onSaveUsers(updatedList);
+                toast.success(v ? "Default view saved" : "Default view reset");
+              } catch (err) {
+                toast.error("Couldn't save preference: " + (err.message||"unknown"));
+              }
+            }}
+            style={{width:"100%",maxWidth:360,padding:"9px 12px",borderRadius:8,
+              border:"1px solid #bfdbfe",background:"#fff",fontSize:13,
+              fontFamily:"inherit",color:"#0f172a",cursor:"pointer"}}>
+            <option value="">Auto — my own crew</option>
+            <option value="all">All crews</option>
+            <option value="mycrew">My crew (foreman + crewmates)</option>
+            {foremanUsers.map(f => (
+              <option key={f.id} value={"crew_"+f.id}>{(f.name||"").split(" ")[0]}'s crew</option>
+            ))}
+          </select>
+          <div style={{fontSize:10,color:"#64748b",marginTop:6,lineHeight:1.4}}>
+            Applied the next time the schedule loads. Saved to your user record — not shared with other people.
+          </div>
+        </div>
+      )}
 
       {noUsers && (
         <div style={{fontSize:13,color:"#94a3b8",fontStyle:"italic",marginBottom:24,
@@ -19465,6 +19532,7 @@ function App() {
             users={users}
             colorOverrides={_colorOverrides}
             onSave={saveSettings}
+            onSaveUsers={saveUsers}
             jobs={jobs}
             identity={identity}
             upcoming={upcoming}
