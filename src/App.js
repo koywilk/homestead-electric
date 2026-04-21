@@ -3656,14 +3656,16 @@ function JobNoteCard({
     });
   };
 
-  // Spec notes = reference material (e.g. device/plate colors, fixture specs).
-  // Not triageable — they're informational, not action items. Rendered with a
-  // distinct slate color so the eye immediately reads "this isn't work to do."
+  // Detail notes = reference material (e.g. device/plate colors, fixture
+  // specs). Not triageable — they're informational, not action items.
+  // Rendered with a distinct slate color so the eye immediately reads "this
+  // isn't work to do." Stored value stays `'spec'` (zero migration); only
+  // the UI label is "Detail".
   const isSpec = note.phase === 'spec';
   const phaseLabel =
     note.phase === 'rough'  ? 'Rough'   :
     note.phase === 'finish' ? 'Finish'  :
-    note.phase === 'spec'   ? 'Spec'    : 'General';
+    note.phase === 'spec'   ? 'Detail'  : 'General';
   const phaseDefs = {
     rough:   C.rough,
     finish:  C.finish,
@@ -3754,7 +3756,7 @@ function JobNoteCard({
         </button>
 
         <span
-          title={isSpec ? 'Specification note — reference only (not triageable)' : undefined}
+          title={isSpec ? 'Detail note — reference only (not triageable)' : undefined}
           style={{
             fontSize:9, fontWeight:800, color: thisPhaseColor, letterSpacing:'0.08em',
             background: thisPhaseColor + '14', border:`1px solid ${thisPhaseColor}44`,
@@ -3830,12 +3832,13 @@ function JobNoteCard({
             <option value="rough">Rough</option>
             <option value="finish">Finish</option>
             <option value="general">General</option>
-            <option value="spec">Spec (reference)</option>
+            <option value="spec">Detail (reference)</option>
           </select>
         )}
 
-        {/* Triage toggle — suppressed for Spec notes (reference, not actionable).
-            Only shown when expanded so the collapsed header stays minimal. */}
+        {/* Triage toggle — suppressed for Detail notes (reference, not
+            actionable). Only shown when expanded so the collapsed header
+            stays minimal. */}
         {!isSpec && !editing && isExpanded && lines.filter(l=>!l.promoted).length > 0 && (
           <button onClick={()=>{ setTriage(t=>!t); setSelected(new Set()); }}
             style={{
@@ -3963,7 +3966,7 @@ function JobNoteCard({
       </div>
       )}
 
-      {/* Triage action bar — hidden for Spec notes (reference, not promotable) */}
+      {/* Triage action bar — hidden for Detail notes (reference, not promotable) */}
       {!isSpec && triage && selected.size > 0 && (
         <div style={{
           borderTop:`1px solid ${C.border}`, padding:'8px 10px',
@@ -4185,7 +4188,7 @@ function JobNotesSection({
         </button>
         <button
           onClick={()=>addNote({ phase:'spec' })}
-          title="Spec Note — reference info like device colors, plate colors, fixtures. Not triageable."
+          title="Detail Note — reference info like device colors, plate colors, fixtures. Not triageable."
           style={{
             background:'transparent',
             border:`1px solid #64748b55`, borderRadius:99,
@@ -4193,10 +4196,10 @@ function JobNotesSection({
             color:'#64748b', cursor:'pointer', fontFamily:'inherit',
             display:'inline-flex', alignItems:'center', gap:3,
           }}>
-          <span style={{ fontSize:10 }}>ℹ</span> + Spec
+          <span style={{ fontSize:10 }}>ℹ</span> + Detail
         </button>
         <label
-          title="Quick-capture — pick photos/files and drop them in a new spec note"
+          title="Quick-capture — pick photos/files and drop them in a new detail note"
           style={{
             background:'transparent',
             border:`1px solid #64748b55`, borderRadius:99,
@@ -4223,8 +4226,8 @@ function JobNotesSection({
       {filtered.length === 0 && (
         <div style={{ marginTop:8, fontSize:11, color: C.dim, fontStyle:'italic', textAlign:'center' }}>
           {scope === 'all'
-            ? 'No notes yet. Capture work in Job Notes (triage into RT / Punch / CO / Call), or use Spec Notes for reference info like device/plate colors.'
-            : `No ${scope} notes yet. Use "+ Spec Note" for reference info (device colors, fixtures, etc.).`}
+            ? 'No notes yet. Capture work in Job Notes (triage into RT / Punch / CO / Call), or use Detail Notes for reference info like device/plate colors.'
+            : `No ${scope} notes yet. Use "+ Detail" for reference info (device colors, fixtures, etc.).`}
         </div>
       )}
     </div>
