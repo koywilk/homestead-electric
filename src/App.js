@@ -2692,11 +2692,15 @@ function JobNoteLine({
           </div>
         )}
 
-        {/* Line photos */}
+        {/* Line photos — attached to THIS specific line so they travel with
+            the line when promoted to punch (see JobNoteDestinationPunch:
+            newItems.photos = l.photos). The empty-state renders a labeled
+            chip ("📷 Add photo"); once photos exist, a compact `+` tile
+            takes over so the row stays tight. */}
         {(photos.length > 0 || editing) && (
-          <div style={{display:'flex', flexWrap:'wrap', gap:5, marginTop: photos.length>0 ? 5 : 0}}>
+          <div style={{display:'flex', flexWrap:'wrap', gap:5, marginTop: (photos.length>0 || editing) ? 5 : 0, alignItems:'center'}}>
             {photos.map(p => (
-              <div key={p.id} style={{ position:'relative', width:48, height:48, borderRadius:6, overflow:'hidden', border:`1px solid ${C.border}` }}>
+              <div key={p.id} style={{ position:'relative', width:44, height:44, borderRadius:6, overflow:'hidden', border:`1px solid ${C.border}` }}>
                 <img src={p.url} alt={p.name || 'photo'}
                   onClick={()=>onViewPhoto && onViewPhoto(p.url)}
                   style={{ width:'100%', height:'100%', objectFit:'cover', cursor:'pointer' }}/>
@@ -2712,17 +2716,46 @@ function JobNoteLine({
               </div>
             ))}
             {editing && !isPromoted && (
-              <label style={{
-                width:48, height:48, borderRadius:6, border:`1px dashed ${phaseColor}66`,
-                display:'flex', alignItems:'center', justifyContent:'center',
-                cursor:'pointer', background: uploading ? '#f3f4f6' : 'transparent',
-                fontSize:18, color: phaseColor, fontWeight:300,
-              }}>
-                {uploading ? '…' : '+'}
-                <input type="file" accept="image/*" multiple
-                  onChange={(e)=>{attachPhotos(e.target.files); e.target.value='';}}
-                  style={{display:'none'}}/>
-              </label>
+              photos.length === 0 ? (
+                /* Empty state — labeled chip so users know it's for photos */
+                <label
+                  title="Attach a photo to this line — will travel with it if promoted to Punch"
+                  style={{
+                    display:'inline-flex', alignItems:'center', gap:4,
+                    background:'transparent', border:`1px dashed ${phaseColor}66`,
+                    borderRadius:99, padding:'2px 9px',
+                    cursor: uploading ? 'wait' : 'pointer',
+                    fontSize:10, fontWeight:600, color: phaseColor,
+                    fontFamily:'inherit',
+                    opacity: uploading ? 0.6 : 1,
+                  }}>
+                  <span style={{ fontSize:11, lineHeight:1 }}>{uploading ? '…' : '📷'}</span>
+                  <span>{uploading ? 'Uploading…' : 'Add photo'}</span>
+                  <input type="file" accept="image/*" multiple
+                    disabled={uploading}
+                    onChange={(e)=>{attachPhotos(e.target.files); e.target.value='';}}
+                    style={{display:'none'}}/>
+                </label>
+              ) : (
+                /* With photos — compact + tile to add more */
+                <label
+                  title="Add another photo"
+                  style={{
+                    width:44, height:44, borderRadius:6, border:`1px dashed ${phaseColor}66`,
+                    display:'flex', alignItems:'center', justifyContent:'center',
+                    cursor: uploading ? 'wait' : 'pointer',
+                    background: uploading ? '#f3f4f6' : 'transparent',
+                    fontSize:14, color: phaseColor, fontWeight:400, gap:2,
+                  }}>
+                  {uploading
+                    ? <span style={{ fontSize:11 }}>…</span>
+                    : <><span style={{ fontSize:12 }}>📷</span><span style={{ fontSize:14, lineHeight:1 }}>+</span></>}
+                  <input type="file" accept="image/*" multiple
+                    disabled={uploading}
+                    onChange={(e)=>{attachPhotos(e.target.files); e.target.value='';}}
+                    style={{display:'none'}}/>
+                </label>
+              )
             )}
           </div>
         )}
@@ -3549,6 +3582,11 @@ function JobNoteCard({
   const [triage, setTriage] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
   const [notePhotoUploading, setNotePhotoUploading] = useState(false);
+  // Cards start COLLAPSED so the list reads like a table of contents. Editing
+  // or triage force-opens (below) — a brand-new empty note defaults to edit
+  // mode, so it expands automatically. Clicking the chevron or title flips
+  // this for read-only notes.
+  const [collapsed, setCollapsed] = useState(true);
   // J4 — active destination type when the picker is open ('punch'|'rt'|'co'|'call').
   // J5 & J6 actually render the picker body; J4 wires the UI state only.
   const [pickerType, setPickerType] = useState(null);
@@ -3666,6 +3704,25 @@ function JobNoteCard({
     }, 140);
   };
 
+  // Editing and triage force the card open — otherwise a brand-new note
+  // would render as a collapsed shell the user couldn't type into, and a
+  // triage operation couldn't show its checkboxes.
+  const isExpanded = !collapsed || editing || triage;
+
+  // Summary for the collapsed header: line count, photo count, and a short
+  // preview of the first non-empty line so the card is scannable without
+  // opening it.
+  const activeLines = lines.filter(l => !l.promoted);
+  const previewText = (() => {
+    const firstWithText = lines.find(l => l && (l.text || '').trim().length > 0);
+    if (!firstWithText) return '';
+    const p = jobNotePlain(firstWithText.text);
+    return p.length > 60 ? p.slice(0, 60) + '…' : p;
+  })();
+  const photoCount =
+    (Array.isArray(note.photos) ? note.photos.length : 0) +
+    lines.reduce((acc, l) => acc + ((Array.isArray(l?.photos) ? l.photos.length : 0)), 0);
+
   return (
     <div style={{
       border: `1.5px solid ${thisPhaseColor}33`,
@@ -3676,8 +3733,26 @@ function JobNoteCard({
       {/* Header */}
       <div style={{
         display:'flex', alignItems:'center', gap:8,
-        padding:'7px 10px', borderBottom: editing ? `1px solid ${C.border}` : 'none',
+        padding:'7px 10px', borderBottom: (editing && isExpanded) ? `1px solid ${C.border}` : 'none',
       }}>
+        {/* Chevron — toggles collapsed (only when not editing/triage, which
+            force-open). Visually indicates expandable state even when the
+            forces pin it open. */}
+        <button
+          onClick={()=>setCollapsed(c=>!c)}
+          disabled={editing || triage}
+          title={isExpanded ? 'Collapse' : 'Expand'}
+          style={{
+            background:'none', border:'none', padding:0, margin:0,
+            cursor: (editing || triage) ? 'default' : 'pointer',
+            color: C.dim, fontSize:10, lineHeight:1, flexShrink:0,
+            width:14, display:'inline-flex', alignItems:'center', justifyContent:'center',
+            fontFamily:'inherit',
+            opacity: (editing || triage) ? 0.4 : 1,
+          }}>
+          {isExpanded ? '▾' : '▸'}
+        </button>
+
         <span
           title={isSpec ? 'Specification note — reference only (not triageable)' : undefined}
           style={{
@@ -3699,8 +3774,37 @@ function JobNoteCard({
               fontSize:13, fontWeight:700, color: C.text, fontFamily:'inherit',
             }}/>
         ) : (
-          <div style={{ flex:1, fontSize:13, fontWeight:700, color: C.text, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
-            {note.title || `Note — ${jobNoteDateLabel(new Date(note.createdAt||Date.now()))}`}
+          <div
+            onClick={()=>setCollapsed(c=>!c)}
+            style={{
+              flex:1, minWidth:0, cursor:'pointer',
+              display:'flex', alignItems:'baseline', gap:6, overflow:'hidden',
+            }}>
+            <span style={{
+              fontSize:13, fontWeight:700, color: C.text,
+              overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flexShrink:0, maxWidth:'60%',
+            }}>
+              {note.title || `Note — ${jobNoteDateLabel(new Date(note.createdAt||Date.now()))}`}
+            </span>
+            {!isExpanded && (
+              <span style={{
+                fontSize:11, color: C.dim, fontWeight:400, minWidth:0,
+                overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap', flex:1,
+              }}>
+                {previewText
+                  ? <span style={{ fontStyle:'italic' }}>{previewText}</span>
+                  : <span>
+                      {activeLines.length} open line{activeLines.length!==1?'s':''}
+                      {photoCount > 0 ? ` · ${photoCount} 📷` : ''}
+                    </span>}
+                {previewText && (activeLines.length > 1 || photoCount > 0) && (
+                  <span style={{ marginLeft:6, fontStyle:'normal' }}>
+                    · {activeLines.length} line{activeLines.length!==1?'s':''}
+                    {photoCount > 0 ? ` · ${photoCount} 📷` : ''}
+                  </span>
+                )}
+              </span>
+            )}
           </div>
         )}
 
@@ -3730,8 +3834,9 @@ function JobNoteCard({
           </select>
         )}
 
-        {/* Triage toggle — suppressed for Spec notes (reference, not actionable) */}
-        {!isSpec && !editing && lines.filter(l=>!l.promoted).length > 0 && (
+        {/* Triage toggle — suppressed for Spec notes (reference, not actionable).
+            Only shown when expanded so the collapsed header stays minimal. */}
+        {!isSpec && !editing && isExpanded && lines.filter(l=>!l.promoted).length > 0 && (
           <button onClick={()=>{ setTriage(t=>!t); setSelected(new Set()); }}
             style={{
               fontSize:10, fontWeight:700,
@@ -3745,17 +3850,22 @@ function JobNoteCard({
           </button>
         )}
 
-        <button onClick={()=>setEditing(e=>!e)}
-          style={{
-            fontSize:10, fontWeight:700, color: C.dim,
-            background:'transparent', border:`1px solid ${C.border}`,
-            borderRadius:99, padding:'2px 8px', cursor:'pointer', fontFamily:'inherit', flexShrink:0,
-          }}>
-          {editing ? 'Close' : 'Edit'}
-        </button>
+        {/* Edit button hidden when collapsed — click the title/chevron to
+            expand first, then choose to edit. Keeps the collapsed header tidy. */}
+        {isExpanded && (
+          <button onClick={()=>setEditing(e=>!e)}
+            style={{
+              fontSize:10, fontWeight:700, color: C.dim,
+              background:'transparent', border:`1px solid ${C.border}`,
+              borderRadius:99, padding:'2px 8px', cursor:'pointer', fontFamily:'inherit', flexShrink:0,
+            }}>
+            {editing ? 'Close' : 'Edit'}
+          </button>
+        )}
       </div>
 
-      {/* Body — lines */}
+      {/* Body — lines (only when expanded) */}
+      {isExpanded && (
       <div style={{ padding:'6px 8px 10px' }}>
         {lines.length === 0 && !editing && (
           <div style={{ padding:'4px 8px', fontSize:12, color: C.dim, fontStyle:'italic' }}>
@@ -3779,23 +3889,61 @@ function JobNoteCard({
           />
         ))}
 
+        {/* Action row (edit mode): compact "Add line" + "Attach file/photo".
+            Note-level photos belong to the whole note (context shots, plans).
+            Line-level photos live on individual bullets and travel with the
+            line when it gets promoted to Punch (source of truth: line
+            photos copy into item.photos on promote). */}
         {editing && (
-          <button onClick={addLine}
-            style={{
-              width:'100%', background:'transparent',
-              border:`1px dashed ${thisPhaseColor}66`, borderRadius:6,
-              padding:'5px 0', fontSize:11, fontWeight:600, color: thisPhaseColor,
-              cursor:'pointer', fontFamily:'inherit', marginTop: lines.length>0 ? 4 : 0,
+          <div style={{
+            display:'flex', gap:6, alignItems:'center', flexWrap:'wrap',
+            marginTop: lines.length>0 ? 6 : 0,
+          }}>
+            <button onClick={addLine}
+              title="Add a new bullet to this note"
+              style={{
+                background:'transparent',
+                border:`1px dashed ${thisPhaseColor}66`, borderRadius:99,
+                padding:'3px 10px', fontSize:11, fontWeight:600, color: thisPhaseColor,
+                cursor:'pointer', fontFamily:'inherit',
+                display:'inline-flex', alignItems:'center', gap:3,
+              }}>
+              <span style={{ fontSize:12, lineHeight:1 }}>＋</span>
+              <span>Add line</span>
+            </button>
+            <label
+              title="Attach a photo or file to the WHOLE note (for general context — use a line's 📷 Add photo if the photo belongs to a specific item)"
+              style={{
+                background:'transparent',
+                border:`1px dashed ${thisPhaseColor}66`, borderRadius:99,
+                padding:'3px 10px', fontSize:11, fontWeight:600, color: thisPhaseColor,
+                cursor: notePhotoUploading ? 'wait' : 'pointer', fontFamily:'inherit',
+                display:'inline-flex', alignItems:'center', gap:4,
+                opacity: notePhotoUploading ? 0.6 : 1,
+              }}>
+              <span style={{ fontSize:12, lineHeight:1 }}>{notePhotoUploading ? '…' : '📷'}</span>
+              <span>{notePhotoUploading ? 'Uploading…' : 'Attach photo / file'}</span>
+              <input type="file" accept="image/*" multiple
+                disabled={notePhotoUploading}
+                onChange={(e)=>{attachNotePhotos(e.target.files); e.target.value='';}}
+                style={{display:'none'}}/>
+            </label>
+            <span style={{
+              marginLeft:'auto', fontSize:10, color: C.dim, fontStyle:'italic',
+              maxWidth: 180, textAlign:'right',
             }}>
-            + Add line
-          </button>
+              tip: use a line's 📷 for item-specific pics — they follow to Punch
+            </span>
+          </div>
         )}
 
-        {/* Note-level photos */}
-        {((note.photos||[]).length > 0 || editing) && (
+        {/* Note-level photo gallery — thumbnails render below the action row
+            when photos exist. Empty + editing is already handled by the
+            "Attach photo / file" button above. */}
+        {(note.photos||[]).length > 0 && (
           <div style={{ marginTop:8, display:'flex', flexWrap:'wrap', gap:6 }}>
             {(note.photos||[]).map(p => (
-              <div key={p.id} style={{ position:'relative', width:56, height:56, borderRadius:6, overflow:'hidden', border:`1px solid ${C.border}` }}>
+              <div key={p.id} style={{ position:'relative', width:52, height:52, borderRadius:6, overflow:'hidden', border:`1px solid ${C.border}` }}>
                 <img src={p.url} alt={p.name || 'photo'}
                   onClick={()=>onViewPhoto && onViewPhoto(p.url)}
                   style={{ width:'100%', height:'100%', objectFit:'cover', cursor:'pointer' }}/>
@@ -3810,22 +3958,10 @@ function JobNoteCard({
                 )}
               </div>
             ))}
-            {editing && (
-              <label style={{
-                width:56, height:56, borderRadius:6, border:`1px dashed ${thisPhaseColor}66`,
-                display:'flex', alignItems:'center', justifyContent:'center',
-                cursor:'pointer', background: notePhotoUploading ? '#f3f4f6' : 'transparent',
-                fontSize:20, color: thisPhaseColor, fontWeight:300,
-              }}>
-                {notePhotoUploading ? '…' : '+'}
-                <input type="file" accept="image/*" multiple
-                  onChange={(e)=>{attachNotePhotos(e.target.files); e.target.value='';}}
-                  style={{display:'none'}}/>
-              </label>
-            )}
           </div>
         )}
       </div>
+      )}
 
       {/* Triage action bar — hidden for Spec notes (reference, not promotable) */}
       {!isSpec && triage && selected.size > 0 && (
