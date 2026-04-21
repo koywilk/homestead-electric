@@ -2687,7 +2687,7 @@ function JobNoteLine({
             rows={1}
             onChange={(e)=>onChange({ ...line, text: e.target.value })}
             /* No onKeyDown Enter handler — Enter inserts a native newline
-               inside THIS bullet. Users click "＋ Add line" for a new
+               inside THIS bullet. Users click "+ Add line" for a new
                bullet. Previous auto-split behavior was too easy to trigger
                mid-word (esp. on mobile autocorrect). */
             placeholder="One item / thought per line…"
@@ -2718,8 +2718,8 @@ function JobNoteLine({
         {/* Line photos — attached to THIS specific line so they travel with
             the line when promoted to punch (see JobNoteDestinationPunch:
             newItems.photos = l.photos). The empty-state renders a labeled
-            chip ("📷 Add photo"); once photos exist, a compact `+` tile
-            takes over so the row stays tight. */}
+            chip ("Add photo" w/ camera icon); once photos exist, a compact
+            `+` tile takes over so the row stays tight. */}
         {(photos.length > 0 || editing) && (
           <div style={{display:'flex', flexWrap:'wrap', gap:5, marginTop: (photos.length>0 || editing) ? 5 : 0, alignItems:'center'}}>
             {photos.map(p => (
@@ -2752,7 +2752,9 @@ function JobNoteLine({
                     fontFamily:'inherit',
                     opacity: uploading ? 0.6 : 1,
                   }}>
-                  <span style={{ fontSize:11, lineHeight:1 }}>{uploading ? '…' : '📷'}</span>
+                  {uploading
+                    ? <span style={{ fontSize:11, lineHeight:1 }}>…</span>
+                    : <Icon name="camera" size={11} color={phaseColor}/>}
                   <span>{uploading ? 'Uploading…' : 'Add photo'}</span>
                   <input type="file" accept="image/*" multiple
                     disabled={uploading}
@@ -2772,7 +2774,7 @@ function JobNoteLine({
                   }}>
                   {uploading
                     ? <span style={{ fontSize:11 }}>…</span>
-                    : <><span style={{ fontSize:12 }}>📷</span><span style={{ fontSize:14, lineHeight:1 }}>+</span></>}
+                    : <><Icon name="camera" size={13} color={phaseColor}/><span style={{ fontSize:14, lineHeight:1 }}>+</span></>}
                   <input type="file" accept="image/*" multiple
                     disabled={uploading}
                     onChange={(e)=>{attachPhotos(e.target.files); e.target.value='';}}
@@ -2802,7 +2804,9 @@ function JobNoteLine({
                   borderRadius:99, padding:'1px 3px 1px 8px',
                   fontSize:11, color: C.text,
                 }}>
-                  <span style={{ fontSize:10, opacity:0.7 }}>🧰</span>
+                  <span style={{ opacity:0.7, display:'inline-flex' }}>
+                    <Icon name="package" size={10}/>
+                  </span>
                   <input
                     value={m}
                     onChange={(e)=>updateMaterial(i, e.target.value)}
@@ -2829,7 +2833,9 @@ function JobNoteLine({
                     borderRadius:99, padding:'1px 9px',
                     fontSize:11, color: isPromoted ? C.dim : C.text,
                   }}>
-                    <span style={{ fontSize:10, opacity:0.7 }}>🧰</span>
+                    <span style={{ opacity:0.7, display:'inline-flex' }}>
+                      <Icon name="package" size={10}/>
+                    </span>
                     {m}
                   </span>
                 ) : null
@@ -2846,7 +2852,7 @@ function JobNoteLine({
                   cursor:'pointer', fontSize:10, fontWeight:600,
                   color: phaseColor, fontFamily:'inherit',
                 }}>
-                <span style={{ fontSize:11, lineHeight:1 }}>🧰</span>
+                <Icon name="package" size={11} color={phaseColor}/>
                 <span>{materials.length === 0 ? 'Add material' : '+'}</span>
               </button>
             )}
@@ -3861,7 +3867,7 @@ function JobNoteCard({
             borderRadius:99, padding:'1px 7px', flexShrink:0, whiteSpace:'nowrap',
             display:'inline-flex', alignItems:'center', gap:3,
           }}>
-          {isSpec && <span style={{ fontSize:9, lineHeight:1 }}>ℹ</span>}
+          {isSpec && <Icon name="info" size={9} color={thisPhaseColor}/>}
           {phaseLabel.toUpperCase()}
         </span>
 
@@ -3895,12 +3901,16 @@ function JobNoteCard({
                   ? <span style={{ fontStyle:'italic' }}>{previewText}</span>
                   : <span>
                       {activeLines.length} open line{activeLines.length!==1?'s':''}
-                      {photoCount > 0 ? ` · ${photoCount} 📷` : ''}
+                      {photoCount > 0 && (
+                        <> · {photoCount} <Icon name="camera" size={10} color={C.dim}/></>
+                      )}
                     </span>}
                 {previewText && (activeLines.length > 1 || photoCount > 0) && (
                   <span style={{ marginLeft:6, fontStyle:'normal' }}>
                     · {activeLines.length} line{activeLines.length!==1?'s':''}
-                    {photoCount > 0 ? ` · ${photoCount} 📷` : ''}
+                    {photoCount > 0 && (
+                      <> · {photoCount} <Icon name="camera" size={10} color={C.dim}/></>
+                    )}
                   </span>
                 )}
               </span>
@@ -4009,11 +4019,11 @@ function JobNoteCard({
                 cursor:'pointer', fontFamily:'inherit',
                 display:'inline-flex', alignItems:'center', gap:3,
               }}>
-              <span style={{ fontSize:12, lineHeight:1 }}>＋</span>
+              <Icon name="plus" size={11} color={thisPhaseColor}/>
               <span>Add line</span>
             </button>
             <label
-              title="Attach a photo or file to the WHOLE note (for general context — use a line's 📷 Add photo if the photo belongs to a specific item)"
+              title="Attach a photo or file to the WHOLE note (for general context — use a line's Add photo button if the photo belongs to a specific item)"
               style={{
                 background:'transparent',
                 border:`1px dashed ${thisPhaseColor}66`, borderRadius:99,
@@ -4022,7 +4032,9 @@ function JobNoteCard({
                 display:'inline-flex', alignItems:'center', gap:4,
                 opacity: notePhotoUploading ? 0.6 : 1,
               }}>
-              <span style={{ fontSize:12, lineHeight:1 }}>{notePhotoUploading ? '…' : '📷'}</span>
+              {notePhotoUploading
+                ? <span style={{ fontSize:12, lineHeight:1 }}>…</span>
+                : <Icon name="camera" size={12} color={thisPhaseColor}/>}
               <span>{notePhotoUploading ? 'Uploading…' : 'Attach photo / file'}</span>
               <input type="file" accept="image/*" multiple
                 disabled={notePhotoUploading}
@@ -4033,7 +4045,7 @@ function JobNoteCard({
               marginLeft:'auto', fontSize:10, color: C.dim, fontStyle:'italic',
               maxWidth: 180, textAlign:'right',
             }}>
-              tip: use a line's 📷 for item-specific pics — they follow to Punch
+              tip: use a line's camera button for item-specific pics — they follow to Punch
             </span>
           </div>
         )}
@@ -4294,7 +4306,8 @@ function JobNotesSection({
             color:'#64748b', cursor:'pointer', fontFamily:'inherit',
             display:'inline-flex', alignItems:'center', gap:3,
           }}>
-          <span style={{ fontSize:10 }}>ℹ</span> + Detail
+          <Icon name="info" size={10} color="#64748b"/>
+          <span>+ Detail</span>
         </button>
         <label
           title="Quick-capture — pick photos/files and drop them in a new detail note"
@@ -4308,7 +4321,9 @@ function JobNotesSection({
             display:'inline-flex', alignItems:'center', gap:4,
             opacity: quickCamUploading ? 0.6 : 1,
           }}>
-          <span style={{ fontSize:13, lineHeight:1 }}>{quickCamUploading ? '…' : '📷'}</span>
+          {quickCamUploading
+            ? <span style={{ fontSize:13, lineHeight:1 }}>…</span>
+            : <Icon name="camera" size={13} color="#64748b"/>}
           <input type="file" accept="image/*" multiple
             disabled={quickCamUploading}
             onChange={(e)=>{ quickCaptureWithPhotos(e.target.files, 'spec'); e.target.value=''; }}
@@ -4684,7 +4699,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
           {/* Materials carried over from the source Job Note line on promote.
               Distinct from the single-string materialNeeded above (legacy
               field, kept for existing items). Each material renders as a
-              🧰 pill. Hidden once the punch item is done. */}
+              pill with a package icon. Hidden once the punch item is done. */}
           {Array.isArray(item.materials) && item.materials.filter(m=>(m||'').trim()).length > 0 && !item.done && (
             <div style={{marginLeft:22,marginTop:2,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
               {item.materials.filter(m=>(m||'').trim()).map((m, mi) => (
@@ -4693,7 +4708,9 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                   fontSize:10, fontWeight:600, background:'#f1f5f9', color:'#334155',
                   borderRadius:99, padding:'2px 8px', border:`1px solid ${C.border}`,
                 }}>
-                  <span style={{ fontSize:9, opacity:0.7 }}>🧰</span>
+                  <span style={{ opacity:0.7, display:'inline-flex' }}>
+                    <Icon name="package" size={9}/>
+                  </span>
                   {m}
                 </span>
               ))}
