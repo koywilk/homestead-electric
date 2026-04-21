@@ -3432,6 +3432,11 @@ function JobNoteDestinationRT({ note, selectedLines, selectedLineIds, job, onPat
 function JobNoteDestinationCO({ note, selectedLines, selectedLineIds, job, onPatch, markPromotedInNote, onDone }) {
   const [mode, setMode] = useState('new');
   const [targetCOId, setTargetCOId] = useState(null);
+  // User-typed description for the NEW CO. Lands in co.desc (plain input in
+  // the CO form — "Description of Task"). Prompted here because the note's
+  // bullets are too granular for that single-line field and the user wants
+  // to name the overall change (e.g. "River feature — added water pumps").
+  const [coDesc, setCoDesc] = useState(note?.title || '');
 
   // Filter COs — only ones where more content is still meaningful to add.
   const openCOs = (job?.changeOrders || []).filter(co => {
@@ -3439,20 +3444,54 @@ function JobNoteDestinationCO({ note, selectedLines, selectedLineIds, job, onPat
     return s !== 'completed' && s !== 'converted' && s !== 'invoiced' && s !== 'rejected';
   });
 
-  const canPromote = (mode === 'new') || (mode === 'existing' && targetCOId);
+  const canPromote =
+    (mode === 'new' && coDesc.trim().length > 0) ||
+    (mode === 'existing' && targetCOId);
 
-  // Format selected lines as HTML bullets so they render nicely inside the
-  // existing rich-text `desc` field.
-  const bulletsHtml = () => {
-    return selectedLines.map(l => {
-      const t = jobNotePlain(l.text).replace(/</g, '&lt;').replace(/>/g, '&gt;');
-      return `<li>${t || '(empty)'}</li>`;
-    }).join('');
+  // Escape < and > so user text can't inject HTML into the rich-text field.
+  const escHtml = (t) => (t || '').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+
+  // Format selected lines as HTML bullets — these go into the `task` field
+  // (the Task-In-Field rich text editor), NOT `desc` (which is a plain
+  // single-line input).
+  const bulletsHtml = () => selectedLines
+    .map(l => `<li>${escHtml(jobNotePlain(l.text)) || '(empty)'}</li>`)
+    .join('');
+
+  // Gather materials from all selected lines, dedupe (case-insensitive), and
+  // format as HTML bullets. Lands in the `material` field (rich text).
+  const materialsHtml = () => {
+    const seen = new Set();
+    const items = [];
+    selectedLines.forEach(l => {
+      (Array.isArray(l.materials) ? l.materials : []).forEach(raw => {
+        const m = (raw || '').trim();
+        if (!m) return;
+        const k = m.toLowerCase();
+        if (seen.has(k)) return;
+        seen.add(k);
+        items.push(m);
+      });
+    });
+    if (items.length === 0) return '';
+    return items.map(m => `<li>${escHtml(m)}</li>`).join('');
+  };
+
+  // Append a block of <li>…</li> items into an existing rich-text HTML
+  // string. If it already ends in </ul>, inject before the closing tag so
+  // new items tack onto the existing list. If empty, wrap in <ul>.
+  const mergeBullets = (existingHtml, newLis) => {
+    if (!newLis) return existingHtml || '';
+    const ex = (existingHtml || '').trim();
+    if (!ex) return `<ul>${newLis}</ul>`;
+    if (/<\/ul>\s*$/i.test(ex)) return ex.replace(/<\/ul>\s*$/i, newLis + '</ul>');
+    return ex + `<ul>${newLis}</ul>`;
   };
 
   const promote = () => {
     const creator = (getIdentity && getIdentity()) || null;
     const bullets = bulletsHtml();
+    const materials = materialsHtml();
     const newBacklinks = selectedLines.map(l => ({
       jobNoteId: note.id, lineId: l.id,
       lineText: jobNotePlain(l.text).slice(0, 200),
@@ -3464,12 +3503,15 @@ function JobNoteDestinationCO({ note, selectedLines, selectedLineIds, job, onPat
     let targetLabel;
 
     if (mode === 'new') {
+      // desc = user-typed name/description (plain text, fits in the plain input)
+      // task = bullet list of what the work actually is (rich text)
+      // material = deduped line materials (rich text)
       const newCO = {
         id: uid(),
         date: '',
-        desc: `<ul>${bullets}</ul>`,
-        task: '',
-        material: '',
+        desc: coDesc.trim(),
+        task: bullets ? `<ul>${bullets}</ul>` : '',
+        material: materials ? `<ul>${materials}</ul>` : '',
         time: '',
         sendTo: '',
         coStatus: 'needs_sending',
@@ -3485,21 +3527,14 @@ function JobNoteDestinationCO({ note, selectedLines, selectedLineIds, job, onPat
     } else {
       const target = openCOs.find(co => co.id === targetCOId);
       if (!target) return;
-      // Append bullets to the desc field. If desc already has a <ul>, inject
-      // before the closing tag so existing bullets stay on top; else wrap.
-      const desc = target.desc || '';
-      let nextDesc;
-      if (/<\/ul>\s*$/i.test(desc)) {
-        nextDesc = desc.replace(/<\/ul>\s*$/i, bullets + '</ul>');
-      } else if (desc.trim()) {
-        nextDesc = desc + `<ul>${bullets}</ul>`;
-      } else {
-        nextDesc = `<ul>${bullets}</ul>`;
-      }
+      // Append to the TASK field (the bulleted checklist) — NOT desc (which
+      // is the plain one-line summary). Materials append to `material`.
+      // `desc` stays untouched so the existing CO description isn't clobbered.
       nextCOs = (job.changeOrders || []).map(co => co.id === target.id
         ? {
             ...co,
-            desc: nextDesc,
+            task: mergeBullets(co.task, bullets),
+            material: materials ? mergeBullets(co.material, materials) : (co.material || ''),
             fromJobNotes: [ ...(Array.isArray(co.fromJobNotes) ? co.fromJobNotes : []), ...newBacklinks ],
           }
         : co);
@@ -3529,22 +3564,48 @@ function JobNoteDestinationCO({ note, selectedLines, selectedLineIds, job, onPat
       </div>
 
       {mode === 'new' && (
-        <div style={{ fontSize:12, color: C.dim, marginBottom:12, padding:'8px 10px', background: C.surface, border:`1px solid ${C.border}`, borderRadius:7 }}>
-          Creates a new Change Order with these lines as bullets in the description. You can edit status, pricing, and send-to from the Change Orders tab.
-        </div>
+        <>
+          {/* Description prompt — the user is naming the CO before promotion
+              so it lands in the correct place. `desc` is a plain single-line
+              input on the CO form; bullets/materials go into `task` + `material`
+              (the rich-text fields). */}
+          <div style={{ marginBottom:12 }}>
+            <div style={{ fontSize:10, color: C.dim, marginBottom:4, fontWeight:700, letterSpacing:'0.04em', textTransform:'uppercase' }}>
+              CO Description
+            </div>
+            <input
+              autoFocus
+              value={coDesc}
+              onChange={(e)=>setCoDesc(e.target.value)}
+              placeholder="e.g. River feature — added water pumps"
+              style={{
+                width:'100%', boxSizing:'border-box',
+                background: C.surface, border:`1px solid ${C.border}`, borderRadius:7,
+                padding:'8px 10px', fontSize:13, color: C.text,
+                fontFamily:'inherit', outline:'none',
+              }}/>
+            <div style={{ fontSize:10, color: C.dim, marginTop:4, fontStyle:'italic' }}>
+              Goes in the CO's "Description of Task" field. The selected lines will fill "Task (In Field)", and any materials will fill "Material Needed".
+            </div>
+          </div>
+        </>
       )}
 
       {mode === 'existing' && (
-        <div style={{
-          maxHeight:230, overflowY:'auto',
-          border:`1px solid ${C.border}`, borderRadius:8, background: C.surface,
-          marginBottom:12,
-        }}>
-          {openCOs.length === 0 && (
-            <div style={{ fontSize:12, color: C.dim, padding:'14px 12px', textAlign:'center', fontStyle:'italic' }}>
-              No open change orders on this job yet — switch to "New" above.
-            </div>
-          )}
+        <>
+          <div style={{ fontSize:10, color: C.dim, marginBottom:6, fontStyle:'italic' }}>
+            Selected lines will append to the CO's "Task (In Field)" list. Any materials append to "Material Needed". The existing description stays.
+          </div>
+          <div style={{
+            maxHeight:230, overflowY:'auto',
+            border:`1px solid ${C.border}`, borderRadius:8, background: C.surface,
+            marginBottom:12,
+          }}>
+            {openCOs.length === 0 && (
+              <div style={{ fontSize:12, color: C.dim, padding:'14px 12px', textAlign:'center', fontStyle:'italic' }}>
+                No open change orders on this job yet — switch to "New" above.
+              </div>
+            )}
           {openCOs.map((co, i) => {
             const idx = (job.changeOrders || []).findIndex(c => c.id === co.id);
             const selected = targetCOId === co.id;
@@ -3569,7 +3630,8 @@ function JobNoteDestinationCO({ note, selectedLines, selectedLineIds, job, onPat
               </div>
             );
           })}
-        </div>
+          </div>
+        </>
       )}
 
       <button onClick={promote} disabled={!canPromote}
@@ -3582,7 +3644,9 @@ function JobNoteDestinationCO({ note, selectedLines, selectedLineIds, job, onPat
           fontFamily:'inherit',
         }}>
         {mode === 'new'
-          ? `Create CO with ${selectedLineIds.length} line${selectedLineIds.length!==1?'s':''}`
+          ? (coDesc.trim()
+              ? `Create CO with ${selectedLineIds.length} line${selectedLineIds.length!==1?'s':''}`
+              : 'Enter a CO description to continue')
           : `Add ${selectedLineIds.length} line${selectedLineIds.length!==1?'s':''} to CO`}
       </button>
     </div>
