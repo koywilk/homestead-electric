@@ -4732,13 +4732,178 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
   );
 }
 
+// ── PunchLinker ──────────────────────────────────────────────────────
+// Modal that lets Koy attach existing rough/finish punch items to a
+// Return Trip. Flattens roughPunch + finishPunch into a selectable list
+// grouped by phase/floor/room. Ticked items become entries in rt.punch[]
+// with originItemId + originPhase set, which plugs into the existing
+// bidirectional cascade in handleReturnTripsChange / handlePhasePunchChange.
+//
+// Data safety:
+// - Never mutates source punch items. Only adds/removes entries on
+//   rt.punch[] that carry an originItemId reference back to the source.
+// - Unlinking simply drops the RT entry. The source punch item, its
+//   photos, and its done-state are untouched.
+// - Re-linking preserves the existing RT entry (including any photos or
+//   checkedBy metadata that accumulated on it).
+function PunchLinker({ roughPunch, finishPunch, rt, onSave, onClose }) {
+  const alreadyLinked = new Map();
+  (rt.punch||[]).forEach(p => {
+    if (p && p.originItemId) alreadyLinked.set(p.originItemId, p);
+  });
+  const [selected, setSelected] = useState(() => new Set(alreadyLinked.keys()));
+  const [showDone, setShowDone] = useState(false);
+  const [search, setSearch] = useState("");
+
+  const plainText = (s) => (s||"").replace(/<[^>]*>/g,"").replace(/&nbsp;/g," ").replace(/&amp;/g,"&").trim();
+
+  const flatItems = [];
+  const walk = (punch, phase) => {
+    if (!punch) return;
+    const phaseCap = phase.charAt(0).toUpperCase() + phase.slice(1);
+    const namedFloors = [
+      ...(["upper","main","basement"].map(k => ({name:k.charAt(0).toUpperCase()+k.slice(1), fl:punch[k]})).filter(x=>x.fl)),
+      ...((Array.isArray(punch.extraFloors) ? punch.extraFloors : []).map((fl,i) => ({name:(fl&&fl.name)||`Floor ${i+1}`, fl}))),
+    ];
+    namedFloors.forEach(({name:floorName, fl}) => {
+      if (!fl) return;
+      (fl.general||[]).forEach(i => {
+        if (!i?.id || !i?.text) return;
+        flatItems.push({id:i.id, text:plainText(i.text), phase, phaseCap, floor:floorName, room:"General", done:!!i.done, fromQC:!!i.fromQC});
+      });
+      (fl.rooms||[]).forEach(r => (r.items||[]).forEach(i => {
+        if (!i?.id || !i?.text) return;
+        flatItems.push({id:i.id, text:plainText(i.text), phase, phaseCap, floor:floorName, room:(r.name||"Room"), done:!!i.done, fromQC:!!i.fromQC});
+      }));
+      (fl.hotcheck||[]).forEach(i => {
+        if (!i?.id || !i?.text) return;
+        flatItems.push({id:i.id, text:plainText(i.text), phase, phaseCap, floor:floorName, room:"Hotcheck", done:!!i.done, fromQC:!!i.fromQC});
+      });
+    });
+  };
+  walk(roughPunch, "rough");
+  walk(finishPunch, "finish");
+
+  const q = search.trim().toLowerCase();
+  const visible = flatItems.filter(it => {
+    if (!showDone && it.done && !selected.has(it.id)) return false;
+    if (q && !(`${it.text} ${it.floor} ${it.room} ${it.phaseCap}`.toLowerCase().includes(q))) return false;
+    return true;
+  });
+
+  const byPhase = { rough:[], finish:[] };
+  visible.forEach(it => byPhase[it.phase].push(it));
+
+  const toggle = (id) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(id)) next.delete(id); else next.add(id);
+      return next;
+    });
+  };
+
+  const save = () => {
+    const nonLinked = (rt.punch||[]).filter(p => !p?.originItemId);
+    const byId = new Map(flatItems.map(f => [f.id, f]));
+    const linkedOut = [];
+    selected.forEach(sourceId => {
+      const src = byId.get(sourceId);
+      if (!src) return; // source no longer exists — drop stale link
+      const existing = alreadyLinked.get(sourceId);
+      if (existing) {
+        linkedOut.push(existing); // preserve photos/checkedBy/done
+      } else {
+        linkedOut.push({
+          id: uid(),
+          text: `[${src.phaseCap} · ${src.floor} · ${src.room}] ${src.text}`,
+          done: src.done,
+          originItemId: src.id,
+          originPhase: src.phase,
+        });
+      }
+    });
+    onSave([...nonLinked, ...linkedOut]);
+    onClose();
+  };
+
+  return (
+    <div onClick={onClose}
+      style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",zIndex:9200,
+        display:"flex",alignItems:"flex-start",justifyContent:"center",
+        padding:"40px 16px",overflowY:"auto"}}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:14,
+          maxWidth:680,width:"100%",padding:18,boxShadow:"0 20px 60px rgba(0,0,0,0.4)"}}>
+        <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#8b5cf6"}}>LINK PUNCH ITEMS</div>
+          <button onClick={onClose}
+            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,color:C.dim,fontSize:13,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✕</button>
+        </div>
+        <div style={{fontSize:11,color:C.dim,marginBottom:10}}>
+          Tick items from this job's punch list to attach them to this return trip. They stay on the punch list — this just references them, so checking them off anywhere flips them everywhere. {selected.size} selected.
+        </div>
+        <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap",alignItems:"center"}}>
+          <Inp value={search} onChange={e=>setSearch(e.target.value)} placeholder="Filter…" style={{flex:1,minWidth:180}}/>
+          <label style={{display:"flex",alignItems:"center",gap:6,fontSize:11,color:C.dim,cursor:"pointer"}}>
+            <input type="checkbox" checked={showDone} onChange={e=>setShowDone(e.target.checked)}/>
+            Show completed
+          </label>
+        </div>
+        {flatItems.length===0 && (
+          <div style={{textAlign:"center",padding:"30px 0",color:C.muted,fontSize:12,fontStyle:"italic"}}>
+            No punch items exist on this job yet. Add items on the Rough or Finish tabs first.
+          </div>
+        )}
+        {["rough","finish"].map(phase => {
+          const list = byPhase[phase];
+          if (list.length === 0) return null;
+          const phaseColor = phase === "rough" ? C.rough : C.finish;
+          const label = phase === "rough" ? "ROUGH PUNCH" : "FINISH PUNCH";
+          return (
+            <div key={phase} style={{marginBottom:14}}>
+              <div style={{fontSize:10,fontWeight:800,color:phaseColor,letterSpacing:"0.08em",marginBottom:6}}>
+                {label} <span style={{color:C.dim,fontWeight:600}}>({list.length})</span>
+              </div>
+              {list.map(it => {
+                const isSelected = selected.has(it.id);
+                return (
+                  <label key={`${phase}-${it.id}`} style={{display:"flex",alignItems:"flex-start",gap:8,padding:"7px 10px",marginBottom:4,background: isSelected?`${phaseColor}10`:"transparent",border:`1px solid ${isSelected?phaseColor+"44":C.border}`,borderRadius:7,cursor:"pointer"}}>
+                    <input type="checkbox" checked={isSelected} onChange={()=>toggle(it.id)} style={{marginTop:2,flexShrink:0}}/>
+                    <div style={{flex:1,minWidth:0}}>
+                      <div style={{fontSize:12,color: it.done?C.dim:C.text, textDecoration: it.done?"line-through":"none"}}>{it.text}</div>
+                      <div style={{fontSize:10,color:C.dim,marginTop:2}}>
+                        {it.floor} · {it.room}
+                        {it.fromQC && <span style={{color:"#f59e0b",fontWeight:700,marginLeft:6}}>QC</span>}
+                        {it.done && <span style={{color:C.green,marginLeft:6}}>✓ done</span>}
+                      </div>
+                    </div>
+                  </label>
+                );
+              })}
+            </div>
+          );
+        })}
+        <div style={{display:"flex",gap:8,justifyContent:"flex-end",marginTop:14,paddingTop:12,borderTop:`1px solid ${C.border}`}}>
+          <button onClick={onClose}
+            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,color:C.dim,padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
+          <button onClick={save}
+            style={{background:"#8b5cf6",border:"none",borderRadius:7,color:"#fff",padding:"7px 16px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            Save {selected.size} link{selected.size===1?"":"s"}
+          </button>
+        </div>
+      </div>
+    </div>
+  );
+}
+
 // ── Return Trips ──────────────────────────────────────────────
 
-function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[]}) {
+function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],roughPunch={},finishPunch={}}) {
 
   const [viewPhoto, setViewPhoto] = useState(null);
   const [expandedRTs, setExpandedRTs] = useState({}); // trip IDs manually expanded when signed off
   const toggleExpand = (id) => setExpandedRTs(v=>({...v,[id]:!v[id]}));
+  const [linkerTripId, setLinkerTripId] = useState(null); // RT id currently showing the Link Punch Items modal
 
   const add = () => onChange([...trips, {id:uid(),date:"",scope:"",material:"",punch:[],photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:false,needsScheduleDate:"",rtScheduled:false,scheduledDate:""}]);
 
@@ -4815,6 +4980,20 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[]}
   return (
 
     <div>
+
+      {linkerTripId && (() => {
+        const rt = trips.find(x => x.id === linkerTripId);
+        if (!rt) return null;
+        return (
+          <PunchLinker
+            roughPunch={roughPunch}
+            finishPunch={finishPunch}
+            rt={rt}
+            onSave={(newPunch) => onChange(trips.map(x => x.id===linkerTripId ? {...x, punch:newPunch} : x))}
+            onClose={() => setLinkerTripId(null)}
+          />
+        );
+      })()}
 
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add Return Trip</Btn>
 
@@ -4959,7 +5138,19 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[]}
 
           {/* Punch List */}
 
-          <div style={{fontSize:10,color:C.dim,fontWeight:700,marginBottom:6,letterSpacing:"0.08em"}}>PUNCH LIST</div>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+            <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>
+              PUNCH LIST
+              {(() => {
+                const linkedCount = (t.punch||[]).filter(p => p && p.originItemId).length;
+                return linkedCount > 0 ? <span style={{color:"#8b5cf6",fontWeight:700,marginLeft:8}}>· {linkedCount} linked</span> : null;
+              })()}
+            </div>
+            <button onClick={()=>setLinkerTripId(t.id)}
+              style={{background:"none",border:"1px solid #8b5cf655",borderRadius:6,color:"#8b5cf6",fontSize:10,padding:"3px 10px",cursor:"pointer",fontFamily:"inherit",fontWeight:700,letterSpacing:"0.04em"}}>
+              + Link Punch Items
+            </button>
+          </div>
 
           <PunchItems items={t.punch||[]} onChange={v=>upd(t.id,{punch:v})}/>
 
@@ -8753,21 +8944,38 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     u(patch);
   };
 
-  // Wrap phase punch updates. When a `fromQC` item flips, find any RT punch
-  // entries referencing it via originItemId and flip those too. Same atomic
-  // patch pattern so Firestore only sees one write.
+  // Wrap phase punch updates. When ANY punch item's done-state flips and
+  // that item is referenced by a return trip's punch[] entry via
+  // originItemId, flip the RT entry too. Same atomic patch pattern so
+  // Firestore only sees one write.
+  //
+  // (Prior version only synced fromQC items, which meant Visit-linked punch
+  //  items didn't cascade. V2 drops that filter so any linked item syncs
+  //  both ways. Non-linked items are ignored by the RT walk below.)
   const handlePhasePunchChange = (phase, nextPunch) => {
     const prev = jobRef.current;
     const prevPunch = phase === "rough" ? prev.roughPunch : prev.finishPunch;
+    // Build the set of source IDs that any RT currently references on this
+    // phase. We only need to track done-state for those — everything else is
+    // a no-op downstream anyway. This keeps the walk cheap even on big punch
+    // lists with many items.
+    const linkedSourceIds = new Set();
+    (prev.returnTrips||[]).forEach(rt => {
+      (rt.punch||[]).forEach(p => {
+        if (p && p.originItemId && (p.originPhase||"rough") === phase) {
+          linkedSourceIds.add(p.originItemId);
+        }
+      });
+    });
     const prevDoneById = new Map();
     const walk = (punch) => {
       if (!punch) return;
       const floors = [...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
         ...(Array.isArray(punch.extraFloors) ? punch.extraFloors : [])];
       floors.forEach(fl => {
-        (fl.general||[]).forEach(i => { if (i?.fromQC) prevDoneById.set(i.id, !!i.done); });
-        (fl.rooms||[]).forEach(r => (r.items||[]).forEach(i => { if (i?.fromQC) prevDoneById.set(i.id, !!i.done); }));
-        (fl.hotcheck||[]).forEach(i => { if (i?.fromQC) prevDoneById.set(i.id, !!i.done); });
+        (fl.general||[]).forEach(i => { if (i && linkedSourceIds.has(i.id)) prevDoneById.set(i.id, !!i.done); });
+        (fl.rooms||[]).forEach(r => (r.items||[]).forEach(i => { if (i && linkedSourceIds.has(i.id)) prevDoneById.set(i.id, !!i.done); }));
+        (fl.hotcheck||[]).forEach(i => { if (i && linkedSourceIds.has(i.id)) prevDoneById.set(i.id, !!i.done); });
       });
     };
     walk(prevPunch);
@@ -8778,7 +8986,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
         ...(Array.isArray(punch.extraFloors) ? punch.extraFloors : [])];
       floors.forEach(fl => {
         const collect = (i) => {
-          if (!i?.fromQC) return;
+          if (!i || !linkedSourceIds.has(i.id)) return;
           const was = prevDoneById.get(i.id);
           if (was === undefined || was === !!i.done) return;
           flipTo.set(i.id, !!i.done);
@@ -10218,7 +10426,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             <div>
 
               <Section label="Return Trips" color={C.purple} defaultOpen={true}>
-                <ReturnTrips trips={job.returnTrips} onChange={handleReturnTripsChange} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData} jobId={job.id} users={users}/>
+                <ReturnTrips trips={job.returnTrips} onChange={handleReturnTripsChange} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData} jobId={job.id} users={users} roughPunch={job.roughPunch||{}} finishPunch={job.finishPunch||{}}/>
               </Section>
 
             </div>
