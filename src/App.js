@@ -2358,6 +2358,54 @@ function PhaseInstructionEntry({entry, onUpd, onDel, color, onAddMaterial}) {
   );
 }
 
+// J8 — Wraps the legacy PhaseInstructions editor behind a small collapsible.
+// Default collapsed. Shown in a neutral "archive" style so it's clear this is
+// the OLD capture surface; new notes go into JobNotesSection above. Data is
+// never purged — these arrays remain on the job doc (see §7-layer migration
+// in the Job Notes spec). If the list is empty, the toggle stays hidden.
+function LegacyInstructionsToggle({ items, onChange, color, onAddMaterial }) {
+  const [open, setOpen] = useState(false);
+  const list = Array.isArray(items) ? items : [];
+  if (list.length === 0 && !open) {
+    return (
+      <div style={{ marginTop:8 }}>
+        <button onClick={()=>setOpen(true)}
+          style={{
+            background:'transparent', border:'none', padding:'2px 0',
+            fontSize:10, color: C.dim, cursor:'pointer',
+            fontFamily:'inherit', textDecoration:'underline',
+          }}>
+          + Legacy instructions editor (empty)
+        </button>
+      </div>
+    );
+  }
+  return (
+    <div style={{
+      marginTop:10, border:`1px dashed ${C.border}`, borderRadius:8,
+      background:'#f9fafb',
+    }}>
+      <button onClick={()=>setOpen(v=>!v)}
+        style={{
+          width:'100%', background:'transparent', border:'none',
+          padding:'7px 10px', display:'flex', alignItems:'center',
+          justifyContent:'space-between', cursor:'pointer',
+          fontFamily:'inherit', fontSize:11, fontWeight:700, color: C.dim,
+        }}>
+        <span>{open ? '▾' : '▸'} Legacy instructions {list.length > 0 ? `· ${list.length} saved` : ''}</span>
+        <span style={{ fontSize:9, fontWeight:600, color: C.dim, fontStyle:'italic' }}>
+          archive — new items go in Job Notes
+        </span>
+      </button>
+      {open && (
+        <div style={{ padding:'2px 10px 10px' }}>
+          <PhaseInstructions items={list} onChange={onChange} color={color} onAddMaterial={onAddMaterial}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PhaseInstructions({items, onChange, color, placeholder, onAddMaterial}) {
   const list = Array.isArray(items) ? items : [];
   const add  = () => onChange([...list, {id:uid(), label:'', text:''}]);
@@ -2455,6 +2503,1495 @@ function PhaseInstructions({items, onChange, color, placeholder, onAddMaterial})
   );
 }
 
+// ══════════════════════════════════════════════════════════════
+// Job Notes — capture + triage surface
+//
+// Data safety contract (see project_job_notes_spec.md §"Hard Rules"):
+//   - Source PhaseInstructions arrays are NEVER mutated (migration copies OUT
+//     only, normalizeJob handles it).
+//   - Soft delete via `deleted: true`.
+//   - Promote is atomic — a single onPatch({...}) write covers both the note
+//     update AND the destination insert.
+//   - Line photos stay on the note after promote (they also get COPIED by
+//     URL into the destination — no move).
+//
+// V1 scope (this section):
+//   J3 — JobNote card + editor + line photos + note photos + migration badge
+//   J4 — Triage toggle + multi-select checkboxes + action bar
+//   J5 — DestinationPicker (Punch)
+//   J6 — DestinationPicker (RT / CO / Call)
+//   J7 — Ghost chips + tap-to-nav back to destination
+// ══════════════════════════════════════════════════════════════
+
+// Route a File[] into Firebase Storage. Returns array of {id,name,url,storagePath}.
+// Reuses the same shape as QuickJobDetail.addPhotos for compatibility.
+async function uploadJobNotePhotos(files, jobId, noteId, lineId) {
+  const out = [];
+  for (const file of Array.from(files || [])) {
+    try {
+      const photoId = uid();
+      const ext = (file.name || 'jpg').split('.').pop() || 'jpg';
+      const subPath = lineId ? `lines/${lineId}` : `note`;
+      const storagePath = `jobs/${jobId}/jobNotes/${noteId}/${subPath}/${photoId}.${ext}`;
+      const storageRef = ref(storage, storagePath);
+      await uploadBytes(storageRef, file);
+      const url = await getDownloadURL(storageRef);
+      out.push({ id: photoId, name: file.name, url, storagePath });
+    } catch (e) {
+      console.error('Job Note photo upload failed:', e);
+      toast.error && toast.error(`Upload failed: ${file.name}`);
+    }
+  }
+  return out;
+}
+
+// Short date label (eg "4/20"). Used for auto-title "Note — 4/20".
+function jobNoteDateLabel(d = new Date()) {
+  return `${d.getMonth()+1}/${d.getDate()}`;
+}
+
+// Strip HTML + collapse whitespace to a short preview. Migrated notes put
+// their entire HTML blob in lines[0].text — this turns it back into
+// something displayable inside a bullet.
+function jobNotePlain(s) {
+  return (s || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
+}
+
+// Single bullet line. Read-only until the parent note is in edit mode.
+// Triage mode (J4) will add a left checkbox; promoted lines will carry a
+// ghost chip on the right (J7).
+function JobNoteLine({
+  line, editing, phaseColor, onChange, onRemove, onViewPhoto,
+  triage = false, selected = false, onToggleSelect = null, onJumpToPromoted = null,
+  jobId, noteId,
+}) {
+  const [uploading, setUploading] = useState(false);
+  const textRef = useRef(null);
+
+  const text = line?.text || '';
+  const promoted = line?.promoted || null;
+  const photos = Array.isArray(line?.photos) ? line.photos : [];
+  const isPromoted = !!promoted;
+
+  // Attach photos to this line via Firebase Storage.
+  const attachPhotos = async (files) => {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    const uploaded = await uploadJobNotePhotos(files, jobId, noteId, line.id);
+    setUploading(false);
+    if (uploaded.length === 0) return;
+    onChange({ ...line, photos: [...photos, ...uploaded] });
+  };
+
+  const removePhoto = async (p) => {
+    // Best-effort delete from Storage, then update the line.
+    if (p && p.storagePath) {
+      try { await deleteObject(ref(storage, p.storagePath)); } catch {}
+    }
+    onChange({ ...line, photos: photos.filter(x => x.id !== p.id) });
+  };
+
+  return (
+    <div style={{
+      display:'flex', gap:8, alignItems:'flex-start',
+      padding:'5px 8px', borderRadius:6,
+      background: isPromoted ? '#f8fafc' : 'transparent',
+      opacity: isPromoted && !triage ? 0.72 : 1,
+    }}>
+      {/* Triage checkbox — V1 J4 wires this up */}
+      {triage && !isPromoted && (
+        <input type="checkbox"
+          checked={!!selected}
+          onChange={() => onToggleSelect && onToggleSelect(line.id)}
+          style={{ marginTop: 4, cursor:'pointer', flexShrink: 0 }} />
+      )}
+      {/* Bullet dot */}
+      {!triage && (
+        <span style={{
+          flexShrink:0, marginTop:7, width:5, height:5, borderRadius:99,
+          background: isPromoted ? '#94a3b8' : phaseColor,
+        }}/>
+      )}
+      <div style={{ flex:1, minWidth:0 }}>
+        {editing && !isPromoted ? (
+          <textarea
+            ref={textRef}
+            value={text}
+            rows={Math.max(1, Math.min(6, (text.match(/\n/g)||[]).length + 1))}
+            onChange={(e)=>onChange({ ...line, text: e.target.value })}
+            onKeyDown={(e)=>{
+              // Enter without shift → parent adds a new line after this one.
+              if (e.key === 'Enter' && !e.shiftKey) {
+                e.preventDefault();
+                onChange({ ...line, text }, { splitAfter: true });
+              }
+            }}
+            placeholder="One item / thought per line…"
+            style={{
+              width:'100%', boxSizing:'border-box',
+              background:'transparent', border:'none', outline:'none',
+              fontSize:13, color: C.text, lineHeight:1.4, resize:'none',
+              fontFamily:'inherit', padding:0,
+            }}
+          />
+        ) : (
+          <div style={{
+            fontSize:13, color: isPromoted ? C.dim : C.text, lineHeight:1.4,
+            whiteSpace:'pre-wrap', wordBreak:'break-word',
+            textDecoration: isPromoted ? 'none' : 'none',
+          }}
+            // Migrated notes carry HTML in text — render it so bullets/links
+            // show up correctly in read mode. User-edited plain text uses
+            // the same path because HTML-escape happens at the browser level
+            // and the editor controls what gets saved.
+            dangerouslySetInnerHTML={{ __html: text || '<span style="color:#94a3b8">(empty line)</span>' }}
+          />
+        )}
+
+        {/* Line photos */}
+        {(photos.length > 0 || editing) && (
+          <div style={{display:'flex', flexWrap:'wrap', gap:5, marginTop: photos.length>0 ? 5 : 0}}>
+            {photos.map(p => (
+              <div key={p.id} style={{ position:'relative', width:48, height:48, borderRadius:6, overflow:'hidden', border:`1px solid ${C.border}` }}>
+                <img src={p.url} alt={p.name || 'photo'}
+                  onClick={()=>onViewPhoto && onViewPhoto(p.url)}
+                  style={{ width:'100%', height:'100%', objectFit:'cover', cursor:'pointer' }}/>
+                {editing && (
+                  <button onClick={()=>removePhoto(p)}
+                    style={{
+                      position:'absolute', top:1, right:1,
+                      background:'rgba(0,0,0,0.6)', color:'#fff', border:'none',
+                      borderRadius:99, width:16, height:16, fontSize:10, lineHeight:1,
+                      cursor:'pointer', padding:0,
+                    }}>×</button>
+                )}
+              </div>
+            ))}
+            {editing && !isPromoted && (
+              <label style={{
+                width:48, height:48, borderRadius:6, border:`1px dashed ${phaseColor}66`,
+                display:'flex', alignItems:'center', justifyContent:'center',
+                cursor:'pointer', background: uploading ? '#f3f4f6' : 'transparent',
+                fontSize:18, color: phaseColor, fontWeight:300,
+              }}>
+                {uploading ? '…' : '+'}
+                <input type="file" accept="image/*" multiple
+                  onChange={(e)=>{attachPhotos(e.target.files); e.target.value='';}}
+                  style={{display:'none'}}/>
+              </label>
+            )}
+          </div>
+        )}
+
+        {/* Ghost chip — J7 makes this tappable to navigate */}
+        {promoted && (
+          <div style={{ marginTop: 4, display:'inline-flex', alignItems:'center' }}>
+            <button
+              onClick={()=>onJumpToPromoted && onJumpToPromoted(promoted)}
+              style={{
+                fontSize:10, fontWeight:700, letterSpacing:'0.02em',
+                background:'#f1f5f9', color:'#475569',
+                border:`1px solid ${C.border}`, borderRadius:99,
+                padding:'1px 9px', cursor: onJumpToPromoted ? 'pointer':'default',
+                fontFamily:'inherit',
+              }}
+              title="Jump to destination">
+              → {promoted.type?.toUpperCase() || '?'} · {promoted.targetLabel || ''}
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Right-side remove (editing, non-promoted only) */}
+      {editing && !isPromoted && (
+        <button onClick={()=>onRemove && onRemove(line.id)}
+          title="Remove line"
+          style={{background:'none', border:'none', color:C.dim, cursor:'pointer',
+            fontSize:14, lineHeight:1, padding:'2px 4px', fontFamily:'inherit', flexShrink:0}}>×</button>
+      )}
+    </div>
+  );
+}
+
+// Destination picker — the "new vs existing" branch for promote flows.
+// J4 stub; filled by J5 (Punch) and J6 (RT / CO / Call).
+//
+// Atomic write contract (spec §"Hard Rules — Atomic writes"):
+//   a promote = single onPatch({...}) call carrying BOTH the updated
+//   jobNotes array (marking promoted lines) AND the destination mutation
+//   (roughPunch / finishPunch / returnTrips / changeOrders). Call-type
+//   promotes additionally fire onSaveManualTask for each line (one
+//   manualTasks doc per line).
+function JobNoteDestinationPicker({
+  type, note, selectedLineIds = [], job, onPatch,
+  manualTasks = [], onSaveManualTask, onClose, onDone,
+}) {
+  const selectedLines = (note?.lines || []).filter(l => selectedLineIds.includes(l.id));
+
+  // Utility: mark N lines as promoted inside the source note, returning the
+  // NEXT jobNotes array. Used by every branch.
+  const markPromotedInNote = (promotedFields) => {
+    const now = new Date().toISOString();
+    const creator = (getIdentity && getIdentity()) || null;
+    const nextLines = (note.lines||[]).map(l => {
+      if (!selectedLineIds.includes(l.id)) return l;
+      return { ...l, promoted: {
+        ...promotedFields,
+        promotedAt: now,
+        promotedBy: creator?.name || '',
+      }};
+    });
+    const nextNote = { ...note, lines: nextLines, updatedAt: now };
+    return (job.jobNotes||[]).map(n => n.id === note.id ? nextNote : n);
+  };
+
+  const title = {
+    punch: `Promote ${selectedLineIds.length} to Punch`,
+    rt:    `Promote ${selectedLineIds.length} to Return Trip`,
+    co:    `Promote ${selectedLineIds.length} to Change Order`,
+    call:  `Promote ${selectedLineIds.length} to Call`,
+  }[type] || 'Promote';
+
+  return (
+    <div
+      style={{
+        position:'fixed', inset:0, zIndex:500,
+        background:'rgba(0,0,0,0.55)',
+        display:'flex', alignItems:'flex-end', justifyContent:'center',
+      }}
+      onClick={(e)=>{ if (e.target === e.currentTarget) onClose && onClose(); }}
+    >
+      <div onClick={e=>e.stopPropagation()}
+        style={{
+          width:'100%', maxWidth:520, background: C.card,
+          border:`1px solid ${C.border}`,
+          borderRadius:'16px 16px 0 0',
+          padding:'14px 16px 18px',
+          maxHeight:'80vh', overflowY:'auto',
+          boxShadow:'0 -10px 40px rgba(0,0,0,0.45)',
+        }}>
+        <div style={{ display:'flex', alignItems:'center', gap:10, marginBottom:12 }}>
+          <div style={{ fontSize:14, fontWeight:800, color: C.text, flex:1 }}>{title}</div>
+          <button onClick={onClose}
+            style={{ background:'none', border:'none', color: C.dim, fontSize:20, cursor:'pointer', padding:'0 4px' }}>✕</button>
+        </div>
+
+        {/* Preview of the selected lines */}
+        <div style={{
+          background: C.surface, border:`1px solid ${C.border}`,
+          borderRadius:8, padding:'8px 10px', marginBottom:12,
+          maxHeight:150, overflowY:'auto',
+        }}>
+          {selectedLines.map(l => (
+            <div key={l.id} style={{ fontSize:12, color: C.text, padding:'2px 0', whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+              · {jobNotePlain(l.text) || '(empty)'}
+            </div>
+          ))}
+        </div>
+
+        {/* Body — J5 fills Punch branch, J6 fills RT/CO/Call */}
+        {type === 'punch' && (
+          <JobNoteDestinationPunch
+            note={note} selectedLines={selectedLines} selectedLineIds={selectedLineIds}
+            job={job} onPatch={onPatch} markPromotedInNote={markPromotedInNote}
+            onDone={onDone}/>
+        )}
+        {type === 'rt' && (
+          <JobNoteDestinationRT
+            note={note} selectedLines={selectedLines} selectedLineIds={selectedLineIds}
+            job={job} onPatch={onPatch} markPromotedInNote={markPromotedInNote}
+            onDone={onDone}/>
+        )}
+        {type === 'co' && (
+          <JobNoteDestinationCO
+            note={note} selectedLines={selectedLines} selectedLineIds={selectedLineIds}
+            job={job} onPatch={onPatch} markPromotedInNote={markPromotedInNote}
+            onDone={onDone}/>
+        )}
+        {type === 'call' && (
+          <JobNoteDestinationCall
+            note={note} selectedLines={selectedLines} selectedLineIds={selectedLineIds}
+            job={job} onPatch={onPatch} markPromotedInNote={markPromotedInNote}
+            manualTasks={manualTasks} onSaveManualTask={onSaveManualTask}
+            onDone={onDone}/>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── Destination branch: Punch ─────────────────────────────────
+// Create punch items on one phase+floor+(general|room) combo. Each item
+// carries a fromJobNote backlink + photos copied from the source line.
+// Single atomic onPatch() updating BOTH {rough|finish}Punch AND jobNotes.
+function JobNoteDestinationPunch({ note, selectedLines, selectedLineIds, job, onPatch, markPromotedInNote, onDone }) {
+  // Default phase: match the note's phase if rough/finish, else fall back to
+  // rough — the user can switch freely. General notes land wherever the user
+  // picks.
+  const initialPhase = (note?.phase === 'rough' || note?.phase === 'finish') ? note.phase : 'rough';
+  const [phase, setPhase] = useState(initialPhase);
+  const [mode, setMode]   = useState('new'); // 'new' | 'existing'
+  const [floorKey, setFloorKey] = useState('main');
+  const [roomId, setRoomId] = useState(''); // '' means General
+  const [existingCombo, setExistingCombo] = useState(null); // {floorKey, floorLabel, roomId, roomLabel}
+
+  const punch = phase === 'rough' ? (job.roughPunch || {}) : (job.finishPunch || {});
+
+  // Build the list of available floors (upper/main/basement + extraFloors).
+  // Each entry: {key, label, floorObj}
+  const floors = useMemo(() => {
+    const out = [];
+    ['upper','main','basement'].forEach(k => {
+      if (punch[k]) out.push({ key: k, label: k.charAt(0).toUpperCase()+k.slice(1), floor: punch[k] });
+    });
+    if (Array.isArray(punch.extraFloors)) {
+      punch.extraFloors.forEach((f, i) => {
+        out.push({ key: `extra:${i}`, label: f?.name || `Floor ${i+1}`, floor: f });
+      });
+    }
+    // If no floors exist yet (fresh job), still offer Main so we can create it.
+    if (out.length === 0) out.push({ key: 'main', label: 'Main', floor: {} });
+    return out;
+  }, [punch]);
+
+  // Build existing combos: one entry per phase+floor+(General|room) combo
+  // that has at least one punch item.
+  const existingCombos = useMemo(() => {
+    const out = [];
+    floors.forEach(f => {
+      const gen = Array.isArray(f.floor?.general) ? f.floor.general : [];
+      const open = gen.filter(i => i && !i.done).length;
+      if (gen.length > 0) {
+        out.push({ floorKey: f.key, floorLabel: f.label, roomId: '', roomLabel: 'General', count: gen.length, openCount: open });
+      }
+      (f.floor?.rooms || []).forEach(r => {
+        const items = Array.isArray(r?.items) ? r.items : [];
+        const ro = items.filter(i => i && !i.done).length;
+        if (items.length > 0) {
+          out.push({ floorKey: f.key, floorLabel: f.label, roomId: r.id, roomLabel: r.name || 'Room', count: items.length, openCount: ro });
+        }
+      });
+    });
+    return out;
+  }, [floors]);
+
+  // When phase switches, reset selections to defaults.
+  useEffect(() => {
+    setFloorKey(floors[0]?.key || 'main');
+    setRoomId('');
+    setExistingCombo(null);
+  }, [phase]); // eslint-disable-line
+
+  const currentFloor = floors.find(f => f.key === floorKey) || floors[0];
+  const rooms = Array.isArray(currentFloor?.floor?.rooms) ? currentFloor.floor.rooms : [];
+
+  const canPromote = (mode === 'new' && floorKey) || (mode === 'existing' && existingCombo);
+
+  const promote = () => {
+    // Build new punch items from selected lines.
+    const creator = (getIdentity && getIdentity()) || null;
+    const now = new Date().toLocaleDateString('en-US');
+    const newItems = selectedLines.map(l => ({
+      id: uid(),
+      text: jobNotePlain(l.text) || (l.text || ''),
+      done: false,
+      addedBy: creator?.name || '',
+      addedAt: now,
+      photos: Array.isArray(l.photos) ? l.photos.map(p => ({ ...p })) : [], // copy by reference-safe clone
+      fromJobNote: { jobNoteId: note.id, lineId: l.id, noteTitle: note.title || '' },
+    }));
+
+    // Decide target combo.
+    const target = mode === 'existing'
+      ? { floorKey: existingCombo.floorKey, roomId: existingCombo.roomId, roomLabel: existingCombo.roomLabel, floorLabel: existingCombo.floorLabel }
+      : { floorKey, roomId: roomId || '', roomLabel: roomId ? (rooms.find(r=>r.id===roomId)?.name || 'Room') : 'General', floorLabel: currentFloor?.label || '' };
+
+    // Clone the phase's punch tree and insert.
+    const nextPunch = JSON.parse(JSON.stringify(punch || {}));
+    const writeIntoFloor = (floorObj) => {
+      if (!floorObj) floorObj = {};
+      if (!target.roomId) {
+        floorObj.general = [ ...(floorObj.general || []), ...newItems ];
+      } else {
+        floorObj.rooms = (floorObj.rooms || []).map(r => r.id === target.roomId
+          ? { ...r, items: [ ...(r.items || []), ...newItems ] }
+          : r);
+      }
+      return floorObj;
+    };
+    if (target.floorKey.startsWith('extra:')) {
+      const i = parseInt(target.floorKey.split(':')[1], 10);
+      const arr = Array.isArray(nextPunch.extraFloors) ? [...nextPunch.extraFloors] : [];
+      arr[i] = writeIntoFloor(arr[i] || {});
+      nextPunch.extraFloors = arr;
+    } else {
+      nextPunch[target.floorKey] = writeIntoFloor(nextPunch[target.floorKey]);
+    }
+
+    // Mark source lines promoted.
+    const nextJobNotes = markPromotedInNote({
+      type: 'punch',
+      targetId: null, // punch items don't have a single stable parent id; navigate via floor+room
+      targetLabel: `${phase === 'rough' ? 'Rough' : 'Finish'} · ${target.floorLabel} / ${target.roomLabel}`,
+      targetPhase: phase,
+      targetFloorKey: target.floorKey,
+      targetRoomId: target.roomId || null,
+    });
+
+    // Atomic single-patch write.
+    const patch = { jobNotes: nextJobNotes };
+    if (phase === 'rough') patch.roughPunch = nextPunch;
+    else patch.finishPunch = nextPunch;
+    onPatch && onPatch(patch);
+    onDone && onDone();
+  };
+
+  const pillStyle = (active, color='#7c3aed') => ({
+    fontSize:11, fontWeight:700,
+    background: active ? color : 'transparent',
+    color: active ? '#fff' : color,
+    border:`1px solid ${color}`, borderRadius:99,
+    padding:'3px 12px', cursor:'pointer', fontFamily:'inherit',
+  });
+
+  return (
+    <div>
+      {/* Phase selector */}
+      <div style={{ marginBottom:12 }}>
+        <div style={{ fontSize:10, color: C.dim, fontWeight:700, letterSpacing:'0.06em', marginBottom:5 }}>PHASE</div>
+        <div style={{ display:'flex', gap:6 }}>
+          <button onClick={()=>setPhase('rough')}  style={pillStyle(phase==='rough',  C.rough)}>Rough</button>
+          <button onClick={()=>setPhase('finish')} style={pillStyle(phase==='finish', C.finish)}>Finish</button>
+        </div>
+      </div>
+
+      {/* New vs existing */}
+      <div style={{ marginBottom:12 }}>
+        <div style={{ display:'flex', gap:6, marginBottom:8 }}>
+          <button onClick={()=>setMode('new')}      style={pillStyle(mode==='new')}>New — create items</button>
+          <button onClick={()=>setMode('existing')} style={pillStyle(mode==='existing')}>Add to existing</button>
+        </div>
+
+        {mode === 'new' && (
+          <div style={{ display:'grid', gap:8 }}>
+            <div>
+              <div style={{ fontSize:10, color: C.dim, fontWeight:700, letterSpacing:'0.06em', marginBottom:5 }}>FLOOR</div>
+              <select value={floorKey} onChange={e=>{ setFloorKey(e.target.value); setRoomId(''); }}
+                style={{
+                  width:'100%', background: C.surface, border:`1px solid ${C.border}`,
+                  borderRadius:7, padding:'6px 9px', fontSize:12, color: C.text,
+                  fontFamily:'inherit', cursor:'pointer', outline:'none',
+                }}>
+                {floors.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize:10, color: C.dim, fontWeight:700, letterSpacing:'0.06em', marginBottom:5 }}>ROOM</div>
+              <select value={roomId} onChange={e=>setRoomId(e.target.value)}
+                style={{
+                  width:'100%', background: C.surface, border:`1px solid ${C.border}`,
+                  borderRadius:7, padding:'6px 9px', fontSize:12, color: C.text,
+                  fontFamily:'inherit', cursor:'pointer', outline:'none',
+                }}>
+                <option value="">General (no specific room)</option>
+                {rooms.map(r => <option key={r.id} value={r.id}>{r.name || 'Room'}</option>)}
+              </select>
+              {rooms.length === 0 && (
+                <div style={{ fontSize:10, color: C.dim, marginTop:4, fontStyle:'italic' }}>
+                  No rooms on this floor yet. Items land in General — add a room in the Punch tab later to re-home them.
+                </div>
+              )}
+            </div>
+          </div>
+        )}
+
+        {mode === 'existing' && (
+          <div style={{
+            maxHeight:230, overflowY:'auto',
+            border:`1px solid ${C.border}`, borderRadius:8, background: C.surface,
+          }}>
+            {existingCombos.length === 0 && (
+              <div style={{ fontSize:12, color: C.dim, padding:'14px 12px', textAlign:'center', fontStyle:'italic' }}>
+                No existing punch groups on this phase — switch to "New" above.
+              </div>
+            )}
+            {existingCombos.map((c, i) => {
+              const selected = existingCombo && existingCombo.floorKey === c.floorKey && existingCombo.roomId === c.roomId;
+              return (
+                <div key={`${c.floorKey}::${c.roomId||'__gen'}::${i}`}
+                  onClick={()=>setExistingCombo(c)}
+                  style={{
+                    padding:'8px 12px', cursor:'pointer',
+                    borderBottom: i === existingCombos.length-1 ? 'none' : `1px solid ${C.border}`,
+                    background: selected ? '#f1f5f9' : 'transparent',
+                    display:'flex', alignItems:'center', gap:8,
+                  }}>
+                  <input type="radio" readOnly checked={!!selected} style={{ flexShrink:0 }}/>
+                  <div style={{ flex:1, minWidth:0 }}>
+                    <div style={{ fontSize:12, fontWeight:700, color: C.text }}>
+                      {c.floorLabel} / {c.roomLabel}
+                    </div>
+                    <div style={{ fontSize:10, color: C.dim, marginTop:1 }}>
+                      {c.openCount} open · {c.count} total
+                    </div>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Commit button */}
+      <button onClick={promote} disabled={!canPromote}
+        style={{
+          width:'100%', background: canPromote ? '#7c3aed' : '#e5e7eb',
+          color: canPromote ? '#fff' : C.dim,
+          border:'none', borderRadius:8,
+          padding:'9px 0', fontSize:13, fontWeight:800,
+          cursor: canPromote ? 'pointer' : 'not-allowed',
+          fontFamily:'inherit',
+        }}>
+        Promote {selectedLineIds.length} item{selectedLineIds.length!==1?'s':''} to Punch
+      </button>
+    </div>
+  );
+}
+// ── Destination branch: Return Trip ───────────────────────────
+// NEW RT: inline date + crew. Lines become the RT's punch[] entries.
+// EXISTING RT: append selected lines as new punch[] entries (all carry
+// fromJobNote backlink). Signed-off RTs are filtered out — don't re-open
+// closed work via promote.
+function JobNoteDestinationRT({ note, selectedLines, selectedLineIds, job, onPatch, markPromotedInNote, onDone }) {
+  const [mode, setMode] = useState('new');
+  const [newDate, setNewDate] = useState('');
+  const [newCrew, setNewCrew] = useState('');
+  const [newScope, setNewScope] = useState(note?.title ? `From note: ${note.title}` : '');
+  const [targetRTId, setTargetRTId] = useState(null);
+
+  const openRTs = (job?.returnTrips || []).filter(rt => !rt.signedOff);
+
+  const canPromote = (mode === 'new') || (mode === 'existing' && targetRTId);
+
+  const buildPunchEntries = () => {
+    const now = new Date().toLocaleDateString('en-US');
+    const creator = (getIdentity && getIdentity()) || null;
+    return selectedLines.map(l => ({
+      id: uid(),
+      text: jobNotePlain(l.text) || (l.text || ''),
+      done: false,
+      addedBy: creator?.name || '',
+      addedAt: now,
+      photos: Array.isArray(l.photos) ? l.photos.map(p => ({ ...p })) : [],
+      fromJobNote: { jobNoteId: note.id, lineId: l.id, noteTitle: note.title || '' },
+    }));
+  };
+
+  const promote = () => {
+    const entries = buildPunchEntries();
+    let nextTrips;
+    let targetId;
+    let targetLabel;
+
+    if (mode === 'new') {
+      const creator = (getIdentity && getIdentity()) || null;
+      const newRT = {
+        id: uid(),
+        date: newDate || '',
+        scope: newScope || (note.title ? `From note: ${note.title}` : 'Return Trip'),
+        material: '',
+        punch: entries,
+        photos: [],
+        assignedTo: newCrew || '',
+        signedOff: false, signedOffBy: '', signedOffDate: '',
+        needsSchedule: !newDate,
+        needsScheduleDate: '',
+        rtScheduled: !!newDate,
+        rtStatus: newDate ? 'scheduled' : 'needs',
+        rtStatusDate: '',
+        scheduledDate: newDate || '',
+        needsHardDate: false,
+        needsByStart: '',
+        needsByEnd: '',
+        createdAt: new Date().toISOString(),
+        createdFromJobNoteId: note.id,
+        requestedBy: creator?.name || '',
+      };
+      nextTrips = [ ...(job.returnTrips || []), newRT ];
+      targetId = newRT.id;
+      targetLabel = newDate
+        ? `${newDate}${newCrew ? ' w/ ' + newCrew : ''}`
+        : (newCrew ? `Unscheduled w/ ${newCrew}` : 'Unscheduled');
+    } else {
+      const target = openRTs.find(rt => rt.id === targetRTId);
+      if (!target) return;
+      nextTrips = (job.returnTrips || []).map(rt => rt.id === target.id
+        ? { ...rt, punch: [ ...(rt.punch || []), ...entries ] }
+        : rt);
+      targetId = target.id;
+      const d = target.scheduledDate || target.date || '';
+      targetLabel = d
+        ? `${d}${target.assignedTo ? ' w/ ' + target.assignedTo : ''}`
+        : (target.assignedTo ? `Unscheduled w/ ${target.assignedTo}` : (target.scope || 'Return Trip'));
+    }
+
+    const nextJobNotes = markPromotedInNote({
+      type: 'rt', targetId, targetLabel,
+    });
+
+    onPatch && onPatch({ returnTrips: nextTrips, jobNotes: nextJobNotes });
+    onDone && onDone();
+  };
+
+  const pillStyle = (active, color='#0d9488') => ({
+    fontSize:11, fontWeight:700,
+    background: active ? color : 'transparent',
+    color: active ? '#fff' : color,
+    border:`1px solid ${color}`, borderRadius:99,
+    padding:'3px 12px', cursor:'pointer', fontFamily:'inherit',
+  });
+
+  return (
+    <div>
+      <div style={{ display:'flex', gap:6, marginBottom:12 }}>
+        <button onClick={()=>setMode('new')}      style={pillStyle(mode==='new')}>New — create RT</button>
+        <button onClick={()=>setMode('existing')} style={pillStyle(mode==='existing')}>Add to existing</button>
+      </div>
+
+      {mode === 'new' && (
+        <div style={{ display:'grid', gap:8, marginBottom:12 }}>
+          <div>
+            <div style={{ fontSize:10, color: C.dim, fontWeight:700, letterSpacing:'0.06em', marginBottom:5 }}>SCOPE (title)</div>
+            <input value={newScope} onChange={e=>setNewScope(e.target.value)}
+              placeholder="What this visit is for…"
+              style={{ width:'100%', boxSizing:'border-box', background: C.surface, border:`1px solid ${C.border}`, borderRadius:7, padding:'6px 9px', fontSize:12, color: C.text, fontFamily:'inherit', outline:'none' }}/>
+          </div>
+          <div style={{ display:'grid', gap:8, gridTemplateColumns:'1fr 1fr' }}>
+            <div>
+              <div style={{ fontSize:10, color: C.dim, fontWeight:700, letterSpacing:'0.06em', marginBottom:5 }}>DATE (optional)</div>
+              <input type="date" value={newDate} onChange={e=>setNewDate(e.target.value)}
+                style={{ width:'100%', boxSizing:'border-box', background: C.surface, border:`1px solid ${C.border}`, borderRadius:7, padding:'6px 9px', fontSize:12, color: C.text, fontFamily:'inherit', outline:'none' }}/>
+            </div>
+            <div>
+              <div style={{ fontSize:10, color: C.dim, fontWeight:700, letterSpacing:'0.06em', marginBottom:5 }}>CREW (optional)</div>
+              <input value={newCrew} onChange={e=>setNewCrew(e.target.value)} placeholder="Crew / foreman"
+                style={{ width:'100%', boxSizing:'border-box', background: C.surface, border:`1px solid ${C.border}`, borderRadius:7, padding:'6px 9px', fontSize:12, color: C.text, fontFamily:'inherit', outline:'none' }}/>
+            </div>
+          </div>
+          <div style={{ fontSize:10, color: C.dim, fontStyle:'italic' }}>
+            No date? RT goes to Unscheduled — you can schedule it anytime from the Return Trips tab.
+          </div>
+        </div>
+      )}
+
+      {mode === 'existing' && (
+        <div style={{
+          maxHeight:230, overflowY:'auto',
+          border:`1px solid ${C.border}`, borderRadius:8, background: C.surface,
+          marginBottom:12,
+        }}>
+          {openRTs.length === 0 && (
+            <div style={{ fontSize:12, color: C.dim, padding:'14px 12px', textAlign:'center', fontStyle:'italic' }}>
+              No open return trips on this job yet — switch to "New" above.
+            </div>
+          )}
+          {openRTs.map((rt, i) => {
+            const d = rt.scheduledDate || rt.date || '';
+            const scheduled = !!rt.rtScheduled || !!d;
+            const selected = targetRTId === rt.id;
+            return (
+              <div key={rt.id}
+                onClick={()=>setTargetRTId(rt.id)}
+                style={{
+                  padding:'8px 12px', cursor:'pointer',
+                  borderBottom: i === openRTs.length-1 ? 'none' : `1px solid ${C.border}`,
+                  background: selected ? '#f1f5f9' : 'transparent',
+                  display:'flex', alignItems:'center', gap:8,
+                }}>
+                <input type="radio" readOnly checked={selected} style={{ flexShrink:0 }}/>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:12, fontWeight:700, color: C.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                    {jobNotePlain(rt.scope) || 'Return Trip'}
+                  </div>
+                  <div style={{ fontSize:10, color: C.dim, marginTop:1, display:'flex', gap:8 }}>
+                    <span>{scheduled && d ? `📅 ${d}` : (scheduled ? '📅 scheduled' : '◇ unscheduled')}</span>
+                    {rt.assignedTo && <span>· {rt.assignedTo}</span>}
+                    {(rt.punch||[]).length > 0 && <span>· {(rt.punch||[]).length} item{(rt.punch||[]).length!==1?'s':''}</span>}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <button onClick={promote} disabled={!canPromote}
+        style={{
+          width:'100%', background: canPromote ? '#0d9488' : '#e5e7eb',
+          color: canPromote ? '#fff' : C.dim,
+          border:'none', borderRadius:8,
+          padding:'9px 0', fontSize:13, fontWeight:800,
+          cursor: canPromote ? 'pointer' : 'not-allowed',
+          fontFamily:'inherit',
+        }}>
+        {mode === 'new'
+          ? `Create Return Trip with ${selectedLineIds.length} item${selectedLineIds.length!==1?'s':''}`
+          : `Add ${selectedLineIds.length} item${selectedLineIds.length!==1?'s':''} to Return Trip`}
+      </button>
+    </div>
+  );
+}
+
+// ── Destination branch: Change Order ──────────────────────────
+// NEW CO: lines become bulleted HTML in the `desc` field.
+// EXISTING CO: append bullets to the target CO's `desc` (only non-completed/
+// non-converted/non-invoiced COs are offered). Backlink stored as
+// `fromJobNotes: [{jobNoteId, lineId, lineText}, ...]` array since a CO can
+// accumulate content from multiple notes over time.
+function JobNoteDestinationCO({ note, selectedLines, selectedLineIds, job, onPatch, markPromotedInNote, onDone }) {
+  const [mode, setMode] = useState('new');
+  const [targetCOId, setTargetCOId] = useState(null);
+
+  // Filter COs — only ones where more content is still meaningful to add.
+  const openCOs = (job?.changeOrders || []).filter(co => {
+    const s = co.coStatus || '';
+    return s !== 'completed' && s !== 'converted' && s !== 'invoiced' && s !== 'rejected';
+  });
+
+  const canPromote = (mode === 'new') || (mode === 'existing' && targetCOId);
+
+  // Format selected lines as HTML bullets so they render nicely inside the
+  // existing rich-text `desc` field.
+  const bulletsHtml = () => {
+    return selectedLines.map(l => {
+      const t = jobNotePlain(l.text).replace(/</g, '&lt;').replace(/>/g, '&gt;');
+      return `<li>${t || '(empty)'}</li>`;
+    }).join('');
+  };
+
+  const promote = () => {
+    const creator = (getIdentity && getIdentity()) || null;
+    const bullets = bulletsHtml();
+    const newBacklinks = selectedLines.map(l => ({
+      jobNoteId: note.id, lineId: l.id,
+      lineText: jobNotePlain(l.text).slice(0, 200),
+      noteTitle: note.title || '',
+    }));
+
+    let nextCOs;
+    let targetId;
+    let targetLabel;
+
+    if (mode === 'new') {
+      const newCO = {
+        id: uid(),
+        date: '',
+        desc: `<ul>${bullets}</ul>`,
+        task: '',
+        material: '',
+        time: '',
+        sendTo: '',
+        coStatus: 'needs_sending',
+        coStatusDate: '',
+        needsHardDate: false, needsByStart: '', needsByEnd: '',
+        createdBy: creator?.name || '',
+        createdAt: new Date().toLocaleDateString('en-US'),
+        fromJobNotes: newBacklinks,
+      };
+      nextCOs = [ ...(job.changeOrders || []), newCO ];
+      targetId = newCO.id;
+      targetLabel = `CO · ${(job.changeOrders||[]).length + 1}`;
+    } else {
+      const target = openCOs.find(co => co.id === targetCOId);
+      if (!target) return;
+      // Append bullets to the desc field. If desc already has a <ul>, inject
+      // before the closing tag so existing bullets stay on top; else wrap.
+      const desc = target.desc || '';
+      let nextDesc;
+      if (/<\/ul>\s*$/i.test(desc)) {
+        nextDesc = desc.replace(/<\/ul>\s*$/i, bullets + '</ul>');
+      } else if (desc.trim()) {
+        nextDesc = desc + `<ul>${bullets}</ul>`;
+      } else {
+        nextDesc = `<ul>${bullets}</ul>`;
+      }
+      nextCOs = (job.changeOrders || []).map(co => co.id === target.id
+        ? {
+            ...co,
+            desc: nextDesc,
+            fromJobNotes: [ ...(Array.isArray(co.fromJobNotes) ? co.fromJobNotes : []), ...newBacklinks ],
+          }
+        : co);
+      targetId = target.id;
+      const idx = (job.changeOrders || []).findIndex(c => c.id === target.id);
+      targetLabel = `CO · ${idx >= 0 ? idx + 1 : ''}`;
+    }
+
+    const nextJobNotes = markPromotedInNote({ type: 'co', targetId, targetLabel });
+    onPatch && onPatch({ changeOrders: nextCOs, jobNotes: nextJobNotes });
+    onDone && onDone();
+  };
+
+  const pillStyle = (active, color='#f59e0b') => ({
+    fontSize:11, fontWeight:700,
+    background: active ? color : 'transparent',
+    color: active ? '#fff' : color,
+    border:`1px solid ${color}`, borderRadius:99,
+    padding:'3px 12px', cursor:'pointer', fontFamily:'inherit',
+  });
+
+  return (
+    <div>
+      <div style={{ display:'flex', gap:6, marginBottom:12 }}>
+        <button onClick={()=>setMode('new')}      style={pillStyle(mode==='new')}>New CO</button>
+        <button onClick={()=>setMode('existing')} style={pillStyle(mode==='existing')}>Add to existing</button>
+      </div>
+
+      {mode === 'new' && (
+        <div style={{ fontSize:12, color: C.dim, marginBottom:12, padding:'8px 10px', background: C.surface, border:`1px solid ${C.border}`, borderRadius:7 }}>
+          Creates a new Change Order with these lines as bullets in the description. You can edit status, pricing, and send-to from the Change Orders tab.
+        </div>
+      )}
+
+      {mode === 'existing' && (
+        <div style={{
+          maxHeight:230, overflowY:'auto',
+          border:`1px solid ${C.border}`, borderRadius:8, background: C.surface,
+          marginBottom:12,
+        }}>
+          {openCOs.length === 0 && (
+            <div style={{ fontSize:12, color: C.dim, padding:'14px 12px', textAlign:'center', fontStyle:'italic' }}>
+              No open change orders on this job yet — switch to "New" above.
+            </div>
+          )}
+          {openCOs.map((co, i) => {
+            const idx = (job.changeOrders || []).findIndex(c => c.id === co.id);
+            const selected = targetCOId === co.id;
+            return (
+              <div key={co.id}
+                onClick={()=>setTargetCOId(co.id)}
+                style={{
+                  padding:'8px 12px', cursor:'pointer',
+                  borderBottom: i === openCOs.length-1 ? 'none' : `1px solid ${C.border}`,
+                  background: selected ? '#f1f5f9' : 'transparent',
+                  display:'flex', alignItems:'center', gap:8,
+                }}>
+                <input type="radio" readOnly checked={selected} style={{ flexShrink:0 }}/>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:12, fontWeight:700, color: C.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                    CO #{idx+1} — {jobNotePlain(co.desc).slice(0,60) || '(no description)'}
+                  </div>
+                  <div style={{ fontSize:10, color: C.dim, marginTop:1 }}>
+                    Status: {co.coStatus || 'pending'} · {co.date || co.createdAt || '—'}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <button onClick={promote} disabled={!canPromote}
+        style={{
+          width:'100%', background: canPromote ? '#f59e0b' : '#e5e7eb',
+          color: canPromote ? '#fff' : C.dim,
+          border:'none', borderRadius:8,
+          padding:'9px 0', fontSize:13, fontWeight:800,
+          cursor: canPromote ? 'pointer' : 'not-allowed',
+          fontFamily:'inherit',
+        }}>
+        {mode === 'new'
+          ? `Create CO with ${selectedLineIds.length} line${selectedLineIds.length!==1?'s':''}`
+          : `Add ${selectedLineIds.length} line${selectedLineIds.length!==1?'s':''} to CO`}
+      </button>
+    </div>
+  );
+}
+
+// ── Destination branch: Call ──────────────────────────────────
+// No "existing" concept — calls are always new manualTasks. One doc per
+// line. Atomic-ish: we fire all onSaveManualTask calls + a single onPatch
+// for the note update (which is the auditing ground truth). If the
+// manualTasks writes partially fail, the note still records them via
+// `promoted`, so the user can see the intent and re-try via the Open Items
+// tab if a row is missing.
+function JobNoteDestinationCall({ note, selectedLines, selectedLineIds, job, onPatch, markPromotedInNote, manualTasks, onSaveManualTask, onDone }) {
+  const [foreman, setForeman] = useState(job?.foreman || 'Koy');
+  const [dueDate, setDueDate] = useState('');
+
+  const promote = () => {
+    const creator = (getIdentity && getIdentity()) || null;
+    const color = (typeof ITEM_TYPE_COLORS !== 'undefined' && ITEM_TYPE_COLORS?.Call) || '#2563eb';
+    const tasks = selectedLines.map(l => ({
+      id: uid(),
+      title: jobNotePlain(l.text).slice(0, 200) || 'Call',
+      foreman,
+      notes: '',
+      dueDate: dueDate || '',
+      type: 'manual', category: 'manual',
+      color,
+      cleared: false,
+      createdAt: new Date().toISOString(),
+      jobId: job.id,
+      itemType: 'Call',
+      requestedBy: creator?.name || '',
+      status: 'open',
+      fromJobNote: { jobNoteId: note.id, lineId: l.id, noteTitle: note.title || '' },
+    }));
+    // Fire one write per task. onSaveManualTask in App wires both a Firestore
+    // write AND the local state update, so each call is self-contained.
+    tasks.forEach(t => onSaveManualTask && onSaveManualTask(t));
+
+    // Mark source lines promoted — one call each so every line has its own
+    // targetId (pointing at its manualTask doc).
+    const now = new Date().toISOString();
+    const creatorName = creator?.name || '';
+    const nextLines = (note.lines || []).map(l => {
+      const idx = selectedLines.findIndex(s => s.id === l.id);
+      if (idx < 0) return l;
+      const t = tasks[idx];
+      return { ...l, promoted: {
+        type: 'call', targetId: t.id, targetLabel: `Call · ${t.title.slice(0,40)}`,
+        promotedAt: now, promotedBy: creatorName,
+      }};
+    });
+    const nextNote = { ...note, lines: nextLines, updatedAt: now };
+    const nextJobNotes = (job.jobNotes || []).map(n => n.id === note.id ? nextNote : n);
+    onPatch && onPatch({ jobNotes: nextJobNotes });
+    onDone && onDone();
+  };
+
+  return (
+    <div>
+      <div style={{ fontSize:12, color: C.dim, marginBottom:10, padding:'8px 10px', background: C.surface, border:`1px solid ${C.border}`, borderRadius:7 }}>
+        Creates one Call task per line in Open Items. Assign a foreman so it shows up on their list.
+      </div>
+      <div style={{ display:'grid', gap:8, marginBottom:12, gridTemplateColumns:'1fr 1fr' }}>
+        <div>
+          <div style={{ fontSize:10, color: C.dim, fontWeight:700, letterSpacing:'0.06em', marginBottom:5 }}>ASSIGN TO</div>
+          <input value={foreman} onChange={e=>setForeman(e.target.value)}
+            placeholder="Foreman / person"
+            style={{ width:'100%', boxSizing:'border-box', background: C.surface, border:`1px solid ${C.border}`, borderRadius:7, padding:'6px 9px', fontSize:12, color: C.text, fontFamily:'inherit', outline:'none' }}/>
+        </div>
+        <div>
+          <div style={{ fontSize:10, color: C.dim, fontWeight:700, letterSpacing:'0.06em', marginBottom:5 }}>DUE (optional)</div>
+          <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)}
+            style={{ width:'100%', boxSizing:'border-box', background: C.surface, border:`1px solid ${C.border}`, borderRadius:7, padding:'6px 9px', fontSize:12, color: C.text, fontFamily:'inherit', outline:'none' }}/>
+        </div>
+      </div>
+      <button onClick={promote}
+        style={{
+          width:'100%', background: '#2563eb', color:'#fff',
+          border:'none', borderRadius:8,
+          padding:'9px 0', fontSize:13, fontWeight:800,
+          cursor:'pointer', fontFamily:'inherit',
+        }}>
+        Create {selectedLineIds.length} Call{selectedLineIds.length!==1?'s':''}
+      </button>
+    </div>
+  );
+}
+
+// A single Job Note — card wrapper with header, lines, and footer actions.
+// `onPatch(patch)` writes to the parent job doc atomically. `onChange(note)`
+// is a convenience that just updates this one note in place.
+function JobNoteCard({
+  note, onChange, onDelete, onArchive, phaseColor,
+  jobId, job, setTab, onPatch,
+  manualTasks = [], onSaveManualTask,
+  onViewPhoto,
+}) {
+  const [editing, setEditing] = useState(() => !(note?.title) && (note?.lines||[]).every(l=>!l.text));
+  const [triage, setTriage] = useState(false);
+  const [selected, setSelected] = useState(() => new Set());
+  const [notePhotoUploading, setNotePhotoUploading] = useState(false);
+  // J4 — active destination type when the picker is open ('punch'|'rt'|'co'|'call').
+  // J5 & J6 actually render the picker body; J4 wires the UI state only.
+  const [pickerType, setPickerType] = useState(null);
+
+  // J4/J5/J6 (triage picker) still to be wired — placeholder state for J3.
+  const lines = Array.isArray(note?.lines) ? note.lines : [];
+  const migrated = !!(note?.migratedFrom);
+
+  const setLines = (nextLines, extra = {}) => {
+    onChange({ ...note, lines: nextLines, updatedAt: new Date().toISOString(), ...extra });
+  };
+
+  const updateLine = (lineId, nextLine, opts = {}) => {
+    const idx = lines.findIndex(l => l.id === lineId);
+    if (idx < 0) return;
+    const nextLines = [...lines];
+    nextLines[idx] = nextLine;
+    // Split-after: caller pressed Enter; drop a fresh empty line underneath.
+    if (opts.splitAfter) {
+      nextLines.splice(idx + 1, 0, {
+        id: uid(), text: '', createdAt: new Date().toISOString(), photos: [], promoted: null,
+      });
+    }
+    setLines(nextLines);
+  };
+
+  const removeLine = (lineId) => {
+    const idx = lines.findIndex(l => l.id === lineId);
+    if (idx < 0) return;
+    // Do NOT allow removing a promoted line — the destination still points to it
+    // (V1 is one-way; V2 adds un-promote). Soft-clear is fine, but removal
+    // would orphan the destination's fromJobNote backlink.
+    if (lines[idx].promoted) {
+      toast.warn && toast.warn('This line was already promoted — un-promote is V2. Edit the destination directly.');
+      return;
+    }
+    setLines(lines.filter(l => l.id !== lineId));
+  };
+
+  const addLine = () => {
+    const newLine = { id: uid(), text: '', createdAt: new Date().toISOString(), photos: [], promoted: null };
+    setLines([...lines, newLine]);
+    setEditing(true);
+  };
+
+  const attachNotePhotos = async (files) => {
+    if (!files || files.length === 0) return;
+    setNotePhotoUploading(true);
+    const uploaded = await uploadJobNotePhotos(files, jobId, note.id, null);
+    setNotePhotoUploading(false);
+    if (uploaded.length === 0) return;
+    onChange({ ...note, photos: [ ...(note.photos||[]), ...uploaded ], updatedAt: new Date().toISOString() });
+  };
+
+  const removeNotePhoto = async (p) => {
+    if (p && p.storagePath) {
+      try { await deleteObject(ref(storage, p.storagePath)); } catch {}
+    }
+    onChange({ ...note, photos: (note.photos||[]).filter(x => x.id !== p.id), updatedAt: new Date().toISOString() });
+  };
+
+  const toggleSelect = (lineId) => {
+    setSelected(prev => {
+      const next = new Set(prev);
+      if (next.has(lineId)) next.delete(lineId); else next.add(lineId);
+      return next;
+    });
+  };
+
+  // Spec notes = reference material (e.g. device/plate colors, fixture specs).
+  // Not triageable — they're informational, not action items. Rendered with a
+  // distinct slate color so the eye immediately reads "this isn't work to do."
+  const isSpec = note.phase === 'spec';
+  const phaseLabel =
+    note.phase === 'rough'  ? 'Rough'   :
+    note.phase === 'finish' ? 'Finish'  :
+    note.phase === 'spec'   ? 'Spec'    : 'General';
+  const phaseDefs = {
+    rough:   C.rough,
+    finish:  C.finish,
+    general: C.blue || '#2563eb',
+    spec:    '#64748b', // slate — neutral, reference-feel
+  };
+  const thisPhaseColor = phaseDefs[note.phase] || phaseColor;
+
+  // J7 — Ghost chip jump: switch to destination tab, then scroll to anchor if it exists.
+  // The promoted.type drives which tab to open; the destination rendering (J7 badges)
+  // stamps a DOM id of `jn-dest-${targetId}` on its outer container.
+  const jumpToPromoted = (promoted) => {
+    if (!promoted || !setTab) return;
+    let destTab = null;
+    if (promoted.type === 'punch') {
+      destTab = promoted.targetPhase === 'finish' ? 'Finish' : 'Rough';
+    } else if (promoted.type === 'rt') {
+      destTab = 'Return Trips';
+    } else if (promoted.type === 'co') {
+      destTab = 'Change Orders';
+    } else if (promoted.type === 'call') {
+      destTab = 'Open Items';
+    }
+    if (!destTab) return;
+    setTab(destTab);
+    // Best-effort scroll + flash highlight after the destination tab mounts.
+    setTimeout(() => {
+      try {
+        const el = document.getElementById('jn-dest-' + promoted.targetId);
+        if (el && el.scrollIntoView) {
+          el.scrollIntoView({ behavior:'smooth', block:'center' });
+          const orig = el.style.boxShadow;
+          el.style.transition = 'box-shadow 300ms ease';
+          el.style.boxShadow = '0 0 0 3px ' + (thisPhaseColor + '88');
+          setTimeout(()=>{ try { el.style.boxShadow = orig || 'none'; } catch {} }, 1200);
+        }
+      } catch {}
+    }, 140);
+  };
+
+  return (
+    <div style={{
+      border: `1.5px solid ${thisPhaseColor}33`,
+      borderLeft: `3px solid ${thisPhaseColor}`,
+      borderRadius: 10, background: C.card,
+      marginBottom: 10, overflow:'hidden',
+    }}>
+      {/* Header */}
+      <div style={{
+        display:'flex', alignItems:'center', gap:8,
+        padding:'7px 10px', borderBottom: editing ? `1px solid ${C.border}` : 'none',
+      }}>
+        <span
+          title={isSpec ? 'Specification note — reference only (not triageable)' : undefined}
+          style={{
+            fontSize:9, fontWeight:800, color: thisPhaseColor, letterSpacing:'0.08em',
+            background: thisPhaseColor + '14', border:`1px solid ${thisPhaseColor}44`,
+            borderRadius:99, padding:'1px 7px', flexShrink:0, whiteSpace:'nowrap',
+            display:'inline-flex', alignItems:'center', gap:3,
+          }}>
+          {isSpec && <span style={{ fontSize:9, lineHeight:1 }}>ℹ</span>}
+          {phaseLabel.toUpperCase()}
+        </span>
+
+        {editing ? (
+          <input value={note.title || ''}
+            onChange={(e)=>onChange({ ...note, title: e.target.value, updatedAt: new Date().toISOString() })}
+            placeholder={`Note — ${jobNoteDateLabel()}`}
+            style={{
+              flex:1, background:'transparent', border:'none', outline:'none',
+              fontSize:13, fontWeight:700, color: C.text, fontFamily:'inherit',
+            }}/>
+        ) : (
+          <div style={{ flex:1, fontSize:13, fontWeight:700, color: C.text, minWidth:0, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+            {note.title || `Note — ${jobNoteDateLabel(new Date(note.createdAt||Date.now()))}`}
+          </div>
+        )}
+
+        {migrated && (
+          <span title="Migrated from legacy Instructions"
+            style={{
+              fontSize:9, fontWeight:700, color:'#6b7280',
+              background:'#f1f5f9', border:`1px solid ${C.border}`,
+              borderRadius:99, padding:'1px 6px', flexShrink:0, whiteSpace:'nowrap',
+            }}>↪ migrated</span>
+        )}
+
+        {/* Phase dropdown (edit mode) */}
+        {editing && (
+          <select value={note.phase || 'general'}
+            onChange={(e)=>onChange({ ...note, phase: e.target.value, updatedAt: new Date().toISOString() })}
+            style={{
+              fontSize:10, fontWeight:700, color: C.text,
+              background: C.surface, border:`1px solid ${C.border}`,
+              borderRadius:6, padding:'2px 6px', cursor:'pointer',
+              fontFamily:'inherit', flexShrink:0,
+            }}>
+            <option value="rough">Rough</option>
+            <option value="finish">Finish</option>
+            <option value="general">General</option>
+            <option value="spec">Spec (reference)</option>
+          </select>
+        )}
+
+        {/* Triage toggle — suppressed for Spec notes (reference, not actionable) */}
+        {!isSpec && !editing && lines.filter(l=>!l.promoted).length > 0 && (
+          <button onClick={()=>{ setTriage(t=>!t); setSelected(new Set()); }}
+            style={{
+              fontSize:10, fontWeight:700,
+              background: triage ? thisPhaseColor : 'transparent',
+              color: triage ? '#fff' : thisPhaseColor,
+              border: `1px solid ${thisPhaseColor}`,
+              borderRadius:99, padding:'2px 10px', cursor:'pointer',
+              fontFamily:'inherit', flexShrink:0,
+            }}>
+            {triage ? 'Done' : 'Triage'}
+          </button>
+        )}
+
+        <button onClick={()=>setEditing(e=>!e)}
+          style={{
+            fontSize:10, fontWeight:700, color: C.dim,
+            background:'transparent', border:`1px solid ${C.border}`,
+            borderRadius:99, padding:'2px 8px', cursor:'pointer', fontFamily:'inherit', flexShrink:0,
+          }}>
+          {editing ? 'Close' : 'Edit'}
+        </button>
+      </div>
+
+      {/* Body — lines */}
+      <div style={{ padding:'6px 8px 10px' }}>
+        {lines.length === 0 && !editing && (
+          <div style={{ padding:'4px 8px', fontSize:12, color: C.dim, fontStyle:'italic' }}>
+            (no lines yet)
+          </div>
+        )}
+        {lines.map(line => (
+          <JobNoteLine key={line.id}
+            line={line}
+            editing={editing}
+            phaseColor={thisPhaseColor}
+            jobId={jobId}
+            noteId={note.id}
+            triage={triage}
+            selected={selected.has(line.id)}
+            onToggleSelect={toggleSelect}
+            onChange={(nextLine, opts)=>updateLine(line.id, nextLine, opts)}
+            onRemove={removeLine}
+            onViewPhoto={onViewPhoto}
+            onJumpToPromoted={jumpToPromoted}
+          />
+        ))}
+
+        {editing && (
+          <button onClick={addLine}
+            style={{
+              width:'100%', background:'transparent',
+              border:`1px dashed ${thisPhaseColor}66`, borderRadius:6,
+              padding:'5px 0', fontSize:11, fontWeight:600, color: thisPhaseColor,
+              cursor:'pointer', fontFamily:'inherit', marginTop: lines.length>0 ? 4 : 0,
+            }}>
+            + Add line
+          </button>
+        )}
+
+        {/* Note-level photos */}
+        {((note.photos||[]).length > 0 || editing) && (
+          <div style={{ marginTop:8, display:'flex', flexWrap:'wrap', gap:6 }}>
+            {(note.photos||[]).map(p => (
+              <div key={p.id} style={{ position:'relative', width:56, height:56, borderRadius:6, overflow:'hidden', border:`1px solid ${C.border}` }}>
+                <img src={p.url} alt={p.name || 'photo'}
+                  onClick={()=>onViewPhoto && onViewPhoto(p.url)}
+                  style={{ width:'100%', height:'100%', objectFit:'cover', cursor:'pointer' }}/>
+                {editing && (
+                  <button onClick={()=>removeNotePhoto(p)}
+                    style={{
+                      position:'absolute', top:1, right:1,
+                      background:'rgba(0,0,0,0.6)', color:'#fff', border:'none',
+                      borderRadius:99, width:18, height:18, fontSize:10, lineHeight:1,
+                      cursor:'pointer', padding:0,
+                    }}>×</button>
+                )}
+              </div>
+            ))}
+            {editing && (
+              <label style={{
+                width:56, height:56, borderRadius:6, border:`1px dashed ${thisPhaseColor}66`,
+                display:'flex', alignItems:'center', justifyContent:'center',
+                cursor:'pointer', background: notePhotoUploading ? '#f3f4f6' : 'transparent',
+                fontSize:20, color: thisPhaseColor, fontWeight:300,
+              }}>
+                {notePhotoUploading ? '…' : '+'}
+                <input type="file" accept="image/*" multiple
+                  onChange={(e)=>{attachNotePhotos(e.target.files); e.target.value='';}}
+                  style={{display:'none'}}/>
+              </label>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Triage action bar — hidden for Spec notes (reference, not promotable) */}
+      {!isSpec && triage && selected.size > 0 && (
+        <div style={{
+          borderTop:`1px solid ${C.border}`, padding:'8px 10px',
+          background: '#f8fafc',
+          display:'flex', gap:6, alignItems:'center', flexWrap:'wrap',
+        }}>
+          <span style={{ fontSize:11, fontWeight:700, color: C.text, flexShrink:0 }}>
+            Promote {selected.size} to:
+          </span>
+          {['punch','rt','co','call'].map(t => {
+            const labels = { punch:'Punch', rt:'RT', co:'CO', call:'Call' };
+            const colors = { punch:'#7c3aed', rt:'#0d9488', co:'#f59e0b', call:'#2563eb' };
+            return (
+              <button key={t} onClick={()=>setPickerType(t)}
+                style={{
+                  fontSize:11, fontWeight:700, color: colors[t],
+                  background: colors[t] + '15',
+                  border:`1px solid ${colors[t]}55`, borderRadius:99,
+                  padding:'3px 11px', cursor:'pointer', fontFamily:'inherit',
+                }}>
+                {labels[t]}
+              </button>
+            );
+          })}
+          <button disabled
+            title="Purchase Order destination ships in V2"
+            style={{
+              fontSize:11, fontWeight:700, color: C.dim,
+              background:'transparent', border:`1px dashed ${C.border}`,
+              borderRadius:99, padding:'3px 11px', cursor:'not-allowed',
+              fontFamily:'inherit', opacity:0.6,
+            }}>
+            PO (V2)
+          </button>
+          <button onClick={()=>setSelected(new Set())}
+            style={{
+              marginLeft:'auto',
+              fontSize:10, color: C.dim, background:'none', border:'none',
+              cursor:'pointer', fontFamily:'inherit',
+            }}>
+            Clear
+          </button>
+        </div>
+      )}
+
+      {/* Destination picker — J5 (punch) + J6 (rt/co/call) fill the body */}
+      {pickerType && (
+        <JobNoteDestinationPicker
+          type={pickerType}
+          note={note}
+          selectedLineIds={Array.from(selected)}
+          job={job}
+          onPatch={onPatch}
+          manualTasks={manualTasks}
+          onSaveManualTask={onSaveManualTask}
+          onClose={()=>setPickerType(null)}
+          onDone={()=>{
+            // After a successful promote: clear selection, keep triage ON
+            // per spec (fast multi-batch sorting), close picker.
+            setSelected(new Set());
+            setPickerType(null);
+          }}
+        />
+      )}
+
+      {/* Footer — delete/archive (edit mode only) */}
+      {editing && (
+        <div style={{
+          borderTop:`1px solid ${C.border}`, padding:'5px 10px',
+          display:'flex', gap:8, alignItems:'center',
+        }}>
+          <span style={{ flex:1, fontSize:10, color: C.dim }}>
+            {lines.length} line{lines.length!==1?'s':''}{(note.photos||[]).length ? ` · ${(note.photos||[]).length} photo${(note.photos||[]).length!==1?'s':''}` : ''}
+          </span>
+          <button onClick={()=>onArchive && onArchive()}
+            style={{
+              fontSize:10, fontWeight:700, color: C.dim,
+              background:'transparent', border:`1px solid ${C.border}`,
+              borderRadius:99, padding:'2px 10px', cursor:'pointer', fontFamily:'inherit',
+            }}>Archive</button>
+          <button onClick={()=>onDelete && onDelete()}
+            style={{
+              fontSize:10, fontWeight:700, color: '#dc2626',
+              background:'transparent', border:`1px solid #dc262655`,
+              borderRadius:99, padding:'2px 10px', cursor:'pointer', fontFamily:'inherit',
+            }}>Delete</button>
+        </div>
+      )}
+    </div>
+  );
+}
+
+// Top-level section that renders the list of notes for a given phase scope.
+// `scope`: 'rough' | 'finish' | 'general' | 'all' (Open Items tab = 'all').
+function JobNotesSection({
+  job, scope = 'all', onPatch, phaseColor,
+  manualTasks = [], onSaveManualTask,
+  setTab,
+  onViewPhoto,
+}) {
+  const notes = Array.isArray(job?.jobNotes) ? job.jobNotes : [];
+  const filtered = scope === 'all'
+    ? getAllActiveNotes(notes)
+    : getNotesForPhase(notes, scope);
+
+  const defaultPhase = scope === 'all' ? 'general' : scope;
+
+  const writeNotes = (next) => onPatch && onPatch({ jobNotes: next });
+
+  const upsertNote = (note) => {
+    const idx = notes.findIndex(n => n && n.id === note.id);
+    const next = idx >= 0
+      ? notes.map(n => n.id === note.id ? note : n)
+      : [...notes, note];
+    writeNotes(next);
+  };
+
+  const softDeleteNote = async (noteId) => {
+    const target = notes.find(n => n.id === noteId);
+    if (!target) return;
+    const hasPromoted = (target.lines||[]).some(l => l.promoted);
+    const label = target.title || `Note`;
+    const warn = hasPromoted
+      ? `Delete "${label}"?\n\nThis note has lines that were promoted to other places (RT/Punch/CO/Call). Those destinations WILL stay — only the note is removed.\n\n(Soft delete — data retained for audit.)`
+      : `Delete "${label}"?\n\n(Soft delete — data retained for audit.)`;
+    const ok = await showConfirm(warn);
+    if (!ok) return;
+    writeNotes(notes.map(n => n.id === noteId ? { ...n, deleted: true, updatedAt: new Date().toISOString() } : n));
+  };
+
+  const archiveNote = (noteId) => {
+    writeNotes(notes.map(n => n.id === noteId ? { ...n, archived: true, updatedAt: new Date().toISOString() } : n));
+  };
+
+  const addNote = (overrides = {}) => {
+    const creator = (getIdentity && getIdentity()) || null;
+    const now = new Date().toISOString();
+    const newNote = {
+      id: uid(),
+      title: '',
+      phase: defaultPhase,
+      createdAt: now,
+      createdBy: creator?.name || '',
+      updatedAt: now,
+      lines: [{ id: uid(), text: '', createdAt: now, photos: [], promoted: null }],
+      photos: [],
+      archived: false,
+      deleted: false,
+      migratedFrom: null,
+      ...overrides, // lets callers pre-set phase (e.g. 'spec') without re-entering edit mode
+    };
+    writeNotes([ ...notes, newNote ]);
+  };
+
+  return (
+    <div>
+      {filtered.map(note => (
+        <JobNoteCard key={note.id}
+          note={note}
+          phaseColor={phaseColor}
+          jobId={job.id}
+          job={job}
+          setTab={setTab}
+          onPatch={onPatch}
+          manualTasks={manualTasks}
+          onSaveManualTask={onSaveManualTask}
+          onChange={(next)=>upsertNote(next)}
+          onDelete={()=>softDeleteNote(note.id)}
+          onArchive={()=>archiveNote(note.id)}
+          onViewPhoto={onViewPhoto}
+        />
+      ))}
+      <div style={{
+        display:'flex', gap:6, marginTop: filtered.length > 0 ? 6 : 0,
+      }}>
+        <button onClick={()=>addNote()}
+          style={{
+            flex:2, background:'transparent',
+            border:`1px dashed ${phaseColor || C.border}`, borderRadius:8,
+            padding:'8px 0', fontSize:12, fontWeight:700,
+            color: phaseColor || C.dim, cursor:'pointer', fontFamily:'inherit',
+          }}>
+          + New Job Note
+        </button>
+        <button
+          onClick={()=>addNote({ phase:'spec' })}
+          title="Specification note — reference info like device colors, plate colors, fixtures. Not triageable."
+          style={{
+            flex:1, background:'transparent',
+            border:`1px dashed #64748b`, borderRadius:8,
+            padding:'8px 0', fontSize:12, fontWeight:700,
+            color:'#64748b', cursor:'pointer', fontFamily:'inherit',
+            display:'flex', alignItems:'center', justifyContent:'center', gap:4,
+          }}>
+          <span style={{ fontSize:11 }}>ℹ</span> + Spec Note
+        </button>
+      </div>
+      {filtered.length === 0 && (
+        <div style={{ marginTop:8, fontSize:11, color: C.dim, fontStyle:'italic', textAlign:'center' }}>
+          {scope === 'all'
+            ? 'No notes yet. Capture work in Job Notes (triage into RT / Punch / CO / Call), or use Spec Notes for reference info like device/plate colors.'
+            : `No ${scope} notes yet. Use "+ Spec Note" for reference info (device colors, fixtures, etc.).`}
+        </div>
+      )}
+    </div>
+  );
+}
+
 const StageBar = ({stages,current,color}) => {
 
   const isScheduled = current === "Scheduled";
@@ -2498,6 +4035,62 @@ function normFloor(v) {
 
   return { general: Array.isArray(v) ? v : [], rooms: [], hotcheck: [] };
 
+}
+
+// J7 — Small pill shown on destination records (Punch item, RT, CO line, manualTask)
+// indicating they were created via a Job Note promote. Looks up the source note
+// by id from `job.jobNotes[]` so the title stays fresh if the user renames the note.
+// Accepts either:
+//   - singular: {jobNoteId, lineId, noteTitle?} (Punch / manualTask / RT-appended-entry)
+//   - array:    [{jobNoteId, lineId, lineText?}, ...] (CO — one CO may aggregate many)
+//   - plain id string: a createdFromJobNoteId (new RT)
+// Renders nothing when `job` is missing or no source note can be resolved —
+// i.e. it's safe to sprinkle in without breaking anything for non-promoted records.
+function FromJobNoteBadge({ ref, job = null, jobNotes = null, size = 'sm', onClick = null }) {
+  if (!ref) return null;
+  const notes = Array.isArray(jobNotes)
+    ? jobNotes
+    : (job && Array.isArray(job.jobNotes) ? job.jobNotes : []);
+  let title = '';
+  let count = 0;
+  if (typeof ref === 'string') {
+    const n = notes.find(x => x && x.id === ref);
+    if (!n) return null;
+    title = n.title || '(untitled note)';
+    count = 1;
+  } else if (Array.isArray(ref)) {
+    const ids = [...new Set(ref.map(r => r && r.jobNoteId).filter(Boolean))];
+    if (ids.length === 0) return null;
+    count = ids.length;
+    const firstNote = notes.find(x => x && x.id === ids[0]);
+    title = firstNote ? (firstNote.title || '(untitled note)') : (ref[0]?.noteTitle || '');
+  } else if (typeof ref === 'object' && ref.jobNoteId) {
+    const n = notes.find(x => x && x.id === ref.jobNoteId);
+    title = (n ? (n.title || '(untitled note)') : (ref.noteTitle || ''));
+    if (!title) return null;
+    count = 1;
+  } else {
+    return null;
+  }
+  const fs = size === 'xs' ? 9 : 10;
+  const pad = size === 'xs' ? '1px 5px' : '2px 6px';
+  const label = count > 1 ? `📝 from ${count} notes` : `📝 from note · ${title}`;
+  return (
+    <span
+      title={label}
+      onClick={onClick ? (e)=>{ e.stopPropagation(); onClick(); } : undefined}
+      style={{
+        display:'inline-flex', alignItems:'center', gap:3,
+        fontSize:fs, fontWeight:600,
+        color:'#6b7280', background:'#f3f4f6', border:'1px solid #e5e7eb',
+        borderRadius:99, padding:pad, lineHeight:1.3,
+        cursor: onClick ? 'pointer' : 'default',
+        maxWidth:180, overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap',
+        flexShrink:0,
+      }}>
+      {label}
+    </span>
+  );
 }
 
 
@@ -4470,7 +6063,7 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
 
 // ── Change Orders ─────────────────────────────────────────────
 
-function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughStatus, finishStatus}) {
+function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughStatus, finishStatus, jobNotes = []}) {
 
   const [expandedCOs, setExpandedCOs] = useState({});
   const toggleCO = (id) => setExpandedCOs(v=>({...v,[id]:!v[id]}));
@@ -4551,7 +6144,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
         const isCollapsed  = isCompleted && !expandedCOs[o.id];
 
         return (
-          <div key={o.id} style={{
+          <div key={o.id} id={"jn-dest-" + o.id} style={{
             background: isCompleted ? "#16a34a0a" : isConverted ? "var(--surface)" : "var(--card)",
             border:`1px solid ${isCompleted?"#16a34a44":isConverted?"var(--border)":coDef.color?coDef.color+"33":"var(--border)"}`,
             borderLeft:`3px solid ${isCompleted?"#16a34a":isConverted?"#6b7280":coDef.color||"var(--border)"}`,
@@ -4569,6 +6162,9 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
                 {isConverted&&<span style={{fontSize:10,fontWeight:700,color:"#6b7280",background:"#6b728018",borderRadius:99,padding:"2px 8px",border:"1px solid #6b728033"}}>CONVERTED TO RT</span>}
                 {o.desc&&isCollapsed&&<span style={{fontSize:11,color:"var(--dim)",fontStyle:"italic"}}>{o.desc}</span>}
                 {!isCollapsed&&o.createdBy&&<span style={{fontSize:10,color:"var(--dim)"}}>created by <b>{o.createdBy}</b>{o.createdAt?" · "+o.createdAt:""}</span>}
+                {Array.isArray(o.fromJobNotes) && o.fromJobNotes.length > 0 && (
+                  <FromJobNoteBadge ref={o.fromJobNotes} jobNotes={jobNotes} size="xs"/>
+                )}
               </div>
               <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
                 {isCompleted&&<span style={{fontSize:11,color:"#16a34a88"}}>{isCollapsed?"▸":"▾"}</span>}
@@ -4907,7 +6503,7 @@ function PunchLinker({ roughPunch, finishPunch, rt, onSave, onClose }) {
 
 // ── Return Trips ──────────────────────────────────────────────
 
-function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],roughPunch={},finishPunch={},onAttachPhotoToPunch}) {
+function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],roughPunch={},finishPunch={},onAttachPhotoToPunch,jobNotes=[]}) {
 
   const [viewPhoto, setViewPhoto] = useState(null);
   const [expandedRTs, setExpandedRTs] = useState({}); // trip IDs manually expanded when signed off
@@ -5071,7 +6667,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
 
         return (
 
-        <div key={t.id} style={{background:t.needsSchedule?"rgba(220,38,38,0.06)":t.rtScheduled?"rgba(139,92,246,0.06)":t.signedOff?`${C.green}0a`:C.surface,
+        <div key={t.id} id={"jn-dest-" + t.id} style={{background:t.needsSchedule?"rgba(220,38,38,0.06)":t.rtScheduled?"rgba(139,92,246,0.06)":t.signedOff?`${C.green}0a`:C.surface,
 
           border:t.needsSchedule?"1px solid #dc262655":t.rtScheduled?"1px solid #8b5cf655":t.signedOff?`1px solid ${C.green}33`:`1px solid ${C.border}`,
 
@@ -5081,6 +6677,9 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
 
             <div style={{display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
               <span style={{fontSize:12,color:C.purple,fontWeight:700}}>Return Trip</span>
+              {t.createdFromJobNoteId && (
+                <FromJobNoteBadge ref={t.createdFromJobNoteId} jobNotes={jobNotes} size="xs"/>
+              )}
               {!t.signedOff&&(
                 <>
                   {(()=>{
@@ -8199,6 +9798,81 @@ const sanitize = (obj) => {
   return obj;
 };
 
+// ── Job Notes — lazy idempotent migration ──────────────────────
+// Data safety (spec §"Replacement of PhaseInstructions"):
+//   1. `job.roughInstructions` / `job.finishInstructions` are NEVER mutated
+//      here — migration copies OUT only.
+//   2. Each migrated note carries `migratedFrom: { phase, originalId }` so
+//      spot-checks post-launch can confirm data round-trips.
+//   3. On first write of `jobNotes`, the `u()` helper in JobDetail stamps
+//      `jobNotesMigratedAt`. After that timestamp exists, we do NOT
+//      re-materialize migrated notes even if the user empties the list —
+//      that's an intentional clear, not a virgin state.
+//   4. Raw HTML preserved verbatim in `lines[0].text` — no parsing. A
+//      later "Split on bullets" action (V2) can opt-in to splitting.
+function buildMigratedJobNotes(raw) {
+  const out = [];
+  const now = new Date().toISOString();
+  const pushFromInstructions = (arr, phase) => {
+    (Array.isArray(arr) ? arr : []).forEach((entry) => {
+      if (!entry) return;
+      const label = (entry.label || '').trim();
+      const txt   = entry.text || '';
+      // Skip truly empty scratch rows so we don't migrate placeholders.
+      const hasContent = label.length > 0 || txt.replace(/<[^>]+>/g,' ').trim().length > 0;
+      if (!hasContent) return;
+      out.push({
+        id: uid(),
+        title: label || 'Migrated note',
+        phase,
+        createdAt: now,
+        createdBy: '',
+        updatedAt: now,
+        lines: [{
+          id: uid(),
+          text: txt,
+          createdAt: now,
+          photos: [],
+          promoted: null,
+        }],
+        photos: [],
+        archived: false,
+        deleted: false,
+        migratedFrom: { phase, originalId: entry.id || null },
+      });
+    });
+  };
+  pushFromInstructions(raw?.roughInstructions,  'rough');
+  pushFromInstructions(raw?.finishInstructions, 'finish');
+  return out;
+}
+
+function normalizeJobNotes(raw) {
+  // Explicit saved list — trust it, leave the user's edits alone.
+  if (Array.isArray(raw?.jobNotes) && raw.jobNotes.length > 0) return raw.jobNotes;
+  // Migration already ran and was persisted — respect empty state.
+  if (raw?.jobNotesMigratedAt) return Array.isArray(raw?.jobNotes) ? raw.jobNotes : [];
+  // Virgin — materialize from legacy PhaseInstructions (in-memory only
+  // until the first u({jobNotes:...}) write stamps jobNotesMigratedAt).
+  return buildMigratedJobNotes(raw);
+}
+
+function getNotesForPhase(notes, phase) {
+  const list = Array.isArray(notes) ? notes : [];
+  // Spec notes are reference material (device/plate colors, fixtures, etc.)
+  // — they show up on ANY phase tab since that info is relevant everywhere.
+  // Same for 'general' notes. Only phase-tagged capture notes are filtered.
+  return list.filter(n =>
+    n && !n.deleted && !n.archived &&
+    (n.phase === phase || n.phase === 'general' || n.phase === 'spec')
+  );
+}
+
+function getAllActiveNotes(notes) {
+  const list = Array.isArray(notes) ? notes : [];
+  return list.filter(n => n && !n.deleted && !n.archived);
+}
+
 const normalizeJob = (raw) => ({
   changeOrders:[], returnTrips:[], uploadedFiles:[], customLinks:[],
   roughMaterials:[], roughUpdates:[], finishMaterials:[], finishUpdates:[],
@@ -8246,6 +9920,10 @@ const normalizeJob = (raw) => ({
   finishStatusDate:     raw?.finishStatusDate     || "",
   finishProjectedStart: raw?.finishProjectedStart || "",
   qcStatusDate:         raw?.qcStatusDate         || "",
+  // Job Notes (new capture/triage surface — see buildMigratedJobNotes above).
+  // Additive: legacy roughInstructions/finishInstructions stay on raw as-is.
+  jobNotes:             normalizeJobNotes(raw),
+  jobNotesMigratedAt:   raw?.jobNotesMigratedAt || null,
 });
 
 
@@ -8912,10 +10590,23 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   useEffect(()=>{ jobRef.current = job; }, [job]);
 
   const u = patch => {
-    const updated = {...jobRef.current, ...patch};
+    // Data-safety stamp (Job Notes, spec §"Replacement of PhaseInstructions"):
+    // the FIRST time a job's jobNotes are written we lock in
+    // jobNotesMigratedAt so later loads don't re-materialize legacy
+    // PhaseInstructions data on top of the user's edits.
+    let finalPatch = patch;
+    if (
+      patch &&
+      Object.prototype.hasOwnProperty.call(patch, 'jobNotes') &&
+      !jobRef.current.jobNotesMigratedAt &&
+      !patch.jobNotesMigratedAt
+    ) {
+      finalPatch = { ...patch, jobNotesMigratedAt: new Date().toISOString() };
+    }
+    const updated = {...jobRef.current, ...finalPatch};
     jobRef.current = updated;
     setJob(updated);
-    onUpdate(updated, patch);
+    onUpdate(updated, finalPatch);
   };
 
   // ── QC Fail ↔ Return Trip check-off sync ────────────────────────────
@@ -9768,13 +11459,31 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <div style={{marginTop:8,marginBottom:12}}>
                   <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough}/>
                 </div>
-                <PhaseInstructions items={job.roughInstructions} onChange={v=>u({roughInstructions:v})} color={C.rough}
+                {/* J8 — Job Notes (primary capture surface). Replaces the
+                    PhaseInstructions slot. Legacy instructions are still
+                    readable via the collapsible below — data retained
+                    forever (nothing purged during migration). */}
+                <JobNotesSection
+                  job={job}
+                  scope="rough"
+                  phaseColor={C.rough}
+                  onPatch={(patch)=>u(patch)}
+                  manualTasks={manualTasks}
+                  onSaveManualTask={onSaveManualTask}
+                  setTab={setTab}
+                  onViewPhoto={(url)=>window.open(url,'_blank')}
+                />
+                <LegacyInstructionsToggle
+                  items={job.roughInstructions}
+                  onChange={v=>u({roughInstructions:v})}
+                  color={C.rough}
                   onAddMaterial={(text,source)=>{
                     const orders = job.roughMaterials||[];
                     const openEntry = [...orders].reverse().find(o=>o.needsOrder&&!o.ordered&&!o.pickedUp&&(source?(o.source||"")===(source||""):true));
                     if(openEntry){ u({roughMaterials:orders.map(o=>o.id===openEntry.id?{...o,items:o.items?o.items.replace(/(<br\s*\/?>)+$/i,'')+'<br>'+text:text}:o)}); }
                     else { u({roughMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",source:source||"",items:text,pickedUp:false,needsOrder:true}]}); }
-                  }}/>
+                  }}
+                />
 
               </Section>
 
@@ -10009,13 +11718,28 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 })()}
                 <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const finishOpen=punchOpen(job.finishPunch);const qcOpen=punchOpen(job.qcPunch);const total=finishOpen+qcOpen;if(total>0){const parts=[];if(finishOpen>0)parts.push(`${finishOpen} finish punch item${finishOpen!==1?"s":""}`);if(qcOpen>0)parts.push(`${qcOpen} QC item${qcOpen!==1?"s":""}`);toast.warn(`Cannot set Finish to 100% — ${parts.join(" and ")} still open. Clear them first.`);return;}}const invoiceFire=pct>=85&&!job.finishInvoiceFired?{finishInvoiceFired:true,finishInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{finishInvoiceFired:false,finishInvoiceDismissed:false}:{};u({finishStage:v,...invoiceFire,...invoiceReset,...(v==="100%"?{finishStatus:"complete"}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
                 <div style={{marginTop:8,marginBottom:12}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
-                <PhaseInstructions items={job.finishInstructions} onChange={v=>u({finishInstructions:v})} color={C.finish}
+                {/* J8 — Job Notes (primary capture surface for Finish phase). */}
+                <JobNotesSection
+                  job={job}
+                  scope="finish"
+                  phaseColor={C.finish}
+                  onPatch={(patch)=>u(patch)}
+                  manualTasks={manualTasks}
+                  onSaveManualTask={onSaveManualTask}
+                  setTab={setTab}
+                  onViewPhoto={(url)=>window.open(url,'_blank')}
+                />
+                <LegacyInstructionsToggle
+                  items={job.finishInstructions}
+                  onChange={v=>u({finishInstructions:v})}
+                  color={C.finish}
                   onAddMaterial={(text,source)=>{
                     const orders = job.finishMaterials||[];
                     const openEntry = [...orders].reverse().find(o=>o.needsOrder&&!o.ordered&&!o.pickedUp&&(source?(o.source||"")===(source||""):true));
                     if(openEntry){ u({finishMaterials:orders.map(o=>o.id===openEntry.id?{...o,items:o.items?o.items.replace(/(<br\s*\/?>)+$/i,'')+'<br>'+text:text}:o)}); }
                     else { u({finishMaterials:[...orders,{id:uid(),date:"",po:"",pickupDate:"",source:source||"",items:text,pickedUp:false,needsOrder:true}]}); }
-                  }}/>
+                  }}
+                />
               </Section>
 
               <Section label="Punch List" color={C.finish} action={
@@ -10548,6 +12272,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   onEmail={setEmailData}
                   roughStatus={job.roughStatus||""}
                   finishStatus={job.finishStatus||""}
+                  jobNotes={job.jobNotes||[]}
                 />
               </Section>
 
@@ -10561,7 +12286,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             <div>
 
               <Section label="Return Trips" color={C.purple} defaultOpen={true}>
-                <ReturnTrips trips={job.returnTrips} onChange={handleReturnTripsChange} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData} jobId={job.id} users={users} roughPunch={job.roughPunch||{}} finishPunch={job.finishPunch||{}} onAttachPhotoToPunch={handleAttachPhotoToPunch}/>
+                <ReturnTrips trips={job.returnTrips} onChange={handleReturnTripsChange} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData} jobId={job.id} users={users} roughPunch={job.roughPunch||{}} finishPunch={job.finishPunch||{}} onAttachPhotoToPunch={handleAttachPhotoToPunch} jobNotes={job.jobNotes||[]}/>
               </Section>
 
             </div>
@@ -10583,6 +12308,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   jobs={jobs}
                   onUpdateJob={u}
                   onGoToReturnTrips={()=>setTab("Return Trips")}
+                  setTab={setTab}
                 />
               </Section>
 
@@ -13083,7 +14809,7 @@ function AddTaskForm({ defaultForeman, onAdd, onCancel, foremenList, jobs, defau
 // Why reference, don't copy: a Visit/Return Trip stays in ONE place
 // (job.returnTrips). This tab just *views* them alongside manualTasks.
 // No sync loop, no ghost writes. Creating a Visit here writes a new RT.
-function JobOpenItems({ job, manualTasks, onSaveManualTask, onDeleteManualTask, foremenList, jobs, onUpdateJob, onGoToReturnTrips }) {
+function JobOpenItems({ job, manualTasks, onSaveManualTask, onDeleteManualTask, foremenList, jobs, onUpdateJob, onGoToReturnTrips, setTab }) {
   const [showAdd, setShowAdd] = useState(false);
 
   // manualTasks filtered to this job (Purchase/Call/Other + legacy Visits
@@ -13211,6 +14937,24 @@ function JobOpenItems({ job, manualTasks, onSaveManualTask, onDeleteManualTask, 
 
   return (
     <div>
+      {/* J9 — Job Notes sit ON TOP of Open Items. This is the capture front door:
+          free-form scratch lines here, then Triage to promote to RT/CO/Punch/Call.
+          The existing Open Items list below still shows ALL manualTasks + RTs
+          for this job (including ones spawned from notes). */}
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:10,fontWeight:700,color:"var(--dim)",
+          letterSpacing:"0.08em",marginBottom:6}}>JOB NOTES</div>
+        <JobNotesSection
+          job={job}
+          scope="all"
+          phaseColor={C.blue || '#2563eb'}
+          onPatch={(patch)=>onUpdateJob && onUpdateJob(patch)}
+          manualTasks={manualTasks}
+          onSaveManualTask={onSaveManualTask}
+          setTab={setTab}
+          onViewPhoto={(url)=>window.open(url,'_blank')}
+        />
+      </div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
         <div style={{fontSize:11,fontWeight:700,color:"var(--dim)",letterSpacing:"0.06em"}}>
           {openCount} OPEN · {items.length} TOTAL
