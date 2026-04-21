@@ -2501,7 +2501,7 @@ function normFloor(v) {
 }
 
 
-function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId }) {
+function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, scheduledRTMap=null, onJumpToRT=null }) {
 
   const safeItems = Array.isArray(items) ? items : [];
 
@@ -2660,11 +2660,20 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId }) {
                   onMouseLeave={e=>e.target.style.background='transparent'}>
                   <RichText html={item.text}/>
                 </span>
-                {(item.addedBy||item.checkedBy||(filterIds!=null))&&(
+                {(item.addedBy||item.checkedBy||(filterIds!=null)||(scheduledRTMap&&scheduledRTMap[item.id]&&!item.done))&&(
                   <span style={{fontSize:9,color:C.dim,paddingLeft:4,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
                     {item.addedBy&&!item.done&&<span>added by {item.addedBy}</span>}
                     {item.checkedBy&&item.done&&<span style={{color:C.green}}>✓ checked by {item.checkedBy}{item.checkedAt?" · "+item.checkedAt:""}</span>}
                     {item.fromQC&&<span style={{fontSize:9,fontWeight:700,background:'#fff7ed',color:'#c2410c',borderRadius:99,padding:'1px 6px',border:'1px solid #fed7aa',lineHeight:1.6}}>QC</span>}
+                    {scheduledRTMap&&scheduledRTMap[item.id]&&!item.done&&(
+                      <span onClick={(e)=>{e.stopPropagation(); onJumpToRT && onJumpToRT(scheduledRTMap[item.id].rtId);}}
+                        title={`On scheduled Return Trip${scheduledRTMap[item.id].crew?' — '+scheduledRTMap[item.id].crew:''}. Tap to view.`}
+                        style={{fontSize:9,fontWeight:700,background:'#eff6ff',color:'#1d4ed8',
+                          borderRadius:99,padding:'1px 7px',border:'1px solid #bfdbfe',lineHeight:1.6,
+                          cursor: onJumpToRT ? 'pointer':'default',whiteSpace:'nowrap'}}>
+                        📅 {scheduledRTMap[item.id].date || 'scheduled'}{scheduledRTMap[item.id].crew?` · ${scheduledRTMap[item.id].crew}`:''}
+                      </span>
+                    )}
                     {filterIds!=null&&<span style={{fontWeight:700,borderRadius:99,padding:'1px 6px',lineHeight:1.6,
                       background:filterIds.has(item.id)?'#dcfce7':'#f3f4f6',
                       color:filterIds.has(item.id)?'#16a34a':'#9ca3af'}}>
@@ -2915,7 +2924,7 @@ function RoomNameEdit({name, onSave}) {
 }
 
 
-function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId }) {
+function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null }) {
 
   const data = normFloor(floorData);
 
@@ -3037,7 +3046,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
           </div>
           {qInput('general')}
 
-          <PunchItems items={data.general} onChange={setGeneral} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId}/>
+          <PunchItems items={data.general} onChange={setGeneral} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT}/>
 
           {showHotcheck && (
             <div style={{ marginTop: 12, background: `rgba(220,38,38,0.06)`, border: `1px solid rgba(220,38,38,0.25)`, borderRadius: 8, padding: 10 }}>
@@ -3049,7 +3058,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                   </span>
                 )}
               </div>
-              <PunchItems items={data.hotcheck} onChange={setHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId}/>
+              <PunchItems items={data.hotcheck} onChange={setHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT}/>
             </div>
           )}
 
@@ -3081,7 +3090,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
               <PunchItems items={Array.isArray(room.items) ? room.items : []}
 
-                onChange={v => setRoomItems(room.id, v)} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId}/>
+                onChange={v => setRoomItems(room.id, v)} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT}/>
 
               <button onClick={async () => { if(!await showConfirm(`Remove room "${room.name}" and all its punch items?`)) return; delRoom(room.id); }}
                 style={{ display: 'block', marginTop: 6, marginLeft: 'auto', background: 'none', border: 'none',
@@ -3117,7 +3126,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 }
 
 
-function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId }) {
+function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null }) {
 
   const upper    = normFloor(punch.upper);
   const main     = normFloor(punch.main);
@@ -3233,11 +3242,11 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
       </div>
 
-      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('upper',t,`Upper Level – ${src}`) : null} jobId={jobId}/>
+      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('upper',t,`Upper Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT}/>
 
-      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('main',t,`Main Level – ${src}`) : null} jobId={jobId}/>
+      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('main',t,`Main Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT}/>
 
-      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('basement',t,`Basement – ${src}`) : null} jobId={jobId}/>
+      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('basement',t,`Basement – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT}/>
 
       {extras.map((e,i)=>(
         <div key={e.key}>
@@ -3250,7 +3259,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
             showHotcheck={showHotcheck}
             filterIds={filterIds}
             onAddMaterial={onAddMaterial}
-            onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('main',t,`Main Level – ${src}`) : null} jobId={jobId}/>
+            onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('main',t,`Main Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT}/>
           <button onClick={async ()=>{
             if(!await showConfirm(`Remove "${e.label}" and all its punch items? This cannot be undone.`)) return;
             removeFloor(e.key);
@@ -4898,12 +4907,16 @@ function PunchLinker({ roughPunch, finishPunch, rt, onSave, onClose }) {
 
 // ── Return Trips ──────────────────────────────────────────────
 
-function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],roughPunch={},finishPunch={}}) {
+function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],roughPunch={},finishPunch={},onAttachPhotoToPunch}) {
 
   const [viewPhoto, setViewPhoto] = useState(null);
   const [expandedRTs, setExpandedRTs] = useState({}); // trip IDs manually expanded when signed off
   const toggleExpand = (id) => setExpandedRTs(v=>({...v,[id]:!v[id]}));
   const [linkerTripId, setLinkerTripId] = useState(null); // RT id currently showing the Link Punch Items modal
+  // V2.3 photo routing — per-RT target: "general" (attach to RT) or a linked
+  // punch item id (attach to that source punch item). Default "general" keeps
+  // existing behavior for RTs with no linked items.
+  const [photoTarget, setPhotoTarget] = useState({}); // {[rtId]: "general" | originItemId}
 
   const add = () => onChange([...trips, {id:uid(),date:"",scope:"",material:"",punch:[],photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:false,needsScheduleDate:"",rtScheduled:false,scheduledDate:""}]);
 
@@ -4939,6 +4952,12 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
     if(!jobId) { toast.error("Cannot upload photos — job ID missing. Save the job first."); return; }
     const trip = trips.find(t=>t.id===id);
     const existing = trip?.photos||[];
+    // V2.3 — route to linked punch item if one is selected for this RT.
+    // target is either "general" (RT) or an originItemId of a linked punch item.
+    const target = photoTarget[id] || "general";
+    const linkedPunch = target !== "general"
+      ? (trip?.punch||[]).find(p => p && p.originItemId === target)
+      : null;
     const newPhotos = [];
     setUploading(true);
 
@@ -4946,7 +4965,11 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
       try {
         const photoId = uid();
         const ext = file.name.split(".").pop() || "jpg";
-        const storagePath = `jobs/${jobId}/rt-photos/${id}/${photoId}.${ext}`;
+        // Route storage folder so deletion of either record doesn't orphan photos.
+        const folder = linkedPunch
+          ? `jobs/${jobId}/punch-photos/${target}`
+          : `jobs/${jobId}/rt-photos/${id}`;
+        const storagePath = `${folder}/${photoId}.${ext}`;
         const storageRef = ref(storage, storagePath);
         await uploadBytes(storageRef, file);
         const url = await getDownloadURL(storageRef);
@@ -4958,7 +4981,15 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
     }
 
     if(newPhotos.length > 0) {
-      upd(id, {photos:[...existing, ...newPhotos]});
+      if (linkedPunch && onAttachPhotoToPunch) {
+        // Attach to the source punch item in roughPunch/finishPunch. The
+        // callback handles finding the item inside the floors/rooms tree.
+        const phase = linkedPunch.originPhase || "rough";
+        onAttachPhotoToPunch(phase, linkedPunch.originItemId, newPhotos);
+      } else {
+        // Default: attach to the RT itself (existing behavior).
+        upd(id, {photos:[...existing, ...newPhotos]});
+      }
     }
     setUploading(false);
   };
@@ -5196,6 +5227,32 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
             {uploading&&<div style={{fontSize:11,color:C.accent,fontWeight:600,marginBottom:8,
               padding:"6px 10px",background:`${C.accent}12`,border:`1px solid ${C.accent}33`,
               borderRadius:7,display:"flex",alignItems:"center",gap:8}}><Spinner size={12}/> Uploading photos...</div>}
+
+            {/* V2.3 — "Photo goes to:" chooser. Only shown when this RT has
+                linked punch items (because otherwise there's nowhere else to
+                route to). Default is General (attach to the RT). Picking a
+                linked item sends next uploads straight to that punch item's
+                photos — no double-write, no orphan records. */}
+            {(()=>{
+              const linked = (t.punch||[]).filter(p => p && p.originItemId);
+              if (linked.length === 0) return null;
+              const current = photoTarget[t.id] || "general";
+              return (
+                <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6,flexWrap:"wrap"}}>
+                  <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.06em"}}>PHOTO GOES TO:</div>
+                  <select value={current} onChange={e=>setPhotoTarget(v=>({...v,[t.id]:e.target.value}))}
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                      padding:"4px 8px",fontSize:11,fontFamily:'inherit',outline:'none',color:C.text,
+                      maxWidth:320}}>
+                    <option value="general">General (this Return Trip)</option>
+                    {linked.map(p => {
+                      const label = stripPunchHtml(p.text).slice(0,60) || "Linked item";
+                      return <option key={p.originItemId} value={p.originItemId}>↳ {label}</option>;
+                    })}
+                  </select>
+                </div>
+              );
+            })()}
 
             <div style={{display:"flex",gap:6}}>
               <label style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",
@@ -9028,6 +9085,51 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     u(patch);
   };
 
+  // V2.3 — photo attach helper. When a photo is uploaded from a Return Trip
+  // but targeted at a linked punch item, we write the photo directly onto
+  // that punch item (in roughPunch / finishPunch) rather than onto the RT.
+  // The RT already knows where the item lives (originPhase + originItemId),
+  // so we just walk the floors/rooms/hotcheck tree and push the photos onto
+  // the matching item's photos array.
+  //
+  // Safety: additive — never deletes existing photos, never touches other
+  // items. Atomic — single u() write with just one of (roughPunch,
+  // finishPunch) patched.
+  const handleAttachPhotoToPunch = (phase, itemId, photos) => {
+    if (!phase || !itemId || !Array.isArray(photos) || photos.length === 0) return;
+    const prev = jobRef.current;
+    const srcPunch = phase === "finish" ? prev.finishPunch : prev.roughPunch;
+    if (!srcPunch) return;
+    let found = false;
+    const mapItem = (it) => {
+      if (!it || it.id !== itemId) return it;
+      found = true;
+      return { ...it, photos: [ ...(it.photos||[]), ...photos ] };
+    };
+    const mapFloor = (fl) => fl ? ({
+      ...fl,
+      general:  (fl.general||[]).map(mapItem),
+      rooms:    (fl.rooms||[]).map(r => ({...r, items:(r.items||[]).map(mapItem)})),
+      hotcheck: (fl.hotcheck||[]).map(mapItem),
+    }) : fl;
+    const nextPunch = {...srcPunch};
+    ["upper","main","basement"].forEach(k => { if (nextPunch[k]) nextPunch[k] = mapFloor(nextPunch[k]); });
+    if (Array.isArray(nextPunch.extraFloors)) nextPunch.extraFloors = nextPunch.extraFloors.map(mapFloor);
+    if (!found) {
+      // Fallback: source item not in the tree anymore (deleted?) — attach to
+      // RT's own photos on the RT that references it so the photo isn't lost.
+      const rt = (prev.returnTrips||[]).find(r => (r.punch||[]).some(p => p && p.originItemId === itemId));
+      if (rt) {
+        const nextTrips = (prev.returnTrips||[]).map(r => r.id === rt.id
+          ? { ...r, photos: [ ...(r.photos||[]), ...photos ] }
+          : r);
+        u({ returnTrips: nextTrips });
+      }
+      return;
+    }
+    u(phase === "finish" ? { finishPunch: nextPunch } : { roughPunch: nextPunch });
+  };
+
   const [tab, setTab] = useState(()=>initialTab && TABS.includes(initialTab) ? initialTab : "Job Info");
   const [newLightingFloor, setNewLightingFloor] = useState("");
   const [emailData, setEmailData] = useState(null);
@@ -9282,6 +9384,35 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const fqc = countQCWalk(job.finishPunch);
   const qcWalkTotal = rqc.total + fqc.total;
   const qcWalkDone  = rqc.done  + fqc.done;
+
+  // V2.4 — Scheduled-RT map for punch items. Builds {punchItemId → {date,
+  // crew, rtId, phase}} from job.returnTrips, so PunchSection can show a
+  // "📅 on DATE w/ CREW" badge next to items that are already on a scheduled
+  // Return Trip. Only includes RTs that are actually scheduled AND not yet
+  // signed off — once an RT ships, the badge disappears automatically.
+  // Safety: pure read — never mutates the trip list, purely derives a lookup.
+  const scheduledRTMap = (() => {
+    const map = {};
+    (job.returnTrips||[]).forEach(rt => {
+      if (!rt || rt.signedOff) return;
+      const isScheduled = rt.rtStatus === "scheduled" || (!!rt.scheduledDate && rt.rtStatus !== "complete");
+      if (!isScheduled) return;
+      const date = rt.scheduledDate || "";
+      const crew = rt.assignedTo || "";
+      (rt.punch||[]).forEach(p => {
+        if (!p || !p.originItemId) return;
+        // First-win (a punch item should only be on one upcoming visit anyway,
+        // but if multiple collide we keep the earliest-defined one for determinism).
+        if (!map[p.originItemId]) {
+          map[p.originItemId] = { date, crew, rtId: rt.id, phase: p.originPhase || "rough" };
+        }
+      });
+    });
+    return map;
+  })();
+  const scheduledRTMapRough  = Object.fromEntries(Object.entries(scheduledRTMap).filter(([,v]) => v.phase === "rough"));
+  const scheduledRTMapFinish = Object.fromEntries(Object.entries(scheduledRTMap).filter(([,v]) => v.phase === "finish"));
+  const onJumpToRT = () => setTab("Return Trips");
 
 
   return (
@@ -9656,6 +9787,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <PunchSection punch={job.roughPunch} onChange={v=>handlePhasePunchChange("rough", v)}
                   jobName={job.name||"This Job"} phase="Rough" onEmail={setEmailData}
                   filterIds={job.roughPunchFilter ? new Set(job.roughPunchFilter) : null}
+                  scheduledRTMap={scheduledRTMapRough}
+                  onJumpToRT={onJumpToRT}
                   onAddMaterial={(text, source)=>{
                     const orders = job.roughMaterials || [];
                     const openEntry = [...orders].reverse().find(o=>
@@ -9891,6 +10024,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               }>
                 <PunchSection punch={job.finishPunch} onChange={v=>handlePhasePunchChange("finish", v)} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}
                   filterIds={job.finishPunchFilter ? new Set(job.finishPunchFilter) : null}
+                  scheduledRTMap={scheduledRTMapFinish}
+                  onJumpToRT={onJumpToRT}
                   onAddMaterial={(text, source)=>{
                     const orders = job.finishMaterials || [];
                     const openEntry = [...orders].reverse().find(o=>
@@ -10426,7 +10561,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             <div>
 
               <Section label="Return Trips" color={C.purple} defaultOpen={true}>
-                <ReturnTrips trips={job.returnTrips} onChange={handleReturnTripsChange} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData} jobId={job.id} users={users} roughPunch={job.roughPunch||{}} finishPunch={job.finishPunch||{}}/>
+                <ReturnTrips trips={job.returnTrips} onChange={handleReturnTripsChange} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData} jobId={job.id} users={users} roughPunch={job.roughPunch||{}} finishPunch={job.finishPunch||{}} onAttachPhotoToPunch={handleAttachPhotoToPunch}/>
               </Section>
 
             </div>
@@ -10446,6 +10581,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   onDeleteManualTask={onDeleteManualTask}
                   foremenList={foremenList}
                   jobs={jobs}
+                  onUpdateJob={u}
+                  onGoToReturnTrips={()=>setTab("Return Trips")}
                 />
               </Section>
 
@@ -12672,7 +12809,7 @@ const URGENCY = (dueDateStr) => {
   return {label:`DUE ${due.toLocaleDateString("en-US",{month:"short",day:"numeric"})}`, color:"#6b7280", bg:"transparent", level:"fine", days: diff};
 };
 
-function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualClear }) {
+function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualClear, onSignOffRT }) {
   const [editingDate, setEditingDate] = useState(false);
   const [dateVal, setDateVal] = useState(task.dueDate||"");
   // localDueDate keeps color in sync immediately on save without waiting for Firebase round-trip
@@ -12820,13 +12957,32 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
 
       {/* Action buttons */}
       <div style={{flexShrink:0,display:"flex",flexDirection:"column",gap:4,alignItems:"flex-end"}}>
+        {/* One-tap Sign Off for scheduled/needs-schedule Return Trips. Extracts
+            the rt.id from task.id (shape: "<jobId>_rt_<rtId>_sched" or "_needs").
+            Why one-tap: crews should be able to close out a visit from the
+            inbox without navigating. Cascade to linked punch items is handled
+            by onSignOffRT in the Tasks component (single atomic patch). */}
+        {onSignOffRT && task.category === "rt" && task.jobId && (
+          task.id.endsWith("_sched") || task.id.endsWith("_needs")
+        ) && (()=>{
+          const m = task.id.match(/^.+_rt_(.+)_(?:sched|needs)$/);
+          const rtId = m ? m[1] : null;
+          if (!rtId) return null;
+          return (
+            <button onClick={()=>onSignOffRT(task.jobId, rtId)}
+              title="Sign off this return trip and mark any linked punch items complete"
+              style={{background:"#16a34a",border:"1px solid #16a34a",borderRadius:7,color:"#fff",fontSize:11,padding:"5px 11px",cursor:"pointer",fontFamily:"inherit",fontWeight:700,whiteSpace:"nowrap"}}>
+              ✓ Sign Off
+            </button>
+          );
+        })()}
         {onDismiss&&(
           <button onClick={onDismiss}
             style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"5px 11px",cursor:"pointer",fontFamily:"inherit",fontWeight:600,whiteSpace:"nowrap"}}>
             ✓ Done
           </button>
         )}
-        {!onDismiss&&task.type!=="manual"&&task.jobId&&(
+        {!onDismiss&&task.type!=="manual"&&task.jobId&&task.category!=="rt"&&(
           <button onClick={()=>{
             const job=jobs.find(j=>j.id===task.jobId);
             if(!job||!onManualClear) return;
@@ -12920,20 +13076,81 @@ function AddTaskForm({ defaultForeman, onAdd, onCancel, foremenList, jobs, defau
 
 // ── JobOpenItems ─────────────────────────────────────────────────────
 // Per-job "Open Items" panel rendered inside the Open Items tab on JobDetail.
-// Reads from the global manualTasks list filtered by jobId; uses the same
-// save/delete handlers so the data lives in ONE place (manualTasks collection)
-// and continues to show on the global Tasks page too.
-function JobOpenItems({ job, manualTasks, onSaveManualTask, onDeleteManualTask, foremenList, jobs }) {
+// Non-Visit items (Purchase/Call/Other) live in the shared manualTasks
+// collection. Visits are the same records as Return Trips (job.returnTrips[])
+// — we surface them here so Koy sees one unified list.
+//
+// Why reference, don't copy: a Visit/Return Trip stays in ONE place
+// (job.returnTrips). This tab just *views* them alongside manualTasks.
+// No sync loop, no ghost writes. Creating a Visit here writes a new RT.
+function JobOpenItems({ job, manualTasks, onSaveManualTask, onDeleteManualTask, foremenList, jobs, onUpdateJob, onGoToReturnTrips }) {
   const [showAdd, setShowAdd] = useState(false);
+
+  // manualTasks filtered to this job (Purchase/Call/Other + legacy Visits
+  // that were created before V2.1 routed Visits to returnTrips — we still
+  // show them in the Visit group so Koy doesn't lose anything).
   const items = (manualTasks||[]).filter(t => t && t.jobId === job.id);
+
+  // Return trips adapted into the same display shape as manualTasks so the
+  // existing render code can handle them. We tag `__rt:true` to branch the
+  // "done" / "delete" actions — RT lifecycle uses signedOff, not cleared.
+  const rtAsItems = (job.returnTrips||[]).map((rt, i) => {
+    const isDone = !!rt.signedOff;
+    const whenLabel = rt.scheduledDate || rt.needsScheduleDate || rt.date || "";
+    return {
+      id: rt.id,
+      title: stripHtml(rt.scope) || `Return Trip #${i+1}`,
+      foreman: rt.assignedTo || "",
+      notes: stripHtml(rt.material) || "",
+      dueDate: whenLabel,
+      itemType: "Visit",
+      requestedBy: "",
+      status: isDone ? "done" : "open",
+      cleared: isDone,
+      __rt: true,
+      __rtIndex: i,
+      __rtRaw: rt,
+      __rtStatus: rt.rtScheduled ? "scheduled" : (rt.needsSchedule ? "needs" : ""),
+      __rtPunchCount: (rt.punch||[]).length,
+      __rtPhotoCount: (rt.photos||[]).length,
+    };
+  });
 
   const grouped = { Visit:[], Purchase:[], Call:[], Other:[], __nocat:[] };
   items.forEach(t => {
     const k = (t.itemType && grouped[t.itemType]) ? t.itemType : "__nocat";
     grouped[k].push(t);
   });
+  // Prepend RTs so scheduled visits show at the top of the Visit section.
+  grouped.Visit = [...rtAsItems, ...grouped.Visit];
 
   const handleAdd = (t) => {
+    // Visits become Return Trips (one source of truth per spec). Everything
+    // else stays in the manualTasks collection.
+    if (t.itemType === "Visit") {
+      if (!onUpdateJob) return;
+      const newRT = {
+        id: uid(),
+        date: "",
+        scope: t.title,
+        material: t.notes || "",
+        punch: [],
+        photos: [],
+        assignedTo: t.foreman || "",
+        signedOff: false, signedOffBy: "", signedOffDate: "",
+        needsSchedule: !t.dueDate,
+        needsScheduleDate: "",
+        rtScheduled: !!t.dueDate,
+        rtStatus: t.dueDate ? "scheduled" : "needs",
+        scheduledDate: t.dueDate || "",
+        // Audit fields — non-breaking additions
+        createdAt: new Date().toISOString(),
+        requestedBy: t.requestedBy || "",
+      };
+      onUpdateJob({ returnTrips: [ ...(job.returnTrips||[]), newRT ] });
+      setShowAdd(false);
+      return;
+    }
     const itemColor = (t.itemType && ITEM_TYPE_COLORS[t.itemType]) || "#6b7280";
     const task = {
       id: uid(), title: t.title, foreman: t.foreman,
@@ -12948,23 +13165,49 @@ function JobOpenItems({ job, manualTasks, onSaveManualTask, onDeleteManualTask, 
     setShowAdd(false);
   };
 
+  // Mark RT signed off. Uses onUpdateJob so the full job doc is patched
+  // atomically — same write path used by the Return Trips tab.
+  const markRTDone = (rtId) => {
+    if (!onUpdateJob) return;
+    const next = (job.returnTrips||[]).map(rt => rt.id === rtId
+      ? { ...rt, signedOff:true, signedOffDate: new Date().toLocaleDateString("en-US") }
+      : rt);
+    onUpdateJob({ returnTrips: next });
+  };
+  const reopenRT = (rtId) => {
+    if (!onUpdateJob) return;
+    const next = (job.returnTrips||[]).map(rt => rt.id === rtId
+      ? { ...rt, signedOff:false, signedOffDate:"" }
+      : rt);
+    onUpdateJob({ returnTrips: next });
+  };
+
   const markDone = (t) => {
+    if (t.__rt) return markRTDone(t.id);
     const updated = { ...t, cleared: true, status: "done", completedAt: new Date().toISOString() };
     onSaveManualTask && onSaveManualTask(updated);
   };
 
   const reopen = (t) => {
+    if (t.__rt) return reopenRT(t.id);
     const updated = { ...t, cleared: false, status: "open", completedAt: "" };
     onSaveManualTask && onSaveManualTask(updated);
   };
 
-  const removeItem = (id) => {
+  const removeItem = (itm) => {
+    if (itm && itm.__rt) {
+      // Don't delete an RT from here — too destructive (linked punch items,
+      // photos). Send the user to the Return Trips tab to handle it.
+      if (onGoToReturnTrips) onGoToReturnTrips();
+      return;
+    }
     if (window.confirm("Permanently remove this item? (This won't affect anything else in the app.)")) {
-      onDeleteManualTask && onDeleteManualTask(id);
+      onDeleteManualTask && onDeleteManualTask(itm.id);
     }
   };
 
-  const openCount = items.filter(t => t.status !== "done" && !t.cleared).length;
+  const allItems = [...items, ...rtAsItems];
+  const openCount = allItems.filter(t => t.status !== "done" && !t.cleared).length;
 
   return (
     <div>
@@ -12988,7 +13231,7 @@ function JobOpenItems({ job, manualTasks, onSaveManualTask, onDeleteManualTask, 
           lockJob={true}
         />
       )}
-      {items.length === 0 && !showAdd && (
+      {allItems.length === 0 && !showAdd && (
         <div style={{textAlign:"center",padding:"24px 0",color:"var(--muted)",fontSize:12,fontStyle:"italic"}}>
           No open items for this job. Tap "+ Add Item" to capture one.
         </div>
@@ -13006,22 +13249,47 @@ function JobOpenItems({ job, manualTasks, onSaveManualTask, onDeleteManualTask, 
             </div>
             {list.map(t => {
               const isDone = t.status === "done" || t.cleared;
+              const isRT = !!t.__rt;
+              // Pick a border tone so Koy can tell scheduled vs. needs-scheduling at a glance.
+              const rtAccent = isRT
+                ? (t.__rtStatus === "scheduled" ? "#8b5cf6"
+                   : t.__rtStatus === "needs"   ? "#dc2626"
+                   : color)
+                : color;
               return (
-                <div key={t.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",marginBottom:6,background: isDone ? "var(--surface)" : "var(--card)",border:`1px solid ${color}22`,borderLeft:`3px solid ${color}`,borderRadius:9,opacity: isDone ? 0.6 : 1}}>
+                <div key={t.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",marginBottom:6,background: isDone ? "var(--surface)" : "var(--card)",border:`1px solid ${rtAccent}22`,borderLeft:`3px solid ${rtAccent}`,borderRadius:9,opacity: isDone ? 0.6 : 1}}>
                   <div style={{flex:1,minWidth:0}}>
-                    <div style={{fontSize:13,fontWeight:600,color: isDone ? "var(--dim)" : "var(--text)", textDecoration: isDone ? "line-through" : "none"}}>{t.title}</div>
+                    <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                      <div style={{fontSize:13,fontWeight:600,color: isDone ? "var(--dim)" : "var(--text)", textDecoration: isDone ? "line-through" : "none"}}>{t.title}</div>
+                      {isRT && t.__rtStatus === "scheduled" && (
+                        <span style={{fontSize:9,fontWeight:700,color:"#8b5cf6",background:"#8b5cf615",border:"1px solid #8b5cf533",borderRadius:99,padding:"1px 6px",letterSpacing:"0.04em",textTransform:"uppercase"}}>Scheduled</span>
+                      )}
+                      {isRT && t.__rtStatus === "needs" && (
+                        <span style={{fontSize:9,fontWeight:700,color:"#dc2626",background:"#dc262615",border:"1px solid #dc262633",borderRadius:99,padding:"1px 6px",letterSpacing:"0.04em",textTransform:"uppercase"}}>Needs Schedule</span>
+                      )}
+                    </div>
                     <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:3}}>
                       {t.requestedBy && <span style={{fontSize:10,color:"var(--dim)"}}>via {t.requestedBy}</span>}
-                      {t.dueDate && <span style={{fontSize:10,color:"var(--dim)"}}>Due {t.dueDate}</span>}
+                      {t.dueDate && <span style={{fontSize:10,color:"var(--dim)"}}>{isRT ? (t.__rtStatus === "scheduled" ? "📅 " : "") : "Due "}{t.dueDate}</span>}
                       {t.foreman && <span style={{fontSize:10,color:"var(--dim)"}}>{t.foreman}</span>}
+                      {isRT && t.__rtPunchCount > 0 && <span style={{fontSize:10,color:"var(--dim)"}}>{t.__rtPunchCount} punch item{t.__rtPunchCount===1?"":"s"}</span>}
+                      {isRT && t.__rtPhotoCount > 0 && <span style={{fontSize:10,color:"var(--dim)"}}>{t.__rtPhotoCount} photo{t.__rtPhotoCount===1?"":"s"}</span>}
                     </div>
                     {t.notes && <div style={{fontSize:11,color:"var(--muted)",marginTop:4,whiteSpace:"pre-wrap"}}>{t.notes}</div>}
                   </div>
-                  <div style={{display:"flex",gap:6,flexShrink:0}}>
+                  <div style={{display:"flex",gap:6,flexShrink:0,flexWrap:"wrap",justifyContent:"flex-end"}}>
+                    {isRT && onGoToReturnTrips && (
+                      <button onClick={onGoToReturnTrips}
+                        title="Open in Return Trips tab to edit scope, link punch items, upload photos"
+                        style={{background:"none",border:"1px solid var(--border)",borderRadius:6,color:"var(--dim)",padding:"4px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit"}}>
+                        View →
+                      </button>
+                    )}
                     {!isDone ? (
                       <button onClick={()=>markDone(t)}
+                        title={isRT ? "Sign off this return trip" : "Mark item complete"}
                         style={{background:"none",border:"1px solid var(--border)",borderRadius:6,color:"var(--dim)",padding:"4px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit"}}>
-                        ✓ Done
+                        {isRT ? "✓ Sign Off" : "✓ Done"}
                       </button>
                     ) : (
                       <button onClick={()=>reopen(t)}
@@ -13029,10 +13297,12 @@ function JobOpenItems({ job, manualTasks, onSaveManualTask, onDeleteManualTask, 
                         Reopen
                       </button>
                     )}
-                    <button onClick={()=>removeItem(t.id)}
-                      style={{background:"none",border:"1px solid var(--border)",borderRadius:6,color:"var(--dim)",padding:"4px 8px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
-                      ✕
-                    </button>
+                    {!isRT && (
+                      <button onClick={()=>removeItem(t)}
+                        style={{background:"none",border:"1px solid var(--border)",borderRadius:6,color:"var(--dim)",padding:"4px 8px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
+                        ✕
+                      </button>
+                    )}
                   </div>
                 </div>
               );
@@ -13248,6 +13518,76 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
   const dismissCODoneTask    = (jobId,coId)=> { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{coDoneDismissed:[...(job.coDoneDismissed||[]),coId]}); };
   const dismissRTDoneTask    = (jobId,rtId)=> { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{rtDoneDismissed:[...(job.rtDoneDismissed||[]),rtId]}); };
 
+  // ── V2.2: one-tap Sign Off from the forecast view ──────────────────
+  // Sets signedOff + flips every linked punch item in this RT to done.
+  // The cascade to roughPunch/finishPunch happens in the JobDetail's
+  // handleReturnTripsChange wrapper — but Tasks writes directly via
+  // onUpdateJob(jobId, patch), which bypasses that wrapper. We have to
+  // include roughPunch/finishPunch updates in the same patch so the
+  // cascade isn't lost.
+  //
+  // Why safe: we only flip items whose id appears in rt.punch[].originItemId
+  // (i.e. items linked via PunchLinker or QC fail). Non-linked items are
+  // untouched. Single atomic onUpdateJob write = no race.
+  const handleSignOffRT = (jobId, rtId) => {
+    if (!onUpdateJob) return;
+    const job = (jobs||[]).find(j => j && j.id === jobId);
+    if (!job) return;
+    const rt = (job.returnTrips||[]).find(r => r && r.id === rtId);
+    if (!rt) return;
+    let who = "";
+    try { const ident = getIdentity && getIdentity(); who = ident?.name || ""; } catch {}
+    const today = new Date().toLocaleDateString("en-US");
+
+    // Build next RTs: sign this one off, flip its punch items done too
+    const nextTrips = (job.returnTrips||[]).map(r => {
+      if (r.id !== rtId) return r;
+      return {
+        ...r,
+        signedOff: true,
+        rtStatus: "complete",
+        signedOffBy: r.signedOffBy || who,
+        signedOffDate: r.signedOffDate || today,
+        punch: (r.punch||[]).map(p => p && !p.done
+          ? { ...p, done:true, checkedBy: p.checkedBy||who, checkedAt: p.checkedAt||today }
+          : p),
+      };
+    });
+
+    // Cascade: linked punch items in roughPunch/finishPunch flip to done
+    const roughHits = new Set();
+    const finishHits = new Set();
+    (rt.punch||[]).forEach(p => {
+      if (!p || !p.originItemId || p.done) return;
+      (p.originPhase === "finish" ? finishHits : roughHits).add(p.originItemId);
+    });
+
+    const flipPunch = (punch, ids) => {
+      if (!punch || ids.size === 0) return punch;
+      const mapItem = (it) => (it && ids.has(it.id) && !it.done)
+        ? { ...it, done:true, checkedBy: it.checkedBy||who, checkedAt: it.checkedAt||today, waiting:false }
+        : it;
+      const mapFloor = (fl) => fl ? ({
+        ...fl,
+        general: (fl.general||[]).map(mapItem),
+        rooms: (fl.rooms||[]).map(r => ({...r, items:(r.items||[]).map(mapItem)})),
+        hotcheck: (fl.hotcheck||[]).map(mapItem),
+      }) : fl;
+      const out = {...punch};
+      ["upper","main","basement"].forEach(k => { if (out[k]) out[k] = mapFloor(out[k]); });
+      if (Array.isArray(out.extraFloors)) out.extraFloors = out.extraFloors.map(mapFloor);
+      return out;
+    };
+
+    const patch = { returnTrips: nextTrips };
+    const nextRough = flipPunch(job.roughPunch, roughHits);
+    const nextFinish = flipPunch(job.finishPunch, finishHits);
+    if (nextRough !== job.roughPunch) patch.roughPunch = nextRough;
+    if (nextFinish !== job.finishPunch) patch.finishPunch = nextFinish;
+
+    onUpdateJob(jobId, patch);
+  };
+
   const allTaskDueDates = jobs.reduce((acc,j)=>({...acc,...(j.taskDueDates||{})}),{});
   // Build set of manually cleared task IDs across all jobs
   const allClearedTasks = new Set(jobs.flatMap(j=>j.clearedTasks||[]));
@@ -13360,7 +13700,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
             {/* Invoice-category tasks (deposits, stale alerts, etc.) */}
             {sortedInvoice.map(task=>(
               <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
-                onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear}/>
+                onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear} onSignOffRT={handleSignOffRT}/>
             ))}
           </>
         )}
@@ -13451,7 +13791,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
                 {showAdd&&<AddTaskForm defaultForeman={filterForeman} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList} jobs={jobs}/>}
                 {sorted.map(task=>(
                   <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
-                    onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear}/>
+                    onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear} onSignOffRT={handleSignOffRT}/>
                 ))}
               </div>
             ) : (
@@ -13482,7 +13822,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
                     </div>
                     {!isCollapsed&&groupTasks.map(task=>(
                       <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
-                        onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear}/>
+                        onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear} onSignOffRT={handleSignOffRT}/>
                     ))}
                   </div>
                 );
@@ -19850,6 +20190,42 @@ function App() {
               jobs={jobs}
               onCancel={()=>setQuickAddOpen(false)}
               onAdd={(t)=>{
+                // Visit + job selected → new Return Trip on that job.
+                // Why not write to manualTasks too: the RT is the single
+                // source of truth. Double-write would drift.
+                // Why require jobId: return trips live on a job doc; no job
+                // means nowhere to attach. We fall back to a manualTask so
+                // nothing gets dropped.
+                if (t.itemType === "Visit" && t.jobId) {
+                  const target = (jobs||[]).find(j => j && j.id === t.jobId);
+                  if (target) {
+                    const newRT = {
+                      id: uid(),
+                      date: "",
+                      scope: t.title,
+                      material: t.notes || "",
+                      punch: [], photos: [],
+                      assignedTo: t.foreman || "",
+                      signedOff:false, signedOffBy:"", signedOffDate:"",
+                      needsSchedule: !t.dueDate,
+                      needsScheduleDate: "",
+                      rtScheduled: !!t.dueDate,
+                      rtStatus: t.dueDate ? "scheduled" : "needs",
+                      scheduledDate: t.dueDate || "",
+                      createdAt: new Date().toISOString(),
+                      requestedBy: t.requestedBy || "",
+                    };
+                    const nextTrips = [ ...(target.returnTrips||[]), newRT ];
+                    const updatedJob = { ...target, returnTrips: nextTrips };
+                    // Mirror the standard save pattern used elsewhere: update
+                    // local state + persist patch so we don't drop nextTrips
+                    // in a race with Firestore.
+                    setJobs(js => js.map(j => j.id === updatedJob.id ? updatedJob : j));
+                    saveJob(updatedJob, { returnTrips: nextTrips });
+                    setQuickAddOpen(false);
+                    return;
+                  }
+                }
                 const itemColor = (t.itemType && ITEM_TYPE_COLORS[t.itemType]) || "#6b7280";
                 const task = {
                   id: uid(), title: t.title, foreman: t.foreman,
