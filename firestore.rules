@@ -5,15 +5,32 @@ service cloud.firestore {
 
     // ── JOBS ──────────────────────────────────────────────────────────────────
     // Reads are open so share links (punch, home runs, questions, lighting)
-    // work without login. Writes are validated to prevent garbage data.
+    // work without login. Writes are validated lightly to prevent garbage data,
+    // but we accept the actual shape the client sends: updated_at is an ISO
+    // string (new Date().toISOString()), NOT a Firestore Timestamp — the app
+    // has always written it that way. If a write lands without data/updated_at
+    // that's almost certainly a bug or an attack, so we still require them.
     match /jobs/{jobId} {
       allow read: if true;
 
-      // Only allow writes that include a valid data map and updated_at timestamp.
-      // This stops anyone from bulk-wiping or injecting junk via the API key.
       allow write: if request.resource.data.keys().hasAll(['data', 'updated_at'])
                    && request.resource.data.data is map
-                   && request.resource.data.updated_at is timestamp;
+                   && request.resource.data.updated_at is string;
+      // The write rule only fires for create/update — delete passes a null
+      // resource and would otherwise fail the key check. Allow it explicitly
+      // so the app's job-archive path keeps working.
+      allow delete: if true;
+    }
+
+    // ── MANUAL TASKS ──────────────────────────────────────────────────────────
+    // Ad-hoc task list outside the job records. Same shape as /jobs (data map
+    // + ISO updated_at string), so we apply the same light validation.
+    match /manualTasks/{taskId} {
+      allow read: if true;
+      allow write: if request.resource.data.keys().hasAll(['data', 'updated_at'])
+                   && request.resource.data.data is map
+                   && request.resource.data.updated_at is string;
+      allow delete: if true;
     }
 
     // ── HOMEOWNER REQUESTS ────────────────────────────────────────────────────
@@ -39,6 +56,25 @@ service cloud.firestore {
       allow update: if request.resource.data.keys().hasAll(['questionIds', 'updatedAt'])
                     && request.resource.data.questionIds is list;
       allow delete: if false;
+    }
+
+    // ── SETTINGS ──────────────────────────────────────────────────────────────
+    // Shared app settings (user list, scoreboard weight defaults, etc).
+    // Reads are open so the app can bootstrap without login. Writes are open
+    // in the same spirit as /jobs — the app protects these with UI-level
+    // permission checks rather than Firestore auth (consistent with how the
+    // rest of the app works today).
+    match /settings/{docId} {
+      allow read: if true;
+      allow write: if true;
+    }
+
+    // ── CONFIG ────────────────────────────────────────────────────────────────
+    // App-wide config flags (e.g. force-update version). Same read/write
+    // posture as /settings.
+    match /config/{docId} {
+      allow read: if true;
+      allow write: if true;
     }
 
     // ── EVERYTHING ELSE ───────────────────────────────────────────────────────

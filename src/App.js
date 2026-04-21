@@ -7933,7 +7933,16 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
 
 const TABS = ["Job Info","Plans & Links","Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
 
-              "Change Orders","Return Trips","QC"];
+              "Change Orders","Return Trips","Open Items","QC"];
+
+// Item type options for Open Items (tasks/visits tied to a job)
+const ITEM_TYPES = ["Visit","Purchase","Call","Other"];
+const ITEM_TYPE_COLORS = {
+  Visit:    "#2563eb",  // blue
+  Purchase: "#8b5cf6",  // purple
+  Call:     "#ca8a04",  // amber
+  Other:    "#6b7280",  // gray
+};
 
 
 const sanitize = (obj) => {
@@ -8644,7 +8653,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
   );
 }
 
-function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, initialTab, users=[], identity=null}) {
+function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, initialTab, users=[], identity=null, manualTasks=[], onSaveManualTask, onDeleteManualTask, jobs=[]}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
@@ -10210,6 +10219,26 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               <Section label="Return Trips" color={C.purple} defaultOpen={true}>
                 <ReturnTrips trips={job.returnTrips} onChange={handleReturnTripsChange} jobName={job.name||"This Job"} jobSimproNo={job.simproNo} onEmail={setEmailData} jobId={job.id} users={users}/>
+              </Section>
+
+            </div>
+
+          )}
+
+
+          {tab==="Open Items"&&(
+
+            <div>
+
+              <Section label="Open Items" color="#2563eb" defaultOpen={true}>
+                <JobOpenItems
+                  job={job}
+                  manualTasks={manualTasks}
+                  onSaveManualTask={onSaveManualTask}
+                  onDeleteManualTask={onDeleteManualTask}
+                  foremenList={foremenList}
+                  jobs={jobs}
+                />
               </Section>
 
             </div>
@@ -12488,6 +12517,16 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
           <span style={{fontSize:9,fontWeight:800,color:task.color,background:`${task.color}18`,borderRadius:99,padding:"2px 8px",border:`1px solid ${task.color}28`,letterSpacing:"0.07em"}}>
             {(CATEGORY_LABELS[task.category]||task.category).toUpperCase()}
           </span>
+          {task.itemType && ITEM_TYPE_COLORS[task.itemType] && (
+            <span style={{fontSize:9,fontWeight:800,color:ITEM_TYPE_COLORS[task.itemType],background:`${ITEM_TYPE_COLORS[task.itemType]}18`,borderRadius:99,padding:"2px 8px",border:`1px solid ${ITEM_TYPE_COLORS[task.itemType]}33`,letterSpacing:"0.07em"}}>
+              {task.itemType.toUpperCase()}
+            </span>
+          )}
+          {task.requestedBy && (
+            <span style={{fontSize:9,fontWeight:600,color:"var(--dim)",letterSpacing:"0.04em"}}>
+              via {task.requestedBy}
+            </span>
+          )}
           {urg&&!editingDate&&(
             <span onClick={()=>{setEditingDate(true);setDateVal(task.dueDate||"");}}
               style={{fontSize:9,fontWeight:800,color:urg.color,background:urg.bg,borderRadius:99,padding:"2px 8px",border:`1px solid ${urg.color}33`,letterSpacing:"0.07em",cursor:"pointer",display:"inline-flex",alignItems:"center",gap:4}}
@@ -12600,11 +12639,48 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
   );
 }
 
-function AddTaskForm({ defaultForeman, onAdd, onCancel, foremenList }) {
-  const [t, setT] = useState({title:"", foreman:defaultForeman||"Koy", notes:"", dueDate:""});
+function AddTaskForm({ defaultForeman, onAdd, onCancel, foremenList, jobs, defaultJobId, defaultItemType, lockJob }) {
+  const [t, setT] = useState({
+    title:"",
+    foreman:defaultForeman||"Koy",
+    notes:"",
+    dueDate:"",
+    jobId: defaultJobId || "",
+    itemType: defaultItemType || "",
+    requestedBy: "",
+  });
+  // Sort jobs by name for the picker; include a blank option for "No job"
+  const sortedJobs = Array.isArray(jobs)
+    ? [...jobs].filter(j=>j && !j.tempPed).sort((a,b)=>(a.name||"").localeCompare(b.name||""))
+    : null;
   return (
     <div style={{padding:"14px 16px",background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,marginBottom:16}}>
       <div style={{fontSize:11,fontWeight:700,color:"var(--dim)",letterSpacing:"0.08em",marginBottom:12}}>NEW TASK</div>
+      {/* Job picker (first, per Koy's preference). Only renders if jobs passed in. */}
+      {sortedJobs && (
+        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
+          <div style={{flex:2,minWidth:180}}>
+            <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Job {lockJob?"":"(optional)"}</div>
+            <select value={t.jobId} onChange={e=>setT(x=>({...x,jobId:e.target.value}))} disabled={!!lockJob}
+              style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:7,color:"var(--text)",padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:lockJob?"default":"pointer",width:"100%",opacity:lockJob?0.85:1}}>
+              <option value="">— No job / general —</option>
+              {sortedJobs.map(j=><option key={j.id} value={j.id}>{j.name||"Untitled Job"}</option>)}
+            </select>
+          </div>
+          <div style={{flex:1,minWidth:130}}>
+            <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Type</div>
+            <select value={t.itemType} onChange={e=>setT(x=>({...x,itemType:e.target.value}))}
+              style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:7,color:"var(--text)",padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
+              <option value="">— pick type —</option>
+              {ITEM_TYPES.map(it=><option key={it} value={it}>{it}</option>)}
+            </select>
+          </div>
+          <div style={{flex:1,minWidth:130}}>
+            <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Requested By</div>
+            <Inp value={t.requestedBy} onChange={e=>setT(x=>({...x,requestedBy:e.target.value}))} placeholder="GC / contractor"/>
+          </div>
+        </div>
+      )}
       <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
         <div style={{flex:3,minWidth:180}}>
           <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Task</div>
@@ -12630,6 +12706,132 @@ function AddTaskForm({ defaultForeman, onAdd, onCancel, foremenList }) {
         <button onClick={()=>{if(t.title.trim())onAdd(t);}} style={{background:"var(--accent)",border:"none",borderRadius:7,color:"#000",fontWeight:800,padding:"8px 20px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Add Task</button>
         <button onClick={onCancel} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",padding:"8px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
       </div>
+    </div>
+  );
+}
+
+// ── JobOpenItems ─────────────────────────────────────────────────────
+// Per-job "Open Items" panel rendered inside the Open Items tab on JobDetail.
+// Reads from the global manualTasks list filtered by jobId; uses the same
+// save/delete handlers so the data lives in ONE place (manualTasks collection)
+// and continues to show on the global Tasks page too.
+function JobOpenItems({ job, manualTasks, onSaveManualTask, onDeleteManualTask, foremenList, jobs }) {
+  const [showAdd, setShowAdd] = useState(false);
+  const items = (manualTasks||[]).filter(t => t && t.jobId === job.id);
+
+  const grouped = { Visit:[], Purchase:[], Call:[], Other:[], __nocat:[] };
+  items.forEach(t => {
+    const k = (t.itemType && grouped[t.itemType]) ? t.itemType : "__nocat";
+    grouped[k].push(t);
+  });
+
+  const handleAdd = (t) => {
+    const itemColor = (t.itemType && ITEM_TYPE_COLORS[t.itemType]) || "#6b7280";
+    const task = {
+      id: uid(), title: t.title, foreman: t.foreman,
+      notes: t.notes, dueDate: t.dueDate||"", type:"manual", category:"manual",
+      color: itemColor, cleared:false, createdAt: new Date().toISOString(),
+      jobId: job.id,
+      itemType: t.itemType||"",
+      requestedBy: t.requestedBy||"",
+      status: "open",
+    };
+    onSaveManualTask && onSaveManualTask(task);
+    setShowAdd(false);
+  };
+
+  const markDone = (t) => {
+    const updated = { ...t, cleared: true, status: "done", completedAt: new Date().toISOString() };
+    onSaveManualTask && onSaveManualTask(updated);
+  };
+
+  const reopen = (t) => {
+    const updated = { ...t, cleared: false, status: "open", completedAt: "" };
+    onSaveManualTask && onSaveManualTask(updated);
+  };
+
+  const removeItem = (id) => {
+    if (window.confirm("Permanently remove this item? (This won't affect anything else in the app.)")) {
+      onDeleteManualTask && onDeleteManualTask(id);
+    }
+  };
+
+  const openCount = items.filter(t => t.status !== "done" && !t.cleared).length;
+
+  return (
+    <div>
+      <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
+        <div style={{fontSize:11,fontWeight:700,color:"var(--dim)",letterSpacing:"0.06em"}}>
+          {openCount} OPEN · {items.length} TOTAL
+        </div>
+        <button onClick={()=>setShowAdd(v=>!v)}
+          style={{background:"var(--accent)",border:"none",borderRadius:7,color:"#000",fontWeight:700,padding:"6px 14px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
+          {showAdd ? "Cancel" : "+ Add Item"}
+        </button>
+      </div>
+      {showAdd && (
+        <AddTaskForm
+          defaultForeman={job.foreman||"Koy"}
+          onAdd={handleAdd}
+          onCancel={()=>setShowAdd(false)}
+          foremenList={foremenList}
+          jobs={jobs}
+          defaultJobId={job.id}
+          lockJob={true}
+        />
+      )}
+      {items.length === 0 && !showAdd && (
+        <div style={{textAlign:"center",padding:"24px 0",color:"var(--muted)",fontSize:12,fontStyle:"italic"}}>
+          No open items for this job. Tap "+ Add Item" to capture one.
+        </div>
+      )}
+      {ITEM_TYPES.concat(["__nocat"]).map(key => {
+        const list = grouped[key];
+        if (!list || list.length === 0) return null;
+        const label = key === "__nocat" ? "Other / Untyped" : key;
+        const color = ITEM_TYPE_COLORS[key] || "#6b7280";
+        return (
+          <div key={key} style={{marginBottom:14}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6}}>
+              <div style={{fontSize:10,fontWeight:800,color,letterSpacing:"0.08em",textTransform:"uppercase"}}>{label}</div>
+              <div style={{background:`${color}18`,border:`1px solid ${color}33`,borderRadius:99,padding:"1px 7px",fontSize:10,color,fontWeight:700}}>{list.length}</div>
+            </div>
+            {list.map(t => {
+              const isDone = t.status === "done" || t.cleared;
+              return (
+                <div key={t.id} style={{display:"flex",alignItems:"flex-start",gap:10,padding:"10px 12px",marginBottom:6,background: isDone ? "var(--surface)" : "var(--card)",border:`1px solid ${color}22`,borderLeft:`3px solid ${color}`,borderRadius:9,opacity: isDone ? 0.6 : 1}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:600,color: isDone ? "var(--dim)" : "var(--text)", textDecoration: isDone ? "line-through" : "none"}}>{t.title}</div>
+                    <div style={{display:"flex",gap:10,flexWrap:"wrap",marginTop:3}}>
+                      {t.requestedBy && <span style={{fontSize:10,color:"var(--dim)"}}>via {t.requestedBy}</span>}
+                      {t.dueDate && <span style={{fontSize:10,color:"var(--dim)"}}>Due {t.dueDate}</span>}
+                      {t.foreman && <span style={{fontSize:10,color:"var(--dim)"}}>{t.foreman}</span>}
+                    </div>
+                    {t.notes && <div style={{fontSize:11,color:"var(--muted)",marginTop:4,whiteSpace:"pre-wrap"}}>{t.notes}</div>}
+                  </div>
+                  <div style={{display:"flex",gap:6,flexShrink:0}}>
+                    {!isDone ? (
+                      <button onClick={()=>markDone(t)}
+                        style={{background:"none",border:"1px solid var(--border)",borderRadius:6,color:"var(--dim)",padding:"4px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit"}}>
+                        ✓ Done
+                      </button>
+                    ) : (
+                      <button onClick={()=>reopen(t)}
+                        style={{background:"none",border:"1px solid var(--border)",borderRadius:6,color:"var(--dim)",padding:"4px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit"}}>
+                        Reopen
+                      </button>
+                    )}
+                    <button onClick={()=>removeItem(t.id)}
+                      style={{background:"none",border:"1px solid var(--border)",borderRadius:6,color:"var(--dim)",padding:"4px 8px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
+                      ✕
+                    </button>
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        );
+      })}
     </div>
   );
 }
@@ -12813,9 +13015,16 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
   };
 
   const handleAdd = (t) => {
+    const itemColor = (t.itemType && ITEM_TYPE_COLORS[t.itemType]) || "#6b7280";
     const task = { id: uid(), title: t.title, foreman: t.foreman,
       notes: t.notes, dueDate: t.dueDate||"", type:"manual", category:"manual",
-      color: "#6b7280", cleared:false, createdAt: new Date().toISOString() };
+      color: itemColor, cleared:false, createdAt: new Date().toISOString(),
+      // New Open Items fields (all optional, additive — old tasks ignore them):
+      jobId: t.jobId||"",
+      itemType: t.itemType||"",
+      requestedBy: t.requestedBy||"",
+      status: "open",
+    };
     onManualTasksChange([...(manualTasks||[]), task]);
     setShowAdd(false);
   };
@@ -12986,7 +13195,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
       )}
 
       <div style={{padding:filterForeman||compact?"0":"16px 26px"}}>
-        {showAdd&&<AddTaskForm defaultForeman={filterForeman||"Koy"} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList}/>}
+        {showAdd&&<AddTaskForm defaultForeman={filterForeman||"Koy"} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList} jobs={jobs}/>}
 
         {/* Pre Job Prep — only on main Tasks page (not foreman filter), collapsible, starts collapsed */}
         {!filterForeman&&catFilter!=="invoice"&&(()=>{
@@ -13031,7 +13240,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
                   <div style={{fontSize:11,fontWeight:700,color:"var(--dim)",letterSpacing:"0.06em"}}>TASKS</div>
                   <button onClick={()=>setShowAdd(v=>!v)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"4px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>+ Add Task</button>
                 </div>
-                {showAdd&&<AddTaskForm defaultForeman={filterForeman} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList}/>}
+                {showAdd&&<AddTaskForm defaultForeman={filterForeman} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList} jobs={jobs}/>}
                 {sorted.map(task=>(
                   <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
                     onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear}/>
@@ -18156,6 +18365,7 @@ function App() {
 
   const [view, setView] = useState("home");
   const [activeForeman, setActiveForeman] = useState(null);
+  const [quickAddOpen, setQuickAddOpen] = useState(false);
 
   const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
   const [crewView, setCrewView] = useState(null); // foreman name or null
@@ -19383,6 +19593,10 @@ function App() {
         : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);setOpenTab(null);}} foremenList={_foremen} leadsList={_leads}
             canConvertQuote={can(identity,"quotes.convert")}
             initialTab={openTab} users={users} identity={identity}
+            manualTasks={manualTasks}
+            onSaveManualTask={(task)=>{ saveManualTask(task); setManualTasks(prev=>{ const idx=(prev||[]).findIndex(t=>t.id===task.id); if(idx>=0){ const next=[...prev]; next[idx]=task; return next; } return [...(prev||[]), task]; }); }}
+            onDeleteManualTask={(id)=>{ deleteManualTask(id); setManualTasks(prev=>(prev||[]).filter(t=>t.id!==id)); }}
+            jobs={jobs}
             onConvertQuote={(q)=>{
               // q already has simproNo set from the prompt
               const updated={...q, type:""};
@@ -19391,6 +19605,59 @@ function App() {
               setSelected(updated);
             }}
           />)}
+
+      {/* ── GLOBAL QUICK-ADD FAB & MODAL ────────────────────────────────
+          Floating "+" button so Koy can capture a contractor request from
+          anywhere in the app without navigating. Opens AddTaskForm in a
+          modal; saves into the same manualTasks collection used by the
+          Tasks page and the per-job Open Items tab. */}
+      {identity && can(identity,"tasks.view") && (
+        <button onClick={()=>setQuickAddOpen(true)}
+          title="Quick add task / open item"
+          style={{position:"fixed",right:18,bottom:18,zIndex:9000,
+            width:54,height:54,borderRadius:"50%",border:"none",
+            background:"#2563eb",color:"#fff",fontSize:28,fontWeight:300,
+            cursor:"pointer",fontFamily:"inherit",lineHeight:1,
+            boxShadow:"0 6px 20px rgba(37,99,235,0.45), 0 2px 6px rgba(0,0,0,0.25)",
+            display:"flex",alignItems:"center",justifyContent:"center"}}>
+          +
+        </button>
+      )}
+      {quickAddOpen && (
+        <div onClick={()=>setQuickAddOpen(false)}
+          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",
+            zIndex:9100,display:"flex",alignItems:"flex-start",justifyContent:"center",
+            padding:"60px 16px",overflowY:"auto"}}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{background:"var(--bg)",border:"1px solid var(--border)",borderRadius:14,
+              maxWidth:640,width:"100%",padding:18,boxShadow:"0 20px 60px rgba(0,0,0,0.4)"}}>
+            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#2563eb"}}>QUICK ADD</div>
+              <button onClick={()=>setQuickAddOpen(false)}
+                style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:13,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✕</button>
+            </div>
+            <AddTaskForm
+              defaultForeman={(identity && identity.name) || "Koy"}
+              foremenList={_foremen}
+              jobs={jobs}
+              onCancel={()=>setQuickAddOpen(false)}
+              onAdd={(t)=>{
+                const itemColor = (t.itemType && ITEM_TYPE_COLORS[t.itemType]) || "#6b7280";
+                const task = {
+                  id: uid(), title: t.title, foreman: t.foreman,
+                  notes: t.notes, dueDate: t.dueDate||"", type:"manual", category:"manual",
+                  color: itemColor, cleared:false, createdAt: new Date().toISOString(),
+                  jobId: t.jobId||"", itemType: t.itemType||"",
+                  requestedBy: t.requestedBy||"", status: "open",
+                };
+                saveManualTask(task);
+                setManualTasks(prev=>[...(prev||[]), task]);
+                setQuickAddOpen(false);
+              }}
+            />
+          </div>
+        </div>
+      )}
 
       {/* ── SUBCONTRACTORS TAB ── */}
       {view==="subcontractors"&&(()=>{
