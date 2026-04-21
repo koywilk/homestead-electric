@@ -2613,7 +2613,18 @@ function JobNoteLine({
   const text = line?.text || '';
   const promoted = line?.promoted || null;
   const photos = Array.isArray(line?.photos) ? line.photos : [];
+  const materials = Array.isArray(line?.materials) ? line.materials : [];
   const isPromoted = !!promoted;
+
+  // Auto-grow the textarea so long lines stay fully visible. Driven off the
+  // native scrollHeight so visual wrap (not just explicit \n) is accounted
+  // for — fixes "typed off the edge and couldn't see what I was typing."
+  useEffect(() => {
+    const el = textRef.current;
+    if (!el) return;
+    el.style.height = 'auto';
+    el.style.height = Math.min(400, el.scrollHeight) + 'px';
+  }, [text, editing]);
 
   // Attach photos to this line via Firebase Storage.
   const attachPhotos = async (files) => {
@@ -2631,6 +2642,20 @@ function JobNoteLine({
       try { await deleteObject(ref(storage, p.storagePath)); } catch {}
     }
     onChange({ ...line, photos: photos.filter(x => x.id !== p.id) });
+  };
+
+  // Materials attached to this line. Each entry is a plain string (e.g.
+  // "2x 7a pumps"). Materials travel with the line to Punch on promote.
+  const addMaterial = () => {
+    onChange({ ...line, materials: [...materials, ''] });
+  };
+  const updateMaterial = (idx, value) => {
+    const next = materials.slice();
+    next[idx] = value;
+    onChange({ ...line, materials: next });
+  };
+  const removeMaterial = (idx) => {
+    onChange({ ...line, materials: materials.filter((_, i) => i !== idx) });
   };
 
   return (
@@ -2659,21 +2684,19 @@ function JobNoteLine({
           <textarea
             ref={textRef}
             value={text}
-            rows={Math.max(1, Math.min(6, (text.match(/\n/g)||[]).length + 1))}
+            rows={1}
             onChange={(e)=>onChange({ ...line, text: e.target.value })}
-            onKeyDown={(e)=>{
-              // Enter without shift → parent adds a new line after this one.
-              if (e.key === 'Enter' && !e.shiftKey) {
-                e.preventDefault();
-                onChange({ ...line, text }, { splitAfter: true });
-              }
-            }}
+            /* No onKeyDown Enter handler — Enter inserts a native newline
+               inside THIS bullet. Users click "＋ Add line" for a new
+               bullet. Previous auto-split behavior was too easy to trigger
+               mid-word (esp. on mobile autocorrect). */
             placeholder="One item / thought per line…"
             style={{
               width:'100%', boxSizing:'border-box',
               background:'transparent', border:'none', outline:'none',
               fontSize:13, color: C.text, lineHeight:1.4, resize:'none',
               fontFamily:'inherit', padding:0,
+              overflow:'hidden', // the scrollHeight effect handles height
             }}
           />
         ) : (
@@ -2756,6 +2779,76 @@ function JobNoteLine({
                     style={{display:'none'}}/>
                 </label>
               )
+            )}
+          </div>
+        )}
+
+        {/* Materials attached to THIS line. Each entry is a short string
+            like "2x 7a pumps" or "100ft conduit". When the line gets
+            promoted to Punch, materials copy onto the punch item (see
+            JobNoteDestinationPunch.promote — newItems[].materials).
+            Read-only rendering shows pills; edit mode shows editable
+            inputs with an X to remove. */}
+        {(materials.length > 0 || editing) && (
+          <div style={{
+            display:'flex', flexWrap:'wrap', gap:5,
+            marginTop: 5, alignItems:'center',
+          }}>
+            {materials.map((m, i) => (
+              editing && !isPromoted ? (
+                <span key={i} style={{
+                  display:'inline-flex', alignItems:'center', gap:3,
+                  background:'#f1f5f9', border:`1px solid ${C.border}`,
+                  borderRadius:99, padding:'1px 3px 1px 8px',
+                  fontSize:11, color: C.text,
+                }}>
+                  <span style={{ fontSize:10, opacity:0.7 }}>🧰</span>
+                  <input
+                    value={m}
+                    onChange={(e)=>updateMaterial(i, e.target.value)}
+                    autoFocus={m === ''}
+                    placeholder="e.g. 2x 7a pumps"
+                    style={{
+                      background:'transparent', border:'none', outline:'none',
+                      fontSize:11, color: C.text, fontFamily:'inherit',
+                      minWidth:60, width: Math.max(60, Math.min(200, (m.length || 10) * 7)),
+                    }}/>
+                  <button onClick={()=>removeMaterial(i)}
+                    title="Remove material"
+                    style={{
+                      background:'rgba(0,0,0,0.08)', border:'none', color:'#475569',
+                      borderRadius:99, width:15, height:15, fontSize:10, lineHeight:1,
+                      cursor:'pointer', padding:0, fontFamily:'inherit', flexShrink:0,
+                    }}>×</button>
+                </span>
+              ) : (
+                m ? (
+                  <span key={i} style={{
+                    display:'inline-flex', alignItems:'center', gap:3,
+                    background:'#f1f5f9', border:`1px solid ${C.border}`,
+                    borderRadius:99, padding:'1px 9px',
+                    fontSize:11, color: isPromoted ? C.dim : C.text,
+                  }}>
+                    <span style={{ fontSize:10, opacity:0.7 }}>🧰</span>
+                    {m}
+                  </span>
+                ) : null
+              )
+            ))}
+            {editing && !isPromoted && (
+              <button
+                onClick={addMaterial}
+                title="Add a material needed for this item — will follow to Punch if promoted"
+                style={{
+                  display:'inline-flex', alignItems:'center', gap:4,
+                  background:'transparent', border:`1px dashed ${phaseColor}66`,
+                  borderRadius:99, padding:'2px 9px',
+                  cursor:'pointer', fontSize:10, fontWeight:600,
+                  color: phaseColor, fontFamily:'inherit',
+                }}>
+                <span style={{ fontSize:11, lineHeight:1 }}>🧰</span>
+                <span>{materials.length === 0 ? 'Add material' : '+'}</span>
+              </button>
             )}
           </div>
         )}
@@ -2975,6 +3068,11 @@ function JobNoteDestinationPunch({ note, selectedLines, selectedLineIds, job, on
       addedBy: creator?.name || '',
       addedAt: now,
       photos: Array.isArray(l.photos) ? l.photos.map(p => ({ ...p })) : [], // copy by reference-safe clone
+      // Materials follow the line to Punch so the crew sees what to bring.
+      // Stored on the punch item as a string array; punch UI can render them
+      // alongside the item text. Empty strings filtered so placeholder
+      // materials don't leak through.
+      materials: Array.isArray(l.materials) ? l.materials.filter(m => (m||'').trim()).slice() : [],
       fromJobNote: { jobNoteId: note.id, lineId: l.id, noteTitle: note.title || '' },
     }));
 
@@ -4580,6 +4678,25 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                 style={{fontSize:9,background:'none',border:'none',color:C.muted,cursor:'pointer',textDecoration:'underline',padding:0}}>
                 edit
               </button>
+            </div>
+          )}
+
+          {/* Materials carried over from the source Job Note line on promote.
+              Distinct from the single-string materialNeeded above (legacy
+              field, kept for existing items). Each material renders as a
+              🧰 pill. Hidden once the punch item is done. */}
+          {Array.isArray(item.materials) && item.materials.filter(m=>(m||'').trim()).length > 0 && !item.done && (
+            <div style={{marginLeft:22,marginTop:2,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
+              {item.materials.filter(m=>(m||'').trim()).map((m, mi) => (
+                <span key={mi} style={{
+                  display:'inline-flex', alignItems:'center', gap:3,
+                  fontSize:10, fontWeight:600, background:'#f1f5f9', color:'#334155',
+                  borderRadius:99, padding:'2px 8px', border:`1px solid ${C.border}`,
+                }}>
+                  <span style={{ fontSize:9, opacity:0.7 }}>🧰</span>
+                  {m}
+                </span>
+              ))}
             </div>
           )}
 
