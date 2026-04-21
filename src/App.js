@@ -2557,6 +2557,48 @@ function jobNotePlain(s) {
   return (s || '').replace(/<[^>]+>/g, ' ').replace(/\s+/g, ' ').trim();
 }
 
+// Convert legacy rich-text HTML (from PhaseInstructions) into readable plain
+// text with line breaks preserved. Used during migration so the new Job
+// Notes surface doesn't show raw <p>, <br>, &nbsp;, style="..." markup.
+// Idempotent — plain text round-trips unchanged.
+function jobNoteHtmlToText(s) {
+  if (!s) return '';
+  let t = String(s);
+  // No tags and no entities → already plain text, short-circuit.
+  if (!/[<&]/.test(t)) return t;
+  // Normalize block-level breaks BEFORE stripping tags.
+  t = t.replace(/<\s*br\s*\/?\s*>/gi, '\n');
+  t = t.replace(/<\/\s*(p|div|li|h[1-6]|tr)\s*>/gi, '\n');
+  t = t.replace(/<\s*li[^>]*>/gi, '• ');
+  // Strip every remaining tag.
+  t = t.replace(/<[^>]+>/g, '');
+  // Decode the handful of entities the legacy editor emits.
+  t = t.replace(/&nbsp;/gi, ' ')
+       .replace(/&amp;/gi, '&')
+       .replace(/&lt;/gi, '<')
+       .replace(/&gt;/gi, '>')
+       .replace(/&quot;/gi, '"')
+       .replace(/&#39;/gi, "'")
+       .replace(/&#(\d+);/g, (_, n) => String.fromCharCode(parseInt(n, 10)))
+       .replace(/&[a-z0-9]+;/gi, ' ');
+  // Clean up whitespace: collapse runs of spaces, trim each line, cap blank
+  // runs to a single blank line, trim the whole thing.
+  t = t.replace(/[ \t]+/g, ' ');
+  t = t.split('\n').map(x => x.trim()).join('\n');
+  t = t.replace(/\n{3,}/g, '\n\n');
+  return t.trim();
+}
+
+// Returns true if a string looks like it contains HTML markup. Used to
+// decide whether to run jobNoteHtmlToText on lines already in Firestore
+// (users whose jobNotesMigratedAt was stamped before this cleanup).
+function jobNoteLooksLikeHtml(s) {
+  if (!s) return false;
+  return /<\s*(p|br|div|li|ul|ol|span|b|i|strong|em|a|h[1-6])\b[^>]*>/i.test(s)
+      || /<\/\s*(p|div|li|ul|ol|span|b|i|strong|em|a|h[1-6])\s*>/i.test(s)
+      || /&(nbsp|amp|lt|gt|quot|#\d+);/i.test(s);
+}
+
 // Single bullet line. Read-only until the parent note is in edit mode.
 // Triage mode (J4) will add a left checkbox; promoted lines will carry a
 // ghost chip on the right (J7).
@@ -2639,13 +2681,15 @@ function JobNoteLine({
             fontSize:13, color: isPromoted ? C.dim : C.text, lineHeight:1.4,
             whiteSpace:'pre-wrap', wordBreak:'break-word',
             textDecoration: isPromoted ? 'none' : 'none',
-          }}
-            // Migrated notes carry HTML in text — render it so bullets/links
-            // show up correctly in read mode. User-edited plain text uses
-            // the same path because HTML-escape happens at the browser level
-            // and the editor controls what gets saved.
-            dangerouslySetInnerHTML={{ __html: text || '<span style="color:#94a3b8">(empty line)</span>' }}
-          />
+          }}>
+            {/* Plain-text rendering. Migration cleans legacy HTML ahead of
+                time (see jobNoteHtmlToText + sanitizeJobNotesForDisplay),
+                and anything the user types in the textarea is treated as
+                literal text — no risk of injecting markup via `<` / `>`. */}
+            {text
+              ? text
+              : <span style={{color:'#94a3b8'}}>(empty line)</span>}
+          </div>
         )}
 
         {/* Line photos */}
@@ -3936,6 +3980,36 @@ function JobNotesSection({
       ...overrides, // lets callers pre-set phase (e.g. 'spec') without re-entering edit mode
     };
     writeNotes([ ...notes, newNote ]);
+    return newNote;
+  };
+
+  // Camera / file-upload shortcut. Creates a new note and attaches the chosen
+  // photos directly to the note's photos[]. Phase defaults to the section's
+  // scope; Koy can flip to 'spec' via the dropdown after the fact.
+  const [quickCamUploading, setQuickCamUploading] = useState(false);
+  const quickCaptureWithPhotos = async (files, phaseOverride = null) => {
+    if (!files || files.length === 0) return;
+    const creator = (getIdentity && getIdentity()) || null;
+    const now = new Date().toISOString();
+    const noteId = uid();
+    setQuickCamUploading(true);
+    const uploaded = await uploadJobNotePhotos(files, job.id, noteId, null);
+    setQuickCamUploading(false);
+    if (uploaded.length === 0) return;
+    const newNote = {
+      id: noteId,
+      title: '',
+      phase: phaseOverride || defaultPhase,
+      createdAt: now,
+      createdBy: creator?.name || '',
+      updatedAt: now,
+      lines: [{ id: uid(), text: '', createdAt: now, photos: [], promoted: null }],
+      photos: uploaded,
+      archived: false,
+      deleted: false,
+      migratedFrom: null,
+    };
+    writeNotes([ ...notes, newNote ]);
   };
 
   return (
@@ -3956,30 +4030,59 @@ function JobNotesSection({
           onViewPhoto={onViewPhoto}
         />
       ))}
+      {/* Compact add-row — small pills, NOT full-width dashed boxes.
+          Camera icon triggers quick capture: pick photos → new note
+          with those photos already attached. */}
       <div style={{
-        display:'flex', gap:6, marginTop: filtered.length > 0 ? 6 : 0,
+        display:'flex', gap:6, alignItems:'center',
+        marginTop: filtered.length > 0 ? 8 : 0,
       }}>
         <button onClick={()=>addNote()}
+          title="New Job Note — captures work to triage into RT / Punch / CO / Call"
           style={{
-            flex:2, background:'transparent',
-            border:`1px dashed ${phaseColor || C.border}`, borderRadius:8,
-            padding:'8px 0', fontSize:12, fontWeight:700,
+            background:'transparent',
+            border:`1px solid ${(phaseColor || C.border)}55`, borderRadius:99,
+            padding:'3px 10px', fontSize:11, fontWeight:700,
             color: phaseColor || C.dim, cursor:'pointer', fontFamily:'inherit',
           }}>
-          + New Job Note
+          + Note
         </button>
         <button
           onClick={()=>addNote({ phase:'spec' })}
-          title="Specification note — reference info like device colors, plate colors, fixtures. Not triageable."
+          title="Spec Note — reference info like device colors, plate colors, fixtures. Not triageable."
           style={{
-            flex:1, background:'transparent',
-            border:`1px dashed #64748b`, borderRadius:8,
-            padding:'8px 0', fontSize:12, fontWeight:700,
+            background:'transparent',
+            border:`1px solid #64748b55`, borderRadius:99,
+            padding:'3px 10px', fontSize:11, fontWeight:700,
             color:'#64748b', cursor:'pointer', fontFamily:'inherit',
-            display:'flex', alignItems:'center', justifyContent:'center', gap:4,
+            display:'inline-flex', alignItems:'center', gap:3,
           }}>
-          <span style={{ fontSize:11 }}>ℹ</span> + Spec Note
+          <span style={{ fontSize:10 }}>ℹ</span> + Spec
         </button>
+        <label
+          title="Quick-capture — pick photos/files and drop them in a new spec note"
+          style={{
+            background:'transparent',
+            border:`1px solid #64748b55`, borderRadius:99,
+            padding:'3px 9px', fontSize:12, fontWeight:700,
+            color: quickCamUploading ? C.dim : '#64748b',
+            cursor: quickCamUploading ? 'wait' : 'pointer',
+            fontFamily:'inherit',
+            display:'inline-flex', alignItems:'center', gap:4,
+            opacity: quickCamUploading ? 0.6 : 1,
+          }}>
+          <span style={{ fontSize:13, lineHeight:1 }}>{quickCamUploading ? '…' : '📷'}</span>
+          <input type="file" accept="image/*" multiple
+            disabled={quickCamUploading}
+            onChange={(e)=>{ quickCaptureWithPhotos(e.target.files, 'spec'); e.target.value=''; }}
+            style={{display:'none'}}/>
+        </label>
+        <span style={{
+          marginLeft:'auto', fontSize:10, color: C.dim, fontStyle:'italic',
+          whiteSpace:'nowrap',
+        }}>
+          {filtered.length === 0 ? 'add a note →' : ''}
+        </span>
       </div>
       {filtered.length === 0 && (
         <div style={{ marginTop:8, fontSize:11, color: C.dim, fontStyle:'italic', textAlign:'center' }}>
@@ -9816,10 +9919,14 @@ function buildMigratedJobNotes(raw) {
   const pushFromInstructions = (arr, phase) => {
     (Array.isArray(arr) ? arr : []).forEach((entry) => {
       if (!entry) return;
-      const label = (entry.label || '').trim();
-      const txt   = entry.text || '';
+      const rawLabel = (entry.label || '').trim();
+      const rawText  = entry.text || '';
+      // Convert legacy rich-text HTML to readable plain text (preserving line
+      // breaks). Anything that's already plain text round-trips unchanged.
+      const label    = jobNoteHtmlToText(rawLabel);
+      const txt      = jobNoteHtmlToText(rawText);
       // Skip truly empty scratch rows so we don't migrate placeholders.
-      const hasContent = label.length > 0 || txt.replace(/<[^>]+>/g,' ').trim().length > 0;
+      const hasContent = label.length > 0 || txt.length > 0;
       if (!hasContent) return;
       out.push({
         id: uid(),
@@ -9847,9 +9954,45 @@ function buildMigratedJobNotes(raw) {
   return out;
 }
 
+// In-memory only: for users whose migration ran before the HTML→plain text
+// cleanup shipped, their stored jobNotes still carry raw <p>/<br>/&nbsp;
+// markup. Strip it on load so the UI renders clean text. Doesn't write back
+// to Firestore (non-destructive); the next explicit edit persists the
+// cleaned version. Idempotent — plain-text notes round-trip untouched.
+function sanitizeJobNotesForDisplay(list) {
+  if (!Array.isArray(list)) return [];
+  let changed = false;
+  const out = list.map(n => {
+    if (!n) return n;
+    let note = n;
+    if (jobNoteLooksLikeHtml(n.title)) {
+      note = { ...note, title: jobNoteHtmlToText(n.title) };
+      changed = true;
+    }
+    if (Array.isArray(n.lines)) {
+      let linesChanged = false;
+      const nextLines = n.lines.map(l => {
+        if (l && jobNoteLooksLikeHtml(l.text)) {
+          linesChanged = true;
+          return { ...l, text: jobNoteHtmlToText(l.text) };
+        }
+        return l;
+      });
+      if (linesChanged) {
+        note = { ...note, lines: nextLines };
+        changed = true;
+      }
+    }
+    return note;
+  });
+  return changed ? out : list;
+}
+
 function normalizeJobNotes(raw) {
-  // Explicit saved list — trust it, leave the user's edits alone.
-  if (Array.isArray(raw?.jobNotes) && raw.jobNotes.length > 0) return raw.jobNotes;
+  // Explicit saved list — trust it, but sanitize legacy HTML on display.
+  if (Array.isArray(raw?.jobNotes) && raw.jobNotes.length > 0) {
+    return sanitizeJobNotesForDisplay(raw.jobNotes);
+  }
   // Migration already ran and was persisted — respect empty state.
   if (raw?.jobNotesMigratedAt) return Array.isArray(raw?.jobNotes) ? raw.jobNotes : [];
   // Virgin — materialize from legacy PhaseInstructions (in-memory only
