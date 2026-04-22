@@ -9477,8 +9477,14 @@ function TapeLightSection({lights,onChange}) {
 
               <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Load Name</div>
 
+              {/* NOTE: no onAdd on mobile. The mobile sheet's Done handler fires
+                  onChange + onAdd in the same sync tick with a stale `lights`
+                  closure — add() overwrote the just-typed name with a blank card.
+                  Keeping onKeyDown (desktop Enter) is safe because per-keystroke
+                  state updates keep the closure fresh; the mobile Add button at
+                  the bottom of the section covers the "add another" flow. */}
               <Inp value={l.loadName} onChange={e=>upd(l.id,{loadName:e.target.value})} placeholder="e.g. Kitchen Under-Cabinet"
-                onKeyDown={e=>e.key==="Enter"&&add()} onAdd={add}/>
+                onKeyDown={e=>e.key==="Enter"&&add()}/>
 
             </div>
 
