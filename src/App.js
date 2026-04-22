@@ -8300,13 +8300,18 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
 
   const allRows=[...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[]),
     ...(homeRuns.extraFloors||[]).flatMap(e=>homeRuns[e.key]||[])];
-  const total=allRows.length, pulled=allRows.filter(r=>r.status==='Pulled').length;
+  // Only count rows that have a load name — placeholder/blank rows shouldn't
+  // inflate the "needs to pull" total. A blank row is just scaffolding, not a
+  // load. This keeps the pulled/total progress honest.
+  const namedRows=allRows.filter(r=>(r.name||'').trim());
+  const total=namedRows.length, pulled=namedRows.filter(r=>r.status==='Pulled').length;
   const pct=total>0?Math.round((pulled/total)*100):0;
 
   return (
     <div>
-      {/* Generator Load Selection */}
-      <Section label="Generator Load Selection" color={C.accent} defaultOpen={true}>
+      {/* Generator Load Selection — starts collapsed so the section header is
+          quick to scan; foremen can expand when they need to pick/review loads. */}
+      <Section label="Generator Load Selection" color={C.accent} defaultOpen={false}>
         {hoResponse?.submitted&&(
           <div style={{background:`${C.green}12`,border:`1px solid ${C.green}44`,borderRadius:10,
             padding:'10px 14px',marginBottom:14,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
@@ -9021,6 +9026,12 @@ function KeypadSection({loads,onChange,label,allLoads=[]}) {
   const lastRef = useRef(null);
   useEffect(()=>{ if(focusLast&&lastRef.current){lastRef.current.focus();setFocusLast(false);} },[loads.length,focusLast]);
 
+  // Confirmed = this floor's keypads are done being edited; collapse the
+  // edit grid into a tight read-only list so the tab stays scannable during
+  // review. Pure UI state — the underlying loads array is untouched, so
+  // toggling back to edit restores every field as-is (no data migration).
+  const [confirmed, setConfirmed] = useState(false);
+
   const addRow = () => { onChange([...loads, newKPRow(loads.length+1)]); setFocusLast(true); };
 
   const delRow = (id) => onChange(loads.filter(r=>r.id!==id).map((r,i)=>({...r,num:i+1})));
@@ -9033,8 +9044,21 @@ function KeypadSection({loads,onChange,label,allLoads=[]}) {
 
     <div style={{marginBottom:22}}>
 
-      <div style={{marginBottom:6}}>
-        <div style={{fontSize:12,color:C.purple,fontWeight:700}}>{label}</div>
+      <div style={{marginBottom:6,display:"flex",alignItems:"center",gap:8}}>
+        <div style={{fontSize:12,color:C.purple,fontWeight:700,flex:1}}>{label}</div>
+        {namedRows.length>0&&(
+          <button onClick={()=>setConfirmed(c=>!c)}
+            title={confirmed?"Switch back to edit mode":"Collapse to a compact read-only list"}
+            style={{
+              fontSize:10,fontWeight:700,letterSpacing:"0.05em",
+              background: confirmed ? C.purple : 'transparent',
+              color: confirmed ? '#fff' : C.purple,
+              border:`1px solid ${C.purple}`, borderRadius:99,
+              padding:'2px 10px', cursor:'pointer', fontFamily:'inherit',
+            }}>
+            {confirmed ? '✓ CONFIRMED — EDIT' : 'CONFIRM'}
+          </button>
+        )}
       </div>
 
       {/* Pull progress — only shown when there are named rows */}
@@ -9052,48 +9076,81 @@ function KeypadSection({loads,onChange,label,allLoads=[]}) {
 
       {allLoads.length>0&&<datalist id={dlId}>{allLoads.filter(l=>l.name.trim()).map(l=><option key={l.id} value={l.name}/>)}</datalist>}
 
-      <div style={{display:"grid",gridTemplateColumns:"36px 1fr 80px 28px",gap:6,marginBottom:6}}>
-
-        {["#","Keypad Load Name","Status",""].map((h,i)=>(
-
-          <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
-
-        ))}
-
-      </div>
-
-      {loads.map((r,ri)=>(
-
-        <div key={r.id} style={{display:"grid",gridTemplateColumns:"36px 1fr 80px 28px",gap:6,marginBottom:4,alignItems:"center",
-          borderRadius:6,padding:"3px 0",
-          background:r.status==="Pulled"?"rgba(34,197,94,0.08)":r.status==="Need Specs"?"rgba(239,68,68,0.08)":"transparent"}}>
-
-          <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:6}}>{r.num}.</span>
-
-          <input ref={ri===loads.length-1?lastRef:null}
-            list={allLoads.length>0?dlId:undefined}
-            value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"
-            onKeyDown={e=>e.key==="Enter"&&addRow()}
-            style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
-              padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
-
-          <Sel value={r.status||""} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
-            style={{color:r.status==="Pulled"?C.green:r.status==="Need Specs"?C.red:C.text,fontSize:10}}/>
-
-          <button onClick={()=>delRow(r.id)}
-
-            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
-
+      {confirmed ? (
+        /* Compact read-only list — shows only the named rows with their
+           status badge. No edit inputs, no add/delete buttons, no blank
+           placeholder rows. Click the "EDIT" pill at the top to get the
+           full edit grid back — the underlying loads array is untouched. */
+        <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+          {namedRows.map((r,i)=>{
+            const statusColor = r.status==="Pulled" ? C.green : r.status==="Need Specs" ? C.red : C.muted;
+            const statusBg    = r.status==="Pulled" ? "rgba(34,197,94,0.08)" : r.status==="Need Specs" ? "rgba(239,68,68,0.08)" : "transparent";
+            return (
+              <div key={r.id} style={{
+                display:"flex",alignItems:"center",gap:8,
+                padding:"5px 10px",
+                background: statusBg,
+                borderTop: i>0 ? `1px solid ${C.border}` : "none",
+              }}>
+                <span style={{fontSize:11,color:C.muted,fontWeight:700,flexShrink:0,width:22}}>{r.num}.</span>
+                <span style={{fontSize:12,color:C.text,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                  {r.name}
+                </span>
+                {r.status && (
+                  <span style={{fontSize:10,fontWeight:700,color:statusColor,letterSpacing:"0.04em",flexShrink:0}}>
+                    {r.status==="Pulled"?"✓ PULLED":r.status.toUpperCase()}
+                  </span>
+                )}
+              </div>
+            );
+          })}
         </div>
+      ) : (
+        <>
+          <div style={{display:"grid",gridTemplateColumns:"36px 1fr 80px 28px",gap:6,marginBottom:6}}>
 
-      ))}
+            {["#","Keypad Load Name","Status",""].map((h,i)=>(
 
-      <button onClick={addRow}
-        style={{background:"none",border:`1px dashed ${C.purple}44`,color:`${C.purple}88`,borderRadius:7,
-          padding:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"100%",
-          letterSpacing:"0.04em",marginTop:4}}>
-        + Add Row
-      </button>
+              <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
+
+            ))}
+
+          </div>
+
+          {loads.map((r,ri)=>(
+
+            <div key={r.id} style={{display:"grid",gridTemplateColumns:"36px 1fr 80px 28px",gap:6,marginBottom:4,alignItems:"center",
+              borderRadius:6,padding:"3px 0",
+              background:r.status==="Pulled"?"rgba(34,197,94,0.08)":r.status==="Need Specs"?"rgba(239,68,68,0.08)":"transparent"}}>
+
+              <span style={{fontSize:11,color:C.muted,textAlign:"right",paddingRight:6}}>{r.num}.</span>
+
+              <input ref={ri===loads.length-1?lastRef:null}
+                list={allLoads.length>0?dlId:undefined}
+                value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"
+                onKeyDown={e=>e.key==="Enter"&&addRow()}
+                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+                  padding:"6px 10px",fontSize:12,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
+
+              <Sel value={r.status||""} onChange={e=>upd(r.id,{status:e.target.value})} options={PULLED_OPTS}
+                style={{color:r.status==="Pulled"?C.green:r.status==="Need Specs"?C.red:C.text,fontSize:10}}/>
+
+              <button onClick={()=>delRow(r.id)}
+
+                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
+
+            </div>
+
+          ))}
+
+          <button onClick={addRow}
+            style={{background:"none",border:`1px dashed ${C.purple}44`,color:`${C.purple}88`,borderRadius:7,
+              padding:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"100%",
+              letterSpacing:"0.04em",marginTop:4}}>
+            + Add Row
+          </button>
+        </>
+      )}
 
     </div>
 
@@ -9125,6 +9182,17 @@ function PanelModulesSection({
     return ()=>window.removeEventListener("resize",handle);
   },[]);
   const narrow = winW < 640;
+
+  // Per-module "confirmed" toggle — tracks which module cards should render as
+  // a compact read-only list instead of the full edit grid. Keyed by
+  // `mod.id`. Purely visual state: toggling doesn't touch the modules array,
+  // so no field values can be lost on switch-back to edit mode.
+  const [confirmedMods, setConfirmedMods] = useState(() => new Set());
+  const toggleConfirmed = (mid) => setConfirmedMods(prev => {
+    const next = new Set(prev);
+    if (next.has(mid)) next.delete(mid); else next.add(mid);
+    return next;
+  });
 
   const updMod  = (mid,p) => onChange(modules.map(m=>m.id===mid?{...m,...p}:m));
   const delMod  = (mid)   => onChange(modules.filter(m=>m.id!==mid));
@@ -9212,6 +9280,7 @@ function PanelModulesSection({
         const cap = chCap(mod.moduleType);
         const named = mod.loads.filter(l=>l.name.trim());
         const pulled = named.filter(l=>l.pulled);
+        const isConfirmed = confirmedMods.has(mod.id);
         return (
           <div key={mod.id} style={{border:`1px solid ${C.purple}33`,borderRadius:8,marginBottom:12,overflow:"hidden"}}>
 
@@ -9259,6 +9328,20 @@ function PanelModulesSection({
               <span style={{fontSize:10,color:`${C.purple}88`,marginLeft:"auto",whiteSpace:"nowrap"}}>
                 {named.length}{cap?`/${cap}`:""} ch{pulled.length>0?` · ${pulled.length} pulled`:""}
               </span>
+              {named.length>0&&(
+                <button onClick={()=>toggleConfirmed(mod.id)}
+                  title={isConfirmed?"Switch back to edit mode":"Collapse to a compact read-only list"}
+                  style={{
+                    fontSize:9,fontWeight:700,letterSpacing:"0.05em",
+                    background: isConfirmed ? C.purple : 'transparent',
+                    color: isConfirmed ? '#fff' : C.purple,
+                    border:`1px solid ${C.purple}`, borderRadius:99,
+                    padding:'1px 8px', cursor:'pointer', fontFamily:'inherit',
+                    flexShrink:0,
+                  }}>
+                  {isConfirmed ? '✓ EDIT' : 'CONFIRM'}
+                </button>
+              )}
               <button onClick={()=>delMod(mod.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,padding:"0 2px",flexShrink:0}}>✕</button>
             </div>
 
@@ -9266,7 +9349,31 @@ function PanelModulesSection({
             <div style={{padding:"6px 10px 4px"}}>
               {allLoads.length>0&&<datalist id={`mod-dl-${mod.id}`}>{allLoads.filter(l=>l.name.trim()).map(l=><option key={l.id} value={l.name}>{l.location?`(${l.location})`:""}</option>)}</datalist>}
 
-              {narrow ? (
+              {isConfirmed ? (
+                /* Compact read-only list — named loads only, no blank
+                   placeholder rows. Switching back to EDIT restores every
+                   field as-is (data untouched). */
+                <div style={{border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+                  {named.map((load, i) => (
+                    <div key={load.id} style={{
+                      display:"flex",alignItems:"center",gap:8,
+                      padding:"5px 10px",
+                      background: load.pulled ? "rgba(34,197,94,0.08)" : "transparent",
+                      borderTop: i>0 ? `1px solid ${C.border}` : "none",
+                    }}>
+                      <span style={{fontSize:11,color:C.muted,fontWeight:700,flexShrink:0,width:22}}>{load.num}.</span>
+                      <span style={{fontSize:12,color:C.text,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                        {load.name}
+                      </span>
+                      {load.ch && <span style={{fontSize:10,color:C.muted,flexShrink:0}}>Ch {load.ch}</span>}
+                      {load.loadType && <span style={{fontSize:10,color:C.muted,flexShrink:0}}>{load.loadType}</span>}
+                      {load.watts && <span style={{fontSize:10,color:C.muted,flexShrink:0}}>{load.watts}W</span>}
+                      {showKeypad && load.keypad && <span style={{fontSize:10,color:`${C.purple}`,fontWeight:600,flexShrink:0}}>KP {load.keypad}</span>}
+                      {load.pulled && <span style={{fontSize:10,fontWeight:700,color:C.green,letterSpacing:"0.04em",flexShrink:0}}>✓ PULLED</span>}
+                    </div>
+                  ))}
+                </div>
+              ) : narrow ? (
                 /* Mobile: card per load */
                 mod.loads.map((load,li)=>(
                   <div key={load.id} style={{
@@ -9378,11 +9485,13 @@ function PanelModulesSection({
                 </>
               )}
 
-              <button onClick={()=>addLoad(mod.id)}
-                style={{background:"none",border:"none",color:C.purple,fontSize:10,fontWeight:700,fontFamily:"inherit",
-                  cursor:"pointer",padding:"4px 2px",letterSpacing:"0.04em",opacity:0.75}}>
-                + Add Row to {devLabel} {mod.modNum||mod.moduleType}
-              </button>
+              {!isConfirmed && (
+                <button onClick={()=>addLoad(mod.id)}
+                  style={{background:"none",border:"none",color:C.purple,fontSize:10,fontWeight:700,fontFamily:"inherit",
+                    cursor:"pointer",padding:"4px 2px",letterSpacing:"0.04em",opacity:0.75}}>
+                  + Add Row to {devLabel} {mod.modNum||mod.moduleType}
+                </button>
+              )}
             </div>
           </div>
         );
@@ -10444,9 +10553,29 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
 }
 
 
+// Default tab order. Panelized Lighting + Tape Light sit just after Home Runs
+// because on lighting-heavy jobs the foreman hops between Home Runs and the
+// lighting tabs constantly. On jobs with NO panelized lighting / NO tape
+// light, though, those tabs are clutter — so `tabsForJob(job)` below moves
+// them to the far right when job.noPanelizedLighting / job.noTapeLight is set.
 const TABS = ["Job Info","Plans & Links","Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
 
               "Change Orders","Return Trips","Open Items","QC"];
+
+// Per-job tab order. Tabs the job doesn't use get shuffled to the end so the
+// leading edge of the tab bar stays focused on what that job actually needs.
+// Both flags default to undefined (= keep in original slot), so existing jobs
+// are unaffected until the foreman flips the toggle inside the lighting tab.
+const tabsForJob = (job) => {
+  if(!job) return TABS;
+  const hideP = !!job.noPanelizedLighting;
+  const hideT = !!job.noTapeLight;
+  if(!hideP && !hideT) return TABS;
+  const ordered = TABS.filter(t => !(hideP && t==="Panelized Lighting") && !(hideT && t==="Tape Light"));
+  if(hideP) ordered.push("Panelized Lighting");
+  if(hideT) ordered.push("Tape Light");
+  return ordered;
+};
 
 // Item type options for Open Items (tasks/visits tied to a job)
 const ITEM_TYPES = ["Visit","Purchase","Call","Other"];
@@ -11285,7 +11414,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
   );
 }
 
-function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, initialTab, users=[], identity=null, manualTasks=[], onSaveManualTask, onDeleteManualTask, jobs=[]}) {
+function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, initialTab, users=[], identity=null, manualTasks=[], onSaveManualTask, onDeleteManualTask, jobs=[]}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
@@ -11971,6 +12100,21 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               )
             )}
 
+            {/* Undo accidental "Promote to Quote" — moves this quote back into */}
+            {/* the Upcoming pipeline, preserving name/address/gc/foreman. The  */}
+            {/* original job doc is deleted only after the upcoming entry is    */}
+            {/* persisted, so data can't vanish mid-op.                         */}
+            {job.type==="quote"&&canConvertQuote&&onMoveQuoteBackToUpcoming&&!convertPrompt&&(
+              <button onClick={()=>onMoveQuoteBackToUpcoming(job)}
+                title="Move this quote back into the Upcoming pipeline"
+                style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                  color:C.dim,padding:"6px 12px",fontSize:12,fontWeight:600,cursor:"pointer",
+                  fontFamily:"inherit",letterSpacing:"0.03em",display:"inline-flex",
+                  alignItems:"center",gap:5,whiteSpace:"nowrap"}}>
+                <Icon name="arrowLeft" size={11} stroke={2}/> Back to Upcoming
+              </button>
+            )}
+
             <button onClick={refreshJob} title="Refresh"
 
               style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
@@ -12000,7 +12144,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
           flexShrink:0,overflowX:"auto",scrollbarWidth:"none"}}>
 
-          {TABS.map(t=>(
+          {tabsForJob(job).map(t=>(
 
             <button key={t} onClick={()=>setTab(t)}
 
@@ -12551,6 +12695,27 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
             <div>
 
+              {/* "No panelized lighting" toggle — flips job.noPanelizedLighting,    */}
+              {/* which tabsForJob() uses to shove this tab to the end of the bar.   */}
+              {/* Data-safety: this is a pure UI-order flag; existing lighting rows, */}
+              {/* modules, keypads are untouched and still live under this tab so    */}
+              {/* nothing is destroyed even if the toggle is flipped by accident.    */}
+              <div style={{marginBottom:12,padding:"8px 12px",background:job.noPanelizedLighting?`${C.dim}15`:C.surface,
+                border:`1px solid ${job.noPanelizedLighting?C.dim+"55":C.border}`,borderRadius:8,
+                display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                <label style={{display:"inline-flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,color:C.text,fontWeight:600}}>
+                  <input type="checkbox" checked={!!job.noPanelizedLighting}
+                    onChange={e=>u({noPanelizedLighting:e.target.checked})}
+                    style={{cursor:"pointer"}}/>
+                  No panelized lighting system on this job
+                </label>
+                {job.noPanelizedLighting&&(
+                  <span style={{fontSize:10,color:C.dim,fontStyle:"italic"}}>
+                    Tab moved to end of tab bar. Uncheck to restore its original position.
+                  </span>
+                )}
+              </div>
+
               {/* Share Collab Link */}
               <div style={{marginBottom:16,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
                 <button onClick={()=>{
@@ -12948,6 +13113,25 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           {tab==="Tape Light"&&(
 
             <div>
+
+              {/* "No tape light" toggle — mirrors the panelized lighting one.      */}
+              {/* Flips job.noTapeLight, pushing this tab to the end via            */}
+              {/* tabsForJob(). Existing tapeLights array is preserved either way.  */}
+              <div style={{marginBottom:12,padding:"8px 12px",background:job.noTapeLight?`${C.dim}15`:C.surface,
+                border:`1px solid ${job.noTapeLight?C.dim+"55":C.border}`,borderRadius:8,
+                display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                <label style={{display:"inline-flex",alignItems:"center",gap:8,cursor:"pointer",fontSize:12,color:C.text,fontWeight:600}}>
+                  <input type="checkbox" checked={!!job.noTapeLight}
+                    onChange={e=>u({noTapeLight:e.target.checked})}
+                    style={{cursor:"pointer"}}/>
+                  No tape light on this job
+                </label>
+                {job.noTapeLight&&(
+                  <span style={{fontSize:10,color:C.dim,fontStyle:"italic"}}>
+                    Tab moved to end of tab bar. Uncheck to restore its original position.
+                  </span>
+                )}
+              </div>
 
               <Section label="Tape Light Locations" color={C.teal} defaultOpen={true}>
                 <TapeLightSection lights={job.tapeLights||[]} onChange={v=>u({tapeLights:v})}/>
@@ -22601,6 +22785,47 @@ function App() {
               setJobs(js=>js.map(j=>j.id===q.id?updated:j));
               saveJob(updated,{type:"", simproNo:q.simproNo||""});
               setSelected(updated);
+            }}
+            onMoveQuoteBackToUpcoming={async (q)=>{
+              // Recovery for an accidental "→ Quote" promote from Upcoming.
+              // Data-safety order of operations:
+              //   1. Build the upcoming entry from the quote's name/address/gc/foreman.
+              //   2. Write upcoming list to Firestore FIRST (via setDoc directly
+              //      so we can catch errors — saveAllUpcoming swallows them).
+              //   3. Only after that write resolves do we delete the quote job
+              //      doc. If the upcoming write fails, we bail before deleting
+              //      so no data is lost.
+              if(!await showConfirm({
+                message:`Move "${q.name||"this quote"}" back to the Upcoming pipeline? The quote will be removed from the Quotes list.`,
+                confirmLabel:"Move Back", cancelLabel:"Cancel"
+              })) return;
+              const u = {
+                id: uid(),
+                name: q.name || "",
+                address: q.address || "",
+                city: "",
+                sales: "",
+                customer: q.gc || "",
+                notes: "",
+                lastFollowUp: "",
+                foreman: q.foreman && q.foreman!=="Unassigned" ? q.foreman : "",
+              };
+              const next = [u, ...upcoming];
+              try {
+                await setDoc(doc(db,"settings","upcoming_jobs"),
+                  {items:next, updated_at:new Date().toISOString()});
+              } catch(err) {
+                console.error("Move-quote-back save failed:", err);
+                toast.error && toast.error("Couldn't save to Upcoming — quote was NOT moved.");
+                return;
+              }
+              setUpcoming(next);
+              // Now it's safe to remove the quote job — upcoming already has the data.
+              setJobs(js=>js.filter(j=>j.id!==q.id));
+              if(selected?.id===q.id) setSelected(null);
+              deleteJobRemote(q.id);
+              setView("upcoming");
+              toast.success && toast.success(`Moved "${q.name||"quote"}" back to Upcoming.`);
             }}
           />)}
 
