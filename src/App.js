@@ -2605,6 +2605,7 @@ function jobNoteLooksLikeHtml(s) {
 function JobNoteLine({
   line, editing, phaseColor, onChange, onRemove, onViewPhoto,
   triage = false, selected = false, onToggleSelect = null, onJumpToPromoted = null,
+  onUnpromote = null,
   jobId, noteId,
 }) {
   const [uploading, setUploading] = useState(false);
@@ -2859,9 +2860,13 @@ function JobNoteLine({
           </div>
         )}
 
-        {/* Ghost chip — J7 makes this tappable to navigate */}
+        {/* Ghost chip — J7 makes this tappable to navigate.
+            × button (CO only, V1) lets the user un-promote later if the
+            10-second toast has expired. Parent handles the confirm dialog
+            (with edited-since-promote + in-progress warnings) so this button
+            is just a trigger. */}
         {promoted && (
-          <div style={{ marginTop: 4, display:'inline-flex', alignItems:'center' }}>
+          <div style={{ marginTop: 4, display:'inline-flex', alignItems:'center', gap:4 }}>
             <button
               onClick={()=>onJumpToPromoted && onJumpToPromoted(promoted)}
               style={{
@@ -2874,6 +2879,21 @@ function JobNoteLine({
               title="Jump to destination">
               → {promoted.type?.toUpperCase() || '?'} · {promoted.targetLabel || ''}
             </button>
+            {onUnpromote && promoted.type === 'co' && (
+              <button
+                onClick={(e)=>{ e.stopPropagation(); onUnpromote(line); }}
+                title="Un-promote this line (remove from CO)"
+                style={{
+                  fontSize:11, fontWeight:700, lineHeight:1,
+                  background:'transparent', color: C.dim,
+                  border:`1px solid ${C.border}`, borderRadius:99,
+                  width:16, height:16, padding:0, cursor:'pointer',
+                  fontFamily:'inherit',
+                  display:'inline-flex', alignItems:'center', justifyContent:'center',
+                }}>
+                ×
+              </button>
+            )}
           </div>
         )}
       </div>
@@ -2906,13 +2926,21 @@ function JobNoteDestinationPicker({
 
   // Utility: mark N lines as promoted inside the source note, returning the
   // NEXT jobNotes array. Used by every branch.
-  const markPromotedInNote = (promotedFields) => {
+  //
+  // `promotedFieldsOrFn` can be an object (applied to every selected line)
+  // OR a function `(line) => fields` so a branch can stamp per-line data
+  // like the exact bullet HTML it added (used by the chip × unpromote flow
+  // to surgically remove a single line's contribution from the target).
+  const markPromotedInNote = (promotedFieldsOrFn) => {
     const now = new Date().toISOString();
     const creator = (getIdentity && getIdentity()) || null;
+    const fieldsFor = (l) => typeof promotedFieldsOrFn === 'function'
+      ? promotedFieldsOrFn(l)
+      : promotedFieldsOrFn;
     const nextLines = (note.lines||[]).map(l => {
       if (!selectedLineIds.includes(l.id)) return l;
       return { ...l, promoted: {
-        ...promotedFields,
+        ...fieldsFor(l),
         promotedAt: now,
         promotedBy: creator?.name || '',
       }};
@@ -3498,9 +3526,20 @@ function JobNoteDestinationCO({ note, selectedLines, selectedLineIds, job, onPat
       noteTitle: note.title || '',
     }));
 
+    // Snapshot BEFORE any mutation — used by the toast Undo to restore the
+    // pre-promote state in a single onPatch. We only capture the fields we
+    // will mutate (changeOrders + jobNotes) so the patch is as small as
+    // possible; referencing the same arrays is fine because promote() does
+    // not mutate them in place — it builds new arrays below.
+    const beforeSnapshot = {
+      changeOrders: job.changeOrders || [],
+      jobNotes: job.jobNotes || [],
+    };
+
     let nextCOs;
     let targetId;
     let targetLabel;
+    const wasNewTarget = (mode === 'new');
 
     if (mode === 'new') {
       // desc = user-typed name/description (plain text, fits in the plain input)
@@ -3543,9 +3582,25 @@ function JobNoteDestinationCO({ note, selectedLines, selectedLineIds, job, onPat
       targetLabel = `CO · ${idx >= 0 ? idx + 1 : ''}`;
     }
 
-    const nextJobNotes = markPromotedInNote({ type: 'co', targetId, targetLabel });
+    // Per-line promoted stamp — each line carries its own bullet-HTML
+    // snapshot so the chip × can surgically remove just THAT line's
+    // contribution later, even after the toast window expires.
+    const nextJobNotes = markPromotedInNote((l) => ({
+      type: 'co', targetId, targetLabel,
+      undo: {
+        wasNewTarget,
+        addedBulletHtml: `<li>${escHtml(jobNotePlain(l.text)) || '(empty)'}</li>`,
+      },
+    }));
     onPatch && onPatch({ changeOrders: nextCOs, jobNotes: nextJobNotes });
-    onDone && onDone();
+    // Hand the parent an undo bundle so it can show a toast with a snapshot
+    // restore. The parent is responsible for the toast lifecycle (timer,
+    // dismiss). If the user clicks Undo, the parent calls onPatch(snapshot).
+    onDone && onDone({
+      undoSnapshot: beforeSnapshot,
+      undoLabel: targetLabel,
+      undoType: 'co',
+    });
   };
 
   const pillStyle = (active, color='#f59e0b') => ({
@@ -3758,6 +3813,12 @@ function JobNoteCard({
   // J4 — active destination type when the picker is open ('punch'|'rt'|'co'|'call').
   // J5 & J6 actually render the picker body; J4 wires the UI state only.
   const [pickerType, setPickerType] = useState(null);
+  // Undo toast after a successful promote. Branches that supply a snapshot
+  // (currently just CO) get a 10-second "Undo" banner that restores the
+  // pre-promote state via a single onPatch. Shape:
+  //   { snapshot: {changeOrders, jobNotes, ...}, label: 'CO · 3', type: 'co', timer }
+  const [undoToast, setUndoToast] = useState(null);
+  useEffect(() => () => { if (undoToast?.timer) clearTimeout(undoToast.timer); }, [undoToast]);
 
   // J4/J5/J6 (triage picker) still to be wired — placeholder state for J3.
   const lines = Array.isArray(note?.lines) ? note.lines : [];
@@ -3872,6 +3933,102 @@ function JobNoteCard({
         }
       } catch {}
     }, 140);
+  };
+
+  // Permanent "unpromote" action (ghost chip × button). Currently supports
+  // the CO path only — other types will no-op until explicit undo metadata
+  // is wired for them. This runs OUTSIDE the 10-second toast window, so it
+  // relies on the per-line `promoted.undo.addedBulletHtml` snapshot stamped
+  // at promote time to surgically remove just this line's contribution.
+  //
+  // Data safety — this is the risky path (may run after the CO was edited,
+  // sent, or even referenced by pricing workflows). Guards:
+  //   1. Only acts on type='co' with a targetId the user can confirm.
+  //   2. Detects "CO has been edited since promote" by checking whether the
+  //      stamped `addedBulletHtml` is still present verbatim in `co.task`.
+  //      If NOT, we show a stronger warning and still attempt surgical
+  //      removal, but the user is told bullets may not come out cleanly.
+  //   3. Never mutates pricing, status, sendTo, or date fields on the CO.
+  //      Only `task`, `material` (unchanged — materials are note-level and
+  //      deduped, so we don't touch them on per-line unpromote), and
+  //      `fromJobNotes` (the backlink for THIS line is filtered out).
+  //   4. If the target CO was created by this promote (`wasNewTarget`) AND
+  //      no other promoted lines reference it, the whole CO is removed to
+  //      avoid leaving an empty husk. Any other case: CO stays.
+  //   5. Single atomic onPatch over { changeOrders, jobNotes } — same
+  //      write contract as promote itself. If the patch fails, nothing
+  //      changes client- or server-side.
+  const unpromoteLine = async (line) => {
+    const p = line?.promoted;
+    if (!p || p.type !== 'co' || !p.targetId) {
+      toast.warn && toast.warn("Undo for this destination isn't wired yet — only Change Orders are reversible for now.");
+      return;
+    }
+    const targetCO = (job?.changeOrders || []).find(co => co.id === p.targetId);
+    if (!targetCO) {
+      // CO already gone — just clear the promoted flag so the note is clean.
+      const cleanedNote = { ...note, lines: lines.map(l => l.id === line.id ? { ...l, promoted: null } : l), updatedAt: new Date().toISOString() };
+      onPatch && onPatch({ jobNotes: (job.jobNotes||[]).map(n => n.id === note.id ? cleanedNote : n) });
+      return;
+    }
+    const addedHtml = p.undo?.addedBulletHtml || '';
+    const coEdited = addedHtml
+      ? !(targetCO.task || '').includes(addedHtml)
+      : false;
+    const meaningfullyStarted =
+      (targetCO.coStatus && targetCO.coStatus !== 'needs_sending') ||
+      !!targetCO.date || !!targetCO.sendTo || !!targetCO.time;
+
+    const baseMsg = `Remove this line from ${p.targetLabel || 'the CO'}?`;
+    const warnings = [];
+    if (coEdited) warnings.push(`The CO's Task field has been edited since promote — this bullet may not come out cleanly. You may need to clean it up manually.`);
+    if (meaningfullyStarted) warnings.push(`The CO has status/date/send-to filled in (not just "needs_sending"). Any pricing or workflow progress will stay on the CO.`);
+    warnings.push(`Materials from this line stay on the CO (they're deduped across lines).`);
+    const ok = showConfirm
+      ? await showConfirm({ message: [baseMsg, ...warnings].join('\n\n'), confirmLabel: 'Remove', cancelLabel: 'Keep' })
+      : window.confirm(baseMsg);
+    if (!ok) return;
+
+    // Surgical task removal — drop the exact <li> we added. Idempotent: if
+    // the snapshot isn't found, the task field is left as-is.
+    let nextTask = targetCO.task || '';
+    if (addedHtml && nextTask.includes(addedHtml)) {
+      nextTask = nextTask.replace(addedHtml, '');
+      // If removing the <li> leaves an empty <ul></ul>, strip the wrapper.
+      nextTask = nextTask.replace(/<ul>\s*<\/ul>/gi, '').trim();
+    }
+
+    // Strip this line's backlink from the CO's fromJobNotes array.
+    const nextFromJN = (Array.isArray(targetCO.fromJobNotes) ? targetCO.fromJobNotes : [])
+      .filter(bl => !(bl.jobNoteId === note.id && bl.lineId === line.id));
+
+    // Is this the last promoted line pointing to this CO across the whole job?
+    const stillReferenced = (job.jobNotes || []).some(n =>
+      (n.lines || []).some(l => {
+        if (n.id === note.id && l.id === line.id) return false; // ignore the one being unpromoted
+        return l.promoted && l.promoted.type === 'co' && l.promoted.targetId === p.targetId;
+      }));
+    const removeWholeCO =
+      !!p.undo?.wasNewTarget && !stillReferenced && !meaningfullyStarted;
+
+    let nextCOs;
+    if (removeWholeCO) {
+      nextCOs = (job.changeOrders || []).filter(co => co.id !== p.targetId);
+    } else {
+      nextCOs = (job.changeOrders || []).map(co => co.id === p.targetId
+        ? { ...co, task: nextTask, fromJobNotes: nextFromJN }
+        : co);
+    }
+
+    // Clear this line's promoted stamp so it's triageable again.
+    const nextNote = {
+      ...note,
+      lines: lines.map(l => l.id === line.id ? { ...l, promoted: null } : l),
+      updatedAt: new Date().toISOString(),
+    };
+    const nextJobNotes = (job.jobNotes || []).map(n => n.id === note.id ? nextNote : n);
+
+    onPatch && onPatch({ changeOrders: nextCOs, jobNotes: nextJobNotes });
   };
 
   // Editing and triage force the card open — otherwise a brand-new note
@@ -4061,6 +4218,7 @@ function JobNoteCard({
             onRemove={removeLine}
             onViewPhoto={onViewPhoto}
             onJumpToPromoted={jumpToPromoted}
+            onUnpromote={unpromoteLine}
           />
         ))}
 
@@ -4197,11 +4355,25 @@ function JobNoteCard({
           manualTasks={manualTasks}
           onSaveManualTask={onSaveManualTask}
           onClose={()=>setPickerType(null)}
-          onDone={()=>{
+          onDone={(undoBundle)=>{
             // After a successful promote: clear selection, keep triage ON
             // per spec (fast multi-batch sorting), close picker.
             setSelected(new Set());
             setPickerType(null);
+            // If the branch handed us an undo bundle, stage a 10-second
+            // Undo toast. Clicking Undo fires onPatch(snapshot) which
+            // atomically restores the pre-promote state of whatever fields
+            // the branch captured (currently CO: changeOrders + jobNotes).
+            if (undoBundle && undoBundle.undoSnapshot) {
+              if (undoToast?.timer) clearTimeout(undoToast.timer);
+              const t = setTimeout(() => setUndoToast(null), 10000);
+              setUndoToast({
+                snapshot: undoBundle.undoSnapshot,
+                label: undoBundle.undoLabel || '',
+                type: undoBundle.undoType || '',
+                timer: t,
+              });
+            }
           }}
         />
       )}
@@ -4227,6 +4399,54 @@ function JobNoteCard({
               background:'transparent', border:`1px solid #dc262655`,
               borderRadius:99, padding:'2px 10px', cursor:'pointer', fontFamily:'inherit',
             }}>Delete</button>
+        </div>
+      )}
+
+      {/* Undo toast — appears for ~10s after a successful CO promote.
+          Clicking "Undo" atomically restores the pre-promote snapshot (both
+          `changeOrders` and `jobNotes` in one patch) so the un-promoted line
+          goes back to triageable and the CO either un-mutates or disappears
+          entirely if it was freshly created. After 10s the toast fades and
+          the user can still use the ghost chip's × button for the same
+          effect (with a confirmation dialog). */}
+      {undoToast && (
+        <div style={{
+          borderTop:`1px solid ${C.border}`,
+          background:'#1f2937', color:'#fff',
+          padding:'8px 12px',
+          display:'flex', alignItems:'center', gap:10,
+          fontSize:12, fontWeight:600,
+        }}>
+          <span style={{ flex:1 }}>
+            Promoted to <em style={{ opacity:0.9, fontStyle:'normal', fontWeight:700 }}>
+              {undoToast.label || undoToast.type?.toUpperCase() || 'destination'}
+            </em>
+          </span>
+          <button
+            onClick={()=>{
+              if (undoToast.timer) clearTimeout(undoToast.timer);
+              onPatch && onPatch(undoToast.snapshot);
+              setUndoToast(null);
+              toast.info && toast.info('Promote undone.');
+            }}
+            style={{
+              fontSize:11, fontWeight:800, letterSpacing:'0.04em',
+              background:'#f59e0b', color:'#1f2937',
+              border:'none', borderRadius:99,
+              padding:'3px 12px', cursor:'pointer', fontFamily:'inherit',
+            }}>
+            UNDO
+          </button>
+          <button
+            onClick={()=>{ if (undoToast.timer) clearTimeout(undoToast.timer); setUndoToast(null); }}
+            title="Dismiss"
+            style={{
+              background:'transparent', border:'none', color:'#9ca3af',
+              fontSize:14, lineHeight:1, cursor:'pointer', padding:'0 2px',
+              fontFamily:'inherit',
+            }}>
+            ×
+          </button>
         </div>
       )}
     </div>
