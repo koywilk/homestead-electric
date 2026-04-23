@@ -18431,6 +18431,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
   const crewTeamDragRef = useRef(null);
   const [crewJobOrder, setCrewJobOrder] = useState([]);
   const crewRowDragRef = useRef(null);
+  const [teamNameDrafts, setTeamNameDrafts] = useState({}); // { [idx]: "typed name" }
 
   const crewMon = useMemo(() => {
     const d = new Date(); const day = d.getDay();
@@ -19454,30 +19455,43 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)"}}>
                 CREW PLANNER
               </div>
-              <div style={{display:"flex",alignItems:"center",gap:4}}>
+              <div style={{display:"flex",alignItems:"center",gap:4,background:"var(--surface)",
+                borderRadius:8,padding:"4px",border:`1px solid ${C.border}`}}>
                 <button onClick={()=>setCrewWeekOff(v=>v-1)}
+                  title="Previous week"
                   style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
-                    color:C.dim,fontSize:14,width:28,height:28,cursor:"pointer",display:"flex",
-                    alignItems:"center",justifyContent:"center",fontFamily:"inherit"}}>
-                  <Icon name="chevronLeft" size={14}/>
+                    color:C.dim,padding:"4px 8px",cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600,
+                    display:"inline-flex",alignItems:"center",gap:3}}>
+                  <Icon name="chevronLeft" size={11}/> Prev
                 </button>
-                <span style={{fontSize:12,fontWeight:700,color:"var(--text)",minWidth:120,textAlign:"center"}}>
-                  {crewFmtD(crewDays[0])} &ndash; {crewFmtD(crewDays[5])}
-                </span>
+                <div style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"0 10px",minWidth:140}}>
+                  <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",
+                    color:crewWeekOff===0?C.accent:crewWeekOff===1?"#2563eb":crewWeekOff<0?C.muted:C.dim}}>
+                    {crewWeekOff===0?"THIS WEEK":crewWeekOff===1?"NEXT WEEK":crewWeekOff===-1?"LAST WEEK":
+                     crewWeekOff>0?`${crewWeekOff} WEEKS OUT`:`${Math.abs(crewWeekOff)} WEEKS BACK`}
+                  </span>
+                  <span style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>
+                    {crewFmtD(crewDays[0])} &ndash; {crewFmtD(crewDays[5])}
+                  </span>
+                </div>
                 <button onClick={()=>setCrewWeekOff(v=>v+1)}
-                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
-                    color:C.dim,fontSize:14,width:28,height:28,cursor:"pointer",display:"flex",
-                    alignItems:"center",justifyContent:"center",fontFamily:"inherit"}}>
-                  <Icon name="chevronRight" size={14}/>
+                  title="Next week"
+                  style={{background:crewWeekOff===0?"#2563eb":"none",
+                    border:`1px solid ${crewWeekOff===0?"#2563eb":C.border}`,borderRadius:6,
+                    color:crewWeekOff===0?"#fff":C.dim,padding:"4px 10px",cursor:"pointer",fontSize:11,
+                    fontFamily:"inherit",fontWeight:700,display:"inline-flex",alignItems:"center",gap:3}}>
+                  Next <Icon name="chevronRight" size={11}/>
                 </button>
-                {crewWeekOff!==0&&(
-                  <button onClick={()=>setCrewWeekOff(0)}
-                    style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:6,
-                      color:C.accent,padding:"4px 10px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:700}}>
-                    THIS WEEK
-                  </button>
-                )}
               </div>
+              {crewWeekOff!==0&&(
+                <button onClick={()=>setCrewWeekOff(0)}
+                  title="Jump back to the current week"
+                  style={{background:C.accent,border:"none",borderRadius:6,
+                    color:"#fff",padding:"6px 12px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:800,
+                    letterSpacing:"0.06em"}}>
+                  TODAY
+                </button>
+              )}
               <div style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
                 <button onClick={crewCopyPrevWeek}
                   title="Copy last week's assignments into this week"
@@ -19532,7 +19546,10 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                   return (
                     <div key={name}
                       draggable
-                      onDragStart={()=>{crewDragRef.current=name;}}
+                      onDragStart={e=>{
+                        crewDragRef.current=name;
+                        try{e.dataTransfer.setData('text/plain',name);e.dataTransfer.effectAllowed='move';}catch(_){/* noop */}
+                      }}
                       onClick={()=>setCrewSel(isSel?null:name)}
                       style={{display:"inline-flex",alignItems:"center",gap:4,padding:"4px 10px",
                         borderRadius:99,cursor:"grab",userSelect:"none",fontSize:11,fontWeight:700,
@@ -19632,7 +19649,64 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                           onMouseEnter={e=>{if(crewTeamSel)e.currentTarget.style.borderColor=C.accent;}}
                           onMouseLeave={e=>{e.currentTarget.style.borderColor=crewTeamSel?C.accent+"55":teamColor+"33";}}>
                           {allNames.length===0?(
-                            <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>Empty team</div>
+                            <div onClick={e=>e.stopPropagation()} style={{minWidth:180}}>
+                              <div style={{fontSize:10,color:C.muted,fontStyle:"italic",marginBottom:6}}>
+                                Type a name or pick from roster
+                              </div>
+                              <div style={{display:"flex",gap:4,marginBottom:6}}>
+                                <input
+                                  value={teamNameDrafts[idx]||""}
+                                  onChange={e=>setTeamNameDrafts({...teamNameDrafts,[idx]:e.target.value})}
+                                  onKeyDown={e=>{
+                                    if(e.key==="Enter" && (teamNameDrafts[idx]||"").trim()){
+                                      const name=teamNameDrafts[idx].trim();
+                                      // Remove from other team if already assigned
+                                      const fromIdx=crewTeams.findIndex(t=>t.lead===name||t.members.includes(name));
+                                      if(fromIdx>=0 && fromIdx!==idx) teamMovePerson(name,fromIdx,idx);
+                                      else teamSetLead(idx,name);
+                                      setTeamNameDrafts({...teamNameDrafts,[idx]:""});
+                                    }
+                                  }}
+                                  placeholder="Lead name…"
+                                  autoFocus
+                                  style={{background:"var(--surface)",border:`1px solid ${C.border}`,borderRadius:5,
+                                    padding:"4px 8px",fontSize:11,color:"var(--text)",fontFamily:"inherit",flex:1,minWidth:0}}/>
+                                <button onClick={()=>{
+                                  const name=(teamNameDrafts[idx]||"").trim();
+                                  if(!name) return;
+                                  const fromIdx=crewTeams.findIndex(t=>t.lead===name||t.members.includes(name));
+                                  if(fromIdx>=0 && fromIdx!==idx) teamMovePerson(name,fromIdx,idx);
+                                  else teamSetLead(idx,name);
+                                  setTeamNameDrafts({...teamNameDrafts,[idx]:""});
+                                }}
+                                  style={{background:C.accent,border:"none",borderRadius:5,color:"#fff",
+                                    padding:"4px 10px",cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"inherit"}}>
+                                  Add
+                                </button>
+                              </div>
+                              {teamUnassigned.length>0&&(
+                                <div style={{display:"flex",flexWrap:"wrap",gap:3}}>
+                                  {teamUnassigned.slice(0,8).map(name=>{
+                                    const nc=crewGetColor(name);
+                                    return (
+                                      <span key={name}
+                                        onClick={e=>{e.stopPropagation();teamSetLead(idx,name);}}
+                                        style={{display:"inline-flex",alignItems:"center",gap:2,
+                                          padding:"2px 7px",borderRadius:99,fontSize:10,fontWeight:600,
+                                          cursor:"pointer",userSelect:"none",
+                                          color:nc,background:nc+"15",
+                                          border:`1px solid ${nc}33`,transition:"all 0.12s"}}
+                                        onMouseEnter={e=>e.currentTarget.style.background=nc+"28"}
+                                        onMouseLeave={e=>e.currentTarget.style.background=nc+"15"}>
+                                        {isForeman(name)&&<Icon name="star" size={8} stroke={2.5}/>}
+                                        {name}
+                                      </span>
+                                    );
+                                  })}
+                                  {teamUnassigned.length>8&&<span style={{fontSize:9,color:C.muted,alignSelf:"center"}}>+{teamUnassigned.length-8} more below</span>}
+                                </div>
+                              )}
+                            </div>
                           ):(
                             <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
                               {allNames.map((name,ni)=>{
@@ -19640,7 +19714,11 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                                 const nc=crewGetColor(name);
                                 return (
                                   <span key={name} draggable
-                                    onDragStart={e=>{e.stopPropagation();crewTeamDragRef.current=name;}}
+                                    onDragStart={e=>{
+                                      e.stopPropagation();
+                                      crewTeamDragRef.current=name;
+                                      try{e.dataTransfer.setData('text/plain',name);e.dataTransfer.effectAllowed='move';}catch(_){/* noop */}
+                                    }}
                                     onClick={e=>{
                                       e.stopPropagation();
                                       if(crewTeamSel===name) setCrewTeamSel(null);
@@ -19699,7 +19777,10 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                           const nc=crewGetColor(name);
                           return (
                             <span key={name} draggable
-                              onDragStart={()=>{crewTeamDragRef.current=name;}}
+                              onDragStart={e=>{
+                                crewTeamDragRef.current=name;
+                                try{e.dataTransfer.setData('text/plain',name);e.dataTransfer.effectAllowed='move';}catch(_){/* noop */}
+                              }}
                               onClick={()=>setCrewTeamSel(crewTeamSel===name?null:name)}
                               style={{display:"inline-flex",alignItems:"center",gap:3,
                                 padding:"3px 9px",borderRadius:99,fontSize:11,fontWeight:600,
@@ -19778,7 +19859,10 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                           <div style={{display:"flex",alignItems:"flex-start",gap:6}}>
                             <span
                               draggable
-                              onDragStart={()=>{crewRowDragRef.current=job.id;}}
+                              onDragStart={e=>{
+                                crewRowDragRef.current=job.id;
+                                try{e.dataTransfer.setData('text/plain',job.id);e.dataTransfer.effectAllowed='move';}catch(_){/* noop */}
+                              }}
                               onDragEnd={()=>{crewRowDragRef.current=null;}}
                               title="Drag to reorder"
                               style={{cursor:"grab",color:C.muted,fontSize:13,lineHeight:1,
@@ -19844,6 +19928,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                                       onDragStart={e=>{
                                         e.stopPropagation();
                                         crewDragRef.current={name, fromJid:job.id, fromDi:di, wasLead:isLead};
+                                        try{e.dataTransfer.setData('text/plain',name);e.dataTransfer.effectAllowed='move';}catch(_){/* noop */}
                                       }}
                                       onClick={e=>e.stopPropagation()}
                                       title="Drag to move to another cell"
