@@ -1354,21 +1354,37 @@ const Pill = ({label,color}) => (
 // Shows "On Schedule" (blue solid) or "Ongoing" (gray dashed) next to
 // an In Progress status. Tap to toggle. Optional onSync for manual
 // resync with Simpro. Pure presentational — parent owns the data.
-function InProgressModePill({ mode, onToggle, onSync, size = "md", showSync = true }) {
+// 3-state scheduling pill for In Progress jobs
+// States:
+//   "scheduled"  — on current Crew Planner schedule / Simpro schedule (blue, solid)
+//   "needsSched" — needs to be scheduled; may carry a hard date or be flexible (orange, solid)
+//   "ongoing"    — in progress but doesn't need day-level scheduling (gray, dashed)
+// Click cycles: scheduled → needsSched → ongoing → scheduled
+function InProgressModePill({ mode, onToggle, onSync, onSetNeedsDate, needsDate, needsHard, size = "md", showSync = true }) {
   const isScheduled = mode === "scheduled";
+  const isNeedsSched = mode === "needsSched";
   const isOngoing = mode === "ongoing";
-  const isUnset = !isScheduled && !isOngoing;
-  const color = isScheduled ? "#2563eb" : (isOngoing ? "#6b7280" : "#9ca3af");
-  const label = isScheduled ? "On Schedule" : (isOngoing ? "Ongoing" : "Set schedule");
+  const isUnset = !isScheduled && !isNeedsSched && !isOngoing;
+  const color = isScheduled ? "#2563eb"
+              : isNeedsSched ? "#f97316"
+              : isOngoing ? "#6b7280"
+              : "#9ca3af";
+  const fmtD = d => { try { const dt=new Date(d); if(isNaN(dt)) return ""; return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); } catch(_){return "";} };
+  const dateStr = isNeedsSched && needsDate ? fmtD(needsDate) : "";
+  const baseLabel = isScheduled ? "On Schedule"
+                  : isNeedsSched ? (dateStr ? (needsHard ? `Needs: ${dateStr}` : `Target ${dateStr}`) : "Needs Sched")
+                  : isOngoing ? "Ongoing"
+                  : "Set schedule";
   const pad = size === "sm" ? "1px 7px" : "2px 8px";
   const fs  = size === "sm" ? 9 : 10;
   const borderStyle = isOngoing ? "dashed" : "solid";
+  const nextTitle = isScheduled ? "Needs Sched" : isNeedsSched ? "Ongoing" : isOngoing ? "On Schedule" : "On Schedule";
   return (
     <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
       <button
         type="button"
         onClick={(e)=>{ e.stopPropagation(); onToggle && onToggle(); }}
-        title={isUnset ? "Tap to mark On Schedule / Ongoing" : `Tap to switch to ${isScheduled?"Ongoing":"On Schedule"}`}
+        title={isUnset ? "Tap to set state" : `Tap to switch to ${nextTitle}`}
         style={{
           fontSize:fs, fontWeight:700, letterSpacing:"0.06em",
           padding:pad, borderRadius:99,
@@ -1379,8 +1395,17 @@ function InProgressModePill({ mode, onToggle, onSync, size = "md", showSync = tr
           display:"inline-flex", alignItems:"center", gap:4,
         }}>
         <span style={{width:6,height:6,borderRadius:"50%",background:color,display:"inline-block",flexShrink:0}}/>
-        {label}
+        {baseLabel}
       </button>
+      {isNeedsSched && onSetNeedsDate && (
+        <button type="button"
+          onClick={(e)=>{ e.stopPropagation(); onSetNeedsDate && onSetNeedsDate(); }}
+          title={needsDate ? `Edit ${needsHard?"hard":"target"} date` : "Set target date or hard deadline"}
+          style={{background:"none",border:"none",cursor:"pointer",color:"#f97316",
+            padding:2,display:"inline-flex",alignItems:"center",fontSize:10}}>
+          <Icon name="calendar" size={size==="sm"?9:10}/>
+        </button>
+      )}
       {showSync && onSync && (
         <button
           type="button"
@@ -13660,11 +13685,23 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         {job.roughStatus==="inprogress" && (
                           <InProgressModePill
                             mode={job.roughInProgressMode}
+                            needsDate={job.roughNeedsSchedDate||""}
+                            needsHard={!!job.roughNeedsSchedHard}
                             onToggle={()=>{
-                              const next = job.roughInProgressMode==="scheduled" ? "ongoing"
-                                        : job.roughInProgressMode==="ongoing"   ? "scheduled"
+                              const next = job.roughInProgressMode==="scheduled" ? "needsSched"
+                                        : job.roughInProgressMode==="needsSched"  ? "ongoing"
+                                        : job.roughInProgressMode==="ongoing"     ? "scheduled"
                                         : "scheduled"; // unset → first tap sets On Schedule
                               u({ roughInProgressMode: next });
+                            }}
+                            onSetNeedsDate={()=>{
+                              const cur = job.roughNeedsSchedDate||"";
+                              const d = prompt("Target or hard date (YYYY-MM-DD, leave blank for flexible):", cur);
+                              if(d===null) return;
+                              const cleaned = (d||"").trim();
+                              if(cleaned && !/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) { alert("Use YYYY-MM-DD format"); return; }
+                              const hard = cleaned ? window.confirm("Hard deadline? OK = MUST happen on that date, Cancel = flexible target") : false;
+                              u({ roughNeedsSchedDate: cleaned, roughNeedsSchedHard: hard });
                             }}
                             onSync={()=>resyncInProgressMode("rough")}
                           />
@@ -13937,11 +13974,23 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         {job.finishStatus==="inprogress" && (
                           <InProgressModePill
                             mode={job.finishInProgressMode}
+                            needsDate={job.finishNeedsSchedDate||""}
+                            needsHard={!!job.finishNeedsSchedHard}
                             onToggle={()=>{
-                              const next = job.finishInProgressMode==="scheduled" ? "ongoing"
-                                        : job.finishInProgressMode==="ongoing"   ? "scheduled"
+                              const next = job.finishInProgressMode==="scheduled" ? "needsSched"
+                                        : job.finishInProgressMode==="needsSched"  ? "ongoing"
+                                        : job.finishInProgressMode==="ongoing"     ? "scheduled"
                                         : "scheduled";
                               u({ finishInProgressMode: next });
+                            }}
+                            onSetNeedsDate={()=>{
+                              const cur = job.finishNeedsSchedDate||"";
+                              const d = prompt("Target or hard date (YYYY-MM-DD, leave blank for flexible):", cur);
+                              if(d===null) return;
+                              const cleaned = (d||"").trim();
+                              if(cleaned && !/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) { alert("Use YYYY-MM-DD format"); return; }
+                              const hard = cleaned ? window.confirm("Hard deadline? OK = MUST happen on that date, Cancel = flexible target") : false;
+                              u({ finishNeedsSchedDate: cleaned, finishNeedsSchedHard: hard });
                             }}
                             onSync={()=>resyncInProgressMode("finish")}
                           />
@@ -18374,7 +18423,7 @@ function NavView({ jobs }) {
 
 // ── Scheduling Forecast ───────────────────────────────────────
 
-function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
+function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdateJob }) {
   const [foremanTab, setForemanTab] = useState("All");
   const [viewMode,   setViewMode]   = useState("calendar"); // kanban | week | attention | calendar
   const [calMonth,   setCalMonth]   = useState(() => { const d=new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
@@ -18760,13 +18809,19 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
         {s:fs, d:j.finishStatusDate||j.finishProjectedStart, ph:"finish"},
       ];
       let best={score:7, label:"", color:C.dim, date:""};
-      phases.forEach(({s,d})=>{
+      phases.forEach(({s,d,ph})=>{
         if(!s) return;
         const parsed = d ? parseAnyDate(d) : null;
         if(parsed) parsed.setHours(0,0,0,0);
         // Overdue: has date, date < today, not scheduled/inprogress
         if(parsed && parsed<today && s!=="inprogress" && s!=="complete" && s!=="invoice") {
           if(0<best.score) best={score:0,label:"OVERDUE",color:C.red,date:d};
+        } else if(s==="inprogress" && j[ph==="rough"?"roughInProgressMode":"finishInProgressMode"]==="needsSched") {
+          // In Progress job that explicitly needs to be scheduled — high priority
+          const nDate = j[ph==="rough"?"roughNeedsSchedDate":"finishNeedsSchedDate"] || "";
+          const hard  = j[ph==="rough"?"roughNeedsSchedHard":"finishNeedsSchedHard"];
+          const lbl = hard ? "NEEDS SCHED" : nDate ? "TARGET" : "NEEDS SCHED";
+          if(1<best.score) best={score:1, label:lbl, color:"#f97316", date:nDate};
         } else if(s==="date_confirmed") {
           if(1<best.score) best={score:1,label:"NEEDS SCHED",color:"#f97316",date:d};
         } else if(s==="waiting_date") {
@@ -20187,6 +20242,44 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                                 <span style={{fontSize:9,fontWeight:600,color:jc,
                                   background:jc+"15",borderRadius:99,padding:"1px 6px"}}>{job.foreman||"Koy"}</span>
                               </div>
+                              {/* In Progress scheduling state — mirrors the one on the job card */}
+                              {(() => {
+                                const phaseKey = rs==="inprogress" ? "rough" : fs==="inprogress" ? "finish" : null;
+                                if(!phaseKey || !onUpdateJob) return null;
+                                const modeKey = phaseKey==="rough" ? "roughInProgressMode" : "finishInProgressMode";
+                                const dateKey = phaseKey==="rough" ? "roughNeedsSchedDate" : "finishNeedsSchedDate";
+                                const hardKey = phaseKey==="rough" ? "roughNeedsSchedHard" : "finishNeedsSchedHard";
+                                return (
+                                  <div style={{marginTop:4}} onClick={e=>e.stopPropagation()}>
+                                    <InProgressModePill
+                                      size="sm"
+                                      showSync={false}
+                                      mode={job[modeKey]}
+                                      needsDate={job[dateKey]||""}
+                                      needsHard={!!job[hardKey]}
+                                      onToggle={()=>{
+                                        const cur = job[modeKey];
+                                        const next = cur==="scheduled" ? "needsSched"
+                                                  : cur==="needsSched"  ? "ongoing"
+                                                  : cur==="ongoing"     ? "scheduled"
+                                                  : "scheduled";
+                                        const patch = { [modeKey]: next };
+                                        onUpdateJob({ ...job, ...patch }, patch);
+                                      }}
+                                      onSetNeedsDate={()=>{
+                                        const cur = job[dateKey]||"";
+                                        const d = prompt("Target or hard date (YYYY-MM-DD, leave blank for flexible):", cur);
+                                        if(d===null) return;
+                                        const cleaned = (d||"").trim();
+                                        if(cleaned && !/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) { alert("Use YYYY-MM-DD format"); return; }
+                                        const hard = cleaned ? window.confirm("Hard deadline? OK = MUST happen on that date, Cancel = flexible target") : false;
+                                        const patch = { [dateKey]: cleaned, [hardKey]: hard };
+                                        onUpdateJob({ ...job, ...patch }, patch);
+                                      }}
+                                    />
+                                  </div>
+                                );
+                              })()}
                               {crewExtra.includes(job.id)&&(
                                 <span onClick={e=>{e.stopPropagation();
                                   const ne=crewExtra.filter(id=>id!==job.id);
@@ -20425,9 +20518,14 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                         Clear all
                       </button>
                       <button onClick={()=>{
-                        const ids=allActive.filter(j=>_crewJobPriority(j).score<=3).map(j=>j.id);
+                        const ids=allActive.filter(j=>{
+                          // Prioritize: jobs marked "Needs Sched" (any phase) OR priority <=3 (overdue/needs date/this week)
+                          if(j.roughInProgressMode==="needsSched" || j.finishInProgressMode==="needsSched") return true;
+                          return _crewJobPriority(j).score<=3;
+                        }).map(j=>j.id);
                         setCrewPinned(ids); _saveCrewData(crewData,crewExtra,crewJobOrder,ids,crewFocus);
                       }}
+                        title="Pins anything marked Needs Sched, Overdue, Needs Date, or scheduled for this week"
                         style={{background:"none",border:`1px solid ${C.accent}44`,borderRadius:5,color:C.accent,
                           padding:"4px 10px",cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"inherit"}}>
                         Suggest urgent
@@ -26084,7 +26182,7 @@ function App() {
       })()}
 
       {view==="schedule"&&can(identity,"schedule.view")&&(
-        <SchedulingForecast jobs={jobs} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)} foremenList={_foremen} identity={identity}/>
+        <SchedulingForecast jobs={jobs} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)} foremenList={_foremen} identity={identity} onUpdateJob={updateJob}/>
       )}
 
       {view==="tasks"&&can(identity,"tasks.view")&&(
