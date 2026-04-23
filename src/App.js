@@ -18429,6 +18429,8 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
   const [crewTeamsOpen, setCrewTeamsOpen] = useState(false);
   const [crewTeamSel,   setCrewTeamSel]   = useState(null);
   const crewTeamDragRef = useRef(null);
+  const [crewJobOrder, setCrewJobOrder] = useState([]);
+  const crewRowDragRef = useRef(null);
 
   const crewMon = useMemo(() => {
     const d = new Date(); const day = d.getDay();
@@ -18440,13 +18442,28 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
   }), [crewMon]);
   const crewWK = useMemo(() => { const m=crewMon; return `${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,"0")}-${String(m.getDate()).padStart(2,"0")}`; }, [crewMon]);
 
+  const _crewLoadAllUsers = async () => {
+    try {
+      const snap = await getDoc(doc(db,"settings","users"));
+      const list = snap.exists() ? (snap.data().list||[]) : [];
+      // Each user has { name, ... } — pull first name as display handle
+      const firstNames = list.map(u => (u.name||"").trim().split(/\s+/)[0]).filter(Boolean);
+      return [...new Set([...getForemenList(),...getLeadsList(),...firstNames])];
+    } catch { return [...new Set([...getForemenList(),...getLeadsList()])]; }
+  };
   useEffect(() => onSnapshot(doc(db,"settings","crewRoster"), s => {
     if(s.exists()) setCrewRoster(s.data().names||[]);
-    else setCrewRoster([...new Set([...getForemenList(),...getLeadsList()])]);
+    else _crewLoadAllUsers().then(names => setCrewRoster(names));
   }), []);
+  const crewLoadAllUsers = async () => {
+    const names = await _crewLoadAllUsers();
+    const merged = [...new Set([...(crewRoster||[]),...names])];
+    _saveRoster(merged);
+    toast.success(`Roster now has ${merged.length} people.`);
+  };
   useEffect(() => onSnapshot(doc(db,"settings","schedule_"+crewWK), s => {
-    if(s.exists()){ const d=s.data(); setCrewData(d.assignments||{}); setCrewExtra(d.extraJobs||[]); }
-    else { setCrewData({}); setCrewExtra([]); }
+    if(s.exists()){ const d=s.data(); setCrewData(d.assignments||{}); setCrewExtra(d.extraJobs||[]); setCrewJobOrder(d.jobOrder||[]); }
+    else { setCrewData({}); setCrewExtra([]); setCrewJobOrder([]); }
   }), [crewWK]);
 
   const _saveRoster = n => { setCrewRoster(n); setDoc(doc(db,"settings","crewRoster"),{names:n,updatedAt:new Date().toISOString()}); };
@@ -18491,7 +18508,25 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
     crewTeams.forEach(t=>{ if(t.lead) assigned.add(t.lead); t.members.forEach(n=>assigned.add(n)); });
     return (crewRoster||[]).filter(n=>!assigned.has(n));
   }, [crewTeams, crewRoster]);
-  const _saveCrewData = (a,e) => setDoc(doc(db,"settings","schedule_"+crewWK),{assignments:a,extraJobs:e!==undefined?e:crewExtra,updatedAt:new Date().toISOString()});
+  const _saveCrewData = (a,e,o) => setDoc(doc(db,"settings","schedule_"+crewWK),{assignments:a,extraJobs:e!==undefined?e:crewExtra,jobOrder:o!==undefined?o:crewJobOrder,updatedAt:new Date().toISOString()});
+  const crewMoveJobRow = (fromJid, toJid) => {
+    if(!fromJid || !toJid || fromJid===toJid) return;
+    const currentOrder = crewJobOrder && crewJobOrder.length
+      ? [...crewJobOrder]
+      : crewPlanJobs.map(j=>j.id);
+    const fromIdx = currentOrder.indexOf(fromJid);
+    const toIdx   = currentOrder.indexOf(toJid);
+    if(fromIdx<0 || toIdx<0) return;
+    const [moved] = currentOrder.splice(fromIdx,1);
+    currentOrder.splice(toIdx,0,moved);
+    setCrewJobOrder(currentOrder);
+    _saveCrewData(crewData, crewExtra, currentOrder);
+  };
+  const crewResetOrder = () => {
+    setCrewJobOrder([]);
+    _saveCrewData(crewData, crewExtra, []);
+    toast.info('Job order reset to auto priority.');
+  };
 
   const crewAssign = (jid,di) => {
     if(!crewSel) return;
@@ -18501,12 +18536,41 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
     setCrewData(nx); _saveCrewData(nx);
   };
   const crewDrop = (jid,di) => {
-    const name=crewDragRef.current; crewDragRef.current=null; if(!name) return;
-    const k=`${jid}_${di}`, cur=crewData[k]||{lead:"",crew:[]};
-    if(cur.crew.includes(name)||cur.lead===name) return;
-    const nx={...crewData,[k]:{...cur,crew:[...cur.crew,name]}};
+    const payload=crewDragRef.current; crewDragRef.current=null; if(!payload) return;
+    const name = typeof payload === 'string' ? payload : payload.name;
+    const fromJid = typeof payload === 'object' ? payload.fromJid : null;
+    const fromDi  = typeof payload === 'object' ? payload.fromDi : null;
+    const wasLead = typeof payload === 'object' ? payload.wasLead : false;
+    const k=`${jid}_${di}`;
+    // No-op if dropped on same cell
+    if(fromJid===jid && fromDi===di) return;
+    const nx={...crewData};
+    // Remove from source if this was a move from another cell
+    if(fromJid!=null && fromDi!=null){
+      const srcK=`${fromJid}_${fromDi}`, srcCell=nx[srcK];
+      if(srcCell){
+        const upd={lead:srcCell.lead===name?"":srcCell.lead, crew:srcCell.crew.filter(n=>n!==name)};
+        if(!upd.lead && upd.crew.length===0) delete nx[srcK]; else nx[srcK]=upd;
+      }
+    }
+    // Add to target (preserve lead status if it was a lead)
+    const cur=nx[k]||{lead:"",crew:[]};
+    if(cur.crew.includes(name)||cur.lead===name) return; // already there
+    if(wasLead && !cur.lead) nx[k]={...cur,lead:name};
+    else nx[k]={...cur,crew:[...cur.crew,name]};
     setCrewData(nx); _saveCrewData(nx);
   };
+  const crewClearWeek = () => {
+    if(Object.keys(crewData).length===0 && crewExtra.length===0 && (crewJobOrder||[]).length===0) { toast.info('Nothing to reset.'); return; }
+    showConfirm(`Reset this week's schedule?\n\nAll crew assignments and manual job order for ${crewFmtDLong(crewMon)} - ${crewFmtDLong(crewDays[5])} will be cleared. Teams and roster are not affected.`).then(ok=>{
+      if(!ok) return;
+      setCrewData({}); setCrewExtra([]); setCrewJobOrder([]);
+      _saveCrewData({},[],[]);
+      setCrewSel(null);
+      toast.success('Week cleared.');
+    });
+  };
+  const crewFmtDLong = d => d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
   const crewRemove = (jid,di,name) => {
     const k=`${jid}_${di}`, cur=crewData[k]; if(!cur) return;
     const nx={...crewData};
@@ -18541,18 +18605,87 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
     });
   };
 
+  // Priority scoring for crew-planner job ordering.
+  // Lower score = higher priority (sorts to top). Meanings:
+  //   0  Overdue rough/finish  (past start date, no completion)
+  //   1  Date confirmed but not scheduled yet (action needed)
+  //   2  Waiting for a date  (pending decision)
+  //   3  Scheduled this week
+  //   4  In progress
+  //   5  Scheduled future
+  //   6  Has assignments this week (carried over)
+  //   7  Manually added / other
+  const _crewJobPriority = useMemo(() => {
+    const today=new Date(); today.setHours(0,0,0,0);
+    const wkStart=new Date(crewMon); const wkEnd=new Date(crewMon); wkEnd.setDate(wkEnd.getDate()+6);
+    const aIds=new Set(Object.keys(crewData).map(k=>k.split("_")[0]));
+    return (j) => {
+      const rs=effRS(j), fs=effFS(j);
+      // Pick the most relevant phase for urgency calculation (scheduled/inprogress wins over complete)
+      const phases=[
+        {s:rs, d:j.roughStatusDate||j.roughProjectedStart, ph:"rough"},
+        {s:fs, d:j.finishStatusDate||j.finishProjectedStart, ph:"finish"},
+      ];
+      let best={score:7, label:"", color:C.dim, date:""};
+      phases.forEach(({s,d})=>{
+        if(!s) return;
+        const parsed = d ? parseAnyDate(d) : null;
+        if(parsed) parsed.setHours(0,0,0,0);
+        // Overdue: has date, date < today, not scheduled/inprogress
+        if(parsed && parsed<today && s!=="inprogress" && s!=="complete" && s!=="invoice") {
+          if(0<best.score) best={score:0,label:"OVERDUE",color:C.red,date:d};
+        } else if(s==="date_confirmed") {
+          if(1<best.score) best={score:1,label:"NEEDS SCHED",color:"#f97316",date:d};
+        } else if(s==="waiting_date") {
+          if(2<best.score) best={score:2,label:"NO DATE",color:"#ca8a04",date:""};
+        } else if(s==="scheduled" && parsed && parsed>=wkStart && parsed<=wkEnd) {
+          if(3<best.score) best={score:3,label:"THIS WEEK",color:C.green,date:d};
+        } else if(s==="inprogress") {
+          if(4<best.score) best={score:4,label:"IN PROGRESS",color:"#7dd3fc",date:d||""};
+        } else if(s==="scheduled") {
+          if(5<best.score) best={score:5,label:"SCHEDULED",color:C.blue||"#2563eb",date:d};
+        }
+      });
+      if(best.score===7 && aIds.has(j.id)) best={score:6,label:"",color:C.dim,date:""};
+      return best;
+    };
+  }, [jobs,crewData,crewMon]);
+
   const crewPlanJobs = useMemo(() => {
     const active = jobs.filter(j => {
       if(j.tempPed||j.quickJob) return false;
       const rs=effRS(j),fs=effFS(j);
-      return rs==="scheduled"||rs==="inprogress"||fs==="scheduled"||fs==="inprogress";
+      return rs&&rs!=="complete" && rs!=="invoice"
+          || fs&&fs!=="complete" && fs!=="invoice"
+          || rs==="scheduled"||rs==="inprogress"||fs==="scheduled"||fs==="inprogress";
     });
     const aIds=new Set(Object.keys(crewData).map(k=>k.split("_")[0]));
     const fromA=jobs.filter(j=>aIds.has(j.id)&&!active.some(a=>a.id===j.id));
     const fromE=crewExtra.map(id=>jobs.find(j=>j.id===id)).filter(Boolean)
       .filter(j=>!active.some(a=>a.id===j.id)&&!fromA.some(a=>a.id===j.id));
-    return [...active,...fromA,...fromE];
-  }, [jobs,crewData,crewExtra]);
+    const union=[...active,...fromA,...fromE];
+
+    // Apply custom manual order first, then priority-sort anything not in the manual list.
+    const orderMap=new Map((crewJobOrder||[]).map((id,i)=>[id,i]));
+    const withOrder = union.map(j=>({
+      job:j,
+      manual: orderMap.has(j.id) ? orderMap.get(j.id) : null,
+      pri: _crewJobPriority(j),
+    }));
+    withOrder.sort((a,b)=>{
+      if(a.manual!=null && b.manual!=null) return a.manual-b.manual;
+      if(a.manual!=null) return -1;
+      if(b.manual!=null) return 1;
+      if(a.pri.score!==b.pri.score) return a.pri.score-b.pri.score;
+      // Within same score, earlier date first; jobs without dates sort last
+      const ad=a.pri.date?parseAnyDate(a.pri.date):null;
+      const bd=b.pri.date?parseAnyDate(b.pri.date):null;
+      if(ad&&bd) return ad-bd;
+      if(ad) return -1; if(bd) return 1;
+      return (a.job.name||"").localeCompare(b.job.name||"");
+    });
+    return withOrder.map(x=>({...x.job, _pri:x.pri}));
+  }, [jobs,crewData,crewExtra,crewJobOrder,_crewJobPriority]);
 
   const crewDayTotals = useMemo(() => {
     const t=Array(6).fill(0);
@@ -19353,6 +19486,22 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                     display:"inline-flex",alignItems:"center",gap:4}}>
                   <Icon name="copy" size={11}/> Copy Last Week
                 </button>
+                {(crewJobOrder||[]).length>0&&(
+                  <button onClick={crewResetOrder}
+                    title="Re-sort jobs by urgency (clears your manual order)"
+                    style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                      color:C.dim,padding:"4px 10px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:600,
+                      display:"inline-flex",alignItems:"center",gap:4}}>
+                    <Icon name="refresh" size={11}/> Re-sort by Priority
+                  </button>
+                )}
+                <button onClick={crewClearWeek}
+                  title="Clear every crew assignment for this week"
+                  style={{background:"none",border:`1px solid ${C.red}44`,borderRadius:6,
+                    color:C.red,padding:"4px 10px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:600,
+                    display:"inline-flex",alignItems:"center",gap:4}}>
+                  <Icon name="trash" size={11}/> Reset Week
+                </button>
                 <button onClick={()=>setCrewJobPick(true)}
                   style={{background:C.accent,border:"none",borderRadius:6,
                     color:"#fff",padding:"4px 12px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:700,
@@ -19411,6 +19560,13 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                     }}
                     style={{background:"var(--card)",border:`1px solid ${C.border}`,borderRadius:6,
                       padding:"5px 10px",fontSize:11,color:"var(--text)",fontFamily:"inherit",width:140}}/>
+                  <button onClick={crewLoadAllUsers}
+                    title="Pull every user from app settings into the roster"
+                    style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:6,color:C.accent,
+                      padding:"5px 10px",cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"inherit",
+                      display:"inline-flex",alignItems:"center",gap:4}}>
+                    <Icon name="users" size={11}/> Load All Users
+                  </button>
                   <button onClick={()=>{
                     if(crewAddName.trim()){ _saveRoster([...roster,crewAddName.trim()]); setCrewAddName(""); }
                   }}
@@ -19605,32 +19761,61 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                     const jc=getFC(job.foreman||"Koy");
                     const rs=effRS(job),fs=effFS(job);
                     const phase=rs==="scheduled"||rs==="inprogress"?"Rough":fs==="scheduled"||fs==="inprogress"?"Finish":"";
+                    const pri=job._pri||{score:7,label:"",color:C.dim,date:""};
+                    const priDate=pri.date?(()=>{const d=parseAnyDate(pri.date);return d?d.toLocaleDateString("en-US",{month:"short",day:"numeric"}):"";})():"";
                     return (
-                      <tr key={job.id}>
-                        <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`,
+                      <tr key={job.id}
+                        onDragOver={e=>{if(crewRowDragRef.current) e.preventDefault();}}
+                        onDrop={e=>{
+                          if(!crewRowDragRef.current) return;
+                          e.preventDefault(); e.stopPropagation();
+                          crewMoveJobRow(crewRowDragRef.current, job.id);
+                          crewRowDragRef.current=null;
+                        }}>
+                        <td style={{padding:"8px 6px 8px 10px",borderBottom:`1px solid ${C.border}`,
                           position:"sticky",left:0,background:"var(--card)",zIndex:1,
-                          verticalAlign:"top",maxWidth:160}}>
-                          <div onClick={()=>onSelectJob(job)}
-                            style={{cursor:"pointer",fontWeight:700,fontSize:12,color:"var(--text)",
-                              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
-                              marginBottom:2}}>{job.name||"Untitled"}</div>
-                          <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
-                            {phase&&<span style={{fontSize:9,fontWeight:700,
-                              color:phase==="Rough"?C.rough||"#2563eb":C.finish||"#16a34a",
-                              background:(phase==="Rough"?C.rough||"#2563eb":C.finish||"#16a34a")+"15",
-                              borderRadius:99,padding:"1px 6px"}}>{phase.toUpperCase()}</span>}
-                            <span style={{fontSize:9,fontWeight:600,color:jc,
-                              background:jc+"15",borderRadius:99,padding:"1px 6px"}}>{job.foreman||"Koy"}</span>
-                          </div>
-                          {crewExtra.includes(job.id)&&(
-                            <span onClick={e=>{e.stopPropagation();
-                              const ne=crewExtra.filter(id=>id!==job.id);
-                              setCrewExtra(ne); _saveCrewData(crewData,ne);
-                            }}
-                              style={{fontSize:9,color:C.red,cursor:"pointer",fontWeight:600,marginTop:2,display:"block"}}>
-                              Remove
+                          verticalAlign:"top",maxWidth:180}}>
+                          <div style={{display:"flex",alignItems:"flex-start",gap:6}}>
+                            <span
+                              draggable
+                              onDragStart={()=>{crewRowDragRef.current=job.id;}}
+                              onDragEnd={()=>{crewRowDragRef.current=null;}}
+                              title="Drag to reorder"
+                              style={{cursor:"grab",color:C.muted,fontSize:13,lineHeight:1,
+                                padding:"2px 0",userSelect:"none",fontFamily:"monospace",letterSpacing:-2,flexShrink:0}}>
+                              &#8942;&#8942;
                             </span>
-                          )}
+                            <div style={{flex:1,minWidth:0}}>
+                              <div onClick={()=>onSelectJob(job)}
+                                style={{cursor:"pointer",fontWeight:700,fontSize:12,color:"var(--text)",
+                                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+                                  marginBottom:2}}>{job.name||"Untitled"}</div>
+                              <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
+                                {pri.label&&(
+                                  <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.05em",
+                                    color:pri.color,background:pri.color+"18",
+                                    border:`1px solid ${pri.color}33`,borderRadius:99,padding:"1px 6px"}}>
+                                    {pri.label}{priDate?` ${priDate}`:""}
+                                  </span>
+                                )}
+                                {phase&&<span style={{fontSize:9,fontWeight:700,
+                                  color:phase==="Rough"?C.rough||"#2563eb":C.finish||"#16a34a",
+                                  background:(phase==="Rough"?C.rough||"#2563eb":C.finish||"#16a34a")+"15",
+                                  borderRadius:99,padding:"1px 6px"}}>{phase.toUpperCase()}</span>}
+                                <span style={{fontSize:9,fontWeight:600,color:jc,
+                                  background:jc+"15",borderRadius:99,padding:"1px 6px"}}>{job.foreman||"Koy"}</span>
+                              </div>
+                              {crewExtra.includes(job.id)&&(
+                                <span onClick={e=>{e.stopPropagation();
+                                  const ne=crewExtra.filter(id=>id!==job.id);
+                                  setCrewExtra(ne); _saveCrewData(crewData,ne);
+                                }}
+                                  style={{fontSize:9,color:C.red,cursor:"pointer",fontWeight:600,marginTop:2,display:"block"}}>
+                                  Remove
+                                </span>
+                              )}
+                            </div>
+                          </div>
                         </td>
                         {crewDays.map((d,di)=>{
                           const ymd=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -19655,12 +19840,19 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                                   const isFM=isForeman(name);
                                   return (
                                     <span key={name}
+                                      draggable
+                                      onDragStart={e=>{
+                                        e.stopPropagation();
+                                        crewDragRef.current={name, fromJid:job.id, fromDi:di, wasLead:isLead};
+                                      }}
+                                      onClick={e=>e.stopPropagation()}
+                                      title="Drag to move to another cell"
                                       style={{display:"inline-flex",alignItems:"center",gap:2,
                                         padding:"2px 7px",borderRadius:99,fontSize:10,fontWeight:700,
                                         color:isLead?"#fff":pc,
                                         background:isLead?pc:pc+"18",
                                         border:`1.5px ${isLead?"solid":"solid"} ${isLead?pc:pc+"44"}`,
-                                        cursor:"pointer",userSelect:"none",whiteSpace:"nowrap",
+                                        cursor:"grab",userSelect:"none",whiteSpace:"nowrap",
                                         boxShadow:isLead?`0 1px 4px ${pc}33`:"none"}}>
                                       {isLead&&<Icon name="star" size={8} stroke={3}/>}
                                       {name}
@@ -19671,7 +19863,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                                       }}
                                         title={isFM?(isLead?"Remove as lead":"Set as lead"):"Remove"}
                                         style={{fontSize:isFM&&!isLead?8:10,fontWeight:800,marginLeft:2,
-                                          opacity:0.6,lineHeight:1}}>
+                                          opacity:0.6,lineHeight:1,cursor:"pointer"}}>
                                         {isFM&&!isLead?"\u2605":"\u00D7"}
                                       </span>
                                     </span>
