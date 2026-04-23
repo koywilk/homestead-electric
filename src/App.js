@@ -13043,6 +13043,27 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   //     `originPhase === phase` are removed. Every other RT field is left
   //     alone. Signed-off RTs are NEVER touched (they're frozen by design).
   //   • If no QC-Fail RTs reference the item, only the punch patch is written.
+  // NeedsSched date modal — opens when user taps the calendar icon on the
+  // Needs Sched pill. Lets them pick a date with the native picker and flag
+  // it as hard deadline (must happen) or flexible target.
+  const [needsSchedModal, setNeedsSchedModal] = useState(null); // { phase, date, hard }
+  const openNeedsSchedModal = (phase) => {
+    const dateKey = phase==="rough" ? "roughNeedsSchedDate" : "finishNeedsSchedDate";
+    const hardKey = phase==="rough" ? "roughNeedsSchedHard" : "finishNeedsSchedHard";
+    setNeedsSchedModal({
+      phase,
+      date: job[dateKey] || "",
+      hard: !!job[hardKey],
+    });
+  };
+  const saveNeedsSchedModal = () => {
+    if(!needsSchedModal) return;
+    const { phase, date, hard } = needsSchedModal;
+    const dateKey = phase==="rough" ? "roughNeedsSchedDate" : "finishNeedsSchedDate";
+    const hardKey = phase==="rough" ? "roughNeedsSchedHard" : "finishNeedsSchedHard";
+    u({ [dateKey]: date || "", [hardKey]: !!hard });
+    setNeedsSchedModal(null);
+  };
   const handleVoidQCItem = ({ phase, floorKey, roomId, itemId, patch }) => {
     if (!phase || !floorKey || !roomId || !itemId || !patch) return;
     const prev = jobRef.current;
@@ -13694,15 +13715,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                                         : "scheduled"; // unset → first tap sets On Schedule
                               u({ roughInProgressMode: next });
                             }}
-                            onSetNeedsDate={()=>{
-                              const cur = job.roughNeedsSchedDate||"";
-                              const d = prompt("Target or hard date (YYYY-MM-DD, leave blank for flexible):", cur);
-                              if(d===null) return;
-                              const cleaned = (d||"").trim();
-                              if(cleaned && !/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) { alert("Use YYYY-MM-DD format"); return; }
-                              const hard = cleaned ? window.confirm("Hard deadline? OK = MUST happen on that date, Cancel = flexible target") : false;
-                              u({ roughNeedsSchedDate: cleaned, roughNeedsSchedHard: hard });
-                            }}
+                            onSetNeedsDate={()=>openNeedsSchedModal("rough")}
                             onSync={()=>resyncInProgressMode("rough")}
                           />
                         )}
@@ -13983,15 +13996,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                                         : "scheduled";
                               u({ finishInProgressMode: next });
                             }}
-                            onSetNeedsDate={()=>{
-                              const cur = job.finishNeedsSchedDate||"";
-                              const d = prompt("Target or hard date (YYYY-MM-DD, leave blank for flexible):", cur);
-                              if(d===null) return;
-                              const cleaned = (d||"").trim();
-                              if(cleaned && !/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) { alert("Use YYYY-MM-DD format"); return; }
-                              const hard = cleaned ? window.confirm("Hard deadline? OK = MUST happen on that date, Cancel = flexible target") : false;
-                              u({ finishNeedsSchedDate: cleaned, finishNeedsSchedHard: hard });
-                            }}
+                            onSetNeedsDate={()=>openNeedsSchedModal("finish")}
                             onSync={()=>resyncInProgressMode("finish")}
                           />
                         )}
@@ -15261,6 +15266,68 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
       )}
 
+
+    {needsSchedModal && (
+      <div onClick={()=>setNeedsSchedModal(null)}
+        style={{position:"fixed",inset:0,background:"rgba(17,24,39,0.65)",zIndex:9999,
+          display:"flex",alignItems:"center",justifyContent:"center",padding:20,backdropFilter:"blur(4px)"}}>
+        <div onClick={e=>e.stopPropagation()}
+          style={{background:"var(--card)",borderRadius:14,padding:"22px 26px",width:360,
+            border:`1px solid ${C.border}`,boxShadow:"0 20px 50px rgba(0,0,0,0.35)"}}>
+          <div style={{marginBottom:16}}>
+            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)"}}>
+              SCHEDULING TARGET
+            </div>
+            <div style={{fontSize:11,color:C.dim,marginTop:3}}>
+              {needsSchedModal.phase==="rough"?"Rough":"Finish"} &middot; {job.name||"Untitled"}
+            </div>
+          </div>
+          <div style={{marginBottom:14}}>
+            <div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.1em",marginBottom:5}}>DATE</div>
+            <DateInp value={needsSchedModal.date}
+              onChange={e=>setNeedsSchedModal({...needsSchedModal, date: e.target.value})}/>
+            <div style={{fontSize:10,color:C.muted,marginTop:4,fontStyle:"italic"}}>
+              Leave blank for flexible (no specific date — just flagged as needing scheduling).
+            </div>
+          </div>
+          <label onClick={e=>e.stopPropagation()}
+            style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",
+              background:needsSchedModal.hard?"#dc262615":"var(--surface)",
+              border:`1px solid ${needsSchedModal.hard?"#dc2626":C.border}`,
+              borderRadius:8,cursor:"pointer",marginBottom:14,transition:"all 0.15s"}}>
+            <input type="checkbox" checked={needsSchedModal.hard}
+              onChange={e=>setNeedsSchedModal({...needsSchedModal, hard: e.target.checked})}
+              style={{accentColor:"#dc2626",cursor:"pointer"}}/>
+            <div style={{flex:1}}>
+              <div style={{fontSize:12,fontWeight:700,color:needsSchedModal.hard?"#dc2626":"var(--text)"}}>
+                Hard deadline
+              </div>
+              <div style={{fontSize:10,color:C.dim,marginTop:1}}>
+                {needsSchedModal.hard ? "MUST happen on this date" : "Flexible target — can shift if needed"}
+              </div>
+            </div>
+          </label>
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={()=>setNeedsSchedModal(null)}
+              style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                padding:"9px 16px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim,
+                fontFamily:"inherit",flex:1}}>Cancel</button>
+            {(job[needsSchedModal.phase==="rough"?"roughNeedsSchedDate":"finishNeedsSchedDate"]) && (
+              <button onClick={()=>{ setNeedsSchedModal({...needsSchedModal, date:"", hard:false}); }}
+                style={{background:"none",border:`1px solid ${C.red}44`,borderRadius:8,
+                  padding:"9px 14px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.red,
+                  fontFamily:"inherit"}}>Clear</button>
+            )}
+            <button onClick={saveNeedsSchedModal}
+              style={{background:C.accent,border:"none",borderRadius:8,color:"#fff",
+                padding:"9px 16px",cursor:"pointer",fontSize:11,fontWeight:800,fontFamily:"inherit",flex:1,
+                letterSpacing:"0.04em"}}>
+              Save
+            </button>
+          </div>
+        </div>
+      </div>
+    )}
 
     </div>
 
@@ -18500,6 +18567,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
   const crewStopAutoScroll = () => { if(crewScrollRaf.current){cancelAnimationFrame(crewScrollRaf.current); crewScrollRaf.current=null;} };
   const [teamNameDrafts, setTeamNameDrafts] = useState({}); // { [idx]: "typed name" }
   const [crewUserMap, setCrewUserMap] = useState({}); // { firstName: "First L." display label }
+  const [crewNeedsModal, setCrewNeedsModal] = useState(null); // { jobId, phase, date, hard }
   const [crewTimeModal, setCrewTimeModal] = useState(null); // { jobId, dayIdx, start, end } or null
   const crewSetCellTime = (jid, di, start, end) => {
     const k=`${jid}_${di}`, cur=crewData[k];
@@ -19686,21 +19754,26 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                 </button>
               )}
               <div style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
-                <button onClick={crewToggleFocus}
-                  title={crewFocus?"Show every active job":"Show only pinned + assigned jobs"}
-                  style={{background:crewFocus?C.accent+"15":"none",border:`1px solid ${crewFocus?C.accent:C.border}`,borderRadius:6,
-                    color:crewFocus?C.accent:C.dim,padding:"4px 10px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:700,
-                    display:"inline-flex",alignItems:"center",gap:4}}>
-                  <Icon name="eye" size={11}/>
-                  {crewFocus ? `FOCUS (${crewPinned.length})` : "Focus Mode"}
-                </button>
                 <button onClick={()=>setCrewPinPickerOpen(true)}
-                  title="Select jobs to pin for this week"
-                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
-                    color:C.dim,padding:"4px 10px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:600,
+                  title="Pick which jobs you're planning this week. Pinned = shows in the grid."
+                  style={{background:crewPinned.length>0?C.accent+"12":"none",
+                    border:`1px solid ${crewPinned.length>0?C.accent:C.border}`,borderRadius:6,
+                    color:crewPinned.length>0?C.accent:C.dim,padding:"4px 10px",cursor:"pointer",
+                    fontSize:10,fontFamily:"inherit",fontWeight:700,
                     display:"inline-flex",alignItems:"center",gap:4}}>
-                  <Icon name="flag" size={11}/> Pin Jobs
+                  <Icon name="flag" size={11}/>
+                  {crewPinned.length>0 ? `Week Plan (${crewPinned.length})` : "Pick Jobs for Week"}
                 </button>
+                {crewPinned.length>0 && (
+                  <button onClick={crewToggleFocus}
+                    title={crewFocus?"Show every active job, not just pinned":"Hide everything except pinned jobs"}
+                    style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                      color:C.dim,padding:"4px 10px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:600,
+                      display:"inline-flex",alignItems:"center",gap:4}}>
+                    <Icon name="eye" size={11}/>
+                    {crewFocus ? "Show all" : "Show only pinned"}
+                  </button>
+                )}
                 <button onClick={crewCopyPrevWeek}
                   title="Copy last week's assignments into this week"
                   style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
@@ -20109,16 +20182,16 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                       {crewFocus && crewPinned.length===0 ? (
                         <div>
                           <div style={{fontSize:13,color:"var(--text)",fontWeight:600,marginBottom:6}}>
-                            Focus Mode is on, but no jobs are pinned yet.
+                            No jobs picked for this week yet.
                           </div>
                           <div style={{fontSize:11,color:C.dim,marginBottom:12}}>
-                            Pin the jobs you need to schedule this week, or turn off Focus Mode to see everything.
+                            Pick the jobs you're planning to schedule this week, or show all active jobs.
                           </div>
                           <button onClick={()=>setCrewPinPickerOpen(true)}
                             style={{background:C.accent,border:"none",borderRadius:6,color:"#fff",
                               padding:"6px 14px",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",
                               marginRight:8}}>
-                            Pin Jobs
+                            Pick Jobs
                           </button>
                           <button onClick={crewToggleFocus}
                             style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
@@ -20267,14 +20340,12 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                         onUpdateJob({ ...job, ...patch }, patch);
                                       }}
                                       onSetNeedsDate={()=>{
-                                        const cur = job[dateKey]||"";
-                                        const d = prompt("Target or hard date (YYYY-MM-DD, leave blank for flexible):", cur);
-                                        if(d===null) return;
-                                        const cleaned = (d||"").trim();
-                                        if(cleaned && !/^\d{4}-\d{2}-\d{2}$/.test(cleaned)) { alert("Use YYYY-MM-DD format"); return; }
-                                        const hard = cleaned ? window.confirm("Hard deadline? OK = MUST happen on that date, Cancel = flexible target") : false;
-                                        const patch = { [dateKey]: cleaned, [hardKey]: hard };
-                                        onUpdateJob({ ...job, ...patch }, patch);
+                                        setCrewNeedsModal({
+                                          jobId: job.id,
+                                          phase: phaseKey,
+                                          date: job[dateKey]||"",
+                                          hard: !!job[hardKey],
+                                        });
                                       }}
                                     />
                                   </div>
@@ -20395,24 +20466,105 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
             )}
 
             {/* Job picker modal */}
+            {/* Needs-Sched date modal — native date picker for Crew Planner pill */}
+            {crewNeedsModal && (() => {
+              const modalJob = jobs.find(j=>j.id===crewNeedsModal.jobId);
+              const dateKey = crewNeedsModal.phase==="rough" ? "roughNeedsSchedDate" : "finishNeedsSchedDate";
+              const hardKey = crewNeedsModal.phase==="rough" ? "roughNeedsSchedHard" : "finishNeedsSchedHard";
+              return (
+                <div onClick={()=>setCrewNeedsModal(null)}
+                  style={{position:"fixed",inset:0,background:"rgba(17,24,39,0.65)",zIndex:9999,
+                    display:"flex",alignItems:"center",justifyContent:"center",padding:20,backdropFilter:"blur(4px)"}}>
+                  <div onClick={e=>e.stopPropagation()}
+                    style={{background:"var(--card)",borderRadius:14,padding:"22px 26px",width:360,
+                      border:`1px solid ${C.border}`,boxShadow:"0 20px 50px rgba(0,0,0,0.35)"}}>
+                    <div style={{marginBottom:16}}>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)"}}>
+                        SCHEDULING TARGET
+                      </div>
+                      {modalJob && (
+                        <div style={{fontSize:11,color:C.dim,marginTop:3}}>
+                          {crewNeedsModal.phase==="rough"?"Rough":"Finish"} &middot; {modalJob.name||"Untitled"}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{marginBottom:14}}>
+                      <div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.1em",marginBottom:5}}>DATE</div>
+                      <DateInp value={crewNeedsModal.date}
+                        onChange={e=>setCrewNeedsModal({...crewNeedsModal, date:e.target.value})}/>
+                      <div style={{fontSize:10,color:C.muted,marginTop:4,fontStyle:"italic"}}>
+                        Leave blank for flexible (no specific date — just flagged as needing scheduling).
+                      </div>
+                    </div>
+                    <label onClick={e=>e.stopPropagation()}
+                      style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",
+                        background:crewNeedsModal.hard?"#dc262615":"var(--surface)",
+                        border:`1px solid ${crewNeedsModal.hard?"#dc2626":C.border}`,
+                        borderRadius:8,cursor:"pointer",marginBottom:14,transition:"all 0.15s"}}>
+                      <input type="checkbox" checked={crewNeedsModal.hard}
+                        onChange={e=>setCrewNeedsModal({...crewNeedsModal, hard:e.target.checked})}
+                        style={{accentColor:"#dc2626",cursor:"pointer"}}/>
+                      <div style={{flex:1}}>
+                        <div style={{fontSize:12,fontWeight:700,color:crewNeedsModal.hard?"#dc2626":"var(--text)"}}>
+                          Hard deadline
+                        </div>
+                        <div style={{fontSize:10,color:C.dim,marginTop:1}}>
+                          {crewNeedsModal.hard ? "MUST happen on this date" : "Flexible target — can shift if needed"}
+                        </div>
+                      </div>
+                    </label>
+                    <div style={{display:"flex",gap:8}}>
+                      <button onClick={()=>setCrewNeedsModal(null)}
+                        style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                          padding:"9px 16px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim,
+                          fontFamily:"inherit",flex:1}}>Cancel</button>
+                      {modalJob && modalJob[dateKey] && (
+                        <button onClick={()=>setCrewNeedsModal({...crewNeedsModal, date:"", hard:false})}
+                          style={{background:"none",border:`1px solid ${C.red}44`,borderRadius:8,
+                            padding:"9px 14px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.red,
+                            fontFamily:"inherit"}}>Clear</button>
+                      )}
+                      <button onClick={()=>{
+                        if(!modalJob) { setCrewNeedsModal(null); return; }
+                        const patch = { [dateKey]: crewNeedsModal.date||"", [hardKey]: !!crewNeedsModal.hard };
+                        onUpdateJob({ ...modalJob, ...patch }, patch);
+                        setCrewNeedsModal(null);
+                      }}
+                        style={{background:C.accent,border:"none",borderRadius:8,color:"#fff",
+                          padding:"9px 16px",cursor:"pointer",fontSize:11,fontWeight:800,fontFamily:"inherit",flex:1,
+                          letterSpacing:"0.04em"}}>
+                        Save
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
+
             {/* Time modal */}
             {crewTimeModal&&(() => {
               const modalJob = jobs.find(j=>j.id===crewTimeModal.jobId);
               const modalDay = crewDays[crewTimeModal.dayIdx];
               return (
-                <div style={{position:"fixed",inset:0,background:"rgba(17,24,39,0.65)",zIndex:9999,
+                <div style={{position:"fixed",inset:0,background:"rgba(17,24,39,0.78)",zIndex:9999,
                   display:"flex",alignItems:"center",justifyContent:"center",padding:20,
-                  backdropFilter:"blur(4px)"}}
+                  backdropFilter:"blur(6px)"}}
                   onClick={()=>setCrewTimeModal(null)}>
                   <div onClick={e=>e.stopPropagation()}
-                    style={{background:"var(--card)",borderRadius:14,padding:"22px 26px",width:360,
-                      border:`1px solid ${C.border}`,boxShadow:"0 20px 50px rgba(0,0,0,0.35)"}}>
-                    <div style={{marginBottom:18}}>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",
-                        color:"var(--text)"}}>SET TIME</div>
+                    style={{background:"var(--card)",borderRadius:16,padding:"28px 32px",width:420,maxWidth:"95vw",
+                      border:`3px solid ${C.accent}`,
+                      boxShadow:`0 30px 70px rgba(0,0,0,0.5), 0 0 0 1px ${C.accent}`}}>
+                    <div style={{marginBottom:22,paddingBottom:14,borderBottom:`1px solid ${C.border}`}}>
+                      <div style={{display:"inline-flex",alignItems:"center",gap:8,marginBottom:4}}>
+                        <Icon name="clock" size={18} color={C.accent} stroke={2.5}/>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,letterSpacing:"0.06em",
+                          color:C.accent}}>SET TIME ON JOB</div>
+                      </div>
                       {modalJob&&modalDay&&(
-                        <div style={{fontSize:11,color:C.dim,marginTop:3}}>
-                          {modalJob.name||"Untitled"} &middot; {modalDay.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})}
+                        <div style={{fontSize:13,color:"var(--text)",marginTop:4,fontWeight:600}}>
+                          {modalJob.name||"Untitled"}
+                          <span style={{color:C.dim,fontWeight:400,margin:"0 6px"}}>&middot;</span>
+                          <span style={{color:C.dim}}>{modalDay.toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})}</span>
                         </div>
                       )}
                     </div>
@@ -20506,9 +20658,9 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                       boxShadow:"0 20px 50px rgba(0,0,0,0.35)"}}>
                     <div style={{marginBottom:16}}>
                       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",
-                        color:"var(--text)"}}>PIN JOBS FOR THIS WEEK</div>
-                      <div style={{fontSize:11,color:C.dim,marginTop:4}}>
-                        Select the jobs you need to schedule this week. When Focus Mode is on, only pinned jobs show.
+                        color:"var(--text)"}}>PICK JOBS FOR THIS WEEK</div>
+                      <div style={{fontSize:11,color:C.dim,marginTop:4,lineHeight:1.5}}>
+                        Check the jobs you're planning to schedule this week. The grid will show only these jobs so there's less to scroll through. Any job you assign crew to also auto-shows.
                       </div>
                     </div>
                     <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
@@ -20579,14 +20731,14 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                           padding:"9px 16px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim,
                           fontFamily:"inherit",flex:1}}>Close</button>
                       <button onClick={()=>{
-                        // Turn Focus Mode on (if not already) after pinning
+                        // Auto-enable "show pinned only" when picks are saved
                         if(crewPinned.length>0 && !crewFocus){ crewToggleFocus(); }
                         setCrewPinPickerOpen(false);
                       }}
                         style={{background:C.accent,border:"none",borderRadius:8,color:"#fff",
                           padding:"9px 16px",cursor:"pointer",fontSize:11,fontWeight:800,fontFamily:"inherit",flex:1,
                           letterSpacing:"0.04em"}}>
-                        {crewFocus?"Done":"Turn On Focus Mode"}
+                        Done
                       </button>
                     </div>
                   </div>
