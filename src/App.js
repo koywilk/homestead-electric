@@ -18430,7 +18430,25 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
   const [crewTeamSel,   setCrewTeamSel]   = useState(null);
   const crewTeamDragRef = useRef(null);
   const [crewJobOrder, setCrewJobOrder] = useState([]);
+  const [crewPinned, setCrewPinned] = useState([]); // jobIds explicitly pinned for this week
+  const [crewFocus,  setCrewFocus]  = useState(false); // focus mode = show only pinned + assigned
+  const [crewPinPickerOpen, setCrewPinPickerOpen] = useState(false);
   const crewRowDragRef = useRef(null);
+  const [crewRowDragOver, setCrewRowDragOver] = useState(null); // jobId being hovered during row drag
+  const crewScrollRaf = useRef(null);
+  // Auto-scroll window when dragging near top/bottom edges
+  const crewAutoScroll = (clientY) => {
+    const margin = 80; const speed = 14;
+    if(crewScrollRaf.current) cancelAnimationFrame(crewScrollRaf.current);
+    const step = () => {
+      if(!crewRowDragRef.current) return;
+      if(clientY < margin) window.scrollBy(0, -speed);
+      else if(clientY > window.innerHeight - margin) window.scrollBy(0, speed);
+      crewScrollRaf.current = requestAnimationFrame(step);
+    };
+    step();
+  };
+  const crewStopAutoScroll = () => { if(crewScrollRaf.current){cancelAnimationFrame(crewScrollRaf.current); crewScrollRaf.current=null;} };
   const [teamNameDrafts, setTeamNameDrafts] = useState({}); // { [idx]: "typed name" }
   const [crewUserMap, setCrewUserMap] = useState({}); // { firstName: "First L." display label }
   const [crewTimeModal, setCrewTimeModal] = useState(null); // { jobId, dayIdx, start, end } or null
@@ -18499,8 +18517,8 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
     toast.success(`Roster now has ${merged.length} people.`);
   };
   useEffect(() => onSnapshot(doc(db,"settings","schedule_"+crewWK), s => {
-    if(s.exists()){ const d=s.data(); setCrewData(d.assignments||{}); setCrewExtra(d.extraJobs||[]); setCrewJobOrder(d.jobOrder||[]); }
-    else { setCrewData({}); setCrewExtra([]); setCrewJobOrder([]); }
+    if(s.exists()){ const d=s.data(); setCrewData(d.assignments||{}); setCrewExtra(d.extraJobs||[]); setCrewJobOrder(d.jobOrder||[]); setCrewPinned(d.pinnedJobs||[]); setCrewFocus(!!d.focus); }
+    else { setCrewData({}); setCrewExtra([]); setCrewJobOrder([]); setCrewPinned([]); setCrewFocus(false); }
   }), [crewWK]);
 
   const _saveRoster = n => { setCrewRoster(n); setDoc(doc(db,"settings","crewRoster"),{names:n,updatedAt:new Date().toISOString()}); };
@@ -18560,7 +18578,24 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
     crewTeams.forEach(t=>{ if(t.lead) assigned.add(t.lead); t.members.forEach(n=>assigned.add(n)); });
     return (crewRoster||[]).filter(n=>!assigned.has(n));
   }, [crewTeams, crewRoster]);
-  const _saveCrewData = (a,e,o) => setDoc(doc(db,"settings","schedule_"+crewWK),{assignments:a,extraJobs:e!==undefined?e:crewExtra,jobOrder:o!==undefined?o:crewJobOrder,updatedAt:new Date().toISOString()});
+  const _saveCrewData = (a,e,o,p,f) => setDoc(doc(db,"settings","schedule_"+crewWK),{
+    assignments:a,
+    extraJobs:e!==undefined?e:crewExtra,
+    jobOrder:o!==undefined?o:crewJobOrder,
+    pinnedJobs:p!==undefined?p:crewPinned,
+    focus:f!==undefined?f:crewFocus,
+    updatedAt:new Date().toISOString()
+  });
+  const crewTogglePinned = (jid) => {
+    const next = crewPinned.includes(jid) ? crewPinned.filter(id=>id!==jid) : [...crewPinned, jid];
+    setCrewPinned(next);
+    _saveCrewData(crewData, crewExtra, crewJobOrder, next, crewFocus);
+  };
+  const crewToggleFocus = () => {
+    const next = !crewFocus;
+    setCrewFocus(next);
+    _saveCrewData(crewData, crewExtra, crewJobOrder, crewPinned, next);
+  };
   const crewMoveJobRow = (fromJid, toJid) => {
     if(!fromJid || !toJid || fromJid===toJid) return;
     const currentOrder = crewJobOrder && crewJobOrder.length
@@ -18571,6 +18606,28 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
     if(fromIdx<0 || toIdx<0) return;
     const [moved] = currentOrder.splice(fromIdx,1);
     currentOrder.splice(toIdx,0,moved);
+    setCrewJobOrder(currentOrder);
+    _saveCrewData(crewData, crewExtra, currentOrder);
+  };
+  const crewMoveJobToTop = (jid) => {
+    const currentOrder = crewJobOrder && crewJobOrder.length
+      ? [...crewJobOrder]
+      : crewPlanJobs.map(j=>j.id);
+    const idx = currentOrder.indexOf(jid);
+    if(idx<=0) return; // already at top or not found
+    const [moved] = currentOrder.splice(idx,1);
+    currentOrder.unshift(moved);
+    setCrewJobOrder(currentOrder);
+    _saveCrewData(crewData, crewExtra, currentOrder);
+  };
+  const crewMoveJobOne = (jid, dir) => {
+    const currentOrder = crewJobOrder && crewJobOrder.length
+      ? [...crewJobOrder]
+      : crewPlanJobs.map(j=>j.id);
+    const idx = currentOrder.indexOf(jid);
+    const nextIdx = idx + dir;
+    if(idx<0 || nextIdx<0 || nextIdx>=currentOrder.length) return;
+    [currentOrder[idx], currentOrder[nextIdx]] = [currentOrder[nextIdx], currentOrder[idx]];
     setCrewJobOrder(currentOrder);
     _saveCrewData(crewData, crewExtra, currentOrder);
   };
@@ -18739,7 +18796,13 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
     const fromA=jobs.filter(j=>aIds.has(j.id)&&!active.some(a=>a.id===j.id));
     const fromE=crewExtra.map(id=>jobs.find(j=>j.id===id)).filter(Boolean)
       .filter(j=>!active.some(a=>a.id===j.id)&&!fromA.some(a=>a.id===j.id));
-    const union=[...active,...fromA,...fromE];
+    let union=[...active,...fromA,...fromE];
+
+    // Focus mode: only show pinned jobs + jobs that already have assignments or were added manually
+    if(crewFocus && crewPinned.length > 0){
+      const keep = new Set([...crewPinned, ...aIds, ...crewExtra]);
+      union = union.filter(j => keep.has(j.id));
+    }
 
     // Apply custom manual order first, then priority-sort anything not in the manual list.
     const orderMap=new Map((crewJobOrder||[]).map((id,i)=>[id,i]));
@@ -18761,7 +18824,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
       return (a.job.name||"").localeCompare(b.job.name||"");
     });
     return withOrder.map(x=>({...x.job, _pri:x.pri}));
-  }, [jobs,crewData,crewExtra,crewJobOrder,_crewJobPriority]);
+  }, [jobs,crewData,crewExtra,crewJobOrder,_crewJobPriority,crewFocus,crewPinned]);
 
   const crewDayTotals = useMemo(() => {
     const t=Array(6).fill(0);
@@ -19568,6 +19631,21 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                 </button>
               )}
               <div style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
+                <button onClick={crewToggleFocus}
+                  title={crewFocus?"Show every active job":"Show only pinned + assigned jobs"}
+                  style={{background:crewFocus?C.accent+"15":"none",border:`1px solid ${crewFocus?C.accent:C.border}`,borderRadius:6,
+                    color:crewFocus?C.accent:C.dim,padding:"4px 10px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:700,
+                    display:"inline-flex",alignItems:"center",gap:4}}>
+                  <Icon name="eye" size={11}/>
+                  {crewFocus ? `FOCUS (${crewPinned.length})` : "Focus Mode"}
+                </button>
+                <button onClick={()=>setCrewPinPickerOpen(true)}
+                  title="Select jobs to pin for this week"
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                    color:C.dim,padding:"4px 10px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:600,
+                    display:"inline-flex",alignItems:"center",gap:4}}>
+                  <Icon name="flag" size={11}/> Pin Jobs
+                </button>
                 <button onClick={crewCopyPrevWeek}
                   title="Copy last week's assignments into this week"
                   style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
@@ -19724,13 +19802,20 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                             const fromIdx=crewTeams.findIndex(t=>t.lead===name||t.members.includes(name));
                             if(fromIdx!==idx) teamMovePerson(name,fromIdx,idx);
                           }}
-                          style={{background:"var(--card)",border:`1px solid ${crewTeamSel?C.accent+"55":teamColor+"33"}`,
-                            borderLeft:`3px solid ${teamColor}`,borderRadius:9,padding:"10px 12px",
-                            minWidth:130,flex:"0 1 auto",cursor:crewTeamSel?"pointer":"default",
-                            transition:"border-color 0.15s,box-shadow 0.15s",
-                            boxShadow:crewTeamSel?`0 0 0 1px ${C.accent}22`:"none"}}
-                          onMouseEnter={e=>{if(crewTeamSel)e.currentTarget.style.borderColor=C.accent;}}
-                          onMouseLeave={e=>{e.currentTarget.style.borderColor=crewTeamSel?C.accent+"55":teamColor+"33";}}>
+                          style={{background:"var(--card)",border:`1px solid ${crewTeamSel?C.accent+"55":teamColor+"22"}`,
+                            borderLeft:`3px solid ${teamColor}`,borderRadius:10,padding:"12px 14px",
+                            minWidth:180,maxWidth:260,flex:"0 1 auto",cursor:hasMembers?"grab":(crewTeamSel?"pointer":"default"),
+                            transition:"border-color 0.15s,box-shadow 0.15s,transform 0.1s",
+                            boxShadow:crewTeamSel?`0 0 0 1px ${C.accent}22`:`0 1px 3px ${teamColor}12`}}
+                          onMouseEnter={e=>{
+                            if(crewTeamSel)e.currentTarget.style.borderColor=C.accent;
+                            else if(hasMembers){e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 12px ${teamColor}22`;}
+                          }}
+                          onMouseLeave={e=>{
+                            e.currentTarget.style.borderColor=crewTeamSel?C.accent+"55":teamColor+"22";
+                            e.currentTarget.style.transform="";
+                            e.currentTarget.style.boxShadow=crewTeamSel?`0 0 0 1px ${C.accent}22`:`0 1px 3px ${teamColor}12`;
+                          }}>
                           {allNames.length===0?(
                             <div onClick={e=>e.stopPropagation()} style={{minWidth:180}}>
                               <div style={{fontSize:10,color:C.muted,fontStyle:"italic",marginBottom:6}}>
@@ -19828,42 +19913,37 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                           )}
                           {/* Add helper input — shown on any non-empty team with a lead */}
                           {team.lead&&(
-                            <div onClick={e=>e.stopPropagation()} style={{marginTop:6,display:"flex",gap:3,flexWrap:"wrap"}}>
+                            <div onClick={e=>e.stopPropagation()} style={{marginTop:8}}>
                               <input
                                 value={teamNameDrafts["m"+idx]||""}
                                 onChange={e=>setTeamNameDrafts({...teamNameDrafts,["m"+idx]:e.target.value})}
+                                onFocus={()=>setTeamNameDrafts({...teamNameDrafts,["open"+idx]:true})}
+                                onBlur={()=>{setTimeout(()=>setTeamNameDrafts(prev=>{const n={...prev};delete n["open"+idx];return n;}),200);}}
                                 onKeyDown={e=>{
                                   if(e.key==="Enter" && (teamNameDrafts["m"+idx]||"").trim()){
                                     teamAddMember(idx, teamNameDrafts["m"+idx].trim());
                                     setTeamNameDrafts({...teamNameDrafts,["m"+idx]:""});
+                                  } else if(e.key==="Escape"){
+                                    e.target.blur();
                                   }
                                 }}
-                                placeholder="+ helper"
-                                style={{background:"var(--surface)",border:`1px solid ${C.border}`,borderRadius:4,
-                                  padding:"3px 6px",fontSize:10,color:"var(--text)",fontFamily:"inherit",width:80,minWidth:0}}/>
-                              <button onClick={()=>{
-                                const name=(teamNameDrafts["m"+idx]||"").trim();
-                                if(!name) return;
-                                teamAddMember(idx,name);
-                                setTeamNameDrafts({...teamNameDrafts,["m"+idx]:""});
-                              }}
-                                style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:4,color:C.accent,
-                                  padding:"3px 7px",cursor:"pointer",fontSize:9,fontWeight:700,fontFamily:"inherit"}}>
-                                Add
-                              </button>
-                              {teamUnassigned.length>0&&(
-                                <div style={{display:"flex",flexWrap:"wrap",gap:3,width:"100%",marginTop:3}}>
+                                placeholder="+ add helper"
+                                style={{background:"var(--surface)",border:`1px solid ${C.border}`,borderRadius:5,
+                                  padding:"4px 8px",fontSize:10,color:"var(--text)",fontFamily:"inherit",width:"100%"}}/>
+                              {/* Quick-pick chips only appear while the input is focused — keeps team cards clean */}
+                              {teamNameDrafts["open"+idx]&&teamUnassigned.length>0&&(
+                                <div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:4}}>
                                   {teamUnassigned.slice(0,6).map(name=>{
                                     const nc=crewGetColor(name);
                                     return (
                                       <span key={name}
-                                        onClick={e=>{e.stopPropagation();teamAddMember(idx,name);}}
-                                        title={`Add ${name} to this team`}
+                                        onMouseDown={e=>{e.preventDefault();e.stopPropagation();teamAddMember(idx,name);}}
+                                        title={`Add ${name}`}
                                         style={{display:"inline-flex",alignItems:"center",gap:2,
-                                          padding:"1px 6px",borderRadius:99,fontSize:9,fontWeight:600,
+                                          padding:"2px 7px",borderRadius:99,fontSize:10,fontWeight:600,
                                           cursor:"pointer",userSelect:"none",
-                                          color:nc,background:nc+"10",border:`1px dashed ${nc}55`}}>
-                                        + {crewDisplayName(name)}
+                                          color:nc,background:nc+"12",border:`1px solid ${nc}44`}}>
+                                        {crewDisplayName(name)}
                                       </span>
                                     );
                                   })}
@@ -19871,12 +19951,15 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                               )}
                             </div>
                           )}
-                          <div style={{display:"flex",gap:4,marginTop:6}}>
-                            {team.lead&&team.members.length>0&&(
-                              <span style={{fontSize:9,color:C.muted}}>{1+team.members.length} people</span>
+                          <div style={{display:"flex",alignItems:"center",gap:6,marginTop:8,paddingTop:6,borderTop:`1px solid ${C.border}`}}>
+                            {team.lead&&(
+                              <span style={{fontSize:9,color:C.muted,fontWeight:600}}>{allNames.length} {allNames.length===1?"person":"people"}</span>
                             )}
                             <span onClick={e=>{e.stopPropagation();teamRemove(idx);}}
-                              style={{marginLeft:"auto",fontSize:9,color:C.red,cursor:"pointer",fontWeight:600,opacity:0.6}}>
+                              style={{marginLeft:"auto",fontSize:9,color:C.muted,cursor:"pointer",fontWeight:500,
+                                opacity:0.5,transition:"opacity 0.15s"}}
+                              onMouseEnter={e=>e.currentTarget.style.opacity=1}
+                              onMouseLeave={e=>e.currentTarget.style.opacity=0.5}>
                               Dissolve</span>
                           </div>
                         </div>
@@ -19967,8 +20050,30 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                 </thead>
                 <tbody>
                   {crewPlanJobs.length===0&&(
-                    <tr><td colSpan={7} style={{textAlign:"center",padding:"40px 0",color:C.muted,fontSize:12,fontStyle:"italic"}}>
-                      No active jobs. Click "Add Job" to get started.
+                    <tr><td colSpan={7} style={{textAlign:"center",padding:"40px 20px",color:C.muted,fontSize:12}}>
+                      {crewFocus && crewPinned.length===0 ? (
+                        <div>
+                          <div style={{fontSize:13,color:"var(--text)",fontWeight:600,marginBottom:6}}>
+                            Focus Mode is on, but no jobs are pinned yet.
+                          </div>
+                          <div style={{fontSize:11,color:C.dim,marginBottom:12}}>
+                            Pin the jobs you need to schedule this week, or turn off Focus Mode to see everything.
+                          </div>
+                          <button onClick={()=>setCrewPinPickerOpen(true)}
+                            style={{background:C.accent,border:"none",borderRadius:6,color:"#fff",
+                              padding:"6px 14px",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",
+                              marginRight:8}}>
+                            Pin Jobs
+                          </button>
+                          <button onClick={crewToggleFocus}
+                            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
+                              padding:"6px 14px",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit"}}>
+                            Show All
+                          </button>
+                        </div>
+                      ) : (
+                        <span style={{fontStyle:"italic"}}>No active jobs. Click "Add Job" to get started.</span>
+                      )}
                     </td></tr>
                   )}
                   {crewPlanJobs.map(job=>{
@@ -19979,34 +20084,94 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                     const priDate=pri.date?(()=>{const d=parseAnyDate(pri.date);return d?d.toLocaleDateString("en-US",{month:"short",day:"numeric"}):"";})():"";
                     return (
                       <tr key={job.id}
-                        onDragOver={e=>{if(crewRowDragRef.current) e.preventDefault();}}
+                        onDragOver={e=>{
+                          if(!crewRowDragRef.current) return;
+                          e.preventDefault();
+                          if(crewRowDragOver !== job.id) setCrewRowDragOver(job.id);
+                          crewAutoScroll(e.clientY);
+                        }}
+                        onDragLeave={e=>{
+                          // Only clear if leaving the tr entirely — not moving between its cells
+                          if(e.currentTarget.contains(e.relatedTarget)) return;
+                          if(crewRowDragOver === job.id) setCrewRowDragOver(null);
+                        }}
                         onDrop={e=>{
                           if(!crewRowDragRef.current) return;
                           e.preventDefault(); e.stopPropagation();
                           crewMoveJobRow(crewRowDragRef.current, job.id);
                           crewRowDragRef.current=null;
+                          setCrewRowDragOver(null);
+                          crewStopAutoScroll();
+                        }}
+                        style={{
+                          background: crewRowDragOver===job.id ? C.accent+"10" : crewRowDragRef.current===job.id ? C.accent+"06" : "transparent",
+                          outline: crewRowDragOver===job.id ? `2px solid ${C.accent}` : "none",
+                          outlineOffset: -2,
+                          transition:"background 0.1s,outline 0.1s",
                         }}>
                         <td style={{padding:"8px 6px 8px 10px",borderBottom:`1px solid ${C.border}`,
                           position:"sticky",left:0,background:"var(--card)",zIndex:1,
                           verticalAlign:"top",maxWidth:180}}>
-                          <div style={{display:"flex",alignItems:"flex-start",gap:6}}>
-                            <span
-                              draggable
-                              onDragStart={e=>{
-                                crewRowDragRef.current=job.id;
-                                try{e.dataTransfer.setData('text/plain',job.id);e.dataTransfer.effectAllowed='move';}catch(_){/* noop */}
-                              }}
-                              onDragEnd={()=>{crewRowDragRef.current=null;}}
-                              title="Drag to reorder"
-                              style={{cursor:"grab",color:C.muted,fontSize:13,lineHeight:1,
-                                padding:"2px 0",userSelect:"none",fontFamily:"monospace",letterSpacing:-2,flexShrink:0}}>
-                              &#8942;&#8942;
-                            </span>
+                          <div style={{display:"flex",alignItems:"flex-start",gap:4}}>
+                            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:1,flexShrink:0}}>
+                              <span
+                                draggable
+                                onDragStart={e=>{
+                                  crewRowDragRef.current=job.id;
+                                  setCrewRowDragOver(null);
+                                  try{e.dataTransfer.setData('text/plain',job.id);e.dataTransfer.effectAllowed='move';}catch(_){/* noop */}
+                                }}
+                                onDragEnd={()=>{crewRowDragRef.current=null;setCrewRowDragOver(null);crewStopAutoScroll();}}
+                                title="Drag to reorder"
+                                style={{cursor:"grab",color:C.muted,fontSize:13,lineHeight:1,
+                                  padding:"2px 4px",userSelect:"none",fontFamily:"monospace",letterSpacing:-2}}>
+                                &#8942;&#8942;
+                              </span>
+                              <button onClick={e=>{e.stopPropagation();crewMoveJobToTop(job.id);}}
+                                title="Move to top"
+                                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                                  padding:"1px 4px",fontSize:9,fontFamily:"inherit",fontWeight:700,lineHeight:1,
+                                  opacity:0.6,transition:"opacity 0.15s"}}
+                                onMouseEnter={e=>e.currentTarget.style.opacity=1}
+                                onMouseLeave={e=>e.currentTarget.style.opacity=0.6}>
+                                &#x21C8;
+                              </button>
+                              <div style={{display:"flex",gap:2}}>
+                                <button onClick={e=>{e.stopPropagation();crewMoveJobOne(job.id,-1);}}
+                                  title="Move up"
+                                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                                    padding:"1px 3px",fontSize:9,lineHeight:1,opacity:0.5,transition:"opacity 0.15s"}}
+                                  onMouseEnter={e=>e.currentTarget.style.opacity=1}
+                                  onMouseLeave={e=>e.currentTarget.style.opacity=0.5}>
+                                  &#x25B2;
+                                </button>
+                                <button onClick={e=>{e.stopPropagation();crewMoveJobOne(job.id,1);}}
+                                  title="Move down"
+                                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                                    padding:"1px 3px",fontSize:9,lineHeight:1,opacity:0.5,transition:"opacity 0.15s"}}
+                                  onMouseEnter={e=>e.currentTarget.style.opacity=1}
+                                  onMouseLeave={e=>e.currentTarget.style.opacity=0.5}>
+                                  &#x25BC;
+                                </button>
+                              </div>
+                            </div>
                             <div style={{flex:1,minWidth:0}}>
-                              <div onClick={()=>onSelectJob(job)}
-                                style={{cursor:"pointer",fontWeight:700,fontSize:12,color:"var(--text)",
-                                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
-                                  marginBottom:2}}>{job.name||"Untitled"}</div>
+                              <div style={{display:"flex",alignItems:"center",gap:4,marginBottom:2}}>
+                                <button onClick={e=>{e.stopPropagation();crewTogglePinned(job.id);}}
+                                  title={crewPinned.includes(job.id)?"Unpin from this week":"Pin to this week"}
+                                  style={{background:"none",border:"none",cursor:"pointer",padding:"0 2px",
+                                    color:crewPinned.includes(job.id)?C.accent:C.muted,
+                                    opacity:crewPinned.includes(job.id)?1:0.5,transition:"all 0.15s",lineHeight:1,flexShrink:0}}
+                                  onMouseEnter={e=>e.currentTarget.style.opacity=1}
+                                  onMouseLeave={e=>e.currentTarget.style.opacity=crewPinned.includes(job.id)?1:0.5}>
+                                  <Icon name="flag" size={11} stroke={crewPinned.includes(job.id)?2.5:2}/>
+                                </button>
+                                <div onClick={()=>onSelectJob(job)}
+                                  style={{cursor:"pointer",fontWeight:700,fontSize:12,color:"var(--text)",
+                                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,minWidth:0}}>
+                                  {job.name||"Untitled"}
+                                </div>
+                              </div>
                               <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
                                 {pri.label&&(
                                   <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.05em",
@@ -20138,75 +20303,198 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
 
             {/* Job picker modal */}
             {/* Time modal */}
-            {crewTimeModal&&(
-              <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:9999,
-                display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
-                onClick={()=>setCrewTimeModal(null)}>
-                <div onClick={e=>e.stopPropagation()}
-                  style={{background:"var(--card)",borderRadius:14,padding:"20px 24px",width:320,
-                    border:`1px solid ${C.border}`}}>
-                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",
-                    color:"var(--text)",marginBottom:14}}>SET TIME ON JOB</div>
-                  <div style={{display:"flex",gap:10,marginBottom:14}}>
-                    <label style={{flex:1}}>
-                      <div style={{fontSize:10,fontWeight:700,color:C.dim,marginBottom:4}}>START</div>
-                      <input type="time" value={crewTimeModal.start}
-                        onChange={e=>setCrewTimeModal({...crewTimeModal,start:e.target.value})}
-                        style={{width:"100%",background:"var(--surface)",border:`1px solid ${C.border}`,
-                          borderRadius:6,padding:"6px 10px",fontSize:12,color:"var(--text)",fontFamily:"inherit"}}/>
-                    </label>
-                    <label style={{flex:1}}>
-                      <div style={{fontSize:10,fontWeight:700,color:C.dim,marginBottom:4}}>END</div>
-                      <input type="time" value={crewTimeModal.end}
-                        onChange={e=>setCrewTimeModal({...crewTimeModal,end:e.target.value})}
-                        style={{width:"100%",background:"var(--surface)",border:`1px solid ${C.border}`,
-                          borderRadius:6,padding:"6px 10px",fontSize:12,color:"var(--text)",fontFamily:"inherit"}}/>
-                    </label>
-                  </div>
-                  <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
-                    {[
-                      {label:"Half day AM",s:"07:00",e:"11:30"},
-                      {label:"Half day PM",s:"12:00",e:"15:30"},
-                      {label:"Full day",s:"07:00",e:"15:30"},
-                    ].map(preset=>(
-                      <button key={preset.label}
-                        onClick={()=>setCrewTimeModal({...crewTimeModal,start:preset.s,end:preset.e})}
-                        style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,
-                          color:C.dim,padding:"3px 8px",cursor:"pointer",fontSize:9,fontWeight:600,fontFamily:"inherit"}}>
-                        {preset.label}
+            {crewTimeModal&&(() => {
+              const modalJob = jobs.find(j=>j.id===crewTimeModal.jobId);
+              const modalDay = crewDays[crewTimeModal.dayIdx];
+              return (
+                <div style={{position:"fixed",inset:0,background:"rgba(17,24,39,0.65)",zIndex:9999,
+                  display:"flex",alignItems:"center",justifyContent:"center",padding:20,
+                  backdropFilter:"blur(4px)"}}
+                  onClick={()=>setCrewTimeModal(null)}>
+                  <div onClick={e=>e.stopPropagation()}
+                    style={{background:"var(--card)",borderRadius:14,padding:"22px 26px",width:360,
+                      border:`1px solid ${C.border}`,boxShadow:"0 20px 50px rgba(0,0,0,0.35)"}}>
+                    <div style={{marginBottom:18}}>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",
+                        color:"var(--text)"}}>SET TIME</div>
+                      {modalJob&&modalDay&&(
+                        <div style={{fontSize:11,color:C.dim,marginTop:3}}>
+                          {modalJob.name||"Untitled"} &middot; {modalDay.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})}
+                        </div>
+                      )}
+                    </div>
+                    <div style={{display:"flex",gap:12,marginBottom:14}}>
+                      <label style={{flex:1}}>
+                        <div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.1em",marginBottom:5}}>START</div>
+                        <input type="time" value={crewTimeModal.start}
+                          onChange={e=>setCrewTimeModal({...crewTimeModal,start:e.target.value})}
+                          style={{width:"100%",background:"var(--surface)",border:`1px solid ${C.border}`,
+                            borderRadius:8,padding:"8px 12px",fontSize:13,fontWeight:600,color:"var(--text)",fontFamily:"inherit"}}/>
+                      </label>
+                      <label style={{flex:1}}>
+                        <div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.1em",marginBottom:5}}>END</div>
+                        <input type="time" value={crewTimeModal.end}
+                          onChange={e=>setCrewTimeModal({...crewTimeModal,end:e.target.value})}
+                          style={{width:"100%",background:"var(--surface)",border:`1px solid ${C.border}`,
+                            borderRadius:8,padding:"8px 12px",fontSize:13,fontWeight:600,color:"var(--text)",fontFamily:"inherit"}}/>
+                      </label>
+                    </div>
+                    <div style={{display:"flex",gap:6,marginBottom:18}}>
+                      {[
+                        {label:"Half AM",s:"07:00",e:"11:30"},
+                        {label:"Half PM",s:"12:00",e:"15:30"},
+                        {label:"Full day",s:"07:00",e:"15:30"},
+                      ].map(preset=>{
+                        const active = crewTimeModal.start===preset.s && crewTimeModal.end===preset.e;
+                        return (
+                          <button key={preset.label}
+                            onClick={()=>setCrewTimeModal({...crewTimeModal,start:preset.s,end:preset.e})}
+                            style={{flex:1,background:active?C.accent+"18":"var(--surface)",
+                              border:`1px solid ${active?C.accent:C.border}`,borderRadius:7,
+                              color:active?C.accent:C.dim,padding:"6px 8px",cursor:"pointer",fontSize:10,
+                              fontWeight:700,fontFamily:"inherit",transition:"all 0.15s"}}>
+                            {preset.label}
+                          </button>
+                        );
+                      })}
+                    </div>
+                    <div style={{display:"flex",gap:8}}>
+                      <button onClick={()=>setCrewTimeModal(null)}
+                        style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                          padding:"9px 16px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim,
+                          fontFamily:"inherit",flex:1}}>Cancel</button>
+                      {(() => {
+                        const k=`${crewTimeModal.jobId}_${crewTimeModal.dayIdx}`;
+                        const cur=crewData[k];
+                        return cur && cur.time && (cur.time.start||cur.time.end) ? (
+                          <button onClick={()=>{
+                            crewSetCellTime(crewTimeModal.jobId,crewTimeModal.dayIdx,"","");
+                            setCrewTimeModal(null);
+                          }}
+                            style={{background:"none",border:`1px solid ${C.red}44`,borderRadius:8,
+                              padding:"9px 14px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.red,
+                              fontFamily:"inherit"}}>Clear</button>
+                        ) : null;
+                      })()}
+                      <button onClick={()=>{
+                        crewSetCellTime(crewTimeModal.jobId,crewTimeModal.dayIdx,crewTimeModal.start,crewTimeModal.end);
+                        setCrewTimeModal(null);
+                      }}
+                        style={{background:C.accent,border:"none",borderRadius:8,color:"#fff",
+                          padding:"9px 16px",cursor:"pointer",fontSize:11,fontWeight:800,fontFamily:"inherit",flex:1,
+                          letterSpacing:"0.04em"}}>
+                        Save
                       </button>
-                    ))}
-                  </div>
-                  <div style={{display:"flex",gap:8}}>
-                    <button onClick={()=>setCrewTimeModal(null)}
-                      style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
-                        padding:"8px 16px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim,
-                        fontFamily:"inherit",flex:1}}>Cancel</button>
-                    {(() => {
-                      const k=`${crewTimeModal.jobId}_${crewTimeModal.dayIdx}`;
-                      const cur=crewData[k];
-                      return cur && cur.time && (cur.time.start||cur.time.end) ? (
-                        <button onClick={()=>{
-                          crewSetCellTime(crewTimeModal.jobId,crewTimeModal.dayIdx,"","");
-                          setCrewTimeModal(null);
-                        }}
-                          style={{background:"none",border:`1px solid ${C.red}`,borderRadius:8,
-                            padding:"8px 12px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.red,
-                            fontFamily:"inherit"}}>Clear</button>
-                      ) : null;
-                    })()}
-                    <button onClick={()=>{
-                      crewSetCellTime(crewTimeModal.jobId,crewTimeModal.dayIdx,crewTimeModal.start,crewTimeModal.end);
-                      setCrewTimeModal(null);
-                    }}
-                      style={{background:C.accent,border:"none",borderRadius:8,color:"#fff",
-                        padding:"8px 16px",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",flex:1}}>
-                      Save
-                    </button>
+                    </div>
                   </div>
                 </div>
-              </div>
-            )}
+              );
+            })()}
+
+            {/* Pin picker modal — multi-select jobs to pin for this week */}
+            {crewPinPickerOpen&&(() => {
+              const allActive = jobs.filter(j=>{
+                if(j.tempPed||j.quickJob) return false;
+                const rs=effRS(j), fs=effFS(j);
+                return (rs&&rs!=="complete"&&rs!=="invoice") || (fs&&fs!=="complete"&&fs!=="invoice");
+              });
+              allActive.sort((a,b)=>{
+                const ap=_crewJobPriority(a).score, bp=_crewJobPriority(b).score;
+                if(ap!==bp) return ap-bp;
+                return (a.name||"").localeCompare(b.name||"");
+              });
+              return (
+                <div style={{position:"fixed",inset:0,background:"rgba(17,24,39,0.65)",zIndex:9999,
+                  display:"flex",alignItems:"center",justifyContent:"center",padding:20,backdropFilter:"blur(4px)"}}
+                  onClick={()=>setCrewPinPickerOpen(false)}>
+                  <div onClick={e=>e.stopPropagation()}
+                    style={{background:"var(--card)",borderRadius:14,padding:"22px 26px",width:480,maxWidth:"95vw",
+                      maxHeight:"80vh",display:"flex",flexDirection:"column",border:`1px solid ${C.border}`,
+                      boxShadow:"0 20px 50px rgba(0,0,0,0.35)"}}>
+                    <div style={{marginBottom:16}}>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",
+                        color:"var(--text)"}}>PIN JOBS FOR THIS WEEK</div>
+                      <div style={{fontSize:11,color:C.dim,marginTop:4}}>
+                        Select the jobs you need to schedule this week. When Focus Mode is on, only pinned jobs show.
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:6,marginBottom:12,flexWrap:"wrap"}}>
+                      <button onClick={()=>{setCrewPinned([]);_saveCrewData(crewData,crewExtra,crewJobOrder,[],crewFocus);}}
+                        style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,color:C.dim,
+                          padding:"4px 10px",cursor:"pointer",fontSize:10,fontWeight:600,fontFamily:"inherit"}}>
+                        Clear all
+                      </button>
+                      <button onClick={()=>{
+                        const ids=allActive.filter(j=>_crewJobPriority(j).score<=3).map(j=>j.id);
+                        setCrewPinned(ids); _saveCrewData(crewData,crewExtra,crewJobOrder,ids,crewFocus);
+                      }}
+                        style={{background:"none",border:`1px solid ${C.accent}44`,borderRadius:5,color:C.accent,
+                          padding:"4px 10px",cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"inherit"}}>
+                        Suggest urgent
+                      </button>
+                      <span style={{fontSize:10,color:C.muted,alignSelf:"center",marginLeft:"auto"}}>
+                        {crewPinned.length} pinned &middot; {allActive.length} active
+                      </span>
+                    </div>
+                    <div style={{flex:1,overflowY:"auto",border:`1px solid ${C.border}`,borderRadius:8,
+                      padding:6,background:"var(--surface)"}}>
+                      {allActive.length===0?(
+                        <div style={{fontSize:12,color:C.muted,textAlign:"center",padding:"24px 0",fontStyle:"italic"}}>
+                          No active jobs found.
+                        </div>
+                      ):allActive.map(j=>{
+                        const isPinned=crewPinned.includes(j.id);
+                        const pri=_crewJobPriority(j);
+                        const priDateP=pri.date?(()=>{const d=parseAnyDate(pri.date);return d?d.toLocaleDateString("en-US",{month:"short",day:"numeric"}):"";})():"";
+                        const jcp=getFC(j.foreman||"Koy");
+                        return (
+                          <label key={j.id}
+                            style={{display:"flex",alignItems:"center",gap:8,padding:"6px 10px",borderRadius:6,
+                              cursor:"pointer",background:isPinned?C.accent+"10":"transparent",
+                              border:`1px solid ${isPinned?C.accent+"44":"transparent"}`,
+                              marginBottom:3,transition:"background 0.12s"}}
+                            onMouseEnter={e=>{if(!isPinned)e.currentTarget.style.background=C.accent+"06";}}
+                            onMouseLeave={e=>{if(!isPinned)e.currentTarget.style.background="transparent";}}>
+                            <input type="checkbox" checked={isPinned}
+                              onChange={()=>crewTogglePinned(j.id)}
+                              style={{accentColor:C.accent,cursor:"pointer",flexShrink:0}}/>
+                            <div style={{flex:1,minWidth:0}}>
+                              <div style={{fontWeight:700,fontSize:12,color:"var(--text)",
+                                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{j.name||"Untitled"}</div>
+                              <div style={{display:"flex",gap:4,marginTop:2,flexWrap:"wrap"}}>
+                                {pri.label&&(
+                                  <span style={{fontSize:9,fontWeight:800,color:pri.color,
+                                    background:pri.color+"18",borderRadius:99,padding:"1px 6px",
+                                    border:`1px solid ${pri.color}33`}}>{pri.label}{priDateP?` ${priDateP}`:""}</span>
+                                )}
+                                <span style={{fontSize:9,fontWeight:600,color:jcp,background:jcp+"15",
+                                  borderRadius:99,padding:"1px 6px"}}>{j.foreman||"Koy"}</span>
+                              </div>
+                            </div>
+                          </label>
+                        );
+                      })}
+                    </div>
+                    <div style={{display:"flex",gap:8,marginTop:14}}>
+                      <button onClick={()=>setCrewPinPickerOpen(false)}
+                        style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                          padding:"9px 16px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim,
+                          fontFamily:"inherit",flex:1}}>Close</button>
+                      <button onClick={()=>{
+                        // Turn Focus Mode on (if not already) after pinning
+                        if(crewPinned.length>0 && !crewFocus){ crewToggleFocus(); }
+                        setCrewPinPickerOpen(false);
+                      }}
+                        style={{background:C.accent,border:"none",borderRadius:8,color:"#fff",
+                          padding:"9px 16px",cursor:"pointer",fontSize:11,fontWeight:800,fontFamily:"inherit",flex:1,
+                          letterSpacing:"0.04em"}}>
+                        {crewFocus?"Done":"Turn On Focus Mode"}
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
 
             {crewJobPick&&(
               <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:9999,
