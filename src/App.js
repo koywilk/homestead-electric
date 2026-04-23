@@ -13105,7 +13105,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     if (job.roughStatus === "inprogress" && !job.roughInProgressMode) patch.roughInProgressMode = derive;
     if (job.finishStatus === "inprogress" && !job.finishInProgressMode) patch.finishInProgressMode = derive;
     if (Object.keys(patch).length) u(patch);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [simproOnSchedulePids, job.simproNo, job.roughStatus, job.finishStatus, job.roughInProgressMode, job.finishInProgressMode]);
 
   // Manual resync — force refetch from Simpro, then overwrite the given phase.
