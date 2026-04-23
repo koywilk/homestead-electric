@@ -286,6 +286,47 @@ const QUICK_JOB_TYPES = [
 ];
 const getStatusDef = (arr, val) => arr.find(x=>x.value===val)||{};
 
+// ── Simpro "on current schedule" cache ─────────────────────────
+// Used by the In Progress → On Schedule / Ongoing pill on Rough/Finish phases.
+// Single 14-day fetch, shared across all JobDetail instances.
+// 5-min TTL; re-fetches after that on next getter call.
+let _simproPidsCache = { pids: null, fetchedAt: 0, inflight: null };
+const _simproPidsListeners = new Set();
+const SIMPRO_PIDS_TTL_MS = 5 * 60 * 1000;
+async function fetchSimproOnSchedulePids(httpsCallableFn, functionsInstance, force = false) {
+  const now = Date.now();
+  if (!force && _simproPidsCache.pids && (now - _simproPidsCache.fetchedAt) < SIMPRO_PIDS_TTL_MS) {
+    return _simproPidsCache.pids;
+  }
+  if (_simproPidsCache.inflight) return _simproPidsCache.inflight;
+  const p = (async () => {
+    try {
+      const today = new Date(); today.setHours(0,0,0,0);
+      const plus14 = new Date(today.getTime() + 14 * 86400000);
+      const toStr = d => d.toISOString().split('T')[0];
+      const fn = httpsCallableFn(functionsInstance, "getSimproSchedule");
+      const res = await fn({ dateFrom: toStr(today), dateTo: toStr(plus14) });
+      const pids = new Set();
+      (res.data || []).forEach(entry => {
+        if (entry.Type !== "job") return;
+        const pid = entry.Project?.ProjectID;
+        if (pid) pids.add(String(pid));
+      });
+      _simproPidsCache = { pids, fetchedAt: Date.now(), inflight: null };
+      _simproPidsListeners.forEach(cb => { try { cb(pids); } catch {} });
+      return pids;
+    } catch (e) {
+      // On failure, keep existing cache (do NOT clobber). Return whatever we have.
+      _simproPidsCache.inflight = null;
+      return _simproPidsCache.pids || new Set();
+    }
+  })();
+  _simproPidsCache.inflight = p;
+  return p;
+}
+function subscribeSimproPids(cb) { _simproPidsListeners.add(cb); return () => _simproPidsListeners.delete(cb); }
+function getCachedSimproPids() { return _simproPidsCache.pids; }
+
 const PREP_STAGES   = ['Redline Walk Scheduled','Redline Walk Completed','Redline CO Doc Made','Redline Plans Made','Redline CO Sent','Redline CO Signed','Redline Plans Need to be Updated','Job Prep Complete'];
 const PREP_STAGE_ALERT = 'Redline Plans Need to be Updated';
 const PREP_CHECKLIST_ITEMS = [
@@ -1309,6 +1350,55 @@ const Pill = ({label,color}) => (
 );
 
 
+// ── InProgressModePill ────────────────────────────────────────
+// Shows "On Schedule" (blue solid) or "Ongoing" (gray dashed) next to
+// an In Progress status. Tap to toggle. Optional onSync for manual
+// resync with Simpro. Pure presentational — parent owns the data.
+function InProgressModePill({ mode, onToggle, onSync, size = "md", showSync = true }) {
+  const isScheduled = mode === "scheduled";
+  const isOngoing = mode === "ongoing";
+  const isUnset = !isScheduled && !isOngoing;
+  const color = isScheduled ? "#2563eb" : (isOngoing ? "#6b7280" : "#9ca3af");
+  const label = isScheduled ? "On Schedule" : (isOngoing ? "Ongoing" : "Set schedule");
+  const pad = size === "sm" ? "1px 7px" : "2px 8px";
+  const fs  = size === "sm" ? 9 : 10;
+  const borderStyle = isOngoing ? "dashed" : "solid";
+  return (
+    <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
+      <button
+        type="button"
+        onClick={(e)=>{ e.stopPropagation(); onToggle && onToggle(); }}
+        title={isUnset ? "Tap to mark On Schedule / Ongoing" : `Tap to switch to ${isScheduled?"Ongoing":"On Schedule"}`}
+        style={{
+          fontSize:fs, fontWeight:700, letterSpacing:"0.06em",
+          padding:pad, borderRadius:99,
+          background:`${color}18`, color,
+          border:`1px ${borderStyle} ${color}55`,
+          whiteSpace:"nowrap", cursor:"pointer",
+          fontFamily:"inherit", lineHeight:1.4,
+          display:"inline-flex", alignItems:"center", gap:4,
+        }}>
+        <span style={{width:6,height:6,borderRadius:"50%",background:color,display:"inline-block",flexShrink:0}}/>
+        {label}
+      </button>
+      {showSync && onSync && (
+        <button
+          type="button"
+          onClick={(e)=>{ e.stopPropagation(); onSync && onSync(); }}
+          title="Re-sync from Simpro schedule"
+          style={{
+            background:"none", border:"none", cursor:"pointer",
+            color:"#9ca3af", padding:2, display:"inline-flex", alignItems:"center",
+            fontSize:10,
+          }}>
+          <Icon name="rotateCw" size={size==="sm"?9:10}/>
+        </button>
+      )}
+    </span>
+  );
+}
+
+
 const SectionHead = ({label,color=C.dim,action=null}) => (
 
   <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
@@ -1895,6 +1985,8 @@ const ICON_PATHS = {
   pause:        <><rect x="6" y="4" width="4" height="16" rx="1"/><rect x="14" y="4" width="4" height="16" rx="1"/></>,
   wifiOff:      <><path d="M2 2l20 20"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 4.17-2.65"/><path d="M10.66 5c4.01-.36 8.14.9 11.34 3.76"/><path d="M16.85 11.25a10 10 0 0 1 2.22 1.68"/><path d="M5 13a10 10 0 0 1 5.24-2.76"/><path d="M12 20h.01"/></>,
   user:         <><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></>,
+  users:        <><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></>,
+  copy:         <><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></>,
   send:         <><path d="M22 2 11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></>,
   truck:        <><path d="M1 3h15v13H1z"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></>,
   checkCircle:  <><circle cx="12" cy="12" r="10"/><path d="m9 12 2 2 4-4"/></>,
@@ -2599,6 +2691,80 @@ function jobNoteLooksLikeHtml(s) {
       || /&(nbsp|amp|lt|gt|quot|#\d+);/i.test(s);
 }
 
+// A5 — Suggested triage heuristics.
+// Given a job-note line, returns { type, score } with the most likely
+// destination if any of the patterns match strongly enough. `type` is one
+// of 'punch' | 'rt' | 'co' | 'call' | 'po', or null if no confident match.
+//
+// The scoring is intentionally simple — keyword + regex hits per category.
+// The winner is the category with the highest score (>=2). Ties and low
+// scores return null so the UI stays quiet rather than guessing badly.
+//
+// Data safety: this function is a pure read-only analyzer. It does NOT
+// mutate the line, doesn't touch Firestore, and its output is used only
+// to render UI hints — the user still has to tap a destination button to
+// promote, so a wrong hint can't cause data loss.
+function suggestTriageType(line) {
+  if (!line) return null;
+  const text = String(line.text || '').toLowerCase();
+  const materials = Array.isArray(line.materials) ? line.materials.filter(Boolean) : [];
+  if (!text && materials.length === 0) return null;
+
+  const scores = { punch: 0, rt: 0, co: 0, call: 0, po: 0 };
+
+  // ---- CO: money, extra work, out of scope -----------------------------
+  if (/\$\s*\d/.test(text)) scores.co += 3;
+  if (/\b(\d+\s*(?:dollars?|bucks?))\b/.test(text)) scores.co += 2;
+  if (/\b(change\s*order|co#?\s*\d+|co\s+for)\b/.test(text)) scores.co += 3;
+  if (/\b(extra|additional|out\s+of\s+scope|upcharge|overage|over\s+budget)\b/.test(text)) scores.co += 2;
+  if (/\b(charge|bill(?:ed|ing)?|invoice|add\s+to\s+(?:invoice|bill|co))\b/.test(text)) scores.co += 2;
+  if (/\b(not\s+in\s+(?:bid|scope|contract)|wasn'?t\s+in\s+(?:bid|scope))\b/.test(text)) scores.co += 3;
+  if (/\bquote\b/.test(text)) scores.co += 1;
+
+  // ---- Call: contact someone -------------------------------------------
+  if (/\b(call|ring|phone|text|email)\s+[a-z]/.test(text)) scores.call += 3;
+  if (/\b(ask|reach\s*out\s+to|follow\s*up\s+with|check\s+with|contact)\s+[a-z]/.test(text)) scores.call += 2;
+  if (/\b(question\s+for|need\s+to\s+ask|talk\s+to)\b/.test(text)) scores.call += 2;
+  if (/\b\d{3}[-. ]?\d{3}[-. ]?\d{4}\b/.test(text)) scores.call += 3;
+  if (/\b(gc|general\s+contractor|builder|homeowner|ho|super|supervisor|designer|architect|inspector)\b/.test(text)) scores.call += 1;
+
+  // ---- Punch: fix / broken / missing ------------------------------------
+  if (/\b(fix|repair|replace|swap)\b/.test(text)) scores.punch += 2;
+  if (/\b(broken|bad|dead|faulty|defective|loose|cracked|chipped|burnt|burned)\b/.test(text)) scores.punch += 2;
+  if (/\b(doesn'?t\s+work|not\s+working|isn'?t\s+working|won'?t\s+turn\s+on)\b/.test(text)) scores.punch += 3;
+  if (/\b(needs?\s+(?:to\s+be\s+)?(?:replaced|fixed|repaired|redone|swapped))\b/.test(text)) scores.punch += 3;
+  if (/\b(missing|install\s+(?:the|a)?\s*\w+|hang|trim\s+out)\b/.test(text)) scores.punch += 2;
+  if (/\b(punch|hotcheck|hot\s*check)\b/.test(text)) scores.punch += 3;
+  if (/\b(wrong|incorrect|mislabeled|mis-?wired|backwards)\b/.test(text)) scores.punch += 1;
+
+  // ---- RT: return trip / future visit ----------------------------------
+  if (/\b(return\s*trip|rt|return\s+visit|come\s*back|go\s*back|drop\s*by|stop\s*by|next\s*trip|when\s+we(?:'re|\s+are)\s+back)\b/.test(text)) scores.rt += 3;
+  if (/\b(tomorrow|next\s+(?:week|monday|tuesday|wednesday|thursday|friday|saturday|sunday)|later\s+this\s+week)\b/.test(text)) scores.rt += 2;
+  if (/\b(schedule|book|set\s+up)\s+(?:a\s+)?(?:visit|return|trip|day)\b/.test(text)) scores.rt += 2;
+  if (/\b(after\s+(?:drywall|tile|paint|trim|mud|tape)|post-?(?:drywall|paint|tile))\b/.test(text)) scores.rt += 2;
+  if (/\b(monday|tuesday|wednesday|thursday|friday|saturday|sunday)\b/.test(text)) scores.rt += 1;
+
+  // ---- PO: order / pick up materials -----------------------------------
+  if (/\b(order|pick\s*up|buy|purchase)\b/.test(text)) scores.po += 3;
+  if (/\b(home\s*depot|hd|ced|platt|graybar|grainger|rexel|amazon|lowe'?s)\b/.test(text)) scores.po += 2;
+  if (/\b(at\s+the\s+)?shop\b/.test(text)) scores.po += 1;
+  if (/\b(need\s+to\s+(?:grab|get|order|pick\s*up)|grab\s+(?:a|some|the)\s+\w+)\b/.test(text)) scores.po += 2;
+  if (/\b(material|supplies|stock)\b/.test(text)) scores.po += 1;
+  // Any line that already has materials attached usually means "we need
+  // stuff" — nudge toward PO but don't override a strong Punch/CO signal.
+  if (materials.length > 0) scores.po += 1;
+
+  // Pick the top scorer. Require at least 2 points to speak up — lower
+  // than that is noise. On ties, return null (don't guess).
+  let top = null, topScore = 0, tied = false;
+  for (const t of Object.keys(scores)) {
+    if (scores[t] > topScore) { top = t; topScore = scores[t]; tied = false; }
+    else if (scores[t] === topScore && topScore > 0) { tied = true; }
+  }
+  if (topScore < 2 || tied) return null;
+  return { type: top, score: topScore };
+}
+
 // Single bullet line. Read-only until the parent note is in edit mode.
 // Triage mode (J4) will add a left checkbox; promoted lines will carry a
 // ghost chip on the right (J7).
@@ -2687,6 +2853,41 @@ function JobNoteLine({
             value={text}
             rows={1}
             onChange={(e)=>onChange({ ...line, text: e.target.value })}
+            onPaste={(e)=>{
+              // A3 — Split on bullets parser. When the user pastes a
+              // bullet list (2+ lines with bullet-like prefixes), auto-
+              // split it into separate bullet lines so they don't have
+              // to hit "Add line" N times. The parser is conservative:
+              // it only fires when at least 2 non-empty lines are
+              // detected AND at least half of them look like list items.
+              // Otherwise the native paste runs (accidental multi-line
+              // pastes in the middle of a sentence aren't clobbered).
+              try {
+                const pasted = (e.clipboardData || window.clipboardData)?.getData('text') || '';
+                if (!pasted.includes('\n')) return; // single-line paste → native
+
+                // Split on any newline, normalize, strip common bullet
+                // prefixes ("-", "*", "•", "·", "–", "—", "1.", "1)").
+                const bulletRe = /^\s*(?:[-*•·–—]|\d+[.)])\s+/;
+                const rawLines = pasted.split(/\r?\n/).map(s => s.trim()).filter(Boolean);
+                if (rawLines.length < 2) return;
+                const bulletLines = rawLines.filter(l => bulletRe.test(l));
+                // Heuristic: at least half the lines need to look like
+                // bullets. Prevents splitting a pasted paragraph or a
+                // multi-line code block that happens to have a dash.
+                if (bulletLines.length < Math.ceil(rawLines.length / 2)) return;
+
+                const cleaned = rawLines.map(l => l.replace(bulletRe, '').trim()).filter(Boolean);
+                if (cleaned.length < 2) return;
+
+                e.preventDefault();
+                // First cleaned line replaces THIS line's text (keeps
+                // promoted=null, photos intact); rest get inserted after
+                // via the `insertAfter` opt so updateLine can drop them
+                // into the note's lines array in one patch.
+                onChange({ ...line, text: cleaned[0] }, { insertAfter: cleaned.slice(1) });
+              } catch { /* fall through to native paste */ }
+            }}
             /* No onKeyDown Enter handler — Enter inserts a native newline
                inside THIS bullet. Users click "+ Add line" for a new
                bullet. Previous auto-split behavior was too easy to trigger
@@ -2954,6 +3155,7 @@ function JobNoteDestinationPicker({
     rt:    `Promote ${selectedLineIds.length} to Return Trip`,
     co:    `Promote ${selectedLineIds.length} to Change Order`,
     call:  `Promote ${selectedLineIds.length} to Call`,
+    po:    `Promote ${selectedLineIds.length} to Purchase Order`,
   }[type] || 'Promote';
 
   return (
@@ -3017,6 +3219,12 @@ function JobNoteDestinationPicker({
             note={note} selectedLines={selectedLines} selectedLineIds={selectedLineIds}
             job={job} onPatch={onPatch} markPromotedInNote={markPromotedInNote}
             manualTasks={manualTasks} onSaveManualTask={onSaveManualTask}
+            onDone={onDone}/>
+        )}
+        {type === 'po' && (
+          <JobNoteDestinationPO
+            note={note} selectedLines={selectedLines} selectedLineIds={selectedLineIds}
+            job={job} onPatch={onPatch} markPromotedInNote={markPromotedInNote}
             onDone={onDone}/>
         )}
       </div>
@@ -3092,23 +3300,31 @@ function JobNoteDestinationPunch({ note, selectedLines, selectedLineIds, job, on
   const canPromote = (mode === 'new' && floorKey) || (mode === 'existing' && existingCombo);
 
   const promote = () => {
-    // Build new punch items from selected lines.
+    // Build new punch items from selected lines. We capture each line's
+    // new punch-item id in a map so we can stamp per-line undo metadata
+    // for surgical A2 un-promote (remove just THIS line's punch item, not
+    // the whole group).
     const creator = (getIdentity && getIdentity()) || null;
     const now = new Date().toLocaleDateString('en-US');
-    const newItems = selectedLines.map(l => ({
-      id: uid(),
-      text: jobNotePlain(l.text) || (l.text || ''),
-      done: false,
-      addedBy: creator?.name || '',
-      addedAt: now,
-      photos: Array.isArray(l.photos) ? l.photos.map(p => ({ ...p })) : [], // copy by reference-safe clone
-      // Materials follow the line to Punch so the crew sees what to bring.
-      // Stored on the punch item as a string array; punch UI can render them
-      // alongside the item text. Empty strings filtered so placeholder
-      // materials don't leak through.
-      materials: Array.isArray(l.materials) ? l.materials.filter(m => (m||'').trim()).slice() : [],
-      fromJobNote: { jobNoteId: note.id, lineId: l.id, noteTitle: note.title || '' },
-    }));
+    const itemIdByLineId = {};
+    const newItems = selectedLines.map(l => {
+      const newId = uid();
+      itemIdByLineId[l.id] = newId;
+      return {
+        id: newId,
+        text: jobNotePlain(l.text) || (l.text || ''),
+        done: false,
+        addedBy: creator?.name || '',
+        addedAt: now,
+        photos: Array.isArray(l.photos) ? l.photos.map(p => ({ ...p })) : [], // copy by reference-safe clone
+        // Materials follow the line to Punch so the crew sees what to bring.
+        // Stored on the punch item as a string array; punch UI can render them
+        // alongside the item text. Empty strings filtered so placeholder
+        // materials don't leak through.
+        materials: Array.isArray(l.materials) ? l.materials.filter(m => (m||'').trim()).slice() : [],
+        fromJobNote: { jobNoteId: note.id, lineId: l.id, noteTitle: note.title || '' },
+      };
+    });
 
     // Decide target combo.
     const target = mode === 'existing'
@@ -3137,15 +3353,28 @@ function JobNoteDestinationPunch({ note, selectedLines, selectedLineIds, job, on
       nextPunch[target.floorKey] = writeIntoFloor(nextPunch[target.floorKey]);
     }
 
-    // Mark source lines promoted.
-    const nextJobNotes = markPromotedInNote({
+    // Mark source lines promoted. Per-line undo carries the specific
+    // punch item id this line created, so A2 un-promote can surgically
+    // remove ONLY that item — leaving other items in the same floor/room
+    // untouched. `wasNewTarget` distinguishes "new" (mode='new') from
+    // "existing" so un-promote knows whether the target was a freshly
+    // chosen floor/room — informational for now, reserved for future
+    // cleanup of empty rooms.
+    const nextJobNotes = markPromotedInNote((l) => ({
       type: 'punch',
       targetId: null, // punch items don't have a single stable parent id; navigate via floor+room
       targetLabel: `${phase === 'rough' ? 'Rough' : 'Finish'} · ${target.floorLabel} / ${target.roomLabel}`,
       targetPhase: phase,
       targetFloorKey: target.floorKey,
       targetRoomId: target.roomId || null,
-    });
+      undo: {
+        phase,
+        floorKey: target.floorKey,
+        roomId: target.roomId || null,
+        punchItemId: itemIdByLineId[l.id],
+        wasNewTarget: mode === 'new',
+      },
+    }));
 
     // Atomic single-patch write.
     const patch = { jobNotes: nextJobNotes };
@@ -3282,18 +3511,28 @@ function JobNoteDestinationRT({ note, selectedLines, selectedLineIds, job, onPat
 
   const canPromote = (mode === 'new') || (mode === 'existing' && targetRTId);
 
+  // Capture per-line punch-entry id so A2 un-promote can surgically remove
+  // ONLY this line's entry from the RT's punch array — not the whole RT,
+  // not other lines that were promoted together.
+  const entryIdByLineIdRef = useRef({});
+
   const buildPunchEntries = () => {
     const now = new Date().toLocaleDateString('en-US');
     const creator = (getIdentity && getIdentity()) || null;
-    return selectedLines.map(l => ({
-      id: uid(),
-      text: jobNotePlain(l.text) || (l.text || ''),
-      done: false,
-      addedBy: creator?.name || '',
-      addedAt: now,
-      photos: Array.isArray(l.photos) ? l.photos.map(p => ({ ...p })) : [],
-      fromJobNote: { jobNoteId: note.id, lineId: l.id, noteTitle: note.title || '' },
-    }));
+    entryIdByLineIdRef.current = {};
+    return selectedLines.map(l => {
+      const newId = uid();
+      entryIdByLineIdRef.current[l.id] = newId;
+      return {
+        id: newId,
+        text: jobNotePlain(l.text) || (l.text || ''),
+        done: false,
+        addedBy: creator?.name || '',
+        addedAt: now,
+        photos: Array.isArray(l.photos) ? l.photos.map(p => ({ ...p })) : [],
+        fromJobNote: { jobNoteId: note.id, lineId: l.id, noteTitle: note.title || '' },
+      };
+    });
   };
 
   const promote = () => {
@@ -3301,6 +3540,7 @@ function JobNoteDestinationRT({ note, selectedLines, selectedLineIds, job, onPat
     let nextTrips;
     let targetId;
     let targetLabel;
+    const wasNewTarget = (mode === 'new');
 
     if (mode === 'new') {
       const creator = (getIdentity && getIdentity()) || null;
@@ -3344,9 +3584,19 @@ function JobNoteDestinationRT({ note, selectedLines, selectedLineIds, job, onPat
         : (target.assignedTo ? `Unscheduled w/ ${target.assignedTo}` : (target.scope || 'Return Trip'));
     }
 
-    const nextJobNotes = markPromotedInNote({
+    // Per-line undo carries the specific punch-entry id inside the target
+    // RT. A2 un-promote will filter that one entry out of rt.punch[]. If
+    // the RT was freshly created AND removing this entry empties it AND
+    // no other promoted lines reference the RT, the whole RT gets removed
+    // (avoids orphan empty RTs).
+    const nextJobNotes = markPromotedInNote((l) => ({
       type: 'rt', targetId, targetLabel,
-    });
+      undo: {
+        rtId: targetId,
+        punchItemId: entryIdByLineIdRef.current[l.id],
+        wasNewTarget,
+      },
+    }));
 
     onPatch && onPatch({ returnTrips: nextTrips, jobNotes: nextJobNotes });
     onDone && onDone();
@@ -3743,7 +3993,11 @@ function JobNoteDestinationCall({ note, selectedLines, selectedLineIds, job, onP
     tasks.forEach(t => onSaveManualTask && onSaveManualTask(t));
 
     // Mark source lines promoted — one call each so every line has its own
-    // targetId (pointing at its manualTask doc).
+    // targetId (pointing at its manualTask doc). Per-line undo carries the
+    // manualTask id so A2 un-promote can locate and delete THIS call
+    // without touching other calls that may have been created in the same
+    // batch. Calls are always new (no "add to existing") so wasNewTarget
+    // is always true.
     const now = new Date().toISOString();
     const creatorName = creator?.name || '';
     const nextLines = (note.lines || []).map(l => {
@@ -3753,6 +4007,7 @@ function JobNoteDestinationCall({ note, selectedLines, selectedLineIds, job, onP
       return { ...l, promoted: {
         type: 'call', targetId: t.id, targetLabel: `Call · ${t.title.slice(0,40)}`,
         promotedAt: now, promotedBy: creatorName,
+        undo: { manualTaskId: t.id, wasNewTarget: true },
       }};
     });
     const nextNote = { ...note, lines: nextLines, updatedAt: now };
@@ -3792,13 +4047,288 @@ function JobNoteDestinationCall({ note, selectedLines, selectedLineIds, job, onP
   );
 }
 
+// ── Job Note → Purchase Order branch ────────────────────────────────────────
+// A1 (V2): promote selected bullets into a phase-scoped PO entry in
+// roughMaterials / finishMaterials. Modeled after the RT branch
+// (new-or-existing) with a phase selector and source picker for new POs.
+//
+// Data model reality check: POs store material lines as a single HTML string
+// (`items` with <br> separators), NOT as an item[] array — so there's no
+// per-line fromJobNote stamp on the material level. Instead:
+//   • New PO carries `createdFromJobNoteId` (same pattern as RT)
+//   • PO carries `fromJobNotes: [{ jobNoteId, lineId, noteTitle }]` backlinks
+//     for later multi-line tracking (mirrors CO's fromJobNotes)
+//   • Per-line `promoted.undo.addedBulletHtml` captures the EXACT
+//     <br>-prefixed snippet that was appended, enabling surgical un-promote
+//     later in A2.
+//
+// Data safety:
+//   • Single atomic onPatch — either { roughMaterials, jobNotes } or
+//     { finishMaterials, jobNotes }. Never touches the "other" phase's
+//     materials array.
+//   • "Add to existing" filter: needsOrder && !ordered && !pickedUp — won't
+//     let you accidentally append to a closed/picked-up PO.
+//   • Appending to existing uses string concat with a leading <br> only if
+//     there's prior content — won't clobber or blank out existing items.
+function JobNoteDestinationPO({ note, selectedLines, selectedLineIds, job, onPatch, markPromotedInNote, onDone }) {
+  const initialPhase = (note?.phase === 'rough' || note?.phase === 'finish') ? note.phase : 'rough';
+  const [phase, setPhase]   = useState(initialPhase);
+  const [mode, setMode]     = useState('new'); // 'new' | 'existing'
+  const [newSource, setNewSource] = useState('');
+  const [newPoNum, setNewPoNum]   = useState('');
+  const [targetPoId, setTargetPoId] = useState(null);
+
+  const SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","Other"];
+
+  const phaseMaterialsField = phase === 'rough' ? 'roughMaterials' : 'finishMaterials';
+  const phaseMaterials = Array.isArray(job?.[phaseMaterialsField]) ? job[phaseMaterialsField] : [];
+  // "Open" = not yet picked up and still being worked on (needsOrder true, ordered or not).
+  // Excludes pickedUp (done) to prevent re-opening finished POs.
+  const openPOs = phaseMaterials.filter(o => o && !o.pickedUp);
+
+  // When phase switches, reset existing target so we don't reference a PO
+  // from the other phase.
+  useEffect(() => { setTargetPoId(null); }, [phase]);
+
+  const canPromote =
+    (mode === 'new') ||
+    (mode === 'existing' && targetPoId);
+
+  // Convert a selected line into a material-list HTML snippet. Each bullet
+  // becomes its own <br>-separated line so it pastes into Simpro cleanly.
+  // Materials on the line (if any) become sub-bullets with "  · " prefix so
+  // the foreman sees what to bring for that item.
+  const lineToHtmlSnippet = (l) => {
+    const plain = (jobNotePlain(l.text) || l.text || '').trim();
+    const mats = Array.isArray(l.materials) ? l.materials.filter(m => (m||'').trim()) : [];
+    const escape = (s) => String(s)
+      .replace(/&/g, '&amp;').replace(/</g, '&lt;').replace(/>/g, '&gt;');
+    const parts = [];
+    if (plain) parts.push(`- ${escape(plain)}`);
+    mats.forEach(m => parts.push(`&nbsp;&nbsp;&middot; ${escape(m)}`));
+    return parts.join('<br>');
+  };
+
+  const promote = () => {
+    const creator = (getIdentity && getIdentity()) || null;
+    const now = new Date().toLocaleDateString('en-US');
+    const nowIso = new Date().toISOString();
+
+    // Per-line HTML snippets — kept separate so we can stamp each line's
+    // `addedBulletHtml` for later surgical un-promote.
+    const perLineHtml = selectedLines.map(l => ({
+      line: l,
+      html: lineToHtmlSnippet(l),
+    })).filter(x => x.html);
+
+    if (perLineHtml.length === 0) return;
+
+    const combinedHtml = perLineHtml.map(x => x.html).join('<br>');
+    const backlinks = selectedLines.map(l => ({
+      jobNoteId: note.id,
+      lineId: l.id,
+      noteTitle: note.title || '',
+    }));
+
+    let nextMaterials;
+    let targetId;
+    let targetLabel;
+    let wasNewTarget = false;
+    // Per-line final addedBulletHtml — may differ from the base snippet if we
+    // prefixed it with a <br> when appending to existing content.
+    const addedHtmlByLineId = {};
+
+    if (mode === 'new') {
+      wasNewTarget = true;
+      const newPO = {
+        id: uid(),
+        date: '',
+        po: newPoNum || '',
+        pickupDate: '',
+        source: newSource || '',
+        items: combinedHtml,
+        pickedUp: false,
+        needsOrder: true,
+        ordered: false,
+        createdAt: nowIso,
+        createdBy: creator?.name || '',
+        createdFromJobNoteId: note.id,
+        fromJobNotes: backlinks,
+      };
+      nextMaterials = [ ...phaseMaterials, newPO ];
+      targetId = newPO.id;
+      const label = newPoNum ? `#${newPoNum}` : (newSource || 'Purchase Order');
+      targetLabel = `${phase === 'rough' ? 'Rough' : 'Finish'} PO ${label}`;
+      // For a fresh PO, each line's addedBulletHtml is its snippet verbatim
+      // plus a leading <br> for lines after the first (matching how join built
+      // combinedHtml). Index 0 has no leading <br>; others do.
+      perLineHtml.forEach((x, i) => {
+        addedHtmlByLineId[x.line.id] = i === 0 ? x.html : ('<br>' + x.html);
+      });
+    } else {
+      const target = openPOs.find(o => o.id === targetPoId);
+      if (!target) return;
+      const existingItems = target.items || '';
+      // Normalize: trailing <br>s on existing get stripped (matches other
+      // append paths in MaterialOrders at line 12333+).
+      const trimmed = existingItems.replace(/(<br\s*\/?>)+$/i, '');
+      const needsFirstSeparator = !!trimmed;
+
+      // Build nextItems by appending each line's snippet with a <br>
+      // separator where needed. Per-line addedBulletHtml is captured as
+      // the EXACT substring appended (including leading <br>) so A2
+      // un-promote can do a literal string replace and leave the rest
+      // intact — no orphan <br>s, no merged lines.
+      let nextItems = trimmed;
+      perLineHtml.forEach((x, i) => {
+        const sep = (i === 0 && !needsFirstSeparator) ? '' : '<br>';
+        const snippet = sep + x.html;
+        addedHtmlByLineId[x.line.id] = snippet;
+        nextItems += snippet;
+      });
+
+      nextMaterials = phaseMaterials.map(o => o.id === target.id
+        ? {
+            ...o,
+            items: nextItems,
+            fromJobNotes: [ ...(Array.isArray(o.fromJobNotes) ? o.fromJobNotes : []), ...backlinks ],
+          }
+        : o);
+      targetId = target.id;
+      const label = target.po ? `#${target.po}` : (target.source || 'Purchase Order');
+      targetLabel = `${phase === 'rough' ? 'Rough' : 'Finish'} PO ${label}`;
+    }
+
+    // Mark each selected line promoted on the note, stamping per-line the
+    // exact HTML snippet appended so A2 un-promote can surgically remove it.
+    const nextJobNotes = markPromotedInNote((l) => ({
+      type: 'po',
+      targetId,
+      targetLabel,
+      undo: {
+        phase,
+        addedBulletHtml: addedHtmlByLineId[l.id] || '',
+        wasNewTarget,
+      },
+    }));
+
+    onPatch && onPatch({
+      [phaseMaterialsField]: nextMaterials,
+      jobNotes: nextJobNotes,
+    });
+    onDone && onDone();
+  };
+
+  const pillStyle = (active, color='#ea580c') => ({
+    fontSize:11, fontWeight:700,
+    background: active ? color : 'transparent',
+    color: active ? '#fff' : color,
+    border:`1px solid ${color}`, borderRadius:99,
+    padding:'3px 12px', cursor:'pointer', fontFamily:'inherit',
+  });
+
+  return (
+    <div>
+      {/* Phase selector — which materials bucket this PO lands in */}
+      <div style={{ display:'flex', gap:6, marginBottom:10 }}>
+        <div style={{ fontSize:10, color: C.dim, fontWeight:700, letterSpacing:'0.06em', alignSelf:'center', marginRight:6 }}>PHASE</div>
+        <button onClick={()=>setPhase('rough')}  style={pillStyle(phase==='rough',  '#7c3aed')}>Rough</button>
+        <button onClick={()=>setPhase('finish')} style={pillStyle(phase==='finish', '#0d9488')}>Finish</button>
+      </div>
+
+      {/* Mode selector */}
+      <div style={{ display:'flex', gap:6, marginBottom:12 }}>
+        <button onClick={()=>setMode('new')}      style={pillStyle(mode==='new')}>New — create PO</button>
+        <button onClick={()=>setMode('existing')} style={pillStyle(mode==='existing')}>Add to existing</button>
+      </div>
+
+      {mode === 'new' && (
+        <div style={{ display:'grid', gap:8, marginBottom:12 }}>
+          <div style={{ display:'grid', gap:8, gridTemplateColumns:'1fr 1fr' }}>
+            <div>
+              <div style={{ fontSize:10, color: C.dim, fontWeight:700, letterSpacing:'0.06em', marginBottom:5 }}>SOURCE (optional)</div>
+              <select value={newSource} onChange={e=>setNewSource(e.target.value)}
+                style={{ width:'100%', boxSizing:'border-box', background: C.surface, border:`1px solid ${C.border}`, borderRadius:7, padding:'6px 9px', fontSize:12, color: newSource ? C.text : C.dim, fontFamily:'inherit', outline:'none', cursor:'pointer' }}>
+                {SOURCES.map(s => <option key={s} value={s}>{s || '— source —'}</option>)}
+              </select>
+            </div>
+            <div>
+              <div style={{ fontSize:10, color: C.dim, fontWeight:700, letterSpacing:'0.06em', marginBottom:5 }}>PO # (optional)</div>
+              <input value={newPoNum} onChange={e=>setNewPoNum(e.target.value)} placeholder="PO-001"
+                style={{ width:'100%', boxSizing:'border-box', background: C.surface, border:`1px solid ${C.border}`, borderRadius:7, padding:'6px 9px', fontSize:12, color: C.text, fontFamily:'inherit', outline:'none' }}/>
+            </div>
+          </div>
+          <div style={{ fontSize:10, color: C.dim, fontStyle:'italic' }}>
+            New PO lands in {phase === 'rough' ? 'Rough' : 'Finish'} Material Orders as "Needs to Order" — you can fill in date/source later.
+          </div>
+        </div>
+      )}
+
+      {mode === 'existing' && (
+        <div style={{
+          maxHeight:230, overflowY:'auto',
+          border:`1px solid ${C.border}`, borderRadius:8, background: C.surface,
+          marginBottom:12,
+        }}>
+          {openPOs.length === 0 && (
+            <div style={{ fontSize:12, color: C.dim, padding:'14px 12px', textAlign:'center', fontStyle:'italic' }}>
+              No open {phase === 'rough' ? 'Rough' : 'Finish'} POs yet — switch to "New" above.
+            </div>
+          )}
+          {openPOs.map((po, i) => {
+            const selected = targetPoId === po.id;
+            const statusLabel = po.ordered ? 'Order Sent' : (po.source === 'Shop' ? 'Needs Pickup' : 'Need to Order');
+            const statusColor = po.ordered ? '#1d4ed8' : '#ea580c';
+            return (
+              <div key={po.id}
+                onClick={()=>setTargetPoId(po.id)}
+                style={{
+                  padding:'8px 12px', cursor:'pointer',
+                  borderBottom: i === openPOs.length-1 ? 'none' : `1px solid ${C.border}`,
+                  background: selected ? '#f1f5f9' : 'transparent',
+                  display:'flex', alignItems:'center', gap:8,
+                }}>
+                <input type="radio" readOnly checked={selected} style={{ flexShrink:0 }}/>
+                <div style={{ flex:1, minWidth:0 }}>
+                  <div style={{ fontSize:12, fontWeight:700, color: C.text, whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis' }}>
+                    PO #{i+1}{po.po ? ` · ${po.po}` : ''}{po.source ? ` · ${po.source}` : ''}
+                  </div>
+                  <div style={{ fontSize:10, color: C.dim, marginTop:1, display:'flex', gap:8 }}>
+                    <span style={{ color: statusColor, fontWeight:700 }}>{statusLabel}</span>
+                    {po.date && <span>· ordered {po.date}</span>}
+                    {po.items && <span>· has items</span>}
+                  </div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+
+      <button onClick={promote} disabled={!canPromote}
+        style={{
+          width:'100%', background: canPromote ? '#ea580c' : '#e5e7eb',
+          color: canPromote ? '#fff' : C.dim,
+          border:'none', borderRadius:8,
+          padding:'9px 0', fontSize:13, fontWeight:800,
+          cursor: canPromote ? 'pointer' : 'not-allowed',
+          fontFamily:'inherit',
+        }}>
+        {mode === 'new'
+          ? `Create ${phase === 'rough' ? 'Rough' : 'Finish'} PO with ${selectedLineIds.length} item${selectedLineIds.length!==1?'s':''}`
+          : `Add ${selectedLineIds.length} item${selectedLineIds.length!==1?'s':''} to PO`}
+      </button>
+    </div>
+  );
+}
+
 // A single Job Note — card wrapper with header, lines, and footer actions.
 // `onPatch(patch)` writes to the parent job doc atomically. `onChange(note)`
 // is a convenience that just updates this one note in place.
 function JobNoteCard({
   note, onChange, onDelete, onArchive, phaseColor,
   jobId, job, setTab, onPatch,
-  manualTasks = [], onSaveManualTask,
+  manualTasks = [], onSaveManualTask, onDeleteManualTask,
   onViewPhoto,
 }) {
   const [editing, setEditing] = useState(() => !(note?.title) && (note?.lines||[]).every(l=>!l.text));
@@ -3820,9 +4350,65 @@ function JobNoteCard({
   const [undoToast, setUndoToast] = useState(null);
   useEffect(() => () => { if (undoToast?.timer) clearTimeout(undoToast.timer); }, [undoToast]);
 
+  // B2 — Share modal state. When open, user sees the current share URL (if
+  // any), copy + revoke controls, and a "Create link" button if no token
+  // exists yet. Modal is inline below the card body — no portal needed.
+  const [shareOpen, setShareOpen] = useState(false);
+  const [copiedFlash, setCopiedFlash] = useState(false);
+
   // J4/J5/J6 (triage picker) still to be wired — placeholder state for J3.
   const lines = Array.isArray(note?.lines) ? note.lines : [];
   const migrated = !!(note?.migratedFrom);
+  const hasShare = !!(note?.shareToken);
+  const shareUrl = hasShare
+    ? `${window.location.origin}/?jobnote=${encodeURIComponent(jobId)}:${encodeURIComponent(note.id)}:${encodeURIComponent(note.shareToken)}`
+    : '';
+
+  // B2 — create / revoke share link. Token is 128-bit hex from
+  // crypto.getRandomValues (falls back to Math.random * 2 for older
+  // browsers, still acceptable since the URL itself is the capability).
+  // Data safety: creates/revokes only touch shareToken/sharedAt. No impact
+  // on lines, promoted flags, or any other data.
+  const mintShareToken = () => {
+    try {
+      const arr = new Uint8Array(16);
+      (window.crypto || window.msCrypto).getRandomValues(arr);
+      return Array.from(arr).map(b => b.toString(16).padStart(2,'0')).join('');
+    } catch {
+      return (Math.random().toString(16).slice(2) + Math.random().toString(16).slice(2)).slice(0, 32);
+    }
+  };
+  const createShareLink = () => {
+    const token = mintShareToken();
+    onChange({
+      ...note,
+      shareToken: token,
+      sharedAt: new Date().toISOString(),
+      updatedAt: new Date().toISOString(),
+    });
+  };
+  const revokeShareLink = async () => {
+    const ok = await showConfirm('Revoke this share link?\n\nThe existing URL will stop working immediately. A new link can be generated later (it will have a different URL).');
+    if (!ok) return;
+    onChange({
+      ...note,
+      shareToken: null,
+      sharedAt: null,
+      updatedAt: new Date().toISOString(),
+    });
+    setCopiedFlash(false);
+  };
+  const copyShareUrl = async () => {
+    if (!shareUrl) return;
+    try {
+      await navigator.clipboard.writeText(shareUrl);
+      setCopiedFlash(true);
+      setTimeout(() => setCopiedFlash(false), 1800);
+    } catch {
+      // Fallback: select the input. Handled via a ref in the modal JSX.
+      toast.info && toast.info('Select the link and copy manually.');
+    }
+  };
 
   const setLines = (nextLines, extra = {}) => {
     onChange({ ...note, lines: nextLines, updatedAt: new Date().toISOString(), ...extra });
@@ -3838,6 +4424,17 @@ function JobNoteCard({
       nextLines.splice(idx + 1, 0, {
         id: uid(), text: '', createdAt: new Date().toISOString(), photos: [], promoted: null,
       });
+    }
+    // A3 — insertAfter: caller (JobNoteLine paste handler) parsed a
+    // bullet list and wants extra lines spawned right after this one.
+    // Each new line is a fresh bullet with its own id; photos and
+    // materials stay empty since the paste only supplied text.
+    if (Array.isArray(opts.insertAfter) && opts.insertAfter.length > 0) {
+      const now = new Date().toISOString();
+      const newLines = opts.insertAfter.map(txt => ({
+        id: uid(), text: txt, createdAt: now, photos: [], promoted: null,
+      }));
+      nextLines.splice(idx + 1, 0, ...newLines);
     }
     setLines(nextLines);
   };
@@ -3935,100 +4532,315 @@ function JobNoteCard({
     }, 140);
   };
 
-  // Permanent "unpromote" action (ghost chip × button). Currently supports
-  // the CO path only — other types will no-op until explicit undo metadata
-  // is wired for them. This runs OUTSIDE the 10-second toast window, so it
-  // relies on the per-line `promoted.undo.addedBulletHtml` snapshot stamped
-  // at promote time to surgically remove just this line's contribution.
+  // Permanent "unpromote" action (ghost chip × button). Runs OUTSIDE the
+  // 10-second toast window, so it relies on per-line `promoted.undo`
+  // snapshots stamped at promote time to surgically remove just this
+  // line's contribution.
   //
-  // Data safety — this is the risky path (may run after the CO was edited,
-  // sent, or even referenced by pricing workflows). Guards:
-  //   1. Only acts on type='co' with a targetId the user can confirm.
-  //   2. Detects "CO has been edited since promote" by checking whether the
-  //      stamped `addedBulletHtml` is still present verbatim in `co.task`.
-  //      If NOT, we show a stronger warning and still attempt surgical
-  //      removal, but the user is told bullets may not come out cleanly.
-  //   3. Never mutates pricing, status, sendTo, or date fields on the CO.
-  //      Only `task`, `material` (unchanged — materials are note-level and
-  //      deduped, so we don't touch them on per-line unpromote), and
-  //      `fromJobNotes` (the backlink for THIS line is filtered out).
-  //   4. If the target CO was created by this promote (`wasNewTarget`) AND
-  //      no other promoted lines reference it, the whole CO is removed to
-  //      avoid leaving an empty husk. Any other case: CO stays.
-  //   5. Single atomic onPatch over { changeOrders, jobNotes } — same
-  //      write contract as promote itself. If the patch fails, nothing
-  //      changes client- or server-side.
+  // A2 extends un-promote from CO-only to all 5 destination types:
+  // co, punch, rt, call, po. The structure is the same for each:
+  //
+  //   1. Guard on promoted + undo metadata presence
+  //   2. Confirm with destination-specific warnings
+  //   3. Surgically remove THIS line's contribution from the target
+  //      (item id for punch/rt, manualTask id for call, HTML snippet
+  //      for co/po). Use per-line ids so other lines promoted in the
+  //      same batch stay intact.
+  //   4. If the target was a new target AND no other lines reference it
+  //      AND no downstream work has started, remove the empty husk
+  //      (target). Otherwise leave the target in place.
+  //   5. Clear the line's promoted flag so it's triageable again
+  //   6. Single atomic onPatch so we never leave the doc in a half-state
   const unpromoteLine = async (line) => {
     const p = line?.promoted;
-    if (!p || p.type !== 'co' || !p.targetId) {
-      toast.warn && toast.warn("Undo for this destination isn't wired yet — only Change Orders are reversible for now.");
-      return;
-    }
-    const targetCO = (job?.changeOrders || []).find(co => co.id === p.targetId);
-    if (!targetCO) {
-      // CO already gone — just clear the promoted flag so the note is clean.
-      const cleanedNote = { ...note, lines: lines.map(l => l.id === line.id ? { ...l, promoted: null } : l), updatedAt: new Date().toISOString() };
-      onPatch && onPatch({ jobNotes: (job.jobNotes||[]).map(n => n.id === note.id ? cleanedNote : n) });
-      return;
-    }
-    const addedHtml = p.undo?.addedBulletHtml || '';
-    const coEdited = addedHtml
-      ? !(targetCO.task || '').includes(addedHtml)
-      : false;
-    const meaningfullyStarted =
-      (targetCO.coStatus && targetCO.coStatus !== 'needs_sending') ||
-      !!targetCO.date || !!targetCO.sendTo || !!targetCO.time;
+    if (!p || !p.type) return;
 
-    const baseMsg = `Remove this line from ${p.targetLabel || 'the CO'}?`;
-    const warnings = [];
-    if (coEdited) warnings.push(`The CO's Task field has been edited since promote — this bullet may not come out cleanly. You may need to clean it up manually.`);
-    if (meaningfullyStarted) warnings.push(`The CO has status/date/send-to filled in (not just "needs_sending"). Any pricing or workflow progress will stay on the CO.`);
-    warnings.push(`Materials from this line stay on the CO (they're deduped across lines).`);
-    const ok = showConfirm
-      ? await showConfirm({ message: [baseMsg, ...warnings].join('\n\n'), confirmLabel: 'Remove', cancelLabel: 'Keep' })
-      : window.confirm(baseMsg);
-    if (!ok) return;
-
-    // Surgical task removal — drop the exact <li> we added. Idempotent: if
-    // the snapshot isn't found, the task field is left as-is.
-    let nextTask = targetCO.task || '';
-    if (addedHtml && nextTask.includes(addedHtml)) {
-      nextTask = nextTask.replace(addedHtml, '');
-      // If removing the <li> leaves an empty <ul></ul>, strip the wrapper.
-      nextTask = nextTask.replace(/<ul>\s*<\/ul>/gi, '').trim();
-    }
-
-    // Strip this line's backlink from the CO's fromJobNotes array.
-    const nextFromJN = (Array.isArray(targetCO.fromJobNotes) ? targetCO.fromJobNotes : [])
-      .filter(bl => !(bl.jobNoteId === note.id && bl.lineId === line.id));
-
-    // Is this the last promoted line pointing to this CO across the whole job?
-    const stillReferenced = (job.jobNotes || []).some(n =>
-      (n.lines || []).some(l => {
-        if (n.id === note.id && l.id === line.id) return false; // ignore the one being unpromoted
-        return l.promoted && l.promoted.type === 'co' && l.promoted.targetId === p.targetId;
-      }));
-    const removeWholeCO =
-      !!p.undo?.wasNewTarget && !stillReferenced && !meaningfullyStarted;
-
-    let nextCOs;
-    if (removeWholeCO) {
-      nextCOs = (job.changeOrders || []).filter(co => co.id !== p.targetId);
-    } else {
-      nextCOs = (job.changeOrders || []).map(co => co.id === p.targetId
-        ? { ...co, task: nextTask, fromJobNotes: nextFromJN }
-        : co);
-    }
-
-    // Clear this line's promoted stamp so it's triageable again.
-    const nextNote = {
-      ...note,
-      lines: lines.map(l => l.id === line.id ? { ...l, promoted: null } : l),
-      updatedAt: new Date().toISOString(),
+    // Small helper — returns the "cleared line" note + jobNotes patch so
+    // every branch below can tack it on to its own onPatch call.
+    const clearedPatch = () => {
+      const cleanedNote = {
+        ...note,
+        lines: lines.map(l => l.id === line.id ? { ...l, promoted: null } : l),
+        updatedAt: new Date().toISOString(),
+      };
+      return { jobNotes: (job.jobNotes || []).map(n => n.id === note.id ? cleanedNote : n) };
     };
-    const nextJobNotes = (job.jobNotes || []).map(n => n.id === note.id ? nextNote : n);
 
-    onPatch && onPatch({ changeOrders: nextCOs, jobNotes: nextJobNotes });
+    const confirm = async (msg) => showConfirm
+      ? await showConfirm({ message: msg, confirmLabel: 'Remove', cancelLabel: 'Keep' })
+      : window.confirm(msg);
+
+    // ── CO ─────────────────────────────────────────────────────────────
+    // Existing CO path — unchanged. Kept here so all un-promote logic
+    // lives in one function for easier audit.
+    if (p.type === 'co') {
+      if (!p.targetId) { onPatch && onPatch(clearedPatch()); return; }
+      const targetCO = (job?.changeOrders || []).find(co => co.id === p.targetId);
+      if (!targetCO) { onPatch && onPatch(clearedPatch()); return; }
+
+      const addedHtml = p.undo?.addedBulletHtml || '';
+      const coEdited = addedHtml ? !(targetCO.task || '').includes(addedHtml) : false;
+      const meaningfullyStarted =
+        (targetCO.coStatus && targetCO.coStatus !== 'needs_sending') ||
+        !!targetCO.date || !!targetCO.sendTo || !!targetCO.time;
+
+      const warnings = [`Remove this line from ${p.targetLabel || 'the CO'}?`];
+      if (coEdited) warnings.push(`The CO's Task field has been edited since promote — this bullet may not come out cleanly. You may need to clean it up manually.`);
+      if (meaningfullyStarted) warnings.push(`The CO has status/date/send-to filled in (not just "needs_sending"). Any pricing or workflow progress will stay on the CO.`);
+      warnings.push(`Materials from this line stay on the CO (they're deduped across lines).`);
+      if (!(await confirm(warnings.join('\n\n')))) return;
+
+      let nextTask = targetCO.task || '';
+      if (addedHtml && nextTask.includes(addedHtml)) {
+        nextTask = nextTask.replace(addedHtml, '');
+        nextTask = nextTask.replace(/<ul>\s*<\/ul>/gi, '').trim();
+      }
+      const nextFromJN = (Array.isArray(targetCO.fromJobNotes) ? targetCO.fromJobNotes : [])
+        .filter(bl => !(bl.jobNoteId === note.id && bl.lineId === line.id));
+      const stillReferenced = (job.jobNotes || []).some(n =>
+        (n.lines || []).some(l => {
+          if (n.id === note.id && l.id === line.id) return false;
+          return l.promoted && l.promoted.type === 'co' && l.promoted.targetId === p.targetId;
+        }));
+      const removeWholeCO = !!p.undo?.wasNewTarget && !stillReferenced && !meaningfullyStarted;
+
+      const nextCOs = removeWholeCO
+        ? (job.changeOrders || []).filter(co => co.id !== p.targetId)
+        : (job.changeOrders || []).map(co => co.id === p.targetId
+            ? { ...co, task: nextTask, fromJobNotes: nextFromJN }
+            : co);
+
+      onPatch && onPatch({ changeOrders: nextCOs, ...clearedPatch() });
+      return;
+    }
+
+    // ── PUNCH ──────────────────────────────────────────────────────────
+    // Remove THIS line's punch item from the floor+room it landed in.
+    // Data safety: only deletes if punch item is NOT done AND has no new
+    // user-added photos beyond what we copied from the line (can't tell
+    // exact identity — just warn if any photos exist on the item).
+    if (p.type === 'punch') {
+      const undo = p.undo || {};
+      if (!undo.phase || !undo.floorKey || !undo.punchItemId) {
+        toast.warn && toast.warn("This line was promoted before un-promote tracking was added — clearing the flag only.");
+        onPatch && onPatch(clearedPatch());
+        return;
+      }
+      const punchField = undo.phase === 'rough' ? 'roughPunch' : 'finishPunch';
+      const punchTree = job?.[punchField] || {};
+
+      // Locate the floor — may be a named floor or extra:N.
+      const getFloor = () => {
+        if (undo.floorKey.startsWith('extra:')) {
+          const i = parseInt(undo.floorKey.split(':')[1], 10);
+          return (Array.isArray(punchTree.extraFloors) && punchTree.extraFloors[i]) || null;
+        }
+        return punchTree[undo.floorKey] || null;
+      };
+      const floorObj = getFloor();
+      if (!floorObj) { onPatch && onPatch(clearedPatch()); return; }
+
+      // Find the target item + check its state.
+      const locateItem = () => {
+        if (!undo.roomId) {
+          const gen = Array.isArray(floorObj.general) ? floorObj.general : [];
+          const item = gen.find(i => i && i.id === undo.punchItemId);
+          return item ? { container: 'general', item } : null;
+        }
+        const rooms = Array.isArray(floorObj.rooms) ? floorObj.rooms : [];
+        for (const r of rooms) {
+          const items = Array.isArray(r.items) ? r.items : [];
+          const item = items.find(i => i && i.id === undo.punchItemId);
+          if (item) return { container: 'room', roomId: r.id, item };
+        }
+        return null;
+      };
+      const found = locateItem();
+      if (!found) {
+        // Item already gone (maybe deleted by the crew). Just clear the flag.
+        onPatch && onPatch(clearedPatch());
+        return;
+      }
+
+      const warnings = [`Remove this line from ${p.targetLabel || 'the punch list'}?`];
+      if (found.item.done) warnings.push(`The item is already marked DONE. If you un-promote, the completion record goes too.`);
+      if (Array.isArray(found.item.photos) && found.item.photos.length > (Array.isArray(line.photos) ? line.photos.length : 0)) {
+        warnings.push(`Someone added photos to this punch item beyond the line's originals — those photos will be removed along with the item.`);
+      }
+      if (!(await confirm(warnings.join('\n\n')))) return;
+
+      // Clone and surgically remove the item.
+      const nextTree = JSON.parse(JSON.stringify(punchTree));
+      const mutateFloor = (fo) => {
+        if (!fo) return fo;
+        if (!undo.roomId) {
+          fo.general = (fo.general || []).filter(i => i && i.id !== undo.punchItemId);
+        } else {
+          fo.rooms = (fo.rooms || []).map(r => r.id === undo.roomId
+            ? { ...r, items: (r.items || []).filter(i => i && i.id !== undo.punchItemId) }
+            : r);
+        }
+        return fo;
+      };
+      if (undo.floorKey.startsWith('extra:')) {
+        const i = parseInt(undo.floorKey.split(':')[1], 10);
+        const arr = Array.isArray(nextTree.extraFloors) ? [...nextTree.extraFloors] : [];
+        if (arr[i]) arr[i] = mutateFloor({ ...arr[i] });
+        nextTree.extraFloors = arr;
+      } else {
+        nextTree[undo.floorKey] = mutateFloor({ ...(nextTree[undo.floorKey] || {}) });
+      }
+
+      onPatch && onPatch({ [punchField]: nextTree, ...clearedPatch() });
+      return;
+    }
+
+    // ── RT ─────────────────────────────────────────────────────────────
+    // Remove THIS line's punch-entry from rt.punch[]. If the RT was
+    // created by THIS promote AND removing this entry empties it AND no
+    // other promoted lines reference it AND the RT hasn't been signed
+    // off, scheduled with a hard date, or otherwise progressed, the
+    // whole RT is removed.
+    if (p.type === 'rt') {
+      const undo = p.undo || {};
+      if (!undo.rtId || !undo.punchItemId) {
+        toast.warn && toast.warn("This line was promoted before un-promote tracking was added — clearing the flag only.");
+        onPatch && onPatch(clearedPatch());
+        return;
+      }
+      const targetRT = (job?.returnTrips || []).find(rt => rt.id === undo.rtId);
+      if (!targetRT) { onPatch && onPatch(clearedPatch()); return; }
+
+      const rtStarted =
+        !!targetRT.signedOff ||
+        (targetRT.rtStatus && targetRT.rtStatus !== 'needs' && targetRT.rtStatus !== 'scheduled') ||
+        !!targetRT.scheduledDate ||
+        !!targetRT.date;
+
+      const warnings = [`Remove this line from ${p.targetLabel || 'the return trip'}?`];
+      if (targetRT.signedOff) warnings.push(`This RT is already SIGNED OFF. Un-promoting removes the item from the record but leaves the sign-off in place.`);
+      else if (rtStarted) warnings.push(`This RT has a date / status assigned. Un-promoting won't reset those — only the one item is removed.`);
+
+      const nextPunch = (targetRT.punch || []).filter(it => it && it.id !== undo.punchItemId);
+      const stillReferenced = (job.jobNotes || []).some(n =>
+        (n.lines || []).some(l => {
+          if (n.id === note.id && l.id === line.id) return false;
+          return l.promoted && l.promoted.type === 'rt' && l.promoted.targetId === undo.rtId;
+        }));
+      const removeWholeRT =
+        !!undo.wasNewTarget && !stillReferenced && nextPunch.length === 0 && !rtStarted;
+
+      if (removeWholeRT) warnings.push(`This will remove the entire Return Trip (it was created by this promote and has no other items or progress).`);
+      if (!(await confirm(warnings.join('\n\n')))) return;
+
+      const nextTrips = removeWholeRT
+        ? (job.returnTrips || []).filter(rt => rt.id !== undo.rtId)
+        : (job.returnTrips || []).map(rt => rt.id === undo.rtId
+            ? { ...rt, punch: nextPunch }
+            : rt);
+
+      onPatch && onPatch({ returnTrips: nextTrips, ...clearedPatch() });
+      return;
+    }
+
+    // ── CALL ───────────────────────────────────────────────────────────
+    // Calls are always new — delete the manualTask if it still exists
+    // and hasn't been completed/cleared. One manualTask per line so
+    // there's no "empty husk" concern.
+    if (p.type === 'call') {
+      const undo = p.undo || {};
+      const taskId = undo.manualTaskId || p.targetId;
+      if (!taskId) { onPatch && onPatch(clearedPatch()); return; }
+
+      const targetTask = (manualTasks || []).find(t => t && t.id === taskId);
+      if (!targetTask) { onPatch && onPatch(clearedPatch()); return; }
+
+      const warnings = [`Delete this call (${p.targetLabel || taskId})?`];
+      if (targetTask.cleared || targetTask.status === 'completed') {
+        warnings.push(`This call is already completed/cleared. Un-promoting deletes the task record.`);
+      }
+      if ((targetTask.notes || '').trim()) {
+        warnings.push(`The call has notes added: "${targetTask.notes.slice(0, 80)}${targetTask.notes.length > 80 ? '…' : ''}". Those notes will be lost.`);
+      }
+      if (!(await confirm(warnings.join('\n\n')))) return;
+
+      // Two writes here — onDeleteManualTask fires a separate Firestore
+      // delete (manualTasks live in their own collection), then onPatch
+      // clears the line flag on the job doc. If the delete fails but
+      // the clear succeeds, the call becomes an orphan but the line is
+      // triageable again; the user can manually delete the orphan.
+      if (typeof onDeleteManualTask === 'function') {
+        onDeleteManualTask(taskId);
+      } else {
+        toast.warn && toast.warn("Call delete isn't wired here — clearing the line flag but the call record stays.");
+      }
+      onPatch && onPatch(clearedPatch());
+      return;
+    }
+
+    // ── PO ─────────────────────────────────────────────────────────────
+    // Same pattern as CO — surgical string replace on the PO's items
+    // HTML using the per-line addedBulletHtml snapshot. Extra guard: if
+    // the PO has been ordered or picked up, don't let the foreman silently
+    // alter a sent order — warn hard.
+    if (p.type === 'po') {
+      const undo = p.undo || {};
+      if (!undo.phase || !p.targetId) {
+        toast.warn && toast.warn("This line was promoted before un-promote tracking was added — clearing the flag only.");
+        onPatch && onPatch(clearedPatch());
+        return;
+      }
+      const matField = undo.phase === 'rough' ? 'roughMaterials' : 'finishMaterials';
+      const list = Array.isArray(job?.[matField]) ? job[matField] : [];
+      const targetPO = list.find(o => o && o.id === p.targetId);
+      if (!targetPO) { onPatch && onPatch(clearedPatch()); return; }
+
+      const addedHtml = undo.addedBulletHtml || '';
+      const poEdited = addedHtml ? !(targetPO.items || '').includes(addedHtml) : false;
+      const poStarted = !!targetPO.ordered || !!targetPO.pickedUp || !!targetPO.date;
+
+      const warnings = [`Remove this line from ${p.targetLabel || 'the PO'}?`];
+      if (targetPO.pickedUp) warnings.push(`The PO is marked PICKED UP. Items have already been received — un-promoting only changes the record, not what's in your truck.`);
+      else if (targetPO.ordered) warnings.push(`The PO has been ORDERED. Un-promoting only changes your record — it does NOT cancel the order with the supplier.`);
+      if (poEdited) warnings.push(`The PO's material list has been edited since promote — this line may not come out cleanly. You may need to clean it up manually.`);
+      if (!(await confirm(warnings.join('\n\n')))) return;
+
+      let nextItems = targetPO.items || '';
+      if (addedHtml && nextItems.includes(addedHtml)) {
+        nextItems = nextItems.replace(addedHtml, '');
+        // Collapse runs of consecutive <br>s left by multi-line removes,
+        // and strip leading/trailing <br>s.
+        nextItems = nextItems
+          .replace(/(<br\s*\/?>)+/gi, '<br>')
+          .replace(/^(<br\s*\/?>)+/i, '')
+          .replace(/(<br\s*\/?>)+$/i, '')
+          .trim();
+      }
+      const nextFromJN = (Array.isArray(targetPO.fromJobNotes) ? targetPO.fromJobNotes : [])
+        .filter(bl => !(bl.jobNoteId === note.id && bl.lineId === line.id));
+
+      const stillReferenced = (job.jobNotes || []).some(n =>
+        (n.lines || []).some(l => {
+          if (n.id === note.id && l.id === line.id) return false;
+          return l.promoted && l.promoted.type === 'po' && l.promoted.targetId === p.targetId;
+        }));
+      const removeWholePO =
+        !!undo.wasNewTarget && !stillReferenced && !poStarted && !nextItems;
+
+      const nextList = removeWholePO
+        ? list.filter(o => o.id !== p.targetId)
+        : list.map(o => o.id === p.targetId
+            ? { ...o, items: nextItems, fromJobNotes: nextFromJN }
+            : o);
+
+      onPatch && onPatch({ [matField]: nextList, ...clearedPatch() });
+      return;
+    }
+
+    // Fallback — unknown type. Clear the flag so the line is triageable
+    // again and log a warning.
+    toast.warn && toast.warn(`Un-promote not implemented for type=${p.type}. Clearing the flag only.`);
+    onPatch && onPatch(clearedPatch());
   };
 
   // Editing and triage force the card open — otherwise a brand-new note
@@ -4169,7 +4981,19 @@ function JobNoteCard({
             actionable). Only shown when expanded so the collapsed header
             stays minimal. */}
         {!isSpec && !editing && isExpanded && lines.filter(l=>!l.promoted).length > 0 && (
-          <button onClick={()=>{ setTriage(t=>!t); setSelected(new Set()); }}
+          <button onClick={()=>{
+            setTriage(t => {
+              const next = !t;
+              // A4 — entering triage is also a clear "I've reviewed this
+              // note" signal — clear the migrated badge. Same safety as
+              // edit-mode clear (display-only metadata).
+              if (next && migrated) {
+                onChange({ ...note, migratedFrom: null, updatedAt: new Date().toISOString() });
+              }
+              return next;
+            });
+            setSelected(new Set());
+          }}
             style={{
               fontSize:10, fontWeight:700,
               background: triage ? thisPhaseColor : 'transparent',
@@ -4183,9 +5007,46 @@ function JobNoteCard({
         )}
 
         {/* Edit button hidden when collapsed — click the title/chevron to
-            expand first, then choose to edit. Keeps the collapsed header tidy. */}
+            expand first, then choose to edit. Keeps the collapsed header tidy.
+            A4 — on transition INTO edit mode for a migrated note, auto-clear
+            the "↪ migrated" badge. Entering edit is the clearest signal the
+            user has reviewed the migrated content (they saw the badge and
+            chose to touch the note); stale badges clutter the UI over time.
+            Data safety: migratedFrom is display-only metadata — clearing it
+            doesn't affect promoted flags, originalId lookups, or any
+            downstream features. If we need audit later, `createdAt` still
+            reflects when the migration happened. */}
+        {/* B2 — Share toggle. Opens an inline panel with copy/revoke controls.
+            Available whenever the card is expanded so users can share without
+            entering edit mode. Hidden for Detail notes to match existing
+            "Detail is reference" framing — shareable field notes only. */}
+        {isExpanded && !isSpec && (
+          <button onClick={()=>setShareOpen(o => !o)}
+            title={hasShare ? 'Share link active — click to manage' : 'Share a read-only view of this note'}
+            style={{
+              fontSize:10, fontWeight:700,
+              color: hasShare ? '#0d9488' : C.dim,
+              background: hasShare ? '#0d948815' : 'transparent',
+              border: `1px solid ${hasShare ? '#0d948855' : C.border}`,
+              borderRadius:99, padding:'2px 8px', cursor:'pointer',
+              fontFamily:'inherit', flexShrink:0,
+              display:'inline-flex', alignItems:'center', gap:4,
+            }}>
+            <Icon name="link" size={10} color={hasShare ? '#0d9488' : C.dim}/>
+            <span>{hasShare ? 'Shared' : 'Share'}</span>
+          </button>
+        )}
+
         {isExpanded && (
-          <button onClick={()=>setEditing(e=>!e)}
+          <button onClick={()=>{
+            setEditing(e => {
+              const next = !e;
+              if (next && migrated) {
+                onChange({ ...note, migratedFrom: null, updatedAt: new Date().toISOString() });
+              }
+              return next;
+            });
+          }}
             style={{
               fontSize:10, fontWeight:700, color: C.dim,
               background:'transparent', border:`1px solid ${C.border}`,
@@ -4195,6 +5056,95 @@ function JobNoteCard({
           </button>
         )}
       </div>
+
+      {/* B2 — Share panel. Inline drawer directly below the toolbar. Shows
+          current link + Copy/Revoke if active, or a "Create link" CTA if
+          not. Closed by toggling the Share button again or pressing ×. */}
+      {isExpanded && !isSpec && shareOpen && (
+        <div style={{
+          borderTop:`1px solid ${C.border}`,
+          background:'#f0fdfa', padding:'10px 12px',
+          display:'flex', flexDirection:'column', gap:8,
+        }}>
+          <div style={{ display:'flex', alignItems:'center', gap:6 }}>
+            <Icon name="link" size={12} color="#0d9488"/>
+            <span style={{ fontSize:11, fontWeight:700, color:'#0d9488' }}>
+              {hasShare ? 'Shared read-only link' : 'Share a read-only link'}
+            </span>
+            <button onClick={()=>setShareOpen(false)}
+              title="Close"
+              style={{
+                marginLeft:'auto', background:'none', border:'none',
+                color: C.dim, fontSize:14, cursor:'pointer', padding:0, lineHeight:1,
+              }}>×</button>
+          </div>
+
+          {!hasShare ? (
+            <>
+              <div style={{ fontSize:11, color: C.text, lineHeight:1.4 }}>
+                Creates a private URL anyone can view without logging in.
+                Read-only. Revoke anytime to kill the link.
+              </div>
+              <div>
+                <button onClick={createShareLink}
+                  style={{
+                    fontSize:12, fontWeight:700, color:'#fff',
+                    background:'#0d9488', border:'none',
+                    borderRadius:99, padding:'5px 14px',
+                    cursor:'pointer', fontFamily:'inherit',
+                  }}>
+                  Create link
+                </button>
+              </div>
+            </>
+          ) : (
+            <>
+              <div style={{ display:'flex', gap:6, alignItems:'center' }}>
+                <input
+                  readOnly
+                  value={shareUrl}
+                  onFocus={(e)=>e.target.select()}
+                  style={{
+                    flex:1, minWidth:0,
+                    fontSize:11, color: C.text, fontFamily:'monospace',
+                    background:'#fff', border:`1px solid ${C.border}`,
+                    borderRadius:6, padding:'5px 8px',
+                    outline:'none',
+                  }}/>
+                <button onClick={copyShareUrl}
+                  style={{
+                    fontSize:11, fontWeight:700, color:'#fff',
+                    background: copiedFlash ? '#059669' : '#0d9488',
+                    border:'none', borderRadius:99,
+                    padding:'5px 11px', cursor:'pointer', fontFamily:'inherit',
+                    flexShrink:0,
+                  }}>
+                  {copiedFlash ? 'Copied' : 'Copy'}
+                </button>
+              </div>
+              <div style={{ display:'flex', alignItems:'center', gap:8, flexWrap:'wrap' }}>
+                <span style={{ fontSize:10, color: C.dim }}>
+                  Created {note.sharedAt ? new Date(note.sharedAt).toLocaleString() : '—'}
+                </span>
+                <button onClick={revokeShareLink}
+                  style={{
+                    marginLeft:'auto',
+                    fontSize:11, fontWeight:700, color:'#dc2626',
+                    background:'transparent', border:'1px solid #dc262655',
+                    borderRadius:99, padding:'3px 11px',
+                    cursor:'pointer', fontFamily:'inherit',
+                  }}>
+                  Revoke
+                </button>
+              </div>
+              <div style={{ fontSize:10, color: C.dim, lineHeight:1.4 }}>
+                Viewers see the note live — edits appear as you make them.
+                Revoke kills the link immediately.
+              </div>
+            </>
+          )}
+        </div>
+      )}
 
       {/* Body — lines (only when expanded) */}
       {isExpanded && (
@@ -4299,50 +5249,74 @@ function JobNoteCard({
       )}
 
       {/* Triage action bar — hidden for Detail notes (reference, not promotable) */}
-      {!isSpec && triage && selected.size > 0 && (
-        <div style={{
-          borderTop:`1px solid ${C.border}`, padding:'8px 10px',
-          background: '#f8fafc',
-          display:'flex', gap:6, alignItems:'center', flexWrap:'wrap',
-        }}>
-          <span style={{ fontSize:11, fontWeight:700, color: C.text, flexShrink:0 }}>
-            Promote {selected.size} to:
-          </span>
-          {['punch','rt','co','call'].map(t => {
-            const labels = { punch:'Punch', rt:'RT', co:'CO', call:'Call' };
-            const colors = { punch:'#7c3aed', rt:'#0d9488', co:'#f59e0b', call:'#2563eb' };
-            return (
-              <button key={t} onClick={()=>setPickerType(t)}
-                style={{
-                  fontSize:11, fontWeight:700, color: colors[t],
-                  background: colors[t] + '15',
-                  border:`1px solid ${colors[t]}55`, borderRadius:99,
-                  padding:'3px 11px', cursor:'pointer', fontFamily:'inherit',
-                }}>
-                {labels[t]}
-              </button>
-            );
-          })}
-          <button disabled
-            title="Purchase Order destination ships in V2"
-            style={{
-              fontSize:11, fontWeight:700, color: C.dim,
-              background:'transparent', border:`1px dashed ${C.border}`,
-              borderRadius:99, padding:'3px 11px', cursor:'not-allowed',
-              fontFamily:'inherit', opacity:0.6,
-            }}>
-            PO (V2)
-          </button>
-          <button onClick={()=>setSelected(new Set())}
-            style={{
-              marginLeft:'auto',
-              fontSize:10, color: C.dim, background:'none', border:'none',
-              cursor:'pointer', fontFamily:'inherit',
-            }}>
-            Clear
-          </button>
-        </div>
-      )}
+      {!isSpec && triage && selected.size > 0 && (() => {
+        // A5 — tally suggested destinations across the currently selected
+        // lines. The badge on each button shows how many selected lines the
+        // heuristic thinks belong there; the "top" pick gets a subtle glow.
+        // Purely advisory — user still taps the button they want.
+        const tally = { punch:0, rt:0, co:0, call:0, po:0 };
+        for (const l of lines) {
+          if (!selected.has(l.id)) continue;
+          const s = suggestTriageType(l);
+          if (s && tally[s.type] != null) tally[s.type] += 1;
+        }
+        let topType = null, topCount = 0, topTied = false;
+        for (const t of Object.keys(tally)) {
+          if (tally[t] > topCount) { topType = t; topCount = tally[t]; topTied = false; }
+          else if (tally[t] === topCount && topCount > 0) { topTied = true; }
+        }
+        if (topTied) topType = null; // don't glow on ties
+        return (
+          <div style={{
+            borderTop:`1px solid ${C.border}`, padding:'8px 10px',
+            background: '#f8fafc',
+            display:'flex', gap:6, alignItems:'center', flexWrap:'wrap',
+          }}>
+            <span style={{ fontSize:11, fontWeight:700, color: C.text, flexShrink:0 }}>
+              Promote {selected.size} to:
+            </span>
+            {['punch','rt','co','call','po'].map(t => {
+              const labels = { punch:'Punch', rt:'RT', co:'CO', call:'Call', po:'PO' };
+              const colors = { punch:'#7c3aed', rt:'#0d9488', co:'#f59e0b', call:'#2563eb', po:'#ea580c' };
+              const count = tally[t] || 0;
+              const isTop = topType === t;
+              return (
+                <button key={t} onClick={()=>setPickerType(t)}
+                  title={count > 0 ? `${count} selected line${count!==1?'s':''} look${count===1?'s':''} like ${labels[t]}` : undefined}
+                  style={{
+                    position:'relative',
+                    fontSize:11, fontWeight:700, color: colors[t],
+                    background: colors[t] + (isTop ? '25' : '15'),
+                    border:`1px solid ${colors[t]}${isTop ? 'AA' : '55'}`,
+                    borderRadius:99,
+                    padding:'3px 11px', cursor:'pointer', fontFamily:'inherit',
+                    boxShadow: isTop ? `0 0 0 2px ${colors[t]}22` : 'none',
+                  }}>
+                  {labels[t]}
+                  {count > 0 && (
+                    <span style={{
+                      marginLeft:5, display:'inline-block',
+                      minWidth:14, height:14, lineHeight:'14px', padding:'0 3px',
+                      borderRadius:99, background: colors[t], color:'#fff',
+                      fontSize:9, fontWeight:800, verticalAlign:'middle',
+                    }}>
+                      {count}
+                    </span>
+                  )}
+                </button>
+              );
+            })}
+            <button onClick={()=>setSelected(new Set())}
+              style={{
+                marginLeft:'auto',
+                fontSize:10, color: C.dim, background:'none', border:'none',
+                cursor:'pointer', fontFamily:'inherit',
+              }}>
+              Clear
+            </button>
+          </div>
+        );
+      })()}
 
       {/* Destination picker — J5 (punch) + J6 (rt/co/call) fill the body */}
       {pickerType && (
@@ -4457,7 +5431,7 @@ function JobNoteCard({
 // `scope`: 'rough' | 'finish' | 'general' | 'all' (Open Items tab = 'all').
 function JobNotesSection({
   job, scope = 'all', onPatch, phaseColor,
-  manualTasks = [], onSaveManualTask,
+  manualTasks = [], onSaveManualTask, onDeleteManualTask,
   setTab,
   onViewPhoto,
 }) {
@@ -4465,6 +5439,22 @@ function JobNotesSection({
   const filtered = scope === 'all'
     ? getAllActiveNotes(notes)
     : getNotesForPhase(notes, scope);
+
+  // B1 — Archive view. Archived notes are never purged (data safety: same
+  // rule as deleted), so this section is purely a viewer — Restore flips
+  // archived:false and the note pops back into the active list. Newest-
+  // archived first. Phase scope respected so the archive matches the tab.
+  const [showArchived, setShowArchived] = useState(false);
+  const archivedNotes = notes
+    .filter(n => n && !n.deleted && n.archived)
+    .filter(n => scope === 'all'
+      ? true
+      : (n.phase === scope || n.phase === 'general' || n.phase === 'spec'))
+    .sort((a,b) => {
+      const aT = a.archivedAt || a.updatedAt || a.createdAt || '';
+      const bT = b.archivedAt || b.updatedAt || b.createdAt || '';
+      return bT.localeCompare(aT);
+    });
 
   const defaultPhase = scope === 'all' ? 'general' : scope;
 
@@ -4492,7 +5482,15 @@ function JobNotesSection({
   };
 
   const archiveNote = (noteId) => {
-    writeNotes(notes.map(n => n.id === noteId ? { ...n, archived: true, updatedAt: new Date().toISOString() } : n));
+    const now = new Date().toISOString();
+    writeNotes(notes.map(n => n.id === noteId ? { ...n, archived: true, archivedAt: now, updatedAt: now } : n));
+  };
+
+  // B1 — Restore an archived note. Flip archived:false, clear archivedAt.
+  // Safe: pure metadata flip, doesn't touch lines/promoted/photos.
+  const unarchiveNote = (noteId) => {
+    const now = new Date().toISOString();
+    writeNotes(notes.map(n => n.id === noteId ? { ...n, archived: false, archivedAt: null, updatedAt: now } : n));
   };
 
   const addNote = (overrides = {}) => {
@@ -4557,6 +5555,7 @@ function JobNotesSection({
           onPatch={onPatch}
           manualTasks={manualTasks}
           onSaveManualTask={onSaveManualTask}
+          onDeleteManualTask={onDeleteManualTask}
           onChange={(next)=>upsertNote(next)}
           onDelete={()=>softDeleteNote(note.id)}
           onArchive={()=>archiveNote(note.id)}
@@ -4625,6 +5624,79 @@ function JobNotesSection({
           {scope === 'all'
             ? 'No notes yet. Capture work in Job Notes (triage into RT / Punch / CO / Call), or use Detail Notes for reference info like device/plate colors.'
             : `No ${scope} notes yet. Use "+ Detail" for reference info (device colors, fixtures, etc.).`}
+        </div>
+      )}
+
+      {/* B1 — Archived notes toggle + viewer. Only shows the toggle when
+          archived notes exist for this scope. Archived notes are never
+          purged so this is purely a re-surface — Restore flips archived
+          back to false and the note reappears up top. */}
+      {archivedNotes.length > 0 && (
+        <div style={{ marginTop: 14, borderTop:`1px dashed ${C.border}`, paddingTop: 10 }}>
+          <button
+            onClick={()=>setShowArchived(s => !s)}
+            style={{
+              background:'transparent', border:`1px solid ${C.border}`, borderRadius:99,
+              padding:'3px 11px', fontSize:11, fontWeight:700, color: C.dim,
+              cursor:'pointer', fontFamily:'inherit',
+              display:'inline-flex', alignItems:'center', gap:5,
+            }}>
+            <Icon name={showArchived ? 'chevron-down' : 'chevron-right'} size={10} color={C.dim}/>
+            <span>{showArchived ? 'Hide archived' : `Show archived (${archivedNotes.length})`}</span>
+          </button>
+
+          {showArchived && (
+            <div style={{ marginTop: 10, display:'flex', flexDirection:'column', gap:6 }}>
+              {archivedNotes.map(note => {
+                const lineCount = Array.isArray(note.lines) ? note.lines.filter(l => (l?.text || '').trim() || (l?.photos||[]).length).length : 0;
+                const photoCount = Array.isArray(note.photos) ? note.photos.length : 0;
+                const linePhotoCount = Array.isArray(note.lines)
+                  ? note.lines.reduce((sum, l) => sum + (Array.isArray(l?.photos) ? l.photos.length : 0), 0)
+                  : 0;
+                const totalPhotos = photoCount + linePhotoCount;
+                const promotedCount = Array.isArray(note.lines) ? note.lines.filter(l => l?.promoted).length : 0;
+                const title = (note.title || '').trim() || '(untitled note)';
+                const archivedWhen = note.archivedAt || note.updatedAt || note.createdAt;
+                const archivedWhenLabel = archivedWhen ? new Date(archivedWhen).toLocaleDateString() : '';
+                const phaseTag = note.phase === 'spec' ? 'Detail' : (note.phase === 'general' ? 'General' : (note.phase === 'rough' ? 'Rough' : (note.phase === 'finish' ? 'Finish' : note.phase)));
+
+                return (
+                  <div key={note.id} style={{
+                    border:`1px solid ${C.border}`, borderRadius:8,
+                    padding:'8px 10px', background:'#fafafa',
+                    display:'flex', alignItems:'center', gap:10, opacity: 0.9,
+                  }}>
+                    <div style={{ flex:1, minWidth:0 }}>
+                      <div style={{ fontSize:12, fontWeight:700, color: C.text,
+                        overflow:'hidden', textOverflow:'ellipsis', whiteSpace:'nowrap' }}>
+                        {title}
+                      </div>
+                      <div style={{ fontSize:10, color: C.dim, marginTop:2, display:'flex', gap:8, flexWrap:'wrap' }}>
+                        {phaseTag && <span>{phaseTag}</span>}
+                        <span>{lineCount} line{lineCount!==1?'s':''}</span>
+                        {totalPhotos > 0 && <span>· {totalPhotos} photo{totalPhotos!==1?'s':''}</span>}
+                        {promotedCount > 0 && <span>· {promotedCount} promoted</span>}
+                        {archivedWhenLabel && <span>· archived {archivedWhenLabel}</span>}
+                      </div>
+                    </div>
+                    <button
+                      onClick={()=>unarchiveNote(note.id)}
+                      title="Restore this note — it will reappear in the active list"
+                      style={{
+                        fontSize:11, fontWeight:700,
+                        color: phaseColor || '#64748b',
+                        background: (phaseColor || '#64748b') + '15',
+                        border:`1px solid ${(phaseColor || '#64748b')}55`,
+                        borderRadius:99, padding:'3px 11px',
+                        cursor:'pointer', fontFamily:'inherit', flexShrink:0,
+                      }}>
+                      Restore
+                    </button>
+                  </div>
+                );
+              })}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -4896,7 +5968,13 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                   <span style={{fontSize:9,color:C.dim,paddingLeft:4,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
                     {item.addedBy&&!item.done&&<span>added by {item.addedBy}</span>}
                     {item.checkedBy&&item.done&&<span style={{color:C.green}}>✓ checked by {item.checkedBy}{item.checkedAt?" · "+item.checkedAt:""}</span>}
-                    {item.fromQC&&<span style={{fontSize:9,fontWeight:700,background:'#fff7ed',color:'#c2410c',borderRadius:99,padding:'1px 6px',border:'1px solid #fed7aa',lineHeight:1.6}}>QC</span>}
+                    {item.fromQC&&!item.voided&&<span style={{fontSize:9,fontWeight:700,background:'#fff7ed',color:'#c2410c',borderRadius:99,padding:'1px 6px',border:'1px solid #fed7aa',lineHeight:1.6}}>QC</span>}
+                    {item.voided&&(
+                      <span title={item.voidReason ? `Voided: ${item.voidReason}${item.voidedBy?` · ${item.voidedBy}`:''}${item.voidedAt?` · ${item.voidedAt}`:''}` : 'Voided from QC'}
+                        style={{fontSize:9,fontWeight:700,background:'#f3f4f6',color:'#6b7280',borderRadius:99,padding:'1px 6px',border:'1px solid #d1d5db',lineHeight:1.6}}>
+                        Voided{item.voidReason ? ` — ${item.voidReason.length>28?item.voidReason.slice(0,28)+'…':item.voidReason}` : ''}
+                      </span>
+                    )}
                     {scheduledRTMap&&scheduledRTMap[item.id]&&!item.done&&(
                       <span onClick={(e)=>{e.stopPropagation(); onJumpToRT && onJumpToRT(scheduledRTMap[item.id].rtId);}}
                         title={`On scheduled Return Trip${scheduledRTMap[item.id].crew?' — '+scheduledRTMap[item.id].crew:''}. Tap to view.`}
@@ -5553,7 +6631,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
 // ── QC Walk Section ──────────────────────────────────────────────────────────
 
-function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAllDone }) {
+function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAllDone, onVoidItem }) {
   const [addOpen,      setAddOpen]      = useState(false);
   const [addFloor,     setAddFloor]     = useState('main');
   const [addTarget,    setAddTarget]    = useState('general');
@@ -5564,6 +6642,11 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
   const [editingItem,  setEditingItem]  = useState(null); // {fk, roomId, itemId}
   const [editText,     setEditText]     = useState('');
   const [undoToast,    setUndoToast]    = useState(null); // {fk, roomId, item, index, timer}
+  // Void modal — set while user is entering a reason. Shape: {fk,roomId,itemId,text}
+  const [voidModal,    setVoidModal]    = useState(null);
+  const [voidReasonDraft, setVoidReasonDraft] = useState('');
+  // Per-group collapsed state for the "Voided (N)" drawer — defaults closed.
+  const [voidedCollapsed, setVoidedCollapsed] = useState({});
 
   const safePunch = punch || {};
   const extras    = safePunch.extras || [];
@@ -5589,9 +6672,11 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
     const allQC = [];
     floorKeys.forEach(fk => {
       const f = normFloor(fk===floorKey ? newFloorData : safePunch[fk]);
-      allQC.push(...f.general.filter(i=>i.fromQC));
-      f.rooms.forEach(r => allQC.push(...(r.items||[]).filter(i=>i.fromQC)));
-      if(showHotcheck) allQC.push(...(f.hotcheck||[]).filter(i=>i.fromQC));
+      // Voided items are excluded from the QC all-done roll-up — they're no
+      // longer considered QC items (see void handler below).
+      allQC.push(...f.general.filter(i=>i.fromQC && !i.voided));
+      f.rooms.forEach(r => allQC.push(...(r.items||[]).filter(i=>i.fromQC && !i.voided)));
+      if(showHotcheck) allQC.push(...(f.hotcheck||[]).filter(i=>i.fromQC && !i.voided));
     });
     if(allQC.length > 0 && allQC.every(i=>i.done)) onAllDone && onAllDone();
   };
@@ -5719,18 +6804,107 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
     setAddOpen(false);
   };
 
+  // ── Void flow ─────────────────────────────────────────────────
+  // A Voided QC item means "this wasn't actually a QC failure" — e.g. the
+  // item was taken out during rough-in, not in scope, fixed elsewhere, or
+  // the GC declined the fix. Voided items keep their fromQC tag (so they're
+  // recoverable) but are filtered out of:
+  //   • QC walk rollup / auto-close (see writeFloor)
+  //   • QC Fail return-trip creation
+  //   • QC fail report / Scoreboard QC counts
+  // They remain visible in the regular punch list view (with a grey
+  // "Voided" pill instead of the orange "QC" pill) so the crew still sees
+  // them if they're still something worth fixing outside of the QC walk.
+  // Restore is always available and fully reverses the void state.
+  //
+  // Data safety: we never delete fields. Void sets `voided:true`, sets
+  // `voidReason`/`voidedBy`/`voidedAt`, and also removes `fromQC` from a
+  // Set? No — we KEEP `fromQC:true` so restore is a one-click reverse and
+  // no information is lost.
+  const VOID_QUICK_REASONS = [
+    'Removed during rough-in',
+    'Not in scope',
+    'Fixed elsewhere',
+    'GC declined',
+  ];
+
+  const openVoidModal = (fk, roomId, itemId, text) => {
+    setVoidModal({ fk, roomId, itemId, text });
+    setVoidReasonDraft('');
+  };
+
+  const patchItemVoid = (fk, roomId, itemId, patch) => {
+    const floor = getFloor(fk);
+    const upd = items => items.map(i => i.id===itemId ? { ...i, ...patch } : i);
+    let newFloor;
+    if(roomId==='general')       newFloor = {...floor, general: upd(floor.general)};
+    else if(roomId==='hotcheck') newFloor = {...floor, hotcheck: upd(floor.hotcheck||[])};
+    else newFloor = {...floor, rooms: floor.rooms.map(r => r.id===roomId ? {...r, items: upd(r.items||[])} : r)};
+    writeFloor(fk, newFloor);
+  };
+
+  const commitVoid = (reason) => {
+    if (!voidModal) return;
+    const clean = (reason||'').trim();
+    if (!clean) { toast.error('Please add a reason before voiding.'); return; }
+    const who = getIdentity();
+    const when = new Date().toLocaleDateString("en-US");
+    const voidPatch = {
+      voided: true,
+      voidReason: clean,
+      voidedBy: who?.name || '',
+      voidedAt: when,
+    };
+    // If the parent provided onVoidItem, delegate to it so it can also
+    // clean the item out of any open QC-Fail return trips in the same
+    // atomic Firestore write. Otherwise fall back to a local punch patch.
+    if (typeof onVoidItem === 'function') {
+      onVoidItem({
+        phase: (phase||'').toLowerCase(),
+        floorKey: voidModal.fk,
+        roomId:   voidModal.roomId,
+        itemId:   voidModal.itemId,
+        patch:    voidPatch,
+      });
+    } else {
+      patchItemVoid(voidModal.fk, voidModal.roomId, voidModal.itemId, voidPatch);
+    }
+    setVoidModal(null);
+    setVoidReasonDraft('');
+    toast.success('Voided — item moved out of QC.');
+  };
+
+  const restoreVoided = (fk, roomId, itemId) => {
+    // Clear all four void fields. fromQC stays true, so the item is
+    // right back in the QC walk exactly where it was.
+    patchItemVoid(fk, roomId, itemId, {
+      voided: false,
+      voidReason: '',
+      voidedBy: '',
+      voidedAt: '',
+    });
+    toast.info('Restored to QC.');
+  };
+
+  // Split fromQC items into active groups (shown as today) and voided
+  // groups (collapsed "Voided (N)" drawer at the bottom of each floor/room).
   const qcGroups = [];
+  const voidedGroups = [];
+  const pushGroup = (bucket, group) => { if (group.items.length) bucket.push(group); };
   floorKeys.forEach(fk => {
     const floor = getFloor(fk);
-    const genQC = floor.general.filter(i=>i.fromQC);
-    if(genQC.length) qcGroups.push({fk, roomId:'general', roomName:`${floorLabel(fk)} — General`, items:genQC});
+    const genAll = floor.general.filter(i=>i.fromQC);
+    pushGroup(qcGroups,     {fk, roomId:'general', roomName:`${floorLabel(fk)} — General`, items:genAll.filter(i=>!i.voided)});
+    pushGroup(voidedGroups, {fk, roomId:'general', roomName:`${floorLabel(fk)} — General`, items:genAll.filter(i=> i.voided)});
     floor.rooms.forEach(r => {
-      const rQC = (r.items||[]).filter(i=>i.fromQC);
-      if(rQC.length) qcGroups.push({fk, roomId:r.id, roomName:`${floorLabel(fk)} — ${r.name}`, items:rQC});
+      const rAll = (r.items||[]).filter(i=>i.fromQC);
+      pushGroup(qcGroups,     {fk, roomId:r.id, roomName:`${floorLabel(fk)} — ${r.name}`, items:rAll.filter(i=>!i.voided)});
+      pushGroup(voidedGroups, {fk, roomId:r.id, roomName:`${floorLabel(fk)} — ${r.name}`, items:rAll.filter(i=> i.voided)});
     });
     if(showHotcheck) {
-      const hQC = (floor.hotcheck||[]).filter(i=>i.fromQC);
-      if(hQC.length) qcGroups.push({fk, roomId:'hotcheck', roomName:'Hot Check', items:hQC});
+      const hAll = (floor.hotcheck||[]).filter(i=>i.fromQC);
+      pushGroup(qcGroups,     {fk, roomId:'hotcheck', roomName:'Hot Check', items:hAll.filter(i=>!i.voided)});
+      pushGroup(voidedGroups, {fk, roomId:'hotcheck', roomName:'Hot Check', items:hAll.filter(i=> i.voided)});
     }
   });
 
@@ -5788,6 +6962,15 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
             </label>
           );
         })()}
+        {!item.done && (
+          <button onClick={()=>openVoidModal(fk, roomId, item.id, item.text)}
+            title="Not actually a QC item — void with reason"
+            style={{background:'none',border:`1px solid ${C.border}`,color:C.muted,
+              borderRadius:5,cursor:'pointer',fontSize:10,flexShrink:0,
+              padding:'2px 7px',fontFamily:'inherit',fontWeight:600,lineHeight:1.4}}>
+            Void
+          </button>
+        )}
         <button onClick={()=>deleteItem(fk,roomId,item.id)}
           style={{background:'none',border:'none',color:C.muted,cursor:'pointer',fontSize:12,flexShrink:0,padding:'0 2px'}}>✕</button>
       </div>
@@ -5809,6 +6992,36 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
           ))}
         </div>
       )}
+    </div>
+  );
+
+  // Voided items render in a dim, compact card inside the "Voided (N)"
+  // drawer. Includes the reason, attribution, and a Restore button. No
+  // checkbox or photo-upload — voided items are effectively archived from
+  // the QC walk.
+  const renderVoidedItem = (fk, roomId, item) => (
+    <div key={item.id} style={{marginBottom:6,border:`1px dashed ${C.border}`,
+      borderRadius:8,padding:'6px 10px',background:C.surface,opacity:0.85}}>
+      <div style={{display:'flex',alignItems:'center',gap:8}}>
+        <span style={{flex:1,fontSize:12,color:C.muted,lineHeight:1.4,
+          textDecoration:'line-through'}}>
+          {item.text}
+        </span>
+        <button onClick={()=>restoreVoided(fk, roomId, item.id)}
+          title="Restore to QC walk"
+          style={{background:'none',border:`1px solid ${C.border}`,color:C.text,
+            borderRadius:5,cursor:'pointer',fontSize:10,flexShrink:0,
+            padding:'2px 8px',fontFamily:'inherit',fontWeight:600,lineHeight:1.4}}>
+          Restore
+        </button>
+      </div>
+      <div style={{fontSize:10,color:C.dim,marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
+        <span style={{fontWeight:700,color:'#6b7280'}}>Void reason:</span>
+        <span style={{color:C.muted}}>{item.voidReason || '(no reason recorded)'}</span>
+        {(item.voidedBy||item.voidedAt) && (
+          <span>· by {item.voidedBy || '—'}{item.voidedAt ? ` · ${item.voidedAt}` : ''}</span>
+        )}
+      </div>
     </div>
   );
 
@@ -5872,23 +7085,146 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
         </div>
       )}
 
-      {qcGroups.length===0&&!addOpen&&(
+      {qcGroups.length===0&&voidedGroups.length===0&&!addOpen&&(
         <div style={{textAlign:'center',padding:'20px 12px',color:C.muted,fontSize:12,
           border:`1px dashed ${C.border}`,borderRadius:8}}>
           No {phase.toLowerCase()} QC items yet — tap "+ Add QC Item" to log issues.
         </div>
       )}
 
-      {qcGroups.map(({fk,roomId,roomName,items})=>(
-        <div key={`${fk}-${roomId}`} style={{marginBottom:14}}>
-          <div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:'0.07em',
-            marginBottom:6,paddingBottom:4,borderBottom:`1px solid ${C.border}55`,
-            textTransform:'uppercase'}}>
-            {roomName}
+      {qcGroups.map(({fk,roomId,roomName,items})=>{
+        // Find any voided items scoped to this same floor/room so they can
+        // be rendered as a collapsed drawer right below their siblings.
+        const voidedMatch = voidedGroups.find(v => v.fk===fk && v.roomId===roomId);
+        const voidedItems = voidedMatch ? voidedMatch.items : [];
+        const voidKey = `${fk}-${roomId}`;
+        const isVoidedOpen = !!voidedCollapsed[voidKey];
+        return (
+          <div key={`${fk}-${roomId}`} style={{marginBottom:14}}>
+            <div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:'0.07em',
+              marginBottom:6,paddingBottom:4,borderBottom:`1px solid ${C.border}55`,
+              textTransform:'uppercase'}}>
+              {roomName}
+            </div>
+            {items.map(item=>renderQCItem(fk,roomId,item))}
+            {voidedItems.length>0 && (
+              <div style={{marginTop:6}}>
+                <button onClick={()=>setVoidedCollapsed(c=>({...c,[voidKey]:!c[voidKey]}))}
+                  style={{background:'none',border:`1px dashed ${C.border}`,borderRadius:7,
+                    color:C.muted,cursor:'pointer',fontSize:10,fontWeight:700,
+                    padding:'4px 10px',fontFamily:'inherit',letterSpacing:'0.04em',
+                    display:'inline-flex',alignItems:'center',gap:6}}>
+                  <span>Voided ({voidedItems.length})</span>
+                  <span style={{color:C.dim}}>{isVoidedOpen ? '▾' : '▸'}</span>
+                </button>
+                {isVoidedOpen && (
+                  <div style={{marginTop:6,paddingLeft:4}}>
+                    {voidedItems.map(item=>renderVoidedItem(fk,roomId,item))}
+                  </div>
+                )}
+              </div>
+            )}
           </div>
-          {items.map(item=>renderQCItem(fk,roomId,item))}
+        );
+      })}
+
+      {/* Voided groups that have NO remaining active siblings — e.g. the
+          user voided every item in a room. Render them at the bottom so
+          they're still recoverable via Restore without cluttering the
+          main list. */}
+      {voidedGroups.filter(v => !qcGroups.some(g => g.fk===v.fk && g.roomId===v.roomId)).map(({fk,roomId,roomName,items})=>{
+        const voidKey = `orphan-${fk}-${roomId}`;
+        const isOpen = !!voidedCollapsed[voidKey];
+        return (
+          <div key={voidKey} style={{marginBottom:14}}>
+            <div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:'0.07em',
+              marginBottom:6,paddingBottom:4,borderBottom:`1px solid ${C.border}55`,
+              textTransform:'uppercase',opacity:0.65}}>
+              {roomName} <span style={{fontWeight:400}}>(all voided)</span>
+            </div>
+            <button onClick={()=>setVoidedCollapsed(c=>({...c,[voidKey]:!c[voidKey]}))}
+              style={{background:'none',border:`1px dashed ${C.border}`,borderRadius:7,
+                color:C.muted,cursor:'pointer',fontSize:10,fontWeight:700,
+                padding:'4px 10px',fontFamily:'inherit',letterSpacing:'0.04em',
+                display:'inline-flex',alignItems:'center',gap:6}}>
+              <span>Voided ({items.length})</span>
+              <span style={{color:C.dim}}>{isOpen ? '▾' : '▸'}</span>
+            </button>
+            {isOpen && (
+              <div style={{marginTop:6,paddingLeft:4}}>
+                {items.map(item=>renderVoidedItem(fk,roomId,item))}
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      {/* ── Void reason modal ───────────────────────────────────── */}
+      {voidModal && (
+        <div onClick={e=>{ if(e.target===e.currentTarget){ setVoidModal(null); setVoidReasonDraft(''); } }}
+          style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.72)',zIndex:99998,
+            display:'flex',alignItems:'center',justifyContent:'center',padding:16}}>
+          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,
+            maxWidth:460,width:'100%',boxShadow:'0 24px 64px rgba(0,0,0,0.6)',overflow:'hidden'}}>
+            <div style={{padding:'18px 20px 14px'}}>
+              <div style={{fontSize:15,fontWeight:700,color:C.text,marginBottom:6}}>
+                Void this QC item?
+              </div>
+              <div style={{fontSize:12,color:C.dim,lineHeight:1.5,marginBottom:10}}>
+                It will move to the "Voided" drawer at the bottom of the same room.
+                Not counted as a QC fail, not sent on the QC return trip. You can
+                restore it any time.
+              </div>
+              <div style={{fontSize:12,color:C.text,background:C.surface,
+                border:`1px solid ${C.border}`,borderRadius:7,padding:'7px 10px',
+                marginBottom:12,lineHeight:1.4,maxHeight:80,overflow:'auto'}}>
+                {voidModal.text}
+              </div>
+              <div style={{fontSize:11,fontWeight:700,color:C.dim,letterSpacing:'0.04em',marginBottom:6}}>
+                REASON <span style={{color:C.red,fontWeight:700}}>*</span>
+              </div>
+              <div style={{display:'flex',flexWrap:'wrap',gap:5,marginBottom:8}}>
+                {VOID_QUICK_REASONS.map(r => (
+                  <button key={r} onClick={()=>setVoidReasonDraft(r)}
+                    style={{background:voidReasonDraft===r?C.blue:C.surface,
+                      color:voidReasonDraft===r?'#fff':C.text,
+                      border:`1px solid ${voidReasonDraft===r?C.blue:C.border}`,
+                      borderRadius:99,padding:'4px 10px',fontSize:11,fontWeight:600,
+                      cursor:'pointer',fontFamily:'inherit'}}>
+                    {r}
+                  </button>
+                ))}
+              </div>
+              <textarea value={voidReasonDraft}
+                onChange={e=>setVoidReasonDraft(e.target.value)}
+                autoFocus
+                placeholder="Or type a custom reason…"
+                rows={2}
+                onKeyDown={e=>{ if(e.key==='Enter'&&(e.metaKey||e.ctrlKey)){ e.preventDefault(); commitVoid(voidReasonDraft); } }}
+                style={{width:'100%',boxSizing:'border-box',fontSize:12,
+                  border:`1px solid ${C.border}`,borderRadius:7,padding:'7px 10px',
+                  background:C.surface,color:C.text,outline:'none',
+                  fontFamily:'inherit',resize:'vertical',lineHeight:1.5}}/>
+            </div>
+            <div style={{display:'flex',gap:8,justifyContent:'flex-end',
+              padding:'12px 16px',background:C.surface,borderTop:`1px solid ${C.border}`}}>
+              <button onClick={()=>{ setVoidModal(null); setVoidReasonDraft(''); }}
+                style={{background:'none',border:`1px solid ${C.border}`,color:C.dim,
+                  borderRadius:7,padding:'7px 14px',fontSize:12,cursor:'pointer',
+                  fontFamily:'inherit',fontWeight:600}}>Cancel</button>
+              <button onClick={()=>commitVoid(voidReasonDraft)}
+                disabled={!voidReasonDraft.trim()}
+                style={{background:voidReasonDraft.trim()?C.blue:C.border,
+                  border:'none',color:'#fff',borderRadius:7,padding:'7px 16px',
+                  fontSize:12,cursor:voidReasonDraft.trim()?'pointer':'not-allowed',
+                  fontFamily:'inherit',fontWeight:700,
+                  opacity:voidReasonDraft.trim()?1:0.6}}>
+                Void
+              </button>
+            </div>
+          </div>
         </div>
-      ))}
+      )}
 
       {undoToast&&(
         <div style={{position:'sticky',bottom:12,zIndex:50,marginTop:10,
@@ -5949,6 +7285,8 @@ function MaterialOrders({orders,onChange}) {
     onChange(safeOrders.map(o => o.id===id ? {...o,...p} : o));
     if(p.pickedUp === true)  setCollapsed(c => ({...c, [id]: true}));
     if(p.pickedUp === false) setCollapsed(c => ({...c, [id]: false}));
+    if(p.deliveredToShop === true)  setCollapsed(c => ({...c, [id]: true}));
+    if(p.deliveredToShop === false) setCollapsed(c => ({...c, [id]: false}));
   };
 
   const del = async (id) => { if(!await showConfirm("Remove this purchase order?")) return; onChange(safeOrders.filter(o => o.id!==id)); };
@@ -5961,17 +7299,19 @@ function MaterialOrders({orders,onChange}) {
 
       {[...safeOrders]
         .sort((a,b) => {
-          const rank = o => o.pickedUp ? 2 : (!o.ordered && o.needsOrder) ? 0 : 1;
+          const rank = o => (o.pickedUp || o.deliveredToShop) ? 2 : (!o.ordered && o.needsOrder) ? 0 : 1;
           return rank(a) - rank(b);
         })
         .map((o,i) => {
         const isCollapsed = !!collapsed[o.id];
-        // Three states (in priority order): pickedUp > ordered > needsOrder
+        // Four states (in priority order): pickedUp > deliveredToShop > ordered > needsOrder
         const cardBg     = o.pickedUp ? "rgba(22,163,74,0.05)"
+                         : o.deliveredToShop ? "rgba(22,163,74,0.05)"
                          : o.ordered  ? "rgba(59,130,246,0.05)"
                          : o.needsOrder ? "rgba(234,88,12,0.06)"
                          : C.surface;
         const cardBorder = o.pickedUp ? "1px solid #16a34a44"
+                         : o.deliveredToShop ? "1px solid #16a34a44"
                          : o.ordered  ? "1px solid #3b82f644"
                          : o.needsOrder ? "1px solid #ea580c66"
                          : `1px solid ${C.border}`;
@@ -5983,13 +7323,17 @@ function MaterialOrders({orders,onChange}) {
               style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",cursor:"pointer",userSelect:"none"}}>
               <span style={{fontSize:12,color:C.accent,fontWeight:700}}>PO #{i+1}</span>
               {o.po && <span style={{fontSize:11,color:C.muted}}>#{o.po}</span>}
-              {o.needsOrder && !o.ordered && !o.pickedUp && (
+              {o.needsOrder && !o.ordered && !o.pickedUp && !o.deliveredToShop && (
                 <span style={{fontSize:10,fontWeight:700,background:"#ea580c22",color:"#ea580c",
                   borderRadius:99,padding:"1px 8px"}}>{o.source==="Shop" ? "Needs to be Picked Up" : "Need to Order"}</span>
               )}
-              {o.ordered && !o.pickedUp && (
+              {o.ordered && !o.pickedUp && !o.deliveredToShop && (
                 <span style={{fontSize:10,fontWeight:700,background:"#3b82f622",color:"#1d4ed8",
                   borderRadius:99,padding:"1px 8px"}}>Order Sent</span>
+              )}
+              {o.deliveredToShop && !o.pickedUp && (
+                <span style={{fontSize:10,fontWeight:700,background:"#16a34a22",color:"#16a34a",
+                  borderRadius:99,padding:"1px 8px"}}>Delivered to Shop</span>
               )}
               {o.pickedUp && (
                 <span style={{fontSize:10,fontWeight:700,background:"#16a34a22",color:"#16a34a",
@@ -6066,11 +7410,18 @@ function MaterialOrders({orders,onChange}) {
                         style={{accentColor:"#ea580c",width:14,height:14,cursor:"pointer"}}/>
                       Need to order before return
                     </label>
-                    <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
-                      <input type="checkbox" checked={!!o.deliveredToShop} onChange={e=>upd(o.id,{deliveredToShop:e.target.checked})}
-                        style={{accentColor:"#8b5cf6",width:14,height:14,cursor:"pointer"}}/>
-                      Delivered to shop
-                    </label>
+                    <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                      <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
+                        <input type="checkbox" checked={!!o.deliveredToShop} onChange={e=>{
+                          const val=e.target.checked; const who=getIdentity();
+                          upd(o.id,{deliveredToShop:val,deliveredToShopBy:val?(who?.name||""):"",deliveredToShopAt:val?new Date().toLocaleDateString("en-US"):""});
+                        }} style={{accentColor:"#16a34a",width:14,height:14,cursor:"pointer"}}/>
+                        Delivered to shop
+                      </label>
+                      {o.deliveredToShop&&o.deliveredToShopBy&&(
+                        <span style={{fontSize:9,color:"#16a34a",fontWeight:600,paddingLeft:20}}>✓ by {o.deliveredToShopBy}{o.deliveredToShopAt?" · "+o.deliveredToShopAt:""}</span>
+                      )}
+                    </div>
                     <div style={{display:"flex",flexDirection:"column",gap:2}}>
                       <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
                         <input type="checkbox" checked={!!o.ordered} onChange={e=>{
@@ -10911,7 +12262,7 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
               </div>
               <div>
                 <div style={{ fontSize: 10, color: C.dim, marginBottom: 3 }}>Lead</div>
-                <Sel value={job.lead || ""} onChange={e => u({ lead: e.target.value })} options={["", ...(leadsList || LEADS)]} />
+                <Sel value={job.lead || ""} onChange={e => u({ lead: e.target.value })} options={["", ...[...new Set([...(foremenList||getForemenList()),...(leadsList||LEADS)])]]} />
               </div>
               <div>
                 <div style={{ fontSize: 10, color: C.dim, marginBottom: 3 }}>Job Type</div>
@@ -11656,6 +13007,52 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     u(phase === "finish" ? { finishPunch: nextPunch } : { roughPunch: nextPunch });
   };
 
+  // Void a QC walk item. Writes the void fields onto the source punch item
+  // AND cleans any matching entries out of open QC-Fail return trips — all in
+  // a single atomic u({...}) so Firestore sees one coherent write.
+  //
+  // Data safety:
+  //   • Source item: voided fields are SET, fromQC stays true, nothing else
+  //     is removed. Restore reverses the void completely.
+  //   • Return Trips: only punch entries with `originItemId === itemId` and
+  //     `originPhase === phase` are removed. Every other RT field is left
+  //     alone. Signed-off RTs are NEVER touched (they're frozen by design).
+  //   • If no QC-Fail RTs reference the item, only the punch patch is written.
+  const handleVoidQCItem = ({ phase, floorKey, roomId, itemId, patch }) => {
+    if (!phase || !floorKey || !roomId || !itemId || !patch) return;
+    const prev = jobRef.current;
+    const phaseKey = phase === "finish" ? "finishPunch" : "roughPunch";
+    const src = prev[phaseKey];
+    if (!src) return;
+
+    // Apply patch to the source item at exactly the floor/room specified.
+    const floor = normFloor(src[floorKey]);
+    const upd = items => items.map(i => i.id === itemId ? { ...i, ...patch } : i);
+    let newFloor;
+    if (roomId === 'general')       newFloor = { ...floor, general: upd(floor.general) };
+    else if (roomId === 'hotcheck') newFloor = { ...floor, hotcheck: upd(floor.hotcheck || []) };
+    else newFloor = { ...floor, rooms: floor.rooms.map(r => r.id === roomId ? { ...r, items: upd(r.items || []) } : r) };
+    const nextPunch = { ...src, [floorKey]: newFloor };
+
+    // Strip any open QC-Fail RT entries that pointed at this item. Signed-off
+    // RTs are immutable.
+    const nextTrips = (prev.returnTrips || []).map(rt => {
+      if (!rt || rt.signedOff) return rt;
+      const isQCFail = typeof rt.scope === 'string' && rt.scope.startsWith('QC Fail');
+      if (!isQCFail) return rt;
+      const nextRTPunch = (rt.punch || []).filter(p =>
+        !(p && p.originItemId === itemId && p.originPhase === phase)
+      );
+      return nextRTPunch.length === (rt.punch || []).length ? rt : { ...rt, punch: nextRTPunch };
+    });
+
+    const updatePatch = { [phaseKey]: nextPunch };
+    if (nextTrips.some((rt, i) => rt !== (prev.returnTrips || [])[i])) {
+      updatePatch.returnTrips = nextTrips;
+    }
+    u(updatePatch);
+  };
+
   const [tab, setTab] = useState(()=>initialTab && TABS.includes(initialTab) ? initialTab : "Job Info");
   const [newLightingFloor, setNewLightingFloor] = useState("");
   const [emailData, setEmailData] = useState(null);
@@ -11679,6 +13076,51 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       })
       .catch(e => { console.error("[simproFinancials error]", e); setSimproFinancials(null); });
   }, [job.simproNo]);
+
+  // ── Simpro "on current schedule" (14-day window) ─────────────────
+  // Powers the In Progress → On Schedule / Ongoing pill. Only fires
+  // while a phase is in progress to avoid wasted fetches. Uses a
+  // module-level 5-min cache that's shared across all JobDetail
+  // instances, so opening multiple jobs doesn't re-fetch.
+  // Data safety: auto-populate only writes when the field is null —
+  // never overwrites a user's manual choice. Failed fetch = no write.
+  const [simproOnSchedulePids, setSimproOnSchedulePids] = useState(() => getCachedSimproPids());
+  const isEitherInProgress = job.roughStatus === "inprogress" || job.finishStatus === "inprogress";
+  useEffect(() => {
+    if (!isEitherInProgress) return;
+    let cancelled = false;
+    fetchSimproOnSchedulePids(httpsCallable, functions).then(pids => {
+      if (!cancelled && pids) setSimproOnSchedulePids(new Set(pids));
+    }).catch(()=>{});
+    const unsub = subscribeSimproPids(pids => { if (!cancelled) setSimproOnSchedulePids(new Set(pids)); });
+    return () => { cancelled = true; unsub(); };
+  }, [isEitherInProgress]);
+
+  // Auto-populate inProgressMode when null — once only. Manual choice wins.
+  useEffect(() => {
+    if (!simproOnSchedulePids || !job.simproNo) return;
+    const onSch = simproOnSchedulePids.has(String(job.simproNo));
+    const derive = onSch ? "scheduled" : "ongoing";
+    const patch = {};
+    if (job.roughStatus === "inprogress" && !job.roughInProgressMode) patch.roughInProgressMode = derive;
+    if (job.finishStatus === "inprogress" && !job.finishInProgressMode) patch.finishInProgressMode = derive;
+    if (Object.keys(patch).length) u(patch);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [simproOnSchedulePids, job.simproNo, job.roughStatus, job.finishStatus, job.roughInProgressMode, job.finishInProgressMode]);
+
+  // Manual resync — force refetch from Simpro, then overwrite the given phase.
+  // Unlike auto-populate, this intentionally overwrites (it's a user-requested reset).
+  const resyncInProgressMode = async (phase) => {
+    try {
+      const pids = await fetchSimproOnSchedulePids(httpsCallable, functions, /*force*/true);
+      if (!pids || !job.simproNo) return;
+      setSimproOnSchedulePids(new Set(pids));
+      const onSch = pids.has(String(job.simproNo));
+      const val = onSch ? "scheduled" : "ongoing";
+      if (phase === "rough")  u({ roughInProgressMode: val });
+      if (phase === "finish") u({ finishInProgressMode: val });
+    } catch {}
+  };
 
   // Simpro cost centers — bid line items used by the "Is this in the bid?"
   // panel. We cache the full response on the job doc so subsequent loads
@@ -11895,13 +13337,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const qcCount = countFloor(job.qcPunch?.upper||{}) + countFloor(job.qcPunch?.main||{}) + countFloor(job.qcPunch?.basement||{}) +
     (job.qcPunch?.extras||[]).reduce((s,e)=>s+countFloor(job.qcPunch?.[e.key]||{}),0);
 
-  // Count fromQC items across roughPunch + finishPunch for the QC walk summary pill
+  // Count fromQC items across roughPunch + finishPunch for the QC walk summary pill.
+  // Voided items are excluded — they're no longer considered QC items.
   const countQCWalk = (punch) => {
     let total=0, done=0;
     ['upper','main','basement',...(punch?.extras||[]).map(e=>e.key)].forEach(fk=>{
       const f = normFloor(punch?.[fk]);
       [...f.general,...f.rooms.flatMap(r=>r.items||[]),...(f.hotcheck||[])].forEach(i=>{
-        if(i.fromQC){ total++; if(i.done) done++; }
+        if(i.fromQC && !i.voided){ total++; if(i.done) done++; }
       });
     });
     return {total,done};
@@ -12215,6 +13658,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           fontWeight:rsDef.color?700:400,outline:"none",cursor:"pointer"}}>
                           {ROUGH_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>
+                        {job.roughStatus==="inprogress" && (
+                          <InProgressModePill
+                            mode={job.roughInProgressMode}
+                            onToggle={()=>{
+                              const next = job.roughInProgressMode==="scheduled" ? "ongoing"
+                                        : job.roughInProgressMode==="ongoing"   ? "scheduled"
+                                        : "scheduled"; // unset → first tap sets On Schedule
+                              u({ roughInProgressMode: next });
+                            }}
+                            onSync={()=>resyncInProgressMode("rough")}
+                          />
+                        )}
                         {rsDef.hasDate&&job.roughStatus!=="date_confirmed"&&(
                           <div style={{display:"flex",flexDirection:"column",gap:3}}>
                             <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:rsDef.color}}>SCHEDULED DATE</div>
@@ -12320,6 +13775,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   onPatch={(patch)=>u(patch)}
                   manualTasks={manualTasks}
                   onSaveManualTask={onSaveManualTask}
+                  onDeleteManualTask={onDeleteManualTask}
                   setTab={setTab}
                   onViewPhoto={(url)=>window.open(url,'_blank')}
                 />
@@ -12479,6 +13935,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           fontWeight:fsDef.color?700:400,outline:"none",cursor:"pointer"}}>
                           {FINISH_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>
+                        {job.finishStatus==="inprogress" && (
+                          <InProgressModePill
+                            mode={job.finishInProgressMode}
+                            onToggle={()=>{
+                              const next = job.finishInProgressMode==="scheduled" ? "ongoing"
+                                        : job.finishInProgressMode==="ongoing"   ? "scheduled"
+                                        : "scheduled";
+                              u({ finishInProgressMode: next });
+                            }}
+                            onSync={()=>resyncInProgressMode("finish")}
+                          />
+                        )}
                         {fsDef.hasDate&&job.finishStatus!=="date_confirmed"&&(
                           <div style={{display:"flex",flexDirection:"column",gap:3}}>
                             <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:fsDef.color}}>SCHEDULED DATE</div>
@@ -12576,6 +14044,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   onPatch={(patch)=>u(patch)}
                   manualTasks={manualTasks}
                   onSaveManualTask={onSaveManualTask}
+                  onDeleteManualTask={onDeleteManualTask}
                   setTab={setTab}
                   onViewPhoto={(url)=>window.open(url,'_blank')}
                 />
@@ -13248,11 +14717,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               if (!punch) return;
                               const allFloors = [...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
                                 ...(Array.isArray(punch.extraFloors)?punch.extraFloors:[])];
+                              // Voided items are filtered out — they're no longer considered QC.
                               allFloors.forEach(fl => {
                                 if (!fl) return;
-                                (fl.general||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push({...i, __phase:phase}); });
-                                (fl.rooms||[]).forEach(r=> (r.items||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push({...i, __phase:phase}); }));
-                                (fl.hotcheck||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push({...i, __phase:phase}); });
+                                (fl.general||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); });
+                                (fl.rooms||[]).forEach(r=> (r.items||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); }));
+                                (fl.hotcheck||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); });
                               });
                             };
                             grab(job.roughPunch, "rough"); grab(job.finishPunch, "finish");
@@ -13337,11 +14807,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           if(!punch) return;
                           const allFloors=[...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
                             ...(Array.isArray(punch.extraFloors)?punch.extraFloors:[])];
+                          // Voided items are filtered out — they're no longer considered QC.
                           allFloors.forEach(fl=>{
                             if(!fl) return;
-                            (fl.general||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push({...i, __phase:phase}); });
-                            (fl.rooms||[]).forEach(r=>(r.items||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push({...i, __phase:phase}); }));
-                            (fl.hotcheck||[]).forEach(i=>{ if(i?.fromQC && !i.done) openQC.push({...i, __phase:phase}); });
+                            (fl.general||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); });
+                            (fl.rooms||[]).forEach(r=>(r.items||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); }));
+                            (fl.hotcheck||[]).forEach(i=>{ if(i?.fromQC && !i.done && !i.voided) openQC.push({...i, __phase:phase}); });
                           });
                         };
                         grab(job.roughPunch,"rough"); grab(job.finishPunch,"finish");
@@ -13429,12 +14900,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     const fp=job.finishPunch||{};
                     ['upper','main','basement',...(fp.extras||[]).map(e=>e.key)].forEach(fk=>{
                       const fl=normFloor(fp[fk]);
-                      finQC.push(...fl.general.filter(i=>i.fromQC));
-                      fl.rooms.forEach(r=>finQC.push(...(r.items||[]).filter(i=>i.fromQC)));
-                      finQC.push(...(fl.hotcheck||[]).filter(i=>i.fromQC));
+                      finQC.push(...fl.general.filter(i=>i.fromQC && !i.voided));
+                      fl.rooms.forEach(r=>finQC.push(...(r.items||[]).filter(i=>i.fromQC && !i.voided)));
+                      finQC.push(...(fl.hotcheck||[]).filter(i=>i.fromQC && !i.voided));
                     });
                     if(finQC.length===0||finQC.every(i=>i.done)) u({qcStatus:'fixed'});
-                  }}/>
+                  }}
+                  onVoidItem={handleVoidQCItem}/>
               </Section>
               </div>
               <div id="qc-walk-finish" style={{scrollMarginTop:12}}>
@@ -13447,11 +14919,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     const rp=job.roughPunch||{};
                     ['upper','main','basement',...(rp.extras||[]).map(e=>e.key)].forEach(fk=>{
                       const fl=normFloor(rp[fk]);
-                      rghQC.push(...fl.general.filter(i=>i.fromQC));
-                      fl.rooms.forEach(r=>rghQC.push(...(r.items||[]).filter(i=>i.fromQC)));
+                      rghQC.push(...fl.general.filter(i=>i.fromQC && !i.voided));
+                      fl.rooms.forEach(r=>rghQC.push(...(r.items||[]).filter(i=>i.fromQC && !i.voided)));
                     });
                     if(rghQC.length===0||rghQC.every(i=>i.done)) u({qcStatus:'fixed'});
-                  }}/>
+                  }}
+                  onVoidItem={handleVoidQCItem}/>
               </Section>
               </div>
               {job.qcPunch&&punchOpen(job.qcPunch)>0&&(
@@ -13542,7 +15015,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Lead</div>
 
 {["Keegan","Gage","Daegan","Colby","Braden","Treycen","Jon","Vasa","Abe","Louis","Jacob"].length>0
-                  ? <Sel value={job.lead||""} onChange={e=>u({lead:e.target.value})} options={["", ...(leadsList||LEADS)]} placeholder="Select lead…"/>
+                  ? <Sel value={job.lead||""} onChange={e=>u({lead:e.target.value})} options={["", ...[...new Set([...(foremenList||getForemenList()),...(leadsList||LEADS)])]]} placeholder="Select lead…"/>
                   : <Inp value={job.lead||""} onChange={e=>u({lead:e.target.value})} placeholder="Lead name…"/>}
 
               </div>
@@ -15841,6 +17314,7 @@ function JobOpenItems({ job, manualTasks, onSaveManualTask, onDeleteManualTask, 
           onPatch={(patch)=>onUpdateJob && onUpdateJob(patch)}
           manualTasks={manualTasks}
           onSaveManualTask={onSaveManualTask}
+          onDeleteManualTask={onDeleteManualTask}
           setTab={setTab}
           onViewPhoto={(url)=>window.open(url,'_blank')}
         />
@@ -16901,7 +18375,7 @@ function NavView({ jobs }) {
 
 // ── Scheduling Forecast ───────────────────────────────────────
 
-function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
+function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
   const [foremanTab, setForemanTab] = useState("All");
   const [viewMode,   setViewMode]   = useState("calendar"); // kanban | week | attention | calendar
   const [calMonth,   setCalMonth]   = useState(() => { const d=new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
@@ -16940,6 +18414,166 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
     simproSchedule.forEach(entry => { const pid = entry.Project?.ProjectID; if (pid) s.add(String(pid)); });
     return s;
   }, [simproSchedule]);
+
+  // ── Crew Planner state ──────────────────────────────────────
+  const [crewWeekOff, setCrewWeekOff] = useState(0);
+  const [crewRoster,  setCrewRoster]  = useState(null);
+  const [crewData,    setCrewData]    = useState({});
+  const [crewExtra,   setCrewExtra]   = useState([]);
+  const [crewSel,     setCrewSel]     = useState(null);
+  const [crewAddOpen, setCrewAddOpen] = useState(false);
+  const [crewAddName, setCrewAddName] = useState("");
+  const [crewJobPick, setCrewJobPick] = useState(false);
+  const [crewCopyWeek, setCrewCopyWeek] = useState(false);
+  const crewDragRef = useRef(null);
+  const [crewTeams,     setCrewTeams]     = useState([]);
+  const [crewTeamsOpen, setCrewTeamsOpen] = useState(false);
+  const [crewTeamSel,   setCrewTeamSel]   = useState(null);
+  const crewTeamDragRef = useRef(null);
+
+  const crewMon = useMemo(() => {
+    const d = new Date(); const day = d.getDay();
+    const m = new Date(d); m.setDate(d.getDate() - (day===0?6:day-1) + crewWeekOff*7); m.setHours(0,0,0,0);
+    return m;
+  }, [crewWeekOff]);
+  const crewDays = useMemo(() => Array.from({length:6},(_,i)=>{
+    const d=new Date(crewMon); d.setDate(crewMon.getDate()+i); return d;
+  }), [crewMon]);
+  const crewWK = useMemo(() => { const m=crewMon; return `${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,"0")}-${String(m.getDate()).padStart(2,"0")}`; }, [crewMon]);
+
+  useEffect(() => onSnapshot(doc(db,"settings","crewRoster"), s => {
+    if(s.exists()) setCrewRoster(s.data().names||[]);
+    else setCrewRoster([...new Set([...getForemenList(),...getLeadsList()])]);
+  }), []);
+  useEffect(() => onSnapshot(doc(db,"settings","schedule_"+crewWK), s => {
+    if(s.exists()){ const d=s.data(); setCrewData(d.assignments||{}); setCrewExtra(d.extraJobs||[]); }
+    else { setCrewData({}); setCrewExtra([]); }
+  }), [crewWK]);
+
+  const _saveRoster = n => { setCrewRoster(n); setDoc(doc(db,"settings","crewRoster"),{names:n,updatedAt:new Date().toISOString()}); };
+
+  // Teams
+  useEffect(() => onSnapshot(doc(db,"settings","crewTeams"), s => {
+    if(s.exists()) setCrewTeams(s.data().teams||[]);
+    else setCrewTeams([]);
+  }), []);
+  const _saveTeams = t => { setCrewTeams(t); setDoc(doc(db,"settings","crewTeams"),{teams:t,updatedAt:new Date().toISOString()}); };
+  const teamAdd = () => _saveTeams([...crewTeams,{id:Date.now().toString(36),lead:"",members:[]}]);
+  const teamRemove = idx => _saveTeams(crewTeams.filter((_,i)=>i!==idx));
+  const teamSetLead = (idx,name) => {
+    const next=crewTeams.map((t,i)=>i===idx?{...t,lead:name,members:t.members.filter(n=>n!==name)}:t);
+    _saveTeams(next);
+  };
+  const teamMovePerson = (name, fromIdx, toIdx) => {
+    const next=crewTeams.map(t=>({...t,members:[...t.members]}));
+    // Remove from source team
+    if(fromIdx>=0&&fromIdx<next.length){
+      const f=next[fromIdx];
+      if(f.lead===name){ f.lead=f.members.length?f.members.shift():""; }
+      else f.members=f.members.filter(n=>n!==name);
+    }
+    // Add to target team
+    if(toIdx>=0&&toIdx<next.length){
+      if(!next[toIdx].lead) next[toIdx].lead=name;
+      else next[toIdx].members.push(name);
+    }
+    _saveTeams(next);
+    setCrewTeamSel(null);
+  };
+  const teamRemovePerson = (name,idx) => {
+    const next=crewTeams.map(t=>({...t,members:[...t.members]}));
+    const f=next[idx];
+    if(f.lead===name){ f.lead=f.members.length?f.members.shift():""; }
+    else f.members=f.members.filter(n=>n!==name);
+    _saveTeams(next);
+  };
+  const teamUnassigned = useMemo(() => {
+    const assigned=new Set();
+    crewTeams.forEach(t=>{ if(t.lead) assigned.add(t.lead); t.members.forEach(n=>assigned.add(n)); });
+    return (crewRoster||[]).filter(n=>!assigned.has(n));
+  }, [crewTeams, crewRoster]);
+  const _saveCrewData = (a,e) => setDoc(doc(db,"settings","schedule_"+crewWK),{assignments:a,extraJobs:e!==undefined?e:crewExtra,updatedAt:new Date().toISOString()});
+
+  const crewAssign = (jid,di) => {
+    if(!crewSel) return;
+    const k=`${jid}_${di}`, cur=crewData[k]||{lead:"",crew:[]};
+    if(cur.crew.includes(crewSel)||cur.lead===crewSel) return;
+    const nx={...crewData,[k]:{...cur,crew:[...cur.crew,crewSel]}};
+    setCrewData(nx); _saveCrewData(nx);
+  };
+  const crewDrop = (jid,di) => {
+    const name=crewDragRef.current; crewDragRef.current=null; if(!name) return;
+    const k=`${jid}_${di}`, cur=crewData[k]||{lead:"",crew:[]};
+    if(cur.crew.includes(name)||cur.lead===name) return;
+    const nx={...crewData,[k]:{...cur,crew:[...cur.crew,name]}};
+    setCrewData(nx); _saveCrewData(nx);
+  };
+  const crewRemove = (jid,di,name) => {
+    const k=`${jid}_${di}`, cur=crewData[k]; if(!cur) return;
+    const nx={...crewData};
+    const u2={lead:cur.lead===name?"":cur.lead,crew:cur.crew.filter(n=>n!==name)};
+    if(!u2.lead&&u2.crew.length===0) delete nx[k]; else nx[k]=u2;
+    setCrewData(nx); _saveCrewData(nx);
+  };
+  const crewToggleLead = (jid,di,name) => {
+    const k=`${jid}_${di}`, cur=crewData[k]||{lead:"",crew:[]};
+    const nx={...crewData};
+    if(cur.lead===name){ nx[k]={...cur,lead:"",crew:[...cur.crew,name]}; }
+    else { const nc=cur.crew.filter(n=>n!==name); if(cur.lead) nc.push(cur.lead); nx[k]={...cur,lead:name,crew:nc}; }
+    setCrewData(nx); _saveCrewData(nx);
+  };
+  const crewClearDay = (di) => {
+    const nx={...crewData};
+    Object.keys(nx).forEach(k=>{ if(k.endsWith("_"+di)) delete nx[k]; });
+    setCrewData(nx); _saveCrewData(nx);
+  };
+  const crewCopyPrevWeek = () => {
+    const prevMon = new Date(crewMon); prevMon.setDate(prevMon.getDate()-7);
+    const prevWK = `${prevMon.getFullYear()}-${String(prevMon.getMonth()+1).padStart(2,"0")}-${String(prevMon.getDate()).padStart(2,"0")}`;
+    getDoc(doc(db,"settings","schedule_"+prevWK)).then(s => {
+      if(s.exists()){
+        const prev=s.data();
+        setCrewData(prev.assignments||{});
+        setCrewExtra(prev.extraJobs||[]);
+        _saveCrewData(prev.assignments||{},prev.extraJobs||[]);
+        setCrewCopyWeek(false);
+        toast.success("Copied last week's schedule");
+      } else { toast.info("No schedule found for last week"); setCrewCopyWeek(false); }
+    });
+  };
+
+  const crewPlanJobs = useMemo(() => {
+    const active = jobs.filter(j => {
+      if(j.tempPed||j.quickJob) return false;
+      const rs=effRS(j),fs=effFS(j);
+      return rs==="scheduled"||rs==="inprogress"||fs==="scheduled"||fs==="inprogress";
+    });
+    const aIds=new Set(Object.keys(crewData).map(k=>k.split("_")[0]));
+    const fromA=jobs.filter(j=>aIds.has(j.id)&&!active.some(a=>a.id===j.id));
+    const fromE=crewExtra.map(id=>jobs.find(j=>j.id===id)).filter(Boolean)
+      .filter(j=>!active.some(a=>a.id===j.id)&&!fromA.some(a=>a.id===j.id));
+    return [...active,...fromA,...fromE];
+  }, [jobs,crewData,crewExtra]);
+
+  const crewDayTotals = useMemo(() => {
+    const t=Array(6).fill(0);
+    Object.entries(crewData).forEach(([k,v])=>{
+      const di=parseInt(k.split("_").pop());
+      if(di>=0&&di<6) t[di]+=(v.lead?1:0)+(v.crew||[]).length;
+    });
+    return t;
+  }, [crewData]);
+
+  const crewPersonDays = useMemo(() => {
+    const m={};
+    Object.entries(crewData).forEach(([k,v])=>{
+      const di=parseInt(k.split("_").pop());
+      if(di<0||di>=6) return;
+      const all=[...(v.lead?[v.lead]:[]),...(v.crew||[])];
+      all.forEach(n=>{ if(!m[n]) m[n]=new Set(); m[n].add(di); });
+    });
+    return m;
+  }, [crewData]);
 
   const today = new Date(); today.setHours(0,0,0,0);
   const todayStr = today.toISOString().split("T")[0];
@@ -17010,6 +18644,13 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
           hardDate:false,
           status:rs, statusLabel:isInv?"Ready to Invoice":(rsDef.label||"Projected"),
           desc:isInv?"Ready to Invoice":(rsDef.label||"Projected start date set"),
+          // In Progress → schedule-presence pill. Manual value wins; else
+          // derive from Simpro schedule (month pids set), else null.
+          inProgressMode: rs==="inprogress"
+            ? (job.roughInProgressMode ||
+               (job.simproNo && simproAllSnos.has(String(job.simproNo)) ? "scheduled"
+                : (job.simproNo ? "ongoing" : null)))
+            : null,
         });
       }
 
@@ -17031,6 +18672,11 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
           hardDate:false,
           status:fs, statusLabel:isInv?"Ready to Invoice":(fsDef.label||"Projected"),
           desc:isInv?"Ready to Invoice":(fsDef.label||"Projected start date set"),
+          inProgressMode: fs==="inprogress"
+            ? (job.finishInProgressMode ||
+               (job.simproNo && simproAllSnos.has(String(job.simproNo)) ? "scheduled"
+                : (job.simproNo ? "ongoing" : null)))
+            : null,
         });
       }
 
@@ -17198,6 +18844,19 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
             textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.desc.replace(/<[^>]*>/g,"")}</div>}
         <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap",marginTop:2}}>
           <span style={{fontSize:10,fontWeight:700,color:ev.statusLabel?col:"var(--dim)"}}>{ev.statusLabel}</span>
+          {ev.inProgressMode && (()=>{
+            const isSch = ev.inProgressMode === "scheduled";
+            const pc = isSch ? "#2563eb" : "#6b7280";
+            return (
+              <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.06em",padding:"1px 6px",
+                borderRadius:99, background:`${pc}18`, color:pc,
+                border:`1px ${isSch?"solid":"dashed"} ${pc}55`,
+                display:"inline-flex",alignItems:"center",gap:3,whiteSpace:"nowrap"}}>
+                <span style={{width:5,height:5,borderRadius:"50%",background:pc,display:"inline-block"}}/>
+                {isSch ? "On Schedule" : "Ongoing"}
+              </span>
+            );
+          })()}
           {ev.startDate&&(
             <span style={{fontSize:10,fontWeight:700,color:over?C.red:"var(--dim)",marginLeft:"auto"}}>
               {ev.type==="rt"&&ev.status==="needs"?"Due: ":""}{fmtDate(ev.startDate)||""}{ev.endDate?" \u2013 "+fmtDate(ev.endDate):""}
@@ -17333,7 +18992,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
           <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:"var(--text)",lineHeight:1}}>SCHEDULING FORECAST</div>
           <div style={{fontSize:11,color:"var(--dim)"}}>{allEvents.length} item{allEvents.length!==1?"s":""}</div>
           <div style={{marginLeft:"auto",display:"flex",gap:4}}>
-            {[{k:"kanban",l:"Kanban",icon:null},{k:"week",l:"Week",icon:"clipboard"},{k:"attention",l:"Attention",icon:"alertTriangle"},{k:"calendar",l:"Calendar",icon:"calendar"}].map(({k,l,icon})=>(
+            {[{k:"kanban",l:"Kanban",icon:null},{k:"week",l:"Week",icon:"clipboard"},{k:"attention",l:"Attention",icon:"alertTriangle"},{k:"calendar",l:"Calendar",icon:"calendar"},{k:"crew",l:"Crew",icon:"users"}].map(({k,l,icon})=>(
               <button key={k} onClick={()=>setViewMode(k)}
                 style={{padding:"6px 14px",borderRadius:8,fontSize:11,fontWeight:viewMode===k?700:500,
                   cursor:"pointer",fontFamily:"inherit",border:`1px solid ${viewMode===k?C.accent:C.border}`,
@@ -17514,6 +19173,19 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
                               color:isOverdue(ev.startDate,ev.status)?C.red:ev.color,flexShrink:0}}>
                               {ev.statusLabel}
                             </span>
+                            {ev.inProgressMode && (()=>{
+                              const isSch = ev.inProgressMode === "scheduled";
+                              const pc = isSch ? "#2563eb" : "#6b7280";
+                              return (
+                                <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.06em",
+                                  padding:"1px 6px", borderRadius:99, background:`${pc}18`, color:pc,
+                                  border:`1px ${isSch?"solid":"dashed"} ${pc}55`, flexShrink:0,
+                                  display:"inline-flex",alignItems:"center",gap:3,whiteSpace:"nowrap"}}>
+                                  <span style={{width:5,height:5,borderRadius:"50%",background:pc,display:"inline-block"}}/>
+                                  {isSch ? "On Schedule" : "Ongoing"}
+                                </span>
+                              );
+                            })()}
                             <span style={{fontSize:9,fontWeight:700,color:ev.fc,
                               background:ev.fc+"15",borderRadius:99,padding:"1px 6px",
                               border:`1px solid ${ev.fc}20`,flexShrink:0}}>{ev.job.foreman||"Koy"}</span>
@@ -17625,6 +19297,451 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList }) {
                 {section.items.map(ev=><EventCard key={ev.id} ev={ev}/>)}
               </div>
             ))}
+          </div>
+        );
+      })()}
+
+      {/* ── CREW PLANNER ── */}
+      {viewMode==="crew"&&(()=>{
+        const roster = crewRoster || [];
+        const foremen = getForemenList();
+        const dayLabels = ["MON","TUE","WED","THU","FRI","SAT"];
+        const todayYMD2 = todayStr;
+        const crewFmtD = d => d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
+        const crewGetColor = n => {
+          const fc = getFC(n); if(fc && fc !== "#6b7280") return fc;
+          const lc = getLeadFC(n); if(lc && lc !== "#6b7280") return lc;
+          return "#6b7280";
+        };
+        const isForeman = n => foremen.map(f=>f.toLowerCase()).includes(n.toLowerCase());
+
+        return (
+          <div style={{padding:"20px 20px 8px"}}>
+            {/* Week nav */}
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)"}}>
+                CREW PLANNER
+              </div>
+              <div style={{display:"flex",alignItems:"center",gap:4}}>
+                <button onClick={()=>setCrewWeekOff(v=>v-1)}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                    color:C.dim,fontSize:14,width:28,height:28,cursor:"pointer",display:"flex",
+                    alignItems:"center",justifyContent:"center",fontFamily:"inherit"}}>
+                  <Icon name="chevronLeft" size={14}/>
+                </button>
+                <span style={{fontSize:12,fontWeight:700,color:"var(--text)",minWidth:120,textAlign:"center"}}>
+                  {crewFmtD(crewDays[0])} &ndash; {crewFmtD(crewDays[5])}
+                </span>
+                <button onClick={()=>setCrewWeekOff(v=>v+1)}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                    color:C.dim,fontSize:14,width:28,height:28,cursor:"pointer",display:"flex",
+                    alignItems:"center",justifyContent:"center",fontFamily:"inherit"}}>
+                  <Icon name="chevronRight" size={14}/>
+                </button>
+                {crewWeekOff!==0&&(
+                  <button onClick={()=>setCrewWeekOff(0)}
+                    style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:6,
+                      color:C.accent,padding:"4px 10px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:700}}>
+                    THIS WEEK
+                  </button>
+                )}
+              </div>
+              <div style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
+                <button onClick={crewCopyPrevWeek}
+                  title="Copy last week's assignments into this week"
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                    color:C.dim,padding:"4px 10px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:600,
+                    display:"inline-flex",alignItems:"center",gap:4}}>
+                  <Icon name="copy" size={11}/> Copy Last Week
+                </button>
+                <button onClick={()=>setCrewJobPick(true)}
+                  style={{background:C.accent,border:"none",borderRadius:6,
+                    color:"#fff",padding:"4px 12px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:700,
+                    display:"inline-flex",alignItems:"center",gap:4}}>
+                  <Icon name="plus" size={11} stroke={2.5}/> Add Job
+                </button>
+              </div>
+            </div>
+
+            {/* Roster — tap or drag a name to assign */}
+            <div style={{marginBottom:16,padding:"12px 14px",background:"var(--surface)",
+              borderRadius:10,border:`1px solid ${C.border}`}}>
+              <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
+                <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim}}>ROSTER</span>
+                {crewSel&&<span style={{fontSize:10,color:C.accent,fontWeight:600}}>Tap a cell to place {crewSel}</span>}
+                <button onClick={()=>setCrewAddOpen(v=>!v)}
+                  style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:5,
+                    color:C.dim,padding:"2px 8px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:600}}>
+                  {crewAddOpen?"Done":"Edit Roster"}
+                </button>
+              </div>
+              <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                {roster.map(name => {
+                  const col = crewGetColor(name);
+                  const isSel = crewSel===name;
+                  const isFM = isForeman(name);
+                  const dayCount = (crewPersonDays[name]||new Set()).size;
+                  return (
+                    <div key={name}
+                      draggable
+                      onDragStart={()=>{crewDragRef.current=name;}}
+                      onClick={()=>setCrewSel(isSel?null:name)}
+                      style={{display:"inline-flex",alignItems:"center",gap:4,padding:"4px 10px",
+                        borderRadius:99,cursor:"grab",userSelect:"none",fontSize:11,fontWeight:700,
+                        color:isSel?"#fff":col,
+                        background:isSel?col:col+"15",
+                        border:`2px solid ${isSel?col:col+"44"}`,
+                        transition:"all 0.12s",
+                        boxShadow:isSel?`0 2px 8px ${col}44`:"none"}}>
+                      {isFM&&<Icon name="star" size={10} stroke={2.5}/>}
+                      {name}
+                      {dayCount>0&&<span style={{fontSize:8,opacity:0.7}}>({dayCount}d)</span>}
+                    </div>
+                  );
+                })}
+              </div>
+              {crewAddOpen&&(
+                <div style={{marginTop:10,display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                  <input value={crewAddName} onChange={e=>setCrewAddName(e.target.value)}
+                    placeholder="New name…"
+                    onKeyDown={e=>{
+                      if(e.key==="Enter"&&crewAddName.trim()){
+                        _saveRoster([...roster,crewAddName.trim()]);
+                        setCrewAddName("");
+                      }
+                    }}
+                    style={{background:"var(--card)",border:`1px solid ${C.border}`,borderRadius:6,
+                      padding:"5px 10px",fontSize:11,color:"var(--text)",fontFamily:"inherit",width:140}}/>
+                  <button onClick={()=>{
+                    if(crewAddName.trim()){ _saveRoster([...roster,crewAddName.trim()]); setCrewAddName(""); }
+                  }}
+                    style={{background:C.accent,border:"none",borderRadius:6,color:"#fff",
+                      padding:"5px 10px",cursor:"pointer",fontSize:10,fontWeight:700,fontFamily:"inherit"}}>Add</button>
+                  <div style={{width:"100%",display:"flex",flexWrap:"wrap",gap:4,marginTop:4}}>
+                    {roster.map(name=>(
+                      <span key={name} style={{fontSize:10,display:"inline-flex",alignItems:"center",gap:3,
+                        padding:"2px 8px",borderRadius:99,background:"var(--card)",border:`1px solid ${C.border}`,color:C.dim}}>
+                        {name}
+                        <span onClick={()=>_saveRoster(roster.filter(n=>n!==name))}
+                          style={{cursor:"pointer",fontWeight:800,color:C.red,fontSize:12,lineHeight:1}}>&times;</span>
+                      </span>
+                    ))}
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Teams */}
+            <div style={{marginBottom:16,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
+              <div onClick={()=>setCrewTeamsOpen(v=>!v)}
+                style={{display:"flex",alignItems:"center",gap:8,padding:"10px 14px",cursor:"pointer",
+                  background:"var(--surface)",userSelect:"none"}}>
+                <Icon name="users" size={13} color={C.accent}/>
+                <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.1em",color:C.accent}}>TEAMS</span>
+                <span style={{fontSize:10,color:C.dim}}>({crewTeams.length} team{crewTeams.length!==1?"s":""})</span>
+                {crewTeamSel&&<span style={{fontSize:10,color:C.accent,fontWeight:600,marginLeft:4}}>
+                  Tap a team to move {crewTeamSel}</span>}
+                <span style={{marginLeft:"auto",fontSize:12,color:C.dim,
+                  transform:crewTeamsOpen?"rotate(90deg)":"rotate(-90deg)",display:"inline-block",transition:"transform 0.2s"}}>
+                  ›</span>
+              </div>
+              {crewTeamsOpen&&(
+                <div style={{padding:"12px 14px"}}>
+                  <div style={{display:"flex",flexWrap:"wrap",gap:8,marginBottom:teamUnassigned.length>0?10:0}}>
+                    {crewTeams.map((team,idx)=>{
+                      const allNames=[...(team.lead?[team.lead]:[]),...team.members];
+                      const teamColor=team.lead?crewGetColor(team.lead):C.dim;
+                      return (
+                        <div key={team.id||idx}
+                          onClick={()=>{
+                            if(crewTeamSel){
+                              // Move selected person to this team
+                              const fromIdx=crewTeams.findIndex(t=>t.lead===crewTeamSel||t.members.includes(crewTeamSel));
+                              if(fromIdx!==idx) teamMovePerson(crewTeamSel,fromIdx,idx);
+                              else setCrewTeamSel(null);
+                            }
+                          }}
+                          onDragOver={e=>e.preventDefault()}
+                          onDrop={e=>{
+                            e.preventDefault();
+                            const name=crewTeamDragRef.current; crewTeamDragRef.current=null;
+                            if(!name) return;
+                            const fromIdx=crewTeams.findIndex(t=>t.lead===name||t.members.includes(name));
+                            if(fromIdx!==idx) teamMovePerson(name,fromIdx,idx);
+                          }}
+                          style={{background:"var(--card)",border:`1px solid ${crewTeamSel?C.accent+"55":teamColor+"33"}`,
+                            borderLeft:`3px solid ${teamColor}`,borderRadius:9,padding:"10px 12px",
+                            minWidth:130,flex:"0 1 auto",cursor:crewTeamSel?"pointer":"default",
+                            transition:"border-color 0.15s,box-shadow 0.15s",
+                            boxShadow:crewTeamSel?`0 0 0 1px ${C.accent}22`:"none"}}
+                          onMouseEnter={e=>{if(crewTeamSel)e.currentTarget.style.borderColor=C.accent;}}
+                          onMouseLeave={e=>{e.currentTarget.style.borderColor=crewTeamSel?C.accent+"55":teamColor+"33";}}>
+                          {allNames.length===0?(
+                            <div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>Empty team</div>
+                          ):(
+                            <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                              {allNames.map((name,ni)=>{
+                                const isLead=name===team.lead;
+                                const nc=crewGetColor(name);
+                                return (
+                                  <span key={name} draggable
+                                    onDragStart={e=>{e.stopPropagation();crewTeamDragRef.current=name;}}
+                                    onClick={e=>{
+                                      e.stopPropagation();
+                                      if(crewTeamSel===name) setCrewTeamSel(null);
+                                      else if(!crewTeamSel) setCrewTeamSel(name);
+                                    }}
+                                    style={{display:"inline-flex",alignItems:"center",gap:3,
+                                      padding:"3px 9px",borderRadius:99,fontSize:11,
+                                      fontWeight:isLead?800:600,cursor:"grab",userSelect:"none",
+                                      color:crewTeamSel===name?"#fff":isLead?"#fff":nc,
+                                      background:crewTeamSel===name?C.accent:isLead?nc:nc+"15",
+                                      border:`1.5px solid ${crewTeamSel===name?C.accent:isLead?nc:nc+"44"}`,
+                                      boxShadow:crewTeamSel===name?`0 2px 6px ${C.accent}44`:isLead?`0 1px 3px ${nc}33`:"none",
+                                      transition:"all 0.12s"}}>
+                                    {isLead&&<Icon name="star" size={9} stroke={3}/>}
+                                    {name}
+                                    <span onClick={e2=>{e2.stopPropagation();teamRemovePerson(name,idx);}}
+                                      title="Remove from team"
+                                      style={{fontSize:11,fontWeight:800,opacity:0.5,lineHeight:1,cursor:"pointer",marginLeft:1}}>
+                                      &times;</span>
+                                  </span>
+                                );
+                              })}
+                            </div>
+                          )}
+                          <div style={{display:"flex",gap:4,marginTop:6}}>
+                            {team.lead&&team.members.length>0&&(
+                              <span style={{fontSize:9,color:C.muted}}>{1+team.members.length} people</span>
+                            )}
+                            <span onClick={e=>{e.stopPropagation();teamRemove(idx);}}
+                              style={{marginLeft:"auto",fontSize:9,color:C.red,cursor:"pointer",fontWeight:600,opacity:0.6}}>
+                              Dissolve</span>
+                          </div>
+                        </div>
+                      );
+                    })}
+                    {/* New team button */}
+                    <div onClick={teamAdd}
+                      style={{border:`2px dashed ${C.border}`,borderRadius:9,padding:"10px 16px",
+                        display:"flex",alignItems:"center",justifyContent:"center",gap:4,
+                        cursor:"pointer",minWidth:100,color:C.dim,fontSize:11,fontWeight:600,
+                        transition:"border-color 0.15s"}}
+                      onMouseEnter={e=>e.currentTarget.style.borderColor=C.accent}
+                      onMouseLeave={e=>e.currentTarget.style.borderColor=C.border}>
+                      <Icon name="plus" size={12}/> New Team
+                    </div>
+                  </div>
+
+                  {/* Unassigned people */}
+                  {teamUnassigned.length>0&&(
+                    <div style={{paddingTop:8,borderTop:`1px solid ${C.border}`}}>
+                      <div style={{fontSize:9,fontWeight:700,color:C.muted,letterSpacing:"0.08em",marginBottom:6}}>
+                        NOT ON A TEAM
+                      </div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                        {teamUnassigned.map(name=>{
+                          const nc=crewGetColor(name);
+                          return (
+                            <span key={name} draggable
+                              onDragStart={()=>{crewTeamDragRef.current=name;}}
+                              onClick={()=>setCrewTeamSel(crewTeamSel===name?null:name)}
+                              style={{display:"inline-flex",alignItems:"center",gap:3,
+                                padding:"3px 9px",borderRadius:99,fontSize:11,fontWeight:600,
+                                cursor:"grab",userSelect:"none",
+                                color:crewTeamSel===name?"#fff":nc,
+                                background:crewTeamSel===name?C.accent:nc+"15",
+                                border:`1.5px solid ${crewTeamSel===name?C.accent:nc+"44"}`,
+                                transition:"all 0.12s"}}>
+                              {isForeman(name)&&<Icon name="star" size={9} stroke={2.5}/>}
+                              {name}
+                            </span>
+                          );
+                        })}
+                      </div>
+                    </div>
+                  )}
+
+                  <div style={{fontSize:10,color:C.muted,marginTop:8,fontStyle:"italic"}}>
+                    Drag names between teams or tap a name then tap a team card to move them.
+                    First person in each team is the lead.
+                  </div>
+                </div>
+              )}
+            </div>
+
+            {/* Schedule grid */}
+            <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
+              <table style={{width:"100%",minWidth:780,borderCollapse:"separate",borderSpacing:0}}>
+                <thead>
+                  <tr>
+                    <th style={{textAlign:"left",padding:"8px 10px",fontSize:10,fontWeight:800,
+                      color:C.dim,letterSpacing:"0.1em",width:160,position:"sticky",left:0,
+                      background:"var(--surface)",zIndex:2,borderBottom:`2px solid ${C.border}`}}>JOB</th>
+                    {crewDays.map((d,di)=>{
+                      const ymd=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+                      const isToday3=ymd===todayYMD2;
+                      return (
+                        <th key={di} style={{textAlign:"center",padding:"6px 4px",minWidth:100,
+                          borderBottom:`2px solid ${isToday3?C.accent:C.border}`,
+                          background:isToday3?C.accent+"10":"var(--surface)"}}>
+                          <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",
+                            color:isToday3?C.accent:C.dim}}>{dayLabels[di]}</div>
+                          <div style={{fontSize:11,fontWeight:600,color:isToday3?C.accent:"var(--text)"}}>
+                            {d.toLocaleDateString("en-US",{month:"short",day:"numeric"})}
+                          </div>
+                          <div style={{fontSize:9,color:C.muted,fontWeight:600}}>{crewDayTotals[di]} people</div>
+                        </th>
+                      );
+                    })}
+                  </tr>
+                </thead>
+                <tbody>
+                  {crewPlanJobs.length===0&&(
+                    <tr><td colSpan={7} style={{textAlign:"center",padding:"40px 0",color:C.muted,fontSize:12,fontStyle:"italic"}}>
+                      No active jobs. Click "Add Job" to get started.
+                    </td></tr>
+                  )}
+                  {crewPlanJobs.map(job=>{
+                    const jc=getFC(job.foreman||"Koy");
+                    const rs=effRS(job),fs=effFS(job);
+                    const phase=rs==="scheduled"||rs==="inprogress"?"Rough":fs==="scheduled"||fs==="inprogress"?"Finish":"";
+                    return (
+                      <tr key={job.id}>
+                        <td style={{padding:"8px 10px",borderBottom:`1px solid ${C.border}`,
+                          position:"sticky",left:0,background:"var(--card)",zIndex:1,
+                          verticalAlign:"top",maxWidth:160}}>
+                          <div onClick={()=>onSelectJob(job)}
+                            style={{cursor:"pointer",fontWeight:700,fontSize:12,color:"var(--text)",
+                              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+                              marginBottom:2}}>{job.name||"Untitled"}</div>
+                          <div style={{display:"flex",gap:4,flexWrap:"wrap"}}>
+                            {phase&&<span style={{fontSize:9,fontWeight:700,
+                              color:phase==="Rough"?C.rough||"#2563eb":C.finish||"#16a34a",
+                              background:(phase==="Rough"?C.rough||"#2563eb":C.finish||"#16a34a")+"15",
+                              borderRadius:99,padding:"1px 6px"}}>{phase.toUpperCase()}</span>}
+                            <span style={{fontSize:9,fontWeight:600,color:jc,
+                              background:jc+"15",borderRadius:99,padding:"1px 6px"}}>{job.foreman||"Koy"}</span>
+                          </div>
+                          {crewExtra.includes(job.id)&&(
+                            <span onClick={e=>{e.stopPropagation();
+                              const ne=crewExtra.filter(id=>id!==job.id);
+                              setCrewExtra(ne); _saveCrewData(crewData,ne);
+                            }}
+                              style={{fontSize:9,color:C.red,cursor:"pointer",fontWeight:600,marginTop:2,display:"block"}}>
+                              Remove
+                            </span>
+                          )}
+                        </td>
+                        {crewDays.map((d,di)=>{
+                          const ymd=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+                          const isToday3=ymd===todayYMD2;
+                          const k=`${job.id}_${di}`;
+                          const cell=crewData[k]||{lead:"",crew:[]};
+                          const allPeople=[...(cell.lead?[{name:cell.lead,isLead:true}]:[]),...cell.crew.map(n=>({name:n,isLead:false}))];
+                          return (
+                            <td key={di}
+                              onClick={()=>crewAssign(job.id,di)}
+                              onDragOver={e=>e.preventDefault()}
+                              onDrop={e=>{e.preventDefault();crewDrop(job.id,di);}}
+                              style={{padding:"6px 4px",borderBottom:`1px solid ${C.border}`,
+                                verticalAlign:"top",cursor:crewSel?"pointer":"default",
+                                background:isToday3?C.accent+"06":crewSel?C.accent+"04":"transparent",
+                                transition:"background 0.1s",minHeight:40}}
+                              onMouseEnter={e=>{if(crewSel)e.currentTarget.style.background=C.accent+"12";}}
+                              onMouseLeave={e=>{e.currentTarget.style.background=isToday3?C.accent+"06":crewSel?C.accent+"04":"transparent";}}>
+                              <div style={{display:"flex",flexWrap:"wrap",gap:3,minHeight:24}}>
+                                {allPeople.map(({name,isLead})=>{
+                                  const pc=crewGetColor(name);
+                                  const isFM=isForeman(name);
+                                  return (
+                                    <span key={name}
+                                      style={{display:"inline-flex",alignItems:"center",gap:2,
+                                        padding:"2px 7px",borderRadius:99,fontSize:10,fontWeight:700,
+                                        color:isLead?"#fff":pc,
+                                        background:isLead?pc:pc+"18",
+                                        border:`1.5px ${isLead?"solid":"solid"} ${isLead?pc:pc+"44"}`,
+                                        cursor:"pointer",userSelect:"none",whiteSpace:"nowrap",
+                                        boxShadow:isLead?`0 1px 4px ${pc}33`:"none"}}>
+                                      {isLead&&<Icon name="star" size={8} stroke={3}/>}
+                                      {name}
+                                      <span onClick={e=>{e.stopPropagation();
+                                        if(isFM&&!isLead) crewToggleLead(job.id,di,name);
+                                        else if(isLead) crewToggleLead(job.id,di,name);
+                                        else crewRemove(job.id,di,name);
+                                      }}
+                                        title={isFM?(isLead?"Remove as lead":"Set as lead"):"Remove"}
+                                        style={{fontSize:isFM&&!isLead?8:10,fontWeight:800,marginLeft:2,
+                                          opacity:0.6,lineHeight:1}}>
+                                        {isFM&&!isLead?"\u2605":"\u00D7"}
+                                      </span>
+                                    </span>
+                                  );
+                                })}
+                              </div>
+                            </td>
+                          );
+                        })}
+                      </tr>
+                    );
+                  })}
+                </tbody>
+              </table>
+            </div>
+
+            {/* Utilization summary */}
+            {roster.length>0&&Object.keys(crewData).length>0&&(
+              <div style={{marginTop:16,padding:"12px 14px",background:"var(--surface)",
+                borderRadius:10,border:`1px solid ${C.border}`}}>
+                <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:8}}>
+                  UNASSIGNED THIS WEEK
+                </div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                  {roster.filter(n=>!(crewPersonDays[n]&&crewPersonDays[n].size>0)).map(name=>(
+                    <span key={name} style={{fontSize:10,fontWeight:600,padding:"3px 8px",borderRadius:99,
+                      background:"#fef2f2",color:"#dc2626",border:"1px solid #fecaca"}}>
+                      {name}
+                    </span>
+                  ))}
+                  {roster.every(n=>crewPersonDays[n]&&crewPersonDays[n].size>0)&&(
+                    <span style={{fontSize:11,color:C.green,fontWeight:600}}>Everyone is assigned</span>
+                  )}
+                </div>
+              </div>
+            )}
+
+            {/* Job picker modal */}
+            {crewJobPick&&(
+              <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:9999,
+                display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+                onClick={()=>setCrewJobPick(false)}>
+                <div onClick={e=>e.stopPropagation()}
+                  style={{background:"var(--card)",borderRadius:14,padding:"20px 24px",width:380,
+                    maxHeight:"70vh",overflowY:"auto",border:`1px solid ${C.border}`}}>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",
+                    color:"var(--text)",marginBottom:12}}>ADD JOB TO SCHEDULE</div>
+                  {jobs.filter(j=>!j.tempPed&&!crewPlanJobs.some(p=>p.id===j.id)).map(j=>(
+                    <div key={j.id} onClick={()=>{
+                      const ne=[...crewExtra,j.id];
+                      setCrewExtra(ne); _saveCrewData(crewData,ne);
+                      setCrewJobPick(false);
+                    }}
+                      style={{padding:"8px 12px",borderRadius:8,cursor:"pointer",marginBottom:4,
+                        border:`1px solid ${C.border}`,fontSize:12,fontWeight:600,color:"var(--text)",
+                        transition:"background 0.1s"}}
+                      onMouseEnter={e=>e.currentTarget.style.background=C.accent+"10"}
+                      onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                      {j.name||"Untitled"}
+                      <span style={{fontSize:10,color:C.dim,marginLeft:8}}>{j.foreman||""}</span>
+                    </div>
+                  ))}
+                  <button onClick={()=>setCrewJobPick(false)}
+                    style={{marginTop:10,background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                      padding:"8px 16px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim,
+                      fontFamily:"inherit",width:"100%"}}>Cancel</button>
+                </div>
+              </div>
+            )}
           </div>
         );
       })()}
@@ -17816,7 +19933,7 @@ function Scoreboard({ jobs, users=[], identity }) {
         ...(f.hotcheck||[]),
       ];
       buckets.forEach(i => {
-        if (!i || !i.fromQC) return;
+        if (!i || !i.fromQC || i.voided) return;
         if (i.addedAt) {
           const ymd = _toYMDScore(i.addedAt);
           if (ymd && (ymd < effStart || ymd > effEnd)) return;
@@ -17849,9 +19966,9 @@ function Scoreboard({ jobs, users=[], identity }) {
       const allFloors = [...stdFloors, ...((p.extras||[]).map(e=>e.key))];
       allFloors.forEach(fk => {
         const f = p[fk]; if (!f) return;
-        (f.general||[]).forEach(i => { if (i && !i.done) punch++; });
-        (f.hotcheck||[]).forEach(i => { if (i && !i.done) punch++; });
-        (f.rooms||[]).forEach(r => (r.items||[]).forEach(i => { if (i && !i.done) punch++; }));
+        (f.general||[]).forEach(i => { if (i && !i.done && !i.voided) punch++; });
+        (f.hotcheck||[]).forEach(i => { if (i && !i.done && !i.voided) punch++; });
+        (f.rooms||[]).forEach(r => (r.items||[]).forEach(i => { if (i && !i.done && !i.voided) punch++; }));
       });
     });
     // Questions
@@ -19050,7 +21167,7 @@ function BulkEditTable({ jobs, foremenList, leadsList, onUpdateJob }) {
                   <Sel value={job.foreman||""} onChange={e=>{const patch={foreman:e.target.value}; onUpdateJob({...job,...patch},patch);}} options={[...(foremenList||[]),"Unassigned"]}/>
                 </td>
                 <td style={{padding:"6px 8px"}}>
-                  <Sel value={job.lead||""} onChange={e=>{const patch={lead:e.target.value}; onUpdateJob({...job,...patch},patch);}} options={["Lead TBD",...(leadsList||[])]}/>
+                  <Sel value={job.lead||""} onChange={e=>{const patch={lead:e.target.value}; onUpdateJob({...job,...patch},patch);}} options={["Lead TBD",...[...new Set([...(foremenList||getForemenList()),...(leadsList||[])])]]}/>
                 </td>
               </tr>
             ))}
@@ -20738,6 +22855,185 @@ function QuestionsSharePage({ jobId }) {
   );
 }
 
+// B2 — Read-only shareable view for a single job note.
+// URL: /?jobnote={jobId}:{noteId}:{token}
+// The viewer reads the job doc live (same pattern as the other share pages)
+// and validates that `note.shareToken === token`. Owner can revoke anytime
+// by clearing shareToken on the note — the viewer then flips to "Link
+// expired" on the next snapshot tick.
+//
+// Security: token is 128-bit random hex, unguessable. Only matches ONE note;
+// the viewer never renders other notes, job details, or any cross-job data.
+// A wrong or missing token → "Not available." No login needed, read-only.
+//
+// Data safety: this is a PURE READER. It never writes to Firestore, never
+// mutates the note, never touches promoted flags. Deleting the note or
+// clearing the token disables the link; re-generating issues a new token
+// (old link dies).
+function JobNoteSharePage({ param }) {
+  const parts = String(param || '').split(':');
+  const jobId   = parts[0] || '';
+  const noteId  = parts[1] || '';
+  const token   = parts.slice(2).join(':') || ''; // tokens are hex-only but be forgiving
+
+  const [job,     setJob]     = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error,   setError]   = useState(null);
+
+  useEffect(() => {
+    if (!jobId || !noteId || !token) {
+      setError('This link is malformed.'); setLoading(false); return;
+    }
+    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
+      if (!snap.exists()) { setError('This note is not available.'); setLoading(false); return; }
+      setJob(snap.data()?.data || null); setLoading(false);
+    }, () => { setError('Failed to load. Please try again.'); setLoading(false); });
+    return () => unsub();
+  }, [jobId, noteId, token]);
+
+  const cardPageBg = '#f3f4f6';
+  const headerBg = '#1e3a5f';
+
+  if (loading) return (
+    <div style={{textAlign:'center',padding:60,color:'#9ca3af',fontFamily:'system-ui,sans-serif'}}>Loading…</div>
+  );
+  if (error) return (
+    <div style={{textAlign:'center',padding:60,color:'#ef4444',fontFamily:'system-ui,sans-serif'}}>{error}</div>
+  );
+
+  const notes = Array.isArray(job?.jobNotes) ? job.jobNotes : [];
+  const note = notes.find(n => n && n.id === noteId);
+
+  if (!note || note.deleted) {
+    return (
+      <div style={{textAlign:'center',padding:60,color:'#9ca3af',fontFamily:'system-ui,sans-serif'}}>
+        This note is not available.
+      </div>
+    );
+  }
+  if (!note.shareToken || note.shareToken !== token) {
+    return (
+      <div style={{textAlign:'center',padding:60,color:'#9ca3af',fontFamily:'system-ui,sans-serif'}}>
+        This share link has been revoked or is no longer valid.
+      </div>
+    );
+  }
+
+  const lines = Array.isArray(note.lines) ? note.lines : [];
+  const photos = Array.isArray(note.photos) ? note.photos : [];
+  const title = (note.title || '').trim() || '(untitled note)';
+  const phaseTag = note.phase === 'spec' ? 'Detail'
+                  : note.phase === 'general' ? 'General'
+                  : note.phase === 'rough' ? 'Rough'
+                  : note.phase === 'finish' ? 'Finish' : note.phase;
+  const updated = note.updatedAt || note.createdAt;
+  const updatedLabel = updated ? new Date(updated).toLocaleString() : '';
+  const phaseColor = note.phase === 'rough' ? '#2563eb'
+                    : note.phase === 'finish' ? '#0ea5e9'
+                    : note.phase === 'spec' ? '#64748b'
+                    : '#475569';
+
+  return (
+    <div style={{maxWidth:720,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:cardPageBg,minHeight:'100vh'}}>
+      {/* Header */}
+      <div style={{background:headerBg,borderRadius:14,padding:'20px 22px',marginBottom:22}}>
+        <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>
+          HOMESTEAD ELECTRIC · JOB NOTE
+        </div>
+        <div style={{fontSize:19,fontWeight:700,color:'#fff',marginBottom:2}}>{job?.name || 'Project'}</div>
+        {job?.address && <div style={{fontSize:12,color:'rgba(255,255,255,0.65)',marginBottom:2}}>{job.address}</div>}
+        <div style={{marginTop:8,display:'flex',gap:6,flexWrap:'wrap'}}>
+          {phaseTag && (
+            <span style={{fontSize:10,fontWeight:700,color:'#fff',background:phaseColor,borderRadius:99,padding:'2px 9px'}}>
+              {phaseTag.toUpperCase()}
+            </span>
+          )}
+          <span style={{fontSize:10,color:'rgba(255,255,255,0.7)'}}>READ-ONLY</span>
+        </div>
+      </div>
+
+      {/* Note card */}
+      <div style={{background:'#fff',borderRadius:12,padding:'18px 20px',boxShadow:'0 1px 3px rgba(0,0,0,0.06)'}}>
+        <div style={{fontSize:16,fontWeight:700,color:'#1f2937',marginBottom:4}}>
+          {title}
+        </div>
+        {updatedLabel && (
+          <div style={{fontSize:11,color:'#9ca3af',marginBottom:14}}>Updated {updatedLabel}</div>
+        )}
+
+        {/* Note-level photos */}
+        {photos.length > 0 && (
+          <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:14}}>
+            {photos.map(p => (
+              <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer"
+                 style={{display:'block',width:72,height:72,borderRadius:6,overflow:'hidden',border:'1px solid #e5e7eb'}}>
+                <img src={p.url} alt={p.name || 'photo'} style={{width:'100%',height:'100%',objectFit:'cover'}}/>
+              </a>
+            ))}
+          </div>
+        )}
+
+        {/* Lines */}
+        {lines.length === 0 && (
+          <div style={{fontSize:13,color:'#9ca3af',fontStyle:'italic'}}>(no lines)</div>
+        )}
+        <div style={{display:'flex',flexDirection:'column',gap:8}}>
+          {lines.map(l => {
+            const lPhotos = Array.isArray(l?.photos) ? l.photos : [];
+            const lMaterials = Array.isArray(l?.materials) ? l.materials.filter(Boolean) : [];
+            const wasPromoted = !!(l?.promoted);
+            return (
+              <div key={l.id} style={{
+                display:'flex',alignItems:'flex-start',gap:9,
+                padding:'8px 0',borderBottom:'1px solid #f3f4f6',
+                opacity: wasPromoted ? 0.65 : 1,
+              }}>
+                <span style={{flexShrink:0,marginTop:7,width:5,height:5,borderRadius:99,background:phaseColor}}/>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:13,color:'#1f2937',whiteSpace:'pre-wrap',wordBreak:'break-word',lineHeight:1.45}}>
+                    {(l?.text || '').trim() || <span style={{color:'#9ca3af'}}>(empty line)</span>}
+                  </div>
+                  {lPhotos.length > 0 && (
+                    <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:6}}>
+                      {lPhotos.map(p => (
+                        <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer"
+                           style={{display:'block',width:52,height:52,borderRadius:6,overflow:'hidden',border:'1px solid #e5e7eb'}}>
+                          <img src={p.url} alt={p.name || 'photo'} style={{width:'100%',height:'100%',objectFit:'cover'}}/>
+                        </a>
+                      ))}
+                    </div>
+                  )}
+                  {lMaterials.length > 0 && (
+                    <div style={{display:'flex',flexWrap:'wrap',gap:5,marginTop:6}}>
+                      {lMaterials.map((m,i) => (
+                        <span key={i} style={{
+                          display:'inline-flex',alignItems:'center',
+                          background:'#f1f5f9',border:'1px solid #e5e7eb',
+                          borderRadius:99,padding:'1px 9px',
+                          fontSize:11,color:'#1f2937',
+                        }}>{m}</span>
+                      ))}
+                    </div>
+                  )}
+                  {wasPromoted && (
+                    <div style={{marginTop:5,fontSize:10,color:'#9ca3af',fontStyle:'italic'}}>
+                      (handled — promoted internally)
+                    </div>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      </div>
+
+      <div style={{textAlign:'center',marginTop:18,fontSize:11,color:'#9ca3af'}}>
+        This is a read-only shared view. Updates appear live.
+      </div>
+    </div>
+  );
+}
+
 function App() {
   // Homeowner page route — ?homeowner=JOB_ID
   const hoParam = new URLSearchParams(window.location.search).get("homeowner");
@@ -20762,6 +23058,10 @@ function App() {
   if(fpParam) return <PunchSharePage jobId={fpParam} stage="Finish"/>;
   const qcpParam = new URLSearchParams(window.location.search).get("qcpunch");
   if(qcpParam) return <PunchSharePage jobId={qcpParam} stage="QC"/>;
+
+  // B2 — Job Note share page route — ?jobnote=JOB_ID:NOTE_ID:TOKEN
+  const jnParam = new URLSearchParams(window.location.search).get("jobnote");
+  if(jnParam) return <JobNoteSharePage param={jnParam}/>;
 
   // ── Identity ──────────────────────────────────────────────────
   const [identity, setIdentity] = useState(()=>getIdentity());
@@ -22999,7 +25299,7 @@ function App() {
       })()}
 
       {view==="schedule"&&can(identity,"schedule.view")&&(
-        <SchedulingForecast jobs={jobs} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)} foremenList={_foremen}/>
+        <SchedulingForecast jobs={jobs} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)} foremenList={_foremen} identity={identity}/>
       )}
 
       {view==="tasks"&&can(identity,"tasks.view")&&(
