@@ -18432,6 +18432,16 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
   const [crewJobOrder, setCrewJobOrder] = useState([]);
   const crewRowDragRef = useRef(null);
   const [teamNameDrafts, setTeamNameDrafts] = useState({}); // { [idx]: "typed name" }
+  const [crewUserMap, setCrewUserMap] = useState({}); // { firstName: "First L." display label }
+  const [crewTimeModal, setCrewTimeModal] = useState(null); // { jobId, dayIdx, start, end } or null
+  const crewSetCellTime = (jid, di, start, end) => {
+    const k=`${jid}_${di}`, cur=crewData[k];
+    if(!cur) return;
+    const nx={...crewData};
+    if(!start && !end) { const {time, ...rest} = cur; nx[k] = rest; }
+    else nx[k] = { ...cur, time:{ start:start||"", end:end||"" } };
+    setCrewData(nx); _saveCrewData(nx);
+  };
 
   const crewMon = useMemo(() => {
     const d = new Date(); const day = d.getDay();
@@ -18452,6 +18462,32 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
       return [...new Set([...getForemenList(),...getLeadsList(),...firstNames])];
     } catch { return [...new Set([...getForemenList(),...getLeadsList()])]; }
   };
+  // Load user first+last name map to show "First L." on chips for disambiguation
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,"settings","users"), snap => {
+      if(!snap.exists()) return;
+      const list = snap.data().list || [];
+      const map = {};
+      // Count occurrences of each first name so we only add last-initial when there's ambiguity
+      const firstCount = {};
+      list.forEach(u => {
+        const parts = (u.name||"").trim().split(/\s+/);
+        if(parts[0]) firstCount[parts[0]] = (firstCount[parts[0]]||0) + 1;
+      });
+      list.forEach(u => {
+        const parts = (u.name||"").trim().split(/\s+/);
+        const first = parts[0]; if(!first) return;
+        const last = parts[parts.length-1];
+        if(parts.length > 1 && last && last !== first) {
+          // Always include last initial when there's a last name — Koy asked for this
+          map[first] = `${first} ${last[0]}.`;
+        }
+      });
+      setCrewUserMap(map);
+    });
+    return unsub;
+  }, []);
+  const crewDisplayName = (name) => crewUserMap[name] || name;
   useEffect(() => onSnapshot(doc(db,"settings","crewRoster"), s => {
     if(s.exists()) setCrewRoster(s.data().names||[]);
     else _crewLoadAllUsers().then(names => setCrewRoster(names));
@@ -18480,6 +18516,21 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
   const teamSetLead = (idx,name) => {
     const next=crewTeams.map((t,i)=>i===idx?{...t,lead:name,members:t.members.filter(n=>n!==name)}:t);
     _saveTeams(next);
+  };
+  const teamAddMember = (idx,name) => {
+    if(!name) return;
+    const next=crewTeams.map((t,i)=>{
+      if(i!==idx) return t;
+      if(t.lead===name || t.members.includes(name)) return t; // already there
+      if(!t.lead) return {...t, lead:name};
+      return {...t, members:[...t.members, name]};
+    });
+    // Also remove from other teams if present
+    const cleaned=next.map((t,i)=>{
+      if(i===idx) return t;
+      return {...t, lead:t.lead===name?"":t.lead, members:t.members.filter(n=>n!==name)};
+    });
+    _saveTeams(cleaned);
   };
   const teamMovePerson = (name, fromIdx, toIdx) => {
     const next=crewTeams.map(t=>({...t,members:[...t.members]}));
@@ -18538,11 +18589,29 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
   };
   const crewDrop = (jid,di) => {
     const payload=crewDragRef.current; crewDragRef.current=null; if(!payload) return;
+    const k=`${jid}_${di}`;
+    // Handle team drop — add entire team to cell, prompt for time
+    if(typeof payload === 'object' && payload.type === 'team'){
+      const team = crewTeams[payload.idx];
+      if(!team) return;
+      const nx={...crewData};
+      const cur=nx[k]||{lead:"",crew:[]};
+      // Lead of team → cell lead (if cell has no lead yet)
+      const newLead = !cur.lead && team.lead ? team.lead : cur.lead;
+      // All team members (minus the one who became lead) go to crew
+      const teamMembers = [...(team.lead?[team.lead]:[]),...team.members].filter(n=>n!==newLead);
+      const newCrew = [...cur.crew];
+      teamMembers.forEach(n=>{ if(!newCrew.includes(n) && n!==newLead) newCrew.push(n); });
+      nx[k] = { ...cur, lead:newLead, crew:newCrew };
+      setCrewData(nx); _saveCrewData(nx);
+      // Open time modal for this cell
+      setCrewTimeModal({jobId:jid, dayIdx:di, start:cur.time?.start||"07:00", end:cur.time?.end||"15:30"});
+      return;
+    }
     const name = typeof payload === 'string' ? payload : payload.name;
     const fromJid = typeof payload === 'object' ? payload.fromJid : null;
     const fromDi  = typeof payload === 'object' ? payload.fromDi : null;
     const wasLead = typeof payload === 'object' ? payload.wasLead : false;
-    const k=`${jid}_${di}`;
     // No-op if dropped on same cell
     if(fromJid===jid && fromDi===di) return;
     const nx={...crewData};
@@ -18550,13 +18619,13 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
     if(fromJid!=null && fromDi!=null){
       const srcK=`${fromJid}_${fromDi}`, srcCell=nx[srcK];
       if(srcCell){
-        const upd={lead:srcCell.lead===name?"":srcCell.lead, crew:srcCell.crew.filter(n=>n!==name)};
+        const upd={...srcCell,lead:srcCell.lead===name?"":srcCell.lead, crew:srcCell.crew.filter(n=>n!==name)};
         if(!upd.lead && upd.crew.length===0) delete nx[srcK]; else nx[srcK]=upd;
       }
     }
     // Add to target (preserve lead status if it was a lead)
     const cur=nx[k]||{lead:"",crew:[]};
-    if(cur.crew.includes(name)||cur.lead===name) return; // already there
+    if(cur.crew.includes(name)||cur.lead===name) { setCrewData(nx); _saveCrewData(nx); return; }
     if(wasLead && !cur.lead) nx[k]={...cur,lead:name};
     else nx[k]={...cur,crew:[...cur.crew,name]};
     setCrewData(nx); _saveCrewData(nx);
@@ -18572,6 +18641,12 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
     });
   };
   const crewFmtDLong = d => d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
+  const _crewFmtTime = t => {
+    if(!t) return "";
+    const [h,m] = t.split(":").map(Number); if(isNaN(h)) return t;
+    const hr = h%12||12; const ap = h>=12?"p":"a";
+    return `${hr}${m?":"+String(m).padStart(2,"0"):""}${ap}`;
+  };
   const crewRemove = (jid,di,name) => {
     const k=`${jid}_${di}`, cur=crewData[k]; if(!cur) return;
     const nx={...crewData};
@@ -19559,7 +19634,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                         transition:"all 0.12s",
                         boxShadow:isSel?`0 2px 8px ${col}44`:"none"}}>
                       {isFM&&<Icon name="star" size={10} stroke={2.5}/>}
-                      {name}
+                      {crewDisplayName(name)}
                       {dayCount>0&&<span style={{fontSize:8,opacity:0.7}}>({dayCount}d)</span>}
                     </div>
                   );
@@ -19623,8 +19698,16 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                     {crewTeams.map((team,idx)=>{
                       const allNames=[...(team.lead?[team.lead]:[]),...team.members];
                       const teamColor=team.lead?crewGetColor(team.lead):C.dim;
+                      const hasMembers = allNames.length>0;
                       return (
                         <div key={team.id||idx}
+                          draggable={hasMembers}
+                          onDragStart={e=>{
+                            if(!hasMembers) { e.preventDefault(); return; }
+                            crewDragRef.current={type:'team', idx};
+                            try{e.dataTransfer.setData('text/plain','team:'+idx);e.dataTransfer.effectAllowed='copy';}catch(_){/* noop */}
+                          }}
+                          title={hasMembers?"Drag whole team onto a schedule cell":""}
                           onClick={()=>{
                             if(crewTeamSel){
                               // Move selected person to this team
@@ -19699,7 +19782,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                                         onMouseEnter={e=>e.currentTarget.style.background=nc+"28"}
                                         onMouseLeave={e=>e.currentTarget.style.background=nc+"15"}>
                                         {isForeman(name)&&<Icon name="star" size={8} stroke={2.5}/>}
-                                        {name}
+                                        {crewDisplayName(name)}
                                       </span>
                                     );
                                   })}
@@ -19733,7 +19816,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                                       boxShadow:crewTeamSel===name?`0 2px 6px ${C.accent}44`:isLead?`0 1px 3px ${nc}33`:"none",
                                       transition:"all 0.12s"}}>
                                     {isLead&&<Icon name="star" size={9} stroke={3}/>}
-                                    {name}
+                                    {crewDisplayName(name)}
                                     <span onClick={e2=>{e2.stopPropagation();teamRemovePerson(name,idx);}}
                                       title="Remove from team"
                                       style={{fontSize:11,fontWeight:800,opacity:0.5,lineHeight:1,cursor:"pointer",marginLeft:1}}>
@@ -19741,6 +19824,51 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                                   </span>
                                 );
                               })}
+                            </div>
+                          )}
+                          {/* Add helper input — shown on any non-empty team with a lead */}
+                          {team.lead&&(
+                            <div onClick={e=>e.stopPropagation()} style={{marginTop:6,display:"flex",gap:3,flexWrap:"wrap"}}>
+                              <input
+                                value={teamNameDrafts["m"+idx]||""}
+                                onChange={e=>setTeamNameDrafts({...teamNameDrafts,["m"+idx]:e.target.value})}
+                                onKeyDown={e=>{
+                                  if(e.key==="Enter" && (teamNameDrafts["m"+idx]||"").trim()){
+                                    teamAddMember(idx, teamNameDrafts["m"+idx].trim());
+                                    setTeamNameDrafts({...teamNameDrafts,["m"+idx]:""});
+                                  }
+                                }}
+                                placeholder="+ helper"
+                                style={{background:"var(--surface)",border:`1px solid ${C.border}`,borderRadius:4,
+                                  padding:"3px 6px",fontSize:10,color:"var(--text)",fontFamily:"inherit",width:80,minWidth:0}}/>
+                              <button onClick={()=>{
+                                const name=(teamNameDrafts["m"+idx]||"").trim();
+                                if(!name) return;
+                                teamAddMember(idx,name);
+                                setTeamNameDrafts({...teamNameDrafts,["m"+idx]:""});
+                              }}
+                                style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:4,color:C.accent,
+                                  padding:"3px 7px",cursor:"pointer",fontSize:9,fontWeight:700,fontFamily:"inherit"}}>
+                                Add
+                              </button>
+                              {teamUnassigned.length>0&&(
+                                <div style={{display:"flex",flexWrap:"wrap",gap:3,width:"100%",marginTop:3}}>
+                                  {teamUnassigned.slice(0,6).map(name=>{
+                                    const nc=crewGetColor(name);
+                                    return (
+                                      <span key={name}
+                                        onClick={e=>{e.stopPropagation();teamAddMember(idx,name);}}
+                                        title={`Add ${name} to this team`}
+                                        style={{display:"inline-flex",alignItems:"center",gap:2,
+                                          padding:"1px 6px",borderRadius:99,fontSize:9,fontWeight:600,
+                                          cursor:"pointer",userSelect:"none",
+                                          color:nc,background:nc+"10",border:`1px dashed ${nc}55`}}>
+                                        + {crewDisplayName(name)}
+                                      </span>
+                                    );
+                                  })}
+                                </div>
+                              )}
                             </div>
                           )}
                           <div style={{display:"flex",gap:4,marginTop:6}}>
@@ -19790,7 +19918,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                                 border:`1.5px solid ${crewTeamSel===name?C.accent:nc+"44"}`,
                                 transition:"all 0.12s"}}>
                               {isForeman(name)&&<Icon name="star" size={9} stroke={2.5}/>}
-                              {name}
+                              {crewDisplayName(name)}
                             </span>
                           );
                         })}
@@ -19817,16 +19945,21 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                     {crewDays.map((d,di)=>{
                       const ymd=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
                       const isToday3=ymd===todayYMD2;
+                      const isWeekend=di===5; // Saturday
                       return (
-                        <th key={di} style={{textAlign:"center",padding:"6px 4px",minWidth:100,
+                        <th key={di} style={{textAlign:"center",padding:"8px 4px",minWidth:110,
                           borderBottom:`2px solid ${isToday3?C.accent:C.border}`,
-                          background:isToday3?C.accent+"10":"var(--surface)"}}>
-                          <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",
-                            color:isToday3?C.accent:C.dim}}>{dayLabels[di]}</div>
-                          <div style={{fontSize:11,fontWeight:600,color:isToday3?C.accent:"var(--text)"}}>
+                          borderLeft:di===0?`2px solid ${C.border}`:`2px solid ${C.border}`,
+                          borderRight:di===5?`2px solid ${C.border}`:"none",
+                          background:isToday3?C.accent+"18":isWeekend?"var(--surface)":"var(--card)"}}>
+                          <div style={{fontSize:11,fontWeight:900,letterSpacing:"0.1em",
+                            color:isToday3?C.accent:"var(--text)"}}>{dayLabels[di]}</div>
+                          <div style={{fontSize:12,fontWeight:700,color:isToday3?C.accent:"var(--text)",marginTop:2}}>
                             {d.toLocaleDateString("en-US",{month:"short",day:"numeric"})}
                           </div>
-                          <div style={{fontSize:9,color:C.muted,fontWeight:600}}>{crewDayTotals[di]} people</div>
+                          <div style={{fontSize:9,color:isToday3?C.accent:C.muted,fontWeight:700,marginTop:2}}>
+                            {crewDayTotals[di]} {crewDayTotals[di]===1?"person":"people"}
+                          </div>
                         </th>
                       );
                     })}
@@ -19912,12 +20045,29 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                               onClick={()=>crewAssign(job.id,di)}
                               onDragOver={e=>e.preventDefault()}
                               onDrop={e=>{e.preventDefault();crewDrop(job.id,di);}}
-                              style={{padding:"6px 4px",borderBottom:`1px solid ${C.border}`,
+                              style={{padding:"6px 6px",borderBottom:`1px solid ${C.border}`,
+                                borderLeft:`2px solid ${C.border}`,
+                                borderRight:di===5?`2px solid ${C.border}`:"none",
                                 verticalAlign:"top",cursor:crewSel?"pointer":"default",
-                                background:isToday3?C.accent+"06":crewSel?C.accent+"04":"transparent",
+                                background:isToday3?C.accent+"08":crewSel?C.accent+"04":"transparent",
                                 transition:"background 0.1s",minHeight:40}}
-                              onMouseEnter={e=>{if(crewSel)e.currentTarget.style.background=C.accent+"12";}}
-                              onMouseLeave={e=>{e.currentTarget.style.background=isToday3?C.accent+"06":crewSel?C.accent+"04":"transparent";}}>
+                              onMouseEnter={e=>{if(crewSel)e.currentTarget.style.background=C.accent+"14";}}
+                              onMouseLeave={e=>{e.currentTarget.style.background=isToday3?C.accent+"08":crewSel?C.accent+"04":"transparent";}}>
+                              {allPeople.length>0 && (
+                                <div onClick={e=>{e.stopPropagation();setCrewTimeModal({jobId:job.id,dayIdx:di,start:cell.time?.start||"07:00",end:cell.time?.end||"15:30"});}}
+                                  title={cell.time?.start?"Tap to edit time":"Tap to set time"}
+                                  style={{fontSize:9,fontWeight:700,
+                                    color:cell.time?.start?"#2563eb":C.muted,
+                                    background:cell.time?.start?"#2563eb15":"transparent",
+                                    border:`1px ${cell.time?.start?"solid":"dashed"} ${cell.time?.start?"#2563eb33":C.border}`,
+                                    borderRadius:4,padding:"1px 5px",marginBottom:3,cursor:"pointer",
+                                    display:"inline-flex",alignItems:"center",gap:3,whiteSpace:"nowrap"}}>
+                                  <Icon name="clock" size={8} stroke={2.5}/>
+                                  {cell.time?.start
+                                    ? `${_crewFmtTime(cell.time.start)}${cell.time.end?` - ${_crewFmtTime(cell.time.end)}`:""}`
+                                    : "set time"}
+                                </div>
+                              )}
                               <div style={{display:"flex",flexWrap:"wrap",gap:3,minHeight:24}}>
                                 {allPeople.map(({name,isLead})=>{
                                   const pc=crewGetColor(name);
@@ -19940,7 +20090,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
                                         cursor:"grab",userSelect:"none",whiteSpace:"nowrap",
                                         boxShadow:isLead?`0 1px 4px ${pc}33`:"none"}}>
                                       {isLead&&<Icon name="star" size={8} stroke={3}/>}
-                                      {name}
+                                      {crewDisplayName(name)}
                                       <span onClick={e=>{e.stopPropagation();
                                         if(isFM&&!isLead) crewToggleLead(job.id,di,name);
                                         else if(isLead) crewToggleLead(job.id,di,name);
@@ -19987,6 +20137,77 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity }) {
             )}
 
             {/* Job picker modal */}
+            {/* Time modal */}
+            {crewTimeModal&&(
+              <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:9999,
+                display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
+                onClick={()=>setCrewTimeModal(null)}>
+                <div onClick={e=>e.stopPropagation()}
+                  style={{background:"var(--card)",borderRadius:14,padding:"20px 24px",width:320,
+                    border:`1px solid ${C.border}`}}>
+                  <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",
+                    color:"var(--text)",marginBottom:14}}>SET TIME ON JOB</div>
+                  <div style={{display:"flex",gap:10,marginBottom:14}}>
+                    <label style={{flex:1}}>
+                      <div style={{fontSize:10,fontWeight:700,color:C.dim,marginBottom:4}}>START</div>
+                      <input type="time" value={crewTimeModal.start}
+                        onChange={e=>setCrewTimeModal({...crewTimeModal,start:e.target.value})}
+                        style={{width:"100%",background:"var(--surface)",border:`1px solid ${C.border}`,
+                          borderRadius:6,padding:"6px 10px",fontSize:12,color:"var(--text)",fontFamily:"inherit"}}/>
+                    </label>
+                    <label style={{flex:1}}>
+                      <div style={{fontSize:10,fontWeight:700,color:C.dim,marginBottom:4}}>END</div>
+                      <input type="time" value={crewTimeModal.end}
+                        onChange={e=>setCrewTimeModal({...crewTimeModal,end:e.target.value})}
+                        style={{width:"100%",background:"var(--surface)",border:`1px solid ${C.border}`,
+                          borderRadius:6,padding:"6px 10px",fontSize:12,color:"var(--text)",fontFamily:"inherit"}}/>
+                    </label>
+                  </div>
+                  <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:14}}>
+                    {[
+                      {label:"Half day AM",s:"07:00",e:"11:30"},
+                      {label:"Half day PM",s:"12:00",e:"15:30"},
+                      {label:"Full day",s:"07:00",e:"15:30"},
+                    ].map(preset=>(
+                      <button key={preset.label}
+                        onClick={()=>setCrewTimeModal({...crewTimeModal,start:preset.s,end:preset.e})}
+                        style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,
+                          color:C.dim,padding:"3px 8px",cursor:"pointer",fontSize:9,fontWeight:600,fontFamily:"inherit"}}>
+                        {preset.label}
+                      </button>
+                    ))}
+                  </div>
+                  <div style={{display:"flex",gap:8}}>
+                    <button onClick={()=>setCrewTimeModal(null)}
+                      style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                        padding:"8px 16px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim,
+                        fontFamily:"inherit",flex:1}}>Cancel</button>
+                    {(() => {
+                      const k=`${crewTimeModal.jobId}_${crewTimeModal.dayIdx}`;
+                      const cur=crewData[k];
+                      return cur && cur.time && (cur.time.start||cur.time.end) ? (
+                        <button onClick={()=>{
+                          crewSetCellTime(crewTimeModal.jobId,crewTimeModal.dayIdx,"","");
+                          setCrewTimeModal(null);
+                        }}
+                          style={{background:"none",border:`1px solid ${C.red}`,borderRadius:8,
+                            padding:"8px 12px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.red,
+                            fontFamily:"inherit"}}>Clear</button>
+                      ) : null;
+                    })()}
+                    <button onClick={()=>{
+                      crewSetCellTime(crewTimeModal.jobId,crewTimeModal.dayIdx,crewTimeModal.start,crewTimeModal.end);
+                      setCrewTimeModal(null);
+                    }}
+                      style={{background:C.accent,border:"none",borderRadius:8,color:"#fff",
+                        padding:"8px 16px",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",flex:1}}>
+                      Save
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {crewJobPick&&(
               <div style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:9999,
                 display:"flex",alignItems:"center",justifyContent:"center",padding:20}}
