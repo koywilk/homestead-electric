@@ -13792,6 +13792,23 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         )}
                       </div>
 
+                      {/* Status Update — read-only mirror next to status row, edited in the section below */}
+                      {job.statusUpdate && (
+                        <div style={{display:"flex",alignItems:"center",gap:8,marginTop:8,marginBottom:10,flexWrap:"wrap"}}>
+                          <div style={{display:"inline-flex",alignItems:"center",
+                            fontSize:13,fontWeight:500,color:"var(--text)",
+                            borderLeft:"3px solid #f59e0b",paddingLeft:10,paddingRight:2,lineHeight:1.45,
+                            maxWidth:"100%"}}>
+                            <span>{job.statusUpdate}</span>
+                          </div>
+                          {job.statusUpdateBy && (
+                            <span style={{fontSize:10,color:C.dim,fontStyle:"italic"}}>
+                              {job.statusUpdateBy}{job.statusUpdateAt?` · ${timeAgo(job.statusUpdateAt)}`:""}
+                            </span>
+                          )}
+                        </div>
+                      )}
+
                       {/* Compact date strip */}
                       <div style={{background:"#f3f4f6",borderRadius:8,padding:"8px 12px",display:"flex",gap:16,alignItems:"center",flexWrap:"wrap",marginBottom:10}}>
                         <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
@@ -14074,6 +14091,23 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           </div>
                         )}
                       </div>
+
+                      {/* Status Update — read-only mirror next to status row, edited in the section below */}
+                      {job.statusUpdate && (
+                        <div style={{display:"flex",alignItems:"center",gap:8,marginTop:8,marginBottom:10,flexWrap:"wrap"}}>
+                          <div style={{display:"inline-flex",alignItems:"center",
+                            fontSize:13,fontWeight:500,color:"var(--text)",
+                            borderLeft:"3px solid #f59e0b",paddingLeft:10,paddingRight:2,lineHeight:1.45,
+                            maxWidth:"100%"}}>
+                            <span>{job.statusUpdate}</span>
+                          </div>
+                          {job.statusUpdateBy && (
+                            <span style={{fontSize:10,color:C.dim,fontStyle:"italic"}}>
+                              {job.statusUpdateBy}{job.statusUpdateAt?` · ${timeAgo(job.statusUpdateAt)}`:""}
+                            </span>
+                          )}
+                        </div>
+                      )}
 
                       {/* Compact date strip */}
                       <div style={{background:"#f3f4f6",borderRadius:8,padding:"8px 12px",display:"flex",gap:16,alignItems:"center",flexWrap:"wrap",marginBottom:10}}>
