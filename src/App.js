@@ -18925,6 +18925,37 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     else { setCrewData({}); setCrewExtra([]); setCrewJobOrder([]); setCrewPinned([]); setCrewFocus(false); }
   }), [crewWK]);
 
+  // Opportunistic backfill — whenever we have fresh assignments loaded (the
+  // current displayed week), bump each job's `lastScheduledDate` so the
+  // scheduling pill everywhere shows the latest day the job actually has
+  // crew on the calendar. Monotonically-increasing: removing crew from the
+  // last day won't downgrade (we'd need to scan ALL weeks' docs for that).
+  useEffect(() => {
+    if(!onUpdateJob || !crewData || !crewDays.length || !jobs?.length) return;
+    const perJob = {};
+    Object.entries(crewData).forEach(([k, v]) => {
+      if(!v || (!v.lead && !(v.crew||[]).length)) return;
+      const [jid, diStr] = k.split("_");
+      const di = parseInt(diStr);
+      if(isNaN(di) || di<0 || di>=crewDays.length) return;
+      const dt = crewDays[di]; if(!dt) return;
+      const ymd = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
+      if(!perJob[jid] || ymd > perJob[jid]) perJob[jid] = ymd;
+    });
+    Object.entries(perJob).forEach(([jid, newYmd]) => {
+      const j = jobs.find(x => x.id === jid);
+      if(!j) return;
+      const curRaw = j.lastScheduledDate || "";
+      // Compare via Date so we don't mix string formats
+      const cur = curRaw ? parseAnyDate(curRaw) : null;
+      const nxt = parseAnyDate(newYmd);
+      if(!nxt) return;
+      if(!cur || nxt > cur) {
+        onUpdateJob({ ...j, lastScheduledDate: newYmd }, { lastScheduledDate: newYmd });
+      }
+    });
+  }, [crewData, crewDays, jobs, onUpdateJob]);
+
   const _saveRoster = n => { setCrewRoster(n); setDoc(doc(db,"settings","crewRoster"),{names:n,updatedAt:new Date().toISOString()}); };
 
   // Teams
@@ -20790,8 +20821,20 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                               .filter(x => x.d)
                               .sort((a,b) => a.d - b.d)[0];
                             const curMode = phaseMode || (rtNeeds ? "needsSched" : null);
+                            // Prefer the later of (phase scheduled date) and (last day crew was
+                            // actually scheduled on the calendar) — so a job whose scheduled
+                            // date has already passed but still has crew on later days shows
+                            // that later day. lastScheduledDate is maintained by the useEffect
+                            // above as Koy navigates through weeks.
+                            const pickLater = (a, b) => {
+                              const da = a ? parseAnyDate(a) : null;
+                              const db = b ? parseAnyDate(b) : null;
+                              if(!da) return b || "";
+                              if(!db) return a || "";
+                              return da > db ? a : b;
+                            };
                             const curDate = phaseMode
-                              ? (job[dateKey]||"")
+                              ? pickLater(job[dateKey]||"", job.lastScheduledDate||"")
                               : (rtNeeds ? rtNeeds.rt.rtStatusDate : "");
                             const isHover = crewHoverJobId === job.id;
                             const isPinned = crewPinned.includes(job.id);
