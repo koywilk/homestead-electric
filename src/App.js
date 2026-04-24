@@ -16118,7 +16118,11 @@ const deriveScheduleMode = (job, phase) => {
     return "ongoing"; // default for in-progress when no explicit sub-state
   }
   if(st==="scheduled") return "scheduled";
-  if(st==="date_confirmed" || st==="waiting_date") return "needsSched";
+  // "date_confirmed" → GC has given us a start date; we just need a crew.
+  // "waiting_date"   → we're still waiting on a start date from the GC — nothing
+  //                     to schedule yet, so no pill (was showing "Needs Sched"
+  //                     which implied action on our side that we can't take).
+  if(st==="date_confirmed") return "needsSched";
   return null;
 };
 const applyScheduleMode = (job, phase, next) => {
