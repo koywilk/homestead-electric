@@ -18968,7 +18968,6 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
         onUpdateJob({ ...j, lastScheduledDate: newYmd }, { lastScheduledDate: newYmd });
       }
     });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [crewData, crewDays, jobs, onUpdateJob]);
 
   // One-time full backfill on mount — scan the past ~26 Mondays worth of
@@ -19022,7 +19021,6 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
         });
       } catch(_){ /* backfill is best-effort — ignore failures */ }
     })();
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [jobs?.length]);
 
   const _saveRoster = n => { setCrewRoster(n); setDoc(doc(db,"settings","crewRoster"),{names:n,updatedAt:new Date().toISOString()}); };
