@@ -20841,14 +20841,18 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                               .filter(x => x.d)
                               .sort((a,b) => a.d - b.d)[0];
                             const curMode = phaseMode || (rtNeeds ? "needsSched" : null);
-                            // Pill date priority:
-                            //   1. LAST day this job is scheduled in Simpro (authoritative)
-                            //   2. The phase's status date (fallback when Simpro has no data)
-                            //   3. For RT-only jobs: the RT's schedule-by date
+                            // Pill date logic by mode:
+                            //   scheduled / ongoing → LAST day in Simpro (authoritative schedule)
+                            //     falls back to the phase status date if Simpro has no data
+                            //   needsSched          → the user-set target date (NEVER Simpro —
+                            //     that would silently overwrite a deliberate "needs by" target)
+                            //   RT-only (no phase)  → the RT's schedule-by date
                             const simproLast = job.simproNo ? simproLastByJob[String(job.simproNo)] : null;
-                            const curDate = phaseMode
-                              ? (simproLast || (job[dateKey]||""))
-                              : (rtNeeds ? rtNeeds.rt.rtStatusDate : "");
+                            const curDate = phaseMode === "needsSched"
+                              ? (job[dateKey]||"")
+                              : phaseMode
+                                ? (simproLast || (job[dateKey]||""))
+                                : (rtNeeds ? rtNeeds.rt.rtStatusDate : "");
                             const isHover = crewHoverJobId === job.id;
                             const isPinned = crewPinned.includes(job.id);
                             return (
