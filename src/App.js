@@ -18937,16 +18937,20 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
       });
       setCrewUserMap(map);
       // Build foreman-of-user map: firstName → their foreman's firstName.
-      // Users have a foremanId pointing at another user's id. We resolve that
-      // to a first name so the picker can include "everyone on Koy's crew"
-      // even when they're not in one of Koy's teams.
+      // Users have a foremanId pointing at another user's id. Keyed by BOTH
+      // first name and full name so the picker's lookup works whether the
+      // roster stores "Joel" or "Joel Fey" (or any other variation).
       const byId = Object.fromEntries(list.map(u => [u.id, u]));
       const fmOf = {};
       list.forEach(u => {
-        const first = (u.name||"").trim().split(/\s+/)[0]; if(!first) return;
+        const fullName = (u.name||"").trim();
+        const first = fullName.split(/\s+/)[0]; if(!first) return;
         const fmUser = u.foremanId ? byId[u.foremanId] : null;
-        const fmFirst = fmUser ? (fmUser.name||"").trim().split(/\s+/)[0] : "";
-        if(fmFirst) fmOf[first] = fmFirst;
+        if(!fmUser) return;
+        const fmFirst = (fmUser.name||"").trim().split(/\s+/)[0];
+        if(!fmFirst) return;
+        fmOf[first] = fmFirst;
+        if(fullName && fullName !== first) fmOf[fullName] = fmFirst;
       });
       setCrewForemanOf(fmOf);
     });
@@ -21203,8 +21207,13 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                         });
                         // Include anyone whose user record has this foreman assigned —
                         // that's Koy's "actual crew" regardless of team membership.
+                        // Look up by both the raw roster name AND its first-word form,
+                        // because the roster might store "Joel" or "Joel Fey".
+                        const fmFilterFirst = crewForemanFilter.trim().split(/\s+/)[0];
                         (crewRoster || []).forEach(n => {
-                          if(crewForemanOf[n] === crewForemanFilter) allowed.add(n);
+                          const first = (n||"").trim().split(/\s+/)[0];
+                          const fm = crewForemanOf[n] || crewForemanOf[first];
+                          if(fm === crewForemanFilter || fm === fmFilterFirst) allowed.add(n);
                         });
                         return (crewRoster || []).filter(n => allowed.has(n));
                       })();
