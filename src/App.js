@@ -13550,14 +13550,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       {pillLabel}
                     </span>
                   )}
-                  {job.statusUpdate && (
-                    <div style={{display:"inline-flex",alignItems:"center",
-                      fontSize:12,fontWeight:500,color:C.text,
-                      borderLeft:"3px solid #f59e0b",paddingLeft:8,paddingRight:2,
-                      lineHeight:1.4}}>
-                      <span>{job.statusUpdate}</span>
-                    </div>
-                  )}
+                  <StatusUpdateInline job={job} onSave={u} identity={identity} fontSize={12} maxWidth={360}/>
                 </div>
               );
             })()}
@@ -13792,22 +13785,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         )}
                       </div>
 
-                      {/* Status Update — read-only mirror next to status row, edited in the section below */}
-                      {job.statusUpdate && (
-                        <div style={{display:"flex",alignItems:"center",gap:8,marginTop:8,marginBottom:10,flexWrap:"wrap"}}>
-                          <div style={{display:"inline-flex",alignItems:"center",
-                            fontSize:13,fontWeight:500,color:"var(--text)",
-                            borderLeft:"3px solid #f59e0b",paddingLeft:10,paddingRight:2,lineHeight:1.45,
-                            maxWidth:"100%"}}>
-                            <span>{job.statusUpdate}</span>
-                          </div>
-                          {job.statusUpdateBy && (
-                            <span style={{fontSize:10,color:C.dim,fontStyle:"italic"}}>
-                              {job.statusUpdateBy}{job.statusUpdateAt?` · ${timeAgo(job.statusUpdateAt)}`:""}
-                            </span>
-                          )}
-                        </div>
-                      )}
+                      {/* Status Update — inline-editable mirror next to status row */}
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginTop:8,marginBottom:10,flexWrap:"wrap"}}>
+                        <StatusUpdateInline job={job} onSave={u} identity={identity} fontSize={13} maxWidth={400} showEmpty={true}/>
+                        {job.statusUpdate && job.statusUpdateBy && (
+                          <span style={{fontSize:10,color:C.dim,fontStyle:"italic"}}>
+                            {job.statusUpdateBy}{job.statusUpdateAt?` · ${timeAgo(job.statusUpdateAt)}`:""}
+                          </span>
+                        )}
+                      </div>
 
                       {/* Compact date strip */}
                       <div style={{background:"#f3f4f6",borderRadius:8,padding:"8px 12px",display:"flex",gap:16,alignItems:"center",flexWrap:"wrap",marginBottom:10}}>
@@ -14092,22 +14078,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         )}
                       </div>
 
-                      {/* Status Update — read-only mirror next to status row, edited in the section below */}
-                      {job.statusUpdate && (
-                        <div style={{display:"flex",alignItems:"center",gap:8,marginTop:8,marginBottom:10,flexWrap:"wrap"}}>
-                          <div style={{display:"inline-flex",alignItems:"center",
-                            fontSize:13,fontWeight:500,color:"var(--text)",
-                            borderLeft:"3px solid #f59e0b",paddingLeft:10,paddingRight:2,lineHeight:1.45,
-                            maxWidth:"100%"}}>
-                            <span>{job.statusUpdate}</span>
-                          </div>
-                          {job.statusUpdateBy && (
-                            <span style={{fontSize:10,color:C.dim,fontStyle:"italic"}}>
-                              {job.statusUpdateBy}{job.statusUpdateAt?` · ${timeAgo(job.statusUpdateAt)}`:""}
-                            </span>
-                          )}
-                        </div>
-                      )}
+                      {/* Status Update — inline-editable mirror next to status row */}
+                      <div style={{display:"flex",alignItems:"center",gap:8,marginTop:8,marginBottom:10,flexWrap:"wrap"}}>
+                        <StatusUpdateInline job={job} onSave={u} identity={identity} fontSize={13} maxWidth={400} showEmpty={true}/>
+                        {job.statusUpdate && job.statusUpdateBy && (
+                          <span style={{fontSize:10,color:C.dim,fontStyle:"italic"}}>
+                            {job.statusUpdateBy}{job.statusUpdateAt?` · ${timeAgo(job.statusUpdateAt)}`:""}
+                          </span>
+                        )}
+                      </div>
 
                       {/* Compact date strip */}
                       <div style={{background:"#f3f4f6",borderRadius:8,padding:"8px 12px",display:"flex",gap:16,alignItems:"center",flexWrap:"wrap",marginBottom:10}}>
@@ -15974,14 +15953,9 @@ function QuickJobCard({ job, onOpen, onUpdate, onDelete }) {
             <span style={{ fontWeight: 700, color: fc }}>{foreman}</span>
             {job.lead && <span style={{ color: C.accent }}>· {job.lead}</span>}
           </div>
-          {job.statusUpdate && (
-            <div style={{fontSize:10,color:"#9a3412",marginTop:4,fontWeight:700,
-              background:"#fff7ed",border:"1px solid #ea580c",borderRadius:6,
-              padding:"2px 7px",display:"inline-flex",alignItems:"center",gap:4,maxWidth:"100%"}}>
-              <Icon name="alertTriangle" size={9} stroke={2.5} color="#ea580c"/>
-              <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{job.statusUpdate}</span>
-            </div>
-          )}
+          <div style={{marginTop:4}}>
+            <StatusUpdateInline job={job} onSave={p=>onUpdate({...job, ...p}, p)} fontSize={11} maxWidth={240}/>
+          </div>
         </div>
 
         <div style={{ display: "flex", flexDirection: "column", gap: 6, alignItems: "flex-end", flexShrink: 0 }}>
@@ -16045,13 +16019,9 @@ function TempPedCard({ job, onOpen, onUpdate, onDelete }) {
             <span style={{fontWeight:700,color:fc}}>{foreman}</span>
             {job.lead&&<span style={{color:"var(--accent)"}}>· {job.lead}</span>}
           </div>
-          {job.statusUpdate&&(
-            <div style={{fontSize:11,color:"var(--text)",marginTop:4,fontWeight:500,
-              borderLeft:"3px solid #f59e0b",paddingLeft:8,paddingRight:2,
-              display:"inline-flex",alignItems:"center",maxWidth:"100%",lineHeight:1.4}}>
-              <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{job.statusUpdate}</span>
-            </div>
-          )}
+          <div style={{marginTop:4}}>
+            <StatusUpdateInline job={job} onSave={upd} fontSize={11} maxWidth={240}/>
+          </div>
         </div>
 
         {/* Right: status control */}
@@ -16177,6 +16147,105 @@ const applyScheduleMode = (job, phase, next) => {
   }
   return {};
 };
+
+// ── Status update inline editor ──────────────────────────────────────────────
+// Wraps the amber-left-stripe status update display so it can be edited in
+// place anywhere it shows up (Board cards, Forecast rows, Crew Planner rows,
+// JobDetail). Click the text to edit; Enter saves, Escape cancels, blur saves.
+// `onSave(patch)` should apply the patch to the job (same shape as elsewhere:
+// statusUpdate/statusUpdateBy/statusUpdateAt).
+function StatusUpdateInline({ job, onSave, identity=null, fontSize=11, maxWidth=280, stripeColor="#f59e0b", style={}, showEmpty=false, placeholder="Add status note…" }) {
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(job.statusUpdate || "");
+  const inputRef = useRef(null);
+
+  useEffect(() => {
+    if(editing && inputRef.current) { inputRef.current.focus(); inputRef.current.select(); }
+  }, [editing]);
+
+  useEffect(() => {
+    // Keep local draft in sync with external state when not editing
+    if(!editing) setDraft(job.statusUpdate || "");
+  }, [job.statusUpdate, editing]);
+
+  const commit = () => {
+    const v = (draft||"").trim();
+    const current = (job.statusUpdate||"").trim();
+    if(v === current) { setEditing(false); return; }
+    const patch = {
+      statusUpdate: v,
+      statusUpdateBy: v ? (identity?.name || job.statusUpdateBy || "") : "",
+      statusUpdateAt: v ? new Date().toISOString() : "",
+    };
+    try { onSave && onSave(patch); } catch(_){}
+    setEditing(false);
+  };
+
+  const cancel = () => { setDraft(job.statusUpdate||""); setEditing(false); };
+
+  if(editing) {
+    return (
+      <input
+        ref={inputRef}
+        value={draft}
+        onChange={e=>setDraft(e.target.value)}
+        onBlur={commit}
+        onKeyDown={e=>{
+          if(e.key==="Enter") { e.preventDefault(); commit(); }
+          else if(e.key==="Escape") { e.preventDefault(); cancel(); }
+        }}
+        onClick={e=>e.stopPropagation()}
+        onMouseDown={e=>e.stopPropagation()}
+        placeholder={placeholder}
+        style={{
+          fontSize, fontWeight: 500, color: "var(--text)",
+          borderLeft: `3px solid ${stripeColor}`,
+          padding: "3px 8px 3px 8px",
+          background: "#fffbeb",
+          borderTop: `1px solid ${stripeColor}55`,
+          borderRight: `1px solid ${stripeColor}55`,
+          borderBottom: `1px solid ${stripeColor}55`,
+          borderRadius: 4,
+          outline: "none", minWidth: 160, maxWidth: typeof maxWidth==="number"? maxWidth+40 : maxWidth,
+          lineHeight: 1.4, fontFamily: "inherit",
+          ...style,
+        }}
+      />
+    );
+  }
+
+  if(!job.statusUpdate) {
+    if(!showEmpty || !onSave) return null;
+    return (
+      <button type="button"
+        onClick={e=>{ e.stopPropagation(); setEditing(true); }}
+        style={{
+          fontSize, color: "var(--dim)", fontWeight: 500,
+          background: "none", border: `1px dashed var(--border)`,
+          borderRadius: 4, padding: "2px 8px",
+          cursor: "pointer", fontFamily: "inherit",
+          ...style,
+        }}>+ status</button>
+    );
+  }
+
+  return (
+    <div
+      onClick={e=>{ if(onSave){ e.stopPropagation(); setEditing(true); } }}
+      title={`Status set by ${job.statusUpdateBy||"someone"}${job.statusUpdateAt?` · ${timeAgo(job.statusUpdateAt)}`:""}${onSave?" · click to edit":""}`}
+      style={{
+        fontSize, color: "var(--text)", fontWeight: 500,
+        borderLeft: `3px solid ${stripeColor}`,
+        paddingLeft: 8, paddingRight: 4,
+        display: "inline-flex", alignItems: "center", maxWidth: "100%",
+        lineHeight: 1.4, cursor: onSave ? "pointer" : "default",
+        ...style,
+      }}
+    >
+      <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth}}>{job.statusUpdate}</span>
+    </div>
+  );
+}
 
 const STAGE_SECTIONS = [
 
@@ -19457,7 +19526,13 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
         </div>
         <div style={{fontWeight:700,fontSize:13,color:"var(--text)",marginBottom:3,
           overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.job.name||"Untitled"}</div>
-        {ev.job.statusUpdate&&(
+        {onUpdateJob ? (
+          <div style={{marginBottom:4}}>
+            <StatusUpdateInline job={ev.job} identity={identity}
+              onSave={p=>onUpdateJob({...ev.job, ...p}, p)}
+              fontSize={11} maxWidth={260}/>
+          </div>
+        ) : ev.job.statusUpdate && (
           <div style={{fontSize:11,color:"var(--text)",marginBottom:4,fontWeight:500,
             borderLeft:"3px solid #f59e0b",paddingLeft:7,paddingRight:2,
             display:"inline-flex",alignItems:"center",maxWidth:"100%",lineHeight:1.35}}>
@@ -20640,17 +20715,11 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                         });
                                       }}
                                     />
-                                    {/* Status update note (existing job.statusUpdate field) —
-                                        shows inline so scheduling context travels with the row */}
-                                    {job.statusUpdate && (
-                                      <span style={{fontSize:10,color:"var(--text)",fontWeight:500,
-                                        borderLeft:"3px solid #f59e0b",paddingLeft:6,paddingRight:2,
-                                        maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
-                                        display:"inline-flex",alignItems:"center",lineHeight:1.3}}
-                                        title={job.statusUpdate}>
-                                        {job.statusUpdate}
-                                      </span>
-                                    )}
+                                    {/* Status update note — click to edit inline so
+                                        scheduling context can be updated from the row */}
+                                    <StatusUpdateInline job={job} identity={identity}
+                                      onSave={p=>onUpdateJob({...job, ...p}, p)}
+                                      fontSize={10} maxWidth={200}/>
                                   </div>
                                 );
                               })()}
@@ -25430,14 +25499,45 @@ function App() {
                 <Icon name="flag" size={11}/> {job.flagNote}
               </div>
             )}
-            {job.statusUpdate&&(
-              <div title={`Status set by ${job.statusUpdateBy||"someone"}${job.statusUpdateAt?` · ${timeAgo(job.statusUpdateAt)}`:""}`}
-                style={{fontSize:12,color:"var(--text)",marginTop:4,fontWeight:500,
-                borderLeft:"3px solid #f59e0b",paddingLeft:8,paddingRight:2,
-                display:"inline-flex",alignItems:"center",maxWidth:"100%",lineHeight:1.4}}>
-                <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:280}}>{job.statusUpdate}</span>
-              </div>
-            )}
+            {(() => {
+              // Scheduling pill + status update together on the board card
+              const rs = effRS(job), fs = effFS(job);
+              const phaseKey = (rs && rs!=="complete" && rs!=="invoice") ? "rough"
+                           : (fs && fs!=="complete" && fs!=="invoice") ? "finish"
+                           : null;
+              const mode = phaseKey ? deriveScheduleMode(job, phaseKey) : null;
+              const needsDate = phaseKey==="rough" ? (job.roughStatusDate||"")
+                              : phaseKey==="finish" ? (job.finishStatusDate||"") : "";
+              const needsHard = phaseKey==="rough" ? !!job.roughNeedsSchedHard
+                              : phaseKey==="finish" ? !!job.finishNeedsSchedHard : false;
+              if(!mode && !job.statusUpdate) return null;
+              const pillColor = mode==="scheduled" ? "#2563eb"
+                             : mode==="needsSched" ? "#f97316"
+                             : mode==="ongoing"   ? "#6b7280" : null;
+              const fmtD = d => { try { const dt=new Date(d); if(isNaN(dt)) return ""; return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); } catch(_){return "";} };
+              const dateStr = mode==="needsSched" && needsDate ? fmtD(needsDate) : "";
+              const pillLabel = mode==="scheduled" ? "On Schedule"
+                              : mode==="needsSched" ? (dateStr ? (needsHard ? `Needs: ${dateStr}` : `Target ${dateStr}`) : "Needs Sched")
+                              : mode==="ongoing" ? "Ongoing" : null;
+              return (
+                <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4,flexWrap:"wrap"}}>
+                  {pillColor && pillLabel && (
+                    <span style={{display:"inline-flex",alignItems:"center",gap:4,
+                      fontSize:11,fontWeight:700,letterSpacing:"0.04em",
+                      padding:"2px 9px",borderRadius:99,
+                      background:`${pillColor}18`,color:pillColor,
+                      border:`1px ${mode==="ongoing"?"dashed":"solid"} ${pillColor}55`,
+                      whiteSpace:"nowrap",flexShrink:0}}>
+                      <span style={{width:6,height:6,borderRadius:"50%",background:pillColor,display:"inline-block"}}/>
+                      {pillLabel}
+                    </span>
+                  )}
+                  <StatusUpdateInline job={job} identity={identity}
+                    onSave={p=>updateJob({...job, ...p}, p)}
+                    fontSize={12} maxWidth={280}/>
+                </div>
+              );
+            })()}
 
           </div>
 
