@@ -18868,7 +18868,9 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     const m = new Date(d); m.setDate(d.getDate() - (day===0?6:day-1) + crewWeekOff*7); m.setHours(0,0,0,0);
     return m;
   }, [crewWeekOff]);
-  const crewDays = useMemo(() => Array.from({length:6},(_,i)=>{
+  // Mon–Fri only — crew doesn't work Sat/Sun. If that ever changes, bump
+  // the length back up and update di<N + crewDays[last] references.
+  const crewDays = useMemo(() => Array.from({length:5},(_,i)=>{
     const d=new Date(crewMon); d.setDate(crewMon.getDate()+i); return d;
   }), [crewMon]);
   const crewWK = useMemo(() => { const m=crewMon; return `${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,"0")}-${String(m.getDate()).padStart(2,"0")}`; }, [crewMon]);
@@ -19126,7 +19128,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
   };
   const crewClearWeek = () => {
     if(Object.keys(crewData).length===0 && crewExtra.length===0 && (crewJobOrder||[]).length===0) { toast.info('Nothing to reset.'); return; }
-    showConfirm(`Reset this week's schedule?\n\nAll crew assignments and manual job order for ${crewFmtDLong(crewMon)} - ${crewFmtDLong(crewDays[5])} will be cleared. Teams and roster are not affected.`).then(ok=>{
+    showConfirm(`Reset this week's schedule?\n\nAll crew assignments and manual job order for ${crewFmtDLong(crewMon)} - ${crewFmtDLong(crewDays[4])} will be cleared. Teams and roster are not affected.`).then(ok=>{
       if(!ok) return;
       setCrewData({}); setCrewExtra([]); setCrewJobOrder([]);
       _saveCrewData({},[],[]);
@@ -19253,7 +19255,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
   // from crewEventsByJobDay to include jobs whose only week-presence is an event.
   const crewPlanEvents = useMemo(() => {
     const out = [];
-    const weekStart = crewDays[0]; const weekEnd = crewDays[5];
+    const weekStart = crewDays[0]; const weekEnd = crewDays[4];
     const dayIdxFor = (d) => {
       if(!d) return -1;
       const dt = parseAnyDate(d); if(!dt) return -1;
@@ -19265,26 +19267,26 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
       if(j.tempPed||j.quickJob) return;
       if(j.roughInspectionDate && !j.roughInspectionResult) {
         const di = dayIdxFor(j.roughInspectionDate);
-        if(di>=0 && di<6) out.push({ id:j.id+"_rins", jobId:j.id, jobName:j.name||"Untitled", type:"inspection", label:"Rough Inspection", color:"#7c3aed", dayIdx:di, date:j.roughInspectionDate });
+        if(di>=0 && di<5) out.push({ id:j.id+"_rins", jobId:j.id, jobName:j.name||"Untitled", type:"inspection", label:"Rough Inspection", color:"#7c3aed", dayIdx:di, date:j.roughInspectionDate });
       }
       if(j.finalInspectionDate && !j.finalInspectionResult) {
         const di = dayIdxFor(j.finalInspectionDate);
-        if(di>=0 && di<6) out.push({ id:j.id+"_fins", jobId:j.id, jobName:j.name||"Untitled", type:"inspection", label:"Final Inspection", color:"#7c3aed", dayIdx:di, date:j.finalInspectionDate });
+        if(di>=0 && di<5) out.push({ id:j.id+"_fins", jobId:j.id, jobName:j.name||"Untitled", type:"inspection", label:"Final Inspection", color:"#7c3aed", dayIdx:di, date:j.finalInspectionDate });
       }
       if(j.fourWayTargetDate) {
         const di = dayIdxFor(j.fourWayTargetDate);
-        if(di>=0 && di<6) out.push({ id:j.id+"_4way", jobId:j.id, jobName:j.name||"Untitled", type:"fourway", label:"4-Way Inspection", color:"#6d28d9", dayIdx:di, date:j.fourWayTargetDate });
+        if(di>=0 && di<5) out.push({ id:j.id+"_4way", jobId:j.id, jobName:j.name||"Untitled", type:"fourway", label:"4-Way Inspection", color:"#6d28d9", dayIdx:di, date:j.fourWayTargetDate });
       }
       if(j.qcStatus==="scheduled" && j.qcStatusDate) {
         const di = dayIdxFor(j.qcStatusDate);
-        if(di>=0 && di<6) out.push({ id:j.id+"_qc", jobId:j.id, jobName:j.name||"Untitled", type:"qc", label:"QC Walk", color:"#0d9488", dayIdx:di, date:j.qcStatusDate });
+        if(di>=0 && di<5) out.push({ id:j.id+"_qc", jobId:j.id, jobName:j.name||"Untitled", type:"qc", label:"QC Walk", color:"#0d9488", dayIdx:di, date:j.qcStatusDate });
       }
       (j.returnTrips||[]).forEach((rt,rti) => {
         if(rt.signedOff || rt.rtStatus==="complete") return;
         const d = rt.rtStatusDate || rt.date;
         if(!d) return;
         const di = dayIdxFor(d);
-        if(di>=0 && di<6) {
+        if(di>=0 && di<5) {
           const needsSched = rt.rtStatus==="needs";
           out.push({ id:j.id+"_rt_"+(rt.id||rti), jobId:j.id, jobName:j.name||"Untitled",
             type:"rt", label:`RT ${rti+1}${rt.scope?" — "+rt.scope.substring(0,30):""}`,
@@ -19368,10 +19370,10 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
   }, [jobs,crewData,crewExtra,crewJobOrder,_crewJobPriority,crewFocus,crewPinned,crewForemanFilter,crewEventsByJobDay]);
 
   const crewDayTotals = useMemo(() => {
-    const t=Array(6).fill(0);
+    const t=Array(5).fill(0);
     Object.entries(crewData).forEach(([k,v])=>{
       const di=parseInt(k.split("_").pop());
-      if(di>=0&&di<6) t[di]+=(v.lead?1:0)+(v.crew||[]).length;
+      if(di>=0&&di<5) t[di]+=(v.lead?1:0)+(v.crew||[]).length;
     });
     return t;
   }, [crewData]);
@@ -20122,7 +20124,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
       {viewMode==="crew"&&(()=>{
         const roster = crewRoster || [];
         const foremen = getForemenList();
-        const dayLabels = ["MON","TUE","WED","THU","FRI","SAT"];
+        const dayLabels = ["MON","TUE","WED","THU","FRI"];
         const todayYMD2 = todayStr;
         const crewFmtD = d => d.toLocaleDateString("en-US",{month:"short",day:"numeric"});
         const crewGetColor = n => {
@@ -20572,7 +20574,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                      crewWeekOff>0?`${crewWeekOff} WEEKS OUT`:`${Math.abs(crewWeekOff)} WEEKS BACK`}
                   </span>
                   <span style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>
-                    {crewFmtD(crewDays[0])} &ndash; {crewFmtD(crewDays[5])}
+                    {crewFmtD(crewDays[0])} &ndash; {crewFmtD(crewDays[4])}
                   </span>
                 </div>
                 <button onClick={()=>setCrewWeekOff(v=>v+1)}
@@ -20637,22 +20639,21 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
 
             {/* Schedule grid */}
             <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
-              <table style={{width:"100%",minWidth:780,borderCollapse:"separate",borderSpacing:0}}>
+              <table style={{width:"100%",minWidth:820,borderCollapse:"separate",borderSpacing:0}}>
                 <thead>
                   <tr>
                     <th style={{textAlign:"left",padding:"8px 10px",fontSize:10,fontWeight:800,
-                      color:C.dim,letterSpacing:"0.1em",width:160,position:"sticky",left:0,
+                      color:C.dim,letterSpacing:"0.1em",width:280,position:"sticky",left:0,
                       background:"var(--surface)",zIndex:2,borderBottom:`2px solid ${C.border}`}}>JOB</th>
                     {crewDays.map((d,di)=>{
                       const ymd=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
                       const isToday3=ymd===todayYMD2;
-                      const isWeekend=di===5; // Saturday
                       return (
                         <th key={di} style={{textAlign:"center",padding:"8px 4px",minWidth:110,
                           borderBottom:`2px solid ${isToday3?C.accent:C.border}`,
                           borderLeft:di===0?`2px solid ${C.border}`:`2px solid ${C.border}`,
-                          borderRight:di===5?`2px solid ${C.border}`:"none",
-                          background:isToday3?C.accent+"18":isWeekend?"var(--surface)":"var(--card)"}}>
+                          borderRight:di===4?`2px solid ${C.border}`:"none",
+                          background:isToday3?C.accent+"18":"var(--card)"}}>
                           <div style={{fontSize:11,fontWeight:900,letterSpacing:"0.1em",
                             color:isToday3?C.accent:"var(--text)"}}>{dayLabels[di]}</div>
                           <div style={{fontSize:12,fontWeight:700,color:isToday3?C.accent:"var(--text)",marginTop:2}}>
@@ -20668,7 +20669,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                 </thead>
                 <tbody>
                   {crewPlanJobs.length===0&&(
-                    <tr><td colSpan={7} style={{textAlign:"center",padding:"40px 20px",color:C.muted,fontSize:12}}>
+                    <tr><td colSpan={6} style={{textAlign:"center",padding:"40px 20px",color:C.muted,fontSize:12}}>
                       {crewFocus && crewPinned.length===0 ? (
                         <div>
                           <div style={{fontSize:13,color:"var(--text)",fontWeight:600,marginBottom:6}}>
@@ -20732,7 +20733,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                         <td
                           style={{padding:"4px 6px 4px 8px",borderBottom:`1px solid ${C.border}`,
                             position:"sticky",left:0,background:"var(--card)",zIndex:1,
-                            verticalAlign:"middle",maxWidth:210,minWidth:170}}>
+                            verticalAlign:"middle",width:280,maxWidth:280,minWidth:220}}>
                           {/* Compact single-line row: [grip] [pin] [name] [pill] [foreman]
                               Status update + reorder controls show only on row hover. */}
                           {(() => {
@@ -20783,11 +20784,13 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                     width:isPinned||isHover?"auto":0,overflow:"hidden"}}>
                                   <Icon name="flag" size={10} stroke={isPinned?2.5:2}/>
                                 </button>
-                                {/* Job name */}
+                                {/* Job name — allowed to wrap to 2 lines so full name shows.
+                                    Column is wider now (280px) so this should be rare. */}
                                 <div onClick={()=>onSelectJob(job)}
-                                  title={job.statusUpdate || job.name || ""}
                                   style={{cursor:"pointer",fontWeight:600,fontSize:12,color:"var(--text)",
-                                    overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,minWidth:0}}>
+                                    flex:1,minWidth:0,lineHeight:1.25,
+                                    display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",
+                                    overflow:"hidden",wordBreak:"break-word"}}>
                                   {job.name||"Untitled"}
                                 </div>
                                 {/* Scheduling pill — same "new status pill" for phase jobs AND
@@ -20834,19 +20837,21 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                     borderRadius:99,padding:"1px 6px",flexShrink:0}}>
                                   {(job.foreman||"Koy").charAt(0)}
                                 </span>
-                                {/* Hover overlay — status update note only. No priority
-                                    chip or bubble; the pill on the row already carries the
-                                    scheduling state, and hover is reserved for the note. */}
+                                {/* Hover status-update — anchored to the RIGHT of the sticky
+                                    name column so it floats into the empty calendar space for
+                                    this row without overlapping rows above/below. Single-line,
+                                    ellipsized, non-interactive. */}
                                 {isHover && job.statusUpdate && (
-                                  <div style={{position:"absolute",left:24,top:"100%",marginTop:2,zIndex:10,
+                                  <div style={{position:"absolute",left:"100%",top:"50%",
+                                    transform:"translateY(-50%)",marginLeft:8,zIndex:20,
                                     background:"var(--card)",border:`1px solid ${C.border}`,
                                     borderLeft:`3px solid #f59e0b`,borderRadius:6,
-                                    padding:"5px 8px",maxWidth:340,minWidth:160,
+                                    padding:"4px 10px",maxWidth:380,
+                                    fontSize:11,color:"var(--text)",lineHeight:1.3,fontWeight:500,
+                                    whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",
                                     boxShadow:"0 4px 14px rgba(0,0,0,0.12)",
                                     pointerEvents:"none"}}>
-                                    <div style={{fontSize:11,color:"var(--text)",lineHeight:1.35}}>
-                                      {job.statusUpdate}
-                                    </div>
+                                    {job.statusUpdate}
                                   </div>
                                 )}
                                 {/* Extra-added jobs get a small remove × on hover */}
@@ -20883,7 +20888,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                               onDrop={e=>{e.preventDefault();crewDrop(job.id,di);}}
                               style={{padding:"6px 6px",borderBottom:`1px solid ${C.border}`,
                                 borderLeft:`2px solid ${C.border}`,
-                                borderRight:di===5?`2px solid ${C.border}`:"none",
+                                borderRight:di===4?`2px solid ${C.border}`:"none",
                                 verticalAlign:"top",cursor:"pointer",
                                 background:isToday3?C.accent+"08":crewSel?C.accent+"04":"transparent",
                                 transition:"background 0.1s",minHeight:40}}
@@ -21050,18 +21055,20 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
               };
               return (
                 <>
-                  {/* Transparent click-catcher so the calendar stays fully visible
-                      behind the picker. Clicking anywhere outside closes. */}
+                  {/* Light dim backdrop — enough to separate the picker visually
+                      from the page without the full "black out" effect. Click
+                      anywhere outside closes. */}
                   <div onClick={close}
-                    style={{position:"fixed",inset:0,background:"transparent",zIndex:9998}}/>
-                  {/* Picker panel — floats at top-center, doesn't obscure the grid
-                      so you can see the cell you were assigning into. */}
+                    style={{position:"fixed",inset:0,background:"rgba(255,255,255,0.6)",
+                      backdropFilter:"blur(1.5px)",zIndex:9998}}/>
+                  {/* Picker panel — solid opaque card at top-center, clearly
+                      above the dimmed page with an orange accent ring. */}
                   <div onClick={e=>e.stopPropagation()}
                     style={{position:"fixed",top:80,left:"50%",transform:"translateX(-50%)",
                       width:620,maxWidth:"96vw",maxHeight:"calc(100vh - 120px)",overflowY:"auto",
                       background:"var(--card)",borderRadius:12,padding:"14px 18px",
-                      border:`1px solid ${C.border}`,zIndex:9999,
-                      boxShadow:"0 12px 40px rgba(0,0,0,0.28), 0 0 0 3px rgba(232,144,26,0.20)"}}>
+                      border:`2px solid ${C.accent}`,zIndex:9999,
+                      boxShadow:"0 18px 48px rgba(0,0,0,0.22), 0 0 0 4px rgba(232,144,26,0.18)"}}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:10}}>
                       <div>
                         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)",lineHeight:1}}>SCHEDULE CREW</div>
