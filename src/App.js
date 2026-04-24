@@ -1372,8 +1372,8 @@ function InProgressModePill({ mode, onToggle, onSync, onSetNeedsDate, needsDate,
               : isOngoing ? "#6b7280"
               : "#9ca3af";
   const fmtD = d => { try { const dt=new Date(d); if(isNaN(dt)) return ""; return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); } catch(_){return "";} };
-  const dateStr = isNeedsSched && needsDate ? fmtD(needsDate) : "";
-  const baseLabel = isScheduled ? "On Schedule"
+  const dateStr = needsDate ? fmtD(needsDate) : "";
+  const baseLabel = isScheduled ? (dateStr ? `On Schedule · ${dateStr}` : "On Schedule")
                   : isNeedsSched ? (dateStr ? (needsHard ? `Needs: ${dateStr}` : `Target ${dateStr}`) : "Needs Sched")
                   : isOngoing ? "Ongoing"
                   : "Set schedule";
@@ -19274,17 +19274,18 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     };
     jobs.forEach(j => {
       if(j.tempPed||j.quickJob) return;
-      if(j.roughInspectionDate && !j.roughInspectionResult) {
-        const di = dayIdxFor(j.roughInspectionDate);
-        if(di>=0 && di<5) out.push({ id:j.id+"_rins", jobId:j.id, jobName:j.name||"Untitled", type:"inspection", label:"Rough Inspection", color:"#7c3aed", dayIdx:di, date:j.roughInspectionDate });
-      }
-      if(j.finalInspectionDate && !j.finalInspectionResult) {
-        const di = dayIdxFor(j.finalInspectionDate);
-        if(di>=0 && di<5) out.push({ id:j.id+"_fins", jobId:j.id, jobName:j.name||"Untitled", type:"inspection", label:"Final Inspection", color:"#7c3aed", dayIdx:di, date:j.finalInspectionDate });
-      }
-      if(j.fourWayTargetDate) {
+      // Rough / 4-way inspection — the UI writes the target date to
+      // fourWayTargetDate. Only show as a planner event while the result is
+      // still pending (not pass/fail).
+      if(j.fourWayTargetDate && !j.roughInspectionResult) {
         const di = dayIdxFor(j.fourWayTargetDate);
-        if(di>=0 && di<5) out.push({ id:j.id+"_4way", jobId:j.id, jobName:j.name||"Untitled", type:"fourway", label:"4-Way Inspection", color:"#6d28d9", dayIdx:di, date:j.fourWayTargetDate });
+        if(di>=0 && di<5) out.push({ id:j.id+"_4way", jobId:j.id, jobName:j.name||"Untitled", type:"fourway", label:"Rough / 4-Way Inspection", color:"#6d28d9", dayIdx:di, date:j.fourWayTargetDate });
+      }
+      // Final inspection — UI field is finalInspectionTargetDate (NOT finalInspectionDate,
+      // which was in the default schema but never written to from any UI).
+      if(j.finalInspectionTargetDate && !j.finalInspectionResult) {
+        const di = dayIdxFor(j.finalInspectionTargetDate);
+        if(di>=0 && di<5) out.push({ id:j.id+"_fins", jobId:j.id, jobName:j.name||"Untitled", type:"inspection", label:"Final Inspection", color:"#7c3aed", dayIdx:di, date:j.finalInspectionTargetDate });
       }
       if(j.qcStatus==="scheduled" && j.qcStatusDate) {
         const di = dayIdxFor(j.qcStatusDate);
