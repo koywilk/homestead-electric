@@ -6285,10 +6285,13 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
   const data = normFloor(floorData);
 
   const [collapsed,       setCollapsed]      = useState(true);
+  const [roomsCollapsed,  setRoomsCollapsed] = useState({}); // { roomId: bool } — undefined/false = collapsed (default), true = expanded
   const [roomDraft,       setRoomDraft]      = useState('');
   const [openQFor,        setOpenQFor]       = useState(null); // 'general' | room.id | null
   const [questionDraft,   setQuestionDraft]  = useState('');
   const [qConfirmedFor,   setQConfirmedFor]  = useState(null);
+  const isRoomOpen = (rid) => !!roomsCollapsed[rid];
+  const toggleRoom = (rid) => setRoomsCollapsed(prev => ({ ...prev, [rid]: !prev[rid] }));
 
   const submitQuestion = (sectionId) => {
     if (!questionDraft.trim() || !onAddQuestion) return;
@@ -6418,45 +6421,57 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
             </div>
           )}
 
-          {data.rooms.map(room => (
-
-            <div key={room.id} style={{ marginTop: 12, background: C.surface,
-
-              border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
-
-              <div style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: 4 }}>
-
-                <RoomNameEdit name={room.name} onSave={v=>onFloorChange(floorKey,{...data,rooms:data.rooms.map(r=>r.id===room.id?{...r,name:v}:r)})}/>
-
-                {(Array.isArray(room.items) ? room.items : []).filter(i => !i.done).length > 0 &&
-                  <span style={{ fontSize: 10, background: `${C.red}22`, color: C.red,
-                    borderRadius: 99, padding: '2px 6px', fontWeight: 700 }}>
-                    {room.items.filter(i => !i.done).length} open
-                  </span>}
-                {(Array.isArray(room.items) ? room.items : []).filter(i => !i.done && i.waiting).length > 0 &&
-                  <span style={{ fontSize: 10, background: '#fef3c7', color: '#92400e',
-                    borderRadius: 99, padding: '2px 6px', fontWeight: 700, border: '1px solid #fcd34d' }}>
-                    {room.items.filter(i => !i.done && i.waiting).length} waiting
-                  </span>}
-                {qBtn(room.id)}
-                {qConfirmedFor===room.id&&<span style={{fontSize:9,fontWeight:700,color:'#16a34a'}}>✓ added</span>}
-
+          {data.rooms.map(room => {
+            const open = isRoomOpen(room.id);
+            const items = Array.isArray(room.items) ? room.items : [];
+            const openN = items.filter(i => !i.done).length;
+            const waitN = items.filter(i => !i.done && i.waiting).length;
+            const totalN = items.length;
+            return (
+              <div key={room.id} style={{ marginTop: 12, background: C.surface,
+                border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
+                <div onClick={()=>toggleRoom(room.id)}
+                  style={{ display: 'flex', alignItems: 'center', gap: 8, marginBottom: open?4:0, cursor:'pointer', userSelect:'none' }}>
+                  <span style={{fontSize:11,color:C.dim,transform:open?'rotate(90deg)':'rotate(0deg)',
+                    display:'inline-block',transition:'transform 0.15s',width:10,flexShrink:0,lineHeight:1}}>▶</span>
+                  <div onClick={e=>{if(open) e.stopPropagation();}}>
+                    <RoomNameEdit name={room.name} onSave={v=>onFloorChange(floorKey,{...data,rooms:data.rooms.map(r=>r.id===room.id?{...r,name:v}:r)})}/>
+                  </div>
+                  {openN > 0 &&
+                    <span style={{ fontSize: 10, background: `${C.red}22`, color: C.red,
+                      borderRadius: 99, padding: '2px 6px', fontWeight: 700 }}>
+                      {openN} open
+                    </span>}
+                  {waitN > 0 &&
+                    <span style={{ fontSize: 10, background: '#fef3c7', color: '#92400e',
+                      borderRadius: 99, padding: '2px 6px', fontWeight: 700, border: '1px solid #fcd34d' }}>
+                      {waitN} waiting
+                    </span>}
+                  {!open && openN===0 && totalN>0 &&
+                    <span style={{ fontSize: 10, background: '#dcfce7', color: '#166534',
+                      borderRadius: 99, padding: '2px 6px', fontWeight: 700 }}>
+                      all done
+                    </span>}
+                  <div onClick={e=>e.stopPropagation()} style={{display:'flex',alignItems:'center',gap:8,marginLeft:'auto'}}>
+                    {qBtn(room.id)}
+                    {qConfirmedFor===room.id&&<span style={{fontSize:9,fontWeight:700,color:'#16a34a'}}>✓ added</span>}
+                  </div>
+                </div>
+                {open && (
+                  <>
+                    {qInput(room.id)}
+                    <PunchItems items={items}
+                      onChange={v => setRoomItems(room.id, v)} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT}/>
+                    <button onClick={async () => { if(!await showConfirm(`Remove room "${room.name}" and all its punch items?`)) return; delRoom(room.id); }}
+                      style={{ display: 'block', marginTop: 6, marginLeft: 'auto', background: 'none', border: 'none',
+                        color: C.muted, cursor: 'pointer', fontSize: 11, textDecoration: 'underline', fontFamily: 'inherit' }}>
+                      Remove {room.name}
+                    </button>
+                  </>
+                )}
               </div>
-              {qInput(room.id)}
-
-              <PunchItems items={Array.isArray(room.items) ? room.items : []}
-
-                onChange={v => setRoomItems(room.id, v)} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT}/>
-
-              <button onClick={async () => { if(!await showConfirm(`Remove room "${room.name}" and all its punch items?`)) return; delRoom(room.id); }}
-                style={{ display: 'block', marginTop: 6, marginLeft: 'auto', background: 'none', border: 'none',
-                  color: C.muted, cursor: 'pointer', fontSize: 11, textDecoration: 'underline', fontFamily: 'inherit' }}>
-                Remove {room.name}
-              </button>
-
-            </div>
-
-          ))}
+            );
+          })}
 
           <div style={{ display: 'flex', gap: 6, marginTop: 12 }}>
 
@@ -13046,9 +13061,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // NeedsSched date modal — opens when user taps the calendar icon on the
   // Needs Sched pill. Lets them pick a date with the native picker and flag
   // it as hard deadline (must happen) or flexible target.
+  // The pill's calendar icon now reads/writes the SAME `roughStatusDate` /
+  // `finishStatusDate` used by the phase status row — one date field, edited
+  // from either place. Only the "hard deadline" flag stays separate.
   const [needsSchedModal, setNeedsSchedModal] = useState(null); // { phase, date, hard }
   const openNeedsSchedModal = (phase) => {
-    const dateKey = phase==="rough" ? "roughNeedsSchedDate" : "finishNeedsSchedDate";
+    const dateKey = phase==="rough" ? "roughStatusDate" : "finishStatusDate";
     const hardKey = phase==="rough" ? "roughNeedsSchedHard" : "finishNeedsSchedHard";
     setNeedsSchedModal({
       phase,
@@ -13059,7 +13077,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const saveNeedsSchedModal = () => {
     if(!needsSchedModal) return;
     const { phase, date, hard } = needsSchedModal;
-    const dateKey = phase==="rough" ? "roughNeedsSchedDate" : "finishNeedsSchedDate";
+    const dateKey = phase==="rough" ? "roughStatusDate" : "finishStatusDate";
     const hardKey = phase==="rough" ? "roughNeedsSchedHard" : "finishNeedsSchedHard";
     u({ [dateKey]: date || "", [hardKey]: !!hard });
     setNeedsSchedModal(null);
@@ -13499,10 +13517,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
             {job.statusUpdate&&(
               <div style={{display:"inline-flex",alignItems:"center",gap:6,marginTop:5,
-                fontSize:12,fontWeight:700,color:"#9a3412",background:"#fff7ed",
-                border:"2px solid #ea580c",borderRadius:8,padding:"4px 10px",
-                boxShadow:"0 0 0 2px #fed7aa55"}}>
-                <Icon name="alertTriangle" size={12} stroke={2.5} color="#ea580c"/>
+                fontSize:12,fontWeight:500,color:C.text,
+                borderLeft:"3px solid #f59e0b",paddingLeft:8,paddingRight:2,
+                lineHeight:1.4}}>
                 <span>{job.statusUpdate}</span>
               </div>
             )}
@@ -13703,20 +13720,22 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           fontWeight:rsDef.color?700:400,outline:"none",cursor:"pointer"}}>
                           {ROUGH_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>
-                        {job.roughStatus==="inprogress" && (
+                        {job.roughStatus && job.roughStatus!=="complete" && job.roughStatus!=="invoice" && (
                           <InProgressModePill
-                            mode={job.roughInProgressMode}
-                            needsDate={job.roughNeedsSchedDate||""}
+                            mode={deriveScheduleMode(job, "rough")}
+                            needsDate={job.roughStatusDate||""}
                             needsHard={!!job.roughNeedsSchedHard}
                             onToggle={()=>{
-                              const next = job.roughInProgressMode==="scheduled" ? "needsSched"
-                                        : job.roughInProgressMode==="needsSched"  ? "ongoing"
-                                        : job.roughInProgressMode==="ongoing"     ? "scheduled"
-                                        : "scheduled"; // unset → first tap sets On Schedule
-                              u({ roughInProgressMode: next });
+                              const cur = deriveScheduleMode(job, "rough");
+                              const next = cur==="scheduled" ? "needsSched"
+                                        : cur==="needsSched"  ? "ongoing"
+                                        : cur==="ongoing"     ? "scheduled"
+                                        : "scheduled";
+                              u(applyScheduleMode(job, "rough", next));
                             }}
                             onSetNeedsDate={()=>openNeedsSchedModal("rough")}
-                            onSync={()=>resyncInProgressMode("rough")}
+                            onSync={job.roughStatus==="inprogress" ? ()=>resyncInProgressMode("rough") : null}
+                            showSync={job.roughStatus==="inprogress"}
                           />
                         )}
                         {rsDef.hasDate&&job.roughStatus!=="date_confirmed"&&(
@@ -13984,20 +14003,22 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           fontWeight:fsDef.color?700:400,outline:"none",cursor:"pointer"}}>
                           {FINISH_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
                         </select>
-                        {job.finishStatus==="inprogress" && (
+                        {job.finishStatus && job.finishStatus!=="complete" && job.finishStatus!=="invoice" && (
                           <InProgressModePill
-                            mode={job.finishInProgressMode}
-                            needsDate={job.finishNeedsSchedDate||""}
+                            mode={deriveScheduleMode(job, "finish")}
+                            needsDate={job.finishStatusDate||""}
                             needsHard={!!job.finishNeedsSchedHard}
                             onToggle={()=>{
-                              const next = job.finishInProgressMode==="scheduled" ? "needsSched"
-                                        : job.finishInProgressMode==="needsSched"  ? "ongoing"
-                                        : job.finishInProgressMode==="ongoing"     ? "scheduled"
+                              const cur = deriveScheduleMode(job, "finish");
+                              const next = cur==="scheduled" ? "needsSched"
+                                        : cur==="needsSched"  ? "ongoing"
+                                        : cur==="ongoing"     ? "scheduled"
                                         : "scheduled";
-                              u({ finishInProgressMode: next });
+                              u(applyScheduleMode(job, "finish", next));
                             }}
                             onSetNeedsDate={()=>openNeedsSchedModal("finish")}
-                            onSync={()=>resyncInProgressMode("finish")}
+                            onSync={job.finishStatus==="inprogress" ? ()=>resyncInProgressMode("finish") : null}
+                            showSync={job.finishStatus==="inprogress"}
                           />
                         )}
                         {fsDef.hasDate&&job.finishStatus!=="date_confirmed"&&(
@@ -15079,37 +15100,51 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   from any view. Shows on every job card too (Board, Forecast,
                   Upcoming) so a "needs a lift" type note is impossible to miss. */}
               <div style={{marginTop:16}}>
-                <div style={{fontSize:10,color:C.dim,marginBottom:3,display:"flex",alignItems:"center",gap:6}}>
-                  STATUS UPDATE <span style={{color:C.muted,fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>(e.g. needs a lift, waiting on parts — shows on every card)</span>
+                <div style={{fontSize:10,color:C.dim,marginBottom:6,display:"flex",alignItems:"center",gap:6,
+                  letterSpacing:"0.06em",fontWeight:600}}>
+                  STATUS UPDATE
+                  <span style={{color:C.muted,fontWeight:400,textTransform:"none",letterSpacing:"normal"}}>
+                    shows on job cards
+                  </span>
                   {job.statusUpdate && (
                     <button onClick={()=>u({statusUpdate:"",statusUpdateBy:"",statusUpdateAt:""})}
-                      style={{marginLeft:"auto",background:"none",border:"1px solid #dc262633",
-                        borderRadius:5,color:"#dc2626",fontSize:9,fontWeight:700,
-                        padding:"2px 7px",cursor:"pointer",fontFamily:"inherit",
-                        textTransform:"uppercase",letterSpacing:"0.05em"}}>Clear</button>
+                      title="Clear this status update"
+                      style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,
+                        borderRadius:5,color:C.muted,fontSize:9,fontWeight:600,
+                        padding:"2px 8px",cursor:"pointer",fontFamily:"inherit",
+                        letterSpacing:"0.04em",textTransform:"uppercase"}}>Clear</button>
                   )}
                 </div>
-                <textarea
-                  value={job.statusUpdate||""}
-                  onChange={e=>{
-                    const v=e.target.value;
-                    u({
-                      statusUpdate: v,
-                      statusUpdateBy: v ? (identity?.name || job.statusUpdateBy || "") : "",
-                      statusUpdateAt: v ? new Date().toISOString() : "",
-                    });
-                  }}
-                  placeholder="e.g. Needs a lift rental · Waiting on panel · Weather delay"
-                  rows={2}
-                  style={{width:"100%",boxSizing:"border-box",
-                    background: job.statusUpdate ? "#fff7ed" : C.surface,
-                    border: `${job.statusUpdate?2:1}px solid ${job.statusUpdate?"#ea580c":C.border}`,
-                    borderRadius:8,padding:"8px 10px",
-                    fontSize: job.statusUpdate ? 13 : 12,
-                    fontWeight: job.statusUpdate ? 600 : 400,
-                    color: job.statusUpdate ? "#9a3412" : C.text,
-                    fontFamily:"inherit",resize:"vertical",outline:"none",lineHeight:1.5,
-                    transition:"all 0.15s"}}/>
+                <div style={{position:"relative"}}>
+                  {job.statusUpdate && (
+                    <div style={{position:"absolute",left:0,top:0,bottom:0,width:3,
+                      background:"#f59e0b",borderTopLeftRadius:8,borderBottomLeftRadius:8}}/>
+                  )}
+                  <textarea
+                    value={job.statusUpdate||""}
+                    onChange={e=>{
+                      const v=e.target.value;
+                      u({
+                        statusUpdate: v,
+                        statusUpdateBy: v ? (identity?.name || job.statusUpdateBy || "") : "",
+                        statusUpdateAt: v ? new Date().toISOString() : "",
+                      });
+                    }}
+                    placeholder="e.g. Needs a lift rental · Waiting on panel · Weather delay"
+                    rows={2}
+                    style={{width:"100%",boxSizing:"border-box",
+                      background: C.surface,
+                      border: `1px solid ${C.border}`,
+                      borderRadius:8,
+                      padding: job.statusUpdate ? "8px 10px 8px 14px" : "8px 10px",
+                      fontSize: 13,
+                      fontWeight: 500,
+                      color: C.text,
+                      fontFamily:"inherit",resize:"vertical",outline:"none",lineHeight:1.5,
+                      transition:"border-color 0.15s"}}
+                    onFocus={e=>e.target.style.borderColor=C.accent}
+                    onBlur={e=>e.target.style.borderColor=C.border}/>
+                </div>
                 {job.statusUpdate && job.statusUpdateBy && (
                   <div style={{fontSize:10,color:C.dim,marginTop:4}}>
                     Set by {job.statusUpdateBy}{job.statusUpdateAt ? ` · ${timeAgo(job.statusUpdateAt)}` : ""}
@@ -16026,6 +16061,50 @@ const effFS = j => {
   if(j.tempPed) return ""; // temp peds don't have a finish stage
   if(j.finishStatus) return j.finishStatus;
   const p=parseInt(j.finishStage)||0; return p===100?"complete":p>0?"inprogress":"";
+};
+
+// ── Simplified scheduling state (3 values: needsSched | scheduled | ongoing) ──
+// Derives a single indicator from whatever the user's current status + mode is,
+// so the card can show ONE pill that answers "do I need to put crew on this?"
+// Source of truth is still roughStatus/finishStatus for lifecycle; this is a view
+// on top. Writing via applyScheduleMode keeps both in sync.
+const deriveScheduleMode = (job, phase) => {
+  const st   = phase==="rough" ? job.roughStatus : job.finishStatus;
+  const mode = phase==="rough" ? job.roughInProgressMode : job.finishInProgressMode;
+  if(!st) return null;
+  if(st==="complete" || st==="invoice") return null;
+  if(st==="inprogress") {
+    if(mode==="scheduled" || mode==="needsSched" || mode==="ongoing") return mode;
+    return "ongoing"; // default for in-progress when no explicit sub-state
+  }
+  if(st==="scheduled") return "scheduled";
+  if(st==="date_confirmed" || st==="waiting_date") return "needsSched";
+  return null;
+};
+const applyScheduleMode = (job, phase, next) => {
+  // When user clicks the pill, update both the lifecycle status and the sub-mode
+  // so things stay coherent. Never touches complete/invoice.
+  const stKey   = phase==="rough" ? "roughStatus"          : "finishStatus";
+  const modeKey = phase==="rough" ? "roughInProgressMode"  : "finishInProgressMode";
+  const curSt = job[stKey];
+  // Leaving complete/invoice alone: if somehow pill is active there, don't clobber
+  if(curSt==="complete" || curSt==="invoice") return {};
+  if(next==="ongoing") {
+    // Flip to in-progress/ongoing
+    return { [stKey]: "inprogress", [modeKey]: "ongoing" };
+  }
+  if(next==="needsSched") {
+    // If already in-progress, keep in-progress with needsSched sub-state
+    if(curSt==="inprogress") return { [modeKey]: "needsSched" };
+    // Otherwise, map to date_confirmed (needs to be scheduled)
+    return { [stKey]: "date_confirmed", [modeKey]: "needsSched" };
+  }
+  if(next==="scheduled") {
+    // If already in-progress, keep in-progress with scheduled sub-state
+    if(curSt==="inprogress") return { [modeKey]: "scheduled" };
+    return { [stKey]: "scheduled", [modeKey]: "scheduled" };
+  }
+  return {};
 };
 
 const STAGE_SECTIONS = [
@@ -18492,7 +18571,7 @@ function NavView({ jobs }) {
 
 function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdateJob }) {
   const [foremanTab, setForemanTab] = useState("All");
-  const [viewMode,   setViewMode]   = useState("calendar"); // kanban | week | attention | calendar
+  const [viewMode,   setViewMode]   = useState("crew"); // crew | kanban | week | attention | calendar
   const [calMonth,   setCalMonth]   = useState(() => { const d=new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
   const [calDayDetail, setCalDayDetail] = useState(null); // date string YYYY-MM-DD for expanded day
 
@@ -18568,6 +18647,35 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
   const [teamNameDrafts, setTeamNameDrafts] = useState({}); // { [idx]: "typed name" }
   const [crewUserMap, setCrewUserMap] = useState({}); // { firstName: "First L." display label }
   const [crewNeedsModal, setCrewNeedsModal] = useState(null); // { jobId, phase, date, hard }
+  const [crewPTOList, setCrewPTOList] = useState([]); // [{name, start, end, note}]
+  const [crewPTOModalOpen, setCrewPTOModalOpen] = useState(false);
+  const [crewPTODraft, setCrewPTODraft] = useState({ name:"", start:"", end:"", note:"" });
+  useEffect(() => onSnapshot(doc(db,"settings","crewPTO"), s => {
+    if(s.exists()) setCrewPTOList(s.data().list||[]);
+    else setCrewPTOList([]);
+  }), []);
+  const _savePTO = (list) => { setCrewPTOList(list); setDoc(doc(db,"settings","crewPTO"),{list, updatedAt:new Date().toISOString()}); };
+  const addPTO = () => {
+    if(!crewPTODraft.name || !crewPTODraft.start) return;
+    const entry = { ...crewPTODraft, end: crewPTODraft.end || crewPTODraft.start, id: Date.now().toString(36) };
+    _savePTO([...crewPTOList, entry]);
+    setCrewPTODraft({ name:"", start:"", end:"", note:"" });
+  };
+  const removePTO = (id) => _savePTO(crewPTOList.filter(p=>p.id!==id));
+  // Is this person on PTO for a given day?
+  const isOnPTO = (name, dayDate) => {
+    if(!name || !dayDate) return null;
+    const dMs = new Date(dayDate); dMs.setHours(0,0,0,0);
+    return crewPTOList.find(p => {
+      if(p.name !== name) return false;
+      const s = parseAnyDate(p.start); const e = parseAnyDate(p.end || p.start);
+      if(!s) return false;
+      s.setHours(0,0,0,0); if(e) e.setHours(0,0,0,0);
+      return dMs >= s && dMs <= (e || s);
+    });
+  };
+  // Is person on PTO for any day this displayed week?
+  const isOnPTOThisWeek = (name) => crewDays.some(d => isOnPTO(name, d));
   const [crewTimeModal, setCrewTimeModal] = useState(null); // { jobId, dayIdx, start, end } or null
   const crewSetCellTime = (jid, di, start, end) => {
     const k=`${jid}_${di}`, cur=crewData[k];
@@ -18779,7 +18887,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
       nx[k] = { ...cur, lead:newLead, crew:newCrew };
       setCrewData(nx); _saveCrewData(nx);
       // Open time modal for this cell
-      setCrewTimeModal({jobId:jid, dayIdx:di, start:cur.time?.start||"07:00", end:cur.time?.end||"15:30"});
+      setCrewTimeModal({jobId:jid, dayIdx:di, start:cur.time?.start||"07:00", end:cur.time?.end||"17:00"});
       return;
     }
     const name = typeof payload === 'string' ? payload : payload.name;
@@ -18885,8 +18993,9 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
         if(parsed && parsed<today && s!=="inprogress" && s!=="complete" && s!=="invoice") {
           if(0<best.score) best={score:0,label:"OVERDUE",color:C.red,date:d};
         } else if(s==="inprogress" && j[ph==="rough"?"roughInProgressMode":"finishInProgressMode"]==="needsSched") {
-          // In Progress job that explicitly needs to be scheduled — high priority
-          const nDate = j[ph==="rough"?"roughNeedsSchedDate":"finishNeedsSchedDate"] || "";
+          // In Progress job that explicitly needs to be scheduled — high priority.
+          // Uses the single shared date field (roughStatusDate / finishStatusDate).
+          const nDate = j[ph==="rough"?"roughStatusDate":"finishStatusDate"] || "";
           const hard  = j[ph==="rough"?"roughNeedsSchedHard":"finishNeedsSchedHard"];
           const lbl = hard ? "NEEDS SCHED" : nDate ? "TARGET" : "NEEDS SCHED";
           if(1<best.score) best={score:1, label:lbl, color:"#f97316", date:nDate};
@@ -18957,6 +19066,58 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     });
     return t;
   }, [crewData]);
+
+  // All dated events (inspections, 4-way, QC walks, return trips) that land in the displayed week.
+  // Each event: { id, jobId, jobName, type, label, color, dayIdx, date, time }
+  const crewPlanEvents = useMemo(() => {
+    const out = [];
+    const weekStart = crewDays[0]; const weekEnd = crewDays[5];
+    const dayIdxFor = (d) => {
+      if(!d) return -1;
+      const dt = parseAnyDate(d); if(!dt) return -1;
+      dt.setHours(0,0,0,0);
+      if(dt < weekStart || dt > new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate(), 23, 59)) return -1;
+      return Math.round((dt - weekStart) / (24*60*60*1000));
+    };
+    jobs.forEach(j => {
+      if(j.tempPed||j.quickJob) return;
+      // Rough inspection
+      if(j.roughInspectionDate && !j.roughInspectionResult) {
+        const di = dayIdxFor(j.roughInspectionDate);
+        if(di>=0 && di<6) out.push({ id:j.id+"_rins", jobId:j.id, jobName:j.name||"Untitled", type:"inspection", label:"Rough Inspection", color:"#7c3aed", dayIdx:di, date:j.roughInspectionDate });
+      }
+      // Final / Finish inspection
+      if(j.finalInspectionDate && !j.finalInspectionResult) {
+        const di = dayIdxFor(j.finalInspectionDate);
+        if(di>=0 && di<6) out.push({ id:j.id+"_fins", jobId:j.id, jobName:j.name||"Untitled", type:"inspection", label:"Final Inspection", color:"#7c3aed", dayIdx:di, date:j.finalInspectionDate });
+      }
+      // 4-way inspection
+      if(j.fourWayTargetDate) {
+        const di = dayIdxFor(j.fourWayTargetDate);
+        if(di>=0 && di<6) out.push({ id:j.id+"_4way", jobId:j.id, jobName:j.name||"Untitled", type:"fourway", label:"4-Way Inspection", color:"#6d28d9", dayIdx:di, date:j.fourWayTargetDate });
+      }
+      // QC walk (when scheduled)
+      if(j.qcStatus==="scheduled" && j.qcStatusDate) {
+        const di = dayIdxFor(j.qcStatusDate);
+        if(di>=0 && di<6) out.push({ id:j.id+"_qc", jobId:j.id, jobName:j.name||"Untitled", type:"qc", label:"QC Walk", color:"#0d9488", dayIdx:di, date:j.qcStatusDate });
+      }
+      // Return trips
+      (j.returnTrips||[]).forEach((rt,rti) => {
+        if(rt.signedOff || rt.rtStatus==="complete") return;
+        const d = rt.rtStatusDate || rt.date;
+        if(!d) return;
+        const di = dayIdxFor(d);
+        if(di>=0 && di<6) {
+          const needsSched = rt.rtStatus==="needs";
+          out.push({ id:j.id+"_rt_"+(rt.id||rti), jobId:j.id, jobName:j.name||"Untitled",
+            type:"rt", label:`RT ${rti+1}${rt.scope?" — "+rt.scope.substring(0,30):""}`,
+            color: needsSched ? "#dc2626" : "#8b5cf6",
+            dayIdx:di, date:d, needsSched });
+        }
+      });
+    });
+    return out;
+  }, [jobs, crewDays]);
 
   const crewPersonDays = useMemo(() => {
     const m={};
@@ -19226,10 +19387,9 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
         <div style={{fontWeight:700,fontSize:13,color:"var(--text)",marginBottom:3,
           overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.job.name||"Untitled"}</div>
         {ev.job.statusUpdate&&(
-          <div style={{fontSize:10,color:"#9a3412",marginBottom:4,fontWeight:700,
-            background:"#fff7ed",border:"1px solid #ea580c",borderRadius:6,
-            padding:"2px 7px",display:"inline-flex",alignItems:"center",gap:4,maxWidth:"100%"}}>
-            <Icon name="alertTriangle" size={9} stroke={2.5} color="#ea580c"/>
+          <div style={{fontSize:11,color:"var(--text)",marginBottom:4,fontWeight:500,
+            borderLeft:"3px solid #f59e0b",paddingLeft:7,paddingRight:2,
+            display:"inline-flex",alignItems:"center",maxWidth:"100%",lineHeight:1.35}}>
             <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.job.statusUpdate}</span>
           </div>
         )}
@@ -19711,48 +19871,11 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
 
         return (
           <div style={{padding:"20px 20px 8px"}}>
-            {/* Week nav */}
+            {/* Title + action buttons (week nav moved down to directly above the schedule grid) */}
             <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:16,flexWrap:"wrap"}}>
               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)"}}>
                 CREW PLANNER
               </div>
-              <div style={{display:"flex",alignItems:"center",gap:4,background:"var(--surface)",
-                borderRadius:8,padding:"4px",border:`1px solid ${C.border}`}}>
-                <button onClick={()=>setCrewWeekOff(v=>v-1)}
-                  title="Previous week"
-                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
-                    color:C.dim,padding:"4px 8px",cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600,
-                    display:"inline-flex",alignItems:"center",gap:3}}>
-                  <Icon name="chevronLeft" size={11}/> Prev
-                </button>
-                <div style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"0 10px",minWidth:140}}>
-                  <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",
-                    color:crewWeekOff===0?C.accent:crewWeekOff===1?"#2563eb":crewWeekOff<0?C.muted:C.dim}}>
-                    {crewWeekOff===0?"THIS WEEK":crewWeekOff===1?"NEXT WEEK":crewWeekOff===-1?"LAST WEEK":
-                     crewWeekOff>0?`${crewWeekOff} WEEKS OUT`:`${Math.abs(crewWeekOff)} WEEKS BACK`}
-                  </span>
-                  <span style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>
-                    {crewFmtD(crewDays[0])} &ndash; {crewFmtD(crewDays[5])}
-                  </span>
-                </div>
-                <button onClick={()=>setCrewWeekOff(v=>v+1)}
-                  title="Next week"
-                  style={{background:crewWeekOff===0?"#2563eb":"none",
-                    border:`1px solid ${crewWeekOff===0?"#2563eb":C.border}`,borderRadius:6,
-                    color:crewWeekOff===0?"#fff":C.dim,padding:"4px 10px",cursor:"pointer",fontSize:11,
-                    fontFamily:"inherit",fontWeight:700,display:"inline-flex",alignItems:"center",gap:3}}>
-                  Next <Icon name="chevronRight" size={11}/>
-                </button>
-              </div>
-              {crewWeekOff!==0&&(
-                <button onClick={()=>setCrewWeekOff(0)}
-                  title="Jump back to the current week"
-                  style={{background:C.accent,border:"none",borderRadius:6,
-                    color:"#fff",padding:"6px 12px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:800,
-                    letterSpacing:"0.06em"}}>
-                  TODAY
-                </button>
-              )}
               <div style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
                 <button onClick={()=>setCrewPinPickerOpen(true)}
                   title="Pick which jobs you're planning this week. Pinned = shows in the grid."
@@ -19812,8 +19935,15 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
                 <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim}}>ROSTER</span>
                 {crewSel&&<span style={{fontSize:10,color:C.accent,fontWeight:600}}>Tap a cell to place {crewSel}</span>}
-                <button onClick={()=>setCrewAddOpen(v=>!v)}
+                <button onClick={()=>setCrewPTOModalOpen(true)}
+                  title="Mark people out (PTO, sick days, vacation)"
                   style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:5,
+                    color:C.dim,padding:"2px 8px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:600,
+                    display:"inline-flex",alignItems:"center",gap:3}}>
+                  <Icon name="calendar" size={10}/> Time Off
+                </button>
+                <button onClick={()=>setCrewAddOpen(v=>!v)}
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:5,
                     color:C.dim,padding:"2px 8px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:600}}>
                   {crewAddOpen?"Done":"Edit Roster"}
                 </button>
@@ -19824,6 +19954,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                   const isSel = crewSel===name;
                   const isFM = isForeman(name);
                   const dayCount = (crewPersonDays[name]||new Set()).size;
+                  const ptoThisWeek = isOnPTOThisWeek(name);
                   return (
                     <div key={name}
                       draggable
@@ -19832,16 +19963,20 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                         try{e.dataTransfer.setData('text/plain',name);e.dataTransfer.effectAllowed='move';}catch(_){/* noop */}
                       }}
                       onClick={()=>setCrewSel(isSel?null:name)}
+                      title={ptoThisWeek ? "Has PTO this week" : undefined}
                       style={{display:"inline-flex",alignItems:"center",gap:4,padding:"4px 10px",
                         borderRadius:99,cursor:"grab",userSelect:"none",fontSize:11,fontWeight:700,
-                        color:isSel?"#fff":col,
-                        background:isSel?col:col+"15",
-                        border:`2px solid ${isSel?col:col+"44"}`,
+                        color:isSel?"#fff":ptoThisWeek?C.muted:col,
+                        background:isSel?col:ptoThisWeek?"#f3f4f6":col+"15",
+                        border:`2px ${ptoThisWeek?"dashed":"solid"} ${isSel?col:ptoThisWeek?"#d1d5db":col+"44"}`,
+                        opacity: ptoThisWeek ? 0.7 : 1,
                         transition:"all 0.12s",
                         boxShadow:isSel?`0 2px 8px ${col}44`:"none"}}>
                       {isFM&&<Icon name="star" size={10} stroke={2.5}/>}
                       {crewDisplayName(name)}
-                      {dayCount>0&&<span style={{fontSize:8,opacity:0.7}}>({dayCount}d)</span>}
+                      {ptoThisWeek && <span style={{fontSize:8,fontWeight:700,color:"#92400e",background:"#fef3c7",
+                        padding:"1px 4px",borderRadius:3}}>PTO</span>}
+                      {dayCount>0&&!ptoThisWeek&&<span style={{fontSize:8,opacity:0.7}}>({dayCount}d)</span>}
                     </div>
                   );
                 })}
@@ -19931,10 +20066,10 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                             if(fromIdx!==idx) teamMovePerson(name,fromIdx,idx);
                           }}
                           style={{background:"var(--card)",border:`1px solid ${crewTeamSel?C.accent+"55":teamColor+"22"}`,
-                            borderLeft:`3px solid ${teamColor}`,borderRadius:10,padding:"12px 14px",
-                            minWidth:180,maxWidth:260,flex:"0 1 auto",cursor:hasMembers?"grab":(crewTeamSel?"pointer":"default"),
+                            borderLeft:`3px solid ${teamColor}`,borderRadius:8,padding:"7px 9px",
+                            minWidth:140,maxWidth:220,flex:"0 1 auto",cursor:hasMembers?"grab":(crewTeamSel?"pointer":"default"),
                             transition:"border-color 0.15s,box-shadow 0.15s,transform 0.1s",
-                            boxShadow:crewTeamSel?`0 0 0 1px ${C.accent}22`:`0 1px 3px ${teamColor}12`}}
+                            boxShadow:crewTeamSel?`0 0 0 1px ${C.accent}22`:`0 1px 3px ${teamColor}10`}}
                           onMouseEnter={e=>{
                             if(crewTeamSel)e.currentTarget.style.borderColor=C.accent;
                             else if(hasMembers){e.currentTarget.style.transform="translateY(-1px)";e.currentTarget.style.boxShadow=`0 4px 12px ${teamColor}22`;}
@@ -20020,13 +20155,13 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                       if(crewTeamSel===name) setCrewTeamSel(null);
                                       else if(!crewTeamSel) setCrewTeamSel(name);
                                     }}
-                                    style={{display:"inline-flex",alignItems:"center",gap:3,
-                                      padding:"3px 9px",borderRadius:99,fontSize:11,
+                                    style={{display:"inline-flex",alignItems:"center",gap:2,
+                                      padding:"2px 7px",borderRadius:99,fontSize:10,
                                       fontWeight:isLead?800:600,cursor:"grab",userSelect:"none",
                                       color:crewTeamSel===name?"#fff":isLead?"#fff":nc,
                                       background:crewTeamSel===name?C.accent:isLead?nc:nc+"15",
-                                      border:`1.5px solid ${crewTeamSel===name?C.accent:isLead?nc:nc+"44"}`,
-                                      boxShadow:crewTeamSel===name?`0 2px 6px ${C.accent}44`:isLead?`0 1px 3px ${nc}33`:"none",
+                                      border:`1px solid ${crewTeamSel===name?C.accent:isLead?nc:nc+"44"}`,
+                                      boxShadow:crewTeamSel===name?`0 2px 6px ${C.accent}44`:"none",
                                       transition:"all 0.12s"}}>
                                     {isLead&&<Icon name="star" size={9} stroke={3}/>}
                                     {crewDisplayName(name)}
@@ -20144,6 +20279,89 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                 </div>
               )}
             </div>
+
+            {/* Week nav — lives right above the calendar grid so it's always where you need it */}
+            <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
+              <div style={{display:"flex",alignItems:"center",gap:4,background:"var(--surface)",
+                borderRadius:8,padding:"4px",border:`1px solid ${C.border}`}}>
+                <button onClick={()=>setCrewWeekOff(v=>v-1)}
+                  title="Previous week"
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                    color:C.dim,padding:"4px 8px",cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600,
+                    display:"inline-flex",alignItems:"center",gap:3}}>
+                  <Icon name="chevronLeft" size={11}/> Prev
+                </button>
+                <div style={{display:"flex",flexDirection:"column",alignItems:"center",padding:"0 10px",minWidth:140}}>
+                  <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.1em",
+                    color:crewWeekOff===0?C.accent:crewWeekOff===1?"#2563eb":crewWeekOff<0?C.muted:C.dim}}>
+                    {crewWeekOff===0?"THIS WEEK":crewWeekOff===1?"NEXT WEEK":crewWeekOff===-1?"LAST WEEK":
+                     crewWeekOff>0?`${crewWeekOff} WEEKS OUT`:`${Math.abs(crewWeekOff)} WEEKS BACK`}
+                  </span>
+                  <span style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>
+                    {crewFmtD(crewDays[0])} &ndash; {crewFmtD(crewDays[5])}
+                  </span>
+                </div>
+                <button onClick={()=>setCrewWeekOff(v=>v+1)}
+                  title="Next week"
+                  style={{background:crewWeekOff===0?"#2563eb":"none",
+                    border:`1px solid ${crewWeekOff===0?"#2563eb":C.border}`,borderRadius:6,
+                    color:crewWeekOff===0?"#fff":C.dim,padding:"4px 10px",cursor:"pointer",fontSize:11,
+                    fontFamily:"inherit",fontWeight:700,display:"inline-flex",alignItems:"center",gap:3}}>
+                  Next <Icon name="chevronRight" size={11}/>
+                </button>
+              </div>
+              {crewWeekOff!==0&&(
+                <button onClick={()=>setCrewWeekOff(0)}
+                  title="Jump back to the current week"
+                  style={{background:C.accent,border:"none",borderRadius:6,
+                    color:"#fff",padding:"6px 12px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:800,
+                    letterSpacing:"0.06em"}}>
+                  TODAY
+                </button>
+              )}
+            </div>
+
+            {/* Events this week — read-only strip with inspections, 4-ways, QCs, RTs landing each day */}
+            {crewPlanEvents.length > 0 && (
+              <div style={{marginBottom:10,border:`1px solid ${C.border}`,borderRadius:10,background:"var(--card)"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",borderBottom:`1px solid ${C.border}`}}>
+                  <Icon name="calendar" size={13} color="#7c3aed"/>
+                  <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:"#7c3aed"}}>EVENTS THIS WEEK</span>
+                  <span style={{fontSize:10,color:C.dim,marginLeft:"auto"}}>
+                    {crewPlanEvents.length} event{crewPlanEvents.length!==1?"s":""} across this week · plan crews around them
+                  </span>
+                </div>
+                <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:0}}>
+                  {crewDays.map((d,di)=>{
+                    const dayEvts = crewPlanEvents.filter(e=>e.dayIdx===di).sort((a,b)=>a.type.localeCompare(b.type));
+                    const isToday3 = (()=>{const ymd=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; return ymd===todayYMD2;})();
+                    return (
+                      <div key={di} style={{padding:"6px 6px",
+                        borderRight: di<5 ? `1px solid ${C.border}` : "none",
+                        background: isToday3 ? C.accent+"06" : "transparent",
+                        minHeight: 40}}>
+                        {dayEvts.length===0 ? (
+                          <div style={{fontSize:9,color:C.muted,fontStyle:"italic",textAlign:"center",paddingTop:6}}>—</div>
+                        ) : dayEvts.map(ev => (
+                          <div key={ev.id}
+                            onClick={()=>{const j=jobs.find(x=>x.id===ev.jobId); if(j) onSelectJob(j);}}
+                            title={`${ev.label} · ${ev.jobName}`}
+                            style={{cursor:"pointer",borderLeft:`3px solid ${ev.color}`,
+                              padding:"3px 6px",marginBottom:3,background:ev.color+"0a",
+                              borderRadius:"0 4px 4px 0"}}>
+                            <div style={{fontSize:9,fontWeight:800,color:ev.color,letterSpacing:"0.04em"}}>
+                              {ev.type==="inspection"?"INSP":ev.type==="fourway"?"4-WAY":ev.type==="qc"?"QC":ev.type==="rt"?(ev.needsSched?"RT!":"RT"):ev.type.toUpperCase()}
+                            </div>
+                            <div style={{fontSize:10,fontWeight:600,color:"var(--text)",
+                              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.jobName}</div>
+                          </div>
+                        ))}
+                      </div>
+                    );
+                  })}
+                </div>
+              </div>
+            )}
 
             {/* Schedule grid */}
             <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
@@ -20315,29 +20533,32 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                 <span style={{fontSize:9,fontWeight:600,color:jc,
                                   background:jc+"15",borderRadius:99,padding:"1px 6px"}}>{job.foreman||"Koy"}</span>
                               </div>
-                              {/* In Progress scheduling state — mirrors the one on the job card */}
+                              {/* Scheduling state pill — mirrors the one on the job card */}
                               {(() => {
-                                const phaseKey = rs==="inprogress" ? "rough" : fs==="inprogress" ? "finish" : null;
+                                // Pick the most-active phase for the pill (rough if rough isn't complete, else finish)
+                                const phaseKey = (rs && rs!=="complete" && rs!=="invoice") ? "rough"
+                                              : (fs && fs!=="complete" && fs!=="invoice") ? "finish"
+                                              : null;
                                 if(!phaseKey || !onUpdateJob) return null;
-                                const modeKey = phaseKey==="rough" ? "roughInProgressMode" : "finishInProgressMode";
-                                const dateKey = phaseKey==="rough" ? "roughNeedsSchedDate" : "finishNeedsSchedDate";
+                                const dateKey = phaseKey==="rough" ? "roughStatusDate" : "finishStatusDate";
                                 const hardKey = phaseKey==="rough" ? "roughNeedsSchedHard" : "finishNeedsSchedHard";
+                                const curMode = deriveScheduleMode(job, phaseKey);
+                                if(!curMode) return null;
                                 return (
-                                  <div style={{marginTop:4}} onClick={e=>e.stopPropagation()}>
+                                  <div style={{marginTop:4,display:"flex",flexDirection:"column",gap:3,alignItems:"flex-start"}} onClick={e=>e.stopPropagation()}>
                                     <InProgressModePill
                                       size="sm"
                                       showSync={false}
-                                      mode={job[modeKey]}
+                                      mode={curMode}
                                       needsDate={job[dateKey]||""}
                                       needsHard={!!job[hardKey]}
                                       onToggle={()=>{
-                                        const cur = job[modeKey];
-                                        const next = cur==="scheduled" ? "needsSched"
-                                                  : cur==="needsSched"  ? "ongoing"
-                                                  : cur==="ongoing"     ? "scheduled"
+                                        const next = curMode==="scheduled" ? "needsSched"
+                                                  : curMode==="needsSched"  ? "ongoing"
+                                                  : curMode==="ongoing"     ? "scheduled"
                                                   : "scheduled";
-                                        const patch = { [modeKey]: next };
-                                        onUpdateJob({ ...job, ...patch }, patch);
+                                        const patch = applyScheduleMode(job, phaseKey, next);
+                                        if(Object.keys(patch).length) onUpdateJob({ ...job, ...patch }, patch);
                                       }}
                                       onSetNeedsDate={()=>{
                                         setCrewNeedsModal({
@@ -20348,6 +20569,17 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                         });
                                       }}
                                     />
+                                    {/* Status update note (existing job.statusUpdate field) —
+                                        shows inline so scheduling context travels with the row */}
+                                    {job.statusUpdate && (
+                                      <span style={{fontSize:10,color:"var(--text)",fontWeight:500,
+                                        borderLeft:"3px solid #f59e0b",paddingLeft:6,paddingRight:2,
+                                        maxWidth:200,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+                                        display:"inline-flex",alignItems:"center",lineHeight:1.3}}
+                                        title={job.statusUpdate}>
+                                        {job.statusUpdate}
+                                      </span>
+                                    )}
                                   </div>
                                 );
                               })()}
@@ -20383,7 +20615,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                               onMouseEnter={e=>{if(crewSel)e.currentTarget.style.background=C.accent+"14";}}
                               onMouseLeave={e=>{e.currentTarget.style.background=isToday3?C.accent+"08":crewSel?C.accent+"04":"transparent";}}>
                               {allPeople.length>0 && (
-                                <div onClick={e=>{e.stopPropagation();setCrewTimeModal({jobId:job.id,dayIdx:di,start:cell.time?.start||"07:00",end:cell.time?.end||"15:30"});}}
+                                <div onClick={e=>{e.stopPropagation();setCrewTimeModal({jobId:job.id,dayIdx:di,start:cell.time?.start||"07:00",end:cell.time?.end||"17:00"});}}
                                   title={cell.time?.start?"Tap to edit time":"Tap to set time"}
                                   style={{fontSize:9,fontWeight:700,
                                     color:cell.time?.start?"#2563eb":C.muted,
@@ -20401,6 +20633,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                 {allPeople.map(({name,isLead})=>{
                                   const pc=crewGetColor(name);
                                   const isFM=isForeman(name);
+                                  const ptoToday = isOnPTO(name, crewDays[di]);
                                   return (
                                     <span key={name}
                                       draggable
@@ -20410,15 +20643,17 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                         try{e.dataTransfer.setData('text/plain',name);e.dataTransfer.effectAllowed='move';}catch(_){/* noop */}
                                       }}
                                       onClick={e=>e.stopPropagation()}
-                                      title="Drag to move to another cell"
+                                      title={ptoToday ? `⚠ ${name} is on PTO this day${ptoToday.note?" — "+ptoToday.note:""}` : "Drag to move to another cell"}
                                       style={{display:"inline-flex",alignItems:"center",gap:2,
                                         padding:"2px 7px",borderRadius:99,fontSize:10,fontWeight:700,
-                                        color:isLead?"#fff":pc,
-                                        background:isLead?pc:pc+"18",
-                                        border:`1.5px ${isLead?"solid":"solid"} ${isLead?pc:pc+"44"}`,
+                                        color:ptoToday ? "#92400e" : (isLead?"#fff":pc),
+                                        background:ptoToday ? "#fef3c7" : (isLead?pc:pc+"18"),
+                                        border:`1.5px ${ptoToday?"dashed":"solid"} ${ptoToday?"#d97706":(isLead?pc:pc+"44")}`,
                                         cursor:"grab",userSelect:"none",whiteSpace:"nowrap",
-                                        boxShadow:isLead?`0 1px 4px ${pc}33`:"none"}}>
-                                      {isLead&&<Icon name="star" size={8} stroke={3}/>}
+                                        textDecoration: ptoToday ? "line-through" : "none",
+                                        boxShadow:isLead&&!ptoToday?`0 1px 4px ${pc}33`:"none"}}>
+                                      {ptoToday && <span style={{fontSize:10}}>⚠</span>}
+                                      {isLead&&!ptoToday&&<Icon name="star" size={8} stroke={3}/>}
                                       {crewDisplayName(name)}
                                       <span onClick={e=>{e.stopPropagation();
                                         if(isFM&&!isLead) crewToggleLead(job.id,di,name);
@@ -20466,10 +20701,113 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
             )}
 
             {/* Job picker modal */}
+            {/* PTO modal — mark crew members out by date range */}
+            {crewPTOModalOpen && (
+              <div onClick={()=>setCrewPTOModalOpen(false)}
+                style={{position:"fixed",inset:0,background:"rgba(17,24,39,0.65)",zIndex:9999,
+                  display:"flex",alignItems:"center",justifyContent:"center",padding:20,backdropFilter:"blur(4px)"}}>
+                <div onClick={e=>e.stopPropagation()}
+                  style={{background:"var(--card)",borderRadius:14,padding:"22px 26px",width:460,maxWidth:"95vw",
+                    maxHeight:"85vh",overflowY:"auto",border:`1px solid ${C.border}`,boxShadow:"0 20px 50px rgba(0,0,0,0.35)"}}>
+                  <div style={{marginBottom:16}}>
+                    <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",
+                      color:"var(--text)"}}>TIME OFF</div>
+                    <div style={{fontSize:11,color:C.dim,marginTop:4,lineHeight:1.5}}>
+                      Mark crew out (PTO, sick, vacation). They'll show grayed in the roster on those days so you don't accidentally schedule them.
+                    </div>
+                  </div>
+
+                  <div style={{padding:"12px 14px",background:"var(--surface)",borderRadius:10,
+                    border:`1px solid ${C.border}`,marginBottom:14}}>
+                    <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:8}}>
+                      ADD TIME OFF
+                    </div>
+                    <div style={{display:"flex",flexDirection:"column",gap:8}}>
+                      <select value={crewPTODraft.name}
+                        onChange={e=>setCrewPTODraft({...crewPTODraft,name:e.target.value})}
+                        style={{background:"var(--card)",border:`1px solid ${C.border}`,borderRadius:6,
+                          padding:"7px 10px",fontSize:12,color:"var(--text)",fontFamily:"inherit"}}>
+                        <option value="">Pick a person…</option>
+                        {(crewRoster||[]).map(n => <option key={n} value={n}>{crewDisplayName(n)}</option>)}
+                      </select>
+                      <div style={{display:"flex",gap:8}}>
+                        <label style={{flex:1}}>
+                          <div style={{fontSize:9,fontWeight:700,color:C.dim,marginBottom:3}}>FROM</div>
+                          <DateInp value={crewPTODraft.start}
+                            onChange={e=>setCrewPTODraft({...crewPTODraft,start:e.target.value})}/>
+                        </label>
+                        <label style={{flex:1}}>
+                          <div style={{fontSize:9,fontWeight:700,color:C.dim,marginBottom:3}}>TO <span style={{color:C.muted,fontWeight:400}}>(optional)</span></div>
+                          <DateInp value={crewPTODraft.end}
+                            onChange={e=>setCrewPTODraft({...crewPTODraft,end:e.target.value})}/>
+                        </label>
+                      </div>
+                      <input value={crewPTODraft.note}
+                        onChange={e=>setCrewPTODraft({...crewPTODraft,note:e.target.value})}
+                        placeholder="Reason (optional) — e.g. vacation, sick, family"
+                        style={{background:"var(--card)",border:`1px solid ${C.border}`,borderRadius:6,
+                          padding:"6px 10px",fontSize:11,color:"var(--text)",fontFamily:"inherit"}}/>
+                      <button onClick={addPTO}
+                        disabled={!crewPTODraft.name||!crewPTODraft.start}
+                        style={{background:(crewPTODraft.name&&crewPTODraft.start)?C.accent:"#d1d5db",
+                          border:"none",borderRadius:6,color:"#fff",
+                          padding:"7px 14px",cursor:(crewPTODraft.name&&crewPTODraft.start)?"pointer":"not-allowed",
+                          fontSize:11,fontWeight:700,fontFamily:"inherit"}}>
+                        + Add time off
+                      </button>
+                    </div>
+                  </div>
+
+                  <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:8}}>
+                    CURRENT PTO ({crewPTOList.length})
+                  </div>
+                  {crewPTOList.length===0 ? (
+                    <div style={{fontSize:12,color:C.muted,fontStyle:"italic",textAlign:"center",padding:"20px 0"}}>
+                      No PTO scheduled. Add some above.
+                    </div>
+                  ) : (
+                    <div style={{display:"flex",flexDirection:"column",gap:4}}>
+                      {[...crewPTOList].sort((a,b)=>(a.start||"").localeCompare(b.start||"")).map(p => {
+                        const s = parseAnyDate(p.start);
+                        const e = parseAnyDate(p.end||p.start);
+                        const fmt = (d)=>d?d.toLocaleDateString("en-US",{month:"short",day:"numeric"}):"";
+                        const range = e && s && +e!==+s ? `${fmt(s)} – ${fmt(e)}` : fmt(s);
+                        return (
+                          <div key={p.id} style={{display:"flex",alignItems:"center",gap:10,padding:"8px 12px",
+                            background:"var(--surface)",border:`1px solid ${C.border}`,borderRadius:8}}>
+                            <div style={{flex:1}}>
+                              <div style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>
+                                {crewDisplayName(p.name)} <span style={{color:C.dim,fontWeight:500,marginLeft:4}}>· {range}</span>
+                              </div>
+                              {p.note && <div style={{fontSize:10,color:C.muted,marginTop:1,fontStyle:"italic"}}>{p.note}</div>}
+                            </div>
+                            <button onClick={()=>removePTO(p.id)}
+                              style={{background:"none",border:`1px solid ${C.red}44`,borderRadius:5,
+                                color:C.red,padding:"3px 8px",cursor:"pointer",fontSize:10,fontWeight:600,fontFamily:"inherit"}}>
+                              Remove
+                            </button>
+                          </div>
+                        );
+                      })}
+                    </div>
+                  )}
+
+                  <div style={{display:"flex",gap:8,marginTop:18}}>
+                    <button onClick={()=>setCrewPTOModalOpen(false)}
+                      style={{background:C.accent,border:"none",borderRadius:8,color:"#fff",
+                        padding:"9px 16px",cursor:"pointer",fontSize:11,fontWeight:800,fontFamily:"inherit",width:"100%",
+                        letterSpacing:"0.04em"}}>
+                      Done
+                    </button>
+                  </div>
+                </div>
+              </div>
+            )}
+
             {/* Needs-Sched date modal — native date picker for Crew Planner pill */}
             {crewNeedsModal && (() => {
               const modalJob = jobs.find(j=>j.id===crewNeedsModal.jobId);
-              const dateKey = crewNeedsModal.phase==="rough" ? "roughNeedsSchedDate" : "finishNeedsSchedDate";
+              const dateKey = crewNeedsModal.phase==="rough" ? "roughStatusDate" : "finishStatusDate";
               const hardKey = crewNeedsModal.phase==="rough" ? "roughNeedsSchedHard" : "finishNeedsSchedHard";
               return (
                 <div onClick={()=>setCrewNeedsModal(null)}
@@ -20586,9 +20924,8 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                     </div>
                     <div style={{display:"flex",gap:6,marginBottom:18}}>
                       {[
-                        {label:"Half AM",s:"07:00",e:"11:30"},
-                        {label:"Half PM",s:"12:00",e:"15:30"},
-                        {label:"Full day",s:"07:00",e:"15:30"},
+                        {label:"Half day",s:"07:00",e:"12:00"},
+                        {label:"Full day",s:"07:00",e:"17:00"},
                       ].map(preset=>{
                         const active = crewTimeModal.start===preset.s && crewTimeModal.end===preset.e;
                         return (
@@ -20671,8 +21008,11 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                       </button>
                       <button onClick={()=>{
                         const ids=allActive.filter(j=>{
-                          // Prioritize: jobs marked "Needs Sched" (any phase) OR priority <=3 (overdue/needs date/this week)
-                          if(j.roughInProgressMode==="needsSched" || j.finishInProgressMode==="needsSched") return true;
+                          // Pin anything currently reading "Needs Sched" (derived state) on either phase,
+                          // plus anything overdue / this-week high-priority.
+                          const rMode = deriveScheduleMode(j,"rough");
+                          const fMode = deriveScheduleMode(j,"finish");
+                          if(rMode==="needsSched" || fMode==="needsSched") return true;
                           return _crewJobPriority(j).score<=3;
                         }).map(j=>j.id);
                         setCrewPinned(ids); _saveCrewData(crewData,crewExtra,crewJobOrder,ids,crewFocus);
