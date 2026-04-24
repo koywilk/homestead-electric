@@ -21112,59 +21112,167 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                         &times;
                       </button>
                     </div>
-                    {crewTeams.length > 0 && (
-                      <div style={{marginBottom:12}}>
-                        <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:6}}>TEAMS</div>
-                        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                          {crewTeams.map((t, ti) => {
-                            const allNames = [...(t.lead?[t.lead]:[]), ...(t.members||[])];
-                            if(allNames.length === 0) return null;
-                            const tc = t.lead ? crewGetColor(t.lead) : C.dim;
-                            return (
-                              <button key={t.id||ti} onClick={()=>applyTeam(ti)}
-                                style={{background:tc+"18",border:`1.5px solid ${tc}55`,borderLeft:`4px solid ${tc}`,
-                                  borderRadius:8,padding:"8px 12px",cursor:"pointer",fontFamily:"inherit",textAlign:"left",
-                                  color:"var(--text)",fontSize:12,fontWeight:600,
-                                  transition:"all 0.12s"}}
-                                onMouseEnter={e=>{e.currentTarget.style.background=tc+"28";e.currentTarget.style.transform="translateY(-1px)";}}
-                                onMouseLeave={e=>{e.currentTarget.style.background=tc+"18";e.currentTarget.style.transform="";}}>
-                                <div style={{fontSize:9,fontWeight:800,color:tc,letterSpacing:"0.06em",marginBottom:3}}>TEAM · {allNames.length}</div>
-                                <div>{allNames.map(n=>crewDisplayName(n)).join(", ")}</div>
-                              </button>
-                            );
-                          })}
-                        </div>
-                      </div>
-                    )}
-                    <div>
-                      <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:6}}>PEOPLE</div>
-                      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                        {(crewRoster||[]).map(name => {
-                          const pc = crewGetColor(name);
-                          const pto = isOnPTO(name, day);
-                          const conflict = crewFindPersonOnDay(name, di, jid);
-                          const isFM = isForeman(name);
-                          return (
-                            <button key={name} onClick={()=>applyPerson(name)}
-                              title={pto ? `On PTO${pto.note?" — "+pto.note:""}` : conflict ? `Currently on ${jobs.find(j=>j.id===conflict.jid)?.name||"another job"} — tap to move` : ""}
-                              style={{background: pto?"#fef3c7":pc+"20",
-                                border:`1.5px ${pto?"dashed":"solid"} ${pto?"#d97706":pc+"77"}`,
-                                borderRadius:99,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",
-                                fontSize:12,fontWeight:700,color:pto?"#92400e":pc,
-                                textDecoration:pto?"line-through":"none",
-                                opacity:pto?0.6:1,
-                                display:"inline-flex",alignItems:"center",gap:4,
-                                transition:"all 0.12s"}}
-                              onMouseEnter={e=>{if(!pto){e.currentTarget.style.background=pc+"38";e.currentTarget.style.transform="translateY(-1px)";}}}
-                              onMouseLeave={e=>{if(!pto){e.currentTarget.style.background=pc+"20";e.currentTarget.style.transform="";}}}>
-                              {isFM && <Icon name="star" size={10} stroke={2.5}/>}
-                              {crewDisplayName(name)}
-                              {conflict && <span style={{fontSize:9,opacity:0.7,marginLeft:3,fontWeight:600}}>·move</span>}
-                            </button>
-                          );
-                        })}
-                      </div>
-                    </div>
+                    {(() => {
+                      // Availability analysis for this day — who is free, who is
+                      // already on another cell (and for how long), and who is on PTO.
+                      // Hours in a standard workday (used to infer availability when
+                      // time is unset on an existing assignment).
+                      const FULL_DAY = 10;
+                      const hoursFromTime = (t) => {
+                        if(!t?.start || !t?.end) return null;
+                        const [sh, sm] = t.start.split(":").map(Number);
+                        const [eh, em] = t.end.split(":").map(Number);
+                        if(isNaN(sh)||isNaN(eh)) return null;
+                        return Math.max(0, (eh + (em||0)/60) - (sh + (sm||0)/60));
+                      };
+                      const statusFor = (name) => {
+                        if(isOnPTO(name, day)) return { kind:"pto" };
+                        const c = crewFindPersonOnDay(name, di, jid);
+                        if(!c) return { kind:"free" };
+                        const cell = crewData[c.k];
+                        const hours = cell?.time ? hoursFromTime(cell.time) : null;
+                        const jobName = jobs.find(j=>j.id===c.jid)?.name || "another job";
+                        return { kind:"busy", jobName, hours, time: cell?.time,
+                          free: hours!=null ? Math.max(0, FULL_DAY - hours) : 0 };
+                      };
+                      const roster = crewRoster || [];
+                      const byKind = { free:[], partial:[], busy:[], pto:[] };
+                      roster.forEach(n => {
+                        const s = statusFor(n);
+                        if(s.kind === "pto") byKind.pto.push({ name:n, s });
+                        else if(s.kind === "free") byKind.free.push({ name:n, s });
+                        else if(s.hours != null && s.free >= 2) byKind.partial.push({ name:n, s });
+                        else byKind.busy.push({ name:n, s });
+                      });
+
+                      const renderPersonChip = ({ name, s }) => {
+                        const pc = crewGetColor(name);
+                        const isFM = isForeman(name);
+                        const pto = s.kind === "pto";
+                        const busy = s.kind === "busy";
+                        const hasFree = s.free && s.free > 0;
+                        const baseColor = pto ? "#92400e" : pc;
+                        const baseBg    = pto ? "#fef3c7" : busy ? pc+"10" : pc+"20";
+                        const border    = pto ? "#d97706" : busy ? pc+"55" : pc+"77";
+                        return (
+                          <button key={name} onClick={()=>applyPerson(name)}
+                            title={pto ? `On PTO${s.kind==="pto"&&isOnPTO(name,day)?.note?" — "+isOnPTO(name,day).note:""}`
+                                 : busy ? `${s.jobName}${s.time?` · ${_crewFmtTime(s.time.start)}–${_crewFmtTime(s.time.end)}`:" · full day"} — tap to move` : ""}
+                            style={{background:baseBg,
+                              border:`1.5px ${pto||busy?"dashed":"solid"} ${border}`,
+                              borderRadius:10,padding:"5px 10px",cursor:"pointer",fontFamily:"inherit",
+                              fontSize:12,fontWeight:700,color:baseColor,
+                              textDecoration:pto?"line-through":"none",
+                              opacity:pto?0.55:busy?0.8:1,
+                              display:"inline-flex",alignItems:"center",gap:5,
+                              transition:"all 0.12s"}}
+                            onMouseEnter={e=>{if(!pto){e.currentTarget.style.background=pc+(busy?"22":"38");e.currentTarget.style.transform="translateY(-1px)";}}}
+                            onMouseLeave={e=>{if(!pto){e.currentTarget.style.background=baseBg;e.currentTarget.style.transform="";}}}>
+                            {isFM && <Icon name="star" size={10} stroke={2.5}/>}
+                            {crewDisplayName(name)}
+                            {busy && s.hours != null && hasFree && (
+                              <span style={{fontSize:9,opacity:0.85,fontWeight:600,
+                                background:"#16a34a20",color:"#15803d",padding:"1px 5px",borderRadius:6}}>
+                                {Math.round(s.free)}h left
+                              </span>
+                            )}
+                            {busy && (
+                              <span style={{fontSize:9,opacity:0.75,fontWeight:500}}>
+                                {s.jobName.length>14?s.jobName.substring(0,14)+"…":s.jobName}
+                              </span>
+                            )}
+                          </button>
+                        );
+                      };
+
+                      return (
+                        <>
+                          {crewTeams.length > 0 && (
+                            <div style={{marginBottom:12}}>
+                              <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:6}}>TEAMS</div>
+                              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                                {crewTeams.map((t, ti) => {
+                                  const allNames = [...(t.lead?[t.lead]:[]), ...(t.members||[])];
+                                  if(allNames.length === 0) return null;
+                                  const tc = t.lead ? crewGetColor(t.lead) : C.dim;
+                                  // Count how many members are already busy that day so
+                                  // Koy sees at-a-glance if the team is free or will cause moves.
+                                  const conflicts = allNames.filter(n => {
+                                    const s = statusFor(n);
+                                    return s.kind === "busy" || s.kind === "partial";
+                                  }).length;
+                                  const ptoCount = allNames.filter(n => statusFor(n).kind === "pto").length;
+                                  const allFree = conflicts === 0 && ptoCount === 0;
+                                  return (
+                                    <button key={t.id||ti} onClick={()=>applyTeam(ti)}
+                                      style={{background:allFree?"#e8f5ed":tc+"18",
+                                        border:`1.5px solid ${allFree?"#22c55e55":tc+"55"}`,
+                                        borderLeft:`4px solid ${allFree?"#22c55e":tc}`,
+                                        borderRadius:8,padding:"8px 12px",cursor:"pointer",fontFamily:"inherit",textAlign:"left",
+                                        color:"var(--text)",fontSize:12,fontWeight:600,
+                                        transition:"all 0.12s"}}
+                                      onMouseEnter={e=>{e.currentTarget.style.transform="translateY(-1px)";}}
+                                      onMouseLeave={e=>{e.currentTarget.style.transform="";}}>
+                                      <div style={{fontSize:9,fontWeight:800,color:allFree?"#15803d":tc,letterSpacing:"0.06em",marginBottom:3,display:"flex",gap:6,alignItems:"center"}}>
+                                        <span>TEAM · {allNames.length}</span>
+                                        {allFree && <span style={{color:"#15803d"}}>✓ ALL FREE</span>}
+                                        {conflicts > 0 && <span style={{color:"#d97706"}}>{conflicts} BUSY</span>}
+                                        {ptoCount > 0 && <span style={{color:"#d97706"}}>{ptoCount} PTO</span>}
+                                      </div>
+                                      <div>{allNames.map(n=>crewDisplayName(n)).join(", ")}</div>
+                                    </button>
+                                  );
+                                })}
+                              </div>
+                            </div>
+                          )}
+
+                          {byKind.free.length > 0 && (
+                            <div style={{marginBottom:10}}>
+                              <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:"#15803d",marginBottom:6}}>
+                                FREE THIS DAY · {byKind.free.length}
+                              </div>
+                              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                                {byKind.free.map(renderPersonChip)}
+                              </div>
+                            </div>
+                          )}
+
+                          {byKind.partial.length > 0 && (
+                            <div style={{marginBottom:10}}>
+                              <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:"#d97706",marginBottom:6}}>
+                                PART-DAY AVAILABLE · {byKind.partial.length}
+                              </div>
+                              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                                {byKind.partial.map(renderPersonChip)}
+                              </div>
+                            </div>
+                          )}
+
+                          {byKind.busy.length > 0 && (
+                            <div style={{marginBottom:10}}>
+                              <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:6}}>
+                                ON ANOTHER JOB · {byKind.busy.length} <span style={{fontWeight:500,color:C.muted,letterSpacing:0,textTransform:"none"}}>— tap to move</span>
+                              </div>
+                              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                                {byKind.busy.map(renderPersonChip)}
+                              </div>
+                            </div>
+                          )}
+
+                          {byKind.pto.length > 0 && (
+                            <div>
+                              <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.muted,marginBottom:6}}>
+                                PTO · {byKind.pto.length}
+                              </div>
+                              <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                                {byKind.pto.map(renderPersonChip)}
+                              </div>
+                            </div>
+                          )}
+                        </>
+                      );
+                    })()}
                   </div>
                 </>
               );
