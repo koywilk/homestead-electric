@@ -18817,6 +18817,12 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
   const [crewNeedsModal, setCrewNeedsModal] = useState(null); // { jobId, phase, date, hard }
   const [crewPTOList, setCrewPTOList] = useState([]); // [{name, start, end, note}]
   const [crewPTOModalOpen, setCrewPTOModalOpen] = useState(false);
+  // Cell picker — tap a day cell to pick an individual or team to drop in.
+  // Works when nothing is pre-selected (i.e., the "quick click" path).
+  const [crewCellPicker, setCrewCellPicker] = useState(null); // {jid, di} | null
+  // Track which job row's hover overlay is active, so the status-update hover
+  // card only renders for the hovered row rather than on every row at once.
+  const [crewHoverJobId, setCrewHoverJobId] = useState(null);
   const [crewPTODraft, setCrewPTODraft] = useState({ name:"", start:"", end:"", note:"" });
   useEffect(() => onSnapshot(doc(db,"settings","crewPTO"), s => {
     if(s.exists()) setCrewPTOList(s.data().list||[]);
@@ -19030,31 +19036,65 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     toast.info('Job order reset to auto priority.');
   };
 
+  // Find any other cell on the same day this person is already in. Returns
+  // { jid, k, wasLead } or null. Used to prevent same-day double-booking.
+  const crewFindPersonOnDay = (name, di, ignoreJid=null) => {
+    for(const [k, v] of Object.entries(crewData)) {
+      const [jid, d] = k.split("_");
+      if(parseInt(d) !== di) continue;
+      if(ignoreJid && jid === ignoreJid) continue;
+      if(v.lead === name) return { jid, k, wasLead:true };
+      if((v.crew||[]).includes(name)) return { jid, k, wasLead:false };
+    }
+    return null;
+  };
+  // Remove a person from a cell, dropping the cell entirely if it becomes empty.
+  const _crewRemoveFromCell = (nx, k, name) => {
+    const cell = nx[k]; if(!cell) return;
+    const upd = { ...cell, lead: cell.lead===name?"":cell.lead, crew:(cell.crew||[]).filter(n=>n!==name) };
+    if(!upd.lead && upd.crew.length===0) delete nx[k]; else nx[k] = upd;
+  };
   const crewAssign = (jid,di) => {
     if(!crewSel) return;
     const k=`${jid}_${di}`, cur=crewData[k]||{lead:"",crew:[]};
     if(cur.crew.includes(crewSel)||cur.lead===crewSel) return;
-    const nx={...crewData,[k]:{...cur,crew:[...cur.crew,crewSel]}};
+    // Prevent same-day double-booking: if crewSel is already on another job
+    // that day, move them (remove from old cell) instead of duplicating.
+    const conflict = crewFindPersonOnDay(crewSel, di, jid);
+    const nx={...crewData};
+    if(conflict) {
+      _crewRemoveFromCell(nx, conflict.k, crewSel);
+      toast.info(`Moved ${crewSel} from ${(jobs.find(j=>j.id===conflict.jid)?.name)||"other job"}.`);
+    }
+    const curNow = nx[k] || {lead:"",crew:[]};
+    // Preserve lead status if they were leading the previous cell and target has no lead
+    if(conflict?.wasLead && !curNow.lead) nx[k] = {...curNow, lead:crewSel};
+    else nx[k] = {...curNow, crew:[...(curNow.crew||[]), crewSel]};
     setCrewData(nx); _saveCrewData(nx);
   };
   const crewDrop = (jid,di) => {
     const payload=crewDragRef.current; crewDragRef.current=null; if(!payload) return;
     const k=`${jid}_${di}`;
-    // Handle team drop — add entire team to cell, prompt for time
+    // Handle team drop — add entire team to cell. Any member already on
+    // another job this day gets auto-moved from their old cell.
     if(typeof payload === 'object' && payload.type === 'team'){
       const team = crewTeams[payload.idx];
       if(!team) return;
       const nx={...crewData};
+      const allTeamNames = [...(team.lead?[team.lead]:[]),...team.members];
+      // Pre-clear same-day conflicts for each team member
+      const moved = [];
+      allTeamNames.forEach(n => {
+        const c = crewFindPersonOnDay(n, di, jid);
+        if(c) { _crewRemoveFromCell(nx, c.k, n); moved.push(n); }
+      });
       const cur=nx[k]||{lead:"",crew:[]};
-      // Lead of team → cell lead (if cell has no lead yet)
       const newLead = !cur.lead && team.lead ? team.lead : cur.lead;
-      // All team members (minus the one who became lead) go to crew
-      const teamMembers = [...(team.lead?[team.lead]:[]),...team.members].filter(n=>n!==newLead);
-      const newCrew = [...cur.crew];
-      teamMembers.forEach(n=>{ if(!newCrew.includes(n) && n!==newLead) newCrew.push(n); });
+      const newCrew = [...(cur.crew||[])];
+      allTeamNames.filter(n=>n!==newLead).forEach(n=>{ if(!newCrew.includes(n)) newCrew.push(n); });
       nx[k] = { ...cur, lead:newLead, crew:newCrew };
       setCrewData(nx); _saveCrewData(nx);
-      // Open time modal for this cell
+      if(moved.length) toast.info(`Moved ${moved.join(", ")} from other job${moved.length>1?"s":""} this day.`);
       setCrewTimeModal({jobId:jid, dayIdx:di, start:cur.time?.start||"07:00", end:cur.time?.end||"17:00"});
       return;
     }
@@ -19065,19 +19105,20 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     // No-op if dropped on same cell
     if(fromJid===jid && fromDi===di) return;
     const nx={...crewData};
-    // Remove from source if this was a move from another cell
+    // Explicit move (drag from another cell) — always remove from source
     if(fromJid!=null && fromDi!=null){
-      const srcK=`${fromJid}_${fromDi}`, srcCell=nx[srcK];
-      if(srcCell){
-        const upd={...srcCell,lead:srcCell.lead===name?"":srcCell.lead, crew:srcCell.crew.filter(n=>n!==name)};
-        if(!upd.lead && upd.crew.length===0) delete nx[srcK]; else nx[srcK]=upd;
-      }
+      _crewRemoveFromCell(nx, `${fromJid}_${fromDi}`, name);
+    } else {
+      // Drop from the roster (no source cell in payload) — still prevent
+      // same-day double-booking by finding and removing any existing cell
+      // on this day with the person.
+      const c = crewFindPersonOnDay(name, di, jid);
+      if(c) { _crewRemoveFromCell(nx, c.k, name); toast.info(`Moved ${name} — they were on another job this day.`); }
     }
-    // Add to target (preserve lead status if it was a lead)
     const cur=nx[k]||{lead:"",crew:[]};
-    if(cur.crew.includes(name)||cur.lead===name) { setCrewData(nx); _saveCrewData(nx); return; }
+    if((cur.crew||[]).includes(name)||cur.lead===name) { setCrewData(nx); _saveCrewData(nx); return; }
     if(wasLead && !cur.lead) nx[k]={...cur,lead:name};
-    else nx[k]={...cur,crew:[...cur.crew,name]};
+    else nx[k]={...cur,crew:[...(cur.crew||[]),name]};
     setCrewData(nx); _saveCrewData(nx);
   };
   const crewClearWeek = () => {
@@ -20667,97 +20708,60 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                           outlineOffset: -2,
                           transition:"background 0.1s,outline 0.1s",
                         }}>
-                        <td style={{padding:"8px 6px 8px 10px",borderBottom:`1px solid ${C.border}`,
-                          position:"sticky",left:0,background:"var(--card)",zIndex:1,
-                          verticalAlign:"top",maxWidth:180}}>
-                          <div style={{display:"flex",alignItems:"flex-start",gap:4}}>
-                            <div style={{display:"flex",flexDirection:"column",alignItems:"center",gap:1,flexShrink:0}}>
-                              <span
-                                draggable
-                                onDragStart={e=>{
-                                  crewRowDragRef.current=job.id;
-                                  setCrewRowDragOver(null);
-                                  try{e.dataTransfer.setData('text/plain',job.id);e.dataTransfer.effectAllowed='move';}catch(_){/* noop */}
-                                }}
-                                onDragEnd={()=>{crewRowDragRef.current=null;setCrewRowDragOver(null);crewStopAutoScroll();}}
-                                title="Drag to reorder"
-                                style={{cursor:"grab",color:C.muted,fontSize:13,lineHeight:1,
-                                  padding:"2px 4px",userSelect:"none",fontFamily:"monospace",letterSpacing:-2}}>
-                                &#8942;&#8942;
-                              </span>
-                              <button onClick={e=>{e.stopPropagation();crewMoveJobToTop(job.id);}}
-                                title="Move to top"
-                                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
-                                  padding:"1px 4px",fontSize:9,fontFamily:"inherit",fontWeight:700,lineHeight:1,
-                                  opacity:0.6,transition:"opacity 0.15s"}}
-                                onMouseEnter={e=>e.currentTarget.style.opacity=1}
-                                onMouseLeave={e=>e.currentTarget.style.opacity=0.6}>
-                                &#x21C8;
-                              </button>
-                              <div style={{display:"flex",gap:2}}>
-                                <button onClick={e=>{e.stopPropagation();crewMoveJobOne(job.id,-1);}}
-                                  title="Move up"
-                                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
-                                    padding:"1px 3px",fontSize:9,lineHeight:1,opacity:0.5,transition:"opacity 0.15s"}}
-                                  onMouseEnter={e=>e.currentTarget.style.opacity=1}
-                                  onMouseLeave={e=>e.currentTarget.style.opacity=0.5}>
-                                  &#x25B2;
-                                </button>
-                                <button onClick={e=>{e.stopPropagation();crewMoveJobOne(job.id,1);}}
-                                  title="Move down"
-                                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
-                                    padding:"1px 3px",fontSize:9,lineHeight:1,opacity:0.5,transition:"opacity 0.15s"}}
-                                  onMouseEnter={e=>e.currentTarget.style.opacity=1}
-                                  onMouseLeave={e=>e.currentTarget.style.opacity=0.5}>
-                                  &#x25BC;
-                                </button>
-                              </div>
-                            </div>
-                            <div style={{flex:1,minWidth:0}}>
-                              <div style={{display:"flex",alignItems:"center",gap:4,marginBottom:2}}>
+                        <td
+                          onMouseEnter={()=>setCrewHoverJobId(job.id)}
+                          onMouseLeave={()=>setCrewHoverJobId(prev=>prev===job.id?null:prev)}
+                          style={{padding:"4px 6px 4px 8px",borderBottom:`1px solid ${C.border}`,
+                            position:"sticky",left:0,background:"var(--card)",zIndex:1,
+                            verticalAlign:"middle",maxWidth:210,minWidth:170}}>
+                          {/* Compact single-line row: [grip] [pin] [name] [pill] [foreman]
+                              Status update + reorder controls show only on row hover. */}
+                          {(() => {
+                            const phaseKey = (rs && rs!=="complete" && rs!=="invoice") ? "rough"
+                                          : (fs && fs!=="complete" && fs!=="invoice") ? "finish"
+                                          : null;
+                            const curMode = phaseKey ? deriveScheduleMode(job, phaseKey) : null;
+                            const dateKey = phaseKey==="rough" ? "roughStatusDate" : phaseKey==="finish" ? "finishStatusDate" : null;
+                            const hardKey = phaseKey==="rough" ? "roughNeedsSchedHard" : phaseKey==="finish" ? "finishNeedsSchedHard" : null;
+                            const isHover = crewHoverJobId === job.id;
+                            const isPinned = crewPinned.includes(job.id);
+                            return (
+                              <div style={{display:"flex",alignItems:"center",gap:5,position:"relative"}}>
+                                {/* Drag grip — only visible on hover to keep row clean */}
+                                <span
+                                  draggable
+                                  onDragStart={e=>{
+                                    crewRowDragRef.current=job.id;
+                                    setCrewRowDragOver(null);
+                                    try{e.dataTransfer.setData('text/plain',job.id);e.dataTransfer.effectAllowed='move';}catch(_){/* noop */}
+                                  }}
+                                  onDragEnd={()=>{crewRowDragRef.current=null;setCrewRowDragOver(null);crewStopAutoScroll();}}
+                                  title="Drag to reorder"
+                                  style={{cursor:"grab",color:C.muted,fontSize:11,lineHeight:1,
+                                    padding:"2px 2px",userSelect:"none",fontFamily:"monospace",letterSpacing:-2,
+                                    opacity:isHover?0.7:0.25,transition:"opacity 0.15s",flexShrink:0}}>
+                                  &#8942;&#8942;
+                                </span>
+                                {/* Pin — always visible if pinned, hover-only otherwise */}
                                 <button onClick={e=>{e.stopPropagation();crewTogglePinned(job.id);}}
-                                  title={crewPinned.includes(job.id)?"Unpin from this week":"Pin to this week"}
+                                  title={isPinned?"Unpin":"Pin to this week"}
                                   style={{background:"none",border:"none",cursor:"pointer",padding:"0 2px",
-                                    color:crewPinned.includes(job.id)?C.accent:C.muted,
-                                    opacity:crewPinned.includes(job.id)?1:0.5,transition:"all 0.15s",lineHeight:1,flexShrink:0}}
-                                  onMouseEnter={e=>e.currentTarget.style.opacity=1}
-                                  onMouseLeave={e=>e.currentTarget.style.opacity=crewPinned.includes(job.id)?1:0.5}>
-                                  <Icon name="flag" size={11} stroke={crewPinned.includes(job.id)?2.5:2}/>
+                                    color:isPinned?C.accent:C.muted,
+                                    opacity:isPinned?1:(isHover?0.7:0),
+                                    transition:"opacity 0.15s,color 0.15s",lineHeight:1,flexShrink:0,
+                                    width:isPinned||isHover?"auto":0,overflow:"hidden"}}>
+                                  <Icon name="flag" size={10} stroke={isPinned?2.5:2}/>
                                 </button>
+                                {/* Job name */}
                                 <div onClick={()=>onSelectJob(job)}
-                                  style={{cursor:"pointer",fontWeight:700,fontSize:12,color:"var(--text)",
+                                  title={job.statusUpdate || job.name || ""}
+                                  style={{cursor:"pointer",fontWeight:600,fontSize:12,color:"var(--text)",
                                     overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,minWidth:0}}>
                                   {job.name||"Untitled"}
                                 </div>
-                              </div>
-                              <div style={{display:"flex",gap:4,flexWrap:"wrap",alignItems:"center"}}>
-                                {pri.label&&(
-                                  <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.05em",
-                                    color:pri.color,background:pri.color+"18",
-                                    border:`1px solid ${pri.color}33`,borderRadius:99,padding:"1px 6px"}}>
-                                    {pri.label}{priDate?` ${priDate}`:""}
-                                  </span>
-                                )}
-                                {phase&&<span style={{fontSize:9,fontWeight:700,
-                                  color:phase==="Rough"?C.rough||"#2563eb":C.finish||"#16a34a",
-                                  background:(phase==="Rough"?C.rough||"#2563eb":C.finish||"#16a34a")+"15",
-                                  borderRadius:99,padding:"1px 6px"}}>{phase.toUpperCase()}</span>}
-                                <span style={{fontSize:9,fontWeight:600,color:jc,
-                                  background:jc+"15",borderRadius:99,padding:"1px 6px"}}>{job.foreman||"Koy"}</span>
-                              </div>
-                              {/* Scheduling state pill — mirrors the one on the job card */}
-                              {(() => {
-                                // Pick the most-active phase for the pill (rough if rough isn't complete, else finish)
-                                const phaseKey = (rs && rs!=="complete" && rs!=="invoice") ? "rough"
-                                              : (fs && fs!=="complete" && fs!=="invoice") ? "finish"
-                                              : null;
-                                if(!phaseKey || !onUpdateJob) return null;
-                                const dateKey = phaseKey==="rough" ? "roughStatusDate" : "finishStatusDate";
-                                const hardKey = phaseKey==="rough" ? "roughNeedsSchedHard" : "finishNeedsSchedHard";
-                                const curMode = deriveScheduleMode(job, phaseKey);
-                                if(!curMode) return null;
-                                return (
-                                  <div style={{marginTop:4,display:"flex",flexDirection:"column",gap:3,alignItems:"flex-start"}} onClick={e=>e.stopPropagation()}>
+                                {/* Scheduling pill — the main "new status pill" */}
+                                {curMode && onUpdateJob && (
+                                  <div onClick={e=>e.stopPropagation()} style={{flexShrink:0}}>
                                     <InProgressModePill
                                       size="sm"
                                       showSync={false}
@@ -20773,33 +20777,55 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                         if(Object.keys(patch).length) onUpdateJob({ ...job, ...patch }, patch);
                                       }}
                                       onSetNeedsDate={()=>{
-                                        setCrewNeedsModal({
-                                          jobId: job.id,
-                                          phase: phaseKey,
-                                          date: job[dateKey]||"",
-                                          hard: !!job[hardKey],
-                                        });
+                                        setCrewNeedsModal({ jobId: job.id, phase: phaseKey,
+                                          date: job[dateKey]||"", hard: !!job[hardKey] });
                                       }}
                                     />
-                                    {/* Status update note — click to edit inline so
-                                        scheduling context can be updated from the row */}
-                                    <StatusUpdateInline job={job} identity={identity}
-                                      onSave={p=>onUpdateJob({...job, ...p}, p)}
-                                      fontSize={10} maxWidth={200}/>
                                   </div>
-                                );
-                              })()}
-                              {crewExtra.includes(job.id)&&(
-                                <span onClick={e=>{e.stopPropagation();
-                                  const ne=crewExtra.filter(id=>id!==job.id);
-                                  setCrewExtra(ne); _saveCrewData(crewData,ne);
-                                }}
-                                  style={{fontSize:9,color:C.red,cursor:"pointer",fontWeight:600,marginTop:2,display:"block"}}>
-                                  Remove
+                                )}
+                                {/* Foreman initial — tiny colored chip for glance ID */}
+                                <span title={`Foreman: ${job.foreman||"Koy"}`}
+                                  style={{fontSize:9,fontWeight:800,color:jc,
+                                    background:jc+"20",border:`1px solid ${jc}55`,
+                                    borderRadius:99,padding:"1px 6px",flexShrink:0}}>
+                                  {(job.foreman||"Koy").charAt(0)}
                                 </span>
-                              )}
-                            </div>
-                          </div>
+                                {/* Hover overlay — status update + reorder buttons, revealed only
+                                    when mouse is on this row so the default view stays minimal */}
+                                {isHover && (job.statusUpdate || pri.label) && (
+                                  <div style={{position:"absolute",left:24,top:"100%",marginTop:2,zIndex:10,
+                                    background:"var(--card)",border:`1px solid ${C.border}`,
+                                    borderLeft:`3px solid #f59e0b`,borderRadius:6,
+                                    padding:"5px 8px",maxWidth:340,minWidth:160,
+                                    boxShadow:"0 4px 14px rgba(0,0,0,0.12)",
+                                    pointerEvents:"none"}}>
+                                    {pri.label && (
+                                      <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.05em",
+                                        color:pri.color,marginBottom:job.statusUpdate?3:0}}>
+                                        {pri.label}{priDate?` · ${priDate}`:""}
+                                      </div>
+                                    )}
+                                    {job.statusUpdate && (
+                                      <div style={{fontSize:11,color:"var(--text)",lineHeight:1.35}}>
+                                        {job.statusUpdate}
+                                      </div>
+                                    )}
+                                  </div>
+                                )}
+                                {/* Extra-added jobs get a small remove × on hover */}
+                                {isHover && crewExtra.includes(job.id) && (
+                                  <span onClick={e=>{e.stopPropagation();
+                                    const ne=crewExtra.filter(id=>id!==job.id);
+                                    setCrewExtra(ne); _saveCrewData(crewData,ne);
+                                  }}
+                                    title="Remove from this week"
+                                    style={{fontSize:11,color:C.muted,cursor:"pointer",fontWeight:700,
+                                      padding:"0 3px",opacity:0.6,flexShrink:0}}>
+                                    &times;</span>
+                                )}
+                              </div>
+                            );
+                          })()}
                         </td>
                         {crewDays.map((d,di)=>{
                           const ymd=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -20809,16 +20835,22 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                           const allPeople=[...(cell.lead?[{name:cell.lead,isLead:true}]:[]),...cell.crew.map(n=>({name:n,isLead:false}))];
                           return (
                             <td key={di}
-                              onClick={()=>crewAssign(job.id,di)}
+                              onClick={()=>{
+                                // Two paths:
+                                //   1. Something pre-selected (crewSel) → quick-add that person
+                                //   2. Nothing selected → open the cell picker to choose individual/team
+                                if(crewSel) crewAssign(job.id,di);
+                                else setCrewCellPicker({jid:job.id, di});
+                              }}
                               onDragOver={e=>e.preventDefault()}
                               onDrop={e=>{e.preventDefault();crewDrop(job.id,di);}}
                               style={{padding:"6px 6px",borderBottom:`1px solid ${C.border}`,
                                 borderLeft:`2px solid ${C.border}`,
                                 borderRight:di===5?`2px solid ${C.border}`:"none",
-                                verticalAlign:"top",cursor:crewSel?"pointer":"default",
+                                verticalAlign:"top",cursor:"pointer",
                                 background:isToday3?C.accent+"08":crewSel?C.accent+"04":"transparent",
                                 transition:"background 0.1s",minHeight:40}}
-                              onMouseEnter={e=>{if(crewSel)e.currentTarget.style.background=C.accent+"14";}}
+                              onMouseEnter={e=>{e.currentTarget.style.background=C.accent+(crewSel?"14":"08");}}
                               onMouseLeave={e=>{e.currentTarget.style.background=isToday3?C.accent+"08":crewSel?C.accent+"04":"transparent";}}>
                               {allPeople.length>0 && (
                                 <div onClick={e=>{e.stopPropagation();setCrewTimeModal({jobId:job.id,dayIdx:di,start:cell.time?.start||"07:00",end:cell.time?.end||"17:00"});}}
@@ -20906,6 +20938,121 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
               </div>
             )}
 
+            {/* Cell picker modal — tap a day cell with nothing pre-selected to
+                pick an individual or team to drop in. Prevents same-day double-
+                booking automatically via crewFindPersonOnDay. */}
+            {crewCellPicker && (() => {
+              const { jid, di } = crewCellPicker;
+              const pickedJob = jobs.find(j => j.id === jid);
+              const day = crewDays[di];
+              const close = () => setCrewCellPicker(null);
+              const applyPerson = (name) => {
+                const nx = { ...crewData };
+                const k = `${jid}_${di}`;
+                const c = crewFindPersonOnDay(name, di, jid);
+                let movedFrom = null;
+                if(c) { _crewRemoveFromCell(nx, c.k, name); movedFrom = jobs.find(j=>j.id===c.jid)?.name || "another job"; }
+                const cur = nx[k] || {lead:"",crew:[]};
+                if(cur.lead===name || (cur.crew||[]).includes(name)) { close(); return; }
+                // Lead auto-promote if cell empty and this person is a foreman / was previously lead
+                if(!cur.lead && (c?.wasLead || isForeman(name))) nx[k] = {...cur, lead:name};
+                else nx[k] = {...cur, crew:[...(cur.crew||[]), name]};
+                setCrewData(nx); _saveCrewData(nx);
+                if(movedFrom) toast.info(`Moved ${name} from ${movedFrom}.`);
+                close();
+              };
+              const applyTeam = (teamIdx) => {
+                const team = crewTeams[teamIdx]; if(!team) return;
+                const nx = { ...crewData };
+                const k = `${jid}_${di}`;
+                const allTeamNames = [...(team.lead?[team.lead]:[]), ...(team.members||[])];
+                const moved = [];
+                allTeamNames.forEach(n => {
+                  const c = crewFindPersonOnDay(n, di, jid);
+                  if(c) { _crewRemoveFromCell(nx, c.k, n); moved.push(n); }
+                });
+                const cur = nx[k] || {lead:"",crew:[]};
+                const newLead = !cur.lead && team.lead ? team.lead : cur.lead;
+                const newCrew = [...(cur.crew||[])];
+                allTeamNames.filter(n=>n!==newLead).forEach(n=>{ if(!newCrew.includes(n)) newCrew.push(n); });
+                nx[k] = { ...cur, lead:newLead, crew:newCrew };
+                setCrewData(nx); _saveCrewData(nx);
+                if(moved.length) toast.info(`Moved ${moved.join(", ")} from other jobs.`);
+                close();
+                setCrewTimeModal({ jobId:jid, dayIdx:di, start:cur.time?.start||"07:00", end:cur.time?.end||"17:00" });
+              };
+              return (
+                <div onClick={close}
+                  style={{position:"fixed",inset:0,background:"rgba(17,24,39,0.55)",zIndex:9999,
+                    display:"flex",alignItems:"center",justifyContent:"center",padding:20,backdropFilter:"blur(3px)"}}>
+                  <div onClick={e=>e.stopPropagation()}
+                    style={{background:"var(--card)",borderRadius:14,padding:"18px 22px",width:520,maxWidth:"95vw",
+                      maxHeight:"80vh",overflowY:"auto",border:`1px solid ${C.border}`,boxShadow:"0 20px 50px rgba(0,0,0,0.35)"}}>
+                    <div style={{marginBottom:12}}>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:"var(--text)"}}>SCHEDULE CREW</div>
+                      <div style={{fontSize:11,color:C.dim,marginTop:3}}>
+                        {pickedJob?.name || "Job"}
+                        {day && <> &middot; {day.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})}</>}
+                      </div>
+                    </div>
+                    {crewTeams.length > 0 && (
+                      <div style={{marginBottom:14}}>
+                        <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:6}}>TEAMS</div>
+                        <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                          {crewTeams.map((t, ti) => {
+                            const allNames = [...(t.lead?[t.lead]:[]), ...(t.members||[])];
+                            if(allNames.length === 0) return null;
+                            const tc = t.lead ? crewGetColor(t.lead) : C.dim;
+                            return (
+                              <button key={t.id||ti} onClick={()=>applyTeam(ti)}
+                                style={{background:tc+"15",border:`1px solid ${tc}55`,borderLeft:`3px solid ${tc}`,
+                                  borderRadius:7,padding:"6px 10px",cursor:"pointer",fontFamily:"inherit",textAlign:"left",
+                                  color:"var(--text)",fontSize:11,fontWeight:600}}>
+                                <div style={{fontSize:9,fontWeight:800,color:tc,letterSpacing:"0.06em",marginBottom:2}}>TEAM · {allNames.length}</div>
+                                <div>{allNames.map(n=>crewDisplayName(n)).join(", ")}</div>
+                              </button>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    )}
+                    <div>
+                      <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:6}}>PEOPLE</div>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                        {(crewRoster||[]).map(name => {
+                          const pc = crewGetColor(name);
+                          const pto = isOnPTO(name, day);
+                          const conflict = crewFindPersonOnDay(name, di, jid);
+                          const isFM = isForeman(name);
+                          return (
+                            <button key={name} onClick={()=>applyPerson(name)}
+                              title={pto ? `On PTO${pto.note?" — "+pto.note:""}` : conflict ? `Currently on ${jobs.find(j=>j.id===conflict.jid)?.name||"another job"} — tap to move` : ""}
+                              style={{background: pto?"#fef3c7":pc+"15",
+                                border:`1px ${pto?"dashed":"solid"} ${pto?"#d97706":pc+"55"}`,
+                                borderRadius:99,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",
+                                fontSize:11,fontWeight:700,color:pto?"#92400e":pc,
+                                textDecoration:pto?"line-through":"none",
+                                opacity:pto?0.6:1,
+                                display:"inline-flex",alignItems:"center",gap:3}}>
+                              {isFM && <Icon name="star" size={9} stroke={2.5}/>}
+                              {crewDisplayName(name)}
+                              {conflict && <span style={{fontSize:9,opacity:0.7,marginLeft:2}}>·move</span>}
+                            </button>
+                          );
+                        })}
+                      </div>
+                    </div>
+                    <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:16}}>
+                      <button onClick={close}
+                        style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
+                          padding:"6px 14px",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit"}}>
+                        Cancel
+                      </button>
+                    </div>
+                  </div>
+                </div>
+              );
+            })()}
             {/* Job picker modal */}
             {/* PTO modal — mark crew members out by date range */}
             {crewPTOModalOpen && (
