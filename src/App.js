@@ -19059,20 +19059,29 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     const upd = { ...cell, lead: cell.lead===name?"":cell.lead, crew:(cell.crew||[]).filter(n=>n!==name) };
     if(!upd.lead && upd.crew.length===0) delete nx[k]; else nx[k] = upd;
   };
-  const crewAssign = (jid,di) => {
+  const crewAssign = async (jid,di) => {
     if(!crewSel) return;
     const k=`${jid}_${di}`, cur=crewData[k]||{lead:"",crew:[]};
     if(cur.crew.includes(crewSel)||cur.lead===crewSel) return;
-    // Prevent same-day double-booking: if crewSel is already on another job
-    // that day, move them (remove from old cell) instead of duplicating.
     const conflict = crewFindPersonOnDay(crewSel, di, jid);
+    // If they're already on another job that day, explicitly confirm the move.
+    if(conflict) {
+      const otherName = jobs.find(j=>j.id===conflict.jid)?.name || "another job";
+      const otherCell = crewData[conflict.k];
+      const t = otherCell?.time;
+      const when = t?.start ? `${_crewFmtTime(t.start)}–${_crewFmtTime(t.end||t.start)}` : "all day";
+      const thisName = jobs.find(j=>j.id===jid)?.name || "this job";
+      const ok = await showConfirm(
+        `${crewDisplayName(crewSel)} is already scheduled at ${otherName} (${when}).\n\nMove them to ${thisName} instead?`
+      );
+      if(!ok) return;
+    }
     const nx={...crewData};
     if(conflict) {
       _crewRemoveFromCell(nx, conflict.k, crewSel);
       toast.info(`Moved ${crewSel} from ${(jobs.find(j=>j.id===conflict.jid)?.name)||"other job"}.`);
     }
     const curNow = nx[k] || {lead:"",crew:[]};
-    // Preserve lead status if they were leading the previous cell and target has no lead
     if(conflict?.wasLead && !curNow.lead) nx[k] = {...curNow, lead:crewSel};
     else nx[k] = {...curNow, crew:[...(curNow.crew||[]), crewSel]};
     setCrewData(nx); _saveCrewData(nx);
@@ -21046,15 +21055,27 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
               const pickedJob = jobs.find(j => j.id === jid);
               const day = crewDays[di];
               const close = () => setCrewCellPicker(null);
-              const applyPerson = (name) => {
-                const nx = { ...crewData };
+              const applyPerson = async (name) => {
                 const k = `${jid}_${di}`;
                 const c = crewFindPersonOnDay(name, di, jid);
+                // If they're on another job that day, explicitly confirm the move so
+                // nobody gets silently pulled off a commitment.
+                if(c) {
+                  const otherName = jobs.find(j=>j.id===c.jid)?.name || "another job";
+                  const otherCell = crewData[c.k];
+                  const t = otherCell?.time;
+                  const when = t?.start ? `${_crewFmtTime(t.start)}–${_crewFmtTime(t.end||t.start)}` : "all day";
+                  const thisName = pickedJob?.name || "this job";
+                  const ok = await showConfirm(
+                    `${crewDisplayName(name)} is already scheduled at ${otherName} (${when}).\n\nMove them to ${thisName} instead?`
+                  );
+                  if(!ok) return;
+                }
+                const nx = { ...crewData };
                 let movedFrom = null;
                 if(c) { _crewRemoveFromCell(nx, c.k, name); movedFrom = jobs.find(j=>j.id===c.jid)?.name || "another job"; }
                 const cur = nx[k] || {lead:"",crew:[]};
                 if(cur.lead===name || (cur.crew||[]).includes(name)) { close(); return; }
-                // Lead auto-promote if cell empty and this person is a foreman / was previously lead
                 if(!cur.lead && (c?.wasLead || isForeman(name))) nx[k] = {...cur, lead:name};
                 else nx[k] = {...cur, crew:[...(cur.crew||[]), name]};
                 setCrewData(nx); _saveCrewData(nx);
@@ -21149,36 +21170,46 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                         const pc = crewGetColor(name);
                         const isFM = isForeman(name);
                         const pto = s.kind === "pto";
-                        const busy = s.kind === "busy";
-                        const hasFree = s.free && s.free > 0;
-                        const baseColor = pto ? "#92400e" : pc;
-                        const baseBg    = pto ? "#fef3c7" : busy ? pc+"10" : pc+"20";
-                        const border    = pto ? "#d97706" : busy ? pc+"55" : pc+"77";
+                        const busy = s.kind === "busy";       // full-day or no-time set
+                        const partial = s.kind === "partial"; // has explicit hours with slack left
+                        // Red styling for fully-booked people so the conflict is unmissable.
+                        // Partial-day shows amber. Free shows the person's own color.
+                        const fullyBooked = busy; // busy kind = no free hours
+                        const baseColor = pto ? "#92400e" : fullyBooked ? "#b91c1c" : partial ? "#a16207" : pc;
+                        const baseBg    = pto ? "#fef3c7" : fullyBooked ? "#fee2e2" : partial ? "#fef3c7" : pc+"20";
+                        const border    = pto ? "#d97706" : fullyBooked ? "#dc2626" : partial ? "#d97706" : pc+"77";
+                        // Actual scheduled range — show it directly on the chip instead of
+                        // a vague "Xh left" summary.
+                        const timeRange = (s.time?.start && s.time?.end)
+                          ? `${_crewFmtTime(s.time.start)}–${_crewFmtTime(s.time.end)}`
+                          : s.kind === "busy" || s.kind === "partial" ? "all day" : "";
                         return (
                           <button key={name} onClick={()=>applyPerson(name)}
-                            title={pto ? `On PTO${s.kind==="pto"&&isOnPTO(name,day)?.note?" — "+isOnPTO(name,day).note:""}`
-                                 : busy ? `${s.jobName}${s.time?` · ${_crewFmtTime(s.time.start)}–${_crewFmtTime(s.time.end)}`:" · full day"} — tap to move` : ""}
+                            title={pto ? `On PTO${isOnPTO(name,day)?.note?" — "+isOnPTO(name,day).note:""}`
+                                 : (busy||partial) ? `${s.jobName}${timeRange?` · ${timeRange}`:""} — tap to move` : ""}
                             style={{background:baseBg,
-                              border:`1.5px ${pto||busy?"dashed":"solid"} ${border}`,
+                              border:`1.5px ${pto||busy||partial?"dashed":"solid"} ${border}`,
                               borderRadius:10,padding:"5px 10px",cursor:"pointer",fontFamily:"inherit",
                               fontSize:12,fontWeight:700,color:baseColor,
                               textDecoration:pto?"line-through":"none",
-                              opacity:pto?0.55:busy?0.8:1,
+                              opacity:pto?0.55:1,
                               display:"inline-flex",alignItems:"center",gap:5,
                               transition:"all 0.12s"}}
-                            onMouseEnter={e=>{if(!pto){e.currentTarget.style.background=pc+(busy?"22":"38");e.currentTarget.style.transform="translateY(-1px)";}}}
-                            onMouseLeave={e=>{if(!pto){e.currentTarget.style.background=baseBg;e.currentTarget.style.transform="";}}}>
+                            onMouseEnter={e=>{if(!pto){e.currentTarget.style.transform="translateY(-1px)";}}}
+                            onMouseLeave={e=>{if(!pto){e.currentTarget.style.transform="";}}}>
                             {isFM && <Icon name="star" size={10} stroke={2.5}/>}
                             {crewDisplayName(name)}
-                            {busy && s.hours != null && hasFree && (
-                              <span style={{fontSize:9,opacity:0.85,fontWeight:600,
-                                background:"#16a34a20",color:"#15803d",padding:"1px 5px",borderRadius:6}}>
-                                {Math.round(s.free)}h left
+                            {(busy || partial) && timeRange && (
+                              <span style={{fontSize:9,fontWeight:700,
+                                background: fullyBooked ? "#dc262622" : "#d9770622",
+                                color: fullyBooked ? "#b91c1c" : "#a16207",
+                                padding:"1px 5px",borderRadius:5,letterSpacing:"0.02em",whiteSpace:"nowrap"}}>
+                                {timeRange}
                               </span>
                             )}
-                            {busy && (
-                              <span style={{fontSize:9,opacity:0.75,fontWeight:500}}>
-                                {s.jobName.length>14?s.jobName.substring(0,14)+"…":s.jobName}
+                            {(busy || partial) && (
+                              <span style={{fontSize:9,opacity:0.7,fontWeight:500,maxWidth:90,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                                {s.jobName}
                               </span>
                             )}
                           </button>
@@ -21251,8 +21282,8 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
 
                           {byKind.busy.length > 0 && (
                             <div style={{marginBottom:10}}>
-                              <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:6}}>
-                                ON ANOTHER JOB · {byKind.busy.length} <span style={{fontWeight:500,color:C.muted,letterSpacing:0,textTransform:"none"}}>— tap to move</span>
+                              <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:"#b91c1c",marginBottom:6}}>
+                                FULLY BOOKED · {byKind.busy.length} <span style={{fontWeight:500,color:C.muted,letterSpacing:0,textTransform:"none"}}>— tap will ask to move</span>
                               </div>
                               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                                 {byKind.busy.map(renderPersonChip)}
