@@ -19247,6 +19247,67 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     };
   }, [jobs,crewData,crewMon]);
 
+  // All dated events (inspections, 4-way, QC walks, return trips) that land in the displayed week.
+  // Each event: { id, jobId, jobName, type, label, color, dayIdx, date, time }
+  // NOTE: must be declared BEFORE crewPlanJobs because the planner filter reads
+  // from crewEventsByJobDay to include jobs whose only week-presence is an event.
+  const crewPlanEvents = useMemo(() => {
+    const out = [];
+    const weekStart = crewDays[0]; const weekEnd = crewDays[5];
+    const dayIdxFor = (d) => {
+      if(!d) return -1;
+      const dt = parseAnyDate(d); if(!dt) return -1;
+      dt.setHours(0,0,0,0);
+      if(dt < weekStart || dt > new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate(), 23, 59)) return -1;
+      return Math.round((dt - weekStart) / (24*60*60*1000));
+    };
+    jobs.forEach(j => {
+      if(j.tempPed||j.quickJob) return;
+      if(j.roughInspectionDate && !j.roughInspectionResult) {
+        const di = dayIdxFor(j.roughInspectionDate);
+        if(di>=0 && di<6) out.push({ id:j.id+"_rins", jobId:j.id, jobName:j.name||"Untitled", type:"inspection", label:"Rough Inspection", color:"#7c3aed", dayIdx:di, date:j.roughInspectionDate });
+      }
+      if(j.finalInspectionDate && !j.finalInspectionResult) {
+        const di = dayIdxFor(j.finalInspectionDate);
+        if(di>=0 && di<6) out.push({ id:j.id+"_fins", jobId:j.id, jobName:j.name||"Untitled", type:"inspection", label:"Final Inspection", color:"#7c3aed", dayIdx:di, date:j.finalInspectionDate });
+      }
+      if(j.fourWayTargetDate) {
+        const di = dayIdxFor(j.fourWayTargetDate);
+        if(di>=0 && di<6) out.push({ id:j.id+"_4way", jobId:j.id, jobName:j.name||"Untitled", type:"fourway", label:"4-Way Inspection", color:"#6d28d9", dayIdx:di, date:j.fourWayTargetDate });
+      }
+      if(j.qcStatus==="scheduled" && j.qcStatusDate) {
+        const di = dayIdxFor(j.qcStatusDate);
+        if(di>=0 && di<6) out.push({ id:j.id+"_qc", jobId:j.id, jobName:j.name||"Untitled", type:"qc", label:"QC Walk", color:"#0d9488", dayIdx:di, date:j.qcStatusDate });
+      }
+      (j.returnTrips||[]).forEach((rt,rti) => {
+        if(rt.signedOff || rt.rtStatus==="complete") return;
+        const d = rt.rtStatusDate || rt.date;
+        if(!d) return;
+        const di = dayIdxFor(d);
+        if(di>=0 && di<6) {
+          const needsSched = rt.rtStatus==="needs";
+          out.push({ id:j.id+"_rt_"+(rt.id||rti), jobId:j.id, jobName:j.name||"Untitled",
+            type:"rt", label:`RT ${rti+1}${rt.scope?" — "+rt.scope.substring(0,30):""}`,
+            color: needsSched ? "#dc2626" : "#8b5cf6",
+            dayIdx:di, date:d, needsSched });
+        }
+      });
+    });
+    return out;
+  }, [jobs, crewDays]);
+
+  // Index events by jobId → dayIdx → [events] so each calendar cell can quickly
+  // pull what lands there. Replaces the separate events strip.
+  const crewEventsByJobDay = useMemo(() => {
+    const m = {};
+    crewPlanEvents.forEach(ev => {
+      if(!m[ev.jobId]) m[ev.jobId] = {};
+      if(!m[ev.jobId][ev.dayIdx]) m[ev.jobId][ev.dayIdx] = [];
+      m[ev.jobId][ev.dayIdx].push(ev);
+    });
+    return m;
+  }, [crewPlanEvents]);
+
   const crewPlanJobs = useMemo(() => {
     // A job qualifies for the planner if:
     //  • any phase is active (not complete/invoice), OR
@@ -19314,70 +19375,6 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     });
     return t;
   }, [crewData]);
-
-  // All dated events (inspections, 4-way, QC walks, return trips) that land in the displayed week.
-  // Each event: { id, jobId, jobName, type, label, color, dayIdx, date, time }
-  const crewPlanEvents = useMemo(() => {
-    const out = [];
-    const weekStart = crewDays[0]; const weekEnd = crewDays[5];
-    const dayIdxFor = (d) => {
-      if(!d) return -1;
-      const dt = parseAnyDate(d); if(!dt) return -1;
-      dt.setHours(0,0,0,0);
-      if(dt < weekStart || dt > new Date(weekEnd.getFullYear(), weekEnd.getMonth(), weekEnd.getDate(), 23, 59)) return -1;
-      return Math.round((dt - weekStart) / (24*60*60*1000));
-    };
-    jobs.forEach(j => {
-      if(j.tempPed||j.quickJob) return;
-      // Rough inspection
-      if(j.roughInspectionDate && !j.roughInspectionResult) {
-        const di = dayIdxFor(j.roughInspectionDate);
-        if(di>=0 && di<6) out.push({ id:j.id+"_rins", jobId:j.id, jobName:j.name||"Untitled", type:"inspection", label:"Rough Inspection", color:"#7c3aed", dayIdx:di, date:j.roughInspectionDate });
-      }
-      // Final / Finish inspection
-      if(j.finalInspectionDate && !j.finalInspectionResult) {
-        const di = dayIdxFor(j.finalInspectionDate);
-        if(di>=0 && di<6) out.push({ id:j.id+"_fins", jobId:j.id, jobName:j.name||"Untitled", type:"inspection", label:"Final Inspection", color:"#7c3aed", dayIdx:di, date:j.finalInspectionDate });
-      }
-      // 4-way inspection
-      if(j.fourWayTargetDate) {
-        const di = dayIdxFor(j.fourWayTargetDate);
-        if(di>=0 && di<6) out.push({ id:j.id+"_4way", jobId:j.id, jobName:j.name||"Untitled", type:"fourway", label:"4-Way Inspection", color:"#6d28d9", dayIdx:di, date:j.fourWayTargetDate });
-      }
-      // QC walk (when scheduled)
-      if(j.qcStatus==="scheduled" && j.qcStatusDate) {
-        const di = dayIdxFor(j.qcStatusDate);
-        if(di>=0 && di<6) out.push({ id:j.id+"_qc", jobId:j.id, jobName:j.name||"Untitled", type:"qc", label:"QC Walk", color:"#0d9488", dayIdx:di, date:j.qcStatusDate });
-      }
-      // Return trips
-      (j.returnTrips||[]).forEach((rt,rti) => {
-        if(rt.signedOff || rt.rtStatus==="complete") return;
-        const d = rt.rtStatusDate || rt.date;
-        if(!d) return;
-        const di = dayIdxFor(d);
-        if(di>=0 && di<6) {
-          const needsSched = rt.rtStatus==="needs";
-          out.push({ id:j.id+"_rt_"+(rt.id||rti), jobId:j.id, jobName:j.name||"Untitled",
-            type:"rt", label:`RT ${rti+1}${rt.scope?" — "+rt.scope.substring(0,30):""}`,
-            color: needsSched ? "#dc2626" : "#8b5cf6",
-            dayIdx:di, date:d, needsSched });
-        }
-      });
-    });
-    return out;
-  }, [jobs, crewDays]);
-
-  // Index events by jobId → dayIdx → [events] so each calendar cell can quickly
-  // pull what lands there. Replaces the separate events strip.
-  const crewEventsByJobDay = useMemo(() => {
-    const m = {};
-    crewPlanEvents.forEach(ev => {
-      if(!m[ev.jobId]) m[ev.jobId] = {};
-      if(!m[ev.jobId][ev.dayIdx]) m[ev.jobId][ev.dayIdx] = [];
-      m[ev.jobId][ev.dayIdx].push(ev);
-    });
-    return m;
-  }, [crewPlanEvents]);
 
   const crewPersonDays = useMemo(() => {
     const m={};
