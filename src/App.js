@@ -246,7 +246,9 @@ const CO_STATUSES_NEW = [
 ];
 const RT_STATUSES = [
   {value:"",          label:"— set status —",        color:null},
-  {value:"needs",     label:"Needs to be Scheduled", color:"#dc2626"},
+  // Giving "needs" a date lets Koy set a "schedule by" target on unscheduled
+  // RTs — these surface in the Crew Planner's needs-scheduling list.
+  {value:"needs",     label:"Needs to be Scheduled", color:"#dc2626", hasDate:true},
   {value:"scheduled", label:"Scheduled",             color:"#8b5cf6", hasDate:true},
   {value:"complete",  label:"Complete",              color:"#22c55e"},
 ];
@@ -8753,7 +8755,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
                         {rtDef.hasDate&&(
                           <div style={{display:"flex",flexDirection:"column",gap:2}}>
                             <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:rtDef.color}}>
-                              {t.rtStatus==="needs"?"WORK TO BE COMPLETED BY":"SCHEDULED DATE"}
+                              {t.rtStatus==="needs"?"SCHEDULE BY":"SCHEDULED FOR"}
                             </div>
                             <DateInp value={t.rtStatusDate||""} onChange={e=>upd(t.id,{rtStatusDate:e.target.value})}
                               style={{width:140,fontSize:11,borderColor:rtDef.color+"55",background:`${rtDef.color}08`}}/>
@@ -18768,19 +18770,44 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
   const crewRowDragRef = useRef(null);
   const [crewRowDragOver, setCrewRowDragOver] = useState(null); // jobId being hovered during row drag
   const crewScrollRaf = useRef(null);
-  // Auto-scroll window when dragging near top/bottom edges
+  const crewDragY = useRef(null); // live-updated cursor Y while any drag is in flight
+  // Auto-scroll window when dragging near top/bottom edges. Works for ANY
+  // active drag (job row reorder, team card, name chip, cell) because we
+  // register a single window-level dragover listener that keeps crewDragY
+  // current and starts the RAF loop on demand.
   const crewAutoScroll = (clientY) => {
-    const margin = 80; const speed = 14;
-    if(crewScrollRaf.current) cancelAnimationFrame(crewScrollRaf.current);
+    crewDragY.current = clientY;
+    if(crewScrollRaf.current) return; // loop already running
+    const margin = 90; const maxSpeed = 20;
     const step = () => {
-      if(!crewRowDragRef.current) return;
-      if(clientY < margin) window.scrollBy(0, -speed);
-      else if(clientY > window.innerHeight - margin) window.scrollBy(0, speed);
+      const y = crewDragY.current;
+      if(y==null) { crewScrollRaf.current=null; return; }
+      let dy = 0;
+      if(y < margin) dy = -Math.ceil(maxSpeed * (1 - y/margin));
+      else if(y > window.innerHeight - margin) dy = Math.ceil(maxSpeed * (1 - (window.innerHeight-y)/margin));
+      if(dy) window.scrollBy(0, dy);
       crewScrollRaf.current = requestAnimationFrame(step);
     };
-    step();
+    crewScrollRaf.current = requestAnimationFrame(step);
   };
-  const crewStopAutoScroll = () => { if(crewScrollRaf.current){cancelAnimationFrame(crewScrollRaf.current); crewScrollRaf.current=null;} };
+  const crewStopAutoScroll = () => {
+    crewDragY.current = null;
+    if(crewScrollRaf.current){cancelAnimationFrame(crewScrollRaf.current); crewScrollRaf.current=null;}
+  };
+  // Window-level dragover → feeds crewAutoScroll so the page follows your
+  // cursor during every drag, not just row reorders.
+  useEffect(() => {
+    const onDragOver = e => { crewAutoScroll(e.clientY); };
+    const onDragEnd  = () => { crewStopAutoScroll(); };
+    window.addEventListener("dragover", onDragOver);
+    window.addEventListener("dragend", onDragEnd);
+    window.addEventListener("drop", onDragEnd);
+    return () => {
+      window.removeEventListener("dragover", onDragOver);
+      window.removeEventListener("dragend", onDragEnd);
+      window.removeEventListener("drop", onDragEnd);
+    };
+  }, []);
   const [teamNameDrafts, setTeamNameDrafts] = useState({}); // { [idx]: "typed name" }
   const [crewUserMap, setCrewUserMap] = useState({}); // { firstName: "First L." display label }
   const [crewNeedsModal, setCrewNeedsModal] = useState(null); // { jobId, phase, date, hard }
@@ -19148,18 +19175,45 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
           if(5<best.score) best={score:5,label:"SCHEDULED",color:C.blue||"#2563eb",date:d};
         }
       });
+      // RTs in "needs" status with a Schedule-By date — surface them like a
+      // phase needing scheduling so the planner treats them as schedulable work.
+      // We only downgrade to an RT-only priority if no phase claim beat it.
+      const rtNeeds = (j.returnTrips||[]).filter(rt => !rt.signedOff && rt.rtStatus==="needs" && rt.rtStatusDate);
+      if(rtNeeds.length) {
+        // Earliest RT date wins
+        const earliest = rtNeeds
+          .map(rt => ({ rt, d: parseAnyDate(rt.rtStatusDate) }))
+          .filter(x => x.d)
+          .sort((a,b) => a.d - b.d)[0];
+        if(earliest) {
+          earliest.d.setHours(0,0,0,0);
+          if(earliest.d < today && 0<best.score) {
+            best = { score:0, label:"RT OVERDUE", color:C.red, date:earliest.rt.rtStatusDate };
+          } else if(1<best.score) {
+            best = { score:1, label:"RT SCHED BY", color:"#f97316", date:earliest.rt.rtStatusDate };
+          }
+        }
+      }
       if(best.score===7 && aIds.has(j.id)) best={score:6,label:"",color:C.dim,date:""};
       return best;
     };
   }, [jobs,crewData,crewMon]);
 
   const crewPlanJobs = useMemo(() => {
+    // A job qualifies for the planner if:
+    //  • any phase is active (not complete/invoice), OR
+    //  • it has a return trip in "needs" status with a Schedule-By date set —
+    //    those RTs are the things-to-schedule we want to see in this view.
     const active = jobs.filter(j => {
       if(j.tempPed||j.quickJob) return false;
       const rs=effRS(j),fs=effFS(j);
-      return rs&&rs!=="complete" && rs!=="invoice"
-          || fs&&fs!=="complete" && fs!=="invoice"
+      const phaseActive = (rs&&rs!=="complete" && rs!=="invoice")
+          || (fs&&fs!=="complete" && fs!=="invoice")
           || rs==="scheduled"||rs==="inprogress"||fs==="scheduled"||fs==="inprogress";
+      if(phaseActive) return true;
+      const rtNeedsSched = (j.returnTrips||[]).some(rt =>
+        !rt.signedOff && rt.rtStatus==="needs" && rt.rtStatusDate);
+      return rtNeedsSched;
     });
     const aIds=new Set(Object.keys(crewData).map(k=>k.split("_")[0]));
     const fromA=jobs.filter(j=>aIds.has(j.id)&&!active.some(a=>a.id===j.id));
@@ -20209,9 +20263,10 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                             if(fromIdx!==idx) teamMovePerson(name,fromIdx,idx);
                           }}
                           style={{background:"var(--card)",border:`1px solid ${crewTeamSel?C.accent+"55":teamColor+"22"}`,
-                            borderLeft:`3px solid ${teamColor}`,borderRadius:8,padding:"7px 9px",
-                            minWidth:140,maxWidth:220,flex:"0 1 auto",cursor:hasMembers?"grab":(crewTeamSel?"pointer":"default"),
+                            borderLeft:`3px solid ${teamColor}`,borderRadius:7,padding:"4px 6px 4px 7px",
+                            minWidth:120,maxWidth:230,flex:"0 1 auto",cursor:hasMembers?"grab":(crewTeamSel?"pointer":"default"),
                             transition:"border-color 0.15s,box-shadow 0.15s,transform 0.1s",
+                            position:"relative",
                             boxShadow:crewTeamSel?`0 0 0 1px ${C.accent}22`:`0 1px 3px ${teamColor}10`}}
                           onMouseEnter={e=>{
                             if(crewTeamSel)e.currentTarget.style.borderColor=C.accent;
@@ -20282,7 +20337,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                               )}
                             </div>
                           ):(
-                            <div style={{display:"flex",flexWrap:"wrap",gap:4}}>
+                            <div style={{display:"flex",flexWrap:"wrap",gap:3,paddingRight:14}}>
                               {allNames.map((name,ni)=>{
                                 const isLead=name===team.lead;
                                 const nc=crewGetColor(name);
@@ -20317,57 +20372,67 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                               })}
                             </div>
                           )}
-                          {/* Add helper input — shown on any non-empty team with a lead */}
-                          {team.lead&&(
-                            <div onClick={e=>e.stopPropagation()} style={{marginTop:8}}>
-                              <input
-                                value={teamNameDrafts["m"+idx]||""}
-                                onChange={e=>setTeamNameDrafts({...teamNameDrafts,["m"+idx]:e.target.value})}
-                                onFocus={()=>setTeamNameDrafts({...teamNameDrafts,["open"+idx]:true})}
-                                onBlur={()=>{setTimeout(()=>setTeamNameDrafts(prev=>{const n={...prev};delete n["open"+idx];return n;}),200);}}
-                                onKeyDown={e=>{
-                                  if(e.key==="Enter" && (teamNameDrafts["m"+idx]||"").trim()){
-                                    teamAddMember(idx, teamNameDrafts["m"+idx].trim());
-                                    setTeamNameDrafts({...teamNameDrafts,["m"+idx]:""});
-                                  } else if(e.key==="Escape"){
-                                    e.target.blur();
-                                  }
-                                }}
-                                placeholder="+ add helper"
-                                style={{background:"var(--surface)",border:`1px solid ${C.border}`,borderRadius:5,
-                                  padding:"4px 8px",fontSize:10,color:"var(--text)",fontFamily:"inherit",width:"100%"}}/>
-                              {/* Quick-pick chips only appear while the input is focused — keeps team cards clean */}
-                              {teamNameDrafts["open"+idx]&&teamUnassigned.length>0&&(
-                                <div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:4}}>
-                                  {teamUnassigned.slice(0,6).map(name=>{
-                                    const nc=crewGetColor(name);
-                                    return (
-                                      <span key={name}
-                                        onMouseDown={e=>{e.preventDefault();e.stopPropagation();teamAddMember(idx,name);}}
-                                        title={`Add ${name}`}
-                                        style={{display:"inline-flex",alignItems:"center",gap:2,
-                                          padding:"2px 7px",borderRadius:99,fontSize:10,fontWeight:600,
-                                          cursor:"pointer",userSelect:"none",
-                                          color:nc,background:nc+"12",border:`1px solid ${nc}44`}}>
-                                        {crewDisplayName(name)}
-                                      </span>
-                                    );
-                                  })}
-                                </div>
-                              )}
-                            </div>
-                          )}
-                          <div style={{display:"flex",alignItems:"center",gap:6,marginTop:8,paddingTop:6,borderTop:`1px solid ${C.border}`}}>
-                            {team.lead&&(
-                              <span style={{fontSize:9,color:C.muted,fontWeight:600}}>{allNames.length} {allNames.length===1?"person":"people"}</span>
-                            )}
-                            <span onClick={e=>{e.stopPropagation();teamRemove(idx);}}
-                              style={{marginLeft:"auto",fontSize:9,color:C.muted,cursor:"pointer",fontWeight:500,
-                                opacity:0.5,transition:"opacity 0.15s"}}
-                              onMouseEnter={e=>e.currentTarget.style.opacity=1}
-                              onMouseLeave={e=>e.currentTarget.style.opacity=0.5}>
-                              Dissolve</span>
-                          </div>
+                          {/* Add helper — small "+" chip that expands into input when clicked.
+                              Keeps team cards compact instead of always showing a full-width input. */}
+                          {team.lead&&(() => {
+                            const isOpen = !!teamNameDrafts["open"+idx];
+                            if(!isOpen) {
+                              return (
+                                <span onClick={e=>{e.stopPropagation();setTeamNameDrafts({...teamNameDrafts,["open"+idx]:true});}}
+                                  title="Add helper"
+                                  style={{display:"inline-flex",alignItems:"center",justifyContent:"center",
+                                    marginLeft:3,width:18,height:18,borderRadius:99,
+                                    border:`1px dashed ${C.border}`,color:C.muted,fontSize:11,fontWeight:700,
+                                    cursor:"pointer",userSelect:"none",flexShrink:0,lineHeight:1}}>+</span>
+                              );
+                            }
+                            return (
+                              <div onClick={e=>e.stopPropagation()} style={{marginTop:5,width:"100%"}}>
+                                <input
+                                  autoFocus
+                                  value={teamNameDrafts["m"+idx]||""}
+                                  onChange={e=>setTeamNameDrafts({...teamNameDrafts,["m"+idx]:e.target.value})}
+                                  onBlur={()=>{setTimeout(()=>setTeamNameDrafts(prev=>{const n={...prev};delete n["open"+idx];delete n["m"+idx];return n;}),200);}}
+                                  onKeyDown={e=>{
+                                    if(e.key==="Enter" && (teamNameDrafts["m"+idx]||"").trim()){
+                                      teamAddMember(idx, teamNameDrafts["m"+idx].trim());
+                                      setTeamNameDrafts({...teamNameDrafts,["m"+idx]:""});
+                                    } else if(e.key==="Escape"){
+                                      e.target.blur();
+                                    }
+                                  }}
+                                  placeholder="Add helper…"
+                                  style={{background:"var(--surface)",border:`1px solid ${C.border}`,borderRadius:5,
+                                    padding:"3px 6px",fontSize:10,color:"var(--text)",fontFamily:"inherit",width:"100%",boxSizing:"border-box"}}/>
+                                {teamUnassigned.length>0&&(
+                                  <div style={{display:"flex",flexWrap:"wrap",gap:3,marginTop:3}}>
+                                    {teamUnassigned.slice(0,6).map(name=>{
+                                      const nc=crewGetColor(name);
+                                      return (
+                                        <span key={name}
+                                          onMouseDown={e=>{e.preventDefault();e.stopPropagation();teamAddMember(idx,name);}}
+                                          title={`Add ${name}`}
+                                          style={{display:"inline-flex",alignItems:"center",gap:2,
+                                            padding:"1px 6px",borderRadius:99,fontSize:9,fontWeight:600,
+                                            cursor:"pointer",userSelect:"none",
+                                            color:nc,background:nc+"12",border:`1px solid ${nc}44`}}>
+                                          {crewDisplayName(name)}
+                                        </span>
+                                      );
+                                    })}
+                                  </div>
+                                )}
+                              </div>
+                            );
+                          })()}
+                          {/* Dissolve — small × tucked in the top-right of the card */}
+                          <span onClick={e=>{e.stopPropagation();teamRemove(idx);}}
+                            title="Dissolve team"
+                            style={{position:"absolute",top:2,right:4,fontSize:12,color:C.muted,cursor:"pointer",
+                              fontWeight:400,opacity:0.35,transition:"opacity 0.15s",padding:"0 3px",lineHeight:1}}
+                            onMouseEnter={e=>e.currentTarget.style.opacity=0.85}
+                            onMouseLeave={e=>e.currentTarget.style.opacity=0.35}>
+                            &times;</span>
                         </div>
                       );
                     })}
