@@ -18823,6 +18823,9 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
   // Track which job row's hover overlay is active, so the status-update hover
   // card only renders for the hovered row rather than on every row at once.
   const [crewHoverJobId, setCrewHoverJobId] = useState(null);
+  // Foreman filter — show only this foreman's jobs (and their scheduling needs).
+  // null = show everyone.
+  const [crewForemanFilter, setCrewForemanFilter] = useState(null);
   const [crewPTODraft, setCrewPTODraft] = useState({ name:"", start:"", end:"", note:"" });
   useEffect(() => onSnapshot(doc(db,"settings","crewPTO"), s => {
     if(s.exists()) setCrewPTOList(s.data().list||[]);
@@ -19247,8 +19250,11 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
   const crewPlanJobs = useMemo(() => {
     // A job qualifies for the planner if:
     //  • any phase is active (not complete/invoice), OR
-    //  • it has a return trip in "needs" status with a Schedule-By date set —
-    //    those RTs are the things-to-schedule we want to see in this view.
+    //  • it has a return trip in "needs" status with a Schedule-By date set, OR
+    //  • it has any dated event landing in the displayed week (inspection, QC,
+    //    4-way, RT) — events render inside the calendar cells now, so the job
+    //    row needs to exist.
+    const eventJobIds = new Set(Object.keys(crewEventsByJobDay));
     const active = jobs.filter(j => {
       if(j.tempPed||j.quickJob) return false;
       const rs=effRS(j),fs=effFS(j);
@@ -19258,7 +19264,8 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
       if(phaseActive) return true;
       const rtNeedsSched = (j.returnTrips||[]).some(rt =>
         !rt.signedOff && rt.rtStatus==="needs" && rt.rtStatusDate);
-      return rtNeedsSched;
+      if(rtNeedsSched) return true;
+      return eventJobIds.has(j.id);
     });
     const aIds=new Set(Object.keys(crewData).map(k=>k.split("_")[0]));
     const fromA=jobs.filter(j=>aIds.has(j.id)&&!active.some(a=>a.id===j.id));
@@ -19270,6 +19277,11 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     if(crewFocus && crewPinned.length > 0){
       const keep = new Set([...crewPinned, ...aIds, ...crewExtra]);
       union = union.filter(j => keep.has(j.id));
+    }
+
+    // Foreman filter — narrow to just this foreman's jobs and their schedule needs
+    if(crewForemanFilter) {
+      union = union.filter(j => (j.foreman||"Koy") === crewForemanFilter);
     }
 
     // Apply custom manual order first, then priority-sort anything not in the manual list.
@@ -19292,7 +19304,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
       return (a.job.name||"").localeCompare(b.job.name||"");
     });
     return withOrder.map(x=>({...x.job, _pri:x.pri}));
-  }, [jobs,crewData,crewExtra,crewJobOrder,_crewJobPriority,crewFocus,crewPinned]);
+  }, [jobs,crewData,crewExtra,crewJobOrder,_crewJobPriority,crewFocus,crewPinned,crewForemanFilter,crewEventsByJobDay]);
 
   const crewDayTotals = useMemo(() => {
     const t=Array(6).fill(0);
@@ -19354,6 +19366,18 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     });
     return out;
   }, [jobs, crewDays]);
+
+  // Index events by jobId → dayIdx → [events] so each calendar cell can quickly
+  // pull what lands there. Replaces the separate events strip.
+  const crewEventsByJobDay = useMemo(() => {
+    const m = {};
+    crewPlanEvents.forEach(ev => {
+      if(!m[ev.jobId]) m[ev.jobId] = {};
+      if(!m[ev.jobId][ev.dayIdx]) m[ev.jobId][ev.dayIdx] = [];
+      m[ev.jobId][ev.dayIdx].push(ev);
+    });
+    return m;
+  }, [crewPlanEvents]);
 
   const crewPersonDays = useMemo(() => {
     const m={};
@@ -20574,47 +20598,45 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
               )}
             </div>
 
-            {/* Events this week — read-only strip with inspections, 4-ways, QCs, RTs landing each day */}
-            {crewPlanEvents.length > 0 && (
-              <div style={{marginBottom:10,border:`1px solid ${C.border}`,borderRadius:10,background:"var(--card)"}}>
-                <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",borderBottom:`1px solid ${C.border}`}}>
-                  <Icon name="calendar" size={13} color="#7c3aed"/>
-                  <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:"#7c3aed"}}>EVENTS THIS WEEK</span>
-                  <span style={{fontSize:10,color:C.dim,marginLeft:"auto"}}>
-                    {crewPlanEvents.length} event{crewPlanEvents.length!==1?"s":""} across this week · plan crews around them
-                  </span>
-                </div>
-                <div style={{display:"grid",gridTemplateColumns:"repeat(6,1fr)",gap:0}}>
-                  {crewDays.map((d,di)=>{
-                    const dayEvts = crewPlanEvents.filter(e=>e.dayIdx===di).sort((a,b)=>a.type.localeCompare(b.type));
-                    const isToday3 = (()=>{const ymd=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`; return ymd===todayYMD2;})();
+            {/* Foreman filter — click a foreman to narrow the calendar to just
+                their jobs + their scheduling needs. Click again (or "All") to
+                clear. Uses the same color palette as roster chips so the
+                filter chip matches the names. */}
+            {(() => {
+              const foremenInJobs = Array.from(new Set(
+                jobs.filter(j=>!j.tempPed && !j.quickJob).map(j=>j.foreman||"Koy")
+              )).filter(Boolean).sort();
+              if(foremenInJobs.length <= 1) return null;
+              return (
+                <div style={{marginBottom:10,display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                  <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim}}>FILTER</span>
+                  <button onClick={()=>setCrewForemanFilter(null)}
+                    style={{background:!crewForemanFilter?C.accent:"var(--surface)",
+                      color:!crewForemanFilter?"#fff":C.dim,
+                      border:`1px solid ${!crewForemanFilter?C.accent:C.border}`,
+                      borderRadius:99,padding:"3px 11px",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit"}}>
+                    All
+                  </button>
+                  {foremenInJobs.map(fm => {
+                    const col = getFC(fm) || C.dim;
+                    const isSel = crewForemanFilter === fm;
                     return (
-                      <div key={di} style={{padding:"6px 6px",
-                        borderRight: di<5 ? `1px solid ${C.border}` : "none",
-                        background: isToday3 ? C.accent+"06" : "transparent",
-                        minHeight: 40}}>
-                        {dayEvts.length===0 ? (
-                          <div style={{fontSize:9,color:C.muted,fontStyle:"italic",textAlign:"center",paddingTop:6}}>—</div>
-                        ) : dayEvts.map(ev => (
-                          <div key={ev.id}
-                            onClick={()=>{const j=jobs.find(x=>x.id===ev.jobId); if(j) onSelectJob(j);}}
-                            title={`${ev.label} · ${ev.jobName}`}
-                            style={{cursor:"pointer",borderLeft:`3px solid ${ev.color}`,
-                              padding:"3px 6px",marginBottom:3,background:ev.color+"0a",
-                              borderRadius:"0 4px 4px 0"}}>
-                            <div style={{fontSize:9,fontWeight:800,color:ev.color,letterSpacing:"0.04em"}}>
-                              {ev.type==="inspection"?"INSP":ev.type==="fourway"?"4-WAY":ev.type==="qc"?"QC":ev.type==="rt"?(ev.needsSched?"RT!":"RT"):ev.type.toUpperCase()}
-                            </div>
-                            <div style={{fontSize:10,fontWeight:600,color:"var(--text)",
-                              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{ev.jobName}</div>
-                          </div>
-                        ))}
-                      </div>
+                      <button key={fm}
+                        onClick={()=>setCrewForemanFilter(isSel?null:fm)}
+                        style={{background:isSel?col:col+"15",
+                          color:isSel?"#fff":col,
+                          border:`1px solid ${isSel?col:col+"55"}`,
+                          borderRadius:99,padding:"3px 11px",cursor:"pointer",fontSize:11,fontWeight:700,fontFamily:"inherit",
+                          display:"inline-flex",alignItems:"center",gap:3,
+                          boxShadow:isSel?`0 2px 6px ${col}44`:"none",transition:"all 0.12s"}}>
+                        {isForeman(fm) && <Icon name="star" size={9} stroke={2.5}/>}
+                        {crewDisplayName(fm)}
+                      </button>
                     );
                   })}
                 </div>
-              </div>
-            )}
+              );
+            })()}
 
             {/* Schedule grid */}
             <div style={{overflowX:"auto",WebkitOverflowScrolling:"touch"}}>
@@ -20852,6 +20874,36 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                 transition:"background 0.1s",minHeight:40}}
                               onMouseEnter={e=>{e.currentTarget.style.background=C.accent+(crewSel?"14":"08");}}
                               onMouseLeave={e=>{e.currentTarget.style.background=isToday3?C.accent+"08":crewSel?C.accent+"04":"transparent";}}>
+                              {/* Events landing in this cell (inspection, 4-way, QC walk, RT).
+                                  Rendered above people so the scheduled event is the first
+                                  thing you see when planning crew around it. */}
+                              {(() => {
+                                const evts = (crewEventsByJobDay[job.id]||{})[di] || [];
+                                if(!evts.length) return null;
+                                return (
+                                  <div style={{display:"flex",flexDirection:"column",gap:2,marginBottom:3}}>
+                                    {evts.map(ev => {
+                                      const lbl = ev.type==="inspection" ? (ev.label.includes("Rough")?"ROUGH INSP":ev.label.includes("Final")?"FINAL INSP":"INSP")
+                                                : ev.type==="fourway"    ? "4-WAY"
+                                                : ev.type==="qc"         ? "QC WALK"
+                                                : ev.type==="rt"         ? (ev.needsSched?"RT NEEDS":"RT")
+                                                : ev.type.toUpperCase();
+                                      return (
+                                        <div key={ev.id}
+                                          onClick={e=>{e.stopPropagation();const j=jobs.find(x=>x.id===ev.jobId); if(j) onSelectJob(j);}}
+                                          title={`${ev.label}${ev.date?" · "+ev.date:""}`}
+                                          style={{cursor:"pointer",borderLeft:`3px solid ${ev.color}`,
+                                            padding:"1px 5px",background:ev.color+"12",borderRadius:"0 3px 3px 0",
+                                            display:"flex",alignItems:"center",gap:4,minHeight:14}}>
+                                          <span style={{fontSize:8,fontWeight:800,color:ev.color,letterSpacing:"0.05em",whiteSpace:"nowrap"}}>
+                                            {lbl}
+                                          </span>
+                                        </div>
+                                      );
+                                    })}
+                                  </div>
+                                );
+                              })()}
                               {allPeople.length>0 && (
                                 <div onClick={e=>{e.stopPropagation();setCrewTimeModal({jobId:job.id,dayIdx:di,start:cell.time?.start||"07:00",end:cell.time?.end||"17:00"});}}
                                   title={cell.time?.start?"Tap to edit time":"Tap to set time"}
