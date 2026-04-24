@@ -13515,14 +13515,52 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
             </div>
 
-            {job.statusUpdate&&(
-              <div style={{display:"inline-flex",alignItems:"center",gap:6,marginTop:5,
-                fontSize:12,fontWeight:500,color:C.text,
-                borderLeft:"3px solid #f59e0b",paddingLeft:8,paddingRight:2,
-                lineHeight:1.4}}>
-                <span>{job.statusUpdate}</span>
-              </div>
-            )}
+            {(() => {
+              // Pick the most-active phase for the scheduling pill on the card
+              const rs = effRS(job), fs = effFS(job);
+              const phaseKey = (rs && rs!=="complete" && rs!=="invoice") ? "rough"
+                           : (fs && fs!=="complete" && fs!=="invoice") ? "finish"
+                           : null;
+              const mode = phaseKey ? deriveScheduleMode(job, phaseKey) : null;
+              const needsDate = phaseKey==="rough" ? (job.roughStatusDate||"")
+                              : phaseKey==="finish" ? (job.finishStatusDate||"")
+                              : "";
+              const needsHard = phaseKey==="rough" ? !!job.roughNeedsSchedHard
+                              : phaseKey==="finish" ? !!job.finishNeedsSchedHard : false;
+              if(!mode && !job.statusUpdate) return null;
+              // Pill color + label per mode (inline version of InProgressModePill for card context)
+              const pillColor = mode==="scheduled" ? "#2563eb"
+                             : mode==="needsSched" ? "#f97316"
+                             : mode==="ongoing"   ? "#6b7280" : null;
+              const fmtD = d => { try { const dt=new Date(d); if(isNaN(dt)) return ""; return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); } catch(_){return "";} };
+              const dateStr = mode==="needsSched" && needsDate ? fmtD(needsDate) : "";
+              const pillLabel = mode==="scheduled" ? "On Schedule"
+                              : mode==="needsSched" ? (dateStr ? (needsHard ? `Needs: ${dateStr}` : `Target ${dateStr}`) : "Needs Sched")
+                              : mode==="ongoing" ? "Ongoing" : null;
+              return (
+                <div style={{display:"flex",alignItems:"center",gap:8,marginTop:5,flexWrap:"wrap"}}>
+                  {pillColor && pillLabel && (
+                    <span style={{display:"inline-flex",alignItems:"center",gap:4,
+                      fontSize:11,fontWeight:700,letterSpacing:"0.04em",
+                      padding:"2px 9px",borderRadius:99,
+                      background:`${pillColor}18`,color:pillColor,
+                      border:`1px ${mode==="ongoing"?"dashed":"solid"} ${pillColor}55`,
+                      whiteSpace:"nowrap"}}>
+                      <span style={{width:6,height:6,borderRadius:"50%",background:pillColor,display:"inline-block"}}/>
+                      {pillLabel}
+                    </span>
+                  )}
+                  {job.statusUpdate && (
+                    <div style={{display:"inline-flex",alignItems:"center",
+                      fontSize:12,fontWeight:500,color:C.text,
+                      borderLeft:"3px solid #f59e0b",paddingLeft:8,paddingRight:2,
+                      lineHeight:1.4}}>
+                      <span>{job.statusUpdate}</span>
+                    </div>
+                  )}
+                </div>
+              );
+            })()}
             {job.accessNote&&(
               <div style={{display:"inline-flex",alignItems:"center",gap:5,marginTop:4,
                 fontSize:11,color:"#92400e",background:"#fef3c7",
@@ -15974,10 +16012,9 @@ function TempPedCard({ job, onOpen, onUpdate, onDelete }) {
             {job.lead&&<span style={{color:"var(--accent)"}}>· {job.lead}</span>}
           </div>
           {job.statusUpdate&&(
-            <div style={{fontSize:10,color:"#9a3412",marginTop:4,fontWeight:700,
-              background:"#fff7ed",border:"1px solid #ea580c",borderRadius:6,
-              padding:"2px 7px",display:"inline-flex",alignItems:"center",gap:4,maxWidth:"100%"}}>
-              <Icon name="alertTriangle" size={9} stroke={2.5} color="#ea580c"/>
+            <div style={{fontSize:11,color:"var(--text)",marginTop:4,fontWeight:500,
+              borderLeft:"3px solid #f59e0b",paddingLeft:8,paddingRight:2,
+              display:"inline-flex",alignItems:"center",maxWidth:"100%",lineHeight:1.4}}>
               <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{job.statusUpdate}</span>
             </div>
           )}
@@ -25361,11 +25398,9 @@ function App() {
             )}
             {job.statusUpdate&&(
               <div title={`Status set by ${job.statusUpdateBy||"someone"}${job.statusUpdateAt?` · ${timeAgo(job.statusUpdateAt)}`:""}`}
-                style={{fontSize:11,color:"#9a3412",marginTop:4,fontWeight:700,
-                background:"#fff7ed",border:"2px solid #ea580c",
-                borderRadius:7,padding:"3px 9px",display:"inline-flex",alignItems:"center",gap:5,maxWidth:"100%",
-                boxShadow:"0 0 0 1px #fed7aa88"}}>
-                <Icon name="alertTriangle" size={11} stroke={2.5} color="#ea580c"/>
+                style={{fontSize:12,color:"var(--text)",marginTop:4,fontWeight:500,
+                borderLeft:"3px solid #f59e0b",paddingLeft:8,paddingRight:2,
+                display:"inline-flex",alignItems:"center",maxWidth:"100%",lineHeight:1.4}}>
                 <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:280}}>{job.statusUpdate}</span>
               </div>
             )}
