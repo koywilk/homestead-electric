@@ -20705,6 +20705,8 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                     const priDate=pri.date?(()=>{const d=parseAnyDate(pri.date);return d?d.toLocaleDateString("en-US",{month:"short",day:"numeric"}):"";})():"";
                     return (
                       <tr key={job.id}
+                        onMouseEnter={()=>setCrewHoverJobId(job.id)}
+                        onMouseLeave={()=>setCrewHoverJobId(prev=>prev===job.id?null:prev)}
                         onDragOver={e=>{
                           if(!crewRowDragRef.current) return;
                           e.preventDefault();
@@ -20731,8 +20733,6 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                           transition:"background 0.1s,outline 0.1s",
                         }}>
                         <td
-                          onMouseEnter={()=>setCrewHoverJobId(job.id)}
-                          onMouseLeave={()=>setCrewHoverJobId(prev=>prev===job.id?null:prev)}
                           style={{padding:"4px 6px 4px 8px",borderBottom:`1px solid ${C.border}`,
                             position:"sticky",left:0,background:"var(--card)",zIndex:1,
                             verticalAlign:"middle",maxWidth:210,minWidth:170}}>
@@ -20742,9 +20742,21 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                             const phaseKey = (rs && rs!=="complete" && rs!=="invoice") ? "rough"
                                           : (fs && fs!=="complete" && fs!=="invoice") ? "finish"
                                           : null;
-                            const curMode = phaseKey ? deriveScheduleMode(job, phaseKey) : null;
+                            const phaseMode = phaseKey ? deriveScheduleMode(job, phaseKey) : null;
                             const dateKey = phaseKey==="rough" ? "roughStatusDate" : phaseKey==="finish" ? "finishStatusDate" : null;
                             const hardKey = phaseKey==="rough" ? "roughNeedsSchedHard" : phaseKey==="finish" ? "finishNeedsSchedHard" : null;
+                            // RT fallback — when no active phase pill, but the job has an
+                            // RT "needs" with a schedule-by date, show that same pill shape
+                            // so the row still communicates "something to schedule".
+                            const rtNeeds = (job.returnTrips||[])
+                              .filter(rt => !rt.signedOff && rt.rtStatus==="needs" && rt.rtStatusDate)
+                              .map(rt => ({ rt, d: parseAnyDate(rt.rtStatusDate) }))
+                              .filter(x => x.d)
+                              .sort((a,b) => a.d - b.d)[0];
+                            const curMode = phaseMode || (rtNeeds ? "needsSched" : null);
+                            const curDate = phaseMode
+                              ? (job[dateKey]||"")
+                              : (rtNeeds ? rtNeeds.rt.rtStatusDate : "");
                             const isHover = crewHoverJobId === job.id;
                             const isPinned = crewPinned.includes(job.id);
                             return (
@@ -20781,26 +20793,39 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                     overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",flex:1,minWidth:0}}>
                                   {job.name||"Untitled"}
                                 </div>
-                                {/* Scheduling pill — the main "new status pill" */}
+                                {/* Scheduling pill — same "new status pill" for phase jobs AND
+                                    RT-only jobs. The RT path just drives the pill in needsSched
+                                    mode with the RT's schedule-by date; clicks open the job
+                                    detail so the user can edit the RT there. */}
                                 {curMode && onUpdateJob && (
                                   <div onClick={e=>e.stopPropagation()} style={{flexShrink:0}}>
                                     <InProgressModePill
                                       size="sm"
                                       showSync={false}
                                       mode={curMode}
-                                      needsDate={job[dateKey]||""}
-                                      needsHard={!!job[hardKey]}
+                                      needsDate={curDate}
+                                      needsHard={phaseMode ? !!job[hardKey] : false}
                                       onToggle={()=>{
-                                        const next = curMode==="scheduled" ? "needsSched"
-                                                  : curMode==="needsSched"  ? "ongoing"
-                                                  : curMode==="ongoing"     ? "scheduled"
-                                                  : "scheduled";
-                                        const patch = applyScheduleMode(job, phaseKey, next);
-                                        if(Object.keys(patch).length) onUpdateJob({ ...job, ...patch }, patch);
+                                        if(phaseMode) {
+                                          const next = curMode==="scheduled" ? "needsSched"
+                                                    : curMode==="needsSched"  ? "ongoing"
+                                                    : curMode==="ongoing"     ? "scheduled"
+                                                    : "scheduled";
+                                          const patch = applyScheduleMode(job, phaseKey, next);
+                                          if(Object.keys(patch).length) onUpdateJob({ ...job, ...patch }, patch);
+                                        } else {
+                                          // RT pill — open job detail for RT edits
+                                          onSelectJob(job);
+                                        }
                                       }}
                                       onSetNeedsDate={()=>{
-                                        setCrewNeedsModal({ jobId: job.id, phase: phaseKey,
-                                          date: job[dateKey]||"", hard: !!job[hardKey] });
+                                        if(phaseMode) {
+                                          setCrewNeedsModal({ jobId: job.id, phase: phaseKey,
+                                            date: job[dateKey]||"", hard: !!job[hardKey] });
+                                        } else {
+                                          // RT pill — open job detail so RT date can be edited there
+                                          onSelectJob(job);
+                                        }
                                       }}
                                     />
                                   </div>
@@ -20812,26 +20837,19 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                     borderRadius:99,padding:"1px 6px",flexShrink:0}}>
                                   {(job.foreman||"Koy").charAt(0)}
                                 </span>
-                                {/* Hover overlay — status update + reorder buttons, revealed only
-                                    when mouse is on this row so the default view stays minimal */}
-                                {isHover && (job.statusUpdate || pri.label) && (
+                                {/* Hover overlay — status update note only. No priority
+                                    chip or bubble; the pill on the row already carries the
+                                    scheduling state, and hover is reserved for the note. */}
+                                {isHover && job.statusUpdate && (
                                   <div style={{position:"absolute",left:24,top:"100%",marginTop:2,zIndex:10,
                                     background:"var(--card)",border:`1px solid ${C.border}`,
                                     borderLeft:`3px solid #f59e0b`,borderRadius:6,
                                     padding:"5px 8px",maxWidth:340,minWidth:160,
                                     boxShadow:"0 4px 14px rgba(0,0,0,0.12)",
                                     pointerEvents:"none"}}>
-                                    {pri.label && (
-                                      <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.05em",
-                                        color:pri.color,marginBottom:job.statusUpdate?3:0}}>
-                                        {pri.label}{priDate?` · ${priDate}`:""}
-                                      </div>
-                                    )}
-                                    {job.statusUpdate && (
-                                      <div style={{fontSize:11,color:"var(--text)",lineHeight:1.35}}>
-                                        {job.statusUpdate}
-                                      </div>
-                                    )}
+                                    <div style={{fontSize:11,color:"var(--text)",lineHeight:1.35}}>
+                                      {job.statusUpdate}
+                                    </div>
                                   </div>
                                 )}
                                 {/* Extra-added jobs get a small remove × on hover */}
@@ -21034,21 +21052,36 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                 setCrewTimeModal({ jobId:jid, dayIdx:di, start:cur.time?.start||"07:00", end:cur.time?.end||"17:00" });
               };
               return (
-                <div onClick={close}
-                  style={{position:"fixed",inset:0,background:"rgba(17,24,39,0.55)",zIndex:9999,
-                    display:"flex",alignItems:"center",justifyContent:"center",padding:20,backdropFilter:"blur(3px)"}}>
+                <>
+                  {/* Transparent click-catcher so the calendar stays fully visible
+                      behind the picker. Clicking anywhere outside closes. */}
+                  <div onClick={close}
+                    style={{position:"fixed",inset:0,background:"transparent",zIndex:9998}}/>
+                  {/* Picker panel — floats at top-center, doesn't obscure the grid
+                      so you can see the cell you were assigning into. */}
                   <div onClick={e=>e.stopPropagation()}
-                    style={{background:"var(--card)",borderRadius:14,padding:"18px 22px",width:520,maxWidth:"95vw",
-                      maxHeight:"80vh",overflowY:"auto",border:`1px solid ${C.border}`,boxShadow:"0 20px 50px rgba(0,0,0,0.35)"}}>
-                    <div style={{marginBottom:12}}>
-                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:"var(--text)"}}>SCHEDULE CREW</div>
-                      <div style={{fontSize:11,color:C.dim,marginTop:3}}>
-                        {pickedJob?.name || "Job"}
-                        {day && <> &middot; {day.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"})}</>}
+                    style={{position:"fixed",top:80,left:"50%",transform:"translateX(-50%)",
+                      width:620,maxWidth:"96vw",maxHeight:"calc(100vh - 120px)",overflowY:"auto",
+                      background:"var(--card)",borderRadius:12,padding:"14px 18px",
+                      border:`1px solid ${C.border}`,zIndex:9999,
+                      boxShadow:"0 12px 40px rgba(0,0,0,0.28), 0 0 0 3px rgba(232,144,26,0.20)"}}>
+                    <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:10,marginBottom:10}}>
+                      <div>
+                        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)",lineHeight:1}}>SCHEDULE CREW</div>
+                        <div style={{fontSize:11,color:C.dim,marginTop:3}}>
+                          <span style={{fontWeight:600,color:"var(--text)"}}>{pickedJob?.name || "Job"}</span>
+                          {day && <> &middot; {day.toLocaleDateString("en-US",{weekday:"long",month:"short",day:"numeric"})}</>}
+                        </div>
                       </div>
+                      <button onClick={close}
+                        title="Close"
+                        style={{background:"none",border:"none",cursor:"pointer",
+                          color:C.muted,fontSize:20,lineHeight:1,padding:"4px 8px",fontFamily:"inherit",fontWeight:400}}>
+                        &times;
+                      </button>
                     </div>
                     {crewTeams.length > 0 && (
-                      <div style={{marginBottom:14}}>
+                      <div style={{marginBottom:12}}>
                         <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:6}}>TEAMS</div>
                         <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                           {crewTeams.map((t, ti) => {
@@ -21057,10 +21090,13 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                             const tc = t.lead ? crewGetColor(t.lead) : C.dim;
                             return (
                               <button key={t.id||ti} onClick={()=>applyTeam(ti)}
-                                style={{background:tc+"15",border:`1px solid ${tc}55`,borderLeft:`3px solid ${tc}`,
-                                  borderRadius:7,padding:"6px 10px",cursor:"pointer",fontFamily:"inherit",textAlign:"left",
-                                  color:"var(--text)",fontSize:11,fontWeight:600}}>
-                                <div style={{fontSize:9,fontWeight:800,color:tc,letterSpacing:"0.06em",marginBottom:2}}>TEAM · {allNames.length}</div>
+                                style={{background:tc+"18",border:`1.5px solid ${tc}55`,borderLeft:`4px solid ${tc}`,
+                                  borderRadius:8,padding:"8px 12px",cursor:"pointer",fontFamily:"inherit",textAlign:"left",
+                                  color:"var(--text)",fontSize:12,fontWeight:600,
+                                  transition:"all 0.12s"}}
+                                onMouseEnter={e=>{e.currentTarget.style.background=tc+"28";e.currentTarget.style.transform="translateY(-1px)";}}
+                                onMouseLeave={e=>{e.currentTarget.style.background=tc+"18";e.currentTarget.style.transform="";}}>
+                                <div style={{fontSize:9,fontWeight:800,color:tc,letterSpacing:"0.06em",marginBottom:3}}>TEAM · {allNames.length}</div>
                                 <div>{allNames.map(n=>crewDisplayName(n)).join(", ")}</div>
                               </button>
                             );
@@ -21070,7 +21106,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                     )}
                     <div>
                       <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:6}}>PEOPLE</div>
-                      <div style={{display:"flex",flexWrap:"wrap",gap:5}}>
+                      <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                         {(crewRoster||[]).map(name => {
                           const pc = crewGetColor(name);
                           const pto = isOnPTO(name, day);
@@ -21079,30 +21115,26 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                           return (
                             <button key={name} onClick={()=>applyPerson(name)}
                               title={pto ? `On PTO${pto.note?" — "+pto.note:""}` : conflict ? `Currently on ${jobs.find(j=>j.id===conflict.jid)?.name||"another job"} — tap to move` : ""}
-                              style={{background: pto?"#fef3c7":pc+"15",
-                                border:`1px ${pto?"dashed":"solid"} ${pto?"#d97706":pc+"55"}`,
-                                borderRadius:99,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit",
-                                fontSize:11,fontWeight:700,color:pto?"#92400e":pc,
+                              style={{background: pto?"#fef3c7":pc+"20",
+                                border:`1.5px ${pto?"dashed":"solid"} ${pto?"#d97706":pc+"77"}`,
+                                borderRadius:99,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",
+                                fontSize:12,fontWeight:700,color:pto?"#92400e":pc,
                                 textDecoration:pto?"line-through":"none",
                                 opacity:pto?0.6:1,
-                                display:"inline-flex",alignItems:"center",gap:3}}>
-                              {isFM && <Icon name="star" size={9} stroke={2.5}/>}
+                                display:"inline-flex",alignItems:"center",gap:4,
+                                transition:"all 0.12s"}}
+                              onMouseEnter={e=>{if(!pto){e.currentTarget.style.background=pc+"38";e.currentTarget.style.transform="translateY(-1px)";}}}
+                              onMouseLeave={e=>{if(!pto){e.currentTarget.style.background=pc+"20";e.currentTarget.style.transform="";}}}>
+                              {isFM && <Icon name="star" size={10} stroke={2.5}/>}
                               {crewDisplayName(name)}
-                              {conflict && <span style={{fontSize:9,opacity:0.7,marginLeft:2}}>·move</span>}
+                              {conflict && <span style={{fontSize:9,opacity:0.7,marginLeft:3,fontWeight:600}}>·move</span>}
                             </button>
                           );
                         })}
                       </div>
                     </div>
-                    <div style={{display:"flex",justifyContent:"flex-end",gap:8,marginTop:16}}>
-                      <button onClick={close}
-                        style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
-                          padding:"6px 14px",cursor:"pointer",fontSize:11,fontWeight:600,fontFamily:"inherit"}}>
-                        Cancel
-                      </button>
-                    </div>
                   </div>
-                </div>
+                </>
               );
             })()}
             {/* Job picker modal */}
