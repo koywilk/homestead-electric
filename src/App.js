@@ -18814,6 +18814,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
   }, []);
   const [teamNameDrafts, setTeamNameDrafts] = useState({}); // { [idx]: "typed name" }
   const [crewUserMap, setCrewUserMap] = useState({}); // { firstName: "First L." display label }
+  const [crewForemanOf, setCrewForemanOf] = useState({}); // { firstName: foremanFirstName }
   const [crewNeedsModal, setCrewNeedsModal] = useState(null); // { jobId, phase, date, hard }
   const [crewPTOList, setCrewPTOList] = useState([]); // [{name, start, end, note}]
   const [crewPTOModalOpen, setCrewPTOModalOpen] = useState(false);
@@ -18890,7 +18891,6 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
       if(!snap.exists()) return;
       const list = snap.data().list || [];
       const map = {};
-      // Count occurrences of each first name so we only add last-initial when there's ambiguity
       const firstCount = {};
       list.forEach(u => {
         const parts = (u.name||"").trim().split(/\s+/);
@@ -18901,11 +18901,23 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
         const first = parts[0]; if(!first) return;
         const last = parts[parts.length-1];
         if(parts.length > 1 && last && last !== first) {
-          // Always include last initial when there's a last name — Koy asked for this
           map[first] = `${first} ${last[0]}.`;
         }
       });
       setCrewUserMap(map);
+      // Build foreman-of-user map: firstName → their foreman's firstName.
+      // Users have a foremanId pointing at another user's id. We resolve that
+      // to a first name so the picker can include "everyone on Koy's crew"
+      // even when they're not in one of Koy's teams.
+      const byId = Object.fromEntries(list.map(u => [u.id, u]));
+      const fmOf = {};
+      list.forEach(u => {
+        const first = (u.name||"").trim().split(/\s+/)[0]; if(!first) return;
+        const fmUser = u.foremanId ? byId[u.foremanId] : null;
+        const fmFirst = fmUser ? (fmUser.name||"").trim().split(/\s+/)[0] : "";
+        if(fmFirst) fmOf[first] = fmFirst;
+      });
+      setCrewForemanOf(fmOf);
     });
     return unsub;
   }, []);
@@ -21244,9 +21256,15 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                       const scopedRoster = (() => {
                         if(!crewForemanFilter) return crewRoster || [];
                         const allowed = new Set([crewForemanFilter]);
+                        // Include members of any team led by this foreman
                         scopedTeams.forEach(t => {
                           if(t.lead) allowed.add(t.lead);
                           (t.members||[]).forEach(n => allowed.add(n));
+                        });
+                        // Include anyone whose user record has this foreman assigned —
+                        // that's Koy's "actual crew" regardless of team membership.
+                        (crewRoster || []).forEach(n => {
+                          if(crewForemanOf[n] === crewForemanFilter) allowed.add(n);
                         });
                         return (crewRoster || []).filter(n => allowed.has(n));
                       })();
