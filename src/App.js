@@ -20701,6 +20701,26 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                     const phase=rs==="scheduled"||rs==="inprogress"?"Rough":fs==="scheduled"||fs==="inprogress"?"Finish":"";
                     const pri=job._pri||{score:7,label:"",color:C.dim,date:""};
                     const priDate=pri.date?(()=>{const d=parseAnyDate(pri.date);return d?d.toLocaleDateString("en-US",{month:"short",day:"numeric"}):"";})():"";
+                    // Needs-met check: is there ANY crew assigned to this job anywhere in
+                    // the displayed week? If yes, this row's scheduling need is satisfied
+                    // for the week and gets a soft green tint so it stands out as "good".
+                    const hasAssignmentThisWeek = (() => {
+                      for(let di=0; di<crewDays.length; di++) {
+                        const cell = crewData[`${job.id}_${di}`];
+                        if(cell && (cell.lead || (cell.crew||[]).length>0)) return true;
+                      }
+                      return false;
+                    })();
+                    // Only treat it as "needs met" if there's actually a scheduling need
+                    // to satisfy (i.e., the job has a pill state). Complete-only or
+                    // fully-stalled jobs don't get the green tint — nothing to be met.
+                    const phaseKeyForNeed = (rs && rs!=="complete" && rs!=="invoice") ? "rough"
+                                          : (fs && fs!=="complete" && fs!=="invoice") ? "finish"
+                                          : null;
+                    const hasPhaseNeed = phaseKeyForNeed && !!deriveScheduleMode(job, phaseKeyForNeed);
+                    const hasRtNeed   = (job.returnTrips||[]).some(rt =>
+                      !rt.signedOff && rt.rtStatus==="needs" && rt.rtStatusDate);
+                    const needsMet = hasAssignmentThisWeek && (hasPhaseNeed || hasRtNeed);
                     return (
                       <tr key={job.id}
                         onMouseEnter={()=>setCrewHoverJobId(job.id)}
@@ -20725,14 +20745,22 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                           crewStopAutoScroll();
                         }}
                         style={{
-                          background: crewRowDragOver===job.id ? C.accent+"10" : crewRowDragRef.current===job.id ? C.accent+"06" : "transparent",
+                          background: crewRowDragOver===job.id ? C.accent+"10"
+                                    : crewRowDragRef.current===job.id ? C.accent+"06"
+                                    : needsMet ? "rgba(34,197,94,0.07)" : "transparent",
                           outline: crewRowDragOver===job.id ? `2px solid ${C.accent}` : "none",
                           outlineOffset: -2,
-                          transition:"background 0.1s,outline 0.1s",
+                          transition:"background 0.15s,outline 0.1s",
                         }}>
                         <td
                           style={{padding:"4px 6px 4px 8px",borderBottom:`1px solid ${C.border}`,
-                            position:"sticky",left:0,background:"var(--card)",zIndex:1,
+                            position:"sticky",left:0,zIndex:1,
+                            // Sticky cell needs its own opaque background so it doesn't
+                            // reveal the scrolled cells behind it. When needs are met,
+                            // that opaque color gets a matching green tint so the whole
+                            // row reads as "good" even across the sticky boundary.
+                            background: needsMet ? "#e8f5ed" : "var(--card)",
+                            borderLeft: needsMet ? `3px solid ${C.green||"#22c55e"}` : "none",
                             verticalAlign:"middle",width:280,maxWidth:280,minWidth:220}}>
                           {/* Compact single-line row: [grip] [pin] [name] [pill] [foreman]
                               Status update + reorder controls show only on row hover. */}
