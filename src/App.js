@@ -13769,20 +13769,20 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             showSync={job.roughStatus==="inprogress"}
                           />
                         )}
-                        {rsDef.hasDate&&job.roughStatus!=="date_confirmed"&&(
-                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
-                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:rsDef.color}}>SCHEDULED DATE</div>
-                            <DateInp value={job.roughStatusDate||""} onChange={e=>u({roughStatusDate:e.target.value})}
-                              style={{width:130,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
-                          </div>
-                        )}
-                        {rsDef.hasDate&&(job.roughStatus==="scheduled"||job.roughStatus==="inprogress")&&(
-                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
-                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:rsDef.color}}>SCHEDULED END</div>
-                            <DateInp value={job.roughScheduledEnd||""} onChange={e=>u({roughScheduledEnd:e.target.value})}
-                              style={{width:130,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
-                          </div>
-                        )}
+                        {rsDef.hasDate&&job.roughStatus!=="date_confirmed"&&(() => {
+                          // Label reflects what this date actually means given the status:
+                          //   scheduled/inprogress → "SCHEDULED FOR" (it IS on the calendar)
+                          //   anything else (needs-scheduling context) → "SCHEDULE BY"
+                          const isOnCalendar = job.roughStatus==="scheduled" || job.roughStatus==="inprogress";
+                          const label = isOnCalendar ? "SCHEDULED FOR" : "SCHEDULE BY";
+                          return (
+                            <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                              <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:rsDef.color}}>{label}</div>
+                              <DateInp value={job.roughStatusDate||""} onChange={e=>u({roughStatusDate:e.target.value})}
+                                style={{width:130,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       {/* Status Update — inline-editable mirror next to status row */}
@@ -14062,20 +14062,17 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             showSync={job.finishStatus==="inprogress"}
                           />
                         )}
-                        {fsDef.hasDate&&job.finishStatus!=="date_confirmed"&&(
-                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
-                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:fsDef.color}}>SCHEDULED DATE</div>
-                            <DateInp value={job.finishStatusDate||""} onChange={e=>u({finishStatusDate:e.target.value})}
-                              style={{width:130,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
-                          </div>
-                        )}
-                        {fsDef.hasDate&&(job.finishStatus==="scheduled"||job.finishStatus==="inprogress")&&(
-                          <div style={{display:"flex",flexDirection:"column",gap:3}}>
-                            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:fsDef.color}}>SCHEDULED END</div>
-                            <DateInp value={job.finishScheduledEnd||""} onChange={e=>u({finishScheduledEnd:e.target.value})}
-                              style={{width:130,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
-                          </div>
-                        )}
+                        {fsDef.hasDate&&job.finishStatus!=="date_confirmed"&&(() => {
+                          const isOnCalendar = job.finishStatus==="scheduled" || job.finishStatus==="inprogress";
+                          const label = isOnCalendar ? "SCHEDULED FOR" : "SCHEDULE BY";
+                          return (
+                            <div style={{display:"flex",flexDirection:"column",gap:3}}>
+                              <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:fsDef.color}}>{label}</div>
+                              <DateInp value={job.finishStatusDate||""} onChange={e=>u({finishStatusDate:e.target.value})}
+                                style={{width:130,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
+                            </div>
+                          );
+                        })()}
                       </div>
 
                       {/* Status Update — inline-editable mirror next to status row */}
