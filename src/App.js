@@ -21135,6 +21135,21 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                       </button>
                     </div>
                     {(() => {
+                      // When the forecast is filtered to one foreman, scope the picker
+                      // to that foreman's crew — their teams + the people in those teams.
+                      // Saves them scrolling past unrelated crews.
+                      const scopedTeams = crewForemanFilter
+                        ? crewTeams.filter(t => t.lead === crewForemanFilter)
+                        : crewTeams;
+                      const scopedRoster = (() => {
+                        if(!crewForemanFilter) return crewRoster || [];
+                        const allowed = new Set([crewForemanFilter]);
+                        scopedTeams.forEach(t => {
+                          if(t.lead) allowed.add(t.lead);
+                          (t.members||[]).forEach(n => allowed.add(n));
+                        });
+                        return (crewRoster || []).filter(n => allowed.has(n));
+                      })();
                       // Availability analysis for this day — who is free, who is
                       // already on another cell (and for how long), and who is on PTO.
                       // Hours in a standard workday (used to infer availability when
@@ -21157,15 +21172,18 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                         return { kind:"busy", jobName, hours, time: cell?.time,
                           free: hours!=null ? Math.max(0, FULL_DAY - hours) : 0 };
                       };
-                      const roster = crewRoster || [];
-                      const byKind = { free:[], partial:[], busy:[], pto:[] };
-                      roster.forEach(n => {
-                        const s = statusFor(n);
-                        if(s.kind === "pto") byKind.pto.push({ name:n, s });
-                        else if(s.kind === "free") byKind.free.push({ name:n, s });
-                        else if(s.hours != null && s.free >= 2) byKind.partial.push({ name:n, s });
-                        else byKind.busy.push({ name:n, s });
-                      });
+                      const classify = (names) => {
+                        const out = { free:[], partial:[], busy:[], pto:[] };
+                        names.forEach(n => {
+                          const s = statusFor(n);
+                          if(s.kind === "pto") out.pto.push({ name:n, s });
+                          else if(s.kind === "free") out.free.push({ name:n, s });
+                          else if(s.hours != null && s.free >= 2) out.partial.push({ name:n, s });
+                          else out.busy.push({ name:n, s });
+                        });
+                        return out;
+                      };
+                      const byKind = classify(scopedRoster);
 
                       const renderPersonChip = ({ name, s }) => {
                         const pc = crewGetColor(name);
@@ -21219,11 +21237,27 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
 
                       return (
                         <>
-                          {crewTeams.length > 0 && (
+                          {crewForemanFilter && (
+                            <div style={{marginBottom:10,padding:"6px 10px",background:(getFC(crewForemanFilter)||C.dim)+"12",
+                              border:`1px solid ${(getFC(crewForemanFilter)||C.dim)}44`,borderRadius:7,
+                              display:"flex",alignItems:"center",gap:8,fontSize:11}}>
+                              <Icon name="filter" size={11} color={getFC(crewForemanFilter)||C.dim}/>
+                              <span style={{color:"var(--text)",fontWeight:600}}>
+                                Showing {crewDisplayName(crewForemanFilter)}&#39;s crew only
+                              </span>
+                              <button onClick={()=>setCrewForemanFilter(null)}
+                                style={{marginLeft:"auto",background:"none",border:"none",color:C.muted,fontSize:10,
+                                  cursor:"pointer",fontFamily:"inherit",fontWeight:600,textDecoration:"underline"}}>
+                                Show everyone
+                              </button>
+                            </div>
+                          )}
+                          {scopedTeams.length > 0 && (
                             <div style={{marginBottom:12}}>
                               <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:6}}>TEAMS</div>
                               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
-                                {crewTeams.map((t, ti) => {
+                                {scopedTeams.map((t) => {
+                                  const ti = crewTeams.indexOf(t);
                                   const allNames = [...(t.lead?[t.lead]:[]), ...(t.members||[])];
                                   if(allNames.length === 0) return null;
                                   const tc = t.lead ? crewGetColor(t.lead) : C.dim;
