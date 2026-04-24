@@ -18925,36 +18925,93 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     else { setCrewData({}); setCrewExtra([]); setCrewJobOrder([]); setCrewPinned([]); setCrewFocus(false); }
   }), [crewWK]);
 
-  // Opportunistic backfill — whenever we have fresh assignments loaded (the
-  // current displayed week), bump each job's `lastScheduledDate` so the
-  // scheduling pill everywhere shows the latest day the job actually has
-  // crew on the calendar. Monotonically-increasing: removing crew from the
-  // last day won't downgrade (we'd need to scan ALL weeks' docs for that).
-  useEffect(() => {
-    if(!onUpdateJob || !crewData || !crewDays.length || !jobs?.length) return;
-    const perJob = {};
-    Object.entries(crewData).forEach(([k, v]) => {
+  // Helper: given a week's assignments object + the Monday of that week,
+  // find the latest day each jobId has crew assigned; returns { jobId: 'YYYY-MM-DD' }.
+  const _latestPerJobFromAssignments = (assignments, weekMon) => {
+    const out = {};
+    if(!assignments || !weekMon) return out;
+    Object.entries(assignments).forEach(([k, v]) => {
       if(!v || (!v.lead && !(v.crew||[]).length)) return;
       const [jid, diStr] = k.split("_");
       const di = parseInt(diStr);
-      if(isNaN(di) || di<0 || di>=crewDays.length) return;
-      const dt = crewDays[di]; if(!dt) return;
+      if(isNaN(di) || di<0 || di>=7) return;
+      const dt = new Date(weekMon); dt.setDate(dt.getDate()+di);
       const ymd = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
-      if(!perJob[jid] || ymd > perJob[jid]) perJob[jid] = ymd;
+      if(!out[jid] || ymd > out[jid]) out[jid] = ymd;
     });
+    return out;
+  };
+
+  // Opportunistic backfill from the CURRENTLY loaded week.
+  useEffect(() => {
+    if(!onUpdateJob || !crewData || !crewDays.length || !jobs?.length) return;
+    const perJob = _latestPerJobFromAssignments(crewData, crewDays[0]);
     Object.entries(perJob).forEach(([jid, newYmd]) => {
       const j = jobs.find(x => x.id === jid);
       if(!j) return;
-      const curRaw = j.lastScheduledDate || "";
-      // Compare via Date so we don't mix string formats
-      const cur = curRaw ? parseAnyDate(curRaw) : null;
+      const cur = j.lastScheduledDate ? parseAnyDate(j.lastScheduledDate) : null;
       const nxt = parseAnyDate(newYmd);
       if(!nxt) return;
       if(!cur || nxt > cur) {
         onUpdateJob({ ...j, lastScheduledDate: newYmd }, { lastScheduledDate: newYmd });
       }
     });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [crewData, crewDays, jobs, onUpdateJob]);
+
+  // One-time full backfill on mount — scan the past ~26 Mondays worth of
+  // schedule docs so lastScheduledDate reflects ANY prior week's assignments,
+  // not just whichever week Koy happens to be viewing. After this runs, the
+  // opportunistic useEffect above keeps things current going forward.
+  const _didBackfillLastSched = useRef(false);
+  useEffect(() => {
+    if(_didBackfillLastSched.current) return;
+    if(!onUpdateJob || !jobs?.length) return;
+    _didBackfillLastSched.current = true;
+    (async () => {
+      try {
+        // Build a list of the past 26 Mondays and upcoming 8 Mondays
+        const today = new Date();
+        const day = today.getDay();
+        const thisMon = new Date(today);
+        thisMon.setDate(today.getDate() - (day===0?6:day-1));
+        thisMon.setHours(0,0,0,0);
+        const weeks = [];
+        for(let w = -26; w <= 8; w++) {
+          const m = new Date(thisMon); m.setDate(thisMon.getDate() + w*7);
+          const wk = `${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,"0")}-${String(m.getDate()).padStart(2,"0")}`;
+          weeks.push({ wk, mon: m });
+        }
+        // Fetch each week's doc in parallel; ignore missing ones
+        const results = await Promise.all(weeks.map(({wk, mon}) =>
+          getDoc(doc(db, "settings", "schedule_"+wk))
+            .then(s => ({ wk, mon, data: s.exists() ? s.data() : null }))
+            .catch(() => ({ wk, mon, data: null }))
+        ));
+        // Aggregate — take the MAX last-date across every week for each job
+        const perJob = {};
+        results.forEach(({mon, data}) => {
+          if(!data?.assignments) return;
+          const fromWeek = _latestPerJobFromAssignments(data.assignments, mon);
+          Object.entries(fromWeek).forEach(([jid, ymd]) => {
+            if(!perJob[jid] || ymd > perJob[jid]) perJob[jid] = ymd;
+          });
+        });
+        // Write each job whose stored lastScheduledDate is older (or missing)
+        Object.entries(perJob).forEach(([jid, newYmd]) => {
+          const j = jobs.find(x => x.id === jid);
+          if(!j) return;
+          const cur = j.lastScheduledDate ? parseAnyDate(j.lastScheduledDate) : null;
+          const nxt = parseAnyDate(newYmd);
+          if(!nxt) return;
+          if(!cur || nxt > cur) {
+            onUpdateJob({ ...j, lastScheduledDate: newYmd }, { lastScheduledDate: newYmd });
+          }
+        });
+      } catch(_){ /* backfill is best-effort — ignore failures */ }
+    })();
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs?.length]);
 
   const _saveRoster = n => { setCrewRoster(n); setDoc(doc(db,"settings","crewRoster"),{names:n,updatedAt:new Date().toISOString()}); };
 
