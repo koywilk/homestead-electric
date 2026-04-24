@@ -18732,6 +18732,37 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
       .catch(() => {}); // silent — crew counts are supplementary
   }, [calMonth]);
 
+  // Wide Simpro schedule — pulls ~18 months so we can derive each job's LAST
+  // scheduled day (authoritative source for the pill's displayed date).
+  // Fetched once per mount and refreshed on tab focus.
+  const [simproLastByJob, setSimproLastByJob] = useState({});
+  useEffect(() => {
+    const fetchWide = () => {
+      const today = new Date();
+      const from = new Date(today); from.setMonth(from.getMonth() - 6);
+      const to   = new Date(today); to.setMonth(to.getMonth() + 12);
+      const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+      const fn = httpsCallable(functions, "getSimproSchedule");
+      fn({ dateFrom: ymd(from), dateTo: ymd(to) })
+        .then(res => {
+          const map = {};
+          (res.data || []).forEach(entry => {
+            if(entry.Type !== "job") return;
+            const pid = entry.Project?.ProjectID ? String(entry.Project.ProjectID) : null;
+            const d = entry.Date; // "YYYY-MM-DD"
+            if(!pid || !d) return;
+            if(!map[pid] || d > map[pid]) map[pid] = d;
+          });
+          setSimproLastByJob(map);
+        })
+        .catch(() => {}); // best-effort — pill falls back to status date
+    };
+    fetchWide();
+    const onFocus = () => fetchWide();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, []);
+
   // Map of date (YYYY-MM-DD) → Set of Simpro ProjectIDs scheduled that day
   const simproByDate = useMemo(() => {
     const map = new Map();
@@ -18937,91 +18968,9 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     else { setCrewData({}); setCrewExtra([]); setCrewJobOrder([]); setCrewPinned([]); setCrewFocus(false); }
   }), [crewWK]);
 
-  // Helper: given a week's assignments object + the Monday of that week,
-  // find the latest day each jobId has crew assigned; returns { jobId: 'YYYY-MM-DD' }.
-  const _latestPerJobFromAssignments = (assignments, weekMon) => {
-    const out = {};
-    if(!assignments || !weekMon) return out;
-    Object.entries(assignments).forEach(([k, v]) => {
-      if(!v || (!v.lead && !(v.crew||[]).length)) return;
-      const [jid, diStr] = k.split("_");
-      const di = parseInt(diStr);
-      if(isNaN(di) || di<0 || di>=7) return;
-      const dt = new Date(weekMon); dt.setDate(dt.getDate()+di);
-      const ymd = `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
-      if(!out[jid] || ymd > out[jid]) out[jid] = ymd;
-    });
-    return out;
-  };
-
-  // Opportunistic backfill from the CURRENTLY loaded week.
-  useEffect(() => {
-    if(!onUpdateJob || !crewData || !crewDays.length || !jobs?.length) return;
-    const perJob = _latestPerJobFromAssignments(crewData, crewDays[0]);
-    Object.entries(perJob).forEach(([jid, newYmd]) => {
-      const j = jobs.find(x => x.id === jid);
-      if(!j) return;
-      const cur = j.lastScheduledDate ? parseAnyDate(j.lastScheduledDate) : null;
-      const nxt = parseAnyDate(newYmd);
-      if(!nxt) return;
-      if(!cur || nxt > cur) {
-        onUpdateJob({ ...j, lastScheduledDate: newYmd }, { lastScheduledDate: newYmd });
-      }
-    });
-  }, [crewData, crewDays, jobs, onUpdateJob]);
-
-  // One-time full backfill on mount — scan the past ~26 Mondays worth of
-  // schedule docs so lastScheduledDate reflects ANY prior week's assignments,
-  // not just whichever week Koy happens to be viewing. After this runs, the
-  // opportunistic useEffect above keeps things current going forward.
-  const _didBackfillLastSched = useRef(false);
-  useEffect(() => {
-    if(_didBackfillLastSched.current) return;
-    if(!onUpdateJob || !jobs?.length) return;
-    _didBackfillLastSched.current = true;
-    (async () => {
-      try {
-        // Build a list of the past 26 Mondays and upcoming 8 Mondays
-        const today = new Date();
-        const day = today.getDay();
-        const thisMon = new Date(today);
-        thisMon.setDate(today.getDate() - (day===0?6:day-1));
-        thisMon.setHours(0,0,0,0);
-        const weeks = [];
-        for(let w = -26; w <= 8; w++) {
-          const m = new Date(thisMon); m.setDate(thisMon.getDate() + w*7);
-          const wk = `${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,"0")}-${String(m.getDate()).padStart(2,"0")}`;
-          weeks.push({ wk, mon: m });
-        }
-        // Fetch each week's doc in parallel; ignore missing ones
-        const results = await Promise.all(weeks.map(({wk, mon}) =>
-          getDoc(doc(db, "settings", "schedule_"+wk))
-            .then(s => ({ wk, mon, data: s.exists() ? s.data() : null }))
-            .catch(() => ({ wk, mon, data: null }))
-        ));
-        // Aggregate — take the MAX last-date across every week for each job
-        const perJob = {};
-        results.forEach(({mon, data}) => {
-          if(!data?.assignments) return;
-          const fromWeek = _latestPerJobFromAssignments(data.assignments, mon);
-          Object.entries(fromWeek).forEach(([jid, ymd]) => {
-            if(!perJob[jid] || ymd > perJob[jid]) perJob[jid] = ymd;
-          });
-        });
-        // Write each job whose stored lastScheduledDate is older (or missing)
-        Object.entries(perJob).forEach(([jid, newYmd]) => {
-          const j = jobs.find(x => x.id === jid);
-          if(!j) return;
-          const cur = j.lastScheduledDate ? parseAnyDate(j.lastScheduledDate) : null;
-          const nxt = parseAnyDate(newYmd);
-          if(!nxt) return;
-          if(!cur || nxt > cur) {
-            onUpdateJob({ ...j, lastScheduledDate: newYmd }, { lastScheduledDate: newYmd });
-          }
-        });
-      } catch(_){ /* backfill is best-effort — ignore failures */ }
-    })();
-  }, [jobs?.length]);
+  // (Removed: the previous approach tracked lastScheduledDate from per-week
+  // schedule docs. Simpro is the authoritative source — see simproLastByJob
+  // above.)
 
   const _saveRoster = n => { setCrewRoster(n); setDoc(doc(db,"settings","crewRoster"),{names:n,updatedAt:new Date().toISOString()}); };
 
@@ -20888,20 +20837,13 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                               .filter(x => x.d)
                               .sort((a,b) => a.d - b.d)[0];
                             const curMode = phaseMode || (rtNeeds ? "needsSched" : null);
-                            // Prefer the later of (phase scheduled date) and (last day crew was
-                            // actually scheduled on the calendar) — so a job whose scheduled
-                            // date has already passed but still has crew on later days shows
-                            // that later day. lastScheduledDate is maintained by the useEffect
-                            // above as Koy navigates through weeks.
-                            const pickLater = (a, b) => {
-                              const da = a ? parseAnyDate(a) : null;
-                              const db = b ? parseAnyDate(b) : null;
-                              if(!da) return b || "";
-                              if(!db) return a || "";
-                              return da > db ? a : b;
-                            };
+                            // Pill date priority:
+                            //   1. LAST day this job is scheduled in Simpro (authoritative)
+                            //   2. The phase's status date (fallback when Simpro has no data)
+                            //   3. For RT-only jobs: the RT's schedule-by date
+                            const simproLast = job.simproNo ? simproLastByJob[String(job.simproNo)] : null;
                             const curDate = phaseMode
-                              ? pickLater(job[dateKey]||"", job.lastScheduledDate||"")
+                              ? (simproLast || (job[dateKey]||""))
                               : (rtNeeds ? rtNeeds.rt.rtStatusDate : "");
                             const isHover = crewHoverJobId === job.id;
                             const isPinned = crewPinned.includes(job.id);
