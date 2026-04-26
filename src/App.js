@@ -21525,11 +21525,17 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                 if(!cell?.time?.start && !cell?.time?.end) return null;
                 return `${_crewFmtTime(cell.time?.start)}–${_crewFmtTime(cell.time?.end||cell.time?.start)}`;
               };
-              // Save: walk every toggled cell, compute add/remove, batch into one
-              // setDoc. Time-overlap warning fires if a newly-added cell shares
-              // explicit times with another same-day cell where the same person
-              // is also scheduled.
-              const onSave = async () => {
+              // applyAndClose: walk every toggled cell, compute add/remove, batch
+              // into one setDoc, then close the wizard. Wired to backdrop click,
+              // X button, and Save Changes — anything that ISN'T explicit Cancel
+              // commits pending toggles so users don't accidentally lose work.
+              // Time-overlap warning fires if a newly-added cell shares explicit
+              // times with another same-day cell where the same person is also
+              // scheduled. Newly-created cells (cell didn't exist before this
+              // toggle) get a default 7:00-17:00 time so they're usable in the
+              // planner without an extra trip to the time modal.
+              const DEFAULT_TIME = { start:"07:00", end:"17:00" };
+              const applyAndClose = async () => {
                 const toggles = Object.keys(crewWizardDraft);
                 if(toggles.length === 0) { close(); return; }
                 const overlaps = [];
@@ -21538,9 +21544,12 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                   const di = parseInt(dStr);
                   const adding = !isTargetIn(k); // toggling from off → on
                   if(!adding) return;
-                  const newCell = crewData[k];
-                  const newTime = newCell?.time;
-                  if(!newTime || (!newTime.start && !newTime.end)) return;
+                  // Compute the time this cell will have AFTER save — existing
+                  // time if present, otherwise the wizard's default.
+                  const existingCell = crewData[k];
+                  const newTime = (existingCell?.time && (existingCell.time.start || existingCell.time.end))
+                    ? existingCell.time
+                    : DEFAULT_TIME;
                   const namesAdded = wiz.kind === 'person' ? [wiz.name] : teamNames;
                   namesAdded.forEach(name => {
                     const other = crewFindPersonOnDay(name, di, jid);
@@ -21558,27 +21567,35 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                   const ok = await showConfirm(
                     `Some assignments overlap existing times:\n\n${[...new Set(overlaps)].join("\n")}\n\nSave anyway?`
                   );
-                  if(!ok) return;
+                  if(!ok) return; // keep the wizard open so user can fix
                 }
                 const nx = { ...crewData };
                 toggles.forEach(k => {
                   const adding = !isTargetIn(k);
                   if(adding) {
+                    const wasEmpty = !crewData[k]; // brand-new cell
                     const cur = nx[k] || {lead:"",crew:[]};
                     if(wiz.kind === 'person') {
                       if(cur.lead===wiz.name || (cur.crew||[]).includes(wiz.name)) return;
-                      nx[k] = {...cur, crew:[...(cur.crew||[]), wiz.name]};
+                      const next = {...cur, crew:[...(cur.crew||[]), wiz.name]};
+                      // Default time only on brand-new cells; never overwrite an
+                      // existing cell's time even if a fellow crew member set it.
+                      if(wasEmpty && !next.time) next.time = DEFAULT_TIME;
+                      nx[k] = next;
                     } else {
                       const newLead = !cur.lead && team?.lead ? team.lead : cur.lead;
                       const newCrew = [...(cur.crew||[])];
                       teamNames.filter(n => n !== newLead).forEach(n => {
                         if(!newCrew.includes(n)) newCrew.push(n);
                       });
-                      nx[k] = { ...cur, lead:newLead, crew:newCrew };
+                      const next = { ...cur, lead:newLead, crew:newCrew };
+                      if(wasEmpty && !next.time) next.time = DEFAULT_TIME;
+                      nx[k] = next;
                     }
                   } else {
                     // Removing — peel out the wizard target only. Other crew on
-                    // the cell are untouched.
+                    // the cell are untouched. The cell's time is left alone so
+                    // it stays valid for whoever remains.
                     const namesOff = wiz.kind === 'person' ? [wiz.name] : teamNames;
                     namesOff.forEach(name => _crewRemoveFromCell(nx, k, name));
                   }
@@ -21589,7 +21606,9 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
               const changeCount = Object.keys(crewWizardDraft).length;
               return (
                 <>
-                  <div onClick={close}
+                  {/* Backdrop click = save+close (anything that isn't explicit
+                      Cancel commits pending toggles). */}
+                  <div onClick={applyAndClose}
                     style={{position:"fixed",inset:0,background:"rgba(255,255,255,0.6)",
                       backdropFilter:"blur(1.5px)",zIndex:9998}}/>
                   <div onClick={e=>e.stopPropagation()}
@@ -21617,11 +21636,11 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                         </div>
                         <div style={{fontSize:11,color:C.dim,marginTop:4}}>
                           Week of {crewMon.toLocaleDateString("en-US",{month:"short",day:"numeric"})} ·
-                          click any cell to toggle assignment
+                          click any cell to toggle · new cells default to 7a–5p
                         </div>
                       </div>
-                      <button onClick={close}
-                        title="Close"
+                      <button onClick={applyAndClose}
+                        title="Save and close"
                         style={{background:"none",border:"none",cursor:"pointer",
                           color:C.muted,fontSize:22,lineHeight:1,padding:"4px 10px",fontFamily:"inherit",fontWeight:400}}>
                         &times;
@@ -21725,16 +21744,19 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                     <div style={{display:"flex",alignItems:"center",gap:10,marginTop:14}}>
                       <div style={{fontSize:11,color:C.dim,flex:1}}>
                         {changeCount === 0
-                          ? "No changes yet · click cells to stage assignments"
-                          : `${changeCount} pending change${changeCount===1?"":"s"}`}
+                          ? "No changes yet · click cells to stage assignments · click outside to close"
+                          : `${changeCount} pending change${changeCount===1?"":"s"} · click outside to save`}
                       </div>
-                      <button onClick={close}
+                      {/* Cancel = explicit discard. Backdrop / X / Save all
+                          commit pending toggles. */}
+                      <button onClick={()=>{ setCrewWizardDraft({}); close(); }}
+                        title="Discard pending changes and close"
                         style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
                           padding:"8px 16px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim,
                           fontFamily:"inherit"}}>
                         Cancel
                       </button>
-                      <button onClick={onSave}
+                      <button onClick={applyAndClose}
                         disabled={changeCount === 0}
                         style={{background:changeCount===0?C.border:titleColor,
                           border:"none",borderRadius:8,color:"#fff",
