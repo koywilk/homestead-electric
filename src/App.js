@@ -18852,6 +18852,17 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
   // Cell picker — tap a day cell to pick an individual or team to drop in.
   // Works when nothing is pre-selected (i.e., the "quick click" path).
   const [crewCellPicker, setCrewCellPicker] = useState(null); // {jid, di} | null
+  // Click-a-person/team-then-fill-week wizard. Click any roster chip or team
+  // tile and a Mon–Fri × jobs grid opens; toggle cells, hit Save once. Lets
+  // Koy fill someone's week in one shot instead of clicking each cell.
+  const [crewAssignWizard, setCrewAssignWizard] = useState(null); // {kind:'person', name} | {kind:'team', teamIdx} | null
+  // Draft assignment toggles for the wizard. Keyed by `${jid}_${di}`. A truthy
+  // value means the cell has been TOGGLED relative to its current state — saved
+  // on Save, discarded on Cancel.
+  const [crewWizardDraft, setCrewWizardDraft] = useState({});
+  // Reset the draft any time the wizard opens (or its target changes) so we
+  // never carry stale toggles into the next session.
+  useEffect(() => { setCrewWizardDraft({}); }, [crewAssignWizard]);
   // Track which job row's hover overlay is active, so the status-update hover
   // card only renders for the hovered row rather than on every row at once.
   const [crewHoverJobId, setCrewHoverJobId] = useState(null);
@@ -19110,56 +19121,77 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     const upd = { ...cell, lead: cell.lead===name?"":cell.lead, crew:(cell.crew||[]).filter(n=>n!==name) };
     if(!upd.lead && upd.crew.length===0) delete nx[k]; else nx[k] = upd;
   };
+  // Do two HH:MM time ranges overlap on the same day? Returns true only if there
+  // is a real, positive overlap (touching ends like 9-12 and 12-5 do NOT overlap).
+  // Either range with missing/blank times is treated as "all day" and overlaps
+  // anything else that has a defined time, so we can warn the user appropriately.
+  const _timesOverlap = (a, b) => {
+    const toMin = (hhmm) => {
+      if(!hhmm) return null;
+      const [h,m] = hhmm.split(":").map(Number);
+      if(isNaN(h)) return null;
+      return h*60 + (m||0);
+    };
+    const aS = toMin(a?.start), aE = toMin(a?.end);
+    const bS = toMin(b?.start), bE = toMin(b?.end);
+    // If a side has no times at all, consider it "all day" → any defined-time
+    // counterpart overlaps with it. (If both sides are timeless, they're both
+    // full-day on the same day and definitely overlap.)
+    if(aS==null && aE==null) return true;
+    if(bS==null && bE==null) return true;
+    // Range needs a real start AND end to compare numerically.
+    if(aS==null || aE==null || bS==null || bE==null) return true;
+    return aS < bE && bS < aE;
+  };
   const crewAssign = async (jid,di) => {
     if(!crewSel) return;
     const k=`${jid}_${di}`, cur=crewData[k]||{lead:"",crew:[]};
     if(cur.crew.includes(crewSel)||cur.lead===crewSel) return;
-    const conflict = crewFindPersonOnDay(crewSel, di, jid);
-    // If they're already on another job that day, explicitly confirm the move.
-    if(conflict) {
-      const otherName = jobs.find(j=>j.id===conflict.jid)?.name || "another job";
-      const otherCell = crewData[conflict.k];
-      const t = otherCell?.time;
-      const when = t?.start ? `${_crewFmtTime(t.start)}–${_crewFmtTime(t.end||t.start)}` : "all day";
-      const thisName = jobs.find(j=>j.id===jid)?.name || "this job";
-      const ok = await showConfirm(
-        `${crewDisplayName(crewSel)} is already scheduled at ${otherName} (${when}).\n\nMove them to ${thisName} instead?`
-      );
-      if(!ok) return;
+    // Multi-job same-day is allowed by design — e.g. 7-9a at one job, 9a-5p at
+    // another. We don't auto-remove from the other cell anymore. We only warn
+    // if BOTH cells have explicit times AND those times actually overlap; in
+    // that case the user gets a confirm so they can fix the time before saving.
+    const other = crewFindPersonOnDay(crewSel, di, jid);
+    if(other) {
+      const otherCell = crewData[other.k];
+      const otherTime = otherCell?.time;
+      const thisTime  = cur?.time;
+      // Warn only when we KNOW the times overlap. If either side has no time
+      // set, defer the decision — the user can set times and the time modal
+      // will surface any conflict at save time.
+      if(otherTime && (otherTime.start || otherTime.end) && thisTime && (thisTime.start || thisTime.end) && _timesOverlap(otherTime, thisTime)) {
+        const otherName = jobs.find(j=>j.id===other.jid)?.name || "another job";
+        const when = `${_crewFmtTime(otherTime.start)}–${_crewFmtTime(otherTime.end||otherTime.start)}`;
+        const ok = await showConfirm(
+          `${crewDisplayName(crewSel)} is already on ${otherName} (${when}) — that overlaps this cell's time.\n\nAdd them here anyway?`
+        );
+        if(!ok) return;
+      }
     }
     const nx={...crewData};
-    if(conflict) {
-      _crewRemoveFromCell(nx, conflict.k, crewSel);
-      toast.info(`Moved ${crewSel} from ${(jobs.find(j=>j.id===conflict.jid)?.name)||"other job"}.`);
-    }
     const curNow = nx[k] || {lead:"",crew:[]};
-    if(conflict?.wasLead && !curNow.lead) nx[k] = {...curNow, lead:crewSel};
-    else nx[k] = {...curNow, crew:[...(curNow.crew||[]), crewSel]};
+    // Just add as crew — multi-job same-day means we can't reliably infer
+    // their role from another cell. User can promote to lead if needed.
+    nx[k] = {...curNow, crew:[...(curNow.crew||[]), crewSel]};
     setCrewData(nx); _saveCrewData(nx);
   };
   const crewDrop = (jid,di) => {
     const payload=crewDragRef.current; crewDragRef.current=null; if(!payload) return;
     const k=`${jid}_${di}`;
-    // Handle team drop — add entire team to cell. Any member already on
-    // another job this day gets auto-moved from their old cell.
+    // Handle team drop — add entire team to cell. Multi-job same-day is allowed
+    // now, so members already scheduled elsewhere stay on those cells too. The
+    // user can split a team across two jobs in a day if the times don't overlap.
     if(typeof payload === 'object' && payload.type === 'team'){
       const team = crewTeams[payload.idx];
       if(!team) return;
       const nx={...crewData};
       const allTeamNames = [...(team.lead?[team.lead]:[]),...team.members];
-      // Pre-clear same-day conflicts for each team member
-      const moved = [];
-      allTeamNames.forEach(n => {
-        const c = crewFindPersonOnDay(n, di, jid);
-        if(c) { _crewRemoveFromCell(nx, c.k, n); moved.push(n); }
-      });
       const cur=nx[k]||{lead:"",crew:[]};
       const newLead = !cur.lead && team.lead ? team.lead : cur.lead;
       const newCrew = [...(cur.crew||[])];
       allTeamNames.filter(n=>n!==newLead).forEach(n=>{ if(!newCrew.includes(n)) newCrew.push(n); });
       nx[k] = { ...cur, lead:newLead, crew:newCrew };
       setCrewData(nx); _saveCrewData(nx);
-      if(moved.length) toast.info(`Moved ${moved.join(", ")} from other job${moved.length>1?"s":""} this day.`);
       setCrewTimeModal({jobId:jid, dayIdx:di, start:cur.time?.start||"07:00", end:cur.time?.end||"17:00"});
       return;
     }
@@ -19170,16 +19202,14 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     // No-op if dropped on same cell
     if(fromJid===jid && fromDi===di) return;
     const nx={...crewData};
-    // Explicit move (drag from another cell) — always remove from source
+    // Explicit move (drag from another cell) — always remove from source.
+    // Cell-to-cell drag is unambiguous "move this assignment" by gesture.
     if(fromJid!=null && fromDi!=null){
       _crewRemoveFromCell(nx, `${fromJid}_${fromDi}`, name);
-    } else {
-      // Drop from the roster (no source cell in payload) — still prevent
-      // same-day double-booking by finding and removing any existing cell
-      // on this day with the person.
-      const c = crewFindPersonOnDay(name, di, jid);
-      if(c) { _crewRemoveFromCell(nx, c.k, name); toast.info(`Moved ${name} — they were on another job this day.`); }
     }
+    // Roster drops are additive — multi-job same-day is allowed. We don't
+    // remove from any other cell. Time conflicts (if any) are surfaced when
+    // the user sets times via the time modal.
     const cur=nx[k]||{lead:"",crew:[]};
     if((cur.crew||[]).includes(name)||cur.lead===name) { setCrewData(nx); _saveCrewData(nx); return; }
     if(wasLead && !cur.lead) nx[k]={...cur,lead:name};
@@ -20260,7 +20290,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
               borderRadius:10,border:`1px solid ${C.border}`}}>
               <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8}}>
                 <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim}}>ROSTER</span>
-                {crewSel&&<span style={{fontSize:10,color:C.accent,fontWeight:600}}>Tap a cell to place {crewSel}</span>}
+                <span style={{fontSize:10,color:C.muted,fontWeight:500}}>Click a name to assign their week · drag for single cells</span>
                 <button onClick={()=>setCrewPTOModalOpen(true)}
                   title="Mark people out (PTO, sick days, vacation)"
                   style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:5,
@@ -20288,8 +20318,8 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                         crewDragRef.current=name;
                         try{e.dataTransfer.setData('text/plain',name);e.dataTransfer.effectAllowed='move';}catch(_){/* noop */}
                       }}
-                      onClick={()=>setCrewSel(isSel?null:name)}
-                      title={ptoThisWeek ? "Has PTO this week" : undefined}
+                      onClick={()=>setCrewAssignWizard({kind:'person', name})}
+                      title={ptoThisWeek ? "Has PTO this week" : `Open ${name}'s week assignment grid`}
                       style={{display:"inline-flex",alignItems:"center",gap:4,padding:"4px 10px",
                         borderRadius:99,cursor:"grab",userSelect:"none",fontSize:11,fontWeight:700,
                         color:isSel?"#fff":ptoThisWeek?C.muted:col,
@@ -20374,13 +20404,15 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                             crewDragRef.current={type:'team', idx};
                             try{e.dataTransfer.setData('text/plain','team:'+idx);e.dataTransfer.effectAllowed='copy';}catch(_){/* noop */}
                           }}
-                          title={hasMembers?"Drag whole team onto a schedule cell":""}
+                          title={hasMembers?"Click to fill this team's week · drag for single cells":""}
                           onClick={()=>{
                             if(crewTeamSel){
                               // Move selected person to this team
                               const fromIdx=crewTeams.findIndex(t=>t.lead===crewTeamSel||t.members.includes(crewTeamSel));
                               if(fromIdx!==idx) teamMovePerson(crewTeamSel,fromIdx,idx);
                               else setCrewTeamSel(null);
+                            } else if(hasMembers) {
+                              setCrewAssignWizard({kind:'team', teamIdx:idx});
                             }
                           }}
                           onDragOver={e=>e.preventDefault()}
@@ -20853,6 +20885,22 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                               : phaseMode
                                 ? (simproLast || (job[dateKey]||""))
                                 : (rtNeeds ? rtNeeds.rt.rtStatusDate : "");
+                            // If the job is in "scheduled" mode but the displayed
+                            // date is already in the past, the schedule has slipped —
+                            // show as "ongoing" instead so the pill stops misleadingly
+                            // saying "Scheduled MM/DD" on a date that already passed.
+                            // Only the rendered mode flips; the underlying job data
+                            // is untouched (no Firestore write).
+                            let _isPast = false;
+                            if(curDate) {
+                              const _d = parseAnyDate(curDate);
+                              if(_d) {
+                                _d.setHours(0,0,0,0);
+                                const _t = new Date(); _t.setHours(0,0,0,0);
+                                _isPast = _d < _t;
+                              }
+                            }
+                            const effectiveMode = (curMode === "scheduled" && _isPast) ? "ongoing" : curMode;
                             const isHover = crewHoverJobId === job.id;
                             const isPinned = crewPinned.includes(job.id);
                             return (
@@ -20895,19 +20943,22 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                     RT-only jobs. The RT path just drives the pill in needsSched
                                     mode with the RT's schedule-by date; clicks open the job
                                     detail so the user can edit the RT there. */}
-                                {curMode && onUpdateJob && (
+                                {effectiveMode && onUpdateJob && (
                                   <div onClick={e=>e.stopPropagation()} style={{flexShrink:0}}>
                                     <InProgressModePill
                                       size="sm"
                                       showSync={false}
-                                      mode={curMode}
+                                      mode={effectiveMode}
                                       needsDate={curDate}
                                       needsHard={phaseMode ? !!job[hardKey] : false}
                                       onToggle={()=>{
+                                        // Toggle cycle uses the rendered mode so a past-date
+                                        // "scheduled" (showing as ongoing) cycles ongoing→scheduled
+                                        // rather than scheduled→needsSched.
                                         if(phaseMode) {
-                                          const next = curMode==="scheduled" ? "needsSched"
-                                                    : curMode==="needsSched"  ? "ongoing"
-                                                    : curMode==="ongoing"     ? "scheduled"
+                                          const next = effectiveMode==="scheduled" ? "needsSched"
+                                                    : effectiveMode==="needsSched"  ? "ongoing"
+                                                    : effectiveMode==="ongoing"     ? "scheduled"
                                                     : "scheduled";
                                           const patch = applyScheduleMode(job, phaseKey, next);
                                           if(Object.keys(patch).length) onUpdateJob({ ...job, ...patch }, patch);
@@ -21109,8 +21160,8 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
             )}
 
             {/* Cell picker modal — tap a day cell with nothing pre-selected to
-                pick an individual or team to drop in. Prevents same-day double-
-                booking automatically via crewFindPersonOnDay. */}
+                pick an individual or team to drop in. Multi-job same-day is
+                allowed; we only block when explicit times truly overlap. */}
             {crewCellPicker && (() => {
               const { jid, di } = crewCellPicker;
               const pickedJob = jobs.find(j => j.id === jid);
@@ -21118,29 +21169,32 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
               const close = () => setCrewCellPicker(null);
               const applyPerson = async (name) => {
                 const k = `${jid}_${di}`;
+                const cur = crewData[k] || {lead:"",crew:[]};
+                if(cur.lead===name || (cur.crew||[]).includes(name)) { close(); return; }
+                // Multi-job same-day allowed by design. We only confirm when
+                // BOTH cells have explicit times AND those times overlap — that's
+                // the only true conflict. Anything else (no time set, partial-day
+                // with slack) just gets added to this cell, leaving the other
+                // assignment intact.
                 const c = crewFindPersonOnDay(name, di, jid);
-                // If they're on another job that day, explicitly confirm the move so
-                // nobody gets silently pulled off a commitment.
                 if(c) {
-                  const otherName = jobs.find(j=>j.id===c.jid)?.name || "another job";
                   const otherCell = crewData[c.k];
-                  const t = otherCell?.time;
-                  const when = t?.start ? `${_crewFmtTime(t.start)}–${_crewFmtTime(t.end||t.start)}` : "all day";
-                  const thisName = pickedJob?.name || "this job";
-                  const ok = await showConfirm(
-                    `${crewDisplayName(name)} is already scheduled at ${otherName} (${when}).\n\nMove them to ${thisName} instead?`
-                  );
-                  if(!ok) return;
+                  const otherTime = otherCell?.time;
+                  const thisTime  = cur?.time;
+                  if(otherTime && (otherTime.start || otherTime.end) && thisTime && (thisTime.start || thisTime.end) && _timesOverlap(otherTime, thisTime)) {
+                    const otherName = jobs.find(j=>j.id===c.jid)?.name || "another job";
+                    const when = `${_crewFmtTime(otherTime.start)}–${_crewFmtTime(otherTime.end||otherTime.start)}`;
+                    const ok = await showConfirm(
+                      `${crewDisplayName(name)} is already on ${otherName} (${when}) — that overlaps this cell's time.\n\nAdd them here anyway?`
+                    );
+                    if(!ok) return;
+                  }
                 }
                 const nx = { ...crewData };
-                let movedFrom = null;
-                if(c) { _crewRemoveFromCell(nx, c.k, name); movedFrom = jobs.find(j=>j.id===c.jid)?.name || "another job"; }
-                const cur = nx[k] || {lead:"",crew:[]};
-                if(cur.lead===name || (cur.crew||[]).includes(name)) { close(); return; }
-                if(!cur.lead && (c?.wasLead || isForeman(name))) nx[k] = {...cur, lead:name};
-                else nx[k] = {...cur, crew:[...(cur.crew||[]), name]};
+                const curNow = nx[k] || {lead:"",crew:[]};
+                if(!curNow.lead && isForeman(name)) nx[k] = {...curNow, lead:name};
+                else nx[k] = {...curNow, crew:[...(curNow.crew||[]), name]};
                 setCrewData(nx); _saveCrewData(nx);
-                if(movedFrom) toast.info(`Moved ${name} from ${movedFrom}.`);
                 close();
               };
               const applyTeam = (teamIdx) => {
@@ -21148,18 +21202,14 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                 const nx = { ...crewData };
                 const k = `${jid}_${di}`;
                 const allTeamNames = [...(team.lead?[team.lead]:[]), ...(team.members||[])];
-                const moved = [];
-                allTeamNames.forEach(n => {
-                  const c = crewFindPersonOnDay(n, di, jid);
-                  if(c) { _crewRemoveFromCell(nx, c.k, n); moved.push(n); }
-                });
+                // Additive — team members already on other jobs this day stay
+                // there. Time-conflict checks run when the user sets times.
                 const cur = nx[k] || {lead:"",crew:[]};
                 const newLead = !cur.lead && team.lead ? team.lead : cur.lead;
                 const newCrew = [...(cur.crew||[])];
                 allTeamNames.filter(n=>n!==newLead).forEach(n=>{ if(!newCrew.includes(n)) newCrew.push(n); });
                 nx[k] = { ...cur, lead:newLead, crew:newCrew };
                 setCrewData(nx); _saveCrewData(nx);
-                if(moved.length) toast.info(`Moved ${moved.join(", ")} from other jobs.`);
                 close();
                 setCrewTimeModal({ jobId:jid, dayIdx:di, start:cur.time?.start||"07:00", end:cur.time?.end||"17:00" });
               };
@@ -21276,7 +21326,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                         return (
                           <button key={name} onClick={()=>applyPerson(name)}
                             title={pto ? `On PTO${isOnPTO(name,day)?.note?" — "+isOnPTO(name,day).note:""}`
-                                 : (busy||partial) ? `${s.jobName}${timeRange?` · ${timeRange}`:""} — tap to move` : ""}
+                                 : (busy||partial) ? `Also on ${s.jobName}${timeRange?` · ${timeRange}`:""} — tap to add here too` : ""}
                             style={{background:baseBg,
                               border:`1.5px ${pto||busy||partial?"dashed":"solid"} ${border}`,
                               borderRadius:10,padding:"5px 10px",cursor:"pointer",fontFamily:"inherit",
@@ -21389,7 +21439,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                           {byKind.busy.length > 0 && (
                             <div style={{marginBottom:10}}>
                               <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:"#b91c1c",marginBottom:6}}>
-                                FULLY BOOKED · {byKind.busy.length} <span style={{fontWeight:500,color:C.muted,letterSpacing:0,textTransform:"none"}}>— tap will ask to move</span>
+                                BUSY ELSEWHERE · {byKind.busy.length} <span style={{fontWeight:500,color:C.muted,letterSpacing:0,textTransform:"none"}}>— still selectable, set times to clarify</span>
                               </div>
                               <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
                                 {byKind.busy.map(renderPersonChip)}
@@ -21410,6 +21460,275 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                         </>
                       );
                     })()}
+                  </div>
+                </>
+              );
+            })()}
+            {/* Click-a-person/team-then-fill-week wizard. Open by clicking any
+                roster name or team tile. Mon-Fri × jobs grid; toggle cells to
+                stage assignments, hit Save once. Multi-job same-day rules from
+                the picker apply (warn on real time overlap). */}
+            {crewAssignWizard && (() => {
+              const wiz = crewAssignWizard;
+              const close = () => setCrewAssignWizard(null);
+              // Resolve who we're assigning. For a team, expand to all members.
+              const team = wiz.kind === 'team' ? crewTeams[wiz.teamIdx] : null;
+              const teamNames = team ? [...(team.lead?[team.lead]:[]), ...(team.members||[])] : [];
+              const titleName = wiz.kind === 'person'
+                ? crewDisplayName(wiz.name)
+                : (team?.lead ? `${crewDisplayName(team.lead)}'s team` : `Team #${wiz.teamIdx+1}`);
+              const titleColor = wiz.kind === 'person'
+                ? crewGetColor(wiz.name)
+                : (team?.lead ? crewGetColor(team.lead) : C.dim);
+              // Is the wizard target currently in this cell?
+              //   person → name appears as lead OR in crew
+              //   team   → ALL team members are in lead OR crew (lenient: at
+              //            least one is enough to be considered "team here")
+              const isTargetIn = (k) => {
+                const cell = crewData[k]; if(!cell) return false;
+                if(wiz.kind === 'person') {
+                  return cell.lead === wiz.name || (cell.crew||[]).includes(wiz.name);
+                }
+                if(!teamNames.length) return false;
+                // Treat the team as "assigned" if every member is on the cell.
+                return teamNames.every(n => cell.lead === n || (cell.crew||[]).includes(n));
+              };
+              // After toggles, what's the displayed assignment state?
+              const cellChecked = (k) => {
+                const cur = isTargetIn(k);
+                return crewWizardDraft[k] ? !cur : cur;
+              };
+              const toggleCell = (k) => {
+                setCrewWizardDraft(d => {
+                  const nx = {...d};
+                  if(nx[k]) delete nx[k]; else nx[k] = true;
+                  return nx;
+                });
+              };
+              // Format helper for a cell's existing time
+              const cellTimeLabel = (cell) => {
+                if(!cell?.time?.start && !cell?.time?.end) return null;
+                return `${_crewFmtTime(cell.time?.start)}–${_crewFmtTime(cell.time?.end||cell.time?.start)}`;
+              };
+              // Save: walk every toggled cell, compute add/remove, batch into one
+              // setDoc. Time-overlap warning fires if a newly-added cell shares
+              // explicit times with another same-day cell where the same person
+              // is also scheduled.
+              const onSave = async () => {
+                const toggles = Object.keys(crewWizardDraft);
+                if(toggles.length === 0) { close(); return; }
+                const overlaps = [];
+                toggles.forEach(k => {
+                  const [jid, dStr] = k.split("_");
+                  const di = parseInt(dStr);
+                  const adding = !isTargetIn(k); // toggling from off → on
+                  if(!adding) return;
+                  const newCell = crewData[k];
+                  const newTime = newCell?.time;
+                  if(!newTime || (!newTime.start && !newTime.end)) return;
+                  const namesAdded = wiz.kind === 'person' ? [wiz.name] : teamNames;
+                  namesAdded.forEach(name => {
+                    const other = crewFindPersonOnDay(name, di, jid);
+                    if(!other) return;
+                    const otherTime = crewData[other.k]?.time;
+                    if(!otherTime || (!otherTime.start && !otherTime.end)) return;
+                    if(_timesOverlap(otherTime, newTime)) {
+                      const otherJob = jobs.find(j=>j.id===other.jid)?.name || "another job";
+                      const w = `${_crewFmtTime(otherTime.start)}–${_crewFmtTime(otherTime.end||otherTime.start)}`;
+                      overlaps.push(`${crewDisplayName(name)} on ${otherJob} (${w})`);
+                    }
+                  });
+                });
+                if(overlaps.length) {
+                  const ok = await showConfirm(
+                    `Some assignments overlap existing times:\n\n${[...new Set(overlaps)].join("\n")}\n\nSave anyway?`
+                  );
+                  if(!ok) return;
+                }
+                const nx = { ...crewData };
+                toggles.forEach(k => {
+                  const adding = !isTargetIn(k);
+                  if(adding) {
+                    const cur = nx[k] || {lead:"",crew:[]};
+                    if(wiz.kind === 'person') {
+                      if(cur.lead===wiz.name || (cur.crew||[]).includes(wiz.name)) return;
+                      nx[k] = {...cur, crew:[...(cur.crew||[]), wiz.name]};
+                    } else {
+                      const newLead = !cur.lead && team?.lead ? team.lead : cur.lead;
+                      const newCrew = [...(cur.crew||[])];
+                      teamNames.filter(n => n !== newLead).forEach(n => {
+                        if(!newCrew.includes(n)) newCrew.push(n);
+                      });
+                      nx[k] = { ...cur, lead:newLead, crew:newCrew };
+                    }
+                  } else {
+                    // Removing — peel out the wizard target only. Other crew on
+                    // the cell are untouched.
+                    const namesOff = wiz.kind === 'person' ? [wiz.name] : teamNames;
+                    namesOff.forEach(name => _crewRemoveFromCell(nx, k, name));
+                  }
+                });
+                setCrewData(nx); _saveCrewData(nx);
+                close();
+              };
+              const changeCount = Object.keys(crewWizardDraft).length;
+              return (
+                <>
+                  <div onClick={close}
+                    style={{position:"fixed",inset:0,background:"rgba(255,255,255,0.6)",
+                      backdropFilter:"blur(1.5px)",zIndex:9998}}/>
+                  <div onClick={e=>e.stopPropagation()}
+                    style={{position:"fixed",top:60,left:"50%",transform:"translateX(-50%)",
+                      width:880,maxWidth:"96vw",maxHeight:"calc(100vh - 100px)",overflowY:"auto",
+                      background:"var(--card)",borderRadius:12,padding:"16px 20px",
+                      border:`2px solid ${titleColor}`,zIndex:9999,
+                      boxShadow:`0 18px 48px rgba(0,0,0,0.22), 0 0 0 4px ${titleColor}22`}}>
+                    {/* Header */}
+                    <div style={{display:"flex",alignItems:"center",gap:12,marginBottom:14}}>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim,marginBottom:3}}>
+                          ASSIGN {wiz.kind === 'team' ? 'TEAM' : 'CREW MEMBER'}
+                        </div>
+                        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+                          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.04em",
+                            color:titleColor,lineHeight:1}}>
+                            {titleName.toUpperCase()}
+                          </div>
+                          {wiz.kind === 'team' && team && (
+                            <div style={{fontSize:11,color:C.muted,marginTop:2}}>
+                              {teamNames.map(n => crewDisplayName(n)).join(", ")}
+                            </div>
+                          )}
+                        </div>
+                        <div style={{fontSize:11,color:C.dim,marginTop:4}}>
+                          Week of {crewMon.toLocaleDateString("en-US",{month:"short",day:"numeric"})} ·
+                          click any cell to toggle assignment
+                        </div>
+                      </div>
+                      <button onClick={close}
+                        title="Close"
+                        style={{background:"none",border:"none",cursor:"pointer",
+                          color:C.muted,fontSize:22,lineHeight:1,padding:"4px 10px",fontFamily:"inherit",fontWeight:400}}>
+                        &times;
+                      </button>
+                    </div>
+                    {/* Grid header */}
+                    {crewPlanJobs.length === 0 ? (
+                      <div style={{padding:"20px 12px",textAlign:"center",color:C.muted,fontSize:12}}>
+                        No jobs in this week's planner. Pin some jobs first.
+                      </div>
+                    ) : (
+                      <table style={{width:"100%",borderCollapse:"separate",borderSpacing:0,fontSize:11}}>
+                        <thead>
+                          <tr>
+                            <th style={{textAlign:"left",padding:"6px 8px",fontSize:10,fontWeight:800,
+                              letterSpacing:"0.1em",color:C.dim,background:"var(--surface)",
+                              borderBottom:`1px solid ${C.border}`,position:"sticky",top:0,zIndex:1}}>JOB</th>
+                            {crewDays.map((d,i) => (
+                              <th key={i} style={{padding:"6px 4px",fontSize:10,fontWeight:800,
+                                letterSpacing:"0.08em",color:C.dim,textAlign:"center",
+                                background:"var(--surface)",borderBottom:`1px solid ${C.border}`,
+                                position:"sticky",top:0,zIndex:1,minWidth:90}}>
+                                {["MON","TUE","WED","THU","FRI"][i]}
+                                <div style={{fontSize:9,fontWeight:600,color:C.muted,marginTop:2}}>
+                                  {d.toLocaleDateString("en-US",{month:"numeric",day:"numeric"})}
+                                </div>
+                              </th>
+                            ))}
+                          </tr>
+                        </thead>
+                        <tbody>
+                          {crewPlanJobs.map(job => (
+                            <tr key={job.id}>
+                              <td style={{padding:"7px 8px",borderBottom:`1px solid ${C.border}`,
+                                color:"var(--text)",fontWeight:600,maxWidth:240,
+                                overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                                {job.name || "Untitled"}
+                              </td>
+                              {crewDays.map((day, di) => {
+                                const k = `${job.id}_${di}`;
+                                const checked = cellChecked(k);
+                                const dirty = !!crewWizardDraft[k];
+                                const cell = crewData[k];
+                                const timeLbl = cellTimeLabel(cell);
+                                // PTO check — for individuals, gray the cell if
+                                // the person is on PTO that day. For teams, gray
+                                // if any member is on PTO.
+                                const ptoNames = wiz.kind === 'person'
+                                  ? (isOnPTO(wiz.name, day) ? [wiz.name] : [])
+                                  : teamNames.filter(n => isOnPTO(n, day));
+                                const onPTO = ptoNames.length > 0;
+                                // Other-job presence — for the wizard target, are
+                                // they ALSO on a different cell that day?
+                                const anotherCells = wiz.kind === 'person'
+                                  ? (crewFindPersonOnDay(wiz.name, di, job.id) ? 1 : 0)
+                                  : teamNames.reduce((n, nm) => n + (crewFindPersonOnDay(nm, di, job.id) ? 1 : 0), 0);
+                                const bg = checked ? titleColor + "30"
+                                         : onPTO ? "#fef3c7"
+                                         : dirty ? C.border + "20"
+                                         : "var(--surface)";
+                                const border = checked ? titleColor
+                                             : onPTO ? "#d97706"
+                                             : dirty ? C.dim
+                                             : C.border;
+                                return (
+                                  <td key={di} style={{padding:3,borderBottom:`1px solid ${C.border}`,verticalAlign:"middle"}}>
+                                    <button onClick={()=>toggleCell(k)}
+                                      title={onPTO ? `${ptoNames.map(crewDisplayName).join(", ")} on PTO this day`
+                                           : anotherCells > 0 ? `Also on another job this day`
+                                           : checked ? "Tap to unassign" : "Tap to assign"}
+                                      style={{width:"100%",minHeight:42,background:bg,
+                                        border:`1.5px ${dirty?"dashed":"solid"} ${border}`,
+                                        borderRadius:7,cursor:"pointer",fontFamily:"inherit",
+                                        display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+                                        gap:2,padding:"4px 6px",
+                                        transition:"all 0.12s"}}>
+                                      <div style={{fontSize:11,fontWeight:700,
+                                        color:checked?titleColor:onPTO?"#92400e":C.dim}}>
+                                        {checked ? "ASSIGNED" : onPTO ? "PTO" : "—"}
+                                      </div>
+                                      {checked && timeLbl && (
+                                        <div style={{fontSize:9,fontWeight:600,color:titleColor,opacity:0.8}}>
+                                          {timeLbl}
+                                        </div>
+                                      )}
+                                      {!checked && anotherCells > 0 && (
+                                        <div style={{fontSize:9,fontWeight:500,color:C.muted}}>
+                                          also elsewhere
+                                        </div>
+                                      )}
+                                    </button>
+                                  </td>
+                                );
+                              })}
+                            </tr>
+                          ))}
+                        </tbody>
+                      </table>
+                    )}
+                    {/* Footer */}
+                    <div style={{display:"flex",alignItems:"center",gap:10,marginTop:14}}>
+                      <div style={{fontSize:11,color:C.dim,flex:1}}>
+                        {changeCount === 0
+                          ? "No changes yet · click cells to stage assignments"
+                          : `${changeCount} pending change${changeCount===1?"":"s"}`}
+                      </div>
+                      <button onClick={close}
+                        style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+                          padding:"8px 16px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim,
+                          fontFamily:"inherit"}}>
+                        Cancel
+                      </button>
+                      <button onClick={onSave}
+                        disabled={changeCount === 0}
+                        style={{background:changeCount===0?C.border:titleColor,
+                          border:"none",borderRadius:8,color:"#fff",
+                          padding:"8px 18px",cursor:changeCount===0?"default":"pointer",
+                          fontSize:11,fontWeight:800,fontFamily:"inherit",
+                          letterSpacing:"0.04em",opacity:changeCount===0?0.6:1}}>
+                        Save Changes
+                      </button>
+                    </div>
                   </div>
                 </>
               );
@@ -21672,8 +21991,35 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                               fontFamily:"inherit"}}>Clear</button>
                         ) : null;
                       })()}
-                      <button onClick={()=>{
-                        crewSetCellTime(crewTimeModal.jobId,crewTimeModal.dayIdx,crewTimeModal.start,crewTimeModal.end);
+                      <button onClick={async ()=>{
+                        // Multi-job same-day is allowed, but if these new times
+                        // overlap a different cell where a person in this cell
+                        // is also scheduled, surface that before we save so the
+                        // user can fix it.
+                        const jid=crewTimeModal.jobId, di=crewTimeModal.dayIdx;
+                        const k=`${jid}_${di}`;
+                        const cell=crewData[k];
+                        const newTime={start:crewTimeModal.start, end:crewTimeModal.end};
+                        const peopleHere=cell ? [...(cell.lead?[cell.lead]:[]), ...(cell.crew||[])] : [];
+                        const overlaps=[];
+                        peopleHere.forEach(name => {
+                          const other = crewFindPersonOnDay(name, di, jid);
+                          if(!other) return;
+                          const otherCell = crewData[other.k];
+                          const otherTime = otherCell?.time;
+                          if(!otherTime || (!otherTime.start && !otherTime.end)) return;
+                          if(_timesOverlap(otherTime, newTime)) {
+                            const otherJob = jobs.find(j=>j.id===other.jid)?.name || "another job";
+                            overlaps.push(`${crewDisplayName(name)} on ${otherJob} (${_crewFmtTime(otherTime.start)}–${_crewFmtTime(otherTime.end||otherTime.start)})`);
+                          }
+                        });
+                        if(overlaps.length) {
+                          const ok = await showConfirm(
+                            `These times overlap an existing assignment:\n\n${overlaps.join("\n")}\n\nSave anyway?`
+                          );
+                          if(!ok) return;
+                        }
+                        crewSetCellTime(jid,di,crewTimeModal.start,crewTimeModal.end);
                         setCrewTimeModal(null);
                       }}
                         style={{background:C.accent,border:"none",borderRadius:8,color:"#fff",
