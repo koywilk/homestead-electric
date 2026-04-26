@@ -2800,6 +2800,10 @@ function JobNoteLine({
   triage = false, selected = false, onToggleSelect = null, onJumpToPromoted = null,
   onUnpromote = null,
   jobId, noteId,
+  // Map of CO id → coStatus, supplied by JobNoteCard. Used to color the
+  // "→ CO · N" pill so a converted line goes orange (pending), green (approved
+  // / scheduled / completed), red (denied), or gray (CO deleted / missing).
+  coStatusById = null,
 }) {
   const [uploading, setUploading] = useState(false);
   const textRef = useRef(null);
@@ -3093,19 +3097,55 @@ function JobNoteLine({
             10-second toast has expired. Parent handles the confirm dialog
             (with edited-since-promote + in-progress warnings) so this button
             is just a trigger. */}
-        {promoted && (
+        {promoted && (() => {
+          // Style the pill by CO status when this line was promoted to a CO.
+          // Other promotion types (punch/rt/po/call) keep the original neutral
+          // styling — the new color signal is specifically about CO approval.
+          let pillBg = '#f1f5f9';
+          let pillFg = '#475569';
+          let pillBorder = C.border;
+          let statusLabel = '';
+          if(promoted.type === 'co' && coStatusById) {
+            const co = coStatusById[promoted.targetId];
+            const status = co?.coStatus || null;
+            if(status === 'approved' || status === 'scheduled' || status === 'completed') {
+              pillBg = '#dcfce7'; pillFg = '#15803d'; pillBorder = '#86efac';
+              statusLabel = status === 'approved' ? 'APPROVED'
+                          : status === 'scheduled' ? 'SCHEDULED'
+                          : 'COMPLETED';
+            } else if(status === 'denied') {
+              pillBg = '#fee2e2'; pillFg = '#b91c1c'; pillBorder = '#fca5a5';
+              statusLabel = 'DENIED';
+            } else if(status === 'pending' || status === 'needs_sending' || status === 'converted') {
+              // Orange = converted, in flight (the most common state right after
+              // promote — shows the line moved into a CO that's awaiting reply).
+              pillBg = '#ffedd5'; pillFg = '#c2410c'; pillBorder = '#fdba74';
+              statusLabel = status === 'needs_sending' ? 'NEEDS SEND'
+                          : status === 'converted' ? 'CONVERTED'
+                          : 'PENDING';
+            } else if(co == null) {
+              // CO not found in the array — likely deleted. Gray + "removed"
+              // hint so the user knows the link is broken.
+              pillBg = '#f3f4f6'; pillFg = '#6b7280'; pillBorder = '#e5e7eb';
+              statusLabel = 'CO REMOVED';
+            }
+          }
+          return (
           <div style={{ marginTop: 4, display:'inline-flex', alignItems:'center', gap:4 }}>
             <button
               onClick={()=>onJumpToPromoted && onJumpToPromoted(promoted)}
               style={{
                 fontSize:10, fontWeight:700, letterSpacing:'0.02em',
-                background:'#f1f5f9', color:'#475569',
-                border:`1px solid ${C.border}`, borderRadius:99,
+                background:pillBg, color:pillFg,
+                border:`1px solid ${pillBorder}`, borderRadius:99,
                 padding:'1px 9px', cursor: onJumpToPromoted ? 'pointer':'default',
                 fontFamily:'inherit',
               }}
-              title="Jump to destination">
+              title={statusLabel
+                ? `${promoted.type?.toUpperCase() || '?'} · ${promoted.targetLabel || ''} · ${statusLabel} — tap to jump`
+                : "Jump to destination"}>
               → {promoted.type?.toUpperCase() || '?'} · {promoted.targetLabel || ''}
+              {statusLabel && <span style={{marginLeft:5,opacity:0.85}}>· {statusLabel}</span>}
             </button>
             {onUnpromote && promoted.type === 'co' && (
               <button
@@ -3123,7 +3163,8 @@ function JobNoteLine({
               </button>
             )}
           </div>
-        )}
+          );
+        })()}
       </div>
 
       {/* Right-side remove (editing, non-promoted only) */}
@@ -4362,6 +4403,15 @@ function JobNoteCard({
   const [triage, setTriage] = useState(false);
   const [selected, setSelected] = useState(() => new Set());
   const [notePhotoUploading, setNotePhotoUploading] = useState(false);
+
+  // Map of CO id → CO object so JobNoteLine can color the "promoted to CO"
+  // pill by the CO's current status (orange when in flight, green when
+  // approved, red on denied, gray when the CO has been deleted).
+  const coStatusById = useMemo(() => {
+    const out = {};
+    (job?.changeOrders || []).forEach(co => { if(co && co.id) out[co.id] = co; });
+    return out;
+  }, [job?.changeOrders]);
   // Cards start COLLAPSED so the list reads like a table of contents. Editing
   // or triage force-opens (below) — a brand-new empty note defaults to edit
   // mode, so it expands automatically. Clicking the chevron or title flips
@@ -5196,6 +5246,7 @@ function JobNoteCard({
             onViewPhoto={onViewPhoto}
             onJumpToPromoted={jumpToPromoted}
             onUnpromote={unpromoteLine}
+            coStatusById={coStatusById}
           />
         ))}
 
