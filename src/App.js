@@ -5832,7 +5832,7 @@ function FromJobNoteBadge({ ref, job = null, jobNotes = null, size = 'sm', onCli
 }
 
 
-function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, scheduledRTMap=null, onJumpToRT=null }) {
+function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null }) {
 
   const safeItems = Array.isArray(items) ? items : [];
 
@@ -6052,6 +6052,50 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
               style={{ background: 'none', border: 'none', color: C.muted, cursor: 'pointer', fontSize: 12, flexShrink: 0 }}>✕</button>
 
           </div>
+
+          {/* ── Assigned-to row ── shows only when the parent passed an
+              assigneeOptions list (so PunchItems usages without a roster
+              context, e.g. inside a Return Trip linker, gracefully omit it).
+              Always render when an assignee EXISTS even without options, so
+              you can see who owns the item even in display-only contexts. */}
+          {(assigneeOptions || item.assignedTo) && !item.done && (
+            <div style={{marginLeft:22,marginTop:3,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',fontSize:10}}>
+              <span style={{color:C.dim,fontWeight:600,letterSpacing:'0.04em'}}>ASSIGNED:</span>
+              {assigneeOptions ? (
+                <select
+                  value={item.assignedTo||""}
+                  onChange={e=>{
+                    const v = e.target.value;
+                    onChange(safeItems.map(i => i.id === item.id ? { ...i, assignedTo: v } : i));
+                  }}
+                  style={{
+                    background: item.assignedTo ? C.accent+"15" : "var(--surface)",
+                    border: `1px solid ${item.assignedTo ? C.accent+"55" : C.border}`,
+                    borderRadius: 99,
+                    padding: "2px 8px",
+                    fontSize: 10,
+                    fontWeight: item.assignedTo ? 700 : 500,
+                    color: item.assignedTo ? C.accent : C.muted,
+                    fontFamily: "inherit",
+                    cursor: "pointer",
+                    outline: "none",
+                  }}>
+                  <option value="">— unassigned —</option>
+                  {assigneeOptions.map(name => <option key={name} value={name}>{name}</option>)}
+                </select>
+              ) : (
+                <span style={{
+                  background: C.accent+"15",
+                  border: `1px solid ${C.accent}55`,
+                  borderRadius: 99,
+                  padding: "2px 8px",
+                  fontSize: 10,
+                  fontWeight: 700,
+                  color: C.accent,
+                }}>{item.assignedTo}</span>
+              )}
+            </div>
+          )}
 
           {/* ── Waiting badges ── */}
           {item.waiting && !item.done && (
@@ -6282,7 +6326,7 @@ function RoomNameEdit({name, onSave}) {
 }
 
 
-function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null }) {
+function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null }) {
 
   const data = normFloor(floorData);
 
@@ -6407,7 +6451,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
           </div>
           {qInput('general')}
 
-          <PunchItems items={data.general} onChange={setGeneral} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT}/>
+          <PunchItems items={data.general} onChange={setGeneral} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions}/>
 
           {showHotcheck && (
             <div style={{ marginTop: 12, background: `rgba(220,38,38,0.06)`, border: `1px solid rgba(220,38,38,0.25)`, borderRadius: 8, padding: 10 }}>
@@ -6419,7 +6463,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                   </span>
                 )}
               </div>
-              <PunchItems items={data.hotcheck} onChange={setHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT}/>
+              <PunchItems items={data.hotcheck} onChange={setHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions}/>
             </div>
           )}
 
@@ -6463,7 +6507,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                   <>
                     {qInput(room.id)}
                     <PunchItems items={items}
-                      onChange={v => setRoomItems(room.id, v)} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT}/>
+                      onChange={v => setRoomItems(room.id, v)} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions}/>
                     <button onClick={async () => { if(!await showConfirm(`Remove room "${room.name}" and all its punch items?`)) return; delRoom(room.id); }}
                       style={{ display: 'block', marginTop: 6, marginLeft: 'auto', background: 'none', border: 'none',
                         color: C.muted, cursor: 'pointer', fontSize: 11, textDecoration: 'underline', fontFamily: 'inherit' }}>
@@ -6499,7 +6543,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 }
 
 
-function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null }) {
+function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null }) {
 
   const upper    = normFloor(punch.upper);
   const main     = normFloor(punch.main);
@@ -6615,11 +6659,11 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
       </div>
 
-      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('upper',t,`Upper Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT}/>
+      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('upper',t,`Upper Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions}/>
 
-      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('main',t,`Main Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT}/>
+      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('main',t,`Main Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions}/>
 
-      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('basement',t,`Basement – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT}/>
+      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('basement',t,`Basement – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions}/>
 
       {extras.map((e,i)=>(
         <div key={e.key}>
@@ -6632,7 +6676,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
             showHotcheck={showHotcheck}
             filterIds={filterIds}
             onAddMaterial={onAddMaterial}
-            onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('main',t,`Main Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT}/>
+            onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('main',t,`Main Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions}/>
           <button onClick={async ()=>{
             if(!await showConfirm(`Remove "${e.label}" and all its punch items? This cannot be undone.`)) return;
             removeFloor(e.key);
@@ -7611,13 +7655,41 @@ function MaterialTally({items, onChange, onAddToPO}) {
 
 // ── Daily Updates ─────────────────────────────────────────────
 
-function DailyUpdates({updates,onChange,jobName,onEmail}) {
+function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null}) {
 
   const [d,setD]           = useState({date:"",text:""});
 
   const [showPicker,setShowPicker] = useState(false);
 
   const [selected,setSelected]     = useState([]);
+
+  const [showClosedToday,setShowClosedToday] = useState(false);
+
+  // Flatten the phase's punch lists into a single array of {text, checkedBy,
+  // checkedAt, room, floor, isHotcheck, ...} so we can filter for items signed
+  // off today. Today's match uses the same format checkedAt is stored in
+  // (toLocaleDateString("en-US")) so no parsing required.
+  const closedToday = useMemo(() => {
+    if(!phasePunch) return [];
+    const out = [];
+    const todayStr = new Date().toLocaleDateString("en-US");
+    const eat = (items, room, floor, isHotcheck=false) => {
+      (items||[]).forEach(i => {
+        if(i && i.done && !i.voided && i.checkedAt === todayStr) {
+          out.push({ ...i, room, floor, isHotcheck });
+        }
+      });
+    };
+    const eatFloor = (fl, floorLabel) => {
+      if(!fl) return;
+      eat(fl.general, "General", floorLabel);
+      eat(fl.hotcheck, "Hot Check", floorLabel, true);
+      (fl.rooms||[]).forEach(r => eat(r.items, r.name, floorLabel));
+    };
+    ["upper","main","basement"].forEach(k => eatFloor(phasePunch[k], {upper:"Upper",main:"Main",basement:"Basement"}[k]));
+    (phasePunch.extraFloors||[]).forEach(fl => eatFloor(fl, fl.label || fl.key || ""));
+    return out;
+  }, [phasePunch]);
 
   const add = (textArg) => {
     const text = typeof textArg==='string' ? textArg : d.text;
@@ -7717,6 +7789,49 @@ function DailyUpdates({updates,onChange,jobName,onEmail}) {
         <Btn onClick={add} variant="primary">+ Log</Btn>
 
       </div>
+
+      {/* Auto-collapsed roll-up of punch items signed off today on this phase.
+          Shows the count when collapsed; expands inline. Pulled from the
+          phase's roughPunch / finishPunch via flattenPunch in the parent. */}
+      {closedToday.length > 0 && (
+        <div style={{marginBottom:10,border:`1px solid ${C.green}44`,
+          borderRadius:8,background:`${C.green}0c`,overflow:"hidden"}}>
+          <button onClick={()=>setShowClosedToday(v=>!v)}
+            style={{width:"100%",display:"flex",alignItems:"center",gap:8,
+              padding:"7px 12px",background:"none",border:"none",cursor:"pointer",
+              fontFamily:"inherit",textAlign:"left",color:C.green}}>
+            <Icon name="checkCircle" size={13}/>
+            <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.06em"}}>
+              PUNCH CLOSED TODAY · {closedToday.length}
+            </span>
+            <span style={{marginLeft:"auto",fontSize:10,color:C.dim,fontWeight:500}}>
+              {showClosedToday ? "hide" : "show"}
+            </span>
+          </button>
+          {showClosedToday && (
+            <div style={{padding:"4px 12px 10px",display:"flex",flexDirection:"column",gap:5}}>
+              {closedToday.map(it => (
+                <div key={it.id} style={{display:"flex",gap:8,fontSize:11,
+                  background:"var(--card)",borderRadius:6,padding:"5px 8px",
+                  border:`1px solid ${C.border}`}}>
+                  <Icon name="check" size={11} color={C.green}/>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{color:"var(--text)"}}>
+                      <RichText html={it.text}/>
+                    </div>
+                    <div style={{fontSize:9,color:C.dim,marginTop:2,display:"flex",gap:6,flexWrap:"wrap"}}>
+                      <span>{it.floor}{it.room && it.room !== "General" ? ` · ${it.room}` : ""}</span>
+                      {it.isHotcheck && <span style={{fontWeight:700,color:"#dc2626"}}>HOT CHECK</span>}
+                      {it.checkedBy && <span>· closed by {it.checkedBy}</span>}
+                      {it.assignedTo && <span>· assigned {it.assignedTo}</span>}
+                    </div>
+                  </div>
+                </div>
+              ))}
+            </div>
+          )}
+        </div>
+      )}
 
       {updates.map(u=>(
 
@@ -12817,6 +12932,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const jobRef = useRef(job);
   useEffect(()=>{ jobRef.current = job; }, [job]);
 
+  // Roster of names that can be assigned to a punch item. Drawn from the
+  // app's full users list so any crew member is pickable (per Koy's spec —
+  // not just foremen/leads). Memoized to a stable array reference so the
+  // PunchSection child doesn't re-render on every JobDetail update.
+  const punchAssigneeOptions = useMemo(
+    () => (Array.isArray(users) ? users.map(u2 => u2.name).filter(Boolean).sort() : []),
+    [users]
+  );
+
   const u = patch => {
     // Data-safety stamp (Job Notes, spec §"Replacement of PhaseInstructions"):
     // the FIRST time a job's jobNotes are written we lock in
@@ -13915,6 +14039,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   filterIds={job.roughPunchFilter ? new Set(job.roughPunchFilter) : null}
                   scheduledRTMap={scheduledRTMapRough}
                   onJumpToRT={onJumpToRT}
+                  assigneeOptions={punchAssigneeOptions}
                   onAddMaterial={(text, source)=>{
                     const orders = job.roughMaterials || [];
                     const openEntry = [...orders].reverse().find(o=>
@@ -13965,7 +14090,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                 <DailyUpdates updates={job.roughUpdates} onChange={v=>u({roughUpdates:v})}
 
-                  jobName={job.name||"This Job"} onEmail={setEmailData}/>
+                  jobName={job.name||"This Job"} onEmail={setEmailData} phasePunch={job.roughPunch}/>
 
               </Section>
 
@@ -14193,6 +14318,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   filterIds={job.finishPunchFilter ? new Set(job.finishPunchFilter) : null}
                   scheduledRTMap={scheduledRTMapFinish}
                   onJumpToRT={onJumpToRT}
+                  assigneeOptions={punchAssigneeOptions}
                   onAddMaterial={(text, source)=>{
                     const orders = job.finishMaterials || [];
                     const openEntry = [...orders].reverse().find(o=>
@@ -14245,7 +14371,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <div style={{marginTop:20}}>
 
                 <Section label="Finish Daily Job Updates" color={C.finish}>
-                <DailyUpdates updates={job.finishUpdates} onChange={v=>u({finishUpdates:v})} jobName={job.name||"This Job"} onEmail={setEmailData}/>
+                <DailyUpdates updates={job.finishUpdates} onChange={v=>u({finishUpdates:v})} jobName={job.name||"This Job"} onEmail={setEmailData} phasePunch={job.finishPunch}/>
               </Section>
 
               </div>
@@ -15054,7 +15180,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               {job.qcPunch&&punchOpen(job.qcPunch)>0&&(
                 <Section label="Legacy QC Items" color={C.teal} defaultOpen={false}>
                   <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC"
-                    onEmail={({subject,body})=>{openEmail("",subject,body);}} showHotcheck={true} jobId={job.id}/>
+                    onEmail={({subject,body})=>{openEmail("",subject,body);}} showHotcheck={true} jobId={job.id}
+                    assigneeOptions={punchAssigneeOptions}/>
                 </Section>
               )}
 
@@ -26344,6 +26471,116 @@ function App() {
 
   const viewJobs = view==="foreman" ? jobs.filter(j=>activeForeman==="Unassigned"?(!j.foreman||j.foreman==="Unassigned"):matchesForeman(j,activeForeman)) : jobs;
 
+  // Toggle a punch item's done-state from outside JobDetail (e.g. the
+  // "Assigned" foreman tab). Mirrors JobDetail's handlePhasePunchChange
+  // RT cross-sync: any return-trip entry with the same originItemId on
+  // this phase flips alongside the source item, in the same atomic write.
+  // QC punches don't have RT linkages so they only update the punch tree.
+  // Returns the new full job (or null if the item couldn't be found).
+  const togglePunchItemDone = (jobId, phase, itemId) => {
+    const job = jobs.find(j => j.id === jobId);
+    if(!job) return null;
+    const phaseKey = phase === "Rough" ? "roughPunch"
+                   : phase === "Finish" ? "finishPunch"
+                   : "qcPunch";
+    const punch = job[phaseKey];
+    if(!punch) return null;
+    const who = (identity?.name) || (getIdentity && getIdentity()?.name) || "";
+    const when = new Date().toLocaleDateString("en-US");
+    let newDone = null;
+    const updateItem = (i) => {
+      if(!i || i.id !== itemId) return i;
+      newDone = !i.done;
+      return {
+        ...i,
+        done: newDone,
+        checkedBy: newDone ? who : "",
+        checkedAt: newDone ? when : "",
+        waiting: newDone ? false : i.waiting,
+      };
+    };
+    const updateFloor = (fl) => {
+      if(!fl) return fl;
+      return {
+        ...fl,
+        general:  (fl.general||[]).map(updateItem),
+        hotcheck: (fl.hotcheck||[]).map(updateItem),
+        rooms:    (fl.rooms||[]).map(r => ({...r, items: (r.items||[]).map(updateItem)})),
+      };
+    };
+    const newPunch = {
+      ...punch,
+      upper:       updateFloor(punch.upper),
+      main:        updateFloor(punch.main),
+      basement:    updateFloor(punch.basement),
+      extraFloors: (punch.extraFloors||[]).map(updateFloor),
+    };
+    if(newDone === null) return null; // item id not found anywhere
+    const patch = { [phaseKey]: newPunch };
+    // Cross-sync any return-trip punch entry that points at this source.
+    // qcPunch doesn't propagate to RTs (RTs reference rough/finish only).
+    if(phase === "Rough" || phase === "Finish") {
+      const phaseLower = phase.toLowerCase();
+      let anyRTChanged = false;
+      const newTrips = (job.returnTrips||[]).map(rt => {
+        let changed = false;
+        const np = (rt.punch||[]).map(p => {
+          if(!p || !p.originItemId) return p;
+          if((p.originPhase||"rough") !== phaseLower) return p;
+          if(p.originItemId !== itemId) return p;
+          if(!!p.done === !!newDone) return p;
+          changed = true;
+          return {
+            ...p,
+            done: newDone,
+            checkedBy: newDone ? who : "",
+            checkedAt: newDone ? when : "",
+          };
+        });
+        if(changed) anyRTChanged = true;
+        return changed ? { ...rt, punch: np } : rt;
+      });
+      if(anyRTChanged) patch.returnTrips = newTrips;
+    }
+    updateJob({ ...job, ...patch }, patch);
+    return true;
+  };
+
+  // Punch items assigned to the currently-active foreman, across every job.
+  // Used by the foreman tab "Assigned" to give them one place to see what's
+  // theirs without hopping between jobs. Walks rough/finish/qc punches and
+  // skips voided + done items.
+  const assignedToActive = useMemo(() => {
+    if(!activeForeman) return [];
+    const out = [];
+    const eatFloor = (fl, floorLabel, phase, jobId, jobName) => {
+      if(!fl) return;
+      const push = (i, room, isHotcheck) => {
+        if(!i || i.voided || i.done) return;
+        if(i.assignedTo !== activeForeman) return;
+        out.push({ ...i, room, floor:floorLabel, phase, isHotcheck, jobId, jobName });
+      };
+      (fl.general||[]).forEach(i => push(i, "General", false));
+      (fl.hotcheck||[]).forEach(i => push(i, "Hot Check", true));
+      (fl.rooms||[]).forEach(r => (r.items||[]).forEach(i => push(i, r.name, false)));
+    };
+    jobs.forEach(j => {
+      if(j.tempPed || j.quickJob) return;
+      const jobName = j.name || "Untitled";
+      const phases = [
+        ["Rough", j.roughPunch],
+        ["Finish", j.finishPunch],
+        ["QC", j.qcPunch],
+      ];
+      phases.forEach(([phase, punch]) => {
+        if(!punch) return;
+        ["upper","main","basement"].forEach(k => eatFloor(punch[k], {upper:"Upper",main:"Main",basement:"Basement"}[k], phase, j.id, jobName));
+        (punch.extraFloors||[]).forEach(fl => eatFloor(fl, fl.label || fl.key || "", phase, j.id, jobName));
+      });
+    });
+    return out;
+  }, [jobs, activeForeman]);
+
 
   const filtered = viewJobs.filter(j=>{
 
@@ -27442,9 +27679,10 @@ function App() {
               const prepTasks = computeTasks(jobs).filter(t=>t.foreman==="Koy"&&t.category==="prep"&&!_clearedTab.has(t.id));
               const taskCount = isKoy ? fTasks.length + prepTasks.length : fTasks.length;
               const fc = _foremanColors[activeForeman]||"#6b7280";
+              const assignedCount = assignedToActive.length;
               return (
                 <div style={{display:"flex",gap:0,borderBottom:`2px solid ${C.border}`,marginTop:8}}>
-                  {[["jobs","Jobs"],["tasks",`Tasks${taskCount>0?` (${taskCount})`:""}`]].map(([key,label])=>(
+                  {[["jobs","Jobs"],["tasks",`Tasks${taskCount>0?` (${taskCount})`:""}`],["assigned",`Assigned${assignedCount>0?` (${assignedCount})`:""}`]].map(([key,label])=>(
                     <button key={key} onClick={()=>setForemanViewTab(key)}
                       style={{background:"none",border:"none",borderBottom:foremanViewTab===key?`2px solid ${fc}`:"2px solid transparent",
                         color:foremanViewTab===key?fc:C.dim,fontSize:13,fontWeight:foremanViewTab===key?700:500,
@@ -27559,6 +27797,98 @@ function App() {
                     activeForeman={activeForeman}
                     foremenList={_foremen}
                   />
+                );
+              })()}
+            </div>
+          )}
+
+          {/* ── ASSIGNED TAB ── per-crew punch items pulled from every job's
+              rough/finish/QC punches. Read-only list grouped by job; tap a row
+              to jump into that job's detail view. */}
+          {foremanViewTab==="assigned"&&(
+            <div style={{padding:"14px 26px"}}>
+              {(() => {
+                if(assignedToActive.length === 0) {
+                  return (
+                    <div style={{textAlign:"center",padding:"60px 0",color:C.muted}}>
+                      <div style={{fontSize:13,marginBottom:6}}>Nothing assigned to {activeForeman} yet.</div>
+                      <div style={{fontSize:11}}>Open a job's punch list and pick {activeForeman} from the Assigned dropdown.</div>
+                    </div>
+                  );
+                }
+                // Group by job so the user sees one section per house with its
+                // open punch items underneath.
+                const byJob = {};
+                assignedToActive.forEach(it => {
+                  if(!byJob[it.jobId]) byJob[it.jobId] = { jobName: it.jobName, items: [] };
+                  byJob[it.jobId].items.push(it);
+                });
+                const fc = _foremanColors[activeForeman] || "#6b7280";
+                return (
+                  <div style={{display:"flex",flexDirection:"column",gap:14}}>
+                    <div style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",
+                      background:`${fc}10`,border:`1px solid ${fc}33`,borderRadius:10}}>
+                      <Icon name="checkCircle" size={14} color={fc}/>
+                      <div style={{fontSize:12,fontWeight:700,color:fc,letterSpacing:"0.04em",flex:1}}>
+                        ASSIGNED TO {activeForeman.toUpperCase()} · {assignedToActive.length} OPEN
+                      </div>
+                    </div>
+                    {Object.entries(byJob).map(([jid, group]) => {
+                      const job = jobs.find(j => j.id === jid);
+                      return (
+                        <div key={jid} style={{border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden",background:"var(--card)"}}>
+                          <button onClick={()=>job && setSelected(job)}
+                            style={{width:"100%",display:"flex",alignItems:"center",gap:8,padding:"10px 14px",
+                              background:"var(--surface)",border:"none",cursor:job?"pointer":"default",
+                              fontFamily:"inherit",textAlign:"left",borderBottom:`1px solid ${C.border}`}}>
+                            <div style={{flex:1,fontSize:13,fontWeight:700,color:"var(--text)"}}>
+                              {group.jobName}
+                            </div>
+                            <span style={{fontSize:10,fontWeight:700,background:fc+"22",color:fc,
+                              borderRadius:99,padding:"2px 8px"}}>
+                              {group.items.length}
+                            </span>
+                            {job && <Icon name="chevronRight" size={14} color={C.muted}/>}
+                          </button>
+                          <div style={{display:"flex",flexDirection:"column",gap:6,padding:"10px 14px"}}>
+                            {group.items.map(it => (
+                              <div key={it.id} style={{display:"flex",gap:8,fontSize:11,
+                                padding:"6px 10px",borderRadius:7,alignItems:"flex-start",
+                                background:"var(--surface)",border:`1px solid ${C.border}`}}>
+                                {/* Check box — toggles done on the source punch
+                                    item AND any linked Return Trip entry.
+                                    stopPropagation so the click doesn't fall
+                                    through to the (currently no-op) row. */}
+                                <input
+                                  type="checkbox"
+                                  checked={false}
+                                  onClick={e=>e.stopPropagation()}
+                                  onChange={()=>{ togglePunchItemDone(it.jobId, it.phase, it.id); }}
+                                  title={`Mark complete · ${it.phase} on ${it.jobName}`}
+                                  style={{accentColor:C.green,width:14,height:14,cursor:"pointer",
+                                    flexShrink:0,marginTop:2}}
+                                />
+                                <div style={{flex:1,minWidth:0}}>
+                                  <div style={{color:"var(--text)"}}>
+                                    <RichText html={it.text}/>
+                                  </div>
+                                  <div style={{fontSize:9,color:C.dim,marginTop:3,display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                                    <span style={{fontWeight:700,letterSpacing:"0.06em",
+                                      background: it.phase==="Rough"?C.rough+"22":it.phase==="Finish"?C.accent+"22":"#0d948822",
+                                      color: it.phase==="Rough"?C.rough:it.phase==="Finish"?C.accent:"#0d9488",
+                                      borderRadius:99,padding:"1px 6px"}}>{it.phase.toUpperCase()}</span>
+                                    <span>{it.floor}{it.room && it.room !== "General" ? ` · ${it.room}` : ""}</span>
+                                    {it.isHotcheck && <span style={{fontWeight:700,color:"#dc2626"}}>HOT CHECK</span>}
+                                    {it.materialNeeded && <span style={{color:"#1d4ed8"}}>· material: {it.materialNeeded}</span>}
+                                  </div>
+                                </div>
+                              </div>
+                            ))}
+                          </div>
+                        </div>
+                      );
+                    })}
+                  </div>
                 );
               })()}
             </div>
