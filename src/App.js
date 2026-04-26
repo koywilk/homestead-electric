@@ -20885,22 +20885,37 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                               : phaseMode
                                 ? (simproLast || (job[dateKey]||""))
                                 : (rtNeeds ? rtNeeds.rt.rtStatusDate : "");
-                            // If the job is in "scheduled" mode but the displayed
-                            // date is already in the past, the schedule has slipped —
-                            // show as "ongoing" instead so the pill stops misleadingly
-                            // saying "Scheduled MM/DD" on a date that already passed.
-                            // Only the rendered mode flips; the underlying job data
-                            // is untouched (no Firestore write).
-                            let _isPast = false;
-                            if(curDate) {
-                              const _d = parseAnyDate(curDate);
-                              if(_d) {
-                                _d.setHours(0,0,0,0);
-                                const _t = new Date(); _t.setHours(0,0,0,0);
-                                _isPast = _d < _t;
-                              }
+                            // Simpro is the authoritative schedule source. If it shows
+                            // a TODAY-OR-FUTURE day for this job, override the displayed
+                            // mode to "scheduled" with that Simpro date — even if the
+                            // Firestore status hasn't been manually flipped to scheduled.
+                            // Catches the common case where a job is on the Simpro
+                            // calendar but the status pill is still on needsSched/ongoing.
+                            const _today0 = new Date(); _today0.setHours(0,0,0,0);
+                            let _simproFutureD = null;
+                            if(simproLast) {
+                              const _sd = parseAnyDate(simproLast);
+                              if(_sd) { _sd.setHours(0,0,0,0); if(_sd >= _today0) _simproFutureD = _sd; }
                             }
-                            const effectiveMode = (curMode === "scheduled" && _isPast) ? "ongoing" : curMode;
+                            // Past-date rule still applies AFTER the Simpro override —
+                            // if there's no future Simpro day and the existing scheduled
+                            // date is in the past, render as "ongoing" so the pill stops
+                            // misleadingly saying "Scheduled MM/DD" with a date that's
+                            // already gone. Display-only flip; Firestore is untouched.
+                            const _displayDate = _simproFutureD ? simproLast : curDate;
+                            let _isPast = false;
+                            if(_displayDate) {
+                              const _d = parseAnyDate(_displayDate);
+                              if(_d) { _d.setHours(0,0,0,0); _isPast = _d < _today0; }
+                            }
+                            let effectiveMode = curMode;
+                            let effectiveDate = curDate;
+                            if(_simproFutureD && phaseMode && phaseMode !== "scheduled") {
+                              effectiveMode = "scheduled";
+                              effectiveDate = simproLast;
+                            } else if(curMode === "scheduled" && _isPast) {
+                              effectiveMode = "ongoing";
+                            }
                             const isHover = crewHoverJobId === job.id;
                             const isPinned = crewPinned.includes(job.id);
                             return (
@@ -20949,7 +20964,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                       size="sm"
                                       showSync={false}
                                       mode={effectiveMode}
-                                      needsDate={curDate}
+                                      needsDate={effectiveDate}
                                       needsHard={phaseMode ? !!job[hardKey] : false}
                                       onToggle={()=>{
                                         // Toggle cycle uses the rendered mode so a past-date
