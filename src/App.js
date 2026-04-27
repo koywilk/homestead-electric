@@ -19038,9 +19038,22 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
   // value means the cell has been TOGGLED relative to its current state — saved
   // on Save, discarded on Cancel.
   const [crewWizardDraft, setCrewWizardDraft] = useState({});
-  // Reset the draft any time the wizard opens (or its target changes) so we
-  // never carry stale toggles into the next session.
-  useEffect(() => { setCrewWizardDraft({}); }, [crewAssignWizard]);
+  // Per-cell time overrides staged inside the wizard. Keyed by `${jid}_${di}`,
+  // value is `{start, end}`. Used both when toggling a brand-new cell ON
+  // (saved time = override OR default) and when editing an existing cell's
+  // time inline within the wizard.
+  const [crewWizardTimes, setCrewWizardTimes] = useState({});
+  // Default time applied to every newly-toggled cell. User can change this at
+  // the top of the wizard and all subsequent toggles use it; cells already
+  // toggled aren't retroactively changed.
+  const [crewWizardDefaultTime, setCrewWizardDefaultTime] = useState({ start:"07:00", end:"17:00" });
+  // Reset the draft + times any time the wizard opens (or its target changes)
+  // so we never carry stale toggles into the next session.
+  useEffect(() => {
+    setCrewWizardDraft({});
+    setCrewWizardTimes({});
+    setCrewWizardDefaultTime({ start:"07:00", end:"17:00" });
+  }, [crewAssignWizard]);
   // Track which job row's hover overlay is active, so the status-update hover
   // card only renders for the hovered row rather than on every row at once.
   const [crewHoverJobId, setCrewHoverJobId] = useState(null);
@@ -21097,6 +21110,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                             const isHover = crewHoverJobId === job.id;
                             const isPinned = crewPinned.includes(job.id);
                             return (
+                              <div style={{display:"flex",flexDirection:"column",gap:3,position:"relative"}}>
                               <div style={{display:"flex",alignItems:"center",gap:5,position:"relative"}}>
                                 {/* Drag grip — only visible on hover to keep row clean */}
                                 <span
@@ -21179,23 +21193,6 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                     borderRadius:99,padding:"1px 6px",flexShrink:0}}>
                                   {(job.foreman||"Koy").charAt(0)}
                                 </span>
-                                {/* Hover status-update — anchored to the RIGHT of the sticky
-                                    name column so it floats into the empty calendar space for
-                                    this row without overlapping rows above/below. Single-line,
-                                    ellipsized, non-interactive. */}
-                                {isHover && job.statusUpdate && (
-                                  <div style={{position:"absolute",left:"100%",top:"50%",
-                                    transform:"translateY(-50%)",marginLeft:8,zIndex:20,
-                                    background:"var(--card)",border:`1px solid ${C.border}`,
-                                    borderLeft:`3px solid #f59e0b`,borderRadius:6,
-                                    padding:"4px 10px",maxWidth:380,
-                                    fontSize:11,color:"var(--text)",lineHeight:1.3,fontWeight:500,
-                                    whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",
-                                    boxShadow:"0 4px 14px rgba(0,0,0,0.12)",
-                                    pointerEvents:"none"}}>
-                                    {job.statusUpdate}
-                                  </div>
-                                )}
                                 {/* Extra-added jobs get a small remove × on hover */}
                                 {isHover && crewExtra.includes(job.id) && (
                                   <span onClick={e=>{e.stopPropagation();
@@ -21207,6 +21204,24 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                       padding:"0 3px",opacity:0.6,flexShrink:0}}>
                                     &times;</span>
                                 )}
+                              </div>
+                              {/* Status update — inline under the row, single line
+                                  ellipsized so it never overlaps day cells. Native
+                                  title attribute shows the full text on hover. The
+                                  prior position:absolute overlay was unreadable when
+                                  it landed on top of crew chips. */}
+                              {job.statusUpdate && (
+                                <div title={job.statusUpdate}
+                                  style={{
+                                    fontSize:10,color:"var(--muted)",
+                                    marginLeft:24,paddingLeft:6,
+                                    borderLeft:`2px solid #f59e0b`,
+                                    whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",
+                                    maxWidth:255,lineHeight:1.3,fontWeight:500,
+                                  }}>
+                                  {job.statusUpdate}
+                                </div>
+                              )}
                               </div>
                             );
                           })()}
@@ -21441,8 +21456,21 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                       // When the forecast is filtered to one foreman, scope the picker
                       // to that foreman's crew — their teams + the people in those teams.
                       // Saves them scrolling past unrelated crews.
+                      // Teams shown: the foreman's own teams PLUS any team led by
+                      // someone whose foremanId points at the filtered foreman
+                      // (e.g. Daegan's team shows in Koy's filtered picker because
+                      // Daegan is one of Koy's crew). Without this, only Koy's
+                      // direct teams would appear and the user complained that
+                      // teams were missing entirely from the picker.
+                      const _fmFilterFirst = crewForemanFilter ? crewForemanFilter.trim().split(/\s+/)[0] : null;
                       const scopedTeams = crewForemanFilter
-                        ? crewTeams.filter(t => t.lead === crewForemanFilter)
+                        ? crewTeams.filter(t => {
+                            if(t.lead === crewForemanFilter) return true;
+                            if(!t.lead) return false;
+                            const leadFirst = t.lead.trim().split(/\s+/)[0];
+                            const fm = crewForemanOf[t.lead] || crewForemanOf[leadFirst];
+                            return fm === crewForemanFilter || fm === _fmFilterFirst;
+                          })
                         : crewTeams;
                       const scopedRoster = (() => {
                         if(!crewForemanFilter) return crewRoster || [];
@@ -21712,22 +21740,31 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
               // scheduled. Newly-created cells (cell didn't exist before this
               // toggle) get a default 7:00-17:00 time so they're usable in the
               // planner without an extra trip to the time modal.
-              const DEFAULT_TIME = { start:"07:00", end:"17:00" };
+              // Pick the time that a given cell-key will end up with after save.
+              // Priority: per-cell override (set via the inline cell time inputs
+              // OR the cell's existing crewData time IF the user has explicitly
+              // edited it via the wizard) → existing cell time → wizard default.
+              // Brand-new cells (no prior entry) fall through to the wizard's
+              // current default time so users can pick once at the top instead
+              // of dialing 7-5 every time.
+              const resolveCellTime = (k) => {
+                const override = crewWizardTimes[k];
+                if(override && (override.start || override.end)) return override;
+                const existing = crewData[k]?.time;
+                if(existing && (existing.start || existing.end)) return existing;
+                return crewWizardDefaultTime;
+              };
               const applyAndClose = async () => {
                 const toggles = Object.keys(crewWizardDraft);
-                if(toggles.length === 0) { close(); return; }
+                const timeEdits = Object.keys(crewWizardTimes);
+                if(toggles.length === 0 && timeEdits.length === 0) { close(); return; }
                 const overlaps = [];
                 toggles.forEach(k => {
                   const [jid, dStr] = k.split("_");
                   const di = parseInt(dStr);
                   const adding = !isTargetIn(k); // toggling from off → on
                   if(!adding) return;
-                  // Compute the time this cell will have AFTER save — existing
-                  // time if present, otherwise the wizard's default.
-                  const existingCell = crewData[k];
-                  const newTime = (existingCell?.time && (existingCell.time.start || existingCell.time.end))
-                    ? existingCell.time
-                    : DEFAULT_TIME;
+                  const newTime = resolveCellTime(k);
                   const namesAdded = wiz.kind === 'person' ? [wiz.name] : teamNames;
                   namesAdded.forEach(name => {
                     const other = crewFindPersonOnDay(name, di, jid);
@@ -21752,13 +21789,15 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                   const adding = !isTargetIn(k);
                   if(adding) {
                     const wasEmpty = !crewData[k]; // brand-new cell
+                    const override = crewWizardTimes[k];
                     const cur = nx[k] || {lead:"",crew:[]};
+                    const cellTime = (override && (override.start || override.end))
+                      ? override
+                      : (wasEmpty ? crewWizardDefaultTime : cur.time);
                     if(wiz.kind === 'person') {
                       if(cur.lead===wiz.name || (cur.crew||[]).includes(wiz.name)) return;
                       const next = {...cur, crew:[...(cur.crew||[]), wiz.name]};
-                      // Default time only on brand-new cells; never overwrite an
-                      // existing cell's time even if a fellow crew member set it.
-                      if(wasEmpty && !next.time) next.time = DEFAULT_TIME;
+                      if(cellTime && (cellTime.start || cellTime.end)) next.time = cellTime;
                       nx[k] = next;
                     } else {
                       const newLead = !cur.lead && team?.lead ? team.lead : cur.lead;
@@ -21767,7 +21806,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                         if(!newCrew.includes(n)) newCrew.push(n);
                       });
                       const next = { ...cur, lead:newLead, crew:newCrew };
-                      if(wasEmpty && !next.time) next.time = DEFAULT_TIME;
+                      if(cellTime && (cellTime.start || cellTime.end)) next.time = cellTime;
                       nx[k] = next;
                     }
                   } else {
@@ -21778,10 +21817,25 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                     namesOff.forEach(name => _crewRemoveFromCell(nx, k, name));
                   }
                 });
+                // Apply pure time edits (cells that were already assigned and
+                // had only their time changed via the inline inputs — no toggle).
+                timeEdits.forEach(k => {
+                  if(crewWizardDraft[k]) return; // handled above as a toggle
+                  const override = crewWizardTimes[k];
+                  if(!override) return;
+                  if(!nx[k]) return; // safety: don't materialize ghost cells
+                  nx[k] = { ...nx[k], time: override };
+                });
                 setCrewData(nx); _saveCrewData(nx);
                 close();
               };
-              const changeCount = Object.keys(crewWizardDraft).length;
+              // Count any toggled cells PLUS any pure time edits (cells already
+              // assigned that just had their time tweaked) so the Save button
+              // and pending-changes hint stay accurate.
+              const changeCount = (() => {
+                const keys = new Set([...Object.keys(crewWizardDraft), ...Object.keys(crewWizardTimes)]);
+                return keys.size;
+              })();
               return (
                 <>
                   {/* Backdrop click = save+close (anything that isn't explicit
@@ -21814,7 +21868,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                         </div>
                         <div style={{fontSize:11,color:C.dim,marginTop:4}}>
                           Week of {crewMon.toLocaleDateString("en-US",{month:"short",day:"numeric"})} ·
-                          click any cell to toggle · new cells default to 7a–5p
+                          click any cell to toggle
                         </div>
                       </div>
                       <button onClick={applyAndClose}
@@ -21823,6 +21877,27 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                           color:C.muted,fontSize:22,lineHeight:1,padding:"4px 10px",fontFamily:"inherit",fontWeight:400}}>
                         &times;
                       </button>
+                    </div>
+                    {/* Default-time controls — applies to every NEW cell toggled
+                        on. Cells that already have a time keep it; cells with
+                        an inline override use that. Adjust here once instead
+                        of dialing 7-5 on every cell. */}
+                    <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,
+                      padding:"8px 12px",background:"var(--surface)",borderRadius:8,
+                      border:`1px solid ${C.border}`}}>
+                      <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.06em",color:C.dim}}>NEW CELLS DEFAULT TO</span>
+                      <input type="time" value={crewWizardDefaultTime.start}
+                        onChange={e=>setCrewWizardDefaultTime(t=>({...t, start:e.target.value}))}
+                        style={{background:"var(--card)",border:`1px solid ${C.border}`,borderRadius:6,
+                          padding:"4px 8px",fontSize:11,fontFamily:"inherit",color:"var(--text)"}}/>
+                      <span style={{fontSize:11,color:C.dim}}>–</span>
+                      <input type="time" value={crewWizardDefaultTime.end}
+                        onChange={e=>setCrewWizardDefaultTime(t=>({...t, end:e.target.value}))}
+                        style={{background:"var(--card)",border:`1px solid ${C.border}`,borderRadius:6,
+                          padding:"4px 8px",fontSize:11,fontFamily:"inherit",color:"var(--text)"}}/>
+                      <span style={{fontSize:10,color:C.muted,marginLeft:"auto"}}>
+                        Tap a cell's time to override per-cell
+                      </span>
                     </div>
                     {/* Grid header */}
                     {crewPlanJobs.length === 0 ? (
@@ -21862,16 +21937,16 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                 const checked = cellChecked(k);
                                 const dirty = !!crewWizardDraft[k];
                                 const cell = crewData[k];
-                                const timeLbl = cellTimeLabel(cell);
-                                // PTO check — for individuals, gray the cell if
-                                // the person is on PTO that day. For teams, gray
-                                // if any member is on PTO.
+                                // Resolve the time the cell will SAVE with —
+                                // override → existing → default. Used both for
+                                // the inline label and for the time inputs.
+                                const resolvedTime = checked
+                                  ? (crewWizardTimes[k] || cell?.time || crewWizardDefaultTime)
+                                  : null;
                                 const ptoNames = wiz.kind === 'person'
                                   ? (isOnPTO(wiz.name, day) ? [wiz.name] : [])
                                   : teamNames.filter(n => isOnPTO(n, day));
                                 const onPTO = ptoNames.length > 0;
-                                // Other-job presence — for the wizard target, are
-                                // they ALSO on a different cell that day?
                                 const anotherCells = wiz.kind === 'person'
                                   ? (crewFindPersonOnDay(wiz.name, di, job.id) ? 1 : 0)
                                   : teamNames.reduce((n, nm) => n + (crewFindPersonOnDay(nm, di, job.id) ? 1 : 0), 0);
@@ -21885,31 +21960,56 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                              : C.border;
                                 return (
                                   <td key={di} style={{padding:3,borderBottom:`1px solid ${C.border}`,verticalAlign:"middle"}}>
-                                    <button onClick={()=>toggleCell(k)}
-                                      title={onPTO ? `${ptoNames.map(crewDisplayName).join(", ")} on PTO this day`
-                                           : anotherCells > 0 ? `Also on another job this day`
-                                           : checked ? "Tap to unassign" : "Tap to assign"}
-                                      style={{width:"100%",minHeight:42,background:bg,
-                                        border:`1.5px ${dirty?"dashed":"solid"} ${border}`,
-                                        borderRadius:7,cursor:"pointer",fontFamily:"inherit",
-                                        display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
-                                        gap:2,padding:"4px 6px",
-                                        transition:"all 0.12s"}}>
-                                      <div style={{fontSize:11,fontWeight:700,
-                                        color:checked?titleColor:onPTO?"#92400e":C.dim}}>
-                                        {checked ? "ASSIGNED" : onPTO ? "PTO" : "—"}
-                                      </div>
-                                      {checked && timeLbl && (
-                                        <div style={{fontSize:9,fontWeight:600,color:titleColor,opacity:0.8}}>
-                                          {timeLbl}
+                                    {/* Cell body — toggle button with time inputs
+                                        underneath when assigned. Time inputs are
+                                        inside the cell so the user can dial
+                                        per-cell times without leaving the wizard.
+                                        Click on inputs is captured (stopPropagation)
+                                        so it doesn't bubble up to the toggle. */}
+                                    <div style={{width:"100%",minHeight:42,background:bg,
+                                      border:`1.5px ${dirty?"dashed":"solid"} ${border}`,
+                                      borderRadius:7,fontFamily:"inherit",
+                                      display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",
+                                      gap:3,padding:"4px 6px",transition:"all 0.12s"}}>
+                                      <button onClick={()=>toggleCell(k)}
+                                        title={onPTO ? `${ptoNames.map(crewDisplayName).join(", ")} on PTO this day`
+                                             : anotherCells > 0 ? `Also on another job this day`
+                                             : checked ? "Tap to unassign" : "Tap to assign"}
+                                        style={{background:"none",border:"none",cursor:"pointer",
+                                          fontFamily:"inherit",padding:0,width:"100%",lineHeight:1.1}}>
+                                        <div style={{fontSize:11,fontWeight:700,
+                                          color:checked?titleColor:onPTO?"#92400e":C.dim}}>
+                                          {checked ? "ASSIGNED" : onPTO ? "PTO" : "—"}
+                                        </div>
+                                        {!checked && anotherCells > 0 && (
+                                          <div style={{fontSize:9,fontWeight:500,color:C.muted,marginTop:2}}>
+                                            also elsewhere
+                                          </div>
+                                        )}
+                                      </button>
+                                      {checked && resolvedTime && (
+                                        <div onClick={e=>e.stopPropagation()}
+                                          style={{display:"flex",alignItems:"center",gap:2,marginTop:1}}>
+                                          <input type="time" value={resolvedTime.start||""}
+                                            onChange={e=>{
+                                              const v = e.target.value;
+                                              setCrewWizardTimes(t=>({...t, [k]: { start:v, end:(t[k]?.end ?? resolvedTime.end ?? "") }}));
+                                            }}
+                                            style={{background:"var(--card)",border:`1px solid ${C.border}`,
+                                              borderRadius:4,padding:"1px 3px",fontSize:9,fontFamily:"inherit",
+                                              color:"var(--text)",width:60}}/>
+                                          <span style={{fontSize:9,color:C.dim}}>–</span>
+                                          <input type="time" value={resolvedTime.end||""}
+                                            onChange={e=>{
+                                              const v = e.target.value;
+                                              setCrewWizardTimes(t=>({...t, [k]: { start:(t[k]?.start ?? resolvedTime.start ?? ""), end:v }}));
+                                            }}
+                                            style={{background:"var(--card)",border:`1px solid ${C.border}`,
+                                              borderRadius:4,padding:"1px 3px",fontSize:9,fontFamily:"inherit",
+                                              color:"var(--text)",width:60}}/>
                                         </div>
                                       )}
-                                      {!checked && anotherCells > 0 && (
-                                        <div style={{fontSize:9,fontWeight:500,color:C.muted}}>
-                                          also elsewhere
-                                        </div>
-                                      )}
-                                    </button>
+                                    </div>
                                   </td>
                                 );
                               })}
@@ -21927,7 +22027,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                       </div>
                       {/* Cancel = explicit discard. Backdrop / X / Save all
                           commit pending toggles. */}
-                      <button onClick={()=>{ setCrewWizardDraft({}); close(); }}
+                      <button onClick={()=>{ setCrewWizardDraft({}); setCrewWizardTimes({}); close(); }}
                         title="Discard pending changes and close"
                         style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
                           padding:"8px 16px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim,
