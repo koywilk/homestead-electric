@@ -2050,6 +2050,42 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 );
 
 
+// ── Status-update hover indicator ─────────────────────────────────────────
+// Drop-in marker for any place a job is rendered (Job Board card, Forecast row).
+// Renders an amber dot when the job has a statusUpdate; hover the dot to see
+// the full text in a high-contrast popover that floats above whatever's
+// underneath. Solid white bg + heavy shadow + high z-index so it's never
+// occluded by row content.
+function StatusUpdateHover({ statusUpdate, anchor = "right" }) {
+  const [hover, setHover] = useState(false);
+  if(!statusUpdate) return null;
+  return (
+    <span style={{position:"relative",display:"inline-flex",alignItems:"center",flexShrink:0}}
+      onMouseEnter={()=>setHover(true)}
+      onMouseLeave={()=>setHover(false)}>
+      <span title="Has a status update — hover to read"
+        style={{width:7,height:7,borderRadius:99,background:"#f59e0b",
+          boxShadow:"0 0 0 2px #f59e0b22",cursor:"help"}}/>
+      {hover && (
+        <div onClick={e=>e.stopPropagation()}
+          style={{position:"absolute",top:"100%",
+            ...(anchor === "right" ? {right:0} : {left:0}),
+            marginTop:6,zIndex:9999,
+            background:"#ffffff",border:`1px solid #f59e0b66`,
+            borderLeft:`4px solid #f59e0b`,borderRadius:8,
+            padding:"7px 12px",maxWidth:420,minWidth:200,
+            fontSize:12,color:"#1f2937",lineHeight:1.4,fontWeight:500,
+            whiteSpace:"normal",
+            boxShadow:"0 12px 28px rgba(0,0,0,0.18), 0 2px 6px rgba(0,0,0,0.08)",
+            pointerEvents:"none"}}>
+          {statusUpdate}
+        </div>
+      )}
+    </span>
+  );
+}
+
+
 // ── In-app confirm + toast system (replaces window.confirm / alert) ──────────
 // Imperative module-level API backed by components mounted once at the App root.
 // showConfirm({message}) returns a Promise<boolean>. toast.xxx() is fire-and-forget.
@@ -10710,7 +10746,7 @@ function LoadsList({loads,onChange,floorOptions,allModules=[],assignedModMap=new
   );
 }
 
-function KeypadSection({loads,onChange,label,allLoads=[]}) {
+function KeypadSection({loads,onChange,label,allLoads=[],confirmedProp=false,onConfirmedChange=null}) {
 
   const dlId   = `kp-dl-${label.replace(/\W+/g,'-')}`;
   const upd    = (id,p) => onChange(loads.map(r=>r.id===id?{...r,...p}:r));
@@ -10720,10 +10756,19 @@ function KeypadSection({loads,onChange,label,allLoads=[]}) {
   useEffect(()=>{ if(focusLast&&lastRef.current){lastRef.current.focus();setFocusLast(false);} },[loads.length,focusLast]);
 
   // Confirmed = this floor's keypads are done being edited; collapse the
-  // edit grid into a tight read-only list so the tab stays scannable during
-  // review. Pure UI state — the underlying loads array is untouched, so
-  // toggling back to edit restores every field as-is (no data migration).
-  const [confirmed, setConfirmed] = useState(false);
+  // edit grid into a tight read-only list. The flag is now lifted to the
+  // parent (job.panelizedLighting.confirmedKeypads) so it persists across
+  // page navigations. Old behavior (local-only state) reset on remount,
+  // which Koy reported as a "doesn't save" bug. We keep a local-state
+  // fallback so the component still works in any context that hasn't
+  // wired the setter (no behavior change for those callers).
+  const [_localConfirmed, _setLocalConfirmed] = useState(false);
+  const confirmed = onConfirmedChange ? !!confirmedProp : _localConfirmed;
+  const setConfirmed = (v) => {
+    const next = typeof v === 'function' ? v(confirmed) : v;
+    if(onConfirmedChange) onConfirmedChange(!!next);
+    else _setLocalConfirmed(!!next);
+  };
 
   const addRow = () => { onChange([...loads, newKPRow(loads.length+1)]); setFocusLast(true); };
 
@@ -14651,29 +14696,77 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 ):null;
               })()}
 
-              <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16}}>
+              <div style={{display:"flex",gap:8,flexWrap:"wrap",marginBottom:16,alignItems:"center"}}>
 
-                {["Control 4","Lutron","Savant","Crestron","Other"].map(sys=>(
+                {["Control 4","Lutron","Savant","Crestron","Other"].map(sys=>{
 
-                  <button key={sys} onClick={()=>u({lightingSystem:sys})}
+                  const sel = (job.lightingSystem||"Control 4")===sys;
 
-                    style={{padding:"6px 14px",borderRadius:8,fontSize:12,cursor:"pointer",
+                  // When locked, only the currently-selected system stays
+                  // active. The others render disabled so a stray click can't
+                  // silently flip the system on a confirmed job.
+                  const locked = !!job.lightingSystemLocked;
+
+                  return (
+
+                  <button key={sys}
+                    onClick={async ()=>{
+                      if(locked && !sel) {
+                        const ok = await showConfirm(`Lighting system is locked to ${job.lightingSystem||"Control 4"}. Switch to ${sys} anyway?`);
+                        if(!ok) return;
+                      }
+                      u({lightingSystem:sys});
+                    }}
+                    disabled={locked && !sel}
+
+                    style={{padding:"6px 14px",borderRadius:8,fontSize:12,
+                      cursor: locked && !sel ? "not-allowed" : "pointer",
 
                       fontFamily:"inherit",transition:"all 0.15s",
 
-                      background:(job.lightingSystem||"Control 4")===sys?C.purple:`${C.purple}15`,
+                      background:sel?C.purple:`${C.purple}15`,
 
-                      border:`1px solid ${(job.lightingSystem||"Control 4")===sys?C.purple:`${C.purple}33`}`,
+                      border:`1px solid ${sel?C.purple:`${C.purple}33`}`,
 
-                      color:(job.lightingSystem||"Control 4")===sys?"#fff":C.dim,
+                      color:sel?"#fff":C.dim,
 
-                      fontWeight:(job.lightingSystem||"Control 4")===sys?700:400}}>
+                      fontWeight:sel?700:400,
+
+                      opacity: locked && !sel ? 0.4 : 1}}>
 
                     {sys}
 
                   </button>
 
-                ))}
+                  );
+
+                })}
+
+                {/* Lock toggle — confirms / locks the selected system so a
+                    misclick can't change it. Persisted as job.lightingSystemLocked
+                    so the lock survives navigation and other devices see it. */}
+
+                <button onClick={()=>u({lightingSystemLocked: !job.lightingSystemLocked})}
+
+                  title={job.lightingSystemLocked ? "Unlock to allow changing the system" : "Lock the selected system so it can't be accidentally changed"}
+
+                  style={{padding:"6px 10px",borderRadius:8,fontSize:11,cursor:"pointer",
+
+                    fontFamily:"inherit",fontWeight:700,
+
+                    background: job.lightingSystemLocked ? "#dcfce7" : "transparent",
+
+                    color: job.lightingSystemLocked ? "#15803d" : C.muted,
+
+                    border: `1px solid ${job.lightingSystemLocked ? "#86efac" : C.border}`,
+
+                    display:"inline-flex",alignItems:"center",gap:5}}>
+
+                  <Icon name="lock" size={11} stroke={2.25}/>
+
+                  {job.lightingSystemLocked ? "Locked" : "Lock system"}
+
+                </button>
 
               </div>
 
@@ -14757,27 +14850,51 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 const al=(_pl.loads||[]).filter(l=>!_assignedNames.has(l.name?.trim()||""));
                 return (<>
 
+              {(() => {
+                // Helper for persisting per-keypad-section "confirmed" state.
+                // Keyed by section identifier; lives on
+                // job.panelizedLighting.confirmedKeypads so the lock survives
+                // page navigations (was local React state before — Koy
+                // reported it didn't save).
+                const _ck = (job.panelizedLighting?.confirmedKeypads) || {};
+                const _setCK = (key, val) => u({
+                  panelizedLighting: {
+                    ...job.panelizedLighting,
+                    confirmedKeypads: { ..._ck, [key]: !!val },
+                  },
+                });
+                return (<>
               <KeypadSection label="Main Level Keypad Loads"
                 loads={job.panelizedLighting.mainKeypad}
                 allLoads={al}
+                confirmedProp={!!_ck.mainKeypad}
+                onConfirmedChange={v=>_setCK('mainKeypad', v)}
                 onChange={v=>u({panelizedLighting:{...job.panelizedLighting,mainKeypad:v}})}/>
 
               <KeypadSection label="Basement Keypad Loads"
                 loads={job.panelizedLighting.basementKeypad}
                 allLoads={al}
+                confirmedProp={!!_ck.basementKeypad}
+                onConfirmedChange={v=>_setCK('basementKeypad', v)}
                 onChange={v=>u({panelizedLighting:{...job.panelizedLighting,basementKeypad:v}})}/>
 
               <KeypadSection label="Upper Level Keypad Loads"
                 loads={job.panelizedLighting.upperKeypad}
                 allLoads={al}
+                confirmedProp={!!_ck.upperKeypad}
+                onConfirmedChange={v=>_setCK('upperKeypad', v)}
                 onChange={v=>u({panelizedLighting:{...job.panelizedLighting,upperKeypad:v}})}/>
 
               {(job.panelizedLighting.extraFloors||[]).map(ef=>(
                 <KeypadSection key={ef.key} label={`${ef.label} Keypad Loads`}
                   loads={(job.panelizedLighting[ef.key+"_keypad"])||[]}
                   allLoads={al}
+                  confirmedProp={!!_ck[ef.key+"_keypad"]}
+                  onConfirmedChange={v=>_setCK(ef.key+"_keypad", v)}
                   onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key+"_keypad"]:v}})}/>
               ))}
+                </>);
+              })()}
 
               </>);})()}
 
@@ -21399,9 +21516,19 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                   return (
                                     <input
                                       type="number" min="0" step="0.5"
-                                      value={target ?? ""}
-                                      onChange={e=>e.stopPropagation()}
+                                      // Uncontrolled input — `key` re-mounts the
+                                      // node any time the saved target changes
+                                      // (loaded from Firestore, edited from
+                                      // another device, etc.) so it picks up
+                                      // the new value, but the user can type
+                                      // freely without React clobbering each
+                                      // keystroke. Earlier version used a
+                                      // controlled `value` with no onChange,
+                                      // which Koy reported as "doesn't work."
+                                      key={`hrs-${job.id}-${_activePhaseKey}-${target ?? 'unset'}`}
+                                      defaultValue={target ?? ""}
                                       onClick={e=>e.stopPropagation()}
+                                      onChange={e=>e.stopPropagation()}
                                       onBlur={e=>{
                                         const v = e.target.value;
                                         setCrewHoursForJob(job.id, _activePhaseKey, v === "" ? null : v);
@@ -27060,6 +27187,8 @@ function App() {
               {job.type==="quote"&&<span style={{fontSize:10,fontWeight:700,color:"#000",background:C.accent,borderRadius:4,padding:"1px 6px",flexShrink:0}}>{job.quoteNumber||"Q"}</span>}
 
               <span style={{fontWeight:600,fontSize:13,color:C.text}}>{job.name||"Untitled Job"}</span>
+
+              <StatusUpdateHover statusUpdate={job.statusUpdate} anchor="left"/>
 
               {job.simproMargin!=null&&(()=>{
                 const m=job.simproMargin, isEst=job.simproMarginIsEst;
