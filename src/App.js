@@ -23864,14 +23864,23 @@ function Scoreboard({ jobs, users=[], identity }) {
     if (_isCompleted) {
       agg[groupKey].completedJobs += 1;
       // Net P/L only counts completed jobs — see comment above for why.
+      // Real losses are scored honestly; we don't outlier-cap dollars.
       if (netPL != null) {
         agg[groupKey]._totalNetPL  += netPL;
         agg[groupKey]._netPLCount  += 1;
       }
-      // Margin (tier-weighted) — also gated on completed.
-      if (typeof j.simproMargin === "number" && !isNaN(j.simproMargin)) {
+      // Margin (tier-weighted) — also gated on completed AND sanity-bounded.
+      // Simpro's NettMargin can produce wild values (e.g. -153%) when actual
+      // costs are mis-entered, partial credits land, or invoiced revenue is
+      // near zero — division noise, not real performance. Margins outside
+      // the [-80%, +80%] range are skipped here so one bad entry doesn't
+      // tank an otherwise solid run. The job still shows in the drilldown.
+      if (typeof j.simproMargin === "number" && !isNaN(j.simproMargin)
+          && j.simproMargin >= -80 && j.simproMargin <= 80) {
         agg[groupKey]._twMarginSum    += j.simproMargin * tier;
         agg[groupKey]._twMarginWeight += tier;
+      } else if (typeof j.simproMargin === "number" && !isNaN(j.simproMargin)) {
+        agg[groupKey]._marginOutliers = (agg[groupKey]._marginOutliers || 0) + 1;
       }
     }
     // First-try inspections (tier-weighted) — passes / attempts × tier.
@@ -24024,6 +24033,7 @@ function Scoreboard({ jobs, users=[], identity }) {
         rtCreatedInWindow: r._rtCreatedInWindow,
         rtClosedInWindow:  r._rtClosedInWindow,
         photoCount:        r._photoCount,
+        _marginOutliers:   r._marginOutliers || 0,
         // Dollar-aware lean composite outputs
         headlineScore:     _headlineScore,
         twMargin:          _twMargin,           // tier-weighted margin %
@@ -25016,14 +25026,21 @@ function Scoreboard({ jobs, users=[], identity }) {
                   </Td>
                   <Td>
                     {r.twMargin != null
-                      ? <span style={{fontWeight:700, color: r.twMargin >= 15 ? "#15803d" : r.twMargin >= 10 ? "#b45309" : "#b91c1c"}}>
+                      ? <span title={r._marginOutliers > 0 ? `${r._marginOutliers} job(s) with outlier margins (>±80%) excluded as bad data` : ""}
+                          style={{fontWeight:700, color: r.twMargin >= 15 ? "#15803d" : r.twMargin >= 10 ? "#b45309" : "#b91c1c"}}>
                           {r.twMargin.toFixed(1)}%
+                          {r._marginOutliers > 0 && <span style={{fontSize:10,opacity:0.7,fontWeight:500,marginLeft:3}}>
+                            ({r._marginOutliers} skipped)
+                          </span>}
                         </span>
                       : r.avgMargin != null
                         ? <span style={{fontWeight:700, color: r.avgMargin >= 15 ? "#15803d" : r.avgMargin >= 10 ? "#b45309" : "#b91c1c"}}>
                             {r.avgMargin.toFixed(1)}%{r.marginEst ? "*" : ""}
                           </span>
-                        : <span style={{color:"#94a3b8",fontSize:12}}>—</span>}
+                        : <span title={r._marginOutliers > 0 ? `${r._marginOutliers} completed job(s) with outlier margins (>±80%) — likely Simpro data entry issue. Excluded from scoring.` : ""}
+                            style={{color:"#94a3b8",fontSize:12}}>
+                            —{r._marginOutliers > 0 && <span style={{color:"#b45309",marginLeft:3}}>({r._marginOutliers} bad)</span>}
+                          </span>}
                   </Td>
                   <Td>{ratioPill(r.roughFirstTryClean, r.roughAttempted, rP, true)}</Td>
                   <Td>{ratioPill(r.finalFirstTryClean, r.finalAttempted, fP, true)}</Td>
