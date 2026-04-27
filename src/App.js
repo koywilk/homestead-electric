@@ -23173,33 +23173,31 @@ function Scoreboard({ jobs, users=[], identity }) {
   // on every call. The weight state is a single source of truth shared by
   // all the boards on the page.
   const BUILTIN_WEIGHTS = {
-    // Original pillars
-    inspection: 25,  // first-try-clean rate (rough + final combined)
-    items:      10,  // items called on inspections (fewer = higher)
-    qc:         10,  // QC walk items (fewer = higher)
-    updates:    15,  // daily-update compliance %
-    openItems:  10,  // open punch / questions / unpulled loads on active jobs (fewer per active job = higher)
-    margin:     25,  // avg margin vs 15% goal
-    goal:       15,  // % of jobs hitting the 15% goal
-    // Phase 2 expansion — 10 new pillars Koy asked for. Defaults are modest
-    // so they enrich the composite without nuking existing rankings on day 1.
-    // Admins can re-balance via the weight editor once the team sees the
-    // new metrics in action for a couple weeks.
-    punchSpeed:        10, // avg days from punch addedAt → checkedAt (lower = better)
-    rtClosure:         10, // % of RTs created in window that got signed off
-    coTurnaround:      10, // days from CO created → approved (lower = better)
-    onTimeStart:       10, // jobs that started on or before scheduled date
-    hoursNeededMet:     5, // weeks where scheduled hrs hit the per-week target
-    hotCheck:           5, // count of open hot-check items per active job (fewer = better)
-    photos:             5, // photos posted per active job (more = better)
-    inspectionAttempts: 5, // avg attempts to pass inspection (lower = better)
-    jobAge:             5, // avg days an active job has been in its current phase (lower = better)
-    poPromptness:       5, // avg days from PO created → material picked up (lower = better)
-    // Lean (headline) composite — Net P/L (profit dollars per active job).
-    // Margin uses the existing `margin` weight above; Net P/L is its own
-    // adjustable weight here so admins can dial how much profit dollars
-    // (vs. margin %) drive the headline.
-    netPL: 18,
+    // Headline pillars — total = 100. Reordered by importance (top
+    // to bottom). What's not on this list defaults to 0 below; admins
+    // can dial those secondary pillars up via the weight editor.
+    netPL:       30,  // 1. Profit $$ on completed jobs — the truth
+    margin:      22,  // 2. Tier-weighted margin % on completed jobs
+    inspection:  18,  // 3. First-try-clean inspections (quality)
+    onTimeStart: 10,  // 4. Jobs starting on or before scheduled
+    punchSpeed:  10,  // 5. Avg days from punch added → checked off
+    rtClosure:    6,  // 6. % RTs created in window that got signed off
+    updates:      4,  // 7. Updates posted per active job (low — gameable)
+    // Secondary pillars — still computed and visible in the drilldown,
+    // but default to 0 so they don't drag the headline. Admins can lift
+    // any of these in the weight editor if a specific behavior needs to
+    // be emphasized (e.g. dial up `qc` to crack down on QC items).
+    goal:               0, // overlaps margin
+    items:              0, // overlaps inspection
+    qc:                 0, // gameable
+    openItems:          0, // overlaps punchSpeed
+    coTurnaround:       0, // sales signal, not foreman behavior
+    hoursNeededMet:     0,
+    hotCheck:           0,
+    photos:             0,
+    inspectionAttempts: 0, // overlaps inspection
+    jobAge:             0, // overlaps punchSpeed + onTimeStart
+    poPromptness:       0,
   };
   const WEIGHTS_STORAGE_KEY = "scoreboard.weights.v1";
   const [teamDefault, setTeamDefault] = useState(null);
@@ -24638,23 +24636,25 @@ function Scoreboard({ jobs, users=[], identity }) {
           )}
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:"10px 16px"}}>
             {[
-              ["margin","Avg margin (HEADLINE)","Tier-weighted margin %. Drives the headline score. Centered on 15% goal."],
-              ["netPL","Net P/L $$ (HEADLINE)","Profit dollars per active job. $5k/job = 100, $0 = 0. Drives the headline score."],
-              ["inspection","Inspection first-try","First-try-clean rate across 4-way + final"],
-              ["items","Items called","Fewer inspection items = higher sub-score"],
-              ["qc","QC items","Fewer QC walk items = higher sub-score"],
-              ["updates","Updates posted","Raw count of daily updates, normalized per active job"],
-              ["openItems","Open items","Open punch, questions, and unpulled loads per active job — fewer is better"],
-              ["goal","≥15% jobs","% of jobs hitting the 15% profit goal"],
-              ["punchSpeed","Punch closeout speed","Avg days from punch added → checked off (lower = better)"],
-              ["rtClosure","RT closure rate","% of RTs created in window that got signed off"],
-              ["coTurnaround","CO turnaround","Avg days from CO created → approved (lower = better)"],
-              ["onTimeStart","On-time start","Jobs that went in-progress on or before scheduled start"],
-              ["hotCheck","Hot Check items","Open hot-check items per active job (fewer = better)"],
-              ["photos","Photos per job","Photos posted across punch + RT + job notes per active job"],
-              ["inspectionAttempts","Inspection re-attempts","Avg attempts to pass — first try = 100, 3+ tries = 0"],
-              ["jobAge","Job age in phase","Avg days an active job has been in current phase (lower = better)"],
-              ["poPromptness","PO promptness","Avg days from PO created → material picked up"],
+              // Headline — drive the score (default total = 100).
+              ["netPL",      "1. Net P/L $$ (HEADLINE)",      "Profit dollars from COMPLETED jobs only. $5k/job = 100. Top weight — actual profit is the truth."],
+              ["margin",     "2. Margin % (HEADLINE)",        "Tier-weighted margin % on completed jobs. Centered on the 15% goal."],
+              ["inspection", "3. Inspection first-try",       "First-try-clean rate across 4-way + final inspections. Quality signal."],
+              ["onTimeStart","4. On-time start",              "Jobs that went in-progress on or before scheduled start. Schedule discipline."],
+              ["punchSpeed", "5. Punch closeout speed",       "Avg days from punch added → checked off. Lower = better."],
+              ["rtClosure",  "6. RT closure rate",            "% of RTs created in window that got signed off. Finishing what you start."],
+              ["updates",    "7. Updates posted",             "Daily updates posted per active job. Low default weight — gameable."],
+              // Secondary — default 0 weight; admin can dial up to emphasize a specific behavior.
+              ["goal",              "≥15% jobs",            "% of jobs hitting the 15% profit goal (overlaps Margin)"],
+              ["items",             "Items called",         "Fewer inspection items = higher (overlaps first-try)"],
+              ["qc",                "QC items",             "Fewer QC walk items = higher (gameable — light pass = high score)"],
+              ["openItems",         "Open items",           "Open punch + questions + pulls per active job (overlaps Punch Speed)"],
+              ["hotCheck",          "Hot Check items",      "Open hot-check items per active job"],
+              ["photos",            "Photos per job",       "Documentation discipline — photos across punch + RT + job notes"],
+              ["inspectionAttempts","Inspection re-attempts","Avg attempts to pass (overlaps first-try)"],
+              ["jobAge",            "Job age in phase",     "Avg days an active job has been in current phase"],
+              ["poPromptness",      "PO promptness",        "Avg days from PO created → material picked up"],
+              ["coTurnaround",      "CO turnaround",        "Days from CO created → approved (sales-driven, not foreman behavior)"],
             ].map(([k,label,hint]) => (
               <label key={k} style={{display:"block",padding:"8px 10px",background:"#f8fafc",
                 border:"1px solid #e2e8f0",borderRadius:8}}>
