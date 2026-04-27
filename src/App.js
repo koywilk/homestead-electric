@@ -23769,8 +23769,17 @@ function Scoreboard({ jobs, users=[], identity }) {
     const groupKey = mode === "lead" ? (j.lead||"") : (j.foreman||"");
     if (!groupKey || groupKey === "Unassigned") return;
     if (isExcluded(groupKey)) return;
+    // Only completed jobs feed Margin and Net P/L scoring. In-progress jobs
+    // have unreliable financials (materials and labor haven't fully landed
+    // yet, so reported "profit" is artificially high). A foreman tearing
+    // through new jobs would otherwise out-score one finishing them well.
+    const _isCompleted = (() => {
+      const fs = (j.finishStatus||"").toLowerCase();
+      return fs === "complete" || fs === "invoice";
+    })();
     if (!agg[groupKey]) agg[groupKey] = {
       name: groupKey, jobs: 0,
+      completedJobs: 0,
       roughFirstTryClean: 0, finalFirstTryClean: 0,
       roughItemsCalled: 0, finalItemsCalled: 0,
       roughQC: 0, finishQC: 0,
@@ -23847,18 +23856,25 @@ function Scoreboard({ jobs, users=[], identity }) {
     const netPL    = _jobNetPL(j);
     const tierLabel = _jobTierLabel(j);
     agg[groupKey]._tierCounts[tierLabel] = (agg[groupKey]._tierCounts[tierLabel] || 0) + 1;
+    // Total bid value reflects the FULL portfolio (active + completed) —
+    // it's a stable bid number, not subject to the in-progress drift
+    // problem. Display purposes only; the score doesn't read this directly.
     if (jobValue != null) {
       agg[groupKey]._totalJobValue += jobValue;
       agg[groupKey]._jobValueCount += 1;
     }
-    if (netPL != null) {
-      agg[groupKey]._totalNetPL  += netPL;
-      agg[groupKey]._netPLCount  += 1;
-    }
-    // Margin (tier-weighted) — counts margin% × tier so big jobs pull harder.
-    if (typeof j.simproMargin === "number" && !isNaN(j.simproMargin)) {
-      agg[groupKey]._twMarginSum    += j.simproMargin * tier;
-      agg[groupKey]._twMarginWeight += tier;
+    if (_isCompleted) {
+      agg[groupKey].completedJobs += 1;
+      // Net P/L only counts completed jobs — see comment above for why.
+      if (netPL != null) {
+        agg[groupKey]._totalNetPL  += netPL;
+        agg[groupKey]._netPLCount  += 1;
+      }
+      // Margin (tier-weighted) — also gated on completed.
+      if (typeof j.simproMargin === "number" && !isNaN(j.simproMargin)) {
+        agg[groupKey]._twMarginSum    += j.simproMargin * tier;
+        agg[groupKey]._twMarginWeight += tier;
+      }
     }
     // First-try inspections (tier-weighted) — passes / attempts × tier.
     const _attempts = s.roughAttempted + s.finalAttempted;
@@ -24534,10 +24550,11 @@ function Scoreboard({ jobs, users=[], identity }) {
                   <div title="Tier-weighted average margin"><b style={{fontSize:18}}>{margin}%</b> margin</div>
                 )}
                 {top.totalNetPL != null && (
-                  <div title="Total net profit/loss across this person's jobs in window">
+                  <div title={`Total net profit/loss across this person's COMPLETED jobs only (${top.completedJobs||0} of ${top.jobs} completed). In-progress jobs aren't scored — their P/L is unreliable until materials and labor fully land.`}>
                     <b style={{fontSize:18, color: top.totalNetPL >= 0 ? "#15803d" : "#b91c1c"}}>
                       ${Math.round(top.totalNetPL).toLocaleString()}
                     </b> profit
+                    <span style={{fontSize:11, opacity:0.75, marginLeft:3}}>({top.completedJobs||0} done)</span>
                   </div>
                 )}
                 {top.totalJobValue != null && (
@@ -24813,8 +24830,10 @@ function Scoreboard({ jobs, users=[], identity }) {
                             display:"flex",gap:10,flexWrap:"wrap"}}>
                             {margin != null && <span>{margin}% margin</span>}
                             {r.totalNetPL != null && (
-                              <span style={{color: r.totalNetPL >= 0 ? "#15803d" : "#b91c1c", fontWeight:700}}>
+                              <span title={`Profit from ${r.completedJobs||0} of ${r.jobs} completed jobs — in-progress jobs aren't scored`}
+                                style={{color: r.totalNetPL >= 0 ? "#15803d" : "#b91c1c", fontWeight:700}}>
                                 ${Math.round(r.totalNetPL).toLocaleString()} profit
+                                <span style={{opacity:0.75, fontWeight:500, marginLeft:3}}>({r.completedJobs||0})</span>
                               </span>
                             )}
                             <span>{r.updatesPosted||0} updates</span>
@@ -24988,8 +25007,10 @@ function Scoreboard({ jobs, users=[], identity }) {
                   </Td>
                   <Td>
                     {r.totalNetPL != null
-                      ? <span style={{fontWeight:700, color: r.totalNetPL >= 0 ? "#15803d" : "#b91c1c"}}>
+                      ? <span title={`From ${r.completedJobs||0} of ${r.jobs} completed jobs — in-progress jobs excluded`}
+                          style={{fontWeight:700, color: r.totalNetPL >= 0 ? "#15803d" : "#b91c1c"}}>
                           ${Math.round(r.totalNetPL).toLocaleString()}
+                          <span style={{fontSize:10, opacity:0.7, fontWeight:500, marginLeft:3}}>({r.completedJobs||0})</span>
                         </span>
                       : <span style={{color:"#94a3b8",fontSize:12}}>—</span>}
                   </Td>
