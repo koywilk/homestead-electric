@@ -2052,20 +2052,26 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 
 // ── Status-update hover indicator ─────────────────────────────────────────
 // Drop-in marker for any place a job is rendered (Job Board card, Forecast row).
-// Renders an amber dot when the job has a statusUpdate; hover the dot to see
-// the full text in a high-contrast popover that floats above whatever's
-// underneath. Solid white bg + heavy shadow + high z-index so it's never
-// occluded by row content.
-function StatusUpdateHover({ statusUpdate, anchor = "right" }) {
+// When called WITHOUT children, renders an amber dot the user can hover to
+// read the full statusUpdate. When called WITH children (e.g. wrapping the
+// existing inline status update text), the children themselves become the
+// hover trigger — useful for cases where the inline text is already shown
+// but truncated, so hovering the visible text reveals the full message.
+// Either way the popover is solid white + heavy shadow + high z-index so it's
+// never occluded by row content.
+function StatusUpdateHover({ statusUpdate, anchor = "right", children = null }) {
   const [hover, setHover] = useState(false);
-  if(!statusUpdate) return null;
+  if(!statusUpdate) return children || null;
   return (
-    <span style={{position:"relative",display:"inline-flex",alignItems:"center",flexShrink:0}}
+    <span style={{position:"relative",display:"inline-flex",alignItems:"center",flexShrink:0,
+      maxWidth: children ? "100%" : undefined}}
       onMouseEnter={()=>setHover(true)}
       onMouseLeave={()=>setHover(false)}>
-      <span title="Has a status update — hover to read"
-        style={{width:7,height:7,borderRadius:99,background:"#f59e0b",
-          boxShadow:"0 0 0 2px #f59e0b22",cursor:"help"}}/>
+      {children || (
+        <span title="Has a status update — hover to read"
+          style={{width:7,height:7,borderRadius:99,background:"#f59e0b",
+            boxShadow:"0 0 0 2px #f59e0b22",cursor:"help"}}/>
+      )}
       {hover && (
         <div onClick={e=>e.stopPropagation()}
           style={{position:"absolute",top:"100%",
@@ -27256,9 +27262,15 @@ function App() {
                       {pillLabel}
                     </span>
                   )}
-                  <StatusUpdateInline job={job} identity={identity}
-                    onSave={p=>updateJob({...job, ...p}, p)}
-                    fontSize={12} maxWidth={280}/>
+                  {/* Wrap the inline display in StatusUpdateHover so hovering
+                      the (possibly truncated) text drops a full-message popover.
+                      When there's no statusUpdate, the wrapper is a passthrough
+                      so the empty-state edit affordance still renders. */}
+                  <StatusUpdateHover statusUpdate={job.statusUpdate} anchor="left">
+                    <StatusUpdateInline job={job} identity={identity}
+                      onSave={p=>updateJob({...job, ...p}, p)}
+                      fontSize={12} maxWidth={280}/>
+                  </StatusUpdateHover>
                 </div>
               );
             })()}
