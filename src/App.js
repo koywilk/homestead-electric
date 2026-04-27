@@ -23050,6 +23050,28 @@ function Scoreboard({ jobs, users=[], identity }) {
   const effStart = startYMD < SCOREBOARD_ANCHOR_YMD ? SCOREBOARD_ANCHOR_YMD : startYMD;
   const effEnd   = endYMD;
 
+  // Period helpers for the WEEK/MONTH tabs and the Champions banner.
+  const _ymd = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  const _periodToday = new Date();
+  const _periods = (() => {
+    const t = _periodToday;
+    // Mon-Sun for "this week", anchored on the Monday before/equal to today
+    const day = t.getDay() || 7;
+    const thisMon = new Date(t); thisMon.setDate(t.getDate() - (day-1));
+    const thisSun = new Date(thisMon); thisSun.setDate(thisMon.getDate()+6);
+    const thisMonStart = new Date(t.getFullYear(), t.getMonth(), 1);
+    const thisMonEnd   = new Date(t.getFullYear(), t.getMonth()+1, 0);
+    const lastMonStart = new Date(t.getFullYear(), t.getMonth()-1, 1);
+    const lastMonEnd   = new Date(t.getFullYear(), t.getMonth(), 0);
+    return {
+      thisWeek:   { start: _ymd(thisMon), end: _ymd(thisSun), label: "This Week" },
+      thisMonth:  { start: _ymd(thisMonStart), end: _ymd(thisMonEnd), label: t.toLocaleDateString("en-US",{month:"long"}) },
+      lastMonth:  { start: _ymd(lastMonStart), end: _ymd(lastMonEnd), label: lastMonStart.toLocaleDateString("en-US",{month:"long"}) },
+    };
+  })();
+  // The new "competitive" window toggle. Defaults to this-week.
+  const [boardWindow, setBoardWindow] = useState("thisWeek"); // "thisWeek" | "thisMonth"
+
   // QC item counts (fromQC-tagged entries in the punch lists). When a date
   // range is supplied, items with an addedAt stamp get filtered to that
   // range; legacy items with no addedAt are always counted (treated as
@@ -23645,6 +23667,34 @@ function Scoreboard({ jobs, users=[], identity }) {
           {tabBtn("lead","Leads")}
           {tabBtn("foreman","Foremen (by crew)")}
         </div>
+        {/* WEEK / MONTH window tabs — drive startYMD/endYMD so the leaderboard
+            renders against the chosen period. Replaces the old date-preset
+            chip bar's primary use. The custom date inputs below are still
+            available for ad-hoc ranges (kept for back-compat). */}
+        <div style={{display:"inline-flex",gap:4,background:"#fef3c7",padding:4,borderRadius:9,
+          border:"1px solid #fcd34d"}}>
+          {[
+            ["thisWeek", "This Week"],
+            ["thisMonth", _periods.thisMonth.label],
+          ].map(([key, label]) => {
+            const active = boardWindow === key;
+            return (
+              <button key={key}
+                onClick={()=>{
+                  setBoardWindow(key);
+                  setStartYMD(_periods[key].start);
+                  setEndYMD(_periods[key].end);
+                  setActivePreset(key === "thisWeek" ? "thisWeek" : "thisMonth");
+                }}
+                style={{padding:"6px 14px",fontSize:12,fontWeight:800,fontFamily:"inherit",cursor:"pointer",
+                  border:"none",borderRadius:7,letterSpacing:"0.06em",textTransform:"uppercase",
+                  background: active ? "#b45309" : "transparent",
+                  color: active ? "#fff" : "#92400e"}}>
+                {label}
+              </button>
+            );
+          })}
+        </div>
         <button onClick={()=>setHelp(!showHelp)}
           style={{padding:"7px 12px",fontSize:12,fontWeight:700,fontFamily:"inherit",cursor:"pointer",
             background:"#fff",border:"1px solid #cbd5e1",borderRadius:8,color:"#334155",
@@ -23658,6 +23708,73 @@ function Scoreboard({ jobs, users=[], identity }) {
           {showWeights ? "▾ Hide weights" : "⚖  Adjust score weights"}
         </button>
       </div>
+
+      {/* TOP PERFORMER HERO — current leader of the active mode + window.
+          Sits above the leaderboard table. Bigger, podium feel — the goal is
+          to make rank #1 desirable to claim and uncomfortable to lose.
+          Phase 2 adds streaks ("Week 3 in a row at #1") and movement arrows
+          vs. last week once the weekly archive is wired. */}
+      {(() => {
+        if(rows.length === 0 || rows[0].composite == null) return null;
+        const top = rows[0];
+        const score = Math.round(top.composite);
+        const margin = top.avgMargin != null ? top.avgMargin.toFixed(1) : null;
+        const updates = top.updatesPosted || 0;
+        const goalPct = top.marginCount > 0 ? Math.round((top.jobsOverGoal / top.marginCount) * 100) : null;
+        const periodLabel = boardWindow === "thisMonth" ? _periods.thisMonth.label : "This Week";
+        return (
+          <div style={{
+            background: "linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)",
+            border: "2px solid #f59e0b",
+            borderRadius: 14,
+            padding: "16px 22px",
+            marginBottom: 16,
+            display: "flex",
+            alignItems: "center",
+            gap: 22,
+            flexWrap: "wrap",
+            boxShadow: "0 8px 22px rgba(245,158,11,0.15)",
+          }}>
+            <div style={{fontSize:32, lineHeight:1, fontFamily:"'Bebas Neue',sans-serif", color:"#78350f", letterSpacing:"0.02em", flexShrink:0}}>
+              <Icon name="star" size={28} stroke={3}/>
+            </div>
+            <div style={{flex:1, minWidth:200}}>
+              <div style={{fontSize:10, fontWeight:800, color:"#92400e", letterSpacing:"0.12em"}}>
+                LEADING {(mode === "lead" ? "LEAD" : "FOREMAN").toUpperCase()} · {periodLabel.toUpperCase()}
+              </div>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif", fontSize:34, color:"#78350f", letterSpacing:"0.02em", lineHeight:1.05, marginTop:2}}>
+                {top.name}
+              </div>
+              <div style={{display:"flex", gap:18, marginTop:8, flexWrap:"wrap", fontSize:12, color:"#78350f"}}>
+                {margin != null && (
+                  <div><b style={{fontSize:18}}>{margin}%</b> avg margin</div>
+                )}
+                {goalPct != null && (
+                  <div><b style={{fontSize:18}}>{goalPct}%</b> jobs ≥ 15%</div>
+                )}
+                <div><b style={{fontSize:18}}>{updates}</b> update{updates===1?"":"s"} posted</div>
+                <div><b style={{fontSize:18}}>{top.jobs}</b> active job{top.jobs===1?"":"s"}</div>
+              </div>
+            </div>
+            <div style={{
+              background:"#78350f", color:"#fef3c7",
+              borderRadius:14, padding:"10px 18px",
+              fontFamily:"'Bebas Neue',sans-serif", lineHeight:1,
+              textAlign:"center", flexShrink:0,
+              boxShadow:"inset 0 -3px 0 rgba(0,0,0,0.15)",
+            }}>
+              <div style={{fontSize:9, letterSpacing:"0.14em", opacity:0.85}}>SCORE</div>
+              <div style={{fontSize:48, marginTop:2}}>{score}</div>
+            </div>
+            {rows.length > 1 && rows[1].composite != null && (
+              <div style={{fontSize:11, color:"#92400e", paddingLeft:14, borderLeft:"1px solid #fcd34d", lineHeight:1.4, flexShrink:0}}>
+                <div style={{fontWeight:700}}>{rows[1].name}</div>
+                <div style={{opacity:0.85}}>{Math.round(rows[1].composite)} · {Math.round(top.composite - rows[1].composite)} pts back</div>
+              </div>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Score weight editor. Visible to anyone who can see the Scoreboard, */}
       {/* but inputs are only editable for users with scoreboard.editWeights. */}
