@@ -5903,6 +5903,27 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
   const [mobileSheet,   setMobileSheet]   = useState(null);
   const [uploadingId,   setUploadingId]   = useState(null);
   const [lightboxPhoto, setLightboxPhoto] = useState(null);
+  // Multi-select for bulk-assigning. When selectMode is on, each item shows
+  // a checkbox; the toolbar at the top shows "N selected · Assign to:" picker.
+  // Stays scoped to this PunchItems instance — selection in one room/section
+  // doesn't bleed into another. Done items aren't selectable (would mean
+  // retroactively tagging closed work, which doesn't make sense).
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(() => new Set());
+  const toggleSelected = (id) => setSelectedIds(prev => {
+    const nx = new Set(prev);
+    if(nx.has(id)) nx.delete(id); else nx.add(id);
+    return nx;
+  });
+  const clearSelection = () => setSelectedIds(new Set());
+  const exitSelectMode = () => { setSelectMode(false); clearSelection(); };
+  const applySelectionAssign = (name) => {
+    if(selectedIds.size === 0) return;
+    onChange(safeItems.map(i =>
+      (i && selectedIds.has(i.id) && !i.done) ? { ...i, assignedTo: name || "" } : i
+    ));
+    exitSelectMode();
+  };
 
   const handlePhotoUpload = async (itemId, files) => {
     if(!files||!files.length||!jobId) return;
@@ -5983,9 +6004,69 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
     setMaterialText('');
   };
 
+  // Are there any open, assignable items? Hides the Select toggle when not.
+  const _selectableCount = safeItems.filter(i => i && !i.done && !i.voided).length;
+
   return (
 
     <div style={{ paddingLeft: 8 }}>
+
+      {/* Select-mode toggle + bulk-assign toolbar. Only renders when an
+          assigneeOptions list is provided AND there's at least one open item
+          to act on. The toolbar swaps into "N selected · Assign to: [picker]"
+          once anything is checked. */}
+      {assigneeOptions && _selectableCount > 0 && (
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:8,flexWrap:'wrap'}}>
+          {!selectMode ? (
+            <button onClick={()=>setSelectMode(true)}
+              title="Pick multiple items and assign them to one person at once"
+              style={{background:'none',border:`1px solid ${C.border}`,borderRadius:99,
+                padding:'2px 10px',fontSize:10,fontWeight:700,color:C.dim,
+                cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.04em',
+                display:'inline-flex',alignItems:'center',gap:4}}>
+              <Icon name="check" size={10}/> SELECT TO ASSIGN
+            </button>
+          ) : (
+            <>
+              <span style={{fontSize:10,fontWeight:800,letterSpacing:'0.06em',color:C.accent}}>
+                SELECT MODE · {selectedIds.size} selected
+              </span>
+              <select
+                value=""
+                disabled={selectedIds.size === 0}
+                onChange={e=>{
+                  const v = e.target.value;
+                  if(!v) return;
+                  applySelectionAssign(v === '__clear__' ? '' : v);
+                }}
+                style={{background:selectedIds.size===0?'var(--surface)':'#fff7ed',
+                  border:`1px solid ${selectedIds.size===0?C.border:'#fdba74'}`,
+                  borderRadius:99,padding:'2px 8px',fontSize:10,fontWeight:700,
+                  color:selectedIds.size===0?C.muted:'#c2410c',
+                  fontFamily:'inherit',outline:'none',
+                  cursor:selectedIds.size===0?'not-allowed':'pointer'}}>
+                <option value="">Assign {selectedIds.size||'…'} to…</option>
+                {assigneeOptions.map(n => <option key={n} value={n}>{n}</option>)}
+                <option value="__clear__">— clear assignments —</option>
+              </select>
+              {selectedIds.size > 0 && (
+                <button onClick={clearSelection}
+                  style={{background:'none',border:'none',color:C.muted,
+                    fontSize:10,fontWeight:600,cursor:'pointer',fontFamily:'inherit',
+                    textDecoration:'underline'}}>
+                  unselect all
+                </button>
+              )}
+              <button onClick={exitSelectMode}
+                style={{background:'none',border:`1px solid ${C.border}`,borderRadius:99,
+                  padding:'2px 10px',fontSize:10,fontWeight:700,color:C.dim,
+                  cursor:'pointer',fontFamily:'inherit',marginLeft:'auto'}}>
+                Done
+              </button>
+            </>
+          )}
+        </div>
+      )}
 
       {safeItems.map(item => {
         // Highlight items assigned to the logged-in user so they can scan a
@@ -5993,16 +6074,39 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
         // (left stripe + soft tint) matches Koy's "highlight per identity"
         // ask without competing with the green done-state or red overdue cues.
         const mine = !!(myName && item.assignedTo && item.assignedTo === myName && !item.done);
+        const isSelected = selectMode && selectedIds.has(item.id);
         return (
-        <div key={item.id} style={{ marginBottom: 10,
-          border:`1px solid ${mine ? '#2563eb55' : (item.done ? C.border+'88' : C.border)}`,
-          borderLeft: mine ? '4px solid #2563eb' : undefined,
+        <div key={item.id}
+          onClick={selectMode && !item.done && !item.voided ? (e)=>{
+            // Whole-row click toggles selection in select mode (saves having
+            // to hit the small checkbox). Clicks on inner controls bubble up;
+            // the inner controls already use stopPropagation where needed.
+            const tag = e.target.tagName;
+            if(tag === 'INPUT' || tag === 'BUTTON' || tag === 'SELECT' || tag === 'TEXTAREA') return;
+            toggleSelected(item.id);
+          } : undefined}
+          style={{ marginBottom: 10,
+          border:`1px solid ${isSelected ? '#ea580c' : mine ? '#2563eb55' : (item.done ? C.border+'88' : C.border)}`,
+          borderLeft: isSelected ? '4px solid #ea580c' : (mine ? '4px solid #2563eb' : undefined),
           borderRadius:8, padding:'8px 10px',
-          background: mine ? '#eff6ff' : (item.done ? C.surface+'88' : C.surface),
+          background: isSelected ? '#fff7ed' : (mine ? '#eff6ff' : (item.done ? C.surface+'88' : C.surface)),
+          cursor: selectMode && !item.done && !item.voided ? 'pointer' : undefined,
           opacity: item.done ? 0.75 : 1 }}>
 
           {/* ── Main item row ── */}
           <div style={{ display: 'flex', alignItems: editingId===item.id ? 'flex-start' : 'center', gap: 8 }}>
+
+            {/* Multi-select checkbox — only renders in select mode. Sits to
+                the LEFT of the existing done-checkbox so the two states are
+                visually distinct (orange-ringed select vs. green done). */}
+            {selectMode && !item.done && !item.voided && (
+              <input type="checkbox"
+                checked={isSelected}
+                onChange={()=>toggleSelected(item.id)}
+                onClick={e=>e.stopPropagation()}
+                title="Select for bulk assign"
+                style={{accentColor:'#ea580c',width:14,height:14,cursor:'pointer',flexShrink:0}}/>
+            )}
 
             <input type="checkbox" checked={!!item.done}
               onChange={() => {
