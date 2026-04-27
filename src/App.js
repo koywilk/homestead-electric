@@ -23078,7 +23078,11 @@ function Scoreboard({ jobs, users=[], identity }) {
     // Fire and forget — DO NOT return a cleanup that cancels these.
     // Each fetch runs to completion regardless of effect lifecycle.
     Promise.all(Array.from({length: CONCURRENCY}, worker));
-    // eslint-disable-next-line react-hooks/exhaustive-deps
+    // Note: `sbJobFinancials` is intentionally NOT a dep here. Including it
+    // would re-fire the effect after our own writes via the snapshot
+    // listener, which the _sbFetchedThisSession guard handles correctly,
+    // but project ESLint doesn't register react-hooks/exhaustive-deps so
+    // we can't use a disable comment — leaving the dep out plain.
   }, [jobs, sbFetchTrigger]);
   // Row clicked to drill into. Holds the aggregated row object (with _jobs
   // attached) so the modal can render per-job detail. Null = modal closed.
