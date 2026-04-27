@@ -13497,18 +13497,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       .then(res => {
         console.log("[simproFinancials]", res.data);
         setSimproFinancials(res.data);
-        // Cache on the job doc so the Scoreboard + Job Board can show
-        // financial figures without an extra call. We persist the entire
-        // payload now (was just margin + isEst) so the Scoreboard can do
-        // dollar-weighted scoring without a follow-up cloud-function pass.
-        // Field names inside the payload may vary; the Scoreboard reads via
-        // multi-key fallback so an unfamiliar shape degrades gracefully.
-        u({
-          simproMargin: res.data.margin,
-          simproMarginIsEst: res.data.isEstimate,
-          simproFinancials: res.data,
-          simproFinancialsAt: new Date().toISOString(),
-        });
+        // Cache on the job doc so the job board can show it without an extra call
+        u({ simproMargin: res.data.margin, simproMarginIsEst: res.data.isEstimate });
       })
       .catch(e => { console.error("[simproFinancials error]", e); setSimproFinancials(null); });
   }, [job.simproNo]);
@@ -23006,6 +22996,76 @@ function Scoreboard({ jobs, users=[], identity }) {
   const canEditWeights = can(identity, "scoreboard.editWeights");
   const [mode, setMode]   = useState("lead"); // "lead" | "foreman"
   const [showHelp, setHelp] = useState(false);
+  // Scoreboard-only financials map. Lives at settings/scoreboardJobFinancials
+  // — populated by THIS COMPONENT (the Scoreboard fetches Simpro itself for
+  // any job whose financials we don't have yet). JobDetail is 100% untouched
+  // by Scoreboard work; this is the only place that writes the doc, only
+  // place that reads it.
+  const [sbJobFinancials, setSbJobFinancials] = useState({});
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "settings", "scoreboardJobFinancials"), s => {
+      setSbJobFinancials(s.exists() ? (s.data() || {}) : {});
+    });
+    return unsub;
+  }, []);
+  // Track which jobs we've already fetched THIS session so we don't loop
+  // when sbJobFinancials updates from our own writes.
+  const _sbFetchedThisSession = useRef(new Set());
+  useEffect(() => {
+    // Refetch financials older than this many ms. Margins move daily but not
+    // minute-by-minute, so 24 h is a comfortable cache window.
+    const STALE_MS = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const fetched = _sbFetchedThisSession.current;
+    const candidates = (jobs || [])
+      .filter(j => j && j.simproNo && j.id)
+      .filter(j => !fetched.has(j.id))
+      .filter(j => {
+        const cached = sbJobFinancials[j.id];
+        if (!cached) return true;
+        const at = cached.fetchedAt ? new Date(cached.fetchedAt).getTime() : 0;
+        return now - at > STALE_MS;
+      });
+    if (candidates.length === 0) return;
+    candidates.forEach(j => fetched.add(j.id));
+    let cancelled = false;
+    const fn = httpsCallable(functions, "getSimproJobFinancials");
+    const CONCURRENCY = 3;
+    let cursor = 0;
+    const fetchOne = async (j) => {
+      if (cancelled) return;
+      try {
+        const res = await fn({ simproJobNo: j.simproNo });
+        if (cancelled) return;
+        await setDoc(doc(db, "settings", "scoreboardJobFinancials"), {
+          [j.id]: {
+            total:         res.data.total ?? null,
+            subTotal:      res.data.subTotal ?? null,
+            netPL:         res.data.netPL ?? null,
+            netPLActual:   res.data.netPLActual ?? null,
+            netPLEstimate: res.data.netPLEstimate ?? null,
+            grossPL:       res.data.grossPL ?? null,
+            grossMargin:   res.data.grossMargin ?? null,
+            margin:        res.data.margin ?? null,
+            isEstimate:    res.data.isEstimate ?? null,
+            fetchedAt:     new Date().toISOString(),
+          },
+        }, { merge: true });
+      } catch (e) {
+        // Don't blow up the Scoreboard for one bad job — log and move on.
+        console.error("[scoreboard financials fetch error]", j.id, e);
+      }
+    };
+    const worker = async () => {
+      while (!cancelled) {
+        const idx = cursor++;
+        if (idx >= candidates.length) return;
+        await fetchOne(candidates[idx]);
+      }
+    };
+    Promise.all(Array.from({length: CONCURRENCY}, worker));
+    return () => { cancelled = true; };
+  }, [jobs, sbJobFinancials]);
   // Row clicked to drill into. Holds the aggregated row object (with _jobs
   // attached) so the modal can render per-job detail. Null = modal closed.
   const [drillRow, setDrillRow] = useState(null);
@@ -23592,20 +23652,22 @@ function Scoreboard({ jobs, users=[], identity }) {
   // some job records but aren't being graded. Matching is case-insensitive.
   // Extend this list if more non-crew assignees show up.
   // ── Dollar-aware scoring helpers ─────────────────────────────────
-  // Read job size + profit dollars from the persisted simproFinancials
-  // blob. Field names inside the payload aren't fully documented from
-  // here, so we try a chain of common keys and fall back to null. Once
-  // the actual key is confirmed (Koy can check the [simproFinancials]
-  // console log) we'll lock to the right one.
+  // Reads each job's size + profit dollars from the Scoreboard-only
+  // settings/scoreboardJobFinancials doc (sbJobFinancials map). The job
+  // doc itself ONLY carries simproMargin + simproMarginIsEst (existing
+  // behavior) so nothing outside the Scoreboard sees these dollar fields.
+  // Field semantics from the cloud function (functions/index.js):
+  //   total    → Simpro Totals.Total.IncTax (Job Total with tax)
+  //   subTotal → Simpro Totals.Total.ExTax  (pre-tax sub-total)
+  //   netPL    → Simpro Totals.NettPL Actual or Estimate (profit dollars)
+  // Falls through to subTotal if total isn't populated yet.
   const _jobValue = (j) => {
-    const f = j?.simproFinancials || {};
-    return f.total ?? f.totalIncTax ?? f.totalExTax ?? f.subTotal
-        ?? f.jobTotal ?? f.invoicedValue ?? null;
+    const f = sbJobFinancials[j?.id] || {};
+    return f.total ?? f.subTotal ?? null;
   };
   const _jobNetPL = (j) => {
-    const f = j?.simproFinancials || {};
-    return f.netPL ?? f.netProfitLoss ?? f.netProfit
-        ?? f.netPnL ?? f.profitLoss ?? null;
+    const f = sbJobFinancials[j?.id] || {};
+    return f.netPL ?? null;
   };
   // Tier multiplier: bigger contracts pull harder on the score. <$25k=1x,
   // $25k-$75k=2x, >$75k=3x. Jobs with no Simpro financials yet default to
