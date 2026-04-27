@@ -23046,9 +23046,12 @@ function Scoreboard({ jobs, users=[], identity }) {
     setStartYMD(s); setEndYMD(e); setActivePreset(key);
   };
 
-  // Clamp the raw input range to the scoreboard anchor — earlier dates have no data anyway.
-  const effStart = startYMD < SCOREBOARD_ANCHOR_YMD ? SCOREBOARD_ANCHOR_YMD : startYMD;
-  const effEnd   = endYMD;
+  // _buildBoardRows is the parameterized aggregator. Phase 2 of the redesign
+  // splits this out so we can compute multiple boards (foreman + lead, this
+  // window + last month, weekly snapshots) instead of being locked to a
+  // single mode + window. The helpers inside read effStart/effEnd from the
+  // function's own scope so each call gets its own window without mutual
+  // interference. Returns the sorted rows array — same shape as before.
 
   // Period helpers for the WEEK/MONTH tabs and the Champions banner.
   const _ymd = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -23072,6 +23075,103 @@ function Scoreboard({ jobs, users=[], identity }) {
   // The new "competitive" window toggle. Defaults to this-week.
   const [boardWindow, setBoardWindow] = useState("thisWeek"); // "thisWeek" | "thisMonth"
 
+  // ── Score weights ─────────────────────────────────────────────────
+  // Hoisted OUT of _buildBoardRows so the function can be called multiple
+  // times per render (one for foreman, one for lead, one for last-month
+  // champions, weekly-archive snapshots, etc.) without re-registering hooks
+  // on every call. The weight state is a single source of truth shared by
+  // all the boards on the page.
+  const BUILTIN_WEIGHTS = {
+    // Original pillars
+    inspection: 25,  // first-try-clean rate (rough + final combined)
+    items:      10,  // items called on inspections (fewer = higher)
+    qc:         10,  // QC walk items (fewer = higher)
+    updates:    15,  // daily-update compliance %
+    openItems:  10,  // open punch / questions / unpulled loads on active jobs (fewer per active job = higher)
+    margin:     25,  // avg margin vs 15% goal
+    goal:       15,  // % of jobs hitting the 15% goal
+    // Phase 2 expansion — 10 new pillars Koy asked for. Defaults are modest
+    // so they enrich the composite without nuking existing rankings on day 1.
+    // Admins can re-balance via the weight editor once the team sees the
+    // new metrics in action for a couple weeks.
+    punchSpeed:        10, // avg days from punch addedAt → checkedAt (lower = better)
+    rtClosure:         10, // % of RTs created in window that got signed off
+    coTurnaround:      10, // days from CO created → approved (lower = better)
+    onTimeStart:       10, // jobs that started on or before scheduled date
+    hoursNeededMet:     5, // weeks where scheduled hrs hit the per-week target
+    hotCheck:           5, // count of open hot-check items per active job (fewer = better)
+    photos:             5, // photos posted per active job (more = better)
+    inspectionAttempts: 5, // avg attempts to pass inspection (lower = better)
+    jobAge:             5, // avg days an active job has been in its current phase (lower = better)
+    poPromptness:       5, // avg days from PO created → material picked up (lower = better)
+  };
+  const WEIGHTS_STORAGE_KEY = "scoreboard.weights.v1";
+  const [teamDefault, setTeamDefault] = useState(null);
+  const [teamSaving,  setTeamSaving]  = useState(false);
+  const [teamSaveMsg, setTeamSaveMsg] = useState("");
+  const [localTweak,  setLocalTweak]  = useState(() => {
+    try {
+      const raw = typeof localStorage !== "undefined" && localStorage.getItem(WEIGHTS_STORAGE_KEY);
+      return raw ? JSON.parse(raw) : null;
+    } catch { return null; }
+  });
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      try {
+        const snap = await getDoc(doc(db, "settings", "scoreboardWeights"));
+        if (cancelled) return;
+        if (snap.exists()) {
+          const d = snap.data() || {};
+          if (d.weights && typeof d.weights === "object") setTeamDefault(d.weights);
+        }
+      } catch {}
+    })();
+    return () => { cancelled = true; };
+  }, []);
+  const _effectiveDefault = { ...BUILTIN_WEIGHTS, ...(teamDefault||{}) };
+  const SCORE_WEIGHTS     = { ..._effectiveDefault, ...(localTweak||{}) };
+  const [showWeights, setShowWeights] = useState(false);
+  const updateWeight = (key, val) => {
+    if (!canEditWeights) return;
+    const n = Math.max(0, Math.min(100, Math.round(Number(val) || 0)));
+    const next = { ...SCORE_WEIGHTS, [key]: n };
+    setLocalTweak(next);
+    try { if (typeof localStorage !== "undefined") localStorage.setItem(WEIGHTS_STORAGE_KEY, JSON.stringify(next)); } catch {}
+  };
+  const resetWeights = () => {
+    if (!canEditWeights) return;
+    setLocalTweak(null);
+    try { if (typeof localStorage !== "undefined") localStorage.removeItem(WEIGHTS_STORAGE_KEY); } catch {}
+  };
+  const saveAsTeamDefault = async () => {
+    if (!canEditWeights) return;
+    setTeamSaving(true); setTeamSaveMsg("");
+    try {
+      const payload = {
+        weights: SCORE_WEIGHTS,
+        updatedAt: new Date().toISOString(),
+        updatedBy: identity?.name || "",
+      };
+      await setDoc(doc(db, "settings", "scoreboardWeights"), payload);
+      setTeamDefault(SCORE_WEIGHTS);
+      setLocalTweak(null);
+      try { if (typeof localStorage !== "undefined") localStorage.removeItem(WEIGHTS_STORAGE_KEY); } catch {}
+      setTeamSaveMsg("Saved — other admins will see these on next load.");
+      setTimeout(() => setTeamSaveMsg(""), 4000);
+    } catch (err) {
+      setTeamSaveMsg("Couldn't save — " + (err?.message || "unknown error"));
+    } finally {
+      setTeamSaving(false);
+    }
+  };
+  const weightTotal = Object.values(SCORE_WEIGHTS).reduce((a,b)=>a+b,0);
+  const hasLocalTweak = !!localTweak;
+  // ── End hoisted weight state ─────────────────────────────────────────
+
+  const _buildBoardRows = (mode, sYMD, eYMD) => {
+  const effStart = sYMD < SCOREBOARD_ANCHOR_YMD ? SCOREBOARD_ANCHOR_YMD : sYMD;
+  const effEnd   = eYMD;
   // QC item counts (fromQC-tagged entries in the punch lists). When a date
   // range is supplied, items with an addedAt stamp get filtered to that
   // range; legacy items with no addedAt are always counted (treated as
@@ -23313,6 +23413,133 @@ function Scoreboard({ jobs, users=[], identity }) {
       : collectOpenItems(job);
     const isActiveJob = fs !== "complete";
 
+    // ── Phase 2 metric extractions ───────────────────────────────────
+    // All 10 new pillars derive from data already on the job. Pure walks,
+    // no new schema. Anything that lacks the needed timestamps simply
+    // doesn't contribute (the pillar reads as "no data" for that job and
+    // averages over jobs that DO have data). Defensive against missing
+    // fields throughout — many of these touch year-old jobs.
+
+    // Punch closeout speed — days from addedAt → checkedAt for every item
+    // closed within the window. Walks roughPunch + finishPunch.
+    const punchClosureDays = [];
+    let hotCheckOpen = 0;
+    let photoCount = 0;
+    const _walkPunchExt = (p) => {
+      if (!p) return;
+      const punchFloors = ["upper","main","basement",...((p.extras||[]).map(e=>e.key))];
+      punchFloors.forEach(fk => {
+        const f = p[fk]; if (!f) return;
+        const buckets = [
+          ...((f.general||[]).map(i=>({i,hot:false}))),
+          ...((f.rooms||[]).flatMap(r=>(r.items||[]).map(i=>({i,hot:false})))),
+          ...((f.hotcheck||[]).map(i=>({i,hot:true}))),
+        ];
+        buckets.forEach(({i,hot}) => {
+          if (!i || i.voided) return;
+          // Photos count any photos attached to any item in window or out;
+          // documentation discipline is a "during the work" signal, not a
+          // strict-window one. Otherwise too many real photos drop out.
+          photoCount += Array.isArray(i.photos) ? i.photos.length : 0;
+          if (hot && !i.done) hotCheckOpen++;
+          if (!i.done) return;
+          const ca = _toYMDScore(i.checkedAt);
+          const aa = _toYMDScore(i.addedAt);
+          if (!ca || !aa) return;
+          if (ca < effStart || ca > effEnd) return;
+          // Compare as Date so DST and month boundaries behave.
+          const days = (new Date(ca).getTime() - new Date(aa).getTime()) / 86400000;
+          if (days >= 0 && days < 365) punchClosureDays.push(days);
+        });
+      });
+    };
+    _walkPunchExt(job.roughPunch);
+    _walkPunchExt(job.finishPunch);
+
+    // RT counts — created vs closed within the window. Falls back to
+    // job.updated_at if rt.createdAt isn't stamped (older RTs).
+    let rtCreatedInWindow = 0, rtClosedInWindow = 0;
+    (job.returnTrips||[]).forEach(rt => {
+      if (!rt) return;
+      const cYMD = _toYMDScore(rt.createdAt) || _toYMDScore(job.updated_at);
+      if (cYMD && cYMD >= effStart && cYMD <= effEnd) rtCreatedInWindow++;
+      const sYMD = _toYMDScore(rt.signedOffAt) || _toYMDScore(rt.signedOffDate);
+      if (rt.signedOff && sYMD && sYMD >= effStart && sYMD <= effEnd) rtClosedInWindow++;
+      // RT photos count toward documentation discipline.
+      photoCount += Array.isArray(rt.photos) ? rt.photos.length : 0;
+    });
+
+    // CO turnaround — for COs that reached approved/scheduled/completed
+    // within the window, count days from createdAt → coStatusDate as a
+    // proxy for "approved on" timing. Drops COs without both stamps.
+    const coTurnaroundDays = [];
+    (job.changeOrders||[]).forEach(co => {
+      if (!co) return;
+      const closedStates = new Set(["approved","scheduled","completed"]);
+      if (!closedStates.has(co.coStatus)) return;
+      const cYMD = _toYMDScore(co.createdAt);
+      const aYMD = _toYMDScore(co.coStatusDate);
+      if (!cYMD || !aYMD) return;
+      if (aYMD < effStart || aYMD > effEnd) return;
+      const days = (new Date(aYMD).getTime() - new Date(cYMD).getTime()) / 86400000;
+      if (days >= 0 && days < 365) coTurnaroundDays.push(days);
+    });
+
+    // On-time start — for jobs with a scheduled rough start that falls in
+    // the window, did rough actually go in-progress on or before that day?
+    let onTimeStartHits = 0, onTimeStartTotal = 0;
+    const schedYMD = _toYMDScore(job.roughScheduledDate || job.roughStartDate);
+    const actualStartYMD = _toYMDScore(job.roughInProgressStartedAt) || _toYMDScore(job.roughStartDate);
+    if (schedYMD && actualStartYMD && schedYMD >= effStart && schedYMD <= effEnd) {
+      onTimeStartTotal = 1;
+      if (actualStartYMD <= schedYMD) onTimeStartHits = 1;
+    }
+
+    // Job notes photo count — also rolls into the photo metric.
+    (job.jobNotes||[]).forEach(n => {
+      (n?.lines||[]).forEach(l => {
+        photoCount += Array.isArray(l?.photos) ? l.photos.length : 0;
+      });
+    });
+
+    // Inspection re-attempts — for inspections that PASSED in the window,
+    // how many tries did it take. 1 = first-try win, 2 = needed a retry, etc.
+    let inspectionAttemptsTotal = 0, inspectionAttemptCount = 0;
+    const _collectAttemptsForPass = (atts) => {
+      const passIdx = atts.findIndex(a => a && a.result === "pass");
+      if (passIdx < 0) return;
+      const passDate = _toYMDScore(atts[passIdx]?.date);
+      if (passDate && (passDate < effStart || passDate > effEnd)) return;
+      inspectionAttemptsTotal += (passIdx + 1);
+      inspectionAttemptCount++;
+    };
+    _collectAttemptsForPass(rAtt);
+    _collectAttemptsForPass(fAtt);
+
+    // Job age in current phase — for active jobs, days since the phase
+    // started. Long-stuck jobs ding the score.
+    let jobAgeDays = 0;
+    if (rs === "inprogress" && (job.roughStartDate || job.roughInProgressStartedAt)) {
+      const sd = parseAnyDate(job.roughInProgressStartedAt || job.roughStartDate);
+      if (sd) jobAgeDays = (Date.now() - sd.getTime()) / 86400000;
+    } else if (fs === "inprogress" && (job.finishStartDate || job.finishInProgressStartedAt)) {
+      const sd = parseAnyDate(job.finishInProgressStartedAt || job.finishStartDate);
+      if (sd) jobAgeDays = (Date.now() - sd.getTime()) / 86400000;
+    }
+
+    // PO promptness — days from PO created → material picked up, for POs
+    // picked up in the window. Walks roughMaterials + finishMaterials.
+    const poDays = [];
+    [...(job.roughMaterials||[]), ...(job.finishMaterials||[])].forEach(po => {
+      if (!po || !po.pickedUp) return;
+      const d = _toYMDScore(po.date);
+      const p = _toYMDScore(po.pickupDate);
+      if (!d || !p) return;
+      if (p < effStart || p > effEnd) return;
+      const days = (new Date(p).getTime() - new Date(d).getTime()) / 86400000;
+      if (days >= 0 && days < 90) poDays.push(days);
+    });
+
     return {
       roughFirstTryClean: firstR && firstR.result === "pass" && (firstR.items||[]).length === 0 ? 1 : 0,
       finalFirstTryClean: firstF && firstF.result === "pass" && (firstF.items||[]).length === 0 ? 1 : 0,
@@ -23328,6 +23555,20 @@ function Scoreboard({ jobs, users=[], identity }) {
       openPulls:     open.pulls,
       activeJobs:    isActiveJob ? 1 : 0,
       _postedDays:   postedDays,
+      // Phase 2 fields — aggregator collects these.
+      _punchClosureDays:        punchClosureDays,
+      _hotCheckOpen:            hotCheckOpen,
+      _photoCount:              photoCount,
+      _rtCreatedInWindow:       rtCreatedInWindow,
+      _rtClosedInWindow:        rtClosedInWindow,
+      _coTurnaroundDays:        coTurnaroundDays,
+      _onTimeStartHits:         onTimeStartHits,
+      _onTimeStartTotal:        onTimeStartTotal,
+      _inspectionAttemptsTotal: inspectionAttemptsTotal,
+      _inspectionAttemptCount:  inspectionAttemptCount,
+      _jobAgeDays:              jobAgeDays,
+      _jobAgeWeight:            jobAgeDays > 0 ? 1 : 0,
+      _poDays:                  poDays,
     };
   };
 
@@ -23367,6 +23608,20 @@ function Scoreboard({ jobs, users=[], identity }) {
       _margins: [],
       _marginsEst: 0,
       _jobs: [],
+      // Phase 2 accumulators
+      _punchClosureDays:        [],
+      _hotCheckOpen:            0,
+      _photoCount:              0,
+      _rtCreatedInWindow:       0,
+      _rtClosedInWindow:        0,
+      _coTurnaroundDays:        [],
+      _onTimeStartHits:         0,
+      _onTimeStartTotal:        0,
+      _inspectionAttemptsTotal: 0,
+      _inspectionAttemptCount:  0,
+      _jobAgeTotal:             0,
+      _jobAgeCount:             0,
+      _poDays:                  [],
     };
 
     const s = statsForJob(j);
@@ -23378,6 +23633,20 @@ function Scoreboard({ jobs, users=[], identity }) {
      "openPunch","openQuestions","openPulls","activeJobs"].forEach(k => {
       agg[groupKey][k] += s[k];
     });
+    // Phase 2 accumulators — sums and array concats.
+    agg[groupKey]._punchClosureDays.push(...s._punchClosureDays);
+    agg[groupKey]._hotCheckOpen            += s._hotCheckOpen;
+    agg[groupKey]._photoCount              += s._photoCount;
+    agg[groupKey]._rtCreatedInWindow       += s._rtCreatedInWindow;
+    agg[groupKey]._rtClosedInWindow        += s._rtClosedInWindow;
+    agg[groupKey]._coTurnaroundDays.push(...s._coTurnaroundDays);
+    agg[groupKey]._onTimeStartHits         += s._onTimeStartHits;
+    agg[groupKey]._onTimeStartTotal        += s._onTimeStartTotal;
+    agg[groupKey]._inspectionAttemptsTotal += s._inspectionAttemptsTotal;
+    agg[groupKey]._inspectionAttemptCount  += s._inspectionAttemptCount;
+    agg[groupKey]._jobAgeTotal             += s._jobAgeDays;
+    agg[groupKey]._jobAgeCount             += s._jobAgeWeight;
+    agg[groupKey]._poDays.push(...s._poDays);
 
     // Drilldown row — one per job, anchored to the assigned lead.
     const allUpdates = [...(j.roughUpdates||[]), ...(j.finishUpdates||[])];
@@ -23414,6 +23683,18 @@ function Scoreboard({ jobs, users=[], identity }) {
       const mCount = r._margins.length;
       const avgMargin = mCount ? (r._margins.reduce((a,x)=>a+x,0) / mCount) : null;
       const jobsOverGoal = r._margins.filter(m => m >= 15).length;
+      // Phase 2 derived means / ratios — `null` when there's no data so the
+      // pillar drops out of the composite cleanly.
+      const _avg = (arr) => arr.length ? (arr.reduce((a,b)=>a+b,0) / arr.length) : null;
+      const avgPunchClosureDays  = _avg(r._punchClosureDays);
+      const avgCoTurnaroundDays  = _avg(r._coTurnaroundDays);
+      const avgPoDays            = _avg(r._poDays);
+      const rtClosureRate        = r._rtCreatedInWindow > 0 ? (r._rtClosedInWindow / r._rtCreatedInWindow) : null;
+      const onTimeStartRate      = r._onTimeStartTotal > 0 ? (r._onTimeStartHits / r._onTimeStartTotal) : null;
+      const avgInspectionAttempts = r._inspectionAttemptCount > 0 ? (r._inspectionAttemptsTotal / r._inspectionAttemptCount) : null;
+      const avgJobAgeDays        = r._jobAgeCount > 0 ? (r._jobAgeTotal / r._jobAgeCount) : null;
+      const hotCheckOpenPerJob   = r.activeJobs > 0 ? (r._hotCheckOpen / r.activeJobs) : null;
+      const photosPerJob         = r.activeJobs > 0 ? (r._photoCount / r.activeJobs) : null;
       return {
         ...r,
         postedDays:   r.postedDays.size,
@@ -23421,6 +23702,19 @@ function Scoreboard({ jobs, users=[], identity }) {
         avgMargin,
         jobsOverGoal,
         marginEst:    r._marginsEst,
+        // Phase 2 — exposed on the row for composite + future drilldown.
+        avgPunchClosureDays,
+        avgCoTurnaroundDays,
+        avgPoDays,
+        rtClosureRate,
+        onTimeStartRate,
+        avgInspectionAttempts,
+        avgJobAgeDays,
+        hotCheckOpenPerJob,
+        photosPerJob,
+        rtCreatedInWindow: r._rtCreatedInWindow,
+        rtClosedInWindow:  r._rtClosedInWindow,
+        photoCount:        r._photoCount,
       };
     });
 
@@ -23429,94 +23723,9 @@ function Scoreboard({ jobs, users=[], identity }) {
   // average, but ONLY over pillars the person has data for — so a new lead
   // with zero inspections yet isn't dragged down to 50%. Weights are
   // persisted to localStorage so admin tweaks survive a reload; they're
-  // per-browser, not team-wide.
-  // Built-in fallbacks. These are only used if no team default exists in
-  // Firestore (e.g. first run) AND this browser has never saved its own copy.
-  const BUILTIN_WEIGHTS = {
-    inspection: 25,  // first-try-clean rate (rough + final combined)
-    items:      10,  // items called on inspections (fewer = higher)
-    qc:         10,  // QC walk items (fewer = higher)
-    updates:    15,  // daily-update compliance %
-    openItems:  10,  // open punch / questions / unpulled loads on active jobs (fewer per active job = higher)
-    margin:     25,  // avg margin vs 15% goal
-    goal:       15,  // % of jobs hitting the 15% goal
-  };
-  const WEIGHTS_STORAGE_KEY = "scoreboard.weights.v1";
-  // Start from localStorage if present, else built-in. Team defaults (from
-  // Firestore) are layered in below via effect — they override built-in
-  // unless the user has their own browser-local tweak.
-  const [teamDefault, setTeamDefault]   = useState(null);   // last fetched team default
-  const [teamSaving,  setTeamSaving]    = useState(false);
-  const [teamSaveMsg, setTeamSaveMsg]   = useState("");
-  const [localTweak,  setLocalTweak]    = useState(() => {
-    try {
-      const raw = typeof localStorage !== "undefined" && localStorage.getItem(WEIGHTS_STORAGE_KEY);
-      return raw ? JSON.parse(raw) : null;
-    } catch { return null; }
-  });
-  // Pull the team default once on mount. Failure (doc missing / rules / offline)
-  // is silent — we just stay with built-in + any local tweak.
-  useEffect(() => {
-    let cancelled = false;
-    (async () => {
-      try {
-        const snap = await getDoc(doc(db, "settings", "scoreboardWeights"));
-        if (cancelled) return;
-        if (snap.exists()) {
-          const d = snap.data() || {};
-          if (d.weights && typeof d.weights === "object") setTeamDefault(d.weights);
-        }
-      } catch {}
-    })();
-    return () => { cancelled = true; };
-  }, []);
-  // Effective defaults = team default if present, else built-in. Active weights
-  // = localTweak on top of those, falling back key-by-key.
-  const effectiveDefault = { ...BUILTIN_WEIGHTS, ...(teamDefault||{}) };
-  const SCORE_WEIGHTS    = { ...effectiveDefault, ...(localTweak||{}) };
-
-  const [showWeights, setShowWeights] = useState(false);
-  const updateWeight = (key, val) => {
-    if (!canEditWeights) return;
-    const n = Math.max(0, Math.min(100, Math.round(Number(val) || 0)));
-    const next = { ...SCORE_WEIGHTS, [key]: n };
-    setLocalTweak(next);
-    try { if (typeof localStorage !== "undefined") localStorage.setItem(WEIGHTS_STORAGE_KEY, JSON.stringify(next)); } catch {}
-  };
-  // "Reset" drops the browser-local tweak so the row falls back to team default
-  // (or built-in if no team default exists). It does NOT touch the team default.
-  const resetWeights = () => {
-    if (!canEditWeights) return;
-    setLocalTweak(null);
-    try { if (typeof localStorage !== "undefined") localStorage.removeItem(WEIGHTS_STORAGE_KEY); } catch {}
-  };
-  // "Save as team default" pushes the current weights to Firestore. All admins
-  // on other browsers will inherit them on next Scoreboard load. The local
-  // tweak is cleared afterward so this admin's view also matches the new
-  // default (otherwise the tweak would keep shadowing the saved value).
-  const saveAsTeamDefault = async () => {
-    if (!canEditWeights) return;
-    setTeamSaving(true); setTeamSaveMsg("");
-    try {
-      const payload = {
-        weights: SCORE_WEIGHTS,
-        updatedAt: new Date().toISOString(),
-        updatedBy: identity?.name || "",
-      };
-      await setDoc(doc(db, "settings", "scoreboardWeights"), payload);
-      setTeamDefault(SCORE_WEIGHTS);
-      setLocalTweak(null);
-      try { if (typeof localStorage !== "undefined") localStorage.removeItem(WEIGHTS_STORAGE_KEY); } catch {}
-      setTeamSaveMsg("Saved — other admins will see these on next load.");
-      setTimeout(() => setTeamSaveMsg(""), 4000);
-    } catch (err) {
-      setTeamSaveMsg("Couldn't save — " + (err?.message || "unknown error"));
-    } finally {
-      setTeamSaving(false);
-    }
-  };
-  const weightTotal = Object.values(SCORE_WEIGHTS).reduce((a,b)=>a+b,0);
-  const hasLocalTweak = !!localTweak;
+  // (Weight state and SCORE_WEIGHTS hoisted to the component scope so the
+  //  helper can be called multiple times per render without re-registering
+  //  hooks. They're available here via closure.)
   // Centered at the 15% goal = 80, slope 2pts per margin percentage point.
   const marginScore = (m) => Math.max(0, Math.min(100, 80 + (m - 15) * 2));
   const clamp100 = (v) => Math.max(0, Math.min(100, v));
@@ -23566,6 +23775,92 @@ function Scoreboard({ jobs, users=[], identity }) {
       parts.goal       = { value: (r.jobsOverGoal / r.marginCount) * 100, weight: SCORE_WEIGHTS.goal, label: "≥15% jobs" };
     }
 
+    // ── Phase 2 pillars ─────────────────────────────────────────────
+    // Each pillar follows the same pattern: only contributes if there's
+    // data for it; sub-score 0-100 with documented thresholds.
+
+    // Punch closeout speed — 0 days = 100, 14+ days = 0.
+    if (r.avgPunchClosureDays != null) {
+      parts.punchSpeed = {
+        value: clamp100(100 - (r.avgPunchClosureDays / 14) * 100),
+        weight: SCORE_WEIGHTS.punchSpeed,
+        label: "Punch closeout speed",
+      };
+    }
+    // RT closure rate — pct of RTs created in window that got signed off.
+    if (r.rtClosureRate != null) {
+      parts.rtClosure = {
+        value: clamp100(r.rtClosureRate * 100),
+        weight: SCORE_WEIGHTS.rtClosure,
+        label: "RT closure rate",
+      };
+    }
+    // CO turnaround — 0 days = 100, 14+ days = 0.
+    if (r.avgCoTurnaroundDays != null) {
+      parts.coTurnaround = {
+        value: clamp100(100 - (r.avgCoTurnaroundDays / 14) * 100),
+        weight: SCORE_WEIGHTS.coTurnaround,
+        label: "CO turnaround",
+      };
+    }
+    // On-time start — pct of jobs that started on or before scheduled.
+    if (r.onTimeStartRate != null) {
+      parts.onTimeStart = {
+        value: clamp100(r.onTimeStartRate * 100),
+        weight: SCORE_WEIGHTS.onTimeStart,
+        label: "On-time start",
+      };
+    }
+    // Hot Check — 0 open per active job = 100, 3+ per job = 0. Aggressive
+    // because hot checks are a forced re-inspection — they should be rare.
+    if (r.hotCheckOpenPerJob != null) {
+      parts.hotCheck = {
+        value: clamp100(100 - (r.hotCheckOpenPerJob / 3) * 100),
+        weight: SCORE_WEIGHTS.hotCheck,
+        label: "Hot Check items",
+      };
+    }
+    // Photos — documentation discipline. 0/job = 0, 10+/job = 100.
+    if (r.photosPerJob != null) {
+      parts.photos = {
+        value: clamp100((r.photosPerJob / 10) * 100),
+        weight: SCORE_WEIGHTS.photos,
+        label: "Photos per job",
+      };
+    }
+    // Inspection re-attempts — avg 1.0 = 100 (every inspection passed first
+    // try), 3.0+ = 0. Smooth gradient between.
+    if (r.avgInspectionAttempts != null) {
+      const v = clamp100(100 - ((r.avgInspectionAttempts - 1) / 2) * 100);
+      parts.inspectionAttempts = {
+        value: v,
+        weight: SCORE_WEIGHTS.inspectionAttempts,
+        label: "Inspection re-attempts",
+      };
+    }
+    // Job age in current phase — 0 days = 100, 60+ days = 0. A 30-day rough
+    // is the rough-time-on-site median; 60+ means stuck.
+    if (r.avgJobAgeDays != null) {
+      parts.jobAge = {
+        value: clamp100(100 - (r.avgJobAgeDays / 60) * 100),
+        weight: SCORE_WEIGHTS.jobAge,
+        label: "Job age in phase",
+      };
+    }
+    // PO promptness — 0 days = 100, 14+ days = 0.
+    if (r.avgPoDays != null) {
+      parts.poPromptness = {
+        value: clamp100(100 - (r.avgPoDays / 14) * 100),
+        weight: SCORE_WEIGHTS.poPromptness,
+        label: "PO promptness",
+      };
+    }
+    // Hours-needed met — placeholder for now. The per-week hours-needed
+    // targets live in settings/schedule_<wk> docs which the Scoreboard
+    // doesn't currently load. Will be wired in a follow-up that reads the
+    // archive of weekly schedule docs.
+    // (Intentionally not contributing to the composite yet.)
+
     // Denominator is the FULL weight total, not just the pillars that have
     // data. A pillar with no data effectively scores 0 on the composite.
     // This is intentional: keeping the app up to date (logging inspections,
@@ -23597,6 +23892,37 @@ function Scoreboard({ jobs, users=[], identity }) {
     if (b.composite !== a.composite) return b.composite - a.composite;
     return a.name.localeCompare(b.name);
   });
+
+  return rows;
+  }; // _buildBoardRows
+
+  // Active-window rows for the currently-selected mode + date range. This is
+  // what the existing single-mode table renders against. Side-by-side render
+  // and the Champions banner pull additional row sets below.
+  // Compute foreman + lead boards once per render; the active table picks
+  // one (or both, in "Side-by-side" mode). _buildBoardRows is pure given
+  // (jobs, mode, window, weights) so calling twice is cheap.
+  const rowsLead    = _buildBoardRows("lead",    startYMD, endYMD);
+  const rowsForeman = _buildBoardRows("foreman", startYMD, endYMD);
+  // `rows` is what the legacy single-table render walks. Defaults to the
+  // current mode; "both" mode hides that single table and uses the two
+  // compact boards instead, so we just point rows at one of them so any
+  // accidental fallback render still has something coherent to show.
+  const rows = mode === "lead" ? rowsLead
+             : mode === "foreman" ? rowsForeman
+             : rowsForeman;
+  // Last-month rows for the Champions banner. Computed regardless of the
+  // active window — the banner always reads "April Champions" (or whatever
+  // the most-recent completed month is) at the top of the page.
+  const lastMonthLeadRows    = _buildBoardRows("lead",    _periods.lastMonth.start, _periods.lastMonth.end);
+  const lastMonthForemanRows = _buildBoardRows("foreman", _periods.lastMonth.start, _periods.lastMonth.end);
+  // Effective active window for downstream display logic that used to read
+  // effStart/effEnd directly. Re-clamp to the scoreboard anchor so legacy
+  // callers see the same value the helper does.
+  const effStart = startYMD < SCOREBOARD_ANCHOR_YMD ? SCOREBOARD_ANCHOR_YMD : startYMD;
+  const effEnd   = endYMD;
+  /* eslint-disable-next-line no-unused-vars */
+  const _winRange = { effStart, effEnd };
 
   const pct = (hit, tot) => tot > 0 ? Math.round((hit/tot)*100) : 0;
   const pctColor = (p) => p >= 90 ? "#16a34a" : p >= 70 ? "#f59e0b" : "#dc2626";
@@ -23662,10 +23988,78 @@ function Scoreboard({ jobs, users=[], identity }) {
         </div>
       </div>
 
+      {/* CHAMPIONS BANNER — last completed calendar month's #1 foreman AND
+          #1 lead. Drives a "defend the throne" mental model: a person who
+          held the title last month can see they have to keep earning it.
+          Hidden if last month had no scorable activity at all (e.g. before
+          the SCOREBOARD_ANCHOR_YMD). */}
+      {(() => {
+        const champFm = lastMonthForemanRows.find(r => r.composite != null);
+        const champLd = lastMonthLeadRows.find(r => r.composite != null);
+        if(!champFm && !champLd) return null;
+        const ChampCard = ({ kind, row }) => {
+          if(!row) return (
+            <div style={{flex:"1 1 240px",minWidth:200,padding:"12px 16px",
+              border:"1px dashed #cbd5e1",borderRadius:10,
+              background:"rgba(255,255,255,0.5)"}}>
+              <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.12em",color:"#64748b"}}>
+                {kind.toUpperCase()} CHAMPION
+              </div>
+              <div style={{fontSize:13,color:"#94a3b8",marginTop:4}}>
+                No qualifying activity yet
+              </div>
+            </div>
+          );
+          const margin = row.avgMargin != null ? row.avgMargin.toFixed(1) : null;
+          return (
+            <div style={{flex:"1 1 240px",minWidth:200,padding:"12px 16px",
+              border:"1px solid #fbbf2466",borderRadius:10,
+              background:"linear-gradient(135deg, rgba(254,243,199,0.7) 0%, rgba(252,211,77,0.4) 100%)"}}>
+              <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:2}}>
+                <Icon name="star" size={11} stroke={2.5} color="#92400e"/>
+                <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.12em",color:"#92400e"}}>
+                  {kind.toUpperCase()} CHAMPION
+                </div>
+              </div>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:24,
+                color:"#78350f",letterSpacing:"0.02em",lineHeight:1.05}}>
+                {row.name}
+              </div>
+              <div style={{display:"flex",gap:14,marginTop:6,fontSize:11,color:"#78350f",flexWrap:"wrap"}}>
+                <div><b style={{fontSize:14}}>{Math.round(row.composite)}</b> score</div>
+                {margin != null && <div><b style={{fontSize:14}}>{margin}%</b> margin</div>}
+                <div><b style={{fontSize:14}}>{row.updatesPosted||0}</b> updates</div>
+              </div>
+            </div>
+          );
+        };
+        return (
+          <div style={{
+            display:"flex",alignItems:"stretch",gap:12,marginBottom:14,
+            padding:"14px 16px",background:"#fffbeb",
+            border:"2px solid #fcd34d",borderRadius:14,flexWrap:"wrap"
+          }}>
+            <div style={{display:"flex",flexDirection:"column",justifyContent:"center",
+              minWidth:140,paddingRight:8,borderRight:"1px solid #fde68a"}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,
+                letterSpacing:"0.04em",color:"#78350f",lineHeight:1}}>
+                {_periods.lastMonth.label.toUpperCase()}
+              </div>
+              <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:"#92400e",marginTop:3}}>
+                CHAMPIONS
+              </div>
+            </div>
+            <ChampCard kind="Foreman" row={champFm}/>
+            <ChampCard kind="Lead" row={champLd}/>
+          </div>
+        );
+      })()}
+
       <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,flexWrap:"wrap"}}>
         <div style={{display:"inline-flex",gap:4,background:"#f1f5f9",padding:4,borderRadius:9}}>
           {tabBtn("lead","Leads")}
           {tabBtn("foreman","Foremen (by crew)")}
+          {tabBtn("both","Side-by-side")}
         </div>
         {/* WEEK / MONTH window tabs — drive startYMD/endYMD so the leaderboard
             renders against the chosen period. Replaces the old date-preset
@@ -23710,11 +24104,9 @@ function Scoreboard({ jobs, users=[], identity }) {
       </div>
 
       {/* TOP PERFORMER HERO — current leader of the active mode + window.
-          Sits above the leaderboard table. Bigger, podium feel — the goal is
-          to make rank #1 desirable to claim and uncomfortable to lose.
-          Phase 2 adds streaks ("Week 3 in a row at #1") and movement arrows
-          vs. last week once the weekly archive is wired. */}
-      {(() => {
+          In "both" mode the hero is replaced by the side-by-side boards
+          below (each board shows its own #1 prominently). */}
+      {mode !== "both" && (() => {
         if(rows.length === 0 || rows[0].composite == null) return null;
         const top = rows[0];
         const score = Math.round(top.composite);
@@ -23830,6 +24222,15 @@ function Scoreboard({ jobs, users=[], identity }) {
               ["openItems","Open items","Open punch, questions, and unpulled loads per active job — fewer is better"],
               ["margin","Avg margin","Centered on 15% goal, +2 pts per margin point"],
               ["goal","≥15% jobs","% of jobs hitting the 15% profit goal"],
+              ["punchSpeed","Punch closeout speed","Avg days from punch added → checked off (lower = better)"],
+              ["rtClosure","RT closure rate","% of RTs created in window that got signed off"],
+              ["coTurnaround","CO turnaround","Avg days from CO created → approved (lower = better)"],
+              ["onTimeStart","On-time start","Jobs that went in-progress on or before scheduled start"],
+              ["hotCheck","Hot Check items","Open hot-check items per active job (fewer = better)"],
+              ["photos","Photos per job","Photos posted across punch + RT + job notes per active job"],
+              ["inspectionAttempts","Inspection re-attempts","Avg attempts to pass — first try = 100, 3+ tries = 0"],
+              ["jobAge","Job age in phase","Avg days an active job has been in current phase (lower = better)"],
+              ["poPromptness","PO promptness","Avg days from PO created → material picked up"],
             ].map(([k,label,hint]) => (
               <label key={k} style={{display:"block",padding:"8px 10px",background:"#f8fafc",
                 border:"1px solid #e2e8f0",borderRadius:8}}>
@@ -23933,6 +24334,99 @@ function Scoreboard({ jobs, users=[], identity }) {
         </div>
       )}
 
+      {/* SIDE-BY-SIDE BOARDS — only when mode === "both". Renders two compact
+          leaderboards (foreman + lead) for the active window so admins can
+          see who's leading on each axis without flipping tabs. Each row is
+          clickable → drilldown modal (same as the full table). Stacks
+          vertically below ~900px viewport so it's still readable on iPad. */}
+      {mode === "both" && (
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(420px,1fr))",
+          gap:14,marginBottom:16}}>
+          {[
+            { title: "FOREMEN", rows: rowsForeman, accent: "#2563eb" },
+            { title: "LEADS",   rows: rowsLead,    accent: "#f97316" },
+          ].map(board => (
+            <div key={board.title} style={{
+              background:"#fff",border:"1px solid #cbd5e1",borderRadius:12,
+              boxShadow:"0 1px 3px rgba(15,23,42,0.04)",overflow:"hidden"}}>
+              <div style={{padding:"10px 14px",borderBottom:`2px solid ${board.accent}`,
+                background:"#f8fafc",display:"flex",alignItems:"center",gap:10}}>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,
+                  letterSpacing:"0.06em",color:board.accent,lineHeight:1}}>
+                  {board.title}
+                </div>
+                <div style={{fontSize:10,color:"#64748b",fontWeight:600}}>
+                  {boardWindow === "thisMonth" ? _periods.thisMonth.label : "This Week"}
+                </div>
+              </div>
+              {board.rows.length === 0 || board.rows[0].composite == null ? (
+                <div style={{padding:"24px 16px",textAlign:"center",color:"#94a3b8",fontSize:12}}>
+                  No qualifying activity in this window.
+                </div>
+              ) : (
+                <div style={{display:"flex",flexDirection:"column"}}>
+                  {board.rows.slice(0, 8).map((r, i) => {
+                    if(r.composite == null) return null;
+                    const rank = rankBadge(i);
+                    const score = Math.round(r.composite);
+                    const margin = r.avgMargin != null ? r.avgMargin.toFixed(1) : null;
+                    const goalPct = r.marginCount > 0 ? Math.round((r.jobsOverGoal / r.marginCount) * 100) : null;
+                    const isTop = i === 0;
+                    return (
+                      <button key={r.name} onClick={()=>setDrillRow(r)}
+                        style={{
+                          display:"flex",alignItems:"center",gap:10,
+                          padding:isTop?"12px 14px":"8px 14px",
+                          borderTop: i > 0 ? "1px solid #f1f5f9" : "none",
+                          background: isTop ? "#fffbeb" : "transparent",
+                          border:"none",cursor:"pointer",fontFamily:"inherit",
+                          textAlign:"left",width:"100%",
+                        }}>
+                        {rank ? (
+                          <span style={{
+                            fontSize:10,fontWeight:800,letterSpacing:"0.04em",
+                            background:rank.bg,color:rank.fg,padding:"2px 7px",
+                            borderRadius:99,minWidth:30,textAlign:"center",flexShrink:0}}>
+                            {rank.label}
+                          </span>
+                        ) : (
+                          <span style={{fontSize:11,fontWeight:700,color:"#94a3b8",
+                            minWidth:30,textAlign:"center",flexShrink:0}}>
+                            #{i+1}
+                          </span>
+                        )}
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{
+                            fontSize:isTop?15:13,fontWeight:isTop?800:600,
+                            color:"#0f172a",lineHeight:1.2}}>
+                            {r.name}
+                          </div>
+                          <div style={{fontSize:11,color:"#64748b",marginTop:2,
+                            display:"flex",gap:10,flexWrap:"wrap"}}>
+                            {margin != null && <span>{margin}% margin</span>}
+                            {goalPct != null && <span>{goalPct}% ≥15%</span>}
+                            <span>{r.updatesPosted||0} updates</span>
+                            <span>{r.jobs} job{r.jobs===1?"":"s"}</span>
+                          </div>
+                        </div>
+                        <div style={{
+                          background: pctBg(score), color: pctColor(score),
+                          padding:"4px 10px",borderRadius:99,fontWeight:800,
+                          fontSize:isTop?16:13,minWidth:48,textAlign:"center",
+                          border:`1px solid ${pctColor(score)}33`,flexShrink:0}}>
+                          {score}
+                        </div>
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+            </div>
+          ))}
+        </div>
+      )}
+
+      {mode !== "both" && (
       <div style={{background:"#fff",border:"1px solid #cbd5e1",borderRadius:12,overflowX:"auto",boxShadow:"0 1px 3px rgba(15,23,42,0.04)"}}>
         <table style={{width:"100%",borderCollapse:"collapse",minWidth:1100}}>
           <thead>
@@ -24118,6 +24612,7 @@ function Scoreboard({ jobs, users=[], identity }) {
           </tbody>
         </table>
       </div>
+      )}
 
       <div style={{fontSize:12,color:"#334155",marginTop:14,lineHeight:1.6,background:"#f1f5f9",border:"1px solid #cbd5e1",borderRadius:10,padding:"12px 14px"}}>
         <b style={{color:"#0f172a"}}>How attribution works.</b> Inspection, QC, open items, daily updates, and margin
