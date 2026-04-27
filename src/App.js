@@ -23059,6 +23059,9 @@ function Scoreboard({ jobs, users=[], identity }) {
             grossMargin:   res.data.grossMargin ?? null,
             margin:        res.data.margin ?? null,
             isEstimate:    res.data.isEstimate ?? null,
+            // Raw blobs from Simpro for forward-compat fallback parsing.
+            _rawTotal:  res.data._rawTotal  ?? null,
+            _rawTotals: res.data._rawTotals ?? null,
             fetchedAt:     new Date().toISOString(),
           },
         }, { merge: true });
@@ -23264,17 +23267,24 @@ function Scoreboard({ jobs, users=[], identity }) {
     const f = sbJobFinancials[j?.id] || {};
     if (f.total != null) return f.total;
     if (f.subTotal != null) return f.subTotal;
+    // 1. Simpro's job.Total object (separate from job.Totals) holds the
+    //    headline IncTax/ExTax. Check this FIRST — it's the canonical
+    //    source for the contract dollars.
+    const top = f._rawTotal;
+    if (top) {
+      const direct = top.IncTax ?? top.ExTax;
+      if (direct != null) return direct;
+    }
+    // 2. Some tenants might include IncTax inside the Totals subtree
+    //    instead — check there next.
     const t = f._rawTotals;
     if (t) {
-      // 1. Direct field — what Simpro exposes on tenants that include
-      //    IncTax/ExTax at the Totals top level.
-      const direct = t.IncTax ?? t.Total?.IncTax ?? t.Totals?.IncTax
-                  ?? t.ExTax  ?? t.Total?.ExTax  ?? t.Totals?.ExTax;
-      if (direct != null) return direct;
-      // 2. Derive from cost components when no top-level price field
-      //    exists. Sub Total = MaterialsCost + ResourcesCost +
-      //    MaterialsMarkup + ResourcesMarkup. Verified against the
-      //    Cowdrey job: 53528 + 61258 + 12277 + 9188 = 136,252 ≡ Sub Total.
+      const direct2 = t.IncTax ?? t.Total?.IncTax ?? t.Totals?.IncTax
+                   ?? t.ExTax  ?? t.Total?.ExTax  ?? t.Totals?.ExTax;
+      if (direct2 != null) return direct2;
+      // 3. Final fallback: derive Sub Total by summing the cost
+      //    components Simpro always exposes. Verified against the
+      //    Cowdrey job (53528 + 61258 + 12277 + 9188 = 136,252).
       const _ae = (o) => o == null ? null
                        : typeof o === "number" ? o
                        : (o.Estimate ?? o.Actual ?? null);

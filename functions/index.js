@@ -869,7 +869,7 @@ exports.getSimproJobFinancials = functions.https.onCall(async (data) => {
   if (!simproJobNo) throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
 
   const resp = await fetch(
-    `${SIMPRO_BASE}/jobs/?ID=${encodeURIComponent(simproJobNo)}&pageSize=1&columns=ID,Totals`,
+    `${SIMPRO_BASE}/jobs/?ID=${encodeURIComponent(simproJobNo)}&pageSize=1&columns=ID,Total,Totals`,
     { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } }
   );
   if (!resp.ok) {
@@ -887,11 +887,67 @@ exports.getSimproJobFinancials = functions.https.onCall(async (data) => {
   // actual === 100 means no real costs have been tracked yet in Simpro
   const hasRealActual = actual !== null && actual !== 100;
 
+  // Pick Actual when real costs are tracked, else Estimate. Falls through
+  // to a flat number when Simpro returns one, then null.
+  const pickAE = (obj) => {
+    if (obj == null) return null;
+    if (typeof obj === "number") return obj;
+    return hasRealActual ? (obj.Actual ?? obj.Estimate ?? null) : (obj.Estimate ?? obj.Actual ?? null);
+  };
+  // Simpro's /jobs response has TWO separate objects we care about:
+  //   job.Total  → { IncTax, ExTax, Tax } — the headline contract dollars
+  //   job.Totals → { NettMargin, NettPL, MaterialsCost, ResourcesCost, ... }
+  // We were originally only requesting columns=Totals, so job.Total was
+  // missing from the response → all dollar fields came back null. Fixed
+  // above by adding `Total` to the columns list. Read the headline
+  // numbers from job.Total first, with a fallback to summing cost
+  // components in case a tenant doesn't return Total.
+  const top = job.Total || {};
+  const _aeNum = (o) => o == null ? null
+                       : typeof o === "number" ? o
+                       : (o.Estimate ?? o.Actual ?? null);
+  const _matCost = _aeNum(t.MaterialsCost);
+  const _resCost = _aeNum(t.ResourcesCost);
+  const _matMk   = _aeNum(t.MaterialsMarkup);
+  const _resMk   = _aeNum(t.ResourcesMarkup);
+  const _haveAnyComponent = _matCost != null || _resCost != null || _matMk != null || _resMk != null;
+  const _derivedSubTotal = _haveAnyComponent
+    ? ((_matCost||0) + (_resCost||0) + (_matMk||0) + (_resMk||0))
+    : null;
+  const totalIncTax = top.IncTax ?? t.IncTax ?? _derivedSubTotal;
+  const totalExTax  = top.ExTax  ?? t.ExTax  ?? _derivedSubTotal;
+
   return {
+    // Existing fields — unchanged.
     margin:    hasRealActual ? actual : estimate,
     isEstimate: !hasRealActual,
     laborHoursActual:   t.ResourcesCost?.LaborHours?.Actual   ?? null,
     laborHoursEstimate: t.ResourcesCost?.LaborHours?.Estimate ?? null,
+    // Job size dollars — what powers the Scoreboard's S/M/L tier weighting.
+    // total = with tax (the headline number on Simpro's project summary).
+    total:    totalIncTax,
+    subTotal: totalExTax,
+    // Net P/L in dollars — actual profit (or loss) for this job. Picks the
+    // Actual side when real costs are tracked, else Estimate.
+    netPL:        pickAE(t.NettPL),
+    netPLActual:   t.NettPL?.Actual   ?? null,
+    netPLEstimate: t.NettPL?.Estimate ?? null,
+    // Gross figures for drilldown / future use.
+    grossPL:     pickAE(t.GrossPL),
+    grossMargin: pickAE(t.GrossMargin),
+    // Cost components (what shows in the Simpro summary breakdown).
+    materialsCost:   pickAE(t.MaterialsCost),
+    resourcesCost:   pickAE(t.ResourcesCost),
+    materialsMarkup: pickAE(t.MaterialsMarkup),
+    resourcesMarkup: pickAE(t.ResourcesMarkup),
+    overhead:        pickAE(t.OverHead) ?? pickAE(t.Overhead),
+    invoicedValue:   pickAE(t.Invoiced) ?? pickAE(t.InvoicedValue),
+    // Raw blobs — forward-compat for any extra fields Simpro returns later
+    // (saves a redeploy if their schema gains a field we want to surface).
+    // _rawTotal  = job.Total  (IncTax, ExTax, Tax)
+    // _rawTotals = job.Totals (cost components, margins, NettPL, ...)
+    _rawTotal:  job.Total || null,
+    _rawTotals: t,
   };
 });
 
