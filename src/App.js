@@ -23195,6 +23195,11 @@ function Scoreboard({ jobs, users=[], identity }) {
     inspectionAttempts: 5, // avg attempts to pass inspection (lower = better)
     jobAge:             5, // avg days an active job has been in its current phase (lower = better)
     poPromptness:       5, // avg days from PO created → material picked up (lower = better)
+    // Lean (headline) composite — Net P/L (profit dollars per active job).
+    // Margin uses the existing `margin` weight above; Net P/L is its own
+    // adjustable weight here so admins can dial how much profit dollars
+    // (vs. margin %) drive the headline.
+    netPL: 18,
   };
   const WEIGHTS_STORAGE_KEY = "scoreboard.weights.v1";
   const [teamDefault, setTeamDefault] = useState(null);
@@ -23302,13 +23307,20 @@ function Scoreboard({ jobs, users=[], identity }) {
     const f = sbJobFinancials[j?.id] || {};
     if (f.netPL != null) return f.netPL;
     const t = f._rawTotals;
-    if (t) {
-      const isEst = !!f.isEstimate;
-      const np = t.NettPL || t.NetPnL || t.NetProfit;
-      if (np && typeof np === "object") {
-        return isEst ? (np.Estimate ?? np.Actual ?? null) : (np.Actual ?? np.Estimate ?? null);
-      }
-      if (typeof np === "number") return np;
+    if (!t) return null;
+    const isEst = !!f.isEstimate;
+    const _aeOne = (o) => o == null ? null
+                       : typeof o === "number" ? o
+                       : isEst ? (o.Estimate ?? o.Actual ?? null) : (o.Actual ?? o.Estimate ?? null);
+    // 1. Try the named NettPL field (and common aliases).
+    const direct = _aeOne(t.NettPL) ?? _aeOne(t.NetPnL) ?? _aeOne(t.NetProfit);
+    if (direct != null) return direct;
+    // 2. Derive from markup sums — Net P/L = Materials Markup + Resources Markup.
+    //    Verified math against Cowdrey: 9613 + 19524 = 29137 = displayed Net P/L.
+    const matMk = _aeOne(t.MaterialsMarkup);
+    const resMk = _aeOne(t.ResourcesMarkup);
+    if (matMk != null || resMk != null) {
+      return (matMk||0) + (resMk||0);
     }
     return null;
   };
@@ -23951,18 +23963,18 @@ function Scoreboard({ jobs, users=[], identity }) {
       const _punchScore  = _twPunchSpeed == null ? null : _clamp(100 - (_twPunchSpeed / 14) * 100);
       const _updatesScore = _updatesPerJob == null ? null : _clamp(_updatesPerJob * 10);
       const _netPLScore  = _netPLPerJob == null ? null : _clamp((_netPLPerJob / 5000) * 100);
-      // Weights — total 100 across 7 pillars. Margin (%) and Net P/L ($)
-      // each carry the most pull because they're the business outcome.
-      // Decoupled from SCORE_WEIGHTS so the lean composite doesn't drift
-      // when admins tweak the legacy weights.
+      // Weights now read from SCORE_WEIGHTS so admins can tune the
+      // headline composite from the existing weight editor. Each lean
+      // pillar maps to a SCORE_WEIGHTS key — margin / netPL / inspection
+      // / punchSpeed / rtClosure / onTimeStart / updates.
       const _LEAN_W = {
-        margin:      24,  // tier-weighted margin %
-        netPL:       18,  // dollars of profit per active job (NEW)
-        inspection:  12,
-        punchSpeed:  12,
-        rtClosure:   12,
-        onTimeStart: 12,
-        updates:     10,
+        margin:      SCORE_WEIGHTS.margin      ?? 24,
+        netPL:       SCORE_WEIGHTS.netPL       ?? 18,
+        inspection:  SCORE_WEIGHTS.inspection  ?? 12,
+        punchSpeed:  SCORE_WEIGHTS.punchSpeed  ?? 12,
+        rtClosure:   SCORE_WEIGHTS.rtClosure   ?? 12,
+        onTimeStart: SCORE_WEIGHTS.onTimeStart ?? 12,
+        updates:     SCORE_WEIGHTS.updates     ?? 10,
       };
       const _parts = [
         ["margin",      _marginScore],
@@ -24609,12 +24621,13 @@ function Scoreboard({ jobs, users=[], identity }) {
           )}
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:"10px 16px"}}>
             {[
+              ["margin","Avg margin (HEADLINE)","Tier-weighted margin %. Drives the headline score. Centered on 15% goal."],
+              ["netPL","Net P/L $$ (HEADLINE)","Profit dollars per active job. $5k/job = 100, $0 = 0. Drives the headline score."],
               ["inspection","Inspection first-try","First-try-clean rate across 4-way + final"],
               ["items","Items called","Fewer inspection items = higher sub-score"],
               ["qc","QC items","Fewer QC walk items = higher sub-score"],
               ["updates","Updates posted","Raw count of daily updates, normalized per active job"],
               ["openItems","Open items","Open punch, questions, and unpulled loads per active job — fewer is better"],
-              ["margin","Avg margin","Centered on 15% goal, +2 pts per margin point"],
               ["goal","≥15% jobs","% of jobs hitting the 15% profit goal"],
               ["punchSpeed","Punch closeout speed","Avg days from punch added → checked off (lower = better)"],
               ["rtClosure","RT closure rate","% of RTs created in window that got signed off"],

@@ -928,8 +928,18 @@ exports.getSimproJobFinancials = functions.https.onCall(async (data) => {
     total:    totalIncTax,
     subTotal: totalExTax,
     // Net P/L in dollars — actual profit (or loss) for this job. Picks the
-    // Actual side when real costs are tracked, else Estimate.
-    netPL:        pickAE(t.NettPL),
+    // Actual side when real costs are tracked, else Estimate. Falls back
+    // to MaterialsMarkup + ResourcesMarkup if Simpro doesn't return
+    // NettPL (verified math: 9613 + 19524 = 29137 for Cowdrey, matching
+    // the displayed Net P/L exactly).
+    netPL: (() => {
+      const direct = pickAE(t.NettPL);
+      if (direct != null) return direct;
+      const matMk = pickAE(t.MaterialsMarkup);
+      const resMk = pickAE(t.ResourcesMarkup);
+      if (matMk == null && resMk == null) return null;
+      return (matMk||0) + (resMk||0);
+    })(),
     netPLActual:   t.NettPL?.Actual   ?? null,
     netPLEstimate: t.NettPL?.Estimate ?? null,
     // Gross figures for drilldown / future use.
