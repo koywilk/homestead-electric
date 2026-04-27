@@ -8936,6 +8936,45 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
 
   };
 
+  // Text via the device's native SMS app (sms: URL scheme). Body includes
+  // scope, material, punch list, and any photo URLs from the RT (carriers
+  // that support MMS preview will inline them; otherwise the recipient
+  // taps the link). Closes with a CTA pointing back to the app for full
+  // detail (which is also where the photos live in higher resolution).
+  const textTrip = (t, i) => {
+    const punchLines = (t.punch||[])
+      .filter(p => !p.done)
+      .map(p => `• ${stripPunchHtml(p.text)}`)
+      .join("\n") || "None";
+    const photos = Array.isArray(t.photos) ? t.photos : [];
+    const photoLines = photos.length > 0
+      ? "\n\nPhotos:\n" + photos.map(p => p?.url).filter(Boolean).join("\n")
+      : "";
+    const lines = [
+      `${jobName} — Return Trip #${i+1}`,
+      "",
+      `Scope: ${stripHtml(t.scope) || "—"}`,
+      t.material ? `Material: ${stripHtml(t.material)}` : null,
+      `Punch:\n${punchLines}`,
+      t.date ? `Schedule by: ${t.date}` : null,
+      t.assignedTo ? `Assigned: ${t.assignedTo}` : null,
+    ].filter(Boolean).join("\n");
+    const body = `${lines}${photoLines}\n\nSee the return trip in the app for more details:\nhttps://homestead-electric.vercel.app/`;
+    // sms:?&body= is the cross-platform format. iOS uses & between body and
+    // any other params; Android tolerates both & and ?. Pre-filling the "to"
+    // field would require a contact picker we don't have here, so we leave
+    // it blank and let the user pick the recipient in their messages app.
+    const url = `sms:?&body=${encodeURIComponent(body)}`;
+    try {
+      window.location.href = url;
+    } catch (_) {
+      // Fallback for desktop where sms: isn't handled — copy to clipboard
+      // so the user can paste it into whichever messaging tool they use.
+      navigator.clipboard?.writeText(body).catch(()=>{});
+      toast.info("Text body copied — paste into your messaging app.");
+    }
+  };
+
 
   const [uploading, setUploading] = useState(false);
 
@@ -9128,6 +9167,7 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
                 window.open(`https://homesteadelectric.simprosuite.com/staff/editProject.php?jobID=${jobSimproNo}`,"_blank");
               }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>Simpro</Btn>}
               <Btn onClick={()=>chatTrip(t,i)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>Chat</Btn>
+              <Btn onClick={()=>textTrip(t,i)} variant="primary" style={{fontSize:11,padding:"3px 9px"}}>Text Trip</Btn>
               <Btn onClick={()=>emailTrip(t,i)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>Email Trip</Btn>
 
               <button onClick={async ()=>{ if(!await showConfirm("Delete this return trip?")) return; del(t.id); }}
@@ -23306,15 +23346,15 @@ function Scoreboard({ jobs, users=[], identity }) {
     if (f.netPL != null) return f.netPL;
     const t = f._rawTotals;
     if (!t) return null;
+    // Use Actual when actuals are tracked, else Estimate.
     const isEst = !!f.isEstimate;
-    const _aeOne = (o) => o == null ? null
-                       : typeof o === "number" ? o
-                       : isEst ? (o.Estimate ?? o.Actual ?? null) : (o.Actual ?? o.Estimate ?? null);
-    // 1. Try the named NettPL field (and common aliases).
+    const _aeOne = (o) => {
+      if (o == null) return null;
+      if (typeof o === "number") return o;
+      return isEst ? (o.Estimate ?? o.Actual ?? null) : (o.Actual ?? o.Estimate ?? null);
+    };
     const direct = _aeOne(t.NettPL) ?? _aeOne(t.NetPnL) ?? _aeOne(t.NetProfit);
     if (direct != null) return direct;
-    // 2. Derive from markup sums — Net P/L = Materials Markup + Resources Markup.
-    //    Verified math against Cowdrey: 9613 + 19524 = 29137 = displayed Net P/L.
     const matMk = _aeOne(t.MaterialsMarkup);
     const resMk = _aeOne(t.ResourcesMarkup);
     if (matMk != null || resMk != null) {
@@ -23937,6 +23977,12 @@ function Scoreboard({ jobs, users=[], identity }) {
       simproNo:    j.simproNo || "",
       bidValue:    _jobValue(j),
       netPL:       _jobNetPL(j),
+      // Bid (estimate) Net P/L for comparison — when Actual is way under
+      // Bid on a "completed" job, the most likely cause is incomplete
+      // cost entry in Simpro (someone clicked Complete but hasn't logged
+      // every cost line). Showing both makes that gap visible.
+      netPLActual:   sbJobFinancials[j.id]?.netPLActual ?? null,
+      netPLEstimate: sbJobFinancials[j.id]?.netPLEstimate ?? null,
       tier:        _jobTier(j),
       tierLabel:   _jobTierLabel(j),
       tierColor:   _jobTierColor(j),
@@ -25286,6 +25332,27 @@ function Scoreboard({ jobs, users=[], identity }) {
                             <td style={{padding:"10px",fontSize:12,textAlign:"right",borderBottom:"1px solid #f1f5f9",fontWeight:700,whiteSpace:"nowrap",
                               color: j.netPL == null ? "#cbd5e1" : j.netPL >= 0 ? "#15803d" : "#b91c1c"}}>
                               {j.netPL != null ? `$${Math.round(j.netPL).toLocaleString()}` : "—"}
+                              {/* Show bid Net P/L as a smaller secondary line when
+                                  it diverges materially from the Actual. Helps spot
+                                  jobs where Simpro's cost tracking is lagging
+                                  ("$1,500 actual / $18,000 bid" → costs incomplete). */}
+                              {(() => {
+                                const a = j.netPLActual, e = j.netPLEstimate;
+                                if (a == null || e == null) return null;
+                                const gap = Math.abs(a - e);
+                                const significant = gap >= 1000 && gap >= Math.abs(e) * 0.25;
+                                if (!significant) return null;
+                                const lagging = a < e * 0.5; // Actual <50% of bid
+                                return (
+                                  <div title={lagging
+                                    ? "Actual P/L is significantly under bid — Simpro cost entry may be incomplete on this job"
+                                    : "Actual P/L vs bid Estimate — costs entered may differ from bid"}
+                                    style={{fontSize:10,fontWeight:500,color:lagging?"#b45309":"#94a3b8",marginTop:2}}>
+                                    bid ${Math.round(e).toLocaleString()}
+                                    {lagging && <span> ⚠</span>}
+                                  </div>
+                                );
+                              })()}
                             </td>
                             <td style={{padding:"10px",fontSize:12,textAlign:"center",borderBottom:"1px solid #f1f5f9",fontWeight:700,
                               color: j.margin == null ? "#cbd5e1" : j.margin >= 15 ? "#15803d" : j.margin >= 10 ? "#b45309" : "#b91c1c"}}>
