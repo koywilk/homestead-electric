@@ -23257,6 +23257,51 @@ function Scoreboard({ jobs, users=[], identity }) {
   const hasLocalTweak = !!localTweak;
   // ── End hoisted weight state ─────────────────────────────────────────
 
+  // ── Dollar-aware scoring helpers (hoisted to component scope so the
+  //    render JSX below can call them too — they were originally inside
+  //    _buildBoardRows where the diagnostic chip couldn't see them). ──
+  const _jobValue = (j) => {
+    const f = sbJobFinancials[j?.id] || {};
+    if (f.total != null) return f.total;
+    if (f.subTotal != null) return f.subTotal;
+    const t = f._rawTotals;
+    if (t) {
+      return t.IncTax ?? t.Total?.IncTax ?? t.Totals?.IncTax
+          ?? t.ExTax  ?? t.Total?.ExTax  ?? t.Totals?.ExTax
+          ?? null;
+    }
+    return null;
+  };
+  const _jobNetPL = (j) => {
+    const f = sbJobFinancials[j?.id] || {};
+    if (f.netPL != null) return f.netPL;
+    const t = f._rawTotals;
+    if (t) {
+      const isEst = !!f.isEstimate;
+      const np = t.NettPL || t.NetPnL || t.NetProfit;
+      if (np && typeof np === "object") {
+        return isEst ? (np.Estimate ?? np.Actual ?? null) : (np.Actual ?? np.Estimate ?? null);
+      }
+      if (typeof np === "number") return np;
+    }
+    return null;
+  };
+  const _jobTier = (j) => {
+    const v = _jobValue(j);
+    if (v == null) return 1;
+    if (v < 25000) return 1;
+    if (v < 75000) return 2;
+    return 3;
+  };
+  const _jobTierLabel = (j) => {
+    const t = _jobTier(j);
+    return t === 3 ? "L" : t === 2 ? "M" : "S";
+  };
+  const _jobTierColor = (j) => {
+    const t = _jobTier(j);
+    return t === 3 ? "#0f766e" : t === 2 ? "#0e7490" : "#64748b";
+  };
+
   const _buildBoardRows = (mode, sYMD, eYMD) => {
   const effStart = sYMD < SCOREBOARD_ANCHOR_YMD ? SCOREBOARD_ANCHOR_YMD : sYMD;
   const effEnd   = eYMD;
@@ -23669,42 +23714,8 @@ function Scoreboard({ jobs, users=[], identity }) {
   // placeholder assignments that happen to be stored as lead or foreman on
   // some job records but aren't being graded. Matching is case-insensitive.
   // Extend this list if more non-crew assignees show up.
-  // ── Dollar-aware scoring helpers ─────────────────────────────────
-  // Reads each job's size + profit dollars from the Scoreboard-only
-  // settings/scoreboardJobFinancials doc (sbJobFinancials map). The job
-  // doc itself ONLY carries simproMargin + simproMarginIsEst (existing
-  // behavior) so nothing outside the Scoreboard sees these dollar fields.
-  // Field semantics from the cloud function (functions/index.js):
-  //   total    → Simpro Totals.Total.IncTax (Job Total with tax)
-  //   subTotal → Simpro Totals.Total.ExTax  (pre-tax sub-total)
-  //   netPL    → Simpro Totals.NettPL Actual or Estimate (profit dollars)
-  // Falls through to subTotal if total isn't populated yet.
-  const _jobValue = (j) => {
-    const f = sbJobFinancials[j?.id] || {};
-    return f.total ?? f.subTotal ?? null;
-  };
-  const _jobNetPL = (j) => {
-    const f = sbJobFinancials[j?.id] || {};
-    return f.netPL ?? null;
-  };
-  // Tier multiplier: bigger contracts pull harder on the score. <$25k=1x,
-  // $25k-$75k=2x, >$75k=3x. Jobs with no Simpro financials yet default to
-  // 1x so they don't get free amplification while the cache populates.
-  const _jobTier = (j) => {
-    const v = _jobValue(j);
-    if (v == null) return 1;
-    if (v < 25000) return 1;
-    if (v < 75000) return 2;
-    return 3;
-  };
-  const _jobTierLabel = (j) => {
-    const t = _jobTier(j);
-    return t === 3 ? "L" : t === 2 ? "M" : "S";
-  };
-  const _jobTierColor = (j) => {
-    const t = _jobTier(j);
-    return t === 3 ? "#0f766e" : t === 2 ? "#0e7490" : "#64748b";
-  };
+  // (Dollar-aware scoring helpers hoisted to component scope above so the
+  //  render JSX can call them too. Available here via closure.)
 
   const SCOREBOARD_EXCLUDE = ["Paul", "Unassigned", "To be determined"];
   const isExcluded = (name) => {
@@ -24246,6 +24257,38 @@ function Scoreboard({ jobs, users=[], identity }) {
           Data anchored at <b style={{color:"#0f172a"}}>March 1, 2026</b> · yearly totals reset Jan 1, 2027
         </div>
       </div>
+
+      {/* CLOUD FUNCTION DIAGNOSTIC — surfaces when fetches HAVE completed
+          (fetchedAt is populated) but the dollar fields are still null on
+          most rows. That means the redeployed cloud function isn't live;
+          we're still hitting the old margin-only version. */}
+      {(() => {
+        const simproJobs = (jobs||[]).filter(j => j && j.simproNo);
+        const cached = simproJobs.filter(j => sbJobFinancials[j.id]?.fetchedAt);
+        if (cached.length < 3) return null; // not enough data to judge
+        const haveDollars = cached.filter(j => _jobValue(j) != null);
+        if (haveDollars.length >= cached.length * 0.5) return null;
+        return (
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,
+            padding:"10px 14px",background:"#fef2f2",border:"1px solid #fecaca",borderRadius:10,
+            fontSize:12,color:"#991b1b",flexWrap:"wrap"}}>
+            <Icon name="alertTriangle" size={14} color="#dc2626" stroke={2}/>
+            <span style={{flex:1,minWidth:240}}>
+              <b>Cloud function needs redeploy</b> — {haveDollars.length} of {cached.length} cached jobs returned dollar data.
+              Run <code style={{background:"#fff",padding:"1px 5px",borderRadius:3}}>firebase deploy --only functions:getSimproJobFinancials</code> from the project root, then click Re-fetch.
+            </span>
+            <button onClick={()=>{
+              _sbFetchedThisSession.current = new Set();
+              setSbFetchStats({ ok: 0, err: 0, lastErr: null });
+              setSbFetchTrigger(t => t + 1);
+            }}
+              style={{padding:"5px 12px",fontSize:11,fontWeight:700,fontFamily:"inherit",cursor:"pointer",
+                background:"#fff",border:"1px solid #fecaca",borderRadius:7,color:"#991b1b"}}>
+              Re-fetch
+            </button>
+          </div>
+        );
+      })()}
 
       {/* SIMPRO FINANCIALS LOADING NOTICE — surfaces while the Scoreboard
           works through pulling per-job financials from Simpro. Disappears
