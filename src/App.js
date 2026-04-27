@@ -5883,7 +5883,7 @@ function FromJobNoteBadge({ ref, job = null, jobNotes = null, size = 'sm', onCli
 }
 
 
-function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null }) {
+function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null, myName=null }) {
 
   const safeItems = Array.isArray(items) ? items : [];
 
@@ -5987,9 +5987,19 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
 
     <div style={{ paddingLeft: 8 }}>
 
-      {safeItems.map(item => (
-
-        <div key={item.id} style={{ marginBottom: 10, border:`1px solid ${item.done ? C.border+'88' : C.border}`, borderRadius:8, padding:'8px 10px', background: item.done ? C.surface+'88' : C.surface, opacity: item.done ? 0.75 : 1 }}>
+      {safeItems.map(item => {
+        // Highlight items assigned to the logged-in user so they can scan a
+        // shared punch list and instantly spot their items. Cyan-blue accent
+        // (left stripe + soft tint) matches Koy's "highlight per identity"
+        // ask without competing with the green done-state or red overdue cues.
+        const mine = !!(myName && item.assignedTo && item.assignedTo === myName && !item.done);
+        return (
+        <div key={item.id} style={{ marginBottom: 10,
+          border:`1px solid ${mine ? '#2563eb55' : (item.done ? C.border+'88' : C.border)}`,
+          borderLeft: mine ? '4px solid #2563eb' : undefined,
+          borderRadius:8, padding:'8px 10px',
+          background: mine ? '#eff6ff' : (item.done ? C.surface+'88' : C.surface),
+          opacity: item.done ? 0.75 : 1 }}>
 
           {/* ── Main item row ── */}
           <div style={{ display: 'flex', alignItems: editingId===item.id ? 'flex-start' : 'center', gap: 8 }}>
@@ -6261,8 +6271,8 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
           )}
 
         </div>
-
-      ))}
+        );
+      })}
 
       {addOpen && !ON_MOBILE ? (
         <div style={{ marginTop: 6 }}
@@ -6377,7 +6387,7 @@ function RoomNameEdit({name, onSave}) {
 }
 
 
-function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null }) {
+function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null, myName=null }) {
 
   const data = normFloor(floorData);
 
@@ -6440,6 +6450,14 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
   const waitingCount = data.general.filter(i => !i.done && i.waiting).length +
     (showHotcheck ? data.hotcheck.filter(i => !i.done && i.waiting).length : 0) +
     data.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done && i.waiting).length : 0), 0);
+  // Count items on this floor that are assigned to the logged-in user. Used
+  // to surface a small chip in the floor header so a crew member opening a
+  // job can see at a glance how much of their day is in this floor.
+  const mineCount = !myName ? 0 : (
+    data.general.filter(i => !i.done && i.assignedTo === myName).length +
+    (showHotcheck ? data.hotcheck.filter(i => !i.done && i.assignedTo === myName).length : 0) +
+    data.rooms.reduce((a, r) => a + (Array.isArray(r.items) ? r.items.filter(i => !i.done && i.assignedTo === myName).length : 0), 0)
+  );
 
 
   const setGeneral = (general) => onFloorChange(floorKey, { ...data, general });
@@ -6486,6 +6504,11 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
           borderRadius: 99, padding: '2px 8px', fontWeight: 700 }}>{openCount} open</span>}
         {waitingCount > 0 && <span style={{ fontSize: 10, background: '#fef3c7', color: '#92400e',
           borderRadius: 99, padding: '2px 8px', fontWeight: 700, border: '1px solid #fcd34d' }}>{waitingCount} waiting</span>}
+        {mineCount > 0 && <span title={`${mineCount} assigned to you on this floor`}
+          style={{ fontSize: 10, background: '#dbeafe', color: '#1d4ed8',
+          borderRadius: 99, padding: '2px 8px', fontWeight: 800, border: '1px solid #93c5fd' }}>
+          {mineCount} for you
+        </span>}
 
         <span style={{ color: floorColor, fontSize: 12 }}>{collapsed ? '▸' : '▾'}</span>
 
@@ -6502,7 +6525,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
           </div>
           {qInput('general')}
 
-          <PunchItems items={data.general} onChange={setGeneral} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions}/>
+          <PunchItems items={data.general} onChange={setGeneral} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions} myName={myName}/>
 
           {showHotcheck && (
             <div style={{ marginTop: 12, background: `rgba(220,38,38,0.06)`, border: `1px solid rgba(220,38,38,0.25)`, borderRadius: 8, padding: 10 }}>
@@ -6514,7 +6537,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                   </span>
                 )}
               </div>
-              <PunchItems items={data.hotcheck} onChange={setHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions}/>
+              <PunchItems items={data.hotcheck} onChange={setHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions} myName={myName}/>
             </div>
           )}
 
@@ -6524,6 +6547,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
             const openN = items.filter(i => !i.done).length;
             const waitN = items.filter(i => !i.done && i.waiting).length;
             const totalN = items.length;
+            const mineN = !myName ? 0 : items.filter(i => !i.done && i.assignedTo === myName).length;
             return (
               <div key={room.id} style={{ marginTop: 12, background: C.surface,
                 border: `1px solid ${C.border}`, borderRadius: 8, padding: 10 }}>
@@ -6549,6 +6573,12 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                       borderRadius: 99, padding: '2px 6px', fontWeight: 700 }}>
                       all done
                     </span>}
+                  {mineN > 0 &&
+                    <span title={`${mineN} assigned to you in ${room.name}`}
+                      style={{ fontSize: 10, background: '#dbeafe', color: '#1d4ed8',
+                      borderRadius: 99, padding: '2px 6px', fontWeight: 800, border: '1px solid #93c5fd' }}>
+                      {mineN} for you
+                    </span>}
                   <div onClick={e=>e.stopPropagation()} style={{display:'flex',alignItems:'center',gap:8,marginLeft:'auto'}}>
                     {qBtn(room.id)}
                     {qConfirmedFor===room.id&&<span style={{fontSize:9,fontWeight:700,color:'#16a34a'}}>✓ added</span>}
@@ -6558,7 +6588,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                   <>
                     {qInput(room.id)}
                     <PunchItems items={items}
-                      onChange={v => setRoomItems(room.id, v)} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions}/>
+                      onChange={v => setRoomItems(room.id, v)} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions} myName={myName}/>
                     <button onClick={async () => { if(!await showConfirm(`Remove room "${room.name}" and all its punch items?`)) return; delRoom(room.id); }}
                       style={{ display: 'block', marginTop: 6, marginLeft: 'auto', background: 'none', border: 'none',
                         color: C.muted, cursor: 'pointer', fontSize: 11, textDecoration: 'underline', fontFamily: 'inherit' }}>
@@ -6594,7 +6624,7 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 }
 
 
-function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null }) {
+function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=false, filterIds=null, onAddMaterial, onAddQuestion, jobId, scheduledRTMap=null, onJumpToRT=null, assigneeOptions=null, myName=null }) {
 
   const upper    = normFloor(punch.upper);
   const main     = normFloor(punch.main);
@@ -6710,11 +6740,11 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
 
       </div>
 
-      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('upper',t,`Upper Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions}/>
+      <PunchFloor floorKey="upper"    floorData={upper}    onFloorChange={handleFloorChange} floorLabel="Upper Level" floorColor={C.blue}    showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('upper',t,`Upper Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions} myName={myName}/>
 
-      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('main',t,`Main Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions}/>
+      <PunchFloor floorKey="main"     floorData={main}     onFloorChange={handleFloorChange} floorLabel="Main Level"  floorColor={C.accent}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('main',t,`Main Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions} myName={myName}/>
 
-      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('basement',t,`Basement – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions}/>
+      <PunchFloor floorKey="basement" floorData={basement} onFloorChange={handleFloorChange} floorLabel="Basement"    floorColor={C.purple}  showHotcheck={showHotcheck} filterIds={filterIds} onAddMaterial={onAddMaterial} onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('basement',t,`Basement – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions} myName={myName}/>
 
       {extras.map((e,i)=>(
         <div key={e.key}>
@@ -6727,7 +6757,7 @@ function PunchSection({ punch, onChange, jobName, phase, onEmail, showHotcheck=f
             showHotcheck={showHotcheck}
             filterIds={filterIds}
             onAddMaterial={onAddMaterial}
-            onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('main',t,`Main Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions}/>
+            onAddQuestion={onAddQuestion ? (t,src)=>onAddQuestion('main',t,`Main Level – ${src}`) : null} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions} myName={myName}/>
           <button onClick={async ()=>{
             if(!await showConfirm(`Remove "${e.label}" and all its punch items? This cannot be undone.`)) return;
             removeFloor(e.key);
@@ -14091,6 +14121,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   scheduledRTMap={scheduledRTMapRough}
                   onJumpToRT={onJumpToRT}
                   assigneeOptions={punchAssigneeOptions}
+                  myName={identity?.name}
                   onAddMaterial={(text, source)=>{
                     const orders = job.roughMaterials || [];
                     const openEntry = [...orders].reverse().find(o=>
@@ -14370,6 +14401,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   scheduledRTMap={scheduledRTMapFinish}
                   onJumpToRT={onJumpToRT}
                   assigneeOptions={punchAssigneeOptions}
+                  myName={identity?.name}
                   onAddMaterial={(text, source)=>{
                     const orders = job.finishMaterials || [];
                     const openEntry = [...orders].reverse().find(o=>
@@ -15232,7 +15264,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <Section label="Legacy QC Items" color={C.teal} defaultOpen={false}>
                   <PunchSection punch={job.qcPunch} onChange={v=>u({qcPunch:v})} jobName={job.name||"Job"} phase="QC"
                     onEmail={({subject,body})=>{openEmail("",subject,body);}} showHotcheck={true} jobId={job.id}
-                    assigneeOptions={punchAssigneeOptions}/>
+                    assigneeOptions={punchAssigneeOptions}
+                    myName={identity?.name}/>
                 </Section>
               )}
 
@@ -19169,9 +19202,14 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     _saveRoster(merged);
     toast.success(`Roster now has ${merged.length} people.`);
   };
+  // Per-week-per-phase hours target. Shape: { [jobId]: { rough: N, finish: N } }.
+  // Lives on the schedule_<wk> Firestore doc so each week is independent.
+  // Used to gate the row's "needs met" green light and to surface a small
+  // "Sched 8h / Need 12h" chip on the row.
+  const [crewHoursByJob, setCrewHoursByJob] = useState({});
   useEffect(() => onSnapshot(doc(db,"settings","schedule_"+crewWK), s => {
-    if(s.exists()){ const d=s.data(); setCrewData(d.assignments||{}); setCrewExtra(d.extraJobs||[]); setCrewJobOrder(d.jobOrder||[]); setCrewPinned(d.pinnedJobs||[]); setCrewFocus(!!d.focus); }
-    else { setCrewData({}); setCrewExtra([]); setCrewJobOrder([]); setCrewPinned([]); setCrewFocus(false); }
+    if(s.exists()){ const d=s.data(); setCrewData(d.assignments||{}); setCrewExtra(d.extraJobs||[]); setCrewJobOrder(d.jobOrder||[]); setCrewPinned(d.pinnedJobs||[]); setCrewFocus(!!d.focus); setCrewHoursByJob(d.hoursByJob||{}); }
+    else { setCrewData({}); setCrewExtra([]); setCrewJobOrder([]); setCrewPinned([]); setCrewFocus(false); setCrewHoursByJob({}); }
   }), [crewWK]);
 
   // (Removed: the previous approach tracked lastScheduledDate from per-week
@@ -19241,8 +19279,48 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     jobOrder:o!==undefined?o:crewJobOrder,
     pinnedJobs:p!==undefined?p:crewPinned,
     focus:f!==undefined?f:crewFocus,
+    hoursByJob:crewHoursByJob,
     updatedAt:new Date().toISOString()
   });
+  // Set this week's hours-needed for a single job + phase. Persists alongside
+  // the rest of the schedule_<wk> doc so it travels with the week.
+  const setCrewHoursForJob = (jobId, phase, hours) => {
+    const next = { ...crewHoursByJob };
+    const cur  = next[jobId] || {};
+    const phaseKey = phase === "rough" ? "rough" : "finish";
+    if(hours == null || hours === "" || isNaN(Number(hours))) {
+      delete cur[phaseKey];
+      if(Object.keys(cur).length === 0) delete next[jobId];
+      else next[jobId] = cur;
+    } else {
+      next[jobId] = { ...cur, [phaseKey]: Number(hours) };
+    }
+    setCrewHoursByJob(next);
+    setDoc(doc(db,"settings","schedule_"+crewWK),{
+      hoursByJob: next,
+      updatedAt: new Date().toISOString(),
+    }, { merge: true });
+  };
+  // Sum scheduled hours for one job across the displayed week's cells.
+  // Sums per-person time ranges. Cells without a time set count as 0 hours
+  // (we only credit time that's been explicitly entered) — keeps the chip
+  // honest about how much is REALLY scheduled.
+  const sumScheduledHoursForJob = (jobId) => {
+    let total = 0;
+    for(let di=0; di<crewDays.length; di++) {
+      const cell = crewData[`${jobId}_${di}`];
+      if(!cell) continue;
+      const t = cell.time;
+      if(!t || (!t.start && !t.end)) continue;
+      const [sh,sm] = (t.start||"").split(":").map(Number);
+      const [eh,em] = (t.end||"").split(":").map(Number);
+      if(isNaN(sh)||isNaN(eh)) continue;
+      const hrs = Math.max(0, (eh + (em||0)/60) - (sh + (sm||0)/60));
+      const heads = (cell.lead?1:0) + (cell.crew||[]).length;
+      total += hrs * heads;
+    }
+    return total;
+  };
   const crewTogglePinned = (jid) => {
     const next = crewPinned.includes(jid) ? crewPinned.filter(id=>id!==jid) : [...crewPinned, jid];
     setCrewPinned(next);
@@ -21004,7 +21082,19 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                     const hasPhaseNeed = phaseKeyForNeed && !!deriveScheduleMode(job, phaseKeyForNeed);
                     const hasRtNeed   = (job.returnTrips||[]).some(rt =>
                       !rt.signedOff && rt.rtStatus==="needs" && rt.rtStatusDate);
-                    const needsMet = hasAssignmentThisWeek && (hasPhaseNeed || hasRtNeed);
+                    // Hours-needed gating. If a phase target is set for THIS
+                    // week (manual input, never from Simpro), the row only goes
+                    // green when scheduled hours >= the target. If no target is
+                    // set, fall back to the legacy "any crew = met" rule.
+                    const _activePhaseKey = hasPhaseNeed ? phaseKeyForNeed : null;
+                    const _hoursNeeded = _activePhaseKey
+                      ? (crewHoursByJob[job.id]?.[_activePhaseKey] ?? null)
+                      : null;
+                    const _hoursScheduled = sumScheduledHoursForJob(job.id);
+                    const _hoursMet = _hoursNeeded == null
+                      ? hasAssignmentThisWeek
+                      : (_hoursScheduled >= _hoursNeeded);
+                    const needsMet = _hoursMet && (hasPhaseNeed || hasRtNeed);
                     return (
                       <tr key={job.id}
                         onMouseEnter={()=>setCrewHoverJobId(job.id)}
@@ -21110,7 +21200,6 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                             const isHover = crewHoverJobId === job.id;
                             const isPinned = crewPinned.includes(job.id);
                             return (
-                              <div style={{display:"flex",flexDirection:"column",gap:3,position:"relative"}}>
                               <div style={{display:"flex",alignItems:"center",gap:5,position:"relative"}}>
                                 {/* Drag grip — only visible on hover to keep row clean */}
                                 <span
@@ -21186,6 +21275,49 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                     />
                                   </div>
                                 )}
+                                {/* Hours-needed chip — manual per-week target for THIS phase.
+                                    Click to edit. Strictly local to the Crew Planner — never
+                                    pulled from Simpro, never surfaced anywhere else. Green when
+                                    scheduled hours meet the target, gray when no target set,
+                                    red when target is set but not yet met. */}
+                                {_activePhaseKey && (() => {
+                                  const target = _hoursNeeded;
+                                  const sched = _hoursScheduled;
+                                  const met = target != null && sched >= target;
+                                  const partial = target != null && sched > 0 && sched < target;
+                                  const empty = target == null;
+                                  const bg = empty ? "var(--surface)" : met ? "#dcfce7" : partial ? "#fef3c7" : "#fee2e2";
+                                  const fg = empty ? C.muted : met ? "#15803d" : partial ? "#92400e" : "#b91c1c";
+                                  const bd = empty ? C.border : met ? "#86efac" : partial ? "#fcd34d" : "#fca5a5";
+                                  return (
+                                    <input
+                                      type="number" min="0" step="0.5"
+                                      value={target ?? ""}
+                                      onChange={e=>e.stopPropagation()}
+                                      onClick={e=>e.stopPropagation()}
+                                      onBlur={e=>{
+                                        const v = e.target.value;
+                                        setCrewHoursForJob(job.id, _activePhaseKey, v === "" ? null : v);
+                                      }}
+                                      onKeyDown={e=>{
+                                        if(e.key === "Enter") { e.target.blur(); }
+                                        if(e.key === "Escape") { e.target.value = target ?? ""; e.target.blur(); }
+                                      }}
+                                      placeholder="Need h"
+                                      title={target == null
+                                        ? `Set hours needed this week for ${_activePhaseKey} on ${job.name}`
+                                        : `${sched.toFixed(1)}h scheduled / ${target}h needed (${_activePhaseKey})`}
+                                      style={{
+                                        fontSize:9, fontWeight:800,
+                                        background:bg, color:fg,
+                                        border:`1px solid ${bd}`, borderRadius:99,
+                                        padding:"1px 6px", width:55,
+                                        fontFamily:"inherit", textAlign:"center",
+                                        outline:"none", flexShrink:0,
+                                      }}
+                                    />
+                                  );
+                                })()}
                                 {/* Foreman initial — tiny colored chip for glance ID */}
                                 <span title={`Foreman: ${job.foreman||"Koy"}`}
                                   style={{fontSize:9,fontWeight:800,color:jc,
@@ -21193,6 +21325,35 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                     borderRadius:99,padding:"1px 6px",flexShrink:0}}>
                                   {(job.foreman||"Koy").charAt(0)}
                                 </span>
+                                {/* Hover status-update — anchored to the RIGHT of
+                                    the sticky name column so it floats into the
+                                    empty calendar space for this row. Solid white
+                                    background + heavy shadow + high z-index so it
+                                    sits unambiguously on TOP of day cell chips
+                                    instead of blending into them like before.
+                                    A small amber dot beside the name signals there
+                                    IS a status update worth hovering for. */}
+                                {job.statusUpdate && !isHover && (
+                                  <span title="Has a status update — hover to read"
+                                    style={{width:6,height:6,borderRadius:99,
+                                      background:"#f59e0b",flexShrink:0,
+                                      boxShadow:"0 0 0 2px #f59e0b22",marginRight:2}}/>
+                                )}
+                                {isHover && job.statusUpdate && (
+                                  <div style={{position:"absolute",left:"100%",top:"50%",
+                                    transform:"translateY(-50%)",marginLeft:8,zIndex:9999,
+                                    background:"#ffffff",
+                                    border:`1px solid #f59e0b66`,
+                                    borderLeft:`4px solid #f59e0b`,
+                                    borderRadius:8,
+                                    padding:"7px 12px",maxWidth:420,minWidth:200,
+                                    fontSize:12,color:"#1f2937",lineHeight:1.4,fontWeight:500,
+                                    whiteSpace:"normal",
+                                    boxShadow:"0 12px 28px rgba(0,0,0,0.18), 0 2px 6px rgba(0,0,0,0.08)",
+                                    pointerEvents:"none"}}>
+                                    {job.statusUpdate}
+                                  </div>
+                                )}
                                 {/* Extra-added jobs get a small remove × on hover */}
                                 {isHover && crewExtra.includes(job.id) && (
                                   <span onClick={e=>{e.stopPropagation();
@@ -21204,24 +21365,6 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                       padding:"0 3px",opacity:0.6,flexShrink:0}}>
                                     &times;</span>
                                 )}
-                              </div>
-                              {/* Status update — inline under the row, single line
-                                  ellipsized so it never overlaps day cells. Native
-                                  title attribute shows the full text on hover. The
-                                  prior position:absolute overlay was unreadable when
-                                  it landed on top of crew chips. */}
-                              {job.statusUpdate && (
-                                <div title={job.statusUpdate}
-                                  style={{
-                                    fontSize:10,color:"var(--muted)",
-                                    marginLeft:24,paddingLeft:6,
-                                    borderLeft:`2px solid #f59e0b`,
-                                    whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",
-                                    maxWidth:255,lineHeight:1.3,fontWeight:500,
-                                  }}>
-                                  {job.statusUpdate}
-                                </div>
-                              )}
                               </div>
                             );
                           })()}
