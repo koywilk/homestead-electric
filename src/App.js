@@ -23832,6 +23832,16 @@ function Scoreboard({ jobs, users=[], identity }) {
       postedDays:    s._postedDays.size,
       lastUpdateYMD,
       isActive:      s.activeJobs > 0,
+      // Dollar-aware drilldown data — pulled from the Scoreboard-only
+      // financials map. Shows up as Bid + Net P/L + tier badge columns.
+      simproNo:    j.simproNo || "",
+      bidValue:    _jobValue(j),
+      netPL:       _jobNetPL(j),
+      tier:        _jobTier(j),
+      tierLabel:   _jobTierLabel(j),
+      tierColor:   _jobTierColor(j),
+      margin:      typeof j.simproMargin === "number" ? j.simproMargin : null,
+      marginIsEst: !!j.simproMarginIsEst,
     });
 
     // Profit margin — unchanged, always credits the assigned lead.
@@ -24210,6 +24220,26 @@ function Scoreboard({ jobs, users=[], identity }) {
           Data anchored at <b style={{color:"#0f172a"}}>March 1, 2026</b> · yearly totals reset Jan 1, 2027
         </div>
       </div>
+
+      {/* SIMPRO FINANCIALS LOADING NOTICE — surfaces while the Scoreboard
+          works through pulling per-job financials from Simpro. Disappears
+          once every Simpro-linked job has data (or 24h-fresh cache).
+          Without this, an empty hero / missing tier badges look broken. */}
+      {(() => {
+        const simproLinkedJobs = (jobs||[]).filter(j => j && j.simproNo);
+        const haveData = simproLinkedJobs.filter(j => sbJobFinancials[j.id] && sbJobFinancials[j.id].fetchedAt);
+        if (simproLinkedJobs.length === 0) return null;
+        if (haveData.length >= simproLinkedJobs.length) return null;
+        const pct = Math.round((haveData.length / simproLinkedJobs.length) * 100);
+        return (
+          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,
+            padding:"10px 14px",background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:10,
+            fontSize:12,color:"#1e3a8a"}}>
+            <Spinner size={14} color="#2563eb" stroke={2}/>
+            <span><b>Loading Simpro financials</b> — {haveData.length} of {simproLinkedJobs.length} jobs cached ({pct}%). Tier weighting + Net P/L will fill in as each job lands.</span>
+          </div>
+        );
+      })()}
 
       {/* CHAMPIONS BANNER — last completed calendar month's #1 foreman AND
           #1 lead. Drives a "defend the throne" mental model: a person who
@@ -24992,6 +25022,10 @@ function Scoreboard({ jobs, users=[], identity }) {
                     <thead>
                       <tr style={{background:"#f8fafc"}}>
                         <th style={{textAlign:"left",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Job</th>
+                        <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}} title="Tier: S < $25k = 1×, M $25-75k = 2×, L > $75k = 3×">Tier</th>
+                        <th style={{textAlign:"right",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}} title="Simpro Job Total (with tax)">Bid Value</th>
+                        <th style={{textAlign:"right",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}} title="Simpro Net P/L — actual profit dollars (or estimate when actuals haven't been tracked)">Net P/L</th>
+                        <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}} title="Net margin %">Margin</th>
                         <th style={{textAlign:"left",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Stage</th>
                         <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Open Punch</th>
                         <th style={{textAlign:"center",padding:"9px 10px",fontSize:10,fontWeight:700,color:"#334155",letterSpacing:"0.06em",textTransform:"uppercase",borderBottom:"2px solid #cbd5e1"}}>Open Qs</th>
@@ -25015,8 +25049,30 @@ function Scoreboard({ jobs, users=[], identity }) {
                         return (
                           <tr key={j.jobId} style={{background:staleTint}}>
                             <td style={{padding:"10px",fontSize:13,color:"#0f172a",borderBottom:"1px solid #f1f5f9",fontWeight:600,maxWidth:320}}>
-                              <div style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{j.jobName}</div>
+                              <div style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                                {j.jobName}
+                                {j.simproNo && <span style={{fontSize:10,color:"#94a3b8",fontWeight:500,marginLeft:6}}>#{j.simproNo}</span>}
+                              </div>
                               {j.address && <div style={{fontSize:11,color:"#64748b",fontWeight:400,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{j.address}</div>}
+                            </td>
+                            <td style={{padding:"10px",textAlign:"center",borderBottom:"1px solid #f1f5f9"}}>
+                              <span style={{display:"inline-block",fontSize:10,fontWeight:800,letterSpacing:"0.06em",
+                                background: j.tierColor + "22", color: j.tierColor,
+                                padding:"2px 8px",borderRadius:99,minWidth:24,
+                                border: `1px solid ${j.tierColor}55`}}>
+                                {j.tierLabel}
+                              </span>
+                            </td>
+                            <td style={{padding:"10px",fontSize:12,textAlign:"right",borderBottom:"1px solid #f1f5f9",fontWeight:700,color:j.bidValue!=null?"#0f172a":"#cbd5e1",whiteSpace:"nowrap"}}>
+                              {j.bidValue != null ? `$${Math.round(j.bidValue).toLocaleString()}` : "—"}
+                            </td>
+                            <td style={{padding:"10px",fontSize:12,textAlign:"right",borderBottom:"1px solid #f1f5f9",fontWeight:700,whiteSpace:"nowrap",
+                              color: j.netPL == null ? "#cbd5e1" : j.netPL >= 0 ? "#15803d" : "#b91c1c"}}>
+                              {j.netPL != null ? `$${Math.round(j.netPL).toLocaleString()}` : "—"}
+                            </td>
+                            <td style={{padding:"10px",fontSize:12,textAlign:"center",borderBottom:"1px solid #f1f5f9",fontWeight:700,
+                              color: j.margin == null ? "#cbd5e1" : j.margin >= 15 ? "#15803d" : j.margin >= 10 ? "#b45309" : "#b91c1c"}}>
+                              {j.margin != null ? `${j.margin.toFixed(1)}%${j.marginIsEst?"*":""}` : "—"}
                             </td>
                             <td style={{padding:"10px",fontSize:12,borderBottom:"1px solid #f1f5f9",color:j.finishStatus==="complete"?"#64748b":"#0f172a",fontWeight:500}}>
                               {stageLabel(j)}
