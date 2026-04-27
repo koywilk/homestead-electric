@@ -21005,7 +21005,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                 <thead>
                   <tr>
                     <th style={{textAlign:"left",padding:"8px 10px",fontSize:10,fontWeight:800,
-                      color:C.dim,letterSpacing:"0.1em",width:280,position:"sticky",left:0,
+                      color:C.dim,letterSpacing:"0.1em",width:360,position:"sticky",left:0,
                       background:"var(--surface)",zIndex:2,borderBottom:`2px solid ${C.border}`}}>JOB</th>
                     {crewDays.map((d,di)=>{
                       const ymd=`${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
@@ -21135,9 +21135,12 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                             // row reads as "good" even across the sticky boundary.
                             background: needsMet ? "#e8f5ed" : "var(--card)",
                             borderLeft: needsMet ? `3px solid ${C.green||"#22c55e"}` : "none",
-                            verticalAlign:"middle",width:280,maxWidth:280,minWidth:220}}>
-                          {/* Compact single-line row: [grip] [pin] [name] [pill] [foreman]
-                              Status update + reorder controls show only on row hover. */}
+                            verticalAlign:"middle",width:360,maxWidth:360,minWidth:300}}>
+                          {/* Compact single-line row: [grip] [pin] [name] [pill] [need] [foreman]
+                              Status update + reorder controls show only on row hover.
+                              Column widened to 360px so the job name has room to
+                              breathe alongside the scheduling pill, hours-needed
+                              input, and foreman initial. */}
                           {(() => {
                             const phaseKey = (rs && rs!=="complete" && rs!=="invoice") ? "rough"
                                           : (fs && fs!=="complete" && fs!=="invoice") ? "finish"
