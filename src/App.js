@@ -23008,12 +23008,22 @@ function Scoreboard({ jobs, users=[], identity }) {
     });
     return unsub;
   }, []);
-  // Track which jobs we've already fetched THIS session so we don't loop
+  // Track which jobs we've already queued THIS session so we don't loop
   // when sbJobFinancials updates from our own writes.
   const _sbFetchedThisSession = useRef(new Set());
+  // Tracks whether the component is still mounted so async workers can
+  // skip state updates after unmount (avoids React warnings). Workers
+  // still complete their Firestore writes — we never cancel a fetch
+  // mid-flight, which was the original bug: the previous version set
+  // cancelled=true in the effect cleanup, so every parent re-render
+  // (which happens constantly) killed the in-flight workers BEFORE
+  // any of them got a network response back. Result: stuck at 0/69.
+  const _sbAlive = useRef(true);
+  useEffect(() => () => { _sbAlive.current = false; }, []);
+  // Counters surfaced in the loading banner.
+  const [sbFetchStats, setSbFetchStats] = useState({ ok: 0, err: 0, lastErr: null });
+  const [sbFetchTrigger, setSbFetchTrigger] = useState(0);
   useEffect(() => {
-    // Refetch financials older than this many ms. Margins move daily but not
-    // minute-by-minute, so 24 h is a comfortable cache window.
     const STALE_MS = 24 * 60 * 60 * 1000;
     const now = Date.now();
     const fetched = _sbFetchedThisSession.current;
@@ -23028,15 +23038,16 @@ function Scoreboard({ jobs, users=[], identity }) {
       });
     if (candidates.length === 0) return;
     candidates.forEach(j => fetched.add(j.id));
-    let cancelled = false;
+    console.log(`[scoreboard] queueing ${candidates.length} financials fetches`);
     const fn = httpsCallable(functions, "getSimproJobFinancials");
     const CONCURRENCY = 3;
     let cursor = 0;
     const fetchOne = async (j) => {
-      if (cancelled) return;
       try {
         const res = await fn({ simproJobNo: j.simproNo });
-        if (cancelled) return;
+        console.log(`[scoreboard] ✓ ${j.jobName || j.id}`, {
+          total: res.data?.total, netPL: res.data?.netPL, margin: res.data?.margin,
+        });
         await setDoc(doc(db, "settings", "scoreboardJobFinancials"), {
           [j.id]: {
             total:         res.data.total ?? null,
@@ -23051,21 +23062,24 @@ function Scoreboard({ jobs, users=[], identity }) {
             fetchedAt:     new Date().toISOString(),
           },
         }, { merge: true });
+        if (_sbAlive.current) setSbFetchStats(s => ({ ...s, ok: s.ok + 1 }));
       } catch (e) {
-        // Don't blow up the Scoreboard for one bad job — log and move on.
-        console.error("[scoreboard financials fetch error]", j.id, e);
+        console.error("[scoreboard financials fetch error]", j.id, j.jobName, e?.message || e);
+        if (_sbAlive.current) setSbFetchStats(s => ({ ...s, err: s.err + 1, lastErr: e?.message || String(e) }));
       }
     };
     const worker = async () => {
-      while (!cancelled) {
+      while (true) {
         const idx = cursor++;
         if (idx >= candidates.length) return;
         await fetchOne(candidates[idx]);
       }
     };
+    // Fire and forget — DO NOT return a cleanup that cancels these.
+    // Each fetch runs to completion regardless of effect lifecycle.
     Promise.all(Array.from({length: CONCURRENCY}, worker));
-    return () => { cancelled = true; };
-  }, [jobs, sbJobFinancials]);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [jobs, sbFetchTrigger]);
   // Row clicked to drill into. Holds the aggregated row object (with _jobs
   // attached) so the modal can render per-job detail. Null = modal closed.
   const [drillRow, setDrillRow] = useState(null);
@@ -24224,19 +24238,42 @@ function Scoreboard({ jobs, users=[], identity }) {
       {/* SIMPRO FINANCIALS LOADING NOTICE — surfaces while the Scoreboard
           works through pulling per-job financials from Simpro. Disappears
           once every Simpro-linked job has data (or 24h-fresh cache).
-          Without this, an empty hero / missing tier badges look broken. */}
+          Shows live success / error counters + a Retry button so a stuck
+          banner doesn't stay opaque. Errors detail goes to DevTools console. */}
       {(() => {
         const simproLinkedJobs = (jobs||[]).filter(j => j && j.simproNo);
         const haveData = simproLinkedJobs.filter(j => sbJobFinancials[j.id] && sbJobFinancials[j.id].fetchedAt);
         if (simproLinkedJobs.length === 0) return null;
         if (haveData.length >= simproLinkedJobs.length) return null;
         const pct = Math.round((haveData.length / simproLinkedJobs.length) * 100);
+        const allErrored = sbFetchStats.err > 0 && sbFetchStats.ok === 0
+                        && sbFetchStats.err >= simproLinkedJobs.length;
+        const bg = allErrored ? "#fef2f2" : "#eff6ff";
+        const bd = allErrored ? "#fecaca" : "#bfdbfe";
+        const fg = allErrored ? "#991b1b" : "#1e3a8a";
         return (
           <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,
-            padding:"10px 14px",background:"#eff6ff",border:"1px solid #bfdbfe",borderRadius:10,
-            fontSize:12,color:"#1e3a8a"}}>
-            <Spinner size={14} color="#2563eb" stroke={2}/>
-            <span><b>Loading Simpro financials</b> — {haveData.length} of {simproLinkedJobs.length} jobs cached ({pct}%). Tier weighting + Net P/L will fill in as each job lands.</span>
+            padding:"10px 14px",background:bg,border:`1px solid ${bd}`,borderRadius:10,
+            fontSize:12,color:fg,flexWrap:"wrap"}}>
+            <Spinner size={14} color={allErrored?"#dc2626":"#2563eb"} stroke={2}/>
+            <span style={{flex:1,minWidth:240}}>
+              <b>{allErrored ? "Simpro financial fetches all errored" : "Loading Simpro financials"}</b>
+              {" — "}{haveData.length} of {simproLinkedJobs.length} cached ({pct}%)
+              {sbFetchStats.ok > 0 && <span> · <b style={{color:"#15803d"}}>{sbFetchStats.ok} ok</b></span>}
+              {sbFetchStats.err > 0 && <span> · <b style={{color:"#b91c1c"}}>{sbFetchStats.err} err</b></span>}
+              {sbFetchStats.lastErr && <span style={{display:"block",fontSize:11,opacity:0.85,marginTop:2}}>
+                Last error: {sbFetchStats.lastErr.slice(0,140)}
+              </span>}
+            </span>
+            <button onClick={()=>{
+              _sbFetchedThisSession.current = new Set();
+              setSbFetchStats({ ok: 0, err: 0, lastErr: null });
+              setSbFetchTrigger(t => t + 1);
+            }}
+              style={{padding:"5px 12px",fontSize:11,fontWeight:700,fontFamily:"inherit",cursor:"pointer",
+                background:"#fff",border:`1px solid ${bd}`,borderRadius:7,color:fg}}>
+              Retry
+            </button>
           </div>
         );
       })()}
