@@ -23266,9 +23266,25 @@ function Scoreboard({ jobs, users=[], identity }) {
     if (f.subTotal != null) return f.subTotal;
     const t = f._rawTotals;
     if (t) {
-      return t.IncTax ?? t.Total?.IncTax ?? t.Totals?.IncTax
-          ?? t.ExTax  ?? t.Total?.ExTax  ?? t.Totals?.ExTax
-          ?? null;
+      // 1. Direct field — what Simpro exposes on tenants that include
+      //    IncTax/ExTax at the Totals top level.
+      const direct = t.IncTax ?? t.Total?.IncTax ?? t.Totals?.IncTax
+                  ?? t.ExTax  ?? t.Total?.ExTax  ?? t.Totals?.ExTax;
+      if (direct != null) return direct;
+      // 2. Derive from cost components when no top-level price field
+      //    exists. Sub Total = MaterialsCost + ResourcesCost +
+      //    MaterialsMarkup + ResourcesMarkup. Verified against the
+      //    Cowdrey job: 53528 + 61258 + 12277 + 9188 = 136,252 ≡ Sub Total.
+      const _ae = (o) => o == null ? null
+                       : typeof o === "number" ? o
+                       : (o.Estimate ?? o.Actual ?? null);
+      const matCost = _ae(t.MaterialsCost);
+      const resCost = _ae(t.ResourcesCost);
+      const matMk   = _ae(t.MaterialsMarkup);
+      const resMk   = _ae(t.ResourcesMarkup);
+      if (matCost != null || resCost != null || matMk != null || resMk != null) {
+        return (matCost||0) + (resCost||0) + (matMk||0) + (resMk||0);
+      }
     }
     return null;
   };
