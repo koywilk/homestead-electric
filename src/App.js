@@ -23337,6 +23337,16 @@ function Scoreboard({ jobs, users=[], identity }) {
     const t = _jobTier(j);
     return t === 3 ? "#0f766e" : t === 2 ? "#0e7490" : "#64748b";
   };
+  // Compact dollar formatter for the leaderboard: <$1k → $123 ; <$1M → $25k ;
+  // ≥ $1M → $1.45M with one decimal. Avoids $1450k confusion (should read 1.45M).
+  const _fmtMoney = (n) => {
+    if (n == null || isNaN(n)) return "—";
+    const abs = Math.abs(n);
+    const sign = n < 0 ? "-" : "";
+    if (abs >= 1_000_000) return `${sign}$${(abs/1_000_000).toFixed(2)}M`;
+    if (abs >= 1_000)     return `${sign}$${Math.round(abs/1_000)}k`;
+    return `${sign}$${Math.round(abs).toLocaleString()}`;
+  };
 
   const _buildBoardRows = (mode, sYMD, eYMD) => {
   const effStart = sYMD < SCOREBOARD_ANCHOR_YMD ? SCOREBOARD_ANCHOR_YMD : sYMD;
@@ -24567,7 +24577,7 @@ function Scoreboard({ jobs, users=[], identity }) {
                 )}
                 {top.totalJobValue != null && (
                   <div title="Total contract dollars across this person's jobs in window">
-                    <b style={{fontSize:18}}>${Math.round(top.totalJobValue/1000)}k</b> contract
+                    <b style={{fontSize:18}}>{_fmtMoney(top.totalJobValue)}</b> contract
                   </div>
                 )}
                 <div><b style={{fontSize:18}}>{updates}</b> update{updates===1?"":"s"}</div>
@@ -25012,7 +25022,7 @@ function Scoreboard({ jobs, users=[], identity }) {
                   </Td>
                   <Td>
                     {r.totalJobValue != null
-                      ? <span style={{fontWeight:700,color:"#0f172a"}}>${Math.round(r.totalJobValue/1000)}k</span>
+                      ? <span style={{fontWeight:700,color:"#0f172a"}}>{_fmtMoney(r.totalJobValue)}</span>
                       : <span style={{color:"#94a3b8",fontSize:12}}>—</span>}
                   </Td>
                   <Td>
