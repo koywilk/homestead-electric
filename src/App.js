@@ -13497,8 +13497,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       .then(res => {
         console.log("[simproFinancials]", res.data);
         setSimproFinancials(res.data);
-        // Cache on the job doc so the job board can show it without an extra call
-        u({ simproMargin: res.data.margin, simproMarginIsEst: res.data.isEstimate });
+        // Cache on the job doc so the Scoreboard + Job Board can show
+        // financial figures without an extra call. We persist the entire
+        // payload now (was just margin + isEst) so the Scoreboard can do
+        // dollar-weighted scoring without a follow-up cloud-function pass.
+        // Field names inside the payload may vary; the Scoreboard reads via
+        // multi-key fallback so an unfamiliar shape degrades gracefully.
+        u({
+          simproMargin: res.data.margin,
+          simproMarginIsEst: res.data.isEstimate,
+          simproFinancials: res.data,
+          simproFinancialsAt: new Date().toISOString(),
+        });
       })
       .catch(e => { console.error("[simproFinancials error]", e); setSimproFinancials(null); });
   }, [job.simproNo]);
@@ -23581,6 +23591,41 @@ function Scoreboard({ jobs, users=[], identity }) {
   // placeholder assignments that happen to be stored as lead or foreman on
   // some job records but aren't being graded. Matching is case-insensitive.
   // Extend this list if more non-crew assignees show up.
+  // ── Dollar-aware scoring helpers ─────────────────────────────────
+  // Read job size + profit dollars from the persisted simproFinancials
+  // blob. Field names inside the payload aren't fully documented from
+  // here, so we try a chain of common keys and fall back to null. Once
+  // the actual key is confirmed (Koy can check the [simproFinancials]
+  // console log) we'll lock to the right one.
+  const _jobValue = (j) => {
+    const f = j?.simproFinancials || {};
+    return f.total ?? f.totalIncTax ?? f.totalExTax ?? f.subTotal
+        ?? f.jobTotal ?? f.invoicedValue ?? null;
+  };
+  const _jobNetPL = (j) => {
+    const f = j?.simproFinancials || {};
+    return f.netPL ?? f.netProfitLoss ?? f.netProfit
+        ?? f.netPnL ?? f.profitLoss ?? null;
+  };
+  // Tier multiplier: bigger contracts pull harder on the score. <$25k=1x,
+  // $25k-$75k=2x, >$75k=3x. Jobs with no Simpro financials yet default to
+  // 1x so they don't get free amplification while the cache populates.
+  const _jobTier = (j) => {
+    const v = _jobValue(j);
+    if (v == null) return 1;
+    if (v < 25000) return 1;
+    if (v < 75000) return 2;
+    return 3;
+  };
+  const _jobTierLabel = (j) => {
+    const t = _jobTier(j);
+    return t === 3 ? "L" : t === 2 ? "M" : "S";
+  };
+  const _jobTierColor = (j) => {
+    const t = _jobTier(j);
+    return t === 3 ? "#0f766e" : t === 2 ? "#0e7490" : "#64748b";
+  };
+
   const SCOREBOARD_EXCLUDE = ["Paul", "Unassigned", "To be determined"];
   const isExcluded = (name) => {
     const clean = (name||"").trim().toLowerCase();
@@ -23622,6 +23667,25 @@ function Scoreboard({ jobs, users=[], identity }) {
       _jobAgeTotal:             0,
       _jobAgeCount:             0,
       _poDays:                  [],
+      // Dollar-aware (lean composite) accumulators. Tier weight per job
+      // is 1/2/3 based on Simpro Total. We multiply per-pillar samples by
+      // the tier so a foreman who tanks a $100k job can't recover by
+      // averaging it against three small jobs.
+      _twMarginSum:           0,
+      _twMarginWeight:        0,
+      _twInspectionPass:      0,
+      _twInspectionAttempts:  0,
+      _twPunchClosureDaysSum: 0,
+      _twPunchClosureWeight:  0,
+      _twRtCreated:           0,
+      _twRtClosed:            0,
+      _twOnTimeStartHits:     0,
+      _twOnTimeStartTotal:    0,
+      _totalNetPL:            0,
+      _netPLCount:            0,
+      _totalJobValue:         0,
+      _jobValueCount:         0,
+      _tierCounts:            { S: 0, M: 0, L: 0 },
     };
 
     const s = statsForJob(j);
@@ -23647,6 +23711,45 @@ function Scoreboard({ jobs, users=[], identity }) {
     agg[groupKey]._jobAgeTotal             += s._jobAgeDays;
     agg[groupKey]._jobAgeCount             += s._jobAgeWeight;
     agg[groupKey]._poDays.push(...s._poDays);
+
+    // ── Dollar-aware (lean composite) accumulators ─────────────────
+    const tier = _jobTier(j);
+    const jobValue = _jobValue(j);
+    const netPL    = _jobNetPL(j);
+    const tierLabel = _jobTierLabel(j);
+    agg[groupKey]._tierCounts[tierLabel] = (agg[groupKey]._tierCounts[tierLabel] || 0) + 1;
+    if (jobValue != null) {
+      agg[groupKey]._totalJobValue += jobValue;
+      agg[groupKey]._jobValueCount += 1;
+    }
+    if (netPL != null) {
+      agg[groupKey]._totalNetPL  += netPL;
+      agg[groupKey]._netPLCount  += 1;
+    }
+    // Margin (tier-weighted) — counts margin% × tier so big jobs pull harder.
+    if (typeof j.simproMargin === "number" && !isNaN(j.simproMargin)) {
+      agg[groupKey]._twMarginSum    += j.simproMargin * tier;
+      agg[groupKey]._twMarginWeight += tier;
+    }
+    // First-try inspections (tier-weighted) — passes / attempts × tier.
+    const _attempts = s.roughAttempted + s.finalAttempted;
+    const _cleans   = s.roughFirstTryClean + s.finalFirstTryClean;
+    if (_attempts > 0) {
+      agg[groupKey]._twInspectionPass     += _cleans  * tier;
+      agg[groupKey]._twInspectionAttempts += _attempts * tier;
+    }
+    // Punch closeout speed (tier-weighted) — sum of (avg closure days × tier).
+    if (s._punchClosureDays && s._punchClosureDays.length > 0) {
+      const avg = s._punchClosureDays.reduce((a,b)=>a+b,0) / s._punchClosureDays.length;
+      agg[groupKey]._twPunchClosureDaysSum += avg * tier;
+      agg[groupKey]._twPunchClosureWeight  += tier;
+    }
+    // RT closure (tier-weighted) — both numerator and denominator scaled.
+    agg[groupKey]._twRtCreated += s._rtCreatedInWindow * tier;
+    agg[groupKey]._twRtClosed  += s._rtClosedInWindow  * tier;
+    // On-time start (tier-weighted).
+    agg[groupKey]._twOnTimeStartHits  += s._onTimeStartHits  * tier;
+    agg[groupKey]._twOnTimeStartTotal += s._onTimeStartTotal * tier;
 
     // Drilldown row — one per job, anchored to the assigned lead.
     const allUpdates = [...(j.roughUpdates||[]), ...(j.finishUpdates||[])];
@@ -23695,6 +23798,51 @@ function Scoreboard({ jobs, users=[], identity }) {
       const avgJobAgeDays        = r._jobAgeCount > 0 ? (r._jobAgeTotal / r._jobAgeCount) : null;
       const hotCheckOpenPerJob   = r.activeJobs > 0 ? (r._hotCheckOpen / r.activeJobs) : null;
       const photosPerJob         = r.activeJobs > 0 ? (r._photoCount / r.activeJobs) : null;
+      // ── Lean (6-pillar) tier-weighted composite ───────────────────
+      // Each pillar produces a 0-100 sub-score using tier-weighted sums.
+      // Pillars without data drop out cleanly (composite uses only the
+      // pillars that registered). Updates is NOT tier-weighted — comms
+      // discipline is per-person, not per-job-size.
+      const _twMargin = r._twMarginWeight > 0 ? (r._twMarginSum / r._twMarginWeight) : null;
+      const _twInspection = r._twInspectionAttempts > 0
+        ? (r._twInspectionPass / r._twInspectionAttempts) * 100 : null;
+      const _twPunchSpeed = r._twPunchClosureWeight > 0
+        ? (r._twPunchClosureDaysSum / r._twPunchClosureWeight) : null;
+      const _twRtClosure = r._twRtCreated > 0 ? (r._twRtClosed / r._twRtCreated) * 100 : null;
+      const _twOnTime = r._twOnTimeStartTotal > 0
+        ? (r._twOnTimeStartHits / r._twOnTimeStartTotal) * 100 : null;
+      // Updates pillar — same per-active-job normalization as before.
+      const _updatesPerJob = r.activeJobs > 0 ? (r.updatesPosted / r.activeJobs) : null;
+      // Sub-scores on a 0-100 scale.
+      const _clamp = (v) => Math.max(0, Math.min(100, v));
+      const _marginScore = _twMargin == null ? null : _clamp(80 + (_twMargin - 15) * 2);
+      const _punchScore  = _twPunchSpeed == null ? null : _clamp(100 - (_twPunchSpeed / 14) * 100);
+      const _updatesScore = _updatesPerJob == null ? null : _clamp(_updatesPerJob * 10);
+      // Each pillar weights equally for now (Avg margin gets a heavier
+      // pull because it's weight 30 vs 14 for the rest = 30+14*5=100).
+      // These are decoupled from SCORE_WEIGHTS so the lean composite
+      // doesn't drift when admins tweak the legacy weights.
+      const _LEAN_W = {
+        margin:      30,
+        inspection:  14,
+        punchSpeed:  14,
+        rtClosure:   14,
+        onTimeStart: 14,
+        updates:     14,
+      };
+      const _parts = [
+        ["margin",      _marginScore],
+        ["inspection",  _twInspection],
+        ["punchSpeed",  _punchScore],
+        ["rtClosure",   _twRtClosure],
+        ["onTimeStart", _twOnTime],
+        ["updates",     _updatesScore],
+      ].filter(([,v]) => v != null);
+      const _twTotal = Object.values(_LEAN_W).reduce((a,b)=>a+b,0);
+      const _coveredW = _parts.reduce((a,[k]) => a + _LEAN_W[k], 0);
+      const _weighted = _parts.reduce((a,[k,v]) => a + v * _LEAN_W[k], 0);
+      const _headlineScore = _coveredW > 0 ? _weighted / _twTotal : null;
+
       return {
         ...r,
         postedDays:   r.postedDays.size,
@@ -23715,6 +23863,16 @@ function Scoreboard({ jobs, users=[], identity }) {
         rtCreatedInWindow: r._rtCreatedInWindow,
         rtClosedInWindow:  r._rtClosedInWindow,
         photoCount:        r._photoCount,
+        // Dollar-aware lean composite outputs
+        headlineScore:     _headlineScore,
+        twMargin:          _twMargin,           // tier-weighted margin %
+        twInspection:      _twInspection,       // first-try % (tier-weighted)
+        twPunchSpeed:      _twPunchSpeed,       // avg days (tier-weighted)
+        twRtClosure:       _twRtClosure,        // % (tier-weighted)
+        twOnTime:          _twOnTime,           // % (tier-weighted)
+        totalNetPL:        r._netPLCount > 0 ? r._totalNetPL : null,
+        totalJobValue:     r._jobValueCount > 0 ? r._totalJobValue : null,
+        tierCounts:        r._tierCounts,
       };
     });
 
@@ -23884,12 +24042,15 @@ function Scoreboard({ jobs, users=[], identity }) {
     r.scoreTotalWeight = c.totalW;
     r.scoreCoverage = c.coverage;
   });
+  // Sort by headlineScore first (the lean tier-weighted dollar-aware number
+  // that's now the primary display), composite second as tiebreaker.
   rows.sort((a,b) => {
-    // Rows with no scorable pillars sink to the bottom.
-    if (a.composite == null && b.composite == null) return a.name.localeCompare(b.name);
-    if (a.composite == null) return 1;
-    if (b.composite == null) return -1;
-    if (b.composite !== a.composite) return b.composite - a.composite;
+    const aS = a.headlineScore != null ? a.headlineScore : a.composite;
+    const bS = b.headlineScore != null ? b.headlineScore : b.composite;
+    if (aS == null && bS == null) return a.name.localeCompare(b.name);
+    if (aS == null) return 1;
+    if (bS == null) return -1;
+    if (bS !== aS) return bS - aS;
     return a.name.localeCompare(b.name);
   });
 
@@ -23994,8 +24155,8 @@ function Scoreboard({ jobs, users=[], identity }) {
           Hidden if last month had no scorable activity at all (e.g. before
           the SCOREBOARD_ANCHOR_YMD). */}
       {(() => {
-        const champFm = lastMonthForemanRows.find(r => r.composite != null);
-        const champLd = lastMonthLeadRows.find(r => r.composite != null);
+        const champFm = lastMonthForemanRows.find(r => (r.headlineScore ?? r.composite) != null);
+        const champLd = lastMonthLeadRows.find(r => (r.headlineScore ?? r.composite) != null);
         if(!champFm && !champLd) return null;
         const ChampCard = ({ kind, row }) => {
           if(!row) return (
@@ -24026,8 +24187,11 @@ function Scoreboard({ jobs, users=[], identity }) {
                 {row.name}
               </div>
               <div style={{display:"flex",gap:14,marginTop:6,fontSize:11,color:"#78350f",flexWrap:"wrap"}}>
-                <div><b style={{fontSize:14}}>{Math.round(row.composite)}</b> score</div>
+                <div><b style={{fontSize:14}}>{Math.round(row.headlineScore ?? row.composite)}</b> score</div>
                 {margin != null && <div><b style={{fontSize:14}}>{margin}%</b> margin</div>}
+                {row.totalNetPL != null && (
+                  <div><b style={{fontSize:14}}>${Math.round(row.totalNetPL).toLocaleString()}</b> profit</div>
+                )}
                 <div><b style={{fontSize:14}}>{row.updatesPosted||0}</b> updates</div>
               </div>
             </div>
@@ -24107,13 +24271,19 @@ function Scoreboard({ jobs, users=[], identity }) {
           In "both" mode the hero is replaced by the side-by-side boards
           below (each board shows its own #1 prominently). */}
       {mode !== "both" && (() => {
-        if(rows.length === 0 || rows[0].composite == null) return null;
+        const _topScore = (r) => r ? (r.headlineScore ?? r.composite) : null;
+        if(rows.length === 0 || _topScore(rows[0]) == null) return null;
         const top = rows[0];
-        const score = Math.round(top.composite);
-        const margin = top.avgMargin != null ? top.avgMargin.toFixed(1) : null;
+        const score = Math.round(_topScore(top));
+        const margin = top.twMargin != null ? top.twMargin.toFixed(1)
+                     : top.avgMargin != null ? top.avgMargin.toFixed(1) : null;
         const updates = top.updatesPosted || 0;
         const goalPct = top.marginCount > 0 ? Math.round((top.jobsOverGoal / top.marginCount) * 100) : null;
         const periodLabel = boardWindow === "thisMonth" ? _periods.thisMonth.label : "This Week";
+        const tierStr = top.tierCounts
+          ? [["L",top.tierCounts.L],["M",top.tierCounts.M],["S",top.tierCounts.S]]
+              .filter(([,n]) => n > 0).map(([l,n]) => `${n}${l}`).join(" · ")
+          : null;
         return (
           <div style={{
             background: "linear-gradient(135deg, #fef3c7 0%, #fde68a 100%)",
@@ -24139,13 +24309,27 @@ function Scoreboard({ jobs, users=[], identity }) {
               </div>
               <div style={{display:"flex", gap:18, marginTop:8, flexWrap:"wrap", fontSize:12, color:"#78350f"}}>
                 {margin != null && (
-                  <div><b style={{fontSize:18}}>{margin}%</b> avg margin</div>
+                  <div title="Tier-weighted average margin"><b style={{fontSize:18}}>{margin}%</b> margin</div>
                 )}
+                {top.totalNetPL != null && (
+                  <div title="Total net profit/loss across this person's jobs in window">
+                    <b style={{fontSize:18, color: top.totalNetPL >= 0 ? "#15803d" : "#b91c1c"}}>
+                      ${Math.round(top.totalNetPL).toLocaleString()}
+                    </b> profit
+                  </div>
+                )}
+                {top.totalJobValue != null && (
+                  <div title="Total contract dollars across this person's jobs in window">
+                    <b style={{fontSize:18}}>${Math.round(top.totalJobValue/1000)}k</b> contract
+                  </div>
+                )}
+                <div><b style={{fontSize:18}}>{updates}</b> update{updates===1?"":"s"}</div>
+                <div><b style={{fontSize:18}}>{top.jobs}</b> job{top.jobs===1?"":"s"}{tierStr ? ` (${tierStr})` : ""}</div>
                 {goalPct != null && (
-                  <div><b style={{fontSize:18}}>{goalPct}%</b> jobs ≥ 15%</div>
+                  <div title="% of jobs hitting 15% margin goal">
+                    <b style={{fontSize:18}}>{goalPct}%</b> ≥15%
+                  </div>
                 )}
-                <div><b style={{fontSize:18}}>{updates}</b> update{updates===1?"":"s"} posted</div>
-                <div><b style={{fontSize:18}}>{top.jobs}</b> active job{top.jobs===1?"":"s"}</div>
               </div>
             </div>
             <div style={{
@@ -24158,10 +24342,10 @@ function Scoreboard({ jobs, users=[], identity }) {
               <div style={{fontSize:9, letterSpacing:"0.14em", opacity:0.85}}>SCORE</div>
               <div style={{fontSize:48, marginTop:2}}>{score}</div>
             </div>
-            {rows.length > 1 && rows[1].composite != null && (
+            {rows.length > 1 && _topScore(rows[1]) != null && (
               <div style={{fontSize:11, color:"#92400e", paddingLeft:14, borderLeft:"1px solid #fcd34d", lineHeight:1.4, flexShrink:0}}>
                 <div style={{fontWeight:700}}>{rows[1].name}</div>
-                <div style={{opacity:0.85}}>{Math.round(rows[1].composite)} · {Math.round(top.composite - rows[1].composite)} pts back</div>
+                <div style={{opacity:0.85}}>{Math.round(_topScore(rows[1]))} · {Math.round(_topScore(top) - _topScore(rows[1]))} pts back</div>
               </div>
             )}
           </div>
@@ -24359,18 +24543,19 @@ function Scoreboard({ jobs, users=[], identity }) {
                   {boardWindow === "thisMonth" ? _periods.thisMonth.label : "This Week"}
                 </div>
               </div>
-              {board.rows.length === 0 || board.rows[0].composite == null ? (
+              {board.rows.length === 0 || (board.rows[0].headlineScore ?? board.rows[0].composite) == null ? (
                 <div style={{padding:"24px 16px",textAlign:"center",color:"#94a3b8",fontSize:12}}>
                   No qualifying activity in this window.
                 </div>
               ) : (
                 <div style={{display:"flex",flexDirection:"column"}}>
                   {board.rows.slice(0, 8).map((r, i) => {
-                    if(r.composite == null) return null;
+                    const rowScore = r.headlineScore ?? r.composite;
+                    if(rowScore == null) return null;
                     const rank = rankBadge(i);
-                    const score = Math.round(r.composite);
-                    const margin = r.avgMargin != null ? r.avgMargin.toFixed(1) : null;
-                    const goalPct = r.marginCount > 0 ? Math.round((r.jobsOverGoal / r.marginCount) * 100) : null;
+                    const score = Math.round(rowScore);
+                    const margin = r.twMargin != null ? r.twMargin.toFixed(1)
+                                 : r.avgMargin != null ? r.avgMargin.toFixed(1) : null;
                     const isTop = i === 0;
                     return (
                       <button key={r.name} onClick={()=>setDrillRow(r)}
@@ -24404,9 +24589,21 @@ function Scoreboard({ jobs, users=[], identity }) {
                           <div style={{fontSize:11,color:"#64748b",marginTop:2,
                             display:"flex",gap:10,flexWrap:"wrap"}}>
                             {margin != null && <span>{margin}% margin</span>}
-                            {goalPct != null && <span>{goalPct}% ≥15%</span>}
+                            {r.totalNetPL != null && (
+                              <span style={{color: r.totalNetPL >= 0 ? "#15803d" : "#b91c1c", fontWeight:700}}>
+                                ${Math.round(r.totalNetPL).toLocaleString()} profit
+                              </span>
+                            )}
                             <span>{r.updatesPosted||0} updates</span>
-                            <span>{r.jobs} job{r.jobs===1?"":"s"}</span>
+                            <span>
+                              {r.jobs} job{r.jobs===1?"":"s"}
+                              {r.tierCounts && (r.tierCounts.L > 0 || r.tierCounts.M > 0 || r.tierCounts.S > 0) && (
+                                <span style={{marginLeft:4,opacity:0.75}}>
+                                  ({[["L",r.tierCounts.L],["M",r.tierCounts.M],["S",r.tierCounts.S]]
+                                    .filter(([,n]) => n > 0).map(([l,n]) => `${n}${l}`).join("/")})
+                                </span>
+                              )}
+                            </span>
                           </div>
                         </div>
                         <div style={{
