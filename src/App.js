@@ -23888,11 +23888,10 @@ function Scoreboard({ jobs, users=[], identity }) {
       const avgJobAgeDays        = r._jobAgeCount > 0 ? (r._jobAgeTotal / r._jobAgeCount) : null;
       const hotCheckOpenPerJob   = r.activeJobs > 0 ? (r._hotCheckOpen / r.activeJobs) : null;
       const photosPerJob         = r.activeJobs > 0 ? (r._photoCount / r.activeJobs) : null;
-      // ── Lean (6-pillar) tier-weighted composite ───────────────────
+      // ── Lean (7-pillar) tier-weighted composite ───────────────────
       // Each pillar produces a 0-100 sub-score using tier-weighted sums.
-      // Pillars without data drop out cleanly (composite uses only the
-      // pillars that registered). Updates is NOT tier-weighted — comms
-      // discipline is per-person, not per-job-size.
+      // Pillars without data drop out cleanly. Updates is NOT tier-weighted
+      // (comms discipline is per-person, not per-job-size).
       const _twMargin = r._twMarginWeight > 0 ? (r._twMarginSum / r._twMarginWeight) : null;
       const _twInspection = r._twInspectionAttempts > 0
         ? (r._twInspectionPass / r._twInspectionAttempts) * 100 : null;
@@ -23903,25 +23902,34 @@ function Scoreboard({ jobs, users=[], identity }) {
         ? (r._twOnTimeStartHits / r._twOnTimeStartTotal) * 100 : null;
       // Updates pillar — same per-active-job normalization as before.
       const _updatesPerJob = r.activeJobs > 0 ? (r.updatesPosted / r.activeJobs) : null;
+      // NEW — Net P/L per active job. Rewards real profit dollars regardless
+      // of margin %. Stops a foreman from dominating purely on % margin while
+      // turning small profit dollars on tiny jobs. Scale: $5k / active job
+      // = 100, $0 = 0, negative drops below 0 → clamped to 0.
+      const _netPLPerJob = (r._netPLCount > 0 && r.activeJobs > 0)
+        ? (r._totalNetPL / r.activeJobs) : null;
       // Sub-scores on a 0-100 scale.
       const _clamp = (v) => Math.max(0, Math.min(100, v));
       const _marginScore = _twMargin == null ? null : _clamp(80 + (_twMargin - 15) * 2);
       const _punchScore  = _twPunchSpeed == null ? null : _clamp(100 - (_twPunchSpeed / 14) * 100);
       const _updatesScore = _updatesPerJob == null ? null : _clamp(_updatesPerJob * 10);
-      // Each pillar weights equally for now (Avg margin gets a heavier
-      // pull because it's weight 30 vs 14 for the rest = 30+14*5=100).
-      // These are decoupled from SCORE_WEIGHTS so the lean composite
-      // doesn't drift when admins tweak the legacy weights.
+      const _netPLScore  = _netPLPerJob == null ? null : _clamp((_netPLPerJob / 5000) * 100);
+      // Weights — total 100 across 7 pillars. Margin (%) and Net P/L ($)
+      // each carry the most pull because they're the business outcome.
+      // Decoupled from SCORE_WEIGHTS so the lean composite doesn't drift
+      // when admins tweak the legacy weights.
       const _LEAN_W = {
-        margin:      30,
-        inspection:  14,
-        punchSpeed:  14,
-        rtClosure:   14,
-        onTimeStart: 14,
-        updates:     14,
+        margin:      24,  // tier-weighted margin %
+        netPL:       18,  // dollars of profit per active job (NEW)
+        inspection:  12,
+        punchSpeed:  12,
+        rtClosure:   12,
+        onTimeStart: 12,
+        updates:     10,
       };
       const _parts = [
         ["margin",      _marginScore],
+        ["netPL",       _netPLScore],
         ["inspection",  _twInspection],
         ["punchSpeed",  _punchScore],
         ["rtClosure",   _twRtClosure],
@@ -24762,8 +24770,11 @@ function Scoreboard({ jobs, users=[], identity }) {
           <thead>
             <tr style={{background:"#f8fafc"}}>
               <Th>{mode==="lead" ? "Lead" : "Foreman"}</Th>
-              <Th title="Weighted composite of every metric — hover a row's score for the breakdown">Score</Th>
-              <Th title="Active jobs assigned to this person">Jobs</Th>
+              <Th title="Lean tier-weighted composite — same number shown in the hero card">Score</Th>
+              <Th title="Active jobs assigned to this person · S/M/L = small/mid/large size tier">Jobs</Th>
+              <Th title="Total Simpro contract dollars across this person's jobs">Total Bid</Th>
+              <Th title="Total Simpro net profit/loss across this person's jobs (green = positive)">Net P/L</Th>
+              <Th title="Tier-weighted average net margin (15% goal)">Margin</Th>
               <Th title="4-ways passed on the very first attempt with zero items called">4-Way First Try</Th>
               <Th title="Finals passed on the very first attempt with zero items called">Final First Try</Th>
               <Th title="Total items called across every 4-way attempt">4-Way Items</Th>
@@ -24781,7 +24792,7 @@ function Scoreboard({ jobs, users=[], identity }) {
           <tbody>
             {rows.length === 0 && (
               <tr>
-                <td colSpan={15} style={{padding:"22px",textAlign:"center",color:"#475569",fontSize:13}}>
+                <td colSpan={18} style={{padding:"22px",textAlign:"center",color:"#475569",fontSize:13}}>
                   No jobs with a {mode==="lead" ? "lead" : "foreman"} assigned yet.
                 </td>
               </tr>
@@ -24828,10 +24839,13 @@ function Scoreboard({ jobs, users=[], identity }) {
                     </button>
                   </Td>
                   <Td>
-                    {r.composite == null
+                    {(r.headlineScore ?? r.composite) == null
                       ? <span style={{color:"#94a3b8",fontSize:12}}>—</span>
                       : (() => {
-                          const s = Math.round(r.composite);
+                          // Display the lean tier-weighted headlineScore so
+                          // the column matches the sort order. Falls back to
+                          // composite for rows that have no lean data.
+                          const s = Math.round(r.headlineScore ?? r.composite);
                           const color = s >= 80 ? "#16a34a" : s >= 65 ? "#f59e0b" : "#dc2626";
                           const bg    = s >= 80 ? "#dcfce7" : s >= 65 ? "#fef3c7" : "#fee2e2";
                           // Plain-text breakdown tooltip. Shows each pillar that had data,
@@ -24874,7 +24888,39 @@ function Scoreboard({ jobs, users=[], identity }) {
                         })()}
                   </Td>
                   <Td>
-                    <span style={{background:"#f1f5f9",color:"#334155",padding:"2px 9px",borderRadius:99,fontSize:12,fontWeight:700}}>{r.jobs}</span>
+                    <span style={{background:"#f1f5f9",color:"#334155",padding:"2px 9px",borderRadius:99,fontSize:12,fontWeight:700,
+                      display:"inline-flex",alignItems:"center",gap:5}}>
+                      {r.jobs}
+                      {r.tierCounts && (r.tierCounts.L > 0 || r.tierCounts.M > 0 || r.tierCounts.S > 0) && (
+                        <span style={{fontSize:9,opacity:0.7,fontWeight:600}}>
+                          ({[["L",r.tierCounts.L],["M",r.tierCounts.M],["S",r.tierCounts.S]]
+                            .filter(([,n]) => n > 0).map(([l,n]) => `${n}${l}`).join("/")})
+                        </span>
+                      )}
+                    </span>
+                  </Td>
+                  <Td>
+                    {r.totalJobValue != null
+                      ? <span style={{fontWeight:700,color:"#0f172a"}}>${Math.round(r.totalJobValue/1000)}k</span>
+                      : <span style={{color:"#94a3b8",fontSize:12}}>—</span>}
+                  </Td>
+                  <Td>
+                    {r.totalNetPL != null
+                      ? <span style={{fontWeight:700, color: r.totalNetPL >= 0 ? "#15803d" : "#b91c1c"}}>
+                          ${Math.round(r.totalNetPL).toLocaleString()}
+                        </span>
+                      : <span style={{color:"#94a3b8",fontSize:12}}>—</span>}
+                  </Td>
+                  <Td>
+                    {r.twMargin != null
+                      ? <span style={{fontWeight:700, color: r.twMargin >= 15 ? "#15803d" : r.twMargin >= 10 ? "#b45309" : "#b91c1c"}}>
+                          {r.twMargin.toFixed(1)}%
+                        </span>
+                      : r.avgMargin != null
+                        ? <span style={{fontWeight:700, color: r.avgMargin >= 15 ? "#15803d" : r.avgMargin >= 10 ? "#b45309" : "#b91c1c"}}>
+                            {r.avgMargin.toFixed(1)}%{r.marginEst ? "*" : ""}
+                          </span>
+                        : <span style={{color:"#94a3b8",fontSize:12}}>—</span>}
                   </Td>
                   <Td>{ratioPill(r.roughFirstTryClean, r.roughAttempted, rP, true)}</Td>
                   <Td>{ratioPill(r.finalFirstTryClean, r.finalAttempted, fP, true)}</Td>
