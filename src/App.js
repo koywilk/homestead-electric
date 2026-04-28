@@ -19493,6 +19493,66 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
   }), [crewMon]);
   const crewWK = useMemo(() => { const m=crewMon; return `${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,"0")}-${String(m.getDate()).padStart(2,"0")}`; }, [crewMon]);
 
+  // ── Simpro schedule overlay for the planner ─────────────────────────────
+  // Fetches just the displayed Mon-Fri window (5 days) so we can show
+  // "Scheduled in Simpro" pills inside each planner cell. Separate from the
+  // calMonth-keyed simproSchedule fetch above — the two views drive different
+  // date ranges and we don't want them stomping on each other. Re-fetches on
+  // window focus so a Simpro change in another tab is reflected within ~1
+  // round trip when Koy comes back to this tab.
+  const [crewWeekSimpro, setCrewWeekSimpro] = useState([]);
+  useEffect(() => {
+    if(!crewDays || !crewDays[0] || !crewDays[4]) return;
+    const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    const dateFrom = ymd(crewDays[0]);
+    const dateTo   = ymd(crewDays[4]);
+    const fetchWk = () => {
+      const fn = httpsCallable(functions, "getSimproSchedule");
+      fn({ dateFrom, dateTo })
+        .then(res => setCrewWeekSimpro((res.data||[]).filter(s=>s.Type==="job")))
+        .catch(()=>{}); // silent — overlay is supplementary, planner still works
+    };
+    fetchWk();
+    const onFocus = () => fetchWk();
+    window.addEventListener("focus", onFocus);
+    return () => window.removeEventListener("focus", onFocus);
+  }, [crewWK]); // re-fetch when the visible week changes (covers crewWeekOff navigation)
+
+  // Map of `${simproProjectID}_${dayIdx}` → Set<rawStaffName> for the visible
+  // week. Names are kept exactly as Simpro returns them; the cell render does
+  // case-insensitive matching against the app's user list (via normalizeName)
+  // when deduping against manual planner pills.
+  const simproPeopleByJobDay = useMemo(() => {
+    const map = new Map();
+    if(!crewWeekSimpro.length) return map;
+    const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    const weekYMDs = (crewDays||[]).map(ymd);
+    crewWeekSimpro.forEach(entry => {
+      const pid = entry.Project?.ProjectID;
+      const date = entry.Date;
+      const staffName = entry.Staff?.Name;
+      if(!pid || !date || !staffName) return;
+      const di = weekYMDs.indexOf(date);
+      if(di < 0) return;
+      const key = `${pid}_${di}`;
+      if(!map.has(key)) map.set(key, new Set());
+      map.get(key).add(staffName);
+    });
+    return map;
+  }, [crewWeekSimpro, crewDays]);
+
+  // Set of all Simpro project IDs that have at least one staff entry in the
+  // visible week. Used by crewPlanJobs to add a row for jobs that have
+  // Simpro entries but aren't otherwise in the foreman's filtered job list.
+  const simproPidsThisWeek = useMemo(() => {
+    const s = new Set();
+    simproPeopleByJobDay.forEach((_, key) => {
+      const pid = key.split("_")[0];
+      if(pid) s.add(pid);
+    });
+    return s;
+  }, [simproPeopleByJobDay]);
+
   const _crewLoadAllUsers = async () => {
     try {
       const snap = await getDoc(doc(db,"settings","users"));
@@ -20058,6 +20118,22 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
       union = union.filter(j => (j.foreman||"Koy") === crewForemanFilter);
     }
 
+    // After the foreman filter — add jobs that have Simpro schedule entries
+    // in the visible week but aren't otherwise in the union. Per Koy's design:
+    // render the row even if Simpro has someone scheduled on a job outside
+    // the foreman filter, so nothing on the books is silently hidden. These
+    // rows are tagged with _simproOnly so the renderer can show a small
+    // "Simpro" badge next to the job name to flag the source.
+    if(simproPidsThisWeek.size > 0) {
+      const fromSimproExtra = jobs.filter(j => {
+        if(j.tempPed||j.quickJob) return false;
+        if(!j.simproNo) return false;
+        if(!simproPidsThisWeek.has(String(j.simproNo))) return false;
+        return !union.some(u => u.id === j.id);
+      }).map(j => ({...j, _simproOnly: true}));
+      union = [...union, ...fromSimproExtra];
+    }
+
     // Apply custom manual order first, then priority-sort anything not in the manual list.
     const orderMap=new Map((crewJobOrder||[]).map((id,i)=>[id,i]));
     const withOrder = union.map(j=>({
@@ -20078,7 +20154,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
       return (a.job.name||"").localeCompare(b.job.name||"");
     });
     return withOrder.map(x=>({...x.job, _pri:x.pri}));
-  }, [jobs,crewData,crewExtra,crewJobOrder,_crewJobPriority,crewFocus,crewPinned,crewForemanFilter,crewEventsByJobDay]);
+  }, [jobs,crewData,crewExtra,crewJobOrder,_crewJobPriority,crewFocus,crewPinned,crewForemanFilter,crewEventsByJobDay,simproPidsThisWeek]);
 
   const crewDayTotals = useMemo(() => {
     const t=Array(5).fill(0);
@@ -21589,6 +21665,19 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                     overflow:"hidden",wordBreak:"break-word"}}>
                                   {job.name||"Untitled"}
                                 </div>
+                                {/* "Simpro only" tag — set on rows added to the planner because
+                                    they have Simpro schedule entries this week, but the job
+                                    isn't otherwise in the foreman's filter / active list.
+                                    Tells Koy why the row is here so an unfamiliar job doesn't
+                                    look like noise. */}
+                                {job._simproOnly && (
+                                  <span title="This row is here because Simpro has someone scheduled on it this week"
+                                    style={{fontSize:8,fontWeight:800,letterSpacing:"0.05em",
+                                      background:"#3b82f6",color:"#fff",borderRadius:3,
+                                      padding:"1px 5px",lineHeight:1,flexShrink:0}}>
+                                    SIMPRO
+                                  </span>
+                                )}
                                 {/* Scheduling pill — same "new status pill" for phase jobs AND
                                     RT-only jobs. The RT path just drives the pill in needsSched
                                     mode with the RT's schedule-by date; clicks open the job
@@ -21739,6 +21828,19 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                           const k=`${job.id}_${di}`;
                           const cell=crewData[k]||{lead:"",crew:[]};
                           const allPeople=[...(cell.lead?[{name:cell.lead,isLead:true}]:[]),...cell.crew.map(n=>({name:n,isLead:false}))];
+                          // Simpro overlay — pull staff names scheduled in
+                          // Simpro for this job/day. Names render as locked
+                          // light-blue "SIMPRO" pills. If a manual pill has
+                          // the same name (case-insensitive), Simpro wins
+                          // and the manual pill is suppressed (dedupe). The
+                          // manual data on crewData stays put; this is purely
+                          // a render-time filter.
+                          const simproNamesRaw = job.simproNo
+                            ? Array.from(simproPeopleByJobDay.get(`${job.simproNo}_${di}`) || [])
+                            : [];
+                          const simproLower = new Set(simproNamesRaw.map(n=>n.toLowerCase()));
+                          const manualPills = allPeople.filter(p => !simproLower.has((p.name||"").toLowerCase()));
+                          const hasAnyPills = simproNamesRaw.length > 0 || allPeople.length > 0;
                           return (
                             <td key={di}
                               onClick={()=>{
@@ -21788,7 +21890,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                   </div>
                                 );
                               })()}
-                              {allPeople.length>0 && (
+                              {hasAnyPills && (
                                 <div onClick={e=>{e.stopPropagation();setCrewTimeModal({jobId:job.id,dayIdx:di,start:cell.time?.start||"07:00",end:cell.time?.end||"17:00"});}}
                                   title={cell.time?.start?"Tap to edit time":"Tap to set time"}
                                   style={{fontSize:9,fontWeight:700,
@@ -21804,7 +21906,32 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                 </div>
                               )}
                               <div style={{display:"flex",flexWrap:"wrap",gap:3,minHeight:24}}>
-                                {allPeople.map(({name,isLead})=>{
+                                {/* Simpro-confirmed pills — locked, blue, not
+                                    draggable, no remove ×. They reflect what's
+                                    on the Simpro schedule for this job/day.
+                                    Clicking does nothing (just stops the cell-
+                                    picker from opening). Hover shows source. */}
+                                {simproNamesRaw.map(rawName => {
+                                  const ptoToday = isOnPTO(rawName, crewDays[di]);
+                                  return (
+                                    <span key={"sp_"+rawName}
+                                      onClick={e=>e.stopPropagation()}
+                                      title={`Scheduled in Simpro · ${rawName}${ptoToday?" · on PTO this day":""}`}
+                                      style={{display:"inline-flex",alignItems:"center",gap:3,
+                                        padding:"2px 7px",borderRadius:99,fontSize:10,fontWeight:700,
+                                        color: ptoToday ? "#92400e" : "#1e3a8a",
+                                        background: ptoToday ? "#fef3c7" : "#dbeafe",
+                                        border: `1.5px solid ${ptoToday?"#d97706":"#3b82f6"}`,
+                                        cursor:"default",userSelect:"none",whiteSpace:"nowrap",
+                                        textDecoration: ptoToday ? "line-through" : "none"}}>
+                                      <span style={{fontSize:7,fontWeight:800,letterSpacing:"0.05em",
+                                        background:"#3b82f6",color:"#fff",borderRadius:3,
+                                        padding:"1px 4px",lineHeight:1}}>SIMPRO</span>
+                                      {crewDisplayName(rawName)}
+                                    </span>
+                                  );
+                                })}
+                                {manualPills.map(({name,isLead})=>{
                                   const pc=crewGetColor(name);
                                   const isFM=isForeman(name);
                                   const ptoToday = isOnPTO(name, crewDays[di]);
