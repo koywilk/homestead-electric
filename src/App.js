@@ -14814,37 +14814,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                 </button>
 
-                {/* No-keypad toggle — hides the entire Keypad Loads section for
-                    systems that don't use keypad-driven loads (e.g. wall-station-
-                    only installs). Pure UI toggle: any existing keypad data on
-                    job.panelizedLighting.{main,basement,upper}Keypad / extra-
-                    floor _keypad arrays stays untouched. Flip back off and the
-                    section reappears with whatever was there. Persisted as
-                    job.panelizedLighting.noKeypadLoads so it sticks across
-                    devices. */}
-
-                <button onClick={()=>u({panelizedLighting:{...job.panelizedLighting, noKeypadLoads: !job.panelizedLighting?.noKeypadLoads}})}
-
-                  title={job.panelizedLighting?.noKeypadLoads ? "Show keypad loads section" : "Hide keypad loads section (for systems without keypads)"}
-
-                  style={{padding:"6px 10px",borderRadius:8,fontSize:11,cursor:"pointer",
-
-                    fontFamily:"inherit",fontWeight:700,
-
-                    background: job.panelizedLighting?.noKeypadLoads ? "#dbeafe" : "transparent",
-
-                    color: job.panelizedLighting?.noKeypadLoads ? "#1d4ed8" : C.muted,
-
-                    border: `1px solid ${job.panelizedLighting?.noKeypadLoads ? "#93c5fd" : C.border}`,
-
-                    display:"inline-flex",alignItems:"center",gap:5}}>
-
-                  <Icon name="eye" size={11} stroke={2.25}/>
-
-                  {job.panelizedLighting?.noKeypadLoads ? "Keypads hidden" : "No keypad loads"}
-
-                </button>
-
               </div>
 
               {(job.lightingSystem||"Control 4")==="Other"&&(
@@ -14929,13 +14898,41 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 );
               })()}
 
-              {/* Keypad Loads — entire section is hidden when
-                  job.panelizedLighting.noKeypadLoads is true (toggle lives next
-                  to the Lock System button). All keypad data on the job doc
-                  stays put when hidden — flip the toggle back off and the
-                  saved keypad assignments come right back. */}
+              {/* Keypad Loads — entire section collapses when
+                  job.panelizedLighting.noKeypadLoads is true. Toggle button
+                  lives inline with the SectionHead so it's discoverable next
+                  to the section it controls. When hidden, a small banner
+                  takes its place with a "Show" button to reopen. All keypad
+                  data on the job doc stays put when hidden — flip the toggle
+                  back off and saved assignments come right back. */}
+              {job.panelizedLighting?.noKeypadLoads && (
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                  background:`${C.surface}`,border:`1px dashed ${C.border}`,borderRadius:8,
+                  padding:"10px 14px",marginTop:8,marginBottom:14}}>
+                  <div style={{fontSize:12,color:C.dim,fontStyle:"italic"}}>
+                    Keypad loads hidden — this system doesn't use keypad-driven loads.
+                  </div>
+                  <button onClick={()=>u({panelizedLighting:{...job.panelizedLighting, noKeypadLoads: false}})}
+                    style={{background:"none",border:`1px solid ${C.purple}`,color:C.purple,
+                      borderRadius:6,padding:"4px 12px",fontSize:11,fontWeight:700,
+                      cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
+                    Show keypads
+                  </button>
+                </div>
+              )}
               {!job.panelizedLighting?.noKeypadLoads && (<>
-              <SectionHead label={`${job.lightingSystem||"Control 4"} Keypads`} color={C.purple}/>
+              <SectionHead label={`${job.lightingSystem||"Control 4"} Keypads`} color={C.purple}
+                action={
+                  <button onClick={()=>u({panelizedLighting:{...job.panelizedLighting, noKeypadLoads: true}})}
+                    title="Hide keypad loads section (for systems without keypads)"
+                    style={{background:"none",border:`1px solid ${C.border}`,color:C.muted,
+                      borderRadius:6,padding:"4px 10px",fontSize:11,fontWeight:600,
+                      cursor:"pointer",fontFamily:"inherit",
+                      display:"inline-flex",alignItems:"center",gap:4}}>
+                    <Icon name="eye" size={11} stroke={2}/>
+                    No keypad loads
+                  </button>
+                }/>
 
               {(()=>{
                 // Build assigned names set to filter from keypad/module suggestions
@@ -26258,14 +26255,32 @@ function LightingSharePage({ jobId }) {
   const sys = job?.lightingSystem||'Control 4';
   const pl = job?.panelizedLighting||{};
 
-  const keypadSections = [
+  // Respect the no-keypad-loads flag from the main app — if Koy hid the keypad
+  // section there, hide it on the LV share link too. LV company's existing
+  // additions stay in homeowner_requests/<jobId>.lightingCollab.sections so
+  // nothing is lost; flipping the flag back off on the main app brings the
+  // section back with all the LV input intact.
+  const keypadSections = pl.noKeypadLoads ? [] : [
     {key:'mainKeypad',     label:'Main Level Keypad'},
     {key:'basementKeypad', label:'Basement Keypad'},
     {key:'upperKeypad',    label:'Upper Level Keypad'},
     ...((pl.extraFloors||[]).map(ef=>({key:ef.key+'_keypad',label:`${ef.label} Keypad`}))),
   ];
-  const panelFloors = ['main','basement','upper',...((pl.extraFloors||[]).map(ef=>ef.key))];
-  const floorLabel = (k) => job?.plSectionLabels?.[k] || (k==='main'?'Main Level':k==='basement'?'Basement':k==='upper'?'Upper Level':k);
+  // Panel display order — matches the main app (upper → main → basement,
+  // top-to-bottom). Letter defaults follow the same order so A=upper, B=main,
+  // C=basement, then D, E, F… for any extras the user added.
+  const panelFloors = ['upper','main','basement',...((pl.extraFloors||[]).map(ef=>ef.key))];
+  const _stdPanelDefaults = { upper:'Panel A', main:'Panel B', basement:'Panel C' };
+  const floorLabel = (k) => {
+    const custom = (job?.plSectionLabels?.[k]||'').trim();
+    if(custom) return custom;
+    if(_stdPanelDefaults[k]) return _stdPanelDefaults[k];
+    // Extra floor — find its label, fall back to next-letter default
+    const ef = (pl.extraFloors||[]).find(e=>e.key===k);
+    if(ef?.label) return ef.label;
+    const idx = (pl.extraFloors||[]).findIndex(e=>e.key===k);
+    return idx >= 0 ? `Panel ${String.fromCharCode(65+3+idx)}` : k;
+  };
 
   const SP = { accent:'#0ea5e9', accentDark:'#0284c7', accentBg:'#f0f9ff', accentBorder:'#7dd3fc',
                bg:'#f1f5f9', card:'#ffffff', border:'#e2e8f0', text:'#0f172a', dim:'#64748b', muted:'#94a3b8',
