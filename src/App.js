@@ -14814,6 +14814,37 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                 </button>
 
+                {/* No-keypad toggle — hides the entire Keypad Loads section for
+                    systems that don't use keypad-driven loads (e.g. wall-station-
+                    only installs). Pure UI toggle: any existing keypad data on
+                    job.panelizedLighting.{main,basement,upper}Keypad / extra-
+                    floor _keypad arrays stays untouched. Flip back off and the
+                    section reappears with whatever was there. Persisted as
+                    job.panelizedLighting.noKeypadLoads so it sticks across
+                    devices. */}
+
+                <button onClick={()=>u({panelizedLighting:{...job.panelizedLighting, noKeypadLoads: !job.panelizedLighting?.noKeypadLoads}})}
+
+                  title={job.panelizedLighting?.noKeypadLoads ? "Show keypad loads section" : "Hide keypad loads section (for systems without keypads)"}
+
+                  style={{padding:"6px 10px",borderRadius:8,fontSize:11,cursor:"pointer",
+
+                    fontFamily:"inherit",fontWeight:700,
+
+                    background: job.panelizedLighting?.noKeypadLoads ? "#dbeafe" : "transparent",
+
+                    color: job.panelizedLighting?.noKeypadLoads ? "#1d4ed8" : C.muted,
+
+                    border: `1px solid ${job.panelizedLighting?.noKeypadLoads ? "#93c5fd" : C.border}`,
+
+                    display:"inline-flex",alignItems:"center",gap:5}}>
+
+                  <Icon name="eye" size={11} stroke={2.25}/>
+
+                  {job.panelizedLighting?.noKeypadLoads ? "Keypads hidden" : "No keypad loads"}
+
+                </button>
+
               </div>
 
               {(job.lightingSystem||"Control 4")==="Other"&&(
@@ -14834,12 +14865,26 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               {(()=>{
                 const pl = job.panelizedLighting;
-                const stdFloors = [{k:"main",l:"Main"},{k:"basement",l:"Basement"},{k:"upper",l:"Upper"}];
+                // Panel labels — default to "Panel A / B / C" in display order
+                // (upper, main, basement). User-set labels in plSectionLabels
+                // win when present so existing custom names (e.g. someone who
+                // typed "Main Level Panel" before the rename) keep working.
+                // Display order matches the rendered Panel Loads sections so
+                // letter assignment is consistent top-to-bottom.
+                const _stdPanelOrder = [
+                  {k:"upper",    defaultLabel:"Panel A"},
+                  {k:"main",     defaultLabel:"Panel B"},
+                  {k:"basement", defaultLabel:"Panel C"},
+                ];
+                const _labelForStd = (k) =>
+                  (job.plSectionLabels?.[k]||"").trim() ||
+                  (_stdPanelOrder.find(p=>p.k===k)?.defaultLabel || "Panel");
                 const allModules = [];
-                stdFloors.forEach(({k,l})=>{
+                _stdPanelOrder.forEach(({k})=>{
+                  const lbl = _labelForStd(k);
                   migrateFloorToModules(pl.cp4Loads?.[k]||[]).filter(m=>m.modNum||m.moduleType).forEach(m=>{
                     allModules.push({modNum:m.modNum,floorKey:k,isExtra:false,
-                      label:`Mod ${m.modNum}${m.moduleType?` · ${m.moduleType}`:""} — ${l}`});
+                      label:`Mod ${m.modNum}${m.moduleType?` · ${m.moduleType}`:""} — ${lbl}`});
                   });
                 });
                 (pl.extraFloors||[]).forEach(ef=>{
@@ -14848,10 +14893,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       label:`Mod ${m.modNum}${m.moduleType?` · ${m.moduleType}`:""} — ${ef.label}`});
                   });
                 });
-                // Build map of load name → "Mod X — Floor" label for assignment badges
+                // Build map of load name → "Mod X — Panel" label for assignment badges
                 const assignedModMap = new Map();
                 const _allFloorData = [
-                  ...stdFloors.map(({k,l})=>({mods:migrateFloorToModules(pl.cp4Loads?.[k]||[]),fl:l})),
+                  ..._stdPanelOrder.map(({k})=>({mods:migrateFloorToModules(pl.cp4Loads?.[k]||[]),fl:_labelForStd(k)})),
                   ...(pl.extraFloors||[]).map(ef=>({mods:migrateFloorToModules(pl[ef.key]||[]),fl:ef.label})),
                 ];
                 _allFloorData.forEach(({mods,fl})=>mods.forEach(m=>m.loads.forEach(l=>{
@@ -14884,6 +14929,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 );
               })()}
 
+              {/* Keypad Loads — entire section is hidden when
+                  job.panelizedLighting.noKeypadLoads is true (toggle lives next
+                  to the Lock System button). All keypad data on the job doc
+                  stays put when hidden — flip the toggle back off and the
+                  saved keypad assignments come right back. */}
+              {!job.panelizedLighting?.noKeypadLoads && (<>
               <SectionHead label={`${job.lightingSystem||"Control 4"} Keypads`} color={C.purple}/>
 
               {(()=>{
@@ -14943,6 +14994,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               })()}
 
               </>);})()}
+              </>)}
 
               <SectionHead label={`${job.lightingSystem||"Control 4"} Panel Loads`} color={C.purple}/>
 
@@ -14959,10 +15011,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 // Panels physically hold mixed-floor loads, so the dropdown
                 // must not be floor-scoped.
                 const _allModulesForMove = [];
+                // Default panel labels: "Panel A / B / C" in display order.
+                // Order is upper → main → basement (top-to-bottom on screen),
+                // so A=upper, B=main, C=basement. Anyone who already typed a
+                // custom label into plSectionLabels (e.g. "Main Level Panel")
+                // keeps it — the default is only used when that's empty.
                 const _stdPanels = [
-                  {floor:"upper",    defaultLabel:"Upper Level"},
-                  {floor:"main",     defaultLabel:"Main Level"},
-                  {floor:"basement", defaultLabel:"Basement"},
+                  {floor:"upper",    defaultLabel:"Panel A"},
+                  {floor:"main",     defaultLabel:"Panel B"},
+                  {floor:"basement", defaultLabel:"Panel C"},
                 ];
                 _stdPanels.forEach(({floor, defaultLabel})=>{
                   const panelLabel = (job.plSectionLabels?.[floor]||"").trim() || defaultLabel;
@@ -15028,8 +15085,26 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   u({panelizedLighting:updated});
                 };
 
+                // Helper — render a small count chip showing N modules · N loads
+                // for a panel header. Counts only modules with a number/type
+                // assigned (skip the placeholder empty mod) and any load row
+                // with a name. Both counts let Koy scan a complex job at a
+                // glance without expanding the section.
+                const PanelCounts = ({mods})=>{
+                  const filledMods = mods.filter(m=>m.modNum||m.moduleType);
+                  const loadCount = mods.reduce((n,m)=>n+(m.loads||[]).filter(l=>l.name?.trim()).length,0);
+                  if(filledMods.length===0 && loadCount===0) return null;
+                  return (
+                    <span style={{fontSize:10,color:C.dim,fontWeight:600,letterSpacing:"0.04em",
+                      textTransform:"none",flexShrink:0,marginLeft:8}}>
+                      {filledMods.length} mod{filledMods.length===1?"":"s"} · {loadCount} load{loadCount===1?"":"s"}
+                    </span>
+                  );
+                };
                 return (<>
-                {_stdPanels.map(({floor,defaultLabel})=>(
+                {_stdPanels.map(({floor,defaultLabel})=>{
+                  const _mods = migrateFloorToModules((job.panelizedLighting.cp4Loads?.[floor])||[]);
+                  return (
                   <div key={floor} style={{marginBottom:16}}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
                       marginBottom:8,paddingBottom:4,borderBottom:`1px solid ${C.border}`}}>
@@ -15040,11 +15115,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.purple,
                           background:"none",border:"none",outline:"none",cursor:"text",
                           textTransform:"uppercase",fontFamily:"inherit",flex:1}}/>
+                      <PanelCounts mods={_mods}/>
                     </div>
                     <PanelModulesSection
                       system={job.lightingSystem||"Control 4"}
                       allLoads={alMod}
-                      modules={migrateFloorToModules((job.panelizedLighting.cp4Loads?.[floor])||[])}
+                      modules={_mods}
                       onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
                         cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}
                       allModulesForMove={_allModulesForMove}
@@ -15052,9 +15128,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       currentFloorKey={floor}
                       currentIsExtra={false}/>
                   </div>
-                ))}
+                  );
+                })}
 
-                {(job.panelizedLighting.extraFloors||[]).map(ef=>(
+                {(job.panelizedLighting.extraFloors||[]).map(ef=>{
+                  const _mods = migrateFloorToModules((job.panelizedLighting[ef.key])||[]);
+                  return (
                   <div key={ef.key} style={{marginBottom:16}}>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",
                       marginBottom:8,paddingBottom:4,borderBottom:`1px solid ${C.border}`}}>
@@ -15067,31 +15146,39 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.purple,
                           background:"none",border:"none",outline:"none",cursor:"text",
                           textTransform:"uppercase",fontFamily:"inherit",flex:1}}/>
+                      <PanelCounts mods={_mods}/>
                       <button onClick={()=>{
                         const newExtras=(job.panelizedLighting.extraFloors||[]).filter(e=>e.key!==ef.key);
                         const updated={...job.panelizedLighting,extraFloors:newExtras};
                         delete updated[ef.key+"_keypad"];
                         u({panelizedLighting:updated});
-                      }} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>Remove</button>
+                      }} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0,marginLeft:8}}>Remove</button>
                     </div>
                     <PanelModulesSection
                       system={job.lightingSystem||"Control 4"}
                       allLoads={alMod}
-                      modules={migrateFloorToModules((job.panelizedLighting[ef.key])||[])}
+                      modules={_mods}
                       onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}
                       allModulesForMove={_allModulesForMove}
                       onCrossPanelMove={_onCrossPanelMove}
                       currentFloorKey={ef.key}
                       currentIsExtra={true}/>
                   </div>
-                ))}
+                  );
+                })}
                 </>);
               })()}
 
               {(()=>{
+                // Next-letter default. 3 std panels (A,B,C) + extras already
+                // added → suggest the next letter (D, E, F…). If the user
+                // submits empty, we use that letter as the label so they can
+                // just hit "+ Add" with nothing typed for the common case.
+                const _extraCount = (job.panelizedLighting.extraFloors||[]).length;
+                const _nextLetter = String.fromCharCode(65 + 3 + _extraCount);
+                const _nextDefault = `Panel ${_nextLetter}`;
                 const addFloor = () => {
-                  const label = newLightingFloor.trim();
-                  if(!label) return;
+                  const label = newLightingFloor.trim() || _nextDefault;
                   const key = "pl_"+label.toLowerCase().replace(/[^a-z0-9]/g,"_")+"_"+Date.now();
                   const newExtras=[...(job.panelizedLighting.extraFloors||[]),{key,label}];
                   u({panelizedLighting:{...job.panelizedLighting,extraFloors:newExtras,[key]:[],[key+"_keypad"]:[]}});
@@ -15101,7 +15188,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   <div style={{display:"flex",gap:8,alignItems:"center",marginTop:8,flexWrap:"wrap"}}>
                     <input value={newLightingFloor} onChange={e=>setNewLightingFloor(e.target.value)}
                       onKeyDown={e=>e.key==="Enter"&&addFloor()}
-                      placeholder="Add panel / area…"
+                      placeholder={`Add panel — defaults to "${_nextDefault}"`}
                       style={{flex:1,minWidth:160,background:C.surface,border:`1px solid ${C.border}`,
                         borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
                         outline:"none",color:C.text}}/>
@@ -15109,7 +15196,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       style={{background:C.purple,color:"#fff",border:"none",borderRadius:7,
                         padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",
                         fontFamily:"inherit",whiteSpace:"nowrap"}}>
-                      + Add Panel / Area
+                      + Add {newLightingFloor.trim() ? "Panel" : _nextDefault}
                     </button>
                   </div>
                 );
