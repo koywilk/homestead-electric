@@ -2050,6 +2050,78 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 );
 
 
+// ── Photo attacher (shared) ────────────────────────────────────────────────
+// Drop-in upload-and-thumbnail-grid for any record that carries a photos[]
+// array. Used by Change Orders and Questions; the same shape ({id, name, url,
+// storagePath}) the punch items use, so existing photo viewers/copy code
+// continues to work without changes.
+//
+// Storage path is composed by the caller (e.g. `jobs/${jobId}/co-photos/${o.id}`)
+// so each consumer keeps its own folder and a single storagePath collision
+// is impossible. Removing a thumbnail just drops it from the array; the
+// underlying file in Storage is left as an orphan rather than purged so the
+// "undo" expectation matches how punch photos work today.
+function PhotoAttacher({ storagePath, photos = [], onChange, color = "#3b82f6", label = "Add photo" }) {
+  const [uploading, setUploading] = useState(false);
+  const handleFiles = async (files) => {
+    if(!files || !files.length) return;
+    setUploading(true);
+    const newPhotos = [];
+    for(const file of Array.from(files)) {
+      try {
+        const photoId = uid();
+        const ext = (file.name && file.name.split('.').pop()) || 'jpg';
+        const path = `${storagePath}/${photoId}.${ext}`;
+        const r = ref(storage, path);
+        await uploadBytes(r, file);
+        const url = await getDownloadURL(r);
+        newPhotos.push({ id:photoId, name:file.name, url, storagePath:path });
+      } catch(e) {
+        console.error('PhotoAttacher upload failed:', e);
+        toast.error && toast.error(`Upload failed: ${file.name}`);
+      }
+    }
+    if(newPhotos.length) onChange([...(photos||[]), ...newPhotos]);
+    setUploading(false);
+  };
+  const removePhoto = (id) => onChange((photos||[]).filter(p => p.id !== id));
+  const list = Array.isArray(photos) ? photos : [];
+  return (
+    <div>
+      {list.length > 0 && (
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:6}}>
+          {list.map(p => (
+            <div key={p.id} style={{position:"relative"}}>
+              <img src={p.url} alt={p.name||"photo"}
+                onClick={()=>window.open(p.url, "_blank")}
+                style={{width:62,height:62,objectFit:"cover",borderRadius:6,
+                  border:"1px solid #e5e7eb",cursor:"pointer",display:"block"}}/>
+              <button onClick={()=>removePhoto(p.id)}
+                title="Remove"
+                style={{position:"absolute",top:-5,right:-5,
+                  background:"#dc2626",color:"#fff",border:"2px solid #fff",
+                  borderRadius:99,width:18,height:18,fontSize:10,fontWeight:700,
+                  cursor:"pointer",lineHeight:1,padding:0,
+                  display:"flex",alignItems:"center",justifyContent:"center"}}>×</button>
+            </div>
+          ))}
+        </div>
+      )}
+      <label style={{display:"inline-flex",alignItems:"center",gap:5,
+        fontSize:11,fontWeight:600,color,cursor:uploading?"wait":"pointer",
+        opacity:uploading?0.6:1,padding:"4px 0"}}>
+        {uploading ? <Spinner size={11} color={color}/> : <Icon name="camera" size={11} stroke={2.25}/>}
+        {uploading ? "Uploading…" : label}
+        <input type="file" accept="image/*" multiple
+          disabled={uploading}
+          onChange={e=>{ handleFiles(e.target.files); e.target.value=""; }}
+          style={{display:"none"}}/>
+      </label>
+    </div>
+  );
+}
+
+
 // ── Status-update hover indicator ─────────────────────────────────────────
 // Drop-in marker for any place a job is rendered (Job Board card, Forecast row).
 // When called WITHOUT children, renders an amber dot the user can hover to
@@ -8458,7 +8530,7 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
 
 // ── Change Orders ─────────────────────────────────────────────
 
-function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughStatus, finishStatus, jobNotes = []}) {
+function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, roughStatus, finishStatus, jobNotes = []}) {
 
   const [expandedCOs, setExpandedCOs] = useState({});
   const toggleCO = (id) => setExpandedCOs(v=>({...v,[id]:!v[id]}));
@@ -8719,6 +8791,21 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, onEmail, roughSta
                     <TA value={o.material||""} onChange={e=>upd(o.id,{material:e.target.value})} placeholder={"- Item 1\n- Item 2"} rows={3}/>
                   </div>
                 </div>
+                {/* Photos — attach images to a CO so the email/chat handoff
+                    can include visual context (problem area, marked-up plan
+                    snippet, brand sticker on a fixture, etc.). Stored on
+                    o.photos as the same shape used by punch items. */}
+                {jobId && (
+                  <div style={{marginBottom:8}}>
+                    <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Photos</div>
+                    <PhotoAttacher
+                      storagePath={`jobs/${jobId}/co-photos/${o.id}`}
+                      photos={o.photos||[]}
+                      onChange={(photos)=>upd(o.id, { photos })}
+                      color={C.accent}
+                      label="Add photo"/>
+                  </div>
+                )}
               </>
             )}
 
@@ -14401,7 +14488,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   <QuestionPicker roughQuestions={job.roughQuestions} finishQuestions={job.finishQuestions} jobId={job.id} color={C.rough}
                     filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}/>
                 }>
-                  {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{if(a.answer&&!((job.roughQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null}/>;})()}
+                  {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{if(a.answer&&!((job.roughQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null} jobId={job.id} photoFolder="rough"/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#16a34a',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
@@ -14684,7 +14771,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   <QuestionPicker roughQuestions={job.roughQuestions} finishQuestions={job.finishQuestions} jobId={job.id} color={C.finish}
                     filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}/>
                 }>
-                  {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{if(a.answer&&!((job.finishQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null}/>;})()}
+                  {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{if(a.answer&&!((job.finishQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null} jobId={job.id} photoFolder="finish"/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#16a34a',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
@@ -15347,6 +15434,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   }}
                   jobName={job.name||"This Job"}
                   jobSimproNo={job.simproNo}
+                  jobId={job.id}
                   onEmail={setEmailData}
                   roughStatus={job.roughStatus||""}
                   finishStatus={job.finishStatus||""}
@@ -16063,7 +16151,7 @@ function QAInlineEdit({value, done, label, onSave}) {
 }
 
 
-function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterIds=null}) {
+function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterIds=null, jobId=null, photoFolder=""}) {
 
   // guard: old data may be a string instead of array
 
@@ -16159,6 +16247,22 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
 
       )}
 
+      {/* Photos — visible whether the question is open or already answered.
+          Lets the field crew snap a photo of the area in question for the
+          GC, and lets the GC see context after their answer is recorded.
+          Stored on q.photos[] (additive — old questions without it just
+          render an empty grid until a photo is added). */}
+      {jobId && (
+        <div style={{marginLeft:22,marginTop:6}}>
+          <PhotoAttacher
+            storagePath={`jobs/${jobId}/question-photos/${photoFolder?photoFolder+"/":""}${q.id}`}
+            photos={q.photos||[]}
+            onChange={(photos)=>upd(q.id,{photos})}
+            color={color}
+            label="Add photo"/>
+        </div>
+      )}
+
       {/* If GC has answered but it hasn't been applied yet, show a pending indicator */}
       {!q.done&&gcAnswerMap[q.id]&&(
         <div style={{marginLeft:22,marginTop:6,background:"#f0fdf4",border:"1px solid #16a34a44",borderRadius:6,padding:"6px 10px",fontSize:11}}>
@@ -16222,7 +16326,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
 }
 
 
-function QASection({questions: _questions, onChange, color, gcAnswerMap={}, filterIds=null}) {
+function QASection({questions: _questions, onChange, color, gcAnswerMap={}, filterIds=null, jobId=null, photoFolder=""}) {
 
   // guard: normalize questions to always be object with array values
 
@@ -16259,7 +16363,9 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, filt
 
             color={color}
             gcAnswerMap={gcAnswerMap}
-            filterIds={filterIds}/>
+            filterIds={filterIds}
+            jobId={jobId}
+            photoFolder={`${photoFolder?photoFolder+"-":""}${k}`}/>
 
         </div>
 
