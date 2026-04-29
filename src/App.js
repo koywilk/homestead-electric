@@ -30353,23 +30353,10 @@ function App() {
             }}
           />)}
 
-      {/* ── GLOBAL QUICK-ADD FAB & MODAL ────────────────────────────────
-          Floating "+" button so Koy can capture a contractor request from
-          anywhere in the app without navigating. Opens AddTaskForm in a
-          modal; saves into the same manualTasks collection used by the
-          Tasks page and the per-job Open Items tab. */}
-      {identity && can(identity,"tasks.view") && (
-        <button onClick={()=>setQuickAddOpen(true)}
-          title="Quick add task / open item"
-          style={{position:"fixed",right:18,bottom:18,zIndex:9000,
-            width:54,height:54,borderRadius:"50%",border:"none",
-            background:"#2563eb",color:"#fff",fontSize:28,fontWeight:300,
-            cursor:"pointer",fontFamily:"inherit",lineHeight:1,
-            boxShadow:"0 6px 20px rgba(37,99,235,0.45), 0 2px 6px rgba(0,0,0,0.25)",
-            display:"flex",alignItems:"center",justifyContent:"center"}}>
-          +
-        </button>
-      )}
+      {/* Global quick-add "+" FAB removed 2026-04-28 — nobody used it; the
+          team always opens a job first and adds tasks/notes from there. The
+          AddTaskForm modal below is now unreachable but kept inert in case a
+          future entry point wants the same flow without rebuilding it. */}
       {quickAddOpen && (
         <div onClick={()=>setQuickAddOpen(false)}
           style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",
