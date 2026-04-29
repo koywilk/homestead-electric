@@ -927,11 +927,11 @@ exports.getSimproJobFinancials = functions.https.onCall(async (data) => {
     // total = with tax (the headline number on Simpro's project summary).
     total:    totalIncTax,
     subTotal: totalExTax,
-    // Net P/L in dollars — actual profit (or loss) for this job. Picks the
-    // Actual side when real costs are tracked, else Estimate. Falls back
-    // to MaterialsMarkup + ResourcesMarkup if Simpro doesn't return
-    // NettPL (verified math: 9613 + 19524 = 29137 for Cowdrey, matching
-    // the displayed Net P/L exactly).
+    // Net P/L in dollars — Actual when costs are tracked, Estimate
+    // otherwise. (Reverted from max(Actual,Estimate) per request — Koy
+    // wants the real delivered profit number, not bid as a floor.)
+    // Falls back to MaterialsMarkup + ResourcesMarkup when NettPL is
+    // missing entirely (verified: 9613 + 19524 = 29137 for Cowdrey).
     netPL: (() => {
       const direct = pickAE(t.NettPL);
       if (direct != null) return direct;
@@ -1702,6 +1702,165 @@ function _flatQuestions(qs) {
   });
   return out;
 }
+
+// ─── Simpro candidates inbox ──────────────────────────────────────────────
+// Fetches Pending-stage Simpro jobs and stores ones that aren't yet in the
+// app to settings/simproCandidates. The app shows a header badge with the
+// count and a modal to Import or Ignore each one. Nothing actually creates
+// an app job here — that only happens when Koy clicks Import in the UI.
+//
+// Data safety:
+//   • Read-only on Simpro.
+//   • Writes only to settings/simproCandidates. Never touches /jobs.
+//   • Preserves existing `ignored` flags on candidates across runs (so a
+//     dismissed Simpro job stays dismissed).
+//   • A bad Simpro response (5xx, timeout) bails the whole run instead of
+//     half-updating the doc.
+//   • Removes candidates whose Simpro job has been imported into the app
+//     (matched by simproNo) so they stop reappearing.
+async function _runSimproCandidateRefresh() {
+  // Walk Simpro /jobs/?Stage=Pending paginated. Defensive about field shape:
+  // Simpro returns minimal columns by default, so we explicitly request
+  // ID/Name/Description/Site/Customer/Stage to keep the inbox useful.
+  const cols = encodeURIComponent("ID,Name,Description,Site,Customer,Stage,DateIssued");
+  const fetched = [];
+  let page = 1;
+  const MAX_PAGES = 30;
+  while (page <= MAX_PAGES) {
+    const url = `${SIMPRO_BASE}/jobs/?Stage=Pending&columns=${cols}&pageSize=100&page=${page}`;
+    const resp = await fetch(url, {
+      headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` },
+    });
+    if (!resp.ok) {
+      functions.logger.warn("refreshSimproCandidates: page failed", {
+        page, status: resp.status,
+      });
+      // Hard fail — don't write a partial list. Keep last good doc intact.
+      throw new Error(`Simpro /jobs/ returned ${resp.status} on page ${page}`);
+    }
+    const batch = await resp.json();
+    if (!Array.isArray(batch) || batch.length === 0) break;
+    fetched.push(...batch);
+    if (batch.length < 100) break;
+    page++;
+  }
+
+  // Existing app jobs by simproNo (string-compared) — anything already
+  // imported is excluded from the candidates list automatically.
+  const jobsSnap = await db.collection("jobs").get();
+  const importedSimproNos = new Set();
+  jobsSnap.docs.forEach(d => {
+    const sn = d.data()?.data?.simproNo;
+    if (sn) importedSimproNos.add(String(sn));
+  });
+
+  // Existing candidates doc — preserve any `ignored` flags users have set.
+  const candDoc = await db.doc("settings/simproCandidates").get();
+  const prev = candDoc.exists ? (candDoc.data().candidates || []) : [];
+  const prevById = new Map(prev.map(c => [String(c.simproId), c]));
+
+  const nowIso = new Date().toISOString();
+  const candidates = [];
+  for (const j of fetched) {
+    const simproId = j && j.ID ? String(j.ID) : null;
+    if (!simproId) continue;
+    if (importedSimproNos.has(simproId)) continue; // already in app — skip
+
+    // Pull a sensible name. Simpro varies: some installs put the project name
+    // in Name, others in Description. Take whichever is non-empty.
+    const name = (j.Name && String(j.Name).trim()) || (j.Description && String(j.Description).trim()) || `Simpro ${simproId}`;
+    // Site address — Simpro typically returns Site as an object with Address
+    // (string) or as a structured Address sub-object.
+    let address = "";
+    if (j.Site) {
+      if (typeof j.Site.Address === "string") address = j.Site.Address;
+      else if (j.Site.Address && typeof j.Site.Address === "object") {
+        const a = j.Site.Address;
+        address = [a.Address, a.City, a.State, a.PostalCode].filter(Boolean).join(", ");
+      } else if (j.Site.Name) {
+        address = j.Site.Name;
+      }
+    }
+    const customer = (j.Customer && (j.Customer.CompanyName || j.Customer.Name)) || "";
+    const dateIssued = j.DateIssued || "";
+
+    const existing = prevById.get(simproId) || {};
+    candidates.push({
+      simproId,
+      name,
+      address,
+      customer,
+      dateIssued,
+      stage: j.Stage || "Pending",
+      firstSeenAt: existing.firstSeenAt || nowIso,
+      lastSeenAt:  nowIso,
+      ignored:     !!existing.ignored,
+      ignoredAt:   existing.ignoredAt || null,
+    });
+  }
+
+  // Sort newest-first by firstSeenAt for display.
+  candidates.sort((a, b) => (b.firstSeenAt || "").localeCompare(a.firstSeenAt || ""));
+
+  await db.doc("settings/simproCandidates").set({
+    candidates,
+    updated_at: nowIso,
+  });
+
+  // Push notify Koy if there are any NEW non-ignored candidates this run.
+  const prevIds = new Set(prev.map(c => String(c.simproId)));
+  const newOnes = candidates.filter(c =>
+    !c.ignored && !prevIds.has(String(c.simproId))
+  );
+  if (newOnes.length > 0) {
+    const names = newOnes.slice(0, 3).map(c => c.name).join(", ");
+    const more = newOnes.length > 3 ? ` +${newOnes.length - 3} more` : "";
+    try {
+      await sendToName("Koy", {
+        title: `${newOnes.length} new Simpro job${newOnes.length===1?"":"s"} pending review`,
+        body:  `${names}${more}`,
+      });
+    } catch (e) {
+      functions.logger.warn("refreshSimproCandidates: push failed", { error: e.message });
+    }
+  }
+
+  return {
+    fetched: fetched.length,
+    pending: candidates.filter(c => !c.ignored).length,
+    ignored: candidates.filter(c =>  c.ignored).length,
+    newOnes: newOnes.length,
+  };
+}
+
+// Callable for the on-demand "Sync from Simpro now" button. Returns the
+// summary so the UI can show a toast like "2 new pending jobs".
+exports.refreshSimproCandidates = functions
+  .runWith({ timeoutSeconds: 120, memory: "256MB" })
+  .https.onCall(async () => {
+    try {
+      const summary = await _runSimproCandidateRefresh();
+      return { ok: true, ...summary };
+    } catch (e) {
+      functions.logger.error("refreshSimproCandidates failed", { error: e.message });
+      throw new functions.https.HttpsError("internal", e.message || "Simpro fetch failed");
+    }
+  });
+
+// Scheduled run every 4 hours. Uses the same helper so behaviour is
+// identical to the on-demand button.
+exports.scheduledSimproCandidateRefresh = functions.pubsub
+  .schedule("0 */4 * * *")
+  .timeZone(TZ)
+  .onRun(async () => {
+    try {
+      const summary = await _runSimproCandidateRefresh();
+      functions.logger.info("scheduledSimproCandidateRefresh ran", summary);
+    } catch (e) {
+      functions.logger.error("scheduledSimproCandidateRefresh failed", { error: e.message });
+    }
+    return null;
+  });
 
 exports.thursdayPacket = functions.pubsub
   .schedule("0 17 * * 4")
