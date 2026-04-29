@@ -1,5 +1,5 @@
 // BUILD_v9_FIXED
-import { useState, useEffect, useRef, useCallback, useMemo } from "react";
+import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { initializeApp } from "firebase/app";
 import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
@@ -458,6 +458,268 @@ const migrateFloorToModules = (arr) => {
 
 const newKPRow         = (num) => ({ id:uid(), num, name:"", status:"" });
 const newCentralLoad   = ()    => ({ id:uid(), name:"", location:"", loadType:"", watts:"", pulled:false });
+
+// ─── Panel schedule print ────────────────────────────────────────────────
+// Opens a new browser window with a clean printable layout for one panel:
+// header (panel label, system, job name, address) followed by one block per
+// module with a row per channel. User hits Cmd/Ctrl+P (or the Print button
+// at the top of the popup) to send to the office printer.
+//
+// Why a popup window instead of a print-css overlay on the main app:
+//   • The main app's stylesheet, sidebars, and dark theme would all need
+//     @media print rules to be hidden — risk of leaking app chrome onto the
+//     printed page if a rule is missed.
+//   • A self-contained popup keeps the print layout isolated, matches Excel/
+//     PDF mental model ("opens a new view"), and lets us style for paper
+//     without touching the rest of the app.
+//
+// Data safety: read-only — never mutates modules / job. If the popup is
+// blocked we surface a toast so the user can retry.
+function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules }) {
+  const sys = system || "Control 4";
+  const isLut = sys === "Lutron";
+  const isCres = sys === "Crestron";
+  const isSav = sys === "Savant";
+  const devLabel = isCres ? "Device" : "Module";
+  const esc = (s) => String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  const stripTags = (s) => String(s == null ? "" : s).replace(/<[^>]*>/g, "");
+
+  const visibleMods = (modules || []).filter(m => m && (m.modNum || m.moduleType || (m.loads||[]).some(l => l && l.name)));
+  const totalLoads = visibleMods.reduce((n, m) => n + (m.loads||[]).filter(l => l && (l.name||"").trim()).length, 0);
+
+  const renderModuleHeaderMeta = (m) => {
+    const bits = [];
+    if (m.moduleType) bits.push(`<span class="badge">${esc(m.moduleType)}</span>`);
+    if (isSav)  { if (m.panel)   bits.push(`Panel <b>${esc(m.panel)}</b>`); if (m.breaker) bits.push(`Bkr <b>${esc(m.breaker)}</b>`); if (m.phase) bits.push(`Phase <b>${esc(m.phase)}</b>`); }
+    if (isLut)  { if (m.bus)     bits.push(`Bus <b>${esc(m.bus)}</b>`);     if (m.pdu)    bits.push(`PDU <b>${esc(m.pdu)}</b>`); }
+    if (isCres) { if (m.chainPos) bits.push(`Chain <b>${esc(m.chainPos)}</b>`); }
+    return bits.join(" · ");
+  };
+
+  const moduleHtml = visibleMods.length === 0
+    ? `<div style="padding:24px;text-align:center;color:#666;font-style:italic">No modules on this panel yet.</div>`
+    : visibleMods.map(m => {
+        const namedLoads = (m.loads || []).filter(l => l && (l.name||"").trim());
+        const rows = namedLoads.length === 0
+          ? `<tr><td colspan="6" style="text-align:center;color:#888;font-style:italic;padding:8px">No channels named on this module yet</td></tr>`
+          : namedLoads.map(l => `
+              <tr>
+                <td class="ch">${esc(l.num || "")}</td>
+                <td>${esc(stripTags(l.name))}</td>
+                <td>${esc(l.loadType || "")}</td>
+                <td>${esc(l.watts || "")}${l.watts ? "W" : ""}</td>
+                <td>${esc(l.keypad || "")}</td>
+                <td class="pulled">${l.pulled ? "&#10003;" : "&#9633;"}</td>
+              </tr>
+            `).join("");
+        return `
+          <div class="module">
+            <div class="module-header">
+              <span class="modnum">${esc(devLabel)} ${esc(m.modNum || "?")}</span>
+              ${renderModuleHeaderMeta(m) ? `<span class="meta">${renderModuleHeaderMeta(m)}</span>` : ""}
+              <span class="count">${namedLoads.length} channel${namedLoads.length === 1 ? "" : "s"}</span>
+            </div>
+            <table>
+              <thead>
+                <tr>
+                  <th class="ch">Ch</th>
+                  <th>Load Name</th>
+                  <th>Type</th>
+                  <th>Watts</th>
+                  <th>Keypad / Notes</th>
+                  <th class="pulled">Pulled</th>
+                </tr>
+              </thead>
+              <tbody>${rows}</tbody>
+            </table>
+          </div>
+        `;
+      }).join("");
+
+  const html = `<!DOCTYPE html>
+<html lang="en"><head>
+  <meta charset="utf-8"/>
+  <title>${esc(panelLabel)} — ${esc(jobName)} — Panel Schedule</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body { font-family: Arial, "Helvetica Neue", sans-serif; padding: 24px; color: #000; background: #fff; }
+    .header { border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 18px; display:flex; justify-content:space-between; align-items:center; gap:16px; }
+    .header .logo-block { display:flex; align-items:center; gap:14px; }
+    .header img { height: 56px; width: 56px; object-fit: contain; flex-shrink: 0; }
+    .header h1 { font-size: 22px; letter-spacing:0.04em; }
+    .header .sys { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: #444; text-transform: uppercase; margin-top: 2px; }
+    .header .meta { font-size: 12px; color: #444; margin-top: 6px; }
+    .header .totals { font-size: 11px; color: #555; text-align:right; }
+    .module { border: 1px solid #000; margin-bottom: 14px; page-break-inside: avoid; }
+    .module-header { background: #f0f0f0; padding: 6px 10px; font-size: 12px; display: flex; gap: 12px; align-items: center; border-bottom: 1px solid #000; flex-wrap: wrap; }
+    .module-header .modnum { font-weight: 700; }
+    .module-header .meta { font-size: 11px; color: #333; }
+    .module-header .badge { background:#fff; border:1px solid #888; border-radius:3px; padding:1px 6px; font-size: 10px; }
+    .module-header .count { margin-left:auto; font-size: 10px; color: #666; }
+    table { width: 100%; border-collapse: collapse; }
+    th, td { border: 1px solid #999; padding: 5px 8px; font-size: 12px; text-align: left; vertical-align: top; }
+    th { background: #fafafa; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: #444; }
+    .ch { width: 40px; text-align: center; font-weight: 700; }
+    .pulled { width: 60px; text-align: center; font-size: 14px; }
+    .toolbar { margin-bottom: 12px; text-align:right; }
+    .toolbar button { padding: 8px 18px; font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid #444; background: #fff; border-radius: 6px; }
+    .toolbar button:hover { background: #f0f0f0; }
+    @media print { .toolbar { display:none; } body { padding: 12px; } }
+  </style>
+</head><body>
+  <div class="toolbar"><button onclick="window.print()">Print</button></div>
+  <div class="header">
+    <div class="logo-block">
+      <img src="/icon-192.png" alt="Homestead Electric" onerror="this.style.display='none'"/>
+      <div>
+        <h1>${esc(panelLabel || "Panel Schedule")}</h1>
+        <div class="sys">${esc(sys)} Panel Schedule</div>
+        <div class="meta">${esc(jobName || "")}${jobAddress ? " · " + esc(jobAddress) : ""}</div>
+      </div>
+    </div>
+    <div class="totals">
+      ${visibleMods.length} ${devLabel.toLowerCase()}${visibleMods.length === 1 ? "" : "s"}<br/>
+      ${totalLoads} channel${totalLoads === 1 ? "" : "s"}
+    </div>
+  </div>
+  ${moduleHtml}
+</body></html>`;
+
+  const win = window.open("", "_blank");
+  if (!win) {
+    if (typeof toast !== "undefined" && toast.error) toast.error("Pop-up blocked — allow pop-ups for this site to print panel schedules.");
+    return;
+  }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+}
+
+// ─── Electrical (load center) panel schedule print ───────────────────────
+// Two-column odd/even breaker layout matching the standard Eaton/Square-D
+// panel schedule blank: circuit name on the outside, slot number in the
+// middle, and each name cell split by a dashed line into top + bottom rows
+// so tandem breakers get their own label.
+//
+//   ┌──────────────┬────┬────┬──────────────┐
+//   │ slot 1 top   │ 1  │ 2  │ slot 2 top   │
+//   │ -- (dashed)- │    │    │ -- (dashed)- │
+//   │ slot 1 bot   │    │    │ slot 2 bot   │
+//   ├──────────────┼────┼────┼──────────────┤
+//   │ slot 3 top   │ 3  │ 4  │ slot 4 top   │
+//   │ ...          │    │    │ ...          │
+//
+// Logo from /icon-192.png in the public/ folder. Self-contained popup so the
+// styling doesn't fight the main app.
+function printElectricalPanel({ jobName, jobAddress, panel }) {
+  const esc = (s) => String(s == null ? "" : s)
+    .replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;")
+    .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
+  const slotCount = panel?.slotCount || 30;
+  // Pulls ONLY from panel.circuits (what the user typed in the in-app editor
+  // for THIS specific panel). Never auto-populated from job.homeRuns or any
+  // other field — the editor starts blank for every new panel and the print
+  // mirrors whatever's been typed. Empty cells stay empty for the crew to
+  // hand-fill at the site.
+  const circuits = panel?.circuits || {};
+  const get = (n, pos) => circuits[`${n}${pos}`] || {};
+  const cellName = (c) => {
+    const bits = [];
+    if (c.name) bits.push(esc(c.name));
+    if (c.amps) bits.push(`<span class="amps">${esc(c.amps)}A</span>`);
+    if (c.wire) bits.push(`<span class="wire">${esc(c.wire)}</span>`);
+    return bits.join(" ");
+  };
+
+  // Pair slots (1,2), (3,4), ... into rows. Each pair gets two physical rows
+  // (top + bottom) so tandems have their own line.
+  const rows = [];
+  for (let oddNum = 1; oddNum <= slotCount; oddNum += 2) {
+    const evenNum = oddNum + 1;
+    const lt = get(oddNum, "A"),  lb = get(oddNum, "B");
+    const rt = get(evenNum, "A"), rb = get(evenNum, "B");
+    rows.push(`
+      <tr>
+        <td class="name">${cellName(lt)}</td>
+        <td class="num" rowspan="2">${oddNum}</td>
+        <td class="num" rowspan="2">${evenNum <= slotCount ? evenNum : ""}</td>
+        <td class="name">${cellName(rt)}</td>
+      </tr>
+      <tr>
+        <td class="name bottom">${cellName(lb)}</td>
+        <td class="name bottom">${cellName(rb)}</td>
+      </tr>
+    `);
+  }
+
+  const html = `<!DOCTYPE html>
+<html lang="en"><head>
+  <meta charset="utf-8"/>
+  <title>${esc(panel?.label || "Panel Schedule")} — ${esc(jobName)}</title>
+  <style>
+    *{box-sizing:border-box;margin:0;padding:0;}
+    body { font-family: Arial, "Helvetica Neue", sans-serif; padding: 20px; color: #000; background: #fff; }
+    .toolbar { margin-bottom: 12px; text-align: right; }
+    .toolbar button { padding: 8px 18px; font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid #444; background: #fff; border-radius: 6px; }
+    .toolbar button:hover { background: #f0f0f0; }
+    .header { text-align: center; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 2px solid #000; }
+    .header img { height: 72px; width: 72px; margin-bottom: 6px; object-fit: contain; }
+    .header h1 { font-size: 22px; letter-spacing: 0.04em; }
+    .header .meta { font-size: 12px; color: #444; margin-top: 4px; }
+    .panel-meta { display:flex; justify-content:space-between; align-items:flex-end; margin-bottom: 10px; font-size: 12px; }
+    .panel-meta .left strong { font-size: 16px; letter-spacing: 0.04em; }
+    .panel-meta .right { color: #555; }
+    table.schedule { width: 100%; border-collapse: collapse; }
+    table.schedule td { border: 1px solid #000; padding: 4px 8px; font-size: 12px; height: 22px; vertical-align: middle; }
+    table.schedule td.name { width: 38%; }
+    table.schedule td.num { width: 12%; text-align: center; font-weight: 700; background: #f3f4f6; font-size: 13px; }
+    table.schedule td.bottom { border-top: 1px dashed #888; }
+    table.schedule td .amps { color: #444; font-size: 10px; margin-left: 4px; }
+    table.schedule td .wire { color: #777; font-size: 10px; margin-left: 4px; font-style: italic; }
+    .footer { margin-top: 14px; font-size: 10px; color: #666; text-align: right; }
+    @media print { .toolbar { display: none; } body { padding: 14px; } @page { size: letter portrait; margin: 0.4in; } }
+  </style>
+</head><body>
+  <div class="toolbar"><button onclick="window.print()">Print</button></div>
+  <div class="header">
+    <img src="/icon-192.png" alt="Homestead Electric" onerror="this.style.display='none'"/>
+    <h1>HOMESTEAD ELECTRIC</h1>
+    <div class="meta">Panel Schedule</div>
+  </div>
+  <div class="panel-meta">
+    <div class="left">
+      <strong>${esc(panel?.label || "Panel")}</strong>
+      ${panel?.location ? ` &middot; ${esc(panel.location)}` : ""}
+      ${panel?.size ? ` &middot; ${esc(panel.size)}` : ""}
+    </div>
+    <div class="right">
+      ${esc(jobName || "")}${jobAddress ? " &middot; " + esc(jobAddress) : ""}
+    </div>
+  </div>
+  <table class="schedule">${rows.join("")}</table>
+  <div class="footer">Slots: ${slotCount} &middot; Tandem capable</div>
+</body></html>`;
+
+  const win = window.open("", "_blank");
+  if (!win) {
+    if (typeof toast !== "undefined" && toast.error) toast.error("Pop-up blocked — allow pop-ups for this site to print panel schedules.");
+    return;
+  }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+}
+
+// Catalog of common panel sizes. First number = breaker slots, second =
+// max circuits if every slot is filled with a tandem. Custom is open-ended.
+const ELEC_PANEL_SIZES = [
+  { label: "30/60",  slots: 30 },
+  { label: "40/80",  slots: 40 },
+  { label: "60/120", slots: 60 },
+  { label: "Custom", slots: null },
+];
 
 const emptyPunch   = ()    => ({ upper:[], main:[], basement:[] });
 
@@ -2061,7 +2323,7 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
 // is impossible. Removing a thumbnail just drops it from the array; the
 // underlying file in Storage is left as an orphan rather than purged so the
 // "undo" expectation matches how punch photos work today.
-function PhotoAttacher({ storagePath, photos = [], onChange, color = "#3b82f6", label = "Add photo" }) {
+function PhotoAttacher({ storagePath, photos = [], onChange, color = "#3b82f6", label = "Add photo", accept = "image/*", iconName = "camera" }) {
   const [uploading, setUploading] = useState(false);
   const handleFiles = async (files) => {
     if(!files || !files.length) return;
@@ -2070,12 +2332,12 @@ function PhotoAttacher({ storagePath, photos = [], onChange, color = "#3b82f6", 
     for(const file of Array.from(files)) {
       try {
         const photoId = uid();
-        const ext = (file.name && file.name.split('.').pop()) || 'jpg';
+        const ext = (file.name && file.name.split('.').pop()) || 'bin';
         const path = `${storagePath}/${photoId}.${ext}`;
         const r = ref(storage, path);
         await uploadBytes(r, file);
         const url = await getDownloadURL(r);
-        newPhotos.push({ id:photoId, name:file.name, url, storagePath:path });
+        newPhotos.push({ id:photoId, name:file.name, url, storagePath:path, type:file.type||"" });
       } catch(e) {
         console.error('PhotoAttacher upload failed:', e);
         toast.error && toast.error(`Upload failed: ${file.name}`);
@@ -2086,16 +2348,37 @@ function PhotoAttacher({ storagePath, photos = [], onChange, color = "#3b82f6", 
   };
   const removePhoto = (id) => onChange((photos||[]).filter(p => p.id !== id));
   const list = Array.isArray(photos) ? photos : [];
+  const isImage = (p) => {
+    if (p.type && p.type.startsWith && p.type.startsWith("image/")) return true;
+    const n = (p.name||"").toLowerCase();
+    return /\.(png|jpe?g|gif|webp|heic|heif|bmp|svg)$/.test(n);
+  };
   return (
     <div>
       {list.length > 0 && (
         <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:6}}>
           {list.map(p => (
             <div key={p.id} style={{position:"relative"}}>
-              <img src={p.url} alt={p.name||"photo"}
-                onClick={()=>window.open(p.url, "_blank")}
-                style={{width:62,height:62,objectFit:"cover",borderRadius:6,
-                  border:"1px solid #e5e7eb",cursor:"pointer",display:"block"}}/>
+              {isImage(p) ? (
+                <img src={p.url} alt={p.name||"photo"}
+                  onClick={()=>window.open(p.url, "_blank")}
+                  style={{width:62,height:62,objectFit:"cover",borderRadius:6,
+                    border:"1px solid #e5e7eb",cursor:"pointer",display:"block"}}/>
+              ) : (
+                <div onClick={()=>window.open(p.url, "_blank")}
+                  title={p.name||"file"}
+                  style={{width:62,height:62,borderRadius:6,border:"1px solid #e5e7eb",
+                    cursor:"pointer",display:"flex",flexDirection:"column",alignItems:"center",
+                    justifyContent:"center",gap:3,background:"#f8fafc",color:"#475569",
+                    padding:"4px",overflow:"hidden",textAlign:"center"}}>
+                  <Icon name="fileText" size={20} stroke={1.75}/>
+                  <span style={{fontSize:8,fontWeight:600,lineHeight:1.1,wordBreak:"break-all",
+                    overflow:"hidden",textOverflow:"ellipsis",display:"-webkit-box",
+                    WebkitLineClamp:2,WebkitBoxOrient:"vertical"}}>
+                    {(p.name||"file").length > 18 ? (p.name||"file").slice(0,15)+"…" : (p.name||"file")}
+                  </span>
+                </div>
+              )}
               <button onClick={()=>removePhoto(p.id)}
                 title="Remove"
                 style={{position:"absolute",top:-5,right:-5,
@@ -2110,9 +2393,9 @@ function PhotoAttacher({ storagePath, photos = [], onChange, color = "#3b82f6", 
       <label style={{display:"inline-flex",alignItems:"center",gap:5,
         fontSize:11,fontWeight:600,color,cursor:uploading?"wait":"pointer",
         opacity:uploading?0.6:1,padding:"4px 0"}}>
-        {uploading ? <Spinner size={11} color={color}/> : <Icon name="camera" size={11} stroke={2.25}/>}
+        {uploading ? <Spinner size={11} color={color}/> : <Icon name={iconName} size={11} stroke={2.25}/>}
         {uploading ? "Uploading…" : label}
-        <input type="file" accept="image/*" multiple
+        <input type="file" accept={accept} multiple
           disabled={uploading}
           onChange={e=>{ handleFiles(e.target.files); e.target.value=""; }}
           style={{display:"none"}}/>
@@ -7962,21 +8245,30 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null}) {
 
   const [selected,setSelected]     = useState([]);
 
-  const [showClosedToday,setShowClosedToday] = useState(false);
+  // Per-date open/close state for the "punch closed" banners. Keyed by
+  // YYYY-MM-DD so each historical day can be expanded independently. Days
+  // not in the map default to collapsed (consistent with the old single-
+  // boolean behaviour).
+  const [showClosedByDate,setShowClosedByDate] = useState({});
+  const toggleClosedDate = (ymd) =>
+    setShowClosedByDate(prev => ({ ...prev, [ymd]: !prev[ymd] }));
 
-  // Flatten the phase's punch lists into a single array of {text, checkedBy,
-  // checkedAt, room, floor, isHotcheck, ...} so we can filter for items signed
-  // off today. Today's match uses the same format checkedAt is stored in
-  // (toLocaleDateString("en-US")) so no parsing required.
-  const closedToday = useMemo(() => {
-    if(!phasePunch) return [];
-    const out = [];
-    const todayStr = new Date().toLocaleDateString("en-US");
+  // Flatten the phase's punch lists into a date-keyed map so closed punches
+  // stay visible under the day they were closed, not just today. Each entry
+  // is YMD ("YYYY-MM-DD") → array of {text, checkedBy, checkedAt, room,
+  // floor, isHotcheck, ...}. Items without a parseable checkedAt are
+  // dropped (can't pin them to a day).
+  const closedByDate = useMemo(() => {
+    const map = new Map();
+    if(!phasePunch) return map;
     const eat = (items, room, floor, isHotcheck=false) => {
       (items||[]).forEach(i => {
-        if(i && i.done && !i.voided && i.checkedAt === todayStr) {
-          out.push({ ...i, room, floor, isHotcheck });
-        }
+        if(!i || !i.done || i.voided || !i.checkedAt) return;
+        const d = parseAnyDate(i.checkedAt);
+        if(!d) return;
+        const ymd = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+        if(!map.has(ymd)) map.set(ymd, []);
+        map.get(ymd).push({ ...i, room, floor, isHotcheck });
       });
     };
     const eatFloor = (fl, floorLabel) => {
@@ -7987,8 +8279,59 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null}) {
     };
     ["upper","main","basement"].forEach(k => eatFloor(phasePunch[k], {upper:"Upper",main:"Main",basement:"Basement"}[k]));
     (phasePunch.extraFloors||[]).forEach(fl => eatFloor(fl, fl.label || fl.key || ""));
-    return out;
+    return map;
   }, [phasePunch]);
+
+  // Today's YMD — used to label "TODAY" on the matching banner.
+  const _todayYMD = useMemo(() => {
+    const t = new Date();
+    return `${t.getFullYear()}-${String(t.getMonth()+1).padStart(2,"0")}-${String(t.getDate()).padStart(2,"0")}`;
+  }, []);
+
+  // Merge updates + closedByDate into a single per-date entries list so the
+  // render below can interleave them. Each entry: { ymd, displayDate,
+  // updates: [...], closed: [...] }. Entries with no parseable date land in
+  // an "undated" bucket at the bottom. Sorted newest-first.
+  const dailyEntries = useMemo(() => {
+    const dateMap = new Map();
+    const ensure = (ymd, displayDate) => {
+      if(!dateMap.has(ymd)) dateMap.set(ymd, { ymd, displayDate, updates: [], closed: [] });
+      return dateMap.get(ymd);
+    };
+    // Updates first — preserve their original date text for display
+    (updates||[]).forEach(u => {
+      const raw = u && u.date ? String(u.date) : "";
+      if(!raw) {
+        ensure("__undated__", "—").updates.push(u);
+        return;
+      }
+      const d = parseAnyDate(raw);
+      if(!d) {
+        ensure("__undated__", raw).updates.push(u);
+        return;
+      }
+      const ymd = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+      ensure(ymd, raw).updates.push(u);
+    });
+    // Closed punches — fill in any dates that don't already have an entry
+    closedByDate.forEach((items, ymd) => {
+      const display = ensure(ymd, ymd).displayDate;
+      // If the entry was just created from punches alone, formalize the
+      // displayDate to a friendlier "M/D/YYYY" so it matches how updates render.
+      if(display === ymd) {
+        const [y,m,d] = ymd.split("-").map(Number);
+        const friendly = `${m}/${d}/${y}`;
+        dateMap.get(ymd).displayDate = friendly;
+      }
+      items.forEach(it => dateMap.get(ymd).closed.push(it));
+    });
+    // Sort by ymd desc; undated sinks to the bottom.
+    return [...dateMap.values()].sort((a, b) => {
+      if(a.ymd === "__undated__") return 1;
+      if(b.ymd === "__undated__") return -1;
+      return b.ymd.localeCompare(a.ymd);
+    });
+  }, [updates, closedByDate]);
 
   const add = (textArg) => {
     const text = typeof textArg==='string' ? textArg : d.text;
@@ -8089,87 +8432,83 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null}) {
 
       </div>
 
-      {/* Auto-collapsed roll-up of punch items signed off today on this phase.
-          Shows the count when collapsed; expands inline. Pulled from the
-          phase's roughPunch / finishPunch via flattenPunch in the parent. */}
-      {closedToday.length > 0 && (
-        <div style={{marginBottom:10,border:`1px solid ${C.green}44`,
-          borderRadius:8,background:`${C.green}0c`,overflow:"hidden"}}>
-          <button onClick={()=>setShowClosedToday(v=>!v)}
-            style={{width:"100%",display:"flex",alignItems:"center",gap:8,
-              padding:"7px 12px",background:"none",border:"none",cursor:"pointer",
-              fontFamily:"inherit",textAlign:"left",color:C.green}}>
-            <Icon name="checkCircle" size={13}/>
-            <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.06em"}}>
-              PUNCH CLOSED TODAY · {closedToday.length}
-            </span>
-            <span style={{marginLeft:"auto",fontSize:10,color:C.dim,fontWeight:500}}>
-              {showClosedToday ? "hide" : "show"}
-            </span>
-          </button>
-          {showClosedToday && (
-            <div style={{padding:"4px 12px 10px",display:"flex",flexDirection:"column",gap:5}}>
-              {closedToday.map(it => (
-                <div key={it.id} style={{display:"flex",gap:8,fontSize:11,
-                  background:"var(--card)",borderRadius:6,padding:"5px 8px",
-                  border:`1px solid ${C.border}`}}>
-                  <Icon name="check" size={11} color={C.green}/>
-                  <div style={{flex:1,minWidth:0}}>
-                    <div style={{color:"var(--text)"}}>
-                      <RichText html={it.text}/>
-                    </div>
-                    <div style={{fontSize:9,color:C.dim,marginTop:2,display:"flex",gap:6,flexWrap:"wrap"}}>
-                      <span>{it.floor}{it.room && it.room !== "General" ? ` · ${it.room}` : ""}</span>
-                      {it.isHotcheck && <span style={{fontWeight:700,color:"#dc2626"}}>HOT CHECK</span>}
-                      {it.checkedBy && <span>· closed by {it.checkedBy}</span>}
-                      {it.assignedTo && <span>· assigned {it.assignedTo}</span>}
-                    </div>
+      {/* Date-grouped render. For each day (newest first):
+            • If any punch items closed that day → render a "PUNCH CLOSED" banner
+              above that day's updates. Each banner is per-day collapsible and
+              persists historically — yesterday's closed items still show under
+              yesterday after midnight rolls over.
+            • Then the user-typed daily updates for that date.
+          Days with only closed punches and no typed update still get a row
+          so the closed-punch rollup never disappears. */}
+      {dailyEntries.map(entry => {
+        const { ymd, displayDate, updates: dayUpdates, closed: dayClosed } = entry;
+        const isToday = ymd === _todayYMD;
+        const expanded = !!showClosedByDate[ymd];
+        return (
+          <div key={ymd} style={{marginBottom:8}}>
+            {dayClosed.length > 0 && (
+              <div style={{marginBottom:dayUpdates.length>0?6:8,border:`1px solid ${C.green}44`,
+                borderRadius:8,background:`${C.green}0c`,overflow:"hidden"}}>
+                <button onClick={()=>toggleClosedDate(ymd)}
+                  style={{width:"100%",display:"flex",alignItems:"center",gap:8,
+                    padding:"7px 12px",background:"none",border:"none",cursor:"pointer",
+                    fontFamily:"inherit",textAlign:"left",color:C.green}}>
+                  <Icon name="checkCircle" size={13}/>
+                  <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.06em"}}>
+                    PUNCH CLOSED{isToday?" · TODAY":` · ${displayDate}`} · {dayClosed.length}
+                  </span>
+                  <span style={{marginLeft:"auto",fontSize:10,color:C.dim,fontWeight:500}}>
+                    {expanded ? "hide" : "show"}
+                  </span>
+                </button>
+                {expanded && (
+                  <div style={{padding:"4px 12px 10px",display:"flex",flexDirection:"column",gap:5}}>
+                    {dayClosed.map(it => (
+                      <div key={it.id} style={{display:"flex",gap:8,fontSize:11,
+                        background:"var(--card)",borderRadius:6,padding:"5px 8px",
+                        border:`1px solid ${C.border}`}}>
+                        <Icon name="check" size={11} color={C.green}/>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{color:"var(--text)"}}>
+                            <RichText html={it.text}/>
+                          </div>
+                          <div style={{fontSize:9,color:C.dim,marginTop:2,display:"flex",gap:6,flexWrap:"wrap"}}>
+                            <span>{it.floor}{it.room && it.room !== "General" ? ` · ${it.room}` : ""}</span>
+                            {it.isHotcheck && <span style={{fontWeight:700,color:"#dc2626"}}>HOT CHECK</span>}
+                            {it.checkedBy && <span>· closed by {it.checkedBy}</span>}
+                            {it.assignedTo && <span>· assigned {it.assignedTo}</span>}
+                          </div>
+                        </div>
+                      </div>
+                    ))}
                   </div>
+                )}
+              </div>
+            )}
+            {dayUpdates.map(u=>(
+              <div key={u.id} onClick={()=>showPicker&&toggleSelect(u.id)}
+                style={{display:"flex",gap:10,padding:"8px 12px",background:showPicker&&selected.includes(u.id)?C.blue+"18":C.surface,
+                  borderRadius:8,marginBottom:6,border:`1px solid ${showPicker&&selected.includes(u.id)?C.blue:C.border}`,
+                  cursor:showPicker?"pointer":"default",transition:"all 0.15s"}}>
+                {showPicker&&(
+                  <div style={{width:16,height:16,borderRadius:4,border:`2px solid ${selected.includes(u.id)?C.blue:C.border}`,
+                    background:selected.includes(u.id)?C.blue:"transparent",flexShrink:0,marginTop:1,
+                    display:"flex",alignItems:"center",justifyContent:"center"}}>
+                    {selected.includes(u.id)&&<span style={{color:"#fff",fontSize:10,fontWeight:700}}>✓</span>}
+                  </div>
+                )}
+                <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",flexShrink:0,gap:2}}>
+                  <span style={{fontSize:11,color:C.accent,whiteSpace:"nowrap",fontWeight:600}}>{u.date||"—"}</span>
+                  {u.addedBy&&<span style={{fontSize:9,color:C.dim,whiteSpace:"nowrap"}}>by {u.addedBy}</span>}
                 </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
-
-      {updates.map(u=>(
-
-        <div key={u.id} onClick={()=>showPicker&&toggleSelect(u.id)}
-
-          style={{display:"flex",gap:10,padding:"8px 12px",background:showPicker&&selected.includes(u.id)?C.blue+"18":C.surface,
-
-            borderRadius:8,marginBottom:6,border:`1px solid ${showPicker&&selected.includes(u.id)?C.blue:C.border}`,
-
-            cursor:showPicker?"pointer":"default",transition:"all 0.15s"}}>
-
-          {showPicker&&(
-
-            <div style={{width:16,height:16,borderRadius:4,border:`2px solid ${selected.includes(u.id)?C.blue:C.border}`,
-
-              background:selected.includes(u.id)?C.blue:"transparent",flexShrink:0,marginTop:1,
-
-              display:"flex",alignItems:"center",justifyContent:"center"}}>
-
-              {selected.includes(u.id)&&<span style={{color:"#fff",fontSize:10,fontWeight:700}}>✓</span>}
-
-            </div>
-
-          )}
-
-          <div style={{display:"flex",flexDirection:"column",alignItems:"flex-start",flexShrink:0,gap:2}}>
-            <span style={{fontSize:11,color:C.accent,whiteSpace:"nowrap",fontWeight:600}}>{u.date||"—"}</span>
-            {u.addedBy&&<span style={{fontSize:9,color:C.dim,whiteSpace:"nowrap"}}>by {u.addedBy}</span>}
+                <span style={{flex:1,fontSize:12,color:C.text,lineHeight:1.5}}>{u.text}</span>
+                {!showPicker&&<button onClick={async ()=>{ if(!await showConfirm("Delete this daily update?")) return; onChange(updates.filter(x=>x.id!==u.id)); }}
+                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>✕</button>}
+              </div>
+            ))}
           </div>
-
-          <span style={{flex:1,fontSize:12,color:C.text,lineHeight:1.5}}>{u.text}</span>
-
-          {!showPicker&&<button onClick={async ()=>{ if(!await showConfirm("Delete this daily update?")) return; onChange(updates.filter(x=>x.id!==u.id)); }}
-
-            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>✕</button>}
-
-        </div>
-
-      ))}
+        );
+      })}
 
     </div>
 
@@ -9758,7 +10097,7 @@ const wireWatts    = (wire) => {
 };
 
 
-function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
+function BreakerCounts({homeRuns, panelCounts, onCountChange, electricalPanels = [], onElectricalPanelsChange = null}) {
 
   const extraRows = (homeRuns.extraFloors||[]).flatMap(ef=>homeRuns[ef.key]||[]);
 
@@ -9899,6 +10238,52 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange}) {
               </div>
 
             )}
+
+            {/* Panel Schedule shortcut — links each breaker-count card to its
+                matching schedule in the Panel Schedules section above. If no
+                schedule exists for this panel name yet, click creates one
+                with the panel name pre-set and scrolls to it. If one already
+                exists, click scrolls to and pulses the existing entry so Koy
+                can find it without scrolling manually. Pure UX shortcut —
+                the schedule data itself still lives on job.electricalPanels
+                and editing/printing happens in the Panel Schedules section. */}
+            {onElectricalPanelsChange && (() => {
+              const existing = (electricalPanels||[]).find(ep => (ep.label||"").toLowerCase() === (p||"").toLowerCase());
+              const scrollTo = (id) => {
+                setTimeout(() => {
+                  const el = document.getElementById(`elec-panel-${id}`);
+                  if (el) {
+                    el.scrollIntoView({behavior:"smooth", block:"center"});
+                    el.style.transition = "background 0.4s";
+                    el.style.background = "#fef3c722";
+                    setTimeout(()=>{ el.style.background = ""; }, 1200);
+                  }
+                }, 60);
+              };
+              return (
+                <button
+                  onClick={()=>{
+                    if (existing) {
+                      scrollTo(existing.id);
+                    } else {
+                      const id = uid();
+                      onElectricalPanelsChange([...(electricalPanels||[]), {
+                        id, label: p, location: "", size: "40/80", slotCount: 40, circuits: {},
+                      }]);
+                      scrollTo(id);
+                    }
+                  }}
+                  style={{marginTop:10,background:existing?"transparent":C.accent,
+                    color:existing?C.accent:"#fff",
+                    border:`1px solid ${C.accent}${existing?"":"00"}`,
+                    borderRadius:7,padding:"6px 12px",fontSize:11,fontWeight:700,
+                    cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.04em",
+                    display:"inline-flex",alignItems:"center",gap:6}}>
+                  <Icon name="fileText" size={11} stroke={2.25}/>
+                  {existing ? "Open panel schedule" : "Create panel schedule"}
+                </button>
+              );
+            })()}
 
           </div>
 
@@ -10083,7 +10468,208 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
   );
 }
 
-function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, finishMaterials, onMatChange, breakerOverrides, onBreakersChange}) {
+// ─── Electrical (load center) panel schedules ───────────────────────────
+// In-app editor for breaker schedules per electrical panel on the job.
+// Each panel has a label, optional location, a size (number of slots), and
+// a circuits map keyed by `${slot}${A|B}` so tandems get their own row.
+// Layout mirrors the printed sheet: name | odd # | even # | name, with each
+// name cell split into top + bottom rows for tandem support.
+//
+// Stored on job.electricalPanels (additive — old jobs without it default
+// to []). Click "Print" on any panel to open the print-ready popup using
+// printElectricalPanel().
+function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddress = "" }) {
+  const list = Array.isArray(panels) ? panels : [];
+  const [newLabel, setNewLabel] = useState("");
+  const [expanded, setExpanded] = useState({}); // { [panelId]: bool }
+  const [sizeKind, setSizeKind] = useState({}); // { [panelId]: "30/60" | "Custom" | ... }
+
+  const addPanel = () => {
+    const label = (newLabel||"").trim() || `Panel ${String.fromCharCode(65 + list.length)}`;
+    const id = uid();
+    onChange([...list, {
+      id,
+      label,
+      location: "",
+      size: "40/80",
+      slotCount: 40,
+      circuits: {},
+    }]);
+    setExpanded(v => ({ ...v, [id]: true }));
+    setNewLabel("");
+  };
+  const updPanel = (id, patch) => onChange(list.map(p => p.id === id ? { ...p, ...patch } : p));
+  const delPanel = async (id) => {
+    if (!await showConfirm("Delete this panel schedule? Circuit names will be lost.")) return;
+    onChange(list.filter(p => p.id !== id));
+  };
+  const setCircuit = (panelId, slotKey, patch) => {
+    const p = list.find(x => x.id === panelId);
+    if (!p) return;
+    const cur = (p.circuits||{})[slotKey] || {};
+    const next = { ...cur, ...patch };
+    // Drop the entry if everything's empty so we don't grow the doc forever
+    const hasContent = (next.name||"").trim() || (next.amps||"").trim() || (next.wire||"").trim() || (next.notes||"").trim();
+    const circuits = { ...(p.circuits||{}) };
+    if (hasContent) circuits[slotKey] = next;
+    else delete circuits[slotKey];
+    updPanel(panelId, { circuits });
+  };
+  const onSizeChange = (panelId, value) => {
+    const found = ELEC_PANEL_SIZES.find(s => s.label === value);
+    if (!found) return;
+    setSizeKind(v => ({ ...v, [panelId]: found.label }));
+    if (found.slots != null) {
+      updPanel(panelId, { size: found.label, slotCount: found.slots });
+    } else {
+      // Custom — keep current slotCount, just remember the label
+      const p = list.find(x => x.id === panelId);
+      const keep = p?.slotCount || 40;
+      updPanel(panelId, { size: "Custom", slotCount: keep });
+    }
+  };
+
+  return (
+    <div style={{marginTop:18}}>
+      <SectionHead label="Panel Schedules" color={C.accent}/>
+      {list.length === 0 && (
+        <div style={{fontSize:11,color:C.muted,fontStyle:"italic",marginBottom:8}}>
+          No panel schedules yet — add one to print breaker assignments.
+        </div>
+      )}
+      {list.map(p => {
+        const slotCount = p.slotCount || 30;
+        const isOpen = expanded[p.id] !== false; // default open after creation
+        const sizeKindCur = sizeKind[p.id] || (ELEC_PANEL_SIZES.find(s=>s.label===p.size) ? p.size : "Custom");
+        const oddCount = Math.ceil(slotCount/2);
+        const filledCount = Object.values(p.circuits||{}).filter(c =>
+          c && ((c.name||"").trim() || (c.amps||"").trim() || (c.wire||"").trim() || (c.notes||"").trim())
+        ).length;
+        return (
+          <div key={p.id} id={`elec-panel-${p.id}`} style={{background:C.surface,border:`1px solid ${C.border}`,
+            borderRadius:10,marginBottom:12,overflow:"hidden"}}>
+            {/* Panel header */}
+            <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 12px",
+              background:C.card,borderBottom:isOpen?`1px solid ${C.border}`:"none",flexWrap:"wrap"}}>
+              <button onClick={()=>setExpanded(v=>({...v,[p.id]:!isOpen}))}
+                style={{background:"none",border:"none",cursor:"pointer",color:C.dim,fontSize:11,padding:"0 4px"}}>
+                {isOpen ? "▼" : "▶"}
+              </button>
+              <input value={p.label||""} onChange={e=>updPanel(p.id,{label:e.target.value})}
+                placeholder="Panel name…"
+                style={{fontSize:13,fontWeight:700,letterSpacing:"0.04em",color:C.text,
+                  background:"none",border:"none",outline:"none",fontFamily:"inherit",flex:"1 1 140px",minWidth:120}}/>
+              <input value={p.location||""} onChange={e=>updPanel(p.id,{location:e.target.value})}
+                placeholder="Location (e.g. Mech Room)"
+                style={{fontSize:11,color:C.dim,background:"none",border:`1px solid ${C.border}`,
+                  outline:"none",fontFamily:"inherit",borderRadius:5,padding:"3px 7px",flex:"1 1 140px",minWidth:120}}/>
+              <select value={sizeKindCur} onChange={e=>onSizeChange(p.id, e.target.value)}
+                style={{fontSize:11,background:C.surface,border:`1px solid ${C.border}`,
+                  color:C.text,padding:"3px 7px",borderRadius:5,fontFamily:"inherit",cursor:"pointer"}}>
+                {ELEC_PANEL_SIZES.map(s => <option key={s.label} value={s.label}>{s.label}</option>)}
+              </select>
+              {sizeKindCur === "Custom" && (
+                <input type="number" min="2" step="2" value={p.slotCount||40}
+                  onChange={e=>updPanel(p.id,{slotCount: Math.max(2, parseInt(e.target.value)||40)})}
+                  style={{width:60,fontSize:11,padding:"3px 7px",borderRadius:5,
+                    background:C.surface,border:`1px solid ${C.border}`,color:C.text,outline:"none",fontFamily:"inherit"}}/>
+              )}
+              <span style={{fontSize:10,color:C.muted,fontWeight:600,marginLeft:"auto"}}>
+                {filledCount} filled
+              </span>
+              <button onClick={()=>printElectricalPanel({jobName,jobAddress,panel:p})}
+                title={`Print ${p.label||"panel"} schedule`}
+                style={{background:"none",border:`1px solid ${C.border}`,color:C.accent,
+                  borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",
+                  fontFamily:"inherit",letterSpacing:"0.05em",
+                  display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}>
+                <Icon name="fileText" size={10} stroke={2}/>
+                PRINT
+              </button>
+              <button onClick={()=>delPanel(p.id)}
+                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>×</button>
+            </div>
+            {isOpen && (
+              <div style={{padding:"8px 12px",overflowX:"auto"}}>
+                <table style={{width:"100%",borderCollapse:"collapse",minWidth:400,fontSize:11}}>
+                  <tbody>
+                    {Array.from({length:oddCount}).map((_,i)=>{
+                      const odd = i*2+1;
+                      const even = odd+1;
+                      const evenInRange = even <= slotCount;
+                      const cellInputStyle = {
+                        width:"100%",border:"none",outline:"none",background:"transparent",
+                        fontSize:11,fontFamily:"inherit",color:C.text,padding:"3px 4px",
+                      };
+                      const renderCell = (slotKey, isBottom) => {
+                        const c = (p.circuits||{})[slotKey] || {};
+                        return (
+                          <td style={{
+                            border:`1px solid ${C.border}`,
+                            borderTop: isBottom ? `1px dashed ${C.border}` : `1px solid ${C.border}`,
+                            padding:0,background:C.bg,height:24}}>
+                            <input value={c.name||""}
+                              onChange={e=>setCircuit(p.id, slotKey, { name: e.target.value })}
+                              placeholder={isBottom?"…tandem":""}
+                              style={cellInputStyle}/>
+                          </td>
+                        );
+                      };
+                      const renderNum = (n, show) => (
+                        <td rowSpan={2} style={{
+                          border:`1px solid ${C.border}`, width:"12%",
+                          textAlign:"center",fontWeight:700,
+                          background:`${C.accent}10`,color:C.accent,
+                          fontSize:13}}>
+                          {show ? n : ""}
+                        </td>
+                      );
+                      return (
+                        <Fragment key={odd}>
+                          <tr>
+                            {renderCell(`${odd}A`, false)}
+                            {renderNum(odd, true)}
+                            {renderNum(even, evenInRange)}
+                            {evenInRange ? renderCell(`${even}A`, false) : <td style={{border:`1px solid ${C.border}`,background:`${C.muted}11`}}/>}
+                          </tr>
+                          <tr>
+                            {renderCell(`${odd}B`, true)}
+                            {evenInRange ? renderCell(`${even}B`, true) : <td style={{border:`1px solid ${C.border}`,background:`${C.muted}11`}}/>}
+                          </tr>
+                        </Fragment>
+                      );
+                    })}
+                  </tbody>
+                </table>
+                <div style={{fontSize:10,color:C.muted,marginTop:6,fontStyle:"italic"}}>
+                  Each slot has two rows for tandem breakers. Top row = primary, bottom row = tandem.
+                </div>
+              </div>
+            )}
+          </div>
+        );
+      })}
+
+      <div style={{display:"flex",gap:6,alignItems:"center",marginTop:8}}>
+        <input value={newLabel} onChange={e=>setNewLabel(e.target.value)}
+          onKeyDown={e=>e.key==="Enter"&&addPanel()}
+          placeholder={`New panel label (defaults to "Panel ${String.fromCharCode(65+list.length)}")`}
+          style={{flex:1,fontSize:12,padding:"6px 10px",borderRadius:7,
+            background:C.surface,border:`1px solid ${C.border}`,
+            color:C.text,outline:"none",fontFamily:"inherit"}}/>
+        <button onClick={addPanel}
+          style={{background:C.accent,color:"#fff",border:"none",borderRadius:7,
+            padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer",
+            fontFamily:"inherit",whiteSpace:"nowrap"}}>
+          + Add Panel
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
+function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, jobName, jobAddress, electricalPanels, onElectricalPanelsChange, finishMaterials, onMatChange, breakerOverrides, onBreakersChange}) {
   const [newPanelName,    setNewPanelName]    = useState('');
   const [genLoads,        setGenLoads]        = useState([]);
   const [hoResponse,      setHoResponse]      = useState(null);
@@ -10171,6 +10757,17 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
 
   return (
     <div>
+      {/* Panel Schedules — printable per-panel breaker layout. Lives at the
+          top of the Home Runs tab because that's where the electrical panel
+          mental model already exists (panelCounts, breaker overrides, etc.).
+          Self-contained: own data on job.electricalPanels, doesn't read or
+          write homeRuns. */}
+      <ElectricalPanelSchedules
+        panels={electricalPanels || []}
+        onChange={onElectricalPanelsChange}
+        jobName={jobName||""}
+        jobAddress={jobAddress||""}/>
+
       {/* Generator Load Selection — starts collapsed so the section header is
           quick to scan; foremen can expand when they need to pick/review loads. */}
       <Section label="Generator Load Selection" color={C.accent} defaultOpen={false}>
@@ -10563,6 +11160,48 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                         {poConfirm[p]}
                       </div>
                     )}
+                    {/* Panel Schedule entry point — creates (or jumps to) the
+                        matching panel schedule by name. The schedule itself
+                        lives in the Panel Schedules section above; this
+                        button is the convenient access point under the
+                        breaker counts. Schedules stay BLANK until the user
+                        types in them — never auto-populated from homeRuns. */}
+                    {onElectricalPanelsChange && (() => {
+                      const existing = (electricalPanels||[]).find(ep =>
+                        (ep.label||"").toLowerCase() === (p||"").toLowerCase());
+                      const scrollAndPulse = (id) => {
+                        setTimeout(() => {
+                          const el = document.getElementById(`elec-panel-${id}`);
+                          if (el) {
+                            el.scrollIntoView({behavior:"smooth", block:"center"});
+                            const orig = el.style.background;
+                            el.style.transition = "background 0.4s";
+                            el.style.background = "#fef3c733";
+                            setTimeout(()=>{ el.style.background = orig||""; }, 1400);
+                          }
+                        }, 60);
+                      };
+                      return (
+                        <button onClick={()=>{
+                          if(existing){ scrollAndPulse(existing.id); return; }
+                          const id = uid();
+                          onElectricalPanelsChange([...(electricalPanels||[]), {
+                            id, label: p, location: "", size: "40/80", slotCount: 40, circuits: {},
+                          }]);
+                          scrollAndPulse(id);
+                        }}
+                          style={{width:'100%',marginTop:6,
+                            background: existing ? `${C.accent}15` : C.accent,
+                            color: existing ? C.accent : '#fff',
+                            border:`1px solid ${C.accent}${existing?'66':''}`,
+                            borderRadius:5,padding:'5px 6px',fontSize:10,fontWeight:700,
+                            cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.04em',
+                            display:'inline-flex',alignItems:'center',justifyContent:'center',gap:5}}>
+                          <Icon name="fileText" size={10} stroke={2.25}/>
+                          {existing ? 'Open Panel Schedule' : 'Create Panel Schedule'}
+                        </button>
+                      );
+                    })()}
                   </div>
                 );})}
               </div>
@@ -14792,7 +15431,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
           {tab==="Home Runs"&&(
 
-            <HomeRunsTab homeRuns={job.homeRuns} panelCounts={job.panelCounts} jobId={job.id} jobName={job.name}
+            <HomeRunsTab homeRuns={job.homeRuns} panelCounts={job.panelCounts} jobId={job.id} jobName={job.name} jobAddress={job.address}
+              electricalPanels={job.electricalPanels||[]}
+              onElectricalPanelsChange={v=>u({electricalPanels:v})}
               onHRChange={v=>u({homeRuns:v})} onCountChange={v=>u({panelCounts:v})}
               finishMaterials={job.finishMaterials} onMatChange={v=>u({finishMaterials:v})}
               breakerOverrides={job.breakerOverrides} onBreakersChange={v=>u({breakerOverrides:v})}/>
@@ -15213,6 +15854,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 return (<>
                 {_stdPanels.map(({floor,defaultLabel})=>{
                   const _mods = migrateFloorToModules((job.panelizedLighting.cp4Loads?.[floor])||[]);
+                  const _panelLabel = (job.plSectionLabels?.[floor]||"").trim() || defaultLabel;
                   return (
                   <div key={floor} style={{marginBottom:16}}>
                     <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
@@ -15225,6 +15867,21 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           background:"none",border:"none",outline:"none",cursor:"text",
                           textTransform:"uppercase",fontFamily:"inherit",flex:1}}/>
                       <PanelCounts mods={_mods}/>
+                      <button onClick={()=>printPanelSchedule({
+                        jobName: job.name||"",
+                        jobAddress: job.address||"",
+                        system: job.lightingSystem||"Control 4",
+                        panelLabel: _panelLabel,
+                        modules: _mods,
+                      })}
+                        title={`Print ${_panelLabel} schedule`}
+                        style={{background:"none",border:`1px solid ${C.border}`,color:C.purple,
+                          borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",
+                          fontFamily:"inherit",letterSpacing:"0.05em",marginLeft:8,
+                          display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}>
+                        <Icon name="fileText" size={10} stroke={2}/>
+                        PRINT
+                      </button>
                     </div>
                     <PanelModulesSection
                       system={job.lightingSystem||"Control 4"}
@@ -15261,12 +15918,27 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           background:"none",border:"none",outline:"none",cursor:"text",
                           textTransform:"uppercase",fontFamily:"inherit",flex:1}}/>
                       <PanelCounts mods={_mods}/>
+                      <button onClick={()=>printPanelSchedule({
+                        jobName: job.name||"",
+                        jobAddress: job.address||"",
+                        system: job.lightingSystem||"Control 4",
+                        panelLabel: ef.label||"",
+                        modules: _mods,
+                      })}
+                        title={`Print ${ef.label||"panel"} schedule`}
+                        style={{background:"none",border:`1px solid ${C.border}`,color:C.purple,
+                          borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",
+                          fontFamily:"inherit",letterSpacing:"0.05em",marginLeft:8,
+                          display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}>
+                        <Icon name="fileText" size={10} stroke={2}/>
+                        PRINT
+                      </button>
                       <button onClick={()=>{
                         const newExtras=(job.panelizedLighting.extraFloors||[]).filter(e=>e.key!==ef.key);
                         const updated={...job.panelizedLighting,extraFloors:newExtras};
                         delete updated[ef.key+"_keypad"];
                         u({panelizedLighting:updated});
-                      }} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0,marginLeft:8}}>Remove</button>
+                      }} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0,marginLeft:6}}>Remove</button>
                     </div>
                     <PanelModulesSection
                       system={job.lightingSystem||"Control 4"}
