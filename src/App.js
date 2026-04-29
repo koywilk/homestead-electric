@@ -29551,10 +29551,30 @@ function App() {
                                 toast.success(msg,{duration:8000});
                               } catch(e) { toast.error("Drive sync failed: " + e.message); }
                             }}
-                            style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",background:"none",border:"none",
+                            style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",background:"none",border:`0 solid ${C.border}`,borderBottom:`1px solid ${C.border}`,
                               color:C.blue,fontSize:12,fontWeight:600,
                               padding:"10px 16px",cursor:"pointer",fontFamily:"inherit"}}>
                             <Icon name="folder" size={13}/> Sync Drive
+                          </button>
+                        )}
+                        {/* Manual entry to the Simpro Inbox — admin-only.
+                            Always available even when there are zero pending
+                            candidates, so the first time you open it post-
+                            deploy you can hit Refresh and pull from Simpro
+                            without waiting on the 4-hour scheduled run. */}
+                        {getAccess(identity)==="admin"&&(
+                          <button onClick={()=>{setShowUtilMenu(false);setSimproInboxOpen(true);}}
+                            style={{display:"flex",alignItems:"center",gap:8,width:"100%",textAlign:"left",background:"none",border:"none",
+                              color:"#3b82f6",fontSize:12,fontWeight:600,
+                              padding:"10px 16px",cursor:"pointer",fontFamily:"inherit"}}>
+                            <Icon name="inbox" size={13}/> Simpro Inbox
+                            {simproCandidates.filter(c=>!c.ignored).length > 0 && (
+                              <span style={{marginLeft:"auto",fontSize:10,fontWeight:800,
+                                background:"#3b82f6",color:"#fff",borderRadius:99,
+                                padding:"1px 7px",lineHeight:1.4}}>
+                                {simproCandidates.filter(c=>!c.ignored).length}
+                              </span>
+                            )}
                           </button>
                         )}
                       </div>
