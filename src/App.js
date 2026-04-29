@@ -404,7 +404,7 @@ const C4_MODULE_TYPES   = ["","8-Ch Dimmer","8-Ch Relay","0-10V Dimmer"];
 const LUT_MODULE_TYPES  = ["","LQSE-2ECO","LQSE-4A","LQSE-S8","LQSE-T5","LQSE-2DAL"];
 const CRES_MODULE_TYPES = ["","ZUMNET-200","ZUMLINK-200"];
 const SAV_MODULE_TYPES  = ["","LMD-8120","LMD-4120","SPM-Q2APD10","SPM-Q4FHD10"];
-const LOAD_TYPES        = ["","Dimming","Switching","MLV","ELV","LED","Fluorescent","Relay","0-10V"];
+const LOAD_TYPES        = ["","Dimming","Switching","MLV","ELV","LED","Fluorescent","Relay","0-10V","Variable Speed"];
 const PHASE_OPTS        = ["","A","B","C"];
 
 const DRIVER_SIZES  = ["","20W","40W","60W","96W","192W","288W"];
@@ -10953,6 +10953,13 @@ function PanelModulesSection({
   onCrossPanelMove = null,   // (fromModId, lid, toFloorKey, toIsExtra, toModId) => void
   currentFloorKey = "",
   currentIsExtra  = false,
+  // Persisted confirmed-modules map (optional). When the parent supplies
+  // confirmedProp + onConfirmedChange the toggle writes through to the job
+  // doc so the lock state survives navigation, page reload, and other
+  // devices. When neither is supplied we fall back to local state for
+  // backward-compat with any caller that doesn't yet pass these.
+  confirmedProp     = null,  // { [modId]: true } — object map (Firestore-friendly)
+  onConfirmedChange = null,  // (nextMap) => void
 }) {
 
   const sys = system||"Control 4";
@@ -10971,12 +10978,30 @@ function PanelModulesSection({
   // a compact read-only list instead of the full edit grid. Keyed by
   // `mod.id`. Purely visual state: toggling doesn't touch the modules array,
   // so no field values can be lost on switch-back to edit mode.
-  const [confirmedMods, setConfirmedMods] = useState(() => new Set());
-  const toggleConfirmed = (mid) => setConfirmedMods(prev => {
-    const next = new Set(prev);
-    if (next.has(mid)) next.delete(mid); else next.add(mid);
-    return next;
-  });
+  //
+  // Persistence: if the parent supplied confirmedProp + onConfirmedChange we
+  // write through to the job doc (same pattern as confirmedKeypads). Otherwise
+  // we fall back to local state. Local fallback exists so any forgotten
+  // caller still works visually, but the actual job-detail callers below
+  // pass the props so confirms survive page reloads.
+  const [confirmedModsLocal, setConfirmedModsLocal] = useState(() => new Set());
+  const usingProp = confirmedProp && typeof onConfirmedChange === "function";
+  const confirmedMods = usingProp
+    ? new Set(Object.keys(confirmedProp).filter(k => !!confirmedProp[k]))
+    : confirmedModsLocal;
+  const toggleConfirmed = (mid) => {
+    if (usingProp) {
+      const next = { ...(confirmedProp||{}) };
+      if (next[mid]) delete next[mid]; else next[mid] = true;
+      onConfirmedChange(next);
+    } else {
+      setConfirmedModsLocal(prev => {
+        const next = new Set(prev);
+        if (next.has(mid)) next.delete(mid); else next.add(mid);
+        return next;
+      });
+    }
+  };
 
   const updMod  = (mid,p) => onChange(modules.map(m=>m.id===mid?{...m,...p}:m));
   const delMod  = (mid)   => onChange(modules.filter(m=>m.id!==mid));
@@ -15123,7 +15148,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       allModulesForMove={_allModulesForMove}
                       onCrossPanelMove={_onCrossPanelMove}
                       currentFloorKey={floor}
-                      currentIsExtra={false}/>
+                      currentIsExtra={false}
+                      confirmedProp={job.panelizedLighting?.confirmedModules || {}}
+                      onConfirmedChange={(nextMap)=>u({panelizedLighting:{
+                        ...job.panelizedLighting,
+                        confirmedModules: nextMap,
+                      }})}/>
                   </div>
                   );
                 })}
@@ -15159,7 +15189,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       allModulesForMove={_allModulesForMove}
                       onCrossPanelMove={_onCrossPanelMove}
                       currentFloorKey={ef.key}
-                      currentIsExtra={true}/>
+                      currentIsExtra={true}
+                      confirmedProp={job.panelizedLighting?.confirmedModules || {}}
+                      onConfirmedChange={(nextMap)=>u({panelizedLighting:{
+                        ...job.panelizedLighting,
+                        confirmedModules: nextMap,
+                      }})}/>
                   </div>
                   );
                 })}
