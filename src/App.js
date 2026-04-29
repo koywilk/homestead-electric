@@ -15008,10 +15008,41 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               <button onClick={()=>u({roughInspectionItems:(job.roughInspectionItems||[]).filter((_,j)=>j!==i)})} style={{background:"none",border:"none",color:C.dim,fontSize:14,cursor:"pointer",padding:"0 2px",lineHeight:1}}>×</button>
                             </div>
                           ))}
-                          <div style={{display:"flex",gap:6,marginTop:5,flexWrap:"wrap"}}>
+                          {/* Inspection report — accepts images and PDFs.
+                              Stored on job.roughInspectionReports (additive)
+                              and copied onto any RT created from failed
+                              items so the report travels with the RT's
+                              punch entries. */}
+                          <div style={{marginTop:8,paddingTop:8,borderTop:`1px dashed #dc262633`}}>
+                            <div style={{fontSize:9,color:"#dc2626",fontWeight:700,letterSpacing:"0.08em",marginBottom:4}}>INSPECTION REPORT</div>
+                            <PhotoAttacher
+                              storagePath={`jobs/${job.id}/inspection-reports/rough`}
+                              photos={job.roughInspectionReports||[]}
+                              onChange={(reports)=>u({roughInspectionReports: reports})}
+                              color="#dc2626"
+                              label="Add report photo / PDF"
+                              accept="image/*,application/pdf"
+                              iconName="paperclip"/>
+                          </div>
+                          <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
                             <button onClick={()=>u({roughInspectionItems:[...(job.roughInspectionItems||[]),{id:uid(),text:"",done:false}]})} style={{fontSize:11,padding:"3px 8px",borderRadius:5,background:C.surface,border:`1px solid ${C.border}`,color:C.text,cursor:"pointer",fontFamily:"inherit"}}>+ Item</button>
                             {(job.roughInspectionItems||[]).filter(x=>!x.done).length>0&&(
-                              <button onClick={()=>{const open=(job.roughInspectionItems||[]).filter(x=>!x.done);const newRT={id:uid(),date:"",scope:"Failed 4-way inspection items",material:"",punch:open.map(x=>({id:uid(),text:x.text,done:false})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};u({returnTrips:[...(job.returnTrips||[]),newRT]});}}
+                              <button onClick={()=>{
+                                const open=(job.roughInspectionItems||[]).filter(x=>!x.done);
+                                // Carry the inspection report files onto the
+                                // RT so the crew can pull them up alongside
+                                // the punch entries. The job-level reports
+                                // stay put — this is a copy, not a move.
+                                const reports = (job.roughInspectionReports||[]).map(r=>({
+                                  ...r, fromInspection: "rough",
+                                }));
+                                const newRT={id:uid(),date:"",scope:"Failed 4-way inspection items",material:"",
+                                  punch:open.map(x=>({id:uid(),text:x.text,done:false})),
+                                  photos:reports,
+                                  assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",
+                                  needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};
+                                u({returnTrips:[...(job.returnTrips||[]),newRT]});
+                              }}
                                 style={{fontSize:11,padding:"3px 10px",borderRadius:5,background:"#dc262618",border:"1px solid #dc262633",color:"#dc2626",cursor:"pointer",fontWeight:700,fontFamily:"inherit"}}>→ Create Return Trip</button>
                             )}
                           </div>
@@ -15298,10 +15329,37 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               <button onClick={()=>u({finalInspectionItems:(job.finalInspectionItems||[]).filter((_,j)=>j!==i)})} style={{background:"none",border:"none",color:C.dim,fontSize:14,cursor:"pointer",padding:"0 2px",lineHeight:1}}>×</button>
                             </div>
                           ))}
-                          <div style={{display:"flex",gap:6,marginTop:5,flexWrap:"wrap"}}>
+                          {/* Inspection report — accepts images and PDFs.
+                              Stored on job.finalInspectionReports (additive)
+                              and copied onto any RT created from failed
+                              items so the report travels with the RT's
+                              punch entries. */}
+                          <div style={{marginTop:8,paddingTop:8,borderTop:`1px dashed #dc262633`}}>
+                            <div style={{fontSize:9,color:"#dc2626",fontWeight:700,letterSpacing:"0.08em",marginBottom:4}}>INSPECTION REPORT</div>
+                            <PhotoAttacher
+                              storagePath={`jobs/${job.id}/inspection-reports/final`}
+                              photos={job.finalInspectionReports||[]}
+                              onChange={(reports)=>u({finalInspectionReports: reports})}
+                              color="#dc2626"
+                              label="Add report photo / PDF"
+                              accept="image/*,application/pdf"
+                              iconName="paperclip"/>
+                          </div>
+                          <div style={{display:"flex",gap:6,marginTop:8,flexWrap:"wrap"}}>
                             <button onClick={()=>u({finalInspectionItems:[...(job.finalInspectionItems||[]),{id:uid(),text:"",done:false}]})} style={{fontSize:11,padding:"3px 8px",borderRadius:5,background:C.surface,border:`1px solid ${C.border}`,color:C.text,cursor:"pointer",fontFamily:"inherit"}}>+ Item</button>
                             {(job.finalInspectionItems||[]).filter(x=>!x.done).length>0&&(
-                              <button onClick={()=>{const open=(job.finalInspectionItems||[]).filter(x=>!x.done);const newRT={id:uid(),date:"",scope:"Failed final inspection items",material:"",punch:open.map(x=>({id:uid(),text:x.text,done:false})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};u({returnTrips:[...(job.returnTrips||[]),newRT]});}}
+                              <button onClick={()=>{
+                                const open=(job.finalInspectionItems||[]).filter(x=>!x.done);
+                                const reports = (job.finalInspectionReports||[]).map(r=>({
+                                  ...r, fromInspection: "final",
+                                }));
+                                const newRT={id:uid(),date:"",scope:"Failed final inspection items",material:"",
+                                  punch:open.map(x=>({id:uid(),text:x.text,done:false})),
+                                  photos:reports,
+                                  assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",
+                                  needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};
+                                u({returnTrips:[...(job.returnTrips||[]),newRT]});
+                              }}
                                 style={{fontSize:11,padding:"3px 10px",borderRadius:5,background:"#dc262618",border:"1px solid #dc262633",color:"#dc2626",cursor:"pointer",fontWeight:700,fontFamily:"inherit"}}>→ Create Return Trip</button>
                             )}
                           </div>
