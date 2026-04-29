@@ -19364,6 +19364,11 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
   const [crewPinned, setCrewPinned] = useState([]); // jobIds explicitly pinned for this week
   const [crewFocus,  setCrewFocus]  = useState(false); // focus mode = show only pinned + assigned
   const [crewPinPickerOpen, setCrewPinPickerOpen] = useState(false);
+  // Tracks which row's hours-needed chip is currently being edited so the
+  // chip can render as a clear "WK HRS" display by default and only swap to
+  // an input when the user clicks it. Keyed `${jobId}_${phase}` so two rows
+  // never share an edit state. Null = no chip is being edited.
+  const [hrsEditing, setHrsEditing] = useState(null);
   const crewRowDragRef = useRef(null);
   const [crewRowDragOver, setCrewRowDragOver] = useState(null); // jobId being hovered during row drag
   const crewScrollRaf = useRef(null);
@@ -19712,23 +19717,99 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
       updatedAt: new Date().toISOString(),
     }, { merge: true });
   };
+  // Per-Simpro-entry hour estimate. Simpro returns time as a Blocks array on
+  // each schedule entry — e.g. Blocks[0].StartTime "07:00", Blocks[N-1].EndTime
+  // "17:00". We span the first block's start to the last block's end so a
+  // staff member with a lunch-split (two blocks) still credits the full
+  // shift window. Falls back to Time.StartTime / Duration / 8h if Simpro's
+  // shape ever changes — keeps the hours-needed chip useful regardless.
+  const _simproEntryHours = (entry) => {
+    const blocks = Array.isArray(entry?.Blocks) ? entry.Blocks : null;
+    if(blocks && blocks.length) {
+      const start = blocks[0]?.StartTime;
+      const end   = blocks[blocks.length-1]?.EndTime;
+      if(start && end) {
+        const [sh,sm] = String(start).split(":").map(Number);
+        const [eh,em] = String(end).split(":").map(Number);
+        if(!isNaN(sh) && !isNaN(eh)) {
+          const hrs = Math.max(0, (eh + (em||0)/60) - (sh + (sm||0)/60));
+          if(hrs > 0) return hrs;
+        }
+      }
+    }
+    const t = entry?.Time || {};
+    const start = t.StartTime || entry?.StartTime;
+    const end   = t.EndTime   || entry?.EndTime;
+    if(start && end) {
+      const [sh,sm] = String(start).split(":").map(Number);
+      const [eh,em] = String(end).split(":").map(Number);
+      if(!isNaN(sh) && !isNaN(eh)) {
+        const hrs = Math.max(0, (eh + (em||0)/60) - (sh + (sm||0)/60));
+        if(hrs > 0) return hrs;
+      }
+    }
+    if(typeof entry?.Duration === "number" && entry.Duration > 0) return entry.Duration/60;
+    return 8;
+  };
+
+  // Aggregate Simpro hours per job/day for the visible week. One entry per
+  // staff-on-job-on-day in Simpro; sum hours across all of them. Used by
+  // sumScheduledHoursForJob so the hours-needed chip credits crew that's
+  // confirmed in Simpro but not yet (or never) typed into the planner.
+  const simproHoursByJobDay = useMemo(() => {
+    const map = new Map();
+    if(!crewWeekSimpro.length) return map;
+    const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    const weekYMDs = (crewDays||[]).map(ymd);
+    crewWeekSimpro.forEach(entry => {
+      const pid = entry.Project?.ProjectID;
+      const date = entry.Date;
+      if(!pid || !date) return;
+      const di = weekYMDs.indexOf(date);
+      if(di < 0) return;
+      const key = `${pid}_${di}`;
+      map.set(key, (map.get(key) || 0) + _simproEntryHours(entry));
+    });
+    return map;
+  }, [crewWeekSimpro, crewDays]);
+
   // Sum scheduled hours for one job across the displayed week's cells.
-  // Sums per-person time ranges. Cells without a time set count as 0 hours
-  // (we only credit time that's been explicitly entered) — keeps the chip
-  // honest about how much is REALLY scheduled.
+  // Two sources combined:
+  //   • Manual planner (crewData) — cell.time × (lead + crew count). People
+  //     who are also confirmed in Simpro for that cell are SKIPPED on the
+  //     manual side so we don't double-count them.
+  //   • Simpro overlay (simproHoursByJobDay) — per-entry hours summed.
+  // Cells without a time set count as 0 manual hours (we only credit time
+  // that's been explicitly entered). Simpro entries always credit, using
+  // their Time block if present or a sane 8-hour default.
   const sumScheduledHoursForJob = (jobId) => {
+    const job = jobs.find(j => j.id === jobId);
+    const simproNo = job?.simproNo ? String(job.simproNo) : null;
     let total = 0;
     for(let di=0; di<crewDays.length; di++) {
+      // Names confirmed in Simpro for this cell — used to dedupe the manual
+      // side so a person on both pills doesn't get double-credited hours.
+      const simproSet = simproNo
+        ? (simproPeopleByJobDay.get(`${simproNo}_${di}`) || new Set())
+        : new Set();
+      const simproLower = new Set([...simproSet].map(n => (n||"").toLowerCase()));
+
       const cell = crewData[`${jobId}_${di}`];
-      if(!cell) continue;
-      const t = cell.time;
-      if(!t || (!t.start && !t.end)) continue;
-      const [sh,sm] = (t.start||"").split(":").map(Number);
-      const [eh,em] = (t.end||"").split(":").map(Number);
-      if(isNaN(sh)||isNaN(eh)) continue;
-      const hrs = Math.max(0, (eh + (em||0)/60) - (sh + (sm||0)/60));
-      const heads = (cell.lead?1:0) + (cell.crew||[]).length;
-      total += hrs * heads;
+      if(cell && cell.time && (cell.time.start || cell.time.end)) {
+        const t = cell.time;
+        const [sh,sm] = (t.start||"").split(":").map(Number);
+        const [eh,em] = (t.end||"").split(":").map(Number);
+        if(!isNaN(sh) && !isNaN(eh)) {
+          const hrs = Math.max(0, (eh + (em||0)/60) - (sh + (sm||0)/60));
+          const names = [...(cell.lead?[cell.lead]:[]), ...(cell.crew||[])];
+          const manualHeads = names.filter(n => !simproLower.has((n||"").toLowerCase())).length;
+          total += hrs * manualHeads;
+        }
+      }
+
+      if(simproNo) {
+        total += simproHoursByJobDay.get(`${simproNo}_${di}`) || 0;
+      }
     }
     return total;
   };
@@ -21718,57 +21799,83 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                     />
                                   </div>
                                 )}
-                                {/* Hours-needed chip — manual per-week target for THIS phase.
-                                    Click to edit. Strictly local to the Crew Planner — never
-                                    pulled from Simpro, never surfaced anywhere else. Green when
-                                    scheduled hours meet the target, gray when no target set,
-                                    red when target is set but not yet met. */}
+                                {/* Hours-needed chip — explicit weekly person-hours target
+                                    for THIS phase. Two states:
+                                      • Display:  "WK HRS · 12.5 / 40h" (or "+ Set wk hrs"
+                                                  when no target). Color-coded: green=met,
+                                                  yellow=partial, red=missing, gray=unset.
+                                      • Edit:     a number input shown when the chip is
+                                                  clicked. Saves on blur / Enter, escapes on
+                                                  Escape, swaps back to display on either.
+                                    "Scheduled" = manual cell-time × heads PLUS Simpro entry
+                                    hours (deduped against manual). The target itself is
+                                    strictly local to the Crew Planner — never written to
+                                    Simpro, never surfaced elsewhere. */}
                                 {_activePhaseKey && (() => {
                                   const target = _hoursNeeded;
                                   const sched = _hoursScheduled;
                                   const met = target != null && sched >= target;
                                   const partial = target != null && sched > 0 && sched < target;
                                   const empty = target == null;
-                                  const bg = empty ? "var(--surface)" : met ? "#dcfce7" : partial ? "#fef3c7" : "#fee2e2";
+                                  const bg = empty ? "transparent" : met ? "#dcfce7" : partial ? "#fef3c7" : "#fee2e2";
                                   const fg = empty ? C.muted : met ? "#15803d" : partial ? "#92400e" : "#b91c1c";
                                   const bd = empty ? C.border : met ? "#86efac" : partial ? "#fcd34d" : "#fca5a5";
+                                  const editKey = `${job.id}_${_activePhaseKey}`;
+                                  const isEditing = hrsEditing === editKey;
+                                  const baseStyle = {
+                                    fontSize:10, fontWeight:800,
+                                    background:bg, color:fg,
+                                    border:`1px ${empty?"dashed":"solid"} ${bd}`,
+                                    borderRadius:8,
+                                    padding:"2px 8px",
+                                    fontFamily:"inherit",
+                                    outline:"none", flexShrink:0,
+                                    letterSpacing:"0.04em",
+                                    display:"inline-flex",alignItems:"center",gap:4,
+                                    whiteSpace:"nowrap",
+                                  };
+                                  if(isEditing) {
+                                    return (
+                                      <input
+                                        type="number" min="0" step="0.5" autoFocus
+                                        // Uncontrolled — `key` re-mounts the input when the
+                                        // saved target changes externally (other device, etc.).
+                                        key={`hrs-${editKey}-${target ?? 'unset'}`}
+                                        defaultValue={target ?? ""}
+                                        onClick={e=>e.stopPropagation()}
+                                        onChange={e=>e.stopPropagation()}
+                                        onBlur={e=>{
+                                          const v = e.target.value;
+                                          setCrewHoursForJob(job.id, _activePhaseKey, v === "" ? null : v);
+                                          setHrsEditing(null);
+                                        }}
+                                        onKeyDown={e=>{
+                                          if(e.key === "Enter") { e.target.blur(); }
+                                          if(e.key === "Escape") { e.target.value = target ?? ""; setHrsEditing(null); }
+                                        }}
+                                        placeholder="hrs needed"
+                                        title={`Weekly person-hours target for ${_activePhaseKey} on ${job.name}. "Scheduled" counts each person × hours per cell, plus Simpro entries.`}
+                                        style={{...baseStyle, width:80, textAlign:"center", padding:"2px 6px"}}
+                                      />
+                                    );
+                                  }
                                   return (
-                                    <input
-                                      type="number" min="0" step="0.5"
-                                      // Uncontrolled input — `key` re-mounts the
-                                      // node any time the saved target changes
-                                      // (loaded from Firestore, edited from
-                                      // another device, etc.) so it picks up
-                                      // the new value, but the user can type
-                                      // freely without React clobbering each
-                                      // keystroke. Earlier version used a
-                                      // controlled `value` with no onChange,
-                                      // which Koy reported as "doesn't work."
-                                      key={`hrs-${job.id}-${_activePhaseKey}-${target ?? 'unset'}`}
-                                      defaultValue={target ?? ""}
-                                      onClick={e=>e.stopPropagation()}
-                                      onChange={e=>e.stopPropagation()}
-                                      onBlur={e=>{
-                                        const v = e.target.value;
-                                        setCrewHoursForJob(job.id, _activePhaseKey, v === "" ? null : v);
-                                      }}
-                                      onKeyDown={e=>{
-                                        if(e.key === "Enter") { e.target.blur(); }
-                                        if(e.key === "Escape") { e.target.value = target ?? ""; e.target.blur(); }
-                                      }}
-                                      placeholder="Need h"
-                                      title={target == null
-                                        ? `Set hours needed this week for ${_activePhaseKey} on ${job.name}`
-                                        : `${sched.toFixed(1)}h scheduled / ${target}h needed (${_activePhaseKey})`}
-                                      style={{
-                                        fontSize:9, fontWeight:800,
-                                        background:bg, color:fg,
-                                        border:`1px solid ${bd}`, borderRadius:99,
-                                        padding:"1px 6px", width:55,
-                                        fontFamily:"inherit", textAlign:"center",
-                                        outline:"none", flexShrink:0,
-                                      }}
-                                    />
+                                    <button
+                                      onClick={e=>{e.stopPropagation();setHrsEditing(editKey);}}
+                                      title={empty
+                                        ? `Set the weekly person-hours target for ${_activePhaseKey} on ${job.name}. Scheduled hours below run against it.`
+                                        : `${sched.toFixed(1)}h scheduled · target ${target}h · ${_activePhaseKey} phase. Click to edit. Counts each person × cell hours, plus Simpro entries.`}
+                                      style={{...baseStyle, cursor:"pointer"}}>
+                                      <Icon name="clock" size={9} stroke={2.5}/>
+                                      {empty ? (
+                                        <span>SET WK HRS</span>
+                                      ) : (
+                                        <>
+                                          <span style={{fontSize:8,fontWeight:700,opacity:0.75,letterSpacing:"0.06em"}}>WK HRS</span>
+                                          <span>{sched.toFixed(sched<10?1:0)}/{target}h</span>
+                                        </>
+                                      )}
+                                    </button>
                                   );
                                 })()}
                                 {/* Foreman initial — tiny colored chip for glance ID */}
@@ -27850,6 +27957,13 @@ function App() {
   const [jobs,     setJobs]     = useState([]);
   const [upcoming, setUpcoming] = useState([]);
   const [manualTasks, setManualTasks] = useState([]);
+  // Simpro inbox — pending Simpro jobs not yet imported into the app.
+  // Populated by the scheduledSimproCandidateRefresh cloud function (every
+  // 4h) and the on-demand Sync button. Each entry: {simproId, name, address,
+  // customer, dateIssued, stage, firstSeenAt, lastSeenAt, ignored, ignoredAt}.
+  const [simproCandidates, setSimproCandidates] = useState([]);
+  const [simproInboxOpen, setSimproInboxOpen] = useState(false);
+  const [simproSyncing, setSimproSyncing] = useState(false);
 
   const [selected, setSelected] = useState(null);
 
@@ -28045,6 +28159,14 @@ function App() {
       }
     }, err => console.error("Upcoming listener error:", err));
 
+    // Simpro inbox subscription. The cloud function refreshes the doc every
+    // 4 hours; this listener picks up changes in real time so the header
+    // badge count updates without a page reload.
+    const unsubSimproCands = onSnapshot(doc(db,"settings","simproCandidates"), snap => {
+      if(snap.exists()) setSimproCandidates(snap.data().candidates || []);
+      else setSimproCandidates([]);
+    }, err => console.error("Simpro candidates listener error:", err));
+
     // Load manual tasks from Firestore
     const unsubTasks = onSnapshot(collection(db,"manualTasks"),
       (snap) => { const loaded=snap.docs.map(d=>d.data().data).filter(Boolean); setManualTasks(loaded); },
@@ -28064,7 +28186,7 @@ function App() {
       }
     }, ()=>{});
 
-    return () => { unsub(); unsubUpcoming(); unsubTasks(); unsubVersion(); }; // cleanup on unmount
+    return () => { unsub(); unsubUpcoming(); unsubSimproCands(); unsubTasks(); unsubVersion(); }; // cleanup on unmount
 
   },[]);
 
@@ -28362,6 +28484,109 @@ function App() {
 
 
   const updateJob = (updated, patch) => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); saveJob(updated, patch); };
+
+  // ── Simpro inbox handlers ──────────────────────────────────────────
+  // Import a Simpro candidate as a real app job. Creates the job doc with a
+  // CREATE-only setDoc (never modifies an existing doc), removes it from the
+  // candidates list, and opens the new job's detail page so Koy can fill in
+  // the foreman / lead before it lands in everyone's view.
+  const importSimproCandidate = async (cand) => {
+    // Belt-and-suspenders gate. The badge / modal already hide for non-admins,
+    // but if someone hits this code path another way (cached UI, dev tools)
+    // we refuse rather than silently creating jobs.
+    if(getAccess(identity) !== "admin") {
+      toast.error("Importing Simpro jobs is admin-only.");
+      return;
+    }
+    const j = blankJob();
+    j.name = cand.name || "";
+    j.address = cand.address || "";
+    j.simproNo = String(cand.simproId || "");
+    j.customer = cand.customer || "";
+    j.foreman = "Unassigned";
+    j._importedFromSimpro = true;
+    j.imported_at = new Date().toISOString();
+    try {
+      await setDoc(doc(db,"jobs",j.id), {
+        data: j,
+        updated_at: new Date().toISOString(),
+      });
+      setJobs(js => [j, ...js]);
+      // Remove from candidates doc — pull the freshest list from state, drop
+      // this one, write back. Real-time listener will pick up the change.
+      const filtered = simproCandidates.filter(c => String(c.simproId) !== String(cand.simproId));
+      await setDoc(doc(db,"settings","simproCandidates"), {
+        candidates: filtered,
+        updated_at: new Date().toISOString(),
+      });
+      setSelected(j);
+      setSimproInboxOpen(false);
+      toast.success(`Imported "${j.name}" — set foreman/lead to make it live`);
+    } catch (e) {
+      console.error("[HE] importSimproCandidate failed", e);
+      toast.error(`Import failed: ${e.message || e}`);
+    }
+  };
+
+  // Mark a Simpro candidate as ignored. Stays in the doc with ignored:true
+  // so subsequent cloud-function refreshes won't bring it back. User can
+  // un-ignore from the inbox panel if they change their mind.
+  const ignoreSimproCandidate = async (cand) => {
+    try {
+      const nowIso = new Date().toISOString();
+      const updated = simproCandidates.map(c =>
+        String(c.simproId) === String(cand.simproId)
+          ? { ...c, ignored: true, ignoredAt: nowIso }
+          : c
+      );
+      await setDoc(doc(db,"settings","simproCandidates"), {
+        candidates: updated,
+        updated_at: nowIso,
+      });
+    } catch (e) {
+      console.error("[HE] ignoreSimproCandidate failed", e);
+      toast.error(`Ignore failed: ${e.message || e}`);
+    }
+  };
+
+  // Un-ignore: flip the flag back. Useful if Koy dismissed something by
+  // mistake and wants it back in the active list.
+  const unignoreSimproCandidate = async (cand) => {
+    try {
+      const updated = simproCandidates.map(c =>
+        String(c.simproId) === String(cand.simproId)
+          ? { ...c, ignored: false, ignoredAt: null }
+          : c
+      );
+      await setDoc(doc(db,"settings","simproCandidates"), {
+        candidates: updated,
+        updated_at: new Date().toISOString(),
+      });
+    } catch (e) {
+      console.error("[HE] unignoreSimproCandidate failed", e);
+    }
+  };
+
+  // On-demand sync — calls the cloud function to refresh the candidates doc
+  // from Simpro right now instead of waiting for the 4-hour scheduled run.
+  const refreshSimproNow = async () => {
+    if(simproSyncing) return;
+    setSimproSyncing(true);
+    try {
+      const fn = httpsCallable(functions, "refreshSimproCandidates");
+      const result = await fn({});
+      const summary = result.data || {};
+      if(summary.newOnes > 0) {
+        toast.success(`${summary.newOnes} new pending Simpro job${summary.newOnes===1?"":"s"}`);
+      } else {
+        toast.info(`Synced — ${summary.pending||0} pending, ${summary.ignored||0} ignored`);
+      }
+    } catch (e) {
+      toast.error(`Simpro sync failed: ${e.message || e}`);
+    } finally {
+      setSimproSyncing(false);
+    }
+  };
 
   // addJob removed — inline in each button instead
 
@@ -28901,6 +29126,172 @@ function App() {
     <div style={{minHeight:"100vh",background:C.bg,fontFamily:"'DM Sans',sans-serif",color:C.text,position:"relative"}}>
       <HEConfirmHost/>
       <HEToastHost/>
+
+      {/* Simpro Inbox — floating button + modal. Admin-only: the badge is
+          hidden for non-admin users (crew/foreman) so they don't see "3
+          pending" badges they can't act on, and the modal/import handler
+          short-circuits if a non-admin somehow opens it. Anything in this
+          block is a no-op for non-admins. */}
+      {getAccess(identity)==="admin" && (() => {
+        const pendingCount = simproCandidates.filter(c => !c.ignored).length;
+        const ignoredCount = simproCandidates.filter(c =>  c.ignored).length;
+        if(pendingCount === 0 && !simproInboxOpen && ignoredCount === 0) return null;
+        return (
+          <>
+            {pendingCount > 0 && (
+              <button onClick={()=>setSimproInboxOpen(true)}
+                title={`${pendingCount} pending Simpro job${pendingCount===1?"":"s"} — click to review`}
+                style={{
+                  position:"fixed", bottom:24, right:24, zIndex:9000,
+                  background:"#3b82f6", color:"#fff",
+                  border:"none", borderRadius:99,
+                  padding:"12px 18px", cursor:"pointer",
+                  fontFamily:"inherit", fontWeight:700, fontSize:13,
+                  boxShadow:"0 6px 20px rgba(59,130,246,0.4), 0 2px 6px rgba(0,0,0,0.15)",
+                  display:"inline-flex", alignItems:"center", gap:8,
+                }}>
+                <Icon name="inbox" size={16} stroke={2.25}/>
+                <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.06em",opacity:0.85}}>SIMPRO</span>
+                <span style={{
+                  background:"#fff", color:"#3b82f6", borderRadius:99,
+                  padding:"2px 8px", fontSize:12, fontWeight:800, lineHeight:1,
+                }}>{pendingCount}</span>
+              </button>
+            )}
+            {simproInboxOpen && (
+              <div onClick={e=>{if(e.target===e.currentTarget) setSimproInboxOpen(false);}}
+                style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.6)",zIndex:9100,
+                  display:"flex",alignItems:"center",justifyContent:"center",padding:16,
+                  animation:"he-fade-in 0.12s ease-out"}}>
+                <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:14,
+                  maxWidth:600,width:"100%",maxHeight:"85vh",
+                  display:"flex",flexDirection:"column",
+                  boxShadow:"0 24px 64px rgba(0,0,0,0.5)",overflow:"hidden"}}>
+                  {/* Header */}
+                  <div style={{padding:"16px 20px 12px",borderBottom:`1px solid ${C.border}`,
+                    background:C.surface,display:"flex",alignItems:"center",justifyContent:"space-between",gap:12}}>
+                    <div>
+                      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#1e3a8a"}}>
+                        SIMPRO INBOX
+                      </div>
+                      <div style={{fontSize:11,color:C.dim,marginTop:2}}>
+                        {pendingCount} pending · {ignoredCount} ignored
+                      </div>
+                    </div>
+                    <div style={{display:"flex",gap:6,alignItems:"center"}}>
+                      <button onClick={refreshSimproNow} disabled={simproSyncing}
+                        title="Pull from Simpro now"
+                        style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,
+                          color:C.dim,fontSize:11,fontWeight:700,padding:"6px 12px",
+                          cursor:simproSyncing?"wait":"pointer",fontFamily:"inherit",
+                          display:"inline-flex",alignItems:"center",gap:5,opacity:simproSyncing?0.6:1}}>
+                        {simproSyncing ? <Spinner size={12}/> : <Icon name="rotateCw" size={12} stroke={2.25}/>}
+                        {simproSyncing ? "Syncing…" : "Refresh"}
+                      </button>
+                      <button onClick={()=>setSimproInboxOpen(false)}
+                        style={{background:"none",border:"none",color:C.muted,
+                          fontSize:18,cursor:"pointer",padding:"4px 8px",lineHeight:1}}>×</button>
+                    </div>
+                  </div>
+                  {/* Body */}
+                  <div style={{flex:1,overflow:"auto",padding:"12px 16px"}}>
+                    {pendingCount === 0 && ignoredCount === 0 && (
+                      <div style={{padding:"40px 20px",textAlign:"center",color:C.dim,fontSize:12,fontStyle:"italic"}}>
+                        No pending Simpro jobs. Run "Refresh" to pull from Simpro now.
+                      </div>
+                    )}
+                    {/* Pending */}
+                    {simproCandidates.filter(c=>!c.ignored).map(c => (
+                      <div key={c.simproId}
+                        style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,
+                          padding:"10px 14px",marginBottom:8}}>
+                        <div style={{display:"flex",alignItems:"flex-start",justifyContent:"space-between",gap:10}}>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:13,fontWeight:700,color:C.text,lineHeight:1.3}}>
+                              {c.name}
+                              <span style={{fontSize:10,fontWeight:600,color:C.muted,marginLeft:6}}>
+                                #{c.simproId}
+                              </span>
+                            </div>
+                            {c.address && (
+                              <div style={{fontSize:11,color:C.dim,marginTop:3}}>{c.address}</div>
+                            )}
+                            {c.customer && (
+                              <div style={{fontSize:11,color:C.dim,marginTop:1}}>
+                                <span style={{opacity:0.7}}>Customer:</span> {c.customer}
+                              </div>
+                            )}
+                            <div style={{fontSize:10,color:C.muted,marginTop:4,fontStyle:"italic"}}>
+                              First seen {(() => {
+                                const t = new Date(c.firstSeenAt||c.lastSeenAt||Date.now());
+                                const days = Math.floor((Date.now()-t.getTime())/(24*3600*1000));
+                                if(days===0) return "today";
+                                if(days===1) return "yesterday";
+                                return `${days} days ago`;
+                              })()}
+                            </div>
+                          </div>
+                          <div style={{display:"flex",flexDirection:"column",gap:5,flexShrink:0}}>
+                            <button onClick={()=>importSimproCandidate(c)}
+                              style={{background:"#3b82f6",color:"#fff",border:"none",borderRadius:6,
+                                padding:"6px 14px",fontSize:11,fontWeight:700,cursor:"pointer",
+                                fontFamily:"inherit",letterSpacing:"0.04em"}}>
+                              Import →
+                            </button>
+                            <button onClick={()=>ignoreSimproCandidate(c)}
+                              style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,
+                                borderRadius:6,padding:"6px 14px",fontSize:11,fontWeight:600,
+                                cursor:"pointer",fontFamily:"inherit"}}>
+                              Ignore
+                            </button>
+                          </div>
+                        </div>
+                      </div>
+                    ))}
+                    {/* Ignored — collapsed by default */}
+                    {ignoredCount > 0 && (
+                      <details style={{marginTop:12}}>
+                        <summary style={{fontSize:11,fontWeight:700,color:C.muted,
+                          letterSpacing:"0.06em",cursor:"pointer",padding:"6px 4px",
+                          textTransform:"uppercase"}}>
+                          Ignored ({ignoredCount})
+                        </summary>
+                        <div style={{marginTop:6}}>
+                          {simproCandidates.filter(c=>c.ignored).map(c => (
+                            <div key={c.simproId}
+                              style={{background:"transparent",border:`1px dashed ${C.border}`,borderRadius:8,
+                                padding:"8px 12px",marginBottom:6,opacity:0.7,
+                                display:"flex",alignItems:"center",justifyContent:"space-between",gap:10}}>
+                              <div style={{flex:1,minWidth:0}}>
+                                <div style={{fontSize:12,fontWeight:600,color:C.dim}}>
+                                  {c.name} <span style={{fontSize:10,color:C.muted}}>#{c.simproId}</span>
+                                </div>
+                                {c.customer && <div style={{fontSize:10,color:C.muted}}>{c.customer}</div>}
+                              </div>
+                              <button onClick={()=>unignoreSimproCandidate(c)}
+                                title="Move back to pending"
+                                style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,
+                                  borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:600,
+                                  cursor:"pointer",fontFamily:"inherit",flexShrink:0}}>
+                                Restore
+                              </button>
+                            </div>
+                          ))}
+                        </div>
+                      </details>
+                    )}
+                  </div>
+                  {/* Footer */}
+                  <div style={{padding:"10px 16px",borderTop:`1px solid ${C.border}`,
+                    background:C.surface,fontSize:10,color:C.muted,textAlign:"center"}}>
+                    Auto-refreshes every 4 hours from Simpro · Pending stage only
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
       {/* Push notification foreground toast — tap to open the relevant job */}
       {pushToast && (
         <div onClick={() => {
