@@ -10114,7 +10114,11 @@ function BreakerCounts({homeRuns, panelCounts, onCountChange, electricalPanels =
   ];
 
 
-  const panels = getPanelOpts(homeRuns.customPanels||DEFAULT_PANELS).filter(p=>p!==""&&p!=="Meter");
+  // Include Meter — it can carry real breakers (EV chargers, pool-house feeds,
+  // garage heaters wired through the meter base) and Koy needs the breaker
+  // count card on it the same as Panel A/B. Original code filtered Meter out
+  // assuming meters never have breakers; that assumption no longer holds.
+  const panels = getPanelOpts(homeRuns.customPanels||DEFAULT_PANELS).filter(p=>p!=="");
 
 
   // For each panel, group rows by breaker label and count poles
@@ -11096,7 +11100,9 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           // ── Inline panel breaker summary ──
           const extraRows=(homeRuns.extraFloors||[]).flatMap(ef=>homeRuns[ef.key]||[]);
           const allHRRows=[...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[]),...extraRows];
-          const panels=getPanelOpts(cp).filter(p=>p!==""&&p!=="Meter");
+          // See note above (BreakerCounts) — Meter can carry breakers, so
+          // include it in the panel summary cards.
+          const panels=getPanelOpts(cp).filter(p=>p!=="");
           const bOvr=breakerOverrides||{};
           const panelData=panels.map(p=>{
             const rows=allHRRows.filter(r=>r.panel===p&&WIRE_BREAKER[r.wire]);
