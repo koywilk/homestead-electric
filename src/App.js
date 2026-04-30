@@ -10478,7 +10478,98 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
 // Stored on job.electricalPanels (additive — old jobs without it default
 // to []). Click "Print" on any panel to open the print-ready popup using
 // printElectricalPanel().
-function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddress = "" }) {
+function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddress = "", homeRuns = {} }) {
+  // Fill a panel's circuits map from home runs assigned to that panel.
+  // Sorting per Koy:
+  //   1. 2-pole breakers first (top)
+  //   2. Within each pole-count, highest amps at the top
+  //   3. Within same amps, alphabetical by load name (stable, repeatable)
+  // Layout:
+  //   - Left column (slots 1,3,5,...) fills first, top to bottom
+  //   - Right column (slots 2,4,6,...) takes the overflow
+  //   - 2-pole takes two CONSECUTIVE same-side slots vertically
+  //     (e.g. 1+3 on the left, or 2+4 on the right)
+  //   - The bottom slot of a 2-pole is labeled "(240V cont.)" so the
+  //     printed sheet reads like a real panel schedule
+  // Always blank-then-filled — the printed sheet still defaults to blank
+  // unless the user typed or clicked Fill.
+  const fillPanelFromHomeRuns = (panelLabel, slotCount) => {
+    if (!homeRuns) return {};
+    const allRows = [
+      ...(homeRuns.main||[]),
+      ...(homeRuns.upper||[]),
+      ...(homeRuns.basement||[]),
+      ...((homeRuns.extraFloors||[]).flatMap(ef => homeRuns[ef.key]||[])),
+    ];
+    const breakers = allRows
+      .filter(r => r && r.panel && r.wire &&
+        (r.panel||"").toLowerCase() === (panelLabel||"").toLowerCase() &&
+        WIRE_BREAKER[r.wire])
+      .map(r => ({
+        name: (r.name||"").trim() || `${r.wire} circuit`,
+        amps: WIRE_BREAKER[r.wire].amps,
+        poles: WIRE_BREAKER[r.wire].poles,
+        wire: r.wire,
+      }));
+    if (!breakers.length) return null; // signal: nothing to fill
+    breakers.sort((a,b) => {
+      if (a.poles !== b.poles) return b.poles - a.poles; // 2-pole before 1-pole
+      if (a.amps !== b.amps) return b.amps - a.amps;     // higher amps first
+      return (a.name||"").localeCompare(b.name||"");
+    });
+
+    // Per-side cursor walking down each column independently.
+    // 2-poles alternate sides at the top: first 2-pole takes left
+    // (slots 1+3), second takes right (2+4), third left (5+7), fourth
+    // right (6+8), and so on — so they spread evenly across the top
+    // instead of stacking on one side. Once 2-poles are placed,
+    // 1-poles fill the remaining single slots, also alternating sides
+    // for balance.
+    const oddSlots = []; const evenSlots = [];
+    for (let i = 1; i <= slotCount; i++) (i%2 ? oddSlots : evenSlots).push(i);
+    const sides = [
+      { slots: oddSlots,  i: 0 },  // left column (1, 3, 5, ...)
+      { slots: evenSlots, i: 0 },  // right column (2, 4, 6, ...)
+    ];
+    const circuits = {};
+    let next2pSide = 0; // 0=left, 1=right — alternates for 2-poles
+    let next1pSide = 0; // alternates for 1-poles too, kept separate
+
+    for (const br of breakers) {
+      if (br.poles === 2) {
+        // Try the alternating side first, fall back to the other side
+        // if there's no room left on this one (tail-of-panel edge case).
+        let placed = false;
+        for (let attempt = 0; attempt < 2 && !placed; attempt++) {
+          const s = sides[(next2pSide + attempt) % 2];
+          if (s.i + 1 < s.slots.length) {
+            const t = s.slots[s.i], bt = s.slots[s.i+1];
+            circuits[`${t}A`]  = { name: br.name, amps: String(br.amps), wire: br.wire, notes: "240V" };
+            circuits[`${bt}A`] = { name: `${br.name} (240V cont.)`, amps: String(br.amps), wire: br.wire };
+            s.i += 2;
+            placed = true;
+            next2pSide = (next2pSide + 1) % 2; // flip for next 2-pole
+          }
+        }
+        if (!placed) break; // no room anywhere — bail
+      } else {
+        let placed = false;
+        for (let attempt = 0; attempt < 2 && !placed; attempt++) {
+          const s = sides[(next1pSide + attempt) % 2];
+          if (s.i < s.slots.length) {
+            circuits[`${s.slots[s.i]}A`] = { name: br.name, amps: String(br.amps), wire: br.wire };
+            s.i++;
+            placed = true;
+            next1pSide = (next1pSide + 1) % 2;
+          }
+        }
+        if (!placed) break;
+      }
+    }
+    return circuits;
+  };
+
+
   const list = Array.isArray(panels) ? panels : [];
   const [newLabel, setNewLabel] = useState("");
   const [expanded, setExpanded] = useState({}); // { [panelId]: bool }
@@ -10577,6 +10668,38 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
               <span style={{fontSize:10,color:C.muted,fontWeight:600,marginLeft:"auto"}}>
                 {filledCount} filled
               </span>
+              {/* Fill from home runs — looks at the home-run rows assigned to
+                  this panel (matched by name), groups them into breakers via
+                  WIRE_BREAKER, and lays them down sorted: 2-pole first,
+                  highest amps at the top, single-pole below. Confirms
+                  before overwriting any existing typed circuits — the
+                  "blank by default" promise is intact unless the user
+                  clicks Fill explicitly. */}
+              <button onClick={async ()=>{
+                const next = fillPanelFromHomeRuns(p.label, p.slotCount||30);
+                if (next === null) {
+                  toast.warn(`No home-run rows on "${p.label}" with wire sizes set yet — assign loads first.`);
+                  return;
+                }
+                if (filledCount > 0) {
+                  const ok = await showConfirm({
+                    message: `Fill "${p.label}" from home runs? This will REPLACE any circuit names you've typed in this panel.`,
+                    confirmLabel: 'Fill',
+                    danger: true,
+                  });
+                  if (!ok) return;
+                }
+                updPanel(p.id, { circuits: next });
+                toast.success(`Filled "${p.label}" — ${Object.keys(next).length} slots populated`);
+              }}
+                title={`Auto-fill ${p.label||"panel"} from home-run loads`}
+                style={{background:"none",border:`1px solid ${C.border}`,color:C.green,
+                  borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",
+                  fontFamily:"inherit",letterSpacing:"0.05em",
+                  display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}>
+                <Icon name="zap" size={10} stroke={2}/>
+                FILL
+              </button>
               <button onClick={()=>printElectricalPanel({jobName,jobAddress,panel:p})}
                 title={`Print ${p.label||"panel"} schedule`}
                 style={{background:"none",border:`1px solid ${C.border}`,color:C.accent,
@@ -10766,7 +10889,8 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
         panels={electricalPanels || []}
         onChange={onElectricalPanelsChange}
         jobName={jobName||""}
-        jobAddress={jobAddress||""}/>
+        jobAddress={jobAddress||""}
+        homeRuns={homeRuns||{}}/>
 
       {/* Generator Load Selection — starts collapsed so the section header is
           quick to scan; foremen can expand when they need to pick/review loads. */}
@@ -12337,7 +12461,11 @@ function DriveFilesSection({ job, onUpdate }) {
     if (!job.simproNo) return;
     const fid = extractDriveFolderId(job.driveFolderId);
     if (!fid) return;
-    if (!await showConfirm(`Push new Drive plans to Simpro job #${job.simproNo}? This only adds files — nothing in Simpro will be deleted.`)) return;
+    if (!await showConfirm({
+      message: `Push new Drive plans to Simpro job #${job.simproNo}? This only adds files — nothing in Simpro will be removed.`,
+      confirmLabel: 'Push',
+      danger: false,
+    })) return;
     setSimproSync("loading");
     try {
       const pushFn = httpsCallable(functions, "pushPlansToSimpro");
