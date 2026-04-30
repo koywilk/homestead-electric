@@ -10582,19 +10582,108 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
       if (!placed) onePolesRemaining.push(br);
     }
 
-    // ── Phase 3: spillover into tandem (B) positions on 1-pole slots ──
+    // ── Phase 3: tandems first, then quads ──
+    // 3a — same-amps tandem pairing (B position of 1-pole slots)
+    // 3b — split-tandem fallback (mismatched amps; flagged splitTandem)
+    // 3c — quad conversion: only if tandems can't absorb everything. Each
+    //      existing 2-pole can become a quad — Koy's panels lay quads out
+    //      with the 1-poles on the OUTER (A position) and the 2-pole on
+    //      the INNER (B position) of the slot pair. So we MOVE the existing
+    //      2-pole from A→B and put 2 overflow 1-poles in the freed A's.
     if (onePolesRemaining.length) {
-      // Walk every slot in number order, placing on B if A is a 1-pole.
-      const tandemQueue = onePolesRemaining.slice();
-      for (let n = 1; n <= slotCount && tandemQueue.length; n++) {
-        if (twoPoleSlots.has(n)) continue;            // 2-pole slot — never tandem
-        if (!circuits[`${n}A`]) continue;             // empty A — should be filled before tandem
-        if (circuits[`${n}B`]) continue;              // already tandem'd
-        const br = tandemQueue.shift();
-        circuits[`${n}B`] = { name: br.name, amps: String(br.amps), wire: br.wire, notes: "tandem" };
+      const queue = onePolesRemaining.slice();
+
+      // Cache amps of A-position 1-pole on each slot (excludes 2-pole slots)
+      const slotAmps = {};
+      for (let n = 1; n <= slotCount; n++) {
+        if (twoPoleSlots.has(n)) continue;
+        const a = circuits[`${n}A`];
+        if (a && a.amps) slotAmps[n] = parseInt(a.amps, 10);
       }
-      // Anything still in the queue couldn't fit at all
-      tandemQueue.forEach(b => unplaced.push(b));
+
+      // 3a — same-amps pairing
+      const remainingAfterMatch = [];
+      for (const br of queue) {
+        let placed = false;
+        for (let n = 1; n <= slotCount; n++) {
+          if (slotAmps[n] === br.amps && !circuits[`${n}B`]) {
+            circuits[`${n}B`] = {
+              name: br.name, amps: String(br.amps), wire: br.wire,
+              notes: "tandem",
+            };
+            placed = true;
+            break;
+          }
+        }
+        if (!placed) remainingAfterMatch.push(br);
+      }
+
+      // 3b — split-tandem fallback
+      const remainingAfterSplit = [];
+      for (const br of remainingAfterMatch) {
+        let placed = false;
+        for (let n = 1; n <= slotCount; n++) {
+          if (twoPoleSlots.has(n)) continue;
+          if (!circuits[`${n}A`]) continue;
+          if (circuits[`${n}B`]) continue;
+          circuits[`${n}B`] = {
+            name: br.name, amps: String(br.amps), wire: br.wire,
+            notes: `tandem · SPLIT (${br.amps}A with ${slotAmps[n]||'?'}A)`,
+            splitTandem: true,
+          };
+          placed = true;
+          break;
+        }
+        if (!placed) remainingAfterSplit.push(br);
+      }
+
+      // 3c — quad conversion.
+      // Quad physical layout for a slot pair (top slot N, bottom slot N+2):
+      //   N-A:    1-pole (outer top)         ← outermost
+      //   N-B:    2-pole top (240V)          ← inner top
+      //   (N+2)-A: 2-pole continuation (240V) ← inner bottom
+      //   (N+2)-B: 1-pole (outer bottom)     ← outermost
+      // i.e. the 2-pole sits in the middle two cells (1B + 3A) and the
+      // 1-poles are on the outermost cells (1A + 3B). To convert an
+      // existing 2-pole (currently at NA + (N+2)A) into a quad we have
+      // to MOVE the existing top→1B and the existing continuation→3A,
+      // freeing up 1A and 3B for the new 1-poles.
+      const twoPoleTops = [];
+      const oddCol  = []; for (let n = 1; n <= slotCount; n+=2) oddCol.push(n);
+      const evenCol = []; for (let n = 2; n <= slotCount; n+=2) evenCol.push(n);
+      for (const col of [oddCol, evenCol]) {
+        for (let i = 0; i + 1 < col.length; i++) {
+          const top = col[i], bot = col[i+1];
+          const ta = circuits[`${top}A`], ba = circuits[`${bot}A`];
+          if (ta && ba && ta.notes === "240V" && ba.name && ba.name.includes("(240V cont.")) {
+            if (circuits[`${top}B`] || circuits[`${bot}B`]) continue;
+            twoPoleTops.push({ top, bot, topData: ta, botData: ba });
+          }
+        }
+      }
+
+      while (remainingAfterSplit.length >= 2 && twoPoleTops.length) {
+        const pair = twoPoleTops.shift();
+        const br1 = remainingAfterSplit.shift();
+        const br2 = remainingAfterSplit.shift();
+        // Move the 2-pole into the inner cells: top-B and bottom-A
+        circuits[`${pair.top}B`] = { ...pair.topData, notes: "240V (quad inner top)" };
+        circuits[`${pair.bot}A`] = { ...pair.botData, notes: "240V cont. (quad inner)" };
+        // Place the two 1-poles on the outer cells: top-A and bottom-B
+        circuits[`${pair.top}A`] = {
+          name: br1.name, amps: String(br1.amps), wire: br1.wire,
+          notes: "quad outer top", quadOuter: true,
+        };
+        circuits[`${pair.bot}B`] = {
+          name: br2.name, amps: String(br2.amps), wire: br2.wire,
+          notes: "quad outer bottom", quadOuter: true,
+        };
+      }
+
+      // If only one 1-pole is left and we have a quad-eligible 2-pole, we
+      // could fill just one outer slot. But mismatching the quad halves is
+      // weird — better to leave it as unplaced so Koy decides.
+      remainingAfterSplit.forEach(b => unplaced.push(b));
     }
 
     return { circuits, unplaced };
@@ -10726,14 +10815,15 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                 updPanel(p.id, { circuits: result.circuits });
                 const filledNum = Object.keys(result.circuits).length;
                 if (result.unplaced && result.unplaced.length) {
-                  // Some breakers couldn't fit — toast a warning with the
-                  // names so Koy knows which ones to move or what panel
-                  // size to bump up to. Long duration so it can be read.
+                  // Some breakers couldn't fit even with full tandeming.
+                  // The next step is usually a quad on a 2-pole load (frees
+                  // up 2 1-pole spots without changing the panel size), so
+                  // suggest that instead of bumping panel size.
                   const names = result.unplaced.map(b => `${b.amps}A ${b.poles===2?'2P':'1P'} ${b.name}`).join('\n• ');
                   toast.warn(
                     `Filled "${p.label}" — ${filledNum} slots used.\n\n` +
                     `${result.unplaced.length} breaker${result.unplaced.length===1?'':'s'} did NOT fit:\n• ${names}\n\n` +
-                    `Bump panel size or move them to another panel.`,
+                    `Use a quad breaker on a 2-pole load to free up space, or move these to another panel.`,
                     { duration: 15000 }
                   );
                 } else {
@@ -10774,15 +10864,47 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                       };
                       const renderCell = (slotKey, isBottom) => {
                         const c = (p.circuits||{})[slotKey] || {};
+                        const isSplit = !!c.splitTandem;
+                        const isQuadOuter = !!c.quadOuter;
+                        const isQuadInner = (c.notes||"").includes("quad inner");
+                        const isQuad = isQuadOuter || isQuadInner;
+                        // Split-tandems get strong red border + ⚠ badge.
+                        // Quad cells get a distinct purple background so
+                        // both halves of the quad read as one unit on the
+                        // schedule and on the printout.
+                        const bg = isSplit ? "#fef2f2"
+                                 : isQuad  ? "#f3e8ff"
+                                 : C.bg;
+                        const borderColor = isSplit ? "#dc2626" : isQuad ? "#7e22ce" : C.border;
+                        const borderWidth = isSplit ? 2 : isQuad ? 1 : 1;
+                        const textColor = isSplit ? "#991b1b" : isQuad ? "#581c87" : C.text;
                         return (
                           <td style={{
-                            border:`1px solid ${C.border}`,
-                            borderTop: isBottom ? `1px dashed ${C.border}` : `1px solid ${C.border}`,
-                            padding:0,background:C.bg,height:24}}>
+                            border: `${borderWidth}px solid ${borderColor}`,
+                            borderTop: isBottom
+                              ? (isSplit || isQuad ? `${borderWidth}px solid ${borderColor}` : `1px dashed ${C.border}`)
+                              : `${borderWidth}px solid ${borderColor}`,
+                            padding:0, background: bg,
+                            height:24, position:"relative"}}>
                             <input value={c.name||""}
                               onChange={e=>setCircuit(p.id, slotKey, { name: e.target.value })}
                               placeholder={isBottom?"…tandem":""}
-                              style={cellInputStyle}/>
+                              title={c.notes || ""}
+                              style={{...cellInputStyle, color: textColor, fontWeight: isSplit||isQuad ? 700 : 400}}/>
+                            {isSplit && (
+                              <span title={c.notes||"split tandem"}
+                                style={{position:"absolute",right:3,top:1,fontSize:8,fontWeight:800,
+                                  color:"#dc2626",letterSpacing:"0.05em",pointerEvents:"none"}}>
+                                ⚠ SPLIT
+                              </span>
+                            )}
+                            {isQuadOuter && (
+                              <span title="Quad outer (1-pole)"
+                                style={{position:"absolute",right:3,top:1,fontSize:8,fontWeight:800,
+                                  color:"#7e22ce",letterSpacing:"0.05em",pointerEvents:"none"}}>
+                                QUAD
+                              </span>
+                            )}
                           </td>
                         );
                       };
@@ -11165,7 +11287,46 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
             const calcSpaces=activeGroups.reduce((s,g)=>s+(g.poles*g.count),0);
             const override=panelCounts?.[p]||"";
             const displaySpaces=override?parseInt(override,10)||calcSpaces:calcSpaces;
-            return {p,displaySpaces,override,activeGroups,autoGroups,isManual};
+
+            // Tandem + quad requirement. Two ways to fit more circuits in a
+            // panel that's tight on slots:
+            //   • Tandem breaker — replaces 2 single-pole 1-pole circuits with
+            //     one breaker in one slot (saves 1 slot per tandem).
+            //   • Quad breaker — replaces a standard 2-pole breaker (2 slots)
+            //     with a quad that holds the 2-pole AND two extra 1-pole
+            //     circuits in the same 2 slots (saves 2 slots per quad,
+            //     consumes 2 1-poles).
+            // Quads are more efficient (2 slots saved each) so prefer quads
+            // first, then tandems for any remaining overflow.
+            let tandemInfo = null;
+            const matchedSchedule = (electricalPanels||[]).find(ep =>
+              (ep.label||"").toLowerCase() === (p||"").toLowerCase());
+            if (matchedSchedule) {
+              const slotCap = matchedSchedule.slotCount || 0;
+              const num1P = activeGroups.filter(g=>g.poles===1).reduce((n,g)=>n+g.count,0);
+              const num2P = activeGroups.filter(g=>g.poles===2).reduce((n,g)=>n+g.count,0);
+              const slotsNeeded = num1P + num2P*2;
+              if (slotCap > 0 && slotsNeeded > slotCap) {
+                let overflow = slotsNeeded - slotCap;
+                let onesAvailable = num1P;
+                let twosAvailable = num2P;
+                // Tandems FIRST — each saves 1 slot, consumes 2 1-poles.
+                // Tandems are cheaper / more common and Koy prefers exhausting
+                // them before reaching for quads.
+                const tandemsNeeded = Math.max(0, Math.min(overflow, Math.floor(onesAvailable/2)));
+                overflow      -= tandemsNeeded;
+                onesAvailable -= 2 * tandemsNeeded;
+                // Quads only if tandems can't cover the rest. Each quad saves
+                // 2 slots — converts an existing 2-pole into a quad with the
+                // 2-pole on the inner and two 1-poles on the outer.
+                const quadsNeeded = Math.max(0, Math.min(twosAvailable, Math.floor(onesAvailable/2), Math.ceil(overflow/2)));
+                overflow      -= 2 * quadsNeeded;
+                const stillOver = Math.max(0, overflow);
+                tandemInfo = { quadsNeeded, tandemsNeeded, stillOver, slotCap, slotsNeeded };
+              }
+            }
+
+            return {p,displaySpaces,override,activeGroups,autoGroups,isManual,tandemInfo};
           }).filter(Boolean);
 
           // helpers for breaker override editing
@@ -11181,7 +11342,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
             {/* Panel summary cards */}
             {panelData.length>0&&(
               <div style={{display:'flex',flexWrap:'wrap',gap:8,marginBottom:14}}>
-                {panelData.map(({p,displaySpaces,override,activeGroups,autoGroups,isManual})=>{
+                {panelData.map(({p,displaySpaces,override,activeGroups,autoGroups,isManual,tandemInfo})=>{
                   const isEditing=editingBreakers===p;
                   const editGroups=bOvr[p]||activeGroups;
                   return (
@@ -11207,6 +11368,40 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                       <span style={{fontSize:10,fontWeight:400,color:C.dim,marginLeft:4}}>spaces</span>
                       {override&&<span style={{fontSize:9,color:C.orange,marginLeft:4}}>override</span>}
                     </div>
+
+                    {/* Tandem + quad requirement banner — renders when this
+                        panel needs special breaker types to fit all circuits.
+                        Quads (2-pole + 2 inner 1-poles in one 2-slot pair)
+                        and tandems (2 1-poles in one slot) buy back capacity
+                        without needing a bigger panel. Banner tells Koy
+                        what to order. */}
+                    {tandemInfo && (tandemInfo.quadsNeeded > 0 || tandemInfo.tandemsNeeded > 0 || tandemInfo.stillOver > 0) && (
+                      <div style={{marginBottom:7,padding:'5px 8px',
+                        background: tandemInfo.stillOver>0 ? '#fef2f2' : '#fef3c7',
+                        border: `1px solid ${tandemInfo.stillOver>0 ? '#fecaca' : '#fcd34d'}`,
+                        borderRadius:6, fontSize:10, lineHeight:1.4}}>
+                        <div style={{color:'#92400e',fontWeight:700,marginBottom:2}}>
+                          <Icon name="alertTriangle" size={9} stroke={2.5}/> {tandemInfo.slotsNeeded} circuits in a {tandemInfo.slotCap}-space panel — need:
+                        </div>
+                        {tandemInfo.tandemsNeeded > 0 && (
+                          <div style={{color:'#92400e',fontWeight:700,paddingLeft:14}}>
+                            • <b>{tandemInfo.tandemsNeeded} tandem breaker{tandemInfo.tandemsNeeded===1?'':'s'}</b>
+                            <span style={{color:'#a16207',fontWeight:500}}> (each holds 2 single-pole circuits)</span>
+                          </div>
+                        )}
+                        {tandemInfo.quadsNeeded > 0 && (
+                          <div style={{color:'#92400e',fontWeight:700,paddingLeft:14}}>
+                            • <b>{tandemInfo.quadsNeeded} quad breaker{tandemInfo.quadsNeeded===1?'':'s'}</b>
+                            <span style={{color:'#a16207',fontWeight:500}}> (1-poles on the outer, 2-pole on the inner)</span>
+                          </div>
+                        )}
+                        {tandemInfo.stillOver > 0 && (
+                          <div style={{color:'#991b1b',fontWeight:700,marginTop:3,paddingLeft:14}}>
+                            • <b>{tandemInfo.stillOver} circuit{tandemInfo.stillOver===1?'':'s'} still won't fit</b> even with full quads + tandems
+                          </div>
+                        )}
+                      </div>
+                    )}
 
                     {/* Chips (view mode) or edit rows (edit mode) */}
                     {!isEditing?(
