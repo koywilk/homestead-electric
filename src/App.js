@@ -11312,7 +11312,12 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           const panels=getPanelOpts(cp).filter(p=>p!=="");
           const bOvr=breakerOverrides||{};
           const panelData=panels.map(p=>{
-            const rows=allHRRows.filter(r=>r.panel===p&&WIRE_BREAKER[r.wire]);
+            // Case-insensitive match — same comparison FILL uses, so the
+            // card's spot count never drifts from what fillPanelFromHomeRuns
+            // would actually pull. Strict equality silently dropped any
+            // row whose panel field had different casing than `p`.
+            const pLow = (p||"").toLowerCase();
+            const rows=allHRRows.filter(r=>r&&r.panel&&(r.panel||"").toLowerCase()===pLow&&WIRE_BREAKER[r.wire]);
             if(!rows.length && !bOvr[p]) return null;
             const groups={};
             rows.forEach(r=>{
@@ -11326,6 +11331,11 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
             // activeGroups: [{id,amps,poles,count}] — manual override or derived from auto
             const activeGroups=isManual ? bOvr[p] : autoGroups.map(([,g])=>({id:uid(),amps:g.amps,poles:g.poles,count:g.count}));
             const calcSpaces=activeGroups.reduce((s,g)=>s+(g.poles*g.count),0);
+            // Drift detection: when a manual override exists but the live home
+            // runs would compute a different number, surface that — otherwise
+            // the card silently disagrees with what FILL would actually do.
+            const autoSpaces=autoGroups.reduce((s,[,g])=>s+(g.poles*g.count),0);
+            const driftFromAuto=isManual && autoSpaces!==calcSpaces ? (autoSpaces-calcSpaces) : 0;
             const override=panelCounts?.[p]||"";
             const displaySpaces=override?parseInt(override,10)||calcSpaces:calcSpaces;
 
@@ -11377,7 +11387,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
               }
             }
 
-            return {p,displaySpaces,override,activeGroups,autoGroups,isManual,tandemInfo};
+            return {p,displaySpaces,override,activeGroups,autoGroups,isManual,tandemInfo,driftFromAuto,autoSpaces};
           }).filter(Boolean);
 
           // helpers for breaker override editing
@@ -11393,7 +11403,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
             {/* Panel summary cards */}
             {panelData.length>0&&(
               <div style={{display:'flex',flexWrap:'wrap',gap:8,marginBottom:14}}>
-                {panelData.map(({p,displaySpaces,override,activeGroups,autoGroups,isManual,tandemInfo})=>{
+                {panelData.map(({p,displaySpaces,override,activeGroups,autoGroups,isManual,tandemInfo,driftFromAuto,autoSpaces})=>{
                   const isEditing=editingBreakers===p;
                   const editGroups=bOvr[p]||activeGroups;
                   return (
@@ -11419,6 +11429,29 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                       <span style={{fontSize:10,fontWeight:400,color:C.dim,marginLeft:4}}>spaces</span>
                       {override&&<span style={{fontSize:9,color:C.orange,marginLeft:4}}>override</span>}
                     </div>
+
+                    {/* Drift hint — manual override is stale (auto-derived
+                        spaces differ from manual). Shows the live count and
+                        a one-click Refresh that reverts to auto so the card
+                        matches what FILL would actually produce. */}
+                    {driftFromAuto !== 0 && (
+                      <div style={{marginBottom:7,padding:'5px 8px',
+                        background:'#fef3c7',border:`1px solid ${C.orange}55`,
+                        borderRadius:6,fontSize:10,lineHeight:1.4,color:'#92400e'}}>
+                        <div style={{fontWeight:700,marginBottom:2}}>
+                          <Icon name="alertTriangle" size={9} stroke={2.5}/> Manual count is stale
+                        </div>
+                        <div style={{paddingLeft:14}}>
+                          Live home runs total <b>{autoSpaces}</b> spaces ({driftFromAuto>0?'+':''}{driftFromAuto} vs manual)
+                        </div>
+                        <button onClick={()=>resetBreakers(p)}
+                          style={{marginTop:3,marginLeft:14,background:'none',border:`1px solid ${C.orange}66`,
+                            color:C.orange,borderRadius:4,padding:'2px 7px',fontSize:9,fontWeight:700,
+                            cursor:'pointer',fontFamily:'inherit'}}>
+                          Refresh from home runs
+                        </button>
+                      </div>
+                    )}
 
                     {/* Tandem + quad requirement banner — renders when this
                         panel needs special breaker types to fit all circuits.
