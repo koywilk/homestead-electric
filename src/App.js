@@ -10879,16 +10879,31 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                         const isQuadOuter = !!c.quadOuter;
                         const isQuadInner = (c.notes||"").includes("quad inner");
                         const isQuad = isQuadOuter || isQuadInner;
+                        // Tandem detection: both A and B of this slot have
+                        // names AND neither is a 2-pole/quad/split — i.e. two
+                        // ordinary 1-poles sharing one slot. We highlight BOTH
+                        // cells so a tandem visually reads as a single unit
+                        // (same way quads do).
+                        const slotNum = parseInt(slotKey, 10);
+                        const sibA = (p.circuits||{})[`${slotNum}A`] || {};
+                        const sibB = (p.circuits||{})[`${slotNum}B`] || {};
+                        const sibIs2P = (sibA.notes||"").includes("240V") || (sibB.notes||"").includes("240V") ||
+                                        (sibA.name||"").includes("(240V cont.") || (sibB.name||"").includes("(240V cont.");
+                        const sibIsQuad = sibA.quadOuter || sibB.quadOuter ||
+                                          (sibA.notes||"").includes("quad inner") || (sibB.notes||"").includes("quad inner");
+                        const sibIsSplit = sibA.splitTandem || sibB.splitTandem;
+                        const isTandem = !!(sibA.name && sibB.name && !sibIs2P && !sibIsQuad && !sibIsSplit);
                         // Split-tandems get strong red border + ⚠ badge.
-                        // Quad cells get a distinct purple background so
-                        // both halves of the quad read as one unit on the
-                        // schedule and on the printout.
+                        // Quad cells get distinct purple. Tandems get warm
+                        // amber so all three "compressed" breaker types read
+                        // at a glance.
                         const bg = isSplit ? "#fef2f2"
                                  : isQuad  ? "#f3e8ff"
+                                 : isTandem ? "#fef3c7"
                                  : C.bg;
-                        const borderColor = isSplit ? "#dc2626" : isQuad ? "#7e22ce" : C.border;
-                        const borderWidth = isSplit ? 2 : isQuad ? 1 : 1;
-                        const textColor = isSplit ? "#991b1b" : isQuad ? "#581c87" : C.text;
+                        const borderColor = isSplit ? "#dc2626" : isQuad ? "#7e22ce" : isTandem ? "#f59e0b" : C.border;
+                        const borderWidth = isSplit ? 2 : isQuad ? 1 : isTandem ? 1 : 1;
+                        const textColor = isSplit ? "#991b1b" : isQuad ? "#581c87" : isTandem ? "#92400e" : C.text;
                         // Right-edge amp pill — always visible when c.amps
                         // is set, so Koy can scan amps down a column without
                         // hovering. SPLIT/QUAD badges sit just left of it.
@@ -10898,7 +10913,7 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                           <td style={{
                             border: `${borderWidth}px solid ${borderColor}`,
                             borderTop: isBottom
-                              ? (isSplit || isQuad ? `${borderWidth}px solid ${borderColor}` : `1px dashed ${C.border}`)
+                              ? (isSplit || isQuad || isTandem ? `${borderWidth}px solid ${borderColor}` : `1px dashed ${C.border}`)
                               : `${borderWidth}px solid ${borderColor}`,
                             padding:0, background: bg,
                             height:24, position:"relative"}}>
@@ -11333,21 +11348,31 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
               const num2P = activeGroups.filter(g=>g.poles===2).reduce((n,g)=>n+g.count,0);
               const slotsNeeded = num1P + num2P*2;
               if (slotCap > 0 && slotsNeeded > slotCap) {
-                let overflow = slotsNeeded - slotCap;
-                let onesAvailable = num1P;
-                let twosAvailable = num2P;
-                // Tandems FIRST — each saves 1 slot, consumes 2 1-poles.
-                // Tandems are cheaper / more common and Koy prefers exhausting
-                // them before reaching for quads.
-                const tandemsNeeded = Math.max(0, Math.min(overflow, Math.floor(onesAvailable/2)));
-                overflow      -= tandemsNeeded;
-                onesAvailable -= 2 * tandemsNeeded;
-                // Quads only if tandems can't cover the rest. Each quad saves
-                // 2 slots — converts an existing 2-pole into a quad with the
-                // 2-pole on the inner and two 1-poles on the outer.
-                const quadsNeeded = Math.max(0, Math.min(twosAvailable, Math.floor(onesAvailable/2), Math.ceil(overflow/2)));
-                overflow      -= 2 * quadsNeeded;
-                const stillOver = Math.max(0, overflow);
+                const overflow = slotsNeeded - slotCap;
+                // Slot inventory for 1-poles after 2-poles claim their 2 slots
+                // each. If 2-poles alone overflow the panel, this clamps to 0
+                // and tandems can't help (quads only buy back capacity for
+                // 1-poles, not 2-poles, since each quad still uses 2 slots).
+                const onePoleSlots = Math.max(0, slotCap - 2*num2P);
+                // Tandems FIRST — each saves 1 slot, holds 2 1-poles in 1
+                // physical slot. Bounded by:
+                //   • overflow we still need to absorb
+                //   • floor(N₁/2) — tandems need pairs of 1-poles
+                //   • onePoleSlots — can't tandem more slots than exist
+                // The third constraint is what was missing before: with 12
+                // 2-poles in a 40-space panel only 16 slots are 1-pole-able,
+                // so 19 tandems was structurally impossible.
+                const tandemsNeeded = Math.max(0, Math.min(overflow, Math.floor(num1P/2), onePoleSlots));
+                let stillOverflow = overflow - tandemsNeeded;
+                // Quads: convert an existing 2-pole into a quad. The 2-pole
+                // moves to the inner cells, two extra 1-poles ride the outer
+                // cells. Each quad saves 2 slots. Bounded by N₂ (only existing
+                // 2-poles can be converted).
+                const quadsNeeded = stillOverflow > 0
+                  ? Math.max(0, Math.min(num2P, Math.ceil(stillOverflow / 2)))
+                  : 0;
+                stillOverflow -= 2 * quadsNeeded;
+                const stillOver = Math.max(0, stillOverflow);
                 tandemInfo = { quadsNeeded, tandemsNeeded, stillOver, slotCap, slotsNeeded };
               }
             }
