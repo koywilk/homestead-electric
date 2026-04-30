@@ -10522,13 +10522,16 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
       return (a.name||"").localeCompare(b.name||"");
     });
 
-    // Per-side cursor walking down each column independently.
-    // 2-poles alternate sides at the top: first 2-pole takes left
-    // (slots 1+3), second takes right (2+4), third left (5+7), fourth
-    // right (6+8), and so on — so they spread evenly across the top
-    // instead of stacking on one side. Once 2-poles are placed,
-    // 1-poles fill the remaining single slots, also alternating sides
-    // for balance.
+    // Three-pass placement so we use tandems when a panel is full:
+    //   Phase 1 (A position): 2-poles alternate sides top-down (1+3, 2+4, 5+7, ...)
+    //   Phase 2 (A position): 1-poles fill remaining A slots alternating sides
+    //   Phase 3 (B / tandem): leftover 1-poles drop into tandem positions
+    //                          on slots whose A is a 1-pole. 2-pole slots are
+    //                          NEVER tandem'd (a 2-pole occupies the full
+    //                          slot pair physically).
+    //   Anything still left after Phase 3 → unplaced[] → caller toasts a
+    //                          warning with the names so Koy knows what to
+    //                          move or which panel size to bump up to.
     const oddSlots = []; const evenSlots = [];
     for (let i = 1; i <= slotCount; i++) (i%2 ? oddSlots : evenSlots).push(i);
     const sides = [
@@ -10536,41 +10539,65 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
       { slots: evenSlots, i: 0 },  // right column (2, 4, 6, ...)
     ];
     const circuits = {};
-    let next2pSide = 0; // 0=left, 1=right — alternates for 2-poles
-    let next1pSide = 0; // alternates for 1-poles too, kept separate
+    const twoPoleSlots = new Set(); // slot numbers that are part of a 2-pole
+    let next2pSide = 0;
+    let next1pSide = 0;
+    const unplaced = [];
 
-    for (const br of breakers) {
-      if (br.poles === 2) {
-        // Try the alternating side first, fall back to the other side
-        // if there's no room left on this one (tail-of-panel edge case).
-        let placed = false;
-        for (let attempt = 0; attempt < 2 && !placed; attempt++) {
-          const s = sides[(next2pSide + attempt) % 2];
-          if (s.i + 1 < s.slots.length) {
-            const t = s.slots[s.i], bt = s.slots[s.i+1];
-            circuits[`${t}A`]  = { name: br.name, amps: String(br.amps), wire: br.wire, notes: "240V" };
-            circuits[`${bt}A`] = { name: `${br.name} (240V cont.)`, amps: String(br.amps), wire: br.wire };
-            s.i += 2;
-            placed = true;
-            next2pSide = (next2pSide + 1) % 2; // flip for next 2-pole
-          }
+    // Split breakers (already sorted: 2-pole first, amps DESC)
+    const twoPoles = breakers.filter(b => b.poles === 2);
+    const onePoles = breakers.filter(b => b.poles === 1);
+
+    // ── Phase 1: place 2-poles in A positions ──
+    for (const br of twoPoles) {
+      let placed = false;
+      for (let attempt = 0; attempt < 2 && !placed; attempt++) {
+        const s = sides[(next2pSide + attempt) % 2];
+        if (s.i + 1 < s.slots.length) {
+          const t = s.slots[s.i], bt = s.slots[s.i+1];
+          circuits[`${t}A`]  = { name: br.name, amps: String(br.amps), wire: br.wire, notes: "240V" };
+          circuits[`${bt}A`] = { name: `${br.name} (240V cont.)`, amps: String(br.amps), wire: br.wire };
+          twoPoleSlots.add(t); twoPoleSlots.add(bt);
+          s.i += 2;
+          placed = true;
+          next2pSide = (next2pSide + 1) % 2;
         }
-        if (!placed) break; // no room anywhere — bail
-      } else {
-        let placed = false;
-        for (let attempt = 0; attempt < 2 && !placed; attempt++) {
-          const s = sides[(next1pSide + attempt) % 2];
-          if (s.i < s.slots.length) {
-            circuits[`${s.slots[s.i]}A`] = { name: br.name, amps: String(br.amps), wire: br.wire };
-            s.i++;
-            placed = true;
-            next1pSide = (next1pSide + 1) % 2;
-          }
-        }
-        if (!placed) break;
       }
+      if (!placed) unplaced.push(br);
     }
-    return circuits;
+
+    // ── Phase 2: place 1-poles in remaining A positions ──
+    const onePolesRemaining = [];
+    for (const br of onePoles) {
+      let placed = false;
+      for (let attempt = 0; attempt < 2 && !placed; attempt++) {
+        const s = sides[(next1pSide + attempt) % 2];
+        if (s.i < s.slots.length) {
+          circuits[`${s.slots[s.i]}A`] = { name: br.name, amps: String(br.amps), wire: br.wire };
+          s.i++;
+          placed = true;
+          next1pSide = (next1pSide + 1) % 2;
+        }
+      }
+      if (!placed) onePolesRemaining.push(br);
+    }
+
+    // ── Phase 3: spillover into tandem (B) positions on 1-pole slots ──
+    if (onePolesRemaining.length) {
+      // Walk every slot in number order, placing on B if A is a 1-pole.
+      const tandemQueue = onePolesRemaining.slice();
+      for (let n = 1; n <= slotCount && tandemQueue.length; n++) {
+        if (twoPoleSlots.has(n)) continue;            // 2-pole slot — never tandem
+        if (!circuits[`${n}A`]) continue;             // empty A — should be filled before tandem
+        if (circuits[`${n}B`]) continue;              // already tandem'd
+        const br = tandemQueue.shift();
+        circuits[`${n}B`] = { name: br.name, amps: String(br.amps), wire: br.wire, notes: "tandem" };
+      }
+      // Anything still in the queue couldn't fit at all
+      tandemQueue.forEach(b => unplaced.push(b));
+    }
+
+    return { circuits, unplaced };
   };
 
 
@@ -10634,7 +10661,10 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
       )}
       {list.map(p => {
         const slotCount = p.slotCount || 30;
-        const isOpen = expanded[p.id] !== false; // default open after creation
+        // Panels default to COLLAPSED — Koy wants to scan a list of names/sizes
+        // first and only expand the one he's working on. Newly added panels
+        // open immediately because addPanel() sets expanded[id]=true.
+        const isOpen = !!expanded[p.id];
         const sizeKindCur = sizeKind[p.id] || (ELEC_PANEL_SIZES.find(s=>s.label===p.size) ? p.size : "Custom");
         const oddCount = Math.ceil(slotCount/2);
         const filledCount = Object.values(p.circuits||{}).filter(c =>
@@ -10680,8 +10710,8 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                   "blank by default" promise is intact unless the user
                   clicks Fill explicitly. */}
               <button onClick={async ()=>{
-                const next = fillPanelFromHomeRuns(p.label, p.slotCount||30);
-                if (next === null) {
+                const result = fillPanelFromHomeRuns(p.label, p.slotCount||30);
+                if (result === null) {
                   toast.warn(`No home-run rows on "${p.label}" with wire sizes set yet — assign loads first.`);
                   return;
                 }
@@ -10693,8 +10723,22 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                   });
                   if (!ok) return;
                 }
-                updPanel(p.id, { circuits: next });
-                toast.success(`Filled "${p.label}" — ${Object.keys(next).length} slots populated`);
+                updPanel(p.id, { circuits: result.circuits });
+                const filledNum = Object.keys(result.circuits).length;
+                if (result.unplaced && result.unplaced.length) {
+                  // Some breakers couldn't fit — toast a warning with the
+                  // names so Koy knows which ones to move or what panel
+                  // size to bump up to. Long duration so it can be read.
+                  const names = result.unplaced.map(b => `${b.amps}A ${b.poles===2?'2P':'1P'} ${b.name}`).join('\n• ');
+                  toast.warn(
+                    `Filled "${p.label}" — ${filledNum} slots used.\n\n` +
+                    `${result.unplaced.length} breaker${result.unplaced.length===1?'':'s'} did NOT fit:\n• ${names}\n\n` +
+                    `Bump panel size or move them to another panel.`,
+                    { duration: 15000 }
+                  );
+                } else {
+                  toast.success(`Filled "${p.label}" — ${filledNum} slots populated. Everything fit.`);
+                }
               }}
                 title={`Auto-fill ${p.label||"panel"} from home-run loads`}
                 style={{background:"none",border:`1px solid ${C.border}`,color:C.green,
