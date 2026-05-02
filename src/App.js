@@ -3715,16 +3715,21 @@ function JobNoteDestinationPunch({ note, selectedLines, selectedLineIds, job, on
 
   const punch = phase === 'rough' ? (job.roughPunch || {}) : (job.finishPunch || {});
 
-  // Build the list of available floors (upper/main/basement + extraFloors).
-  // Each entry: {key, label, floorObj}
+  // Build the list of available floors (upper/main/basement + custom extras).
+  // Punch lists store extras as `punch.extras = [{key, label}]` with the
+  // actual floor data living at `punch[key]` (NOT `punch.extraFloors` —
+  // that field name is only used by homeRuns). Reading from the wrong
+  // field is what kept Garage / Shop / etc. invisible in the triage picker.
   const floors = useMemo(() => {
     const out = [];
     ['upper','main','basement'].forEach(k => {
       if (punch[k]) out.push({ key: k, label: k.charAt(0).toUpperCase()+k.slice(1), floor: punch[k] });
     });
-    if (Array.isArray(punch.extraFloors)) {
-      punch.extraFloors.forEach((f, i) => {
-        out.push({ key: `extra:${i}`, label: f?.name || `Floor ${i+1}`, floor: f });
+    if (Array.isArray(punch.extras)) {
+      punch.extras.forEach((e) => {
+        if (!e || !e.key) return;
+        const floor = punch[e.key] || {};
+        out.push({ key: e.key, label: e.label || e.key, floor });
       });
     }
     // If no floors exist yet (fresh job), still offer Main so we can create it.
@@ -3810,14 +3815,11 @@ function JobNoteDestinationPunch({ note, selectedLines, selectedLineIds, job, on
       }
       return floorObj;
     };
-    if (target.floorKey.startsWith('extra:')) {
-      const i = parseInt(target.floorKey.split(':')[1], 10);
-      const arr = Array.isArray(nextPunch.extraFloors) ? [...nextPunch.extraFloors] : [];
-      arr[i] = writeIntoFloor(arr[i] || {});
-      nextPunch.extraFloors = arr;
-    } else {
-      nextPunch[target.floorKey] = writeIntoFloor(nextPunch[target.floorKey]);
-    }
+    // All floors — standard or extra — write straight into nextPunch[key].
+    // We dropped the "extra:" prefix encoding because the floor's real key
+    // (e.g. "extra_a1b2") is unique on its own and matches how the rest of
+    // the app reads punch data.
+    nextPunch[target.floorKey] = writeIntoFloor(nextPunch[target.floorKey]);
 
     // Mark source lines promoted. Per-line undo carries the specific
     // punch item id this line created, so A2 un-promote can surgically
@@ -5104,14 +5106,12 @@ function JobNoteCard({
       const punchField = undo.phase === 'rough' ? 'roughPunch' : 'finishPunch';
       const punchTree = job?.[punchField] || {};
 
-      // Locate the floor — may be a named floor or extra:N.
-      const getFloor = () => {
-        if (undo.floorKey.startsWith('extra:')) {
-          const i = parseInt(undo.floorKey.split(':')[1], 10);
-          return (Array.isArray(punchTree.extraFloors) && punchTree.extraFloors[i]) || null;
-        }
-        return punchTree[undo.floorKey] || null;
-      };
+      // Locate the floor — keyed directly under punchTree (named floors AND
+      // custom extras). Old stale "extra:N" encodings (which never wrote
+      // real data because the original promote field was broken) just
+      // resolve to null here and fall through to the "item already gone"
+      // path, where the orphaned promote flag gets cleared.
+      const getFloor = () => punchTree[undo.floorKey] || null;
       const floorObj = getFloor();
       if (!floorObj) { onPatch && onPatch(clearedPatch()); return; }
 
@@ -5157,14 +5157,8 @@ function JobNoteCard({
         }
         return fo;
       };
-      if (undo.floorKey.startsWith('extra:')) {
-        const i = parseInt(undo.floorKey.split(':')[1], 10);
-        const arr = Array.isArray(nextTree.extraFloors) ? [...nextTree.extraFloors] : [];
-        if (arr[i]) arr[i] = mutateFloor({ ...arr[i] });
-        nextTree.extraFloors = arr;
-      } else {
-        nextTree[undo.floorKey] = mutateFloor({ ...(nextTree[undo.floorKey] || {}) });
-      }
+      // All floor keys (standard + extras) live directly on punchTree.
+      nextTree[undo.floorKey] = mutateFloor({ ...(nextTree[undo.floorKey] || {}) });
 
       onPatch && onPatch({ [punchField]: nextTree, ...clearedPatch() });
       return;
@@ -8318,7 +8312,11 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null}) {
       (fl.rooms||[]).forEach(r => eat(r.items, r.name, floorLabel));
     };
     ["upper","main","basement"].forEach(k => eatFloor(phasePunch[k], {upper:"Upper",main:"Main",basement:"Basement"}[k]));
-    (phasePunch.extraFloors||[]).forEach(fl => eatFloor(fl, fl.label || fl.key || ""));
+    // Same `punch.extras` shape as everywhere else — floor data at punch[key].
+    (phasePunch.extras||[]).forEach(e => {
+      if (!e || !e.key) return;
+      eatFloor(phasePunch[e.key], e.label || e.key);
+    });
     return map;
   }, [phasePunch]);
 
@@ -9229,7 +9227,12 @@ function PunchLinker({ roughPunch, finishPunch, rt, onSave, onClose }) {
     const phaseCap = phase.charAt(0).toUpperCase() + phase.slice(1);
     const namedFloors = [
       ...(["upper","main","basement"].map(k => ({name:k.charAt(0).toUpperCase()+k.slice(1), fl:punch[k]})).filter(x=>x.fl)),
-      ...((Array.isArray(punch.extraFloors) ? punch.extraFloors : []).map((fl,i) => ({name:(fl&&fl.name)||`Floor ${i+1}`, fl}))),
+      // Custom extras live on punch.extras = [{key,label}] with floor data
+      // at punch[key]. Reading from a non-existent `punch.extraFloors` is
+      // why custom areas weren't showing up in the punch-link picker.
+      ...((Array.isArray(punch.extras) ? punch.extras : [])
+          .map(e => e && e.key ? ({name:e.label||e.key, fl:punch[e.key]}) : null)
+          .filter(x => x && x.fl)),
     ];
     namedFloors.forEach(({name:floorName, fl}) => {
       if (!fl) return;
@@ -14521,7 +14524,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     };
     const out = {...punch};
     ["upper","main","basement"].forEach(k => { if (out[k]) out[k] = mapFloor(out[k]); });
-    if (Array.isArray(out.extraFloors)) out.extraFloors = out.extraFloors.map(mapFloor);
+    // Map custom extras the same way: floor data at out[e.key].
+    (out.extras||[]).forEach(e => {
+      if (e && e.key && out[e.key]) out[e.key] = mapFloor(out[e.key]);
+    });
     return changed ? out : punch;
   };
 
@@ -14591,10 +14597,19 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       });
     });
     const prevDoneById = new Map();
+    // Resolves both standard floors AND `punch.extras = [{key,label}]`
+    // (with floor data at punch[key]). The old code read non-existent
+    // `punch.extraFloors`, so done-state in extra areas never propagated
+    // to linked RT entries.
+    const collectFloors = (punch) => [
+      ...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
+      ...(Array.isArray(punch.extras) ? punch.extras
+            .map(e => e && e.key ? punch[e.key] : null)
+            .filter(Boolean) : []),
+    ];
     const walk = (punch) => {
       if (!punch) return;
-      const floors = [...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
-        ...(Array.isArray(punch.extraFloors) ? punch.extraFloors : [])];
+      const floors = collectFloors(punch);
       floors.forEach(fl => {
         (fl.general||[]).forEach(i => { if (i && linkedSourceIds.has(i.id)) prevDoneById.set(i.id, !!i.done); });
         (fl.rooms||[]).forEach(r => (r.items||[]).forEach(i => { if (i && linkedSourceIds.has(i.id)) prevDoneById.set(i.id, !!i.done); }));
@@ -14605,8 +14620,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     const flipTo = new Map(); // sourceId -> newDone
     const walkNext = (punch) => {
       if (!punch) return;
-      const floors = [...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
-        ...(Array.isArray(punch.extraFloors) ? punch.extraFloors : [])];
+      const floors = collectFloors(punch);
       floors.forEach(fl => {
         const collect = (i) => {
           if (!i || !linkedSourceIds.has(i.id)) return;
@@ -14680,7 +14694,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     }) : fl;
     const nextPunch = {...srcPunch};
     ["upper","main","basement"].forEach(k => { if (nextPunch[k]) nextPunch[k] = mapFloor(nextPunch[k]); });
-    if (Array.isArray(nextPunch.extraFloors)) nextPunch.extraFloors = nextPunch.extraFloors.map(mapFloor);
+    // Custom extras: floor data at nextPunch[e.key]; map each one through.
+    (nextPunch.extras||[]).forEach(e => {
+      if (e && e.key && nextPunch[e.key]) nextPunch[e.key] = mapFloor(nextPunch[e.key]);
+    });
     if (!found) {
       // Fallback: source item not in the tree anymore (deleted?) — attach to
       // RT's own photos on the RT that references it so the photo isn't lost.
@@ -16749,7 +16766,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             const grab = (punch, phase) => {
                               if (!punch) return;
                               const allFloors = [...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
-                                ...(Array.isArray(punch.extraFloors)?punch.extraFloors:[])];
+                                ...((punch.extras||[]).map(e=>e&&e.key?punch[e.key]:null).filter(Boolean))];
                               // Voided items are filtered out — they're no longer considered QC.
                               allFloors.forEach(fl => {
                                 if (!fl) return;
@@ -16839,7 +16856,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         const grab=(punch,phase)=>{
                           if(!punch) return;
                           const allFloors=[...["upper","main","basement"].map(k=>punch[k]).filter(Boolean),
-                            ...(Array.isArray(punch.extraFloors)?punch.extraFloors:[])];
+                            ...((punch.extras||[]).map(e=>e&&e.key?punch[e.key]:null).filter(Boolean))];
                           // Voided items are filtered out — they're no longer considered QC.
                           allFloors.forEach(fl=>{
                             if(!fl) return;
@@ -30079,8 +30096,11 @@ function App() {
       upper:       updateFloor(punch.upper),
       main:        updateFloor(punch.main),
       basement:    updateFloor(punch.basement),
-      extraFloors: (punch.extraFloors||[]).map(updateFloor),
     };
+    // Custom extras: floor data at punch[e.key]; map each through.
+    (punch.extras||[]).forEach(e => {
+      if (e && e.key && punch[e.key]) newPunch[e.key] = updateFloor(punch[e.key]);
+    });
     if(newDone === null) return null; // item id not found anywhere
     const patch = { [phaseKey]: newPunch };
     // Cross-sync any return-trip punch entry that points at this source.
@@ -30141,7 +30161,13 @@ function App() {
       phases.forEach(([phase, punch]) => {
         if(!punch) return;
         ["upper","main","basement"].forEach(k => eatFloor(punch[k], {upper:"Upper",main:"Main",basement:"Basement"}[k], phase, j.id, jobName));
-        (punch.extraFloors||[]).forEach(fl => eatFloor(fl, fl.label || fl.key || "", phase, j.id, jobName));
+        // Custom extras live on punch.extras = [{key,label}] with floor data
+        // at punch[key]. Old code read non-existent `punch.extraFloors`,
+        // dropping every extra-area item from the cross-job rollup.
+        (punch.extras||[]).forEach(e => {
+          if (!e || !e.key) return;
+          eatFloor(punch[e.key], e.label || e.key, phase, j.id, jobName);
+        });
       });
     });
     return out;
