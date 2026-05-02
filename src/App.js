@@ -6216,11 +6216,19 @@ function normFloor(v) {
 
   if (v && typeof v === 'object' && !Array.isArray(v) && ('general' in v || 'rooms' in v || 'hotcheck' in v)) {
 
-    return { general: Array.isArray(v.general) ? v.general : [], rooms: Array.isArray(v.rooms) ? v.rooms : [], hotcheck: Array.isArray(v.hotcheck) ? v.hotcheck : [] };
+    return {
+      general:  Array.isArray(v.general)  ? v.general  : [],
+      rooms:    Array.isArray(v.rooms)    ? v.rooms    : [],
+      hotcheck: Array.isArray(v.hotcheck) ? v.hotcheck : [],
+      // Floor-level photos/files. Attaches to the floor's "general area"
+      // header so crew can drop a hallway photo, a redline PDF, etc. on the
+      // whole floor without needing a specific room or punch item.
+      photos:   Array.isArray(v.photos)   ? v.photos   : [],
+    };
 
   }
 
-  return { general: Array.isArray(v) ? v : [], rooms: [], hotcheck: [] };
+  return { general: Array.isArray(v) ? v : [], rooms: [], hotcheck: [], photos: [] };
 
 }
 
@@ -6964,6 +6972,13 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
   const setGeneral = (general) => onFloorChange(floorKey, { ...data, general });
   const setHotcheck = (hotcheck) => onFloorChange(floorKey, { ...data, hotcheck });
+  // Photos at the floor level (general area) and per room. Storage paths
+  // namespace by floor + room so different rooms never collide and a photo
+  // can be traced back to where it was uploaded.
+  const setFloorPhotos = (photos) => onFloorChange(floorKey, { ...data, photos });
+  const setRoomPhotos = (roomId, photos) => {
+    onFloorChange(floorKey, { ...data, rooms: data.rooms.map(r => r.id === roomId ? { ...r, photos } : r) });
+  };
 
   const addRoom = () => {
 
@@ -7026,6 +7041,18 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
             {qConfirmedFor==='general'&&<span style={{fontSize:9,fontWeight:700,color:'#16a34a'}}>✓ added</span>}
           </div>
           {qInput('general')}
+          {jobId && (data.photos?.length > 0 || true) && (
+            <div style={{marginBottom:8}}>
+              <PhotoAttacher
+                storagePath={`jobs/${jobId}/punch-area-photos/${floorKey}/general`}
+                photos={data.photos||[]}
+                onChange={setFloorPhotos}
+                color={floorColor}
+                accept="image/*,application/pdf"
+                iconName="camera"
+                label={`+ Photo / file for ${floorLabel} general`}/>
+            </div>
+          )}
 
           <PunchItems items={data.general} onChange={setGeneral} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions} myName={myName}/>
 
@@ -7089,6 +7116,18 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
                 {open && (
                   <>
                     {qInput(room.id)}
+                    {jobId && (
+                      <div style={{marginBottom:8}}>
+                        <PhotoAttacher
+                          storagePath={`jobs/${jobId}/punch-area-photos/${floorKey}/${room.id}`}
+                          photos={Array.isArray(room.photos) ? room.photos : []}
+                          onChange={v => setRoomPhotos(room.id, v)}
+                          color={floorColor}
+                          accept="image/*,application/pdf"
+                          iconName="camera"
+                          label={`+ Photo / file for ${room.name}`}/>
+                      </div>
+                    )}
                     <PunchItems items={items}
                       onChange={v => setRoomItems(room.id, v)} filterIds={filterIds} onAddMaterial={onAddMaterial} jobId={jobId} scheduledRTMap={scheduledRTMap} onJumpToRT={onJumpToRT} assigneeOptions={assigneeOptions} myName={myName}/>
                     <button onClick={async () => { if(!await showConfirm(`Remove room "${room.name}" and all its punch items?`)) return; delRoom(room.id); }}
