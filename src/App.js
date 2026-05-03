@@ -29255,6 +29255,36 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
     return unsub;
   }, [weekWK]);
 
+  // Simpro schedule — wide range (~6mo back, 12mo forward) so the active
+  // phases section can show the actual scheduled date from Simpro instead of
+  // the local roughStatusDate field. Crew Planner uses the same source. Map
+  // shape: { [simproProjectID]: ["YYYY-MM-DD", ...] } sorted ascending.
+  const [simproByJob, setSimproByJob] = useState({});
+  const [simproLoaded, setSimproLoaded] = useState(false);
+  useEffect(() => {
+    const today = new Date();
+    const from = new Date(today); from.setMonth(from.getMonth() - 6);
+    const to   = new Date(today); to.setMonth(to.getMonth() + 12);
+    const fmt = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    const fn = httpsCallable(functions, "getSimproSchedule");
+    fn({ dateFrom: fmt(from), dateTo: fmt(to) })
+      .then(res => {
+        const map = {};
+        (res.data || []).forEach(entry => {
+          if(entry.Type !== "job") return;
+          const pid = entry.Project?.ProjectID ? String(entry.Project.ProjectID) : null;
+          const d = entry.Date;
+          if(!pid || !d) return;
+          if(!map[pid]) map[pid] = [];
+          map[pid].push(d);
+        });
+        Object.keys(map).forEach(k => map[k].sort());
+        setSimproByJob(map);
+        setSimproLoaded(true);
+      })
+      .catch(() => setSimproLoaded(true)); // mark loaded even on error so UI doesn't hang
+  }, []);
+
   // Day index 0..4 for Mon..Fri inside the loaded planner week. Sat/Sun = -1
   // and the crew section will fall back to "No assignments".
   const dayIdx = useMemo(() => {
@@ -29415,20 +29445,36 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       const d = parseAnyDate(dStr);
       return d ? d.toLocaleDateString("en-US", { month:"numeric", day:"numeric" }) : dStr;
     };
+    // Simpro lookup — return the displayed date for a job. Prefer the next
+    // future scheduled date (jobs not started, or scheduled jobs about to
+    // start). If none in the future, fall back to the most recent past date
+    // (in-progress jobs whose work window has begun). If the job has no
+    // Simpro entries at all, return null so the caller can render "Not on
+    // Schedule." Mirrors how the Crew Planner pill picks its displayed date.
+    const todayYMD = toYMD(new Date());
+    const simproDateFor = (j) => {
+      if(!j.simproNo) return null;
+      const dates = simproByJob[String(j.simproNo)];
+      if(!dates || !dates.length) return null;
+      const future = dates.find(d => d >= todayYMD);
+      return future || dates[dates.length - 1];
+    };
+
     const activePhases = [];
     jobs.filter(inScopeJob).forEach(j => {
       if(j.tempPed || j.quickJob) return;
       const foreman = fnameFor(j);
       const jobName = j.name || "Untitled";
-      // Render rule per Koy: just show the date (start date if not started, or
-      // scheduled date if scheduled). If no date is set, say "Not on Schedule".
-      // "On Hold" stays distinct from "Not on Schedule" because the meaning is
-      // different — paused intentionally vs. fell off the radar.
-      const addPhase = (phase, eff, statusDate) => {
+      const simproDate = simproDateFor(j);
+      // Render rule per Koy: scheduled date comes from Simpro (the same data
+      // the Crew Planner reads). If Simpro has no entry for this job, say
+      // "Not on Schedule" so it can't be missed. "On Hold" stays distinct
+      // since the job is intentionally paused, not accidentally unscheduled.
+      const addPhase = (phase, eff) => {
         if(!eff || eff === "complete" || eff === "invoice") return;
         let dateOrLabel;
         if(eff === "waiting") dateOrLabel = "On Hold";
-        else if(statusDate) dateOrLabel = fmtShortDate(statusDate);
+        else if(simproDate) dateOrLabel = fmtShortDate(simproDate);
         else dateOrLabel = "Not on Schedule";
         activePhases.push({
           jobName, phase, foreman,
@@ -29436,8 +29482,8 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
           dateOrLabel,
         });
       };
-      addPhase("Rough",  effRS(j), j.roughStatusDate);
-      addPhase("Finish", effFS(j), j.finishStatusDate);
+      addPhase("Rough",  effRS(j));
+      addPhase("Finish", effFS(j));
     });
     activePhases.sort((a,b) => {
       const pa = PHASE_PRIORITY[a.statusKey] ?? 9;
@@ -29622,7 +29668,7 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       punchSummary, // intentionally unsliced — render caps it under each foreman
       openTasks,
     };
-  }, [jobs, crewData, dayIdx, manualTasks, targetYMD, yesterdayYMD, scope]);
+  }, [jobs, crewData, dayIdx, manualTasks, targetYMD, yesterdayYMD, scope, simproByJob]);
 
   // ── Render the message text ──────────────────────────────────────────
   const text = useMemo(() => {
