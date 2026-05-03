@@ -29188,10 +29188,30 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
   }, [identity, foremen]);
   const [scope, setScope] = useState(initialScope);
 
-  // Job is "in scope" when no foreman is picked, or when its foreman matches.
+  // Foreman names whose work shouldn't surface in the huddle. Paul is the
+  // owner/partner — he runs his own jobs and doesn't need a daily huddle.
+  // TBD variants are placeholders for unsigned-off jobs. "Unassigned" is
+  // intentionally NOT excluded — Koy wants those at the top of every
+  // section so nothing slips through. Mirrors the Scoreboard exclusion list.
+  const HUDDLE_EXCLUDE_FOREMAN = (name) => {
+    const clean = (name||"").trim().toLowerCase();
+    if(!clean) return false;
+    if(/\btbd\b/.test(clean)) return true;
+    return clean === "paul";
+  };
+
+  // Job is "in scope" when:
+  //  • its foreman isn't on the exclusion list, AND
+  //  • either no specific foreman is picked, or the picked one matches.
   // Reuses the app's matchesForeman helper so casing/last-name variants work.
-  const inScopeJob = (j) => !scope || matchesForeman(j, scope);
-  const inScopeTask = (t) => !scope || ((t.foreman||"").toLowerCase() === scope.toLowerCase());
+  const inScopeJob = (j) => {
+    if(HUDDLE_EXCLUDE_FOREMAN(j.foreman)) return false;
+    return !scope || matchesForeman(j, scope);
+  };
+  const inScopeTask = (t) => {
+    if(HUDDLE_EXCLUDE_FOREMAN(t.foreman)) return false;
+    return !scope || ((t.foreman||"").toLowerCase() === scope.toLowerCase());
+  };
 
   const targetYMD = toYMD(targetDate);
   // "Yesterday" for recap purposes — most recent weekday before targetDate.
@@ -29432,6 +29452,14 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
         && t.status !== "completed"
         && !allClearedTaskIds.has(t.id))
       .filter(t => {
+        // Strip excluded foremen (Paul/TBD) regardless of scope. Auto tasks
+        // inherit foreman from the job, so this also catches Paul's job-derived
+        // prompts.
+        if(HUDDLE_EXCLUDE_FOREMAN(t.foreman)) return false;
+        if(t.jobId) {
+          const j = jobs.find(x => x.id === t.jobId);
+          if(j && HUDDLE_EXCLUDE_FOREMAN(j.foreman)) return false;
+        }
         if(!scope) return true;
         // Scope match: task's foreman OR (for auto tasks) the job's foreman
         if(t.foreman && t.foreman.toLowerCase() === scope.toLowerCase()) return true;
@@ -29691,9 +29719,13 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
   };
 
   // Foreman pills — All Combined (boss view) + each foreman, in roster order.
+  // Excluded foremen (Paul, TBD) get no pill since their work isn't surfaced.
   const scopeOptions = useMemo(() => {
     const list = [{ label: "All Combined", value: null }];
-    (foremen||[]).forEach(f => list.push({ label: f.split(" ")[0], value: f }));
+    (foremen||[]).forEach(f => {
+      if(HUDDLE_EXCLUDE_FOREMAN(f)) return;
+      list.push({ label: f.split(" ")[0], value: f });
+    });
     return list;
   }, [foremen]);
 
