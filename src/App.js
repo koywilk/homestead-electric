@@ -29410,24 +29410,34 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       scheduled: 3,
       waiting: 4,         // on hold
     };
+    // Format YYYY-MM-DD or M/D/YY into compact "M/D" for display.
+    const fmtShortDate = (dStr) => {
+      const d = parseAnyDate(dStr);
+      return d ? d.toLocaleDateString("en-US", { month:"numeric", day:"numeric" }) : dStr;
+    };
     const activePhases = [];
     jobs.filter(inScopeJob).forEach(j => {
       if(j.tempPed || j.quickJob) return;
       const foreman = fnameFor(j);
       const jobName = j.name || "Untitled";
-      const addPhase = (phase, eff, statusDate, defs) => {
+      // Render rule per Koy: just show the date (start date if not started, or
+      // scheduled date if scheduled). If no date is set, say "Not on Schedule".
+      // "On Hold" stays distinct from "Not on Schedule" because the meaning is
+      // different — paused intentionally vs. fell off the radar.
+      const addPhase = (phase, eff, statusDate) => {
         if(!eff || eff === "complete" || eff === "invoice") return;
-        const def = defs.find(s => s.value === eff);
-        const showDate = statusDate && (eff === "scheduled" || eff === "date_confirmed" || eff === "inprogress");
+        let dateOrLabel;
+        if(eff === "waiting") dateOrLabel = "On Hold";
+        else if(statusDate) dateOrLabel = fmtShortDate(statusDate);
+        else dateOrLabel = "Not on Schedule";
         activePhases.push({
           jobName, phase, foreman,
           statusKey: eff,
-          status: def ? def.label : eff,
-          dateBit: showDate ? ` (${statusDate})` : "",
+          dateOrLabel,
         });
       };
-      addPhase("Rough",  effRS(j), j.roughStatusDate,  ROUGH_STATUSES);
-      addPhase("Finish", effFS(j), j.finishStatusDate, FINISH_STATUSES);
+      addPhase("Rough",  effRS(j), j.roughStatusDate);
+      addPhase("Finish", effFS(j), j.finishStatusDate);
     });
     activePhases.sort((a,b) => {
       const pa = PHASE_PRIORITY[a.statusKey] ?? 9;
@@ -29767,7 +29777,7 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       lines.push(`ACTIVE ROUGH / FINISH (${data.activePhases.length})`);
       renderSection(
         data.activePhases,
-        a => `${a.jobName} — ${a.phase}: ${a.status}${a.dateBit}`
+        a => `${a.jobName} — ${a.phase}: ${a.dateOrLabel}`
       );
       lines.push("");
     }
