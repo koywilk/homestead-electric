@@ -29098,6 +29098,357 @@ function JobNoteSharePage({ param }) {
   );
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Daily Huddle Sheet
+//   On-demand morning summary aggregating yesterday's recap + today's crews,
+//   inspections, open punch/RT, and open tasks. Renders as plain-text so it
+//   copies cleanly into iMessage.
+//
+//   READ-ONLY: this view does not write to Firestore. It reads from the same
+//   in-memory `jobs`, `crewData`, and `manualTasks` the rest of the app uses,
+//   so there's no separate query path that could lose data. The Send button
+//   uses a `sms:` link — the user picks the recipient in Messages, nothing
+//   sends without their tap.
+// ───────────────────────────────────────────────────────────────────────────
+function HuddleSheet({ jobs, crewData, crewMon, manualTasks }) {
+  // YMD helper — local date string, no timezone surprises
+  const toYMD = (d) => {
+    const dt = new Date(d);
+    return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
+  };
+
+  // Default to today; if today is Sat/Sun, jump to next Monday so the planner
+  // assignments map cleanly. User can step the date with the day buttons.
+  const initialDate = useMemo(() => {
+    const d = new Date(); d.setHours(0,0,0,0);
+    const dow = d.getDay();
+    if(dow === 0) d.setDate(d.getDate() + 1);
+    else if(dow === 6) d.setDate(d.getDate() + 2);
+    return d;
+  }, []);
+  const [targetDate, setTargetDate] = useState(initialDate);
+  const [copied, setCopied] = useState(false);
+
+  const targetYMD = toYMD(targetDate);
+  // "Yesterday" for recap purposes — most recent weekday before targetDate.
+  const yesterdayYMD = useMemo(() => {
+    const d = new Date(targetDate);
+    do { d.setDate(d.getDate() - 1); } while(d.getDay() === 0 || d.getDay() === 6);
+    return toYMD(d);
+  }, [targetYMD]);
+
+  // Where targetDate falls in the displayed planner week. Mon=0..Fri=4.
+  const dayIdx = useMemo(() => {
+    if(!crewMon) return -1;
+    const t = new Date(targetDate); t.setHours(0,0,0,0);
+    const m = new Date(crewMon); m.setHours(0,0,0,0);
+    return Math.round((t - m) / (24*60*60*1000));
+  }, [crewMon, targetYMD]);
+
+  // ── Aggregate the data ────────────────────────────────────────────────
+  const data = useMemo(() => {
+    // Walk every punch item across upper/main/basement + extras, both phases
+    const walkPunchItems = (punch, cb) => {
+      if(!punch) return;
+      const eatFloor = (fl) => {
+        if(!fl) return;
+        (fl.general||[]).forEach(cb);
+        (fl.hotcheck||[]).forEach(cb);
+        (fl.rooms||[]).forEach(r => (r.items||[]).forEach(cb));
+      };
+      ["upper","main","basement"].forEach(k => eatFloor(punch[k]));
+      (punch.extras||[]).forEach(e => { if(e?.key) eatFloor(punch[e.key]); });
+    };
+
+    let punchClosedCount = 0;
+    const punchClosedJobs = new Set();
+    const updatesPosted = [];
+
+    jobs.forEach(j => {
+      const jobName = j.name || "Untitled";
+
+      // Punch closed yesterday
+      const checkClose = (item) => {
+        if(!item || !item.done || item.voided || !item.checkedAt) return;
+        const d = new Date(item.checkedAt);
+        if(isNaN(d)) return;
+        if(toYMD(d) === yesterdayYMD) {
+          punchClosedCount++;
+          punchClosedJobs.add(jobName);
+        }
+      };
+      walkPunchItems(j.roughPunch, checkClose);
+      walkPunchItems(j.finishPunch, checkClose);
+
+      // Updates posted yesterday — both phases
+      [["rough", j.roughUpdates], ["finish", j.finishUpdates]].forEach(([phase, ups]) => {
+        (ups||[]).forEach(u => {
+          if(!u?.date) return;
+          const d = new Date(u.date);
+          if(!isNaN(d) && toYMD(d) === yesterdayYMD) {
+            updatesPosted.push({ jobName, phase });
+          }
+        });
+      });
+    });
+
+    // Today's crews — pull cells matching dayIdx
+    const crewToday = [];
+    if(dayIdx >= 0 && dayIdx < 5) {
+      jobs.forEach(j => {
+        const cell = crewData[`${j.id}_${dayIdx}`];
+        if(!cell) return;
+        const hasPeople = cell.lead || (cell.crew||[]).length > 0;
+        if(!hasPeople) return;
+        crewToday.push({
+          jobName: j.name || "Untitled",
+          lead: cell.lead || null,
+          crew: cell.crew || [],
+          time: cell.time || null,
+        });
+      });
+    }
+
+    // Inspections / 4-Way / QC scheduled for targetDate
+    const inspections = [];
+    jobs.forEach(j => {
+      const jobName = j.name || "Untitled";
+      if(j.fourWayTargetDate && !j.roughInspectionResult) {
+        const d = new Date(j.fourWayTargetDate);
+        if(!isNaN(d) && toYMD(d) === targetYMD) inspections.push({ jobName, type: "Rough/4-Way" });
+      }
+      if(j.finalInspectionTargetDate && !j.finalInspectionResult) {
+        const d = new Date(j.finalInspectionTargetDate);
+        if(!isNaN(d) && toYMD(d) === targetYMD) inspections.push({ jobName, type: "Final" });
+      }
+      if(j.qcStatus === "scheduled" && j.qcStatusDate) {
+        const d = new Date(j.qcStatusDate);
+        if(!isNaN(d) && toYMD(d) === targetYMD) inspections.push({ jobName, type: "QC Walk" });
+      }
+    });
+
+    // Open punch + RT summary across all jobs (skip temp peds / quick jobs)
+    const punchSummary = [];
+    jobs.forEach(j => {
+      if(j.tempPed || j.quickJob) return;
+      let openPunch = 0;
+      walkPunchItems(j.roughPunch, item => { if(item && !item.done && !item.voided) openPunch++; });
+      walkPunchItems(j.finishPunch, item => { if(item && !item.done && !item.voided) openPunch++; });
+
+      let rtToday = false, rtNeeds = false;
+      (j.returnTrips||[]).forEach(rt => {
+        if(rt.signedOff || rt.rtStatus === "complete") return;
+        if(rt.rtStatus === "needs") rtNeeds = true;
+        const dStr = rt.rtStatusDate || rt.date;
+        if(dStr) {
+          const d = new Date(dStr);
+          if(!isNaN(d) && toYMD(d) === targetYMD) rtToday = true;
+        }
+      });
+
+      if(openPunch > 0 || rtToday || rtNeeds) {
+        punchSummary.push({ jobName: j.name||"Untitled", openPunch, rtToday, rtNeeds });
+      }
+    });
+    // Surface today's RTs first, then ones needing scheduling, then highest punch counts
+    punchSummary.sort((a,b) => {
+      if(a.rtToday !== b.rtToday) return a.rtToday ? -1 : 1;
+      if(a.rtNeeds !== b.rtNeeds) return a.rtNeeds ? -1 : 1;
+      return b.openPunch - a.openPunch;
+    });
+
+    // Open manual tasks (not done, not dismissed) with overdue/today bubbling up
+    const openTasks = (manualTasks||[])
+      .filter(t => t && t.type === "manual" && !t.done && !t.dismissed);
+    openTasks.sort((a,b) => {
+      const da = a.dueDate ? new Date(a.dueDate) : null;
+      const db = b.dueDate ? new Date(b.dueDate) : null;
+      if(da && db && !isNaN(da) && !isNaN(db)) return da - db;
+      if(da && !isNaN(da)) return -1;
+      if(db && !isNaN(db)) return 1;
+      return 0;
+    });
+
+    return {
+      punchClosedCount,
+      punchClosedJobs: Array.from(punchClosedJobs),
+      updatesPosted,
+      crewToday,
+      inspections,
+      punchSummary: punchSummary.slice(0, 6),
+      openTasks,
+    };
+  }, [jobs, crewData, dayIdx, manualTasks, targetYMD, yesterdayYMD]);
+
+  // ── Render the message text ──────────────────────────────────────────
+  const text = useMemo(() => {
+    const lines = [];
+    const dateLabel = targetDate.toLocaleDateString("en-US", { weekday:"short", month:"short", day:"numeric" });
+    lines.push(`HUDDLE — ${dateLabel}`);
+    lines.push("");
+
+    // YESTERDAY
+    lines.push("YESTERDAY");
+    if(data.punchClosedCount > 0) {
+      const lbl = data.punchClosedJobs.length <= 3
+        ? data.punchClosedJobs.join(", ")
+        : `${data.punchClosedJobs.length} jobs`;
+      lines.push(`- ${data.punchClosedCount} punch closed (${lbl})`);
+    }
+    data.updatesPosted.slice(0, 4).forEach(u => {
+      lines.push(`- ${u.jobName} — ${u.phase} update logged`);
+    });
+    if(data.punchClosedCount === 0 && data.updatesPosted.length === 0) {
+      lines.push("- (quiet)");
+    }
+    lines.push("");
+
+    // TODAY
+    const dayName = targetDate.toLocaleDateString("en-US", { weekday:"short" }).toUpperCase();
+    lines.push(`TODAY (${dayName})`);
+    if(data.crewToday.length === 0) {
+      lines.push("- No assignments");
+    } else {
+      data.crewToday.forEach(c => {
+        const people = [];
+        if(c.lead) people.push(c.lead.split(" ")[0]);
+        c.crew.forEach(p => people.push(p.split(" ")[0]));
+        const peopleStr = people.length > 4
+          ? `${people.slice(0,3).join(", ")} +${people.length-3}`
+          : people.join(", ");
+        const timeStr = c.time ? ` · ${c.time}` : "";
+        lines.push(`- ${c.jobName} — ${peopleStr || "(no names)"}${timeStr}`);
+      });
+    }
+    lines.push("");
+
+    // INSPECTIONS
+    if(data.inspections.length > 0) {
+      lines.push(`INSPECTIONS (${data.inspections.length})`);
+      data.inspections.forEach(i => lines.push(`- ${i.jobName} — ${i.type}`));
+      lines.push("");
+    }
+
+    // OPEN PUNCH / RT
+    if(data.punchSummary.length > 0) {
+      lines.push(`OPEN PUNCH / RT (${data.punchSummary.length})`);
+      data.punchSummary.forEach(p => {
+        const bits = [];
+        if(p.rtToday) bits.push("RT today");
+        if(p.rtNeeds) bits.push("RT needs sched");
+        if(p.openPunch > 0) bits.push(`${p.openPunch} punch`);
+        lines.push(`- ${p.jobName} — ${bits.join(", ")}`);
+      });
+      lines.push("");
+    }
+
+    // OPEN TASKS
+    if(data.openTasks.length > 0) {
+      lines.push(`OPEN TASKS (${data.openTasks.length})`);
+      data.openTasks.slice(0, 6).forEach(t => {
+        const who = t.foreman && t.foreman !== "Unassigned" ? t.foreman.split(" ")[0] : "—";
+        let due = "";
+        if(t.dueDate) {
+          const d = new Date(t.dueDate);
+          if(!isNaN(d)) {
+            const dYMD = toYMD(d);
+            if(dYMD < targetYMD) due = ", overdue";
+            else if(dYMD === targetYMD) due = ", today";
+            else {
+              const days = Math.round((d.setHours(0,0,0,0), d - new Date(targetYMD)) / (24*60*60*1000));
+              if(days > 0 && days <= 3) due = `, in ${days}d`;
+            }
+          }
+        }
+        const title = (t.title || "(no title)").substring(0, 50);
+        lines.push(`- ${title} — ${who}${due}`);
+      });
+      if(data.openTasks.length > 6) lines.push(`- ...and ${data.openTasks.length - 6} more`);
+    }
+
+    return lines.join("\n");
+  }, [data, targetDate, targetYMD]);
+
+  // Copy: prefer Clipboard API, fall back to legacy textarea hack on older browsers
+  const copyToClipboard = async () => {
+    try { await navigator.clipboard.writeText(text); }
+    catch(e) {
+      const ta = document.createElement("textarea");
+      ta.value = text; document.body.appendChild(ta);
+      ta.select();
+      try { document.execCommand("copy"); } catch(_){}
+      document.body.removeChild(ta);
+    }
+    setCopied(true);
+    setTimeout(() => setCopied(false), 2000);
+  };
+
+  // sms: link with body opens iOS Messages with the text pre-filled. User
+  // chooses the recipient (themselves) — nothing sends without their tap.
+  const smsHref = `sms:&body=${encodeURIComponent(text)}`;
+
+  const stepDay = (delta) => {
+    const d = new Date(targetDate);
+    d.setDate(d.getDate() + delta);
+    setTargetDate(d);
+  };
+  const goToday = () => {
+    const d = new Date(); d.setHours(0,0,0,0);
+    setTargetDate(d);
+  };
+
+  return (
+    <div style={{maxWidth:680, margin:"0 auto", padding:"16px"}}>
+      <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap"}}>
+        <h2 style={{fontSize:18, fontWeight:700, color:"var(--text)", margin:0}}>Daily Huddle</h2>
+        <div style={{display:"flex", alignItems:"center", gap:6, marginLeft:"auto", flexWrap:"wrap"}}>
+          <button onClick={()=>stepDay(-1)}
+            style={{fontSize:11, padding:"6px 10px", borderRadius:7, border:"1px solid var(--border)",
+              background:"var(--surface)", color:"var(--text)", cursor:"pointer", fontFamily:"inherit"}}>
+            ◀
+          </button>
+          <button onClick={goToday}
+            style={{fontSize:12, fontWeight:600, color:"var(--text)", padding:"6px 14px",
+              background:"var(--surface)", border:"1px solid var(--border)", borderRadius:7,
+              minWidth:160, cursor:"pointer", fontFamily:"inherit"}}>
+            {targetDate.toLocaleDateString("en-US",{weekday:"short", month:"short", day:"numeric"})}
+          </button>
+          <button onClick={()=>stepDay(1)}
+            style={{fontSize:11, padding:"6px 10px", borderRadius:7, border:"1px solid var(--border)",
+              background:"var(--surface)", color:"var(--text)", cursor:"pointer", fontFamily:"inherit"}}>
+            ▶
+          </button>
+        </div>
+      </div>
+
+      <div style={{display:"flex", gap:8, marginBottom:14, flexWrap:"wrap"}}>
+        <button onClick={copyToClipboard}
+          style={{fontSize:12, fontWeight:700, padding:"9px 18px", borderRadius:8, border:"none",
+            background:"var(--accent)", color:"#000", cursor:"pointer", fontFamily:"inherit"}}>
+          {copied ? "Copied!" : "Copy text"}
+        </button>
+        <a href={smsHref}
+          style={{fontSize:12, fontWeight:700, padding:"9px 18px", borderRadius:8,
+            background:"#22c55e", color:"#000", textDecoration:"none", fontFamily:"inherit",
+            display:"inline-flex", alignItems:"center"}}>
+          Send to my phone
+        </a>
+      </div>
+
+      <pre style={{
+        whiteSpace:"pre-wrap", fontFamily:"ui-monospace, SFMono-Regular, Menlo, monospace",
+        fontSize:13, lineHeight:1.55, color:"var(--text)", background:"var(--surface)",
+        border:"1px solid var(--border)", borderRadius:10, padding:"14px 16px", margin:0,
+      }}>{text}</pre>
+
+      <div style={{fontSize:10, color:"var(--dim)", marginTop:10, lineHeight:1.5}}>
+        Read-only. Pulled live from current job state — no writes. "Send to my phone"
+        opens Messages with the text pre-filled; you pick the recipient.
+      </div>
+    </div>
+  );
+}
+
 function App() {
   // Homeowner page route — ?homeowner=JOB_ID
   const hoParam = new URLSearchParams(window.location.search).get("homeowner");
@@ -30721,6 +31072,7 @@ function App() {
               {key:"upcoming",label:"Upcoming"},
               ...(can(identity,"quotes.view")?[{key:"quotes",label:"Quotes"}]:[]),
               {key:"tasks",label:"Tasks"},
+              ...(can(identity,"settings.view")?[{key:"huddle",label:"Huddle"}]:[]),
               ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors"}]:[]),
               ...(can(identity,"scoreboard.view")?[{key:"scoreboard",label:"Scoreboard"}]:[]),
               ...(can(identity,"settings.view")?[{key:"settings",label:"Settings",icon:"settings"}]:[]),
@@ -30728,7 +31080,7 @@ function App() {
         ).map(({key,label,icon})=>{
           const active = view===key;
           return (
-            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="tasks"?openTasks:key==="nav"?openNav:key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):openSettings}
+            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="tasks"?openTasks:key==="nav"?openNav:key==="huddle"?()=>setView("huddle"):key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):openSettings}
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
@@ -31904,6 +32256,10 @@ function App() {
 
       {view==="schedule"&&can(identity,"schedule.view")&&(
         <SchedulingForecast jobs={jobs} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)} foremenList={_foremen} identity={identity} onUpdateJob={updateJob}/>
+      )}
+
+      {view==="huddle"&&can(identity,"settings.view")&&(
+        <HuddleSheet jobs={jobs} crewData={crewData} crewMon={crewMon} manualTasks={manualTasks}/>
       )}
 
       {view==="tasks"&&can(identity,"tasks.view")&&(
