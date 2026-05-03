@@ -29110,7 +29110,7 @@ function JobNoteSharePage({ param }) {
 //   uses a `sms:` link — the user picks the recipient in Messages, nothing
 //   sends without their tap.
 // ───────────────────────────────────────────────────────────────────────────
-function HuddleSheet({ jobs, manualTasks }) {
+function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
   // YMD helper — local date string, no timezone surprises
   const toYMD = (d) => {
     const dt = new Date(d);
@@ -29133,6 +29133,23 @@ function HuddleSheet({ jobs, manualTasks }) {
   // works without needing the planner state passed down through props. The
   // doc shape: { assignments: { "<jobId>_<dayIdx>": {lead, crew[], time}, ... } }
   const [crewData, setCrewData] = useState({});
+
+  // Foreman scope: null = "All Combined" (boss view, full info). Specific name
+  // = filter every section to just that foreman's jobs + their tasks. Default
+  // to the current user's name when they ARE a foreman so the page they land
+  // on is already their personal huddle.
+  const initialScope = useMemo(() => {
+    if(!identity?.name) return null;
+    const fs = (foremen||[]).map(f => (f||"").toLowerCase());
+    if(fs.includes(identity.name.toLowerCase())) return identity.name;
+    return null;
+  }, [identity, foremen]);
+  const [scope, setScope] = useState(initialScope);
+
+  // Job is "in scope" when no foreman is picked, or when its foreman matches.
+  // Reuses the app's matchesForeman helper so casing/last-name variants work.
+  const inScopeJob = (j) => !scope || matchesForeman(j, scope);
+  const inScopeTask = (t) => !scope || ((t.foreman||"").toLowerCase() === scope.toLowerCase());
 
   const targetYMD = toYMD(targetDate);
   // "Yesterday" for recap purposes — most recent weekday before targetDate.
@@ -29191,10 +29208,10 @@ function HuddleSheet({ jobs, manualTasks }) {
     const punchClosedJobs = new Set();
     const updatesPosted = [];
 
-    jobs.forEach(j => {
+    // Yesterday recap — only counts events on jobs that are in scope
+    jobs.filter(inScopeJob).forEach(j => {
       const jobName = j.name || "Untitled";
 
-      // Punch closed yesterday
       const checkClose = (item) => {
         if(!item || !item.done || item.voided || !item.checkedAt) return;
         const d = new Date(item.checkedAt);
@@ -29207,7 +29224,6 @@ function HuddleSheet({ jobs, manualTasks }) {
       walkPunchItems(j.roughPunch, checkClose);
       walkPunchItems(j.finishPunch, checkClose);
 
-      // Updates posted yesterday — both phases
       [["rough", j.roughUpdates], ["finish", j.finishUpdates]].forEach(([phase, ups]) => {
         (ups||[]).forEach(u => {
           if(!u?.date) return;
@@ -29219,10 +29235,10 @@ function HuddleSheet({ jobs, manualTasks }) {
       });
     });
 
-    // Today's crews — pull cells matching dayIdx
+    // Today's crews — pull cells matching dayIdx, only on jobs in scope
     const crewToday = [];
     if(dayIdx >= 0 && dayIdx < 5) {
-      jobs.forEach(j => {
+      jobs.filter(inScopeJob).forEach(j => {
         const cell = crewData[`${j.id}_${dayIdx}`];
         if(!cell) return;
         const hasPeople = cell.lead || (cell.crew||[]).length > 0;
@@ -29236,9 +29252,9 @@ function HuddleSheet({ jobs, manualTasks }) {
       });
     }
 
-    // Inspections / 4-Way / QC scheduled for targetDate
+    // Inspections / 4-Way / QC scheduled for targetDate (in scope only)
     const inspections = [];
-    jobs.forEach(j => {
+    jobs.filter(inScopeJob).forEach(j => {
       const jobName = j.name || "Untitled";
       if(j.fourWayTargetDate && !j.roughInspectionResult) {
         const d = new Date(j.fourWayTargetDate);
@@ -29254,9 +29270,27 @@ function HuddleSheet({ jobs, manualTasks }) {
       }
     });
 
-    // Open punch + RT summary across all jobs (skip temp peds / quick jobs)
+    // Needs scheduling — rough/finish phases that have a status of waiting_date
+    // ("Awaiting Start Date") or date_confirmed ("Start Date Set" but not yet
+    // on the planner). These are the "in stage but not scheduled" jobs Koy
+    // wants surfaced so they don't get forgotten.
+    const needsScheduling = [];
+    jobs.filter(inScopeJob).forEach(j => {
+      if(j.tempPed || j.quickJob) return;
+      const rs = effRS(j), fs = effFS(j);
+      const phasesNeeding = [];
+      if(rs === "waiting_date") phasesNeeding.push("Rough — needs date");
+      else if(rs === "date_confirmed") phasesNeeding.push("Rough — date set, not on planner");
+      if(fs === "waiting_date") phasesNeeding.push("Finish — needs date");
+      else if(fs === "date_confirmed") phasesNeeding.push("Finish — date set, not on planner");
+      if(phasesNeeding.length) {
+        needsScheduling.push({ jobName: j.name||"Untitled", phases: phasesNeeding });
+      }
+    });
+
+    // Open punch + RT summary (in scope only, skip temp peds / quick jobs)
     const punchSummary = [];
-    jobs.forEach(j => {
+    jobs.filter(inScopeJob).forEach(j => {
       if(j.tempPed || j.quickJob) return;
       let openPunch = 0;
       walkPunchItems(j.roughPunch, item => { if(item && !item.done && !item.voided) openPunch++; });
@@ -29277,16 +29311,18 @@ function HuddleSheet({ jobs, manualTasks }) {
         punchSummary.push({ jobName: j.name||"Untitled", openPunch, rtToday, rtNeeds });
       }
     });
-    // Surface today's RTs first, then ones needing scheduling, then highest punch counts
     punchSummary.sort((a,b) => {
       if(a.rtToday !== b.rtToday) return a.rtToday ? -1 : 1;
       if(a.rtNeeds !== b.rtNeeds) return a.rtNeeds ? -1 : 1;
       return b.openPunch - a.openPunch;
     });
 
-    // Open manual tasks (not done, not dismissed) with overdue/today bubbling up
+    // Open tasks — everything in manualTasks counts as a manual task. Done is
+    // tracked via `cleared` (planner-style) or `status === "completed"` (older
+    // shape). The wrong `type === "manual"` check was excluding everything.
     const openTasks = (manualTasks||[])
-      .filter(t => t && t.type === "manual" && !t.done && !t.dismissed);
+      .filter(t => t && !t.cleared && t.status !== "completed")
+      .filter(inScopeTask);
     openTasks.sort((a,b) => {
       const da = a.dueDate ? new Date(a.dueDate) : null;
       const db = b.dueDate ? new Date(b.dueDate) : null;
@@ -29302,16 +29338,18 @@ function HuddleSheet({ jobs, manualTasks }) {
       updatesPosted,
       crewToday,
       inspections,
-      punchSummary: punchSummary.slice(0, 6),
+      needsScheduling,
+      punchSummary: punchSummary.slice(0, 8),
       openTasks,
     };
-  }, [jobs, crewData, dayIdx, manualTasks, targetYMD, yesterdayYMD]);
+  }, [jobs, crewData, dayIdx, manualTasks, targetYMD, yesterdayYMD, scope]);
 
   // ── Render the message text ──────────────────────────────────────────
   const text = useMemo(() => {
     const lines = [];
     const dateLabel = targetDate.toLocaleDateString("en-US", { weekday:"short", month:"short", day:"numeric" });
-    lines.push(`HUDDLE — ${dateLabel}`);
+    const scopeLabel = scope ? scope.split(" ")[0].toUpperCase() : "ALL";
+    lines.push(`HUDDLE — ${dateLabel} (${scopeLabel})`);
     lines.push("");
 
     // YESTERDAY
@@ -29356,6 +29394,15 @@ function HuddleSheet({ jobs, manualTasks }) {
       lines.push("");
     }
 
+    // NEEDS SCHEDULING — rough/finish phases that don't yet have a planner slot
+    if(data.needsScheduling.length > 0) {
+      lines.push(`NEEDS SCHEDULING (${data.needsScheduling.length})`);
+      data.needsScheduling.forEach(n => {
+        n.phases.forEach(p => lines.push(`- ${n.jobName} — ${p}`));
+      });
+      lines.push("");
+    }
+
     // OPEN PUNCH / RT
     if(data.punchSummary.length > 0) {
       lines.push(`OPEN PUNCH / RT (${data.punchSummary.length})`);
@@ -29394,7 +29441,7 @@ function HuddleSheet({ jobs, manualTasks }) {
     }
 
     return lines.join("\n");
-  }, [data, targetDate, targetYMD]);
+  }, [data, targetDate, targetYMD, scope]);
 
   // Copy: prefer Clipboard API, fall back to legacy textarea hack on older browsers
   const copyToClipboard = async () => {
@@ -29424,6 +29471,13 @@ function HuddleSheet({ jobs, manualTasks }) {
     setTargetDate(d);
   };
 
+  // Foreman pills — All Combined (boss view) + each foreman, in roster order.
+  const scopeOptions = useMemo(() => {
+    const list = [{ label: "All Combined", value: null }];
+    (foremen||[]).forEach(f => list.push({ label: f.split(" ")[0], value: f }));
+    return list;
+  }, [foremen]);
+
   return (
     <div style={{maxWidth:680, margin:"0 auto", padding:"16px", color:C.text}}>
       <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap"}}>
@@ -29446,6 +29500,28 @@ function HuddleSheet({ jobs, manualTasks }) {
             ▶
           </button>
         </div>
+      </div>
+
+      {/* Foreman scope pills — tap to flip between the boss view and each
+          foreman's personal huddle. Also affects the text the Send/Copy
+          buttons produce, so picking a foreman + tapping Send delivers their
+          version. */}
+      <div style={{display:"flex", flexWrap:"wrap", gap:6, marginBottom:12}}>
+        {scopeOptions.map(opt => {
+          const active = scope === opt.value;
+          return (
+            <button key={opt.label} onClick={()=>setScope(opt.value)}
+              style={{
+                fontSize:11, fontWeight: active?700:500, padding:"6px 12px",
+                borderRadius:99, border:`1px solid ${active?C.accent:C.border}`,
+                background: active ? C.accent : C.surface,
+                color: active ? "#000" : C.text, cursor:"pointer", fontFamily:"inherit",
+                letterSpacing:"0.02em",
+              }}>
+              {opt.label}
+            </button>
+          );
+        })}
       </div>
 
       <div style={{display:"flex", gap:8, marginBottom:14, flexWrap:"wrap"}}>
@@ -32286,7 +32362,7 @@ function App() {
       )}
 
       {view==="huddle"&&can(identity,"settings.view")&&(
-        <HuddleSheet jobs={jobs} manualTasks={manualTasks}/>
+        <HuddleSheet jobs={jobs} manualTasks={manualTasks} foremen={_foremen} identity={identity}/>
       )}
 
       {view==="tasks"&&can(identity,"tasks.view")&&(
