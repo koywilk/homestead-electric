@@ -29248,11 +29248,17 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
 
     let punchClosedCount = 0;
     const punchClosedJobs = new Set();
+    const punchClosedByForeman = {}; // foreman -> {count, jobs: Set}
     const updatesPosted = [];
+
+    // Helper — every output item carries the job's foreman so the formatter
+    // can group by it in All Combined mode without re-walking jobs.
+    const fnameFor = (j) => (j.foreman && j.foreman.trim()) || "Unassigned";
 
     // Yesterday recap — only counts events on jobs that are in scope
     jobs.filter(inScopeJob).forEach(j => {
       const jobName = j.name || "Untitled";
+      const foreman = fnameFor(j);
 
       const checkClose = (item) => {
         if(!item || !item.done || item.voided || !item.checkedAt) return;
@@ -29261,6 +29267,9 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
         if(toYMD(d) === yesterdayYMD) {
           punchClosedCount++;
           punchClosedJobs.add(jobName);
+          if(!punchClosedByForeman[foreman]) punchClosedByForeman[foreman] = { count: 0, jobs: new Set() };
+          punchClosedByForeman[foreman].count++;
+          punchClosedByForeman[foreman].jobs.add(jobName);
         }
       };
       walkPunchItems(j.roughPunch, checkClose);
@@ -29271,7 +29280,7 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
           if(!u?.date) return;
           const d = new Date(u.date);
           if(!isNaN(d) && toYMD(d) === yesterdayYMD) {
-            updatesPosted.push({ jobName, phase });
+            updatesPosted.push({ jobName, phase, foreman });
           }
         });
       });
@@ -29290,6 +29299,7 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
           lead: cell.lead || null,
           crew: cell.crew || [],
           time: cell.time || null,
+          foreman: fnameFor(j),
         });
       });
     }
@@ -29298,17 +29308,18 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
     const inspections = [];
     jobs.filter(inScopeJob).forEach(j => {
       const jobName = j.name || "Untitled";
+      const foreman = fnameFor(j);
       if(j.fourWayTargetDate && !j.roughInspectionResult) {
         const d = new Date(j.fourWayTargetDate);
-        if(!isNaN(d) && toYMD(d) === targetYMD) inspections.push({ jobName, type: "Rough/4-Way" });
+        if(!isNaN(d) && toYMD(d) === targetYMD) inspections.push({ jobName, type: "Rough/4-Way", foreman });
       }
       if(j.finalInspectionTargetDate && !j.finalInspectionResult) {
         const d = new Date(j.finalInspectionTargetDate);
-        if(!isNaN(d) && toYMD(d) === targetYMD) inspections.push({ jobName, type: "Final" });
+        if(!isNaN(d) && toYMD(d) === targetYMD) inspections.push({ jobName, type: "Final", foreman });
       }
       if(j.qcStatus === "scheduled" && j.qcStatusDate) {
         const d = new Date(j.qcStatusDate);
-        if(!isNaN(d) && toYMD(d) === targetYMD) inspections.push({ jobName, type: "QC Walk" });
+        if(!isNaN(d) && toYMD(d) === targetYMD) inspections.push({ jobName, type: "QC Walk", foreman });
       }
     });
 
@@ -29326,7 +29337,7 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       if(fs === "waiting_date") phasesNeeding.push("Finish — needs date");
       else if(fs === "date_confirmed") phasesNeeding.push("Finish — date set, not on planner");
       if(phasesNeeding.length) {
-        needsScheduling.push({ jobName: j.name||"Untitled", phases: phasesNeeding });
+        needsScheduling.push({ jobName: j.name||"Untitled", phases: phasesNeeding, foreman: fnameFor(j) });
       }
     });
 
@@ -29350,7 +29361,7 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       });
 
       if(openPunch > 0 || rtToday || rtNeeds) {
-        punchSummary.push({ jobName: j.name||"Untitled", openPunch, rtToday, rtNeeds });
+        punchSummary.push({ jobName: j.name||"Untitled", openPunch, rtToday, rtNeeds, foreman: fnameFor(j) });
       }
     });
     punchSummary.sort((a,b) => {
@@ -29404,11 +29415,12 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
     return {
       punchClosedCount,
       punchClosedJobs: Array.from(punchClosedJobs),
+      punchClosedByForeman, // { foreman: { count, jobs:Set } }
       updatesPosted,
       crewToday,
       inspections,
       needsScheduling,
-      punchSummary: punchSummary.slice(0, 8),
+      punchSummary, // intentionally unsliced — render caps it under each foreman
       openTasks,
     };
   }, [jobs, crewData, dayIdx, manualTasks, targetYMD, yesterdayYMD, scope]);
@@ -29421,17 +29433,72 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
     lines.push(`HUDDLE — ${dateLabel} (${scopeLabel})`);
     lines.push("");
 
-    // YESTERDAY
+    // Sort foreman names with "Unassigned" FIRST so anything without an owner
+    // surfaces at the top of every section and doesn't slip through the
+    // cracks; everyone else is alphabetical after that.
+    const foremanOrder = (items) => {
+      const seen = new Set(items.map(i => i.foreman || "Unassigned"));
+      const arr = Array.from(seen);
+      arr.sort((a,b) => {
+        if(a === "Unassigned") return -1;
+        if(b === "Unassigned") return 1;
+        return a.localeCompare(b);
+      });
+      return arr;
+    };
+
+    // Render a section's items either grouped by foreman (boss view) or flat
+    // (foreman view, since there's only one foreman). renderItem returns the
+    // bullet text for a single item.
+    const renderSection = (items, renderItem) => {
+      if(scope) {
+        items.forEach(i => lines.push(`- ${renderItem(i)}`));
+        return;
+      }
+      const names = foremanOrder(items);
+      names.forEach((name, idx) => {
+        const group = items.filter(i => (i.foreman || "Unassigned") === name);
+        if(idx > 0) lines.push("");
+        lines.push(`  ${name.split(" ")[0]}`);
+        group.forEach(i => lines.push(`  - ${renderItem(i)}`));
+      });
+    };
+
+    // YESTERDAY — punch close totals are aggregate, but we can break them down
+    // by foreman in boss view too.
     lines.push("YESTERDAY");
     if(data.punchClosedCount > 0) {
-      const lbl = data.punchClosedJobs.length <= 3
-        ? data.punchClosedJobs.join(", ")
-        : `${data.punchClosedJobs.length} jobs`;
-      lines.push(`- ${data.punchClosedCount} punch closed (${lbl})`);
+      if(scope) {
+        const lbl = data.punchClosedJobs.length <= 3
+          ? data.punchClosedJobs.join(", ")
+          : `${data.punchClosedJobs.length} jobs`;
+        lines.push(`- ${data.punchClosedCount} punch closed (${lbl})`);
+      } else {
+        const fNames = Object.keys(data.punchClosedByForeman).sort((a,b)=>{
+          if(a==="Unassigned") return -1; if(b==="Unassigned") return 1;
+          return a.localeCompare(b);
+        });
+        fNames.forEach((name, idx) => {
+          const g = data.punchClosedByForeman[name];
+          const jobs = Array.from(g.jobs);
+          const lbl = jobs.length <= 2 ? jobs.join(", ") : `${jobs.length} jobs`;
+          if(idx > 0 || data.punchClosedCount > 0) {} // no blank line — keep tight
+          lines.push(`  ${name.split(" ")[0]}: ${g.count} punch closed (${lbl})`);
+        });
+      }
     }
-    data.updatesPosted.slice(0, 4).forEach(u => {
-      lines.push(`- ${u.jobName} — ${u.phase} update logged`);
-    });
+    if(data.updatesPosted.length > 0) {
+      const updates = data.updatesPosted.slice(0, 6);
+      if(scope) {
+        updates.forEach(u => lines.push(`- ${u.jobName} — ${u.phase} update logged`));
+      } else {
+        const names = foremanOrder(updates);
+        names.forEach(name => {
+          const group = updates.filter(u => (u.foreman||"Unassigned") === name);
+          group.forEach(u => lines.push(`  ${name.split(" ")[0]}: ${u.jobName} — ${u.phase} update`));
+        });
+      }
+    }
     if(data.punchClosedCount === 0 && data.updatesPosted.length === 0) {
       lines.push("- (quiet)");
     }
@@ -29443,7 +29510,7 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
     if(data.crewToday.length === 0) {
       lines.push("- No assignments");
     } else {
-      data.crewToday.forEach(c => {
+      const renderCrew = (c) => {
         const people = [];
         if(c.lead) people.push(c.lead.split(" ")[0]);
         c.crew.forEach(p => people.push(p.split(" ")[0]));
@@ -29451,46 +29518,67 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
           ? `${people.slice(0,3).join(", ")} +${people.length-3}`
           : people.join(", ");
         const timeStr = c.time ? ` · ${c.time}` : "";
-        lines.push(`- ${c.jobName} — ${peopleStr || "(no names)"}${timeStr}`);
-      });
+        return `${c.jobName} — ${peopleStr || "(no names)"}${timeStr}`;
+      };
+      renderSection(data.crewToday, renderCrew);
     }
     lines.push("");
 
     // INSPECTIONS
     if(data.inspections.length > 0) {
       lines.push(`INSPECTIONS (${data.inspections.length})`);
-      data.inspections.forEach(i => lines.push(`- ${i.jobName} — ${i.type}`));
+      renderSection(data.inspections, i => `${i.jobName} — ${i.type}`);
       lines.push("");
     }
 
     // NEEDS SCHEDULING — rough/finish phases that don't yet have a planner slot
     if(data.needsScheduling.length > 0) {
       lines.push(`NEEDS SCHEDULING (${data.needsScheduling.length})`);
+      // Each item has multiple phases; flatten to one line per phase first
+      const flat = [];
       data.needsScheduling.forEach(n => {
-        n.phases.forEach(p => lines.push(`- ${n.jobName} — ${p}`));
+        n.phases.forEach(p => flat.push({ jobName: n.jobName, phase: p, foreman: n.foreman }));
       });
+      renderSection(flat, n => `${n.jobName} — ${n.phase}`);
       lines.push("");
     }
 
     // OPEN PUNCH / RT
     if(data.punchSummary.length > 0) {
-      lines.push(`OPEN PUNCH / RT (${data.punchSummary.length})`);
-      data.punchSummary.forEach(p => {
+      const cap = scope ? 8 : 4; // per-foreman cap when grouped
+      const renderP = (p) => {
         const bits = [];
         if(p.rtToday) bits.push("RT today");
         if(p.rtNeeds) bits.push("RT needs sched");
         if(p.openPunch > 0) bits.push(`${p.openPunch} punch`);
-        lines.push(`- ${p.jobName} — ${bits.join(", ")}`);
-      });
+        return `${p.jobName} — ${bits.join(", ")}`;
+      };
+      // Apply per-foreman cap so a single noisy foreman doesn't drown the rest
+      let toRender;
+      if(scope) {
+        toRender = data.punchSummary.slice(0, 8);
+        lines.push(`OPEN PUNCH / RT (${data.punchSummary.length})`);
+        toRender.forEach(p => lines.push(`- ${renderP(p)}`));
+        if(data.punchSummary.length > 8) lines.push(`- ...and ${data.punchSummary.length - 8} more`);
+      } else {
+        lines.push(`OPEN PUNCH / RT (${data.punchSummary.length})`);
+        const names = foremanOrder(data.punchSummary);
+        names.forEach((name, idx) => {
+          const group = data.punchSummary.filter(p => (p.foreman||"Unassigned") === name).slice(0, cap);
+          const total = data.punchSummary.filter(p => (p.foreman||"Unassigned") === name).length;
+          if(idx > 0) lines.push("");
+          lines.push(`  ${name.split(" ")[0]}`);
+          group.forEach(p => lines.push(`  - ${renderP(p)}`));
+          if(total > cap) lines.push(`  - ...and ${total - cap} more`);
+        });
+      }
       lines.push("");
     }
 
     // OPEN TASKS
     if(data.openTasks.length > 0) {
       lines.push(`OPEN TASKS (${data.openTasks.length})`);
-      const TASK_CAP = 10;
-      data.openTasks.slice(0, TASK_CAP).forEach(t => {
-        const who = t.foreman && t.foreman !== "Unassigned" ? t.foreman.split(" ")[0] : "—";
+      const renderT = (t) => {
         let due = "";
         if(t.dueDate) {
           const d = parseAnyDate(t.dueDate);
@@ -29506,9 +29594,23 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
         }
         const job = t.jobName ? ` [${t.jobName.substring(0,18)}]` : "";
         const title = (t.title || "(no title)").substring(0, 44);
-        lines.push(`- ${title}${job} — ${who}${due}`);
-      });
-      if(data.openTasks.length > TASK_CAP) lines.push(`- ...and ${data.openTasks.length - TASK_CAP} more`);
+        return `${title}${job}${due}`;
+      };
+      if(scope) {
+        const TASK_CAP = 10;
+        data.openTasks.slice(0, TASK_CAP).forEach(t => lines.push(`- ${renderT(t)}`));
+        if(data.openTasks.length > TASK_CAP) lines.push(`- ...and ${data.openTasks.length - TASK_CAP} more`);
+      } else {
+        const PER_FOREMAN_CAP = 6;
+        const names = foremanOrder(data.openTasks);
+        names.forEach((name, idx) => {
+          const group = data.openTasks.filter(t => (t.foreman||"Unassigned") === name);
+          if(idx > 0) lines.push("");
+          lines.push(`  ${name.split(" ")[0]} (${group.length})`);
+          group.slice(0, PER_FOREMAN_CAP).forEach(t => lines.push(`  - ${renderT(t)}`));
+          if(group.length > PER_FOREMAN_CAP) lines.push(`  - ...and ${group.length - PER_FOREMAN_CAP} more`);
+        });
+      }
     }
 
     return lines.join("\n");
