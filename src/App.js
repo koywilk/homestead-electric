@@ -15405,11 +15405,23 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             if(open>0){toast.warn(`Cannot mark Rough as complete — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}
                           }
                           const def=getStatusDef(ROUGH_STATUSES,v);
+                          // Auto-flip matterport to "needs" when rough goes
+                          // complete — but only on the transition (skip if
+                          // already complete on re-save) and only when the
+                          // matterport hasn't been touched yet. Existing
+                          // scheduled scans or uploaded links are preserved.
+                          const matterportFlip = (
+                            v === "complete"
+                            && job.roughStatus !== "complete"
+                            && !job.matterportStatus
+                            && !(job.matterportLinks?.length || job.matterportLink)
+                          ) ? { matterportStatus: "needs" } : {};
                           u({roughStatus:v, roughOnHold:v==="waiting", roughScheduled:v==="scheduled",
                             roughStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting")?job.roughStartConfirmed:false,
                             roughStatusDate:def.hasDate?job.roughStatusDate:"",
                             roughProjectedStart:v==="scheduled"?job.roughProjectedStart:job.roughProjectedStart,
                             ...(v==="scheduled"?{roughDepositDismissed:false}:{}),
+                            ...matterportFlip,
                           });
                         }} style={{background:rsDef.color?`${rsDef.color}18`:C.surface,
                           color:rsDef.color||C.dim, border:`1px solid ${rsDef.color||C.border}`,
@@ -15565,7 +15577,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     </div>
                   );
                 })()}
-                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const open=punchOpen(job.roughPunch);if(open>0){toast.warn(`Cannot set Rough to 100% — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}}const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};const invoiceFire=pct>=85&&!job.roughInvoiceFired?{roughInvoiceFired:true,roughInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{roughInvoiceFired:false,roughInvoiceDismissed:false}:{};u({roughStage:v,...qcFire,...prepDone,...invoiceFire,...invoiceReset,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
+                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const open=punchOpen(job.roughPunch);if(open>0){toast.warn(`Cannot set Rough to 100% — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}}const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};const invoiceFire=pct>=85&&!job.roughInvoiceFired?{roughInvoiceFired:true,roughInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{roughInvoiceFired:false,roughInvoiceDismissed:false}:{};/* Auto-flip matterport to "needs" when stage hits 100% and rough wasn't already complete. Skip if matterport is already set or a scan is uploaded. */const matterportFlip=(v==="100%"&&job.roughStatus!=="complete"&&!job.matterportStatus&&!(job.matterportLinks?.length||job.matterportLink))?{matterportStatus:"needs"}:{};u({roughStage:v,...qcFire,...prepDone,...invoiceFire,...invoiceReset,...matterportFlip,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
 
                 <div style={{marginTop:8,marginBottom:12}}>
                   <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough}/>
@@ -29159,13 +29171,14 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
     return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
   };
 
-  // Default to today; if today is Sat/Sun, jump to next Monday so the planner
-  // assignments map cleanly. User can step the date with the day buttons.
+  // 5pm orientation: default targetDate to TOMORROW (next workday). The
+  // huddle goes out end-of-day, so the foreman is reading it to prep for
+  // the next morning. Recap section automatically anchors on the workday
+  // before targetDate, which is "today" from the sender's perspective.
   const initialDate = useMemo(() => {
     const d = new Date(); d.setHours(0,0,0,0);
-    const dow = d.getDay();
-    if(dow === 0) d.setDate(d.getDate() + 1);
-    else if(dow === 6) d.setDate(d.getDate() + 2);
+    d.setDate(d.getDate() + 1);
+    while(d.getDay() === 0 || d.getDay() === 6) d.setDate(d.getDate() + 1);
     return d;
   }, []);
   const [targetDate, setTargetDate] = useState(initialDate);
@@ -29270,6 +29283,9 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
     const punchClosedJobs = new Set();
     const punchClosedByForeman = {}; // foreman -> {count, jobs: Set}
     const updatesPosted = [];
+    // Inspection results recorded on the recap day. Pass + fail both go in
+    // so wins are visible and re-attempts are on the radar.
+    const inspectionResults = []; // { jobName, type, result, foreman }
 
     // Helper — every output item carries the job's foreman so the formatter
     // can group by it in All Combined mode without re-walking jobs.
@@ -29304,6 +29320,30 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
           }
         });
       });
+
+      // Inspection results recorded on the recap day. Walk attempts[] for
+      // rough + final (each attempt has {date, result}) and the qcStatusDate
+      // for QC. Skip empty/no-result entries — those are placeholder rows.
+      const checkAttempts = (attempts, type) => {
+        (attempts||[]).forEach(a => {
+          if(!a || !a.result) return;
+          const d = parseAnyDate(a.date);
+          if(!d) return;
+          if(toYMD(d) === yesterdayYMD) {
+            inspectionResults.push({ jobName, type, result: a.result, foreman });
+          }
+        });
+      };
+      checkAttempts(j.roughInspectionAttempts, "Rough/4-Way");
+      checkAttempts(j.finalInspectionAttempts, "Final");
+      // QC: pass / fail / fixed all count as a recorded result; qcStatusDate
+      // is when it was set.
+      if(j.qcStatus && ["pass","fail","fixed","completed"].includes(j.qcStatus) && j.qcStatusDate) {
+        const d = parseAnyDate(j.qcStatusDate);
+        if(d && toYMD(d) === yesterdayYMD) {
+          inspectionResults.push({ jobName, type: "QC Walk", result: j.qcStatus, foreman });
+        }
+      }
     });
 
     // Today's crews — pull cells matching dayIdx, only on jobs in scope
@@ -29326,20 +29366,31 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
 
     // Inspections / 4-Way / QC scheduled for targetDate (in scope only)
     const inspections = [];
+    // Pending results — target date has already passed but no pass/fail was
+    // recorded. These are inspections in limbo: somebody needs to confirm
+    // whether they actually happened and what the result was. Skip future
+    // dates (those are upcoming, not pending) and skip targetDate itself
+    // (those land in the inspections section above).
+    const pendingResults = [];
     jobs.filter(inScopeJob).forEach(j => {
       const jobName = j.name || "Untitled";
       const foreman = fnameFor(j);
-      if(j.fourWayTargetDate && !j.roughInspectionResult) {
-        const d = new Date(j.fourWayTargetDate);
-        if(!isNaN(d) && toYMD(d) === targetYMD) inspections.push({ jobName, type: "Rough/4-Way", foreman });
-      }
-      if(j.finalInspectionTargetDate && !j.finalInspectionResult) {
-        const d = new Date(j.finalInspectionTargetDate);
-        if(!isNaN(d) && toYMD(d) === targetYMD) inspections.push({ jobName, type: "Final", foreman });
-      }
+      const checkDate = (dStr, type, hasResult) => {
+        if(!dStr) return;
+        const d = parseAnyDate(dStr); if(!d) return;
+        const ymd = toYMD(d);
+        if(ymd === targetYMD && !hasResult) {
+          inspections.push({ jobName, type, foreman });
+        } else if(ymd < targetYMD && !hasResult) {
+          pendingResults.push({ jobName, type, scheduledDate: dStr, foreman });
+        }
+      };
+      checkDate(j.fourWayTargetDate, "Rough/4-Way", !!j.roughInspectionResult);
+      checkDate(j.finalInspectionTargetDate, "Final", !!j.finalInspectionResult);
+      // QC has a richer status — "scheduled" means waiting on result; pass /
+      // fail / fixed / completed all count as resolved.
       if(j.qcStatus === "scheduled" && j.qcStatusDate) {
-        const d = new Date(j.qcStatusDate);
-        if(!isNaN(d) && toYMD(d) === targetYMD) inspections.push({ jobName, type: "QC Walk", foreman });
+        checkDate(j.qcStatusDate, "QC Walk", false);
       }
     });
 
@@ -29483,8 +29534,10 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       punchClosedJobs: Array.from(punchClosedJobs),
       punchClosedByForeman, // { foreman: { count, jobs:Set } }
       updatesPosted,
+      inspectionResults,
       crewToday,
       inspections,
+      pendingResults,
       needsScheduling,
       smallJobs,
       punchSummary, // intentionally unsliced — render caps it under each foreman
@@ -29531,9 +29584,15 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       });
     };
 
-    // YESTERDAY — punch close totals are aggregate, but we can break them down
-    // by foreman in boss view too.
-    lines.push("YESTERDAY");
+    // RECAP — what closed / got logged on the workday before targetDate. In
+    // the default 5pm flow that's "today" from the sender's perspective.
+    // Section label includes the weekday so it's unambiguous if you step
+    // the date around (e.g. "RECAP — FRI" when targetDate is Mon).
+    const recapDow = (() => {
+      const d = parseAnyDate(yesterdayYMD);
+      return d ? d.toLocaleDateString("en-US", { weekday:"short" }).toUpperCase() : "";
+    })();
+    lines.push(`RECAP — ${recapDow}`);
     if(data.punchClosedCount > 0) {
       if(scope) {
         const lbl = data.punchClosedJobs.length <= 3
@@ -29566,14 +29625,39 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
         });
       }
     }
-    if(data.punchClosedCount === 0 && data.updatesPosted.length === 0) {
+
+    // Inspection pass/fail recorded on the recap day. Renders inline in the
+    // recap so wins / re-attempts surface alongside punch closes and updates.
+    if(data.inspectionResults.length > 0) {
+      const labelFor = (r) => {
+        const k = (r||"").toLowerCase();
+        if(k === "pass" || k === "fixed" || k === "completed") return "PASS";
+        if(k === "fail") return "FAIL";
+        return (r||"").toUpperCase();
+      };
+      if(scope) {
+        data.inspectionResults.forEach(i =>
+          lines.push(`- ${i.jobName} — ${i.type} ${labelFor(i.result)}`));
+      } else {
+        const names = foremanOrder(data.inspectionResults);
+        names.forEach(name => {
+          const group = data.inspectionResults.filter(i => (i.foreman||"Unassigned") === name);
+          group.forEach(i =>
+            lines.push(`  ${name.split(" ")[0]}: ${i.jobName} — ${i.type} ${labelFor(i.result)}`));
+        });
+      }
+    }
+
+    if(data.punchClosedCount === 0 && data.updatesPosted.length === 0 && data.inspectionResults.length === 0) {
       lines.push("- (quiet)");
     }
     lines.push("");
 
-    // TODAY
+    // PLAN — crew assignments on targetDate. Header shows the actual weekday
+    // so "TUE CREWS" / "MON CREWS" reads right whether the user is sending
+    // tonight for tomorrow or stepping back to review a different day.
     const dayName = targetDate.toLocaleDateString("en-US", { weekday:"short" }).toUpperCase();
-    lines.push(`TODAY (${dayName})`);
+    lines.push(`${dayName} CREWS`);
     if(data.crewToday.length === 0) {
       lines.push("- No assignments");
     } else {
@@ -29591,10 +29675,18 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
     }
     lines.push("");
 
-    // INSPECTIONS
+    // INSPECTIONS — landing on targetDate
     if(data.inspections.length > 0) {
-      lines.push(`INSPECTIONS (${data.inspections.length})`);
+      lines.push(`INSPECTIONS — ${dayName} (${data.inspections.length})`);
       renderSection(data.inspections, i => `${i.jobName} — ${i.type}`);
+      lines.push("");
+    }
+
+    // PENDING RESULTS — inspections whose date has passed without a pass/fail
+    // recorded. Surfaces stuck inspections so somebody chases the outcome.
+    if(data.pendingResults.length > 0) {
+      lines.push(`PENDING RESULTS (${data.pendingResults.length})`);
+      renderSection(data.pendingResults, p => `${p.jobName} — ${p.type} (${p.scheduledDate})`);
       lines.push("");
     }
 
@@ -29732,7 +29824,7 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
   return (
     <div style={{maxWidth:680, margin:"0 auto", padding:"16px", color:C.text}}>
       <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap"}}>
-        <h2 style={{fontSize:18, fontWeight:700, color:C.text, margin:0}}>Daily Huddle</h2>
+        <h2 style={{fontSize:18, fontWeight:700, color:C.text, margin:0}}>End-of-Day Huddle</h2>
         <div style={{display:"flex", alignItems:"center", gap:6, marginLeft:"auto", flexWrap:"wrap"}}>
           <button onClick={()=>stepDay(-1)}
             style={{fontSize:11, padding:"6px 10px", borderRadius:7, border:`1px solid ${C.border}`,
@@ -29796,8 +29888,9 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       }}>{text}</pre>
 
       <div style={{fontSize:10, color:C.dim, marginTop:10, lineHeight:1.5}}>
-        Read-only. Pulled live from current job state — no writes. "Send to my phone"
-        opens Messages with the text pre-filled; you pick the recipient.
+        Read-only. Pulled live from current job state — no writes. Default day is
+        the next workday (5pm send → tomorrow). "Send to my phone" opens Messages
+        with the text pre-filled; you pick the recipient.
       </div>
     </div>
   );
