@@ -21584,17 +21584,72 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     }
 
     // After the foreman filter — add jobs that have Simpro schedule entries
-    // in the visible week but aren't otherwise in the union. Per Koy's design:
-    // render the row even if Simpro has someone scheduled on a job outside
-    // the foreman filter, so nothing on the books is silently hidden. These
-    // rows are tagged with _simproOnly so the renderer can show a small
-    // "Simpro" badge next to the job name to flag the source.
+    // in the visible week but aren't otherwise in the union. Tagged with
+    // _simproOnly so the renderer can show a "Simpro" badge.
+    //
+    // IMPORTANT (foreman filter): when crewForemanFilter is active, only
+    // pull in Simpro-extra jobs that ACTUALLY belong to this foreman or
+    // have one of this foreman's crew on the Simpro entry. The previous
+    // version added every Simpro-scheduled job back regardless of foreman,
+    // which made the filter appear broken — clicking a foreman pill
+    // narrowed the list and then Simpro re-added jobs from every other
+    // foreman, so the result looked unchanged. Now: if a job belongs to a
+    // different foreman AND no one on its Simpro entry this week is in
+    // this foreman's crew, it stays hidden when filtered.
     if(simproPidsThisWeek.size > 0) {
+      // Build the set of "this foreman's crew" once, used to test whether
+      // a Simpro entry on a foreign job is still relevant to show.
+      let foremanCrew = null;
+      if(crewForemanFilter) {
+        const fmFirst = crewForemanFilter.trim().split(/\s+/)[0];
+        const set = new Set([crewForemanFilter, fmFirst]);
+        // Anyone whose user record has foremanId pointing at this foreman.
+        Object.entries(crewForemanOf||{}).forEach(([person, fm]) => {
+          if(fm === crewForemanFilter || fm === fmFirst) {
+            set.add(person);
+            const personFirst = person.trim().split(/\s+/)[0];
+            if(personFirst) set.add(personFirst);
+          }
+        });
+        // Plus members of any team led by this foreman.
+        (crewTeams||[]).forEach(t => {
+          const lead = t.lead || "";
+          const leadFirst = lead.trim().split(/\s+/)[0];
+          if(lead === crewForemanFilter || leadFirst === fmFirst) {
+            if(lead) { set.add(lead); set.add(leadFirst); }
+            (t.members||[]).forEach(n => {
+              if(!n) return;
+              set.add(n);
+              const nf = n.trim().split(/\s+/)[0];
+              if(nf) set.add(nf);
+            });
+          }
+        });
+        foremanCrew = set;
+      }
       const fromSimproExtra = jobs.filter(j => {
         if(j.tempPed||j.quickJob) return false;
         if(!j.simproNo) return false;
         if(!simproPidsThisWeek.has(String(j.simproNo))) return false;
-        return !union.some(u => u.id === j.id);
+        if(union.some(u => u.id === j.id)) return false;
+        // No foreman filter active — keep the original behavior (show all).
+        if(!crewForemanFilter) return true;
+        // Foreman filter active and job belongs to this foreman — show it.
+        if((j.foreman||"Koy") === crewForemanFilter) return true;
+        // Foreign job — only show if at least one person on its Simpro
+        // entry this week is in this foreman's crew. Walk the 5 weekday
+        // slots for this project ID and check who's on it.
+        const pid = String(j.simproNo);
+        for(let di = 0; di < 5; di++) {
+          const peeps = simproPeopleByJobDay.get(`${pid}_${di}`);
+          if(!peeps) continue;
+          for(const name of peeps) {
+            if(foremanCrew.has(name)) return true;
+            const first = (name||"").trim().split(/\s+/)[0];
+            if(first && foremanCrew.has(first)) return true;
+          }
+        }
+        return false;
       }).map(j => ({...j, _simproOnly: true}));
       union = [...union, ...fromSimproExtra];
     }
@@ -21619,7 +21674,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
       return (a.job.name||"").localeCompare(b.job.name||"");
     });
     return withOrder.map(x=>({...x.job, _pri:x.pri}));
-  }, [jobs,crewData,crewExtra,crewJobOrder,_crewJobPriority,crewFocus,crewPinned,crewForemanFilter,crewEventsByJobDay,simproPidsThisWeek]);
+  }, [jobs,crewData,crewExtra,crewJobOrder,_crewJobPriority,crewFocus,crewPinned,crewForemanFilter,crewEventsByJobDay,simproPidsThisWeek,simproPeopleByJobDay,crewForemanOf,crewTeams]);
 
   const crewDayTotals = useMemo(() => {
     const t=Array(5).fill(0);
