@@ -23630,15 +23630,56 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                         if(isNaN(sh)||isNaN(eh)) return null;
                         return Math.max(0, (eh + (em||0)/60) - (sh + (sm||0)/60));
                       };
+                      // Simpro busy lookup for THIS day: walk every Simpro
+                      // entry pid for the day and check if `name` (or its
+                      // first-name form) appears in the staff list. Returns
+                      // the matched job name from jobs[] (matched by simproNo)
+                      // so the chip can say "also on <real job name>" instead
+                      // of just "Simpro".
+                      const simproBusyFor = (name) => {
+                        if(!simproPeopleByJobDay || simproPeopleByJobDay.size === 0) return null;
+                        const first = (name||"").trim().split(/\s+/)[0];
+                        // Walk all entries for this day index — keyed `${pid}_${di}`.
+                        for(const [key, peeps] of simproPeopleByJobDay.entries()) {
+                          const [pid, dayIdx] = key.split("_");
+                          if(parseInt(dayIdx,10) !== di) continue;
+                          let matched = false;
+                          for(const p of peeps) {
+                            if(!p) continue;
+                            if(p === name) { matched = true; break; }
+                            const pf = p.trim().split(/\s+/)[0];
+                            if(first && (pf === first || p === first || pf === name)) { matched = true; break; }
+                          }
+                          if(!matched) continue;
+                          // Skip if it's THIS job — the picker is open on this
+                          // cell so being on Simpro for this same job isn't a
+                          // conflict.
+                          const matchedJob = jobs.find(j => String(j.simproNo||"") === String(pid));
+                          if(matchedJob && matchedJob.id === jid) continue;
+                          return { jobName: matchedJob?.name || "Simpro job", source: "simpro" };
+                        }
+                        return null;
+                      };
                       const statusFor = (name) => {
                         if(isOnPTO(name, day)) return { kind:"pto" };
                         const c = crewFindPersonOnDay(name, di, jid);
-                        if(!c) return { kind:"free" };
-                        const cell = crewData[c.k];
-                        const hours = cell?.time ? hoursFromTime(cell.time) : null;
-                        const jobName = jobs.find(j=>j.id===c.jid)?.name || "another job";
-                        return { kind:"busy", jobName, hours, time: cell?.time,
-                          free: hours!=null ? Math.max(0, FULL_DAY - hours) : 0 };
+                        if(c) {
+                          const cell = crewData[c.k];
+                          const hours = cell?.time ? hoursFromTime(cell.time) : null;
+                          const jobName = jobs.find(j=>j.id===c.jid)?.name || "another job";
+                          return { kind:"busy", jobName, hours, time: cell?.time,
+                            free: hours!=null ? Math.max(0, FULL_DAY - hours) : 0 };
+                        }
+                        // Not on the planner anywhere — but might be on a Simpro
+                        // entry for a job that's not visible on the planner
+                        // (e.g. another foreman's job when filtered). Flag it so
+                        // Koy doesn't accidentally double-book.
+                        const sim = simproBusyFor(name);
+                        if(sim) {
+                          return { kind:"busy", jobName: sim.jobName, hours: null,
+                            time: null, free: 0, source: "simpro" };
+                        }
+                        return { kind:"free" };
                       };
                       const classify = (names) => {
                         const out = { free:[], partial:[], busy:[], pto:[] };
@@ -23696,7 +23737,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                             )}
                             {(busy || partial) && (
                               <span style={{fontSize:9,opacity:0.7,fontWeight:500,maxWidth:90,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
-                                {s.jobName}
+                                {s.jobName}{s.source === "simpro" ? " (Simpro)" : ""}
                               </span>
                             )}
                           </button>
