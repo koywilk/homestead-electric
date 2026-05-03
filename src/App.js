@@ -29394,22 +29394,48 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       }
     });
 
-    // Needs scheduling — rough/finish phases that have a status of waiting_date
-    // ("Awaiting Start Date") or date_confirmed ("Start Date Set" but not yet
-    // on the planner). These are the "in stage but not scheduled" jobs Koy
-    // wants surfaced so they don't get forgotten.
-    const needsScheduling = [];
+    // Active rough/finish phases — every job that's currently in flight on
+    // either phase, regardless of whether the status was marked correctly.
+    // Catches the "we forgot to set Awaiting Start Date" case because
+    // effRS/effFS fall through to roughStage/finishStage when the status
+    // field is empty. waiting_date / date_confirmed sort to the top inside
+    // each foreman's group so the action items are obvious. Skip complete
+    // (done), invoice (post-complete), and small jobs (their own section).
+    //
+    // Status sort priority — lower number = surfaced higher up.
+    const PHASE_PRIORITY = {
+      waiting_date: 0,    // needs a date — urgent
+      date_confirmed: 1,  // date set, not yet on planner
+      inprogress: 2,      // just visibility
+      scheduled: 3,
+      waiting: 4,         // on hold
+    };
+    const activePhases = [];
     jobs.filter(inScopeJob).forEach(j => {
       if(j.tempPed || j.quickJob) return;
-      const rs = effRS(j), fs = effFS(j);
-      const phasesNeeding = [];
-      if(rs === "waiting_date") phasesNeeding.push("Rough — needs date");
-      else if(rs === "date_confirmed") phasesNeeding.push("Rough — date set, not on planner");
-      if(fs === "waiting_date") phasesNeeding.push("Finish — needs date");
-      else if(fs === "date_confirmed") phasesNeeding.push("Finish — date set, not on planner");
-      if(phasesNeeding.length) {
-        needsScheduling.push({ jobName: j.name||"Untitled", phases: phasesNeeding, foreman: fnameFor(j) });
-      }
+      const foreman = fnameFor(j);
+      const jobName = j.name || "Untitled";
+      const addPhase = (phase, eff, statusDate, defs) => {
+        if(!eff || eff === "complete" || eff === "invoice") return;
+        const def = defs.find(s => s.value === eff);
+        const showDate = statusDate && (eff === "scheduled" || eff === "date_confirmed" || eff === "inprogress");
+        activePhases.push({
+          jobName, phase, foreman,
+          statusKey: eff,
+          status: def ? def.label : eff,
+          dateBit: showDate ? ` (${statusDate})` : "",
+        });
+      };
+      addPhase("Rough",  effRS(j), j.roughStatusDate,  ROUGH_STATUSES);
+      addPhase("Finish", effFS(j), j.finishStatusDate, FINISH_STATUSES);
+    });
+    activePhases.sort((a,b) => {
+      const pa = PHASE_PRIORITY[a.statusKey] ?? 9;
+      const pb = PHASE_PRIORITY[b.statusKey] ?? 9;
+      if(pa !== pb) return pa - pb;
+      // Within same priority: rough before finish, then by job name
+      if(a.phase !== b.phase) return a.phase === "Rough" ? -1 : 1;
+      return a.jobName.localeCompare(b.jobName);
     });
 
     // Open punch + RT summary (in scope only). Temp peds and quick jobs are
@@ -29441,6 +29467,47 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       if(a.rtNeeds !== b.rtNeeds) return a.rtNeeds ? -1 : 1;
       return b.openPunch - a.openPunch;
     });
+
+    // QC + Matterport scheduling buckets — split into NEEDS and SCHEDULED so
+    // the boss can see at a glance what hasn't been put on the calendar yet
+    // vs what's locked in (and on which date). Skip jobs whose phase is
+    // already wrapped (qcStatus pass/fail/fixed/completed; matterportStatus
+    // complete or has uploaded link).
+    const qcNeeds = [], qcScheduled = [];
+    const matterNeeds = [], matterScheduled = [];
+    jobs.filter(inScopeJob).forEach(j => {
+      const jobName = j.name || "Untitled";
+      const foreman = fnameFor(j);
+
+      // QC
+      if(j.qcStatus === "needs") {
+        qcNeeds.push({ jobName, foreman, byDate: j.qcStatusDate || "" });
+      } else if(j.qcStatus === "scheduled" && j.qcStatusDate) {
+        qcScheduled.push({ jobName, foreman, date: j.qcStatusDate });
+      }
+
+      // Matterport — also skip if a scan link is already uploaded (means it
+      // happened, the status field just wasn't updated). Same guard the
+      // existing matterport task uses.
+      const hasScan = !!(j.matterportLinks?.length || j.matterportLink);
+      if(!hasScan) {
+        if(j.matterportStatus === "needs") {
+          matterNeeds.push({ jobName, foreman, byDate: j.matterportStatusDate || "" });
+        } else if(j.matterportStatus === "scheduled" && j.matterportStatusDate) {
+          matterScheduled.push({ jobName, foreman, date: j.matterportStatusDate });
+        }
+      }
+    });
+    // Sort scheduled by date (earliest first), needs by byDate if present
+    const byDateAsc = (a,b) => {
+      const da = parseAnyDate(a.date || a.byDate);
+      const db = parseAnyDate(b.date || b.byDate);
+      if(da && db) return da - db;
+      if(da) return -1; if(db) return 1;
+      return 0;
+    };
+    qcNeeds.sort(byDateAsc); qcScheduled.sort(byDateAsc);
+    matterNeeds.sort(byDateAsc); matterScheduled.sort(byDateAsc);
 
     // Active temp peds + quick jobs with their current status. We surface
     // these so small jobs don't get forgotten — they have their own status
@@ -29538,7 +29605,9 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       crewToday,
       inspections,
       pendingResults,
-      needsScheduling,
+      activePhases,
+      qcNeeds, qcScheduled,
+      matterNeeds, matterScheduled,
       smallJobs,
       punchSummary, // intentionally unsliced — render caps it under each foreman
       openTasks,
@@ -29690,15 +29759,43 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       lines.push("");
     }
 
-    // NEEDS SCHEDULING — rough/finish phases that don't yet have a planner slot
-    if(data.needsScheduling.length > 0) {
-      lines.push(`NEEDS SCHEDULING (${data.needsScheduling.length})`);
-      // Each item has multiple phases; flatten to one line per phase first
-      const flat = [];
-      data.needsScheduling.forEach(n => {
-        n.phases.forEach(p => flat.push({ jobName: n.jobName, phase: p, foreman: n.foreman }));
-      });
-      renderSection(flat, n => `${n.jobName} — ${n.phase}`);
+    // ACTIVE ROUGH / FINISH — every job currently in either phase. Surfaces
+    // jobs even when the status field wasn't set correctly (effRS/effFS pick
+    // up roughStage/finishStage progress as a fallback). Items already sorted
+    // so urgent statuses (Awaiting Start Date, Start Date Set) lead.
+    if(data.activePhases.length > 0) {
+      lines.push(`ACTIVE ROUGH / FINISH (${data.activePhases.length})`);
+      renderSection(
+        data.activePhases,
+        a => `${a.jobName} — ${a.phase}: ${a.status}${a.dateBit}`
+      );
+      lines.push("");
+    }
+
+    // QC + MATTERPORT — split into separate "needs scheduling" and
+    // "scheduled" buckets per item type so the boss can see at a glance
+    // what's missing a calendar slot and what's locked in. Each section
+    // groups by foreman (boss view) or renders flat (single-foreman view).
+    if(data.qcNeeds.length > 0) {
+      lines.push(`QC — NEEDS SCHEDULING (${data.qcNeeds.length})`);
+      renderSection(data.qcNeeds, q =>
+        `${q.jobName}${q.byDate ? ` — sched by ${q.byDate}` : ""}`);
+      lines.push("");
+    }
+    if(data.qcScheduled.length > 0) {
+      lines.push(`QC — SCHEDULED (${data.qcScheduled.length})`);
+      renderSection(data.qcScheduled, q => `${q.jobName} — ${q.date}`);
+      lines.push("");
+    }
+    if(data.matterNeeds.length > 0) {
+      lines.push(`MATTERPORT — NEEDS SCHEDULING (${data.matterNeeds.length})`);
+      renderSection(data.matterNeeds, m =>
+        `${m.jobName}${m.byDate ? ` — sched by ${m.byDate}` : ""}`);
+      lines.push("");
+    }
+    if(data.matterScheduled.length > 0) {
+      lines.push(`MATTERPORT — SCHEDULED (${data.matterScheduled.length})`);
+      renderSection(data.matterScheduled, m => `${m.jobName} — ${m.date}`);
       lines.push("");
     }
 
