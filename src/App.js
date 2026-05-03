@@ -30376,7 +30376,16 @@ function App() {
   },[]);
 
 
-  const updateJob = (updated, patch) => { setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); setSelected(updated); saveJob(updated, patch); };
+  // Update a job everywhere it lives: jobs list, selected (if open), Firestore.
+  // CRITICAL: setSelected must NOT unconditionally write `updated` — that
+  // would reopen a just-closed modal whenever a debounced save lands a few
+  // ms after the user clicks out. Only patch `selected` when it's actually
+  // pointing at this job (i.e. modal is open on this job).
+  const updateJob = (updated, patch) => {
+    setJobs(js => js.map(j => j.id === updated.id ? updated : j));
+    setSelected(s => (s && s.id === updated.id) ? updated : s);
+    saveJob(updated, patch);
+  };
 
   // ── Simpro inbox handlers ──────────────────────────────────────────
   // Import a Simpro candidate as a real app job. Creates the job doc with a
