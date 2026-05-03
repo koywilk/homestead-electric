@@ -21583,73 +21583,19 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
       union = union.filter(j => (j.foreman||"Koy") === crewForemanFilter);
     }
 
-    // After the foreman filter — add jobs that have Simpro schedule entries
-    // in the visible week but aren't otherwise in the union. Tagged with
-    // _simproOnly so the renderer can show a "Simpro" badge.
-    //
-    // IMPORTANT (foreman filter): when crewForemanFilter is active, only
-    // pull in Simpro-extra jobs that ACTUALLY belong to this foreman or
-    // have one of this foreman's crew on the Simpro entry. The previous
-    // version added every Simpro-scheduled job back regardless of foreman,
-    // which made the filter appear broken — clicking a foreman pill
-    // narrowed the list and then Simpro re-added jobs from every other
-    // foreman, so the result looked unchanged. Now: if a job belongs to a
-    // different foreman AND no one on its Simpro entry this week is in
-    // this foreman's crew, it stays hidden when filtered.
-    if(simproPidsThisWeek.size > 0) {
-      // Build the set of "this foreman's crew" once, used to test whether
-      // a Simpro entry on a foreign job is still relevant to show.
-      let foremanCrew = null;
-      if(crewForemanFilter) {
-        const fmFirst = crewForemanFilter.trim().split(/\s+/)[0];
-        const set = new Set([crewForemanFilter, fmFirst]);
-        // Anyone whose user record has foremanId pointing at this foreman.
-        Object.entries(crewForemanOf||{}).forEach(([person, fm]) => {
-          if(fm === crewForemanFilter || fm === fmFirst) {
-            set.add(person);
-            const personFirst = person.trim().split(/\s+/)[0];
-            if(personFirst) set.add(personFirst);
-          }
-        });
-        // Plus members of any team led by this foreman.
-        (crewTeams||[]).forEach(t => {
-          const lead = t.lead || "";
-          const leadFirst = lead.trim().split(/\s+/)[0];
-          if(lead === crewForemanFilter || leadFirst === fmFirst) {
-            if(lead) { set.add(lead); set.add(leadFirst); }
-            (t.members||[]).forEach(n => {
-              if(!n) return;
-              set.add(n);
-              const nf = n.trim().split(/\s+/)[0];
-              if(nf) set.add(nf);
-            });
-          }
-        });
-        foremanCrew = set;
-      }
+    // FOREMAN-FILTER RULE: when crewForemanFilter is active, the planner
+    // shows ONLY that foreman's jobs — no foreign foremen's jobs at all,
+    // even if one of this foreman's crew is on a Simpro entry there. The
+    // cross-crew visibility belongs in the click-cell picker (which flags
+    // a person as "also scheduled on <job>" so you don't double-book), not
+    // in the row list. The unfiltered view still pulls in Simpro extras so
+    // nothing on the books gets hidden when you're looking at all jobs.
+    if(simproPidsThisWeek.size > 0 && !crewForemanFilter) {
       const fromSimproExtra = jobs.filter(j => {
         if(j.tempPed||j.quickJob) return false;
         if(!j.simproNo) return false;
         if(!simproPidsThisWeek.has(String(j.simproNo))) return false;
-        if(union.some(u => u.id === j.id)) return false;
-        // No foreman filter active — keep the original behavior (show all).
-        if(!crewForemanFilter) return true;
-        // Foreman filter active and job belongs to this foreman — show it.
-        if((j.foreman||"Koy") === crewForemanFilter) return true;
-        // Foreign job — only show if at least one person on its Simpro
-        // entry this week is in this foreman's crew. Walk the 5 weekday
-        // slots for this project ID and check who's on it.
-        const pid = String(j.simproNo);
-        for(let di = 0; di < 5; di++) {
-          const peeps = simproPeopleByJobDay.get(`${pid}_${di}`);
-          if(!peeps) continue;
-          for(const name of peeps) {
-            if(foremanCrew.has(name)) return true;
-            const first = (name||"").trim().split(/\s+/)[0];
-            if(first && foremanCrew.has(first)) return true;
-          }
-        }
-        return false;
+        return !union.some(u => u.id === j.id);
       }).map(j => ({...j, _simproOnly: true}));
       union = [...union, ...fromSimproExtra];
     }
@@ -21674,7 +21620,7 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
       return (a.job.name||"").localeCompare(b.job.name||"");
     });
     return withOrder.map(x=>({...x.job, _pri:x.pri}));
-  }, [jobs,crewData,crewExtra,crewJobOrder,_crewJobPriority,crewFocus,crewPinned,crewForemanFilter,crewEventsByJobDay,simproPidsThisWeek,simproPeopleByJobDay,crewForemanOf,crewTeams]);
+  }, [jobs,crewData,crewExtra,crewJobOrder,_crewJobPriority,crewFocus,crewPinned,crewForemanFilter,crewEventsByJobDay,simproPidsThisWeek]);
 
   const crewDayTotals = useMemo(() => {
     const t=Array(5).fill(0);
@@ -29372,12 +29318,39 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       return b.openPunch - a.openPunch;
     });
 
-    // Open tasks — everything in manualTasks counts as a manual task. Done is
-    // tracked via `cleared` (planner-style) or `status === "completed"` (older
-    // shape). The wrong `type === "manual"` check was excluding everything.
-    const openTasks = (manualTasks||[])
-      .filter(t => t && !t.cleared && t.status !== "completed")
-      .filter(inScopeTask);
+    // Open tasks — same merge the Tasks view uses: auto-derived tasks from
+    // computeTasks(jobs) (rough/finish/qc/co/rt/po/invoice prompts) PLUS
+    // user-added manual tasks. Drop "prep" (pre-job noise), respect
+    // job.clearedTasks (manually cleared by user), and skip tasks marked
+    // done via cleared/status. Originally I was only reading manualTasks
+    // which is why almost nothing showed.
+    const allClearedTaskIds = new Set(jobs.flatMap(j => j.clearedTasks || []));
+    const autoTasks = computeTasks(jobs);
+    // Carry per-job task due-date overrides forward (Tasks view does this too)
+    const allTaskDueDates = jobs.reduce((acc,j)=>({...acc,...(j.taskDueDates||{})}),{});
+    const merged = [
+      ...autoTasks.map(t => {
+        const d = allTaskDueDates[t.id];
+        return d !== undefined ? { ...t, dueDate: d || t.dueDate || "" } : t;
+      }),
+      ...(manualTasks||[]),
+    ];
+    const openTasks = merged
+      .filter(t => t
+        && t.category !== "prep"
+        && !t.cleared
+        && t.status !== "completed"
+        && !allClearedTaskIds.has(t.id))
+      .filter(t => {
+        if(!scope) return true;
+        // Scope match: task's foreman OR (for auto tasks) the job's foreman
+        if(t.foreman && t.foreman.toLowerCase() === scope.toLowerCase()) return true;
+        if(t.jobId) {
+          const j = jobs.find(x => x.id === t.jobId);
+          if(j && matchesForeman(j, scope)) return true;
+        }
+        return false;
+      });
     openTasks.sort((a,b) => {
       const da = a.dueDate ? new Date(a.dueDate) : null;
       const db = b.dueDate ? new Date(b.dueDate) : null;
@@ -29474,25 +29447,27 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
     // OPEN TASKS
     if(data.openTasks.length > 0) {
       lines.push(`OPEN TASKS (${data.openTasks.length})`);
-      data.openTasks.slice(0, 6).forEach(t => {
+      const TASK_CAP = 10;
+      data.openTasks.slice(0, TASK_CAP).forEach(t => {
         const who = t.foreman && t.foreman !== "Unassigned" ? t.foreman.split(" ")[0] : "—";
         let due = "";
         if(t.dueDate) {
-          const d = new Date(t.dueDate);
-          if(!isNaN(d)) {
+          const d = parseAnyDate(t.dueDate);
+          if(d) {
             const dYMD = toYMD(d);
             if(dYMD < targetYMD) due = ", overdue";
             else if(dYMD === targetYMD) due = ", today";
             else {
-              const days = Math.round((d.setHours(0,0,0,0), d - new Date(targetYMD)) / (24*60*60*1000));
+              const days = Math.round((d - new Date(targetDate)) / (24*60*60*1000));
               if(days > 0 && days <= 3) due = `, in ${days}d`;
             }
           }
         }
-        const title = (t.title || "(no title)").substring(0, 50);
-        lines.push(`- ${title} — ${who}${due}`);
+        const job = t.jobName ? ` [${t.jobName.substring(0,18)}]` : "";
+        const title = (t.title || "(no title)").substring(0, 44);
+        lines.push(`- ${title}${job} — ${who}${due}`);
       });
-      if(data.openTasks.length > 6) lines.push(`- ...and ${data.openTasks.length - 6} more`);
+      if(data.openTasks.length > TASK_CAP) lines.push(`- ...and ${data.openTasks.length - TASK_CAP} more`);
     }
 
     return lines.join("\n");
