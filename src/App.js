@@ -29341,10 +29341,11 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       }
     });
 
-    // Open punch + RT summary (in scope only, skip temp peds / quick jobs)
+    // Open punch + RT summary (in scope only). Temp peds and quick jobs are
+    // included here too so any open items on a small job surface — they have
+    // their own status section below for the at-a-glance view.
     const punchSummary = [];
     jobs.filter(inScopeJob).forEach(j => {
-      if(j.tempPed || j.quickJob) return;
       let openPunch = 0;
       walkPunchItems(j.roughPunch, item => { if(item && !item.done && !item.voided) openPunch++; });
       walkPunchItems(j.finishPunch, item => { if(item && !item.done && !item.voided) openPunch++; });
@@ -29368,6 +29369,43 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       if(a.rtToday !== b.rtToday) return a.rtToday ? -1 : 1;
       if(a.rtNeeds !== b.rtNeeds) return a.rtNeeds ? -1 : 1;
       return b.openPunch - a.openPunch;
+    });
+
+    // Active temp peds + quick jobs with their current status. We surface
+    // these so small jobs don't get forgotten — they have their own status
+    // fields (tempPedStatus / quickJobStatus) outside the rough/finish flow,
+    // so they were invisible to every other section. Skip "completed" /
+    // "complete" / "invoice" — those are wrapped up.
+    const smallJobs = [];
+    jobs.filter(inScopeJob).forEach(j => {
+      if(j.tempPed) {
+        const status = j.tempPedStatus || "";
+        if(!status || status === "completed") return;
+        const def = TEMP_PED_STATUSES.find(s => s.value === status);
+        const dateBit = (status === "scheduled" && j.tempPedScheduledDate)
+          ? ` (${j.tempPedScheduledDate})` : "";
+        smallJobs.push({
+          jobName: j.name || "Untitled",
+          kind: "Temp Ped",
+          status: def ? def.label : status,
+          dateBit,
+          foreman: fnameFor(j),
+        });
+      } else if(j.quickJob) {
+        const status = j.quickJobStatus || "new";
+        if(status === "complete" || status === "invoice") return;
+        const def = QUICK_JOB_STATUSES.find(s => s.value === status);
+        const typeDef = QUICK_JOB_TYPES.find(t => t.value === j.quickJobType);
+        const dateBit = (status === "scheduled" && j.quickJobDate)
+          ? ` (${j.quickJobDate})` : "";
+        smallJobs.push({
+          jobName: j.name || "Untitled",
+          kind: typeDef ? typeDef.label : "Quick Job",
+          status: def ? def.label : status,
+          dateBit,
+          foreman: fnameFor(j),
+        });
+      }
     });
 
     // Open tasks — same merge the Tasks view uses: auto-derived tasks from
@@ -29420,6 +29458,7 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       crewToday,
       inspections,
       needsScheduling,
+      smallJobs,
       punchSummary, // intentionally unsliced — render caps it under each foreman
       openTasks,
     };
@@ -29540,6 +29579,13 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
         n.phases.forEach(p => flat.push({ jobName: n.jobName, phase: p, foreman: n.foreman }));
       });
       renderSection(flat, n => `${n.jobName} — ${n.phase}`);
+      lines.push("");
+    }
+
+    // TEMP PEDS / QUICK JOBS — small jobs with their current status
+    if(data.smallJobs.length > 0) {
+      lines.push(`TEMP PEDS / QUICK JOBS (${data.smallJobs.length})`);
+      renderSection(data.smallJobs, s => `${s.jobName} — ${s.kind}: ${s.status}${s.dateBit}`);
       lines.push("");
     }
 
