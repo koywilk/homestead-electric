@@ -29110,7 +29110,7 @@ function JobNoteSharePage({ param }) {
 //   uses a `sms:` link — the user picks the recipient in Messages, nothing
 //   sends without their tap.
 // ───────────────────────────────────────────────────────────────────────────
-function HuddleSheet({ jobs, crewData, crewMon, manualTasks }) {
+function HuddleSheet({ jobs, manualTasks }) {
   // YMD helper — local date string, no timezone surprises
   const toYMD = (d) => {
     const dt = new Date(d);
@@ -29128,6 +29128,11 @@ function HuddleSheet({ jobs, crewData, crewMon, manualTasks }) {
   }, []);
   const [targetDate, setTargetDate] = useState(initialDate);
   const [copied, setCopied] = useState(false);
+  // Crew Planner data is persisted at settings/schedule_<mondayYMD> by the
+  // planner UI in SchedulingForecast. We subscribe directly here so the huddle
+  // works without needing the planner state passed down through props. The
+  // doc shape: { assignments: { "<jobId>_<dayIdx>": {lead, crew[], time}, ... } }
+  const [crewData, setCrewData] = useState({});
 
   const targetYMD = toYMD(targetDate);
   // "Yesterday" for recap purposes — most recent weekday before targetDate.
@@ -29137,13 +29142,35 @@ function HuddleSheet({ jobs, crewData, crewMon, manualTasks }) {
     return toYMD(d);
   }, [targetYMD]);
 
-  // Where targetDate falls in the displayed planner week. Mon=0..Fri=4.
+  // Monday of the week that targetDate sits in — Sunday rolls back 6 days,
+  // every other weekday rolls back day-1 (so Monday=0 → 0, Tue=1 → 1, etc.).
+  const weekMon = useMemo(() => {
+    const d = new Date(targetDate); d.setHours(0,0,0,0);
+    const day = d.getDay();
+    d.setDate(d.getDate() - (day === 0 ? 6 : day - 1));
+    return d;
+  }, [targetYMD]);
+  const weekWK = toYMD(weekMon);
+
+  // Subscribe to the planner doc for the displayed week. Re-subscribes when
+  // the user steps to a date in another week. onSnapshot cleanup is returned
+  // so React can tear down the listener on unmount.
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "settings", "schedule_" + weekWK), s => {
+      if(s.exists()) setCrewData(s.data().assignments || {});
+      else setCrewData({});
+    }, () => setCrewData({}));
+    return unsub;
+  }, [weekWK]);
+
+  // Day index 0..4 for Mon..Fri inside the loaded planner week. Sat/Sun = -1
+  // and the crew section will fall back to "No assignments".
   const dayIdx = useMemo(() => {
-    if(!crewMon) return -1;
     const t = new Date(targetDate); t.setHours(0,0,0,0);
-    const m = new Date(crewMon); m.setHours(0,0,0,0);
-    return Math.round((t - m) / (24*60*60*1000));
-  }, [crewMon, targetYMD]);
+    const m = new Date(weekMon); m.setHours(0,0,0,0);
+    const idx = Math.round((t - m) / (24*60*60*1000));
+    return (idx >= 0 && idx < 5) ? idx : -1;
+  }, [weekMon, targetYMD]);
 
   // ── Aggregate the data ────────────────────────────────────────────────
   const data = useMemo(() => {
@@ -29398,24 +29425,24 @@ function HuddleSheet({ jobs, crewData, crewMon, manualTasks }) {
   };
 
   return (
-    <div style={{maxWidth:680, margin:"0 auto", padding:"16px"}}>
+    <div style={{maxWidth:680, margin:"0 auto", padding:"16px", color:C.text}}>
       <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap"}}>
-        <h2 style={{fontSize:18, fontWeight:700, color:"var(--text)", margin:0}}>Daily Huddle</h2>
+        <h2 style={{fontSize:18, fontWeight:700, color:C.text, margin:0}}>Daily Huddle</h2>
         <div style={{display:"flex", alignItems:"center", gap:6, marginLeft:"auto", flexWrap:"wrap"}}>
           <button onClick={()=>stepDay(-1)}
-            style={{fontSize:11, padding:"6px 10px", borderRadius:7, border:"1px solid var(--border)",
-              background:"var(--surface)", color:"var(--text)", cursor:"pointer", fontFamily:"inherit"}}>
+            style={{fontSize:11, padding:"6px 10px", borderRadius:7, border:`1px solid ${C.border}`,
+              background:C.surface, color:C.text, cursor:"pointer", fontFamily:"inherit"}}>
             ◀
           </button>
           <button onClick={goToday}
-            style={{fontSize:12, fontWeight:600, color:"var(--text)", padding:"6px 14px",
-              background:"var(--surface)", border:"1px solid var(--border)", borderRadius:7,
+            style={{fontSize:12, fontWeight:600, color:C.text, padding:"6px 14px",
+              background:C.surface, border:`1px solid ${C.border}`, borderRadius:7,
               minWidth:160, cursor:"pointer", fontFamily:"inherit"}}>
             {targetDate.toLocaleDateString("en-US",{weekday:"short", month:"short", day:"numeric"})}
           </button>
           <button onClick={()=>stepDay(1)}
-            style={{fontSize:11, padding:"6px 10px", borderRadius:7, border:"1px solid var(--border)",
-              background:"var(--surface)", color:"var(--text)", cursor:"pointer", fontFamily:"inherit"}}>
+            style={{fontSize:11, padding:"6px 10px", borderRadius:7, border:`1px solid ${C.border}`,
+              background:C.surface, color:C.text, cursor:"pointer", fontFamily:"inherit"}}>
             ▶
           </button>
         </div>
@@ -29424,7 +29451,7 @@ function HuddleSheet({ jobs, crewData, crewMon, manualTasks }) {
       <div style={{display:"flex", gap:8, marginBottom:14, flexWrap:"wrap"}}>
         <button onClick={copyToClipboard}
           style={{fontSize:12, fontWeight:700, padding:"9px 18px", borderRadius:8, border:"none",
-            background:"var(--accent)", color:"#000", cursor:"pointer", fontFamily:"inherit"}}>
+            background:C.accent, color:"#000", cursor:"pointer", fontFamily:"inherit"}}>
           {copied ? "Copied!" : "Copy text"}
         </button>
         <a href={smsHref}
@@ -29437,11 +29464,11 @@ function HuddleSheet({ jobs, crewData, crewMon, manualTasks }) {
 
       <pre style={{
         whiteSpace:"pre-wrap", fontFamily:"ui-monospace, SFMono-Regular, Menlo, monospace",
-        fontSize:13, lineHeight:1.55, color:"var(--text)", background:"var(--surface)",
-        border:"1px solid var(--border)", borderRadius:10, padding:"14px 16px", margin:0,
+        fontSize:13, lineHeight:1.55, color:C.text, background:C.surface,
+        border:`1px solid ${C.border}`, borderRadius:10, padding:"14px 16px", margin:0,
       }}>{text}</pre>
 
-      <div style={{fontSize:10, color:"var(--dim)", marginTop:10, lineHeight:1.5}}>
+      <div style={{fontSize:10, color:C.dim, marginTop:10, lineHeight:1.5}}>
         Read-only. Pulled live from current job state — no writes. "Send to my phone"
         opens Messages with the text pre-filled; you pick the recipient.
       </div>
@@ -32259,7 +32286,7 @@ function App() {
       )}
 
       {view==="huddle"&&can(identity,"settings.view")&&(
-        <HuddleSheet jobs={jobs} crewData={crewData} crewMon={crewMon} manualTasks={manualTasks}/>
+        <HuddleSheet jobs={jobs} manualTasks={manualTasks}/>
       )}
 
       {view==="tasks"&&can(identity,"tasks.view")&&(
