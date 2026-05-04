@@ -31,6 +31,23 @@ const RESEND_FROM = "Daily Huddle <onboarding@resend.dev>";
 
 const TZ = "America/Denver";
 
+// Today's calendar date in Mountain Time, returned as a Date anchored at
+// noon UTC of that MT day. Anchoring at noon UTC is a clock-safe sweet
+// spot: it's always inside the same calendar day whether you read the
+// date in UTC (server local) or MT. Avoids the off-by-one that hits when
+// you do `new Date()` + `setHours(0,0,0,0)` on a UTC server — that lands
+// at MT 6pm "yesterday," which then formats wrong with timeZone:TZ.
+function getMTToday() {
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: TZ,
+    year: "numeric", month: "2-digit", day: "2-digit",
+  }).formatToParts(new Date());
+  const y = parts.find(p => p.type === "year").value;
+  const m = parts.find(p => p.type === "month").value;
+  const d = parts.find(p => p.type === "day").value;
+  return new Date(`${y}-${m}-${d}T12:00:00Z`);
+}
+
 // ─── Status definitions (ported from src/App.js) ────────────────────────
 const ROUGH_STATUSES = [
   { value:"",            label:"— set status —" },
@@ -135,10 +152,11 @@ async function fetchHuddleData(db, targetDate) {
   const tasksSnap = await db.collection("manualTasks").get();
   const manualTasks = tasksSnap.docs.map(d => d.data().data).filter(Boolean);
 
-  // Crew Planner — settings/schedule_<mondayYMD>
-  const weekMon = new Date(targetDate); weekMon.setHours(0,0,0,0);
-  const day = weekMon.getDay();
-  weekMon.setDate(weekMon.getDate() - (day === 0 ? 6 : day - 1));
+  // Crew Planner — settings/schedule_<mondayYMD>. Keep the same noon-UTC
+  // anchor used everywhere else so day-of-week math and toYMD agree.
+  const weekMon = new Date(targetDate);
+  const day = weekMon.getUTCDay();
+  weekMon.setUTCDate(weekMon.getUTCDate() - (day === 0 ? 6 : day - 1));
   const weekWK = toYMD(weekMon);
   const planSnap = await db.doc(`settings/schedule_${weekWK}`).get();
   const crewData = planSnap.exists ? (planSnap.data().assignments || {}) : {};
@@ -754,11 +772,9 @@ exports.dailyHuddleEmail = functions
       return null;
     }
 
-    // Target date = next workday (today is Mon-Fri 6am — target is today;
-    // if Friday morning, skip weekend logic by using today; we already only
-    // run Mon-Fri so today is always a workday).
-    const target = new Date();
-    target.setHours(0,0,0,0);
+    // Target date = today in Mountain Time. Cron fires Mon-Fri only so
+    // "today" is always a workday — no weekend logic needed here.
+    const target = getMTToday();
 
     const fetched = await fetchHuddleData(db, target);
     const data = computeHuddleData({ ...fetched, targetDate: target });
@@ -845,11 +861,14 @@ exports.sendTestHuddleEmail = functions
       "No foremen configured — add at least one in Settings");
   }
 
-  // Use today as targetDate so the test mirrors what the cron would produce
-  // tomorrow morning. (The cron at 6am uses today; running it manually mid-
-  // day still anchors on today.)
-  const target = new Date();
-  target.setHours(0,0,0,0);
+  // Target = today in MT on weekdays (matches what this morning's 6am cron
+  // would have produced). On weekends, advance to next Monday so the test
+  // shows what the next cron run will deliver — otherwise Sat/Sun tests come
+  // back "(nothing to report)" since no crew works the weekend.
+  const target = getMTToday();
+  while (target.getUTCDay() === 0 || target.getUTCDay() === 6) {
+    target.setUTCDate(target.getUTCDate() + 1);
+  }
 
   const fetched = await fetchHuddleData(db, target);
   const huddle = computeHuddleData({ ...fetched, targetDate: target });
