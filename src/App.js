@@ -29408,6 +29408,18 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
     return unsub;
   }, [weekWK]);
 
+  // PTO list — same Firestore doc the Crew Planner uses. Surfaces "Out
+  // tomorrow" at the top of the huddle so a foreman doesn't get assigned
+  // someone who's off. Shape: { list: [{id, name, start, end, note}] }
+  const [ptoList, setPtoList] = useState([]);
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "settings", "crewPTO"), s => {
+      if(s.exists()) setPtoList(s.data().list || []);
+      else setPtoList([]);
+    }, () => setPtoList([]));
+    return unsub;
+  }, []);
+
   // Simpro schedule — wide range (~6mo back, 12mo forward) so the active
   // phases section can show the actual scheduled date from Simpro instead of
   // the local roughStatusDate field. Crew Planner uses the same source.
@@ -29842,6 +29854,93 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       return 0;
     });
 
+    // PTO — anyone whose [start, end] window covers targetDate. The Crew
+    // Planner's isOnPTO helper does the same computation; mirroring it here.
+    const ptoOut = [];
+    const targetDateObj = new Date(targetDate); targetDateObj.setHours(0,0,0,0);
+    (ptoList||[]).forEach(p => {
+      if(!p?.name) return;
+      const s = parseAnyDate(p.start);
+      const e = parseAnyDate(p.end || p.start);
+      if(!s) return;
+      s.setHours(0,0,0,0); if(e) e.setHours(0,0,0,0);
+      const lastDay = e || s;
+      if(targetDateObj >= s && targetDateObj <= lastDay) {
+        ptoOut.push({
+          name: p.name,
+          note: p.note || "PTO",
+          range: (p.start === p.end || !p.end) ? p.start : `${p.start}–${p.end}`,
+        });
+      }
+    });
+    ptoOut.sort((a,b) => a.name.localeCompare(b.name));
+
+    // Stuck items — open work that hasn't moved in 7+ days. Surfaces:
+    //  • punch items not done with addedAt at least 7 days ago (legacy
+    //    items without addedAt are skipped — can't tell when they started)
+    //  • return trips not signed off whose scheduled date is 7+ days past
+    //  • open tasks whose dueDate is 7+ days overdue
+    // Each entry carries jobName + kind + age + foreman so the per-foreman
+    // block can roll them up by (job, kind) for compact rendering.
+    const STUCK_DAYS = 7;
+    const nowMs = Date.now();
+    const stuckCutoff = (() => {
+      const d = new Date(); d.setDate(d.getDate() - STUCK_DAYS);
+      return toYMD(d);
+    })();
+    const stuckItems = [];
+    jobs.filter(inScopeJob).forEach(j => {
+      const foreman = fnameFor(j);
+      const jobName = j.name || "Untitled";
+
+      const checkPunch = (item, phase) => {
+        if(!item || item.done || item.voided) return;
+        if(!item.addedAt) return;
+        if(item.addedAt > stuckCutoff) return;
+        const dt = parseAnyDate(item.addedAt);
+        if(!dt) return;
+        const days = Math.floor((nowMs - dt.getTime()) / (24*60*60*1000));
+        stuckItems.push({ kind: "punch", jobName, phase, days, foreman });
+      };
+      walkPunchItems(j.roughPunch, item => checkPunch(item, "Rough"));
+      walkPunchItems(j.finishPunch, item => checkPunch(item, "Finish"));
+
+      (j.returnTrips||[]).forEach(rt => {
+        if(rt.signedOff || rt.rtStatus === "complete") return;
+        const dStr = rt.rtStatusDate || rt.date;
+        if(!dStr) return;
+        const dt = parseAnyDate(dStr);
+        if(!dt) return;
+        if(toYMD(dt) > stuckCutoff) return;
+        const days = Math.floor((nowMs - dt.getTime()) / (24*60*60*1000));
+        stuckItems.push({ kind: "rt", jobName, days, foreman });
+      });
+    });
+    // Stuck tasks: dueDate >= 7 days ago. Foreman is the task's foreman or
+    // its job's foreman (auto tasks). Skip excluded categories already
+    // covered elsewhere (qc/rt/tempped) so we don't double-list.
+    const SKIP_STUCK_CAT = new Set(["qc","rt","tempped"]);
+    openTasks.forEach(t => {
+      if(SKIP_STUCK_CAT.has(t.category)) return;
+      if(!t.dueDate) return;
+      const dt = parseAnyDate(t.dueDate);
+      if(!dt) return;
+      if(toYMD(dt) > stuckCutoff) return;
+      const days = Math.floor((nowMs - dt.getTime()) / (24*60*60*1000));
+      let foreman = t.foreman || "Unassigned";
+      if(t.jobId) {
+        const jj = jobs.find(x => x.id === t.jobId);
+        if(jj) foreman = fnameFor(jj);
+      }
+      stuckItems.push({
+        kind: "task",
+        jobName: t.jobName || "(no job)",
+        title: t.title || "",
+        days,
+        foreman,
+      });
+    });
+
     return {
       punchClosedCount,
       punchClosedJobs: Array.from(punchClosedJobs),
@@ -29857,8 +29956,10 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       smallJobs,
       punchSummary, // intentionally unsliced — render caps it under each foreman
       openTasks,
+      ptoOut,
+      stuckItems,
     };
-  }, [jobs, crewData, dayIdx, manualTasks, targetYMD, yesterdayYMD, scope, simproByJob]);
+  }, [jobs, crewData, dayIdx, manualTasks, targetYMD, yesterdayYMD, scope, simproByJob, ptoList, targetDate]);
 
   // ── Render the message text ──────────────────────────────────────────
   // Structure: when scope is set, render that one foreman's huddle. When scope
@@ -29941,6 +30042,39 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
     const renderForemanBlock = (f) => {
       const blk = [];
       const onlyMine = (item) => (item.foreman || "Unassigned") === f;
+
+      // STUCK — open work that hasn't moved in 7+ days. Sits at the very top
+      // of each foreman's block so "what's slipping" is the first thing they
+      // see. Roll up punch by (jobName, phase) so 4 stuck items on one job
+      // collapse to one bullet with a count + oldest age.
+      const stuckMine = data.stuckItems.filter(onlyMine);
+      if(stuckMine.length) {
+        blk.push(`STUCK 7+ DAYS (${stuckMine.length})`);
+        const punchGroups = {};
+        const rtItems = [];
+        const taskItems = [];
+        stuckMine.forEach(s => {
+          if(s.kind === "punch") {
+            const key = `${s.jobName}|${s.phase}`;
+            if(!punchGroups[key]) punchGroups[key] = { jobName: s.jobName, phase: s.phase, count: 0, oldest: 0 };
+            punchGroups[key].count++;
+            if(s.days > punchGroups[key].oldest) punchGroups[key].oldest = s.days;
+          } else if(s.kind === "rt") {
+            rtItems.push(s);
+          } else if(s.kind === "task") {
+            taskItems.push(s);
+          }
+        });
+        Object.values(punchGroups).forEach(g => {
+          blk.push(`- ${g.jobName} — ${g.count} ${g.phase.toLowerCase()} punch open (oldest ${g.oldest}d)`);
+        });
+        rtItems.forEach(r => blk.push(`- ${r.jobName} — RT past due ${r.days}d`));
+        taskItems.forEach(t => {
+          const ttl = (t.title || "(task)").substring(0, 30);
+          blk.push(`- ${t.jobName} — ${ttl} (${t.days}d overdue)`);
+        });
+        blk.push("");
+      }
 
       // RECAP — punch closed + updates posted + inspection results
       const punchByMe = data.punchClosedByForeman[f];
@@ -30077,6 +30211,18 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
     const out = [];
     out.push(`HUDDLE — ${dateLabel} (${scopeLabel})`);
     out.push("");
+
+    // PTO at the top — applies to the whole company, so it sits above every
+    // foreman block. Only renders when someone is actually out on targetDate.
+    if(data.ptoOut.length) {
+      out.push(`OUT ${dayName} (${data.ptoOut.length})`);
+      data.ptoOut.forEach(p => {
+        const firstName = p.name.split(" ")[0];
+        const tag = p.note && p.note.toLowerCase() !== "pto" ? p.note : "PTO";
+        out.push(`- ${firstName} (${tag})`);
+      });
+      out.push("");
+    }
 
     if(scope) {
       // Single-foreman view: just render the one block
