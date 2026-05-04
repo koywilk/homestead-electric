@@ -25,3 +25,7 @@ firebase-debug.log
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+_*_backup.js
+src/App [0-9]*.js
+src/*.bak*
+src/sync_test.txt
