@@ -21472,11 +21472,25 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
           if(0<best.score) best={score:0,label:"OVERDUE",color:C.red,date:d};
         } else if(s==="inprogress" && j[ph==="rough"?"roughInProgressMode":"finishInProgressMode"]==="needsSched") {
           // In Progress job that explicitly needs to be scheduled — high priority.
-          // Uses the single shared date field (roughStatusDate / finishStatusDate).
-          const nDate = j[ph==="rough"?"roughStatusDate":"finishStatusDate"] || "";
+          // Sort by the LATEST acceptable date (end of window) so jobs with the
+          // tightest deadline rise to the top. Hard dates use the single date.
+          // Pure-window with no end falls back to the start date.
+          //
+          // Overdue rule: if the deadline-driving date is in the past (hard date
+          // missed or window's latest acceptable date passed), bump to OVERDUE
+          // so the row sorts above all other needsSched rows.
+          const startD = j[ph==="rough"?"roughStatusDate":"finishStatusDate"] || "";
+          const endD   = j[ph==="rough"?"roughNeedsByEnd":"finishNeedsByEnd"] || "";
           const hard  = j[ph==="rough"?"roughNeedsSchedHard":"finishNeedsSchedHard"];
-          const lbl = hard ? "NEEDS SCHED" : nDate ? "TARGET" : "NEEDS SCHED";
-          if(1<best.score) best={score:1, label:lbl, color:"#f97316", date:nDate};
+          const sortDate = hard ? startD : (endD || startD);
+          const sortParsed = sortDate ? parseAnyDate(sortDate) : null;
+          if(sortParsed) sortParsed.setHours(0,0,0,0);
+          if(sortParsed && sortParsed < today) {
+            if(0<best.score) best={score:0, label: hard?"HARD DATE PAST":"WINDOW PAST", color:C.red, date:sortDate};
+          } else {
+            const lbl = hard ? "NEEDS SCHED" : (startD || endD) ? "TARGET" : "NEEDS SCHED";
+            if(1<best.score) best={score:1, label:lbl, color:"#f97316", date:sortDate};
+          }
         } else if(s==="date_confirmed") {
           if(1<best.score) best={score:1,label:"NEEDS SCHED",color:"#f97316",date:d};
         } else if(s==="waiting_date") {
@@ -24364,17 +24378,19 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
             {crewNeedsModal && (() => {
               const modalJob = jobs.find(j=>j.id===crewNeedsModal.jobId);
               const dateKey = crewNeedsModal.phase==="rough" ? "roughStatusDate" : "finishStatusDate";
+              const endKey  = crewNeedsModal.phase==="rough" ? "roughNeedsByEnd"  : "finishNeedsByEnd";
               const hardKey = crewNeedsModal.phase==="rough" ? "roughNeedsSchedHard" : "finishNeedsSchedHard";
+              const isHard = !!crewNeedsModal.hard;
               return (
                 <div onClick={()=>setCrewNeedsModal(null)}
                   style={{position:"fixed",inset:0,background:"rgba(17,24,39,0.65)",zIndex:9999,
                     display:"flex",alignItems:"center",justifyContent:"center",padding:20,backdropFilter:"blur(4px)"}}>
                   <div onClick={e=>e.stopPropagation()}
-                    style={{background:"var(--card)",borderRadius:14,padding:"22px 26px",width:360,
+                    style={{background:"var(--card)",borderRadius:14,padding:"22px 26px",width:380,
                       border:`1px solid ${C.border}`,boxShadow:"0 20px 50px rgba(0,0,0,0.35)"}}>
                     <div style={{marginBottom:16}}>
                       <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)"}}>
-                        SCHEDULING TARGET
+                        SCHEDULING WINDOW
                       </div>
                       {modalJob && (
                         <div style={{fontSize:11,color:C.dim,marginTop:3}}>
@@ -24382,28 +24398,49 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                         </div>
                       )}
                     </div>
-                    <div style={{marginBottom:14}}>
-                      <div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.1em",marginBottom:5}}>DATE</div>
-                      <DateInp value={crewNeedsModal.date}
-                        onChange={e=>setCrewNeedsModal({...crewNeedsModal, date:e.target.value})}/>
-                      <div style={{fontSize:10,color:C.muted,marginTop:4,fontStyle:"italic"}}>
-                        Leave blank for flexible (no specific date — just flagged as needing scheduling).
+                    {/* Date inputs — single hard date OR start/end window */}
+                    {isHard ? (
+                      <div style={{marginBottom:14}}>
+                        <div style={{fontSize:10,fontWeight:700,color:"#dc2626",letterSpacing:"0.1em",marginBottom:5}}>HARD DATE</div>
+                        <DateInp value={crewNeedsModal.date}
+                          onChange={e=>setCrewNeedsModal({...crewNeedsModal, date:e.target.value})}/>
+                        <div style={{fontSize:10,color:C.muted,marginTop:4,fontStyle:"italic"}}>
+                          Must happen on this exact date.
+                        </div>
                       </div>
-                    </div>
+                    ) : (
+                      <div style={{display:"flex",gap:10,marginBottom:14}}>
+                        <div style={{flex:1}}>
+                          <div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.1em",marginBottom:5}}>EARLIEST</div>
+                          <DateInp value={crewNeedsModal.date}
+                            onChange={e=>setCrewNeedsModal({...crewNeedsModal, date:e.target.value})}/>
+                        </div>
+                        <div style={{flex:1}}>
+                          <div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.1em",marginBottom:5}}>LATEST</div>
+                          <DateInp value={crewNeedsModal.endDate||""}
+                            onChange={e=>setCrewNeedsModal({...crewNeedsModal, endDate:e.target.value})}/>
+                        </div>
+                      </div>
+                    )}
+                    {!isHard && (
+                      <div style={{fontSize:10,color:C.muted,marginTop:-8,marginBottom:12,fontStyle:"italic"}}>
+                        Leave both blank to just flag as needing scheduling. Latest drives sort order.
+                      </div>
+                    )}
                     <label onClick={e=>e.stopPropagation()}
                       style={{display:"flex",alignItems:"center",gap:8,padding:"10px 12px",
-                        background:crewNeedsModal.hard?"#dc262615":"var(--surface)",
-                        border:`1px solid ${crewNeedsModal.hard?"#dc2626":C.border}`,
+                        background:isHard?"#dc262615":"var(--surface)",
+                        border:`1px solid ${isHard?"#dc2626":C.border}`,
                         borderRadius:8,cursor:"pointer",marginBottom:14,transition:"all 0.15s"}}>
-                      <input type="checkbox" checked={crewNeedsModal.hard}
-                        onChange={e=>setCrewNeedsModal({...crewNeedsModal, hard:e.target.checked})}
+                      <input type="checkbox" checked={isHard}
+                        onChange={e=>setCrewNeedsModal({...crewNeedsModal, hard:e.target.checked, ...(e.target.checked?{endDate:""}:{})})}
                         style={{accentColor:"#dc2626",cursor:"pointer"}}/>
                       <div style={{flex:1}}>
-                        <div style={{fontSize:12,fontWeight:700,color:crewNeedsModal.hard?"#dc2626":"var(--text)"}}>
+                        <div style={{fontSize:12,fontWeight:700,color:isHard?"#dc2626":"var(--text)"}}>
                           Hard deadline
                         </div>
                         <div style={{fontSize:10,color:C.dim,marginTop:1}}>
-                          {crewNeedsModal.hard ? "MUST happen on this date" : "Flexible target — can shift if needed"}
+                          {isHard ? "Single locked date — clears the window range" : "Flexible window — pick earliest and latest acceptable dates"}
                         </div>
                       </div>
                     </label>
@@ -24412,15 +24449,22 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                         style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
                           padding:"9px 16px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim,
                           fontFamily:"inherit",flex:1}}>Cancel</button>
-                      {modalJob && modalJob[dateKey] && (
-                        <button onClick={()=>setCrewNeedsModal({...crewNeedsModal, date:"", hard:false})}
+                      {modalJob && (modalJob[dateKey] || modalJob[endKey]) && (
+                        <button onClick={()=>setCrewNeedsModal({...crewNeedsModal, date:"", endDate:"", hard:false})}
                           style={{background:"none",border:`1px solid ${C.red}44`,borderRadius:8,
                             padding:"9px 14px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.red,
                             fontFamily:"inherit"}}>Clear</button>
                       )}
                       <button onClick={()=>{
                         if(!modalJob) { setCrewNeedsModal(null); return; }
-                        const patch = { [dateKey]: crewNeedsModal.date||"", [hardKey]: !!crewNeedsModal.hard };
+                        // Hard date clears the window's end. Window writes both
+                        // start (dateKey) and end (endKey) so the planner can sort
+                        // by the deadline-driving date (latest acceptable).
+                        const patch = {
+                          [dateKey]: crewNeedsModal.date||"",
+                          [endKey]: isHard ? "" : (crewNeedsModal.endDate||""),
+                          [hardKey]: isHard,
+                        };
                         onUpdateJob({ ...modalJob, ...patch }, patch);
                         setCrewNeedsModal(null);
                       }}
