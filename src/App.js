@@ -30654,6 +30654,41 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
 //   touch jobs or users. Save uses setDoc with merge:false so the doc shape
 //   stays clean (no orphaned fields from old structures).
 // ───────────────────────────────────────────────────────────────────────────
+
+// Input that holds local state during typing and commits on blur. Without
+// this wrapper, every keystroke triggered a Firestore write + onSnapshot
+// echo + re-render, which dropped characters and jumped the cursor.
+function HuddleInput({ value, onCommit, type, placeholder, style, ...rest }) {
+  const [v, setV] = useState(value || "");
+  const focusedRef = useRef(false);
+  useEffect(() => {
+    // Only sync from the prop when the field isn't being actively edited —
+    // prevents external doc updates from stomping on what the user is typing.
+    if (!focusedRef.current) setV(value || "");
+  }, [value]);
+  return (
+    <input
+      {...rest}
+      type={type}
+      placeholder={placeholder}
+      style={style}
+      value={v}
+      onFocus={() => { focusedRef.current = true; }}
+      onChange={e => setV(e.target.value)}
+      onBlur={() => {
+        focusedRef.current = false;
+        if (v !== (value || "")) onCommit(v);
+      }}
+      onKeyDown={e => {
+        if (e.key === "Enter") {
+          e.preventDefault();
+          e.target.blur(); // triggers commit via onBlur
+        }
+      }}
+    />
+  );
+}
+
 function HuddleConfigPanel() {
   const [cfg, setCfg] = useState({ foremen: [], bosses: [], sender: "" });
   const [lastLog, setLastLog] = useState(null);
@@ -30735,10 +30770,10 @@ function HuddleConfigPanel() {
           <div style={{ fontSize: 10, fontWeight: 700, color: C.dim, letterSpacing: "0.08em", marginBottom: 6 }}>
             SENDER ADDRESS
           </div>
-          <input
+          <HuddleInput
             type="email"
             value={cfg.sender}
-            onChange={e => setSender(e.target.value)}
+            onCommit={setSender}
             placeholder="koy@homesteadelectric.net"
             style={{ ...inputStyle, width: 320 }}
           />
@@ -30759,16 +30794,16 @@ function HuddleConfigPanel() {
           )}
           {cfg.foremen.map((f, i) => (
             <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6, alignItems: "center" }}>
-              <input
+              <HuddleInput
                 value={f.name || ""}
-                onChange={e => updateForeman(i, "name", e.target.value)}
+                onCommit={(val) => updateForeman(i, "name", val)}
                 placeholder="Vasa Mataafa"
                 style={{ ...inputStyle, width: 200 }}
               />
-              <input
+              <HuddleInput
                 type="email"
                 value={f.email || ""}
-                onChange={e => updateForeman(i, "email", e.target.value)}
+                onCommit={(val) => updateForeman(i, "email", val)}
                 placeholder="vasa@homesteadelectric.net"
                 style={{ ...inputStyle, width: 280 }}
               />
@@ -30806,10 +30841,10 @@ function HuddleConfigPanel() {
           </div>
           {cfg.bosses.map((b, i) => (
             <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6, alignItems: "center" }}>
-              <input
+              <HuddleInput
                 type="email"
                 value={b || ""}
-                onChange={e => updateBoss(i, e.target.value)}
+                onCommit={(val) => updateBoss(i, val)}
                 placeholder="justin@homesteadelectric.net"
                 style={{ ...inputStyle, width: 320 }}
               />
