@@ -29,3 +29,7 @@ _*_backup.js
 src/App [0-9]*.js
 src/*.bak*
 src/sync_test.txt
+_*_backup.js
+src/App [0-9]*.js
+src/*.bak*
+src/sync_test.txt
