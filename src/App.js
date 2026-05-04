@@ -51,6 +51,17 @@ const storage   = getStorage(firebaseApp);
 const messaging = ("serviceWorker" in navigator) ? getMessaging(firebaseApp) : null;
 const functions = getFunctions(firebaseApp);
 
+// Debug helper for one-off cloud function tests from the browser console.
+// Usage:  await _hsCall('getSimproProfitLossYTD', {})
+// Removed once the call is wired into the UI normally.
+if (typeof window !== "undefined") {
+  window._hsCall = async (name, params = {}) => {
+    const fn = httpsCallable(functions, name);
+    const r = await fn(params);
+    return r.data;
+  };
+}
+
 /**
  * Request notification permission, get FCM token, and save it to the user's
  * record in Firestore (settings/users → list[].fcmTokens).
