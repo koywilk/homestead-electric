@@ -30632,6 +30632,240 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
   );
 }
 
+// ───────────────────────────────────────────────────────────────────────────
+// Daily Huddle Email — recipient config panel
+//   Lives inside the Settings page. Edits the settings/huddleConfig Firestore
+//   doc which the dailyHuddleEmail Cloud Function reads at 6am every weekday.
+//   Three lists: foremen (each gets their own email), bosses (cc'd on every
+//   foreman's email), and the sender Gmail address.
+//
+//   DATA SAFETY: this panel only writes to settings/huddleConfig — it can't
+//   touch jobs or users. Save uses setDoc with merge:false so the doc shape
+//   stays clean (no orphaned fields from old structures).
+// ───────────────────────────────────────────────────────────────────────────
+function HuddleConfigPanel() {
+  const [cfg, setCfg] = useState({ foremen: [], bosses: [], sender: "" });
+  const [lastLog, setLastLog] = useState(null);
+  const [saving, setSaving] = useState(false);
+  const [savedToast, setSavedToast] = useState(false);
+
+  // Live config
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "settings", "huddleConfig"), s => {
+      if(s.exists()) {
+        const d = s.data() || {};
+        setCfg({
+          foremen: Array.isArray(d.foremen) ? d.foremen : [],
+          bosses:  Array.isArray(d.bosses)  ? d.bosses  : [],
+          sender:  d.sender || "",
+        });
+      }
+    });
+    return unsub;
+  }, []);
+
+  // Last-run log (so the user can see "yes, the cron fired this morning")
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db, "settings", "huddleEmailLog"), s => {
+      if(s.exists()) setLastLog(s.data());
+    });
+    return unsub;
+  }, []);
+
+  const save = async (next) => {
+    setSaving(true);
+    try {
+      await setDoc(doc(db, "settings", "huddleConfig"), next);
+      setCfg(next);
+      setSavedToast(true);
+      setTimeout(() => setSavedToast(false), 1800);
+    } catch(e) {
+      console.error("Huddle config save failed:", e);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  const updateForeman = (idx, key, val) => {
+    const list = cfg.foremen.map((f,i) => i===idx ? { ...f, [key]: val } : f);
+    save({ ...cfg, foremen: list });
+  };
+  const removeForeman = (idx) => save({ ...cfg, foremen: cfg.foremen.filter((_,i)=>i!==idx) });
+  const addForeman = () => save({ ...cfg, foremen: [...cfg.foremen, { name:"", email:"" }] });
+
+  const updateBoss = (idx, val) => {
+    const list = cfg.bosses.map((b,i) => i===idx ? val : b);
+    save({ ...cfg, bosses: list });
+  };
+  const removeBoss = (idx) => save({ ...cfg, bosses: cfg.bosses.filter((_,i)=>i!==idx) });
+  const addBoss = () => save({ ...cfg, bosses: [...cfg.bosses, ""] });
+
+  const setSender = (val) => save({ ...cfg, sender: val });
+
+  const inputStyle = {
+    background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7,
+    color: C.text, padding: "7px 10px", fontSize: 12, fontFamily: "inherit",
+    outline: "none",
+  };
+
+  return (
+    <div style={{ padding: "0 26px 24px" }}>
+      <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 24, marginTop: 8 }}>
+        <h3 style={{ fontSize: 15, fontWeight: 700, color: C.text, margin: 0, marginBottom: 4 }}>
+          Daily Huddle Email
+        </h3>
+        <div style={{ fontSize: 11, color: C.dim, marginBottom: 16 }}>
+          Auto-sends at 6am Mon-Fri (Mountain Time). Each foreman gets their own
+          email; both bosses are CC'd on every one.
+        </div>
+
+        {/* Sender */}
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: C.dim, letterSpacing: "0.08em", marginBottom: 6 }}>
+            SENDER ADDRESS
+          </div>
+          <input
+            type="email"
+            value={cfg.sender}
+            onChange={e => setSender(e.target.value)}
+            placeholder="koy@homesteadelectric.net"
+            style={{ ...inputStyle, width: 320 }}
+          />
+          <div style={{ fontSize: 10, color: C.dim, marginTop: 4 }}>
+            Must be a Gmail account with an App Password set on the server.
+          </div>
+        </div>
+
+        {/* Foremen */}
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: C.dim, letterSpacing: "0.08em", marginBottom: 6 }}>
+            FOREMEN RECEIVING THE EMAIL
+          </div>
+          {cfg.foremen.length === 0 && (
+            <div style={{ fontSize: 11, color: C.dim, marginBottom: 6, fontStyle: "italic" }}>
+              No foremen configured yet — add at least one below.
+            </div>
+          )}
+          {cfg.foremen.map((f, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6, alignItems: "center" }}>
+              <input
+                value={f.name || ""}
+                onChange={e => updateForeman(i, "name", e.target.value)}
+                placeholder="Vasa Mataafa"
+                style={{ ...inputStyle, width: 200 }}
+              />
+              <input
+                type="email"
+                value={f.email || ""}
+                onChange={e => updateForeman(i, "email", e.target.value)}
+                placeholder="vasa@homesteadelectric.net"
+                style={{ ...inputStyle, width: 280 }}
+              />
+              <button
+                onClick={() => removeForeman(i)}
+                title="Remove"
+                style={{
+                  background: "none", border: `1px solid ${C.border}`, borderRadius: 7,
+                  color: C.dim, padding: "5px 10px", cursor: "pointer", fontFamily: "inherit",
+                  fontSize: 12,
+                }}>
+                Remove
+              </button>
+            </div>
+          ))}
+          <button
+            onClick={addForeman}
+            style={{
+              fontSize: 11, fontWeight: 600, padding: "6px 12px", borderRadius: 7,
+              border: `1px dashed ${C.border}`, background: "none", color: C.text,
+              cursor: "pointer", fontFamily: "inherit", marginTop: 4,
+            }}>
+            + Add foreman
+          </button>
+          <div style={{ fontSize: 10, color: C.dim, marginTop: 6 }}>
+            Name is matched to job assignments — type it the same way it appears
+            on the Job Board (full name is fine, last name is matched flexibly).
+          </div>
+        </div>
+
+        {/* Bosses */}
+        <div style={{ marginBottom: 18 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: C.dim, letterSpacing: "0.08em", marginBottom: 6 }}>
+            BOSSES CC'D ON EVERY EMAIL
+          </div>
+          {cfg.bosses.map((b, i) => (
+            <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6, alignItems: "center" }}>
+              <input
+                type="email"
+                value={b || ""}
+                onChange={e => updateBoss(i, e.target.value)}
+                placeholder="justin@homesteadelectric.net"
+                style={{ ...inputStyle, width: 320 }}
+              />
+              <button
+                onClick={() => removeBoss(i)}
+                title="Remove"
+                style={{
+                  background: "none", border: `1px solid ${C.border}`, borderRadius: 7,
+                  color: C.dim, padding: "5px 10px", cursor: "pointer", fontFamily: "inherit",
+                  fontSize: 12,
+                }}>
+                Remove
+              </button>
+            </div>
+          ))}
+          <button
+            onClick={addBoss}
+            style={{
+              fontSize: 11, fontWeight: 600, padding: "6px 12px", borderRadius: 7,
+              border: `1px dashed ${C.border}`, background: "none", color: C.text,
+              cursor: "pointer", fontFamily: "inherit", marginTop: 4,
+            }}>
+            + Add boss
+          </button>
+        </div>
+
+        {/* Status / last run */}
+        <div style={{ marginTop: 16, padding: "10px 14px", background: C.surface,
+                      border: `1px solid ${C.border}`, borderRadius: 8 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: C.dim, letterSpacing: "0.08em", marginBottom: 4 }}>
+            LAST RUN
+          </div>
+          {lastLog?.lastRun ? (
+            <div style={{ fontSize: 12, color: C.text }}>
+              {(() => {
+                const d = lastLog.lastRun.toDate ? lastLog.lastRun.toDate() : new Date(lastLog.lastRun);
+                return d.toLocaleString("en-US", { weekday:"short", month:"short", day:"numeric", hour:"numeric", minute:"2-digit" });
+              })()}
+              {Array.isArray(lastLog.results) && (
+                <span style={{ color: C.dim, marginLeft: 8 }}>
+                  · {lastLog.results.filter(r => r.status === "sent").length} sent
+                  {lastLog.results.some(r => r.status === "error") && `, ${lastLog.results.filter(r=>r.status==="error").length} errored`}
+                </span>
+              )}
+            </div>
+          ) : (
+            <div style={{ fontSize: 12, color: C.dim, fontStyle: "italic" }}>
+              Hasn't run yet. The cron fires at 6am MT Mon-Fri.
+            </div>
+          )}
+        </div>
+
+        {savedToast && (
+          <div style={{ fontSize: 11, color: C.green, marginTop: 8 }}>
+            Saved.
+          </div>
+        )}
+        {saving && (
+          <div style={{ fontSize: 11, color: C.dim, marginTop: 8 }}>
+            Saving...
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function App() {
   // Homeowner page route — ?homeowner=JOB_ID
   const hoParam = new URLSearchParams(window.location.search).get("homeowner");
@@ -33583,6 +33817,7 @@ function App() {
               </div>
             </div>
           )}
+          {can(identity,"settings.view")&&<HuddleConfigPanel/>}
         </div>
       )}
 

@@ -1,0 +1,775 @@
+// Daily Huddle Email — auto-send at 6am MT, Mon–Fri
+//
+// Scheduled Cloud Function that mirrors the HuddleSheet view in App.js. For
+// each foreman in settings/huddleConfig, computes their personal huddle and
+// emails it via Gmail SMTP, with both bosses CC'd. Recipients are configured
+// in Firestore (settings/huddleConfig) so changes don't require redeploys.
+//
+// DATA SAFETY: read-only on every collection. Only write is to a log doc
+// (settings/huddleEmailLog) so we can confirm the cron actually fired.
+//
+// SETUP (one time):
+//   1. firebase functions:config:set gmail.user="koy@homesteadelectric.net" gmail.pass="<16-char Google App Password>"
+//      (Generate App Password: https://myaccount.google.com/apppasswords —
+//       requires 2-Step Verification on the Google account first.)
+//   2. Create Firestore doc settings/huddleConfig with shape:
+//        { foremen: [{name, email}], bosses: ["a@x", "b@x"], sender: "koy@..." }
+//   3. firebase deploy --only functions:dailyHuddleEmail
+
+const functions = require("firebase-functions");
+const admin     = require("firebase-admin");
+const nodemailer = require("nodemailer");
+
+const TZ = "America/Denver";
+
+// ─── Status definitions (ported from src/App.js) ────────────────────────
+const ROUGH_STATUSES = [
+  { value:"",            label:"— set status —" },
+  { value:"waiting_date",label:"Awaiting Start Date" },
+  { value:"date_confirmed", label:"Start Date Set" },
+  { value:"scheduled",   label:"Scheduled" },
+  { value:"inprogress",  label:"In Progress" },
+  { value:"waiting",     label:"On Hold" },
+  { value:"complete",    label:"Complete" },
+];
+const FINISH_STATUSES = ROUGH_STATUSES;
+const TEMP_PED_STATUSES = [
+  { value:"",          label:"— set status —" },
+  { value:"ready",     label:"Ready to Schedule" },
+  { value:"scheduled", label:"Scheduled" },
+  { value:"completed", label:"Completed" },
+];
+const QUICK_JOB_STATUSES = [
+  { value:"new",       label:"New" },
+  { value:"scheduled", label:"Scheduled" },
+  { value:"inprogress",label:"In Progress" },
+  { value:"complete",  label:"Complete" },
+  { value:"invoice",   label:"Ready to Invoice" },
+];
+const QUICK_JOB_TYPES = [
+  { value:"service",  label:"Service Call" },
+  { value:"panel",    label:"Panel Upgrade" },
+  { value:"tempped",  label:"Temp Ped Pickup" },
+  { value:"other",    label:"Other" },
+];
+
+// ─── Helpers (ported from App.js) ───────────────────────────────────────
+function toYMD(d) {
+  const dt = new Date(d);
+  return `${dt.getFullYear()}-${String(dt.getMonth()+1).padStart(2,"0")}-${String(dt.getDate()).padStart(2,"0")}`;
+}
+function parseAnyDate(str) {
+  if (!str) return null;
+  const m = String(str).match(/^(\d{4})-(\d{2})-(\d{2})/);
+  if (m) return new Date(+m[1], +m[2]-1, +m[3]);
+  const m2 = String(str).match(/^(\d{1,2})\/(\d{1,2})\/(\d{2,4})/);
+  if (m2) return new Date(+(m2[3].length===2?"20"+m2[3]:m2[3]), +m2[1]-1, +m2[2]);
+  const d = new Date(str);
+  return isNaN(d) ? null : d;
+}
+function fmtShortDate(dStr) {
+  const d = parseAnyDate(dStr);
+  return d ? d.toLocaleDateString("en-US", { month:"numeric", day:"numeric" }) : (dStr || "");
+}
+function effRS(j) {
+  if (j.tempPed) {
+    const s = j.tempPedStatus || "";
+    if (s === "completed") return "complete";
+    if (s === "scheduled") return "scheduled";
+    if (s === "ready")     return "waiting_date";
+    return "";
+  }
+  if (j.roughStatus) return j.roughStatus;
+  const p = parseInt(j.roughStage) || 0;
+  return p === 100 ? "complete" : p > 0 ? "inprogress" : "";
+}
+function effFS(j) {
+  if (j.tempPed) return "";
+  if (j.finishStatus) return j.finishStatus;
+  const p = parseInt(j.finishStage) || 0;
+  return p === 100 ? "complete" : p > 0 ? "inprogress" : "";
+}
+function matchesForeman(job, name) {
+  const jf = (job.foreman || "").trim().toLowerCase();
+  const n  = (name || "").trim().toLowerCase();
+  if (!jf || !n) return false;
+  if (jf === n) return true;
+  if (n.startsWith(jf + " ") || jf.startsWith(n + " ")) return true;
+  const parts = n.split(" ");
+  return parts.some(p => p === jf || p.includes(jf) || jf.includes(p));
+}
+function walkPunchItems(punch, cb) {
+  if (!punch) return;
+  const eatFloor = (fl) => {
+    if (!fl) return;
+    (fl.general || []).forEach(cb);
+    (fl.hotcheck || []).forEach(cb);
+    (fl.rooms || []).forEach(r => (r.items || []).forEach(cb));
+  };
+  ["upper","main","basement"].forEach(k => eatFloor(punch[k]));
+  (punch.extras || []).forEach(e => { if (e?.key) eatFloor(punch[e.key]); });
+}
+function isExcludedForeman(name) {
+  const clean = (name || "").trim().toLowerCase();
+  if (!clean) return false;
+  if (/\btbd\b/.test(clean)) return true;
+  return clean === "paul";
+}
+
+// ─── Data fetch (Firestore Admin SDK) ───────────────────────────────────
+async function fetchHuddleData(db, targetDate) {
+  // Jobs
+  const jobsSnap = await db.collection("jobs").get();
+  const jobs = jobsSnap.docs.map(d => ({ id: d.id, ...(d.data().data || {}) }));
+
+  // Manual tasks
+  const tasksSnap = await db.collection("manualTasks").get();
+  const manualTasks = tasksSnap.docs.map(d => d.data().data).filter(Boolean);
+
+  // Crew Planner — settings/schedule_<mondayYMD>
+  const weekMon = new Date(targetDate); weekMon.setHours(0,0,0,0);
+  const day = weekMon.getDay();
+  weekMon.setDate(weekMon.getDate() - (day === 0 ? 6 : day - 1));
+  const weekWK = toYMD(weekMon);
+  const planSnap = await db.doc(`settings/schedule_${weekWK}`).get();
+  const crewData = planSnap.exists ? (planSnap.data().assignments || {}) : {};
+
+  // PTO
+  const ptoSnap = await db.doc("settings/crewPTO").get();
+  const ptoList = ptoSnap.exists ? (ptoSnap.data().list || []) : [];
+
+  // Simpro schedule (read directly via Simpro REST API — same call the
+  // getSimproSchedule callable makes, but in-process so we don't need a
+  // self-callable round trip). Credentials match what's hardcoded in
+  // index.js. If Koy moves these to functions:config later, swap to
+  // functions.config().simpro?.base / .token.
+  const SIMPRO_TOKEN = "402222413e886be0bda7bd5173aa8e215d34bcdb";
+  const SIMPRO_BASE  = "https://homesteadelectric.simprosuite.com/api/v1.0/companies/0";
+  const simproByJob = {};
+  try {
+    if (SIMPRO_BASE && SIMPRO_TOKEN) {
+      const today = new Date();
+      const from  = new Date(today); from.setMonth(from.getMonth() - 1);
+      const to    = new Date(today); to.setMonth(to.getMonth() + 6);
+      const url = `${SIMPRO_BASE}/schedules/?pageSize=250`;
+      const resp = await fetch(url, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` }});
+      if (resp.ok) {
+        let all = await resp.json();
+        all = all.filter(s => s.Type === "job"
+          && s.Date >= toYMD(from) && s.Date <= toYMD(to));
+        all.forEach(entry => {
+          const pid = entry.Project?.ProjectID ? String(entry.Project.ProjectID) : null;
+          const d = entry.Date;
+          const staff = entry.Staff?.Name;
+          if (!pid || !d) return;
+          if (!simproByJob[pid]) simproByJob[pid] = { dates: new Set(), byDate: {} };
+          simproByJob[pid].dates.add(d);
+          if (staff) {
+            if (!simproByJob[pid].byDate[d]) simproByJob[pid].byDate[d] = new Set();
+            simproByJob[pid].byDate[d].add(staff);
+          }
+        });
+        Object.keys(simproByJob).forEach(k => {
+          simproByJob[k].dates = Array.from(simproByJob[k].dates).sort();
+          Object.keys(simproByJob[k].byDate).forEach(d => {
+            simproByJob[k].byDate[d] = Array.from(simproByJob[k].byDate[d]);
+          });
+        });
+      }
+    }
+  } catch (e) {
+    functions.logger.warn("Simpro fetch failed in huddle cron", { error: e.message });
+  }
+
+  return { jobs, manualTasks, crewData, ptoList, simproByJob, weekMon };
+}
+
+// ─── Huddle data computation (mirror of HuddleSheet's data useMemo) ─────
+function computeHuddleData({ jobs, manualTasks, crewData, ptoList, simproByJob, targetDate, weekMon }) {
+  const targetYMD = toYMD(targetDate);
+  // Yesterday = previous workday
+  const yDate = new Date(targetDate);
+  do { yDate.setDate(yDate.getDate() - 1); } while (yDate.getDay() === 0 || yDate.getDay() === 6);
+  const yesterdayYMD = toYMD(yDate);
+  // Day idx within the loaded planner week
+  let dayIdx = Math.round((targetDate - weekMon) / (24*60*60*1000));
+  if (dayIdx < 0 || dayIdx >= 5) dayIdx = -1;
+
+  const fnameFor = (j) => (j.foreman && j.foreman.trim()) || "Unassigned";
+  const inScopeJob = (j) => !isExcludedForeman(j.foreman);
+  const todayYMD = toYMD(new Date());
+  const simproDateFor = (j) => {
+    if (!j.simproNo) return null;
+    const dates = simproByJob[String(j.simproNo)]?.dates;
+    if (!dates || !dates.length) return null;
+    return dates.find(d => d >= todayYMD) || null;
+  };
+  const simproStaffOn = (j, ymd) => {
+    if (!j.simproNo || !ymd) return [];
+    return simproByJob[String(j.simproNo)]?.byDate?.[ymd] || [];
+  };
+
+  // RECAP
+  let punchClosedCount = 0;
+  const punchClosedJobs = new Set();
+  const punchClosedByForeman = {};
+  const updatesPosted = [];
+  const inspectionResults = [];
+
+  jobs.filter(inScopeJob).forEach(j => {
+    const jobName = j.name || "Untitled";
+    const foreman = fnameFor(j);
+    const checkClose = (item) => {
+      if (!item || !item.done || item.voided || !item.checkedAt) return;
+      const d = new Date(item.checkedAt);
+      if (isNaN(d)) return;
+      if (toYMD(d) === yesterdayYMD) {
+        punchClosedCount++;
+        punchClosedJobs.add(jobName);
+        if (!punchClosedByForeman[foreman]) punchClosedByForeman[foreman] = { count:0, jobs:new Set() };
+        punchClosedByForeman[foreman].count++;
+        punchClosedByForeman[foreman].jobs.add(jobName);
+      }
+    };
+    walkPunchItems(j.roughPunch, checkClose);
+    walkPunchItems(j.finishPunch, checkClose);
+
+    [["rough", j.roughUpdates], ["finish", j.finishUpdates]].forEach(([phase, ups]) => {
+      (ups || []).forEach(u => {
+        if (!u?.date) return;
+        const d = new Date(u.date);
+        if (!isNaN(d) && toYMD(d) === yesterdayYMD) {
+          updatesPosted.push({ jobName, phase, foreman });
+        }
+      });
+    });
+
+    const checkAttempts = (attempts, type) => {
+      (attempts || []).forEach(a => {
+        if (!a || !a.result) return;
+        const d = parseAnyDate(a.date);
+        if (d && toYMD(d) === yesterdayYMD) {
+          inspectionResults.push({ jobName, type, result: a.result, foreman });
+        }
+      });
+    };
+    checkAttempts(j.roughInspectionAttempts, "Rough/4-Way");
+    checkAttempts(j.finalInspectionAttempts, "Final");
+    if (j.qcStatus && ["pass","fail","fixed","completed"].includes(j.qcStatus) && j.qcStatusDate) {
+      const d = parseAnyDate(j.qcStatusDate);
+      if (d && toYMD(d) === yesterdayYMD) {
+        inspectionResults.push({ jobName, type: "QC Walk", result: j.qcStatus, foreman });
+      }
+    }
+  });
+
+  // CREWS — merge manual planner cells with Simpro staff
+  const crewToday = [];
+  if (dayIdx >= 0) {
+    jobs.filter(inScopeJob).forEach(j => {
+      const cell = crewData[`${j.id}_${dayIdx}`] || {};
+      const lead = cell.lead || null;
+      const manualCrew = cell.crew || [];
+      const simproPeople = simproStaffOn(j, targetYMD);
+      const seen = new Set();
+      const mergedCrew = [];
+      if (lead) seen.add(lead.toLowerCase().split(" ")[0]);
+      manualCrew.forEach(p => {
+        const k = p.toLowerCase().split(" ")[0];
+        if (!seen.has(k)) { seen.add(k); mergedCrew.push(p); }
+      });
+      simproPeople.forEach(p => {
+        const k = p.toLowerCase().split(" ")[0];
+        if (!seen.has(k)) { seen.add(k); mergedCrew.push(p); }
+      });
+      const total = (lead ? 1 : 0) + mergedCrew.length;
+      if (total === 0) return;
+      crewToday.push({
+        jobName: j.name || "Untitled",
+        lead, crew: mergedCrew, time: cell.time || null, foreman: fnameFor(j),
+      });
+    });
+  }
+
+  // INSPECTIONS + PENDING RESULTS
+  const inspections = [];
+  const pendingResults = [];
+  jobs.filter(inScopeJob).forEach(j => {
+    const jobName = j.name || "Untitled";
+    const foreman = fnameFor(j);
+    const checkDate = (dStr, type, hasResult) => {
+      if (!dStr) return;
+      const d = parseAnyDate(dStr); if (!d) return;
+      const ymd = toYMD(d);
+      if (ymd === targetYMD && !hasResult) {
+        inspections.push({ jobName, type, foreman });
+      } else if (ymd < targetYMD && !hasResult) {
+        pendingResults.push({ jobName, type, scheduledDate: dStr, foreman });
+      }
+    };
+    checkDate(j.fourWayTargetDate, "Rough/4-Way", !!j.roughInspectionResult);
+    checkDate(j.finalInspectionTargetDate, "Final", !!j.finalInspectionResult);
+    if (j.qcStatus === "scheduled" && j.qcStatusDate) {
+      checkDate(j.qcStatusDate, "QC Walk", false);
+    }
+  });
+
+  // ACTIVE ROUGH/FINISH (Simpro-driven date)
+  const PHASE_PRIORITY = { waiting_date:0, date_confirmed:1, inprogress:2, scheduled:3, waiting:4 };
+  const activePhases = [];
+  jobs.filter(inScopeJob).forEach(j => {
+    if (j.tempPed || j.quickJob) return;
+    const foreman = fnameFor(j);
+    const jobName = j.name || "Untitled";
+    const simproDate = simproDateFor(j);
+    const addPhase = (phase, eff) => {
+      if (!eff || eff === "complete" || eff === "invoice") return;
+      let dateOrLabel;
+      if (eff === "waiting") dateOrLabel = "On Hold";
+      else if (simproDate) dateOrLabel = fmtShortDate(simproDate);
+      else dateOrLabel = "Not on Schedule";
+      activePhases.push({ jobName, phase, foreman, statusKey: eff, dateOrLabel });
+    };
+    addPhase("Rough", effRS(j));
+    addPhase("Finish", effFS(j));
+  });
+  activePhases.sort((a,b) => {
+    const pa = PHASE_PRIORITY[a.statusKey] ?? 9;
+    const pb = PHASE_PRIORITY[b.statusKey] ?? 9;
+    if (pa !== pb) return pa - pb;
+    if (a.phase !== b.phase) return a.phase === "Rough" ? -1 : 1;
+    return a.jobName.localeCompare(b.jobName);
+  });
+
+  // QC + Matterport scheduling buckets
+  const qcNeeds = [], qcScheduled = [];
+  const matterNeeds = [], matterScheduled = [];
+  jobs.filter(inScopeJob).forEach(j => {
+    const jobName = j.name || "Untitled";
+    const foreman = fnameFor(j);
+    if (j.qcStatus === "needs") qcNeeds.push({ jobName, foreman, byDate: j.qcStatusDate || "" });
+    else if (j.qcStatus === "scheduled" && j.qcStatusDate) qcScheduled.push({ jobName, foreman, date: j.qcStatusDate });
+    const hasScan = !!(j.matterportLinks?.length || j.matterportLink);
+    if (!hasScan) {
+      if (j.matterportStatus === "needs") matterNeeds.push({ jobName, foreman, byDate: j.matterportStatusDate || "" });
+      else if (j.matterportStatus === "scheduled" && j.matterportStatusDate) matterScheduled.push({ jobName, foreman, date: j.matterportStatusDate });
+    }
+  });
+
+  // Temp peds / Quick jobs
+  const smallJobs = [];
+  jobs.filter(inScopeJob).forEach(j => {
+    const jobName = j.name || "Untitled";
+    const foreman = fnameFor(j);
+    if (j.tempPed) {
+      const status = j.tempPedStatus || "";
+      if (!status || status === "completed") return;
+      const def = TEMP_PED_STATUSES.find(s => s.value === status);
+      const dateBit = (status === "scheduled" && j.tempPedScheduledDate) ? ` (${j.tempPedScheduledDate})` : "";
+      smallJobs.push({ jobName, kind:"Temp Ped", status: def?def.label:status, dateBit, foreman });
+    } else if (j.quickJob) {
+      const status = j.quickJobStatus || "new";
+      if (status === "complete" || status === "invoice") return;
+      const def = QUICK_JOB_STATUSES.find(s => s.value === status);
+      const typeDef = QUICK_JOB_TYPES.find(t => t.value === j.quickJobType);
+      const dateBit = (status === "scheduled" && j.quickJobDate) ? ` (${j.quickJobDate})` : "";
+      smallJobs.push({ jobName, kind: typeDef?typeDef.label:"Quick Job", status: def?def.label:status, dateBit, foreman });
+    }
+  });
+
+  // Open punch + RT
+  const punchSummary = [];
+  jobs.filter(inScopeJob).forEach(j => {
+    let openPunch = 0;
+    walkPunchItems(j.roughPunch,  i => { if (i && !i.done && !i.voided) openPunch++; });
+    walkPunchItems(j.finishPunch, i => { if (i && !i.done && !i.voided) openPunch++; });
+    let rtToday = false, rtNeeds = false;
+    (j.returnTrips || []).forEach(rt => {
+      if (rt.signedOff || rt.rtStatus === "complete") return;
+      if (rt.rtStatus === "needs") rtNeeds = true;
+      const dStr = rt.rtStatusDate || rt.date;
+      if (dStr) {
+        const d = parseAnyDate(dStr);
+        if (d && toYMD(d) === targetYMD) rtToday = true;
+      }
+    });
+    if (openPunch > 0 || rtToday || rtNeeds) {
+      punchSummary.push({ jobName: j.name || "Untitled", openPunch, rtToday, rtNeeds, foreman: fnameFor(j) });
+    }
+  });
+  punchSummary.sort((a,b) => {
+    if (a.rtToday !== b.rtToday) return a.rtToday ? -1 : 1;
+    if (a.rtNeeds !== b.rtNeeds) return a.rtNeeds ? -1 : 1;
+    return b.openPunch - a.openPunch;
+  });
+
+  // Tasks (manual only — auto-task port deferred; manual tasks already cover
+  // user-added items. Auto prompts like "Confirm Rough Start Date" still show
+  // up in the in-app huddle but aren't in the email yet.)
+  const allClearedTaskIds = new Set(jobs.flatMap(j => j.clearedTasks || []));
+  const allTaskDueDates = jobs.reduce((acc,j) => ({ ...acc, ...(j.taskDueDates || {}) }), {});
+  const SKIP_TASK_CAT = new Set(["qc","rt","tempped"]);
+  const openTasks = (manualTasks || [])
+    .filter(t => t && !t.cleared && t.status !== "completed" && !allClearedTaskIds.has(t.id))
+    .filter(t => {
+      if (SKIP_TASK_CAT.has(t.category)) return false;
+      if (isExcludedForeman(t.foreman)) return false;
+      if (t.jobId) {
+        const j = jobs.find(x => x.id === t.jobId);
+        if (j && isExcludedForeman(j.foreman)) return false;
+      }
+      return true;
+    });
+
+  // PTO
+  const ptoOut = [];
+  const targetDateObj = new Date(targetDate); targetDateObj.setHours(0,0,0,0);
+  (ptoList || []).forEach(p => {
+    if (!p?.name) return;
+    const s = parseAnyDate(p.start);
+    const e = parseAnyDate(p.end || p.start);
+    if (!s) return;
+    s.setHours(0,0,0,0); if (e) e.setHours(0,0,0,0);
+    const lastDay = e || s;
+    if (targetDateObj >= s && targetDateObj <= lastDay) {
+      ptoOut.push({ name: p.name, note: p.note || "PTO" });
+    }
+  });
+  ptoOut.sort((a,b) => a.name.localeCompare(b.name));
+
+  // STUCK
+  const STUCK_DAYS = 7;
+  const nowMs = Date.now();
+  const stuckCutoff = (() => {
+    const d = new Date(); d.setDate(d.getDate() - STUCK_DAYS);
+    return toYMD(d);
+  })();
+  const stuckItems = [];
+  jobs.filter(inScopeJob).forEach(j => {
+    const foreman = fnameFor(j);
+    const jobName = j.name || "Untitled";
+    const checkPunch = (item, phase) => {
+      if (!item || item.done || item.voided || !item.addedAt) return;
+      if (item.addedAt > stuckCutoff) return;
+      const dt = parseAnyDate(item.addedAt); if (!dt) return;
+      stuckItems.push({ kind:"punch", jobName, phase, days: Math.floor((nowMs - dt.getTime())/(24*60*60*1000)), foreman });
+    };
+    walkPunchItems(j.roughPunch,  i => checkPunch(i, "Rough"));
+    walkPunchItems(j.finishPunch, i => checkPunch(i, "Finish"));
+    (j.returnTrips || []).forEach(rt => {
+      if (rt.signedOff || rt.rtStatus === "complete") return;
+      const dStr = rt.rtStatusDate || rt.date;
+      if (!dStr) return;
+      const dt = parseAnyDate(dStr); if (!dt) return;
+      if (toYMD(dt) > stuckCutoff) return;
+      stuckItems.push({ kind:"rt", jobName, days: Math.floor((nowMs - dt.getTime())/(24*60*60*1000)), foreman });
+    });
+  });
+  openTasks.forEach(t => {
+    if (!t.dueDate) return;
+    const dt = parseAnyDate(t.dueDate); if (!dt) return;
+    if (toYMD(dt) > stuckCutoff) return;
+    let foreman = t.foreman || "Unassigned";
+    if (t.jobId) {
+      const jj = jobs.find(x => x.id === t.jobId);
+      if (jj) foreman = fnameFor(jj);
+    }
+    stuckItems.push({ kind:"task", jobName: t.jobName || "(no job)", title: t.title || "", days: Math.floor((nowMs - dt.getTime())/(24*60*60*1000)), foreman });
+  });
+
+  return {
+    targetYMD, yesterdayYMD,
+    punchClosedCount, punchClosedJobs: Array.from(punchClosedJobs), punchClosedByForeman,
+    updatesPosted, inspectionResults,
+    crewToday, inspections, pendingResults, activePhases,
+    qcNeeds, qcScheduled, matterNeeds, matterScheduled,
+    smallJobs, punchSummary, openTasks, ptoOut, stuckItems,
+  };
+}
+
+// ─── Text rendering (per-foreman block, mirrors HuddleSheet) ────────────
+function renderHuddleText({ data, scope, jobs, targetDate, dateLabel, dayName, recapDow }) {
+  const labelForResult = (r) => {
+    const k = (r || "").toLowerCase();
+    if (k === "pass" || k === "fixed" || k === "completed") return "PASS";
+    if (k === "fail") return "FAIL";
+    return (r || "").toUpperCase();
+  };
+  const renderCrew = (c) => {
+    const people = [];
+    if (c.lead) people.push(c.lead.split(" ")[0]);
+    c.crew.forEach(p => people.push(p.split(" ")[0]));
+    const peopleStr = people.length > 4 ? `${people.slice(0,3).join(", ")} +${people.length-3}` : people.join(", ");
+    const timeStr = c.time ? ` · ${c.time}` : "";
+    return `${c.jobName} — ${peopleStr || "(no names)"}${timeStr}`;
+  };
+  const renderTask = (t) => {
+    const job = t.jobName ? ` [${t.jobName.substring(0,18)}]` : "";
+    const title = (t.title || "(no title)").substring(0, 44);
+    let due = "";
+    if (t.dueDate) {
+      const d = parseAnyDate(t.dueDate);
+      if (d) {
+        const dYMD = toYMD(d);
+        if (dYMD < data.targetYMD) due = ", overdue";
+        else if (dYMD === data.targetYMD) due = ", today";
+      }
+    }
+    return `${title}${job}${due}`;
+  };
+
+  const taskBelongsTo = (t, f) => {
+    const tf = (t.foreman || "").trim();
+    if (tf && tf.toLowerCase() === f.toLowerCase()) return true;
+    if (t.jobId) {
+      const j = jobs.find(x => x.id === t.jobId);
+      if (j) {
+        const jf = (j.foreman && j.foreman.trim()) || "Unassigned";
+        if (jf === f) return true;
+      }
+    }
+    return !tf && f === "Unassigned";
+  };
+
+  function renderForemanBlock(f) {
+    const blk = [];
+    const onlyMine = (item) => (item.foreman || "Unassigned") === f;
+
+    // STUCK
+    const stuckMine = data.stuckItems.filter(onlyMine);
+    if (stuckMine.length) {
+      blk.push(`STUCK 7+ DAYS (${stuckMine.length})`);
+      const punchGroups = {}, rtItems = [], taskItems = [];
+      stuckMine.forEach(s => {
+        if (s.kind === "punch") {
+          const key = `${s.jobName}|${s.phase}`;
+          if (!punchGroups[key]) punchGroups[key] = { jobName:s.jobName, phase:s.phase, count:0, oldest:0 };
+          punchGroups[key].count++;
+          if (s.days > punchGroups[key].oldest) punchGroups[key].oldest = s.days;
+        } else if (s.kind === "rt") rtItems.push(s);
+        else if (s.kind === "task") taskItems.push(s);
+      });
+      Object.values(punchGroups).forEach(g => blk.push(`- ${g.jobName} — ${g.count} ${g.phase.toLowerCase()} punch open (oldest ${g.oldest}d)`));
+      rtItems.forEach(r => blk.push(`- ${r.jobName} — RT past due ${r.days}d`));
+      taskItems.forEach(t => blk.push(`- ${t.jobName} — ${(t.title||"(task)").substring(0,30)} (${t.days}d overdue)`));
+      blk.push("");
+    }
+
+    // RECAP
+    const punchByMe = data.punchClosedByForeman[f];
+    const updatesMine = data.updatesPosted.filter(onlyMine);
+    const inspMine = data.inspectionResults.filter(onlyMine);
+    if (punchByMe || updatesMine.length || inspMine.length) {
+      blk.push(`RECAP — ${recapDow}`);
+      if (punchByMe) {
+        const jbs = Array.from(punchByMe.jobs);
+        const lbl = jbs.length <= 3 ? jbs.join(", ") : `${jbs.length} jobs`;
+        blk.push(`- ${punchByMe.count} punch closed (${lbl})`);
+      }
+      updatesMine.slice(0,4).forEach(u => blk.push(`- ${u.jobName} — ${u.phase} update logged`));
+      inspMine.forEach(i => blk.push(`- ${i.jobName} — ${i.type} ${labelForResult(i.result)}`));
+      blk.push("");
+    }
+
+    // CREWS
+    const crewMine = data.crewToday.filter(onlyMine);
+    if (crewMine.length) {
+      blk.push(`${dayName} CREWS`);
+      crewMine.forEach(c => blk.push(`- ${renderCrew(c)}`));
+      blk.push("");
+    }
+
+    // INSPECTIONS today
+    const ispMine = data.inspections.filter(onlyMine);
+    if (ispMine.length) {
+      blk.push(`INSPECTIONS — ${dayName} (${ispMine.length})`);
+      ispMine.forEach(i => blk.push(`- ${i.jobName} — ${i.type}`));
+      blk.push("");
+    }
+    // PENDING RESULTS
+    const pendMine = data.pendingResults.filter(onlyMine);
+    if (pendMine.length) {
+      blk.push(`PENDING RESULTS (${pendMine.length})`);
+      pendMine.forEach(p => blk.push(`- ${p.jobName} — ${p.type} (${p.scheduledDate})`));
+      blk.push("");
+    }
+    // ACTIVE
+    const phaseMine = data.activePhases.filter(onlyMine);
+    if (phaseMine.length) {
+      blk.push(`ACTIVE ROUGH / FINISH (${phaseMine.length})`);
+      phaseMine.forEach(a => blk.push(`- ${a.jobName} — ${a.phase}: ${a.dateOrLabel}`));
+      blk.push("");
+    }
+    // QC
+    const qcN = data.qcNeeds.filter(onlyMine);
+    if (qcN.length) {
+      blk.push(`QC — NEEDS SCHEDULING (${qcN.length})`);
+      qcN.forEach(q => blk.push(`- ${q.jobName}${q.byDate ? ` — sched by ${q.byDate}` : ""}`));
+      blk.push("");
+    }
+    const qcS = data.qcScheduled.filter(onlyMine);
+    if (qcS.length) {
+      blk.push(`QC — SCHEDULED (${qcS.length})`);
+      qcS.forEach(q => blk.push(`- ${q.jobName} — ${q.date}`));
+      blk.push("");
+    }
+    // MATTERPORT
+    const matN = data.matterNeeds.filter(onlyMine);
+    if (matN.length) {
+      blk.push(`MATTERPORT — NEEDS SCHEDULING (${matN.length})`);
+      matN.forEach(m => blk.push(`- ${m.jobName}${m.byDate ? ` — sched by ${m.byDate}` : ""}`));
+      blk.push("");
+    }
+    const matS = data.matterScheduled.filter(onlyMine);
+    if (matS.length) {
+      blk.push(`MATTERPORT — SCHEDULED (${matS.length})`);
+      matS.forEach(m => blk.push(`- ${m.jobName} — ${m.date}`));
+      blk.push("");
+    }
+    // TEMP PEDS
+    const small = data.smallJobs.filter(onlyMine);
+    if (small.length) {
+      blk.push(`TEMP PEDS / QUICK JOBS (${small.length})`);
+      small.forEach(s => blk.push(`- ${s.jobName} — ${s.kind}: ${s.status}${s.dateBit}`));
+      blk.push("");
+    }
+    // OPEN PUNCH / RT
+    const punchMine = data.punchSummary.filter(onlyMine);
+    if (punchMine.length) {
+      blk.push(`OPEN PUNCH / RT (${punchMine.length})`);
+      punchMine.slice(0,8).forEach(p => {
+        const bits = [];
+        if (p.rtToday) bits.push("RT today");
+        if (p.rtNeeds) bits.push("RT needs sched");
+        if (p.openPunch > 0) bits.push(`${p.openPunch} punch`);
+        blk.push(`- ${p.jobName} — ${bits.join(", ")}`);
+      });
+      if (punchMine.length > 8) blk.push(`- ...and ${punchMine.length - 8} more`);
+      blk.push("");
+    }
+    // TASKS
+    const TASK_LABELS = [
+      ["co", "CHANGE ORDERS"], ["po", "PURCHASE ORDERS"], ["invoice", "INVOICES"],
+      ["rough", "ROUGH TASKS"], ["finish", "FINISH TASKS"], ["manual", "MANUAL TASKS"],
+    ];
+    const myTasks = data.openTasks.filter(t => taskBelongsTo(t, f));
+    const knownCats = new Set(TASK_LABELS.map(([k]) => k));
+    TASK_LABELS.forEach(([cat, lbl]) => {
+      const list = myTasks.filter(t => (t.category || "manual") === cat);
+      if (!list.length) return;
+      blk.push(`${lbl} (${list.length})`);
+      list.slice(0, 10).forEach(t => blk.push(`- ${renderTask(t)}`));
+      if (list.length > 10) blk.push(`- ...and ${list.length - 10} more`);
+      blk.push("");
+    });
+    const otherTasks = myTasks.filter(t => !knownCats.has(t.category || "manual"));
+    if (otherTasks.length) {
+      blk.push(`OTHER TASKS (${otherTasks.length})`);
+      otherTasks.slice(0, 10).forEach(t => blk.push(`- ${renderTask(t)}`));
+      blk.push("");
+    }
+
+    while (blk.length && blk[blk.length-1] === "") blk.pop();
+    return blk;
+  }
+
+  // Top-level message
+  const out = [];
+  out.push(`HUDDLE — ${dateLabel} (${(scope || "ALL").split(" ")[0].toUpperCase()})`);
+  out.push("");
+  if (data.ptoOut.length) {
+    out.push(`OUT ${dayName} (${data.ptoOut.length})`);
+    data.ptoOut.forEach(p => {
+      const tag = p.note && p.note.toLowerCase() !== "pto" ? p.note : "PTO";
+      out.push(`- ${p.name.split(" ")[0]} (${tag})`);
+    });
+    out.push("");
+  }
+  const block = renderForemanBlock(scope);
+  if (block.length === 0) out.push("(nothing to report)");
+  else out.push(...block);
+  return out.join("\n");
+}
+
+// ─── Email send via Gmail SMTP ──────────────────────────────────────────
+async function sendOneEmail({ to, cc, subject, body, sender, pass }) {
+  const transporter = nodemailer.createTransport({
+    service: "gmail",
+    auth: { user: sender, pass },
+  });
+  await transporter.sendMail({
+    from: sender, to, cc,
+    subject,
+    text: body,
+  });
+}
+
+// ─── The scheduled function ─────────────────────────────────────────────
+exports.dailyHuddleEmail = functions.pubsub
+  .schedule("0 6 * * 1-5") // 6:00am Mon–Fri
+  .timeZone(TZ)
+  .onRun(async () => {
+    const db = admin.firestore();
+
+    // Load config
+    const cfgSnap = await db.doc("settings/huddleConfig").get();
+    if (!cfgSnap.exists) {
+      functions.logger.warn("No settings/huddleConfig doc — skipping huddle email");
+      return null;
+    }
+    const cfg = cfgSnap.data() || {};
+    const foremen = cfg.foremen || [];
+    const bosses  = cfg.bosses  || [];
+    const sender  = cfg.sender  || (functions.config().gmail?.user);
+    const pass    = functions.config().gmail?.pass;
+    if (!sender || !pass) {
+      functions.logger.error("Gmail credentials missing — set functions:config gmail.user and gmail.pass");
+      return null;
+    }
+
+    // Target date = next workday (today is Mon-Fri 6am — target is today;
+    // if Friday morning, skip weekend logic by using today; we already only
+    // run Mon-Fri so today is always a workday).
+    const target = new Date();
+    target.setHours(0,0,0,0);
+
+    const fetched = await fetchHuddleData(db, target);
+    const data = computeHuddleData({ ...fetched, targetDate: target });
+
+    const dateLabel = target.toLocaleDateString("en-US", { weekday:"short", month:"short", day:"numeric", timeZone:TZ });
+    const dayName   = target.toLocaleDateString("en-US", { weekday:"short", timeZone:TZ }).toUpperCase();
+    const yDate = parseAnyDate(data.yesterdayYMD);
+    const recapDow = yDate ? yDate.toLocaleDateString("en-US", { weekday:"short", timeZone:TZ }).toUpperCase() : "";
+
+    // Send one email per foreman
+    const results = [];
+    for (const fm of foremen) {
+      if (!fm?.name || !fm?.email) continue;
+      try {
+        const text = renderHuddleText({
+          data, scope: fm.name, jobs: fetched.jobs, targetDate: target,
+          dateLabel, dayName, recapDow,
+        });
+        const cc = bosses.filter(b => b && b.toLowerCase() !== fm.email.toLowerCase());
+        await sendOneEmail({
+          to: fm.email,
+          cc,
+          subject: `Daily Huddle — ${fm.name.split(" ")[0]} — ${dateLabel}`,
+          body: text,
+          sender, pass,
+        });
+        results.push({ foreman: fm.name, status: "sent" });
+      } catch (e) {
+        functions.logger.error("Huddle email failed", { foreman: fm.name, error: e.message });
+        results.push({ foreman: fm.name, status: "error", error: e.message });
+      }
+    }
+
+    // Log it so we can confirm next morning
+    await db.doc("settings/huddleEmailLog").set({
+      lastRun: admin.firestore.FieldValue.serverTimestamp(),
+      results,
+    }, { merge: true });
+
+    return null;
+  });

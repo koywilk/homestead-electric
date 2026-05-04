@@ -961,6 +961,161 @@ exports.getSimproJobFinancials = functions.https.onCall(async (data) => {
   };
 });
 
+// ─── Get Simpro Job Profit/Loss feed (Scoreboard source) ──────────────────────
+// Pulls every Simpro job that's been touched in the requested year-to-date
+// window. Returns the full P/L picture for each + the technician field so the
+// Scoreboard can attribute by foreman without needing the job to exist in our
+// Firestore yet. This is what powers Koy's "scoreboard back to before the app
+// was built" use case.
+//
+// Filters to jobs in the window using DateModified >= dateFrom (or the full
+// year-to-date if no range supplied). Walks pages until empty.
+//
+// Returns the full reduced field set per job so the client can decide what to
+// surface; raw Total + Totals blobs are also returned for forward-compat.
+exports.getSimproProfitLossYTD = functions
+  .runWith({ timeoutSeconds: 300, memory: "512MB" })
+  .https.onCall(async (data) => {
+    const { dateFrom, dateTo } = data || {};
+    const fromYMD = dateFrom || `${new Date().getFullYear()}-01-01`;
+    const toYMD   = dateTo   || (() => {
+      const d = new Date();
+      return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    })();
+
+    // Columns we want from /jobs/. Technician is the field Koy wants to drive
+    // foreman attribution. ProjectManager + Salesperson are pulled as fallbacks
+    // in case Technician comes back null on legacy projects.
+    const cols = [
+      "ID", "Name", "Description", "Status", "Stage",
+      "Total", "Totals",
+      "DateIssued", "DateModified", "DateApproved",
+      "Technician", "ProjectManager", "Salesperson",
+      "Customer", "Site",
+    ].join(",");
+
+    // Walk every page of /jobs/ and filter to the window client-side. Simpro's
+    // server-side filter syntax for date ranges is finicky and varies by
+    // tenant; client-side is reliable. Each page is small (100 rows × ~3KB)
+    // so even a year of jobs is well under the function's memory budget.
+    const all = [];
+    let page = 1;
+    const MAX_PAGES = 80;
+    while (page <= MAX_PAGES) {
+      const url = `${SIMPRO_BASE}/jobs/?pageSize=100&page=${page}&columns=${cols}`;
+      const resp = await fetch(url, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } });
+      if (!resp.ok) {
+        functions.logger.warn("getSimproProfitLossYTD page failed", {
+          page, status: resp.status,
+        });
+        break;
+      }
+      const batch = await resp.json();
+      if (!Array.isArray(batch) || batch.length === 0) break;
+      all.push(...batch);
+      if (batch.length < 100) break;
+      page++;
+    }
+
+    // Per-job reducer — same shape getSimproJobFinancials returns so the
+    // Scoreboard can reuse the existing aggregation code paths. Plus a few
+    // attribution fields (technician, projectManager) that the Scoreboard
+    // needs to assign rows to a foreman without an app job doc.
+    const _aeNum = (o) => o == null ? null
+                       : typeof o === "number" ? o
+                       : (o.Estimate ?? o.Actual ?? null);
+    const reduce = (job) => {
+      const t = job.Totals || {};
+      const top = job.Total || {};
+      const actual = t.NettMargin?.Actual ?? null;
+      const estimate = t.NettMargin?.Estimate ?? null;
+      const hasRealActual = actual !== null && actual !== 100;
+      const pickAE = (obj) => {
+        if (obj == null) return null;
+        if (typeof obj === "number") return obj;
+        return hasRealActual ? (obj.Actual ?? obj.Estimate ?? null) : (obj.Estimate ?? obj.Actual ?? null);
+      };
+      const matCost = _aeNum(t.MaterialsCost);
+      const resCost = _aeNum(t.ResourcesCost);
+      const matMk   = _aeNum(t.MaterialsMarkup);
+      const resMk   = _aeNum(t.ResourcesMarkup);
+      const haveAnyComponent = matCost != null || resCost != null || matMk != null || resMk != null;
+      const derivedSubTotal = haveAnyComponent
+        ? ((matCost||0) + (resCost||0) + (matMk||0) + (resMk||0))
+        : null;
+      const totalIncTax = top.IncTax ?? t.IncTax ?? derivedSubTotal;
+      const totalExTax  = top.ExTax  ?? t.ExTax  ?? derivedSubTotal;
+
+      // Technician + project-manager attribution. Simpro returns these as
+      // {ID, Name} objects when populated. Capture name + first-name (the form
+      // the Scoreboard's foreman list uses). Fallback chain: technician →
+      // projectManager → salesperson.
+      const _name = (o) => (o && typeof o === "object" && o.Name) ? String(o.Name).trim() : "";
+      const techName = _name(job.Technician);
+      const pmName   = _name(job.ProjectManager);
+      const spName   = _name(job.Salesperson);
+      const attribution = techName || pmName || spName || "";
+      const attributionFirst = attribution ? attribution.split(/\s+/)[0] : "";
+
+      return {
+        simproId: job.ID,
+        name: job.Name || "",
+        description: job.Description || "",
+        status: job.Status?.Name || job.Status || "",
+        stage: job.Stage || "",
+        dateIssued:   job.DateIssued || null,
+        dateModified: job.DateModified || null,
+        dateApproved: job.DateApproved || null,
+        customer: _name(job.Customer),
+        site:     _name(job.Site),
+        technician: techName,
+        projectManager: pmName,
+        salesperson: spName,
+        attribution,
+        attributionFirst,
+        // Financials (mirror getSimproJobFinancials)
+        margin: hasRealActual ? actual : estimate,
+        isEstimate: !hasRealActual,
+        total:    totalIncTax,
+        subTotal: totalExTax,
+        netPL: (() => {
+          const direct = pickAE(t.NettPL);
+          if (direct != null) return direct;
+          const m = pickAE(t.MaterialsMarkup);
+          const r = pickAE(t.ResourcesMarkup);
+          if (m == null && r == null) return null;
+          return (m||0) + (r||0);
+        })(),
+        netPLActual:   t.NettPL?.Actual   ?? null,
+        netPLEstimate: t.NettPL?.Estimate ?? null,
+        grossPL:     pickAE(t.GrossPL),
+        grossMargin: pickAE(t.GrossMargin),
+        materialsCost:   pickAE(t.MaterialsCost),
+        resourcesCost:   pickAE(t.ResourcesCost),
+        materialsMarkup: pickAE(t.MaterialsMarkup),
+        resourcesMarkup: pickAE(t.ResourcesMarkup),
+        overhead:        pickAE(t.OverHead) ?? pickAE(t.Overhead),
+        invoicedValue:   pickAE(t.Invoiced) ?? pickAE(t.InvoicedValue),
+      };
+    };
+
+    // Filter to the requested window client-side. Use DateModified as the
+    // proxy for "active in this window". Jobs with no DateModified survive
+    // (they're rare; better to surface than silently drop). Strings compare
+    // lexicographically since Simpro returns YYYY-MM-DD.
+    const filtered = all.filter(j => {
+      if (!j.DateModified) return true;
+      return j.DateModified >= fromYMD && j.DateModified <= toYMD;
+    });
+
+    return {
+      dateFrom: fromYMD,
+      dateTo: toYMD,
+      jobCount: filtered.length,
+      jobs: filtered.map(reduce),
+    };
+  });
+
 // ─── Get Simpro Job Cost Centers ──────────────────────────────────────────────
 // Returns the flat list of cost centers + the items inside each cost center
 // (catalogs, one-offs, prebuilds) so the "Is this in the bid?" search can
@@ -2737,3 +2892,9 @@ exports.sendTestNotification = functions.https.onCall(async (data, context) => {
     jobName,
   };
 });
+
+// ─── Daily Huddle Email — fires at 6am MT, Mon-Fri ──────────────────────
+// Implementation lives in ./huddleEmail.js. Recipients are configured at
+// settings/huddleConfig (so the foreman list can change without redeploys).
+// Setup steps and credentials are documented at the top of huddleEmail.js.
+exports.dailyHuddleEmail = require("./huddleEmail").dailyHuddleEmail;
