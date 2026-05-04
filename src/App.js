@@ -29257,8 +29257,10 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
 
   // Simpro schedule — wide range (~6mo back, 12mo forward) so the active
   // phases section can show the actual scheduled date from Simpro instead of
-  // the local roughStatusDate field. Crew Planner uses the same source. Map
-  // shape: { [simproProjectID]: ["YYYY-MM-DD", ...] } sorted ascending.
+  // the local roughStatusDate field. Crew Planner uses the same source.
+  // Shape: { [simproProjectID]: { dates: ["YYYY-MM-DD",...], byDate: { date: [staffName,...] } } }
+  // The byDate map feeds the TUE CREWS section so Simpro-scheduled staff
+  // appear next to manual planner pills (matching what Forecast shows).
   const [simproByJob, setSimproByJob] = useState({});
   const [simproLoaded, setSimproLoaded] = useState(false);
   useEffect(() => {
@@ -29274,11 +29276,22 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
           if(entry.Type !== "job") return;
           const pid = entry.Project?.ProjectID ? String(entry.Project.ProjectID) : null;
           const d = entry.Date;
+          const staff = entry.Staff?.Name;
           if(!pid || !d) return;
-          if(!map[pid]) map[pid] = [];
-          map[pid].push(d);
+          if(!map[pid]) map[pid] = { dates: new Set(), byDate: {} };
+          map[pid].dates.add(d);
+          if(staff) {
+            if(!map[pid].byDate[d]) map[pid].byDate[d] = new Set();
+            map[pid].byDate[d].add(staff);
+          }
         });
-        Object.keys(map).forEach(k => map[k].sort());
+        // Convert sets to sorted/array form for stable iteration
+        Object.keys(map).forEach(k => {
+          map[k].dates = Array.from(map[k].dates).sort();
+          Object.keys(map[k].byDate).forEach(d => {
+            map[k].byDate[d] = Array.from(map[k].byDate[d]);
+          });
+        });
         setSimproByJob(map);
         setSimproLoaded(true);
       })
@@ -29376,18 +29389,40 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       }
     });
 
-    // Today's crews — pull cells matching dayIdx, only on jobs in scope
+    // Today's crews — merge MANUAL planner cells (settings/schedule_<wk>)
+    // with SIMPRO-scheduled staff for the day. Crew Planner shows both;
+    // huddle has to as well or jobs that are scheduled only in Simpro look
+    // empty. Dedupe by lowercased first name so Vasa from Simpro doesn't
+    // double-up with Vasa from a manual cell.
     const crewToday = [];
     if(dayIdx >= 0 && dayIdx < 5) {
       jobs.filter(inScopeJob).forEach(j => {
-        const cell = crewData[`${j.id}_${dayIdx}`];
-        if(!cell) return;
-        const hasPeople = cell.lead || (cell.crew||[]).length > 0;
-        if(!hasPeople) return;
+        const cell = crewData[`${j.id}_${dayIdx}`] || {};
+        const lead = cell.lead || null;
+        const manualCrew = cell.crew || [];
+        const simproPeople = simproStaffOn(j, targetYMD);
+
+        // Merge: lead first (if any), then manual crew, then Simpro extras
+        const seen = new Set();
+        const allManual = [];
+        if(lead) { allManual.push(lead); seen.add(lead.toLowerCase().split(" ")[0]); }
+        manualCrew.forEach(p => {
+          const k = p.toLowerCase().split(" ")[0];
+          if(!seen.has(k)) { seen.add(k); allManual.push(p); }
+        });
+        const simproExtras = [];
+        simproPeople.forEach(p => {
+          const k = p.toLowerCase().split(" ")[0];
+          if(!seen.has(k)) { seen.add(k); simproExtras.push(p); }
+        });
+
+        const totalPeople = allManual.length + simproExtras.length;
+        if(totalPeople === 0) return;
+
         crewToday.push({
           jobName: j.name || "Untitled",
-          lead: cell.lead || null,
-          crew: cell.crew || [],
+          lead,
+          crew: [...manualCrew, ...simproExtras],
           time: cell.time || null,
           foreman: fnameFor(j),
         });
@@ -29452,12 +29487,21 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
     // Simpro entries at all, return null so the caller can render "Not on
     // Schedule." Mirrors how the Crew Planner pill picks its displayed date.
     const todayYMD = toYMD(new Date());
+    // Forward-looking only: return the next Simpro date >= today, or null if
+    // nothing is on the schedule going forward. Past dates aren't relevant
+    // here — even for in-progress jobs, we want "Not on Schedule" so a job
+    // that's stalled without an upcoming day surfaces as needing attention.
     const simproDateFor = (j) => {
       if(!j.simproNo) return null;
-      const dates = simproByJob[String(j.simproNo)];
+      const dates = simproByJob[String(j.simproNo)]?.dates;
       if(!dates || !dates.length) return null;
-      const future = dates.find(d => d >= todayYMD);
-      return future || dates[dates.length - 1];
+      return dates.find(d => d >= todayYMD) || null;
+    };
+    // Staff names Simpro has on a given job/date — drives the merge into
+    // TUE CREWS so Simpro-scheduled people appear next to manual pills.
+    const simproStaffOn = (j, ymd) => {
+      if(!j.simproNo || !ymd) return [];
+      return simproByJob[String(j.simproNo)]?.byDate?.[ymd] || [];
     };
 
     const activePhases = [];
