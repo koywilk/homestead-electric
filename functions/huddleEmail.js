@@ -2,23 +2,32 @@
 //
 // Scheduled Cloud Function that mirrors the HuddleSheet view in App.js. For
 // each foreman in settings/huddleConfig, computes their personal huddle and
-// emails it via Gmail SMTP, with both bosses CC'd. Recipients are configured
-// in Firestore (settings/huddleConfig) so changes don't require redeploys.
+// emails it via Resend's REST API, with both bosses CC'd. Recipients are
+// configured in Firestore (settings/huddleConfig) so changes don't require
+// redeploys.
 //
 // DATA SAFETY: read-only on every collection. Only write is to a log doc
 // (settings/huddleEmailLog) so we can confirm the cron actually fired.
 //
 // SETUP (one time):
-//   1. firebase functions:config:set gmail.user="koy@homesteadelectric.net" gmail.pass="<16-char Google App Password>"
-//      (Generate App Password: https://myaccount.google.com/apppasswords —
-//       requires 2-Step Verification on the Google account first.)
-//   2. Create Firestore doc settings/huddleConfig with shape:
-//        { foremen: [{name, email}], bosses: ["a@x", "b@x"], sender: "koy@..." }
-//   3. firebase deploy --only functions:dailyHuddleEmail
+//   1. Sign up at https://resend.com → create an API key
+//        (Sending access permission, no domain restriction yet)
+//   2. firebase functions:secrets:set RESEND_KEY
+//        (interactive — paste the key when prompted; never lands in shell
+//        history, never visible to functions:config:get, encrypted at rest)
+//   3. Configure recipients in the app (Settings → Daily Huddle Email)
+//   4. firebase deploy --only functions:dailyHuddleEmail,functions:sendTestHuddleEmail
+//
+// FROM address: defaults to onboarding@resend.dev (Resend's shared sender —
+// works without domain verification). Once homesteadelectric.net is verified
+// in Resend, change RESEND_FROM below to "Daily Huddle <huddle@homesteadelectric.net>".
 
 const functions = require("firebase-functions");
 const admin     = require("firebase-admin");
-const nodemailer = require("nodemailer");
+
+// Default Resend sender. Works without any DNS setup. Swap once domain is
+// verified — this is the only line that needs to change.
+const RESEND_FROM = "Daily Huddle <onboarding@resend.dev>";
 
 const TZ = "America/Denver";
 
@@ -691,22 +700,41 @@ function renderHuddleText({ data, scope, jobs, targetDate, dateLabel, dayName, r
   return out.join("\n");
 }
 
-// ─── Email send via Gmail SMTP ──────────────────────────────────────────
-async function sendOneEmail({ to, cc, subject, body, sender, pass }) {
-  const transporter = nodemailer.createTransport({
-    service: "gmail",
-    auth: { user: sender, pass },
-  });
-  await transporter.sendMail({
-    from: sender, to, cc,
+// ─── Email send via Resend REST API ─────────────────────────────────────
+// Replaces the previous nodemailer/Gmail SMTP path. Why: Google Workspace
+// blocks app passwords on this org's plan, and OAuth setup is heavier than
+// it's worth for 3 emails/day. Resend's free tier covers 3,000 emails/month
+// and gives us a stable transactional sender. The API key lives in
+// functions:config (resend.key) — never in source.
+async function sendOneEmail({ to, cc, subject, body, apiKey }) {
+  const ccList = Array.isArray(cc) ? cc.filter(Boolean) : (cc ? [cc] : []);
+  const payload = {
+    from: RESEND_FROM,
+    to:   Array.isArray(to) ? to : [to],
     subject,
     text: body,
+  };
+  if (ccList.length) payload.cc = ccList;
+
+  const resp = await fetch("https://api.resend.com/emails", {
+    method: "POST",
+    headers: {
+      Authorization: `Bearer ${apiKey}`,
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
   });
+  if (!resp.ok) {
+    const text = await resp.text().catch(() => "");
+    throw new Error(`Resend ${resp.status}: ${text || resp.statusText}`);
+  }
+  return resp.json().catch(() => ({}));
 }
 
 // ─── The scheduled function ─────────────────────────────────────────────
-exports.dailyHuddleEmail = functions.pubsub
-  .schedule("0 6 * * 1-5") // 6:00am Mon–Fri
+exports.dailyHuddleEmail = functions
+  .runWith({ secrets: ["RESEND_KEY"] })
+  .pubsub.schedule("0 6 * * 1-5") // 6:00am Mon–Fri
   .timeZone(TZ)
   .onRun(async () => {
     const db = admin.firestore();
@@ -720,10 +748,9 @@ exports.dailyHuddleEmail = functions.pubsub
     const cfg = cfgSnap.data() || {};
     const foremen = cfg.foremen || [];
     const bosses  = cfg.bosses  || [];
-    const sender  = cfg.sender  || (functions.config().gmail?.user);
-    const pass    = functions.config().gmail?.pass;
-    if (!sender || !pass) {
-      functions.logger.error("Gmail credentials missing — set functions:config gmail.user and gmail.pass");
+    const apiKey = process.env.RESEND_KEY;
+    if (!apiKey) {
+      functions.logger.error("Resend API key missing — run: firebase functions:secrets:set RESEND_KEY");
       return null;
     }
 
@@ -756,7 +783,7 @@ exports.dailyHuddleEmail = functions.pubsub
           cc,
           subject: `Daily Huddle — ${fm.name.split(" ")[0]} — ${dateLabel}`,
           body: text,
-          sender, pass,
+          apiKey,
         });
         results.push({ foreman: fm.name, status: "sent" });
       } catch (e) {
@@ -781,10 +808,14 @@ exports.dailyHuddleEmail = functions.pubsub
 // with a "would normally go to..." header so it's visually distinct from
 // production sends. Lets Koy verify the email format end-to-end without
 // spamming the team.
-exports.sendTestHuddleEmail = functions.https.onCall(async (data, context) => {
-  if (!context.auth) {
-    throw new functions.https.HttpsError("unauthenticated", "Sign in required");
-  }
+exports.sendTestHuddleEmail = functions
+  .runWith({ secrets: ["RESEND_KEY"] })
+  .https.onCall(async (data) => {
+  // No Firebase Auth gate — this app authenticates via its own PIN-based
+  // identity stored in localStorage, so context.auth is always null. Calls
+  // are gated by the API key being set via firebase functions:secrets:set
+  // (only somebody with deploy access can put it there) and by the test
+  // function only sending to the configured sender's inbox.
   const db = admin.firestore();
 
   const cfgSnap = await db.doc("settings/huddleConfig").get();
@@ -795,13 +826,20 @@ exports.sendTestHuddleEmail = functions.https.onCall(async (data, context) => {
   const cfg = cfgSnap.data() || {};
   const foremen = cfg.foremen || [];
   const bosses  = cfg.bosses  || [];
-  const sender  = cfg.sender  || (functions.config().gmail && functions.config().gmail.user);
-  const pass    = functions.config().gmail && functions.config().gmail.pass;
-  if (!sender || !pass) {
+  const apiKey = process.env.RESEND_KEY;
+  if (!apiKey) {
     throw new functions.https.HttpsError("failed-precondition",
-      "Gmail credentials missing — set functions:config gmail.user and gmail.pass");
+      "Resend API key missing — run: firebase functions:secrets:set RESEND_KEY");
   }
-  const testTo = (data && data.to) || context.auth.token.email || sender;
+  // Default test target = the configured sender (the email address you
+  // signed up to Resend with). Resend's free tier with the default
+  // onboarding@resend.dev sender will only deliver to that address until
+  // you verify a domain. Client can override via data.to.
+  const testTo = (data && data.to) || cfg.sender;
+  if (!testTo) {
+    throw new functions.https.HttpsError("failed-precondition",
+      "No test recipient — set the Sender address in Settings or pass data.to");
+  }
   if (!foremen.length) {
     throw new functions.https.HttpsError("failed-precondition",
       "No foremen configured — add at least one in Settings");
@@ -841,7 +879,7 @@ exports.sendTestHuddleEmail = functions.https.onCall(async (data, context) => {
         cc: [], // no CC during testing — only the test address gets it
         subject: `[TEST] Daily Huddle — ${fm.name.split(" ")[0]} — ${dateLabel}`,
         body: header + text,
-        sender, pass,
+        apiKey,
       });
       results.push({ foreman: fm.name, status: "sent" });
     } catch (e) {
