@@ -15433,12 +15433,21 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             && !job.matterportStatus
                             && !(job.matterportLinks?.length || job.matterportLink)
                           ) ? { matterportStatus: "needs" } : {};
+                          // Same pattern for QC — flip to "needs" on transition
+                          // to complete if QC hasn't been touched. Preserves
+                          // any user-set status (scheduled/pass/fail/fixed/completed).
+                          const qcFlip = (
+                            v === "complete"
+                            && job.roughStatus !== "complete"
+                            && !job.qcStatus
+                          ) ? { qcStatus: "needs" } : {};
                           u({roughStatus:v, roughOnHold:v==="waiting", roughScheduled:v==="scheduled",
                             roughStartConfirmed:v==="date_confirmed"?true:(v==="scheduled"||v==="inprogress"||v==="complete"||v==="waiting")?job.roughStartConfirmed:false,
                             roughStatusDate:def.hasDate?job.roughStatusDate:"",
                             roughProjectedStart:v==="scheduled"?job.roughProjectedStart:job.roughProjectedStart,
                             ...(v==="scheduled"?{roughDepositDismissed:false}:{}),
                             ...matterportFlip,
+                            ...qcFlip,
                           });
                         }} style={{background:rsDef.color?`${rsDef.color}18`:C.surface,
                           color:rsDef.color||C.dim, border:`1px solid ${rsDef.color||C.border}`,
@@ -15594,7 +15603,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     </div>
                   );
                 })()}
-                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const open=punchOpen(job.roughPunch);if(open>0){toast.warn(`Cannot set Rough to 100% — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}}const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};const invoiceFire=pct>=85&&!job.roughInvoiceFired?{roughInvoiceFired:true,roughInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{roughInvoiceFired:false,roughInvoiceDismissed:false}:{};/* Auto-flip matterport to "needs" when stage hits 100% and rough wasn't already complete. Skip if matterport is already set or a scan is uploaded. */const matterportFlip=(v==="100%"&&job.roughStatus!=="complete"&&!job.matterportStatus&&!(job.matterportLinks?.length||job.matterportLink))?{matterportStatus:"needs"}:{};u({roughStage:v,...qcFire,...prepDone,...invoiceFire,...invoiceReset,...matterportFlip,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
+                <Sel value={job.roughStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const open=punchOpen(job.roughPunch);if(open>0){toast.warn(`Cannot set Rough to 100% — ${open} open punch item${open!==1?"s":""} remaining. Clear them first.`);return;}}const qcFire=pct>=80&&!job.roughQCTaskFired?{roughQCTaskFired:true}:{};const prepDone=pct>0&&job.prepStage!=="Job Prep Complete"?{prepStage:"Job Prep Complete"}:{};const invoiceFire=pct>=85&&!job.roughInvoiceFired?{roughInvoiceFired:true,roughInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{roughInvoiceFired:false,roughInvoiceDismissed:false}:{};/* Auto-flip matterport to "needs" when stage hits 100% and rough wasn't already complete. Skip if matterport is already set or a scan is uploaded. */const matterportFlip=(v==="100%"&&job.roughStatus!=="complete"&&!job.matterportStatus&&!(job.matterportLinks?.length||job.matterportLink))?{matterportStatus:"needs"}:{};/* Auto-flip QC to "needs" when stage hits 80% (same trigger as the auto Schedule QC task) OR when stage hits 100%. Skip if QC has any status already (scheduled / pass / fail / fixed / completed) so user-set values aren't clobbered. */const qcFlip=((pct>=80&&!job.roughQCTaskFired)||(v==="100%"&&job.roughStatus!=="complete"))&&!job.qcStatus?{qcStatus:"needs"}:{};u({roughStage:v,...qcFire,...prepDone,...invoiceFire,...invoiceReset,...matterportFlip,...qcFlip,...(v==="100%"?{roughStatus:"complete"}:pct>0?{roughStatus:"inprogress"}:{})});}} options={ROUGH_STAGES}/>
 
                 <div style={{marginTop:8,marginBottom:12}}>
                   <StageBar stages={ROUGH_STAGES} current={job.roughStage} color={C.rough}/>
@@ -30004,43 +30013,69 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       lines.push("");
     }
 
-    // OPEN TASKS
-    if(data.openTasks.length > 0) {
-      lines.push(`OPEN TASKS (${data.openTasks.length})`);
-      const renderT = (t) => {
-        let due = "";
-        if(t.dueDate) {
-          const d = parseAnyDate(t.dueDate);
-          if(d) {
-            const dYMD = toYMD(d);
-            if(dYMD < targetYMD) due = ", overdue";
-            else if(dYMD === targetYMD) due = ", today";
-            else {
-              const days = Math.round((d - new Date(targetDate)) / (24*60*60*1000));
-              if(days > 0 && days <= 3) due = `, in ${days}d`;
-            }
+    // TASKS — split by category so each kind has its own section. QC and RT
+    // already have their own breakouts above (and tempped is covered by
+    // TEMP PEDS / QUICK JOBS), so we drop those categories here to avoid
+    // double-listing. Sections render in priority order; each one only
+    // renders when it has items.
+    const renderT = (t) => {
+      let due = "";
+      if(t.dueDate) {
+        const d = parseAnyDate(t.dueDate);
+        if(d) {
+          const dYMD = toYMD(d);
+          if(dYMD < targetYMD) due = ", overdue";
+          else if(dYMD === targetYMD) due = ", today";
+          else {
+            const days = Math.round((d - new Date(targetDate)) / (24*60*60*1000));
+            if(days > 0 && days <= 3) due = `, in ${days}d`;
           }
         }
-        const job = t.jobName ? ` [${t.jobName.substring(0,18)}]` : "";
-        const title = (t.title || "(no title)").substring(0, 44);
-        return `${title}${job}${due}`;
-      };
+      }
+      const job = t.jobName ? ` [${t.jobName.substring(0,18)}]` : "";
+      const title = (t.title || "(no title)").substring(0, 44);
+      return `${title}${job}${due}`;
+    };
+    const renderTaskSection = (label, tasks) => {
+      if(!tasks.length) return;
+      lines.push(`${label} (${tasks.length})`);
       if(scope) {
-        const TASK_CAP = 10;
-        data.openTasks.slice(0, TASK_CAP).forEach(t => lines.push(`- ${renderT(t)}`));
-        if(data.openTasks.length > TASK_CAP) lines.push(`- ...and ${data.openTasks.length - TASK_CAP} more`);
+        const CAP = 10;
+        tasks.slice(0, CAP).forEach(t => lines.push(`- ${renderT(t)}`));
+        if(tasks.length > CAP) lines.push(`- ...and ${tasks.length - CAP} more`);
       } else {
-        const PER_FOREMAN_CAP = 6;
-        const names = foremanOrder(data.openTasks);
+        const PER = 6;
+        const names = foremanOrder(tasks);
         names.forEach((name, idx) => {
-          const group = data.openTasks.filter(t => (t.foreman||"Unassigned") === name);
+          const group = tasks.filter(t => (t.foreman||"Unassigned") === name);
           if(idx > 0) lines.push("");
           lines.push(`  ${name.split(" ")[0]} (${group.length})`);
-          group.slice(0, PER_FOREMAN_CAP).forEach(t => lines.push(`  - ${renderT(t)}`));
-          if(group.length > PER_FOREMAN_CAP) lines.push(`  - ...and ${group.length - PER_FOREMAN_CAP} more`);
+          group.slice(0, PER).forEach(t => lines.push(`  - ${renderT(t)}`));
+          if(group.length > PER) lines.push(`  - ...and ${group.length - PER} more`);
         });
       }
-    }
+      lines.push("");
+    };
+
+    // Bucket by category. "qc" / "rt" / "tempped" already covered elsewhere
+    // — drop them so they don't show up twice. Anything not matching a known
+    // bucket lands in OTHER as a catch-all.
+    const tasksByCat = { co:[], po:[], invoice:[], rough:[], finish:[], manual:[], other:[] };
+    const SKIP_CATEGORIES = new Set(["qc","rt","tempped"]);
+    data.openTasks.forEach(t => {
+      const cat = t.category || "manual";
+      if(SKIP_CATEGORIES.has(cat)) return;
+      if(tasksByCat[cat]) tasksByCat[cat].push(t);
+      else tasksByCat.other.push(t);
+    });
+
+    renderTaskSection("CHANGE ORDERS",   tasksByCat.co);
+    renderTaskSection("PURCHASE ORDERS", tasksByCat.po);
+    renderTaskSection("INVOICES",        tasksByCat.invoice);
+    renderTaskSection("ROUGH TASKS",     tasksByCat.rough);
+    renderTaskSection("FINISH TASKS",    tasksByCat.finish);
+    renderTaskSection("MANUAL TASKS",    tasksByCat.manual);
+    renderTaskSection("OTHER TASKS",     tasksByCat.other);
 
     return lines.join("\n");
   }, [data, targetDate, targetYMD, scope]);
