@@ -773,3 +773,82 @@ exports.dailyHuddleEmail = functions.pubsub
 
     return null;
   });
+
+// ─── Test send (HTTPS callable) ─────────────────────────────────────────
+// Runs the same data fetch + per-foreman text generation the cron does, but
+// routes EVERY email to a single test address (defaults to the caller's
+// auth email). Each email is subject-prefixed with [TEST] and body-prefixed
+// with a "would normally go to..." header so it's visually distinct from
+// production sends. Lets Koy verify the email format end-to-end without
+// spamming the team.
+exports.sendTestHuddleEmail = functions.https.onCall(async (data, context) => {
+  if (!context.auth) {
+    throw new functions.https.HttpsError("unauthenticated", "Sign in required");
+  }
+  const db = admin.firestore();
+
+  const cfgSnap = await db.doc("settings/huddleConfig").get();
+  if (!cfgSnap.exists) {
+    throw new functions.https.HttpsError("failed-precondition",
+      "No settings/huddleConfig doc — set up recipients in Settings first");
+  }
+  const cfg = cfgSnap.data() || {};
+  const foremen = cfg.foremen || [];
+  const bosses  = cfg.bosses  || [];
+  const sender  = cfg.sender  || (functions.config().gmail && functions.config().gmail.user);
+  const pass    = functions.config().gmail && functions.config().gmail.pass;
+  if (!sender || !pass) {
+    throw new functions.https.HttpsError("failed-precondition",
+      "Gmail credentials missing — set functions:config gmail.user and gmail.pass");
+  }
+  const testTo = (data && data.to) || context.auth.token.email || sender;
+  if (!foremen.length) {
+    throw new functions.https.HttpsError("failed-precondition",
+      "No foremen configured — add at least one in Settings");
+  }
+
+  // Use today as targetDate so the test mirrors what the cron would produce
+  // tomorrow morning. (The cron at 6am uses today; running it manually mid-
+  // day still anchors on today.)
+  const target = new Date();
+  target.setHours(0,0,0,0);
+
+  const fetched = await fetchHuddleData(db, target);
+  const huddle = computeHuddleData({ ...fetched, targetDate: target });
+
+  const dateLabel = target.toLocaleDateString("en-US", { weekday:"short", month:"short", day:"numeric", timeZone:TZ });
+  const dayName   = target.toLocaleDateString("en-US", { weekday:"short", timeZone:TZ }).toUpperCase();
+  const yDate = parseAnyDate(huddle.yesterdayYMD);
+  const recapDow = yDate ? yDate.toLocaleDateString("en-US", { weekday:"short", timeZone:TZ }).toUpperCase() : "";
+
+  const results = [];
+  for (const fm of foremen) {
+    if (!fm || !fm.name || !fm.email) continue;
+    try {
+      const text = renderHuddleText({
+        data: huddle, scope: fm.name, jobs: fetched.jobs, targetDate: target,
+        dateLabel, dayName, recapDow,
+      });
+      const wouldCC = bosses.filter(b => b && b.toLowerCase() !== fm.email.toLowerCase());
+      const header =
+        `[TEST] In production this would go to:\n` +
+        `   TO: ${fm.email}\n` +
+        (wouldCC.length ? `   CC: ${wouldCC.join(", ")}\n` : "") +
+        `\n` +
+        `--- BEGIN HUDDLE BODY ---\n\n`;
+      await sendOneEmail({
+        to: testTo,
+        cc: [], // no CC during testing — only the test address gets it
+        subject: `[TEST] Daily Huddle — ${fm.name.split(" ")[0]} — ${dateLabel}`,
+        body: header + text,
+        sender, pass,
+      });
+      results.push({ foreman: fm.name, status: "sent" });
+    } catch (e) {
+      functions.logger.error("Test huddle email failed", { foreman: fm.name, error: e.message });
+      results.push({ foreman: fm.name, status: "error", error: e.message });
+    }
+  }
+
+  return { sent: results.filter(r => r.status === "sent").length, results, to: testTo };
+});

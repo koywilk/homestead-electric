@@ -974,7 +974,7 @@ exports.getSimproJobFinancials = functions.https.onCall(async (data) => {
 // Returns the full reduced field set per job so the client can decide what to
 // surface; raw Total + Totals blobs are also returned for forward-compat.
 exports.getSimproProfitLossYTD = functions
-  .runWith({ timeoutSeconds: 300, memory: "512MB" })
+  .runWith({ timeoutSeconds: 540, memory: "1GB" })
   .https.onCall(async (data) => {
     const { dateFrom, dateTo } = data || {};
     const fromYMD = dateFrom || `${new Date().getFullYear()}-01-01`;
@@ -983,39 +983,78 @@ exports.getSimproProfitLossYTD = functions
       return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
     })();
 
-    // Columns we want from /jobs/. Technician is the field Koy wants to drive
-    // foreman attribution. ProjectManager + Salesperson are pulled as fallbacks
-    // in case Technician comes back null on legacy projects.
-    const cols = [
-      "ID", "Name", "Description", "Status", "Stage",
-      "Total", "Totals",
-      "DateIssued", "DateModified", "DateApproved",
-      "Technician", "ProjectManager", "Salesperson",
-      "Customer", "Site",
-    ].join(",");
+    // STRATEGY (after several rounds of figuring out what works on this
+    // tenant): bulk /jobs/?columns=... is brittle — adding an unrecognized
+    // column collapses the whole response to 0. Instead:
+    //   1) bulk fetch IDs only via display=basic
+    //   2) per-ID fetch /jobs/{ID}?display=detailed in parallel — each
+    //      returns the FULL job record (Totals, dates, attribution)
+    //   3) filter to the date window + reduce
+    // Per-ID fetches with concurrency 20 finish ~1300 jobs in well under
+    // the 540s timeout. Rate-limit (429) gets a single backoff retry.
 
-    // Walk every page of /jobs/ and filter to the window client-side. Simpro's
-    // server-side filter syntax for date ranges is finicky and varies by
-    // tenant; client-side is reliable. Each page is small (100 rows × ~3KB)
-    // so even a year of jobs is well under the function's memory budget.
-    const all = [];
+    // ── Step 1: bulk-fetch IDs ────────────────────────────────────────────
+    const ids = [];
     let page = 1;
     const MAX_PAGES = 80;
+    let pageStatuses = [];
     while (page <= MAX_PAGES) {
-      const url = `${SIMPRO_BASE}/jobs/?pageSize=100&page=${page}&columns=${cols}`;
+      const url = `${SIMPRO_BASE}/jobs/?pageSize=250&page=${page}&display=basic`;
       const resp = await fetch(url, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } });
+      pageStatuses.push({ page, status: resp.status });
       if (!resp.ok) {
-        functions.logger.warn("getSimproProfitLossYTD page failed", {
-          page, status: resp.status,
-        });
+        functions.logger.warn("getSimproProfitLossYTD bulk page failed", { page, status: resp.status });
         break;
       }
       const batch = await resp.json();
       if (!Array.isArray(batch) || batch.length === 0) break;
-      all.push(...batch);
-      if (batch.length < 100) break;
+      batch.forEach(j => { if (j && j.ID != null) ids.push(j.ID); });
+      if (batch.length < 250) break;
       page++;
     }
+
+    // ── Step 2: per-ID detailed fetch with concurrency ────────────────────
+    const detailed = new Array(ids.length);
+    let okCount = 0, errCount = 0;
+    const CONCURRENCY = 20;
+    let cursor = 0;
+    const sleep = (ms) => new Promise(r => setTimeout(r, ms));
+    const fetchOne = async (idx) => {
+      const id = ids[idx];
+      const url = `${SIMPRO_BASE}/jobs/${encodeURIComponent(id)}?display=detailed`;
+      for (let attempt = 0; attempt < 3; attempt++) {
+        try {
+          const resp = await fetch(url, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } });
+          if (resp.status === 429) {
+            await sleep(500 * (attempt + 1));
+            continue;
+          }
+          if (!resp.ok) { errCount++; return; }
+          detailed[idx] = await resp.json();
+          okCount++;
+          return;
+        } catch (e) {
+          if (attempt === 2) { errCount++; return; }
+          await sleep(300);
+        }
+      }
+    };
+    const worker = async () => {
+      while (true) {
+        const idx = cursor++;
+        if (idx >= ids.length) return;
+        await fetchOne(idx);
+      }
+    };
+    await Promise.all(Array.from({length: CONCURRENCY}, worker));
+
+    const all = detailed.filter(Boolean);
+    functions.logger.info("getSimproProfitLossYTD fetched", {
+      totalIds: ids.length, totalDetailed: all.length,
+      okCount, errCount, pages: pageStatuses,
+      sampleKeys: all[0] ? Object.keys(all[0]).slice(0, 30) : [],
+      sampleDateKeys: all[0] ? Object.keys(all[0]).filter(k => /date/i.test(k)) : [],
+    });
 
     // Per-job reducer — same shape getSimproJobFinancials returns so the
     // Scoreboard can reuse the existing aggregation code paths. Plus a few
@@ -1099,19 +1138,34 @@ exports.getSimproProfitLossYTD = functions
       };
     };
 
-    // Filter to the requested window client-side. Use DateModified as the
-    // proxy for "active in this window". Jobs with no DateModified survive
-    // (they're rare; better to surface than silently drop). Strings compare
-    // lexicographically since Simpro returns YYYY-MM-DD.
+    // Filter to the requested window client-side. Use the latest available
+    // job date (DateModified > DateApproved > DateIssued > Date) as the
+    // proxy for "active in this window". Strip anything past the YYYY-MM-DD
+    // prefix so timestamp variants like "2026-04-12T10:23:45+10:00" still
+    // sort lexicographically.
+    const _jobDateYMD = (j) => {
+      const raw = j.DateModified || j.DateApproved || j.DateIssued || j.Date || null;
+      if (!raw) return null;
+      return String(raw).slice(0, 10);
+    };
     const filtered = all.filter(j => {
-      if (!j.DateModified) return true;
-      return j.DateModified >= fromYMD && j.DateModified <= toYMD;
+      const ymd = _jobDateYMD(j);
+      if (!ymd) return true; // surface dateless jobs rather than silently dropping
+      return ymd >= fromYMD && ymd <= toYMD;
     });
 
     return {
       dateFrom: fromYMD,
       dateTo: toYMD,
+      // Total raw rows returned by Simpro before window filter — lets the
+      // caller see "we got 800 jobs back, 0 survived the date filter" so a
+      // bad filter / missing field is obvious.
+      rawCount: all.length,
       jobCount: filtered.length,
+      // First raw row (forward-compat debug) — exposes the exact field
+      // names + date string format Simpro is returning, so when something
+      // doesn't match we can see why without re-deploying.
+      _sampleRaw: all[0] || null,
       jobs: filtered.map(reduce),
     };
   });
@@ -2898,3 +2952,4 @@ exports.sendTestNotification = functions.https.onCall(async (data, context) => {
 // settings/huddleConfig (so the foreman list can change without redeploys).
 // Setup steps and credentials are documented at the top of huddleEmail.js.
 exports.dailyHuddleEmail = require("./huddleEmail").dailyHuddleEmail;
+exports.sendTestHuddleEmail = require("./huddleEmail").sendTestHuddleEmail;
