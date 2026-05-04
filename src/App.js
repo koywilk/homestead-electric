@@ -29790,19 +29790,23 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
   }, [jobs, crewData, dayIdx, manualTasks, targetYMD, yesterdayYMD, scope, simproByJob]);
 
   // ── Render the message text ──────────────────────────────────────────
+  // Structure: when scope is set, render that one foreman's huddle. When scope
+  // is null (All Combined), render each foreman's full huddle one after
+  // another with a "=== NAME ===" separator. Each foreman block reads
+  // top-to-bottom like their personal version — sections are NOT mixed across
+  // foremen. Unassigned leads so anything without an owner surfaces first.
   const text = useMemo(() => {
-    const lines = [];
     const dateLabel = targetDate.toLocaleDateString("en-US", { weekday:"short", month:"short", day:"numeric" });
     const scopeLabel = scope ? scope.split(" ")[0].toUpperCase() : "ALL";
-    lines.push(`HUDDLE — ${dateLabel} (${scopeLabel})`);
-    lines.push("");
+    const recapDow = (() => {
+      const d = parseAnyDate(yesterdayYMD);
+      return d ? d.toLocaleDateString("en-US", { weekday:"short" }).toUpperCase() : "";
+    })();
+    const dayName = targetDate.toLocaleDateString("en-US", { weekday:"short" }).toUpperCase();
 
-    // Sort foreman names with "Unassigned" FIRST so anything without an owner
-    // surfaces at the top of every section and doesn't slip through the
-    // cracks; everyone else is alphabetical after that.
-    const foremanOrder = (items) => {
-      const seen = new Set(items.map(i => i.foreman || "Unassigned"));
-      const arr = Array.from(seen);
+    // Foreman ordering: Unassigned first, then alphabetical
+    const sortForemen = (names) => {
+      const arr = Array.from(new Set(names));
       arr.sort((a,b) => {
         if(a === "Unassigned") return -1;
         if(b === "Unassigned") return 1;
@@ -29811,27 +29815,242 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       return arr;
     };
 
-    // Render a section's items either grouped by foreman (boss view) or flat
-    // (foreman view, since there's only one foreman). renderItem returns the
-    // bullet text for a single item.
-    const renderSection = (items, renderItem) => {
-      if(scope) {
-        items.forEach(i => lines.push(`- ${renderItem(i)}`));
-        return;
-      }
-      const names = foremanOrder(items);
-      names.forEach((name, idx) => {
-        const group = items.filter(i => (i.foreman || "Unassigned") === name);
-        if(idx > 0) lines.push("");
-        lines.push(`  ${name.split(" ")[0]}`);
-        group.forEach(i => lines.push(`  - ${renderItem(i)}`));
-      });
+    const labelForResult = (r) => {
+      const k = (r||"").toLowerCase();
+      if(k === "pass" || k === "fixed" || k === "completed") return "PASS";
+      if(k === "fail") return "FAIL";
+      return (r||"").toUpperCase();
     };
 
-    // RECAP — what closed / got logged on the workday before targetDate. In
-    // the default 5pm flow that's "today" from the sender's perspective.
-    // Section label includes the weekday so it's unambiguous if you step
-    // the date around (e.g. "RECAP — FRI" when targetDate is Mon).
+    const renderCrew = (c) => {
+      const people = [];
+      if(c.lead) people.push(c.lead.split(" ")[0]);
+      c.crew.forEach(p => people.push(p.split(" ")[0]));
+      const peopleStr = people.length > 4
+        ? `${people.slice(0,3).join(", ")} +${people.length-3}`
+        : people.join(", ");
+      const timeStr = c.time ? ` · ${c.time}` : "";
+      return `${c.jobName} — ${peopleStr || "(no names)"}${timeStr}`;
+    };
+
+    const renderTask = (t) => {
+      let due = "";
+      if(t.dueDate) {
+        const d = parseAnyDate(t.dueDate);
+        if(d) {
+          const dYMD = toYMD(d);
+          if(dYMD < targetYMD) due = ", overdue";
+          else if(dYMD === targetYMD) due = ", today";
+          else {
+            const days = Math.round((d - new Date(targetDate)) / (24*60*60*1000));
+            if(days > 0 && days <= 3) due = `, in ${days}d`;
+          }
+        }
+      }
+      const job = t.jobName ? ` [${t.jobName.substring(0,18)}]` : "";
+      const title = (t.title || "(no title)").substring(0, 44);
+      return `${title}${job}${due}`;
+    };
+
+    const SKIP_TASK_CAT = new Set(["qc","rt","tempped"]);
+    // Foreman match for a task: own foreman field, OR job's foreman (auto tasks).
+    const taskBelongsTo = (t, f) => {
+      if(SKIP_TASK_CAT.has(t.category)) return false;
+      const tf = (t.foreman || "").trim();
+      if(tf && tf.toLowerCase() === f.toLowerCase()) return true;
+      if(t.jobId) {
+        const j = jobs.find(x => x.id === t.jobId);
+        if(j && (j.foreman || "Unassigned") === f) return true;
+      }
+      return !tf && f === "Unassigned";
+    };
+
+    // Render every section for ONE foreman, only including sections that have
+    // content. Returns the line array (no trailing blank).
+    const renderForemanBlock = (f) => {
+      const blk = [];
+      const onlyMine = (item) => (item.foreman || "Unassigned") === f;
+
+      // RECAP — punch closed + updates posted + inspection results
+      const punchByMe = data.punchClosedByForeman[f];
+      const updatesMine = data.updatesPosted.filter(onlyMine);
+      const inspectionResultsMine = data.inspectionResults.filter(onlyMine);
+      if(punchByMe || updatesMine.length || inspectionResultsMine.length) {
+        blk.push(`RECAP — ${recapDow}`);
+        if(punchByMe) {
+          const jbs = Array.from(punchByMe.jobs);
+          const lbl = jbs.length <= 3 ? jbs.join(", ") : `${jbs.length} jobs`;
+          blk.push(`- ${punchByMe.count} punch closed (${lbl})`);
+        }
+        updatesMine.slice(0,4).forEach(u => blk.push(`- ${u.jobName} — ${u.phase} update logged`));
+        inspectionResultsMine.forEach(i => blk.push(`- ${i.jobName} — ${i.type} ${labelForResult(i.result)}`));
+        blk.push("");
+      }
+
+      // CREWS for the day
+      const crewMine = data.crewToday.filter(onlyMine);
+      if(crewMine.length) {
+        blk.push(`${dayName} CREWS`);
+        crewMine.forEach(c => blk.push(`- ${renderCrew(c)}`));
+        blk.push("");
+      }
+
+      // INSPECTIONS today
+      const inspMine = data.inspections.filter(onlyMine);
+      if(inspMine.length) {
+        blk.push(`INSPECTIONS — ${dayName} (${inspMine.length})`);
+        inspMine.forEach(i => blk.push(`- ${i.jobName} — ${i.type}`));
+        blk.push("");
+      }
+
+      // PENDING RESULTS
+      const pendMine = data.pendingResults.filter(onlyMine);
+      if(pendMine.length) {
+        blk.push(`PENDING RESULTS (${pendMine.length})`);
+        pendMine.forEach(p => blk.push(`- ${p.jobName} — ${p.type} (${p.scheduledDate})`));
+        blk.push("");
+      }
+
+      // ACTIVE ROUGH / FINISH
+      const phaseMine = data.activePhases.filter(onlyMine);
+      if(phaseMine.length) {
+        blk.push(`ACTIVE ROUGH / FINISH (${phaseMine.length})`);
+        phaseMine.forEach(a => blk.push(`- ${a.jobName} — ${a.phase}: ${a.dateOrLabel}`));
+        blk.push("");
+      }
+
+      // QC NEEDS / SCHEDULED
+      const qcN = data.qcNeeds.filter(onlyMine);
+      if(qcN.length) {
+        blk.push(`QC — NEEDS SCHEDULING (${qcN.length})`);
+        qcN.forEach(q => blk.push(`- ${q.jobName}${q.byDate ? ` — sched by ${q.byDate}` : ""}`));
+        blk.push("");
+      }
+      const qcS = data.qcScheduled.filter(onlyMine);
+      if(qcS.length) {
+        blk.push(`QC — SCHEDULED (${qcS.length})`);
+        qcS.forEach(q => blk.push(`- ${q.jobName} — ${q.date}`));
+        blk.push("");
+      }
+
+      // MATTERPORT NEEDS / SCHEDULED
+      const matN = data.matterNeeds.filter(onlyMine);
+      if(matN.length) {
+        blk.push(`MATTERPORT — NEEDS SCHEDULING (${matN.length})`);
+        matN.forEach(m => blk.push(`- ${m.jobName}${m.byDate ? ` — sched by ${m.byDate}` : ""}`));
+        blk.push("");
+      }
+      const matS = data.matterScheduled.filter(onlyMine);
+      if(matS.length) {
+        blk.push(`MATTERPORT — SCHEDULED (${matS.length})`);
+        matS.forEach(m => blk.push(`- ${m.jobName} — ${m.date}`));
+        blk.push("");
+      }
+
+      // TEMP PEDS / QUICK JOBS
+      const smallMine = data.smallJobs.filter(onlyMine);
+      if(smallMine.length) {
+        blk.push(`TEMP PEDS / QUICK JOBS (${smallMine.length})`);
+        smallMine.forEach(s => blk.push(`- ${s.jobName} — ${s.kind}: ${s.status}${s.dateBit}`));
+        blk.push("");
+      }
+
+      // OPEN PUNCH / RT
+      const punchMine = data.punchSummary.filter(onlyMine);
+      if(punchMine.length) {
+        blk.push(`OPEN PUNCH / RT (${punchMine.length})`);
+        punchMine.slice(0, 8).forEach(p => {
+          const bits = [];
+          if(p.rtToday) bits.push("RT today");
+          if(p.rtNeeds) bits.push("RT needs sched");
+          if(p.openPunch > 0) bits.push(`${p.openPunch} punch`);
+          blk.push(`- ${p.jobName} — ${bits.join(", ")}`);
+        });
+        if(punchMine.length > 8) blk.push(`- ...and ${punchMine.length - 8} more`);
+        blk.push("");
+      }
+
+      // TASKS — split per category
+      const TASK_LABELS = [
+        ["co", "CHANGE ORDERS"],
+        ["po", "PURCHASE ORDERS"],
+        ["invoice", "INVOICES"],
+        ["rough", "ROUGH TASKS"],
+        ["finish", "FINISH TASKS"],
+        ["manual", "MANUAL TASKS"],
+      ];
+      const myTasks = data.openTasks.filter(t => taskBelongsTo(t, f));
+      const knownCats = new Set(TASK_LABELS.map(([k]) => k));
+      TASK_LABELS.forEach(([cat, lbl]) => {
+        const list = myTasks.filter(t => (t.category || "manual") === cat);
+        if(!list.length) return;
+        blk.push(`${lbl} (${list.length})`);
+        const CAP = 10;
+        list.slice(0, CAP).forEach(t => blk.push(`- ${renderTask(t)}`));
+        if(list.length > CAP) blk.push(`- ...and ${list.length - CAP} more`);
+        blk.push("");
+      });
+      const otherTasks = myTasks.filter(t => !knownCats.has(t.category || "manual"));
+      if(otherTasks.length) {
+        blk.push(`OTHER TASKS (${otherTasks.length})`);
+        otherTasks.slice(0, 10).forEach(t => blk.push(`- ${renderTask(t)}`));
+        if(otherTasks.length > 10) blk.push(`- ...and ${otherTasks.length - 10} more`);
+        blk.push("");
+      }
+
+      // Trim trailing blank
+      while(blk.length && blk[blk.length-1] === "") blk.pop();
+      return blk;
+    };
+
+    const out = [];
+    out.push(`HUDDLE — ${dateLabel} (${scopeLabel})`);
+    out.push("");
+
+    if(scope) {
+      // Single-foreman view: just render the one block
+      const block = renderForemanBlock(scope);
+      if(block.length === 0) out.push("(nothing to report)");
+      else out.push(...block);
+      return out.join("\n");
+    }
+
+    // All Combined: gather every foreman who appears in any section, then
+    // render each foreman's full block one by one with a separator. Skip any
+    // foreman whose block ends up empty so the message stays tight.
+    const seen = new Set();
+    [
+      ...data.crewToday, ...data.updatesPosted, ...data.inspectionResults,
+      ...data.inspections, ...data.pendingResults, ...data.activePhases,
+      ...data.qcNeeds, ...data.qcScheduled, ...data.matterNeeds, ...data.matterScheduled,
+      ...data.smallJobs, ...data.punchSummary, ...data.openTasks,
+    ].forEach(item => seen.add(item.foreman || "Unassigned"));
+    Object.keys(data.punchClosedByForeman).forEach(f => seen.add(f));
+
+    const fNames = sortForemen(Array.from(seen));
+    let blocksRendered = 0;
+    fNames.forEach(name => {
+      const block = renderForemanBlock(name);
+      if(block.length === 0) return;
+      if(blocksRendered > 0) {
+        out.push("");
+        out.push("");
+      }
+      out.push(`=== ${name.toUpperCase()} ===`);
+      out.push("");
+      out.push(...block);
+      blocksRendered++;
+    });
+    if(blocksRendered === 0) out.push("(nothing to report)");
+
+    return out.join("\n");
+    /* OLD per-section rendering removed — kept this comment so the diff is
+       readable; the per-foreman block above replaces all of it. */
+    // eslint-disable-next-line no-unreachable
+    // (deliberately unreachable — left here for safety while the new block
+    // proves out; remove once stable.)
+    // BEGIN_DEAD_CODE
+    /*
     const recapDow = (() => {
       const d = parseAnyDate(yesterdayYMD);
       return d ? d.toLocaleDateString("en-US", { weekday:"short" }).toUpperCase() : "";
@@ -30078,7 +30297,9 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
     renderTaskSection("OTHER TASKS",     tasksByCat.other);
 
     return lines.join("\n");
-  }, [data, targetDate, targetYMD, scope]);
+    */
+    // END_DEAD_CODE
+  }, [data, targetDate, targetYMD, yesterdayYMD, scope, jobs]);
 
   // Copy: prefer Clipboard API, fall back to legacy textarea hack on older browsers
   const copyToClipboard = async () => {
