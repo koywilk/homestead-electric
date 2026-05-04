@@ -1625,7 +1625,7 @@ const Pill = ({label,color}) => (
 //   "needsSched" — needs to be scheduled; may carry a hard date or be flexible (orange, solid)
 //   "ongoing"    — in progress but doesn't need day-level scheduling (gray, dashed)
 // Click cycles: scheduled → needsSched → ongoing → scheduled
-function InProgressModePill({ mode, onToggle, onSync, onSetNeedsDate, needsDate, needsHard, size = "md", showSync = true }) {
+function InProgressModePill({ mode, onToggle, onSync, onSetNeedsDate, needsDate, needsEndDate, needsHard, size = "md", showSync = true }) {
   const isScheduled = mode === "scheduled";
   const isNeedsSched = mode === "needsSched";
   const isOngoing = mode === "ongoing";
@@ -1635,9 +1635,26 @@ function InProgressModePill({ mode, onToggle, onSync, onSetNeedsDate, needsDate,
               : isOngoing ? "#6b7280"
               : "#9ca3af";
   const fmtD = d => { try { const dt=new Date(d); if(isNaN(dt)) return ""; return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); } catch(_){return "";} };
-  const dateStr = needsDate ? fmtD(needsDate) : "";
-  const baseLabel = isScheduled ? (dateStr ? `On Schedule · ${dateStr}` : "On Schedule")
-                  : isNeedsSched ? (dateStr ? (needsHard ? `Needs: ${dateStr}` : `Target ${dateStr}`) : "Needs Sched")
+  const fmtDay = d => { try { const dt=new Date(d); if(isNaN(dt)) return ""; return String(dt.getDate()); } catch(_){return "";} };
+  const sameMonth = (a, b) => { try { const da=new Date(a), db=new Date(b); return !isNaN(da)&&!isNaN(db) && da.getMonth()===db.getMonth() && da.getFullYear()===db.getFullYear(); } catch(_){return false;} };
+  const startStr = needsDate ? fmtD(needsDate) : "";
+  const endStr = needsEndDate ? fmtD(needsEndDate) : "";
+  // Window range. Hard dates ignore the end (single point in time). Non-hard
+  // with both start + end shows "Apr 12–15" when both fall in the same month,
+  // or "Apr 28 – May 2" when the window crosses a month boundary.
+  const dateRange = (() => {
+    if(needsHard) return startStr;
+    if(startStr && endStr) {
+      if(sameMonth(needsDate, needsEndDate)) return `${startStr}–${fmtDay(needsEndDate)}`;
+      return `${startStr} – ${endStr}`;
+    }
+    return startStr || endStr;
+  })();
+  const baseLabel = isScheduled ? (startStr ? `On Schedule · ${startStr}` : "On Schedule")
+                  : isNeedsSched
+                    ? (dateRange
+                        ? (needsHard ? `Needs: ${dateRange}` : `Sched by ${dateRange}`)
+                        : "Needs Sched")
                   : isOngoing ? "Ongoing"
                   : "Set schedule";
   const pad = size === "sm" ? "1px 7px" : "2px 8px";
@@ -23162,11 +23179,19 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                     detail so the user can edit the RT there. */}
                                 {effectiveMode && onUpdateJob && (
                                   <div onClick={e=>e.stopPropagation()} style={{flexShrink:0}}>
+                                    {(() => {
+                                      // End-of-window date for the pill. Only meaningful in
+                                      // needsSched mode and only when not a hard deadline.
+                                      // Falls back blank for legacy jobs that never had a window.
+                                      const endKey = phaseKey==="rough" ? "roughNeedsByEnd" : phaseKey==="finish" ? "finishNeedsByEnd" : null;
+                                      const endDate = (phaseMode === "needsSched" && endKey && !job[hardKey]) ? (job[endKey]||"") : "";
+                                      return (
                                     <InProgressModePill
                                       size="sm"
                                       showSync={false}
                                       mode={effectiveMode}
                                       needsDate={effectiveDate}
+                                      needsEndDate={endDate}
                                       needsHard={phaseMode ? !!job[hardKey] : false}
                                       onToggle={()=>{
                                         // Toggle cycle uses the rendered mode so a past-date
@@ -23187,13 +23212,17 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                       onSetNeedsDate={()=>{
                                         if(phaseMode) {
                                           setCrewNeedsModal({ jobId: job.id, phase: phaseKey,
-                                            date: job[dateKey]||"", hard: !!job[hardKey] });
+                                            date: job[dateKey]||"",
+                                            endDate: job[endKey||""]||"",
+                                            hard: !!job[hardKey] });
                                         } else {
                                           // RT pill — open job detail so RT date can be edited there
                                           onSelectJob(job);
                                         }
                                       }}
                                     />
+                                      );
+                                    })()}
                                   </div>
                                 )}
                                 {/* Hours-needed chip — explicit weekly person-hours target
@@ -29322,6 +29351,26 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       (punch.extras||[]).forEach(e => { if(e?.key) eatFloor(punch[e.key]); });
     };
 
+    // Simpro helpers — hoisted up here so anything below (crewToday merge,
+    // active phases) can use them. Const declarations live in a temporal
+    // dead zone until evaluation, so calling them above their definition
+    // throws ReferenceError and the whole component blanks.
+    const todayYMD = toYMD(new Date());
+    const fmtShortDate = (dStr) => {
+      const d = parseAnyDate(dStr);
+      return d ? d.toLocaleDateString("en-US", { month:"numeric", day:"numeric" }) : dStr;
+    };
+    const simproDateFor = (j) => {
+      if(!j.simproNo) return null;
+      const dates = simproByJob[String(j.simproNo)]?.dates;
+      if(!dates || !dates.length) return null;
+      return dates.find(d => d >= todayYMD) || null;
+    };
+    const simproStaffOn = (j, ymd) => {
+      if(!j.simproNo || !ymd) return [];
+      return simproByJob[String(j.simproNo)]?.byDate?.[ymd] || [];
+    };
+
     let punchClosedCount = 0;
     const punchClosedJobs = new Set();
     const punchClosedByForeman = {}; // foreman -> {count, jobs: Set}
@@ -29475,35 +29524,8 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
       scheduled: 3,
       waiting: 4,         // on hold
     };
-    // Format YYYY-MM-DD or M/D/YY into compact "M/D" for display.
-    const fmtShortDate = (dStr) => {
-      const d = parseAnyDate(dStr);
-      return d ? d.toLocaleDateString("en-US", { month:"numeric", day:"numeric" }) : dStr;
-    };
-    // Simpro lookup — return the displayed date for a job. Prefer the next
-    // future scheduled date (jobs not started, or scheduled jobs about to
-    // start). If none in the future, fall back to the most recent past date
-    // (in-progress jobs whose work window has begun). If the job has no
-    // Simpro entries at all, return null so the caller can render "Not on
-    // Schedule." Mirrors how the Crew Planner pill picks its displayed date.
-    const todayYMD = toYMD(new Date());
-    // Forward-looking only: return the next Simpro date >= today, or null if
-    // nothing is on the schedule going forward. Past dates aren't relevant
-    // here — even for in-progress jobs, we want "Not on Schedule" so a job
-    // that's stalled without an upcoming day surfaces as needing attention.
-    const simproDateFor = (j) => {
-      if(!j.simproNo) return null;
-      const dates = simproByJob[String(j.simproNo)]?.dates;
-      if(!dates || !dates.length) return null;
-      return dates.find(d => d >= todayYMD) || null;
-    };
-    // Staff names Simpro has on a given job/date — drives the merge into
-    // TUE CREWS so Simpro-scheduled people appear next to manual pills.
-    const simproStaffOn = (j, ymd) => {
-      if(!j.simproNo || !ymd) return [];
-      return simproByJob[String(j.simproNo)]?.byDate?.[ymd] || [];
-    };
-
+    // (simproDateFor / simproStaffOn / fmtShortDate / todayYMD are hoisted
+    // up at the top of the data useMemo — same instances used here.)
     const activePhases = [];
     jobs.filter(inScopeJob).forEach(j => {
       if(j.tempPed || j.quickJob) return;
