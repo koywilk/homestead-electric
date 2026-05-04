@@ -21195,6 +21195,52 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
     return map;
   }, [crewWeekSimpro, crewDays]);
 
+  // Per-person start/end time from Simpro for this week. Keyed by
+  // `${pid}_${di}_${staffNameLower}` → {start: "HH:MM", end: "HH:MM"}.
+  // Pulls the same Block / Time / StartTime fields _simproEntryHours uses
+  // so what shows on the planner pill matches the hours math. If a person
+  // has multiple entries on the same day (rare — e.g. split shift), the
+  // map spans them: earliest start, latest end.
+  const simproTimeByPersonJobDay = useMemo(() => {
+    const map = new Map();
+    if(!crewWeekSimpro.length) return map;
+    const ymd = d => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+    const weekYMDs = (crewDays||[]).map(ymd);
+    crewWeekSimpro.forEach(entry => {
+      const pid = entry.Project?.ProjectID;
+      const date = entry.Date;
+      const staff = entry.Staff?.Name;
+      if(!pid || !date || !staff) return;
+      const di = weekYMDs.indexOf(date);
+      if(di < 0) return;
+      // Time extraction (mirrors _simproEntryHours sources)
+      let start = null, end = null;
+      const blocks = Array.isArray(entry?.Blocks) ? entry.Blocks : null;
+      if(blocks && blocks.length) {
+        start = blocks[0]?.StartTime;
+        end   = blocks[blocks.length-1]?.EndTime;
+      }
+      if(!start || !end) {
+        const t = entry?.Time || {};
+        start = t.StartTime || entry?.StartTime;
+        end   = t.EndTime   || entry?.EndTime;
+      }
+      if(!start || !end) return;
+      // Some Simpro fields come back as HH:MM:SS; strip seconds.
+      start = String(start).slice(0, 5);
+      end   = String(end).slice(0, 5);
+      const key = `${pid}_${di}_${staff.toLowerCase()}`;
+      const existing = map.get(key);
+      if(!existing) {
+        map.set(key, { start, end });
+      } else {
+        if(start < existing.start) existing.start = start;
+        if(end > existing.end) existing.end = end;
+      }
+    });
+    return map;
+  }, [crewWeekSimpro, crewDays]);
+
   // Sum scheduled hours for one job across the displayed week's cells.
   // Two sources combined:
   //   • Manual planner (crewData) — cell.time × (lead + crew count). People
@@ -23469,10 +23515,22 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                     picker from opening). Hover shows source. */}
                                 {simproNamesRaw.map(rawName => {
                                   const ptoToday = isOnPTO(rawName, crewDays[di]);
+                                  // Pull the staff member's Simpro time for this
+                                  // job/day. Lower-case key match so display-name
+                                  // variants don't matter ("Vasa Mataafa" vs
+                                  // "vasa mataafa"). Renders inline on the pill
+                                  // so Koy can see WHEN the crew is scheduled,
+                                  // not just THAT they're scheduled.
+                                  const simTime = job.simproNo
+                                    ? simproTimeByPersonJobDay.get(`${job.simproNo}_${di}_${(rawName||"").toLowerCase()}`)
+                                    : null;
+                                  const timeLabel = simTime
+                                    ? `${_crewFmtTime(simTime.start)}–${_crewFmtTime(simTime.end)}`
+                                    : "";
                                   return (
                                     <span key={"sp_"+rawName}
                                       onClick={e=>e.stopPropagation()}
-                                      title={`Scheduled in Simpro · ${rawName}${ptoToday?" · on PTO this day":""}`}
+                                      title={`Scheduled in Simpro · ${rawName}${timeLabel?" · "+timeLabel:""}${ptoToday?" · on PTO this day":""}`}
                                       style={{display:"inline-flex",alignItems:"center",gap:3,
                                         padding:"2px 7px",borderRadius:99,fontSize:10,fontWeight:700,
                                         color: ptoToday ? "#92400e" : "#1e3a8a",
@@ -23484,6 +23542,13 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                         background:"#3b82f6",color:"#fff",borderRadius:3,
                                         padding:"1px 4px",lineHeight:1}}>SIMPRO</span>
                                       {crewDisplayName(rawName)}
+                                      {timeLabel && (
+                                        <span style={{fontSize:8,fontWeight:700,opacity:0.85,
+                                          background:"#3b82f622",borderRadius:3,padding:"1px 4px",
+                                          marginLeft:1,letterSpacing:"0.02em"}}>
+                                          {timeLabel}
+                                        </span>
+                                      )}
                                     </span>
                                   );
                                 })}
@@ -23697,30 +23762,35 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                       // Simpro busy lookup for THIS day: walk every Simpro
                       // entry pid for the day and check if `name` (or its
                       // first-name form) appears in the staff list. Returns
-                      // the matched job name from jobs[] (matched by simproNo)
-                      // so the chip can say "also on <real job name>" instead
-                      // of just "Simpro".
+                      // the matched job name AND the person's Simpro time
+                      // window so the picker chip shows when they're tied up
+                      // ("Vasa Mataafa · also on Larson 7:00–3:30 (Simpro)").
                       const simproBusyFor = (name) => {
                         if(!simproPeopleByJobDay || simproPeopleByJobDay.size === 0) return null;
                         const first = (name||"").trim().split(/\s+/)[0];
-                        // Walk all entries for this day index — keyed `${pid}_${di}`.
                         for(const [key, peeps] of simproPeopleByJobDay.entries()) {
                           const [pid, dayIdx] = key.split("_");
                           if(parseInt(dayIdx,10) !== di) continue;
-                          let matched = false;
+                          let matchedAs = null;
                           for(const p of peeps) {
                             if(!p) continue;
-                            if(p === name) { matched = true; break; }
+                            if(p === name) { matchedAs = p; break; }
                             const pf = p.trim().split(/\s+/)[0];
-                            if(first && (pf === first || p === first || pf === name)) { matched = true; break; }
+                            if(first && (pf === first || p === first || pf === name)) { matchedAs = p; break; }
                           }
-                          if(!matched) continue;
-                          // Skip if it's THIS job — the picker is open on this
-                          // cell so being on Simpro for this same job isn't a
-                          // conflict.
+                          if(!matchedAs) continue;
                           const matchedJob = jobs.find(j => String(j.simproNo||"") === String(pid));
                           if(matchedJob && matchedJob.id === jid) continue;
-                          return { jobName: matchedJob?.name || "Simpro job", source: "simpro" };
+                          // Pull this person's specific time on the matched
+                          // Simpro entry. Falls back to null when Simpro has
+                          // them assigned without a time (still shown busy,
+                          // just no time tag on the chip).
+                          const t = simproTimeByPersonJobDay.get(`${pid}_${di}_${matchedAs.toLowerCase()}`);
+                          return {
+                            jobName: matchedJob?.name || "Simpro job",
+                            source: "simpro",
+                            time: t || null,
+                          };
                         }
                         return null;
                       };
@@ -23737,11 +23807,12 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                         // Not on the planner anywhere — but might be on a Simpro
                         // entry for a job that's not visible on the planner
                         // (e.g. another foreman's job when filtered). Flag it so
-                        // Koy doesn't accidentally double-book.
+                        // Koy doesn't accidentally double-book. Pass the Simpro
+                        // time through so the chip's time tag fires.
                         const sim = simproBusyFor(name);
                         if(sim) {
                           return { kind:"busy", jobName: sim.jobName, hours: null,
-                            time: null, free: 0, source: "simpro" };
+                            time: sim.time || null, free: 0, source: "simpro" };
                         }
                         return { kind:"free" };
                       };
