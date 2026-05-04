@@ -5488,7 +5488,7 @@ function JobNoteCard({
               borderRadius:99, padding:'2px 10px', cursor:'pointer',
               fontFamily:'inherit', flexShrink:0,
             }}>
-            {triage ? 'Done' : 'Triage'}
+            {triage ? 'Done' : 'Convert'}
           </button>
         )}
 
