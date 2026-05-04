@@ -53,10 +53,11 @@ const functions = getFunctions(firebaseApp);
 
 // Debug helper for one-off cloud function tests from the browser console.
 // Usage:  await _hsCall('getSimproProfitLossYTD', {})
-// Removed once the call is wired into the UI normally.
+// Default callable timeout is 60s — too short for the bulk Simpro pulls,
+// so we set 9 minutes (540s) which matches the function's runtime budget.
 if (typeof window !== "undefined") {
-  window._hsCall = async (name, params = {}) => {
-    const fn = httpsCallable(functions, name);
+  window._hsCall = async (name, params = {}, timeoutMs = 540000) => {
+    const fn = httpsCallable(functions, name, { timeout: timeoutMs });
     const r = await fn(params);
     return r.data;
   };
@@ -30694,6 +30695,8 @@ function HuddleConfigPanel() {
   const [lastLog, setLastLog] = useState(null);
   const [saving, setSaving] = useState(false);
   const [savedToast, setSavedToast] = useState(false);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null); // {ok, msg} | null
 
   // Live config
   useEffect(() => {
@@ -30747,6 +30750,32 @@ function HuddleConfigPanel() {
   const addBoss = () => save({ ...cfg, bosses: [...cfg.bosses, ""] });
 
   const setSender = (val) => save({ ...cfg, sender: val });
+
+  // Run the same email path as the 6am cron, but route every email to the
+  // current user's address. Each foreman in the config produces one [TEST]
+  // email so Koy sees exactly what each person would receive — no risk to
+  // the team. Errors surface inline below the button.
+  const sendTestEmail = async () => {
+    if (testing) return;
+    setTestResult(null);
+    if (!cfg.foremen.length) {
+      setTestResult({ ok: false, msg: "Add at least one foreman before testing." });
+      return;
+    }
+    setTesting(true);
+    try {
+      const fn = httpsCallable(functions, "sendTestHuddleEmail");
+      const res = await fn({}); // server uses the auth user's email by default
+      const sent = res?.data?.sent || 0;
+      const to = res?.data?.to || "";
+      setTestResult({ ok: true, msg: `Sent ${sent} test email${sent===1?"":"s"} to ${to}.` });
+    } catch (e) {
+      console.error("Huddle test send failed:", e);
+      setTestResult({ ok: false, msg: e?.message || "Send failed — check Functions logs." });
+    } finally {
+      setTesting(false);
+    }
+  };
 
   const inputStyle = {
     background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7,
@@ -30869,6 +30898,36 @@ function HuddleConfigPanel() {
             }}>
             + Add boss
           </button>
+        </div>
+
+        {/* Test send */}
+        <div style={{ marginBottom: 16, padding: "12px 14px", background: C.surface,
+                      border: `1px dashed ${C.border}`, borderRadius: 8 }}>
+          <div style={{ fontSize: 10, fontWeight: 700, color: C.dim, letterSpacing: "0.08em", marginBottom: 6 }}>
+            TEST RUN
+          </div>
+          <div style={{ fontSize: 11, color: C.dim, marginBottom: 8, lineHeight: 1.5 }}>
+            Fires the same email path the 6am cron uses, but sends every
+            foreman's email to your inbox only. Subject prefixed with [TEST];
+            no one else gets a copy.
+          </div>
+          <button onClick={sendTestEmail}
+            disabled={testing}
+            style={{
+              fontSize: 12, fontWeight: 700, padding: "8px 16px", borderRadius: 8,
+              border: "none", background: testing ? C.dim : C.accent, color: "#000",
+              cursor: testing ? "default" : "pointer", fontFamily: "inherit",
+            }}>
+            {testing ? "Sending…" : "Send test to me"}
+          </button>
+          {testResult && (
+            <div style={{
+              fontSize: 11, marginTop: 8,
+              color: testResult.ok ? C.green : C.red,
+            }}>
+              {testResult.msg}
+            </div>
+          )}
         </div>
 
         {/* Status / last run */}
