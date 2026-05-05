@@ -25330,7 +25330,7 @@ const sbv2InfoNotesPresence = (j, opts = {}) => {
 // Square root keeps growth visible across the whole range without making
 // a 30-item job indistinguishable from a 200-item one.
 const sbv2InfoPunchPresence = (j, opts = {}) => {
-  if (!_sbv2IsActive(j)) return { applicable: false, score: 0, detail: "job not active" };
+  if (!_sbv2IsActive(j)) return { applicable: false, score: 0, detail: "job not active", count: 0 };
   const target = opts.target || 200;
   let regularCount = 0;
   [j.roughPunch, j.finishPunch].forEach(pp => sbv2WalkPunch(pp, item => {
@@ -25341,7 +25341,8 @@ const sbv2InfoPunchPresence = (j, opts = {}) => {
   return {
     applicable: true,
     score,
-    detail: `${regularCount} regular punch item(s) (target ${target} for 1.0)`,
+    detail: `${regularCount} regular punch item(s) (per-job target ${target})`,
+    count: regularCount,  // ROUND-9 CHANGE: expose for person-level aggregation
   };
 };
 
@@ -25351,10 +25352,16 @@ const sbv2InfoScoreForJob = (j, opts = {}) => {
     status:   sbv2InfoStatusFresh(j, opts.status),
     punch:    sbv2InfoPunchHygiene(j),
     notes:    sbv2InfoNotesPresence(j, opts.notes),     // round-3 (I5)
-    presence: sbv2InfoPunchPresence(j, opts.presence),  // round-6 (I6)
+    presence: sbv2InfoPunchPresence(j, opts.presence),  // round-6 (I6) — visible but not averaged
     triage:   sbv2InfoTriageAndInspections(j),
   };
-  const applicable = Object.values(signals).filter(s => s.applicable);
+  // ROUND-9 CHANGE: presence (I6) is measured at person-level in the rollup
+  // (total punch volume across the person's active jobs) instead of being
+  // averaged per-job. The per-job presence signal stays in the signals map
+  // for drilldown visibility. Per Koy, punch list size should dominate info
+  // — averaging across jobs diluted big-portfolio thoroughness.
+  const inAvg = ["daily", "status", "punch", "notes", "triage"];
+  const applicable = inAvg.map(k => signals[k]).filter(s => s.applicable);
   const score = applicable.length === 0
     ? null
     : applicable.reduce((a, s) => a + s.score, 0) / applicable.length;
@@ -25492,11 +25499,25 @@ const sbv2BuildBoard = (jobs, role, opts = {}) => {
   const shrinkK     = opts.shrinkK     ?? 5;
   const shrinkPrior = opts.shrinkPrior ?? 0.5;
   const rows = [];
+  // ROUND-9 CHANGE: person-level I6 — sum total regular punch volume across
+  // the person's active jobs and score sqrt(total / personTarget). Blended
+  // 50/50 with the per-job info average so portfolio thoroughness (Keegan's
+  // 200-item Cowdrey + smaller other jobs) dominates over per-job averaging.
+  const personI6Target = opts.personI6Target || 500;
   for (const [name, jobScores] of groups.entries()) {
     if (jobScores.length < minJobs) continue; // round-2: minimum job count
     const infos = jobScores.map(j => j.info).filter(s => s != null);
     const quals = jobScores.map(j => j.quality).filter(s => s != null);
-    const infoAvgRaw = infos.length ? infos.reduce((a,b)=>a+b,0) / infos.length : null;
+    const perJobInfoAvg = infos.length ? infos.reduce((a,b)=>a+b,0) / infos.length : null;
+    // Sum regular punch items across this person's active jobs (count from I6 per-job signal)
+    const totalRegularPunch = jobScores.reduce((sum, jr) => {
+      const c = jr.infoSignals && jr.infoSignals.presence ? (jr.infoSignals.presence.count || 0) : 0;
+      return sum + c;
+    }, 0);
+    const personI6 = totalRegularPunch === 0 ? 0 : Math.min(1, Math.sqrt(totalRegularPunch / personI6Target));
+    const infoAvgRaw = perJobInfoAvg == null
+      ? personI6
+      : (perJobInfoAvg + personI6) / 2;  // 50/50 blend
     const qualAvgRaw = quals.length ? quals.reduce((a,b)=>a+b,0) / quals.length : null;
     const infoAvg = _sbv2Shrink(infoAvgRaw, infos.length, shrinkK, shrinkPrior);
     const qualAvg = _sbv2Shrink(qualAvgRaw, quals.length, shrinkK, shrinkPrior);
@@ -25508,6 +25529,8 @@ const sbv2BuildBoard = (jobs, role, opts = {}) => {
       name, jobCount: jobScores.length,
       info: infoAvg, quality: qualAvg,           // shrunk (used for ranking)
       infoRaw: infoAvgRaw, qualityRaw: qualAvgRaw, // raw (for drilldown)
+      // ROUND-9 CHANGE: surface person-level I6 inputs for drilldown
+      totalRegularPunch, personI6, perJobInfoAvg,
       combined, jobs: jobScores,
     });
   }
