@@ -10789,141 +10789,150 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
       if (!placed) unplaced.push(br);
     }
 
-    // ── Phase 2: place every 1-pole in its own A slot if room exists ──
-    // The PRIOR algorithm pre-paired same-amp tandems before placing, which
-    // crammed two breakers into one slot even when later slots were empty.
-    // Koy's complaint: with 30 1-poles and 40 A slots available, no tandems
-    // should be created at all — every breaker gets its own slot. Tandems
-    // are a fallback for OVERFLOW only.
+    // ── Phase 2: pre-pair tandems (highest amp first), then place ──
+    // STRATEGY: figure out how many tandems are NEEDED first (= overflow
+    // beyond available 1-pole A slots). Then form exactly that many
+    // tandems, preferring same-amp pairs by HIGHEST amperage first
+    // (20A+20A pairs before 15A+15A before 15A+20A splits). Place the
+    // tandems at the top of the panel, then the remaining singles below.
     //
-    // So: place each 1-pole as a single in the next available A slot,
-    // alternating sides. If A slots run out → push to overflow → Phase 3
-    // handles tandems / quads / splits. (onePoles is already sorted amps DESC.)
-    const overflow = [];
+    // Why this order matters: with 21×20A + 11×15A and 8 tandems needed,
+    // the prior "place all in A first, tandem the leftovers" logic put
+    // the LOWEST-amp loads (15A) in tandem position because they were
+    // last-placed — burning split-tandem flags. Forming pairs by amps
+    // DESC up front gives 8 clean 20A+20A tandems and 0 splits, which
+    // is what Koy actually wants on the schedule.
+    const onePoleSlotsAvail = sides.reduce((n, s) => n + (s.slots.length - s.i), 0);
+    const tandemsNeeded = Math.max(0, onePoles.length - onePoleSlotsAvail);
+
+    // Group the sorted 1-poles by amps so we can pair from the top down.
+    // onePoles is already amps DESC; insertion order preserved.
+    const ampGroups = new Map();
     for (const br of onePoles) {
+      if (!ampGroups.has(br.amps)) ampGroups.set(br.amps, []);
+      ampGroups.get(br.amps).push(br);
+    }
+    const ampsSorted = [...ampGroups.keys()].sort((a, b) => b - a); // 20, 15, ...
+
+    // Pair-formation passes:
+    //   1. Same-amp pairs (highest amp groups first) until tandemsNeeded met
+    //   2. Cross-amp pairs (split tandems) for any remaining target
+    const tandemUnits = [];
+    let formed = 0;
+    for (const amps of ampsSorted) {
+      const grp = ampGroups.get(amps);
+      while (formed < tandemsNeeded && grp.length >= 2) {
+        const a = grp.shift(), b = grp.shift();
+        tandemUnits.push({ type: "tandem", sameAmp: true, brA: a, brB: b });
+        formed++;
+      }
+      if (formed >= tandemsNeeded) break;
+    }
+    if (formed < tandemsNeeded) {
+      // Flatten remaining leftovers in amps-DESC order for split pairing
+      const leftovers = [];
+      for (const amps of ampsSorted) leftovers.push(...(ampGroups.get(amps) || []));
+      while (formed < tandemsNeeded && leftovers.length >= 2) {
+        const a = leftovers.shift(), b = leftovers.shift();
+        tandemUnits.push({ type: "tandem", sameAmp: false, brA: a, brB: b });
+        formed++;
+      }
+      // Push any still-unpaired loads back into their amp groups as singles
+      for (const br of leftovers) {
+        if (!ampGroups.has(br.amps)) ampGroups.set(br.amps, []);
+        ampGroups.get(br.amps).push(br);
+      }
+    }
+
+    // Build the full unit list: tandems + remaining singles, sorted amps DESC
+    // (with tandems winning ties so they sit at the top of the panel).
+    const singleUnits = [];
+    for (const amps of ampsSorted) {
+      for (const br of (ampGroups.get(amps) || [])) {
+        singleUnits.push({ type: "single", amps, br });
+      }
+    }
+    const allUnits = [...tandemUnits.map(u => ({ ...u, amps: u.brA.amps })), ...singleUnits];
+    allUnits.sort((u, v) => {
+      if (u.amps !== v.amps) return v.amps - u.amps;
+      // tandems before singles within the same amp tier
+      if ((u.type === "tandem") !== (v.type === "tandem")) return u.type === "tandem" ? -1 : 1;
+      return 0;
+    });
+
+    // Place units alternating sides — top of panel first.
+    const overflow = [];
+    for (const unit of allUnits) {
       let placed = false;
       for (let attempt = 0; attempt < 2 && !placed; attempt++) {
         const s = sides[(next1pSide + attempt) % 2];
         if (s.i < s.slots.length) {
-          circuits[`${s.slots[s.i]}A`] = {
-            name: br.name, amps: String(br.amps), wire: br.wire,
-          };
+          const slotN = s.slots[s.i];
+          if (unit.type === "tandem") {
+            circuits[`${slotN}A`] = {
+              name: unit.brA.name, amps: String(unit.brA.amps), wire: unit.brA.wire,
+            };
+            circuits[`${slotN}B`] = {
+              name: unit.brB.name, amps: String(unit.brB.amps), wire: unit.brB.wire,
+              notes: unit.sameAmp
+                ? "tandem"
+                : `tandem · SPLIT (${unit.brB.amps}A with ${unit.brA.amps}A)`,
+              ...(unit.sameAmp ? {} : { splitTandem: true }),
+            };
+          } else {
+            circuits[`${slotN}A`] = {
+              name: unit.br.name, amps: String(unit.br.amps), wire: unit.br.wire,
+            };
+          }
           s.i++;
           placed = true;
           next1pSide = (next1pSide + 1) % 2;
         }
       }
-      if (!placed) overflow.push(br);
+      if (!placed) {
+        if (unit.type === "tandem") overflow.push(unit.brA, unit.brB);
+        else overflow.push(unit.br);
+      }
     }
 
-    // ── Phase 3: handle overflow ──
-    // Order matches the breaker-count card math: TANDEMS exhaust first,
-    // then quads only if tandems alone can't cover. So:
-    //   3a: same-amp tandems (preferred — clean pairings)
-    //   3b: split-tandems    (fallback — mismatched amps, flagged in UI)
-    //   3c: quad conversion  (only if tandems can't drain the overflow)
-    //   3d: unplaced
-    // This keeps FILL aligned with what the breaker-count card promises:
-    // a 48-circuit / 40-space panel that "needs 8 tandems" gets EXACTLY
-    // 8 tandems, not 3 tandems + 2 quads + 1 split.
+    // ── Phase 3: quad conversion only when tandems alone couldn't fit
+    // everything (rare — happens when N1 overflow exceeds the 1-pole slot
+    // budget AND there are existing 2-poles to convert).
+    // Quad layout per slot pair (top N, bottom N+2):
+    //   N-A   = 1-pole (outer top)     ← outermost
+    //   N-B   = 2-pole top (240V)      ← inner top
+    //   N+2-A = 2-pole cont. (240V)    ← inner bottom
+    //   N+2-B = 1-pole (outer bottom)  ← outermost
     if (overflow.length) {
       let queue = overflow.slice();
-
-      // 3a — same-amps tandem pairing
-      const slotAmpsForMatch = {};
-      for (let n = 1; n <= slotCount; n++) {
-        if (twoPoleSlots.has(n)) continue;
-        const a = circuits[`${n}A`];
-        if (a && a.amps && !circuits[`${n}B`]) slotAmpsForMatch[n] = parseInt(a.amps, 10);
-      }
-      const remainingAfterMatch = [];
-      for (const br of queue) {
-        let placed = false;
-        for (let n = 1; n <= slotCount; n++) {
-          if (slotAmpsForMatch[n] === br.amps && !circuits[`${n}B`]) {
-            circuits[`${n}B`] = {
-              name: br.name, amps: String(br.amps), wire: br.wire,
-              notes: "tandem",
-            };
-            placed = true;
-            break;
+      const twoPoleTops = [];
+      const oddCol  = []; for (let n = 1; n <= slotCount; n+=2) oddCol.push(n);
+      const evenCol = []; for (let n = 2; n <= slotCount; n+=2) evenCol.push(n);
+      for (const col of [oddCol, evenCol]) {
+        for (let i = 0; i + 1 < col.length; i++) {
+          const top = col[i], bot = col[i+1];
+          const ta = circuits[`${top}A`], ba = circuits[`${bot}A`];
+          if (ta && ba && ta.notes === "240V" && ba.name && ba.name.includes("(240V cont.")) {
+            if (circuits[`${top}B`] || circuits[`${bot}B`]) continue;
+            twoPoleTops.push({ top, bot, topData: ta, botData: ba });
           }
         }
-        if (!placed) remainingAfterMatch.push(br);
       }
-      queue = remainingAfterMatch;
-
-      // 3b — split-tandem fallback (mismatched amps in B of any A-slot
-      //       that still has open B). Flagged splitTandem:true so the cell
-      //       renders red and the user sees the conflict.
-      if (queue.length) {
-        const slotAmpsRecount = {};
-        for (let n = 1; n <= slotCount; n++) {
-          if (twoPoleSlots.has(n)) continue;
-          const a = circuits[`${n}A`];
-          if (a && a.amps && !circuits[`${n}B`]) slotAmpsRecount[n] = parseInt(a.amps, 10);
-        }
-        const remainingAfterSplit = [];
-        for (const br of queue) {
-          let placed = false;
-          for (let n = 1; n <= slotCount; n++) {
-            if (twoPoleSlots.has(n)) continue;
-            if (!circuits[`${n}A`]) continue;
-            if (circuits[`${n}B`]) continue;
-            const aAmps = slotAmpsRecount[n];
-            circuits[`${n}B`] = {
-              name: br.name, amps: String(br.amps), wire: br.wire,
-              notes: `tandem · SPLIT (${br.amps}A with ${aAmps||'?'}A)`,
-              splitTandem: true,
-            };
-            placed = true;
-            break;
-          }
-          if (!placed) remainingAfterSplit.push(br);
-        }
-        queue = remainingAfterSplit;
+      while (queue.length >= 2 && twoPoleTops.length) {
+        const pair = twoPoleTops.shift();
+        const br1 = queue.shift();
+        const br2 = queue.shift();
+        circuits[`${pair.top}B`] = { ...pair.topData, notes: "240V (quad inner top)" };
+        circuits[`${pair.bot}A`] = { ...pair.botData, notes: "240V cont. (quad inner)" };
+        circuits[`${pair.top}A`] = {
+          name: br1.name, amps: String(br1.amps), wire: br1.wire,
+          notes: "quad outer top", quadOuter: true,
+        };
+        circuits[`${pair.bot}B`] = {
+          name: br2.name, amps: String(br2.amps), wire: br2.wire,
+          notes: "quad outer bottom", quadOuter: true,
+        };
       }
-
-      // 3c — quad conversion (only fires if tandems alone couldn't drain
-      //       overflow, e.g. when N₁ overflow exceeds 1-pole-slot count).
-      // Quad layout per slot pair (top N, bottom N+2):
-      //   N-A   = 1-pole (outer top)     ← outermost
-      //   N-B   = 2-pole top (240V)      ← inner top
-      //   N+2-A = 2-pole cont. (240V)    ← inner bottom
-      //   N+2-B = 1-pole (outer bottom)  ← outermost
-      if (queue.length) {
-        const twoPoleTops = [];
-        const oddCol  = []; for (let n = 1; n <= slotCount; n+=2) oddCol.push(n);
-        const evenCol = []; for (let n = 2; n <= slotCount; n+=2) evenCol.push(n);
-        for (const col of [oddCol, evenCol]) {
-          for (let i = 0; i + 1 < col.length; i++) {
-            const top = col[i], bot = col[i+1];
-            const ta = circuits[`${top}A`], ba = circuits[`${bot}A`];
-            if (ta && ba && ta.notes === "240V" && ba.name && ba.name.includes("(240V cont.")) {
-              if (circuits[`${top}B`] || circuits[`${bot}B`]) continue;
-              twoPoleTops.push({ top, bot, topData: ta, botData: ba });
-            }
-          }
-        }
-
-        while (queue.length >= 2 && twoPoleTops.length) {
-          const pair = twoPoleTops.shift();
-          const br1 = queue.shift();
-          const br2 = queue.shift();
-          circuits[`${pair.top}B`] = { ...pair.topData, notes: "240V (quad inner top)" };
-          circuits[`${pair.bot}A`] = { ...pair.botData, notes: "240V cont. (quad inner)" };
-          circuits[`${pair.top}A`] = {
-            name: br1.name, amps: String(br1.amps), wire: br1.wire,
-            notes: "quad outer top", quadOuter: true,
-          };
-          circuits[`${pair.bot}B`] = {
-            name: br2.name, amps: String(br2.amps), wire: br2.wire,
-            notes: "quad outer bottom", quadOuter: true,
-          };
-        }
-      }
-
-      // 3d — anything still left → unplaced
       queue.forEach(b => unplaced.push(b));
     }
 
