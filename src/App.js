@@ -25317,13 +25317,42 @@ const sbv2InfoNotesPresence = (j, opts = {}) => {
   };
 };
 
+// I6: Regular punch presence on active jobs (round 6 + ROUND-7 CHANGE).
+// Rewards foremen who plan ahead — more items = more foresight. Per Koy,
+// Cowdrey-thoroughness (200+ items) should beat sparse-planning (5 items)
+// by a wide margin, so the original 5+=full-credit step function is gone.
+// Curve: sqrt(count / target), capped at 1.0. With target=200:
+//   5 items   → 0.16   (barely)
+//   20 items  → 0.32
+//   50 items  → 0.50
+//   100 items → 0.71
+//   200 items → 1.00   (Cowdrey-level)
+// Square root keeps growth visible across the whole range without making
+// a 30-item job indistinguishable from a 200-item one.
+const sbv2InfoPunchPresence = (j, opts = {}) => {
+  if (!_sbv2IsActive(j)) return { applicable: false, score: 0, detail: "job not active" };
+  const target = opts.target || 200;
+  let regularCount = 0;
+  [j.roughPunch, j.finishPunch].forEach(pp => sbv2WalkPunch(pp, item => {
+    if (!item || item.voided || item.fromQC) return;
+    regularCount++;
+  }));
+  const score = regularCount === 0 ? 0 : Math.min(1, Math.sqrt(regularCount / target));
+  return {
+    applicable: true,
+    score,
+    detail: `${regularCount} regular punch item(s) (target ${target} for 1.0)`,
+  };
+};
+
 const sbv2InfoScoreForJob = (j, opts = {}) => {
   const signals = {
-    daily:  sbv2InfoDailyUpdates(j, opts.daily),
-    status: sbv2InfoStatusFresh(j, opts.status),
-    punch:  sbv2InfoPunchHygiene(j),
-    notes:  sbv2InfoNotesPresence(j, opts.notes),  // ROUND-3 CHANGES (I5)
-    triage: sbv2InfoTriageAndInspections(j),
+    daily:    sbv2InfoDailyUpdates(j, opts.daily),
+    status:   sbv2InfoStatusFresh(j, opts.status),
+    punch:    sbv2InfoPunchHygiene(j),
+    notes:    sbv2InfoNotesPresence(j, opts.notes),     // round-3 (I5)
+    presence: sbv2InfoPunchPresence(j, opts.presence),  // round-6 (I6)
+    triage:   sbv2InfoTriageAndInspections(j),
   };
   const applicable = Object.values(signals).filter(s => s.applicable);
   const score = applicable.length === 0
@@ -25334,22 +25363,29 @@ const sbv2InfoScoreForJob = (j, opts = {}) => {
 
 // ── QUALITY SIGNALS ─────────────────────────────────────────────────────
 
-// Q1: Small punch list at handoff. Open finish-punch items as a proxy for
-// handoff cleanliness. Linear curve: 0 items = 1.0, ≥maxOpenPunch = 0.0.
-// Only applicable once finish work has started (rough complete OR finishStatus set).
-const sbv2QualityPunchSize = (j, opts = {}) => {
-  const max = opts.maxOpenPunch || 15; // ROUND-2 CHANGE (6): sharpened from 30
+// Q1: Regular-finish-punch closure rate. ROUND-6 CHANGE: now excludes
+// fromQC items, which are defect-driven (measured separately by Q2). Adding
+// regular punch items is a sign of foreman planning/foresight per Koy —
+// only the closure rate of those planned items should affect quality.
+// Cowdrey-style big regular punch lists are no longer penalized for being
+// big; only for having an unworked-through ratio.
+const sbv2QualityPunchSize = (j) => {
   const r = (j.roughStatus  || "").toLowerCase();
   const f = (j.finishStatus || "").toLowerCase();
   if (!(r === "complete" || f)) return { applicable: false, score: 0, detail: "rough not complete yet" };
-  let openPunch = 0;
+  let closed = 0, open = 0;
   sbv2WalkPunch(j.finishPunch, item => {
-    if (item && !item.done && !item.voided) openPunch++;
+    if (!item || item.voided) return;
+    if (item.fromQC) return; // round-6: QC items measured separately
+    if (item.done) closed++;
+    else open++;
   });
+  const total = closed + open;
+  if (total === 0) return { applicable: false, score: 0, detail: "no regular finish punch items" };
   return {
     applicable: true,
-    score: Math.max(0, Math.min(1, 1 - (openPunch / max))),
-    detail: `${openPunch} open finish punch (curve cap ${max})`,
+    score: closed / total,
+    detail: `${closed}/${total} regular finish punch closed (${Math.round(100 * closed / total)}%)`,
   };
 };
 
