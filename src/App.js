@@ -25643,7 +25643,7 @@ const SBV2_TEST_JOB = (jobName) => {
 const sbv2BuildBoard = (jobs, role, opts = {}) => {
   const infoW = opts.infoWeight    ?? 0.5;
   const qualW = opts.qualityWeight ?? 0.5;
-  const minJobs = opts.minJobs ?? 1; // ROUND-14 CHANGE: lowered from 2; shrinkage handles small-N now
+  const minJobs = opts.minJobs ?? 2; // ROUND-25 CHANGE: back to 2 — 1-job people add too much noise even with shrinkage
   const groups = new Map();
   (jobs || []).forEach(j => {
     if (!j) return;
