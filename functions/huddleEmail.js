@@ -545,22 +545,37 @@ function renderHuddleText({ data, scope, jobs, targetDate, dateLabel, dayName, r
     return `${title}${job}${due}`;
   };
 
+  // Fuzzy match: handles "Koy" vs "Koy Wilkinson" both ways, and any
+  // first-name-shared variant. Mirrors the in-app matchesForeman helper so
+  // the huddleConfig name doesn't have to be spelled identically to the
+  // foreman field stored on each job.
+  const matchForeman = (itemForeman, f) => {
+    const a = (itemForeman || "Unassigned").trim().toLowerCase();
+    const b = (f || "").trim().toLowerCase();
+    if (!a || !b) return false;
+    if (a === b) return true;
+    if (a.startsWith(b + " ") || b.startsWith(a + " ")) return true;
+    // First-name share: "Koy" ↔ "Koy Wilkinson"
+    if (a.split(" ")[0] === b.split(" ")[0]) return true;
+    return false;
+  };
   const taskBelongsTo = (t, f) => {
-    const tf = (t.foreman || "").trim();
-    if (tf && tf.toLowerCase() === f.toLowerCase()) return true;
+    if (matchForeman(t.foreman, f)) return true;
     if (t.jobId) {
       const j = jobs.find(x => x.id === t.jobId);
-      if (j) {
-        const jf = (j.foreman && j.foreman.trim()) || "Unassigned";
-        if (jf === f) return true;
-      }
+      if (j && matchesForeman(j, f)) return true;
     }
-    return !tf && f === "Unassigned";
+    if (!t.foreman && f === "Unassigned") return true;
+    return false;
   };
 
   function renderForemanBlock(f) {
     const blk = [];
-    const onlyMine = (item) => (item.foreman || "Unassigned") === f;
+    // Fuzzy match — handles "Koy" vs "Koy Wilkinson" between huddleConfig
+    // and the foreman field stored on each job. Without this, the strict
+    // equality check returned no items if the names were spelled
+    // differently in the two places.
+    const onlyMine = (item) => matchForeman(item.foreman, f);
 
     // STUCK
     const stuckMine = data.stuckItems.filter(onlyMine);
@@ -582,8 +597,18 @@ function renderHuddleText({ data, scope, jobs, targetDate, dateLabel, dayName, r
       blk.push("");
     }
 
-    // RECAP
-    const punchByMe = data.punchClosedByForeman[f];
+    // RECAP — aggregate punch counts under any name that fuzzy-matches f.
+    // Jobs may store foreman as "Koy" or "Koy Wilkinson"; both buckets
+    // should roll up under whichever scope was passed in.
+    let punchByMe = null;
+    for (const name of Object.keys(data.punchClosedByForeman)) {
+      if (!matchForeman(name, f)) continue;
+      const agg = data.punchClosedByForeman[name];
+      if (!punchByMe) punchByMe = { count: 0, jobs: new Set() };
+      punchByMe.count += agg.count;
+      const jobsList = agg.jobs instanceof Set ? Array.from(agg.jobs) : agg.jobs;
+      jobsList.forEach(j => punchByMe.jobs.add(j));
+    }
     const updatesMine = data.updatesPosted.filter(onlyMine);
     const inspMine = data.inspectionResults.filter(onlyMine);
     if (punchByMe || updatesMine.length || inspMine.length) {
