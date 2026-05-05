@@ -25544,11 +25544,24 @@ const sbv2BuildBoard = (jobs, role, opts = {}) => {
     const personI8 = totalCOs     === 0 ? 0 : Math.min(1, Math.sqrt(totalCOs     / personI8Target));
     const personI9 = totalCleared === 0 ? 0 : Math.min(1, Math.sqrt(totalCleared / personI9Target));
 
-    // Blend: equal weight across (per-job behavior, punch vol, RT vol, CO vol, tasks completed)
-    const _components = [perJobInfoAvg, personI6, personI7, personI8, personI9].filter(v => v != null);
-    const infoAvgRaw = _components.length === 0
-      ? null
-      : _components.reduce((a, b) => a + b, 0) / _components.length;
+    // ROUND-13 CHANGE: perJob weighted at 50%, the four volume signals at
+    // 12.5% each. Per-job avg captures CURRENT engagement (recent daily
+    // updates, recent punch hygiene, notes presence on active jobs); volumes
+    // capture accumulated lifetime activity which favors longer-tenured
+    // foremen and inherited jobs. Koy's gut alignment shows current
+    // engagement is the more honest measure of "uses the app the most."
+    const _perJobWeight = 0.5;
+    const _volumeWeight = 0.125; // 4 volume signals × 0.125 = 0.5
+    const _weighted = [
+      [perJobInfoAvg, _perJobWeight],
+      [personI6,      _volumeWeight],
+      [personI7,      _volumeWeight],
+      [personI8,      _volumeWeight],
+      [personI9,      _volumeWeight],
+    ].filter(([v]) => v != null);
+    const _wSum = _weighted.reduce((s, [v, w]) => s + v * w, 0);
+    const _wTot = _weighted.reduce((s, [_, w]) => s + w, 0);
+    const infoAvgRaw = _wTot === 0 ? null : _wSum / _wTot;
     const qualAvgRaw = quals.length ? quals.reduce((a,b)=>a+b,0) / quals.length : null;
     const infoAvg = _sbv2Shrink(infoAvgRaw, infos.length, shrinkK, shrinkPrior);
     const qualAvg = _sbv2Shrink(qualAvgRaw, quals.length, shrinkK, shrinkPrior);
