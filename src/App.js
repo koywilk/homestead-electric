@@ -27444,6 +27444,37 @@ function BulkEditTable({ jobs, foremenList, leadsList, onUpdateJob }) {
   );
 }
 
+// Collapsible section wrapper used across the Settings page. Defaults to
+// closed so the page is short on first load — tap a header to expand the
+// section you actually want.
+function SettingsSection({ title, accent, defaultOpen = false, children }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const c = accent || { bg: "#f8fafc", border: "#e2e8f0", text: "#0f172a" };
+  return (
+    <div style={{marginBottom: 10, borderRadius: 12, overflow: "hidden",
+                 border: `1px solid ${c.border}`, background: c.bg}}>
+      <button
+        type="button"
+        onClick={() => setOpen(o => !o)}
+        style={{
+          width: "100%", background: "transparent", border: "none",
+          padding: "12px 18px", textAlign: "left", cursor: "pointer",
+          fontFamily: "inherit", display: "flex", alignItems: "center",
+          justifyContent: "space-between", color: c.text,
+        }}>
+        <span style={{ fontFamily: "'Bebas Neue', sans-serif", fontSize: 16,
+                       letterSpacing: "0.06em" }}>
+          {title}
+        </span>
+        <span style={{ fontSize: 13, transition: "transform 0.15s",
+                       transform: open ? "rotate(90deg)" : "none",
+                       display: "inline-block" }}>▶</span>
+      </button>
+      {open && <div style={{ padding: "4px 18px 16px" }}>{children}</div>}
+    </div>
+  );
+}
+
 function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverrides, jobs, upcoming, manualTasks, onRestoreFromBackup, onRestoreFromFile, identity }) {
   const [colors, setColors] = useState({...colorOverrides});
   const [saved,  setSaved]  = useState(false);
@@ -27510,12 +27541,7 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
       </div>
 
       {/* Data Backup */}
-      <div style={{marginBottom:32,padding:"16px 18px",background:"#f0fdf4",borderRadius:12,
-        border:"1px solid #bbf7d0"}}>
-        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
-          <span style={{display:"inline-flex",alignItems:"center",color:"#166534"}}><Icon name="save" size={16} stroke={2.25}/></span>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.06em",color:"#166534"}}>DATA BACKUP</div>
-        </div>
+      <SettingsSection title="DATA BACKUP" accent={{bg:"#f0fdf4", border:"#bbf7d0", text:"#166534"}}>
         <div style={{fontSize:11,color:"#15803d",marginBottom:12,lineHeight:1.5}}>
           Download a full backup of all jobs, tasks, and settings. Do this regularly to protect your data.
         </div>
@@ -27582,15 +27608,10 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
             </>
           )}
         </div>
-      </div>
+      </SettingsSection>
 
       {/* Notification Test — verify per-device that pushes deliver and deep-link works */}
-      <div style={{marginBottom:32,padding:"16px 18px",background:"#fef3c7",borderRadius:12,
-        border:"1px solid #fde68a"}}>
-        <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
-          <span style={{display:"inline-flex",alignItems:"center",color:"#92400e"}}><Icon name="bell" size={16} stroke={2.25}/></span>
-          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.06em",color:"#92400e"}}>NOTIFICATIONS</div>
-        </div>
+      <SettingsSection title="NOTIFICATIONS" accent={{bg:"#fef3c7", border:"#fde68a", text:"#92400e"}}>
         <div style={{fontSize:11,color:"#a16207",marginBottom:12,lineHeight:1.5}}>
           Send a test push to this device. Use it on each phone to confirm notifications arrive once (not duplicated) and that tapping one opens the right job.
         </div>
@@ -27614,16 +27635,11 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
           display:"inline-flex",alignItems:"center",gap:8}}>
           <Icon name="bell" size={14}/> Send Test Notification
         </button>
-      </div>
+      </SettingsSection>
 
       {/* My Preferences — personal defaults (scoped to the current user) */}
       {identity?.id && onSaveUsers && (
-        <div style={{marginBottom:32,padding:"16px 18px",background:"#eff6ff",borderRadius:12,
-          border:"1px solid #bfdbfe"}}>
-          <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:8}}>
-            <span style={{display:"inline-flex",alignItems:"center",color:"#1e40af"}}><Icon name="user" size={16} stroke={2.25}/></span>
-            <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:16,letterSpacing:"0.06em",color:"#1e40af"}}>MY PREFERENCES</div>
-          </div>
+        <SettingsSection title="MY PREFERENCES" accent={{bg:"#eff6ff", border:"#bfdbfe", text:"#1e40af"}}>
           <div style={{fontSize:11,color:"#1d4ed8",marginBottom:12,lineHeight:1.5}}>
             Only affects your view — everyone else keeps their own defaults.
           </div>
@@ -27659,7 +27675,7 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
           <div style={{fontSize:10,color:"#64748b",marginTop:6,lineHeight:1.4}}>
             Applied the next time the schedule loads. Saved to your user record — not shared with other people.
           </div>
-        </div>
+        </SettingsSection>
       )}
 
       {noUsers && (
@@ -27670,51 +27686,47 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
       )}
 
       {adminUsers.length>0 && (
-        <div style={{marginBottom:32}}>
-          <SettingsGroupHead label="Admin"/>
+        <SettingsSection title={`ADMIN COLORS (${adminUsers.length})`}>
           {adminUsers.map(u=>(
             <SettingsPersonRow key={u.id} user={u}
               color={getColor(u.name)}
               colorOptions={COLOR_OPTIONS}
               onColorChange={col=>setColor(u.name,col)}/>
           ))}
-        </div>
+        </SettingsSection>
       )}
 
       {foremanUsers.length>0 && (
-        <div style={{marginBottom:32}}>
-          <SettingsGroupHead label="Foremen"/>
+        <SettingsSection title={`FOREMEN COLORS (${foremanUsers.length})`}>
           {foremanUsers.map(u=>(
             <SettingsPersonRow key={u.id} user={u}
               color={getColor(u.name)}
               colorOptions={COLOR_OPTIONS}
               onColorChange={col=>setColor(u.name,col)}/>
           ))}
-        </div>
+        </SettingsSection>
       )}
 
       {leadUsers.length>0 && (
-        <div style={{marginBottom:32}}>
-          <SettingsGroupHead label="Leads"/>
+        <SettingsSection title={`LEADS COLORS (${leadUsers.length})`}>
           {leadUsers.map(u=>(
             <SettingsPersonRow key={u.id} user={u}
               color={getColor(u.name)}
               colorOptions={COLOR_OPTIONS}
               onColorChange={col=>setColor(u.name,col)}/>
           ))}
-        </div>
+        </SettingsSection>
       )}
 
       {crewUsers.length>0 && (
-        <div style={{marginBottom:32}}>
-          <SettingsGroupHead label="Crew"/>
+        <SettingsSection title={`CREW COLORS (${crewUsers.length})`}>
           {crewUsers.map(u=>(
             <SettingsPersonRow key={u.id} user={u}
               color={getColor(u.name)}
               colorOptions={COLOR_OPTIONS}
               onColorChange={col=>setColor(u.name,col)}/>
           ))}
-        </div>
+        </SettingsSection>
       )}
 
       <button onClick={save}
@@ -30785,10 +30797,7 @@ function HuddleConfigPanel() {
 
   return (
     <div style={{ padding: "0 26px 24px" }}>
-      <div style={{ borderTop: `1px solid ${C.border}`, paddingTop: 24, marginTop: 8 }}>
-        <h3 style={{ fontSize: 15, fontWeight: 700, color: C.text, margin: 0, marginBottom: 4 }}>
-          Daily Huddle Email
-        </h3>
+      <SettingsSection title="DAILY HUDDLE EMAIL" accent={{bg:"#fff7ed", border:"#fed7aa", text:"#9a3412"}}>
         <div style={{ fontSize: 11, color: C.dim, marginBottom: 16 }}>
           Auto-sends at 6am Mon-Fri (Mountain Time). Each foreman gets their own
           email; both bosses are CC'd on every one.
@@ -30966,7 +30975,7 @@ function HuddleConfigPanel() {
             Saving...
           </div>
         )}
-      </div>
+      </SettingsSection>
     </div>
   );
 }
