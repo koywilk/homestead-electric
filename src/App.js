@@ -28184,33 +28184,51 @@ function ScoreboardV2Drilldown({ row }) {
       </div>
 
       {/* Per-job table */}
+      {/* ROUND-15 CHANGE: split Quality column into QC + Inspections so it's
+          obvious which signal is contributing. Forth Residence shows
+          Inspections=0 with QC=— (no QC items) instead of one ambiguous
+          "Quality=0" that looks like a QC failure. */}
       <div style={cellHead}>Per-Job Breakdown</div>
       <div style={{
         marginTop: 4, background: "var(--bg, #0f0f0f)",
         borderRadius: 6, overflow: "hidden",
       }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 80px",
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 60px 60px 70px",
                       borderBottom: "1px solid var(--border, #2a2a2a)" }}>
           <div style={cellHead}>Job</div>
           <div style={{ ...cellHead, textAlign: "right" }}>Info</div>
-          <div style={{ ...cellHead, textAlign: "right" }}>Quality</div>
+          <div style={{ ...cellHead, textAlign: "right" }}>QC</div>
+          <div style={{ ...cellHead, textAlign: "right" }}>Insp.</div>
         </div>
-        {row.jobs.map(jr => (
-          <div key={jr.jobId} style={{
-            display: "grid", gridTemplateColumns: "1fr 80px 80px",
-            borderBottom: "1px solid var(--border, #1f1f1f)",
-          }}>
-            <div style={cell}>{jr.jobName}</div>
-            <div style={{ ...cell, textAlign: "right",
-                          color: jr.info == null ? "var(--dim, #888)" : "#3b82f6" }}>
-              {jr.info == null ? "—" : `${Math.round(jr.info * 100)}`}
+        {row.jobs.map(jr => {
+          const qc   = jr.qualitySignals?.qc;
+          const insp = jr.qualitySignals?.inspections;
+          const qcVal   = qc?.applicable   ? qc.score   : null;
+          const inspVal = insp?.applicable ? insp.score : null;
+          return (
+            <div key={jr.jobId} style={{
+              display: "grid", gridTemplateColumns: "1fr 60px 60px 70px",
+              borderBottom: "1px solid var(--border, #1f1f1f)",
+            }}>
+              <div style={cell}>{jr.jobName}</div>
+              <div style={{ ...cell, textAlign: "right",
+                            color: jr.info == null ? "var(--dim, #888)" : "#3b82f6" }}
+                   title={jr.info == null ? "no applicable info signals on this job" : ""}>
+                {jr.info == null ? "—" : `${Math.round(jr.info * 100)}`}
+              </div>
+              <div style={{ ...cell, textAlign: "right",
+                            color: qcVal == null ? "var(--dim, #888)" : "#a855f7" }}
+                   title={qcVal == null ? "no QC items on this job" : qc?.detail || ""}>
+                {qcVal == null ? "—" : `${Math.round(qcVal * 100)}`}
+              </div>
+              <div style={{ ...cell, textAlign: "right",
+                            color: inspVal == null ? "var(--dim, #888)" : "#a855f7" }}
+                   title={inspVal == null ? "no inspection attempts on this job" : insp?.detail || ""}>
+                {inspVal == null ? "—" : `${Math.round(inspVal * 100)}`}
+              </div>
             </div>
-            <div style={{ ...cell, textAlign: "right",
-                          color: jr.quality == null ? "var(--dim, #888)" : "#a855f7" }}>
-              {jr.quality == null ? "—" : `${Math.round(jr.quality * 100)}`}
-            </div>
-          </div>
-        ))}
+          );
+        })}
       </div>
     </div>
   );
