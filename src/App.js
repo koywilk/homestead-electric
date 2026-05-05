@@ -25224,30 +25224,43 @@ const sbv2InfoDailyUpdates = (j, opts = {}) => {
 
 // I2: Status pill kept current. Newest of (roughStatusDate, finishStatusDate)
 // should be within the last 14 days while job is active.
-const sbv2InfoStatusFresh = (j, opts = {}) => {
-  const staleDays = opts.staleDays || 14;
-  if (!_sbv2IsActive(j)) return { applicable: false, score: 0, detail: "job not active" };
-  const dates = [j.roughStatusDate, j.finishStatusDate].map(_sbv2YMD).filter(Boolean);
-  if (dates.length === 0) return { applicable: true, score: 0, detail: "no status date set" };
-  const youngest = Math.min(...dates.map(_sbv2DaysAgo));
-  const score = youngest <= 7 ? 1 : youngest <= staleDays ? 0.5 : 0;
-  return { applicable: true, score, detail: `last status update ${youngest}d ago` };
+const sbv2InfoStatusFresh = (_j, _opts = {}) => {
+  // ROUND-2 CHANGE (3): I2 disabled. roughStatusDate / finishStatusDate are
+  // SCHEDULED dates, not "last touched" timestamps — they were rewarding
+  // future-dated schedules as "recent updates". No clean update timestamp
+  // exists on the job document, so the signal is dropped. Function kept as a
+  // stub so call sites and signal map don't need to change; always returns
+  // applicable:false so it drops out of the per-job mean.
+  return { applicable: false, score: 0, detail: "disabled — no usable update timestamp" };
 };
 
 // I3: Closed punch items have photos + checkedBy. Walks all !voided items
 // in rough+finish punch that are `done`; each should have ≥1 photo and a
 // checkedBy name. Score = % of closed items meeting the bar.
-const sbv2InfoPunchHygiene = (j) => {
-  let closed = 0, hygienic = 0;
+const sbv2InfoPunchHygiene = (j, opts = {}) => {
+  // ROUND-2 CHANGES (1+2): only count items checkedAt within lookback window
+  // (default 60 days) so historical-job items don't drag the score; half
+  // credit for photo-only or checkedBy-only, full for both. The old all-or-
+  // nothing rule sent everyone to 0 because the practice is partial.
+  const lookbackDays = opts.lookbackDays || 60;
+  const cutoff = Date.now() - lookbackDays * 86400000;
+  let closed = 0, points = 0;
   [j.roughPunch, j.finishPunch].forEach(pp => sbv2WalkPunch(pp, item => {
     if (!item || item.voided || !item.done) return;
+    const ymd = _sbv2YMD(item.checkedAt) || _sbv2YMD(item.closedAt);
+    if (!ymd) return; // can't tell when it was closed → don't count
+    const t = new Date(ymd + "T00:00:00").getTime();
+    if (isNaN(t) || t < cutoff) return; // outside window → don't count
     closed++;
     const hasPhoto   = Array.isArray(item.photos) && item.photos.length > 0;
     const hasChecker = !!(item.checkedBy && String(item.checkedBy).trim());
-    if (hasPhoto && hasChecker) hygienic++;
+    let pt = 0;
+    if (hasPhoto)   pt += 0.5;
+    if (hasChecker) pt += 0.5;
+    points += pt;
   }));
-  if (closed === 0) return { applicable: false, score: 0, detail: "no closed punch items" };
-  return { applicable: true, score: hygienic / closed, detail: `${hygienic}/${closed} closed items have photo + checkedBy` };
+  if (closed === 0) return { applicable: false, score: 0, detail: "no recently-closed punch items" };
+  return { applicable: true, score: points / closed, detail: `${points.toFixed(1)}/${closed} hygiene pts on items closed in last ${lookbackDays}d` };
 };
 
 // I4: Notes triaged + past-due inspections entered.
@@ -25314,7 +25327,7 @@ const sbv2InfoScoreForJob = (j, opts = {}) => {
 // handoff cleanliness. Linear curve: 0 items = 1.0, ≥maxOpenPunch = 0.0.
 // Only applicable once finish work has started (rough complete OR finishStatus set).
 const sbv2QualityPunchSize = (j, opts = {}) => {
-  const max = opts.maxOpenPunch || 30;
+  const max = opts.maxOpenPunch || 15; // ROUND-2 CHANGE (6): sharpened from 30
   const r = (j.roughStatus  || "").toLowerCase();
   const f = (j.finishStatus || "").toLowerCase();
   if (!(r === "complete" || f)) return { applicable: false, score: 0, detail: "rough not complete yet" };
@@ -25379,12 +25392,20 @@ const sbv2QualityScoreForJob = (j, opts = {}) => {
 // where neither score is applicable are dropped. Combined uses opts.infoWeight
 // / opts.qualityWeight (default 0.5 / 0.5); if only one side applies,
 // combined = whichever is present.
+// ROUND-2 CHANGES (4+5): filter test jobs by name; require minJobs (default 2)
+// per person to appear in rankings — drops the 1-job-quality-1.0 noise.
+const SBV2_TEST_JOB = (jobName) => {
+  const n = String(jobName || "").toLowerCase();
+  return n.includes("test job") || n.includes("demo job") || n.startsWith("test ") || n === "test" || n === "demo";
+};
 const sbv2BuildBoard = (jobs, role, opts = {}) => {
   const infoW = opts.infoWeight    ?? 0.5;
   const qualW = opts.qualityWeight ?? 0.5;
+  const minJobs = opts.minJobs ?? 2;
   const groups = new Map();
   (jobs || []).forEach(j => {
     if (!j) return;
+    if (SBV2_TEST_JOB(j.name || j.jobName)) return; // round-2: skip test jobs
     const name = (role === "lead" ? j.lead : j.foreman) || "";
     if (SBV2_EXCLUDE_NAME(name)) return;
     const info = sbv2InfoScoreForJob(j, opts);
@@ -25403,6 +25424,7 @@ const sbv2BuildBoard = (jobs, role, opts = {}) => {
   });
   const rows = [];
   for (const [name, jobScores] of groups.entries()) {
+    if (jobScores.length < minJobs) continue; // round-2: minimum job count
     const infos = jobScores.map(j => j.info).filter(s => s != null);
     const quals = jobScores.map(j => j.quality).filter(s => s != null);
     const infoAvg = infos.length ? infos.reduce((a,b)=>a+b,0) / infos.length : null;
