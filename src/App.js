@@ -25330,19 +25330,23 @@ const sbv2InfoNotesPresence = (j, opts = {}) => {
 // Square root keeps growth visible across the whole range without making
 // a 30-item job indistinguishable from a 200-item one.
 const sbv2InfoPunchPresence = (j, opts = {}) => {
-  if (!_sbv2IsActive(j)) return { applicable: false, score: 0, detail: "job not active", count: 0 };
+  // ROUND-19 CHANGE: removed _sbv2IsActive filter. Punch items created on
+  // FINISHED jobs should still count — completing a job shouldn't erase the
+  // tracking work the foreman did during it. Counts all non-voided, non-QC
+  // items in roughPunch + finishPunch regardless of job status.
   const target = opts.target || 200;
   let regularCount = 0;
   [j.roughPunch, j.finishPunch].forEach(pp => sbv2WalkPunch(pp, item => {
     if (!item || item.voided || item.fromQC) return;
     regularCount++;
   }));
-  const score = regularCount === 0 ? 0 : Math.min(1, Math.sqrt(regularCount / target));
+  if (regularCount === 0) return { applicable: false, score: 0, detail: "no punch items on this job", count: 0 };
+  const score = Math.min(1, Math.sqrt(regularCount / target));
   return {
     applicable: true,
     score,
     detail: `${regularCount} regular punch item(s) (per-job target ${target})`,
-    count: regularCount,  // ROUND-9 CHANGE: expose for person-level aggregation
+    count: regularCount,
   };
 };
 
@@ -25381,13 +25385,15 @@ const _sbv2TierScore = (count) => {
   if (count <= 8) return 0.33;
   return 0.0;
 };
-// ROUND-17 CHANGE: QC has its own SHARPER tier — per Koy, QC items called
-// should "really sting" because they represent defects in the lead's work.
-// One QC item already drops you to 0.4. Five items = 0.1. Nine+ = 0.0.
+// ROUND-19 CHANGE: new QC tier breakpoints per Koy.
+//   Tier 1 (0-1 items)   = 1.0   — clean / one-off, not a real signal
+//   Tier 2 (2-14 items)  = 0.5   — moderate quality issue
+//   Tier 3 (15-25 items) = 0.2   — bad
+//   Tier 4 (26+ items)   = 0.0   — terrible
 const _sbv2QCTier = (count) => {
-  if (count <= 0) return 1.0;
-  if (count <= 3) return 0.4;
-  if (count <= 8) return 0.1;
+  if (count <= 1)  return 1.0;
+  if (count <= 14) return 0.5;
+  if (count <= 25) return 0.2;
   return 0.0;
 };
 
@@ -25554,14 +25560,12 @@ const sbv2BuildBoard = (jobs, role, opts = {}) => {
     // visible job count from 17 → 12.
     const key = name.trim();
     if (!groups.has(key)) groups.set(key, []);
-    // ROUND-11 CHANGE: capture RT and CO counts on each job-score so we can
-    // sum them at the person level. ROUND-12 CHANGE: also capture cleared-task
-    // count (j.clearedTasks holds task IDs that have been completed). Active
-    // jobs only — matches I6 active-only behavior.
-    const _isActive = _sbv2IsActive(j);
-    const rtCount = _isActive && Array.isArray(j.returnTrips)   ? j.returnTrips.length    : 0;
-    const coCount = _isActive && Array.isArray(j.changeOrders)  ? j.changeOrders.length   : 0;
-    const clearedCount = _isActive && Array.isArray(j.clearedTasks) ? j.clearedTasks.length : 0;
+    // ROUND-19 CHANGE: removed _isActive filter from RT / CO / cleared-task
+    // counts. Same logic as I6 — completing a job shouldn't erase the work
+    // the foreman did. Counts ALL of these across every job they ran.
+    const rtCount      = Array.isArray(j.returnTrips)   ? j.returnTrips.length    : 0;
+    const coCount      = Array.isArray(j.changeOrders)  ? j.changeOrders.length   : 0;
+    const clearedCount = Array.isArray(j.clearedTasks)  ? j.clearedTasks.length   : 0;
     groups.get(key).push({
       jobId: j.id,
       jobName: j.name || j.jobName || j.id,
@@ -28358,7 +28362,7 @@ function ScoreboardV2HowItWorks() {
 
           <div style={sectionH}>Quality — how clean your work delivers</div>
           <div style={row}><span style={tag}>QC count</span>
-            <span>Number of QC items called on your jobs (the items, not whether they got fixed). Tiered: 0 = 100%, 1-3 = 40%, 4-8 = 10%, 9+ = 0%. Stings hard.</span></div>
+            <span>Number of QC items called on your jobs (the items, not whether they got fixed). Tiered: 0-1 = 100%, 2-14 = 50%, 15-25 = 20%, 26+ = 0%. Stings hard.</span></div>
           <div style={row}><span style={tag}>Inspections</span>
             <span>First-try pass rate per phase (rough, final). A pass = 100%. A fail is tiered by inspection size: 1-3 items = 67%, 4-8 = 33%, 9+ = 0%.</span></div>
 
