@@ -615,9 +615,9 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules }
   printPanelSchedule._lastHtml = { html, jobName, panelLabel: panelLabel||"Lighting panel" };
 }
 
-// One-shot download of the lighting panel schedule. Same builder, captures
-// output instead of opening a window.
-function downloadPanelSchedule(args) {
+// One-shot PDF download for the lighting panel schedule. Same capture-then-
+// render-to-PDF strategy as downloadElectricalPanel.
+async function downloadPanelSchedule(args) {
   const origOpen = window.open;
   let captured = null;
   window.open = () => ({
@@ -630,14 +630,16 @@ function downloadPanelSchedule(args) {
   try { printPanelSchedule(args); } finally { window.open = origOpen; }
   if (!captured) return false;
   const safe = (s) => String(s||"").replace(/[\\/:*?"<>|]+/g, " ").trim();
-  const filename = `${safe(args?.panelLabel||"Lighting panel")} — ${safe(args?.jobName||"schedule")}.html`;
-  const blob = new Blob([captured], { type: "text/html;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = filename; document.body.appendChild(a);
-  a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  return true;
+  const filename = `${safe(args?.panelLabel||"Lighting panel")} — ${safe(args?.jobName||"schedule")}.pdf`;
+  try {
+    if (typeof toast !== "undefined" && toast.info) toast.info("Building PDF…");
+    await _saveHtmlAsPdf(captured, filename);
+    if (typeof toast !== "undefined" && toast.success) toast.success(`Saved ${filename}`);
+    return true;
+  } catch (e) {
+    if (typeof toast !== "undefined" && toast.error) toast.error("PDF download failed: " + e.message);
+    return false;
+  }
 }
 
 // ─── Electrical (load center) panel schedule print ───────────────────────
@@ -761,58 +763,93 @@ function printElectricalPanel({ jobName, jobAddress, panel }) {
   printElectricalPanel._lastHtml = { html, jobName, panelLabel: panel?.label || "Panel" };
 }
 
-// Save the current panel schedule (whatever printElectricalPanel rendered last)
-// as a standalone HTML file. Browsers can open it directly, or you can attach
-// it to an email — file is fully self-contained, no external resources needed
-// except the company icon (loaded from / on disk-open which gracefully hides
-// when missing). Filename: "Panel B — Robison residence.html".
-function downloadElectricalPanelLast() {
-  const last = printElectricalPanel._lastHtml;
-  if (!last) return false;
-  const safe = (s) => String(s||"").replace(/[\\/:*?"<>|]+/g, " ").trim();
-  const filename = `${safe(last.panelLabel)} — ${safe(last.jobName||"panel schedule")}.html`;
-  const blob = new Blob([last.html], { type: "text/html;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = filename; document.body.appendChild(a);
-  a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  return true;
+// Lazy-load a script from CDN exactly once. Resolved promise = window has
+// the global the script exposes. Used for html2canvas + jspdf which we don't
+// pull in via npm (keeps bundle small; PDF download is rare).
+function _loadScriptOnce(src) {
+  if (document.querySelector(`script[data-hs-src="${src}"]`)) {
+    return new Promise((resolve) => {
+      const tag = document.querySelector(`script[data-hs-src="${src}"]`);
+      if (tag.dataset.hsLoaded === "1") return resolve();
+      tag.addEventListener("load", () => resolve());
+    });
+  }
+  return new Promise((resolve, reject) => {
+    const s = document.createElement("script");
+    s.src = src; s.dataset.hsSrc = src;
+    s.onload = () => { s.dataset.hsLoaded = "1"; resolve(); };
+    s.onerror = () => reject(new Error("Failed to load " + src));
+    document.head.appendChild(s);
+  });
 }
 
-// One-shot download — builds the HTML on demand (without opening a print
-// window) and saves it. Used by the in-app DOWNLOAD button so the user
-// doesn't have to print first to get a file.
-function downloadElectricalPanel({ jobName, jobAddress, panel }) {
-  // Re-run the print builder in "silent" mode by temporarily replacing the
-  // window.open call. Cleaner than duplicating the HTML logic.
+// Render an HTML string to a PDF and save it. Strategy: drop the HTML into a
+// hidden iframe so the styles render correctly, html2canvas the iframe body,
+// then add the canvas as an image to a jsPDF letter-size page. The result
+// looks identical to the in-browser print preview but is a real .pdf file
+// the user can email or save to a job folder.
+async function _saveHtmlAsPdf(html, filename) {
+  await _loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/html2canvas/1.4.1/html2canvas.min.js");
+  await _loadScriptOnce("https://cdnjs.cloudflare.com/ajax/libs/jspdf/2.5.1/jspdf.umd.min.js");
+  if (typeof window.html2canvas !== "function" || !window.jspdf?.jsPDF) {
+    throw new Error("PDF libraries failed to load. Check your connection and try again.");
+  }
+  // Hidden iframe with the panel HTML — sized to letter portrait at 96 DPI
+  // so html2canvas captures the same layout the print window shows.
+  const iframe = document.createElement("iframe");
+  iframe.style.cssText = "position:fixed;left:-99999px;top:0;width:816px;height:1056px;border:0;";
+  document.body.appendChild(iframe);
+  try {
+    iframe.contentDocument.open();
+    iframe.contentDocument.write(html);
+    iframe.contentDocument.close();
+    // Give the browser a beat to lay out + load the logo image.
+    await new Promise(r => setTimeout(r, 350));
+    const canvas = await window.html2canvas(iframe.contentDocument.body, {
+      scale: 2, useCORS: true, backgroundColor: "#ffffff", logging: false,
+    });
+    const { jsPDF } = window.jspdf;
+    const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
+    const pdfW = pdf.internal.pageSize.getWidth();
+    const pdfH = pdf.internal.pageSize.getHeight();
+    const ratio = canvas.width / canvas.height;
+    let imgW = pdfW - 40, imgH = imgW / ratio;
+    if (imgH > pdfH - 40) { imgH = pdfH - 40; imgW = imgH * ratio; }
+    pdf.addImage(canvas.toDataURL("image/jpeg", 0.95), "JPEG",
+      (pdfW - imgW) / 2, 20, imgW, imgH);
+    pdf.save(filename);
+  } finally {
+    iframe.remove();
+  }
+}
+
+// One-shot PDF download for the electrical panel schedule. Re-runs the print
+// builder in "silent" mode (intercepts window.open) to capture the HTML, then
+// converts to a real .pdf via _saveHtmlAsPdf.
+async function downloadElectricalPanel({ jobName, jobAddress, panel }) {
   const origOpen = window.open;
   let captured = null;
-  window.open = () => {
-    const fakeWin = {
-      document: {
-        open: () => {},
-        write: (h) => { captured = h; },
-        close: () => {},
-      },
-    };
-    return fakeWin;
-  };
-  try {
-    printElectricalPanel({ jobName, jobAddress, panel });
-  } finally {
-    window.open = origOpen;
-  }
+  window.open = () => ({
+    document: {
+      open: () => {},
+      write: (h) => { captured = h; },
+      close: () => {},
+    },
+  });
+  try { printElectricalPanel({ jobName, jobAddress, panel }); }
+  finally { window.open = origOpen; }
   if (!captured) return false;
   const safe = (s) => String(s||"").replace(/[\\/:*?"<>|]+/g, " ").trim();
-  const filename = `${safe(panel?.label||"Panel")} — ${safe(jobName||"panel schedule")}.html`;
-  const blob = new Blob([captured], { type: "text/html;charset=utf-8" });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement("a");
-  a.href = url; a.download = filename; document.body.appendChild(a);
-  a.click(); a.remove();
-  setTimeout(() => URL.revokeObjectURL(url), 1000);
-  return true;
+  const filename = `${safe(panel?.label||"Panel")} — ${safe(jobName||"panel schedule")}.pdf`;
+  try {
+    if (typeof toast !== "undefined" && toast.info) toast.info("Building PDF…");
+    await _saveHtmlAsPdf(captured, filename);
+    if (typeof toast !== "undefined" && toast.success) toast.success(`Saved ${filename}`);
+    return true;
+  } catch (e) {
+    if (typeof toast !== "undefined" && toast.error) toast.error("PDF download failed: " + e.message);
+    return false;
+  }
 }
 
 // Catalog of common panel sizes. First number = breaker slots, second =
