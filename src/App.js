@@ -9986,6 +9986,7 @@ const WIRE_ORDER  = {"":0,"14/2":1,"14/3":2,"12/2":3,"12/3":4,"10/2":5,"10/3":6,
 
 function HomeRunLevel({rows,onChange,label,customPanels}) {
 
+  const [bulkOpen, setBulkOpen] = useState(false);
   const panelOrder = getPanelOrder(customPanels);
   const sortRows = (arr) => [...arr].sort((a,b)=>{
     // Sort by wire size descending (larger wire first), then alphabetically by name
@@ -10088,10 +10089,151 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
           {rows.length===0&&<div style={{fontSize:11,color:C.muted,fontStyle:"italic"}}>No rows yet</div>}
         </>);
       })()}
-      <Btn onClick={addRow} variant="add" style={{fontSize:11,padding:"3px 10px",marginTop:6}}>+ Add Row</Btn>
+      <div style={{display:"flex",gap:6,marginTop:6,flexWrap:"wrap"}}>
+        <Btn onClick={addRow} variant="add" style={{fontSize:11,padding:"3px 10px"}}>+ Add Row</Btn>
+        <Btn onClick={()=>setBulkOpen(true)} variant="ghost"
+          style={{fontSize:11,padding:"3px 10px",borderColor:C.border,color:C.dim}}>
+          Bulk paste
+        </Btn>
+      </div>
+      {bulkOpen && (
+        <BulkPasteHomeRuns
+          customPanels={customPanels}
+          onCancel={()=>setBulkOpen(false)}
+          onAdd={(newRows)=>{
+            onChange(sortRows([...rows, ...newRows.map(r=>({...r,id:uid()}))]));
+            setBulkOpen(false);
+          }}/>
+      )}
     </div>
   );
 
+}
+
+
+// Modal-style bulk-paste editor for home runs. Accepts a paste with rows on
+// any common format (wire+name in one line, or wire+name+status spread across
+// 2–3 lines like Koy's Apple-Notes export). Parser is forgiving — extracts
+// wire-shaped tokens (e.g. "12/2", "10/3", "6/2") and treats whatever's
+// between them as the name + optional status. Preview before commit so the
+// user can verify nothing got mis-grouped.
+function BulkPasteHomeRuns({ customPanels, onCancel, onAdd }) {
+  const [text, setText] = useState("");
+  const [defaultPanel, setDefaultPanel] = useState("");
+
+  // Wire-size pattern: digits/digits OR #digits (matches WIRE_SIZES list).
+  const WIRE_RE = /^(?:\d+\/\d+|#\d+|\d+\/0)$/;
+
+  const parsed = (() => {
+    const out = [];
+    if (!text.trim()) return out;
+    // Split on newlines, comma rows, or pipe rows. Trim each token.
+    const tokens = text.split(/[\n,|]/).map(s=>s.trim()).filter(Boolean);
+    let i = 0;
+    while (i < tokens.length) {
+      const tok = tokens[i];
+      if (WIRE_RE.test(tok)) {
+        const wire = tok;
+        // Walk forward until the next wire token — those are name + maybe status.
+        let nameParts = [];
+        let status = "Pulled"; // default — most rows in real life are pulled
+        let length = "";
+        i++;
+        while (i < tokens.length && !WIRE_RE.test(tokens[i])) {
+          const t = tokens[i];
+          // Status detection: starts with "Pulled" (with optional length suffix)
+          // or any other recognizable status word.
+          const m = t.match(/^pulled\b\s*(\d+)?\s*['′]?\s*$/i);
+          if (m) {
+            status = "Pulled";
+            if (m[1]) length = m[1];
+          } else if (/^need\s*specs?\b/i.test(t)) {
+            status = "Need Specs";
+          } else if (/^pulled\s+\d+/i.test(t)) {
+            // "Pulled 35'" with extra trailing chars
+            status = "Pulled";
+            const lm = t.match(/(\d+)/);
+            if (lm) length = lm[1];
+          } else if (t) {
+            // Otherwise it's part of the name
+            nameParts.push(t);
+          }
+          i++;
+        }
+        if (nameParts.length === 0) continue;
+        const baseName = nameParts.join(" ").trim();
+        const name = length ? `${baseName} (${length}')` : baseName;
+        out.push({ wire, name, status, panel: defaultPanel, num: 0 });
+      } else {
+        i++;
+      }
+    }
+    return out;
+  })();
+
+  return (
+    <div onClick={onCancel}
+      style={{position:"fixed",inset:0,background:"rgba(17,24,39,0.65)",zIndex:9999,
+        display:"flex",alignItems:"center",justifyContent:"center",padding:20,backdropFilter:"blur(4px)"}}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{background:"var(--card)",borderRadius:14,padding:"22px 26px",width:560,maxWidth:"95vw",
+          maxHeight:"90vh",overflow:"auto",border:`1px solid ${C.border}`,
+          boxShadow:"0 20px 50px rgba(0,0,0,0.35)"}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)",marginBottom:6}}>
+          BULK PASTE HOME RUNS
+        </div>
+        <div style={{fontSize:11,color:C.dim,marginBottom:12,lineHeight:1.5}}>
+          Paste a list — works with wire/name on one line, or each row spread across multiple lines (wire / name / "Pulled 35'"). Example:<br/>
+          <code style={{background:C.surface,padding:"1px 5px",borderRadius:4,fontSize:10}}>10/3 dryer Pulled 35'</code>
+        </div>
+        <div style={{display:"flex",gap:8,marginBottom:10,alignItems:"center",flexWrap:"wrap"}}>
+          <span style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.1em"}}>DEFAULT PANEL</span>
+          <select value={defaultPanel} onChange={e=>setDefaultPanel(e.target.value)}
+            style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
+              padding:"4px 8px",fontSize:11,color:C.text,fontFamily:"inherit",outline:"none"}}>
+            {getPanelOpts(customPanels).map(o=><option key={o} value={o}>{o||"— none —"}</option>)}
+          </select>
+        </div>
+        <textarea value={text} onChange={e=>setText(e.target.value)}
+          placeholder="Paste your home-run list here…"
+          style={{width:"100%",minHeight:180,padding:"10px 12px",
+            background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
+            color:C.text,fontSize:12,fontFamily:"'SF Mono', Menlo, monospace",
+            resize:"vertical",outline:"none",lineHeight:1.5}}/>
+        <div style={{marginTop:12,marginBottom:12,fontSize:11,color:C.dim}}>
+          <strong style={{color:parsed.length>0?C.green:C.muted}}>{parsed.length} rows detected</strong>
+        </div>
+        {parsed.length > 0 && (
+          <div style={{maxHeight:180,overflowY:"auto",border:`1px solid ${C.border}`,
+            borderRadius:7,padding:6,marginBottom:14,background:C.surface}}>
+            {parsed.map((p,i)=>(
+              <div key={i} style={{display:"flex",gap:8,fontSize:11,padding:"3px 6px",
+                borderBottom:i<parsed.length-1?`0.5px solid ${C.border}`:"none"}}>
+                <span style={{minWidth:42,color:C.muted,fontFamily:"monospace"}}>{p.wire}</span>
+                <span style={{flex:1,color:C.text}}>{p.name}</span>
+                <span style={{fontSize:9,color:p.status==="Pulled"?C.green:p.status?"#dc2626":C.muted,
+                  background:p.status==="Pulled"?"rgba(34,197,94,0.12)":"transparent",
+                  padding:"1px 6px",borderRadius:99}}>{p.status||"—"}</span>
+              </div>
+            ))}
+          </div>
+        )}
+        <div style={{display:"flex",gap:8}}>
+          <button onClick={onCancel}
+            style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
+              padding:"9px 16px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim,
+              fontFamily:"inherit",flex:1}}>Cancel</button>
+          <button onClick={()=>onAdd(parsed)} disabled={parsed.length===0}
+            style={{background:parsed.length===0?C.border:C.accent,border:"none",borderRadius:8,
+              color:"#fff",padding:"9px 16px",cursor:parsed.length===0?"default":"pointer",
+              fontSize:11,fontWeight:800,fontFamily:"inherit",flex:1,letterSpacing:"0.04em",
+              opacity:parsed.length===0?0.5:1}}>
+            Add {parsed.length} rows
+          </button>
+        </div>
+      </div>
+    </div>
+  );
 }
 
 
