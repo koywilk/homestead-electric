@@ -27971,6 +27971,260 @@ function Scoreboard({ jobs, users=[], identity }) {
   );
 }
 
+
+// ════════════════════════════════════════════════════════════════════════
+// ScoreboardV2 — Phase 2 component (live standings UI).
+//
+// Renders the behavior-driven scoreboard built on the pure functions above.
+// Three views via sort toggle: Combined / Info / Quality. Two boards via
+// role toggle: Foremen / Leads. Click a row to expand the per-job drilldown.
+//
+// This is additive — old Scoreboard tab stays put (sunset is Phase 4 once
+// V2 is trusted). No Firestore writes, no shared state with old Scoreboard.
+// Memoized off `jobs` so re-renders are cheap.
+// ════════════════════════════════════════════════════════════════════════
+function ScoreboardV2({ jobs, users = [], identity }) {
+  const [role, setRole]     = useState("foreman");      // "foreman" | "lead"
+  const [sortBy, setSortBy] = useState("combined");     // "combined" | "info" | "quality"
+  const [expanded, setExpanded] = useState({});         // {name: bool}
+
+  const result = useMemo(() => sbv2Build(jobs), [jobs]);
+
+  const rows = useMemo(() => {
+    const list = role === "foreman" ? result.foremen : result.leads;
+    return [...list].sort((a, b) => (b[sortBy] ?? -1) - (a[sortBy] ?? -1));
+  }, [result, role, sortBy]);
+
+  // Display helpers — score 0..1 → percent string; null/undefined → "—".
+  const fmt = v => (v == null ? "—" : `${Math.round(v * 100)}`);
+  // Color ramp — index 0 (top) green, last red. Used for rank pill background.
+  const rankColor = (i, total) => {
+    if (total <= 1) return "#22c55e";
+    const t = i / Math.max(1, total - 1);
+    if (t < 0.34) return "#22c55e";
+    if (t < 0.67) return "#eab308";
+    return "#ef4444";
+  };
+
+  const ScoreBar = ({ value, color = "var(--accent, #22c55e)" }) => {
+    const pct = value == null ? 0 : Math.max(0, Math.min(100, value * 100));
+    return (
+      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 110 }}>
+        <div style={{
+          flex: 1, height: 6, borderRadius: 3,
+          background: "var(--border, #2a2a2a)", overflow: "hidden",
+        }}>
+          <div style={{
+            width: `${pct}%`, height: "100%", background: color,
+            transition: "width 0.3s ease",
+          }} />
+        </div>
+        <div style={{ fontSize: 11, fontWeight: 700, minWidth: 26, textAlign: "right",
+                      color: value == null ? "var(--dim, #666)" : "var(--text, #ddd)" }}>
+          {fmt(value)}
+        </div>
+      </div>
+    );
+  };
+
+  const toggleBtn = (active, label, onClick) => (
+    <button onClick={onClick} style={{
+      padding: "6px 14px", fontSize: 12, fontWeight: active ? 700 : 500,
+      fontFamily: "inherit", cursor: "pointer", border: "none", borderRadius: 6,
+      background: active ? "var(--accent, #22c55e)" : "transparent",
+      color: active ? "#000" : "var(--dim, #888)",
+      transition: "all 0.15s",
+    }}>{label}</button>
+  );
+
+  return (
+    <div style={{ padding: 20, fontFamily: "inherit" }}>
+      {/* Title + explanation */}
+      <div style={{ marginBottom: 18 }}>
+        <div style={{ fontSize: 22, fontWeight: 800, color: "var(--text, #ddd)", letterSpacing: "0.01em" }}>
+          Scoreboard V2
+        </div>
+        <div style={{ fontSize: 11, color: "var(--dim, #888)", marginTop: 4 }}>
+          Behavior-driven competition. Info = how much you use the app. Quality = how clean your work delivers. Combined = both.
+        </div>
+      </div>
+
+      {/* Role toggle */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 8, padding: 4,
+                    background: "var(--card, #1a1a1a)", borderRadius: 8, width: "fit-content" }}>
+        {toggleBtn(role === "foreman", "Foremen", () => setRole("foreman"))}
+        {toggleBtn(role === "lead",    "Leads",   () => setRole("lead"))}
+      </div>
+
+      {/* Sort toggle */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 16, padding: 4,
+                    background: "var(--card, #1a1a1a)", borderRadius: 8, width: "fit-content" }}>
+        {toggleBtn(sortBy === "combined", "Combined",            () => setSortBy("combined"))}
+        {toggleBtn(sortBy === "info",     "Info (app usage)",    () => setSortBy("info"))}
+        {toggleBtn(sortBy === "quality",  "Quality (clean work)",() => setSortBy("quality"))}
+      </div>
+
+      {/* Empty state */}
+      {rows.length === 0 && (
+        <div style={{ padding: 30, textAlign: "center", color: "var(--dim, #888)", fontSize: 13 }}>
+          No {role === "foreman" ? "foremen" : "leads"} have enough data to rank yet.
+        </div>
+      )}
+
+      {/* Ranked rows */}
+      {rows.map((row, i) => {
+        const isExp = !!expanded[row.name];
+        const color = rankColor(i, rows.length);
+        return (
+          <div key={row.name} style={{
+            background: "var(--card, #1a1a1a)", borderRadius: 10,
+            border: "1px solid var(--border, #2a2a2a)", marginBottom: 8,
+            overflow: "hidden",
+          }}>
+            {/* Row header */}
+            <div onClick={() => setExpanded(e => ({ ...e, [row.name]: !e[row.name] }))}
+                 style={{
+                   display: "grid",
+                   gridTemplateColumns: "48px 1fr 140px 140px 90px 24px",
+                   gap: 14, alignItems: "center", padding: "12px 14px",
+                   cursor: "pointer",
+                 }}>
+              {/* Rank pill */}
+              <div style={{
+                width: 36, height: 36, borderRadius: "50%",
+                background: `${color}22`, border: `2px solid ${color}`,
+                display: "flex", alignItems: "center", justifyContent: "center",
+                fontWeight: 800, fontSize: 14, color,
+              }}>{i + 1}</div>
+
+              {/* Name + jobs count */}
+              <div>
+                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text, #ddd)" }}>
+                  {row.name}
+                </div>
+                <div style={{ fontSize: 10, color: "var(--dim, #888)", marginTop: 2 }}>
+                  {row.jobCount} job{row.jobCount === 1 ? "" : "s"}
+                </div>
+              </div>
+
+              {/* Info bar */}
+              <div>
+                <div style={{ fontSize: 9, color: "var(--dim, #888)", textTransform: "uppercase",
+                              letterSpacing: "0.06em", fontWeight: 700, marginBottom: 3 }}>Info</div>
+                <ScoreBar value={row.info} color="#3b82f6" />
+              </div>
+
+              {/* Quality bar */}
+              <div>
+                <div style={{ fontSize: 9, color: "var(--dim, #888)", textTransform: "uppercase",
+                              letterSpacing: "0.06em", fontWeight: 700, marginBottom: 3 }}>Quality</div>
+                <ScoreBar value={row.quality} color="#a855f7" />
+              </div>
+
+              {/* Combined */}
+              <div style={{ textAlign: "right" }}>
+                <div style={{ fontSize: 9, color: "var(--dim, #888)", textTransform: "uppercase",
+                              letterSpacing: "0.06em", fontWeight: 700, marginBottom: 3 }}>Combined</div>
+                <div style={{ fontSize: 22, fontWeight: 800, color, lineHeight: 1 }}>
+                  {fmt(row.combined)}
+                </div>
+              </div>
+
+              {/* Expand chevron */}
+              <div style={{
+                fontSize: 14, color: "var(--dim, #888)",
+                transition: "transform 0.2s",
+                transform: isExp ? "rotate(90deg)" : "rotate(0deg)",
+              }}>›</div>
+            </div>
+
+            {/* Drilldown */}
+            {isExp && <ScoreboardV2Drilldown row={row} />}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+// Per-person drilldown — shows the person-level signal inputs (volumes) and a
+// per-job table with each job's info/quality scores. Read-only.
+function ScoreboardV2Drilldown({ row }) {
+  const fmt2 = v => (v == null ? "—" : v.toFixed(2));
+  const cell = { fontSize: 11, color: "var(--text, #ddd)", padding: "6px 10px" };
+  const cellDim = { ...cell, color: "var(--dim, #888)" };
+  const cellHead = { ...cell, fontSize: 9, fontWeight: 700, textTransform: "uppercase",
+                     letterSpacing: "0.06em", color: "var(--dim, #888)" };
+
+  return (
+    <div style={{ padding: "0 14px 14px", borderTop: "1px solid var(--border, #2a2a2a)" }}>
+      {/* Person-level signal inputs */}
+      <div style={{ marginTop: 12, marginBottom: 14 }}>
+        <div style={cellHead}>Person-Level Volume Inputs</div>
+        <div style={{
+          display: "grid", gridTemplateColumns: "repeat(4, 1fr)", gap: 8, marginTop: 6,
+        }}>
+          <DrillStat label="Punch items" total={row.totalRegularPunch} score={row.personI6}/>
+          <DrillStat label="RTs created" total={row.totalRTs}          score={row.personI7}/>
+          <DrillStat label="COs created" total={row.totalCOs}          score={row.personI8}/>
+          <DrillStat label="Tasks done"  total={row.totalCleared}      score={row.personI9}/>
+        </div>
+        <div style={{ ...cellDim, fontSize: 10, marginTop: 8 }}>
+          Per-job rate: {fmt2(row.perJobInfoAvg)} (50% of info) — averaged across {row.jobs.length} job(s)
+        </div>
+      </div>
+
+      {/* Per-job table */}
+      <div style={cellHead}>Per-Job Breakdown</div>
+      <div style={{
+        marginTop: 4, background: "var(--bg, #0f0f0f)",
+        borderRadius: 6, overflow: "hidden",
+      }}>
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 80px 80px",
+                      borderBottom: "1px solid var(--border, #2a2a2a)" }}>
+          <div style={cellHead}>Job</div>
+          <div style={{ ...cellHead, textAlign: "right" }}>Info</div>
+          <div style={{ ...cellHead, textAlign: "right" }}>Quality</div>
+        </div>
+        {row.jobs.map(jr => (
+          <div key={jr.jobId} style={{
+            display: "grid", gridTemplateColumns: "1fr 80px 80px",
+            borderBottom: "1px solid var(--border, #1f1f1f)",
+          }}>
+            <div style={cell}>{jr.jobName}</div>
+            <div style={{ ...cell, textAlign: "right",
+                          color: jr.info == null ? "var(--dim, #888)" : "#3b82f6" }}>
+              {jr.info == null ? "—" : `${Math.round(jr.info * 100)}`}
+            </div>
+            <div style={{ ...cell, textAlign: "right",
+                          color: jr.quality == null ? "var(--dim, #888)" : "#a855f7" }}>
+              {jr.quality == null ? "—" : `${Math.round(jr.quality * 100)}`}
+            </div>
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function DrillStat({ label, total, score }) {
+  const pct = score == null ? 0 : Math.max(0, Math.min(1, score)) * 100;
+  return (
+    <div style={{ background: "var(--bg, #0f0f0f)", borderRadius: 6, padding: 10 }}>
+      <div style={{ fontSize: 9, color: "var(--dim, #888)", textTransform: "uppercase",
+                    letterSpacing: "0.06em", fontWeight: 700 }}>{label}</div>
+      <div style={{ fontSize: 18, fontWeight: 800, color: "var(--text, #ddd)", marginTop: 4 }}>
+        {total ?? 0}
+      </div>
+      <div style={{ marginTop: 5, height: 4, borderRadius: 2,
+                    background: "var(--border, #2a2a2a)", overflow: "hidden" }}>
+        <div style={{ width: `${pct}%`, height: "100%", background: "#22c55e",
+                      transition: "width 0.3s" }} />
+      </div>
+    </div>
+  );
+}
+
 function ActivityLog({ jobs, embedded = false }) {
   const [filter, setFilter] = useState("");
   // Some jobs have updated_at as a Firestore Timestamp object
@@ -33275,12 +33529,13 @@ function App() {
               ...(can(identity,"settings.view")?[{key:"huddle",label:"Huddle"}]:[]),
               ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors"}]:[]),
               ...(can(identity,"scoreboard.view")?[{key:"scoreboard",label:"Scoreboard"}]:[]),
+              ...(can(identity,"scoreboard.view")?[{key:"scoreboardv2",label:"Scoreboard V2"}]:[]),
               ...(can(identity,"settings.view")?[{key:"settings",label:"Settings",icon:"settings"}]:[]),
             ]
         ).map(({key,label,icon})=>{
           const active = view===key;
           return (
-            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="tasks"?openTasks:key==="nav"?openNav:key==="huddle"?()=>setView("huddle"):key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):openSettings}
+            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="tasks"?openTasks:key==="nav"?openNav:key==="huddle"?()=>setView("huddle"):key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):key==="scoreboardv2"?()=>setView("scoreboardv2"):openSettings}
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
@@ -34540,6 +34795,10 @@ function App() {
 
       {view==="scoreboard"&&can(identity,"scoreboard.view")&&(
         <Scoreboard jobs={jobs} users={users} identity={identity}/>
+      )}
+
+      {view==="scoreboardv2"&&can(identity,"scoreboard.view")&&(
+        <ScoreboardV2 jobs={jobs} users={users} identity={identity}/>
       )}
 
       {view==="settings"&&can(identity,"settings.view")&&(
