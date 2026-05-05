@@ -25267,21 +25267,12 @@ const sbv2InfoPunchHygiene = (j, opts = {}) => {
 //   sub-A: jobNotes lines older than 7d should be triaged (line.promoted set).
 //   sub-B: inspections whose target date is in the past should have results.
 // Each sub-signal is null if N/A; combined = mean of whichever subs apply.
+// ROUND-3 CHANGE: triage sub-signal dropped. The old version returned null
+// when oldLines === 0, which let foremen who DON'T write notes drop the
+// signal entirely (and unfairly penalized foremen who DO write notes for
+// not promoting all of them). Note engagement is now measured by I5 below;
+// this signal is now solely past-due-inspections-entered.
 const sbv2InfoTriageAndInspections = (j) => {
-  let oldLines = 0, oldUntriaged = 0;
-  (Array.isArray(j.jobNotes) ? j.jobNotes : []).forEach(n => {
-    if (!n || n.archived || n.deleted) return;
-    (Array.isArray(n.lines) ? n.lines : []).forEach(l => {
-      if (!l) return;
-      const ageDays = _sbv2DaysAgo(_sbv2YMD(l.createdAt));
-      if (ageDays > 7) {
-        oldLines++;
-        if (!l.promoted) oldUntriaged++;
-      }
-    });
-  });
-  const triageScore = oldLines === 0 ? null : Math.max(0, 1 - (oldUntriaged / oldLines));
-
   let pastDue = 0, entered = 0;
   const checkOne = (target, result) => {
     const ymd = _sbv2YMD(target);
@@ -25293,18 +25284,37 @@ const sbv2InfoTriageAndInspections = (j) => {
   };
   checkOne(j.fourWayTargetDate,         j.roughInspectionResult);
   checkOne(j.finalInspectionTargetDate, j.finalInspectionResult);
-  const inspScore = pastDue === 0 ? null : (entered / pastDue);
+  if (pastDue === 0) return { applicable: false, score: 0, detail: "no past-due inspections" };
+  return { applicable: true, score: entered / pastDue, detail: `inspections ${entered}/${pastDue} past-due entered` };
+};
 
-  if (triageScore == null && inspScore == null) {
-    return { applicable: false, score: 0, detail: "no old notes or past-due inspections" };
-  }
-  const parts = [triageScore, inspScore].filter(s => s != null);
-  const avg = parts.reduce((a,b) => a+b, 0) / parts.length;
-  const detail = [
-    triageScore != null ? `triage ${(triageScore*100).toFixed(0)}% (${oldUntriaged}/${oldLines} old lines untriaged)` : null,
-    inspScore   != null ? `inspections ${(inspScore*100).toFixed(0)}% (${entered}/${pastDue} past-due entered)`     : null,
-  ].filter(Boolean).join("; ");
-  return { applicable: true, score: avg, detail };
+// I5: Notes presence on active jobs (NEW in round 3).
+// For an active job, we expect at least one note added in the last 30 days.
+// Score = 1.0 if there's any recent line, 0.0 if not. This replaces the
+// triage hygiene signal — instead of measuring "do you triage your notes",
+// we measure "do you write notes at all on jobs you're running." Foremen
+// who use the notes feature get credit; foremen who don't get a 0 here
+// instead of dropping out of the mean. Not applicable to inactive jobs.
+const sbv2InfoNotesPresence = (j, opts = {}) => {
+  const lookbackDays = opts.lookbackDays || 30;
+  if (!_sbv2IsActive(j)) return { applicable: false, score: 0, detail: "job not active" };
+  const cutoff = Date.now() - lookbackDays * 86400000;
+  let recentLines = 0;
+  (Array.isArray(j.jobNotes) ? j.jobNotes : []).forEach(n => {
+    if (!n || n.archived || n.deleted) return;
+    (Array.isArray(n.lines) ? n.lines : []).forEach(l => {
+      if (!l) return;
+      const ymd = _sbv2YMD(l.createdAt);
+      if (!ymd) return;
+      const t = new Date(ymd + "T00:00:00").getTime();
+      if (!isNaN(t) && t >= cutoff) recentLines++;
+    });
+  });
+  return {
+    applicable: true,
+    score: recentLines > 0 ? 1 : 0,
+    detail: `${recentLines} note line(s) in last ${lookbackDays}d`,
+  };
 };
 
 const sbv2InfoScoreForJob = (j, opts = {}) => {
@@ -25312,6 +25322,7 @@ const sbv2InfoScoreForJob = (j, opts = {}) => {
     daily:  sbv2InfoDailyUpdates(j, opts.daily),
     status: sbv2InfoStatusFresh(j, opts.status),
     punch:  sbv2InfoPunchHygiene(j),
+    notes:  sbv2InfoNotesPresence(j, opts.notes),  // ROUND-3 CHANGES (I5)
     triage: sbv2InfoTriageAndInspections(j),
   };
   const applicable = Object.values(signals).filter(s => s.applicable);
