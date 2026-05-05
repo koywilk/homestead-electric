@@ -25571,12 +25571,18 @@ const sbv2QualityInspections = (j, opts = {}) => {
 // sbv2QualityPunchSize() is left defined for reference but no longer wired
 // into the score.
 const sbv2QualityScoreForJob = (j, opts = {}) => {
-  // ROUND-17 CHANGE: Q2 (QC closure rate) dropped. ROUND-20 CHANGE: pass opts
-  // to Q3 so it filters by window.
-  const signals = {
-    qcCount:     sbv2QualityQCCount(j),         // Q4: QC count penalty (harsh tier; not windowed)
-    inspections: sbv2QualityInspections(j, opts),// Q3: inspections first-try (tiered, windowed)
-  };
+  // ROUND-17 + ROUND-20 + ROUND-22: Q4 (QC count) drops out in windowed
+  // mode because QC items have no item-level timestamps to filter by.
+  // Windowed quality is just Q3 (inspections first-try, filtered to window).
+  const isWindowed = !!(opts.startYMD || opts.endYMD);
+  const signals = isWindowed
+    ? {
+        inspections: sbv2QualityInspections(j, opts),
+      }
+    : {
+        qcCount:     sbv2QualityQCCount(j),
+        inspections: sbv2QualityInspections(j, opts),
+      };
   const applicable = Object.values(signals).filter(s => s.applicable);
   const score = applicable.length === 0
     ? null
@@ -25700,21 +25706,28 @@ const sbv2BuildBoard = (jobs, role, opts = {}) => {
     const personI8 = totalCOs     === 0 ? 0 : Math.min(1, Math.sqrt(totalCOs     / personI8Target));
     const personI9 = totalCleared === 0 ? 0 : Math.min(1, Math.sqrt(totalCleared / personI9Target));
 
-    // ROUND-13 CHANGE: perJob weighted at 50%, the four volume signals at
-    // 12.5% each. Per-job avg captures CURRENT engagement (recent daily
-    // updates, recent punch hygiene, notes presence on active jobs); volumes
-    // capture accumulated lifetime activity which favors longer-tenured
-    // foremen and inherited jobs. Koy's gut alignment shows current
-    // engagement is the more honest measure of "uses the app the most."
-    const _perJobWeight = 0.5;
-    const _volumeWeight = 0.125; // 4 volume signals × 0.125 = 0.5
-    const _weighted = [
-      [perJobInfoAvg, _perJobWeight],
-      [personI6,      _volumeWeight],
-      [personI7,      _volumeWeight],
-      [personI8,      _volumeWeight],
-      [personI9,      _volumeWeight],
-    ].filter(([v]) => v != null);
+    // ROUND-13 + ROUND-22: weight perJob at 50% in the all-time view, with
+    // the four volume signals splitting the other 50%. ROUND-22: when a time
+    // window is set, drop the lifetime-only signals (I6 punch volume, I9
+    // tasks done, Q4 QC count — none have item-level timestamps so they
+    // can't filter to the window). In windowed mode, info uses only
+    // perJob + I7 (RTs in window) + I8 (COs in window). Otherwise someone
+    // with no recent activity but lifetime volume could rank #1 on the
+    // Month view, which was the Colby-with-1-silent-job bug.
+    const _isWindowed = !!(opts.startYMD || opts.endYMD);
+    const _weighted = _isWindowed
+      ? [
+          [perJobInfoAvg, 0.7 ],   // dominant in windowed view
+          [personI7,      0.15],   // RTs filtered to window
+          [personI8,      0.15],   // COs filtered to window
+        ].filter(([v]) => v != null)
+      : [
+          [perJobInfoAvg, 0.5  ],
+          [personI6,      0.125],
+          [personI7,      0.125],
+          [personI8,      0.125],
+          [personI9,      0.125],
+        ].filter(([v]) => v != null);
     const _wSum = _weighted.reduce((s, [v, w]) => s + v * w, 0);
     const _wTot = _weighted.reduce((s, [_, w]) => s + w, 0);
     const infoAvgRaw = _wTot === 0 ? null : _wSum / _wTot;
@@ -28445,10 +28458,13 @@ function ScoreboardV2HowItWorks() {
           <div style={{ fontSize: 11, color: "var(--text, #ddd)", lineHeight: 1.45 }}>
             All Time / Year / Quarter / Month filters the <b>timestamp-aware</b> signals
             (daily updates, punch hygiene, notes, RTs, COs, inspection attempts) to
-            that period. The <b>volume signals</b> below (punch items, tasks done, QC
-            count) don't have item-level timestamps — they reflect lifetime totals
-            regardless of window. So the Month view is a hybrid of "what you did this
-            month" plus "your lifetime portfolio."
+            that period.
+            <br/><br/>
+            Lifetime-only signals (punch volume, tasks done, QC count) have no
+            item-level timestamps so they're <b>dropped entirely</b> in windowed
+            views. In Month/Quarter/Year mode, info = perJob behavior (70%) + RT vol
+            (15%) + CO vol (15%); quality = inspections only. All Time mode uses
+            every signal.
           </div>
 
           <div style={sectionH}>Info — how much you use the app</div>
