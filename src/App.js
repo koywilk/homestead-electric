@@ -25370,6 +25370,27 @@ const sbv2InfoScoreForJob = (j, opts = {}) => {
 
 // ── QUALITY SIGNALS ─────────────────────────────────────────────────────
 
+// ROUND-16 CHANGE: tiered severity scoring for QC count + inspection fails.
+// Koy's tiers: 0 items = clean (1.0), 1-3 = mild (0.67), 4-8 = moderate
+// (0.33), 9+ = severe (0.0). Replaces the binary 0/1 first-try scoring with
+// a graded penalty so a 1-item inspection fail doesn't ding as hard as a
+// 12-item one, and so QC count itself impacts quality (not just closure rate).
+const _sbv2TierScore = (count) => {
+  if (count <= 0) return 1.0;
+  if (count <= 3) return 0.67;
+  if (count <= 8) return 0.33;
+  return 0.0;
+};
+// ROUND-17 CHANGE: QC has its own SHARPER tier — per Koy, QC items called
+// should "really sting" because they represent defects in the lead's work.
+// One QC item already drops you to 0.4. Five items = 0.1. Nine+ = 0.0.
+const _sbv2QCTier = (count) => {
+  if (count <= 0) return 1.0;
+  if (count <= 3) return 0.4;
+  if (count <= 8) return 0.1;
+  return 0.0;
+};
+
 // Q1: Regular-finish-punch closure rate. ROUND-6 CHANGE: now excludes
 // fromQC items, which are defect-driven (measured separately by Q2). Adding
 // regular punch items is a sign of foreman planning/foresight per Koy —
@@ -25409,23 +25430,52 @@ const sbv2QualityQC = (j) => {
   return { applicable: true, score: passed / total, detail: `${passed}/${total} QC items closed` };
 };
 
-// Q3: Inspections passing first try. For each phase (rough, final) that has
-// any attempts, did the FIRST attempt pass? Score = first-pass / phases-with-attempts.
+// Q4: QC item count penalty (round 16). More raw QC items found = more
+// defects detected = worse work quality. Tiered: 0 items=1.0, 1-3=0.67,
+// 4-8=0.33, 9+=0.0. Distinct from Q2 (closure rate); a job can have
+// excellent closure (Q2=1.0) but bad Q4 if there were lots of items.
+const sbv2QualityQCCount = (j) => {
+  let total = 0;
+  [j.roughPunch, j.finishPunch].forEach(pp => sbv2WalkPunch(pp, item => {
+    if (!item || item.voided || !item.fromQC) return;
+    total++;
+  }));
+  if (total === 0) return { applicable: false, score: 0, detail: "no QC items" };
+  // ROUND-17 CHANGE: harsh tier for QC.
+  const score = _sbv2QCTier(total);
+  return { applicable: true, score, detail: `${total} QC items called (harsh tier → ${(score*100).toFixed(0)}%)` };
+};
+
+// Q3: Inspections passing first try, with TIERED FAIL SEVERITY (round 16).
+// Pass = 1.0. Fail = tier based on items in the failed attempt's snapshot
+// (proxy for severity — bigger inspection = bigger fail). Score = average
+// across phases (rough, final) that have attempts.
 const sbv2QualityInspections = (j) => {
   const phases = [
-    { attempts: j.roughInspectionAttempts },
-    { attempts: j.finalInspectionAttempts },
+    { attempts: j.roughInspectionAttempts, label: "rough" },
+    { attempts: j.finalInspectionAttempts, label: "final" },
   ];
-  let total = 0, firstPass = 0;
+  let total = 0, scoreSum = 0;
+  const details = [];
   phases.forEach(p => {
     const arr = Array.isArray(p.attempts) ? p.attempts : [];
     if (arr.length === 0) return;
     total++;
     const sorted = arr.slice().sort((a, b) => (_sbv2YMD(a?.date) || "").localeCompare(_sbv2YMD(b?.date) || ""));
-    if ((sorted[0]?.result || "").toLowerCase() === "pass") firstPass++;
+    const first = sorted[0];
+    const result = (first?.result || "").toLowerCase();
+    if (result === "pass") {
+      scoreSum += 1.0;
+      details.push(`${p.label}: pass`);
+    } else {
+      const itemCount = Array.isArray(first?.items) ? first.items.length : 0;
+      const tier = _sbv2TierScore(itemCount);
+      scoreSum += tier;
+      details.push(`${p.label}: fail ${itemCount} items → ${(tier*100).toFixed(0)}%`);
+    }
   });
   if (total === 0) return { applicable: false, score: 0, detail: "no inspection attempts yet" };
-  return { applicable: true, score: firstPass / total, detail: `${firstPass}/${total} first-try passes` };
+  return { applicable: true, score: scoreSum / total, detail: details.join("; ") };
 };
 
 // ROUND-8 CHANGE: Q1 (regular-punch closure rate) removed from the quality
@@ -25436,9 +25486,14 @@ const sbv2QualityInspections = (j) => {
 // sbv2QualityPunchSize() is left defined for reference but no longer wired
 // into the score.
 const sbv2QualityScoreForJob = (j, opts = {}) => {
+  // ROUND-17 CHANGE: Q2 (QC closure rate) dropped from quality aggregator.
+  // Per Koy, only the COUNT of QC items called should impact quality —
+  // whether they were eventually fixed doesn't matter. Q4 (count, harsh tier)
+  // is the sole QC-related quality signal now. sbv2QualityQC() left defined
+  // for reference / future use but no longer wired in.
   const signals = {
-    qc:          sbv2QualityQC(j),
-    inspections: sbv2QualityInspections(j),
+    qcCount:     sbv2QualityQCCount(j),    // Q4: QC count penalty (harsh tier)
+    inspections: sbv2QualityInspections(j),// Q3: inspections first-try (tiered)
   };
   const applicable = Object.values(signals).filter(s => s.applicable);
   const score = applicable.length === 0
@@ -28048,7 +28103,7 @@ function ScoreboardV2({ jobs, users = [], identity }) {
 
   return (
     <div style={{ padding: 20, fontFamily: "inherit" }}>
-      {/* Title + explanation */}
+      {/* Title + explanation + collapsible scoring details */}
       <div style={{ marginBottom: 18 }}>
         <div style={{ fontSize: 22, fontWeight: 800, color: "var(--text, #ddd)", letterSpacing: "0.01em" }}>
           Scoreboard V2
@@ -28056,6 +28111,7 @@ function ScoreboardV2({ jobs, users = [], identity }) {
         <div style={{ fontSize: 11, color: "var(--dim, #888)", marginTop: 4 }}>
           Behavior-driven competition. Info = how much you use the app. Quality = how clean your work delivers. Combined = both.
         </div>
+        <ScoreboardV2HowItWorks/>
       </div>
 
       {/* Role toggle */}
@@ -28193,7 +28249,7 @@ function ScoreboardV2Drilldown({ row }) {
         marginTop: 4, background: "var(--bg, #0f0f0f)",
         borderRadius: 6, overflow: "hidden",
       }}>
-        <div style={{ display: "grid", gridTemplateColumns: "1fr 60px 60px 70px",
+        <div style={{ display: "grid", gridTemplateColumns: "1fr 60px 60px 60px",
                       borderBottom: "1px solid var(--border, #2a2a2a)" }}>
           <div style={cellHead}>Job</div>
           <div style={{ ...cellHead, textAlign: "right" }}>Info</div>
@@ -28201,13 +28257,13 @@ function ScoreboardV2Drilldown({ row }) {
           <div style={{ ...cellHead, textAlign: "right" }}>Insp.</div>
         </div>
         {row.jobs.map(jr => {
-          const qc   = jr.qualitySignals?.qc;
-          const insp = jr.qualitySignals?.inspections;
-          const qcVal   = qc?.applicable   ? qc.score   : null;
-          const inspVal = insp?.applicable ? insp.score : null;
+          const qcCount = jr.qualitySignals?.qcCount;
+          const insp    = jr.qualitySignals?.inspections;
+          const qcCountVal = qcCount?.applicable ? qcCount.score : null;
+          const inspVal    = insp?.applicable    ? insp.score    : null;
           return (
             <div key={jr.jobId} style={{
-              display: "grid", gridTemplateColumns: "1fr 60px 60px 70px",
+              display: "grid", gridTemplateColumns: "1fr 60px 60px 60px",
               borderBottom: "1px solid var(--border, #1f1f1f)",
             }}>
               <div style={cell}>{jr.jobName}</div>
@@ -28217,19 +28273,92 @@ function ScoreboardV2Drilldown({ row }) {
                 {jr.info == null ? "—" : `${Math.round(jr.info * 100)}`}
               </div>
               <div style={{ ...cell, textAlign: "right",
-                            color: qcVal == null ? "var(--dim, #888)" : "#a855f7" }}
-                   title={qcVal == null ? "no QC items on this job" : qc?.detail || ""}>
-                {qcVal == null ? "—" : `${Math.round(qcVal * 100)}`}
+                            color: qcCountVal == null ? "var(--dim, #888)" : "#a855f7" }}
+                   title={qcCountVal == null ? "no QC items on this job" : (qcCount?.detail || "")}>
+                {qcCountVal == null ? "—" : `${Math.round(qcCountVal * 100)}`}
               </div>
               <div style={{ ...cell, textAlign: "right",
                             color: inspVal == null ? "var(--dim, #888)" : "#a855f7" }}
-                   title={inspVal == null ? "no inspection attempts on this job" : insp?.detail || ""}>
+                   title={inspVal == null ? "no inspection attempts on this job" : (insp?.detail || "")}>
                 {inspVal == null ? "—" : `${Math.round(inspVal * 100)}`}
               </div>
             </div>
           );
         })}
       </div>
+    </div>
+  );
+}
+
+// ROUND-17 CHANGE: how-it-works dropdown — explains every signal so foremen
+// and leads can see exactly what's being measured. Collapsed by default.
+function ScoreboardV2HowItWorks() {
+  const [open, setOpen] = useState(false);
+  const sectionH = { fontSize: 10, fontWeight: 800, color: "var(--text, #ddd)",
+                     textTransform: "uppercase", letterSpacing: "0.08em", marginTop: 12, marginBottom: 6 };
+  const row     = { display: "grid", gridTemplateColumns: "120px 1fr",
+                    gap: 12, fontSize: 11, padding: "4px 0",
+                    color: "var(--text, #ddd)", lineHeight: 1.45 };
+  const tag     = { fontWeight: 700, color: "var(--accent, #22c55e)" };
+
+  return (
+    <div style={{ marginTop: 12 }}>
+      <button onClick={() => setOpen(o => !o)} style={{
+        background: "transparent", border: "1px solid var(--border, #2a2a2a)",
+        borderRadius: 6, padding: "5px 10px", fontSize: 11, fontWeight: 600,
+        color: "var(--dim, #888)", cursor: "pointer", fontFamily: "inherit",
+        display: "inline-flex", alignItems: "center", gap: 6,
+      }}>
+        <span style={{ transition: "transform 0.2s",
+                       transform: open ? "rotate(90deg)" : "rotate(0)" }}>›</span>
+        {open ? "Hide scoring details" : "How is this scored?"}
+      </button>
+
+      {open && (
+        <div style={{ marginTop: 10, padding: 14,
+                      background: "var(--card, #1a1a1a)",
+                      border: "1px solid var(--border, #2a2a2a)",
+                      borderRadius: 8 }}>
+          <div style={{ fontSize: 11, color: "var(--dim, #888)", lineHeight: 1.5 }}>
+            Two scores per person, blended 50/50 into the Combined number.
+            Bayesian shrinkage moderates small-N folks toward the field
+            average so a 1-job perfect score doesn't dominate.
+          </div>
+
+          <div style={sectionH}>Info — how much you use the app</div>
+          <div style={{ fontSize: 11, color: "var(--dim, #888)", marginBottom: 6 }}>
+            Per-job rate is 50% of info; the four volume signals (punch / RT / CO / tasks done) split the other 50%.
+          </div>
+          <div style={row}><span style={tag}>Per-job rate</span>
+            <span>Average of these per-job behaviors on each of your jobs:
+            daily updates filed during active phases,
+            punch hygiene (recently-closed items have photo + checkedBy),
+            past-due inspections entered,
+            notes presence on active jobs.</span></div>
+          <div style={row}><span style={tag}>Punch volume</span>
+            <span>Total non-QC punch items across active jobs. Foreman target 2000 / lead 500. Bigger plan = more credit.</span></div>
+          <div style={row}><span style={tag}>RT volume</span>
+            <span>Total return trips created across active jobs. Foreman target 30 / lead 10.</span></div>
+          <div style={row}><span style={tag}>CO volume</span>
+            <span>Total change orders created across active jobs. Foreman target 30 / lead 10.</span></div>
+          <div style={row}><span style={tag}>Tasks done</span>
+            <span>Total cleared tasks across active jobs. Foreman target 50 / lead 20.</span></div>
+
+          <div style={sectionH}>Quality — how clean your work delivers</div>
+          <div style={row}><span style={tag}>QC count</span>
+            <span>Number of QC items called on your jobs (the items, not whether they got fixed). Tiered: 0 = 100%, 1-3 = 40%, 4-8 = 10%, 9+ = 0%. Stings hard.</span></div>
+          <div style={row}><span style={tag}>Inspections</span>
+            <span>First-try pass rate per phase (rough, final). A pass = 100%. A fail is tiered by inspection size: 1-3 items = 67%, 4-8 = 33%, 9+ = 0%.</span></div>
+
+          <div style={sectionH}>Filters & shrinkage</div>
+          <div style={row}><span style={tag}>Excluded names</span>
+            <span>"Lead TBD", "Paul", "Unassigned", blank.</span></div>
+          <div style={row}><span style={tag}>Test jobs</span>
+            <span>Job names containing "TEST" or "DEMO" are skipped.</span></div>
+          <div style={row}><span style={tag}>Shrinkage</span>
+            <span>Bayesian moderation toward the 0.5 prior, strength 5. A 2-job perfect score (1.00) becomes ~0.64 after shrinkage; a 9-job 0.84 stays at ~0.78.</span></div>
+        </div>
+      )}
     </div>
   );
 }
