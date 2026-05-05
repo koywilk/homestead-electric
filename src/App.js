@@ -1,7 +1,7 @@
 // BUILD_v9_FIXED
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { initializeApp } from "firebase/app";
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, query, where } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable } from "firebase/functions";
@@ -51,16 +51,20 @@ const storage   = getStorage(firebaseApp);
 const messaging = ("serviceWorker" in navigator) ? getMessaging(firebaseApp) : null;
 const functions = getFunctions(firebaseApp);
 
-// Debug helper for one-off cloud function tests from the browser console.
-// Usage:  await _hsCall('getSimproProfitLossYTD', {})
-// Default callable timeout is 60s — too short for the bulk Simpro pulls,
-// so we set 9 minutes (540s) which matches the function's runtime budget.
+// Debug helpers exposed to window so we can run one-off scripts from the
+// browser console (cloud-function calls, bulk data loads, etc.).
+//   _hsCall(name, params)       — invoke a callable cloud function
+//   _hsFs                       — Firestore handles (db + helpers) for
+//                                 read/write scripts that don't need a
+//                                 dedicated function. Writes go through
+//                                 the same security rules as the app.
 if (typeof window !== "undefined") {
   window._hsCall = async (name, params = {}, timeoutMs = 540000) => {
     const fn = httpsCallable(functions, name, { timeout: timeoutMs });
     const r = await fn(params);
     return r.data;
   };
+  window._hsFs = { db, doc, getDoc, getDocs, setDoc, updateDoc, collection, query, where };
 }
 
 /**
@@ -1037,7 +1041,7 @@ const getNotifDefaults = (title) => {
   return prefs;
 };
 
-function UserManagement({ users, onSave }) {
+function UserManagement({ users, onSave, embedded = false }) {
   const [list,    setList]    = useState(users);
   const [editing, setEditing] = useState(null);
   const [showPin, setShowPin] = useState({});
@@ -1059,10 +1063,15 @@ function UserManagement({ users, onSave }) {
 
   return (
     <div>
-      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:20}}>
-        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:C.text}}>
-          TEAM MEMBERS
-        </div>
+      {/* When embedded inside a SettingsSection the parent already renders the
+          "TEAM MEMBERS" title — don't double up. The Add button still shows
+          either way. */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:embedded?"flex-end":"space-between",marginBottom:20}}>
+        {!embedded && (
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:C.text}}>
+            TEAM MEMBERS
+          </div>
+        )}
         <button onClick={newUser}
           style={{background:C.accent,border:"none",borderRadius:9,color:"#000",
             fontWeight:700,padding:"8px 18px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
@@ -27318,7 +27327,7 @@ function Scoreboard({ jobs, users=[], identity }) {
   );
 }
 
-function ActivityLog({ jobs }) {
+function ActivityLog({ jobs, embedded = false }) {
   const [filter, setFilter] = useState("");
   // Some jobs have updated_at as a Firestore Timestamp object
   // (legacy rows) rather than an ISO string — calling .localeCompare
@@ -27368,9 +27377,16 @@ function ActivityLog({ jobs }) {
   };
 
   return (
-    <div style={{padding:"20px 26px"}}>
-      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.06em",color:C.text,marginBottom:4}}>Activity Log</div>
-      <div style={{fontSize:12,color:C.muted,marginBottom:12}}>Shows who last edited each job and when. Updated in real time.</div>
+    <div style={{padding: embedded ? 0 : "20px 26px"}}>
+      {!embedded && (
+        <>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.06em",color:C.text,marginBottom:4}}>Activity Log</div>
+          <div style={{fontSize:12,color:C.muted,marginBottom:12}}>Shows who last edited each job and when. Updated in real time.</div>
+        </>
+      )}
+      {embedded && (
+        <div style={{fontSize:12,color:C.muted,marginBottom:12}}>Shows who last edited each job and when. Updated in real time.</div>
+      )}
       <input placeholder="Filter by job name or person..." value={filter} onChange={e=>setFilter(e.target.value)}
         style={{width:"100%",maxWidth:400,padding:"8px 12px",borderRadius:8,border:`1px solid ${C.border}`,background:C.surface,color:C.text,fontSize:13,fontFamily:"inherit",marginBottom:16,outline:"none"}}/>
       <div style={{overflowX:"auto",borderRadius:10,border:`1px solid ${C.border}`}}>
@@ -33884,8 +33900,13 @@ function App() {
 
       {view==="settings"&&can(identity,"settings.view")&&(
         <div>
-          <ActivityLog jobs={jobs}/>
-          <div style={{height:1,background:C.border,margin:"0 26px"}}/>
+          {/* Activity log collapsed by default — most days nobody needs to
+              look at it, but it's still one click away. */}
+          <div style={{padding:"20px 26px 0"}}>
+            <SettingsSection title="ACTIVITY LOG" defaultOpen={false}>
+              <ActivityLog jobs={jobs} embedded={true}/>
+            </SettingsSection>
+          </div>
           <SettingsPage
             COLOR_OPTIONS={COLOR_OPTIONS}
             users={users}
@@ -33926,9 +33947,9 @@ function App() {
           />
           {can(identity,"users.manage")&&(
             <div style={{padding:"0 26px 40px"}}>
-              <div style={{borderTop:`1px solid ${C.border}`,paddingTop:32,marginTop:8}}>
-                <UserManagement users={users} onSave={saveUsers}/>
-              </div>
+              <SettingsSection title="TEAM MEMBERS" defaultOpen={false}>
+                <UserManagement users={users} onSave={saveUsers} embedded={true}/>
+              </SettingsSection>
             </div>
           )}
           {can(identity,"settings.view")&&<HuddleConfigPanel/>}
