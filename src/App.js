@@ -25735,31 +25735,34 @@ const sbv2BuildBoard = (jobs, role, opts = {}) => {
     const personI8 = totalCOs     === 0 ? 0 : Math.min(1, Math.sqrt(totalCOs     / personI8Target));
     const personI9 = totalCleared === 0 ? 0 : Math.min(1, Math.sqrt(totalCleared / personI9Target));
 
-    // ROUND-13 + ROUND-22: weight perJob at 50% in the all-time view, with
-    // the four volume signals splitting the other 50%. ROUND-22: when a time
-    // window is set, drop the lifetime-only signals (I6 punch volume, I9
-    // tasks done, Q4 QC count — none have item-level timestamps so they
-    // can't filter to the window). In windowed mode, info uses only
-    // perJob + I7 (RTs in window) + I8 (COs in window). Otherwise someone
-    // with no recent activity but lifetime volume could rank #1 on the
-    // Month view, which was the Colby-with-1-silent-job bug.
+    // ROUND-13 + ROUND-22 + ROUND-24 CHANGE: if a person has zero real info
+    // activity (perJob null AND all the eligible volume signals are 0),
+    // infoAvgRaw is null. Otherwise the weighted blend would compute to 0
+    // and Bayesian shrinkage would lift it back up to the 0.5 prior — which
+    // is what was making Colby (1 silent job, all zeros) show info=50.
     const _isWindowed = !!(opts.startYMD || opts.endYMD);
-    const _weighted = _isWindowed
-      ? [
-          [perJobInfoAvg, 0.7 ],   // dominant in windowed view
-          [personI7,      0.15],   // RTs filtered to window
-          [personI8,      0.15],   // COs filtered to window
-        ].filter(([v]) => v != null)
-      : [
-          [perJobInfoAvg, 0.5  ],
-          [personI6,      0.125],
-          [personI7,      0.125],
-          [personI8,      0.125],
-          [personI9,      0.125],
-        ].filter(([v]) => v != null);
-    const _wSum = _weighted.reduce((s, [v, w]) => s + v * w, 0);
-    const _wTot = _weighted.reduce((s, [_, w]) => s + w, 0);
-    const infoAvgRaw = _wTot === 0 ? null : _wSum / _wTot;
+    const _hasInfoActivity = _isWindowed
+      ? (perJobInfoAvg != null || personI7 > 0 || personI8 > 0)
+      : (perJobInfoAvg != null || personI6 > 0 || personI7 > 0 || personI8 > 0 || personI9 > 0);
+    let infoAvgRaw = null;
+    if (_hasInfoActivity) {
+      const _weighted = _isWindowed
+        ? [
+            [perJobInfoAvg, 0.7 ],
+            [personI7,      0.15],
+            [personI8,      0.15],
+          ].filter(([v]) => v != null)
+        : [
+            [perJobInfoAvg, 0.5  ],
+            [personI6,      0.125],
+            [personI7,      0.125],
+            [personI8,      0.125],
+            [personI9,      0.125],
+          ].filter(([v]) => v != null);
+      const _wSum = _weighted.reduce((s, [v, w]) => s + v * w, 0);
+      const _wTot = _weighted.reduce((s, [_, w]) => s + w, 0);
+      infoAvgRaw = _wTot === 0 ? null : _wSum / _wTot;
+    }
     const qualAvgRaw = quals.length ? quals.reduce((a,b)=>a+b,0) / quals.length : null;
     const infoAvg = _sbv2Shrink(infoAvgRaw, infos.length, shrinkK, shrinkPrior);
     const qualAvg = _sbv2Shrink(qualAvgRaw, quals.length, shrinkK, shrinkPrior);
@@ -25767,6 +25770,11 @@ const sbv2BuildBoard = (jobs, role, opts = {}) => {
     if (infoAvg != null && qualAvg != null) combined = infoAvg * infoW + qualAvg * qualW;
     else if (infoAvg != null) combined = infoAvg;
     else if (qualAvg != null) combined = qualAvg;
+    // ROUND-24 CHANGE: skip people from the rankings entirely if they have
+    // no data on either side. Previously a no-data person (Colby with 1
+    // silent job) would still appear with info=50 / quality=— and rank in
+    // the middle of the board, which is misleading.
+    if (infoAvgRaw == null && qualAvgRaw == null) continue;
     rows.push({
       name, jobCount: jobScores.length,
       info: infoAvg, quality: qualAvg,           // shrunk (used for ranking)
