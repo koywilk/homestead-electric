@@ -25194,16 +25194,62 @@ const _sbv2IsActive = (j) => {
   return r === "inprogress" || r === "scheduled" || f === "inprogress" || f === "scheduled";
 };
 
+// ROUND-20 CHANGE: time-window infrastructure for monthly/quarterly/yearly
+// scoring. opts.startYMD / opts.endYMD bound the window; if not provided,
+// signals fall back to a default lookback. Volume signals (I6, I9, Q4)
+// don't have item-level timestamps so they stay lifetime regardless of
+// window — the explainer dropdown notes this.
+const _sbv2GetWindow = (opts = {}) => {
+  if (opts.startYMD || opts.endYMD) {
+    const startTs = opts.startYMD ? new Date(opts.startYMD + "T00:00:00").getTime() : -Infinity;
+    const endTs   = opts.endYMD   ? new Date(opts.endYMD   + "T23:59:59").getTime() :  Date.now();
+    const windowDays = isFinite(startTs) ? Math.max(1, (endTs - startTs) / 86400000) : 365;
+    return { startTs, endTs, windowDays, bounded: true };
+  }
+  const lookbackDays = opts.lookbackDays || 30;
+  return {
+    startTs: Date.now() - lookbackDays * 86400000,
+    endTs: Date.now(),
+    windowDays: lookbackDays,
+    bounded: false,
+  };
+};
+// Compute window start/end YMDs for a named key. Used by the V2 UI's
+// window selector. "all" returns nulls so signals fall back to defaults.
+const sbv2WindowFor = (key) => {
+  const now = new Date();
+  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  if (key === "month") {
+    const s = new Date(now.getFullYear(), now.getMonth(), 1);
+    const e = new Date(now.getFullYear(), now.getMonth()+1, 0);
+    return { startYMD: ymd(s), endYMD: ymd(e), label: now.toLocaleDateString("en-US", { month: "long", year: "numeric" }) };
+  }
+  if (key === "quarter") {
+    const q = Math.floor(now.getMonth() / 3);
+    const s = new Date(now.getFullYear(), q * 3, 1);
+    const e = new Date(now.getFullYear(), q * 3 + 3, 0);
+    return { startYMD: ymd(s), endYMD: ymd(e), label: `Q${q+1} ${now.getFullYear()}` };
+  }
+  if (key === "year") {
+    const s = new Date(now.getFullYear(), 0, 1);
+    const e = new Date(now.getFullYear(), 11, 31);
+    return { startYMD: ymd(s), endYMD: ymd(e), label: `${now.getFullYear()}` };
+  }
+  return { startYMD: null, endYMD: null, label: "All Time" };
+};
+if (typeof window !== "undefined") window.sbv2WindowFor = sbv2WindowFor;
+
 // ── INFO SIGNALS ────────────────────────────────────────────────────────
 
 // I1: Daily updates filed during the lookback window. Counts entries dated
 // in window across roughUpdates + finishUpdates. Not applicable when the
 // job isn't currently active.
 const sbv2InfoDailyUpdates = (j, opts = {}) => {
-  const lookbackDays = opts.lookbackDays || 30;
-  const expectedPerWeek = opts.expectedPerWeek || 1;
+  // ROUND-20 CHANGE: uses _sbv2GetWindow for windowed scoring. Active-job
+  // check stays — daily updates only meaningful while job is active.
   if (!_sbv2IsActive(j)) return { applicable: false, score: 0, detail: "job not active" };
-  const cutoff = Date.now() - lookbackDays * 86400000;
+  const expectedPerWeek = opts.expectedPerWeek || 1;
+  const { startTs, endTs, windowDays } = _sbv2GetWindow(opts);
   const updates = []
     .concat(Array.isArray(j.roughUpdates)  ? j.roughUpdates  : [])
     .concat(Array.isArray(j.finishUpdates) ? j.finishUpdates : []);
@@ -25212,13 +25258,13 @@ const sbv2InfoDailyUpdates = (j, opts = {}) => {
     const ymd = _sbv2YMD(u?.date) || _sbv2YMD(u?.createdAt);
     if (!ymd) return;
     const t = new Date(ymd + "T00:00:00").getTime();
-    if (!isNaN(t) && t >= cutoff) inWindow++;
+    if (!isNaN(t) && t >= startTs && t <= endTs) inWindow++;
   });
-  const expected = Math.max(1, Math.round(expectedPerWeek * (lookbackDays / 7)));
+  const expected = Math.max(1, Math.round(expectedPerWeek * (windowDays / 7)));
   return {
     applicable: true,
     score: Math.max(0, Math.min(1, inWindow / expected)),
-    detail: `${inWindow} updates / ${expected} expected (${lookbackDays}d)`,
+    detail: `${inWindow} updates / ${expected} expected`,
   };
 };
 
@@ -25238,19 +25284,17 @@ const sbv2InfoStatusFresh = (_j, _opts = {}) => {
 // in rough+finish punch that are `done`; each should have ≥1 photo and a
 // checkedBy name. Score = % of closed items meeting the bar.
 const sbv2InfoPunchHygiene = (j, opts = {}) => {
-  // ROUND-2 CHANGES (1+2): only count items checkedAt within lookback window
-  // (default 60 days) so historical-job items don't drag the score; half
-  // credit for photo-only or checkedBy-only, full for both. The old all-or-
-  // nothing rule sent everyone to 0 because the practice is partial.
-  const lookbackDays = opts.lookbackDays || 60;
-  const cutoff = Date.now() - lookbackDays * 86400000;
+  // ROUND-20 CHANGE: uses _sbv2GetWindow. Default lookback 60d if no explicit
+  // window. Counts only non-voided, done items with checkedAt in window.
+  const i3Opts = { ...opts, lookbackDays: opts.lookbackDays || 60 };
+  const { startTs, endTs } = _sbv2GetWindow(i3Opts);
   let closed = 0, points = 0;
   [j.roughPunch, j.finishPunch].forEach(pp => sbv2WalkPunch(pp, item => {
     if (!item || item.voided || !item.done) return;
     const ymd = _sbv2YMD(item.checkedAt) || _sbv2YMD(item.closedAt);
-    if (!ymd) return; // can't tell when it was closed → don't count
+    if (!ymd) return;
     const t = new Date(ymd + "T00:00:00").getTime();
-    if (isNaN(t) || t < cutoff) return; // outside window → don't count
+    if (isNaN(t) || t < startTs || t > endTs) return;
     closed++;
     const hasPhoto   = Array.isArray(item.photos) && item.photos.length > 0;
     const hasChecker = !!(item.checkedBy && String(item.checkedBy).trim());
@@ -25259,8 +25303,8 @@ const sbv2InfoPunchHygiene = (j, opts = {}) => {
     if (hasChecker) pt += 0.5;
     points += pt;
   }));
-  if (closed === 0) return { applicable: false, score: 0, detail: "no recently-closed punch items" };
-  return { applicable: true, score: points / closed, detail: `${points.toFixed(1)}/${closed} hygiene pts on items closed in last ${lookbackDays}d` };
+  if (closed === 0) return { applicable: false, score: 0, detail: "no closed punch items in window" };
+  return { applicable: true, score: points / closed, detail: `${points.toFixed(1)}/${closed} hygiene pts on items closed in window` };
 };
 
 // I4: Notes triaged + past-due inspections entered.
@@ -25296,9 +25340,9 @@ const sbv2InfoTriageAndInspections = (j) => {
 // who use the notes feature get credit; foremen who don't get a 0 here
 // instead of dropping out of the mean. Not applicable to inactive jobs.
 const sbv2InfoNotesPresence = (j, opts = {}) => {
-  const lookbackDays = opts.lookbackDays || 30;
+  // ROUND-20 CHANGE: uses _sbv2GetWindow. Active-job-only logic stays.
   if (!_sbv2IsActive(j)) return { applicable: false, score: 0, detail: "job not active" };
-  const cutoff = Date.now() - lookbackDays * 86400000;
+  const { startTs, endTs } = _sbv2GetWindow(opts);
   let recentLines = 0;
   (Array.isArray(j.jobNotes) ? j.jobNotes : []).forEach(n => {
     if (!n || n.archived || n.deleted) return;
@@ -25307,13 +25351,13 @@ const sbv2InfoNotesPresence = (j, opts = {}) => {
       const ymd = _sbv2YMD(l.createdAt);
       if (!ymd) return;
       const t = new Date(ymd + "T00:00:00").getTime();
-      if (!isNaN(t) && t >= cutoff) recentLines++;
+      if (!isNaN(t) && t >= startTs && t <= endTs) recentLines++;
     });
   });
   return {
     applicable: true,
     score: recentLines > 0 ? 1 : 0,
-    detail: `${recentLines} note line(s) in last ${lookbackDays}d`,
+    detail: `${recentLines} note line(s) in window`,
   };
 };
 
@@ -25446,25 +25490,48 @@ const sbv2QualityQCCount = (j) => {
     if (!item || item.voided || !item.fromQC) return;
     total++;
   }));
-  if (total === 0) return { applicable: false, score: 0, detail: "no QC items" };
-  // ROUND-17 CHANGE: harsh tier for QC.
+  // ROUND-21 CHANGE: a QC walk that happened with ZERO items called is the
+  // cleanest possible result — score 1.0 (was returning applicable:false
+  // which made it drop out and show "—"). Walk-happened detection covers
+  // pass/fail/fixed/completed states. Pre-walk states (needs/scheduled/blank)
+  // remain not-applicable.
+  const qcStatus = (j.qcStatus || "").toLowerCase();
+  const walkHappened = qcStatus === "pass" || qcStatus === "fail" ||
+                       qcStatus === "fixed" || qcStatus === "completed";
+  if (total === 0) {
+    if (walkHappened) {
+      return { applicable: true, score: 1.0, detail: `QC walk ${qcStatus}, 0 items called — clean walk` };
+    }
+    return { applicable: false, score: 0, detail: "no QC walk yet" };
+  }
+  // ROUND-17: harsh tier for QC.
   const score = _sbv2QCTier(total);
-  return { applicable: true, score, detail: `${total} QC items called (harsh tier → ${(score*100).toFixed(0)}%)` };
+  return { applicable: true, score, detail: `${total} QC items called (tier → ${(score*100).toFixed(0)}%)` };
 };
 
 // Q3: Inspections passing first try, with TIERED FAIL SEVERITY (round 16).
 // Pass = 1.0. Fail = tier based on items in the failed attempt's snapshot
 // (proxy for severity — bigger inspection = bigger fail). Score = average
 // across phases (rough, final) that have attempts.
-const sbv2QualityInspections = (j) => {
+const sbv2QualityInspections = (j, opts = {}) => {
   const phases = [
     { attempts: j.roughInspectionAttempts, label: "rough" },
     { attempts: j.finalInspectionAttempts, label: "final" },
   ];
+  // ROUND-20 CHANGE: filter attempts to the time window before sorting.
+  const { startTs, endTs } = _sbv2GetWindow(opts);
+  const inWin = (a) => {
+    const ymd = _sbv2YMD(a?.date);
+    if (!ymd) return false;
+    const t = new Date(ymd + "T00:00:00").getTime();
+    return !isNaN(t) && t >= startTs && t <= endTs;
+  };
   let total = 0, scoreSum = 0;
   const details = [];
   phases.forEach(p => {
-    const arr = Array.isArray(p.attempts) ? p.attempts : [];
+    const allAttempts = Array.isArray(p.attempts) ? p.attempts : [];
+    // For windowed views, only count attempts that fall in the window
+    const arr = (opts.startYMD || opts.endYMD) ? allAttempts.filter(inWin) : allAttempts;
     if (arr.length === 0) return;
     total++;
     const sorted = arr.slice().sort((a, b) => (_sbv2YMD(a?.date) || "").localeCompare(_sbv2YMD(b?.date) || ""));
@@ -25504,14 +25571,11 @@ const sbv2QualityInspections = (j) => {
 // sbv2QualityPunchSize() is left defined for reference but no longer wired
 // into the score.
 const sbv2QualityScoreForJob = (j, opts = {}) => {
-  // ROUND-17 CHANGE: Q2 (QC closure rate) dropped from quality aggregator.
-  // Per Koy, only the COUNT of QC items called should impact quality —
-  // whether they were eventually fixed doesn't matter. Q4 (count, harsh tier)
-  // is the sole QC-related quality signal now. sbv2QualityQC() left defined
-  // for reference / future use but no longer wired in.
+  // ROUND-17 CHANGE: Q2 (QC closure rate) dropped. ROUND-20 CHANGE: pass opts
+  // to Q3 so it filters by window.
   const signals = {
-    qcCount:     sbv2QualityQCCount(j),    // Q4: QC count penalty (harsh tier)
-    inspections: sbv2QualityInspections(j),// Q3: inspections first-try (tiered)
+    qcCount:     sbv2QualityQCCount(j),         // Q4: QC count penalty (harsh tier; not windowed)
+    inspections: sbv2QualityInspections(j, opts),// Q3: inspections first-try (tiered, windowed)
   };
   const applicable = Object.values(signals).filter(s => s.applicable);
   const score = applicable.length === 0
@@ -25560,12 +25624,29 @@ const sbv2BuildBoard = (jobs, role, opts = {}) => {
     // visible job count from 17 → 12.
     const key = name.trim();
     if (!groups.has(key)) groups.set(key, []);
-    // ROUND-19 CHANGE: removed _isActive filter from RT / CO / cleared-task
-    // counts. Same logic as I6 — completing a job shouldn't erase the work
-    // the foreman did. Counts ALL of these across every job they ran.
-    const rtCount      = Array.isArray(j.returnTrips)   ? j.returnTrips.length    : 0;
-    const coCount      = Array.isArray(j.changeOrders)  ? j.changeOrders.length   : 0;
-    const clearedCount = Array.isArray(j.clearedTasks)  ? j.clearedTasks.length   : 0;
+    // ROUND-19+20: counts on every job (lifetime), but filter RTs and COs
+    // by date when a window is set. Cleared tasks have no timestamps so
+    // they stay lifetime.
+    const _winStart = opts.startYMD ? new Date(opts.startYMD + "T00:00:00").getTime() : -Infinity;
+    const _winEnd   = opts.endYMD   ? new Date(opts.endYMD   + "T23:59:59").getTime() :  Date.now();
+    const _winSet = !!(opts.startYMD || opts.endYMD);
+    const rtCount = (Array.isArray(j.returnTrips) ? j.returnTrips : []).reduce((n, rt) => {
+      if (!rt) return n;
+      if (!_winSet) return n + 1;
+      const ymd = _sbv2YMD(rt.date);
+      if (!ymd) return n;
+      const t = new Date(ymd + "T00:00:00").getTime();
+      return (!isNaN(t) && t >= _winStart && t <= _winEnd) ? n + 1 : n;
+    }, 0);
+    const coCount = (Array.isArray(j.changeOrders) ? j.changeOrders : []).reduce((n, co) => {
+      if (!co) return n;
+      if (!_winSet) return n + 1;
+      const ymd = _sbv2YMD(co.createdAt) || _sbv2YMD(co.date);
+      if (!ymd) return n;
+      const t = new Date(ymd + "T00:00:00").getTime();
+      return (!isNaN(t) && t >= _winStart && t <= _winEnd) ? n + 1 : n;
+    }, 0);
+    const clearedCount = Array.isArray(j.clearedTasks) ? j.clearedTasks.length : 0;
     groups.get(key).push({
       jobId: j.id,
       jobName: j.name || j.jobName || j.id,
@@ -28066,9 +28147,15 @@ function ScoreboardV2({ jobs, users = [], identity }) {
   }, [jobs]);
   const [role, setRole]     = useState("foreman");      // "foreman" | "lead"
   const [sortBy, setSortBy] = useState("combined");     // "combined" | "info" | "quality"
+  const [windowKey, setWindowKey] = useState("all");    // "all" | "year" | "quarter" | "month"
   const [expanded, setExpanded] = useState({});         // {name: bool}
 
-  const result = useMemo(() => sbv2Build(jobs), [jobs]);
+  // ROUND-21 CHANGE: compute the window once and pass through to sbv2Build.
+  const { startYMD, endYMD, label: windowLabel } = useMemo(() => sbv2WindowFor(windowKey), [windowKey]);
+  const result = useMemo(
+    () => sbv2Build(jobs, { startYMD, endYMD }),
+    [jobs, startYMD, endYMD]
+  );
 
   const rows = useMemo(() => {
     const list = role === "foreman" ? result.foremen : result.leads;
@@ -28138,11 +28225,25 @@ function ScoreboardV2({ jobs, users = [], identity }) {
       </div>
 
       {/* Sort toggle */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 16, padding: 4,
+      <div style={{ display: "flex", gap: 4, marginBottom: 8, padding: 4,
                     background: "var(--card, #1a1a1a)", borderRadius: 8, width: "fit-content" }}>
         {toggleBtn(sortBy === "combined", "Combined",            () => setSortBy("combined"))}
         {toggleBtn(sortBy === "info",     "Info (app usage)",    () => setSortBy("info"))}
         {toggleBtn(sortBy === "quality",  "Quality (clean work)",() => setSortBy("quality"))}
+      </div>
+
+      {/* ROUND-21 CHANGE: time-window selector (Phase 3). Filters timestamp-
+          aware signals to the chosen period. Volume signals (punch / tasks
+          done / QC count) stay lifetime — see the explainer dropdown. */}
+      <div style={{ display: "flex", gap: 4, marginBottom: 6, padding: 4,
+                    background: "var(--card, #1a1a1a)", borderRadius: 8, width: "fit-content" }}>
+        {toggleBtn(windowKey === "all",     "All Time", () => setWindowKey("all"))}
+        {toggleBtn(windowKey === "year",    "Year",     () => setWindowKey("year"))}
+        {toggleBtn(windowKey === "quarter", "Quarter",  () => setWindowKey("quarter"))}
+        {toggleBtn(windowKey === "month",   "Month",    () => setWindowKey("month"))}
+      </div>
+      <div style={{ fontSize: 10, color: "var(--dim, #888)", marginBottom: 16, fontStyle: "italic" }}>
+        Window: {windowLabel}
       </div>
 
       {/* Empty state */}
@@ -28340,6 +28441,15 @@ function ScoreboardV2HowItWorks() {
             Bayesian shrinkage moderates small-N folks toward the field
             average so a 1-job perfect score doesn't dominate.
           </div>
+          <div style={sectionH}>Time window</div>
+          <div style={{ fontSize: 11, color: "var(--text, #ddd)", lineHeight: 1.45 }}>
+            All Time / Year / Quarter / Month filters the <b>timestamp-aware</b> signals
+            (daily updates, punch hygiene, notes, RTs, COs, inspection attempts) to
+            that period. The <b>volume signals</b> below (punch items, tasks done, QC
+            count) don't have item-level timestamps — they reflect lifetime totals
+            regardless of window. So the Month view is a hybrid of "what you did this
+            month" plus "your lifetime portfolio."
+          </div>
 
           <div style={sectionH}>Info — how much you use the app</div>
           <div style={{ fontSize: 11, color: "var(--dim, #888)", marginBottom: 6 }}>
@@ -28362,7 +28472,7 @@ function ScoreboardV2HowItWorks() {
 
           <div style={sectionH}>Quality — how clean your work delivers</div>
           <div style={row}><span style={tag}>QC count</span>
-            <span>Number of QC items called on your jobs (the items, not whether they got fixed). Tiered: 0-1 = 100%, 2-14 = 50%, 15-25 = 20%, 26+ = 0%. Stings hard.</span></div>
+            <span>Number of QC items called on your jobs. Tiered: 0-1 items = 100%, 2-14 = 50%, 15-25 = 20%, 26+ = 0%. A QC walk marked pass/complete with zero items also scores 100% (clean walk). Stings hard above 1.</span></div>
           <div style={row}><span style={tag}>Inspections</span>
             <span>First-try pass rate per phase (rough, final). A pass = 100%. A fail is tiered by inspection size: 1-3 items = 67%, 4-8 = 33%, 9+ = 0%.</span></div>
 
