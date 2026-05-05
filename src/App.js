@@ -25483,6 +25483,12 @@ const sbv2BuildBoard = (jobs, role, opts = {}) => {
     if (info.score == null && qual.score == null) return;
     const key = name.trim();
     if (!groups.has(key)) groups.set(key, []);
+    // ROUND-11 CHANGE: capture RT and CO counts on each job-score so we can
+    // sum them at the person level. Only counts active jobs (matches I6
+    // active-only behavior). Volume signals — more = more app usage.
+    const _isActive = _sbv2IsActive(j);
+    const rtCount = _isActive && Array.isArray(j.returnTrips)  ? j.returnTrips.length  : 0;
+    const coCount = _isActive && Array.isArray(j.changeOrders) ? j.changeOrders.length : 0;
     groups.get(key).push({
       jobId: j.id,
       jobName: j.name || j.jobName || j.id,
@@ -25490,6 +25496,7 @@ const sbv2BuildBoard = (jobs, role, opts = {}) => {
       quality: qual.score,
       infoSignals: info.signals,
       qualitySignals: qual.signals,
+      rtCount, coCount,
     });
   });
   // ROUND-4 CHANGES: apply shrinkage to per-person averages so small-N
@@ -25521,9 +25528,24 @@ const sbv2BuildBoard = (jobs, role, opts = {}) => {
       return sum + c;
     }, 0);
     const personI6 = totalRegularPunch === 0 ? 0 : Math.min(1, Math.sqrt(totalRegularPunch / personI6Target));
-    const infoAvgRaw = perJobInfoAvg == null
-      ? personI6
-      : (perJobInfoAvg + personI6) / 2;  // 50/50 blend
+
+    // ROUND-11 CHANGE: I7 (RTs created) + I8 (COs created) — person-level
+    // volume signals. Sum counts across this person's active jobs and curve
+    // sqrt(total / target). Foreman target higher than lead since foremen
+    // touch more jobs. Targets tuned so a moderately-active person hits
+    // ~0.7: foreman 30 RTs / 30 COs across portfolio; lead 10 / 10.
+    const personI7Target = opts.personI7Target || (role === "foreman" ? 30 : 10);
+    const personI8Target = opts.personI8Target || (role === "foreman" ? 30 : 10);
+    const totalRTs = jobScores.reduce((s, jr) => s + (jr.rtCount || 0), 0);
+    const totalCOs = jobScores.reduce((s, jr) => s + (jr.coCount || 0), 0);
+    const personI7 = totalRTs === 0 ? 0 : Math.min(1, Math.sqrt(totalRTs / personI7Target));
+    const personI8 = totalCOs === 0 ? 0 : Math.min(1, Math.sqrt(totalCOs / personI8Target));
+
+    // Blend: equal weight across (per-job behavior, punch volume, RT vol, CO vol)
+    const _components = [perJobInfoAvg, personI6, personI7, personI8].filter(v => v != null);
+    const infoAvgRaw = _components.length === 0
+      ? null
+      : _components.reduce((a, b) => a + b, 0) / _components.length;
     const qualAvgRaw = quals.length ? quals.reduce((a,b)=>a+b,0) / quals.length : null;
     const infoAvg = _sbv2Shrink(infoAvgRaw, infos.length, shrinkK, shrinkPrior);
     const qualAvg = _sbv2Shrink(qualAvgRaw, quals.length, shrinkK, shrinkPrior);
@@ -25535,8 +25557,9 @@ const sbv2BuildBoard = (jobs, role, opts = {}) => {
       name, jobCount: jobScores.length,
       info: infoAvg, quality: qualAvg,           // shrunk (used for ranking)
       infoRaw: infoAvgRaw, qualityRaw: qualAvgRaw, // raw (for drilldown)
-      // ROUND-9 CHANGE: surface person-level I6 inputs for drilldown
+      // person-level info inputs (rounds 9 + 11)
       totalRegularPunch, personI6, perJobInfoAvg,
+      totalRTs, personI7, totalCOs, personI8,
       combined, jobs: jobScores,
     });
   }
