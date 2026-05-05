@@ -25471,7 +25471,7 @@ const SBV2_TEST_JOB = (jobName) => {
 const sbv2BuildBoard = (jobs, role, opts = {}) => {
   const infoW = opts.infoWeight    ?? 0.5;
   const qualW = opts.qualityWeight ?? 0.5;
-  const minJobs = opts.minJobs ?? 2;
+  const minJobs = opts.minJobs ?? 1; // ROUND-14 CHANGE: lowered from 2; shrinkage handles small-N now
   const groups = new Map();
   (jobs || []).forEach(j => {
     if (!j) return;
@@ -25480,7 +25480,11 @@ const sbv2BuildBoard = (jobs, role, opts = {}) => {
     if (SBV2_EXCLUDE_NAME(name)) return;
     const info = sbv2InfoScoreForJob(j, opts);
     const qual = sbv2QualityScoreForJob(j, opts);
-    if (info.score == null && qual.score == null) return;
+    // ROUND-14 CHANGE: include silent jobs (both info and quality null) so
+    // their RT/CO/task/punch volumes still count for the person, AND so
+    // foremen/leads with all-silent portfolios still appear on the board.
+    // Was dropping Jonathan Harding (3 silent jobs) and shrinking Abraham's
+    // visible job count from 17 → 12.
     const key = name.trim();
     if (!groups.has(key)) groups.set(key, []);
     // ROUND-11 CHANGE: capture RT and CO counts on each job-score so we can
@@ -27984,6 +27988,11 @@ function Scoreboard({ jobs, users=[], identity }) {
 // Memoized off `jobs` so re-renders are cheap.
 // ════════════════════════════════════════════════════════════════════════
 function ScoreboardV2({ jobs, users = [], identity }) {
+  // ROUND-14 CHANGE: mirror the existing Scoreboard's debug hook so console
+  // testing (window.sbv2Build(window.__sbJobs)) works from this tab too.
+  useEffect(() => {
+    if (typeof window !== "undefined") window.__sbJobs = jobs;
+  }, [jobs]);
   const [role, setRole]     = useState("foreman");      // "foreman" | "lead"
   const [sortBy, setSortBy] = useState("combined");     // "combined" | "info" | "quality"
   const [expanded, setExpanded] = useState({});         // {name: bool}
