@@ -25239,6 +25239,35 @@ const sbv2WindowFor = (key) => {
 };
 if (typeof window !== "undefined") window.sbv2WindowFor = sbv2WindowFor;
 
+// ROUND-23 CHANGE: window for the most-recent COMPLETED period of a given
+// key. Used by the champions banner to show last month / last quarter
+// winners. "year" returns YTD (Jan 1 → today) since the current year isn't
+// done yet — calling that "Last Year" would be misleading.
+const sbv2PreviousWindowFor = (key) => {
+  const now = new Date();
+  const ymd = (d) => `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  if (key === "month") {
+    const s = new Date(now.getFullYear(), now.getMonth() - 1, 1);
+    const e = new Date(now.getFullYear(), now.getMonth(), 0);
+    return { startYMD: ymd(s), endYMD: ymd(e),
+             label: s.toLocaleDateString("en-US", { month: "long", year: "numeric" }) };
+  }
+  if (key === "quarter") {
+    const currentQ = Math.floor(now.getMonth() / 3);
+    const prevQ = currentQ === 0 ? 3 : currentQ - 1;
+    const prevYear = currentQ === 0 ? now.getFullYear() - 1 : now.getFullYear();
+    const s = new Date(prevYear, prevQ * 3, 1);
+    const e = new Date(prevYear, prevQ * 3 + 3, 0);
+    return { startYMD: ymd(s), endYMD: ymd(e), label: `Q${prevQ+1} ${prevYear}` };
+  }
+  if (key === "year") {
+    const s = new Date(now.getFullYear(), 0, 1);
+    return { startYMD: ymd(s), endYMD: ymd(now), label: `${now.getFullYear()} YTD` };
+  }
+  return null;
+};
+if (typeof window !== "undefined") window.sbv2PreviousWindowFor = sbv2PreviousWindowFor;
+
 // ── INFO SIGNALS ────────────────────────────────────────────────────────
 
 // I1: Daily updates filed during the lookback window. Counts entries dated
@@ -28230,6 +28259,11 @@ function ScoreboardV2({ jobs, users = [], identity }) {
         <ScoreboardV2HowItWorks/>
       </div>
 
+      {/* ROUND-23 CHANGE: Champions banner — top foreman + top lead for last
+          month / last quarter / YTD. Computed independently from the current
+          board view's window. */}
+      <ScoreboardV2Champions jobs={jobs}/>
+
       {/* Role toggle */}
       <div style={{ display: "flex", gap: 4, marginBottom: 8, padding: 4,
                     background: "var(--card, #1a1a1a)", borderRadius: 8, width: "fit-content" }}>
@@ -28411,6 +28445,88 @@ function ScoreboardV2Drilldown({ row }) {
                             color: inspVal == null ? "var(--dim, #888)" : "#a855f7" }}
                    title={inspVal == null ? "no inspection attempts on this job" : (insp?.detail || "")}>
                 {inspVal == null ? "—" : `${Math.round(inspVal * 100)}`}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+// ROUND-23 CHANGE: Champions banner. Shows the #1 foreman and #1 lead for
+// each prior period at a glance — last month, last quarter, year-to-date.
+// Each card runs sbv2Build independently with the prior period's window so
+// the rankings reflect that period's behavior, not the currently-selected
+// view's window.
+function ScoreboardV2Champions({ jobs }) {
+  const monthW   = useMemo(() => sbv2PreviousWindowFor("month"),   []);
+  const quarterW = useMemo(() => sbv2PreviousWindowFor("quarter"), []);
+  const yearW    = useMemo(() => sbv2PreviousWindowFor("year"),    []);
+  const mRes = useMemo(() => sbv2Build(jobs, { startYMD: monthW.startYMD,   endYMD: monthW.endYMD   }), [jobs, monthW]);
+  const qRes = useMemo(() => sbv2Build(jobs, { startYMD: quarterW.startYMD, endYMD: quarterW.endYMD }), [jobs, quarterW]);
+  const yRes = useMemo(() => sbv2Build(jobs, { startYMD: yearW.startYMD,    endYMD: yearW.endYMD    }), [jobs, yearW]);
+
+  const top = (rows) => (rows && rows.length > 0 ? rows[0] : null);
+  const fmt = v => (v == null ? "—" : `${Math.round(v * 100)}`);
+
+  const cards = [
+    { sub: "Last Month",    label: monthW.label,   res: mRes, accent: "#22c55e" },
+    { sub: "Last Quarter",  label: quarterW.label, res: qRes, accent: "#3b82f6" },
+    { sub: "Year-to-Date",  label: yearW.label,    res: yRes, accent: "#eab308" },
+  ];
+
+  const renderName = (row, accent) => row ? (
+    <div style={{ display: "flex", alignItems: "baseline", gap: 8, minWidth: 0 }}>
+      <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text, #ddd)", whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+        {row.name}
+      </div>
+      <div style={{ fontSize: 13, fontWeight: 800, color: accent, marginLeft: "auto" }}>
+        {fmt(row.combined)}
+      </div>
+    </div>
+  ) : (
+    <div style={{ fontSize: 11, color: "var(--dim, #888)", fontStyle: "italic" }}>no winner</div>
+  );
+
+  return (
+    <div style={{ marginBottom: 18 }}>
+      <div style={{ fontSize: 9, fontWeight: 800, color: "var(--dim, #888)",
+                    textTransform: "uppercase", letterSpacing: "0.12em", marginBottom: 8,
+                    display: "inline-flex", alignItems: "center", gap: 6 }}>
+        <span style={{ fontSize: 13 }}>★</span> Champions
+      </div>
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(3, 1fr)", gap: 10 }}>
+        {cards.map(card => {
+          const fr = top(card.res.foremen);
+          const ld = top(card.res.leads);
+          return (
+            <div key={card.sub} style={{
+              background: "var(--card, #1a1a1a)",
+              border: `1px solid ${card.accent}33`,
+              borderRadius: 10, padding: "10px 12px",
+              borderLeft: `3px solid ${card.accent}`,
+            }}>
+              <div style={{ fontSize: 9, color: card.accent, fontWeight: 800,
+                            textTransform: "uppercase", letterSpacing: "0.10em" }}>
+                {card.sub}
+              </div>
+              <div style={{ fontSize: 13, fontWeight: 700, color: "var(--text, #ddd)", marginTop: 1 }}>
+                {card.label}
+              </div>
+              <div style={{ marginTop: 9 }}>
+                <div style={{ fontSize: 9, color: "var(--dim, #888)", fontWeight: 700,
+                              textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>
+                  Foreman
+                </div>
+                {renderName(fr, card.accent)}
+              </div>
+              <div style={{ marginTop: 8 }}>
+                <div style={{ fontSize: 9, color: "var(--dim, #888)", fontWeight: 700,
+                              textTransform: "uppercase", letterSpacing: "0.08em", marginBottom: 3 }}>
+                  Lead
+                </div>
+                {renderName(ld, card.accent)}
               </div>
             </div>
           );
