@@ -611,6 +611,33 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules }
   win.document.open();
   win.document.write(html);
   win.document.close();
+  // Stash so the in-app DOWNLOAD button can grab the same output.
+  printPanelSchedule._lastHtml = { html, jobName, panelLabel: panelLabel||"Lighting panel" };
+}
+
+// One-shot download of the lighting panel schedule. Same builder, captures
+// output instead of opening a window.
+function downloadPanelSchedule(args) {
+  const origOpen = window.open;
+  let captured = null;
+  window.open = () => ({
+    document: {
+      open: () => {},
+      write: (h) => { captured = h; },
+      close: () => {},
+    },
+  });
+  try { printPanelSchedule(args); } finally { window.open = origOpen; }
+  if (!captured) return false;
+  const safe = (s) => String(s||"").replace(/[\\/:*?"<>|]+/g, " ").trim();
+  const filename = `${safe(args?.panelLabel||"Lighting panel")} — ${safe(args?.jobName||"schedule")}.html`;
+  const blob = new Blob([captured], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; document.body.appendChild(a);
+  a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
 }
 
 // ─── Electrical (load center) panel schedule print ───────────────────────
@@ -727,6 +754,65 @@ function printElectricalPanel({ jobName, jobAddress, panel }) {
   win.document.open();
   win.document.write(html);
   win.document.close();
+
+  // Stash the rendered HTML on the function so a download button can grab the
+  // same output without re-running the full builder. Updates on every print so
+  // the file you download matches what you just saw on screen.
+  printElectricalPanel._lastHtml = { html, jobName, panelLabel: panel?.label || "Panel" };
+}
+
+// Save the current panel schedule (whatever printElectricalPanel rendered last)
+// as a standalone HTML file. Browsers can open it directly, or you can attach
+// it to an email — file is fully self-contained, no external resources needed
+// except the company icon (loaded from / on disk-open which gracefully hides
+// when missing). Filename: "Panel B — Robison residence.html".
+function downloadElectricalPanelLast() {
+  const last = printElectricalPanel._lastHtml;
+  if (!last) return false;
+  const safe = (s) => String(s||"").replace(/[\\/:*?"<>|]+/g, " ").trim();
+  const filename = `${safe(last.panelLabel)} — ${safe(last.jobName||"panel schedule")}.html`;
+  const blob = new Blob([last.html], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; document.body.appendChild(a);
+  a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
+}
+
+// One-shot download — builds the HTML on demand (without opening a print
+// window) and saves it. Used by the in-app DOWNLOAD button so the user
+// doesn't have to print first to get a file.
+function downloadElectricalPanel({ jobName, jobAddress, panel }) {
+  // Re-run the print builder in "silent" mode by temporarily replacing the
+  // window.open call. Cleaner than duplicating the HTML logic.
+  const origOpen = window.open;
+  let captured = null;
+  window.open = () => {
+    const fakeWin = {
+      document: {
+        open: () => {},
+        write: (h) => { captured = h; },
+        close: () => {},
+      },
+    };
+    return fakeWin;
+  };
+  try {
+    printElectricalPanel({ jobName, jobAddress, panel });
+  } finally {
+    window.open = origOpen;
+  }
+  if (!captured) return false;
+  const safe = (s) => String(s||"").replace(/[\\/:*?"<>|]+/g, " ").trim();
+  const filename = `${safe(panel?.label||"Panel")} — ${safe(jobName||"panel schedule")}.html`;
+  const blob = new Blob([captured], { type: "text/html;charset=utf-8" });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement("a");
+  a.href = url; a.download = filename; document.body.appendChild(a);
+  a.click(); a.remove();
+  setTimeout(() => URL.revokeObjectURL(url), 1000);
+  return true;
 }
 
 // Catalog of common panel sizes. First number = breaker slots, second =
@@ -11097,6 +11183,15 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
                 <Icon name="fileText" size={10} stroke={2}/>
                 PRINT
               </button>
+              <button onClick={()=>downloadElectricalPanel({jobName,jobAddress,panel:p})}
+                title={`Download ${p.label||"panel"} schedule as a self-contained HTML file`}
+                style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,
+                  borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",
+                  fontFamily:"inherit",letterSpacing:"0.05em",
+                  display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}>
+                <Icon name="download" size={10} stroke={2}/>
+                DOWNLOAD
+              </button>
               <button onClick={()=>delPanel(p.id)}
                 style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0}}>×</button>
             </div>
@@ -16671,6 +16766,21 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         <Icon name="fileText" size={10} stroke={2}/>
                         PRINT
                       </button>
+                      <button onClick={()=>downloadPanelSchedule({
+                        jobName: job.name||"",
+                        jobAddress: job.address||"",
+                        system: job.lightingSystem||"Control 4",
+                        panelLabel: _panelLabel,
+                        modules: _mods,
+                      })}
+                        title={`Download ${_panelLabel} schedule as a self-contained HTML file`}
+                        style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,
+                          borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",
+                          fontFamily:"inherit",letterSpacing:"0.05em",marginLeft:6,
+                          display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}>
+                        <Icon name="download" size={10} stroke={2}/>
+                        DOWNLOAD
+                      </button>
                     </div>
                     <PanelModulesSection
                       system={job.lightingSystem||"Control 4"}
@@ -16721,6 +16831,21 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}>
                         <Icon name="fileText" size={10} stroke={2}/>
                         PRINT
+                      </button>
+                      <button onClick={()=>downloadPanelSchedule({
+                        jobName: job.name||"",
+                        jobAddress: job.address||"",
+                        system: job.lightingSystem||"Control 4",
+                        panelLabel: ef.label||"",
+                        modules: _mods,
+                      })}
+                        title={`Download ${ef.label||"panel"} schedule as a self-contained HTML file`}
+                        style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,
+                          borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",
+                          fontFamily:"inherit",letterSpacing:"0.05em",marginLeft:6,
+                          display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}>
+                        <Icon name="download" size={10} stroke={2}/>
+                        DOWNLOAD
                       </button>
                       <button onClick={()=>{
                         const newExtras=(job.panelizedLighting.extraFloors||[]).filter(e=>e.key!==ef.key);
