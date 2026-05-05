@@ -25121,7 +25121,326 @@ const _toYMDScore = (raw) => {
   }
   return "";
 };
+
+// ════════════════════════════════════════════════════════════════════════
+// ScoreboardV2 scoring — Phase 1 (pure functions, additive, dead code).
+//
+// Behavior-driven scoring per spec (memory/project_scoreboard_redo.md):
+//   • Info score  — "did you actually use the app on this job?"
+//   • Quality score — "how clean is your work?"
+//
+// These are pure functions. They don't touch React, Firestore, or any
+// existing component. They take a job (same shape as the `jobs` prop on the
+// existing Scoreboard) and return numbers. Tested via the browser console
+// (`window.sbv2Build(jobs)`) before any UI is built.
+//
+// Each signal returns { applicable, score: 0..1, detail }. Signals that
+// aren't applicable to a job (e.g. QC pass-rate on a job with no QC items
+// yet) are dropped from the per-job mean — we don't punish a foreman for
+// not having had the opportunity. Per-person score = mean of their per-job
+// scores. Rankings sort high→low on combined.
+// ════════════════════════════════════════════════════════════════════════
+
+// Mirror of HUDDLE_EXCLUDE_FOREMAN (line ~29552), extended for Lead-list
+// values that don't appear on the huddle (Unassigned, "to be determined").
+const SBV2_EXCLUDE_NAME = (name) => {
+  const clean = (name || "").trim().toLowerCase();
+  if (!clean) return true;                         // blank == Unassigned
+  if (/\btbd\b/.test(clean)) return true;
+  if (clean === "paul") return true;
+  if (clean === "unassigned") return true;
+  if (clean === "to be determined") return true;
+  return false;
+};
+
+// Walk every punch item across {upper, main, basement, ...extras} → general |
+// hotcheck | rooms[].items. Pure version, no closure dependencies.
+const sbv2WalkPunch = (punchObj, cb) => {
+  if (!punchObj || typeof punchObj !== "object" || !cb) return;
+  const extras = Array.isArray(punchObj.extras) ? punchObj.extras : [];
+  const floorKeys = ["upper","main","basement"].concat(extras.map(e => e?.key).filter(Boolean));
+  floorKeys.forEach(fk => {
+    const floor = punchObj[fk];
+    if (!floor || typeof floor !== "object") return;
+    if (Array.isArray(floor.general))  floor.general.forEach(it => cb(it, { floor: fk, group: "general" }));
+    if (Array.isArray(floor.hotcheck)) floor.hotcheck.forEach(it => cb(it, { floor: fk, group: "hotcheck" }));
+    if (Array.isArray(floor.rooms)) floor.rooms.forEach(room => {
+      if (Array.isArray(room?.items)) room.items.forEach(it => cb(it, { floor: fk, group: "room", roomName: room?.name }));
+    });
+  });
+};
+
+const _sbv2YMD = (raw) => {
+  if (!raw) return "";
+  const s = String(raw).trim();
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const m = s.match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})$/);
+  if (m) return `${m[3]}-${m[1].padStart(2,"0")}-${m[2].padStart(2,"0")}`;
+  const d = new Date(s);
+  if (!isNaN(d.getTime())) {
+    return `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}-${String(d.getDate()).padStart(2,"0")}`;
+  }
+  return "";
+};
+const _sbv2DaysAgo = (ymd) => {
+  if (!ymd) return Infinity;
+  const t = new Date(ymd + "T00:00:00").getTime();
+  if (isNaN(t)) return Infinity;
+  return Math.floor((Date.now() - t) / 86400000);
+};
+const _sbv2IsActive = (j) => {
+  const r = (j?.roughStatus  || "").toLowerCase();
+  const f = (j?.finishStatus || "").toLowerCase();
+  return r === "inprogress" || r === "scheduled" || f === "inprogress" || f === "scheduled";
+};
+
+// ── INFO SIGNALS ────────────────────────────────────────────────────────
+
+// I1: Daily updates filed during the lookback window. Counts entries dated
+// in window across roughUpdates + finishUpdates. Not applicable when the
+// job isn't currently active.
+const sbv2InfoDailyUpdates = (j, opts = {}) => {
+  const lookbackDays = opts.lookbackDays || 30;
+  const expectedPerWeek = opts.expectedPerWeek || 1;
+  if (!_sbv2IsActive(j)) return { applicable: false, score: 0, detail: "job not active" };
+  const cutoff = Date.now() - lookbackDays * 86400000;
+  const updates = []
+    .concat(Array.isArray(j.roughUpdates)  ? j.roughUpdates  : [])
+    .concat(Array.isArray(j.finishUpdates) ? j.finishUpdates : []);
+  let inWindow = 0;
+  updates.forEach(u => {
+    const ymd = _sbv2YMD(u?.date) || _sbv2YMD(u?.createdAt);
+    if (!ymd) return;
+    const t = new Date(ymd + "T00:00:00").getTime();
+    if (!isNaN(t) && t >= cutoff) inWindow++;
+  });
+  const expected = Math.max(1, Math.round(expectedPerWeek * (lookbackDays / 7)));
+  return {
+    applicable: true,
+    score: Math.max(0, Math.min(1, inWindow / expected)),
+    detail: `${inWindow} updates / ${expected} expected (${lookbackDays}d)`,
+  };
+};
+
+// I2: Status pill kept current. Newest of (roughStatusDate, finishStatusDate)
+// should be within the last 14 days while job is active.
+const sbv2InfoStatusFresh = (j, opts = {}) => {
+  const staleDays = opts.staleDays || 14;
+  if (!_sbv2IsActive(j)) return { applicable: false, score: 0, detail: "job not active" };
+  const dates = [j.roughStatusDate, j.finishStatusDate].map(_sbv2YMD).filter(Boolean);
+  if (dates.length === 0) return { applicable: true, score: 0, detail: "no status date set" };
+  const youngest = Math.min(...dates.map(_sbv2DaysAgo));
+  const score = youngest <= 7 ? 1 : youngest <= staleDays ? 0.5 : 0;
+  return { applicable: true, score, detail: `last status update ${youngest}d ago` };
+};
+
+// I3: Closed punch items have photos + checkedBy. Walks all !voided items
+// in rough+finish punch that are `done`; each should have ≥1 photo and a
+// checkedBy name. Score = % of closed items meeting the bar.
+const sbv2InfoPunchHygiene = (j) => {
+  let closed = 0, hygienic = 0;
+  [j.roughPunch, j.finishPunch].forEach(pp => sbv2WalkPunch(pp, item => {
+    if (!item || item.voided || !item.done) return;
+    closed++;
+    const hasPhoto   = Array.isArray(item.photos) && item.photos.length > 0;
+    const hasChecker = !!(item.checkedBy && String(item.checkedBy).trim());
+    if (hasPhoto && hasChecker) hygienic++;
+  }));
+  if (closed === 0) return { applicable: false, score: 0, detail: "no closed punch items" };
+  return { applicable: true, score: hygienic / closed, detail: `${hygienic}/${closed} closed items have photo + checkedBy` };
+};
+
+// I4: Notes triaged + past-due inspections entered.
+//   sub-A: jobNotes lines older than 7d should be triaged (line.promoted set).
+//   sub-B: inspections whose target date is in the past should have results.
+// Each sub-signal is null if N/A; combined = mean of whichever subs apply.
+const sbv2InfoTriageAndInspections = (j) => {
+  let oldLines = 0, oldUntriaged = 0;
+  (Array.isArray(j.jobNotes) ? j.jobNotes : []).forEach(n => {
+    if (!n || n.archived || n.deleted) return;
+    (Array.isArray(n.lines) ? n.lines : []).forEach(l => {
+      if (!l) return;
+      const ageDays = _sbv2DaysAgo(_sbv2YMD(l.createdAt));
+      if (ageDays > 7) {
+        oldLines++;
+        if (!l.promoted) oldUntriaged++;
+      }
+    });
+  });
+  const triageScore = oldLines === 0 ? null : Math.max(0, 1 - (oldUntriaged / oldLines));
+
+  let pastDue = 0, entered = 0;
+  const checkOne = (target, result) => {
+    const ymd = _sbv2YMD(target);
+    if (!ymd) return;
+    if (_sbv2DaysAgo(ymd) > 0) {
+      pastDue++;
+      if (result) entered++;
+    }
+  };
+  checkOne(j.fourWayTargetDate,         j.roughInspectionResult);
+  checkOne(j.finalInspectionTargetDate, j.finalInspectionResult);
+  const inspScore = pastDue === 0 ? null : (entered / pastDue);
+
+  if (triageScore == null && inspScore == null) {
+    return { applicable: false, score: 0, detail: "no old notes or past-due inspections" };
+  }
+  const parts = [triageScore, inspScore].filter(s => s != null);
+  const avg = parts.reduce((a,b) => a+b, 0) / parts.length;
+  const detail = [
+    triageScore != null ? `triage ${(triageScore*100).toFixed(0)}% (${oldUntriaged}/${oldLines} old lines untriaged)` : null,
+    inspScore   != null ? `inspections ${(inspScore*100).toFixed(0)}% (${entered}/${pastDue} past-due entered)`     : null,
+  ].filter(Boolean).join("; ");
+  return { applicable: true, score: avg, detail };
+};
+
+const sbv2InfoScoreForJob = (j, opts = {}) => {
+  const signals = {
+    daily:  sbv2InfoDailyUpdates(j, opts.daily),
+    status: sbv2InfoStatusFresh(j, opts.status),
+    punch:  sbv2InfoPunchHygiene(j),
+    triage: sbv2InfoTriageAndInspections(j),
+  };
+  const applicable = Object.values(signals).filter(s => s.applicable);
+  const score = applicable.length === 0
+    ? null
+    : applicable.reduce((a, s) => a + s.score, 0) / applicable.length;
+  return { score, applicable: applicable.length, signals };
+};
+
+// ── QUALITY SIGNALS ─────────────────────────────────────────────────────
+
+// Q1: Small punch list at handoff. Open finish-punch items as a proxy for
+// handoff cleanliness. Linear curve: 0 items = 1.0, ≥maxOpenPunch = 0.0.
+// Only applicable once finish work has started (rough complete OR finishStatus set).
+const sbv2QualityPunchSize = (j, opts = {}) => {
+  const max = opts.maxOpenPunch || 30;
+  const r = (j.roughStatus  || "").toLowerCase();
+  const f = (j.finishStatus || "").toLowerCase();
+  if (!(r === "complete" || f)) return { applicable: false, score: 0, detail: "rough not complete yet" };
+  let openPunch = 0;
+  sbv2WalkPunch(j.finishPunch, item => {
+    if (item && !item.done && !item.voided) openPunch++;
+  });
+  return {
+    applicable: true,
+    score: Math.max(0, Math.min(1, 1 - (openPunch / max))),
+    detail: `${openPunch} open finish punch (curve cap ${max})`,
+  };
+};
+
+// Q2: QC walks passing first try. fromQC items in rough+finish punch — % done.
+// Not applicable if no QC items have been added yet.
+const sbv2QualityQC = (j) => {
+  let total = 0, passed = 0;
+  [j.roughPunch, j.finishPunch].forEach(pp => sbv2WalkPunch(pp, item => {
+    if (!item || item.voided || !item.fromQC) return;
+    total++;
+    if (item.done) passed++;
+  }));
+  if (total === 0) return { applicable: false, score: 0, detail: "no QC items" };
+  return { applicable: true, score: passed / total, detail: `${passed}/${total} QC items closed` };
+};
+
+// Q3: Inspections passing first try. For each phase (rough, final) that has
+// any attempts, did the FIRST attempt pass? Score = first-pass / phases-with-attempts.
+const sbv2QualityInspections = (j) => {
+  const phases = [
+    { attempts: j.roughInspectionAttempts },
+    { attempts: j.finalInspectionAttempts },
+  ];
+  let total = 0, firstPass = 0;
+  phases.forEach(p => {
+    const arr = Array.isArray(p.attempts) ? p.attempts : [];
+    if (arr.length === 0) return;
+    total++;
+    const sorted = arr.slice().sort((a, b) => (_sbv2YMD(a?.date) || "").localeCompare(_sbv2YMD(b?.date) || ""));
+    if ((sorted[0]?.result || "").toLowerCase() === "pass") firstPass++;
+  });
+  if (total === 0) return { applicable: false, score: 0, detail: "no inspection attempts yet" };
+  return { applicable: true, score: firstPass / total, detail: `${firstPass}/${total} first-try passes` };
+};
+
+const sbv2QualityScoreForJob = (j, opts = {}) => {
+  const signals = {
+    punchSize:   sbv2QualityPunchSize(j, opts.punchSize),
+    qc:          sbv2QualityQC(j),
+    inspections: sbv2QualityInspections(j),
+  };
+  const applicable = Object.values(signals).filter(s => s.applicable);
+  const score = applicable.length === 0
+    ? null
+    : applicable.reduce((a, s) => a + s.score, 0) / applicable.length;
+  return { score, applicable: applicable.length, signals };
+};
+
+// ── ROLLUP — per foreman + per lead ─────────────────────────────────────
+// Groups jobs by name, drops excluded names, averages per-job scores. Jobs
+// where neither score is applicable are dropped. Combined uses opts.infoWeight
+// / opts.qualityWeight (default 0.5 / 0.5); if only one side applies,
+// combined = whichever is present.
+const sbv2BuildBoard = (jobs, role, opts = {}) => {
+  const infoW = opts.infoWeight    ?? 0.5;
+  const qualW = opts.qualityWeight ?? 0.5;
+  const groups = new Map();
+  (jobs || []).forEach(j => {
+    if (!j) return;
+    const name = (role === "lead" ? j.lead : j.foreman) || "";
+    if (SBV2_EXCLUDE_NAME(name)) return;
+    const info = sbv2InfoScoreForJob(j, opts);
+    const qual = sbv2QualityScoreForJob(j, opts);
+    if (info.score == null && qual.score == null) return;
+    const key = name.trim();
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push({
+      jobId: j.id,
+      jobName: j.name || j.jobName || j.id,
+      info: info.score,
+      quality: qual.score,
+      infoSignals: info.signals,
+      qualitySignals: qual.signals,
+    });
+  });
+  const rows = [];
+  for (const [name, jobScores] of groups.entries()) {
+    const infos = jobScores.map(j => j.info).filter(s => s != null);
+    const quals = jobScores.map(j => j.quality).filter(s => s != null);
+    const infoAvg = infos.length ? infos.reduce((a,b)=>a+b,0) / infos.length : null;
+    const qualAvg = quals.length ? quals.reduce((a,b)=>a+b,0) / quals.length : null;
+    let combined = null;
+    if (infoAvg != null && qualAvg != null) combined = infoAvg * infoW + qualAvg * qualW;
+    else if (infoAvg != null) combined = infoAvg;
+    else if (qualAvg != null) combined = qualAvg;
+    rows.push({ name, jobCount: jobScores.length, info: infoAvg, quality: qualAvg, combined, jobs: jobScores });
+  }
+  rows.sort((a, b) => (b.combined ?? -1) - (a.combined ?? -1));
+  return rows;
+};
+
+const sbv2Build = (jobs, opts = {}) => ({
+  foremen: sbv2BuildBoard(jobs, "foreman", opts),
+  leads:   sbv2BuildBoard(jobs, "lead",    opts),
+});
+
+// Console hook for Phase 1 sanity-checking. Removed in Phase 2 once the new
+// component consumes these directly. NO Firestore writes, NO UI changes —
+// adding this is fully reversible by deleting this block.
+if (typeof window !== "undefined") {
+  window.sbv2Build = sbv2Build;
+  window.sbv2InfoScoreForJob    = sbv2InfoScoreForJob;
+  window.sbv2QualityScoreForJob = sbv2QualityScoreForJob;
+}
+
 function Scoreboard({ jobs, users=[], identity }) {
+  // ScoreboardV2 console verify hook — exposes the live `jobs` prop to
+  // window.__sbJobs while this component is mounted so we can run
+  //   window.sbv2Build(window.__sbJobs)
+  // from DevTools to sanity-check the new behavior-driven scoring without
+  // building any UI yet. Removed in Phase 2 once UI consumes scores directly.
+  // Read-only — does not mutate jobs or any Firestore document.
+  useEffect(() => {
+    if (typeof window !== "undefined") window.__sbJobs = jobs;
+  }, [jobs]);
   const canEditWeights = can(identity, "scoreboard.editWeights");
   const [mode, setMode]   = useState("lead"); // "lead" | "foreman"
   const [showHelp, setHelp] = useState(false);
