@@ -25421,9 +25421,15 @@ const sbv2QualityInspections = (j) => {
   return { applicable: true, score: firstPass / total, detail: `${firstPass}/${total} first-try passes` };
 };
 
+// ROUND-8 CHANGE: Q1 (regular-punch closure rate) removed from the quality
+// aggregator. Per Koy, regular punch items in rough/finish should ONLY be
+// a positive signal (rewarded by I6) — never negative on quality. Only QC
+// punch items represent defects and should impact quality. Quality is now
+// purely: did you fix QC defects (Q2) and pass inspections first try (Q3).
+// sbv2QualityPunchSize() is left defined for reference but no longer wired
+// into the score.
 const sbv2QualityScoreForJob = (j, opts = {}) => {
   const signals = {
-    punchSize:   sbv2QualityPunchSize(j, opts.punchSize),
     qc:          sbv2QualityQC(j),
     inspections: sbv2QualityInspections(j),
   };
