@@ -25468,10 +25468,22 @@ const sbv2QualityInspections = (j) => {
       scoreSum += 1.0;
       details.push(`${p.label}: pass`);
     } else {
-      const itemCount = Array.isArray(first?.items) ? first.items.length : 0;
-      const tier = _sbv2TierScore(itemCount);
+      // ROUND-18 CHANGE: handle the "first attempt logged before items
+      // populated" case (Forth Residence pattern). If the fail snapshot has
+      // empty items, look at later attempts for a non-empty items list as
+      // a proxy for what actually had to be fixed. If no snapshot ever had
+      // items, default to moderate penalty (a fail without items recorded
+      // is still a fail — don't reward it as clean).
+      let itemCount = Array.isArray(first?.items) ? first.items.length : 0;
+      if (itemCount === 0) {
+        for (let i = 1; i < sorted.length; i++) {
+          const ic = Array.isArray(sorted[i]?.items) ? sorted[i].items.length : 0;
+          if (ic > 0) { itemCount = ic; break; }
+        }
+      }
+      const tier = itemCount === 0 ? 0.33 : _sbv2TierScore(itemCount);
       scoreSum += tier;
-      details.push(`${p.label}: fail ${itemCount} items → ${(tier*100).toFixed(0)}%`);
+      details.push(`${p.label}: fail ${itemCount || "?"} items → ${(tier*100).toFixed(0)}%`);
     }
   });
   if (total === 0) return { applicable: false, score: 0, detail: "no inspection attempts yet" };
