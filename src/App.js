@@ -25403,6 +25403,16 @@ const sbv2QualityScoreForJob = (j, opts = {}) => {
 // where neither score is applicable are dropped. Combined uses opts.infoWeight
 // / opts.qualityWeight (default 0.5 / 0.5); if only one side applies,
 // combined = whichever is present.
+// ROUND-4 CHANGE: Bayesian shrinkage. Pulls small-N per-person scores toward
+// a prior (default 0.5) so a foreman with 2 jobs at 1.00 quality doesn't
+// outrank a foreman with 9 jobs at 0.84. Big-N is barely affected; small-N
+// gets pulled toward the prior. Kills sample-size noise without filtering
+// anyone out. Tunable: opts.shrinkK (default 5), opts.shrinkPrior (default 0.5).
+const _sbv2Shrink = (raw, n, k, prior) => {
+  if (raw == null) return null;
+  return (n * raw + k * prior) / (n + k);
+};
+
 // ROUND-2 CHANGES (4+5): filter test jobs by name; require minJobs (default 2)
 // per person to appear in rankings — drops the 1-job-quality-1.0 noise.
 const SBV2_TEST_JOB = (jobName) => {
@@ -25433,18 +25443,31 @@ const sbv2BuildBoard = (jobs, role, opts = {}) => {
       qualitySignals: qual.signals,
     });
   });
+  // ROUND-4 CHANGES: apply shrinkage to per-person averages so small-N
+  // people don't artificially top the rankings. info/quality fields hold the
+  // SHRUNK values (used for sorting + display); infoRaw/qualityRaw hold the
+  // un-shrunk averages so the drilldown can still show actual data.
+  const shrinkK     = opts.shrinkK     ?? 5;
+  const shrinkPrior = opts.shrinkPrior ?? 0.5;
   const rows = [];
   for (const [name, jobScores] of groups.entries()) {
     if (jobScores.length < minJobs) continue; // round-2: minimum job count
     const infos = jobScores.map(j => j.info).filter(s => s != null);
     const quals = jobScores.map(j => j.quality).filter(s => s != null);
-    const infoAvg = infos.length ? infos.reduce((a,b)=>a+b,0) / infos.length : null;
-    const qualAvg = quals.length ? quals.reduce((a,b)=>a+b,0) / quals.length : null;
+    const infoAvgRaw = infos.length ? infos.reduce((a,b)=>a+b,0) / infos.length : null;
+    const qualAvgRaw = quals.length ? quals.reduce((a,b)=>a+b,0) / quals.length : null;
+    const infoAvg = _sbv2Shrink(infoAvgRaw, infos.length, shrinkK, shrinkPrior);
+    const qualAvg = _sbv2Shrink(qualAvgRaw, quals.length, shrinkK, shrinkPrior);
     let combined = null;
     if (infoAvg != null && qualAvg != null) combined = infoAvg * infoW + qualAvg * qualW;
     else if (infoAvg != null) combined = infoAvg;
     else if (qualAvg != null) combined = qualAvg;
-    rows.push({ name, jobCount: jobScores.length, info: infoAvg, quality: qualAvg, combined, jobs: jobScores });
+    rows.push({
+      name, jobCount: jobScores.length,
+      info: infoAvg, quality: qualAvg,           // shrunk (used for ranking)
+      infoRaw: infoAvgRaw, qualityRaw: qualAvgRaw, // raw (for drilldown)
+      combined, jobs: jobScores,
+    });
   }
   rows.sort((a, b) => (b.combined ?? -1) - (a.combined ?? -1));
   return rows;
