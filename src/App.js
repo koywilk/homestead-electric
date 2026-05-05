@@ -28259,7 +28259,7 @@ function ScoreboardV2({ jobs, users = [], identity }) {
       {/* Title + explanation + collapsible scoring details */}
       <div style={{ marginBottom: 18 }}>
         <div style={{ fontSize: 22, fontWeight: 800, color: "var(--text, #ddd)", letterSpacing: "0.01em" }}>
-          Scoreboard V2
+          Scoreboard
         </div>
         <div style={{ fontSize: 11, color: "var(--dim, #888)", marginTop: 4 }}>
           Behavior-driven competition. Info = how much you use the app. Quality = how clean your work delivers. Combined = both.
@@ -33950,14 +33950,13 @@ function App() {
               {key:"tasks",label:"Tasks"},
               ...(can(identity,"settings.view")?[{key:"huddle",label:"Huddle"}]:[]),
               ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors"}]:[]),
-              ...(can(identity,"scoreboard.view")?[{key:"scoreboard",label:"Scoreboard"}]:[]),
-              ...(can(identity,"scoreboard.view")?[{key:"scoreboardv2",label:"Scoreboard V2"}]:[]),
+              ...(can(identity,"scoreboard.editWeights")?[{key:"scoreboard",label:"Scoreboard"}]:[]),  // PHASE-4 ADMIN-ONLY: tab hidden for non-admins until boss approves
               ...(can(identity,"settings.view")?[{key:"settings",label:"Settings",icon:"settings"}]:[]),
             ]
         ).map(({key,label,icon})=>{
           const active = view===key;
           return (
-            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="tasks"?openTasks:key==="nav"?openNav:key==="huddle"?()=>setView("huddle"):key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):key==="scoreboardv2"?()=>setView("scoreboardv2"):openSettings}
+            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="tasks"?openTasks:key==="nav"?openNav:key==="huddle"?()=>setView("huddle"):key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):openSettings}
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
@@ -35215,11 +35214,12 @@ function App() {
         />
       )}
 
-      {view==="scoreboard"&&can(identity,"scoreboard.view")&&(
-        <Scoreboard jobs={jobs} users={users} identity={identity}/>
-      )}
-
-      {view==="scoreboardv2"&&can(identity,"scoreboard.view")&&(
+      {/* PHASE-4 ADMIN-ONLY: only admins (scoreboard.editWeights) see the
+          Scoreboard tab + V2 board until Koy gets boss approval. The
+          legacy Scoreboard fallback was dropped per Koy — non-admins see
+          no Scoreboard at all in this state. Once approved, we'll loosen
+          the tab gate back to scoreboard.view so everyone gets V2. */}
+      {view==="scoreboard"&&can(identity,"scoreboard.editWeights")&&(
         <ScoreboardV2 jobs={jobs} users={users} identity={identity}/>
       )}
 
