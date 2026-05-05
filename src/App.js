@@ -25503,7 +25503,13 @@ const sbv2BuildBoard = (jobs, role, opts = {}) => {
   // the person's active jobs and score sqrt(total / personTarget). Blended
   // 50/50 with the per-job info average so portfolio thoroughness (Keegan's
   // 200-item Cowdrey + smaller other jobs) dominates over per-job averaging.
-  const personI6Target = opts.personI6Target || 500;
+  // ROUND-10 CHANGE: foremen run multi-job portfolios (often 1000+ items
+  // total), so the lead-tier 500 target was capping every foreman at 1.0
+  // and erasing the volume difference between top and middle. Foreman target
+  // is now 2000 so the curve keeps differentiating across portfolio sizes.
+  // Lead target stays at 500 since lead portfolios are smaller.
+  const defaultTarget = role === "foreman" ? 2000 : 500;
+  const personI6Target = opts.personI6Target || defaultTarget;
   for (const [name, jobScores] of groups.entries()) {
     if (jobScores.length < minJobs) continue; // round-2: minimum job count
     const infos = jobScores.map(j => j.info).filter(s => s != null);
