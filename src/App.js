@@ -560,29 +560,37 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules }
   <title>${esc(panelLabel)} — ${esc(jobName)} — Panel Schedule</title>
   <style>
     *{box-sizing:border-box;margin:0;padding:0;}
-    body { font-family: Arial, "Helvetica Neue", sans-serif; padding: 24px; color: #000; background: #fff; }
-    .header { border-bottom: 2px solid #000; padding-bottom: 10px; margin-bottom: 18px; display:flex; justify-content:space-between; align-items:center; gap:16px; }
-    .header .logo-block { display:flex; align-items:center; gap:14px; }
-    .header img { height: 56px; width: 56px; object-fit: contain; flex-shrink: 0; }
-    .header h1 { font-size: 22px; letter-spacing:0.04em; }
-    .header .sys { font-size: 11px; font-weight: 700; letter-spacing: 0.08em; color: #444; text-transform: uppercase; margin-top: 2px; }
-    .header .meta { font-size: 12px; color: #444; margin-top: 6px; }
-    .header .totals { font-size: 11px; color: #555; text-align:right; }
-    .module { border: 1px solid #000; margin-bottom: 14px; page-break-inside: avoid; }
-    .module-header { background: #f0f0f0; padding: 6px 10px; font-size: 12px; display: flex; gap: 12px; align-items: center; border-bottom: 1px solid #000; flex-wrap: wrap; }
+    /* PANEL-COVER FIT — 5.5" wide layout sized to drop into the schedule
+       slot on the inside of a residential panel cover. Compact fonts +
+       padding so a typical Control 4 / Lutron / Crestron job fits on one
+       page (or two for very large jobs). */
+    body { font-family: Arial, "Helvetica Neue", sans-serif; padding: 8px 10px; color: #000; background: #fff; max-width: 5.25in; margin: 0 auto; }
+    .header { border-bottom: 1.5px solid #000; padding-bottom: 5px; margin-bottom: 8px; display:flex; justify-content:space-between; align-items:center; gap:8px; }
+    .header .logo-block { display:flex; align-items:center; gap:8px; }
+    .header img { height: 32px; width: 32px; object-fit: contain; flex-shrink: 0; }
+    .header h1 { font-size: 13px; letter-spacing:0.03em; }
+    .header .sys { font-size: 8px; font-weight: 700; letter-spacing: 0.06em; color: #444; text-transform: uppercase; margin-top: 1px; }
+    .header .meta { font-size: 8px; color: #444; margin-top: 2px; }
+    .header .totals { font-size: 8px; color: #555; text-align:right; line-height: 1.2; }
+    .module { border: 0.75px solid #000; margin-bottom: 6px; page-break-inside: avoid; }
+    .module-header { background: #f0f0f0; padding: 2px 6px; font-size: 9px; display: flex; gap: 6px; align-items: center; border-bottom: 0.75px solid #000; flex-wrap: wrap; }
     .module-header .modnum { font-weight: 700; }
-    .module-header .meta { font-size: 11px; color: #333; }
-    .module-header .badge { background:#fff; border:1px solid #888; border-radius:3px; padding:1px 6px; font-size: 10px; }
-    .module-header .count { margin-left:auto; font-size: 10px; color: #666; }
-    table { width: 100%; border-collapse: collapse; }
-    th, td { border: 1px solid #999; padding: 5px 8px; font-size: 12px; text-align: left; vertical-align: top; }
-    th { background: #fafafa; font-size: 10px; text-transform: uppercase; letter-spacing: 0.05em; color: #444; }
-    .ch { width: 40px; text-align: center; font-weight: 700; }
-    .pulled { width: 60px; text-align: center; font-size: 14px; }
-    .toolbar { margin-bottom: 12px; text-align:right; }
-    .toolbar button { padding: 8px 18px; font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid #444; background: #fff; border-radius: 6px; }
+    .module-header .meta { font-size: 8px; color: #333; }
+    .module-header .badge { background:#fff; border:0.5px solid #888; border-radius:2px; padding:0 4px; font-size: 7px; }
+    .module-header .count { margin-left:auto; font-size: 7px; color: #666; }
+    table { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    th, td { border: 0.5px solid #999; padding: 1px 4px; font-size: 8px; text-align: left; vertical-align: top; word-wrap: break-word; }
+    th { background: #fafafa; font-size: 7px; text-transform: uppercase; letter-spacing: 0.04em; color: #444; }
+    .ch { width: 22px; text-align: center; font-weight: 700; }
+    .pulled { width: 28px; text-align: center; font-size: 9px; }
+    .toolbar { margin-bottom: 8px; text-align:right; }
+    .toolbar button { padding: 5px 12px; font-size: 11px; font-weight: 600; cursor: pointer; border: 1px solid #444; background: #fff; border-radius: 5px; }
     .toolbar button:hover { background: #f0f0f0; }
-    @media print { .toolbar { display:none; } body { padding: 12px; } }
+    @media print {
+      .toolbar { display:none; }
+      body { padding: 6px 8px; max-width: none; }
+      @page { size: 5.5in 11in; margin: 0.2in; }
+    }
   </style>
 </head><body>
   <div class="toolbar"><button onclick="window.print()">Print</button></div>
@@ -700,32 +708,45 @@ function printElectricalPanel({ jobName, jobAddress, panel }) {
     `);
   }
 
+  // PANEL-COVER FIT: page is 5.5"×11" (the slot most residential panel covers
+  // have for a schedule). All sizes deliberately tight so a 40-slot panel
+  // lands on a single page and can be trimmed-and-glued to a panel door.
+  // Larger panels (60-80 slot) shrink the row height inline below.
+  const _rowHeight = slotCount <= 40 ? 16 : slotCount <= 60 ? 12 : 10;
+  const _nameFs    = slotCount <= 40 ? 9  : slotCount <= 60 ? 8  : 7;
+  const _numFs     = slotCount <= 40 ? 10 : slotCount <= 60 ? 9  : 8;
   const html = `<!DOCTYPE html>
 <html lang="en"><head>
   <meta charset="utf-8"/>
   <title>${esc(panel?.label || "Panel Schedule")} — ${esc(jobName)}</title>
   <style>
     *{box-sizing:border-box;margin:0;padding:0;}
-    body { font-family: Arial, "Helvetica Neue", sans-serif; padding: 20px; color: #000; background: #fff; }
-    .toolbar { margin-bottom: 12px; text-align: right; }
-    .toolbar button { padding: 8px 18px; font-size: 13px; font-weight: 600; cursor: pointer; border: 1px solid #444; background: #fff; border-radius: 6px; }
+    body { font-family: Arial, "Helvetica Neue", sans-serif; padding: 8px 10px; color: #000; background: #fff; max-width: 5.25in; margin: 0 auto; }
+    .toolbar { margin-bottom: 10px; text-align: right; }
+    .toolbar button { padding: 6px 14px; font-size: 12px; font-weight: 600; cursor: pointer; border: 1px solid #444; background: #fff; border-radius: 5px; }
     .toolbar button:hover { background: #f0f0f0; }
-    .header { text-align: center; margin-bottom: 14px; padding-bottom: 10px; border-bottom: 2px solid #000; }
-    .header img { height: 72px; width: 72px; margin-bottom: 6px; object-fit: contain; }
-    .header h1 { font-size: 22px; letter-spacing: 0.04em; }
-    .header .meta { font-size: 12px; color: #444; margin-top: 4px; }
-    .panel-meta { display:flex; justify-content:space-between; align-items:flex-end; margin-bottom: 10px; font-size: 12px; }
-    .panel-meta .left strong { font-size: 16px; letter-spacing: 0.04em; }
-    .panel-meta .right { color: #555; }
-    table.schedule { width: 100%; border-collapse: collapse; }
-    table.schedule td { border: 1px solid #000; padding: 4px 8px; font-size: 12px; height: 22px; vertical-align: middle; }
-    table.schedule td.name { width: 38%; }
-    table.schedule td.num { width: 12%; text-align: center; font-weight: 700; background: #f3f4f6; font-size: 13px; }
-    table.schedule td.bottom { border-top: 1px dashed #888; }
-    table.schedule td .amps { color: #444; font-size: 10px; margin-left: 4px; }
-    table.schedule td .wire { color: #777; font-size: 10px; margin-left: 4px; font-style: italic; }
-    .footer { margin-top: 14px; font-size: 10px; color: #666; text-align: right; }
-    @media print { .toolbar { display: none; } body { padding: 14px; } @page { size: letter portrait; margin: 0.4in; } }
+    .header { text-align: center; margin-bottom: 6px; padding-bottom: 5px; border-bottom: 1.5px solid #000; }
+    .header img { height: 32px; width: 32px; margin-bottom: 2px; object-fit: contain; }
+    .header h1 { font-size: 13px; letter-spacing: 0.04em; }
+    .header .meta { font-size: 8px; color: #444; margin-top: 1px; }
+    .panel-meta { margin-bottom: 6px; font-size: 9px; line-height: 1.3; }
+    .panel-meta .left strong { font-size: 12px; letter-spacing: 0.03em; }
+    .panel-meta .right { color: #555; font-size: 8px; }
+    table.schedule { width: 100%; border-collapse: collapse; table-layout: fixed; }
+    table.schedule td { border: 0.75px solid #000; padding: 1px 4px; font-size: ${_nameFs}px; height: ${_rowHeight}px; vertical-align: middle; overflow: hidden; }
+    table.schedule td.name { width: 40%; word-wrap: break-word; }
+    table.schedule td.num { width: 10%; text-align: center; font-weight: 700; background: #f3f4f6; font-size: ${_numFs}px; }
+    table.schedule td.bottom { border-top: 0.5px dashed #888; }
+    table.schedule td .amps { color: #444; font-size: ${_nameFs - 1}px; margin-left: 3px; }
+    .footer { margin-top: 6px; font-size: 7px; color: #666; text-align: right; }
+    @media print {
+      .toolbar { display: none; }
+      body { padding: 6px 8px; max-width: none; }
+      /* 5.5" × 11" — sized to drop into the schedule slot on a residential
+         panel cover. If the printer doesn't support the custom size it'll
+         default to letter and the schedule sits in the upper-left for trim. */
+      @page { size: 5.5in 11in; margin: 0.2in; }
+    }
   </style>
 </head><body>
   <div class="toolbar"><button onclick="window.print()">Print</button></div>
@@ -794,29 +815,32 @@ async function _saveHtmlAsPdf(html, filename) {
   if (typeof window.html2canvas !== "function" || !window.jspdf?.jsPDF) {
     throw new Error("PDF libraries failed to load. Check your connection and try again.");
   }
-  // Hidden iframe with the panel HTML — sized to letter portrait at 96 DPI
-  // so html2canvas captures the same layout the print window shows.
+  // Hidden iframe sized to a panel-cover schedule slot — 5.5"×11" at 96 DPI.
+  // html2canvas captures the iframe; jsPDF uses the same dimensions so the
+  // output PDF is the exact size of a panel-door schedule (no trimming).
   const iframe = document.createElement("iframe");
-  iframe.style.cssText = "position:fixed;left:-99999px;top:0;width:816px;height:1056px;border:0;";
+  iframe.style.cssText = "position:fixed;left:-99999px;top:0;width:528px;height:1056px;border:0;";
   document.body.appendChild(iframe);
   try {
     iframe.contentDocument.open();
     iframe.contentDocument.write(html);
     iframe.contentDocument.close();
-    // Give the browser a beat to lay out + load the logo image.
     await new Promise(r => setTimeout(r, 350));
     const canvas = await window.html2canvas(iframe.contentDocument.body, {
       scale: 2, useCORS: true, backgroundColor: "#ffffff", logging: false,
+      width: 528, height: 1056, windowWidth: 528, windowHeight: 1056,
     });
     const { jsPDF } = window.jspdf;
-    const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
+    // 5.5" × 11" portrait, in points (72/in × 5.5 = 396, ×11 = 792)
+    const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: [396, 792] });
     const pdfW = pdf.internal.pageSize.getWidth();
     const pdfH = pdf.internal.pageSize.getHeight();
     const ratio = canvas.width / canvas.height;
-    let imgW = pdfW - 40, imgH = imgW / ratio;
-    if (imgH > pdfH - 40) { imgH = pdfH - 40; imgW = imgH * ratio; }
+    // Fit the canvas to the page — width-driven since aspect ratio matches.
+    let imgW = pdfW - 12, imgH = imgW / ratio;
+    if (imgH > pdfH - 12) { imgH = pdfH - 12; imgW = imgH * ratio; }
     pdf.addImage(canvas.toDataURL("image/jpeg", 0.95), "JPEG",
-      (pdfW - imgW) / 2, 20, imgW, imgH);
+      (pdfW - imgW) / 2, 6, imgW, imgH);
     pdf.save(filename);
   } finally {
     iframe.remove();
