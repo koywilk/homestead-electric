@@ -34518,6 +34518,7 @@ function App() {
           ? [{key:"subcontractors", label:"My Jobs"}]
           : [
               {key:"home",label:"Job Board"},
+              {key:"safety",label:"Safety"},
               {key:"schedule",label:"Forecast"},
               {key:"nav",label:"Nav",icon:"mapPin"},
               {key:"upcoming",label:"Upcoming"},
@@ -34531,7 +34532,7 @@ function App() {
         ).map(({key,label,icon})=>{
           const active = view===key;
           return (
-            <button key={key} onClick={key==="home"?goHome:key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="tasks"?openTasks:key==="nav"?openNav:key==="huddle"?()=>setView("huddle"):key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):openSettings}
+            <button key={key} onClick={key==="home"?goHome:key==="safety"?()=>setView("safety"):key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="tasks"?openTasks:key==="nav"?openNav:key==="huddle"?()=>setView("huddle"):key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):openSettings}
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
@@ -35794,6 +35795,21 @@ function App() {
           legacy Scoreboard fallback was dropped per Koy — non-admins see
           no Scoreboard at all in this state. Once approved, we'll loosen
           the tab gate back to scoreboard.view so everyone gets V2. */}
+      {/* Safety app — coworker's separate web app embedded as a tab. The
+          iframe takes the full available viewport height (minus the top nav
+          bar). All auth + state lives inside the safety app itself; nothing
+          flows in or out from Command Center. If the iframe stays blank,
+          check the safety app's host for X-Frame-Options / CSP frame-ancestors
+          headers — they need to allow this origin. */}
+      {view==="safety"&&(
+        <iframe
+          src="https://jclowardhe.github.io/homestead-safety/"
+          title="Homestead Safety"
+          style={{width:"100%",height:"calc(100vh - 56px)",border:"none",display:"block",background:"#fff"}}
+          allow="camera; microphone; geolocation; clipboard-read; clipboard-write"
+        />
+      )}
+
       {view==="scoreboard"&&can(identity,"scoreboard.editWeights")&&(
         <ScoreboardV2 jobs={jobs} users={users} identity={identity}/>
       )}
