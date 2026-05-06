@@ -65,6 +65,36 @@ if (typeof window !== "undefined") {
     return r.data;
   };
   window._hsFs = { db, doc, getDoc, getDocs, setDoc, updateDoc, collection, query, where };
+
+  // Diagnostic: report byte size of every top-level field on a job, sorted
+  // descending. Use when a job hits Firestore's 1 MB document limit so we
+  // can see which field is bloating it.
+  //   await _hsSizeCheckJob('job name or id substring')
+  window._hsSizeCheckJob = async (needle) => {
+    const snap = await getDocs(collection(db, "jobs"));
+    let target = null;
+    snap.forEach(d => {
+      const data = d.data()?.data;
+      if (!data) return;
+      if (d.id === needle) target = { id: d.id, data };
+      if (!target && (data.name||"").toLowerCase().includes(String(needle||"").toLowerCase())) {
+        target = { id: d.id, data };
+      }
+    });
+    if (!target) { console.error("Job not found:", needle); return null; }
+    const sizeOf = (v) => {
+      try { return new Blob([JSON.stringify(v ?? null)]).size; }
+      catch { return 0; }
+    };
+    const total = sizeOf(target.data);
+    const fields = Object.entries(target.data)
+      .map(([k, v]) => ({ field: k, bytes: sizeOf(v), kb: (sizeOf(v)/1024).toFixed(1) }))
+      .sort((a, b) => b.bytes - a.bytes);
+    console.log(`Job: ${target.data.name} (${target.id})`);
+    console.log(`Total: ${(total/1024).toFixed(1)} KB / 1024 KB Firestore cap (${((total/1048576)*100).toFixed(1)}% used)`);
+    console.table(fields.slice(0, 20));
+    return { id: target.id, name: target.data.name, totalBytes: total, fields };
+  };
 }
 
 /**
