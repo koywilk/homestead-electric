@@ -66,6 +66,45 @@ if (typeof window !== "undefined") {
   };
   window._hsFs = { db, doc, getDoc, getDocs, setDoc, updateDoc, collection, query, where };
 
+  // Drill into the returnTrips array of a job — find which RT(s) and which
+  // sub-fields inside them are bloating the doc. Cowdrey-style situations
+  // usually point at one or two RTs with huge photos[] arrays.
+  //   await _hsSizeCheckRTs('cowdrey')
+  window._hsSizeCheckRTs = async (needle) => {
+    const snap = await getDocs(collection(db, "jobs"));
+    let target = null;
+    snap.forEach(d => {
+      const data = d.data()?.data;
+      if (!data) return;
+      if (d.id === needle) target = { id: d.id, data };
+      if (!target && (data.name||"").toLowerCase().includes(String(needle||"").toLowerCase())) {
+        target = { id: d.id, data };
+      }
+    });
+    if (!target) { console.error("Job not found:", needle); return null; }
+    const rts = Array.isArray(target.data.returnTrips) ? target.data.returnTrips : [];
+    const sizeOf = (v) => { try { return new Blob([JSON.stringify(v ?? null)]).size; } catch { return 0; } };
+    const summary = rts.map((rt, i) => {
+      const fields = Object.entries(rt || {})
+        .map(([k, v]) => ({ field: k, bytes: sizeOf(v) }))
+        .sort((a, b) => b.bytes - a.bytes);
+      return {
+        idx: i,
+        id: rt?.id || "(no id)",
+        scope: (rt?.scope || "").slice(0, 40),
+        signedOff: !!rt?.signedOff,
+        totalKB: (sizeOf(rt) / 1024).toFixed(1),
+        biggestField: fields[0]?.field,
+        biggestKB: fields[0] ? (fields[0].bytes / 1024).toFixed(1) : "0",
+        photoCount: Array.isArray(rt?.photos) ? rt.photos.length : 0,
+        punchCount: Array.isArray(rt?.punch) ? rt.punch.length : 0,
+      };
+    }).sort((a, b) => parseFloat(b.totalKB) - parseFloat(a.totalKB));
+    console.log(`${rts.length} return trips on ${target.data.name}, sorted by size:`);
+    console.table(summary.slice(0, 30));
+    return { rts, summary };
+  };
+
   // Diagnostic: report byte size of every top-level field on a job, sorted
   // descending. Use when a job hits Firestore's 1 MB document limit so we
   // can see which field is bloating it.
