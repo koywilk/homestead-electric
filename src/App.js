@@ -66,6 +66,237 @@ if (typeof window !== "undefined") {
   };
   window._hsFs = { db, doc, getDoc, getDocs, setDoc, updateDoc, collection, query, where };
 
+  // RESCUE: convert legacy inline data-URL photos to Firebase Storage URLs.
+  // SAFETY (every guarantee verified before any write):
+  //   1. Default mode = DRY RUN. No uploads, no writes. Reports what WOULD
+  //      change. Pass {dryRun:false} to actually rescue.
+  //   2. Original `data` is deep-cloned BEFORE any mutation. Source untouched.
+  //   3. Photo IDs/names preserved on each replaced entry. The id, name,
+  //      uploadedBy, uploadedAt fields are kept; only the bytes-bearing field
+  //      switches from `dataUrl` (string) to `url` (Storage download URL).
+  //   4. Photo COUNT invariant — if any photo array changes length between
+  //      before and after, ABORT with no Firestore write.
+  //   5. Doc-size invariant — afterBytes must be smaller than beforeBytes,
+  //      otherwise ABORT.
+  //   6. No-data-url-survivors invariant — after rescue, the working doc must
+  //      have ZERO photos with a remaining dataUrl. If any survived (e.g. an
+  //      upload silently produced an empty url), ABORT.
+  //   7. Single atomic updateDoc — all-or-nothing write. If Firestore rejects,
+  //      the original doc stays untouched (Storage uploads remain as orphans
+  //      but the data is not corrupted; re-run is safe).
+  //   8. Read-back verify — after the write, we re-read the doc and report
+  //      its new size so you can confirm the cap is no longer hit.
+  //
+  // Usage:
+  //   await _hsRescueDataUrlPhotos('cowdrey')                  ← DRY RUN
+  //   await _hsRescueDataUrlPhotos('cowdrey', { dryRun:false })← actually rescue
+  window._hsRescueDataUrlPhotos = async (jobNeedle, options = {}) => {
+    const { dryRun = true } = options;
+    const sizeOf = (v) => { try { return new Blob([JSON.stringify(v)]).size; } catch { return 0; } };
+
+    const snap = await getDocs(collection(db, "jobs"));
+    let docId = null, originalData = null;
+    snap.forEach(d => {
+      const data = d.data()?.data;
+      if (!data) return;
+      if (docId) return; // first match wins
+      if (d.id === jobNeedle || (data.name||"").toLowerCase().includes(String(jobNeedle||"").toLowerCase())) {
+        docId = d.id; originalData = data;
+      }
+    });
+    if (!docId) { console.error("Job not found:", jobNeedle); return null; }
+
+    const beforeBytes = sizeOf(originalData);
+    console.log(`Target: ${originalData.name} (${docId})`);
+    console.log(`Before: ${(beforeBytes/1024).toFixed(1)} KB`);
+
+    // Deep clone — original stays pristine until we explicitly write.
+    const working = JSON.parse(JSON.stringify(originalData));
+
+    // Walk the whole tree, collect references to every legacy photo.
+    const refs = [];
+    const walk = (val) => {
+      if (!val || typeof val !== "object") return;
+      if (Array.isArray(val)) {
+        val.forEach((item, i) => {
+          if (item && typeof item === "object"
+              && typeof item.dataUrl === "string"
+              && item.dataUrl.startsWith("data:")
+              && !item.url) {
+            refs.push({ array: val, index: i });
+          } else {
+            walk(item);
+          }
+        });
+      } else {
+        Object.values(val).forEach(walk);
+      }
+    };
+    walk(working);
+
+    console.log(`Found ${refs.length} legacy data-URL photo(s)`);
+    if (refs.length === 0) { console.log("Nothing to rescue."); return { docId, found: 0 }; }
+
+    // DRY RUN — show table, don't touch anything.
+    if (dryRun) {
+      const summary = refs.map(r => {
+        const p = r.array[r.index];
+        const mime = (p.dataUrl.match(/^data:([^;]+)/) || [])[1] || "?";
+        return { name: p.name || "(unnamed)", id: p.id || "(no id)", mime, dataKB: (p.dataUrl.length / 1024).toFixed(1) };
+      });
+      console.table(summary);
+      console.log("DRY RUN — no changes. Re-run with { dryRun:false } to actually rescue.");
+      return { docId, found: refs.length, dryRun: true, summary };
+    }
+
+    // Live rescue: upload each photo's bytes to Storage, replace entry.
+    console.log(`Uploading ${refs.length} photo(s) to Storage…`);
+    for (let i = 0; i < refs.length; i++) {
+      const r = refs[i];
+      const p = r.array[r.index];
+      const dataUrl = p.dataUrl;
+      const mime = (dataUrl.match(/^data:([^;]+)/) || [])[1] || "image/jpeg";
+      const ext = mime.split("/")[1] || "jpg";
+      const photoId = p.id || `rescue-${Date.now()}-${i}`;
+      const storagePath = `jobs/${docId}/rt-rescue/${photoId}.${ext}`;
+
+      // base64 → bytes → Blob
+      const base64 = dataUrl.split(",")[1] || "";
+      const bin = atob(base64);
+      const bytes = new Uint8Array(bin.length);
+      for (let j = 0; j < bin.length; j++) bytes[j] = bin.charCodeAt(j);
+      const blob = new Blob([bytes], { type: mime });
+
+      const fileRef = ref(storage, storagePath);
+      await uploadBytes(fileRef, blob);
+      const url = await getDownloadURL(fileRef);
+
+      // Replace — preserve id, name, uploadedBy, uploadedAt; swap dataUrl for url.
+      r.array[r.index] = {
+        id: photoId,
+        name: p.name || photoId,
+        url,
+        storagePath,
+        type: mime,
+        ...(p.uploadedBy ? { uploadedBy: p.uploadedBy } : {}),
+        ...(p.uploadedAt ? { uploadedAt: p.uploadedAt } : {}),
+        rescuedAt: new Date().toISOString(),
+      };
+      console.log(`  ${i+1}/${refs.length}: ${p.name||photoId} (${(dataUrl.length/1024).toFixed(0)} KB) → ${url.slice(0, 70)}…`);
+    }
+
+    // INVARIANTS — verify before any Firestore write.
+    const afterBytes = sizeOf(working);
+    console.log(`After: ${(afterBytes/1024).toFixed(1)} KB`);
+
+    // 1. Doc must shrink.
+    if (afterBytes >= beforeBytes) {
+      console.error("ABORT: working doc is not smaller. No write performed.");
+      return { docId, aborted: "size-not-smaller", beforeBytes, afterBytes };
+    }
+
+    // 2. Photo count must match — recursively count anything with url|dataUrl.
+    const countPhotos = (v) => {
+      let n = 0;
+      const w = (x) => {
+        if (!x) return;
+        if (Array.isArray(x)) x.forEach(item => {
+          if (item && typeof item === "object" && (item.url || item.dataUrl)) n++;
+          else w(item);
+        });
+        else if (typeof x === "object") Object.values(x).forEach(w);
+      };
+      w(v);
+      return n;
+    };
+    const beforeCount = countPhotos(originalData);
+    const afterCount = countPhotos(working);
+    if (beforeCount !== afterCount) {
+      console.error(`ABORT: photo count changed (${beforeCount} → ${afterCount}). No write.`);
+      return { docId, aborted: "photo-count-changed", beforeCount, afterCount };
+    }
+
+    // 3. Zero data-URL survivors.
+    let survivors = 0;
+    const surv = (x) => {
+      if (!x) return;
+      if (Array.isArray(x)) x.forEach(it => {
+        if (it && typeof it === "object" && typeof it.dataUrl === "string" && it.dataUrl.startsWith("data:") && !it.url) survivors++;
+        else surv(it);
+      });
+      else if (typeof x === "object") Object.values(x).forEach(surv);
+    };
+    surv(working);
+    if (survivors !== 0) {
+      console.error(`ABORT: ${survivors} dataUrl photos still present after rescue. No write.`);
+      return { docId, aborted: "survivors", survivors };
+    }
+
+    // All invariants pass — single atomic write.
+    await updateDoc(doc(db, "jobs", docId), {
+      data: working,
+      updated_at: new Date().toISOString(),
+    });
+
+    // Read-back verify.
+    const verifySnap = await getDoc(doc(db, "jobs", docId));
+    const verifyBytes = sizeOf(verifySnap.data()?.data);
+    console.log(`Saved. Verified size: ${(verifyBytes/1024).toFixed(1)} KB (was ${(beforeBytes/1024).toFixed(1)} KB) — ${refs.length} photo(s) rescued.`);
+    return { docId, photosRescued: refs.length, beforeBytes, afterBytes: verifyBytes };
+  };
+
+  // Inspect a specific RT's photos array. Tells us whether each photo is
+  // a normal Firebase Storage URL (good — small) or a base64 data URL
+  // (bad — fat). Also shows a preview snippet so we can spot weird payloads.
+  //   await _hsPeekRTPhotos('cowdrey', 1)   ← drill into RT idx 1
+  window._hsPeekRTPhotos = async (jobNeedle, rtIdx = 0) => {
+    const snap = await getDocs(collection(db, "jobs"));
+    let target = null;
+    snap.forEach(d => {
+      const data = d.data()?.data;
+      if (!data) return;
+      if (d.id === jobNeedle) target = { id: d.id, data };
+      if (!target && (data.name||"").toLowerCase().includes(String(jobNeedle||"").toLowerCase())) {
+        target = { id: d.id, data };
+      }
+    });
+    if (!target) { console.error("Job not found:", jobNeedle); return null; }
+    const rt = (target.data.returnTrips||[])[rtIdx];
+    if (!rt) { console.error("RT not at index:", rtIdx); return null; }
+    const photos = Array.isArray(rt.photos) ? rt.photos : [];
+    const summary = photos.map((p, i) => {
+      const json = JSON.stringify(p ?? null);
+      const fields = (p && typeof p === "object")
+        ? Object.entries(p).map(([k, v]) => {
+            const sz = (() => { try { return new Blob([JSON.stringify(v ?? null)]).size; } catch { return 0; } })();
+            const isDataUrl = typeof v === "string" && v.startsWith("data:");
+            const isHttpUrl = typeof v === "string" && (v.startsWith("http://") || v.startsWith("https://"));
+            return { key: k, kb: (sz/1024).toFixed(1), kind: isDataUrl ? "DATA_URL" : isHttpUrl ? "URL" : typeof v };
+          })
+        : [];
+      return {
+        idx: i,
+        totalKB: (json.length / 1024).toFixed(1),
+        biggestField: fields.sort((a,b) => parseFloat(b.kb) - parseFloat(a.kb))[0]?.key,
+        biggestKind: fields[0]?.kind,
+        keys: Object.keys(p||{}).join(","),
+      };
+    });
+    console.log(`RT ${rtIdx} on ${target.data.name}: ${photos.length} photos`);
+    console.table(summary);
+    // Show the first photo's full structure so we can see the actual fields
+    if (photos[0]) {
+      const p0 = photos[0];
+      console.log("First photo's fields and value-prefixes:");
+      Object.entries(p0).forEach(([k, v]) => {
+        const sz = (() => { try { return new Blob([JSON.stringify(v ?? null)]).size; } catch { return 0; } })();
+        const preview = typeof v === "string" ? v.slice(0, 80) : JSON.stringify(v).slice(0, 80);
+        console.log(`  ${k}: ${(sz/1024).toFixed(1)} KB — ${preview}${typeof v === "string" && v.length > 80 ? "…" : ""}`);
+      });
+    }
+    return { rtIdx, jobId: target.id, photos };
+  };
+
   // Drill into the returnTrips array of a job — find which RT(s) and which
   // sub-fields inside them are bloating the doc. Cowdrey-style situations
   // usually point at one or two RTs with huge photos[] arrays.
@@ -33177,7 +33408,15 @@ function App() {
         const msg = e?.message || "";
         if(msg.includes("exceeds the maximum") || msg.includes("too large") || msg.includes("INVALID_ARGUMENT")) {
           setSyncStatus("error");
-          toast.error(`Save failed: "${job.name}" document is too large for Firestore. Try removing photos to reduce size.`,{duration:8000});
+          // Point the user at the rescue helper so they can recover without
+          // losing data. The helper is dry-run by default — it'll show what
+          // would change before any write.
+          const cmd = `await _hsRescueDataUrlPhotos('${(job.name||"").split(" ")[0]||"job"}')`;
+          toast.error(
+            `Save failed: "${job.name}" doc is over Firestore's 1 MB limit. Run this in DevTools console to inspect and rescue:\n${cmd}`,
+            { duration: 20000 }
+          );
+          console.error(`[HE] Save failed (size). Run: ${cmd}`);
         } else {
           setSyncStatus("error");
         }
