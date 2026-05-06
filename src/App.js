@@ -66,6 +66,87 @@ if (typeof window !== "undefined") {
   };
   window._hsFs = { db, doc, getDoc, getDocs, setDoc, updateDoc, collection, query, where };
 
+  // SCAN: walk every job in Firestore and report which ones still carry
+  // legacy inline data-URL photos. Read-only — no writes, no uploads.
+  // Returns a sorted table (largest first) so we can prioritize rescue.
+  //
+  // Usage:  await _hsScanLegacyPhotos()
+  window._hsScanLegacyPhotos = async () => {
+    const sizeOf = (v) => { try { return new Blob([JSON.stringify(v)]).size; } catch { return 0; } };
+    const snap = await getDocs(collection(db, "jobs"));
+    const findDataUrlPhotos = (val, acc) => {
+      if (!val || typeof val !== "object") return;
+      if (Array.isArray(val)) {
+        val.forEach(item => {
+          if (item && typeof item === "object"
+              && typeof item.dataUrl === "string"
+              && item.dataUrl.startsWith("data:")
+              && !item.url) {
+            acc.count++;
+            acc.bytes += item.dataUrl.length;
+          } else {
+            findDataUrlPhotos(item, acc);
+          }
+        });
+      } else {
+        Object.values(val).forEach(v => findDataUrlPhotos(v, acc));
+      }
+    };
+    const affected = [];
+    snap.forEach(d => {
+      const data = d.data()?.data;
+      if (!data) return;
+      const acc = { count: 0, bytes: 0 };
+      findDataUrlPhotos(data, acc);
+      if (acc.count > 0) {
+        affected.push({
+          docId: d.id,
+          name: data.name || "(no name)",
+          legacyPhotos: acc.count,
+          legacyKB: (acc.bytes / 1024).toFixed(1),
+          totalDocKB: (sizeOf(data) / 1024).toFixed(1),
+          status: data.status || "",
+        });
+      }
+    });
+    affected.sort((a, b) => parseFloat(b.legacyKB) - parseFloat(a.legacyKB));
+    console.log(`Scanned ${snap.size} jobs. ${affected.length} have legacy data-URL photos:`);
+    console.table(affected);
+    const totalLegacyBytes = affected.reduce((n, x) => n + parseFloat(x.legacyKB)*1024, 0);
+    console.log(`Total legacy photo bytes across all jobs: ${(totalLegacyBytes/1024/1024).toFixed(2)} MB`);
+    return affected;
+  };
+
+  // BULK RESCUE: run the per-job rescue on every job that has legacy photos.
+  // Defaults to dry-run. Pass {dryRun:false} to actually perform uploads.
+  // Each per-job rescue still has its own strict invariants (size shrink,
+  // photo count unchanged, no surviving dataUrls) — if any job fails its
+  // checks, that job is skipped and the script moves on.
+  //
+  // Usage:
+  //   await _hsRescueAllLegacyPhotos()                   ← scan + dry run
+  //   await _hsRescueAllLegacyPhotos({dryRun:false})     ← actually rescue all
+  window._hsRescueAllLegacyPhotos = async (options = {}) => {
+    const { dryRun = true } = options;
+    const affected = await window._hsScanLegacyPhotos();
+    if (affected.length === 0) { console.log("Nothing to rescue."); return []; }
+    console.log(`\n${dryRun ? "DRY-RUNNING" : "RESCUING"} ${affected.length} job(s)…\n`);
+    const results = [];
+    for (const job of affected) {
+      console.log(`\n── ${job.name} (${job.docId}) — ${job.legacyPhotos} photos, ${job.legacyKB} KB`);
+      try {
+        const r = await window._hsRescueDataUrlPhotos(job.docId, { dryRun });
+        results.push({ docId: job.docId, name: job.name, ok: true, result: r });
+      } catch (e) {
+        console.error(`  FAILED: ${e.message}`);
+        results.push({ docId: job.docId, name: job.name, ok: false, error: e.message });
+      }
+    }
+    console.log(`\nDone. ${results.filter(r=>r.ok).length}/${results.length} succeeded.`);
+    if (dryRun) console.log("Re-run with { dryRun:false } to actually rescue.");
+    return results;
+  };
+
   // RESCUE: convert legacy inline data-URL photos to Firebase Storage URLs.
   // SAFETY (every guarantee verified before any write):
   //   1. Default mode = DRY RUN. No uploads, no writes. Reports what WOULD
