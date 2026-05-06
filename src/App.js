@@ -588,8 +588,8 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules }
     .toolbar button:hover { background: #f0f0f0; }
     @media print {
       .toolbar { display:none; }
-      body { padding: 6px 8px; max-width: none; }
-      @page { size: 5.5in 11in; margin: 0.2in; }
+      body { padding: 0.4in; max-width: 5.25in; }
+      @page { size: letter portrait; margin: 0.4in; }
     }
   </style>
 </head><body>
@@ -741,11 +741,12 @@ function printElectricalPanel({ jobName, jobAddress, panel }) {
     .footer { margin-top: 6px; font-size: 7px; color: #666; text-align: right; }
     @media print {
       .toolbar { display: none; }
-      body { padding: 6px 8px; max-width: none; }
-      /* 5.5" × 11" — sized to drop into the schedule slot on a residential
-         panel cover. If the printer doesn't support the custom size it'll
-         default to letter and the schedule sits in the upper-left for trim. */
-      @page { size: 5.5in 11in; margin: 0.2in; }
+      body { padding: 0.4in; max-width: 5.25in; }
+      /* Letter portrait — what every printer in the shop expects. The
+         schedule itself stays narrow (5.25in body) and centered, so you
+         can trim a panel-cover-sized strip out of a regular letter sheet
+         after printing. */
+      @page { size: letter portrait; margin: 0.4in; }
     }
   </style>
 </head><body>
@@ -815,11 +816,12 @@ async function _saveHtmlAsPdf(html, filename) {
   if (typeof window.html2canvas !== "function" || !window.jspdf?.jsPDF) {
     throw new Error("PDF libraries failed to load. Check your connection and try again.");
   }
-  // Hidden iframe sized to a panel-cover schedule slot — 5.5"×11" at 96 DPI.
-  // html2canvas captures the iframe; jsPDF uses the same dimensions so the
-  // output PDF is the exact size of a panel-door schedule (no trimming).
+  // Hidden iframe at letter portrait (8.5×11" @ 96 DPI). html2canvas captures
+  // it as-is; the body's CSS already constrains the schedule to a 5.25in
+  // panel-cover-shaped strip, so the captured page is letter-shaped with the
+  // schedule centered narrow inside it. Prints to standard letter paper.
   const iframe = document.createElement("iframe");
-  iframe.style.cssText = "position:fixed;left:-99999px;top:0;width:528px;height:1056px;border:0;";
+  iframe.style.cssText = "position:fixed;left:-99999px;top:0;width:816px;height:1056px;border:0;";
   document.body.appendChild(iframe);
   try {
     iframe.contentDocument.open();
@@ -828,19 +830,17 @@ async function _saveHtmlAsPdf(html, filename) {
     await new Promise(r => setTimeout(r, 350));
     const canvas = await window.html2canvas(iframe.contentDocument.body, {
       scale: 2, useCORS: true, backgroundColor: "#ffffff", logging: false,
-      width: 528, height: 1056, windowWidth: 528, windowHeight: 1056,
+      width: 816, height: 1056, windowWidth: 816, windowHeight: 1056,
     });
     const { jsPDF } = window.jspdf;
-    // 5.5" × 11" portrait, in points (72/in × 5.5 = 396, ×11 = 792)
-    const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: [396, 792] });
+    const pdf = new jsPDF({ orientation: "portrait", unit: "pt", format: "letter" });
     const pdfW = pdf.internal.pageSize.getWidth();
     const pdfH = pdf.internal.pageSize.getHeight();
     const ratio = canvas.width / canvas.height;
-    // Fit the canvas to the page — width-driven since aspect ratio matches.
-    let imgW = pdfW - 12, imgH = imgW / ratio;
-    if (imgH > pdfH - 12) { imgH = pdfH - 12; imgW = imgH * ratio; }
+    let imgW = pdfW - 24, imgH = imgW / ratio;
+    if (imgH > pdfH - 24) { imgH = pdfH - 24; imgW = imgH * ratio; }
     pdf.addImage(canvas.toDataURL("image/jpeg", 0.95), "JPEG",
-      (pdfW - imgW) / 2, 6, imgW, imgH);
+      (pdfW - imgW) / 2, 12, imgW, imgH);
     pdf.save(filename);
   } finally {
     iframe.remove();
