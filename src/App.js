@@ -530,17 +530,31 @@ async function registerFCMToken(userId, force=false) {
 // Handle foreground messages (app is open) — show a brief alert-style banner.
 // Reads from payload.data since we send data-only messages to prevent double notifications.
 // Also forwards jobId + section so the toast can deep-link on tap.
+//
+// DEBUG: every step of the foreground-push chain logs to console so we can
+// trace where a "delivered but not visible" push is failing. If you sent a
+// test push and saw NOTHING in the console at all, the push didn't reach the
+// device's service worker. If you see "[HE push] onMessage fired" but no
+// "[HE push] toast set", the React listener didn't pick up the custom event
+// (component not mounted yet, etc).
 if (messaging) {
+  console.log("[HE push] FCM messaging initialized, registering onMessage handler");
   onMessage(messaging, payload => {
+    console.log("[HE push] onMessage fired — payload:", payload);
     const title   = payload.data?.title   || payload.notification?.title;
     const body    = payload.data?.body    || payload.notification?.body;
     const jobId   = payload.data?.jobId   || "";
     const section = payload.data?.section || "";
     if (title || body) {
+      console.log("[HE push] dispatching he-push custom event:", { title, body, jobId, section });
       const ev = new CustomEvent("he-push", { detail: { title, body, jobId, section } });
       window.dispatchEvent(ev);
+    } else {
+      console.warn("[HE push] payload had no title/body — skipping toast");
     }
   });
+} else {
+  console.warn("[HE push] FCM messaging NOT initialized — pushes will not work");
 }
 window.__HE_DB = db;
 window.__HE_REGISTER_FCM = registerFCMToken;
@@ -34580,7 +34594,9 @@ function App() {
   // ── Foreground push notification toast ───────────────────────────────────
   const [pushToast, setPushToast] = useState(null);
   useEffect(() => {
+    console.log("[HE push] he-push listener attached");
     const handler = e => {
+      console.log("[HE push] he-push event received — toast set:", e.detail);
       setPushToast(e.detail);
       setTimeout(() => setPushToast(null), 5000);
     };
