@@ -1116,29 +1116,51 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
       sku === "DUAL_500W_APD" ? "APD Dimmer"
     : sku === "DUAL_20A_RELAY" ? "Dual Relay"
     : (sku || "Smart");
+    // Compute "this regular breaker feeds Load X on smart breaker Y" for badges
+    const regFeedsBySlot = new Map();
+    (modules||[]).forEach(m => {
+      (m.loads||[]).forEach((l, li) => {
+        const fs = Number(l.feederSlot);
+        if (fs > 0) {
+          const letter = li === 0 ? "A" : (li === 1 ? "B" : String.fromCharCode(65+li));
+          if (!regFeedsBySlot.has(fs)) regFeedsBySlot.set(fs, []);
+          regFeedsBySlot.get(fs).push({ slotA:m.slotA, slotB:m.slotB, letter });
+        }
+      });
+    });
     const cellHtml = (slot) => {
       const e = occ.get(slot);
       if (!e) return `<div class="sav-cell sav-empty">—</div>`;
       if (e.kind === "smartA") {
-        const m = e.ref; const out = (m.loads||[])[0]||{};
+        const m = e.ref; const load = (m.loads||[])[0]||{};
+        const feederTag = Number(load.feederSlot)>0 ? `<span class="sav-feed">← Bkr ${esc(load.feederSlot)}</span>` : "";
         return `<div class="sav-cell sav-smart sav-smart-top">
-          <div class="sav-pill">SMART · ${esc(skuShort(m.moduleType))}</div>
-          <div class="sav-out"><span class="sav-out-letter">A</span>
-            <span class="sav-out-name">${esc(stripTags(out.name||""))}</span>
-            ${out.watts?`<span class="sav-out-watts">${esc(out.watts)}W</span>`:""}
+          <div class="sav-pill">SMART BREAKER · ${esc(skuShort(m.moduleType))}</div>
+          <div class="sav-out"><span class="sav-out-letter">LOAD A</span>
+            <span class="sav-out-name">${esc(stripTags(load.name||""))}</span>
+            ${load.watts?`<span class="sav-out-watts">${esc(load.watts)}W</span>`:""}
+            ${feederTag}
           </div></div>`;
       }
       if (e.kind === "smartB") {
-        const m = e.ref; const out = (m.loads||[])[1]||{};
+        const m = e.ref; const load = (m.loads||[])[1]||{};
+        const feederTag = Number(load.feederSlot)>0 ? `<span class="sav-feed">← Bkr ${esc(load.feederSlot)}</span>` : "";
         return `<div class="sav-cell sav-smart sav-smart-bot">
-          <div class="sav-out"><span class="sav-out-letter">B</span>
-            <span class="sav-out-name">${esc(stripTags(out.name||""))}</span>
-            ${out.watts?`<span class="sav-out-watts">${esc(out.watts)}W</span>`:""}
+          <div class="sav-out"><span class="sav-out-letter">LOAD B</span>
+            <span class="sav-out-name">${esc(stripTags(load.name||""))}</span>
+            ${load.watts?`<span class="sav-out-watts">${esc(load.watts)}W</span>`:""}
+            ${feederTag}
           </div></div>`;
       }
       const r = e.ref;
-      return `<div class="sav-cell sav-reg">
+      const feeds = regFeedsBySlot.get(Number(slot)) || [];
+      const feedsTags = feeds.map(f =>
+        `<span class="sav-feeds">→ ${esc(f.slotA)}/${esc(f.slotB)} ${f.letter}</span>`
+      ).join("");
+      const feedsClass = feeds.length>0 ? " sav-reg-feeder" : "";
+      return `<div class="sav-cell sav-reg${feedsClass}">
         <span class="sav-reg-desc">${esc(stripTags(r.description||""))}</span>
+        ${feedsTags}
         ${r.amp?`<span class="sav-reg-amp">${esc(r.amp)}${/^\d+$/.test(String(r.amp).trim())?"A":""}</span>`:""}
       </div>`;
     };
@@ -1246,8 +1268,11 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
     .sav-out-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .sav-out-watts { font-size: 7px; color: #555; flex-shrink: 0; }
     .sav-reg { flex-direction: row; align-items: center; gap: 3px; }
+    .sav-reg-feeder { background: #f5fef5; border-left: 2px solid #15803d !important; }
     .sav-reg-desc { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
     .sav-reg-amp { font-size: 7px; font-weight: 700; color: #555; background: #fafafa; border: 0.5px solid #888; padding: 0 2px; flex-shrink: 0; }
+    .sav-feed { font-size: 7px; font-weight: 700; color: #555; background: #fff; border: 0.5px solid #888; padding: 0 2px; flex-shrink: 0; margin-left: 3px; }
+    .sav-feeds { font-size: 6px; font-weight: 700; color: #15803d; background: #fff; border: 0.5px solid #15803d; padding: 0 2px; flex-shrink: 0; }
     .toolbar { margin-bottom: 8px; text-align:right; }
     .toolbar button { padding: 5px 12px; font-size: 11px; font-weight: 600; cursor: pointer; border: 1px solid #444; background: #fff; border-radius: 5px; }
     .toolbar button:hover { background: #f0f0f0; }
@@ -1269,8 +1294,9 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
       </div>
     </div>
     <div class="totals">
-      ${visibleMods.length} ${devLabel.toLowerCase()}${visibleMods.length === 1 ? "" : "s"}<br/>
-      ${totalLoads} channel${totalLoads === 1 ? "" : "s"}
+      ${savUseSchedule
+        ? `${(modules||[]).filter(m=>Number(m.slotA)>0).length} smart breaker${(modules||[]).filter(m=>Number(m.slotA)>0).length===1?"":"s"}<br/>${(regularBreakers||[]).filter(r=>Number(r.slot)>0).length} regular breaker${(regularBreakers||[]).filter(r=>Number(r.slot)>0).length===1?"":"s"}`
+        : `${visibleMods.length} ${devLabel.toLowerCase()}${visibleMods.length === 1 ? "" : "s"}<br/>${totalLoads} channel${totalLoads === 1 ? "" : "s"}`}
     </div>
   </div>
   ${savUseSchedule ? savScheduleHtml : moduleHtml}
@@ -13284,10 +13310,11 @@ function SavantPanelSchedule({
       moduleType: sku,
       slotA: String(slotA),
       slotB: String(slotB),
-      // Pre-create exactly 2 loads = Output A + Output B
+      // Pre-create exactly 2 loads (Load A + Load B). `feederSlot` left
+      // empty — user picks which regular breaker feeds each in the editor.
       loads: [
-        { ...newLoadRow(1), output: "A" },
-        { ...newLoadRow(2), output: "B" },
+        { ...newLoadRow(1), output: "A", feederSlot: "" },
+        { ...newLoadRow(2), output: "B", feederSlot: "" },
       ],
     };
     onChange([...(modules||[]), newMod]);
@@ -13312,6 +13339,32 @@ function SavantPanelSchedule({
     onRegularChange((regularBreakers||[]).map(r => r.id===rid ? {...r, ...patch} : r));
   const delReg = (rid) =>
     onRegularChange((regularBreakers||[]).filter(r => r.id!==rid));
+
+  // ── Feeder-relationship helpers ───────────────────────────────────────
+  // Each load on a smart breaker can carry a `feederSlot` field — a string
+  // pointing to the regular breaker # that supplies that load. Per Savant
+  // install docs: APD = one feeder for both loads (same number both rows);
+  // Dual Relay = one feeder per load (two different numbers). The data
+  // model is permissive — fill 1 or 2 per smart breaker as the SKU dictates.
+  const regBySlot = new Map();
+  (regularBreakers||[]).forEach(r => {
+    const s = Number(r.slot);
+    if (s > 0) regBySlot.set(s, r);
+  });
+  // For a given regular-breaker slot, return the list of smart-breaker loads
+  // it feeds — used to render "→ Sm.1A" badges on regular-breaker rows.
+  const feedsFromSlot = (regSlot) => {
+    const out = [];
+    (modules||[]).forEach((m, mi) => {
+      (m.loads||[]).forEach((l, li) => {
+        if (Number(l.feederSlot) === Number(regSlot) && Number(l.feederSlot) > 0) {
+          const letter = li === 0 ? "A" : (li === 1 ? "B" : String.fromCharCode(65+li));
+          out.push({ smartIdx: mi+1, letter, slotA: m.slotA, slotB: m.slotB });
+        }
+      });
+    });
+    return out;
+  };
 
   // Color mapping per SKU type
   const skuColor = (sku) => sku === "DUAL_500W_APD" ? C.accent       // orange
@@ -13345,12 +13398,14 @@ function SavantPanelSchedule({
       );
     }
 
-    // Smart breaker — top half (slotA)
+    // Smart breaker — top half (slotA). Shows: SMART pill + Load A row,
+    // plus an inline "← Bkr N" feeder reference when set.
     if (entry.kind === "smartA") {
       const m = entry.ref;
       const sku = m.moduleType || "";
       const color = skuColor(sku);
-      const out = (m.loads||[])[0] || {};
+      const load = (m.loads||[])[0] || {};
+      const feeder = Number(load.feederSlot) > 0 ? Number(load.feederSlot) : null;
       return (
         <div onClick={()=>{ setSelectedSlot(slot); setAddingAtSlot(null); }}
           style={{
@@ -13365,30 +13420,44 @@ function SavantPanelSchedule({
               fontSize:8, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase",
               background:color, color:"#fff", padding:"1px 6px", borderRadius:99,
               flexShrink:0,
-            }}>SMART · {skuShortLabel(sku)}</span>
+            }}>SMART BREAKER · {skuShortLabel(sku)}</span>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11,minWidth:0}}>
             <span style={{
               fontWeight:700, color, background:"#fff",
               border:`1px solid ${color}`, borderRadius:3, padding:"0 4px",
               fontSize:9, flexShrink:0, letterSpacing:"0.04em",
-            }}>A</span>
+            }}>LOAD A</span>
             <span style={{flex:1, fontWeight:600, color:C.text, overflow:"hidden",
               textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0}}>
-              {out.name || <span style={{color:C.muted,fontStyle:"italic",fontWeight:400}}>(unnamed)</span>}
+              {load.name || <span style={{color:C.muted,fontStyle:"italic",fontWeight:400}}>(unnamed)</span>}
             </span>
-            {out.watts && <span style={{fontSize:9,color:C.dim,fontWeight:600,flexShrink:0}}>{out.watts}W</span>}
+            {load.watts && <span style={{fontSize:9,color:C.dim,fontWeight:600,flexShrink:0}}>{load.watts}W</span>}
+            {feeder ? (
+              <span title={`Powered by regular breaker at slot ${feeder}`}
+                style={{fontSize:8,fontWeight:700,color:C.dim,background:"#fff",
+                  border:`1px solid ${C.border}`,borderRadius:3,padding:"0 4px",flexShrink:0}}>
+                ← Bkr {feeder}
+              </span>
+            ) : (
+              <span title="No feeder breaker set — click to assign"
+                style={{fontSize:8,fontWeight:700,color:C.red,background:"#fff",
+                  border:`1px solid ${C.red}55`,borderRadius:3,padding:"0 4px",flexShrink:0}}>
+                ← no feeder
+              </span>
+            )}
           </div>
         </div>
       );
     }
 
-    // Smart breaker — bottom half (slotB)
+    // Smart breaker — bottom half (slotB). Shows Load B + its feeder reference.
     if (entry.kind === "smartB") {
       const m = entry.ref;
       const sku = m.moduleType || "";
       const color = skuColor(sku);
-      const out = (m.loads||[])[1] || {};
+      const load = (m.loads||[])[1] || {};
+      const feeder = Number(load.feederSlot) > 0 ? Number(load.feederSlot) : null;
       const slotA = Number(m.slotA);
       return (
         <div onClick={()=>{ setSelectedSlot(slotA); setAddingAtSlot(null); }}
@@ -13404,31 +13473,57 @@ function SavantPanelSchedule({
               fontWeight:700, color, background:"#fff",
               border:`1px solid ${color}`, borderRadius:3, padding:"0 4px",
               fontSize:9, flexShrink:0, letterSpacing:"0.04em",
-            }}>B</span>
+            }}>LOAD B</span>
             <span style={{flex:1, fontWeight:600, color:C.text, overflow:"hidden",
               textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0}}>
-              {out.name || <span style={{color:C.muted,fontStyle:"italic",fontWeight:400}}>(unnamed)</span>}
+              {load.name || <span style={{color:C.muted,fontStyle:"italic",fontWeight:400}}>(unnamed)</span>}
             </span>
-            {out.watts && <span style={{fontSize:9,color:C.dim,fontWeight:600,flexShrink:0}}>{out.watts}W</span>}
+            {load.watts && <span style={{fontSize:9,color:C.dim,fontWeight:600,flexShrink:0}}>{load.watts}W</span>}
+            {feeder ? (
+              <span title={`Powered by regular breaker at slot ${feeder}`}
+                style={{fontSize:8,fontWeight:700,color:C.dim,background:"#fff",
+                  border:`1px solid ${C.border}`,borderRadius:3,padding:"0 4px",flexShrink:0}}>
+                ← Bkr {feeder}
+              </span>
+            ) : (
+              <span title="No feeder breaker set — click to assign"
+                style={{fontSize:8,fontWeight:700,color:C.red,background:"#fff",
+                  border:`1px solid ${C.red}55`,borderRadius:3,padding:"0 4px",flexShrink:0}}>
+                ← no feeder
+              </span>
+            )}
           </div>
         </div>
       );
     }
 
-    // Regular breaker
+    // Regular breaker. If this regular breaker is referenced as a feeder
+    // by any smart breaker's load, render a "→ feeds Sm.N.X" badge so the
+    // wiring relationship is visible right on the schedule (Koy: "all in
+    // one panel schedule with feeder lines").
     const r = entry.ref;
+    const feeds = feedsFromSlot(slot);
     return (
       <div onClick={()=>{ setSelectedSlot(slot); setAddingAtSlot(null); }}
         style={{
           minHeight: 36, padding:"5px 9px", display:"flex", alignItems:"center",
           gap:6, fontSize:12, cursor:"pointer",
-          background: isSelected ? "#fef3c7" : "#fff",
+          background: isSelected ? "#fef3c7" : (feeds.length > 0 ? "#f0fdf4" : "#fff"),
+          borderLeft: feeds.length > 0 ? `3px solid ${C.green}88` : "none",
           borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`,
         }}>
         <span style={{flex:1, color:C.text, overflow:"hidden", textOverflow:"ellipsis",
           whiteSpace:"nowrap", minWidth:0}}>
           {r.description || <span style={{color:C.muted,fontStyle:"italic"}}>(unnamed)</span>}
         </span>
+        {feeds.map((f, i) => (
+          <span key={i} title={`Feeds Load ${f.letter} on smart breaker at slots ${f.slotA}/${f.slotB}`}
+            style={{fontSize:8, fontWeight:700, color:C.green, background:"#fff",
+              border:`1px solid ${C.green}55`, borderRadius:3, padding:"0 4px", flexShrink:0,
+              letterSpacing:"0.04em"}}>
+            → {f.slotA}/{f.slotB} {f.letter}
+          </span>
+        ))}
         {r.amp && <span style={{
           fontSize:9, fontWeight:700, color:C.dim, background:"#f8fafc",
           border:`1px solid ${C.border}`, borderRadius:3, padding:"1px 4px",
@@ -13467,8 +13562,8 @@ function SavantPanelSchedule({
               background:"#fff", textAlign:"center", fontFamily:"inherit",
               opacity:canFitSmart?1:0.5,
             }}>
-            <div style={{fontWeight:700,fontSize:13,color:C.green,marginBottom:4}}>Smart · Dual 20A Relay</div>
-            <div style={{fontSize:11,color:C.dim}}>2-pole · slots {slot}+{slotB} · 2 outputs</div>
+            <div style={{fontWeight:700,fontSize:13,color:C.green,marginBottom:4}}>Smart Breaker · Dual 20A Relay</div>
+            <div style={{fontSize:11,color:C.dim}}>Slots {slot}+{slotB} · 2 loads · needs 2 feeder breakers (one per load)</div>
           </button>
           <button disabled={!canFitSmart}
             onClick={()=>addSmartAtSlot(slot, "DUAL_500W_APD")}
@@ -13478,8 +13573,8 @@ function SavantPanelSchedule({
               background:"#fff", textAlign:"center", fontFamily:"inherit",
               opacity:canFitSmart?1:0.5,
             }}>
-            <div style={{fontWeight:700,fontSize:13,color:C.accent,marginBottom:4}}>Smart · Dual 500W APD</div>
-            <div style={{fontSize:11,color:C.dim}}>2-pole · slots {slot}+{slotB} · 2 dim outputs</div>
+            <div style={{fontWeight:700,fontSize:13,color:C.accent,marginBottom:4}}>Smart Breaker · Dual 500W APD</div>
+            <div style={{fontSize:11,color:C.dim}}>Slots {slot}+{slotB} · 2 dim loads · needs 1 feeder breaker (powers both)</div>
           </button>
           <button onClick={()=>addRegAtSlot(slot)}
             style={{
@@ -13542,7 +13637,7 @@ function SavantPanelSchedule({
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
             <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",
               color:C.accent,textTransform:"uppercase"}}>
-              Editing slot {m.slotA}/{m.slotB} · {savSkuLabel(sku) || "Smart breaker"}
+              Smart breaker · slots {m.slotA}/{m.slotB} · {savSkuLabel(sku) || "(no SKU)"}
             </div>
             <div style={{display:"flex",gap:6}}>
               <button onClick={()=>{ if(window.confirm("Remove this smart breaker?")) { delSmart(m.id); setSelectedSlot(null); } }}
@@ -13572,33 +13667,75 @@ function SavantPanelSchedule({
               options={PHASE_OPTS} style={{width:60,fontSize:11}}/>
           </div>
 
-          {/* Output rows */}
-          {outputsToShow.map((out, idx) => {
-            const letter = isNew ? (idx===0?"A":"B") : (out.output || String.fromCharCode(65+idx));
-            return (
-              <div key={out.id||idx} style={{
-                display:"flex",gap:8,alignItems:"center",padding:"6px 10px",
-                background:`${color}10`,border:`1px solid ${color}33`,borderRadius:6,marginBottom:6,
-              }}>
-                <span style={{fontWeight:700,color,fontSize:13,width:18,textAlign:"center"}}>{letter}</span>
-                <Inp value={out.name||""} onChange={e=>updSmartLoad(m.id,out.id,{name:e.target.value})}
-                  placeholder="Load name" style={{flex:1,fontSize:12}}/>
-                <Inp value={out.loadType||""} onChange={e=>updSmartLoad(m.id,out.id,{loadType:e.target.value})}
-                  placeholder="Load type" style={{width:90,fontSize:11}}/>
-                <Inp value={out.watts||""} onChange={e=>updSmartLoad(m.id,out.id,{watts:e.target.value})}
-                  placeholder="W" style={{width:60,fontSize:11,textAlign:"center"}}/>
-                <label style={{display:"flex",alignItems:"center",gap:4,fontSize:10,fontWeight:600,color:C.dim,cursor:"pointer"}}>
-                  <input type="checkbox" checked={!!out.pulled}
-                    onChange={e=>updSmartLoad(m.id,out.id,{pulled:e.target.checked})}/>
-                  pulled
-                </label>
-              </div>
-            );
-          })}
+          {/* Load rows. Each load row = one switch leg controlled by this
+              smart breaker. The "Fed by Bkr" select lists every regular
+              breaker in this panel by slot so the user can wire each load
+              back to its feeder. APD = pick the same feeder for both A
+              and B (one feeder breaker for the whole smart breaker). Dual
+              Relay = pick a different feeder for each (two feeder breakers,
+              one per load). The data captures whatever the user enters. */}
+          {(() => {
+            // Helper: build feeder-select options sorted by slot number,
+            // each labeled "Bkr {slot} · {description}".
+            const sortedRegs = (regularBreakers||[])
+              .filter(rr => Number(rr.slot) > 0)
+              .sort((a,b)=>Number(a.slot)-Number(b.slot));
+            const feederOptions = [
+              { value:"", label:"— pick feeder —" },
+              ...sortedRegs.map(rr => ({
+                value: String(rr.slot),
+                label: `Bkr ${rr.slot}${rr.description ? " · " + rr.description : ""}${rr.amp ? " (" + rr.amp + (/^\d+$/.test(String(rr.amp).trim())?"A":"") + ")" : ""}`,
+              })),
+            ];
+            return outputsToShow.map((load, idx) => {
+              const letter = isNew ? (idx===0?"A":"B") : (load.output || String.fromCharCode(65+idx));
+              return (
+                <div key={load.id||idx} style={{
+                  display:"flex",gap:8,alignItems:"center",padding:"6px 10px",
+                  background:`${color}10`,border:`1px solid ${color}33`,borderRadius:6,marginBottom:6,
+                  flexWrap:"wrap",
+                }}>
+                  <span style={{fontWeight:700,color,fontSize:11,
+                    background:"#fff",border:`1px solid ${color}`,borderRadius:3,padding:"1px 5px",
+                    letterSpacing:"0.04em",flexShrink:0}}>LOAD {letter}</span>
+                  <Inp value={load.name||""} onChange={e=>updSmartLoad(m.id,load.id,{name:e.target.value})}
+                    placeholder="Switch leg name (e.g. Kitchen pendants)" style={{flex:1,minWidth:160,fontSize:12}}/>
+                  <Inp value={load.loadType||""} onChange={e=>updSmartLoad(m.id,load.id,{loadType:e.target.value})}
+                    placeholder="Load type" style={{width:90,fontSize:11}}/>
+                  <Inp value={load.watts||""} onChange={e=>updSmartLoad(m.id,load.id,{watts:e.target.value})}
+                    placeholder="W" style={{width:60,fontSize:11,textAlign:"center"}}/>
+                  <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase"}}>Fed by</span>
+                  <div style={{minWidth:160}}>
+                    <Sel value={load.feederSlot||""} onChange={e=>updSmartLoad(m.id,load.id,{feederSlot:e.target.value})}
+                      options={feederOptions} style={{fontSize:11}}/>
+                  </div>
+                  <label style={{display:"flex",alignItems:"center",gap:4,fontSize:10,fontWeight:600,color:C.dim,cursor:"pointer"}}>
+                    <input type="checkbox" checked={!!load.pulled}
+                      onChange={e=>updSmartLoad(m.id,load.id,{pulled:e.target.checked})}/>
+                    pulled
+                  </label>
+                </div>
+              );
+            });
+          })()}
+
+          {/* Hint about feeder wiring depending on SKU */}
+          {isNew && (
+            <div style={{fontSize:11,color:C.dim,fontStyle:"italic",marginTop:6,lineHeight:1.5}}>
+              {sku === "DUAL_500W_APD"
+                ? "APD smart breaker: one regular feeder breaker powers both Load A and Load B — pick the same Bkr # for both."
+                : sku === "DUAL_20A_RELAY"
+                ? "Dual Relay smart breaker: each load has its own feeder breaker — pick a different Bkr # for Load A vs Load B."
+                : "Pick which regular breaker(s) in this panel feed each load."}
+              {(regularBreakers||[]).length === 0 && (
+                <span style={{color:C.red,marginLeft:6}}> No regular breakers added yet — click an empty slot above and choose "Regular breaker" to add one to feed this smart breaker.</span>
+              )}
+            </div>
+          )}
 
           {!isNew && (
             <div style={{fontSize:11,color:C.dim,fontStyle:"italic",marginTop:6}}>
-              Legacy module — preserves existing channel data. Pick a new SKU above to switch to the 2-output (A/B) panel-schedule format.
+              Legacy module — preserves existing channel data. Pick a new SKU above to switch to the 2-load (A/B) panel-schedule format.
             </div>
           )}
         </div>
@@ -13662,7 +13799,7 @@ function SavantPanelSchedule({
         borderRadius:"8px 8px 0 0", borderBottom:"none",
       }}>
         <span style={{fontSize:11,color:C.dim,fontWeight:600}}>
-          <b style={{color:C.text}}>{smartCount}</b> smart · <b style={{color:C.text}}>{regCount}</b> regular · <b style={{color:C.text}}>{emptyCount}</b> empty
+          <b style={{color:C.text}}>{smartCount}</b> smart breaker{smartCount===1?"":"s"} · <b style={{color:C.text}}>{regCount}</b> regular · <b style={{color:C.text}}>{emptyCount}</b> empty
         </span>
         <span style={{fontSize:11,color:C.dim,fontWeight:600,marginLeft:"auto",display:"flex",alignItems:"center",gap:6}}>
           Panel size:
@@ -13671,11 +13808,11 @@ function SavantPanelSchedule({
         </span>
       </div>
 
-      {/* Unplaced modules — modules carrying real data (named module type
+      {/* Unplaced smart breakers — entries carrying real data (named SKU
           or any named load) but no slot assignment yet. Common when opening
-          an existing job that was edited under the old card-style UI. We
-          surface them so the data is never invisible; clicking "Place" auto-
-          assigns the next available slot pair so it appears in the grid. */}
+          a job edited under the old card-style UI. We surface them so the
+          data is never invisible; clicking "Place" assigns the next free
+          slot pair so it appears in the grid. */}
       {(() => {
         const unplaced = (modules||[]).filter(m =>
           !Number(m.slotA) && (m.moduleType || m.modNum ||
@@ -13689,13 +13826,13 @@ function SavantPanelSchedule({
           }}>
             <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.06em",
               color:C.accent,textTransform:"uppercase"}}>
-              {unplaced.length} unplaced module{unplaced.length===1?"":"s"} from before
+              {unplaced.length} unplaced smart breaker{unplaced.length===1?"":"s"} from before
             </span>
             <span style={{fontSize:11,color:C.dim,flex:1,minWidth:0}}>
               These existed before the panel-schedule view. Click "Place" to drop one into the next free pair of slots.
             </span>
             {unplaced.map(m => {
-              const lbl = `${savSkuLabel(m.moduleType) || ("Mod " + (m.modNum||"?"))}`;
+              const lbl = `${savSkuLabel(m.moduleType) || ("Smart " + (m.modNum||"?"))}`;
               const free = savFindFreeSmartPair(occ, panelSize, 1);
               return (
                 <button key={m.id} disabled={!free}
