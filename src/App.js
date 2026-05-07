@@ -967,7 +967,28 @@ const PULLED_OPTS   = ["","Pulled","Need Specs"];
 const C4_MODULE_TYPES   = ["","8-Ch Dimmer","8-Ch Relay","0-10V Dimmer"];
 const LUT_MODULE_TYPES  = ["","LQSE-2ECO","LQSE-4A","LQSE-S8","LQSE-T5","LQSE-2DAL"];
 const CRES_MODULE_TYPES = ["","ZUMNET-200","ZUMLINK-200"];
-const SAV_MODULE_TYPES  = ["","LMD-8120","LMD-4120","SPM-Q2APD10","SPM-Q4FHD10"];
+// Savant smart-breaker SKUs. Values stay short codes for back-compat with
+// existing job docs (Sel resolves either string or {value,label}); labels
+// describe the breaker type per Koy's request. Top two are the modern QO
+// smart breakers (2-pole, 2 outputs). Bottom four are older centralized-
+// cabinet modules retained so legacy jobs still render their picked SKU.
+const SAV_MODULE_TYPES  = [
+  { value:"",                  label:"" },
+  { value:"DUAL_20A_RELAY",    label:"Dual 20A Relay (GPM-QP2R20120)" },
+  { value:"DUAL_500W_APD",     label:"Dual 500W Adaptive Phase Dimmer (GPM-Q2APD10)" },
+  { value:"LMD-8120",          label:"8-Ch Relay (LMD-8120, legacy)" },
+  { value:"LMD-4120",          label:"4-Ch Relay (LMD-4120, legacy)" },
+  { value:"SPM-Q2APD10",       label:"Dual APD (SPM-Q2APD10, legacy)" },
+  { value:"SPM-Q4FHD10",       label:"4-Ch FHD (SPM-Q4FHD10, legacy)" },
+];
+// Quick lookup: SKU value → human label (used by chips, prints, etc.)
+const SAV_SKU_LABEL = Object.fromEntries(
+  SAV_MODULE_TYPES.filter(o=>o.value).map(o=>[o.value, o.label])
+);
+// Which SKUs are the new 2-pole smart breakers vs legacy multi-channel cabinets.
+// New ones get the panel-schedule layout (2 fixed outputs A/B). Legacy ones keep
+// the multi-channel editor for data preservation.
+const SAV_NEW_SKUS = new Set(["DUAL_20A_RELAY","DUAL_500W_APD"]);
 const LOAD_TYPES        = ["","Dimming","Switching","MLV","ELV","LED","Fluorescent","Relay","0-10V","Variable Speed"];
 const PHASE_OPTS        = ["","A","B","C"];
 
@@ -1039,7 +1060,12 @@ const newCentralLoad   = ()    => ({ id:uid(), name:"", location:"", loadType:""
 //
 // Data safety: read-only — never mutates modules / job. If the popup is
 // blocked we surface a toast so the user can retry.
-function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules }) {
+function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
+                              // Optional Savant-only schedule data. When system is
+                              // "Savant" and these are supplied we render the
+                              // Square-D-style schedule (odd-left/even-right) instead
+                              // of the legacy module-card layout.
+                              regularBreakers = [], panelSize = 40 }) {
   const sys = system || "Control 4";
   const isLut = sys === "Lutron";
   const isCres = sys === "Crestron";
@@ -1050,7 +1076,15 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules }
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   const stripTags = (s) => String(s == null ? "" : s).replace(/<[^>]*>/g, "");
 
-  const visibleMods = (modules || []).filter(m => m && (m.modNum || m.moduleType || (m.loads||[]).some(l => l && l.name)));
+  // For Savant, decide which layout to render. If any module has a slotA we use
+  // the new schedule layout; otherwise fall back to the legacy module cards so
+  // existing Savant jobs still print exactly as they did before.
+  const savUseSchedule = isSav && (
+    ((modules||[]).some(m => Number(m && m.slotA) > 0)) ||
+    ((regularBreakers||[]).length > 0)
+  );
+
+  const visibleMods = (modules || []).filter(m => m && (m.modNum || m.moduleType || m.slotA || (m.loads||[]).some(l => l && l.name)));
   const totalLoads = visibleMods.reduce((n, m) => n + (m.loads||[]).filter(l => l && (l.name||"").trim()).length, 0);
 
   const renderModuleHeaderMeta = (m) => {
@@ -1061,6 +1095,72 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules }
     if (isCres) { if (m.chainPos) bits.push(`Chain <b>${esc(m.chainPos)}</b>`); }
     return bits.join(" · ");
   };
+
+  // ── Savant: Square-D-style panel schedule HTML (built only when needed) ──
+  // Renders odd slots in the left column, even on the right. 2-pole smart
+  // breakers visually span 2 rows in the same column with a "SMART" badge,
+  // SKU, and Output A/B labels. Regular breakers fill single slots.
+  const savScheduleHtml = (() => {
+    if (!savUseSchedule) return "";
+    const occ = new Map();
+    (modules||[]).forEach(m => {
+      const a = Number(m.slotA), b = Number(m.slotB);
+      if (a > 0) occ.set(a, { kind:"smartA", ref:m });
+      if (b > 0) occ.set(b, { kind:"smartB", ref:m });
+    });
+    (regularBreakers||[]).forEach(r => {
+      const s = Number(r.slot);
+      if (s > 0 && !occ.has(s)) occ.set(s, { kind:"reg", ref:r });
+    });
+    const skuShort = (sku) =>
+      sku === "DUAL_500W_APD" ? "APD Dimmer"
+    : sku === "DUAL_20A_RELAY" ? "Dual Relay"
+    : (sku || "Smart");
+    const cellHtml = (slot) => {
+      const e = occ.get(slot);
+      if (!e) return `<div class="sav-cell sav-empty">—</div>`;
+      if (e.kind === "smartA") {
+        const m = e.ref; const out = (m.loads||[])[0]||{};
+        return `<div class="sav-cell sav-smart sav-smart-top">
+          <div class="sav-pill">SMART · ${esc(skuShort(m.moduleType))}</div>
+          <div class="sav-out"><span class="sav-out-letter">A</span>
+            <span class="sav-out-name">${esc(stripTags(out.name||""))}</span>
+            ${out.watts?`<span class="sav-out-watts">${esc(out.watts)}W</span>`:""}
+          </div></div>`;
+      }
+      if (e.kind === "smartB") {
+        const m = e.ref; const out = (m.loads||[])[1]||{};
+        return `<div class="sav-cell sav-smart sav-smart-bot">
+          <div class="sav-out"><span class="sav-out-letter">B</span>
+            <span class="sav-out-name">${esc(stripTags(out.name||""))}</span>
+            ${out.watts?`<span class="sav-out-watts">${esc(out.watts)}W</span>`:""}
+          </div></div>`;
+      }
+      const r = e.ref;
+      return `<div class="sav-cell sav-reg">
+        <span class="sav-reg-desc">${esc(stripTags(r.description||""))}</span>
+        ${r.amp?`<span class="sav-reg-amp">${esc(r.amp)}${/^\d+$/.test(String(r.amp).trim())?"A":""}</span>`:""}
+      </div>`;
+    };
+    const rows = [];
+    for (let i = 1; i <= panelSize; i += 2) {
+      rows.push(`
+        <div class="sav-num">${i}</div>${cellHtml(i)}
+        <div class="sav-num">${i+1}</div>${cellHtml(i+1)}
+      `);
+    }
+    const smartTotal = (modules||[]).filter(m => Number(m.slotA) > 0).length;
+    const regTotal = (regularBreakers||[]).filter(r => Number(r.slot) > 0).length;
+    const emptyTotal = Math.max(0, panelSize - occ.size);
+    return `
+      <div class="sav-stats">${smartTotal} smart · ${regTotal} regular · ${emptyTotal} empty · ${panelSize}-slot</div>
+      <div class="sav-grid">
+        <div class="sav-num sav-head">#</div><div class="sav-cell sav-head">Left bus (odd)</div>
+        <div class="sav-num sav-head">#</div><div class="sav-cell sav-head">Right bus (even)</div>
+        ${rows.join("")}
+      </div>
+    `;
+  })();
 
   const moduleHtml = visibleMods.length === 0
     ? `<div style="padding:24px;text-align:center;color:#666;font-style:italic">No modules on this panel yet.</div>`
@@ -1131,6 +1231,23 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules }
     th { background: #fafafa; font-size: 7px; text-transform: uppercase; letter-spacing: 0.04em; color: #444; }
     .ch { width: 22px; text-align: center; font-weight: 700; }
     .pulled { width: 28px; text-align: center; font-size: 9px; }
+    /* Savant schedule grid — used only when savUseSchedule is true */
+    .sav-stats { font-size: 8px; color: #444; margin-bottom: 4px; text-transform: uppercase; letter-spacing: 0.05em; font-weight: 700; }
+    .sav-grid { display: grid; grid-template-columns: 22px 1fr 22px 1fr; border: 0.75px solid #000; }
+    .sav-num { display: flex; align-items: center; justify-content: center; font-size: 7px; font-weight: 700; background: #f0f0f0; border-right: 0.5px solid #888; border-bottom: 0.5px solid #888; padding: 1px; min-height: 22px; }
+    .sav-cell { display: flex; flex-direction: column; justify-content: center; padding: 2px 4px; font-size: 8px; border-right: 0.5px solid #888; border-bottom: 0.5px solid #888; min-height: 22px; }
+    .sav-head { background: #ddd; font-size: 7px; text-transform: uppercase; font-weight: 700; padding: 2px 4px; min-height: 18px; }
+    .sav-empty { color: #aaa; font-style: italic; }
+    .sav-smart { background: #f0f8ff; border-left: 2px solid #000; }
+    .sav-smart-top { gap: 1px; }
+    .sav-pill { font-size: 6px; font-weight: 700; letter-spacing: 0.04em; text-transform: uppercase; background: #000; color: #fff; padding: 0 3px; align-self: flex-start; border-radius: 1px; }
+    .sav-out { display: flex; align-items: center; gap: 3px; font-size: 8px; }
+    .sav-out-letter { font-weight: 700; background: #fff; border: 0.5px solid #000; padding: 0 2px; font-size: 7px; }
+    .sav-out-name { flex: 1; font-weight: 600; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sav-out-watts { font-size: 7px; color: #555; flex-shrink: 0; }
+    .sav-reg { flex-direction: row; align-items: center; gap: 3px; }
+    .sav-reg-desc { flex: 1; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+    .sav-reg-amp { font-size: 7px; font-weight: 700; color: #555; background: #fafafa; border: 0.5px solid #888; padding: 0 2px; flex-shrink: 0; }
     .toolbar { margin-bottom: 8px; text-align:right; }
     .toolbar button { padding: 5px 12px; font-size: 11px; font-weight: 600; cursor: pointer; border: 1px solid #444; background: #fff; border-radius: 5px; }
     .toolbar button:hover { background: #f0f0f0; }
@@ -1156,7 +1273,7 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules }
       ${totalLoads} channel${totalLoads === 1 ? "" : "s"}
     </div>
   </div>
-  ${moduleHtml}
+  ${savUseSchedule ? savScheduleHtml : moduleHtml}
 </body></html>`;
 
   const win = window.open("", "_blank");
@@ -13065,6 +13182,598 @@ function KeypadSection({loads,onChange,label,allLoads=[],confirmedProp=false,onC
 }
 
 
+// ── Savant Panel Schedule helpers ─────────────────────────────────────────
+// In a residential split-phase Homeline panel, slots alternate columns:
+//   left  column (bus L1 / L2 alternating): 1, 3, 5, 7, …  (odd)
+//   right column (bus L1 / L2 alternating): 2, 4, 6, 8, …  (even)
+// A 2-pole Savant smart breaker eats two slots in the same column (e.g.
+// 1+3 or 2+4) so it bridges both phases. Helpers below normalize that.
+const savIsLeftCol  = (slot) => Number(slot) > 0 && Number(slot) % 2 === 1;
+const savIsRightCol = (slot) => Number(slot) > 0 && Number(slot) % 2 === 0;
+const savNextInCol  = (slot) => Number(slot) + 2;     // next slot in same column
+const savColOf      = (slot) => savIsLeftCol(slot) ? "L" : (savIsRightCol(slot) ? "R" : null);
+// Pretty label for a SKU value — falls back to the raw value if unknown
+// (so old data with a raw "LMD-8120" still renders something readable).
+const savSkuLabel   = (v) => SAV_SKU_LABEL[v] || v || "";
+const savIsNewSku   = (v) => SAV_NEW_SKUS.has(v);
+
+// Build a per-slot occupancy map for one panel section. Returns a Map
+// keyed by slot number, value = {kind:"smartA"|"smartB"|"reg", ref}.
+// Any slot not in the map is empty. Read-only — never mutates inputs.
+const savBuildOccupancy = (smartMods, regBkrs) => {
+  const occ = new Map();
+  (smartMods || []).forEach(m => {
+    const a = Number(m.slotA);
+    const b = Number(m.slotB);
+    if (a > 0) occ.set(a, { kind:"smartA", ref:m });
+    if (b > 0) occ.set(b, { kind:"smartB", ref:m });
+  });
+  (regBkrs || []).forEach(r => {
+    const s = Number(r.slot);
+    if (s > 0 && !occ.has(s)) occ.set(s, { kind:"reg", ref:r });
+  });
+  return occ;
+};
+
+// Find the next available slot pair (slot, slot+2) in the same column,
+// starting at preferredStart. Returns {slotA, slotB} or null if nothing fits.
+const savFindFreeSmartPair = (occ, panelSize, preferredStart=1) => {
+  for (let s = preferredStart; s + 2 <= panelSize; s++) {
+    if (!occ.has(s) && !occ.has(s+2)) return { slotA:s, slotB:s+2 };
+  }
+  return null;
+};
+
+
+// ── SavantPanelSchedule ──────────────────────────────────────────────────
+// Renders one Savant panel section as a Square-D-style panel schedule —
+// odd slots stacked on the left bus, even slots on the right. 2-pole
+// smart breakers visually span 2 rows in the same column with always-on
+// labeling (SMART pill + SKU + colored left bar) so they cannot be
+// confused with a regular breaker.
+//
+// Data shape (additive, never destructive):
+//   modules         — existing panelizedLighting.cp4Loads.{floor} array of
+//                     smart-breaker objects. Each gains `slotA` + `slotB`
+//                     fields when placed via the schedule UI. Old `breaker`
+//                     and `phase` fields are preserved as fallback.
+//   regularBreakers — NEW array on panelizedLighting.panelLayout.{floor}
+//                     [{ id, slot, amp, description, phase }]
+//   panelSize       — NEW number (default 40), total slots in this panel.
+function SavantPanelSchedule({
+  modules, onChange, allLoads=[],
+  regularBreakers = [], onRegularChange = ()=>{},
+  panelSize = 40, onPanelSizeChange = ()=>{},
+  // Cross-panel move + confirmed state are accepted for parity with
+  // PanelModulesSection but the schedule UI doesn't surface them yet.
+  // Confirmed-modules toggle is still useful so we keep it wired.
+  confirmedProp = null, onConfirmedChange = null,
+}) {
+  // Track which slot the user is currently editing. null = nothing selected.
+  // Editing state is purely visual; toggling never touches the modules array.
+  const [selectedSlot, setSelectedSlot] = useState(null);
+  // When user clicks an empty slot, show the "+ Add" picker instead of an editor.
+  const [addingAtSlot, setAddingAtSlot] = useState(null);
+
+  const occ = savBuildOccupancy(modules, regularBreakers);
+
+  // Counts for the header strip
+  const smartCount = (modules || []).filter(m => Number(m.slotA) > 0).length;
+  const regCount   = (regularBreakers || []).filter(r => Number(r.slot) > 0).length;
+  const usedSlots  = occ.size;
+  const emptyCount = Math.max(0, panelSize - usedSlots);
+
+  // ── Mutators (all build a NEW array — never mutate in place) ──────────
+  const updSmart = (mid, patch) =>
+    onChange((modules||[]).map(m => m.id===mid ? {...m, ...patch} : m));
+  const delSmart = (mid) =>
+    onChange((modules||[]).filter(m => m.id!==mid));
+  const updSmartLoad = (mid, lid, patch) =>
+    onChange((modules||[]).map(m => m.id===mid
+      ? {...m, loads:(m.loads||[]).map(l => l.id===lid ? {...l, ...patch} : l)}
+      : m));
+
+  // Add a new smart breaker at a specific slot. Caller supplies SKU value.
+  const addSmartAtSlot = (slotA, sku) => {
+    const slotB = savNextInCol(slotA);
+    // Build object using existing newModuleObj shape so anything else that
+    // reads modules (totals rollups, prints) keeps working unchanged.
+    const base = newModuleObj((modules||[]).length + 1);
+    const newMod = {
+      ...base,
+      moduleType: sku,
+      slotA: String(slotA),
+      slotB: String(slotB),
+      // Pre-create exactly 2 loads = Output A + Output B
+      loads: [
+        { ...newLoadRow(1), output: "A" },
+        { ...newLoadRow(2), output: "B" },
+      ],
+    };
+    onChange([...(modules||[]), newMod]);
+    setSelectedSlot(slotA);
+    setAddingAtSlot(null);
+  };
+
+  // Add a regular breaker at a specific slot
+  const addRegAtSlot = (slot) => {
+    const newReg = {
+      id: uid(),
+      slot: String(slot),
+      amp: "",
+      description: "",
+      phase: "",
+    };
+    onRegularChange([...(regularBreakers||[]), newReg]);
+    setSelectedSlot(slot);
+    setAddingAtSlot(null);
+  };
+  const updReg = (rid, patch) =>
+    onRegularChange((regularBreakers||[]).map(r => r.id===rid ? {...r, ...patch} : r));
+  const delReg = (rid) =>
+    onRegularChange((regularBreakers||[]).filter(r => r.id!==rid));
+
+  // Color mapping per SKU type
+  const skuColor = (sku) => sku === "DUAL_500W_APD" ? C.accent       // orange
+                          : sku === "DUAL_20A_RELAY" ? C.green       // green
+                          : C.purple;                                 // legacy / unknown
+  const skuShortLabel = (sku) =>
+    sku === "DUAL_500W_APD" ? "APD Dimmer"
+  : sku === "DUAL_20A_RELAY" ? "Dual Relay"
+  : savSkuLabel(sku) || "Smart";
+
+  // Render one slot cell (left or right side of a row)
+  const renderSlotCell = (slot) => {
+    const entry = occ.get(slot);
+    const isSelected = selectedSlot === slot;
+
+    // Empty slot
+    if (!entry) {
+      const isAddingHere = addingAtSlot === slot;
+      return (
+        <div onClick={()=>{ if(!isAddingHere) setAddingAtSlot(slot); setSelectedSlot(null); }}
+          style={{
+            minHeight: 36, padding:"5px 9px", display:"flex", alignItems:"center",
+            justifyContent:"center", fontSize:11, color: isAddingHere ? C.accent : C.muted,
+            fontStyle:"italic", cursor:"pointer",
+            background: isAddingHere ? "#fef3c7" : "repeating-linear-gradient(45deg,#fff,#fff 6px,#fafafa 6px,#fafafa 12px)",
+            borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`,
+            fontWeight: isAddingHere ? 700 : 400,
+          }}>
+          {isAddingHere ? "← pick type below" : "+ add"}
+        </div>
+      );
+    }
+
+    // Smart breaker — top half (slotA)
+    if (entry.kind === "smartA") {
+      const m = entry.ref;
+      const sku = m.moduleType || "";
+      const color = skuColor(sku);
+      const out = (m.loads||[])[0] || {};
+      return (
+        <div onClick={()=>{ setSelectedSlot(slot); setAddingAtSlot(null); }}
+          style={{
+            minHeight: 36, padding:"5px 9px", display:"flex", flexDirection:"column",
+            justifyContent:"center", gap:2, cursor:"pointer",
+            background: isSelected ? "#fef3c7" : `${color}10`,
+            borderLeft: `3px solid ${isSelected ? C.accent : color}`,
+            borderBottom:`1px solid ${color}22`, borderRight:`1px solid ${C.border}`,
+          }}>
+          <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+            <span style={{
+              fontSize:8, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase",
+              background:color, color:"#fff", padding:"1px 6px", borderRadius:99,
+              flexShrink:0,
+            }}>SMART · {skuShortLabel(sku)}</span>
+          </div>
+          <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11,minWidth:0}}>
+            <span style={{
+              fontWeight:700, color, background:"#fff",
+              border:`1px solid ${color}`, borderRadius:3, padding:"0 4px",
+              fontSize:9, flexShrink:0, letterSpacing:"0.04em",
+            }}>A</span>
+            <span style={{flex:1, fontWeight:600, color:C.text, overflow:"hidden",
+              textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0}}>
+              {out.name || <span style={{color:C.muted,fontStyle:"italic",fontWeight:400}}>(unnamed)</span>}
+            </span>
+            {out.watts && <span style={{fontSize:9,color:C.dim,fontWeight:600,flexShrink:0}}>{out.watts}W</span>}
+          </div>
+        </div>
+      );
+    }
+
+    // Smart breaker — bottom half (slotB)
+    if (entry.kind === "smartB") {
+      const m = entry.ref;
+      const sku = m.moduleType || "";
+      const color = skuColor(sku);
+      const out = (m.loads||[])[1] || {};
+      const slotA = Number(m.slotA);
+      return (
+        <div onClick={()=>{ setSelectedSlot(slotA); setAddingAtSlot(null); }}
+          style={{
+            minHeight: 36, padding:"5px 9px", display:"flex", flexDirection:"column",
+            justifyContent:"center", gap:2, cursor:"pointer",
+            background: isSelected ? "#fef3c7" : `${color}10`,
+            borderLeft: `3px solid ${isSelected ? C.accent : color}`,
+            borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`,
+          }}>
+          <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11,minWidth:0}}>
+            <span style={{
+              fontWeight:700, color, background:"#fff",
+              border:`1px solid ${color}`, borderRadius:3, padding:"0 4px",
+              fontSize:9, flexShrink:0, letterSpacing:"0.04em",
+            }}>B</span>
+            <span style={{flex:1, fontWeight:600, color:C.text, overflow:"hidden",
+              textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0}}>
+              {out.name || <span style={{color:C.muted,fontStyle:"italic",fontWeight:400}}>(unnamed)</span>}
+            </span>
+            {out.watts && <span style={{fontSize:9,color:C.dim,fontWeight:600,flexShrink:0}}>{out.watts}W</span>}
+          </div>
+        </div>
+      );
+    }
+
+    // Regular breaker
+    const r = entry.ref;
+    return (
+      <div onClick={()=>{ setSelectedSlot(slot); setAddingAtSlot(null); }}
+        style={{
+          minHeight: 36, padding:"5px 9px", display:"flex", alignItems:"center",
+          gap:6, fontSize:12, cursor:"pointer",
+          background: isSelected ? "#fef3c7" : "#fff",
+          borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`,
+        }}>
+        <span style={{flex:1, color:C.text, overflow:"hidden", textOverflow:"ellipsis",
+          whiteSpace:"nowrap", minWidth:0}}>
+          {r.description || <span style={{color:C.muted,fontStyle:"italic"}}>(unnamed)</span>}
+        </span>
+        {r.amp && <span style={{
+          fontSize:9, fontWeight:700, color:C.dim, background:"#f8fafc",
+          border:`1px solid ${C.border}`, borderRadius:3, padding:"1px 4px",
+          flexShrink:0,
+        }}>{r.amp}{/^\d+$/.test(String(r.amp).trim()) ? "A" : ""}</span>}
+      </div>
+    );
+  };
+
+  // ── Editor / picker rendered below the grid ──────────────────────────
+  const renderAddPicker = () => {
+    if (addingAtSlot == null) return null;
+    const slot = addingAtSlot;
+    const slotB = savNextInCol(slot);
+    const canFitSmart = slotB <= panelSize && !occ.has(slotB);
+    return (
+      <div style={{
+        marginTop:14, padding:14, background:"#fff",
+        border:`2px dashed ${C.purple}`, borderRadius:10,
+      }}>
+        <div style={{
+          fontSize:11, fontWeight:700, letterSpacing:"0.05em",
+          color:C.purple, textTransform:"uppercase", marginBottom:10,
+          display:"flex", justifyContent:"space-between", alignItems:"center",
+        }}>
+          <span>Add to slot {slot} — pick a breaker type</span>
+          <button onClick={()=>setAddingAtSlot(null)}
+            style={{background:"none",border:"none",color:C.dim,fontSize:18,cursor:"pointer"}}>✕</button>
+        </div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+          <button disabled={!canFitSmart}
+            onClick={()=>addSmartAtSlot(slot, "DUAL_20A_RELAY")}
+            style={{
+              padding:12, border:`1px solid ${canFitSmart?C.border:C.border}`,
+              borderRadius:8, cursor:canFitSmart?"pointer":"not-allowed",
+              background:"#fff", textAlign:"center", fontFamily:"inherit",
+              opacity:canFitSmart?1:0.5,
+            }}>
+            <div style={{fontWeight:700,fontSize:13,color:C.green,marginBottom:4}}>Smart · Dual 20A Relay</div>
+            <div style={{fontSize:11,color:C.dim}}>2-pole · slots {slot}+{slotB} · 2 outputs</div>
+          </button>
+          <button disabled={!canFitSmart}
+            onClick={()=>addSmartAtSlot(slot, "DUAL_500W_APD")}
+            style={{
+              padding:12, border:`1px solid ${C.border}`,
+              borderRadius:8, cursor:canFitSmart?"pointer":"not-allowed",
+              background:"#fff", textAlign:"center", fontFamily:"inherit",
+              opacity:canFitSmart?1:0.5,
+            }}>
+            <div style={{fontWeight:700,fontSize:13,color:C.accent,marginBottom:4}}>Smart · Dual 500W APD</div>
+            <div style={{fontSize:11,color:C.dim}}>2-pole · slots {slot}+{slotB} · 2 dim outputs</div>
+          </button>
+          <button onClick={()=>addRegAtSlot(slot)}
+            style={{
+              padding:12, border:`1px solid ${C.border}`,
+              borderRadius:8, cursor:"pointer",
+              background:"#fff", textAlign:"center", fontFamily:"inherit",
+            }}>
+            <div style={{fontWeight:700,fontSize:13,color:C.text,marginBottom:4}}>Regular breaker</div>
+            <div style={{fontSize:11,color:C.dim}}>Single-pole or tandem · 1 slot</div>
+          </button>
+        </div>
+        {!canFitSmart && (
+          <div style={{marginTop:8,fontSize:11,color:C.dim,fontStyle:"italic"}}>
+            Smart breakers need an empty slot {slotB} (next position in this column). Free that slot to add a smart breaker here.
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  const renderEditor = () => {
+    if (selectedSlot == null) return null;
+    const entry = occ.get(selectedSlot);
+    if (!entry) return null;
+
+    // Smart breaker editor (slotA or slotB — both edit the same module)
+    if (entry.kind === "smartA" || entry.kind === "smartB") {
+      const m = entry.ref;
+      const sku = m.moduleType || "";
+      const color = skuColor(sku);
+      const isNew = savIsNewSku(sku);
+      const loadsArr = m.loads || [];
+      // For new SKUs (Dual Relay/APD), enforce exactly 2 outputs (A and B).
+      // For legacy SKUs (LMD-8120 etc.), preserve all existing channels.
+      const outputsToShow = isNew
+        ? [loadsArr[0] || {id:uid(),num:1,name:"",loadType:"",watts:"",pulled:false},
+           loadsArr[1] || {id:uid(),num:2,name:"",loadType:"",watts:"",pulled:false}]
+        : loadsArr;
+
+      // If the legacy module is missing loads or is a new SKU and has <2 loads,
+      // patch it on the fly so the editor binds to real ids.
+      const ensureLoadIds = () => {
+        if (isNew && loadsArr.length < 2) {
+          const padded = [...loadsArr];
+          while (padded.length < 2) padded.push({...newLoadRow(padded.length+1)});
+          updSmart(m.id, { loads: padded });
+        }
+      };
+      // Run the patch the first time we render an editor for an under-filled module.
+      if (isNew && loadsArr.length < 2) {
+        // Defer to next tick to avoid nested setState during render
+        setTimeout(ensureLoadIds, 0);
+      }
+
+      return (
+        <div style={{
+          marginTop:14, padding:16, background:"#fff",
+          border:`2px solid ${C.accent}`, borderRadius:10,
+        }}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+            <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",
+              color:C.accent,textTransform:"uppercase"}}>
+              Editing slot {m.slotA}/{m.slotB} · {savSkuLabel(sku) || "Smart breaker"}
+            </div>
+            <div style={{display:"flex",gap:6}}>
+              <button onClick={()=>{ if(window.confirm("Remove this smart breaker?")) { delSmart(m.id); setSelectedSlot(null); } }}
+                style={{background:"none",border:`1px solid ${C.red}55`,color:C.red,
+                  borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                Remove
+              </button>
+              <button onClick={()=>setSelectedSlot(null)}
+                style={{background:"none",border:"none",color:C.dim,fontSize:18,cursor:"pointer"}}>✕</button>
+            </div>
+          </div>
+
+          {/* SKU + position fields */}
+          <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:10,flexWrap:"wrap"}}>
+            <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",width:64}}>Slots</span>
+            <Inp value={m.slotA||""} onChange={e=>updSmart(m.id,{slotA:e.target.value})}
+              style={{width:46,textAlign:"center",fontSize:11}}/>
+            <Inp value={m.slotB||""} onChange={e=>updSmart(m.id,{slotB:e.target.value})}
+              style={{width:46,textAlign:"center",fontSize:11}}/>
+            <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",marginLeft:8}}>SKU</span>
+            <div style={{flex:1,minWidth:200}}>
+              <Sel value={m.moduleType||""} onChange={e=>updSmart(m.id,{moduleType:e.target.value})}
+                options={SAV_MODULE_TYPES} style={{fontSize:11}}/>
+            </div>
+            <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",marginLeft:8}}>Phase</span>
+            <Sel value={m.phase||""} onChange={e=>updSmart(m.id,{phase:e.target.value})}
+              options={PHASE_OPTS} style={{width:60,fontSize:11}}/>
+          </div>
+
+          {/* Output rows */}
+          {outputsToShow.map((out, idx) => {
+            const letter = isNew ? (idx===0?"A":"B") : (out.output || String.fromCharCode(65+idx));
+            return (
+              <div key={out.id||idx} style={{
+                display:"flex",gap:8,alignItems:"center",padding:"6px 10px",
+                background:`${color}10`,border:`1px solid ${color}33`,borderRadius:6,marginBottom:6,
+              }}>
+                <span style={{fontWeight:700,color,fontSize:13,width:18,textAlign:"center"}}>{letter}</span>
+                <Inp value={out.name||""} onChange={e=>updSmartLoad(m.id,out.id,{name:e.target.value})}
+                  placeholder="Load name" style={{flex:1,fontSize:12}}/>
+                <Inp value={out.loadType||""} onChange={e=>updSmartLoad(m.id,out.id,{loadType:e.target.value})}
+                  placeholder="Load type" style={{width:90,fontSize:11}}/>
+                <Inp value={out.watts||""} onChange={e=>updSmartLoad(m.id,out.id,{watts:e.target.value})}
+                  placeholder="W" style={{width:60,fontSize:11,textAlign:"center"}}/>
+                <label style={{display:"flex",alignItems:"center",gap:4,fontSize:10,fontWeight:600,color:C.dim,cursor:"pointer"}}>
+                  <input type="checkbox" checked={!!out.pulled}
+                    onChange={e=>updSmartLoad(m.id,out.id,{pulled:e.target.checked})}/>
+                  pulled
+                </label>
+              </div>
+            );
+          })}
+
+          {!isNew && (
+            <div style={{fontSize:11,color:C.dim,fontStyle:"italic",marginTop:6}}>
+              Legacy module — preserves existing channel data. Pick a new SKU above to switch to the 2-output (A/B) panel-schedule format.
+            </div>
+          )}
+        </div>
+      );
+    }
+
+    // Regular breaker editor
+    if (entry.kind === "reg") {
+      const r = entry.ref;
+      return (
+        <div style={{
+          marginTop:14, padding:16, background:"#fff",
+          border:`2px solid ${C.accent}`, borderRadius:10,
+        }}>
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:12}}>
+            <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",
+              color:C.accent,textTransform:"uppercase"}}>
+              Editing slot {r.slot} · Regular breaker
+            </div>
+            <div style={{display:"flex",gap:6}}>
+              <button onClick={()=>{ delReg(r.id); setSelectedSlot(null); }}
+                style={{background:"none",border:`1px solid ${C.red}55`,color:C.red,
+                  borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                Remove
+              </button>
+              <button onClick={()=>setSelectedSlot(null)}
+                style={{background:"none",border:"none",color:C.dim,fontSize:18,cursor:"pointer"}}>✕</button>
+            </div>
+          </div>
+          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+            <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase"}}>Slot</span>
+            <Inp value={r.slot||""} onChange={e=>updReg(r.id,{slot:e.target.value})}
+              style={{width:50,textAlign:"center",fontSize:11}}/>
+            <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",marginLeft:8}}>Amp</span>
+            <Inp value={r.amp||""} onChange={e=>updReg(r.id,{amp:e.target.value})}
+              placeholder="20" style={{width:60,fontSize:11}}/>
+            <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",marginLeft:8}}>Description</span>
+            <Inp value={r.description||""} onChange={e=>updReg(r.id,{description:e.target.value})}
+              placeholder="What this breaker feeds" style={{flex:1,minWidth:160,fontSize:11}}/>
+            <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",marginLeft:8}}>Phase</span>
+            <Sel value={r.phase||""} onChange={e=>updReg(r.id,{phase:e.target.value})}
+              options={PHASE_OPTS} style={{width:60,fontSize:11}}/>
+          </div>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  // ── Render the grid ──────────────────────────────────────────────────
+  // We build pairs of slots: (1,2), (3,4), (5,6), ... up to panelSize.
+  const pairs = [];
+  for (let i = 1; i <= panelSize; i += 2) pairs.push([i, i+1]);
+
+  return (
+    <div style={{marginBottom:16}}>
+      {/* Header strip with stats + panel-size editor */}
+      <div style={{
+        padding:"10px 14px", display:"flex", alignItems:"center", gap:14,
+        flexWrap:"wrap", background:"#f8fafc", border:`1px solid ${C.border}`,
+        borderRadius:"8px 8px 0 0", borderBottom:"none",
+      }}>
+        <span style={{fontSize:11,color:C.dim,fontWeight:600}}>
+          <b style={{color:C.text}}>{smartCount}</b> smart · <b style={{color:C.text}}>{regCount}</b> regular · <b style={{color:C.text}}>{emptyCount}</b> empty
+        </span>
+        <span style={{fontSize:11,color:C.dim,fontWeight:600,marginLeft:"auto",display:"flex",alignItems:"center",gap:6}}>
+          Panel size:
+          <Sel value={String(panelSize)} onChange={e=>onPanelSizeChange(Number(e.target.value)||40)}
+            options={["20","30","40","42"]} style={{width:60,fontSize:11}}/>
+        </span>
+      </div>
+
+      {/* Unplaced modules — modules carrying real data (named module type
+          or any named load) but no slot assignment yet. Common when opening
+          an existing job that was edited under the old card-style UI. We
+          surface them so the data is never invisible; clicking "Place" auto-
+          assigns the next available slot pair so it appears in the grid. */}
+      {(() => {
+        const unplaced = (modules||[]).filter(m =>
+          !Number(m.slotA) && (m.moduleType || m.modNum ||
+            (m.loads||[]).some(l => l && (l.name||"").trim()))
+        );
+        if (unplaced.length === 0) return null;
+        return (
+          <div style={{
+            padding:"10px 14px", background:"#fffbe6", border:`1px solid #fde68a`,
+            borderTop:"none", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap",
+          }}>
+            <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.06em",
+              color:C.accent,textTransform:"uppercase"}}>
+              {unplaced.length} unplaced module{unplaced.length===1?"":"s"} from before
+            </span>
+            <span style={{fontSize:11,color:C.dim,flex:1,minWidth:0}}>
+              These existed before the panel-schedule view. Click "Place" to drop one into the next free pair of slots.
+            </span>
+            {unplaced.map(m => {
+              const lbl = `${savSkuLabel(m.moduleType) || ("Mod " + (m.modNum||"?"))}`;
+              const free = savFindFreeSmartPair(occ, panelSize, 1);
+              return (
+                <button key={m.id} disabled={!free}
+                  onClick={()=>{
+                    if (!free) return;
+                    updSmart(m.id, { slotA:String(free.slotA), slotB:String(free.slotB) });
+                    setSelectedSlot(free.slotA);
+                  }}
+                  style={{
+                    padding:"3px 9px", fontSize:11, fontWeight:600,
+                    background:"#fff", border:`1px solid ${C.accent}55`,
+                    color:free?C.accent:C.dim, borderRadius:5,
+                    cursor:free?"pointer":"not-allowed", fontFamily:"inherit",
+                  }}>
+                  Place {lbl}{free ? ` → ${free.slotA}/${free.slotB}` : " (panel full)"}
+                </button>
+              );
+            })}
+          </div>
+        );
+      })()}
+
+      {/* Schedule grid */}
+      <div style={{
+        display:"grid", gridTemplateColumns:"40px 1fr 40px 1fr",
+        border:`1px solid ${C.border}`, borderRadius:"0 0 8px 8px",
+        overflow:"hidden", background:"#fff",
+      }}>
+        {/* Column headers */}
+        <div style={{...slotNumHeaderStyle()}}>#</div>
+        <div style={{...slotHeaderStyle()}}>Left bus (odd)</div>
+        <div style={{...slotNumHeaderStyle()}}>#</div>
+        <div style={{...slotHeaderStyle(true)}}>Right bus (even)</div>
+
+        {pairs.map(([oddSlot, evenSlot])=>(
+          <Fragment key={oddSlot}>
+            <div style={slotNumStyle(selectedSlot===oddSlot)}>{oddSlot}</div>
+            {renderSlotCell(oddSlot)}
+            <div style={slotNumStyle(selectedSlot===evenSlot)}>{evenSlot}</div>
+            {renderSlotCell(evenSlot)}
+          </Fragment>
+        ))}
+      </div>
+
+      {/* Inline editor / add picker */}
+      {renderAddPicker()}
+      {renderEditor()}
+    </div>
+  );
+}
+// Helpers for the schedule cell styling so the JSX stays readable
+function slotNumStyle(selected) {
+  return {
+    minHeight: 36, display:"flex", alignItems:"center", justifyContent:"center",
+    fontSize:10, fontWeight:700, letterSpacing:"0.05em",
+    color: selected ? "#fff" : C.dim,
+    background: selected ? C.accent : "#f8fafc",
+    borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`,
+  };
+}
+function slotNumHeaderStyle() {
+  return {
+    minHeight: 28, display:"flex", alignItems:"center", justifyContent:"center",
+    fontSize:9, fontWeight:700, letterSpacing:"0.07em", color:C.dim,
+    background:"#eef2f6", borderBottom:`2px solid ${C.border}`,
+    borderRight:`1px solid ${C.border}`, textTransform:"uppercase",
+  };
+}
+function slotHeaderStyle(isRight) {
+  return {
+    minHeight: 28, display:"flex", alignItems:"center",
+    padding:"0 9px", fontSize:9, fontWeight:700, letterSpacing:"0.07em", color:C.dim,
+    background:"#eef2f6", borderBottom:`2px solid ${C.border}`,
+    borderRight: isRight ? "none" : `1px solid ${C.border}`, textTransform:"uppercase",
+  };
+}
+
+
 function PanelModulesSection({
   modules, onChange, system, allLoads=[],
   // Optional cross-panel move support — when provided, the Move dropdown
@@ -13195,9 +13904,14 @@ function PanelModulesSection({
   const moduleTypes = isLut?LUT_MODULE_TYPES:isCres?CRES_MODULE_TYPES:isSav?SAV_MODULE_TYPES:C4_MODULE_TYPES;
 
   const chCap = (type) => ({
-    "8-Ch Dimmer":8,"8-Ch Relay":8,"LMD-8120":8,"LQSE-S8":8,
-    "0-10V Dimmer":2,"LQSE-2ECO":2,"LQSE-2DAL":2,
-    "LQSE-4A":4,"LMD-4120":4,"LQSE-T5":5,
+    // Control 4
+    "8-Ch Dimmer":8, "8-Ch Relay":8, "0-10V Dimmer":2,
+    // Lutron HomeWorks
+    "LQSE-S8":8, "LQSE-2ECO":2, "LQSE-2DAL":2, "LQSE-4A":4, "LQSE-T5":5,
+    // Savant — modern QO smart breakers (2-pole, 2 outputs each)
+    "DUAL_20A_RELAY":2, "DUAL_500W_APD":2,
+    // Savant — legacy centralized cabinet SKUs
+    "LMD-8120":8, "LMD-4120":4, "SPM-Q2APD10":2, "SPM-Q4FHD10":4,
   }[type]||null);
 
   const showKeypad = !isSav&&!isLut&&!isCres;
@@ -17366,6 +18080,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         system: job.lightingSystem||"Control 4",
                         panelLabel: _panelLabel,
                         modules: _mods,
+                        // Savant-only schedule data; print fn ignores when system!=Savant
+                        regularBreakers: (((job.panelizedLighting?.panelLayout)||{})[floor]||{}).regularBreakers||[],
+                        panelSize: (((job.panelizedLighting?.panelLayout)||{})[floor]||{}).panelSize||40,
                       })}
                         title={`Print ${_panelLabel} schedule`}
                         style={{background:"none",border:`1px solid ${C.border}`,color:C.purple,
@@ -17381,6 +18098,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         system: job.lightingSystem||"Control 4",
                         panelLabel: _panelLabel,
                         modules: _mods,
+                        regularBreakers: (((job.panelizedLighting?.panelLayout)||{})[floor]||{}).regularBreakers||[],
+                        panelSize: (((job.panelizedLighting?.panelLayout)||{})[floor]||{}).panelSize||40,
                       })}
                         title={`Download ${_panelLabel} schedule as a self-contained HTML file`}
                         style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,
@@ -17391,21 +18110,50 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         DOWNLOAD
                       </button>
                     </div>
-                    <PanelModulesSection
-                      system={job.lightingSystem||"Control 4"}
-                      allLoads={alMod}
-                      modules={_mods}
-                      onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
-                        cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}
-                      allModulesForMove={_allModulesForMove}
-                      onCrossPanelMove={_onCrossPanelMove}
-                      currentFloorKey={floor}
-                      currentIsExtra={false}
-                      confirmedProp={job.panelizedLighting?.confirmedModules || {}}
-                      onConfirmedChange={(nextMap)=>u({panelizedLighting:{
-                        ...job.panelizedLighting,
-                        confirmedModules: nextMap,
-                      }})}/>
+                    {/* Savant gets the Square-D-style panel schedule. Other systems
+                        keep the existing module-card layout untouched. The Savant
+                        view reads/writes `panelizedLighting.panelLayout.{floor}` for
+                        the new fields (panelSize + regularBreakers) — additive so
+                        old jobs render with empty defaults and lose nothing. */}
+                    {(job.lightingSystem||"Control 4")==="Savant" ? (
+                      <SavantPanelSchedule
+                        allLoads={alMod}
+                        modules={_mods}
+                        onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
+                          cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}
+                        regularBreakers={(((job.panelizedLighting.panelLayout)||{})[floor]||{}).regularBreakers||[]}
+                        onRegularChange={(nextArr)=>{
+                          const _pl=job.panelizedLighting; const _pLay=_pl.panelLayout||{};
+                          const _cur=_pLay[floor]||{};
+                          u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[floor]:{..._cur,regularBreakers:nextArr}}}});
+                        }}
+                        panelSize={(((job.panelizedLighting.panelLayout)||{})[floor]||{}).panelSize||40}
+                        onPanelSizeChange={(n)=>{
+                          const _pl=job.panelizedLighting; const _pLay=_pl.panelLayout||{};
+                          const _cur=_pLay[floor]||{};
+                          u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[floor]:{..._cur,panelSize:n}}}});
+                        }}
+                        confirmedProp={job.panelizedLighting?.confirmedModules || {}}
+                        onConfirmedChange={(nextMap)=>u({panelizedLighting:{
+                          ...job.panelizedLighting, confirmedModules: nextMap,
+                        }})}/>
+                    ) : (
+                      <PanelModulesSection
+                        system={job.lightingSystem||"Control 4"}
+                        allLoads={alMod}
+                        modules={_mods}
+                        onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
+                          cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}
+                        allModulesForMove={_allModulesForMove}
+                        onCrossPanelMove={_onCrossPanelMove}
+                        currentFloorKey={floor}
+                        currentIsExtra={false}
+                        confirmedProp={job.panelizedLighting?.confirmedModules || {}}
+                        onConfirmedChange={(nextMap)=>u({panelizedLighting:{
+                          ...job.panelizedLighting,
+                          confirmedModules: nextMap,
+                        }})}/>
+                    )}
                   </div>
                   );
                 })}
@@ -17432,6 +18180,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         system: job.lightingSystem||"Control 4",
                         panelLabel: ef.label||"",
                         modules: _mods,
+                        regularBreakers: (((job.panelizedLighting?.panelLayout)||{})[ef.key]||{}).regularBreakers||[],
+                        panelSize: (((job.panelizedLighting?.panelLayout)||{})[ef.key]||{}).panelSize||40,
                       })}
                         title={`Print ${ef.label||"panel"} schedule`}
                         style={{background:"none",border:`1px solid ${C.border}`,color:C.purple,
@@ -17447,6 +18197,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         system: job.lightingSystem||"Control 4",
                         panelLabel: ef.label||"",
                         modules: _mods,
+                        regularBreakers: (((job.panelizedLighting?.panelLayout)||{})[ef.key]||{}).regularBreakers||[],
+                        panelSize: (((job.panelizedLighting?.panelLayout)||{})[ef.key]||{}).panelSize||40,
                       })}
                         title={`Download ${ef.label||"panel"} schedule as a self-contained HTML file`}
                         style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,
@@ -17463,20 +18215,46 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         u({panelizedLighting:updated});
                       }} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0,marginLeft:6}}>Remove</button>
                     </div>
-                    <PanelModulesSection
-                      system={job.lightingSystem||"Control 4"}
-                      allLoads={alMod}
-                      modules={_mods}
-                      onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}
-                      allModulesForMove={_allModulesForMove}
-                      onCrossPanelMove={_onCrossPanelMove}
-                      currentFloorKey={ef.key}
-                      currentIsExtra={true}
-                      confirmedProp={job.panelizedLighting?.confirmedModules || {}}
-                      onConfirmedChange={(nextMap)=>u({panelizedLighting:{
-                        ...job.panelizedLighting,
-                        confirmedModules: nextMap,
-                      }})}/>
+                    {/* Same Savant branch as the std-panel section above. Extra-floor
+                        smart breakers live in panelizedLighting[ef.key]; their panel
+                        layout (size + regular breakers) lives in panelLayout[ef.key]. */}
+                    {(job.lightingSystem||"Control 4")==="Savant" ? (
+                      <SavantPanelSchedule
+                        allLoads={alMod}
+                        modules={_mods}
+                        onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}
+                        regularBreakers={(((job.panelizedLighting.panelLayout)||{})[ef.key]||{}).regularBreakers||[]}
+                        onRegularChange={(nextArr)=>{
+                          const _pl=job.panelizedLighting; const _pLay=_pl.panelLayout||{};
+                          const _cur=_pLay[ef.key]||{};
+                          u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[ef.key]:{..._cur,regularBreakers:nextArr}}}});
+                        }}
+                        panelSize={(((job.panelizedLighting.panelLayout)||{})[ef.key]||{}).panelSize||40}
+                        onPanelSizeChange={(n)=>{
+                          const _pl=job.panelizedLighting; const _pLay=_pl.panelLayout||{};
+                          const _cur=_pLay[ef.key]||{};
+                          u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[ef.key]:{..._cur,panelSize:n}}}});
+                        }}
+                        confirmedProp={job.panelizedLighting?.confirmedModules || {}}
+                        onConfirmedChange={(nextMap)=>u({panelizedLighting:{
+                          ...job.panelizedLighting, confirmedModules: nextMap,
+                        }})}/>
+                    ) : (
+                      <PanelModulesSection
+                        system={job.lightingSystem||"Control 4"}
+                        allLoads={alMod}
+                        modules={_mods}
+                        onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}
+                        allModulesForMove={_allModulesForMove}
+                        onCrossPanelMove={_onCrossPanelMove}
+                        currentFloorKey={ef.key}
+                        currentIsExtra={true}
+                        confirmedProp={job.panelizedLighting?.confirmedModules || {}}
+                        onConfirmedChange={(nextMap)=>u({panelizedLighting:{
+                          ...job.panelizedLighting,
+                          confirmedModules: nextMap,
+                        }})}/>
+                    )}
                   </div>
                   );
                 })}
