@@ -74,42 +74,43 @@ async function sendFCM(token, { title, body, jobId, section }) {
     ? `/?jobId=${encodeURIComponent(jobId)}${section ? `&section=${encodeURIComponent(section)}` : ""}`
     : "/";
   try {
+    // DATA-ONLY payload to prevent duplicate notifications on every device.
+    //
+    // Why: when a payload contains BOTH a top-level `notification` field AND
+    // a `webpush.notification` field (the previous shape), the FCM JS SDK
+    // running inside firebase-messaging-sw.js auto-displays the system-level
+    // notification AND our own `onBackgroundMessage` handler ALSO calls
+    // `self.registration.showNotification(...)`. That's where "two of the
+    // same notification per push" was coming from.
+    //
+    // Going data-only routes ALL display through the SW's onBackgroundMessage
+    // handler, which reads payload.data.{title,body,jobId,section} and shows
+    // exactly one notification. The test-push helper (which already worked
+    // without dupes) uses the same shape — this just brings real pushes in
+    // line. The `tag` we set in the SW (`he-${jobId}-${section}`) still
+    // dedupes back-to-back pushes for the same job+section.
+    //
+    // iOS Safari PWA still works: Apple's web-push gateway routes to the SW
+    // via APNS transport, and `apns-push-type: alert` keeps Apple's gateway
+    // from silently dropping it. The SW renders on iOS too.
     await messaging.send({
       token,
-      // data payload — always present so the SW can handle it
       data: {
         title:   title   || "",
         body:    body    || "",
         jobId:   jobId   || "",
         section: section || "",
+        tag,
+        link:    linkPath,
       },
-      // notification payload — required for background delivery on Android & iOS
-      notification: { title: title || "", body: body || "" },
       webpush: {
         headers: { Urgency: "high" },
-        notification: {
-          title: title || "",
-          body:  body  || "",
-          icon:  "/icon-192.png",
-          badge: "/icon-192.png",
-          tag,                      // dedup at the browser/SW layer
-          requireInteraction: false,
-        },
-        // fcmOptions.link is what the FCM SDK opens when the user taps the
-        // notification (FCM handles the click → focus existing tab or open new).
-        fcmOptions: { link: linkPath },
       },
       android: {
         priority: "high",
         // collapseKey makes Android replace any pending notification with the
         // same key instead of stacking — fixes the "2-3 per notification" bug.
         collapseKey: tag,
-        notification: {
-          sound: "default",
-          channelId: "homestead_default",
-          tag,                      // OS-level dedup on the device
-          clickAction: "FLUTTER_NOTIFICATION_CLICK",
-        },
       },
       apns: {
         headers: {
@@ -119,14 +120,7 @@ async function sendFCM(token, { title, body, jobId, section }) {
           "apns-push-type": "alert",
           "apns-priority":  "10",
         },
-        payload: {
-          aps: {
-            alert: { title: title || "", body: body || "" },
-            sound: "default",
-            badge: 1,
-            "thread-id": tag,       // iOS dedup / grouping
-          },
-        },
+        payload: { aps: { contentAvailable: true } },
       },
     });
   } catch (e) {

@@ -496,6 +496,10 @@ async function registerFCMToken(userId, force=false) {
 
     console.log("[HE] FCM token generated (first 20):", token.slice(0,20), "userId:", userId);
 
+    // Stash this device's current token in localStorage so the keep-alive
+    // path can detect drift cheaply (no Firestore read) on visibilitychange.
+    try { localStorage.setItem(`he_fcm_device_token_${userId}`, token); } catch {}
+
     const snap = await getDoc(doc(db, "settings", "users"));
     if (!snap.exists()) return "no_user_doc";
     const rawList = snap.data().list || [];
@@ -526,6 +530,84 @@ async function registerFCMToken(userId, force=false) {
     return "error:" + e.message;
   }
 }
+
+/**
+ * Lightweight token keep-alive — runs on app load, on every tab focus, and
+ * every 30 minutes while the app is open. Detects drift between the SDK's
+ * current token and what's stored on the server, and silently re-registers
+ * if they don't match. Also revives a missing push subscription.
+ *
+ * Why this exists: FCM tokens can rotate at any time (browser updates, push
+ * service hiccups, idle timeouts, OS-level revocations). The old daily-
+ * throttle-on-login path missed every rotation that happened mid-session,
+ * which is why notifications "worked then stopped working" for the whole
+ * crew. This makes the chain self-healing without ever wiping other devices'
+ * tokens.
+ *
+ * DATA SAFETY: never deletes anyone else's tokens, never force-deletes the
+ * local token (force=false), only ADDS missing tokens to the server array.
+ */
+async function validateAndSyncFCMToken(userId) {
+  if (!messaging || !userId) return "skip";
+  if (!("Notification" in window)) return "skip";
+  if (Notification.permission !== "granted") return "skip";
+  try {
+    let swReg = null;
+    if ("serviceWorker" in navigator) {
+      try {
+        swReg = await navigator.serviceWorker.getRegistration("/firebase-messaging-sw.js")
+              || await navigator.serviceWorker.register("/firebase-messaging-sw.js");
+        await swReg.update().catch(() => {});
+        await navigator.serviceWorker.ready;
+      } catch {}
+    }
+
+    // 1. Push subscription health — if it's gone (browser cleared push state,
+    //    SW reinstalled, OS revoked), no FCM token will ever deliver. Force a
+    //    full re-register to recreate it.
+    if (swReg && swReg.pushManager) {
+      try {
+        const sub = await swReg.pushManager.getSubscription();
+        if (!sub) {
+          console.log("[HE keepalive] push subscription missing — force re-registering");
+          return await registerFCMToken(userId, true);
+        }
+      } catch {}
+    }
+
+    // 2. Token drift — what the SDK reports now vs what we last saved on this
+    //    device. If they differ, the token rotated since last login and the
+    //    server doesn't know yet.
+    const tokenOptions = { vapidKey: VAPID_KEY };
+    if (swReg) tokenOptions.serviceWorkerRegistration = swReg;
+    const currentToken = await getToken(messaging, tokenOptions);
+    if (!currentToken) return "no_token";
+
+    const lastSeen = localStorage.getItem(`he_fcm_device_token_${userId}`) || "";
+    if (lastSeen === currentToken) {
+      // Cheap path — token is unchanged on this device. Still verify the
+      // server has it (covers the case where the user logged in on a fresh
+      // device and the registration write failed silently).
+      try {
+        const snap = await getDoc(doc(db, "settings", "users"));
+        const me = snap.exists() ? (snap.data().list || []).find(u => u.id === userId) : null;
+        const saved = Array.isArray(me?.fcmTokens) ? me.fcmTokens
+                    : me?.fcmToken ? [me.fcmToken] : [];
+        if (saved.includes(currentToken)) return "in_sync";
+      } catch {}
+    }
+
+    // 3. Drift detected — additive register (no delete, force=false). This
+    //    saves the new token to the server array without touching anyone
+    //    else's tokens. Stale tokens get pruned server-side on next send.
+    console.log("[HE keepalive] token drift detected — syncing to server");
+    return await registerFCMToken(userId, false);
+  } catch (e) {
+    console.warn("[HE keepalive] validate failed:", e.message);
+    return "error:" + e.message;
+  }
+}
+window.__HE_VALIDATE_FCM = validateAndSyncFCMToken;
 
 // Handle foreground messages (app is open) — show a brief alert-style banner.
 // Reads from payload.data since we send data-only messages to prevent double notifications.
@@ -29459,7 +29541,92 @@ function NotifDoctor({ identity }) {
     const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
     out.push({ label: `Installed as PWA (Add to Home Screen)`, ok: isStandalone || !isIOS,
       hint: isIOS && !isStandalone ? "iOS requires Home Screen install for push. Tap Share → Add to Home Screen." : "" });
+    // 8. Browser push subscription is alive. Even if the FCM token is in the
+    //    server record, the underlying push subscription can be silently dead
+    //    (browser cleared push state, OS revoked permission, SW unregistered
+    //    and lost the subscription, etc.). messaging.send() will still report
+    //    "delivered" because FCM accepts the message for queuing, but it'll
+    //    never reach the device. This check catches that gap.
+    let hasSub = false;
+    let subEndpoint = "";
+    try {
+      if (swReg && swReg.pushManager) {
+        const sub = await swReg.pushManager.getSubscription();
+        if (sub) {
+          hasSub = true;
+          subEndpoint = sub.endpoint || "";
+        }
+      }
+    } catch(e) {}
+    out.push({
+      label: hasSub ? "Browser push subscription is active" : "Browser push subscription is MISSING",
+      ok: hasSub,
+      hint: !hasSub ? "This is the root cause of 'delivered but invisible' pushes. Click 'Force re-register' below to recreate the subscription."
+                    : (subEndpoint.slice(0, 60) + (subEndpoint.length > 60 ? "…" : "")),
+    });
     setChecks(out);
+  };
+
+  // Bypass FCM entirely — fire a Notification via the local Web Notifications
+  // API. If this DOESN'T pop a banner, the OS is blocking Chrome's
+  // notifications at the macOS / iOS / Windows system level (regardless of
+  // browser permission). If this DOES pop a banner, the OS is fine and the
+  // FCM/SW chain is the actual problem.
+  const testOSNotif = () => {
+    if (typeof Notification === "undefined") {
+      setTestResult({ kind: "err", text: "Notification API not available in this browser." });
+      return;
+    }
+    if (Notification.permission !== "granted") {
+      setTestResult({ kind: "err", text: `Notification permission is "${Notification.permission}". Click "Enable notifications" first.` });
+      return;
+    }
+    try {
+      const n = new Notification("Direct OS notification test", {
+        body: "If you see this banner, your OS allows notifications. The FCM chain is the problem.",
+        icon: "/icon-192.png",
+        tag: "he-os-test",
+      });
+      setTestResult({
+        kind: "info",
+        text: "✓ Notification was created. If you see a banner pop on screen, your OS allows notifications and the FCM chain is the bug. If you don't see a banner, macOS Chrome notifications are off — System Settings → Notifications → Chrome → Allow Notifications.",
+      });
+      // Auto-close after 5s so it doesn't pile up
+      setTimeout(() => { try { n.close(); } catch {} }, 5000);
+    } catch(e) {
+      setTestResult({ kind: "err", text: `Failed to create notification: ${e.message}` });
+    }
+  };
+
+  // Nuclear reset: unregister every service worker for this origin, delete
+  // the FCM token, then re-register from scratch. Last-resort fix when push
+  // delivery is fundamentally broken (subscription dead, SW corrupted, etc.).
+  const forceReReg = async () => {
+    if (!identity?.id) return;
+    setTestResult({ kind: "info", text: "Force-resetting service worker + push subscription…" });
+    try {
+      // Delete the FCM token (revokes the underlying subscription too)
+      if (messaging) {
+        try { await deleteToken(messaging); } catch {}
+      }
+      // Unregister every SW on this origin
+      if ("serviceWorker" in navigator) {
+        const regs = await navigator.serviceWorker.getRegistrations();
+        await Promise.all(regs.map(r => r.unregister().catch(() => {})));
+      }
+      // Re-register fresh — registerFCMToken with force=true creates a brand
+      // new SW, brand new push subscription, brand new token.
+      const result = await registerFCMToken(identity.id, true);
+      setTestResult({
+        kind: result === "ok" ? "ok" : "err",
+        text: result === "ok"
+          ? "✓ Reset complete. Run the checks again, then click 'Send test push to me'."
+          : `Reset failed: ${result}`,
+      });
+      runChecks();
+    } catch(e) {
+      setTestResult({ kind: "err", text: `Reset error: ${e.message}` });
+    }
   };
   useEffect(() => { runChecks(); }, []); // eslint-disable-line
 
@@ -29571,6 +29738,18 @@ function NotifDoctor({ identity }) {
           style={{ background: testing ? C.border : "#2563eb", border: "none", borderRadius: 7,
             padding: "6px 12px", fontSize: 11, fontWeight: 700, color: "#fff", cursor: testing ? "default" : "pointer", fontFamily: "inherit", opacity: testing ? 0.6 : 1 }}>
           {testing ? "Sending…" : "Send test push to me"}
+        </button>
+        <button onClick={testOSNotif}
+          title="Bypasses FCM — fires a notification directly via the browser. Tells us if the OS is blocking notifications system-wide."
+          style={{ background: "#8b5cf6", border: "none", borderRadius: 7,
+            padding: "6px 12px", fontSize: 11, fontWeight: 700, color: "#fff", cursor: "pointer", fontFamily: "inherit" }}>
+          Test OS notification (no FCM)
+        </button>
+        <button onClick={forceReReg}
+          title="Last resort: unregister every service worker, delete the FCM token, re-create from scratch."
+          style={{ background: "none", border: `1px solid ${C.red}`, borderRadius: 7,
+            padding: "6px 12px", fontSize: 11, fontWeight: 700, color: C.red, cursor: "pointer", fontFamily: "inherit" }}>
+          Force re-register (nuclear reset)
         </button>
       </div>
 
@@ -33176,21 +33355,42 @@ function App() {
     return () => { window.removeEventListener('online', up); window.removeEventListener('offline', down); };
   }, []);
 
-  // On login: if permission already granted, register silently.
-  // If not yet asked, show the prompt banner so user can tap once to enable.
+  // On login: if permission already granted, register and start the keep-alive
+  // loop. If not yet asked, show the prompt banner so user can tap once.
+  //
+  // Keep-alive strategy (replaces the old daily-throttle-on-login that missed
+  // every mid-session token rotation): validate on login, then re-validate on
+  // every tab focus AND every 30 minutes while the tab is open. FCM tokens can
+  // rotate any time and the old code only noticed once per 24h — that's why
+  // notifications "worked then stopped working" for everyone.
   useEffect(()=>{
     if(!identity?.id) return;
     const perm = ("Notification" in window) ? Notification.permission : "denied";
     if(perm === "granted") {
-      // Always register on login. Also force-refresh once per day so tokens
-      // never go stale — FCM tokens can rotate and expired ones fail silently.
-      const storageKey = `he_fcm_refresh_${identity.id}`;
-      const lastRefresh = parseInt(localStorage.getItem(storageKey)||"0", 10);
-      const oneDayMs = 24 * 60 * 60 * 1000;
-      const needsRefresh = Date.now() - lastRefresh > oneDayMs;
-      registerFCMToken(identity.id, needsRefresh).then(result => {
-        if(result === "ok") localStorage.setItem(storageKey, String(Date.now()));
-      });
+      // Initial validate on login — additive only, never wipes other devices.
+      validateAndSyncFCMToken(identity.id);
+
+      // Re-validate every time the tab becomes visible. This is the cheap
+      // common-case fix: phone wakes up, user opens the app, drift gets
+      // healed before the first push needs to land.
+      const onVis = () => {
+        if (document.visibilityState === "visible") {
+          validateAndSyncFCMToken(identity.id);
+        }
+      };
+      document.addEventListener("visibilitychange", onVis);
+
+      // Heartbeat every 30 minutes for users who leave the app open all day
+      // (foremen on iPad PWAs, Koy at the desk). Catches rotations that
+      // happen while the tab is foregrounded.
+      const interval = setInterval(() => {
+        validateAndSyncFCMToken(identity.id);
+      }, 30 * 60 * 1000);
+
+      return () => {
+        document.removeEventListener("visibilitychange", onVis);
+        clearInterval(interval);
+      };
     } else if(perm === "default") {
       setShowNotifPrompt(true);
     }

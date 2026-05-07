@@ -18,12 +18,20 @@ firebase.initializeApp({
 const messaging = firebase.messaging();
 
 // Background message handler — shows a system notification.
-// The `data` payload includes title, body, jobId, and section.
+// The `data` payload includes title, body, jobId, section, and tag.
+//
+// All real pushes are now data-only (the server stopped sending top-level
+// `notification` payloads to fix the "two notifications per push" bug). That
+// means EVERY push lands in this handler — there's no FCM SDK auto-display
+// happening anymore. We render exactly one notification here.
 messaging.onBackgroundMessage(payload => {
   const title   = payload.data?.title || payload.notification?.title || "Homestead Electric";
   const body    = payload.data?.body  || payload.notification?.body  || "";
   const jobId   = payload.data?.jobId   || "";
   const section = payload.data?.section || "";
+  // Server-supplied tag wins (stable across pushes for the same job+section);
+  // fall back to a derived tag for older clients.
+  const tag     = payload.data?.tag || `he-${jobId}-${section}`;
 
   // Store the deep-link target so the notificationclick handler can use it.
   // We encode it in the notification's data tag so it survives the click event.
@@ -31,7 +39,8 @@ messaging.onBackgroundMessage(payload => {
     body,
     icon:  "/icon-192.png",
     badge: "/icon-192.png",
-    tag:   `he-${jobId}-${section}`,   // dedupes notifications for the same job+section
+    tag,                                // dedupes notifications for the same job+section
+    renotify: false,                    // don't pop a fresh banner if the tag matches
     data:  { jobId, section },
   });
 });
