@@ -29423,15 +29423,36 @@ function NotifDoctor({ identity }) {
       hint: token ? `${token.slice(0,20)}…` : "Token generation failed — check console" });
     // 6. Token saved on the user record in Firestore
     let savedTokenCount = 0;
+    let savedTokens = [];
     try {
       const snap = await getDoc(doc(db,"settings","users"));
       const list = snap.exists() ? (snap.data().list||[]) : [];
       const me = list.find(u => u.id === identity?.id);
-      const tokens = Array.isArray(me?.fcmTokens) ? me.fcmTokens : (me?.fcmToken ? [me.fcmToken] : []);
-      savedTokenCount = tokens.length;
+      savedTokens = Array.isArray(me?.fcmTokens) ? me.fcmTokens : (me?.fcmToken ? [me.fcmToken] : []);
+      savedTokenCount = savedTokens.length;
     } catch(e) {}
     out.push({ label: `Tokens saved in your user record: ${savedTokenCount}`, ok: savedTokenCount > 0,
       hint: savedTokenCount === 0 ? "Click 'Enable notifications' below to register" : "" });
+    // 6b. Is THIS device's current fresh token among the saved tokens? If
+    //     not, server-side test pushes can't reach this device — that's
+    //     the silent "delivered but invisible" failure mode.
+    const tokenIsSaved = !!token && savedTokens.includes(token);
+    out.push({
+      label: tokenIsSaved
+        ? "This device's current token is saved on the server"
+        : "This device's current token is NOT saved on the server",
+      ok: tokenIsSaved,
+      hint: !tokenIsSaved && token ? "Auto-syncing now…" : "",
+    });
+    // Auto-fix: if we have a fresh token but it's not in savedTokens, register
+    // it now (without forcing — just additive merge). This is what was missing
+    // from the daily-throttle path. Re-run runChecks after to confirm.
+    if (token && !tokenIsSaved && identity?.id) {
+      try {
+        await registerFCMToken(identity.id, false);
+        // Don't recurse runChecks here — it would loop. Caller can re-run.
+      } catch(e) {}
+    }
     // 7. PWA installed (iOS gating)
     const isStandalone = window.matchMedia?.("(display-mode: standalone)")?.matches ||
                          window.navigator.standalone === true;
@@ -29462,14 +29483,26 @@ function NotifDoctor({ identity }) {
 
     try {
       const fn = httpsCallable(functions, "sendTestPush");
-      const r = await fn({ userId: identity.id });
-      // Server says delivered — now wait up to 15s for the client to actually
-      // receive it and fire the he-push event. This is the real "did it work?"
-      // check — server "delivered" only means FCM accepted the message, not
-      // that it surfaced on this device.
+      let r = await fn({ userId: identity.id });
+      // If ALL tokens were stale, every one just got pruned server-side. The
+      // current device's fresh token might not yet be on the user record. So
+      // force-register a fresh token AND retry once — this is the auto-recovery
+      // path that catches the most common reason test pushes silently fail.
+      const allStale = !r.data.ok && (r.data.results || []).every(x => x.stale);
+      if (allStale) {
+        setTestResult({ kind: "info", text: "All saved tokens were stale — registering a fresh one and retrying…" });
+        await registerFCMToken(identity.id, true);
+        r = await fn({ userId: identity.id });
+      }
       const delivered = r.data.ok;
       if (!delivered) {
-        setTestResult({ kind: "err", data: r.data, summary: "Server reports no successful tokens." });
+        setTestResult({
+          kind: "err",
+          data: r.data,
+          summary: allStale
+            ? "Even after registering a fresh token, the test push didn't deliver. Try clicking 'Enable notifications' explicitly, then retest."
+            : "Server reports no successful tokens.",
+        });
         return;
       }
       // Poll for up to 15 seconds for the he-push event
