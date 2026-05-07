@@ -29350,6 +29350,154 @@ function BulkEditTable({ jobs, foremenList, leadsList, onUpdateJob }) {
 // Collapsible section wrapper used across the Settings page. Defaults to
 // closed so the page is short on first load — tap a header to expand the
 // section you actually want.
+// Notification Doctor — runs through every step of the FCM chain on this
+// device and reports which step fails. Plus a "Send test push" button that
+// invokes the sendTestPush cloud function and shows per-token results.
+// Lives inside Settings as a collapsible section.
+function NotifDoctor({ identity }) {
+  const [checks, setChecks] = useState(null);
+  const [testing, setTesting] = useState(false);
+  const [testResult, setTestResult] = useState(null);
+
+  const runChecks = async () => {
+    const out = [];
+    // 1. Notification API
+    out.push({ label: "Notification API present", ok: typeof Notification !== "undefined" });
+    // 2. Permission state
+    const perm = (typeof Notification !== "undefined") ? Notification.permission : "unknown";
+    out.push({ label: `Permission state: ${perm}`, ok: perm === "granted",
+      hint: perm === "denied" ? "Reset in browser settings → site permissions → notifications → Allow" :
+            perm === "default" ? "Click 'Enable notifications' below" : "" });
+    // 3. Service worker registered
+    let swReg = null;
+    try {
+      if ("serviceWorker" in navigator) {
+        swReg = await navigator.serviceWorker.getRegistration("/firebase-messaging-sw.js");
+      }
+    } catch(e) {}
+    out.push({ label: "Firebase messaging service worker registered", ok: !!swReg,
+      hint: !swReg ? "Will auto-register when you click 'Enable notifications'" : "" });
+    // 4. SW active
+    out.push({ label: "Service worker active", ok: !!swReg?.active });
+    // 5. FCM token in localStorage / from getToken
+    let token = null;
+    try {
+      if (messaging && perm === "granted" && swReg) {
+        token = await getToken(messaging, { vapidKey: VAPID_KEY, serviceWorkerRegistration: swReg });
+      }
+    } catch(e) {}
+    out.push({ label: "FCM token generated for this device", ok: !!token,
+      hint: token ? `${token.slice(0,20)}…` : "Token generation failed — check console" });
+    // 6. Token saved on the user record in Firestore
+    let savedTokenCount = 0;
+    try {
+      const snap = await getDoc(doc(db,"settings","users"));
+      const list = snap.exists() ? (snap.data().list||[]) : [];
+      const me = list.find(u => u.id === identity?.id);
+      const tokens = Array.isArray(me?.fcmTokens) ? me.fcmTokens : (me?.fcmToken ? [me.fcmToken] : []);
+      savedTokenCount = tokens.length;
+    } catch(e) {}
+    out.push({ label: `Tokens saved in your user record: ${savedTokenCount}`, ok: savedTokenCount > 0,
+      hint: savedTokenCount === 0 ? "Click 'Enable notifications' below to register" : "" });
+    // 7. PWA installed (iOS gating)
+    const isStandalone = window.matchMedia?.("(display-mode: standalone)")?.matches ||
+                         window.navigator.standalone === true;
+    const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+    out.push({ label: `Installed as PWA (Add to Home Screen)`, ok: isStandalone || !isIOS,
+      hint: isIOS && !isStandalone ? "iOS requires Home Screen install for push. Tap Share → Add to Home Screen." : "" });
+    setChecks(out);
+  };
+  useEffect(() => { runChecks(); }, []); // eslint-disable-line
+
+  const enable = async () => {
+    if (!identity?.id) return;
+    setTestResult({ kind: "info", text: "Requesting permission…" });
+    const r = await registerFCMToken(identity.id, true);
+    setTestResult({ kind: r === "ok" ? "ok" : "err", text: `Result: ${r}` });
+    runChecks();
+  };
+
+  const sendTest = async () => {
+    if (!identity?.id) return;
+    setTesting(true);
+    setTestResult(null);
+    try {
+      const fn = httpsCallable(functions, "sendTestPush");
+      const r = await fn({ userId: identity.id });
+      setTestResult({ kind: r.data.ok ? "ok" : "err", data: r.data });
+    } catch(e) {
+      setTestResult({ kind: "err", text: e.message });
+    }
+    setTesting(false);
+  };
+
+  return (
+    <div style={{ padding: "12px 14px" }}>
+      <div style={{ fontSize: 11, color: C.dim, marginBottom: 12, lineHeight: 1.5 }}>
+        Diagnostic for push notifications. Each row checks one part of the
+        delivery chain. Green check = working, red X = needs attention.
+      </div>
+      {checks ? (
+        <div style={{ display: "flex", flexDirection: "column", gap: 6, marginBottom: 14 }}>
+          {checks.map((c, i) => (
+            <div key={i} style={{ display: "flex", alignItems: "flex-start", gap: 8, fontSize: 12 }}>
+              <span style={{ color: c.ok ? "#16a34a" : "#dc2626", fontSize: 14, lineHeight: 1.2, flexShrink: 0 }}>
+                {c.ok ? "✓" : "✗"}
+              </span>
+              <div style={{ flex: 1 }}>
+                <div style={{ color: C.text, fontWeight: c.ok ? 400 : 600 }}>{c.label}</div>
+                {c.hint && <div style={{ fontSize: 10, color: C.dim, marginTop: 1 }}>{c.hint}</div>}
+              </div>
+            </div>
+          ))}
+        </div>
+      ) : (
+        <div style={{ fontSize: 11, color: C.dim }}>Checking…</div>
+      )}
+
+      <div style={{ display: "flex", gap: 8, flexWrap: "wrap" }}>
+        <button onClick={runChecks}
+          style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 7,
+            padding: "6px 12px", fontSize: 11, fontWeight: 600, color: C.dim, cursor: "pointer", fontFamily: "inherit" }}>
+          Re-run checks
+        </button>
+        <button onClick={enable}
+          style={{ background: C.accent, border: "none", borderRadius: 7,
+            padding: "6px 12px", fontSize: 11, fontWeight: 700, color: "#fff", cursor: "pointer", fontFamily: "inherit" }}>
+          Enable notifications
+        </button>
+        <button onClick={sendTest} disabled={testing}
+          style={{ background: testing ? C.border : "#2563eb", border: "none", borderRadius: 7,
+            padding: "6px 12px", fontSize: 11, fontWeight: 700, color: "#fff", cursor: testing ? "default" : "pointer", fontFamily: "inherit", opacity: testing ? 0.6 : 1 }}>
+          {testing ? "Sending…" : "Send test push to me"}
+        </button>
+      </div>
+
+      {testResult && (
+        <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8,
+          background: testResult.kind === "ok" ? "#dcfce7" : testResult.kind === "err" ? "#fee2e2" : "#dbeafe",
+          color: testResult.kind === "ok" ? "#166534" : testResult.kind === "err" ? "#991b1b" : "#1e40af",
+          fontSize: 12, lineHeight: 1.5 }}>
+          {testResult.text || ""}
+          {testResult.data && (
+            <>
+              <div style={{ fontWeight: 600, marginBottom: 4 }}>
+                {testResult.data.ok ? "✓ At least one token delivered" : "✗ All tokens failed"}
+                {" "}— {testResult.data.tokenCount} token{testResult.data.tokenCount===1?"":"s"} on file
+              </div>
+              {(testResult.data.results || []).map((r, i) => (
+                <div key={i} style={{ fontSize: 10, fontFamily: "monospace", marginLeft: 10 }}>
+                  {r.ok ? "✓" : "✗"} {r.token} {r.error ? `— ${r.error}` : ""}{r.stale ? " (pruned)" : ""}
+                </div>
+              ))}
+            </>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SettingsSection({ title, accent, defaultOpen = false, children }) {
   const [open, setOpen] = useState(defaultOpen);
   const c = accent || { bg: "#f8fafc", border: "#e2e8f0", text: "#0f172a" };
@@ -33428,14 +33576,22 @@ function App() {
 
       saveTimers.current[job.id] = null;
 
+      // Snapshot the patch we're about to write but DON'T delete it from the
+      // queue yet — only clear it once Firestore confirms the write. This way
+      // if the network call fails (offline blip, doc-too-large, etc.) the
+      // patch stays in pendingPatches for retry. The previous version popped
+      // the patch BEFORE awaiting updateDoc, so any failure would silently
+      // drop the user's edit even though `localStorage.hejobs_backup` still
+      // had the full job.
+      const accumulated = { ...(pendingPatches.current[job.id] || {}) };
+      const accumulatedKeys = Object.keys(accumulated);
+
       try {
 
         // Tag every save with device identity so we can trace who changed what
         const deviceId = localStorage.getItem('he_device_id') || (() => { const id = 'dev_' + Math.random().toString(36).slice(2,8); localStorage.setItem('he_device_id', id); return id; })();
-        const accumulated = pendingPatches.current[job.id];
-        delete pendingPatches.current[job.id];
 
-        if(accumulated && Object.keys(accumulated).length > 0) {
+        if(accumulatedKeys.length > 0) {
           // Patch mode: only write the fields that changed.
           // updateDoc with dot-notation is the correct Firebase API for this — it touches ONLY
           // the specified nested fields and leaves everything else in Firestore untouched.
@@ -33448,6 +33604,18 @@ function App() {
             if(notFound?.code === 'not-found') {
               await setDoc(doc(db,"jobs",job.id), {data:sanitize(job), updated_at:patch.updated_at, saved_by:patch.saved_by, device:patch.device});
             } else { throw notFound; }
+          }
+          // Write succeeded — clear ONLY the keys we just wrote. New patches
+          // that arrived during the await stay in the queue for next flush.
+          if (pendingPatches.current[job.id]) {
+            accumulatedKeys.forEach(k => {
+              if (pendingPatches.current[job.id][k] === accumulated[k]) {
+                delete pendingPatches.current[job.id][k];
+              }
+            });
+            if (Object.keys(pendingPatches.current[job.id]).length === 0) {
+              delete pendingPatches.current[job.id];
+            }
           }
         } else {
           // No patch — new job or unpatch'd save path. Write all current fields via dot-notation updateDoc
@@ -33507,6 +33675,122 @@ function App() {
     }, 500);
 
   };
+
+  // RECONNECT FLUSH: when the browser transitions offline→online, re-fetch
+  // each job's CURRENT server state, smart-merge our queued offline patch
+  // on top of it, and write the merged result. This way another user's
+  // edits during the offline window aren't clobbered by the offline user's
+  // stale field copy.
+  //
+  // SMART MERGE strategy (per field in the pending patch):
+  //   • Arrays of objects with `id` (punch items, rooms, RTs, COs, etc.) →
+  //     union by id. For matching ids, the one with the LATER timestamp
+  //     wins (checks updated_at, checkedAt, addedAt, doneAt). If neither
+  //     has a timestamp, client wins (their explicit offline edit).
+  //   • Plain arrays → client wins (no way to align without ids).
+  //   • Plain objects → recursive smart-merge.
+  //   • Primitives → client wins (the patch was their explicit edit).
+  // This keeps Vasa's "marked done" flags on items the offline foreman
+  // didn't touch, while preserving any new items the offline foreman added.
+  const _smartMergeForReconnect = (server, client) => {
+    if (server === null || server === undefined) return client;
+    if (client === null || client === undefined) return server;
+    // Array merge
+    if (Array.isArray(server) && Array.isArray(client)) {
+      const idsOk = (arr) => arr.length > 0 && arr.every(x => x && typeof x === "object" && x.id != null);
+      if (idsOk(server) && idsOk(client)) {
+        // Newer-timestamp wins per id; never drop ids that exist on either side.
+        const tsOf = (o) => {
+          const cands = [o?.updated_at, o?.checkedAt, o?.doneAt, o?.addedAt, o?.createdAt, o?.uploadedAt];
+          for (const t of cands) {
+            if (!t) continue;
+            const d = (typeof t === "string" || typeof t === "number") ? new Date(t).getTime() : 0;
+            if (!isNaN(d) && d > 0) return d;
+          }
+          return 0;
+        };
+        const out = new Map();
+        server.forEach(s => out.set(s.id, s));
+        client.forEach(c => {
+          if (!out.has(c.id)) { out.set(c.id, c); return; }
+          const s = out.get(c.id);
+          const sT = tsOf(s), cT = tsOf(c);
+          if (sT > cT) {
+            // Server is newer overall — but still recurse into nested arrays
+            // (e.g. a room's items[]) so individual items merge correctly.
+            out.set(c.id, _smartMergeForReconnect(c, s));
+          } else {
+            out.set(c.id, _smartMergeForReconnect(s, c));
+          }
+        });
+        return [...out.values()];
+      }
+      return client; // ids missing → can't safely merge, client wins
+    }
+    // Object merge
+    if (typeof server === "object" && typeof client === "object" && !Array.isArray(server) && !Array.isArray(client)) {
+      const merged = { ...server };
+      Object.keys(client).forEach(k => { merged[k] = _smartMergeForReconnect(server[k], client[k]); });
+      return merged;
+    }
+    return client; // primitives or type mismatch → client wins
+  };
+
+  const wasOnlineRef = useRef(isOnline);
+  useEffect(() => {
+    const wasOffline = !wasOnlineRef.current;
+    wasOnlineRef.current = isOnline;
+    if (!isOnline || !wasOffline) return;
+
+    const pending = Object.keys(pendingPatches.current || {})
+      .filter(jid => Object.keys(pendingPatches.current[jid] || {}).length > 0);
+    if (pending.length === 0) return;
+    console.log(`[HE] Back online — re-merging ${pending.length} pending job save(s) with latest server state`);
+
+    // Per-job: fetch latest, smart-merge each pending field, write merged result.
+    pending.forEach(async (jid) => {
+      const localPatch = { ...(pendingPatches.current[jid] || {}) };
+      try {
+        const snap = await getDoc(doc(db, "jobs", jid));
+        if (!snap.exists()) {
+          // Doc gone — fall back to existing saveJob behavior (will recreate)
+          const job = (jobsRef.current || []).find(j => j.id === jid);
+          if (job) saveJob(job);
+          return;
+        }
+        const serverData = snap.data()?.data || {};
+        // Replace each pending field with a smart-merged version, then write.
+        const mergedFields = {};
+        Object.keys(localPatch).forEach(field => {
+          mergedFields[field] = _smartMergeForReconnect(serverData[field], localPatch[field]);
+        });
+        // Write only the merged fields directly (bypass the saveJob timer
+        // since we're explicitly flushing). Keep the dot-notation contract.
+        const writePatch = {
+          updated_at: new Date().toISOString(),
+          saved_by: identity?.name || "unknown",
+          device: localStorage.getItem('he_device_id') || "",
+        };
+        Object.entries(sanitize(mergedFields)).forEach(([k, v]) => { writePatch["data." + k] = v; });
+        await updateDoc(doc(db, "jobs", jid), writePatch);
+        // Drop the keys we just merged + wrote from the queue.
+        if (pendingPatches.current[jid]) {
+          Object.keys(localPatch).forEach(k => {
+            if (pendingPatches.current[jid][k] === localPatch[k]) {
+              delete pendingPatches.current[jid][k];
+            }
+          });
+          if (Object.keys(pendingPatches.current[jid]).length === 0) delete pendingPatches.current[jid];
+        }
+        console.log(`[HE] Re-merged + saved job ${jid}`);
+      } catch (e) {
+        console.warn(`[HE] Re-merge failed for job ${jid}, falling back to plain re-save:`, e?.message);
+        // Fallback: original behavior (just re-trigger saveJob)
+        const job = (jobsRef.current || []).find(j => j.id === jid);
+        if (job) saveJob(job);
+      }
+    });
+  }, [isOnline]);
 
 
   // Delete job document
@@ -35821,6 +36105,9 @@ function App() {
           <div style={{padding:"20px 26px 0"}}>
             <SettingsSection title="ACTIVITY LOG" defaultOpen={false}>
               <ActivityLog jobs={jobs} embedded={true}/>
+            </SettingsSection>
+            <SettingsSection title="NOTIFICATION DOCTOR" accent={{bg:"#eff6ff", border:"#bfdbfe", text:"#1e40af"}} defaultOpen={false}>
+              <NotifDoctor identity={identity}/>
             </SettingsSection>
           </div>
           <SettingsPage

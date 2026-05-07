@@ -141,6 +141,63 @@ async function sendFCM(token, { title, body, jobId, section }) {
   }
 }
 
+// ─── Notification Doctor — test push to a single user ───────────────────────
+// Lets the in-app diagnostic page send a push to a specific user and see
+// per-token success/failure. Returns a JSON report instead of swallowing
+// errors so the UI can show exactly which tokens are alive vs dead.
+exports.sendTestPush = functions.https.onCall(async (data) => {
+  const { userId } = data || {};
+  if (!userId) throw new functions.https.HttpsError("invalid-argument", "userId required");
+  const users = await getUsers();
+  const user = users.find(u => u.id === userId);
+  if (!user) throw new functions.https.HttpsError("not-found", `user ${userId} not in settings/users`);
+  const tokens = getTokens(user);
+  if (tokens.length === 0) {
+    return { ok: false, reason: "no-tokens", message: `${user.name} has no FCM tokens registered.` };
+  }
+  const title = "Test push from Command Center";
+  const body  = `If you see this, your notifications are working. ${new Date().toLocaleTimeString()}`;
+  const results = [];
+  for (const token of tokens) {
+    const tokenPreview = token.slice(0, 20) + "…";
+    try {
+      await messaging.send({
+        token,
+        data: { title, body, jobId: "", section: "" },
+        notification: { title, body },
+        webpush: {
+          headers: { Urgency: "high" },
+          notification: { title, body, icon: "/icon-192.png", badge: "/icon-192.png", requireInteraction: false },
+        },
+        android: { priority: "high", notification: { sound: "default", channelId: "homestead_default" } },
+        apns: {
+          headers: { "apns-push-type": "alert", "apns-priority": "10" },
+          payload: { aps: { alert: { title, body }, sound: "default" } },
+        },
+      });
+      results.push({ token: tokenPreview, ok: true });
+    } catch (e) {
+      const isStale = STALE_TOKEN_CODES.some(
+        code => e.code === code || (e.message || "").includes(code)
+      );
+      results.push({
+        token: tokenPreview,
+        ok: false,
+        error: e.message,
+        code: e.code || "",
+        stale: isStale,
+      });
+      if (isStale) await removeStaleToken(token);
+    }
+  }
+  return {
+    ok: results.some(r => r.ok),
+    user: user.name,
+    tokenCount: tokens.length,
+    results,
+  };
+});
+
 async function sendToName(name, notification) {
   if (!name || name === "Unassigned") return;
   const users = await getUsers();
@@ -1013,47 +1070,68 @@ exports.getSimproProfitLossYTD = functions
       page++;
     }
 
-    // ── Step 2: per-ID detailed fetch with concurrency ────────────────────
-    const detailed = new Array(ids.length);
+    // ── Step 2: read cache, only fetch missing/stale ──────────────────────
+    // Cache lives at settings/scoreboardSimproPL keyed by Simpro ID. Each
+    // entry stores the reduced field set + fetchedAt. On every call we read
+    // the doc, decide which IDs need a refresh (missing or older than the
+    // STALE_MS window), and ONLY hit Simpro for those. First call is slow
+    // and seeds the cache; every call after returns mostly from cache and
+    // just tops up new/stale jobs.
+    const STALE_MS = 24 * 60 * 60 * 1000;
+    const now = Date.now();
+    const cacheRef = db.collection("settings").doc("scoreboardSimproPL");
+    const cacheSnap = await cacheRef.get();
+    const cache = cacheSnap.exists ? (cacheSnap.data() || {}) : {};
+
+    const idsToFetch = ids.filter(id => {
+      const cached = cache[String(id)];
+      if (!cached || !cached.fetchedAt) return true;
+      const age = now - new Date(cached.fetchedAt).getTime();
+      return age > STALE_MS || isNaN(age);
+    });
+    functions.logger.info("getSimproProfitLossYTD cache plan", {
+      totalIds: ids.length, cached: ids.length - idsToFetch.length, toFetch: idsToFetch.length,
+    });
+
+    // ── Step 3: detailed fetch only the IDs that need it ─────────────────
+    const fresh = new Array(idsToFetch.length);
     let okCount = 0, errCount = 0;
-    const CONCURRENCY = 20;
+    const CONCURRENCY = 15; // gentler than 20 — fewer 429s, more reliable
     let cursor = 0;
     const sleep = (ms) => new Promise(r => setTimeout(r, ms));
     const fetchOne = async (idx) => {
-      const id = ids[idx];
+      const id = idsToFetch[idx];
       const url = `${SIMPRO_BASE}/jobs/${encodeURIComponent(id)}?display=detailed`;
-      for (let attempt = 0; attempt < 3; attempt++) {
+      for (let attempt = 0; attempt < 4; attempt++) {
         try {
           const resp = await fetch(url, { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } });
           if (resp.status === 429) {
-            await sleep(500 * (attempt + 1));
+            // Exponential backoff on rate-limit: 500ms, 1.5s, 3s
+            await sleep(500 * (attempt + 1) * (attempt + 1));
             continue;
           }
           if (!resp.ok) { errCount++; return; }
-          detailed[idx] = await resp.json();
+          fresh[idx] = await resp.json();
           okCount++;
           return;
         } catch (e) {
-          if (attempt === 2) { errCount++; return; }
-          await sleep(300);
+          if (attempt === 3) { errCount++; return; }
+          await sleep(300 * (attempt + 1));
         }
       }
     };
     const worker = async () => {
       while (true) {
         const idx = cursor++;
-        if (idx >= ids.length) return;
+        if (idx >= idsToFetch.length) return;
         await fetchOne(idx);
       }
     };
     await Promise.all(Array.from({length: CONCURRENCY}, worker));
-
-    const all = detailed.filter(Boolean);
     functions.logger.info("getSimproProfitLossYTD fetched", {
-      totalIds: ids.length, totalDetailed: all.length,
-      okCount, errCount, pages: pageStatuses,
-      sampleKeys: all[0] ? Object.keys(all[0]).slice(0, 30) : [],
-      sampleDateKeys: all[0] ? Object.keys(all[0]).filter(k => /date/i.test(k)) : [],
+      attempted: idsToFetch.length, ok: okCount, err: errCount,
+      pages: pageStatuses,
+      sampleKeys: fresh[0] ? Object.keys(fresh[0]).slice(0, 30) : [],
     });
 
     // Per-job reducer — same shape getSimproJobFinancials returns so the
@@ -1138,35 +1216,57 @@ exports.getSimproProfitLossYTD = functions
       };
     };
 
-    // Filter to the requested window client-side. Use the latest available
-    // job date (DateModified > DateApproved > DateIssued > Date) as the
-    // proxy for "active in this window". Strip anything past the YYYY-MM-DD
-    // prefix so timestamp variants like "2026-04-12T10:23:45+10:00" still
-    // sort lexicographically.
-    const _jobDateYMD = (j) => {
-      const raw = j.DateModified || j.DateApproved || j.DateIssued || j.Date || null;
+    // ── Step 4: reduce fresh fetches + merge into cache ──────────────────
+    // Each fresh job is reduced to its compact field set and stamped with
+    // fetchedAt. Older entries that are still in the cache stay as-is.
+    const cacheUpdates = {};
+    fresh.forEach((job, idx) => {
+      if (!job) return;
+      const id = String(idsToFetch[idx]);
+      const reduced = reduce(job);
+      cacheUpdates[id] = { ...reduced, fetchedAt: new Date().toISOString() };
+    });
+    if (Object.keys(cacheUpdates).length > 0) {
+      try {
+        await cacheRef.set(cacheUpdates, { merge: true });
+      } catch (e) {
+        functions.logger.warn("getSimproProfitLossYTD cache write failed", { error: e.message });
+      }
+    }
+
+    // ── Step 5: assemble final list — cache + fresh, filter to window ────
+    // Walk every ID we know about. Prefer fresh-this-run over cached. Filter
+    // by the requested date window (cached entries already have dateModified
+    // since the reducer captured it; we don't need to re-parse Simpro raw).
+    const merged = ids.map(id => {
+      const k = String(id);
+      return cacheUpdates[k] || cache[k] || null;
+    }).filter(Boolean);
+
+    const _ymdOf = (entry) => {
+      const raw = entry?.dateModified || entry?.dateApproved || entry?.dateIssued || null;
       if (!raw) return null;
       return String(raw).slice(0, 10);
     };
-    const filtered = all.filter(j => {
-      const ymd = _jobDateYMD(j);
-      if (!ymd) return true; // surface dateless jobs rather than silently dropping
+    const filtered = merged.filter(entry => {
+      const ymd = _ymdOf(entry);
+      if (!ymd) return true;
       return ymd >= fromYMD && ymd <= toYMD;
     });
 
     return {
       dateFrom: fromYMD,
       dateTo: toYMD,
-      // Total raw rows returned by Simpro before window filter — lets the
-      // caller see "we got 800 jobs back, 0 survived the date filter" so a
-      // bad filter / missing field is obvious.
-      rawCount: all.length,
+      totalSimproIds: ids.length,
+      cachedFromBefore: ids.length - idsToFetch.length,
+      freshThisRun: okCount,
+      freshFailed: errCount,
+      mergedCount: merged.length,
       jobCount: filtered.length,
-      // First raw row (forward-compat debug) — exposes the exact field
-      // names + date string format Simpro is returning, so when something
-      // doesn't match we can see why without re-deploying.
-      _sampleRaw: all[0] || null,
-      jobs: filtered.map(reduce),
+      // First raw row from THIS run (debug) — null on subsequent calls
+      // when nothing was fetched fresh; that's fine.
+      _sampleRaw: fresh[0] || null,
+      jobs: filtered,
     };
   });
 
