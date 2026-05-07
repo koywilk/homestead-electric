@@ -556,6 +556,25 @@ if (messaging) {
 } else {
   console.warn("[HE push] FCM messaging NOT initialized — pushes will not work");
 }
+
+// Force-update the FCM service worker on every app load to kill stale SW
+// issues. A stale firebase-messaging-sw.js can quietly stop firing onMessage
+// even when the FCM token is healthy — this was the most likely cause of
+// "test push delivered but no toast." update() pulls the latest SW from the
+// server (no-cache by spec) and replaces the controlling SW transparently.
+if ("serviceWorker" in navigator) {
+  navigator.serviceWorker.getRegistration("/firebase-messaging-sw.js")
+    .then(reg => {
+      if (reg) {
+        reg.update().then(() => console.log("[HE push] SW updated on load"))
+                    .catch(e => console.warn("[HE push] SW update failed:", e.message));
+      } else {
+        console.log("[HE push] SW not registered yet — will register on first notification request");
+      }
+    })
+    .catch(() => {});
+}
+
 window.__HE_DB = db;
 window.__HE_REGISTER_FCM = registerFCMToken;
 // Diagnostic: dump the current user's tokens from Firestore
@@ -29435,14 +29454,49 @@ function NotifDoctor({ identity }) {
     if (!identity?.id) return;
     setTesting(true);
     setTestResult(null);
+
+    // Listen for the foreground push BEFORE sending so we don't miss it.
+    let received = false;
+    const onPush = () => { received = true; };
+    window.addEventListener("he-push", onPush);
+
     try {
       const fn = httpsCallable(functions, "sendTestPush");
       const r = await fn({ userId: identity.id });
-      setTestResult({ kind: r.data.ok ? "ok" : "err", data: r.data });
+      // Server says delivered — now wait up to 15s for the client to actually
+      // receive it and fire the he-push event. This is the real "did it work?"
+      // check — server "delivered" only means FCM accepted the message, not
+      // that it surfaced on this device.
+      const delivered = r.data.ok;
+      if (!delivered) {
+        setTestResult({ kind: "err", data: r.data, summary: "Server reports no successful tokens." });
+        return;
+      }
+      // Poll for up to 15 seconds for the he-push event
+      const startedAt = Date.now();
+      while (!received && Date.now() - startedAt < 15000) {
+        await new Promise(res => setTimeout(res, 250));
+      }
+      const elapsed = ((Date.now() - startedAt) / 1000).toFixed(1);
+      if (received) {
+        setTestResult({
+          kind: "ok",
+          data: r.data,
+          summary: `✓ Push delivered AND received by this browser (${elapsed}s). The toast should be visible at top-right.`,
+        });
+      } else {
+        setTestResult({
+          kind: "warn",
+          data: r.data,
+          summary: `⚠ Server delivered the push but THIS browser never received it (waited 15s). Most likely: (1) Notifications blocked for this site at OS level — check System Settings → Notifications → Chrome. (2) Stale service worker — try clicking "Re-run checks", "Enable notifications", then test again. (3) macOS Focus mode / Do Not Disturb.`,
+        });
+      }
     } catch(e) {
       setTestResult({ kind: "err", text: e.message });
+    } finally {
+      window.removeEventListener("he-push", onPush);
+      setTesting(false);
     }
-    setTesting(false);
   };
 
   return (
@@ -29489,14 +29543,15 @@ function NotifDoctor({ identity }) {
 
       {testResult && (
         <div style={{ marginTop: 12, padding: "10px 12px", borderRadius: 8,
-          background: testResult.kind === "ok" ? "#dcfce7" : testResult.kind === "err" ? "#fee2e2" : "#dbeafe",
-          color: testResult.kind === "ok" ? "#166534" : testResult.kind === "err" ? "#991b1b" : "#1e40af",
+          background: testResult.kind === "ok" ? "#dcfce7" : testResult.kind === "err" ? "#fee2e2" : testResult.kind === "warn" ? "#fef3c7" : "#dbeafe",
+          color: testResult.kind === "ok" ? "#166534" : testResult.kind === "err" ? "#991b1b" : testResult.kind === "warn" ? "#92400e" : "#1e40af",
           fontSize: 12, lineHeight: 1.5 }}>
+          {testResult.summary && <div style={{ fontWeight: 600, marginBottom: 8 }}>{testResult.summary}</div>}
           {testResult.text || ""}
           {testResult.data && (
             <>
               <div style={{ fontWeight: 600, marginBottom: 4 }}>
-                {testResult.data.ok ? "✓ At least one token delivered" : "✗ All tokens failed"}
+                {testResult.data.ok ? "✓ Server: at least one token delivered" : "✗ Server: all tokens failed"}
                 {" "}— {testResult.data.tokenCount} token{testResult.data.tokenCount===1?"":"s"} on file
               </div>
               {(testResult.data.results || []).map((r, i) => (

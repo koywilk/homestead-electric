@@ -161,18 +161,26 @@ exports.sendTestPush = functions.https.onCall(async (data) => {
   for (const token of tokens) {
     const tokenPreview = token.slice(0, 20) + "…";
     try {
+      // Test push is DATA-ONLY (no `notification` field at top level) so the
+      // browser's onMessage handler reliably fires when foregrounded. With
+      // a `notification` field present, some FCM SDK versions suppress
+      // onMessage and let the OS handle display — which silently does
+      // nothing on macOS Chrome if site notifications are blocked at OS
+      // level. Data-only forces the app to surface the toast itself.
       await messaging.send({
         token,
-        data: { title, body, jobId: "", section: "" },
-        notification: { title, body },
+        data: {
+          title, body, jobId: "", section: "",
+          // marker so the client knows this is a doctor test push
+          __test: "1",
+        },
         webpush: {
           headers: { Urgency: "high" },
-          notification: { title, body, icon: "/icon-192.png", badge: "/icon-192.png", requireInteraction: false },
         },
-        android: { priority: "high", notification: { sound: "default", channelId: "homestead_default" } },
+        android: { priority: "high" },
         apns: {
           headers: { "apns-push-type": "alert", "apns-priority": "10" },
-          payload: { aps: { alert: { title, body }, sound: "default" } },
+          payload: { aps: { contentAvailable: true } },
         },
       });
       results.push({ token: tokenPreview, ok: true });
