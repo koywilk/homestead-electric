@@ -532,6 +532,52 @@ async function registerFCMToken(userId, force=false) {
 }
 
 /**
+ * Hard reset of THIS device's push subscription. Used when we have evidence
+ * the underlying browser push endpoint is dead (server reports
+ * registration-token-not-registered for this device's token) but
+ * pushManager.getSubscription() still returns a non-null stale object.
+ *
+ * Order matters:
+ *   1. pushManager.unsubscribe() — kills the dead browser-level endpoint.
+ *      Without this, deleteToken+getToken just rebind a new FCM token to
+ *      the same dead subscription, infinite loop.
+ *   2. deleteToken(messaging) — clears the SDK's IndexedDB-cached token.
+ *   3. registerFCMToken(userId, true) — getToken creates a brand-new
+ *      subscription + token. force=true is belt-and-suspenders since we
+ *      already deleted, but matches the existing nuclear path.
+ *
+ * DATA SAFETY: every step is local to THIS device. unsubscribe() and
+ * deleteToken() touch only browser/IndexedDB state. registerFCMToken
+ * is additive on the server (settings/users → list[].fcmTokens, capped
+ * at 10, never wipes). No other device's tokens are affected. Stale
+ * tokens that this device used to own are pruned by sendFCM's catch
+ * block on the next send to them — same path that's already handling it.
+ */
+async function resetPushSubscriptionAndReregister(userId) {
+  if (!messaging || !userId) return "skip";
+  try {
+    if ("serviceWorker" in navigator) {
+      const swReg = await navigator.serviceWorker.getRegistration("/firebase-messaging-sw.js");
+      if (swReg && swReg.pushManager) {
+        try {
+          const sub = await swReg.pushManager.getSubscription();
+          if (sub) {
+            await sub.unsubscribe();
+            console.log("[HE reset] pushManager.unsubscribe() done");
+          }
+        } catch(e) { console.warn("[HE reset] unsubscribe failed:", e.message); }
+      }
+    }
+    try { await deleteToken(messaging); } catch {}
+    return await registerFCMToken(userId, true);
+  } catch (e) {
+    console.warn("[HE reset] reset failed:", e.message);
+    return "error:" + e.message;
+  }
+}
+window.__HE_RESET_PUSH = resetPushSubscriptionAndReregister;
+
+/**
  * Lightweight token keep-alive — runs on app load, on every tab focus, and
  * every 30 minutes while the app is open. Detects drift between the SDK's
  * current token and what's stored on the server, and silently re-registers
@@ -544,8 +590,11 @@ async function registerFCMToken(userId, force=false) {
  * crew. This makes the chain self-healing without ever wiping other devices'
  * tokens.
  *
- * DATA SAFETY: never deletes anyone else's tokens, never force-deletes the
- * local token (force=false), only ADDS missing tokens to the server array.
+ * DATA SAFETY: never deletes anyone else's tokens. The token-drift path
+ * is additive (force=false). The null-subscription path force-deletes
+ * THIS device's local token only (via resetPushSubscriptionAndReregister)
+ * because that's the whole point — the local subscription is dead and a
+ * fresh one is the only fix. Other devices' tokens are never touched.
  */
 async function validateAndSyncFCMToken(userId) {
   if (!messaging || !userId) return "skip";
@@ -563,14 +612,17 @@ async function validateAndSyncFCMToken(userId) {
     }
 
     // 1. Push subscription health — if it's gone (browser cleared push state,
-    //    SW reinstalled, OS revoked), no FCM token will ever deliver. Force a
-    //    full re-register to recreate it.
+    //    SW reinstalled, OS revoked), no FCM token will ever deliver. Run the
+    //    full reset (unsubscribe → deleteToken → fresh register). unsubscribe
+    //    is a no-op when getSubscription() returned null, so this stays safe
+    //    for that case AND is correct if a future caller routes here with a
+    //    non-null but server-rejected subscription.
     if (swReg && swReg.pushManager) {
       try {
         const sub = await swReg.pushManager.getSubscription();
         if (!sub) {
-          console.log("[HE keepalive] push subscription missing — force re-registering");
-          return await registerFCMToken(userId, true);
+          console.log("[HE keepalive] push subscription missing — full reset");
+          return await resetPushSubscriptionAndReregister(userId);
         }
       } catch {}
     }
@@ -29651,14 +29703,37 @@ function NotifDoctor({ identity }) {
     try {
       const fn = httpsCallable(functions, "sendTestPush");
       let r = await fn({ userId: identity.id });
-      // If ALL tokens were stale, every one just got pruned server-side. The
-      // current device's fresh token might not yet be on the user record. So
-      // force-register a fresh token AND retry once — this is the auto-recovery
-      // path that catches the most common reason test pushes silently fail.
+      // Detect whether THIS device's token specifically came back stale.
+      // sendTestPush returns results with token preview = first 20 chars + "…".
+      // Match against our local current token's first 20 chars to know if the
+      // browser-level subscription on THIS device is dead (vs. some other
+      // device the user logged in on).
+      let myDeviceStale = false;
+      try {
+        const swReg = await navigator.serviceWorker.getRegistration("/firebase-messaging-sw.js");
+        const myToken = swReg
+          ? await getToken(messaging, { vapidKey: VAPID_KEY, serviceWorkerRegistration: swReg })
+          : null;
+        if (myToken) {
+          const myPrefix = myToken.slice(0, 20);
+          const myResult = (r.data.results || []).find(x => (x.token || "").startsWith(myPrefix));
+          myDeviceStale = !!(myResult && myResult.stale);
+        }
+      } catch {}
+      // If ALL tokens were stale, every one just got pruned server-side and
+      // the current device's fresh token might not yet be on the user record.
+      // If THIS device's token specifically was rejected, the underlying
+      // browser push subscription is dead — needs the full unsubscribe-then-
+      // reregister path, not just a token refresh.
       const allStale = !r.data.ok && (r.data.results || []).every(x => x.stale);
-      if (allStale) {
-        setTestResult({ kind: "info", text: "All saved tokens were stale — registering a fresh one and retrying…" });
-        await registerFCMToken(identity.id, true);
+      if (myDeviceStale || allStale) {
+        setTestResult({
+          kind: "info",
+          text: myDeviceStale
+            ? "This device's push subscription is dead — fully resetting and retrying…"
+            : "All saved tokens were stale — registering a fresh one and retrying…",
+        });
+        await resetPushSubscriptionAndReregister(identity.id);
         r = await fn({ userId: identity.id });
       }
       const delivered = r.data.ok;
