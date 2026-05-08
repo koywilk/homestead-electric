@@ -14252,16 +14252,32 @@ function SavantPanelSchedule({
 }) {
   // Loads filtered to ones that belong to THIS panel (l.panel matches the
   // panel's label). Used by the chip pickers so users only see the loads
-  // wired to this LCP. Falls back to all loads when no panel label is set
-  // (legacy jobs that haven't tagged their loads yet).
+  // wired to this LCP. Falls back to all loads when:
+  //  - no panel label is set on this section (legacy data), OR
+  //  - the strict filter zeroes out (panel section is named differently
+  //    than any load.panel value — common when the user imports loads tagged
+  //    "LCP 1" but hasn't renamed the default "Panel A/B/C" sections yet).
+  // Better to show too many than to show "no loads found" when there ARE.
   const _panelMatch = (panelLabel || "").trim().toLowerCase();
-  const panelScopedLoads = _panelMatch
-    ? (allLoads || []).filter(l => {
-        const lp = (l?.panel || "").trim().toLowerCase();
-        // No panel set on the load → show it (fallback so legacy data stays usable)
-        return !lp || lp === _panelMatch;
-      })
-    : (allLoads || []);
+  const panelScopedLoads = (() => {
+    if (!_panelMatch) return allLoads || [];
+    const filtered = (allLoads || []).filter(l => {
+      const lp = (l?.panel || "").trim().toLowerCase();
+      return !lp || lp === _panelMatch;
+    });
+    return filtered.length > 0 ? filtered : (allLoads || []);
+  })();
+  // True when the strict filter has matches — drives the "tip" banner that
+  // tells the user they can rename the section to LCP X to filter properly.
+  const _strictFilterHasMatches = !!_panelMatch && (allLoads||[]).some(l => {
+    const lp = (l?.panel || "").trim().toLowerCase();
+    return lp && lp === _panelMatch;
+  });
+  // Loads exist with different panel tags than this section — surface as
+  // a hint so user can rename header to scope.
+  const _scopeMismatch = !!_panelMatch &&
+    !_strictFilterHasMatches &&
+    (allLoads||[]).some(l => (l?.panel || "").trim());
   // Names already placed on a smart breaker in this panel — used to filter
   // the "Unassigned loads" strip so each load only shows up until it's placed.
   const placedNamesLower = new Set();
@@ -15274,6 +15290,24 @@ function SavantPanelSchedule({
       </div>
 
       {/* Header strip with stats + panel-size editor */}
+      {(() => {
+        // Count placed loads broken down by type so the header shows the
+        // dimming-vs-switching ratio at a glance — drives how many APD vs
+        // Relay modules you'll actually need on this panel.
+        const _byType = {};
+        let _total = 0;
+        (modules||[]).forEach(m => (m.loads||[]).forEach(l => {
+          if (!(l?.name||"").trim()) return;
+          _total++;
+          const t = (l.loadType||"").trim() || "other";
+          _byType[t] = (_byType[t]||0) + 1;
+        }));
+        const _order = ["Dimming","Switching","Relay","LED","MLV","ELV","0-10V","Fluorescent","Variable Speed"];
+        const _orderedKeys = [
+          ..._order.filter(k=>_byType[k]),
+          ...Object.keys(_byType).filter(k=>!_order.includes(k)),
+        ];
+        return (
       <div style={{
         padding:"10px 14px", display:"flex", alignItems:"center", gap:14,
         flexWrap:"wrap", background:"#f8fafc", border:`1px solid ${C.border}`,
@@ -15282,12 +15316,29 @@ function SavantPanelSchedule({
         <span style={{fontSize:11,color:C.dim,fontWeight:600}}>
           <b style={{color:C.text}}>{smartCount}</b> smart breaker{smartCount===1?"":"s"} · <b style={{color:C.text}}>{regCount}</b> regular · <b style={{color:C.text}}>{emptyCount}</b> empty
         </span>
+        {_total > 0 && (
+          <span style={{fontSize:11,color:C.dim,fontWeight:600,
+            display:"inline-flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+            <span style={{color:C.muted}}>·</span>
+            <b style={{color:C.text}}>{_total}</b> load{_total===1?"":"s"}
+            <span style={{color:C.muted}}>(</span>
+            {_orderedKeys.map((k,i) => (
+              <Fragment key={k}>
+                {i > 0 && <span style={{color:C.muted}}>·</span>}
+                <span><b style={{color:C.text}}>{_byType[k]}</b> {k.toLowerCase()}</span>
+              </Fragment>
+            ))}
+            <span style={{color:C.muted}}>)</span>
+          </span>
+        )}
         <span style={{fontSize:11,color:C.dim,fontWeight:600,marginLeft:"auto",display:"flex",alignItems:"center",gap:6}}>
           Panel size:
           <Sel value={String(panelSize)} onChange={e=>onPanelSizeChange(Number(e.target.value)||40)}
             options={["20","30","40","42"]} style={{width:60,fontSize:11}}/>
         </span>
       </div>
+        );
+      })()}
 
       {/* ── Pair loads & feeders to modules ─────────────────────────────
           Top-of-section pairing UI. Each module (smart breaker) is one row
