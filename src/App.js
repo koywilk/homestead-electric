@@ -13464,6 +13464,27 @@ function SavantPanelSchedule({
                 {sku === "DUAL_20A_RELAY" ? "GPM-QP2R20120" : sku === "DUAL_500W_APD" ? "GPM-Q2APD10" : ""}
               </span>
             )}
+            {/* In-place delete — one click removes this smart breaker from
+                the panel (with a confirm if it has named loads). Saves
+                opening the editor just to delete. */}
+            <button onClick={(e)=>{
+                e.stopPropagation();
+                const named = (m.loads||[]).filter(l => l && (l.name||"").trim()).length;
+                const msg = named > 0
+                  ? `Delete this smart breaker? ${named} named load${named===1?"":"s"} will be lost.`
+                  : "Delete this smart breaker?";
+                if (window.confirm(msg)) {
+                  delSmart(m.id);
+                  if (selectedSlot === slot) setSelectedSlot(null);
+                }
+              }}
+              title="Delete this smart breaker"
+              style={{marginLeft:"auto",background:"#fff",border:`1px solid ${C.red}55`,
+                color:C.red,fontSize:9,fontWeight:700,letterSpacing:"0.04em",
+                borderRadius:99,padding:"0 6px",cursor:"pointer",fontFamily:"inherit",
+                lineHeight:1.4,flexShrink:0}}>
+              ✕
+            </button>
           </div>
           <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11,minWidth:0}}>
             <span style={{
@@ -13532,6 +13553,19 @@ function SavantPanelSchedule({
           border:`1px solid ${C.border}`, borderRadius:3, padding:"1px 4px",
           flexShrink:0,
         }}>{r.amp}{/^\d+$/.test(String(r.amp).trim()) ? "A" : ""}</span>}
+        {/* In-place delete — same pattern as smart breaker slot. */}
+        <button onClick={(e)=>{
+            e.stopPropagation();
+            if (window.confirm("Delete this regular breaker?")) {
+              delReg(r.id);
+              if (selectedSlot === slot) setSelectedSlot(null);
+            }
+          }}
+          title="Delete this regular breaker"
+          style={{background:"none",border:"none",color:C.muted,fontSize:14,
+            cursor:"pointer",padding:"0 2px",flexShrink:0,lineHeight:1}}>
+          ✕
+        </button>
       </div>
     );
   };
@@ -13542,6 +13576,33 @@ function SavantPanelSchedule({
     const slot = addingAtSlot;
     const slotB = savNextInCol(slot);
     const canFitSmart = slotB <= panelSize && !occ.has(slotB);
+
+    // Aggregate load names from this panel's existing modules so user can
+    // click a chip → smart breaker auto-created with that load placed.
+    const named = (allLoads||[]).filter(l => l && (l.name||"").trim());
+
+    // Click a load chip → add a smart breaker (Dual Relay default) at this
+    // slot, with the picked load assigned to Load A. Editor opens for B.
+    const addSmartWithLoadA = (master) => {
+      if (!canFitSmart) return;
+      const slotBLocal = savNextInCol(slot);
+      const base = newModuleObj((modules||[]).length + 1);
+      const newMod = {
+        ...base,
+        moduleType: "DUAL_20A_RELAY",
+        slotA: String(slot),
+        slotB: String(slotBLocal),
+        loads: [
+          { ...newLoadRow(1), output:"A", feederSlot:"",
+            name: master.name, loadType: master.loadType||"", watts: master.watts||"" },
+          { ...newLoadRow(2), output:"B", feederSlot:"" },
+        ],
+      };
+      onChange([...(modules||[]), newMod]);
+      setSelectedSlot(slot);
+      setAddingAtSlot(null);
+    };
+
     return (
       <div style={{
         marginTop:14, padding:14, background:"#fff",
@@ -13552,9 +13613,51 @@ function SavantPanelSchedule({
           color:C.purple, textTransform:"uppercase", marginBottom:10,
           display:"flex", justifyContent:"space-between", alignItems:"center",
         }}>
-          <span>Add to slot {slot} — pick a breaker type</span>
+          <span>Add to slot {slot}</span>
           <button onClick={()=>setAddingAtSlot(null)}
             style={{background:"none",border:"none",color:C.dim,fontSize:18,cursor:"pointer"}}>✕</button>
+        </div>
+
+        {/* Loads list — pick one to add a smart breaker with that load
+            already placed as Load A. Visible up front so loads come up
+            the moment you click + add. */}
+        {named.length > 0 ? (
+          <div style={{marginBottom:14}}>
+            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",
+              color:C.dim,textTransform:"uppercase",marginBottom:6}}>
+              Pick a load to drop in ({named.length} on this job)
+            </div>
+            <div style={{display:"flex",gap:6,flexWrap:"wrap",
+              maxHeight:180,overflowY:"auto",padding:4,
+              background:"#f8fafc",border:`1px solid ${C.border}`,borderRadius:6}}>
+              {named.map(l => (
+                <button key={l.id} disabled={!canFitSmart}
+                  onClick={()=>addSmartWithLoadA(l)}
+                  title={canFitSmart
+                    ? `Add a smart breaker at ${slot}+${slotB} with "${l.name}" as Load A`
+                    : `Slot ${slotB} is occupied — can't fit a smart breaker here`}
+                  style={{
+                    padding:"3px 9px",fontSize:11,fontWeight:600,
+                    background:"#fff",color:canFitSmart?C.purple:C.dim,
+                    border:`1px solid ${canFitSmart?C.purple+"55":C.border}`,
+                    borderRadius:99,cursor:canFitSmart?"pointer":"not-allowed",
+                    fontFamily:"inherit",
+                  }}>
+                  {l.name}{l.location?` (${l.location})`:""}{l.watts?` · ${l.watts}W`:""}
+                </button>
+              ))}
+            </div>
+          </div>
+        ) : (
+          <div style={{marginBottom:14,padding:"6px 10px",fontSize:11,color:C.dim,
+            fontStyle:"italic",background:"#fffbe6",border:"1px solid #fde68a",borderRadius:6}}>
+            No loads found anywhere on this job yet. Add some loads in any panel below, or use one of the empty-breaker buttons below.
+          </div>
+        )}
+
+        <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",
+          color:C.dim,textTransform:"uppercase",marginBottom:6}}>
+          Or start an empty breaker
         </div>
         <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
           <button disabled={!canFitSmart}
@@ -13565,8 +13668,8 @@ function SavantPanelSchedule({
               background:"#fff", textAlign:"center", fontFamily:"inherit",
               opacity:canFitSmart?1:0.5,
             }}>
-            <div style={{fontWeight:700,fontSize:13,color:C.green,marginBottom:4}}>Smart Breaker · Dual 20A Relay</div>
-            <div style={{fontSize:11,color:C.dim}}>Slots {slot}+{slotB} · 2 loads · needs 2 feeder breakers (one per load)</div>
+            <div style={{fontWeight:700,fontSize:13,color:C.green,marginBottom:4}}>Smart · Dual 20A Relay</div>
+            <div style={{fontSize:11,color:C.dim}}>Slots {slot}+{slotB} · 2 loads</div>
           </button>
           <button disabled={!canFitSmart}
             onClick={()=>addSmartAtSlot(slot, "DUAL_500W_APD")}
@@ -13576,8 +13679,8 @@ function SavantPanelSchedule({
               background:"#fff", textAlign:"center", fontFamily:"inherit",
               opacity:canFitSmart?1:0.5,
             }}>
-            <div style={{fontWeight:700,fontSize:13,color:C.accent,marginBottom:4}}>Smart Breaker · Dual 500W APD</div>
-            <div style={{fontSize:11,color:C.dim}}>Slots {slot}+{slotB} · 2 dim loads · needs 1 feeder breaker (powers both)</div>
+            <div style={{fontWeight:700,fontSize:13,color:C.accent,marginBottom:4}}>Smart · Dual 500W APD</div>
+            <div style={{fontSize:11,color:C.dim}}>Slots {slot}+{slotB} · 2 dim loads</div>
           </button>
           <button onClick={()=>addRegAtSlot(slot)}
             style={{
@@ -13920,15 +14023,16 @@ function SavantPanelSchedule({
         return (
           <div style={{
             padding:"10px 14px", background:"#fffbe6", border:`1px solid #fde68a`,
-            borderTop:"none", display:"flex", alignItems:"center", gap:10, flexWrap:"wrap",
+            borderTop:"none",
           }}>
-            <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.06em",
-              color:C.accent,textTransform:"uppercase"}}>
+            <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.06em",
+              color:C.accent,textTransform:"uppercase",marginBottom:4}}>
               {unplaced.length} unplaced smart breaker{unplaced.length===1?"":"s"} from before
-            </span>
-            <span style={{fontSize:11,color:C.dim,flex:1,minWidth:0}}>
-              These existed before the panel-schedule view. Click "Place" to drop one into the next free pair of slots.
-            </span>
+            </div>
+            <div style={{fontSize:11,color:C.dim,marginBottom:8}}>
+              These existed before the panel-schedule view. Click "Place" to drop one into the next free pair of slots, or ✕ to delete.
+            </div>
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
             {unplaced.map(m => {
               const lbl = `${savSkuLabel(m.moduleType) || ("Smart " + (m.modNum||"?"))}`;
               const free = savFindFreeSmartPair(occ, panelSize, 1);
@@ -13969,6 +14073,7 @@ function SavantPanelSchedule({
                 </span>
               );
             })}
+            </div>
           </div>
         );
       })()}
