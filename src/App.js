@@ -13636,10 +13636,40 @@ function SavantPanelSchedule({
               options={PHASE_OPTS} style={{width:60,fontSize:11}}/>
           </div>
 
-          {/* Load rows — A and B (or all N for legacy SKUs). Mockup style:
-              just letter pill + name + type + watts + pulled. */}
+          {/* Loads-list datalist — autocomplete options from the master "All
+              Loads" list (pl.loads). User can pick from existing entries or
+              type a brand-new name; either works. Browser-native datalist. */}
+          {(allLoads||[]).length > 0 && (
+            <datalist id={`sav-load-dl-${m.id}`}>
+              {(allLoads||[]).filter(l=>l && (l.name||"").trim()).map(l=>(
+                <option key={l.id} value={l.name}>{l.location ? `(${l.location})` : ""}</option>
+              ))}
+            </datalist>
+          )}
+
+          {/* Load rows — A and B (or all N for legacy SKUs). Pick a name
+              from the master loads list via the dropdown arrow, or type a
+              new one. When you select a load that has loadType/watts on
+              the master record, those auto-fill too. */}
           {outputsToShow.map((load, idx) => {
             const letter = isNew ? (idx===0?"A":"B") : (load.output || String.fromCharCode(65+idx));
+            // When user picks an existing load by name, copy over its
+            // loadType + watts so they don't have to retype. Lookup is
+            // case-insensitive and trims whitespace.
+            const onNameChange = (val) => {
+              const match = (allLoads||[]).find(l =>
+                l && (l.name||"").trim().toLowerCase() === val.trim().toLowerCase()
+              );
+              if (match) {
+                updSmartLoad(m.id, load.id, {
+                  name: match.name,
+                  loadType: load.loadType || match.loadType || "",
+                  watts: load.watts || match.watts || "",
+                });
+              } else {
+                updSmartLoad(m.id, load.id, { name: val });
+              }
+            };
             return (
               <div key={load.id||idx} style={{
                 display:"flex",gap:8,alignItems:"center",padding:"6px 10px",
@@ -13647,8 +13677,12 @@ function SavantPanelSchedule({
                 flexWrap:"wrap",
               }}>
                 <span style={{fontWeight:700,color,fontSize:13,width:18,textAlign:"center",flexShrink:0}}>{letter}</span>
-                <Inp value={load.name||""} onChange={e=>updSmartLoad(m.id,load.id,{name:e.target.value})}
-                  placeholder="Load name" style={{flex:1,minWidth:160,fontSize:12}}/>
+                <input list={(allLoads||[]).length>0 ? `sav-load-dl-${m.id}` : undefined}
+                  value={load.name||""} onChange={e=>onNameChange(e.target.value)}
+                  placeholder={(allLoads||[]).length>0 ? "Pick from loads list or type a new name" : "Load name"}
+                  style={{flex:1,minWidth:160,fontSize:12,
+                    background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                    padding:"6px 10px",fontFamily:"inherit",outline:"none",color:C.text}}/>
                 <Inp value={load.loadType||""} onChange={e=>updSmartLoad(m.id,load.id,{loadType:e.target.value})}
                   placeholder="Load type" style={{width:90,fontSize:11}}/>
                 <Inp value={load.watts||""} onChange={e=>updSmartLoad(m.id,load.id,{watts:e.target.value})}
@@ -13694,6 +13728,15 @@ function SavantPanelSchedule({
                 style={{background:"none",border:"none",color:C.dim,fontSize:18,cursor:"pointer"}}>✕</button>
             </div>
           </div>
+          {/* Loads-list datalist for the regular breaker description too,
+              so user can pick from existing master loads or type new. */}
+          {(allLoads||[]).length > 0 && (
+            <datalist id={`sav-reg-dl-${r.id}`}>
+              {(allLoads||[]).filter(l=>l && (l.name||"").trim()).map(l=>(
+                <option key={l.id} value={l.name}>{l.location ? `(${l.location})` : ""}</option>
+              ))}
+            </datalist>
+          )}
           <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
             <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase"}}>Slot</span>
             <Inp value={r.slot||""} onChange={e=>updReg(r.id,{slot:e.target.value})}
@@ -13702,8 +13745,12 @@ function SavantPanelSchedule({
             <Inp value={r.amp||""} onChange={e=>updReg(r.id,{amp:e.target.value})}
               placeholder="20" style={{width:60,fontSize:11}}/>
             <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",marginLeft:8}}>Description</span>
-            <Inp value={r.description||""} onChange={e=>updReg(r.id,{description:e.target.value})}
-              placeholder="What this breaker feeds" style={{flex:1,minWidth:160,fontSize:11}}/>
+            <input list={(allLoads||[]).length>0 ? `sav-reg-dl-${r.id}` : undefined}
+              value={r.description||""} onChange={e=>updReg(r.id,{description:e.target.value})}
+              placeholder={(allLoads||[]).length>0 ? "Pick from loads list or type" : "What this breaker feeds"}
+              style={{flex:1,minWidth:160,fontSize:11,
+                background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                padding:"6px 10px",fontFamily:"inherit",outline:"none",color:C.text}}/>
             <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",marginLeft:8}}>Phase</span>
             <Sel value={r.phase||""} onChange={e=>updReg(r.id,{phase:e.target.value})}
               options={PHASE_OPTS} style={{width:60,fontSize:11}}/>
@@ -13797,20 +13844,40 @@ function SavantPanelSchedule({
               const lbl = `${savSkuLabel(m.moduleType) || ("Smart " + (m.modNum||"?"))}`;
               const free = savFindFreeSmartPair(occ, panelSize, 1);
               return (
-                <button key={m.id} disabled={!free}
-                  onClick={()=>{
-                    if (!free) return;
-                    updSmart(m.id, { slotA:String(free.slotA), slotB:String(free.slotB) });
-                    setSelectedSlot(free.slotA);
-                  }}
-                  style={{
-                    padding:"3px 9px", fontSize:11, fontWeight:600,
-                    background:"#fff", border:`1px solid ${C.accent}55`,
-                    color:free?C.accent:C.dim, borderRadius:5,
-                    cursor:free?"pointer":"not-allowed", fontFamily:"inherit",
-                  }}>
-                  Place {lbl}{free ? ` → ${free.slotA}/${free.slotB}` : " (panel full)"}
-                </button>
+                <span key={m.id} style={{display:"inline-flex",gap:0,flexShrink:0}}>
+                  <button disabled={!free}
+                    onClick={()=>{
+                      if (!free) return;
+                      updSmart(m.id, { slotA:String(free.slotA), slotB:String(free.slotB) });
+                      setSelectedSlot(free.slotA);
+                    }}
+                    style={{
+                      padding:"3px 9px", fontSize:11, fontWeight:600,
+                      background:"#fff", border:`1px solid ${C.accent}55`,
+                      color:free?C.accent:C.dim,
+                      borderRadius:"5px 0 0 5px", borderRight:"none",
+                      cursor:free?"pointer":"not-allowed", fontFamily:"inherit",
+                    }}>
+                    Place {lbl}{free ? ` → ${free.slotA}/${free.slotB}` : " (panel full)"}
+                  </button>
+                  <button
+                    onClick={()=>{
+                      const named = (m.loads||[]).filter(l=>l && (l.name||"").trim()).length;
+                      const msg = named > 0
+                        ? `Delete ${lbl}? It has ${named} named load${named===1?"":"s"} that will be lost.`
+                        : `Delete ${lbl}?`;
+                      if (window.confirm(msg)) delSmart(m.id);
+                    }}
+                    title={`Delete this smart breaker entirely`}
+                    style={{
+                      padding:"3px 8px", fontSize:11, fontWeight:700,
+                      background:"#fff", border:`1px solid ${C.red}55`,
+                      color:C.red, borderRadius:"0 5px 5px 0",
+                      cursor:"pointer", fontFamily:"inherit",
+                    }}>
+                    ✕
+                  </button>
+                </span>
               );
             })}
           </div>
