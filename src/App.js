@@ -15110,13 +15110,15 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel", onAssignFeed
       {/* Load list */}
       {renderLoadList()}
 
-      {/* Read-only marker so we know what we're looking at during Step 2 */}
+      {/* Step marker so we know what we're looking at during the migration */}
       <div style={{
         marginTop:10, padding:"6px 10px", background:"#fef3c7",
         border:`0.5px solid ${C.accent}`, borderRadius:6, fontSize:11,
         color:C.accent, fontStyle:"italic",
       }}>
-        Preview only — not yet wired into the live editor (Step 2 of 7).
+        {isEditable
+          ? "Step 4a — feeder assignment is live (writes to savantV2 overrides). Editing other fields lands in later steps."
+          : "Preview only — read-only render."}
       </div>
     </div>
   );
@@ -15124,10 +15126,38 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel", onAssignFeed
 
 // Toggle wrapper that shows the SavantPanelV2 component below the existing
 // editor when the user clicks "Preview V2." Lets us validate the new render
-// against real data with no risk to the live editor — the old editor stays
-// fully functional and the V2 preview is read-only.
-function SavantV2PreviewToggle({ job, floor, panelLabel }) {
+// against real data while the legacy editor keeps working unchanged.
+//
+// onPatch (optional): receives a partial panelizedLighting patch when the
+// user makes a V2-only edit (currently feeder assignments). Saves are sparse
+// — we only write the savantV2.{floor}.inputAssignments map, never duplicate
+// anything that already lives in cp4Loads / panelLayout. Reverting cleanly
+// just means deleting the savantV2 field; V1 data is untouched.
+function SavantV2PreviewToggle({ job, floor, panelLabel, onPatch }) {
   const [show, setShow] = useState(false);
+  const handleAssignFeeder = onPatch ? (modKey, channel, feederId) => {
+    if (!modKey || (channel !== "A" && channel !== "B")) return;
+    const pl = job?.panelizedLighting || {};
+    const sav = pl.savantV2 || {};
+    const floorOv = sav[floor] || {};
+    const ia = floorOv.inputAssignments || {};
+    const cur = ia[modKey] || {};
+    // Sparse update: only write the field that changed; null clears it.
+    const nextChannel = feederId ? { ...cur, [channel]: feederId }
+                                  : (() => { const c = {...cur}; delete c[channel]; return c; })();
+    const nextIA = (Object.keys(nextChannel).length > 0)
+      ? { ...ia, [modKey]: nextChannel }
+      : (() => { const i = {...ia}; delete i[modKey]; return i; })();
+    onPatch({
+      panelizedLighting: {
+        ...pl,
+        savantV2: {
+          ...sav,
+          [floor]: { ...floorOv, inputAssignments: nextIA },
+        },
+      },
+    });
+  } : null;
   return (
     <div style={{marginTop:10}}>
       <button onClick={()=>setShow(!show)}
@@ -15136,12 +15166,13 @@ function SavantV2PreviewToggle({ job, floor, panelLabel }) {
           cursor:"pointer", fontFamily:"inherit", letterSpacing:"0.04em",
           display:"inline-flex", alignItems:"center", gap:6}}>
         <Icon name={show?"eye":"eye"} size={11} stroke={2}/>
-        {show ? "HIDE V2 PREVIEW" : "PREVIEW V2 (READ-ONLY)"}
+        {show ? "HIDE V2 PREVIEW" : "PREVIEW V2 (FEEDER ASSIGNMENT LIVE)"}
       </button>
       {show && (
         <div style={{marginTop:10, padding:12, background:"#fafbfc",
           border:`1px dashed ${C.purple}55`, borderRadius:8}}>
-          <SavantPanelV2 job={job} floor={floor} panelLabel={panelLabel}/>
+          <SavantPanelV2 job={job} floor={floor} panelLabel={panelLabel}
+            onAssignFeeder={handleAssignFeeder}/>
         </div>
       )}
     </div>
@@ -19537,7 +19568,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           const _cur=_pLay[floor]||{};
                           u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[floor]:{..._cur,panelSize:n}}}});
                         }}/>
-                      <SavantV2PreviewToggle job={job} floor={floor} panelLabel={_panelLabel}/>
+                      <SavantV2PreviewToggle job={job} floor={floor} panelLabel={_panelLabel}
+                        onPatch={(patch)=>u(patch)}/>
                       </>
                     ) : (
                       <PanelModulesSection
@@ -19638,7 +19670,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           const _cur=_pLay[ef.key]||{};
                           u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[ef.key]:{..._cur,panelSize:n}}}});
                         }}/>
-                      <SavantV2PreviewToggle job={job} floor={ef.key} panelLabel={ef.label}/>
+                      <SavantV2PreviewToggle job={job} floor={ef.key} panelLabel={ef.label}
+                        onPatch={(patch)=>u(patch)}/>
                       </>
                     ) : (
                       <PanelModulesSection
