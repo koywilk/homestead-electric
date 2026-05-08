@@ -14042,14 +14042,54 @@ function SavantPanelSchedule({
     return out;
   };
 
-  // Color mapping per SKU type
-  const skuColor = (sku) => sku === "DUAL_500W_APD" ? C.accent       // orange
-                          : sku === "DUAL_20A_RELAY" ? C.green       // green
-                          : C.purple;                                 // legacy / unknown
+  // ── Color palette per feeder ──────────────────────────────────────────
+  // Each regular breaker (feeder) gets one color from this fixed cycle.
+  // Smart breakers inherit their A and B feeders' colors, so when one feeder
+  // powers multiple smart-breaker inputs, you can see all of them at a glance
+  // without reading the slot numbers. SKU is still shown via the SMART pill
+  // text — color is now reserved for "which feeder powers this."
+  const FEEDER_PALETTE = [
+    "#7f77dd",  // purple
+    "#1d9e75",  // teal
+    "#d85a30",  // coral
+    "#d4537e",  // pink
+    "#ba7517",  // amber
+    "#185fa5",  // blue
+    "#639922",  // green
+    "#a32d2d",  // rust
+  ];
+  // Build feederSlot → color map. Index by the order regularBreakers were
+  // added, so colors stay stable as long as the array order doesn't change.
+  const feederColorBySlot = new Map();
+  (regularBreakers || []).forEach((r, i) => {
+    const s = Number(r.slot);
+    if (s > 0) feederColorBySlot.set(s, FEEDER_PALETTE[i % FEEDER_PALETTE.length]);
+  });
+  // For a smart breaker load with `feederSlot`, return its feeder's color.
+  const loadFeederColor = (load) => {
+    const fs = Number(load?.feederSlot);
+    if (!fs || Number.isNaN(fs)) return null;
+    return feederColorBySlot.get(fs) || null;
+  };
+
+  // SKU shape — used for the SMART pill. Color is no longer SKU-driven so
+  // this falls back to a neutral gray so SKU label doesn't fight the feeder
+  // color visually. The SKU still shows up as text on the pill.
+  const skuColor = (sku) => C.dim;
   const skuShortLabel = (sku) =>
     sku === "DUAL_500W_APD" ? "APD Dimmer"
   : sku === "DUAL_20A_RELAY" ? "Dual Relay"
   : savSkuLabel(sku) || "Smart";
+
+  // Aggregate every load name from the job for the load-name autocomplete
+  // datalist. Names already saved on this Savant panel + names floating in
+  // pl.loads (the unassigned-loads list) all become suggestions so you can
+  // type or pick. Trimmed and de-duped.
+  const loadNameSuggestions = Array.from(new Set([
+    ...(allLoads || []).map(l => (l?.name || "").trim()).filter(Boolean),
+    ...((modules || []).flatMap(m => (m.loads || []).map(l => (l?.name || "").trim()))).filter(Boolean),
+  ])).sort();
+  const loadDatalistId = `sav-load-names-${Math.random().toString(36).slice(2,8)}`;
 
   // Render one slot cell (left or right side of a row)
   const renderSlotCell = (slot) => {
@@ -14074,113 +14114,117 @@ function SavantPanelSchedule({
       );
     }
 
-    // Smart breaker — top half (slotA). SMART pill + SKU + Load A name/watts.
-    // Matches the original mockup: no feeder badges, just the load info.
-    if (entry.kind === "smartA") {
-      const m = entry.ref;
-      const sku = m.moduleType || "";
-      const color = skuColor(sku);
-      const load = (m.loads||[])[0] || {};
+    // ── Compact row renderer matching the Home Runs panel schedule layout.
+    // Each cell is just a name input with a feeder-colored left border and
+    // a small amp pill on the right edge. Tiny SMART/A · B / REG indicator
+    // sits to the left of the input so you can still tell what kind of
+    // breaker is in that slot. Click anywhere on the cell (other than the
+    // input) to open the editor below for SKU / feeder / watts / etc.
+    const compactCell = ({ kind, color, leftBadge, rightBadge, ampLabel, value, onChange,
+                            placeholder, onClickRest, withDatalist = false }) => {
+      const hasFeeder = !!color;
+      const fillBg = isSelected ? "#fef3c7" : (hasFeeder ? `${color}1f` : "#fff");
       return (
-        <div onClick={()=>{ setSelectedSlot(slot); setAddingAtSlot(null); }}
+        <div onClick={onClickRest}
           style={{
-            minHeight: 36, padding:"5px 9px", display:"flex", flexDirection:"column",
-            justifyContent:"center", gap:2, cursor:"pointer",
-            background: isSelected ? "#fef3c7" : `${color}10`,
-            borderLeft: `3px solid ${isSelected ? C.accent : color}`,
-            borderBottom:`1px solid ${color}22`, borderRight:`1px solid ${C.border}`,
-          }}>
-          <div style={{display:"flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
-            <span style={{
-              fontSize:8, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase",
-              background:color, color:"#fff", padding:"1px 6px", borderRadius:99,
-              flexShrink:0,
-            }}>SMART · {skuShortLabel(sku)}</span>
-            {sku && (
-              <span style={{fontSize:8,color:C.dim,fontWeight:700,letterSpacing:"0.04em"}}>
-                {sku === "DUAL_20A_RELAY" ? "GPM-QP2R20120" : sku === "DUAL_500W_APD" ? "GPM-Q2APD10" : ""}
-              </span>
-            )}
-            {/* In-place delete — one click removes this smart breaker from
-                the panel (with a confirm if it has named loads). Saves
-                opening the editor just to delete. */}
-            <button onClick={(e)=>{
-                e.stopPropagation();
-                const named = (m.loads||[]).filter(l => l && (l.name||"").trim()).length;
-                const msg = named > 0
-                  ? `Delete this smart breaker? ${named} named load${named===1?"":"s"} will be lost.`
-                  : "Delete this smart breaker?";
-                if (window.confirm(msg)) {
-                  delSmart(m.id);
-                  if (selectedSlot === slot) setSelectedSlot(null);
-                }
-              }}
-              title="Delete this smart breaker"
-              style={{marginLeft:"auto",background:"#fff",border:`1px solid ${C.red}55`,
-                color:C.red,fontSize:9,fontWeight:700,letterSpacing:"0.04em",
-                borderRadius:99,padding:"0 6px",cursor:"pointer",fontFamily:"inherit",
-                lineHeight:1.4,flexShrink:0}}>
-              ✕
-            </button>
-          </div>
-          <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11,minWidth:0}}>
-            <span style={{
-              fontWeight:700, color, background:"#fff",
-              border:`1px solid ${color}`, borderRadius:3, padding:"0 4px",
-              fontSize:9, flexShrink:0, letterSpacing:"0.04em",
-            }}>A</span>
-            <span style={{flex:1, fontWeight:600, color:C.text, overflow:"hidden",
-              textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0}}>
-              {load.name || <span style={{color:C.muted,fontStyle:"italic",fontWeight:400}}>(unnamed)</span>}
-            </span>
-            {load.watts && <span style={{fontSize:9,color:C.dim,fontWeight:600,flexShrink:0}}>{load.watts}W{load.loadType?` · ${load.loadType}`:""}</span>}
-          </div>
-        </div>
-      );
-    }
-
-    // Smart breaker — bottom half (slotB). Just Load B name + watts.
-    if (entry.kind === "smartB") {
-      const m = entry.ref;
-      const sku = m.moduleType || "";
-      const color = skuColor(sku);
-      const load = (m.loads||[])[1] || {};
-      const slotA = Number(m.slotA);
-      return (
-        <div onClick={()=>{ setSelectedSlot(slotA); setAddingAtSlot(null); }}
-          style={{
-            minHeight: 36, padding:"5px 9px", display:"flex", flexDirection:"column",
-            justifyContent:"center", gap:2, cursor:"pointer",
-            background: isSelected ? "#fef3c7" : `${color}10`,
-            borderLeft: `3px solid ${isSelected ? C.accent : color}`,
+            minHeight: 24, height: 24, padding:0, display:"flex",
+            alignItems:"center", cursor:"pointer", position:"relative",
+            background: fillBg,
+            borderLeft: `3px solid ${hasFeeder ? color : (isSelected ? C.accent : "transparent")}`,
             borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`,
           }}>
-          <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11,minWidth:0}}>
+          {leftBadge && (
             <span style={{
-              fontWeight:700, color, background:"#fff",
-              border:`1px solid ${color}`, borderRadius:3, padding:"0 4px",
-              fontSize:9, flexShrink:0, letterSpacing:"0.04em",
-            }}>B</span>
-            <span style={{flex:1, fontWeight:600, color:C.text, overflow:"hidden",
-              textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0}}>
-              {load.name || <span style={{color:C.muted,fontStyle:"italic",fontWeight:400}}>(unnamed)</span>}
-            </span>
-            {load.watts && <span style={{fontSize:9,color:C.dim,fontWeight:600,flexShrink:0}}>{load.watts}W{load.loadType?` · ${load.loadType}`:""}</span>}
-          </div>
+              fontSize:8, fontWeight:800, letterSpacing:"0.05em",
+              color: hasFeeder ? color : C.dim,
+              padding:"0 5px", flexShrink:0, textTransform:"uppercase",
+            }}>{leftBadge}</span>
+          )}
+          <input
+            list={withDatalist ? loadDatalistId : undefined}
+            value={value || ""}
+            onChange={onChange}
+            onClick={e=>e.stopPropagation()}
+            placeholder={placeholder || ""}
+            style={{
+              flex:1, minWidth:0, height:"100%", border:"none", outline:"none",
+              background:"transparent", fontSize:11, fontFamily:"inherit",
+              color:C.text, padding:"0 4px",
+              paddingRight: ampLabel ? 30 : 4,
+              fontWeight: 400,
+            }}/>
+          {ampLabel && (
+            <span style={{
+              position:"absolute", right:4, top:"50%", transform:"translateY(-50%)",
+              fontSize:9, fontWeight:700, color:C.dim, opacity:0.7,
+              letterSpacing:"0.02em", pointerEvents:"none",
+            }}>{ampLabel}</span>
+          )}
         </div>
       );
+    };
+
+    if (entry.kind === "smartA") {
+      const m = entry.ref;
+      const load = (m.loads||[])[0] || {};
+      const feederColor = loadFeederColor(load);
+      const ampLabel = m.moduleType === "DUAL_20A_RELAY" ? "20A"
+                     : m.moduleType === "DUAL_500W_APD"  ? "500W"
+                     : "";
+      return compactCell({
+        kind: "smartA",
+        color: feederColor,
+        leftBadge: "A",
+        ampLabel,
+        value: load.name,
+        placeholder: "Type or pick load…",
+        onChange: e => updSmartLoad(m.id, load.id, { name: e.target.value }),
+        onClickRest: () => { setSelectedSlot(slot); setAddingAtSlot(null); },
+        withDatalist: true,
+      });
     }
 
-    // Regular breaker — plain row, description + amp pill, just like the mockup.
+    if (entry.kind === "smartB") {
+      const m = entry.ref;
+      const load = (m.loads||[])[1] || {};
+      const feederColor = loadFeederColor(load);
+      const slotA = Number(m.slotA);
+      const ampLabel = m.moduleType === "DUAL_20A_RELAY" ? "20A"
+                     : m.moduleType === "DUAL_500W_APD"  ? "500W"
+                     : "";
+      return compactCell({
+        kind: "smartB",
+        color: feederColor,
+        leftBadge: "B",
+        ampLabel,
+        value: load.name,
+        placeholder: "Type or pick load…",
+        onChange: e => updSmartLoad(m.id, load.id, { name: e.target.value }),
+        onClickRest: () => { setSelectedSlot(slotA); setAddingAtSlot(null); },
+        withDatalist: true,
+      });
+    }
+
+    // Regular breaker
     const r = entry.ref;
-    return (
-      <div onClick={()=>{ setSelectedSlot(slot); setAddingAtSlot(null); }}
-        style={{
-          minHeight: 36, padding:"5px 9px", display:"flex", alignItems:"center",
-          gap:6, fontSize:12, cursor:"pointer",
-          background: isSelected ? "#fef3c7" : "#fff",
-          borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`,
-        }}>
+    const feederColor = feederColorBySlot.get(Number(r.slot)) || null;
+    return compactCell({
+      kind: "reg",
+      color: feederColor,
+      leftBadge: "",
+      ampLabel: r.amp ? `${r.amp}A` : "",
+      value: r.description,
+      placeholder: "Type description…",
+      onChange: e => updReg(r.id, { description: e.target.value }),
+      onClickRest: () => { setSelectedSlot(slot); setAddingAtSlot(null); },
+    });
+
+    // unused legacy markup below — left in place to avoid touching anything
+    // that's been deleted from the call path; the early return above handles
+    // every entry kind.
+    // eslint-disable-next-line no-unreachable
+    if (false) return (
+      <div>
         <span style={{flex:1, color:C.text, overflow:"hidden", textOverflow:"ellipsis",
           whiteSpace:"nowrap", minWidth:0}}>
           {r.description || <span style={{color:C.muted,fontStyle:"italic"}}>(unnamed)</span>}
@@ -14484,9 +14528,13 @@ function SavantPanelSchedule({
                 flexWrap:"wrap",
               }}>
                 <span style={{fontWeight:700,color,fontSize:13,width:18,textAlign:"center",flexShrink:0}}>{letter}</span>
-                <Inp value={load.name||""} onChange={e=>updSmartLoad(m.id,load.id,{name:e.target.value})}
-                  placeholder="(empty — click a chip above to fill)"
-                  style={{flex:1,minWidth:160,fontSize:12}}/>
+                <input list={loadDatalistId}
+                  value={load.name||""} onChange={e=>updSmartLoad(m.id,load.id,{name:e.target.value})}
+                  placeholder="Type or pick from list…"
+                  style={{flex:1,minWidth:160,fontSize:12,
+                    background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+                    color:C.text,padding:"6px 10px",fontFamily:"inherit",outline:"none",
+                    boxSizing:"border-box"}}/>
                 <Inp value={load.loadType||""} onChange={e=>updSmartLoad(m.id,load.id,{loadType:e.target.value})}
                   placeholder="Load type" style={{width:90,fontSize:11}}/>
                 <Inp value={load.watts||""} onChange={e=>updSmartLoad(m.id,load.id,{watts:e.target.value})}
@@ -14597,6 +14645,13 @@ function SavantPanelSchedule({
 
   return (
     <div style={{marginBottom:16}}>
+      {/* Datalist powering the load-name autocomplete on every smart-breaker
+          load row. Suggestions come from the job's pl.loads list (anything
+          you've typed in Loads) plus any names already saved on Savant
+          panels. Typing still works for free-text entry. */}
+      <datalist id={loadDatalistId}>
+        {loadNameSuggestions.map(n => <option key={n} value={n}/>)}
+      </datalist>
       {/* Wiring diagrams — quick links to the official Savant install PDFs.
           Always at the top of every Savant panel section so the field crew
           can pull them up without leaving the app. */}
@@ -20416,7 +20471,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         info lives in per-row `mod`+`ch`+`moduleType` so
                         nothing new is added at the panel-section level. */}
                     {(job.lightingSystem||"Control 4")==="Savant" ? (
-                      <>
                       <SavantPanelSchedule
                         allLoads={_savAggLoads}
                         modules={_mods}
@@ -20434,9 +20488,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           const _cur=_pLay[floor]||{};
                           u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[floor]:{..._cur,panelSize:n}}}});
                         }}/>
-                      <SavantV2PreviewToggle job={job} floor={floor} panelLabel={_panelLabel}
-                        onPatch={(patch)=>u(patch)}/>
-                      </>
                     ) : (
                       <PanelModulesSection
                         system={job.lightingSystem||"Control 4"}
@@ -20519,7 +20570,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         list with smart-breaker pairing. Loads live in
                         panelizedLighting[ef.key]. */}
                     {(job.lightingSystem||"Control 4")==="Savant" ? (
-                      <>
                       <SavantPanelSchedule
                         allLoads={_savAggLoads}
                         modules={_mods}
@@ -20536,9 +20586,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           const _cur=_pLay[ef.key]||{};
                           u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[ef.key]:{..._cur,panelSize:n}}}});
                         }}/>
-                      <SavantV2PreviewToggle job={job} floor={ef.key} panelLabel={ef.label}
-                        onPatch={(patch)=>u(patch)}/>
-                      </>
                     ) : (
                       <PanelModulesSection
                         system={job.lightingSystem||"Control 4"}
