@@ -14380,6 +14380,11 @@ function SavantPanelSchedule({
   // Expanded popup view of the chips — fullscreen overlay so all loads are
   // easy to scan at once instead of squinting at a tight inline strip.
   const [chipsExpanded, setChipsExpanded] = useState(false);
+  // Armed feeder breaker — slot # of the regular breaker that's currently
+  // active for assignment. When set, clicks on smart-breaker A/B halves
+  // assign this feeder (set load.feederSlot) so the cell turns its color.
+  // Mutually exclusive with armedLoad — arming one clears the other.
+  const [armedFeederSlot, setArmedFeederSlot] = useState(null);
 
   const occ = savBuildOccupancy(modules, regularBreakers);
 
@@ -14646,15 +14651,25 @@ function SavantPanelSchedule({
                        : (m.moduleType === "DUAL_500W_APD" ? "500W" : "15A");
       const isEmpty = !(load.name||"").trim();
       const isArmedTarget = armedLoad && isEmpty;
+      const isFeederArmedTarget = !!armedFeederSlot;
+      const armedFeederColor = isFeederArmedTarget
+        ? feederColorBySlot.get(Number(armedFeederSlot)) : null;
       return compactCell({
         kind: "smartA",
-        color: isArmedTarget ? "#22c55e" : feederColor,
+        color: isArmedTarget ? "#22c55e" : (isFeederArmedTarget ? armedFeederColor : feederColor),
         leftBadge: "A",
         ampLabel,
         value: load.name,
-        placeholder: isArmedTarget ? `↓ drop "${armedLoad.name.slice(0,18)}${armedLoad.name.length>18?"…":""}"` : "Type or pick load…",
+        placeholder: isArmedTarget
+          ? `↓ drop "${armedLoad.name.slice(0,18)}${armedLoad.name.length>18?"…":""}"`
+          : (isFeederArmedTarget ? "↓ assign feeder" : "Type or pick load…"),
         onChange: e => updSmartLoad(m.id, load.id, { name: e.target.value }),
         onClickRest: () => {
+          // Feeder armed → assign this feeder to Load A's feederSlot
+          if (armedFeederSlot) {
+            updSmartLoad(m.id, load.id, { feederSlot: String(armedFeederSlot) });
+            return;
+          }
           if (armedLoad && isEmpty) { placeArmedAtSlot(slot); return; }
           setSelectedSlot(slot); setAddingAtSlot(null);
         },
@@ -14683,15 +14698,24 @@ function SavantPanelSchedule({
                        : (m.moduleType === "DUAL_500W_APD" ? "500W" : "15A");
       const isEmpty = !(load.name||"").trim();
       const isArmedTarget = armedLoad && isEmpty;
+      const isFeederArmedTarget = !!armedFeederSlot;
+      const armedFeederColor = isFeederArmedTarget
+        ? feederColorBySlot.get(Number(armedFeederSlot)) : null;
       return compactCell({
         kind: "smartB",
-        color: isArmedTarget ? "#22c55e" : feederColor,
+        color: isArmedTarget ? "#22c55e" : (isFeederArmedTarget ? armedFeederColor : feederColor),
         leftBadge: "B",
         ampLabel,
         value: load.name,
-        placeholder: isArmedTarget ? `↓ drop "${armedLoad.name.slice(0,18)}${armedLoad.name.length>18?"…":""}"` : "Type or pick load…",
+        placeholder: isArmedTarget
+          ? `↓ drop "${armedLoad.name.slice(0,18)}${armedLoad.name.length>18?"…":""}"`
+          : (isFeederArmedTarget ? "↓ assign feeder" : "Type or pick load…"),
         onChange: e => updSmartLoad(m.id, load.id, { name: e.target.value }),
         onClickRest: () => {
+          if (armedFeederSlot) {
+            updSmartLoad(m.id, load.id, { feederSlot: String(armedFeederSlot) });
+            return;
+          }
           if (armedLoad && isEmpty) { placeArmedAtSlot(slot); return; }
           setSelectedSlot(slotA); setAddingAtSlot(null);
         },
@@ -15686,6 +15710,8 @@ function SavantPanelSchedule({
             name: l.name, loadType: l.loadType||"",
             watts: l.watts||"", location: l.location||"",
           });
+          // Mutual exclusion: clear feeder arming when arming a load
+          setArmedFeederSlot(null);
         };
 
         const renderChip = (l, opts={}) => {
@@ -15775,6 +15801,71 @@ function SavantPanelSchedule({
           </>
         );
       })()}
+
+      {/* Feeder-arming strip — click a feeder to arm it, then click any
+          smart-breaker A or B half to set that load's feederSlot. The mod
+          half instantly turns the feeder's color. Stays armed so you can
+          rapid-assign across many mods. */}
+      {(regularBreakers||[]).filter(r => Number(r.slot) > 0).length > 0 && (
+        <div style={{
+          padding:"8px 10px", marginBottom:8,
+          background: armedFeederSlot ? "#dbeafe" : "#fafbfc",
+          border:`1px ${armedFeederSlot ? "solid" : "dashed"} ${armedFeederSlot ? "#2563eb" : C.border}`,
+          borderRadius:8,
+        }}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
+            <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.07em",
+              color: armedFeederSlot ? "#1e40af" : C.purple, textTransform:"uppercase"}}>
+              {armedFeederSlot
+                ? `Feeder armed (slot ${armedFeederSlot}) — click any mod A/B to assign`
+                : "Feeders · click to arm, then click a mod A/B"}
+            </span>
+            {armedFeederSlot && (
+              <button onClick={()=>setArmedFeederSlot(null)}
+                style={{marginLeft:"auto",background:"none",border:`1px solid ${C.dim}`,
+                  color:C.dim,borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:700,
+                  cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
+                CLEAR
+              </button>
+            )}
+          </div>
+          <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
+            {(regularBreakers||[])
+              .filter(r => Number(r.slot) > 0)
+              .sort((a,b) => Number(a.slot) - Number(b.slot))
+              .map(r => {
+                const slotN = Number(r.slot);
+                const isArmed = armedFeederSlot && Number(armedFeederSlot) === slotN;
+                const color = feederColorBySlot.get(slotN) || C.dim;
+                return (
+                  <button key={r.id}
+                    onClick={()=>{
+                      // Re-click same → disarm. Different → switch armed.
+                      // Arming a feeder clears any armed load + pairing state.
+                      if (isArmed) { setArmedFeederSlot(null); return; }
+                      setArmedFeederSlot(slotN);
+                      setArmedLoad(null);
+                      setIsPairing(false);
+                    }}
+                    title={`Slot ${slotN} · ${r.amp||"15"}A${r.description?` · ${r.description}`:""}`}
+                    style={{
+                      padding:"3px 9px", fontSize:11, fontWeight:600,
+                      background: isArmed ? color : "#fff",
+                      color: isArmed ? "#fff" : C.text,
+                      border: `1px solid ${isArmed ? color : C.border}`,
+                      borderLeft: `3px solid ${color}`,
+                      borderRadius:99, cursor:"pointer", fontFamily:"inherit",
+                    }}>
+                    Slot {slotN} · {r.amp||"15"}A
+                    {r.description && <span style={{fontSize:9,marginLeft:5,opacity:0.7,fontWeight:500}}>
+                      {r.description.slice(0,20)}
+                    </span>}
+                  </button>
+                );
+              })}
+          </div>
+        </div>
+      )}
 
       {/* Inline editor / add picker — rendered ABOVE the grid so when you
           click "+ add" or a cell, the options pop up right where you can see
