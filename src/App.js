@@ -773,6 +773,36 @@ window.__HE_FCM_STATUS = async () => {
   return me;
 };
 
+// Emergency-triage console helper: dumps every user's notification health
+// in one table so Koy can see at a glance who's broken without having to
+// open the admin Fleet Health view. Returns an array so it can be piped
+// further (e.g. .filter(u => u.tokenCount === 0)).
+window.__HE_FLEET_HEALTH = async () => {
+  const snap = await getDoc(doc(db, "settings", "users"));
+  const list = snap.data()?.list || [];
+  const rows = list
+    .filter(u => u.name)
+    .map(u => ({
+      id:         u.id,
+      name:       u.name,
+      role:       u.title || u.role || "",
+      tokenCount: (u.fcmTokens || []).length + (u.fcmToken ? 1 : 0),
+      tokens:     (u.fcmTokens || []).map(t => t.slice(0, 12) + "…"),
+    }))
+    .sort((a, b) => (a.tokenCount - b.tokenCount) || a.name.localeCompare(b.name));
+  console.table(rows.map(r => ({
+    name: r.name, role: r.role, tokens: r.tokenCount,
+    health: r.tokenCount === 0 ? "BROKEN" : "ok",
+  })));
+  const broken = rows.filter(r => r.tokenCount === 0);
+  if (broken.length) {
+    console.warn("[HE fleet] users with 0 tokens:", broken.map(r => r.name).join(", "));
+  } else {
+    console.log("[HE fleet] every user has at least 1 token ✓");
+  }
+  return rows;
+};
+
 // Check what Firestore ACTUALLY has for a job
 window.__HE_CHECK = async(name)=>{
   const snap = await getDocs(collection(db,"jobs"));
@@ -31325,6 +31355,156 @@ function NotifDoctor({ identity }) {
   );
 }
 
+// Admin-only fleet view of notification health. Pulls settings/users live
+// and shows per-user token counts, with a one-click "send test push" so
+// Koy can verify any device on the fly. The point is to make broken
+// notifications IMPOSSIBLE TO HIDE — if a foreman or lead has 0 tokens,
+// it shows red here even before they complain.
+//
+// DATA SAFETY: read-only on settings/users. The sendTestPush callable
+// is the same path the Notification Doctor uses for self-test — it
+// triggers FCM sends but no Firestore writes (other than server-side
+// stale-token pruning which already happens on every push attempt).
+function FleetHealth({ identity }) {
+  const [snapshot, setSnapshot] = useState(null);
+  const [refreshing, setRefreshing] = useState(false);
+  const [testingId, setTestingId] = useState(null);
+  const [testResult, setTestResult] = useState({}); // {userId: {ok, msg}}
+
+  const load = async () => {
+    setRefreshing(true);
+    try {
+      const snap = await getDoc(doc(db, "settings", "users"));
+      const list = snap.exists() ? (snap.data().list || []) : [];
+      setSnapshot(list);
+    } catch (e) {
+      console.warn("[HE fleet] load failed:", e.message);
+    } finally {
+      setRefreshing(false);
+    }
+  };
+
+  useEffect(() => {
+    load();
+    const id = setInterval(load, 60 * 1000); // refresh every 60s
+    return () => clearInterval(id);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, []);
+
+  const sendTo = async (userId) => {
+    setTestingId(userId);
+    setTestResult(prev => ({ ...prev, [userId]: null }));
+    try {
+      const fn = httpsCallable(functions, "sendTestPush");
+      const r = await fn({ userId });
+      const ok = r.data?.ok;
+      const reason = r.data?.reason || "";
+      const tokenCount = (r.data?.results || []).length;
+      const successCount = (r.data?.results || []).filter(x => x.ok).length;
+      const staleCount = (r.data?.results || []).filter(x => x.stale).length;
+      let msg;
+      if (ok) {
+        msg = `✓ ${successCount}/${tokenCount} delivered`;
+        if (staleCount) msg += ` (${staleCount} stale pruned)`;
+      } else if (reason === "no-tokens") {
+        msg = "✗ user has no tokens";
+      } else if (staleCount === tokenCount && tokenCount > 0) {
+        msg = `✗ all ${tokenCount} tokens stale (pruned now)`;
+      } else {
+        msg = "✗ all sends failed";
+      }
+      setTestResult(prev => ({ ...prev, [userId]: { ok, msg } }));
+      // Refresh snapshot so pruned tokens are reflected.
+      load();
+    } catch (e) {
+      setTestResult(prev => ({ ...prev, [userId]: { ok: false, msg: "✗ " + e.message } }));
+    } finally {
+      setTestingId(null);
+    }
+  };
+
+  const list = snapshot || [];
+  // Sort: broken (0 tokens) first, then by name. Skip users without name.
+  const ranked = list
+    .filter(u => u.name)
+    .map(u => {
+      const tokens = (u.fcmTokens || []).length + (u.fcmToken ? 1 : 0);
+      return { ...u, tokenCount: tokens };
+    })
+    .sort((a, b) => {
+      if (a.tokenCount === 0 && b.tokenCount > 0) return -1;
+      if (b.tokenCount === 0 && a.tokenCount > 0) return 1;
+      return (a.name || "").localeCompare(b.name || "");
+    });
+
+  const broken = ranked.filter(u => u.tokenCount === 0).length;
+  const healthy = ranked.length - broken;
+
+  return (
+    <div style={{ padding: "12px 14px" }}>
+      <div style={{ fontSize: 11, color: C.dim, marginBottom: 12, lineHeight: 1.5 }}>
+        Live view of every user's notification health. Red = no tokens (will
+        not receive any push). Green = healthy. Tap "Test" to send a probe push
+        to any user — pruning happens server-side automatically.
+      </div>
+      <div style={{ display: "flex", gap: 12, marginBottom: 10, fontSize: 12, alignItems: "center" }}>
+        <span style={{ color: "#16a34a", fontWeight: 700 }}>✓ {healthy} healthy</span>
+        <span style={{ color: broken ? "#dc2626" : C.dim, fontWeight: broken ? 700 : 500 }}>
+          ✗ {broken} broken
+        </span>
+        <button onClick={load} disabled={refreshing}
+          style={{ marginLeft: "auto", background: "none", border: `1px solid ${C.border}`,
+            borderRadius: 7, padding: "4px 10px", fontSize: 10, fontWeight: 700,
+            color: C.dim, cursor: refreshing ? "default" : "pointer", fontFamily: "inherit",
+            opacity: refreshing ? 0.5 : 1 }}>
+          {refreshing ? "Refreshing…" : "Refresh"}
+        </button>
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 4 }}>
+        {ranked.map(u => {
+          const isBroken = u.tokenCount === 0;
+          const result = testResult[u.id];
+          return (
+            <div key={u.id}
+              style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 12,
+                padding: "6px 8px", borderRadius: 6,
+                background: isBroken ? "rgba(220,38,38,0.06)" : "transparent",
+                border: `1px solid ${isBroken ? "rgba(220,38,38,0.20)" : "transparent"}` }}>
+              <span style={{ width: 14, color: isBroken ? "#dc2626" : "#16a34a", fontWeight: 700 }}>
+                {isBroken ? "✗" : "✓"}
+              </span>
+              <span style={{ flex: 1, color: C.text, fontWeight: isBroken ? 700 : 500 }}>{u.name}</span>
+              <span style={{ fontSize: 10, color: C.dim, minWidth: 56, textAlign: "right" }}>
+                {u.title || u.role || ""}
+              </span>
+              <span style={{ fontSize: 10, color: isBroken ? "#dc2626" : C.dim, minWidth: 56, textAlign: "right" }}>
+                {u.tokenCount} token{u.tokenCount === 1 ? "" : "s"}
+              </span>
+              {result && (
+                <span style={{ fontSize: 10, color: result.ok ? "#16a34a" : "#dc2626", minWidth: 110, textAlign: "right" }}>
+                  {result.msg}
+                </span>
+              )}
+              <button onClick={() => sendTo(u.id)} disabled={testingId === u.id}
+                style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 6,
+                  padding: "3px 8px", fontSize: 10, fontWeight: 700, color: C.dim,
+                  cursor: testingId === u.id ? "default" : "pointer", fontFamily: "inherit",
+                  opacity: testingId === u.id ? 0.5 : 1 }}>
+                {testingId === u.id ? "…" : "Test"}
+              </button>
+            </div>
+          );
+        })}
+        {ranked.length === 0 && (
+          <div style={{ fontSize: 11, color: C.dim, textAlign: "center", padding: 8 }}>
+            {snapshot === null ? "Loading…" : "No users."}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
 function SettingsSection({ title, accent, defaultOpen = false, children }) {
   const [open, setOpen] = useState(defaultOpen);
   const c = accent || { bg: "#f8fafc", border: "#e2e8f0", text: "#0f172a" };
@@ -34890,7 +35070,11 @@ function App() {
   // ── Identity ──────────────────────────────────────────────────
   const [identity, setIdentity] = useState(()=>getIdentity());
   const [notifStatus,  setNotifStatus]  = useState(null); // null | 'loading' | 'ok' | string
-  const [showNotifPrompt, setShowNotifPrompt] = useState(false);
+  // notifIssue: null | 'ios-not-installed' | 'permission-default' | 'permission-denied' | 'no-tokens'
+  // Replaces the old binary showNotifPrompt — captures every failure mode that
+  // would silently leave a user without notifications. Banner stays visible
+  // until the issue is fixed (no dismiss for critical states).
+  const [notifIssue, setNotifIssue] = useState(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
 
   useEffect(()=>{
@@ -34901,45 +35085,81 @@ function App() {
     return () => { window.removeEventListener('online', up); window.removeEventListener('offline', down); };
   }, []);
 
-  // On login: if permission already granted, register and start the keep-alive
-  // loop. If not yet asked, show the prompt banner so user can tap once.
+  // Notification health — comprehensive check that runs on login + tab focus
+  // + every 30 min. Detects EVERY way a user can silently end up without
+  // working notifications:
   //
-  // Keep-alive strategy (replaces the old daily-throttle-on-login that missed
-  // every mid-session token rotation): validate on login, then re-validate on
-  // every tab focus AND every 30 minutes while the tab is open. FCM tokens can
-  // rotate any time and the old code only noticed once per 24h — that's why
-  // notifications "worked then stopped working" for everyone.
+  //   1. iOS Safari but PWA not installed to home screen  → 'ios-not-installed'
+  //      (iOS literally cannot deliver web push without standalone install)
+  //   2. Notification permission never asked              → 'permission-default'
+  //   3. Notification permission denied                   → 'permission-denied'
+  //   4. Permission granted but 0 tokens on user record   → 'no-tokens'
+  //      (auto-fix attempted: validateAndSync → if still 0, force registerFCMToken)
+  //   5. Token drift / dead subscription                  → auto-healed
+  //      (validateAndSyncFCMToken handles silently)
+  //
+  // The banner reflects notifIssue. When issue resolves, banner disappears.
+  // No "dismiss" for critical states — Koy explicitly asked for never-fails-
+  // on-anyone's-device, so we keep nudging until fixed.
   useEffect(()=>{
     if(!identity?.id) return;
-    const perm = ("Notification" in window) ? Notification.permission : "denied";
-    if(perm === "granted") {
-      // Initial validate on login — additive only, never wipes other devices.
-      validateAndSyncFCMToken(identity.id);
+    let cancelled = false;
 
-      // Re-validate every time the tab becomes visible. This is the cheap
-      // common-case fix: phone wakes up, user opens the app, drift gets
-      // healed before the first push needs to land.
-      const onVis = () => {
-        if (document.visibilityState === "visible") {
-          validateAndSyncFCMToken(identity.id);
+    const checkHealth = async () => {
+      if (cancelled) return;
+      // Step 1 — iOS install gate. iOS Safari can't do web push outside a
+      // standalone PWA, so flag this before anything else.
+      const isIOS = /iPad|iPhone|iPod/.test(navigator.userAgent);
+      const isStandalone = window.matchMedia?.("(display-mode: standalone)")?.matches ||
+                           window.navigator.standalone === true;
+      if (isIOS && !isStandalone) { setNotifIssue('ios-not-installed'); return; }
+
+      // Step 2 — permission state.
+      const perm = ("Notification" in window) ? Notification.permission : "denied";
+      if (perm === "default") { setNotifIssue('permission-default'); return; }
+      if (perm === "denied")  { setNotifIssue('permission-denied');  return; }
+
+      // Step 3 — keep-alive sync. Heals token drift / dead subscriptions
+      // silently. Doesn't show UI on its own.
+      await validateAndSyncFCMToken(identity.id);
+      if (cancelled) return;
+
+      // Step 4 — verify the token actually landed on the server. This is
+      // the silent-failure mode where everything LOOKS fine client-side but
+      // the user's record has no tokens (registration write failed, tokens
+      // got pruned, etc.). If we find 0 tokens, last-ditch force re-register.
+      try {
+        const snap = await getDoc(doc(db, "settings", "users"));
+        const me = snap.exists() ? (snap.data().list || []).find(u => u.id === identity.id) : null;
+        const tokenCount = (me?.fcmTokens || []).length + (me?.fcmToken ? 1 : 0);
+        if (tokenCount === 0) {
+          // Force re-register. Permission is granted, so registerFCMToken
+          // will skip requestPermission (we updated it for iOS PWA) and just
+          // create a fresh subscription + token + server write.
+          await registerFCMToken(identity.id, true);
+          if (cancelled) return;
+          const snap2 = await getDoc(doc(db, "settings", "users"));
+          const me2 = snap2.exists() ? (snap2.data().list || []).find(u => u.id === identity.id) : null;
+          const finalCount = (me2?.fcmTokens || []).length + (me2?.fcmToken ? 1 : 0);
+          if (finalCount === 0) { setNotifIssue('no-tokens'); return; }
         }
-      };
-      document.addEventListener("visibilitychange", onVis);
+        setNotifIssue(null); // healthy
+      } catch (e) {
+        // Network failed — don't show false-positive banner. Leave previous
+        // state alone so we don't flicker on intermittent connectivity.
+        console.warn("[HE health] token verify skipped:", e.message);
+      }
+    };
 
-      // Heartbeat every 30 minutes for users who leave the app open all day
-      // (foremen on iPad PWAs, Koy at the desk). Catches rotations that
-      // happen while the tab is foregrounded.
-      const interval = setInterval(() => {
-        validateAndSyncFCMToken(identity.id);
-      }, 30 * 60 * 1000);
-
-      return () => {
-        document.removeEventListener("visibilitychange", onVis);
-        clearInterval(interval);
-      };
-    } else if(perm === "default") {
-      setShowNotifPrompt(true);
-    }
+    checkHealth();
+    const onVis = () => { if (document.visibilityState === "visible") checkHealth(); };
+    document.addEventListener("visibilitychange", onVis);
+    const interval = setInterval(checkHealth, 30 * 60 * 1000);
+    return () => {
+      cancelled = true;
+      document.removeEventListener("visibilitychange", onVis);
+      clearInterval(interval);
+    };
   }, [identity?.id]);
 
   const handleEnableNotifs = async () => {
@@ -36705,25 +36925,69 @@ function App() {
         </div>
       )}
 
-      {/* Notification permission prompt — shown once after login if not yet granted */}
-      {showNotifPrompt && !notifStatus && (
-        <div style={{background:'rgba(59,130,246,0.08)',borderBottom:`1px solid rgba(59,130,246,0.25)`,
-          padding:'10px 16px',display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
-          <span style={{fontSize:12,fontWeight:600,color:C.text,flex:1,display:"inline-flex",alignItems:"center",gap:8}}>
-            <Icon name="bell" size={14} stroke={2.25}/> Enable push notifications to get job updates on this device
-          </span>
-          <button onClick={()=>{ setShowNotifPrompt(false); handleEnableNotifs(); }}
-            style={{fontSize:11,fontWeight:700,background:C.blue,color:'#fff',border:'none',
-              borderRadius:7,padding:'6px 14px',cursor:'pointer',fontFamily:'inherit',whiteSpace:'nowrap'}}>
-            Enable
-          </button>
-          <button onClick={()=>setShowNotifPrompt(false)}
-            style={{fontSize:11,background:'none',border:'none',color:C.dim,cursor:'pointer',
-              fontFamily:'inherit',padding:'4px'}}>
-            Not now
-          </button>
-        </div>
-      )}
+      {/* Persistent notification health banner — replaces the old one-shot
+          prompt. Stays visible until the issue is fixed. Different copy +
+          action per failure mode. No dismiss for critical states (denied /
+          no-tokens / ios-not-installed) per Koy's "never stop working on
+          anyone's device" mandate — the banner is the only way some users
+          would ever know notifications are off. */}
+      {notifIssue && !notifStatus && (() => {
+        const isCritical = notifIssue === 'permission-denied' || notifIssue === 'no-tokens' || notifIssue === 'ios-not-installed';
+        const bg = isCritical ? 'rgba(220,38,38,0.10)' : 'rgba(59,130,246,0.08)';
+        const border = isCritical ? 'rgba(220,38,38,0.30)' : 'rgba(59,130,246,0.25)';
+
+        let label = "";
+        let hint = "";
+        let actionText = null;
+        let onAction = null;
+
+        if (notifIssue === 'ios-not-installed') {
+          label = "Notifications off — install this app to your iPhone home screen";
+          hint = "Tap the Share button in Safari → Add to Home Screen. Then open from the home-screen icon (not Safari).";
+          // No action button — user has to do this in Safari themselves.
+        } else if (notifIssue === 'permission-default') {
+          label = "Enable push notifications to get job updates on this device";
+          actionText = "Enable";
+          onAction = handleEnableNotifs;
+        } else if (notifIssue === 'permission-denied') {
+          label = "Notifications BLOCKED — fix in browser settings";
+          const ua = navigator.userAgent;
+          if (/iPhone|iPad|iPod/.test(ua)) {
+            hint = "iOS Settings → Notifications → Homestead Electric → Allow Notifications. Then reload this page.";
+          } else if (/Chrome/.test(ua) && !/Edg/.test(ua)) {
+            hint = "Click the lock icon in the address bar → Notifications → Allow → reload.";
+          } else if (/Safari/.test(ua)) {
+            hint = "Safari → Settings → Websites → Notifications → set Homestead to Allow → reload.";
+          } else {
+            hint = "Open your browser's site settings for this URL → set Notifications to Allow → reload.";
+          }
+        } else if (notifIssue === 'no-tokens') {
+          label = "Notifications connection broken — tap to reconnect";
+          actionText = "Reconnect";
+          onAction = handleEnableNotifs;
+        }
+
+        return (
+          <div style={{background:bg, borderBottom:`1px solid ${border}`,
+            padding:'10px 16px', display:'flex', alignItems:'center', gap:10, flexWrap:'wrap'}}>
+            <div style={{flex:1, minWidth:200}}>
+              <div style={{fontSize:12, fontWeight:700, color:C.text, display:"inline-flex", alignItems:"center", gap:8}}>
+                <Icon name="bell" size={14} stroke={2.25}/> {label}
+              </div>
+              {hint && (
+                <div style={{fontSize:11, color:C.dim, marginTop:3, lineHeight:1.4}}>{hint}</div>
+              )}
+            </div>
+            {actionText && (
+              <button onClick={onAction}
+                style={{fontSize:11, fontWeight:700, background:C.blue, color:'#fff', border:'none',
+                  borderRadius:7, padding:'6px 14px', cursor:'pointer', fontFamily:'inherit', whiteSpace:'nowrap'}}>
+                {actionText}
+              </button>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Notification status banner */}
       {notifStatus && notifStatus !== 'loading' && notifStatus !== 'ok' && (
@@ -37959,6 +38223,11 @@ function App() {
             <SettingsSection title="NOTIFICATION DOCTOR" accent={{bg:"#eff6ff", border:"#bfdbfe", text:"#1e40af"}} defaultOpen={false}>
               <NotifDoctor identity={identity}/>
             </SettingsSection>
+            {getAccess(identity)==="admin" && (
+              <SettingsSection title="FLEET NOTIFICATION HEALTH" accent={{bg:"#fef3c7", border:"#fcd34d", text:"#78350f"}} defaultOpen={false}>
+                <FleetHealth identity={identity}/>
+              </SettingsSection>
+            )}
           </div>
           <SettingsPage
             COLOR_OPTIONS={COLOR_OPTIONS}
