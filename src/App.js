@@ -18516,6 +18516,35 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 (_plM.extraFloors||[]).forEach(ef=>migrateFloorToModules(_plM[ef.key]||[]).forEach(m=>m.loads.forEach(l=>{if(l.name?.trim())_anM.add(l.name.trim());})));
                 const alMod=(_plM.loads||[]).filter(l=>!_anM.has(l.name?.trim()||""));
 
+                // Aggregated loads list for Savant — for Savant jobs the master
+                // pl.loads array is often empty because the loads were typed
+                // directly into the panel modules. Build a deduped list of
+                // every named load across pl.loads + every cp4Loads panel +
+                // every extra floor so the in-panel "pick from loads list"
+                // chips actually have something to show. Each entry carries
+                // location/watts/loadType so chip-click can auto-fill those.
+                const _savAggLoads = (() => {
+                  const seen = new Map(); // lowercased name -> entry
+                  const add = (name, extras={}) => {
+                    const n = (name||"").trim();
+                    if (!n) return;
+                    const k = n.toLowerCase();
+                    if (!seen.has(k)) seen.set(k, { id: extras.id || (n+"_savAgg"), name: n, ...extras });
+                  };
+                  (_plM.loads||[]).forEach(l => add(l.name, { id:l.id, location:l.location, watts:l.watts, loadType:l.loadType }));
+                  ["main","basement","upper"].forEach(k => {
+                    migrateFloorToModules(_plM.cp4Loads?.[k]||[]).forEach(m => {
+                      (m.loads||[]).forEach(l => add(l.name, { id:l.id, watts:l.watts, loadType:l.loadType }));
+                    });
+                  });
+                  (_plM.extraFloors||[]).forEach(ef => {
+                    migrateFloorToModules(_plM[ef.key]||[]).forEach(m => {
+                      (m.loads||[]).forEach(l => add(l.name, { id:l.id, watts:l.watts, loadType:l.loadType }));
+                    });
+                  });
+                  return Array.from(seen.values());
+                })();
+
                 // Build flat list of every module across every panel section
                 // so the per-row "Move to Module" dropdown can span panels.
                 // Panels physically hold mixed-floor loads, so the dropdown
@@ -18670,7 +18699,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         nothing new is added at the panel-section level. */}
                     {(job.lightingSystem||"Control 4")==="Savant" ? (
                       <SavantPanelSchedule
-                        allLoads={(job.panelizedLighting?.loads)||[]}
+                        allLoads={_savAggLoads}
                         modules={_mods}
                         onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
                           cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}
@@ -18769,7 +18798,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         panelizedLighting[ef.key]. */}
                     {(job.lightingSystem||"Control 4")==="Savant" ? (
                       <SavantPanelSchedule
-                        allLoads={(job.panelizedLighting?.loads)||[]}
+                        allLoads={_savAggLoads}
                         modules={_mods}
                         onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}
                         regularBreakers={(((job.panelizedLighting.panelLayout)||{})[ef.key]||{}).regularBreakers||[]}
