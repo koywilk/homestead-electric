@@ -10964,13 +10964,14 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
                     o.photos as the same shape used by punch items. */}
                 {jobId && (
                   <div style={{marginBottom:8}}>
-                    <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Photos</div>
+                    <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Photos / files</div>
                     <PhotoAttacher
                       storagePath={`jobs/${jobId}/co-photos/${o.id}`}
                       photos={o.photos||[]}
                       onChange={(photos)=>upd(o.id, { photos })}
                       color={C.accent}
-                      label="Add photo"/>
+                      accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx"
+                      label="Add photo / file"/>
                   </div>
                 )}
               </>
@@ -11552,8 +11553,8 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
                 background:`${C.purple}12`,border:`1px dashed ${C.purple}55`,borderRadius:8,
                 cursor:uploading?"not-allowed":"pointer",opacity:uploading?0.5:1,
                 fontSize:12,color:C.purple,fontWeight:600}}>
-                <Icon name="image" size={13}/> Add Photos
-                <input type="file" accept="image/*" multiple style={{display:"none"}}
+                <Icon name="image" size={13}/> Add Photos / Files
+                <input type="file" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx" multiple style={{display:"none"}}
                   disabled={uploading}
                   onChange={e=>{addPhotos(t.id,e.target.files);e.target.value="";}}/>
               </label>
@@ -14385,6 +14386,46 @@ function SavantPanelSchedule({
   // assign this feeder (set load.feederSlot) so the cell turns its color.
   // Mutually exclusive with armedLoad — arming one clears the other.
   const [armedFeederSlot, setArmedFeederSlot] = useState(null);
+  // Move-mode: drag-equivalent for touch screens. Click a breaker's MOVE
+  // button → it arms for moving (this slot becomes the "from"). Click any
+  // empty slot → breaker relocates (slotA/slotB updated). Re-click the
+  // armed breaker to cancel.
+  const [moveSourceSlot, setMoveSourceSlot] = useState(null);
+  const moveBreakerToSlot = (targetSlot) => {
+    if (!moveSourceSlot) return false;
+    const source = occ.get(moveSourceSlot);
+    if (!source) { setMoveSourceSlot(null); return false; }
+    const targetSlotB = savNextInCol(targetSlot);
+    // Block if target overlaps anything (other than the source itself)
+    const blockedAt = (s) => {
+      if (s > panelSize) return true;
+      const c = occ.get(s);
+      if (!c) return false;
+      // Same module (the one being moved) is fine — we're vacating it
+      if ((c.kind === "smartA" || c.kind === "smartB") && source.ref &&
+          c.ref?.id === source.ref.id) return false;
+      if (c.kind === "reg" && source.ref && c.ref?.id === source.ref.id) return false;
+      return true;
+    };
+    if (source.kind === "smartA" || source.kind === "smartB") {
+      if (blockedAt(targetSlot) || blockedAt(targetSlotB)) {
+        window.alert(`Can't move there — slot ${blockedAt(targetSlot) ? targetSlot : targetSlotB} is occupied or out of range.`);
+        return false;
+      }
+      updSmart(source.ref.id, { slotA: String(targetSlot), slotB: String(targetSlotB) });
+    } else if (source.kind === "reg") {
+      // Regular breaker — single slot (or 2 for tandem, but tandems share
+      // the same slot # both halves, so still single-slot occupancy in occ).
+      if (blockedAt(targetSlot)) {
+        window.alert(`Can't move there — slot ${targetSlot} is occupied.`);
+        return false;
+      }
+      updReg(source.ref.id, { slot: String(targetSlot) });
+    }
+    setMoveSourceSlot(null);
+    setSelectedSlot(targetSlot);
+    return true;
+  };
 
   const occ = savBuildOccupancy(modules, regularBreakers);
 
@@ -14549,8 +14590,10 @@ function SavantPanelSchedule({
     if (!entry) {
       const isAddingHere = addingAtSlot === slot;
       const armed = !!armedLoad;
+      const isMoveTarget = !!moveSourceSlot;
       return (
         <div onClick={()=>{
+            if (isMoveTarget) { moveBreakerToSlot(slot); return; }
             if (armed) { placeArmedAtSlot(slot); return; }
             if(!isAddingHere) setAddingAtSlot(slot);
             setSelectedSlot(null);
@@ -14558,19 +14601,20 @@ function SavantPanelSchedule({
           style={{
             minHeight: 36, padding:"5px 9px", display:"flex", alignItems:"center",
             justifyContent:"center", fontSize:11,
-            color: armed ? C.green : (isAddingHere ? C.accent : C.muted),
+            color: isMoveTarget ? "#2563eb" : (armed ? C.green : (isAddingHere ? C.accent : C.muted)),
             fontStyle:"italic", cursor:"pointer",
-            background: armed
+            background: isMoveTarget ? "#dbeafe" : (armed
               ? "#dcfce7"
-              : (isAddingHere ? "#fef3c7" : "repeating-linear-gradient(45deg,#fff,#fff 6px,#fafafa 6px,#fafafa 12px)"),
+              : (isAddingHere ? "#fef3c7" : "repeating-linear-gradient(45deg,#fff,#fff 6px,#fafafa 6px,#fafafa 12px)")),
             borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`,
-            fontWeight: armed || isAddingHere ? 700 : 400,
+            fontWeight: isMoveTarget || armed || isAddingHere ? 700 : 400,
           }}>
-          {armed
-            ? (armedLoad.pairedB
-                ? `↓ drop pair (A+B)`
-                : `↓ drop "${armedLoad.name.slice(0,18)}${armedLoad.name.length>18?"…":""}"`)
-            : (isAddingHere ? "← pick type below" : "+ add")}
+          {isMoveTarget ? "↓ move here"
+            : (armed
+              ? (armedLoad.pairedB
+                  ? `↓ drop pair (A+B)`
+                  : `↓ drop "${armedLoad.name.slice(0,18)}${armedLoad.name.length>18?"…":""}"`)
+              : (isAddingHere ? "← pick type below" : "+ add"))}
         </div>
       );
     }
@@ -14683,7 +14727,7 @@ function SavantPanelSchedule({
       return compactCell({
         kind: "smartA",
         color: _isLoadDropAllowed ? "#22c55e" : (isFeederArmedTarget ? armedFeederColor : feederColor),
-        leftBadge: "A",
+        leftBadge: `M${m.modNum||"?"}·A`,
         ampLabel,
         armedMode: _smartAArmed,
         value: load.name,
@@ -14746,7 +14790,7 @@ function SavantPanelSchedule({
       return compactCell({
         kind: "smartB",
         color: _isLoadDropAllowedB ? "#22c55e" : (isFeederArmedTarget ? armedFeederColor : feederColor),
-        leftBadge: "B",
+        leftBadge: `M${m.modNum||"?"}·B`,
         ampLabel,
         armedMode: _smartBArmed,
         value: load.name,
@@ -15064,6 +15108,14 @@ function SavantPanelSchedule({
               Smart breaker · slots {m.slotA}/{m.slotB} · {savSkuLabel(sku) || "(no SKU)"}
             </div>
             <div style={{display:"flex",gap:6}}>
+              <button onClick={()=>{
+                  setMoveSourceSlot(Number(m.slotA));
+                  setSelectedSlot(null);
+                }}
+                style={{background:"#dbeafe",border:`1px solid #2563eb`,color:"#1e40af",
+                  borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                Move
+              </button>
               <button onClick={()=>{ if(window.confirm("Remove this smart breaker?")) { delSmart(m.id); setSelectedSlot(null); } }}
                 style={{background:"none",border:`1px solid ${C.red}55`,color:C.red,
                   borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
@@ -15214,6 +15266,14 @@ function SavantPanelSchedule({
               Editing slot {r.slot} · Regular breaker
             </div>
             <div style={{display:"flex",gap:6}}>
+              <button onClick={()=>{
+                  setMoveSourceSlot(Number(r.slot));
+                  setSelectedSlot(null);
+                }}
+                style={{background:"#dbeafe",border:`1px solid #2563eb`,color:"#1e40af",
+                  borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                Move
+              </button>
               <button onClick={()=>{ delReg(r.id); setSelectedSlot(null); }}
                 style={{background:"none",border:`1px solid ${C.red}55`,color:C.red,
                   borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
@@ -15910,6 +15970,27 @@ function SavantPanelSchedule({
                 );
               })}
           </div>
+        </div>
+      )}
+
+      {/* Move-mode banner — appears when a breaker is armed for moving. Click
+          any empty slot in the grid to relocate it. */}
+      {moveSourceSlot && (
+        <div style={{
+          padding:"8px 10px", marginBottom:8,
+          background:"#dbeafe", border:`1px solid #2563eb`, borderRadius:8,
+          display:"flex", alignItems:"center", gap:8, flexWrap:"wrap",
+        }}>
+          <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",
+            color:"#1e40af", textTransform:"uppercase"}}>
+            Moving breaker from slot {moveSourceSlot} — click any empty slot to relocate
+          </span>
+          <button onClick={()=>setMoveSourceSlot(null)}
+            style={{marginLeft:"auto",background:"none",border:`1px solid #1e40af`,
+              color:"#1e40af",borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:700,
+              cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
+            CANCEL MOVE
+          </button>
         </div>
       )}
 
