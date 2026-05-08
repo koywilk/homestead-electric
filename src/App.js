@@ -14391,6 +14391,10 @@ function SavantPanelSchedule({
   // empty slot → breaker relocates (slotA/slotB updated). Re-click the
   // armed breaker to cancel.
   const [moveSourceSlot, setMoveSourceSlot] = useState(null);
+  // Sticky move mode — when on, clicking ANY breaker arms it for moving and
+  // clicking an empty slot moves it. Stays on after each move so the user
+  // can shuffle a bunch of breakers in a row without toggling per move.
+  const [moveModeEnabled, setMoveModeEnabled] = useState(false);
   const moveBreakerToSlot = (targetSlot) => {
     if (!moveSourceSlot) return false;
     const source = occ.get(moveSourceSlot);
@@ -14423,7 +14427,9 @@ function SavantPanelSchedule({
       updReg(source.ref.id, { slot: String(targetSlot) });
     }
     setMoveSourceSlot(null);
-    setSelectedSlot(targetSlot);
+    // Stay in move mode if the toggle is on — user is shuffling multiple
+    // breakers in a row. Otherwise auto-select the moved breaker.
+    if (!moveModeEnabled) setSelectedSlot(targetSlot);
     return true;
   };
 
@@ -14735,7 +14741,7 @@ function SavantPanelSchedule({
         return true;
       })();
       const _isLoadDropAllowed = isArmedTarget && _typeMatchA;
-      const _smartAArmed = _isLoadDropAllowed || isFeederArmedTarget;
+      const _smartAArmed = _isLoadDropAllowed || isFeederArmedTarget || moveModeEnabled;
       return compactCell({
         kind: "smartA",
         color: _isLoadDropAllowed ? "#22c55e" : (isFeederArmedTarget ? armedFeederColor : feederColor),
@@ -14750,6 +14756,14 @@ function SavantPanelSchedule({
               : "Type or pick load…")),
         onChange: e => updSmartLoad(m.id, load.id, { name: e.target.value }),
         onClickRest: () => {
+          // In move mode → clicking arms this breaker for relocation.
+          // Click an empty slot next to drop, or click the same breaker
+          // again to cancel.
+          if (moveModeEnabled) {
+            const sa = Number(m.slotA);
+            setMoveSourceSlot(prev => prev === sa ? null : sa);
+            return;
+          }
           // Feeder armed → assign this feeder to Load A's feederSlot
           if (armedFeederSlot) {
             updSmartLoad(m.id, load.id, { feederSlot: String(armedFeederSlot) });
@@ -14802,7 +14816,7 @@ function SavantPanelSchedule({
         return true;
       })();
       const _isLoadDropAllowedB = isArmedTarget && _typeMatchB;
-      const _smartBArmed = _isLoadDropAllowedB || isFeederArmedTarget;
+      const _smartBArmed = _isLoadDropAllowedB || isFeederArmedTarget || moveModeEnabled;
       return compactCell({
         kind: "smartB",
         color: _isLoadDropAllowedB ? "#22c55e" : (isFeederArmedTarget ? armedFeederColor : feederColor),
@@ -14817,6 +14831,11 @@ function SavantPanelSchedule({
               : "Type or pick load…")),
         onChange: e => updSmartLoad(m.id, load.id, { name: e.target.value }),
         onClickRest: () => {
+          if (moveModeEnabled) {
+            const sa = Number(m.slotA);
+            setMoveSourceSlot(prev => prev === sa ? null : sa);
+            return;
+          }
           if (armedFeederSlot) {
             updSmartLoad(m.id, load.id, { feederSlot: String(armedFeederSlot) });
             return;
@@ -14915,8 +14934,16 @@ function SavantPanelSchedule({
       ampLabel: r.amp ? `${r.amp}A` : "",
       value: r.description,
       placeholder: "Type description…",
+      armedMode: moveModeEnabled,
       onChange: e => updReg(r.id, { description: e.target.value }),
-      onClickRest: () => { setSelectedSlot(slot); setAddingAtSlot(null); },
+      onClickRest: () => {
+        if (moveModeEnabled) {
+          const s = Number(r.slot);
+          setMoveSourceSlot(prev => prev === s ? null : s);
+          return;
+        }
+        setSelectedSlot(slot); setAddingAtSlot(null);
+      },
       onDelete: () => {
         if (window.confirm("Delete this regular breaker?")) {
           delReg(r.id);
@@ -15484,7 +15511,25 @@ function SavantPanelSchedule({
             <span style={{color:C.muted}}>)</span>
           </span>
         )}
-        <span style={{fontSize:11,color:C.dim,fontWeight:600,marginLeft:"auto",display:"flex",alignItems:"center",gap:6}}>
+        <button onClick={()=>{
+            const next = !moveModeEnabled;
+            setMoveModeEnabled(next);
+            if (!next) setMoveSourceSlot(null);
+            // Mutually exclusive with armed-load / armed-feeder flows
+            if (next) { setArmedLoad(null); setArmedFeederSlot(null); setIsPairing(false); }
+          }}
+          title={moveModeEnabled
+            ? "Exit move mode — clicks return to normal (open editor / arm assignments)"
+            : "Enter move mode — click any breaker to arm it, then click an empty slot to drop. Stays on so you can move multiple in a row."}
+          style={{marginLeft:"auto",fontSize:10,fontWeight:700,letterSpacing:"0.05em",
+            padding:"4px 11px", borderRadius:5, cursor:"pointer", fontFamily:"inherit",
+            background: moveModeEnabled ? "#2563eb" : "#fff",
+            color: moveModeEnabled ? "#fff" : "#2563eb",
+            border: `1px solid #2563eb`,
+          }}>
+          {moveModeEnabled ? "✓ MOVE MODE ON" : "MOVE MODE"}
+        </button>
+        <span style={{fontSize:11,color:C.dim,fontWeight:600,display:"flex",alignItems:"center",gap:6}}>
           Panel size:
           <Sel value={String(panelSize)} onChange={e=>onPanelSizeChange(Number(e.target.value)||40)}
             options={["20","30","40","42"]} style={{width:60,fontSize:11}}/>
@@ -15997,9 +16042,9 @@ function SavantPanelSchedule({
         </div>
       )}
 
-      {/* Move-mode banner — appears when a breaker is armed for moving. Click
-          any empty slot in the grid to relocate it. */}
-      {moveSourceSlot && (
+      {/* Move-mode banner — sticky when MOVE MODE is on. Shows the current
+          armed source if any, otherwise prompts to click a breaker. */}
+      {(moveModeEnabled || moveSourceSlot) && (
         <div style={{
           padding:"8px 10px", marginBottom:8,
           background:"#dbeafe", border:`1px solid #2563eb`, borderRadius:8,
@@ -16007,14 +16052,27 @@ function SavantPanelSchedule({
         }}>
           <span style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",
             color:"#1e40af", textTransform:"uppercase"}}>
-            Moving breaker from slot {moveSourceSlot} — click any empty slot to relocate
+            {moveSourceSlot
+              ? `Moving breaker from slot ${moveSourceSlot} — click an empty slot to drop${moveModeEnabled ? " (or click another breaker to swap target)" : ""}`
+              : "Move mode on — click any breaker to arm it, then click an empty slot to drop"}
           </span>
-          <button onClick={()=>setMoveSourceSlot(null)}
-            style={{marginLeft:"auto",background:"none",border:`1px solid #1e40af`,
-              color:"#1e40af",borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:700,
-              cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
-            CANCEL MOVE
-          </button>
+          {moveSourceSlot && (
+            <button onClick={()=>setMoveSourceSlot(null)}
+              style={{background:"none",border:`1px solid #1e40af`,
+                color:"#1e40af",borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:700,
+                cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
+              CANCEL ARM
+            </button>
+          )}
+          {moveModeEnabled && (
+            <button onClick={()=>{ setMoveModeEnabled(false); setMoveSourceSlot(null); }}
+              style={{marginLeft:moveSourceSlot ? 0 : "auto",
+                background:"#2563eb",border:`1px solid #2563eb`,
+                color:"#fff",borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:700,
+                cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
+              EXIT MOVE MODE
+            </button>
+          )}
         </div>
       )}
 
