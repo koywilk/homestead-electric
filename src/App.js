@@ -14298,16 +14298,20 @@ function SavantPanelSchedule({
   const placeArmedAtSlot = (slot) => {
     if (!armedLoad) return false;
     const cell = occ.get(slot);
-    // Empty slot → create smart breaker
+    // Empty slot → create smart breaker. If a pair is armed, fills BOTH
+    // Input A (armedLoad) and Input B (armedLoad.pairedB).
     if (!cell) {
       const slotB = savNextInCol(slot);
       if (slotB > panelSize || occ.has(slotB)) {
         window.alert(`Can't place a smart breaker here — slot ${slotB} is occupied or out of range.`);
         return false;
       }
-      const sku = (armedLoad.loadType||"").toLowerCase().includes("dim")
-        ? "DUAL_500W_APD" : "DUAL_20A_RELAY";
+      // SKU follows the dominant load type. If either half is dimming, use APD.
+      const aDim = (armedLoad.loadType||"").toLowerCase().includes("dim");
+      const bDim = (armedLoad.pairedB?.loadType||"").toLowerCase().includes("dim");
+      const sku = (aDim || bDim) ? "DUAL_500W_APD" : "DUAL_20A_RELAY";
       const base = newModuleObj((modules||[]).length + 1);
+      const pB = armedLoad.pairedB;
       const newMod = {
         ...base,
         moduleType: sku,
@@ -14316,20 +14320,23 @@ function SavantPanelSchedule({
         loads: [
           { ...newLoadRow(1), output:"A", feederSlot:"",
             name: armedLoad.name, loadType: armedLoad.loadType||"", watts: armedLoad.watts||"" },
-          { ...newLoadRow(2), output:"B", feederSlot:"" },
+          { ...newLoadRow(2), output:"B", feederSlot:"",
+            name: pB?.name || "", loadType: pB?.loadType || "", watts: pB?.watts || "" },
         ],
       };
       onChange([...(modules||[]), newMod]);
       setArmedLoad(null);
+      setIsPairing(false);
       return true;
     }
-    // Smart breaker half — drop into the empty Load A or Load B
+    // Smart breaker half — drop into the empty Load A or Load B. Single load
+    // only (a pair on an existing module slot doesn't make sense — there's
+    // only one half being clicked).
     if (cell.kind === "smartA" || cell.kind === "smartB") {
       const m = cell.ref;
       const loadIdx = cell.kind === "smartA" ? 0 : 1;
       const targetLoad = (m.loads||[])[loadIdx] || {};
       if ((targetLoad.name||"").trim()) {
-        // Already named — confirm overwrite
         if (!window.confirm(`Replace "${targetLoad.name}" with "${armedLoad.name}"?`)) return false;
       }
       updSmartLoad(m.id, targetLoad.id, {
@@ -14337,7 +14344,21 @@ function SavantPanelSchedule({
         loadType: armedLoad.loadType || targetLoad.loadType || "",
         watts: armedLoad.watts || targetLoad.watts || "",
       });
+      // If a paired second load was also armed, drop it on the OTHER half
+      // of this same module (auto-fills the pair on a half-empty module).
+      if (armedLoad.pairedB) {
+        const otherIdx = loadIdx === 0 ? 1 : 0;
+        const otherLoad = (m.loads||[])[otherIdx] || {};
+        if (!(otherLoad.name||"").trim()) {
+          updSmartLoad(m.id, otherLoad.id, {
+            name: armedLoad.pairedB.name,
+            loadType: armedLoad.pairedB.loadType || otherLoad.loadType || "",
+            watts: armedLoad.pairedB.watts || otherLoad.watts || "",
+          });
+        }
+      }
       setArmedLoad(null);
+      setIsPairing(false);
       return true;
     }
     return false;
@@ -14349,8 +14370,10 @@ function SavantPanelSchedule({
   const [addingAtSlot, setAddingAtSlot] = useState(null);
   // Click-to-arm flow: click a load chip → its name goes here. Then click any
   // empty slot or any smart-breaker half with an empty name to place it.
-  // Two clicks per assignment instead of seven.
-  const [armedLoad, setArmedLoad] = useState(null);  // { name, loadType, watts, location }
+  // Optionally pair a second load BEFORE placing — the pair drops in as
+  // Input A + Input B in one click on the empty slot.
+  const [armedLoad, setArmedLoad] = useState(null);  // { name, loadType, watts, location, pairedB? }
+  const [isPairing, setIsPairing] = useState(false); // true while waiting for the second-pick
 
   const occ = savBuildOccupancy(modules, regularBreakers);
 
@@ -14532,8 +14555,11 @@ function SavantPanelSchedule({
             borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`,
             fontWeight: armed || isAddingHere ? 700 : 400,
           }}>
-          {armed ? `↓ drop "${armedLoad.name.slice(0,18)}${armedLoad.name.length>18?"…":""}"` :
-            (isAddingHere ? "← pick type below" : "+ add")}
+          {armed
+            ? (armedLoad.pairedB
+                ? `↓ drop pair (A+B)`
+                : `↓ drop "${armedLoad.name.slice(0,18)}${armedLoad.name.length>18?"…":""}"`)
+            : (isAddingHere ? "← pick type below" : "+ add")}
         </div>
       );
     }
@@ -15587,20 +15613,43 @@ function SavantPanelSchedule({
       {unassignedLoads.length > 0 && (
         <div style={{
           padding:"8px 10px", marginBottom:8,
-          background: armedLoad ? "#dcfce7" : "#fafbfc",
-          border:`1px ${armedLoad ? "solid" : "dashed"} ${armedLoad ? C.green : C.border}`,
+          background: armedLoad ? (isPairing ? "#fef3c7" : "#dcfce7") : "#fafbfc",
+          border:`1px ${armedLoad ? "solid" : "dashed"} ${armedLoad ? (isPairing ? C.accent : C.green) : C.border}`,
           borderRadius:8,
         }}>
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
             <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.07em",
-              color:armedLoad ? C.green : C.purple, textTransform:"uppercase"}}>
-              {armedLoad ? `Armed: "${armedLoad.name}" — click an empty slot to place` : "Unassigned loads · click to arm"}
+              color: isPairing ? C.accent : (armedLoad ? C.green : C.purple),
+              textTransform:"uppercase"}}>
+              {!armedLoad && "Unassigned loads · click to arm"}
+              {armedLoad && !armedLoad.pairedB && !isPairing &&
+                `Armed: "${armedLoad.name}" — click an empty slot, or + Pair another first`}
+              {armedLoad && armedLoad.pairedB && !isPairing &&
+                `Armed pair: "${armedLoad.name}" + "${armedLoad.pairedB.name}" — click an empty slot to drop both`}
+              {armedLoad && isPairing &&
+                `Pick second load to pair with "${armedLoad.name}"…`}
             </span>
             <span style={{fontSize:10,color:C.dim}}>
               {unassignedLoads.length} left
             </span>
+            {armedLoad && !armedLoad.pairedB && !isPairing && (
+              <button onClick={()=>setIsPairing(true)}
+                style={{background:"#fff",border:`1px solid ${C.accent}`,color:C.accent,
+                  borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:700,
+                  cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
+                + PAIR ANOTHER
+              </button>
+            )}
+            {armedLoad && armedLoad.pairedB && (
+              <button onClick={()=>setArmedLoad({...armedLoad, pairedB: null})}
+                style={{background:"#fff",border:`1px solid ${C.dim}`,color:C.dim,
+                  borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:700,
+                  cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
+                UNPAIR
+              </button>
+            )}
             {armedLoad && (
-              <button onClick={()=>setArmedLoad(null)}
+              <button onClick={()=>{ setArmedLoad(null); setIsPairing(false); }}
                 style={{marginLeft:"auto",background:"none",border:`1px solid ${C.dim}`,
                   color:C.dim,borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:700,
                   cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
@@ -15611,15 +15660,39 @@ function SavantPanelSchedule({
           <div style={{display:"flex",gap:5,flexWrap:"wrap",
             maxHeight:120,overflowY:"auto"}}>
             {unassignedLoads.map(l => {
-              const isArmed = armedLoad && armedLoad.name === l.name;
+              const isArmedA = armedLoad && armedLoad.name === l.name && !isPairing;
+              const isArmedB = armedLoad?.pairedB && armedLoad.pairedB.name === l.name;
+              const isArmed = isArmedA || isArmedB;
               const isDim = (l.loadType||"").toLowerCase().includes("dim");
               const typeColor = isDim ? C.accent : C.green;
               return (
                 <button key={l.id||l.name}
-                  onClick={()=>setArmedLoad(isArmed ? null : {
-                    name: l.name, loadType: l.loadType||"",
-                    watts: l.watts||"", location: l.location||"",
-                  })}
+                  onClick={()=>{
+                    // In pairing-pick mode → clicking sets pairedB and exits pairing
+                    if (isPairing) {
+                      // Don't pair a load with itself
+                      if (armedLoad && armedLoad.name === l.name) { setIsPairing(false); return; }
+                      setArmedLoad({
+                        ...armedLoad,
+                        pairedB: {
+                          name: l.name, loadType: l.loadType||"",
+                          watts: l.watts||"", location: l.location||"",
+                        },
+                      });
+                      setIsPairing(false);
+                      return;
+                    }
+                    // Normal arm/disarm flow
+                    if (isArmed) {
+                      setArmedLoad(null);
+                      setIsPairing(false);
+                    } else {
+                      setArmedLoad({
+                        name: l.name, loadType: l.loadType||"",
+                        watts: l.watts||"", location: l.location||"",
+                      });
+                    }
+                  }}
                   title={`${l.loadType||"unspecified"}${l.watts?` · ${l.watts}W`:""}${l.location?` · ${l.location}`:""}`}
                   style={{
                     padding:"3px 9px", fontSize:11, fontWeight:600,
@@ -15631,7 +15704,7 @@ function SavantPanelSchedule({
                   }}>
                   {l.name}
                   <span style={{fontSize:9,marginLeft:5,opacity:0.65,fontWeight:500}}>
-                    {isDim ? "D" : "S"}
+                    {isDim ? "D" : "S"}{isArmedB ? " · B" : ""}
                   </span>
                 </button>
               );
