@@ -14637,9 +14637,13 @@ function SavantPanelSchedule({
       const m = entry.ref;
       const load = (m.loads||[])[0] || {};
       const feederColor = loadFeederColor(load);
-      const ampLabel = m.moduleType === "DUAL_20A_RELAY" ? "20A"
-                     : m.moduleType === "DUAL_500W_APD"  ? "500W"
-                     : "";
+      // Amp label: show this load's feeder breaker amp if assigned; otherwise
+      // default to 15A (typical Savant lighting feeder per Koy's standard).
+      // APD modules are rated by VA so still show 500W as a hint.
+      const _feederForA = (regularBreakers||[]).find(r => Number(r.slot) === Number(load.feederSlot));
+      const ampLabel = _feederForA?.amp
+                       ? `${_feederForA.amp}A`
+                       : (m.moduleType === "DUAL_500W_APD" ? "500W" : "15A");
       const isEmpty = !(load.name||"").trim();
       const isArmedTarget = armedLoad && isEmpty;
       return compactCell({
@@ -14673,9 +14677,10 @@ function SavantPanelSchedule({
       const load = (m.loads||[])[1] || {};
       const feederColor = loadFeederColor(load);
       const slotA = Number(m.slotA);
-      const ampLabel = m.moduleType === "DUAL_20A_RELAY" ? "20A"
-                     : m.moduleType === "DUAL_500W_APD"  ? "500W"
-                     : "";
+      const _feederForB = (regularBreakers||[]).find(r => Number(r.slot) === Number(load.feederSlot));
+      const ampLabel = _feederForB?.amp
+                       ? `${_feederForB.amp}A`
+                       : (m.moduleType === "DUAL_500W_APD" ? "500W" : "15A");
       const isEmpty = !(load.name||"").trim();
       const isArmedTarget = armedLoad && isEmpty;
       return compactCell({
@@ -15617,6 +15622,15 @@ function SavantPanelSchedule({
           load type (Dimming → APD, Switching → Relay) when dropped on an
           empty slot. Two clicks per assignment instead of seven. */}
       {unassignedLoads.length > 0 && (() => {
+        // Per-type counts of what's still NEEDING to be assigned. Lets you
+        // scan "I have 8 dimming + 4 switching left" so you know how many
+        // APD vs Relay modules to add.
+        const _unassignedByType = unassignedLoads.reduce((acc, l) => {
+          const isDim = (l.loadType||"").toLowerCase().includes("dim");
+          const k = isDim ? "dimming" : "switching";
+          acc[k] = (acc[k]||0) + 1;
+          return acc;
+        }, {});
         // Shared header (status + action buttons) — used in both the inline
         // strip and the popup so behavior matches.
         const renderHeader = () => (
@@ -15632,8 +15646,20 @@ function SavantPanelSchedule({
               {armedLoad && isPairing &&
                 `Pick second load to pair with "${armedLoad.name}"…`}
             </span>
-            <span style={{fontSize:10,color:C.dim}}>
-              {unassignedLoads.length} left
+            <span style={{fontSize:10,color:C.dim,display:"inline-flex",alignItems:"center",gap:5}}>
+              <b style={{color:C.text}}>{unassignedLoads.length}</b> left
+              {_unassignedByType.dimming > 0 && (
+                <span style={{
+                  background:`${C.accent}1a`, color:C.accent,
+                  borderRadius:99, padding:"1px 7px", fontWeight:700, fontSize:10,
+                }}>{_unassignedByType.dimming} dim</span>
+              )}
+              {_unassignedByType.switching > 0 && (
+                <span style={{
+                  background:`${C.green}1a`, color:C.green,
+                  borderRadius:99, padding:"1px 7px", fontWeight:700, fontSize:10,
+                }}>{_unassignedByType.switching} sw</span>
+              )}
             </span>
             {armedLoad && !armedLoad.pairedB && !isPairing && (
               <button onClick={()=>setIsPairing(true)}
