@@ -14666,17 +14666,32 @@ function SavantPanelSchedule({
       const isFeederArmedTarget = !!armedFeederSlot;
       const armedFeederColor = isFeederArmedTarget
         ? feederColorBySlot.get(Number(armedFeederSlot)) : null;
-      const _smartAArmed = isArmedTarget || isFeederArmedTarget;
+      // Compatibility check: dimming loads only land on APD modules,
+      // switching loads only land on Relay modules. Loads with no type
+      // (legacy or unspecified) drop on anything.
+      const _typeMatchA = !armedLoad ? true : (() => {
+        const lt = (armedLoad.loadType||"").toLowerCase();
+        if (!lt) return true;
+        const isDim = lt.includes("dim");
+        const isSwitch = lt.includes("switch") || lt.includes("relay");
+        if (isDim) return m.moduleType === "DUAL_500W_APD";
+        if (isSwitch) return m.moduleType === "DUAL_20A_RELAY";
+        return true;
+      })();
+      const _isLoadDropAllowed = isArmedTarget && _typeMatchA;
+      const _smartAArmed = _isLoadDropAllowed || isFeederArmedTarget;
       return compactCell({
         kind: "smartA",
-        color: isArmedTarget ? "#22c55e" : (isFeederArmedTarget ? armedFeederColor : feederColor),
+        color: _isLoadDropAllowed ? "#22c55e" : (isFeederArmedTarget ? armedFeederColor : feederColor),
         leftBadge: "A",
         ampLabel,
         armedMode: _smartAArmed,
         value: load.name,
-        placeholder: isArmedTarget
+        placeholder: _isLoadDropAllowed
           ? `↓ drop "${armedLoad.name.slice(0,18)}${armedLoad.name.length>18?"…":""}"`
-          : (isFeederArmedTarget ? "↓ assign feeder" : "Type or pick load…"),
+          : (isFeederArmedTarget ? "↓ assign feeder"
+              : (isArmedTarget && !_typeMatchA ? `wrong mod type for ${armedLoad.loadType||"this load"}`
+              : "Type or pick load…")),
         onChange: e => updSmartLoad(m.id, load.id, { name: e.target.value }),
         onClickRest: () => {
           // Feeder armed → assign this feeder to Load A's feederSlot
@@ -14684,6 +14699,8 @@ function SavantPanelSchedule({
             updSmartLoad(m.id, load.id, { feederSlot: String(armedFeederSlot) });
             return;
           }
+          // Load armed but type mismatch → reject silently
+          if (armedLoad && isEmpty && !_typeMatchA) return;
           if (armedLoad && isEmpty) { placeArmedAtSlot(slot); return; }
           setSelectedSlot(slot); setAddingAtSlot(null);
         },
@@ -14715,21 +14732,36 @@ function SavantPanelSchedule({
       const isFeederArmedTarget = !!armedFeederSlot;
       const armedFeederColor = isFeederArmedTarget
         ? feederColorBySlot.get(Number(armedFeederSlot)) : null;
+      const _typeMatchB = !armedLoad ? true : (() => {
+        const lt = (armedLoad.loadType||"").toLowerCase();
+        if (!lt) return true;
+        const isDim = lt.includes("dim");
+        const isSwitch = lt.includes("switch") || lt.includes("relay");
+        if (isDim) return m.moduleType === "DUAL_500W_APD";
+        if (isSwitch) return m.moduleType === "DUAL_20A_RELAY";
+        return true;
+      })();
+      const _isLoadDropAllowedB = isArmedTarget && _typeMatchB;
+      const _smartBArmed = _isLoadDropAllowedB || isFeederArmedTarget;
       return compactCell({
         kind: "smartB",
-        color: isArmedTarget ? "#22c55e" : (isFeederArmedTarget ? armedFeederColor : feederColor),
+        color: _isLoadDropAllowedB ? "#22c55e" : (isFeederArmedTarget ? armedFeederColor : feederColor),
         leftBadge: "B",
         ampLabel,
+        armedMode: _smartBArmed,
         value: load.name,
-        placeholder: isArmedTarget
+        placeholder: _isLoadDropAllowedB
           ? `↓ drop "${armedLoad.name.slice(0,18)}${armedLoad.name.length>18?"…":""}"`
-          : (isFeederArmedTarget ? "↓ assign feeder" : "Type or pick load…"),
+          : (isFeederArmedTarget ? "↓ assign feeder"
+              : (isArmedTarget && !_typeMatchB ? `wrong mod type for ${armedLoad.loadType||"this load"}`
+              : "Type or pick load…")),
         onChange: e => updSmartLoad(m.id, load.id, { name: e.target.value }),
         onClickRest: () => {
           if (armedFeederSlot) {
             updSmartLoad(m.id, load.id, { feederSlot: String(armedFeederSlot) });
             return;
           }
+          if (armedLoad && isEmpty && !_typeMatchB) return;
           if (armedLoad && isEmpty) { placeArmedAtSlot(slot); return; }
           setSelectedSlot(slotA); setAddingAtSlot(null);
         },
