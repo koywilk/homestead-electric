@@ -31388,7 +31388,6 @@ function FleetHealth({ identity }) {
     load();
     const id = setInterval(load, 60 * 1000); // refresh every 60s
     return () => clearInterval(id);
-    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, []);
 
   const sendTo = async (userId) => {
