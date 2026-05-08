@@ -14239,6 +14239,70 @@ function SavantPanelSchedule({
         return !lp || lp === _panelMatch;
       })
     : (allLoads || []);
+  // Names already placed on a smart breaker in this panel — used to filter
+  // the "Unassigned loads" strip so each load only shows up until it's placed.
+  const placedNamesLower = new Set();
+  (modules||[]).forEach(m => (m.loads||[]).forEach(l => {
+    const n = (l?.name||"").trim().toLowerCase();
+    if (n) placedNamesLower.add(n);
+  }));
+  const unassignedLoads = panelScopedLoads
+    .filter(l => l && (l.name||"").trim() && !placedNamesLower.has(l.name.trim().toLowerCase()));
+
+  // Place the currently-armed load. Behavior depends on what was clicked:
+  //  - Empty slot: auto-create a smart breaker (APD if Dimming, Relay if
+  //    Switching/anything else) and put the armed load on Load A. Slot B
+  //    becomes empty for the next load placement.
+  //  - Smart breaker A/B half with empty name: drop the armed load on that
+  //    half. Inherits load type and watts.
+  // Either way, clears the armed state after placement.
+  const placeArmedAtSlot = (slot) => {
+    if (!armedLoad) return false;
+    const cell = occ.get(slot);
+    // Empty slot → create smart breaker
+    if (!cell) {
+      const slotB = savNextInCol(slot);
+      if (slotB > panelSize || occ.has(slotB)) {
+        window.alert(`Can't place a smart breaker here — slot ${slotB} is occupied or out of range.`);
+        return false;
+      }
+      const sku = (armedLoad.loadType||"").toLowerCase().includes("dim")
+        ? "DUAL_500W_APD" : "DUAL_20A_RELAY";
+      const base = newModuleObj((modules||[]).length + 1);
+      const newMod = {
+        ...base,
+        moduleType: sku,
+        slotA: String(slot),
+        slotB: String(slotB),
+        loads: [
+          { ...newLoadRow(1), output:"A", feederSlot:"",
+            name: armedLoad.name, loadType: armedLoad.loadType||"", watts: armedLoad.watts||"" },
+          { ...newLoadRow(2), output:"B", feederSlot:"" },
+        ],
+      };
+      onChange([...(modules||[]), newMod]);
+      setArmedLoad(null);
+      return true;
+    }
+    // Smart breaker half — drop into the empty Load A or Load B
+    if (cell.kind === "smartA" || cell.kind === "smartB") {
+      const m = cell.ref;
+      const loadIdx = cell.kind === "smartA" ? 0 : 1;
+      const targetLoad = (m.loads||[])[loadIdx] || {};
+      if ((targetLoad.name||"").trim()) {
+        // Already named — confirm overwrite
+        if (!window.confirm(`Replace "${targetLoad.name}" with "${armedLoad.name}"?`)) return false;
+      }
+      updSmartLoad(m.id, targetLoad.id, {
+        name: armedLoad.name,
+        loadType: armedLoad.loadType || targetLoad.loadType || "",
+        watts: armedLoad.watts || targetLoad.watts || "",
+      });
+      setArmedLoad(null);
+      return true;
+    }
+    return false;
+  };
   // Track which slot the user is currently editing. null = nothing selected.
   // Editing state is purely visual; toggling never touches the modules array.
   const [selectedSlot, setSelectedSlot] = useState(null);
@@ -14411,17 +14475,26 @@ function SavantPanelSchedule({
     // Empty slot
     if (!entry) {
       const isAddingHere = addingAtSlot === slot;
+      const armed = !!armedLoad;
       return (
-        <div onClick={()=>{ if(!isAddingHere) setAddingAtSlot(slot); setSelectedSlot(null); }}
+        <div onClick={()=>{
+            if (armed) { placeArmedAtSlot(slot); return; }
+            if(!isAddingHere) setAddingAtSlot(slot);
+            setSelectedSlot(null);
+          }}
           style={{
             minHeight: 36, padding:"5px 9px", display:"flex", alignItems:"center",
-            justifyContent:"center", fontSize:11, color: isAddingHere ? C.accent : C.muted,
+            justifyContent:"center", fontSize:11,
+            color: armed ? C.green : (isAddingHere ? C.accent : C.muted),
             fontStyle:"italic", cursor:"pointer",
-            background: isAddingHere ? "#fef3c7" : "repeating-linear-gradient(45deg,#fff,#fff 6px,#fafafa 6px,#fafafa 12px)",
+            background: armed
+              ? "#dcfce7"
+              : (isAddingHere ? "#fef3c7" : "repeating-linear-gradient(45deg,#fff,#fff 6px,#fafafa 6px,#fafafa 12px)"),
             borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`,
-            fontWeight: isAddingHere ? 700 : 400,
+            fontWeight: armed || isAddingHere ? 700 : 400,
           }}>
-          {isAddingHere ? "← pick type below" : "+ add"}
+          {armed ? `↓ drop "${armedLoad.name.slice(0,18)}${armedLoad.name.length>18?"…":""}"` :
+            (isAddingHere ? "← pick type below" : "+ add")}
         </div>
       );
     }
@@ -14496,15 +14569,20 @@ function SavantPanelSchedule({
       const ampLabel = m.moduleType === "DUAL_20A_RELAY" ? "20A"
                      : m.moduleType === "DUAL_500W_APD"  ? "500W"
                      : "";
+      const isEmpty = !(load.name||"").trim();
+      const isArmedTarget = armedLoad && isEmpty;
       return compactCell({
         kind: "smartA",
-        color: feederColor,
+        color: isArmedTarget ? "#22c55e" : feederColor,
         leftBadge: "A",
         ampLabel,
         value: load.name,
-        placeholder: "Type or pick load…",
+        placeholder: isArmedTarget ? `↓ drop "${armedLoad.name.slice(0,18)}${armedLoad.name.length>18?"…":""}"` : "Type or pick load…",
         onChange: e => updSmartLoad(m.id, load.id, { name: e.target.value }),
-        onClickRest: () => { setSelectedSlot(slot); setAddingAtSlot(null); },
+        onClickRest: () => {
+          if (armedLoad && isEmpty) { placeArmedAtSlot(slot); return; }
+          setSelectedSlot(slot); setAddingAtSlot(null);
+        },
         onDelete: () => {
           const named = (m.loads||[]).filter(l => l && (l.name||"").trim()).length;
           const msg = named > 0
@@ -14527,15 +14605,20 @@ function SavantPanelSchedule({
       const ampLabel = m.moduleType === "DUAL_20A_RELAY" ? "20A"
                      : m.moduleType === "DUAL_500W_APD"  ? "500W"
                      : "";
+      const isEmpty = !(load.name||"").trim();
+      const isArmedTarget = armedLoad && isEmpty;
       return compactCell({
         kind: "smartB",
-        color: feederColor,
+        color: isArmedTarget ? "#22c55e" : feederColor,
         leftBadge: "B",
         ampLabel,
         value: load.name,
-        placeholder: "Type or pick load…",
+        placeholder: isArmedTarget ? `↓ drop "${armedLoad.name.slice(0,18)}${armedLoad.name.length>18?"…":""}"` : "Type or pick load…",
         onChange: e => updSmartLoad(m.id, load.id, { name: e.target.value }),
-        onClickRest: () => { setSelectedSlot(slotA); setAddingAtSlot(null); },
+        onClickRest: () => {
+          if (armedLoad && isEmpty) { placeArmedAtSlot(slot); return; }
+          setSelectedSlot(slotA); setAddingAtSlot(null);
+        },
         onDelete: () => {
           const named = (m.loads||[]).filter(l => l && (l.name||"").trim()).length;
           const msg = named > 0
@@ -15420,6 +15503,68 @@ function SavantPanelSchedule({
           </div>
         );
       })()}
+
+      {/* Quick-place strip — every panel-scoped load that isn't yet on a
+          smart breaker shows up as a chip. Click a chip to "arm" it
+          (highlights green); then click any empty slot or empty smart-breaker
+          half to drop the load there. Auto-creates the right SKU based on
+          load type (Dimming → APD, Switching → Relay) when dropped on an
+          empty slot. Two clicks per assignment instead of seven. */}
+      {unassignedLoads.length > 0 && (
+        <div style={{
+          padding:"8px 10px", marginBottom:8,
+          background: armedLoad ? "#dcfce7" : "#fafbfc",
+          border:`1px ${armedLoad ? "solid" : "dashed"} ${armedLoad ? C.green : C.border}`,
+          borderRadius:8,
+        }}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
+            <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.07em",
+              color:armedLoad ? C.green : C.purple, textTransform:"uppercase"}}>
+              {armedLoad ? `Armed: "${armedLoad.name}" — click an empty slot to place` : "Unassigned loads · click to arm"}
+            </span>
+            <span style={{fontSize:10,color:C.dim}}>
+              {unassignedLoads.length} left
+            </span>
+            {armedLoad && (
+              <button onClick={()=>setArmedLoad(null)}
+                style={{marginLeft:"auto",background:"none",border:`1px solid ${C.dim}`,
+                  color:C.dim,borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:700,
+                  cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
+                CLEAR
+              </button>
+            )}
+          </div>
+          <div style={{display:"flex",gap:5,flexWrap:"wrap",
+            maxHeight:120,overflowY:"auto"}}>
+            {unassignedLoads.map(l => {
+              const isArmed = armedLoad && armedLoad.name === l.name;
+              const isDim = (l.loadType||"").toLowerCase().includes("dim");
+              const typeColor = isDim ? C.accent : C.green;
+              return (
+                <button key={l.id||l.name}
+                  onClick={()=>setArmedLoad(isArmed ? null : {
+                    name: l.name, loadType: l.loadType||"",
+                    watts: l.watts||"", location: l.location||"",
+                  })}
+                  title={`${l.loadType||"unspecified"}${l.watts?` · ${l.watts}W`:""}${l.location?` · ${l.location}`:""}`}
+                  style={{
+                    padding:"3px 9px", fontSize:11, fontWeight:600,
+                    background: isArmed ? typeColor : "#fff",
+                    color: isArmed ? "#fff" : C.text,
+                    border: `1px solid ${isArmed ? typeColor : C.border}`,
+                    borderLeft: `3px solid ${typeColor}`,
+                    borderRadius:99, cursor:"pointer", fontFamily:"inherit",
+                  }}>
+                  {l.name}
+                  <span style={{fontSize:9,marginLeft:5,opacity:0.65,fontWeight:500}}>
+                    {isDim ? "D" : "S"}
+                  </span>
+                </button>
+              );
+            })}
+          </div>
+        </div>
+      )}
 
       {/* Inline editor / add picker — rendered ABOVE the grid so when you
           click "+ add" or a cell, the options pop up right where you can see
@@ -21096,10 +21241,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         <>
                           <span style={{color:C.muted}}>(</span>
                           {orderedKeys.map((k,i) => (
-                            <React.Fragment key={k}>
+                            <Fragment key={k}>
                               {i > 0 && <span style={{color:C.muted}}>·</span>}
                               <span>{byType[k]} {k.toLowerCase()}</span>
-                            </React.Fragment>
+                            </Fragment>
                           ))}
                           <span style={{color:C.muted}}>)</span>
                         </>
