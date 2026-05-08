@@ -15078,6 +15078,32 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel" }) {
   );
 }
 
+// Toggle wrapper that shows the SavantPanelV2 component below the existing
+// editor when the user clicks "Preview V2." Lets us validate the new render
+// against real data with no risk to the live editor — the old editor stays
+// fully functional and the V2 preview is read-only.
+function SavantV2PreviewToggle({ job, floor, panelLabel }) {
+  const [show, setShow] = useState(false);
+  return (
+    <div style={{marginTop:10}}>
+      <button onClick={()=>setShow(!show)}
+        style={{background:"none", border:`1px dashed ${C.purple}`, color:C.purple,
+          borderRadius:6, padding:"5px 11px", fontSize:11, fontWeight:700,
+          cursor:"pointer", fontFamily:"inherit", letterSpacing:"0.04em",
+          display:"inline-flex", alignItems:"center", gap:6}}>
+        <Icon name={show?"eye":"eye"} size={11} stroke={2}/>
+        {show ? "HIDE V2 PREVIEW" : "PREVIEW V2 (READ-ONLY)"}
+      </button>
+      {show && (
+        <div style={{marginTop:10, padding:12, background:"#fafbfc",
+          border:`1px dashed ${C.purple}55`, borderRadius:8}}>
+          <SavantPanelV2 job={job} floor={floor} panelLabel={panelLabel}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function PanelModulesSection({
   modules, onChange, system, allLoads=[],
   // Optional cross-panel move support — when provided, the Move dropdown
@@ -19449,6 +19475,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         info lives in per-row `mod`+`ch`+`moduleType` so
                         nothing new is added at the panel-section level. */}
                     {(job.lightingSystem||"Control 4")==="Savant" ? (
+                      <>
                       <SavantPanelSchedule
                         allLoads={_savAggLoads}
                         modules={_mods}
@@ -19466,6 +19493,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           const _cur=_pLay[floor]||{};
                           u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[floor]:{..._cur,panelSize:n}}}});
                         }}/>
+                      <SavantV2PreviewToggle job={job} floor={floor} panelLabel={_panelLabel}/>
+                      </>
                     ) : (
                       <PanelModulesSection
                         system={job.lightingSystem||"Control 4"}
@@ -19548,6 +19577,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         list with smart-breaker pairing. Loads live in
                         panelizedLighting[ef.key]. */}
                     {(job.lightingSystem||"Control 4")==="Savant" ? (
+                      <>
                       <SavantPanelSchedule
                         allLoads={_savAggLoads}
                         modules={_mods}
@@ -19564,6 +19594,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           const _cur=_pLay[ef.key]||{};
                           u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[ef.key]:{..._cur,panelSize:n}}}});
                         }}/>
+                      <SavantV2PreviewToggle job={job} floor={ef.key} panelLabel={ef.label}/>
+                      </>
                     ) : (
                       <PanelModulesSection
                         system={job.lightingSystem||"Control 4"}
