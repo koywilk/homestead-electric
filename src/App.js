@@ -15255,7 +15255,12 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
             </span>
           )}
         </span>
-        {isEditable && ch && (
+        {isEditable && ch && v2.feeders.length === 0 && (
+          <span style={{
+            fontSize:10, color:C.orange, fontStyle:"italic", whiteSpace:"nowrap",
+          }}>add a feeder first</span>
+        )}
+        {isEditable && ch && v2.feeders.length > 0 && (
           <select
             value={m.inputs?.[ch] || ""}
             onChange={(e)=>onAssignFeeder(m.modNum || m._legacyMod, ch, e.target.value || null)}
@@ -15263,7 +15268,7 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
             style={{
               fontSize:11, padding:"2px 4px", border:`0.5px solid ${C.border}`,
               borderRadius:4, background: color ? "rgba(255,255,255,0.7)" : "#fff",
-              maxWidth:120, color:C.text, fontFamily:"inherit",
+              maxWidth:140, color:C.text, fontFamily:"inherit",
             }}>
             <option value="">← unassigned</option>
             {v2.feeders.map(f => (
@@ -15356,17 +15361,83 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
     return out;
   };
 
-  // ── Load list (one card per module) ────────────────────────────────
-  const renderLoadList = () => (
-    <div style={{marginTop:14}}>
-      <div style={{fontSize:12, fontWeight:600, color:C.dim, marginBottom:8,
+  // ── Feeders section (editable inline, lives above the modules) ─────
+  const renderFeeders = () => (
+    <div style={{marginBottom:14}}>
+      <div style={{fontSize:12, fontWeight:600, color:C.dim, marginBottom:6,
         letterSpacing:"0.04em", textTransform:"uppercase"}}>
-        Load list — switch legs by module
+        Feeder breakers <span style={{color:C.muted, fontWeight:400, textTransform:"none",
+          letterSpacing:0, fontSize:11}}>· {v2.feeders.length}</span>
+      </div>
+      {v2.feeders.length === 0 ? (
+        <div style={{padding:"8px 10px", fontSize:12, color:C.dim, fontStyle:"italic",
+          background:"#fafbfc", border:`0.5px dashed ${C.border}`, borderRadius:6}}>
+          No feeders yet — add one below to start coloring modules.
+        </div>
+      ) : (
+        <div style={{display:"flex", flexDirection:"column", gap:4}}>
+          {v2.feeders.map((f, idx) => {
+            const color = SAV_V2_FEEDER_COLORS[idx % SAV_V2_FEEDER_COLORS.length];
+            const fed = (v2.modules||[]).flatMap(m => {
+              const arr = [];
+              if (m.inputs?.A === f.id) arr.push(`${m.modNum||"?"}·A`);
+              if (m.inputs?.B === f.id) arr.push(`${m.modNum||"?"}·B`);
+              return arr;
+            });
+            return (
+              <div key={f.id} style={{
+                display:"grid", gridTemplateColumns:"36px 60px 60px 70px 1fr auto auto",
+                gap:6, alignItems:"center", padding:"5px 9px", borderRadius:5,
+                background: color.fill, borderLeft:`3px solid ${color.chip}`,
+              }}>
+                <input value={f.slot||""} placeholder="slot"
+                  title="Slot # in the panel"
+                  style={{fontSize:11, padding:"3px 5px", border:`0.5px solid ${C.border}`,
+                    borderRadius:3, fontFamily:"inherit", background:"#fff"}}
+                  readOnly/>
+                <span style={{fontSize:11, fontWeight:500, color:C.text}}>
+                  {f.amps||"20"}A
+                </span>
+                <span style={{fontSize:11, color:C.dim}}>
+                  {(f.poles||1)===2 ? "2-pole" : "1-pole"}
+                </span>
+                <span style={{fontSize:11, fontWeight:500, color:C.text}}>{f.label||""}</span>
+                <span style={{fontSize:11, color:C.dim, fontStyle: fed.length===0?"italic":"normal"}}>
+                  {fed.length === 0 ? "unassigned" :
+                    `feeds ${fed.length}: ${fed.join(" · ")}`}
+                </span>
+                <span style={{fontSize:10, color:C.dim, fontWeight:500}}>{color.name}</span>
+                {canDeleteFeeder && (
+                  <button onClick={()=>{
+                      const msg = fed.length > 0
+                        ? `Delete ${f.label||"feeder"}? Powers ${fed.length} input${fed.length===1?"":"s"} (${fed.join(", ")}). Those become unassigned.`
+                        : `Delete ${f.label||"feeder"}?`;
+                      if (window.confirm(msg)) onDeleteFeeder(f.id);
+                    }}
+                    title="Delete feeder"
+                    style={{background:"none", border:"none", color:C.muted,
+                      cursor:"pointer", fontSize:14, lineHeight:1, padding:0}}>×</button>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+
+  // ── Modules section (one editable card per module — primary edit surface) ─
+  const renderLoadList = () => (
+    <div style={{marginTop:8}}>
+      <div style={{fontSize:12, fontWeight:600, color:C.dim, marginBottom:6,
+        letterSpacing:"0.04em", textTransform:"uppercase"}}>
+        Modules <span style={{color:C.muted, fontWeight:400, textTransform:"none",
+          letterSpacing:0, fontSize:11}}>· {v2.modules.length}</span>
       </div>
       {(v2.modules || []).length === 0 && (
         <div style={{padding:"10px 12px", fontSize:12, color:C.dim, fontStyle:"italic",
           background:"#fafbfc", border:`0.5px dashed ${C.border}`, borderRadius:6}}>
-          No modules yet.
+          No modules yet — add one below.
         </div>
       )}
       {(v2.modules || []).map(m => {
@@ -15375,70 +15446,100 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
         const aColor = savV2FeederColor(m.inputs?.A, v2.feeders);
         const bColor = savV2FeederColor(m.inputs?.B, v2.feeders);
         const editKey = m.modNum || m._legacyMod;
-        // For single-output SKUs, the V1 row stores ch="" and we pass null
-        // through to the edit handler so it matches that row.
-        const editChannel = (ch === "—") ? null : ch;
-        const outRow = (ch, color, out, breakerInfo) => out ? (
-          <div style={{
-            display:"grid",
-            gridTemplateColumns: canEditOutput
-              ? (canSetRoom ? "80px 1fr 100px 90px 60px 26px" : "80px 1fr 100px 70px 26px")
-              : (canSetRoom ? "90px 1fr 110px 90px 60px" : "90px 1fr 100px 70px"),
-            gap:8, alignItems:"center", padding:"6px 12px",
-            background: color ? color.fill : "transparent",
-            borderTop: `0.5px solid ${C.border}`,
-          }}>
-            <span style={{fontSize:11, fontWeight:600, color:C.text}}>
-              {ch || "—"} · {breakerInfo}
-            </span>
-            {canEditOutput ? (
-              <input
-                value={out.name || ""}
-                onChange={(e)=>onEditOutput(editKey, editChannel, "name", e.target.value)}
-                placeholder="Switch leg name"
-                style={{fontSize:13, padding:"3px 6px", border:`0.5px solid ${C.border}`,
-                  borderRadius:4, background:"#fff", fontFamily:"inherit", color:C.text}}/>
-            ) : (
-              <span style={{color:C.text, fontSize:13}}>
-                {out.name || <span style={{color:C.muted, fontStyle:"italic"}}>(no name)</span>}
+        // outRow is rendered with channel ("A" / "B") for dual-output modules
+        // and with "" / null for single-output modules. The edit handler maps
+        // that to the right V1 row by `ch` field.
+        const outRow = (ch, color, out, breakerLabel) => {
+          const editChannel = ch || null;
+          const feederPickerCh = ch || "A";  // single-output stores assignment on A
+          return out ? (
+            <div style={{
+              display:"grid",
+              // Slot/leg | name | feeder picker | type | W | room | ✓
+              gridTemplateColumns:"60px 1.5fr 130px 90px 50px 90px 24px",
+              gap:6, alignItems:"center", padding:"6px 10px",
+              background: color ? color.fill : "transparent",
+              borderTop: `0.5px solid ${C.border}`,
+            }}>
+              <span style={{fontSize:11, fontWeight:600, color:C.text}}>
+                {ch || "—"} · {breakerLabel}
               </span>
-            )}
-            {canSetRoom && (
-              <input
-                value={out.room || ""}
-                onChange={(e)=>onSetRoom(editKey, editChannel || "A", e.target.value)}
-                placeholder="Room"
-                title="Used to group this load on the pull-list-by-room print"
-                style={{fontSize:11, padding:"3px 6px", border:`0.5px solid ${C.border}`,
-                  borderRadius:4, background:"#fff", fontFamily:"inherit", color:C.text}}/>
-            )}
-            {canEditOutput ? (
-              <Sel value={out.loadType || ""} options={LOAD_TYPES}
-                onChange={(e)=>onEditOutput(editKey, editChannel, "loadType", e.target.value)}
-                style={{fontSize:11, padding:"3px 6px"}}/>
-            ) : (
-              <span style={{color:C.dim, fontSize:12}}>{out.loadType || ""}</span>
-            )}
-            {canEditOutput ? (
-              <input
-                value={out.watts || ""}
-                onChange={(e)=>onEditOutput(editKey, editChannel, "watts", e.target.value)}
-                placeholder="W"
-                style={{fontSize:11, padding:"3px 6px", border:`0.5px solid ${C.border}`,
-                  borderRadius:4, background:"#fff", fontFamily:"inherit", color:C.text,
-                  textAlign:"center"}}/>
-            ) : (
-              <span style={{color:C.dim, fontSize:12, textAlign:"right",
-                fontVariantNumeric:"tabular-nums"}}>{out.watts ? `${out.watts}W` : ""}</span>
-            )}
-            {canEditOutput && (
-              <input type="checkbox" checked={!!out.pulled}
-                onChange={(e)=>onEditOutput(editKey, editChannel, "pulled", e.target.checked)}
-                title="Mark wire as pulled"
-                style={{cursor:"pointer"}}/>
-            )}
-          </div>
-        ) : null;
+              {canEditOutput ? (
+                <input
+                  value={out.name || ""}
+                  onChange={(e)=>onEditOutput(editKey, editChannel, "name", e.target.value)}
+                  placeholder="Switch leg name (e.g. Kitchen pendants)"
+                  style={{fontSize:13, padding:"4px 7px", border:`0.5px solid ${C.border}`,
+                    borderRadius:4, background:"#fff", fontFamily:"inherit", color:C.text}}/>
+              ) : (
+                <span style={{color:C.text, fontSize:13}}>
+                  {out.name || <span style={{color:C.muted, fontStyle:"italic"}}>(no name)</span>}
+                </span>
+              )}
+              {/* Inline feeder picker — same row, no scrolling */}
+              {isEditable ? (
+                v2.feeders.length === 0 ? (
+                  <span style={{fontSize:10, color:C.orange, fontStyle:"italic"}}>add feeder ↑</span>
+                ) : (
+                  <select
+                    value={m.inputs?.[feederPickerCh] || ""}
+                    onChange={(e)=>onAssignFeeder(editKey, feederPickerCh, e.target.value || null)}
+                    title={`Pick which feeder powers Input ${ch||"A"}`}
+                    style={{fontSize:11, padding:"3px 5px", border:`0.5px solid ${C.border}`,
+                      borderRadius:4, background:color?"rgba(255,255,255,0.7)":"#fff",
+                      color:C.text, fontFamily:"inherit"}}>
+                    <option value="">← unassigned</option>
+                    {v2.feeders.map(f => (
+                      <option key={f.id} value={f.id}>
+                        {f.label} ({f.amps||"20"}A)
+                      </option>
+                    ))}
+                  </select>
+                )
+              ) : (
+                <span style={{fontSize:11, color:C.dim}}>
+                  {breakerLabel || "—"}
+                </span>
+              )}
+              {canEditOutput ? (
+                <Sel value={out.loadType || ""} options={LOAD_TYPES}
+                  onChange={(e)=>onEditOutput(editKey, editChannel, "loadType", e.target.value)}
+                  style={{fontSize:11, padding:"3px 5px"}}/>
+              ) : (
+                <span style={{color:C.dim, fontSize:11}}>{out.loadType || ""}</span>
+              )}
+              {canEditOutput ? (
+                <input
+                  value={out.watts || ""}
+                  onChange={(e)=>onEditOutput(editKey, editChannel, "watts", e.target.value)}
+                  placeholder="W"
+                  style={{fontSize:11, padding:"3px 5px", border:`0.5px solid ${C.border}`,
+                    borderRadius:4, background:"#fff", fontFamily:"inherit", color:C.text,
+                    textAlign:"center"}}/>
+              ) : (
+                <span style={{color:C.dim, fontSize:11, textAlign:"right",
+                  fontVariantNumeric:"tabular-nums"}}>{out.watts ? `${out.watts}W` : ""}</span>
+              )}
+              {canSetRoom ? (
+                <input
+                  value={out.room || ""}
+                  onChange={(e)=>onSetRoom(editKey, feederPickerCh, e.target.value)}
+                  placeholder="Room"
+                  title="Used to group this load on the pull-list-by-room print"
+                  style={{fontSize:11, padding:"3px 5px", border:`0.5px solid ${C.border}`,
+                    borderRadius:4, background:"#fff", fontFamily:"inherit", color:C.text}}/>
+              ) : (
+                <span style={{fontSize:11, color:C.dim}}>{out.room || ""}</span>
+              )}
+              {canEditOutput && (
+                <input type="checkbox" checked={!!out.pulled}
+                  onChange={(e)=>onEditOutput(editKey, editChannel, "pulled", e.target.checked)}
+                  title="Mark wire as pulled"
+                  style={{cursor:"pointer", justifySelf:"center"}}/>
+              )}
+            </div>
+          ) : null;
+        };
         const aFeeder = v2.feeders.find(f => f.id === m.inputs?.A);
         const bFeeder = v2.feeders.find(f => f.id === m.inputs?.B);
         return (
@@ -15446,18 +15547,31 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
             border:`0.5px solid ${C.border}`, borderRadius:6, overflow:"hidden",
             marginBottom:8, background:"#fff",
           }}>
-            <div style={{padding:"7px 12px", fontSize:12, fontWeight:600,
+            <div style={{padding:"7px 10px", fontSize:12, fontWeight:600,
               color:C.text, background:"#f8fafc",
-              display:"flex", justifyContent:"space-between"}}>
-              <span>Module #{m.modNum||"?"} · {meta.label || m.sku || "Unknown"}</span>
-              <span style={{color:C.dim, fontSize:11, fontWeight:400}}>
+              display:"flex", justifyContent:"space-between", alignItems:"center", gap:8}}>
+              <span style={{whiteSpace:"nowrap"}}>Mod #{m.modNum||"?"}</span>
+              <span style={{flex:1, fontWeight:400, color:C.dim, fontSize:11, minWidth:0,
+                overflow:"hidden", textOverflow:"ellipsis"}}>
+                {meta.label || m.sku || "Unknown"}
+              </span>
+              <span style={{color:C.dim, fontSize:11, fontWeight:400, whiteSpace:"nowrap"}}>
                 slots {(m.slots||[]).join(", ") || "unplaced"}
               </span>
+              {canDeleteModule && (
+                <button onClick={()=>{
+                    if (window.confirm(`Delete Module #${m.modNum||"?"} and both its outputs?`))
+                      onDeleteModule(m.modNum || m._legacyMod);
+                  }}
+                  title="Delete module"
+                  style={{background:"none", border:"none", color:C.muted,
+                    cursor:"pointer", fontSize:14, lineHeight:1, padding:0}}>×</button>
+              )}
             </div>
             {outRow("A", aColor, m.outputs?.A,
-              `${aFeeder?.label || "?"} · ${aFeeder?.amps || "?"}A`)}
+              aFeeder ? `${aFeeder.amps||"20"}A` : "20A")}
             {!isSingle && outRow("B", bColor, m.outputs?.B,
-              `${bFeeder?.label || "?"} · ${bFeeder?.amps || "?"}A`)}
+              bFeeder ? `${bFeeder.amps||"20"}A` : "20A")}
           </div>
         );
       })}
@@ -15487,25 +15601,65 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
         </div>
       </div>
 
-      {/* Two-column slot grid */}
-      <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}}>
-        <div>{renderColumn(oddSlots)}</div>
-        <div>{renderColumn(evenSlots)}</div>
-      </div>
+      {/* Empty-state guide — shown until the user has feeders to assign.
+          Without feeders, the assignment dropdowns on each module half are
+          empty and nothing colors itself, which looks like the app is broken.
+          This banner tells the user the actual flow: add feeders first, THEN
+          assign them, THEN colors light up. */}
+      {isEditable && v2.feeders.length === 0 && (
+        <div style={{
+          padding:"12px 14px", marginBottom:10,
+          background:"#fff7ed", border:`1px solid ${C.orange}55`, borderRadius:8,
+          fontSize:12, color:C.text, lineHeight:1.5,
+        }}>
+          <div style={{fontWeight:600, color:C.orange, marginBottom:4,
+            fontSize:11, letterSpacing:"0.05em", textTransform:"uppercase"}}>
+            Get started
+          </div>
+          To color-code modules and build a panel cover schedule:
+          <ol style={{margin:"6px 0 0 18px", padding:0, color:C.dim, lineHeight:1.7}}>
+            <li>Click <b style={{color:C.purple}}>+ ADD FEEDER BREAKER</b> below to enter each feeder breaker that powers your modules (slot #, amps, poles).</li>
+            <li>If a module isn't already in the list, click <b style={{color:C.purple}}>+ ADD MODULE</b> to place it on a slot.</li>
+            <li>For each module, use the dropdown on its <b>A</b> and <b>B</b> halves to pick the feeder powering each input — the row instantly fills with that feeder's color.</li>
+          </ol>
+        </div>
+      )}
 
-      {/* Load list */}
+      {isEditable && v2.feeders.length > 0 && v2.modules.every(m => !m.inputs?.A && !m.inputs?.B) && (
+        <div style={{
+          padding:"10px 12px", marginBottom:10,
+          background:"#fef3c7", border:`1px solid ${C.accent}55`, borderRadius:8,
+          fontSize:12, color:C.text,
+        }}>
+          <b style={{color:C.accent}}>Now assign feeders.</b> Click the dropdown
+          on each module half ({"← unassigned"}) and pick which feeder
+          powers it. Colors light up the moment you do.
+        </div>
+      )}
+
+      {/* Feeders section (editable list) — must come first so the picker
+          options on each module half know what's available. */}
+      {renderFeeders()}
+
+      {/* Modules section (the editing surface). The 2-column slot grid
+          (panel-cover view) was moved to print-only — see the PRINT PANEL
+          COVER button. On-screen this is one card per module so every field
+          is in reach without scrolling between sections. */}
       {renderLoadList()}
 
       {/* Add feeder / Add module — inline forms expand on click. New entries
-          land in the V1 storage so the legacy editor sees them too. */}
+          land in the V1 storage so the legacy editor sees them too. The Add
+          Feeder form auto-expands when there are zero feeders so the empty
+          state has a clear next step. */}
       {(canAddFeeder || canAddModule) && (
         <div style={{marginTop:14, padding:10, background:"#fafbfc",
           border:`0.5px dashed ${C.border}`, borderRadius:8}}>
           <div style={{display:"flex", gap:8, flexWrap:"wrap"}}>
             {canAddFeeder && (
               <button onClick={()=>{ setShowAddFeeder(!showAddFeeder); setShowAddModule(false); }}
-                style={{background:showAddFeeder?C.purple:"none",
-                  border:`1px solid ${C.purple}`, color:showAddFeeder?"#fff":C.purple,
+                style={{background:(showAddFeeder||v2.feeders.length===0)?C.purple:"none",
+                  border:`1px solid ${C.purple}`,
+                  color:(showAddFeeder||v2.feeders.length===0)?"#fff":C.purple,
                   borderRadius:6, padding:"5px 11px", fontSize:11, fontWeight:700,
                   cursor:"pointer", fontFamily:"inherit", letterSpacing:"0.04em"}}>
                 + ADD FEEDER BREAKER
@@ -15521,7 +15675,7 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
               </button>
             )}
           </div>
-          {showAddFeeder && canAddFeeder && (
+          {(showAddFeeder || (v2.feeders.length === 0 && canAddFeeder)) && canAddFeeder && (
             <div style={{marginTop:10, padding:10, background:"#fff",
               border:`0.5px solid ${C.border}`, borderRadius:6,
               display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(110px,1fr))",
