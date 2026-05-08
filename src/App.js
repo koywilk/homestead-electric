@@ -1434,6 +1434,69 @@ if (typeof window !== "undefined") {
   window.__HE_SAVANT_V2_FLATTEN = savantV2ToV1;
   window.__HE_SAVANT_V2_FOR_FLOOR = getSavantV2ForFloor;
 
+  // Console helper — bulk-add loads to a specific job's panelizedLighting.loads
+  // array. Used to import a foreman's typed-up load list without manually
+  // clicking + Add Load 100 times. Match-by-name is fuzzy (case-insensitive,
+  // includes-substring) so "Robison" or "1005" both find the same job.
+  //
+  // Each entry in `newLoads` should be { name, location, loadType, panel?,
+  // watts? }. We assign fresh IDs and num values so the loads slot cleanly
+  // into the existing array without touching anything that's already there.
+  //
+  // Returns { jobName, addedCount, totalCount } on success.
+  // Throws if no job matches or multiple jobs match (so you don't write to
+  // the wrong job by accident).
+  //
+  // Usage example:
+  //   __HE_BULK_ADD_LOADS("Robison", [
+  //     { name: "kitchen pendants", location: "Main", loadType: "Dimming", panel: "LCP 3" },
+  //     ...
+  //   ])
+  window.__HE_BULK_ADD_LOADS = async (jobIdentifier, newLoads) => {
+    if (!jobIdentifier) throw new Error("jobIdentifier required (name fragment or job #)");
+    if (!Array.isArray(newLoads) || newLoads.length === 0) throw new Error("newLoads must be a non-empty array");
+    const needle = String(jobIdentifier).toLowerCase().trim();
+    const snap = await getDocs(collection(window.__HE_DB, "jobs"));
+    const allJobs = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+    const matches = allJobs.filter(j => {
+      const name = (j.data?.name || "").toLowerCase();
+      const number = String(j.data?.number || j.data?.jobNumber || "").toLowerCase();
+      return name.includes(needle) || number.includes(needle);
+    });
+    if (matches.length === 0) throw new Error(`No job matched "${jobIdentifier}".`);
+    if (matches.length > 1) throw new Error(`${matches.length} jobs matched "${jobIdentifier}": ${matches.map(j=>j.data?.name).join(", ")}. Be more specific.`);
+    const job = matches[0];
+    const existing = job.data?.panelizedLighting?.loads || [];
+    let _u = Date.now() * 1000;
+    const startNum = existing.length;
+    const cleaned = newLoads.map((l, i) => ({
+      id: String(++_u),
+      num: startNum + i + 1,
+      name: String(l.name || "").trim(),
+      location: String(l.location || "").trim(),
+      panel: String(l.panel || "").trim(),
+      loadType: String(l.loadType || "").trim(),
+      watts: l.watts != null ? String(l.watts) : "",
+      keypad: "",
+      pulled: false,
+    })).filter(l => l.name);
+    const merged = [...existing, ...cleaned];
+    const nextData = {
+      ...(job.data || {}),
+      panelizedLighting: {
+        ...(job.data?.panelizedLighting || {}),
+        loads: merged,
+      },
+    };
+    await setDoc(doc(window.__HE_DB, "jobs", job.id), { data: nextData }, { merge: true });
+    console.log(`✓ Added ${cleaned.length} loads to "${job.data?.name}" (was ${existing.length}, now ${merged.length})`);
+    return {
+      jobName: job.data?.name || job.id,
+      addedCount: cleaned.length,
+      totalCount: merged.length,
+    };
+  };
+
   // Console helper — pulls every Savant job from Firestore and prints the
   // V2-migrated shape for each. Use this after deploy to confirm the
   // migration produces sane output on real data before we wire up the UI.
