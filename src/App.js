@@ -679,10 +679,44 @@ if (messaging) {
     const body    = payload.data?.body    || payload.notification?.body;
     const jobId   = payload.data?.jobId   || "";
     const section = payload.data?.section || "";
+    const tag     = payload.data?.tag     || (jobId ? `he-${jobId}-${section}` : `he-${Date.now()}`);
     if (title || body) {
       console.log("[HE push] dispatching he-push custom event:", { title, body, jobId, section });
       const ev = new CustomEvent("he-push", { detail: { title, body, jobId, section } });
       window.dispatchEvent(ev);
+
+      // Also show a system notification banner. This is THE fix for "I assigned
+      // myself foreman and saw nothing" — the foreground onMessage path used to
+      // ONLY render an in-app toast (top-right, 5s), which is invisible when
+      // you're focused on a form. The SW's onBackgroundMessage doesn't fire
+      // when the page is foregrounded, so without this call there's no system
+      // banner at all when the app is visible. Now both fire: in-app toast
+      // (instant feedback) AND OS banner (impossible to miss). Tag dedups the
+      // two so the OS doesn't show two banners — the in-app toast comes from
+      // the he-push event listener, the OS banner from this Notification call.
+      try {
+        if (typeof Notification !== "undefined" && Notification.permission === "granted") {
+          const n = new Notification(title || "Homestead Electric", {
+            body: body || "",
+            icon: "/icon-192.png",
+            tag,
+            data: { jobId, section },
+          });
+          n.onclick = () => {
+            window.focus();
+            // Reuse the same SW postMessage shape so existing handlers fire.
+            window.dispatchEvent(new MessageEvent("message", {
+              data: { type: "HE_NOTIF_CLICK", jobId, section },
+            }));
+            try { n.close(); } catch {}
+          };
+          // Auto-close after 6s so banners don't pile up if many pushes arrive.
+          setTimeout(() => { try { n.close(); } catch {} }, 6000);
+          console.log("[HE push] foreground system Notification shown");
+        }
+      } catch (e) {
+        console.warn("[HE push] foreground Notification failed:", e.message);
+      }
     } else {
       console.warn("[HE push] payload had no title/body — skipping toast");
     }

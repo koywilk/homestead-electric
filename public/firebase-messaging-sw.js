@@ -17,6 +17,23 @@ firebase.initializeApp({
 
 const messaging = firebase.messaging();
 
+// ─── SW lifecycle: skipWaiting + clients.claim ──────────────────────────────
+// Without these, a freshly deployed firebase-messaging-sw.js sits in "waiting"
+// state until ALL open tabs of the app close — which for a PWA the crew keeps
+// open all day means new SW logic NEVER takes effect. That's exactly how the
+// old SW could keep mishandling new server payloads silently. Calling
+// skipWaiting() on install + clients.claim() on activate makes every future
+// SW deploy take over existing tabs immediately. The first deploy of THIS
+// version still has to be fetched once (browser checks /firebase-messaging-sw.js
+// on each register() call, which the app does on every page load), but after
+// that initial fetch, activation is immediate. Also expose a SKIP_WAITING
+// message handler so the page can yell at any waiting SW from JS.
+self.addEventListener("install", () => { self.skipWaiting(); });
+self.addEventListener("activate", e => { e.waitUntil(self.clients.claim()); });
+self.addEventListener("message", e => {
+  if (e.data && e.data.type === "SKIP_WAITING") self.skipWaiting();
+});
+
 // Background message handler — shows a system notification.
 // The `data` payload includes title, body, jobId, section, and tag.
 //
@@ -25,6 +42,15 @@ const messaging = firebase.messaging();
 // means EVERY push lands in this handler — there's no FCM SDK auto-display
 // happening anymore. We render exactly one notification here.
 messaging.onBackgroundMessage(payload => {
+  // Diagnostic — visible in DevTools → Application → Service Workers → console.
+  // If pushes arrive but no banner shows, this log proves whether the SW even
+  // received them (vs. push subscription dead, app foregrounded path, etc.).
+  console.log("[HE bgsw] onBackgroundMessage", {
+    hasData: !!payload.data,
+    hasNotification: !!payload.notification,
+    title: payload.data?.title,
+    section: payload.data?.section,
+  });
   const title   = payload.data?.title || payload.notification?.title || "Homestead Electric";
   const body    = payload.data?.body  || payload.notification?.body  || "";
   const jobId   = payload.data?.jobId   || "";
