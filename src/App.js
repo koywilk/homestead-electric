@@ -14285,8 +14285,11 @@ function SavantPanelSchedule({
     const n = (l?.name||"").trim().toLowerCase();
     if (n) placedNamesLower.add(n);
   }));
+  // Sorted alphabetically (case-insensitive) so similar names cluster —
+  // e.g. all the "bed 2 …" loads end up next to each other.
   const unassignedLoads = panelScopedLoads
-    .filter(l => l && (l.name||"").trim() && !placedNamesLower.has(l.name.trim().toLowerCase()));
+    .filter(l => l && (l.name||"").trim() && !placedNamesLower.has(l.name.trim().toLowerCase()))
+    .sort((a, b) => (a.name||"").toLowerCase().localeCompare((b.name||"").toLowerCase()));
 
   // Place the currently-armed load. Behavior depends on what was clicked:
   //  - Empty slot: auto-create a smart breaker (APD if Dimming, Relay if
@@ -14374,6 +14377,9 @@ function SavantPanelSchedule({
   // Input A + Input B in one click on the empty slot.
   const [armedLoad, setArmedLoad] = useState(null);  // { name, loadType, watts, location, pairedB? }
   const [isPairing, setIsPairing] = useState(false); // true while waiting for the second-pick
+  // Expanded popup view of the chips — fullscreen overlay so all loads are
+  // easy to scan at once instead of squinting at a tight inline strip.
+  const [chipsExpanded, setChipsExpanded] = useState(false);
 
   const occ = savBuildOccupancy(modules, regularBreakers);
 
@@ -15610,13 +15616,10 @@ function SavantPanelSchedule({
           half to drop the load there. Auto-creates the right SKU based on
           load type (Dimming → APD, Switching → Relay) when dropped on an
           empty slot. Two clicks per assignment instead of seven. */}
-      {unassignedLoads.length > 0 && (
-        <div style={{
-          padding:"8px 10px", marginBottom:8,
-          background: armedLoad ? (isPairing ? "#fef3c7" : "#dcfce7") : "#fafbfc",
-          border:`1px ${armedLoad ? "solid" : "dashed"} ${armedLoad ? (isPairing ? C.accent : C.green) : C.border}`,
-          borderRadius:8,
-        }}>
+      {unassignedLoads.length > 0 && (() => {
+        // Shared header (status + action buttons) — used in both the inline
+        // strip and the popup so behavior matches.
+        const renderHeader = () => (
           <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
             <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.07em",
               color: isPairing ? C.accent : (armedLoad ? C.green : C.purple),
@@ -15650,68 +15653,140 @@ function SavantPanelSchedule({
             )}
             {armedLoad && (
               <button onClick={()=>{ setArmedLoad(null); setIsPairing(false); }}
-                style={{marginLeft:"auto",background:"none",border:`1px solid ${C.dim}`,
+                style={{background:"none",border:`1px solid ${C.dim}`,
                   color:C.dim,borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:700,
                   cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
                 CLEAR
               </button>
             )}
+            <button onClick={()=>setChipsExpanded(!chipsExpanded)}
+              style={{marginLeft:"auto",background:"#fff",border:`1px solid ${C.purple}`,
+                color:C.purple,borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:700,
+                cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
+              {chipsExpanded ? "✕ CLOSE" : "EXPAND ⤢"}
+            </button>
           </div>
-          <div style={{display:"flex",gap:5,flexWrap:"wrap",
-            maxHeight:120,overflowY:"auto"}}>
-            {unassignedLoads.map(l => {
-              const isArmedA = armedLoad && armedLoad.name === l.name && !isPairing;
-              const isArmedB = armedLoad?.pairedB && armedLoad.pairedB.name === l.name;
-              const isArmed = isArmedA || isArmedB;
-              const isDim = (l.loadType||"").toLowerCase().includes("dim");
-              const typeColor = isDim ? C.accent : C.green;
-              return (
-                <button key={l.id||l.name}
-                  onClick={()=>{
-                    // In pairing-pick mode → clicking sets pairedB and exits pairing
-                    if (isPairing) {
-                      // Don't pair a load with itself
-                      if (armedLoad && armedLoad.name === l.name) { setIsPairing(false); return; }
-                      setArmedLoad({
-                        ...armedLoad,
-                        pairedB: {
-                          name: l.name, loadType: l.loadType||"",
-                          watts: l.watts||"", location: l.location||"",
-                        },
-                      });
-                      setIsPairing(false);
-                      return;
-                    }
-                    // Normal arm/disarm flow
-                    if (isArmed) {
-                      setArmedLoad(null);
-                      setIsPairing(false);
-                    } else {
-                      setArmedLoad({
-                        name: l.name, loadType: l.loadType||"",
-                        watts: l.watts||"", location: l.location||"",
-                      });
-                    }
-                  }}
-                  title={`${l.loadType||"unspecified"}${l.watts?` · ${l.watts}W`:""}${l.location?` · ${l.location}`:""}`}
+        );
+
+        // Chip click handler — same logic for inline + popup.
+        // Clicking the SAME armed chip while not pairing is a no-op now (used to
+        // disarm). To unarm, click CLEAR. This prevents accidentally losing
+        // your armed state by re-tapping the same chip.
+        const onChipClick = (l, isArmedA, isArmedB) => {
+          if (isPairing) {
+            if (armedLoad && armedLoad.name === l.name) { setIsPairing(false); return; }
+            setArmedLoad({
+              ...armedLoad,
+              pairedB: {
+                name: l.name, loadType: l.loadType||"",
+                watts: l.watts||"", location: l.location||"",
+              },
+            });
+            setIsPairing(false);
+            // Auto-close popup if open so user can drop right after pairing
+            return;
+          }
+          // Already armed as A → no-op (use CLEAR to disarm)
+          if (isArmedA) return;
+          // Already armed as B → unpair this one
+          if (isArmedB) {
+            setArmedLoad({...armedLoad, pairedB: null});
+            return;
+          }
+          // Otherwise → arm as A (replacing whatever was armed)
+          setArmedLoad({
+            name: l.name, loadType: l.loadType||"",
+            watts: l.watts||"", location: l.location||"",
+          });
+        };
+
+        const renderChip = (l, opts={}) => {
+          const isArmedA = armedLoad && armedLoad.name === l.name && !isPairing;
+          const isArmedB = armedLoad?.pairedB && armedLoad.pairedB.name === l.name;
+          const isArmed = isArmedA || isArmedB;
+          const isDim = (l.loadType||"").toLowerCase().includes("dim");
+          const typeColor = isDim ? C.accent : C.green;
+          return (
+            <button key={l.id||l.name}
+              onClick={()=>onChipClick(l, isArmedA, isArmedB)}
+              title={`${l.loadType||"unspecified"}${l.watts?` · ${l.watts}W`:""}${l.location?` · ${l.location}`:""}`}
+              style={{
+                padding: opts.large ? "6px 14px" : "3px 9px",
+                fontSize: opts.large ? 13 : 11,
+                fontWeight:600,
+                background: isArmed ? typeColor : "#fff",
+                color: isArmed ? "#fff" : C.text,
+                border: `1px solid ${isArmed ? typeColor : C.border}`,
+                borderLeft: `3px solid ${typeColor}`,
+                borderRadius:99, cursor:"pointer", fontFamily:"inherit",
+              }}>
+              {l.name}
+              <span style={{fontSize: opts.large ? 11 : 9,marginLeft:5,opacity:0.65,fontWeight:500}}>
+                {isDim ? "D" : "S"}{isArmedB ? " · B" : ""}
+              </span>
+            </button>
+          );
+        };
+
+        return (
+          <>
+            {/* Inline strip — always shows summary, plus a strip of chips
+                when popup is closed. */}
+            <div style={{
+              padding:"8px 10px", marginBottom:8,
+              background: armedLoad ? (isPairing ? "#fef3c7" : "#dcfce7") : "#fafbfc",
+              border:`1px ${armedLoad ? "solid" : "dashed"} ${armedLoad ? (isPairing ? C.accent : C.green) : C.border}`,
+              borderRadius:8,
+            }}>
+              {renderHeader()}
+              {!chipsExpanded && (
+                <div style={{display:"flex",gap:5,flexWrap:"wrap",
+                  maxHeight:120,overflowY:"auto"}}>
+                  {unassignedLoads.map(l => renderChip(l))}
+                </div>
+              )}
+              {chipsExpanded && (
+                <div style={{fontSize:11,color:C.dim,fontStyle:"italic"}}>
+                  Loads opened in popup overlay → click outside or ✕ to close.
+                </div>
+              )}
+            </div>
+
+            {/* Fullscreen popup — bigger chips, easier to scan. Click outside
+                or ✕ closes. */}
+            {chipsExpanded && (
+              <div onClick={()=>setChipsExpanded(false)}
+                style={{
+                  position:"fixed", inset:0, zIndex:9000,
+                  background:"rgba(15,23,42,0.55)",
+                  display:"flex", alignItems:"center", justifyContent:"center",
+                  padding:"4vh 4vw",
+                }}>
+                <div onClick={e=>e.stopPropagation()}
                   style={{
-                    padding:"3px 9px", fontSize:11, fontWeight:600,
-                    background: isArmed ? typeColor : "#fff",
-                    color: isArmed ? "#fff" : C.text,
-                    border: `1px solid ${isArmed ? typeColor : C.border}`,
-                    borderLeft: `3px solid ${typeColor}`,
-                    borderRadius:99, cursor:"pointer", fontFamily:"inherit",
+                    background:"#fff", borderRadius:10, maxWidth:"96vw",
+                    maxHeight:"92vh", width:"min(900px, 96vw)",
+                    display:"flex", flexDirection:"column", overflow:"hidden",
+                    boxShadow:"0 24px 60px rgba(0,0,0,0.4)",
                   }}>
-                  {l.name}
-                  <span style={{fontSize:9,marginLeft:5,opacity:0.65,fontWeight:500}}>
-                    {isDim ? "D" : "S"}{isArmedB ? " · B" : ""}
-                  </span>
-                </button>
-              );
-            })}
-          </div>
-        </div>
-      )}
+                  <div style={{
+                    padding:"10px 14px", borderBottom:`1px solid ${C.border}`,
+                    background: armedLoad ? (isPairing ? "#fef3c7" : "#dcfce7") : "#fafbfc",
+                  }}>
+                    {renderHeader()}
+                  </div>
+                  <div style={{
+                    flex:1, overflowY:"auto", padding:"12px 14px",
+                    display:"flex", flexWrap:"wrap", gap:8,
+                  }}>
+                    {unassignedLoads.map(l => renderChip(l, {large:true}))}
+                  </div>
+                </div>
+              </div>
+            )}
+          </>
+        );
+      })()}
 
       {/* Inline editor / add picker — rendered ABOVE the grid so when you
           click "+ add" or a cell, the options pop up right where you can see
