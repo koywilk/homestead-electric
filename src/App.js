@@ -1145,6 +1145,237 @@ const migrateFloorToModules = (arr) => {
   return order.map(k=>({ ...map[k], loads: map[k].loads.length ? map[k].loads : [newLoadRow(1)] }));
 };
 
+// ─── Savant Panel V2 — data shape + migration ─────────────────────────────
+//
+// V2 shape (additive — never replaces V1 fields, lives at panelizedLighting
+// .savantV2.{floor}). V1 cp4Loads + regularBreakers stay as-is until we
+// explicitly remove them in the cleanup step (project plan step 7).
+//
+// Shape:
+//   {
+//     panelSize: 40,
+//     feeders: [{ id, slot, amps, poles, label, phase, feedsInputs:[{moduleId,channel}] }],
+//     modules: [{
+//       id, slots:[n, n+2], sku, modNum,
+//       inputs:  { A: feederId|null, B: feederId|null },
+//       outputs: { A: {name,loadType,watts,room,keypad,pulled,notes}, B: {...} },
+//       _legacyMod: "1"   // back-pointer for round-trip writes
+//     }]
+//   }
+//
+// Per-SKU metadata: how many outputs the module has, breaker poles, max amps.
+// Drives both UI (single vs dual layout) and validation (80% rule, slot count).
+const SAV_SKU_META = {
+  DUAL_20A_RELAY:   { outputs: 2, kind: "relay",   poles: 1, maxAmps: 20, label: "Dual 20A Relay" },
+  DUAL_500W_APD:    { outputs: 2, kind: "dimmer",  poles: 1, maxAmps: 20, dim: true, label: "Dual 500W APD" },
+  SINGLE_30A_RELAY: { outputs: 1, kind: "relay",   poles: 2, maxAmps: 30, label: "Single 30A Relay" },
+  SINGLE_60A_RELAY: { outputs: 1, kind: "relay",   poles: 2, maxAmps: 60, label: "Single 60A Relay" },
+  DUAL_24V_CTRL:    { outputs: 2, kind: "ctrl24v", poles: 1, maxAmps: 5,  label: "Dual 24V Control Relay" },
+  DUAL_FPD_500W:    { outputs: 2, kind: "dimmer",  poles: 1, maxAmps: 20, dim: true, forwardPhase: true, label: "Dual 500W Forward Phase" },
+  // Legacy multi-channel cabinets (kept so old data still renders, not used in V2 designs)
+  "LMD-8120":       { outputs: 8, kind: "legacy",  poles: 1, maxAmps: 20, legacy: true, label: "8-Ch Relay (legacy)" },
+  "LMD-4120":       { outputs: 4, kind: "legacy",  poles: 1, maxAmps: 20, legacy: true, label: "4-Ch Relay (legacy)" },
+  "SPM-Q2APD10":    { outputs: 2, kind: "dimmer",  poles: 1, maxAmps: 20, dim: true, legacy: true, label: "Dual APD (legacy)" },
+  "SPM-Q4FHD10":    { outputs: 4, kind: "legacy",  poles: 1, maxAmps: 20, legacy: true, label: "4-Ch FHD (legacy)" },
+};
+const savSkuMeta = (sku) => SAV_SKU_META[sku] || { outputs: 2, kind: "unknown", poles: 1, maxAmps: 20, label: sku || "" };
+const savSkuOutputs = (sku) => savSkuMeta(sku).outputs;
+
+// Build the V2 shape from the legacy V1 data (cp4Loads.{floor} + panelLayout
+// .{floor}.regularBreakers). Pure function — no mutation, no Firestore write.
+// Always returns a valid shape, even on malformed input. Caller decides
+// whether to render from this directly (read-side migration) or persist it
+// (write-side migration, later).
+//
+// What gets carried forward 1:1 from V1:
+//   • Every load row's name, loadType, watts, keypad, pulled state
+//   • SKU per group of mod#-paired rows
+//   • Slot # per row (where present)
+//   • Every regular breaker → feeder (slot, amps, poles, phase, label)
+//
+// What's intentionally null until user edits:
+//   • inputs.A / inputs.B → which feeder ID powers each module input.
+//     V1 didn't capture this wiring; we default to null and let the user
+//     assign in the new editor. No data loss because there was no data here.
+function migrateToSavantV2(oldRows = [], regularBreakers = [], panelSize = 40) {
+  try {
+    const rows = Array.isArray(oldRows) ? oldRows : [];
+    const breakers = Array.isArray(regularBreakers) ? regularBreakers : [];
+
+    // Build feeders. Each regular breaker becomes one feeder. Default label
+    // is "F1", "F2", … (positional). User can rename in the editor.
+    const feeders = breakers.map((b, i) => ({
+      id: b.id || uid(),
+      slot: b.slot || "",
+      amps: b.amps || "20",
+      poles: b.poles || 1,
+      label: b.label || `F${i+1}`,
+      phase: b.phase || "",
+      feedsInputs: [],   // populated when user assigns inputs.A/B in the editor
+    }));
+
+    // Group rows by mod#. Each group = one module. Rows without a mod# are
+    // each treated as their own one-off "unpaired" module so we don't drop
+    // them — the new editor surfaces these so the user can pair or delete.
+    const modGroups = {};
+    const modOrder = [];
+    rows.forEach(r => {
+      if (!r) return;
+      const rawMod = (r.mod||"").trim();
+      const key = rawMod || `_unpaired_${r.id || uid()}`;
+      if (!modGroups[key]) { modGroups[key] = []; modOrder.push(key); }
+      modGroups[key].push(r);
+    });
+
+    const buildOutput = (leg) => leg ? {
+      name:     leg.name     || "",
+      loadType: leg.loadType || "",
+      watts:    leg.watts    || "",
+      keypad:   leg.keypad   || "",
+      room:     leg.room     || "",
+      pulled:   leg.status === "Pulled" || !!leg.pulled,
+      notes:    leg.notes    || "",
+      _legacyId: leg.id || "",
+    } : null;
+
+    const modules = modOrder.map(key => {
+      const group = modGroups[key];
+      const isUnpaired = key.startsWith("_unpaired_");
+      // Sort by ch so A comes first; missing ch sorts before "A"/"B".
+      const sorted = [...group].sort((a,b) => (a.ch||"").localeCompare(b.ch||""));
+      const legA = sorted[0] || {};
+      const legB = sorted[1] || null;
+      const sku = legA.moduleType || legB?.moduleType || "";
+      const meta = savSkuMeta(sku);
+
+      // Slot inference: prefer explicit slot fields. Fall back to slot+2 for
+      // the second pole if only the first row had it. Empty array = unplaced
+      // (user picks slots in the editor).
+      const slot0 = legA.slot ? parseInt(legA.slot, 10) : null;
+      const slot1 = legB?.slot ? parseInt(legB.slot, 10)
+                  : (slot0 != null ? slot0 + 2 : null);
+      const slots = [slot0, slot1].filter(s => s != null && !Number.isNaN(s));
+
+      // For single-output SKUs (30A/60A relays), only outputs.A is meaningful.
+      // We still scan legB so any data accidentally stored there (legacy) is
+      // preserved — surface it later as a "stray output" warning.
+      const isSingle = meta.outputs === 1;
+
+      return {
+        id: uid(),
+        modNum: isUnpaired ? "" : key,
+        slots,
+        sku,
+        inputs:  { A: null, B: isSingle ? null : null },
+        outputs: {
+          A: buildOutput(legA),
+          B: isSingle ? null : buildOutput(legB),
+        },
+        // Anything past A/B that legacy data had on this mod# — preserved
+        // here so we don't silently lose it. New editor surfaces these.
+        _legacyExtras: sorted.slice(2).map(buildOutput).filter(Boolean),
+        _legacyMod: isUnpaired ? "" : key,
+      };
+    });
+
+    return {
+      panelSize: panelSize || 40,
+      feeders,
+      modules,
+      _migratedAt: Date.now(),
+    };
+  } catch (e) {
+    console.warn("[savantV2] migrate failed:", e?.message);
+    return { panelSize: panelSize || 40, feeders: [], modules: [] };
+  }
+}
+
+// Inverse — flatten a V2 shape back to V1 (cp4Loads rows + regularBreakers).
+// Used during the dual-write phase: every save writes BOTH shapes so a revert
+// at any point still has correct V1 data. Pure function.
+function savantV2ToV1(v2) {
+  if (!v2 || typeof v2 !== "object") return { rows: [], regularBreakers: [] };
+  try {
+    const rows = [];
+    let num = 1;
+    (v2.modules || []).forEach(m => {
+      const sku = m.sku || "";
+      const slots = m.slots || [];
+      const pushOutput = (out, ch, slotIdx) => {
+        if (!out) return;
+        rows.push({
+          id: out._legacyId || uid(),
+          num: num++,
+          name: out.name || "",
+          moduleType: sku,
+          mod: m.modNum || m._legacyMod || "",
+          ch,
+          loadType: out.loadType || "",
+          watts: out.watts || "",
+          keypad: out.keypad || "",
+          slot: slots[slotIdx] != null ? String(slots[slotIdx]) : "",
+          pulled: !!out.pulled,
+          status: out.pulled ? "Pulled" : "",
+          room: out.room || "",
+          notes: out.notes || "",
+        });
+      };
+      pushOutput(m.outputs?.A, "A", 0);
+      pushOutput(m.outputs?.B, "B", 1);
+      // Preserve any legacy-extras so round-trip is lossless
+      (m._legacyExtras || []).forEach((out, i) => {
+        if (!out) return;
+        rows.push({
+          id: out._legacyId || uid(),
+          num: num++,
+          name: out.name || "",
+          moduleType: sku,
+          mod: m.modNum || m._legacyMod || "",
+          ch: "",
+          loadType: out.loadType || "",
+          watts: out.watts || "",
+          keypad: out.keypad || "",
+          slot: "",
+          pulled: !!out.pulled,
+          status: out.pulled ? "Pulled" : "",
+          notes: out.notes || "",
+        });
+      });
+    });
+    const regularBreakers = (v2.feeders || []).map(f => ({
+      id: f.id, slot: f.slot, amps: f.amps, poles: f.poles,
+      label: f.label, phase: f.phase,
+    }));
+    return { rows, regularBreakers };
+  } catch (e) {
+    console.warn("[savantV2] flatten failed:", e?.message);
+    return { rows: [], regularBreakers: [] };
+  }
+}
+
+// Read-side accessor: returns V2 data for one floor of a job. Prefers stored
+// V2 shape if present; otherwise migrates from V1 on the fly. Always returns
+// a valid shape. The new component uses this so it works on jobs that have
+// never been touched by the V2 editor.
+function getSavantV2ForFloor(job, floor) {
+  const pl = job?.panelizedLighting || {};
+  const stored = pl.savantV2?.[floor];
+  if (stored && Array.isArray(stored.modules)) return stored;
+  const v1Rows = pl.cp4Loads?.[floor] || [];
+  const layout = pl.panelLayout?.[floor] || {};
+  return migrateToSavantV2(
+    flattenModulesToRows(v1Rows),  // handles both flat and nested legacy shapes
+    layout.regularBreakers || [],
+    layout.panelSize || 40
+  );
+}
+// Expose on window for console-poking during development.
+if (typeof window !== "undefined") {
+  window.__HE_SAVANT_V2_MIGRATE = migrateToSavantV2;
+  window.__HE_SAVANT_V2_FLATTEN = savantV2ToV1;
+  window.__HE_SAVANT_V2_FOR_FLOOR = getSavantV2ForFloor;
+}
+
 const newKPRow         = (num) => ({ id:uid(), num, name:"", status:"" });
 const newCentralLoad   = ()    => ({ id:uid(), name:"", location:"", loadType:"", watts:"", pulled:false });
 
