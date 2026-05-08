@@ -14581,8 +14581,14 @@ function SavantPanelSchedule({
     // SMART/A · B / REG indicator sits to the left of the input so you can
     // still tell what kind of breaker is in that slot. Click anywhere on
     // the cell (other than the input or × button) to open the editor below.
+    //
+    // armedMode: when true, the cell is the target of a click-to-arm action
+    // (a feeder or load is currently armed and clicking will assign it).
+    // In that mode the input becomes click-through so the whole cell —
+    // input area included — responds to the assign click.
     const compactCell = ({ kind, color, leftBadge, rightBadge, ampLabel, value, onChange,
-                            placeholder, onClickRest, onDelete, withDatalist = false }) => {
+                            placeholder, onClickRest, onDelete, withDatalist = false,
+                            armedMode = false }) => {
       const hasFeeder = !!color;
       const fillBg = isSelected ? "#fef3c7" : (hasFeeder ? `${color}1f` : "#fff");
       const ampPad = ampLabel ? 30 : 4;
@@ -14607,7 +14613,11 @@ function SavantPanelSchedule({
             list={withDatalist ? loadDatalistId : undefined}
             value={value || ""}
             onChange={onChange}
-            onClick={e=>e.stopPropagation()}
+            // In armedMode, let the click bubble up to the cell so onClickRest
+            // fires and the assignment happens. Otherwise stop propagation so
+            // typing in the input doesn't accidentally arm the cell.
+            onClick={e => { if (!armedMode) e.stopPropagation(); }}
+            readOnly={armedMode}
             placeholder={placeholder || ""}
             style={{
               flex:1, minWidth:0, height:"100%", border:"none", outline:"none",
@@ -14615,6 +14625,8 @@ function SavantPanelSchedule({
               color:C.text, padding:"0 4px",
               paddingRight: ampPad + delPad,
               fontWeight: 400,
+              cursor: armedMode ? "pointer" : "text",
+              pointerEvents: armedMode ? "none" : "auto",
             }}/>
           {ampLabel && (
             <span style={{
@@ -14654,11 +14666,13 @@ function SavantPanelSchedule({
       const isFeederArmedTarget = !!armedFeederSlot;
       const armedFeederColor = isFeederArmedTarget
         ? feederColorBySlot.get(Number(armedFeederSlot)) : null;
+      const _smartAArmed = isArmedTarget || isFeederArmedTarget;
       return compactCell({
         kind: "smartA",
         color: isArmedTarget ? "#22c55e" : (isFeederArmedTarget ? armedFeederColor : feederColor),
         leftBadge: "A",
         ampLabel,
+        armedMode: _smartAArmed,
         value: load.name,
         placeholder: isArmedTarget
           ? `↓ drop "${armedLoad.name.slice(0,18)}${armedLoad.name.length>18?"…":""}"`
