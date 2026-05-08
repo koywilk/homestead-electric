@@ -13636,40 +13636,73 @@ function SavantPanelSchedule({
               options={PHASE_OPTS} style={{width:60,fontSize:11}}/>
           </div>
 
-          {/* Loads-list datalist — autocomplete options from the master "All
-              Loads" list (pl.loads). User can pick from existing entries or
-              type a brand-new name; either works. Browser-native datalist. */}
-          {(allLoads||[]).length > 0 && (
-            <datalist id={`sav-load-dl-${m.id}`}>
-              {(allLoads||[]).filter(l=>l && (l.name||"").trim()).map(l=>(
-                <option key={l.id} value={l.name}>{l.location ? `(${l.location})` : ""}</option>
-              ))}
-            </datalist>
-          )}
+          {/* Quick-pick chips — every load from the master "All Loads" list
+              shown as a clickable pill. Clicking one assigns that load to the
+              next empty leg (A first, then B). Visible at all times so loads
+              don't "hide" inside a typeahead. */}
+          {(() => {
+            const named = (allLoads||[]).filter(l => l && (l.name||"").trim());
+            if (named.length === 0) {
+              return (
+                <div style={{padding:"6px 10px",fontSize:11,color:C.dim,
+                  fontStyle:"italic",background:"#fffbe6",border:"1px solid #fde68a",
+                  borderRadius:6,marginBottom:8}}>
+                  No master loads to pick from yet. Add loads in the "All Loads" section
+                  at the top of the Panelized Lighting tab, then come back here to assign them.
+                </div>
+              );
+            }
+            // Already assigned to this smart breaker — used to disable chips
+            const usedNames = new Set(
+              (m.loads||[]).map(l => (l.name||"").trim().toLowerCase()).filter(Boolean)
+            );
+            // Where to put a clicked load: first empty slot among A/B (new SKUs)
+            const placeLoad = (master) => {
+              const targetIdx = (m.loads||[]).findIndex(l => !(l.name||"").trim());
+              if (targetIdx < 0) return;  // both legs full
+              const target = m.loads[targetIdx];
+              updSmartLoad(m.id, target.id, {
+                name: master.name,
+                loadType: target.loadType || master.loadType || "",
+                watts: target.watts || master.watts || "",
+              });
+            };
+            return (
+              <div style={{marginBottom:10}}>
+                <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",
+                  color:C.dim,textTransform:"uppercase",marginBottom:6}}>
+                  Pick from loads list ({named.length})
+                </div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                  {named.map(l => {
+                    const isUsed = usedNames.has((l.name||"").trim().toLowerCase());
+                    return (
+                      <button key={l.id} disabled={isUsed}
+                        onClick={()=>placeLoad(l)}
+                        title={isUsed ? "Already assigned to this smart breaker" :
+                          `Add to next empty leg${l.location?` · ${l.location}`:""}${l.watts?` · ${l.watts}W`:""}`}
+                        style={{
+                          padding:"3px 9px",fontSize:11,fontWeight:600,
+                          background: isUsed ? "#f1f5f9" : "#fff",
+                          color: isUsed ? C.muted : C.purple,
+                          border:`1px solid ${isUsed ? C.border : C.purple+"55"}`,
+                          borderRadius:99,cursor:isUsed?"not-allowed":"pointer",
+                          fontFamily:"inherit",
+                        }}>
+                        {l.name}{l.location?` (${l.location})`:""}
+                      </button>
+                    );
+                  })}
+                </div>
+              </div>
+            );
+          })()}
 
-          {/* Load rows — A and B (or all N for legacy SKUs). Pick a name
-              from the master loads list via the dropdown arrow, or type a
-              new one. When you select a load that has loadType/watts on
-              the master record, those auto-fill too. */}
+          {/* Load rows — A and B (or all N for legacy SKUs). Name is editable
+              free-text so you can override or clear, but the typical flow is
+              clicking a chip above. */}
           {outputsToShow.map((load, idx) => {
             const letter = isNew ? (idx===0?"A":"B") : (load.output || String.fromCharCode(65+idx));
-            // When user picks an existing load by name, copy over its
-            // loadType + watts so they don't have to retype. Lookup is
-            // case-insensitive and trims whitespace.
-            const onNameChange = (val) => {
-              const match = (allLoads||[]).find(l =>
-                l && (l.name||"").trim().toLowerCase() === val.trim().toLowerCase()
-              );
-              if (match) {
-                updSmartLoad(m.id, load.id, {
-                  name: match.name,
-                  loadType: load.loadType || match.loadType || "",
-                  watts: load.watts || match.watts || "",
-                });
-              } else {
-                updSmartLoad(m.id, load.id, { name: val });
-              }
-            };
             return (
               <div key={load.id||idx} style={{
                 display:"flex",gap:8,alignItems:"center",padding:"6px 10px",
@@ -13677,12 +13710,9 @@ function SavantPanelSchedule({
                 flexWrap:"wrap",
               }}>
                 <span style={{fontWeight:700,color,fontSize:13,width:18,textAlign:"center",flexShrink:0}}>{letter}</span>
-                <input list={(allLoads||[]).length>0 ? `sav-load-dl-${m.id}` : undefined}
-                  value={load.name||""} onChange={e=>onNameChange(e.target.value)}
-                  placeholder={(allLoads||[]).length>0 ? "Pick from loads list or type a new name" : "Load name"}
-                  style={{flex:1,minWidth:160,fontSize:12,
-                    background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
-                    padding:"6px 10px",fontFamily:"inherit",outline:"none",color:C.text}}/>
+                <Inp value={load.name||""} onChange={e=>updSmartLoad(m.id,load.id,{name:e.target.value})}
+                  placeholder="(empty — click a chip above to fill)"
+                  style={{flex:1,minWidth:160,fontSize:12}}/>
                 <Inp value={load.loadType||""} onChange={e=>updSmartLoad(m.id,load.id,{loadType:e.target.value})}
                   placeholder="Load type" style={{width:90,fontSize:11}}/>
                 <Inp value={load.watts||""} onChange={e=>updSmartLoad(m.id,load.id,{watts:e.target.value})}
@@ -13692,6 +13722,12 @@ function SavantPanelSchedule({
                     onChange={e=>updSmartLoad(m.id,load.id,{pulled:e.target.checked})}/>
                   pulled
                 </label>
+                {(load.name||"").trim() && (
+                  <button onClick={()=>updSmartLoad(m.id,load.id,{name:"",loadType:"",watts:""})}
+                    title="Clear this leg"
+                    style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                      fontSize:14,padding:"0 4px",flexShrink:0}}>✕</button>
+                )}
               </div>
             );
           })}
@@ -13728,15 +13764,38 @@ function SavantPanelSchedule({
                 style={{background:"none",border:"none",color:C.dim,fontSize:18,cursor:"pointer"}}>✕</button>
             </div>
           </div>
-          {/* Loads-list datalist for the regular breaker description too,
-              so user can pick from existing master loads or type new. */}
-          {(allLoads||[]).length > 0 && (
-            <datalist id={`sav-reg-dl-${r.id}`}>
-              {(allLoads||[]).filter(l=>l && (l.name||"").trim()).map(l=>(
-                <option key={l.id} value={l.name}>{l.location ? `(${l.location})` : ""}</option>
-              ))}
-            </datalist>
-          )}
+          {/* Quick-pick chips for the regular breaker description from the
+              master loads list — same pattern as the smart breaker editor. */}
+          {(() => {
+            const named = (allLoads||[]).filter(l => l && (l.name||"").trim());
+            if (named.length === 0) return null;
+            return (
+              <div style={{marginBottom:10}}>
+                <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",
+                  color:C.dim,textTransform:"uppercase",marginBottom:6}}>
+                  Pick from loads list ({named.length})
+                </div>
+                <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+                  {named.map(l => (
+                    <button key={l.id}
+                      onClick={()=>updReg(r.id,{
+                        description: l.name,
+                        amp: r.amp || (l.watts ? "" : ""),  // amp is breaker amp, leave alone
+                      })}
+                      title={`Set description to "${l.name}"${l.location?` · ${l.location}`:""}`}
+                      style={{
+                        padding:"3px 9px",fontSize:11,fontWeight:600,
+                        background:"#fff",color:C.purple,
+                        border:`1px solid ${C.purple}55`,
+                        borderRadius:99,cursor:"pointer",fontFamily:"inherit",
+                      }}>
+                      {l.name}{l.location?` (${l.location})`:""}
+                    </button>
+                  ))}
+                </div>
+              </div>
+            );
+          })()}
           <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
             <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase"}}>Slot</span>
             <Inp value={r.slot||""} onChange={e=>updReg(r.id,{slot:e.target.value})}
@@ -13745,12 +13804,8 @@ function SavantPanelSchedule({
             <Inp value={r.amp||""} onChange={e=>updReg(r.id,{amp:e.target.value})}
               placeholder="20" style={{width:60,fontSize:11}}/>
             <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",marginLeft:8}}>Description</span>
-            <input list={(allLoads||[]).length>0 ? `sav-reg-dl-${r.id}` : undefined}
-              value={r.description||""} onChange={e=>updReg(r.id,{description:e.target.value})}
-              placeholder={(allLoads||[]).length>0 ? "Pick from loads list or type" : "What this breaker feeds"}
-              style={{flex:1,minWidth:160,fontSize:11,
-                background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
-                padding:"6px 10px",fontFamily:"inherit",outline:"none",color:C.text}}/>
+            <Inp value={r.description||""} onChange={e=>updReg(r.id,{description:e.target.value})}
+              placeholder="Pick a chip above or type" style={{flex:1,minWidth:160,fontSize:11}}/>
             <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",marginLeft:8}}>Phase</span>
             <Sel value={r.phase||""} onChange={e=>updReg(r.id,{phase:e.target.value})}
               options={PHASE_OPTS} style={{width:60,fontSize:11}}/>
@@ -18581,7 +18636,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         nothing new is added at the panel-section level. */}
                     {(job.lightingSystem||"Control 4")==="Savant" ? (
                       <SavantPanelSchedule
-                        allLoads={alMod}
+                        allLoads={(job.panelizedLighting?.loads)||[]}
                         modules={_mods}
                         onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
                           cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}
@@ -18680,7 +18735,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         panelizedLighting[ef.key]. */}
                     {(job.lightingSystem||"Control 4")==="Savant" ? (
                       <SavantPanelSchedule
-                        allLoads={alMod}
+                        allLoads={(job.panelizedLighting?.loads)||[]}
                         modules={_mods}
                         onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}
                         regularBreakers={(((job.panelizedLighting.panelLayout)||{})[ef.key]||{}).regularBreakers||[]}
