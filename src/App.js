@@ -13627,7 +13627,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
 // ── Panelized Lighting ────────────────────────────────────────
 
 // ── Central Loads List ────────────────────────────────────────
-function LoadsList({loads,onChange,floorOptions,allModules=[],assignedModMap=new Map(),onAssignToModule}) {
+function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],assignedModMap=new Map(),onAssignToModule}) {
   const sortByType = (arr) => [...arr].sort((a,b)=>{
     const ai = LOAD_TYPES.indexOf(a.loadType||""), bi = LOAD_TYPES.indexOf(b.loadType||"");
     return (ai<0?999:ai)-(bi<0?999:bi);
@@ -13672,7 +13672,8 @@ function LoadsList({loads,onChange,floorOptions,allModules=[],assignedModMap=new
   const namedLoads  = loads.filter(l=>l.name.trim());
   const pulledCount = namedLoads.filter(l=>l.pulled).length;
   const pullPct     = namedLoads.length>0 ? Math.round((pulledCount/namedLoads.length)*100) : 0;
-  const COL = selecting ? "20px 16px 24px 1fr 100px 72px 52px 20px" : "16px 24px 1fr 100px 72px 52px 20px";
+  // Columns: [select?] [pulled] [#] [name] [floor] [panel] [type] [watts] [del]
+  const COL = selecting ? "20px 16px 24px 1fr 100px 100px 72px 52px 20px" : "16px 24px 1fr 100px 100px 72px 52px 20px";
   const mob = ON_MOBILE;
 
   return (
@@ -13832,10 +13833,19 @@ function LoadsList({loads,onChange,floorOptions,allModules=[],assignedModMap=new
                                 flex:1,minWidth:0,fontWeight:600}}/>
                             <button onClick={()=>del(l.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:16,padding:"0 2px",flexShrink:0}}>✕</button>
                           </div>
-                          {/* Row 2: location + type + watts + assigned badge */}
+                          {/* Row 2: location + panel + type + watts + assigned badge.
+                              Floor/area is where the load physically lives.
+                              Panel is which lighting panel powers it — separate
+                              concept so a Master-bedroom load can be assigned to
+                              the basement LCP, etc. */}
                           <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap",paddingLeft:48}}>
                             <input list="pl-floor-opts" value={l.location||""} onChange={e=>upd(l.id,{location:e.target.value})}
                               placeholder="Floor / area"
+                              style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,
+                                padding:"4px 8px",fontSize:11,fontFamily:"inherit",outline:"none",flex:1,minWidth:80}}/>
+                            <input list="pl-panel-opts" value={l.panel||""} onChange={e=>upd(l.id,{panel:e.target.value})}
+                              placeholder="Panel"
+                              title="Which lighting panel powers this load"
                               style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:6,color:C.text,
                                 padding:"4px 8px",fontSize:11,fontFamily:"inherit",outline:"none",flex:1,minWidth:80}}/>
                             <Sel value={l.loadType||""} onChange={e=>upd(l.id,{loadType:e.target.value})} options={LOAD_TYPES}
@@ -13884,6 +13894,11 @@ function LoadsList({loads,onChange,floorOptions,allModules=[],assignedModMap=new
                             placeholder="Floor / area"
                             style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
                               padding:"6px 8px",fontSize:11,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
+                          <input list="pl-panel-opts" value={l.panel||""} onChange={e=>upd(l.id,{panel:e.target.value})}
+                            placeholder="Panel"
+                            title="Which lighting panel powers this load"
+                            style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+                              padding:"6px 8px",fontSize:11,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
                           <Sel value={l.loadType||""} onChange={e=>upd(l.id,{loadType:e.target.value})} options={LOAD_TYPES} style={{fontSize:10}}/>
                           <Inp value={l.watts||""} onChange={e=>upd(l.id,{watts:e.target.value})} placeholder="W" style={{textAlign:"center",fontSize:10}}/>
                           <button onClick={()=>del(l.id)} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:"0 2px"}}>✕</button>
@@ -13893,6 +13908,7 @@ function LoadsList({loads,onChange,floorOptions,allModules=[],assignedModMap=new
                   </div>
                 ))}
                 <datalist id="pl-floor-opts">{(floorOptions||[]).map(f=><option key={f} value={f}/>)}</datalist>
+                <datalist id="pl-panel-opts">{(panelOptions||[]).map(p=><option key={p} value={p}/>)}</datalist>
               </>
             );
           })()}
@@ -20709,6 +20725,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     loads={pl.loads||[]}
                     onChange={v=>u({panelizedLighting:{...pl,loads:v}})}
                     floorOptions={["Main Level","Basement","Upper Level",...(pl.extraFloors||[]).map(ef=>ef.label)]}
+                    panelOptions={[
+                      _labelForStd("upper"),
+                      _labelForStd("main"),
+                      _labelForStd("basement"),
+                      ...(pl.extraFloors||[]).map(ef=>ef.label),
+                    ].filter(Boolean)}
                     allModules={allModules}
                     assignedModMap={assignedModMap}
                     onAssignToModule={onAssignToModule}/>
