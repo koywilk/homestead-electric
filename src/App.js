@@ -1102,12 +1102,14 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   const stripTags = (s) => String(s == null ? "" : s).replace(/<[^>]*>/g, "");
 
-  // Savant uses the simple switch-leg list now — print falls through to the
-  // existing module-card layout (which already groups by `mod` field, so
-  // smart breakers print as one card with two legs A/B). The earlier
-  // panel-schedule branch is left in code but disabled.
-  const savUseSchedule = false;
-  // (Earlier: const savUseSchedule = isSav && (modules has slotA OR regularBreakers exist))
+  // For Savant, render the Square-D-style schedule (odd left / even right)
+  // with slot numbers when any module has a slotA OR when there are regular
+  // breakers in the panel. Foreman gets a printed sheet that looks just
+  // like the inside of a Homeline panel door.
+  const savUseSchedule = isSav && (
+    ((modules||[]).some(m => Number(m && m.slotA) > 0)) ||
+    ((regularBreakers||[]).length > 0)
+  );
 
   const visibleMods = (modules || []).filter(m => m && (m.modNum || m.moduleType || m.slotA || (m.loads||[]).some(l => l && l.name)));
   const totalLoads = visibleMods.reduce((n, m) => n + (m.loads||[]).filter(l => l && (l.name||"").trim()).length, 0);
@@ -1141,51 +1143,29 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
       sku === "DUAL_500W_APD" ? "APD Dimmer"
     : sku === "DUAL_20A_RELAY" ? "Dual Relay"
     : (sku || "Smart");
-    // Compute "this regular breaker feeds Load X on smart breaker Y" for badges
-    const regFeedsBySlot = new Map();
-    (modules||[]).forEach(m => {
-      (m.loads||[]).forEach((l, li) => {
-        const fs = Number(l.feederSlot);
-        if (fs > 0) {
-          const letter = li === 0 ? "A" : (li === 1 ? "B" : String.fromCharCode(65+li));
-          if (!regFeedsBySlot.has(fs)) regFeedsBySlot.set(fs, []);
-          regFeedsBySlot.get(fs).push({ slotA:m.slotA, slotB:m.slotB, letter });
-        }
-      });
-    });
     const cellHtml = (slot) => {
       const e = occ.get(slot);
       if (!e) return `<div class="sav-cell sav-empty">—</div>`;
       if (e.kind === "smartA") {
         const m = e.ref; const load = (m.loads||[])[0]||{};
-        const feederTag = Number(load.feederSlot)>0 ? `<span class="sav-feed">← Bkr ${esc(load.feederSlot)}</span>` : "";
         return `<div class="sav-cell sav-smart sav-smart-top">
-          <div class="sav-pill">SMART BREAKER · ${esc(skuShort(m.moduleType))}</div>
-          <div class="sav-out"><span class="sav-out-letter">LOAD A</span>
+          <div class="sav-pill">SMART · ${esc(skuShort(m.moduleType))}</div>
+          <div class="sav-out"><span class="sav-out-letter">A</span>
             <span class="sav-out-name">${esc(stripTags(load.name||""))}</span>
             ${load.watts?`<span class="sav-out-watts">${esc(load.watts)}W</span>`:""}
-            ${feederTag}
           </div></div>`;
       }
       if (e.kind === "smartB") {
         const m = e.ref; const load = (m.loads||[])[1]||{};
-        const feederTag = Number(load.feederSlot)>0 ? `<span class="sav-feed">← Bkr ${esc(load.feederSlot)}</span>` : "";
         return `<div class="sav-cell sav-smart sav-smart-bot">
-          <div class="sav-out"><span class="sav-out-letter">LOAD B</span>
+          <div class="sav-out"><span class="sav-out-letter">B</span>
             <span class="sav-out-name">${esc(stripTags(load.name||""))}</span>
             ${load.watts?`<span class="sav-out-watts">${esc(load.watts)}W</span>`:""}
-            ${feederTag}
           </div></div>`;
       }
       const r = e.ref;
-      const feeds = regFeedsBySlot.get(Number(slot)) || [];
-      const feedsTags = feeds.map(f =>
-        `<span class="sav-feeds">→ ${esc(f.slotA)}/${esc(f.slotB)} ${f.letter}</span>`
-      ).join("");
-      const feedsClass = feeds.length>0 ? " sav-reg-feeder" : "";
-      return `<div class="sav-cell sav-reg${feedsClass}">
+      return `<div class="sav-cell sav-reg">
         <span class="sav-reg-desc">${esc(stripTags(r.description||""))}</span>
-        ${feedsTags}
         ${r.amp?`<span class="sav-reg-amp">${esc(r.amp)}${/^\d+$/.test(String(r.amp).trim())?"A":""}</span>`:""}
       </div>`;
     };
@@ -13423,14 +13403,13 @@ function SavantPanelSchedule({
       );
     }
 
-    // Smart breaker — top half (slotA). Shows: SMART pill + Load A row,
-    // plus an inline "← Bkr N" feeder reference when set.
+    // Smart breaker — top half (slotA). SMART pill + SKU + Load A name/watts.
+    // Matches the original mockup: no feeder badges, just the load info.
     if (entry.kind === "smartA") {
       const m = entry.ref;
       const sku = m.moduleType || "";
       const color = skuColor(sku);
       const load = (m.loads||[])[0] || {};
-      const feeder = Number(load.feederSlot) > 0 ? Number(load.feederSlot) : null;
       return (
         <div onClick={()=>{ setSelectedSlot(slot); setAddingAtSlot(null); }}
           style={{
@@ -13445,44 +13424,35 @@ function SavantPanelSchedule({
               fontSize:8, fontWeight:700, letterSpacing:"0.06em", textTransform:"uppercase",
               background:color, color:"#fff", padding:"1px 6px", borderRadius:99,
               flexShrink:0,
-            }}>SMART BREAKER · {skuShortLabel(sku)}</span>
+            }}>SMART · {skuShortLabel(sku)}</span>
+            {sku && (
+              <span style={{fontSize:8,color:C.dim,fontWeight:700,letterSpacing:"0.04em"}}>
+                {sku === "DUAL_20A_RELAY" ? "GPM-QP2R20120" : sku === "DUAL_500W_APD" ? "GPM-Q2APD10" : ""}
+              </span>
+            )}
           </div>
           <div style={{display:"flex",alignItems:"center",gap:6,fontSize:11,minWidth:0}}>
             <span style={{
               fontWeight:700, color, background:"#fff",
               border:`1px solid ${color}`, borderRadius:3, padding:"0 4px",
               fontSize:9, flexShrink:0, letterSpacing:"0.04em",
-            }}>LOAD A</span>
+            }}>A</span>
             <span style={{flex:1, fontWeight:600, color:C.text, overflow:"hidden",
               textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0}}>
               {load.name || <span style={{color:C.muted,fontStyle:"italic",fontWeight:400}}>(unnamed)</span>}
             </span>
-            {load.watts && <span style={{fontSize:9,color:C.dim,fontWeight:600,flexShrink:0}}>{load.watts}W</span>}
-            {feeder ? (
-              <span title={`Powered by regular breaker at slot ${feeder}`}
-                style={{fontSize:8,fontWeight:700,color:C.dim,background:"#fff",
-                  border:`1px solid ${C.border}`,borderRadius:3,padding:"0 4px",flexShrink:0}}>
-                ← Bkr {feeder}
-              </span>
-            ) : (
-              <span title="No feeder breaker set — click to assign"
-                style={{fontSize:8,fontWeight:700,color:C.red,background:"#fff",
-                  border:`1px solid ${C.red}55`,borderRadius:3,padding:"0 4px",flexShrink:0}}>
-                ← no feeder
-              </span>
-            )}
+            {load.watts && <span style={{fontSize:9,color:C.dim,fontWeight:600,flexShrink:0}}>{load.watts}W{load.loadType?` · ${load.loadType}`:""}</span>}
           </div>
         </div>
       );
     }
 
-    // Smart breaker — bottom half (slotB). Shows Load B + its feeder reference.
+    // Smart breaker — bottom half (slotB). Just Load B name + watts.
     if (entry.kind === "smartB") {
       const m = entry.ref;
       const sku = m.moduleType || "";
       const color = skuColor(sku);
       const load = (m.loads||[])[1] || {};
-      const feeder = Number(load.feederSlot) > 0 ? Number(load.feederSlot) : null;
       const slotA = Number(m.slotA);
       return (
         <div onClick={()=>{ setSelectedSlot(slotA); setAddingAtSlot(null); }}
@@ -13498,57 +13468,31 @@ function SavantPanelSchedule({
               fontWeight:700, color, background:"#fff",
               border:`1px solid ${color}`, borderRadius:3, padding:"0 4px",
               fontSize:9, flexShrink:0, letterSpacing:"0.04em",
-            }}>LOAD B</span>
+            }}>B</span>
             <span style={{flex:1, fontWeight:600, color:C.text, overflow:"hidden",
               textOverflow:"ellipsis", whiteSpace:"nowrap", minWidth:0}}>
               {load.name || <span style={{color:C.muted,fontStyle:"italic",fontWeight:400}}>(unnamed)</span>}
             </span>
-            {load.watts && <span style={{fontSize:9,color:C.dim,fontWeight:600,flexShrink:0}}>{load.watts}W</span>}
-            {feeder ? (
-              <span title={`Powered by regular breaker at slot ${feeder}`}
-                style={{fontSize:8,fontWeight:700,color:C.dim,background:"#fff",
-                  border:`1px solid ${C.border}`,borderRadius:3,padding:"0 4px",flexShrink:0}}>
-                ← Bkr {feeder}
-              </span>
-            ) : (
-              <span title="No feeder breaker set — click to assign"
-                style={{fontSize:8,fontWeight:700,color:C.red,background:"#fff",
-                  border:`1px solid ${C.red}55`,borderRadius:3,padding:"0 4px",flexShrink:0}}>
-                ← no feeder
-              </span>
-            )}
+            {load.watts && <span style={{fontSize:9,color:C.dim,fontWeight:600,flexShrink:0}}>{load.watts}W{load.loadType?` · ${load.loadType}`:""}</span>}
           </div>
         </div>
       );
     }
 
-    // Regular breaker. If this regular breaker is referenced as a feeder
-    // by any smart breaker's load, render a "→ feeds Sm.N.X" badge so the
-    // wiring relationship is visible right on the schedule (Koy: "all in
-    // one panel schedule with feeder lines").
+    // Regular breaker — plain row, description + amp pill, just like the mockup.
     const r = entry.ref;
-    const feeds = feedsFromSlot(slot);
     return (
       <div onClick={()=>{ setSelectedSlot(slot); setAddingAtSlot(null); }}
         style={{
           minHeight: 36, padding:"5px 9px", display:"flex", alignItems:"center",
           gap:6, fontSize:12, cursor:"pointer",
-          background: isSelected ? "#fef3c7" : (feeds.length > 0 ? "#f0fdf4" : "#fff"),
-          borderLeft: feeds.length > 0 ? `3px solid ${C.green}88` : "none",
+          background: isSelected ? "#fef3c7" : "#fff",
           borderBottom:`1px solid ${C.border}`, borderRight:`1px solid ${C.border}`,
         }}>
         <span style={{flex:1, color:C.text, overflow:"hidden", textOverflow:"ellipsis",
           whiteSpace:"nowrap", minWidth:0}}>
           {r.description || <span style={{color:C.muted,fontStyle:"italic"}}>(unnamed)</span>}
         </span>
-        {feeds.map((f, i) => (
-          <span key={i} title={`Feeds Load ${f.letter} on smart breaker at slots ${f.slotA}/${f.slotB}`}
-            style={{fontSize:8, fontWeight:700, color:C.green, background:"#fff",
-              border:`1px solid ${C.green}55`, borderRadius:3, padding:"0 4px", flexShrink:0,
-              letterSpacing:"0.04em"}}>
-            → {f.slotA}/{f.slotB} {f.letter}
-          </span>
-        ))}
         {r.amp && <span style={{
           fontSize:9, fontWeight:700, color:C.dim, background:"#f8fafc",
           border:`1px solid ${C.border}`, borderRadius:3, padding:"1px 4px",
@@ -13692,71 +13636,31 @@ function SavantPanelSchedule({
               options={PHASE_OPTS} style={{width:60,fontSize:11}}/>
           </div>
 
-          {/* Load rows. Each load row = one switch leg controlled by this
-              smart breaker. The "Fed by Bkr" select lists every regular
-              breaker in this panel by slot so the user can wire each load
-              back to its feeder. APD = pick the same feeder for both A
-              and B (one feeder breaker for the whole smart breaker). Dual
-              Relay = pick a different feeder for each (two feeder breakers,
-              one per load). The data captures whatever the user enters. */}
-          {(() => {
-            // Helper: build feeder-select options sorted by slot number,
-            // each labeled "Bkr {slot} · {description}".
-            const sortedRegs = (regularBreakers||[])
-              .filter(rr => Number(rr.slot) > 0)
-              .sort((a,b)=>Number(a.slot)-Number(b.slot));
-            const feederOptions = [
-              { value:"", label:"— pick feeder —" },
-              ...sortedRegs.map(rr => ({
-                value: String(rr.slot),
-                label: `Bkr ${rr.slot}${rr.description ? " · " + rr.description : ""}${rr.amp ? " (" + rr.amp + (/^\d+$/.test(String(rr.amp).trim())?"A":"") + ")" : ""}`,
-              })),
-            ];
-            return outputsToShow.map((load, idx) => {
-              const letter = isNew ? (idx===0?"A":"B") : (load.output || String.fromCharCode(65+idx));
-              return (
-                <div key={load.id||idx} style={{
-                  display:"flex",gap:8,alignItems:"center",padding:"6px 10px",
-                  background:`${color}10`,border:`1px solid ${color}33`,borderRadius:6,marginBottom:6,
-                  flexWrap:"wrap",
-                }}>
-                  <span style={{fontWeight:700,color,fontSize:11,
-                    background:"#fff",border:`1px solid ${color}`,borderRadius:3,padding:"1px 5px",
-                    letterSpacing:"0.04em",flexShrink:0}}>LOAD {letter}</span>
-                  <Inp value={load.name||""} onChange={e=>updSmartLoad(m.id,load.id,{name:e.target.value})}
-                    placeholder="Switch leg name (e.g. Kitchen pendants)" style={{flex:1,minWidth:160,fontSize:12}}/>
-                  <Inp value={load.loadType||""} onChange={e=>updSmartLoad(m.id,load.id,{loadType:e.target.value})}
-                    placeholder="Load type" style={{width:90,fontSize:11}}/>
-                  <Inp value={load.watts||""} onChange={e=>updSmartLoad(m.id,load.id,{watts:e.target.value})}
-                    placeholder="W" style={{width:60,fontSize:11,textAlign:"center"}}/>
-                  <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase"}}>Fed by</span>
-                  <div style={{minWidth:160}}>
-                    <Sel value={load.feederSlot||""} onChange={e=>updSmartLoad(m.id,load.id,{feederSlot:e.target.value})}
-                      options={feederOptions} style={{fontSize:11}}/>
-                  </div>
-                  <label style={{display:"flex",alignItems:"center",gap:4,fontSize:10,fontWeight:600,color:C.dim,cursor:"pointer"}}>
-                    <input type="checkbox" checked={!!load.pulled}
-                      onChange={e=>updSmartLoad(m.id,load.id,{pulled:e.target.checked})}/>
-                    pulled
-                  </label>
-                </div>
-              );
-            });
-          })()}
-
-          {/* Hint about feeder wiring depending on SKU */}
-          {isNew && (
-            <div style={{fontSize:11,color:C.dim,fontStyle:"italic",marginTop:6,lineHeight:1.5}}>
-              {sku === "DUAL_500W_APD"
-                ? "APD smart breaker: one regular feeder breaker powers both Load A and Load B — pick the same Bkr # for both."
-                : sku === "DUAL_20A_RELAY"
-                ? "Dual Relay smart breaker: each load has its own feeder breaker — pick a different Bkr # for Load A vs Load B."
-                : "Pick which regular breaker(s) in this panel feed each load."}
-              {(regularBreakers||[]).length === 0 && (
-                <span style={{color:C.red,marginLeft:6}}> No regular breakers added yet — click an empty slot above and choose "Regular breaker" to add one to feed this smart breaker.</span>
-              )}
-            </div>
-          )}
+          {/* Load rows — A and B (or all N for legacy SKUs). Mockup style:
+              just letter pill + name + type + watts + pulled. */}
+          {outputsToShow.map((load, idx) => {
+            const letter = isNew ? (idx===0?"A":"B") : (load.output || String.fromCharCode(65+idx));
+            return (
+              <div key={load.id||idx} style={{
+                display:"flex",gap:8,alignItems:"center",padding:"6px 10px",
+                background:`${color}10`,border:`1px solid ${color}33`,borderRadius:6,marginBottom:6,
+                flexWrap:"wrap",
+              }}>
+                <span style={{fontWeight:700,color,fontSize:13,width:18,textAlign:"center",flexShrink:0}}>{letter}</span>
+                <Inp value={load.name||""} onChange={e=>updSmartLoad(m.id,load.id,{name:e.target.value})}
+                  placeholder="Load name" style={{flex:1,minWidth:160,fontSize:12}}/>
+                <Inp value={load.loadType||""} onChange={e=>updSmartLoad(m.id,load.id,{loadType:e.target.value})}
+                  placeholder="Load type" style={{width:90,fontSize:11}}/>
+                <Inp value={load.watts||""} onChange={e=>updSmartLoad(m.id,load.id,{watts:e.target.value})}
+                  placeholder="W" style={{width:60,fontSize:11,textAlign:"center"}}/>
+                <label style={{display:"flex",alignItems:"center",gap:4,fontSize:10,fontWeight:600,color:C.dim,cursor:"pointer"}}>
+                  <input type="checkbox" checked={!!load.pulled}
+                    onChange={e=>updSmartLoad(m.id,load.id,{pulled:e.target.checked})}/>
+                  pulled
+                </label>
+              </div>
+            );
+          })}
 
           {!isNew && (
             <div style={{fontSize:11,color:C.dim,fontStyle:"italic",marginTop:6}}>
@@ -13817,6 +13721,39 @@ function SavantPanelSchedule({
 
   return (
     <div style={{marginBottom:16}}>
+      {/* Wiring diagrams — quick links to the official Savant install PDFs.
+          Always at the top of every Savant panel section so the field crew
+          can pull them up without leaving the app. */}
+      <div style={{
+        padding:"8px 12px", marginBottom:10, background:"#f0f9ff",
+        border:`1px solid #bae6fd`, borderRadius:8,
+        display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", fontSize:11,
+      }}>
+        <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",
+          color:C.purple,textTransform:"uppercase"}}>Wiring diagrams</span>
+        <a href="https://sav-documentation.s3.amazonaws.com/Product%20QRGs/009-1484-03%20Dual%2020%20Amp%20Relay%20Companion%20Module%20Installation%20Manual.pdf"
+          target="_blank" rel="noopener noreferrer"
+          style={{color:C.green,fontWeight:700,textDecoration:"none",
+            background:"#fff",border:`1px solid ${C.green}55`,borderRadius:5,
+            padding:"3px 9px",fontSize:11}}>
+          Dual 20A Relay (PDF)
+        </a>
+        <a href="https://sav-documentation.s3.amazonaws.com/Product%20QRGs/009-1486-01%20Dual%20500W%20Adaptive%20Phase%20Dimmer%20Installation%20Manual.pdf"
+          target="_blank" rel="noopener noreferrer"
+          style={{color:C.accent,fontWeight:700,textDecoration:"none",
+            background:"#fff",border:`1px solid ${C.accent}55`,borderRadius:5,
+            padding:"3px 9px",fontSize:11}}>
+          Dual 500W APD (PDF)
+        </a>
+        <a href="https://sav-documentation.s3.amazonaws.com/Product%20Deployment%20Guides/009-1823-01%20Savant%20Panelized%20Lighting%20Deployment%20Guide.pdf"
+          target="_blank" rel="noopener noreferrer"
+          style={{color:C.dim,fontWeight:700,textDecoration:"none",
+            background:"#fff",border:`1px solid ${C.border}`,borderRadius:5,
+            padding:"3px 9px",fontSize:11}}>
+          Full Deployment Guide (PDF)
+        </a>
+      </div>
+
       {/* Header strip with stats + panel-size editor */}
       <div style={{
         padding:"10px 14px", display:"flex", alignItems:"center", gap:14,
@@ -14035,6 +13972,14 @@ function SavantPanelSimple({ loads = [], onChange, allLoads = [] }) {
         background:"#fff", border:`1px solid ${C.border}`, borderRadius:6,
         marginBottom:6, flexWrap:"wrap",
       }}>
+        {/* Slot # — drives the panel-schedule print so the foreman gets a
+            sheet with real slot positions. Field name `slot` is new and
+            optional; rows without it just go to the unassigned list at the
+            bottom of the print. */}
+        <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.05em",
+          color:C.dim,textTransform:"uppercase",flexShrink:0}}>Slot</span>
+        <Inp value={it.slot||""} onChange={e=>update(it.id,{slot:e.target.value})}
+          placeholder="#" style={{width:42,textAlign:"center",fontSize:11}}/>
         {showLetter && (
           <span style={{
             fontWeight:700, color:C.purple, background:"#fff",
@@ -14160,6 +14105,39 @@ function SavantPanelSimple({ loads = [], onChange, allLoads = [] }) {
 
   return (
     <div style={{marginBottom:16}}>
+      {/* Wiring diagrams — quick links to the official Savant install PDFs
+          for the smart breakers used in this app. Always present at the top
+          of every Savant panel section so the field crew has them on hand. */}
+      <div style={{
+        padding:"8px 12px", marginBottom:10, background:"#f0f9ff",
+        border:`1px solid #bae6fd`, borderRadius:8,
+        display:"flex", alignItems:"center", gap:10, flexWrap:"wrap", fontSize:11,
+      }}>
+        <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",
+          color:C.purple,textTransform:"uppercase"}}>Wiring diagrams</span>
+        <a href="https://sav-documentation.s3.amazonaws.com/Product%20QRGs/009-1484-03%20Dual%2020%20Amp%20Relay%20Companion%20Module%20Installation%20Manual.pdf"
+          target="_blank" rel="noopener noreferrer"
+          style={{color:C.green,fontWeight:700,textDecoration:"none",
+            background:"#fff",border:`1px solid ${C.green}55`,borderRadius:5,
+            padding:"3px 9px",fontSize:11}}>
+          Dual 20A Relay (PDF)
+        </a>
+        <a href="https://sav-documentation.s3.amazonaws.com/Product%20QRGs/009-1486-01%20Dual%20500W%20Adaptive%20Phase%20Dimmer%20Installation%20Manual.pdf"
+          target="_blank" rel="noopener noreferrer"
+          style={{color:C.accent,fontWeight:700,textDecoration:"none",
+            background:"#fff",border:`1px solid ${C.accent}55`,borderRadius:5,
+            padding:"3px 9px",fontSize:11}}>
+          Dual 500W APD (PDF)
+        </a>
+        <a href="https://sav-documentation.s3.amazonaws.com/Product%20Deployment%20Guides/009-1823-01%20Savant%20Panelized%20Lighting%20Deployment%20Guide.pdf"
+          target="_blank" rel="noopener noreferrer"
+          style={{color:C.dim,fontWeight:700,textDecoration:"none",
+            background:"#fff",border:`1px solid ${C.border}`,borderRadius:5,
+            padding:"3px 9px",fontSize:11}}>
+          Full Deployment Guide (PDF)
+        </a>
+      </div>
+
       {/* Item list */}
       {groups.length === 0 && (
         <div style={{padding:"12px 14px",fontSize:12,color:C.dim,fontStyle:"italic",
@@ -18535,11 +18513,23 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         info lives in per-row `mod`+`ch`+`moduleType` so
                         nothing new is added at the panel-section level. */}
                     {(job.lightingSystem||"Control 4")==="Savant" ? (
-                      <SavantPanelSimple
+                      <SavantPanelSchedule
                         allLoads={alMod}
-                        loads={flattenModulesToRows((job.panelizedLighting.cp4Loads||{})[floor]||[])}
+                        modules={_mods}
                         onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
-                          cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}/>
+                          cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}
+                        regularBreakers={(((job.panelizedLighting.panelLayout)||{})[floor]||{}).regularBreakers||[]}
+                        onRegularChange={(nextArr)=>{
+                          const _pl=job.panelizedLighting; const _pLay=_pl.panelLayout||{};
+                          const _cur=_pLay[floor]||{};
+                          u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[floor]:{..._cur,regularBreakers:nextArr}}}});
+                        }}
+                        panelSize={(((job.panelizedLighting.panelLayout)||{})[floor]||{}).panelSize||40}
+                        onPanelSizeChange={(n)=>{
+                          const _pl=job.panelizedLighting; const _pLay=_pl.panelLayout||{};
+                          const _cur=_pLay[floor]||{};
+                          u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[floor]:{..._cur,panelSize:n}}}});
+                        }}/>
                     ) : (
                       <PanelModulesSection
                         system={job.lightingSystem||"Control 4"}
@@ -18622,10 +18612,22 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         list with smart-breaker pairing. Loads live in
                         panelizedLighting[ef.key]. */}
                     {(job.lightingSystem||"Control 4")==="Savant" ? (
-                      <SavantPanelSimple
+                      <SavantPanelSchedule
                         allLoads={alMod}
-                        loads={flattenModulesToRows((job.panelizedLighting[ef.key])||[])}
-                        onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}/>
+                        modules={_mods}
+                        onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}
+                        regularBreakers={(((job.panelizedLighting.panelLayout)||{})[ef.key]||{}).regularBreakers||[]}
+                        onRegularChange={(nextArr)=>{
+                          const _pl=job.panelizedLighting; const _pLay=_pl.panelLayout||{};
+                          const _cur=_pLay[ef.key]||{};
+                          u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[ef.key]:{..._cur,regularBreakers:nextArr}}}});
+                        }}
+                        panelSize={(((job.panelizedLighting.panelLayout)||{})[ef.key]||{}).panelSize||40}
+                        onPanelSizeChange={(n)=>{
+                          const _pl=job.panelizedLighting; const _pLay=_pl.panelLayout||{};
+                          const _cur=_pLay[ef.key]||{};
+                          u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[ef.key]:{..._cur,panelSize:n}}}});
+                        }}/>
                     ) : (
                       <PanelModulesSection
                         system={job.lightingSystem||"Control 4"}
