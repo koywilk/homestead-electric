@@ -18986,6 +18986,24 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
                     style={{ fontSize: 11, fontWeight: 700, color: "#8b5cf6", background: "#8b5cf615", border: "1px solid #8b5cf633",
                       borderRadius: 7, padding: "6px 10px", textDecoration: "none", whiteSpace: "nowrap", cursor: "pointer" }}>
                     <span style={{display:"inline-flex",alignItems:"center",gap:4}}>Open <Icon name="external" size={11}/></span></a>}
+                  {ml.url && <button onClick={async (e) => {
+                      e.stopPropagation();
+                      try {
+                        await navigator.clipboard.writeText(ml.url);
+                        if (typeof toast !== "undefined" && toast.success)
+                          toast.success(`Matterport link${ml.label?` for ${ml.label}`:""} copied`);
+                      } catch (err) {
+                        if (typeof toast !== "undefined" && toast.error)
+                          toast.error("Couldn't copy — try long-pressing the URL");
+                      }
+                    }}
+                    title="Copy link to clipboard"
+                    style={{ fontSize: 11, fontWeight: 700, color: C.accent, background: `${C.accent}15`,
+                      border: `1px solid ${C.accent}33`, borderRadius: 7, padding: "6px 10px",
+                      whiteSpace: "nowrap", cursor: "pointer", fontFamily: "inherit",
+                      display:"inline-flex", alignItems:"center", gap:4 }}>
+                    <Icon name="copy" size={11}/> Copy
+                  </button>}
                   <span onClick={() => {
                     const links = [...(job.matterportLinks || (job.matterportLink ? [{ label: "Main", url: job.matterportLink }] : []))];
                     links.splice(mi, 1);
