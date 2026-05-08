@@ -14871,59 +14871,21 @@ function SavantPanelSchedule({
             style={{background:"none",border:"none",color:C.dim,fontSize:18,cursor:"pointer"}}>✕</button>
         </div>
 
-        {/* Loads list — pick one to add a smart breaker with that load
-            already placed as Load A. Visible up front so loads come up
-            the moment you click + add. */}
-        {named.length > 0 ? (
-          <div style={{marginBottom:14}}>
-            <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",
-              color:C.dim,textTransform:"uppercase",marginBottom:6}}>
-              Pick a load to drop in ({named.length} on this job)
-            </div>
-            <div style={{display:"flex",gap:6,flexWrap:"wrap",
-              maxHeight:180,overflowY:"auto",padding:4,
-              background:"#f8fafc",border:`1px solid ${C.border}`,borderRadius:6}}>
-              {named.map(l => {
-                const assigned = isLoadAssigned(l.name);
-                const tag = assigned ? loadAssignmentLabel(l.name) : "";
-                const disabled = !canFitSmart || assigned;
-                return (
-                  <button key={l.id} disabled={disabled}
-                    onClick={()=>addSmartWithLoadA(l)}
-                    title={assigned
-                      ? `Already assigned to ${tag} — pick a different load`
-                      : (canFitSmart
-                        ? `Add a smart breaker at ${slot}+${slotB} with "${l.name}" as Load A`
-                        : `Slot ${slotB} is occupied — can't fit a smart breaker here`)}
-                    style={{
-                      padding:"3px 9px",fontSize:11,fontWeight:600,
-                      background: assigned ? "#f1f5f9" : "#fff",
-                      color: assigned ? C.dim : (canFitSmart?C.purple:C.dim),
-                      border:`1px solid ${assigned ? C.border : (canFitSmart?C.purple+"55":C.border)}`,
-                      borderRadius:99,
-                      cursor: disabled ? "not-allowed" : "pointer",
-                      fontFamily:"inherit",
-                      textDecoration: assigned ? "line-through" : "none",
-                      opacity: assigned ? 0.7 : 1,
-                    }}>
-                    {l.name}{l.location?` (${l.location})`:""}{l.watts?` · ${l.watts}W`:""}
-                    {assigned && <span style={{marginLeft:5,fontSize:9,color:C.green,
-                      fontWeight:800,letterSpacing:"0.04em"}}>✓ {tag}</span>}
-                  </button>
-                );
-              })}
-            </div>
-          </div>
-        ) : (
-          <div style={{marginBottom:14,padding:"6px 10px",fontSize:11,color:C.dim,
-            fontStyle:"italic",background:"#fffbe6",border:"1px solid #fde68a",borderRadius:6}}>
-            No loads found anywhere on this job yet. Add some loads in any panel below, or use one of the empty-breaker buttons below.
-          </div>
-        )}
+        {/* Slot-click picker is breaker-only by design — phase 1 of the
+            schedule build is "place breakers". Phase 2 is filling them with
+            loads via the click-to-arm chip flow above the schedule.
+            Keeping the two flows separate lets you lay out the panel
+            structure first, then drop loads on top. */}
+        <div style={{
+          marginBottom:14, padding:"6px 10px", fontSize:11, color:C.dim, fontStyle:"italic",
+          background:"#f0f9ff", border:`1px solid #bae6fd`, borderRadius:6,
+        }}>
+          Pick a breaker type below. To assign loads, use the armed-loads strip above the schedule.
+        </div>
 
         <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",
           color:C.dim,textTransform:"uppercase",marginBottom:6}}>
-          Or start an empty breaker
+          Breaker type
         </div>
         <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(150px, 1fr))",gap:10}}>
           <button disabled={!canFitSmart}
