@@ -660,12 +660,24 @@ async function validateAndSyncFCMToken(userId) {
         const saved = Array.isArray(me?.fcmTokens) ? me.fcmTokens
                     : me?.fcmToken ? [me.fcmToken] : [];
         if (saved.includes(currentToken)) return "in_sync";
+
+        // Token UNCHANGED locally but MISSING from server. The most likely
+        // cause is server-side pruning after FCM rejected it as stale (the
+        // sendFCM catch block in functions/index.js calls removeStaleToken).
+        // Re-adding the same token would get it pruned again — that's the
+        // infinite loop where a user's token keeps bouncing in and out of
+        // their fcmTokens array on every push attempt. Do a hard reset to
+        // mint a brand-new token bound to a fresh push subscription.
+        // Without this branch, a stale-token user is permanently broken
+        // until they manually tap Enable in the Notification Doctor.
+        console.log("[HE keepalive] our token was pruned server-side — full reset");
+        return await resetPushSubscriptionAndReregister(userId);
       } catch {}
     }
 
-    // 3. Drift detected — additive register (no delete, force=false). This
-    //    saves the new token to the server array without touching anyone
-    //    else's tokens. Stale tokens get pruned server-side on next send.
+    // 3. Drift detected (SDK has a different token than we last saved) —
+    //    additive register (no delete, force=false). Saves the new token
+    //    to the server array without touching anyone else's tokens.
     console.log("[HE keepalive] token drift detected — syncing to server");
     return await registerFCMToken(userId, false);
   } catch (e) {
@@ -1052,8 +1064,15 @@ const CRES_MODULE_TYPES = ["","ZUMNET-200","ZUMLINK-200"];
 // cabinet modules retained so legacy jobs still render their picked SKU.
 const SAV_MODULE_TYPES  = [
   { value:"",                  label:"" },
+  // Modern QO smart breakers (2 outputs each)
   { value:"DUAL_20A_RELAY",    label:"Dual 20A Relay (GPM-QP2R20120)" },
   { value:"DUAL_500W_APD",     label:"Dual 500W Adaptive Phase Dimmer (GPM-Q2APD10)" },
+  { value:"DUAL_FPD_500W",     label:"Dual 500W Forward Phase Dimmer" },
+  { value:"DUAL_24V_CTRL",     label:"Dual 24V Control Relay" },
+  // Single-output modules (2-pole feeder, single output to load)
+  { value:"SINGLE_30A_RELAY",  label:"Single 30A Relay (240V, GPM-QP1R30240)" },
+  { value:"SINGLE_60A_RELAY",  label:"Single 60A Relay (240V, GPM-QP1R60240)" },
+  // Legacy centralized cabinet modules (kept so old jobs render their picked SKU)
   { value:"LMD-8120",          label:"8-Ch Relay (LMD-8120, legacy)" },
   { value:"LMD-4120",          label:"4-Ch Relay (LMD-4120, legacy)" },
   { value:"SPM-Q2APD10",       label:"Dual APD (SPM-Q2APD10, legacy)" },
@@ -1063,10 +1082,13 @@ const SAV_MODULE_TYPES  = [
 const SAV_SKU_LABEL = Object.fromEntries(
   SAV_MODULE_TYPES.filter(o=>o.value).map(o=>[o.value, o.label])
 );
-// Which SKUs are the new 2-pole smart breakers vs legacy multi-channel cabinets.
-// New ones get the panel-schedule layout (2 fixed outputs A/B). Legacy ones keep
-// the multi-channel editor for data preservation.
-const SAV_NEW_SKUS = new Set(["DUAL_20A_RELAY","DUAL_500W_APD"]);
+// Which SKUs are the new in-panel smart breakers vs legacy multi-channel cabinets.
+// New ones get the panel-schedule layout (1 or 2 fixed outputs A/B depending
+// on SKU). Legacy ones keep the multi-channel editor for data preservation.
+const SAV_NEW_SKUS = new Set([
+  "DUAL_20A_RELAY","DUAL_500W_APD","DUAL_FPD_500W","DUAL_24V_CTRL",
+  "SINGLE_30A_RELAY","SINGLE_60A_RELAY",
+]);
 const LOAD_TYPES        = ["","Dimming","Switching","MLV","ELV","LED","Fluorescent","Relay","0-10V","Variable Speed"];
 const PHASE_OPTS        = ["","A","B","C"];
 
@@ -1390,6 +1412,18 @@ function getSavantV2ForFloor(job, floor) {
       // point at nothing.
       if (a && base.feeders.some(f => f.id === a)) m.inputs.A = a;
       if (b && base.feeders.some(f => f.id === b)) m.inputs.B = b;
+    });
+  }
+  // Room labels per output — V2-only, used by the pull-list-by-room print.
+  // V1 has no room field, so this is purely additive.
+  if (overrides.outputRooms && typeof overrides.outputRooms === "object") {
+    base.modules.forEach(m => {
+      const key = m.modNum || m._legacyMod;
+      if (!key) return;
+      const a = overrides.outputRooms[key]?.A;
+      const b = overrides.outputRooms[key]?.B;
+      if (a && m.outputs?.A) m.outputs.A.room = a;
+      if (b && m.outputs?.B) m.outputs.B.room = b;
     });
   }
   return base;
@@ -1850,6 +1884,272 @@ function printElectricalPanel({ jobName, jobAddress, panel }) {
   // same output without re-running the full builder. Updates on every print so
   // the file you download matches what you just saw on screen.
   printElectricalPanel._lastHtml = { html, jobName, panelLabel: panel?.label || "Panel" };
+}
+
+// ─── Savant V2 prints ─────────────────────────────────────────────────────
+// Two prints, both using the V2 shape directly (feeders + modules with input
+// assignments). Rendered into a popup window with print CSS scoped so user
+// hits Cmd/Ctrl+P → clean panel-cover-shaped output.
+//
+// Color is the spine of both prints: the V2 SAV_V2_FEEDER_COLORS palette is
+// mirrored here as print-safe RGB values. Each feeder gets its index-based
+// color; modules show their A/B halves in their feeders' colors; load list
+// rows in the second print stay color-matched.
+
+const SAV_V2_PRINT_PALETTE = [
+  { name:"purple", fill:"#EEEDFE", stroke:"#7F77DD", text:"#26215C" },
+  { name:"teal",   fill:"#E1F5EE", stroke:"#1D9E75", text:"#04342C" },
+  { name:"coral",  fill:"#FAECE7", stroke:"#D85A30", text:"#4A1B0C" },
+  { name:"pink",   fill:"#FBEAF0", stroke:"#D4537E", text:"#4B1528" },
+  { name:"amber",  fill:"#FAEEDA", stroke:"#BA7517", text:"#412402" },
+  { name:"blue",   fill:"#E6F1FB", stroke:"#185FA5", text:"#042C53" },
+  { name:"green",  fill:"#EAF3DE", stroke:"#639922", text:"#173404" },
+  { name:"rust",   fill:"#FCEBEB", stroke:"#A32D2D", text:"#501313" },
+];
+const savV2PrintColor = (feederId, feeders) => {
+  if (!feederId) return null;
+  const idx = feeders.findIndex(f => f.id === feederId);
+  if (idx < 0) return null;
+  return SAV_V2_PRINT_PALETTE[idx % SAV_V2_PRINT_PALETTE.length];
+};
+
+// Print 1: Panel cover. Letter portrait, content sized to ~5.25" wide so it
+// can be folded/cut to fit inside a Square D panel cover. Two-column slot
+// schedule with color-coded feeders and modules.
+function printSavantV2PanelCover({ jobName, jobAddress, panelLabel, v2 }) {
+  const esc = (s) => String(s == null ? "" : s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+  const feeders = v2?.feeders || [];
+  const modules = v2?.modules || [];
+  const panelSize = v2?.panelSize || 40;
+
+  // Build slot map (same logic as on-screen)
+  const slotMap = {};
+  feeders.forEach(f => {
+    const slot = parseInt(f.slot, 10);
+    if (!slot) return;
+    slotMap[slot] = { kind:"feeder", feeder:f, isCont:false };
+    if ((f.poles||1) === 2) slotMap[slot+2] = { kind:"feeder", feeder:f, isCont:true };
+  });
+  modules.forEach(m => {
+    (m.slots||[]).forEach((s, i) => {
+      const slot = parseInt(s, 10);
+      if (!slot) return;
+      slotMap[slot] = { kind:"module-half", module:m, halfIndex:i,
+        channel: i === 0 ? "A" : (savSkuOutputs(m.sku) === 1 ? null : "B") };
+    });
+  });
+
+  // Render one cell for one slot
+  const renderCell = (slot) => {
+    const cell = slotMap[slot];
+    if (!cell) {
+      return `<td class="slot-num">${slot}</td><td class="cell empty">—</td>`;
+    }
+    if (cell.kind === "feeder") {
+      const f = cell.feeder;
+      const c = savV2PrintColor(f.id, feeders);
+      const fed = modules.flatMap(m => {
+        const arr = [];
+        if (m.inputs?.A === f.id) arr.push(`${m.modNum||"?"}·A`);
+        if (m.inputs?.B === f.id) arr.push(`${m.modNum||"?"}·B`);
+        return arr;
+      });
+      const style = c ? `background:${c.fill};border-left:3px solid ${c.stroke};color:${c.text};` : "";
+      const label = cell.isCont ? `${esc(f.label||"F")} cont.` :
+        `${esc(f.label||"F")} · ${esc(f.amps||"20")}A${(f.poles||1)===2?" 2P":""}`;
+      const sub = cell.isCont ? "" :
+        (fed.length ? `<div class="sub">→ ${esc(fed.join(" · "))}</div>` :
+                      `<div class="sub muted">unassigned</div>`);
+      return `<td class="slot-num">${slot}</td><td class="cell" style="${style}">
+        <div class="lbl">${label}</div>${sub}</td>`;
+    }
+    // module-half
+    const m = cell.module;
+    const ch = cell.channel;
+    const fid = m.inputs?.[ch];
+    const c = savV2PrintColor(fid, feeders);
+    const out = ch ? m.outputs?.[ch] : m.outputs?.A;
+    const meta = savSkuMeta(m.sku);
+    const isFirst = cell.halfIndex === 0;
+    const f = feeders.find(ff => ff.id === fid);
+    const style = c ? `background:${c.fill};border-left:3px solid ${c.stroke};color:${c.text};` : "";
+    const skuLabel = meta.label || m.sku || "Module";
+    const headerLine = isFirst
+      ? `<div class="mod-head">Mod ${esc(m.modNum||"?")} — ${esc(skuLabel)}</div>` : "";
+    const outputLine = out
+      ? `<div class="lbl"><b>${ch||"—"}</b> ${esc(out.name||"(no name)")} ${out.watts?`· ${esc(out.watts)}W`:""}</div>`
+      : `<div class="lbl muted"><b>${ch||"—"}</b> (no output)</div>`;
+    const fromLine = c
+      ? `<div class="sub">← ${esc(f?.label||"")}</div>`
+      : `<div class="sub muted">← unassigned</div>`;
+    return `<td class="slot-num">${slot}</td><td class="cell" style="${style}">
+      ${headerLine}${outputLine}${fromLine}</td>`;
+  };
+
+  // Build rows: pair odd-left with even-right
+  const rows = [];
+  for (let i = 1; i <= panelSize; i += 2) {
+    const leftSlot = i;
+    const rightSlot = i + 1;
+    rows.push(`<tr>${renderCell(leftSlot)}${renderCell(rightSlot)}</tr>`);
+  }
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"/>
+<title>${esc(panelLabel)} — ${esc(jobName||"")}</title>
+<style>
+  @page { size: letter portrait; margin: 0.4in; }
+  * { box-sizing:border-box; }
+  body { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color:#0f172a; margin:0; padding:0; }
+  .toolbar { padding:6px 10px; background:#f1f5f9; border-bottom:1px solid #e2e8f0; }
+  .toolbar button { font-family:inherit; font-size:13px; padding:4px 12px; cursor:pointer; }
+  @media print { .toolbar { display:none; } }
+  .page { max-width:5.25in; margin:0 auto; padding:0.15in 0; }
+  .hdr { padding:6px 0 8px; border-bottom:1.5px solid #0f172a; margin-bottom:8px; }
+  .hdr h1 { margin:0; font-size:14px; letter-spacing:0.04em; }
+  .hdr .meta { font-size:10px; color:#64748b; margin-top:2px; }
+  table.schedule { width:100%; border-collapse:collapse; table-layout:fixed; }
+  table.schedule td { border:0.5px solid #e2e8f0; padding:0; vertical-align:top; font-size:9px; line-height:1.2; }
+  td.slot-num { width:18px; text-align:right; padding:3px 4px; color:#64748b; font-variant-numeric:tabular-nums; font-size:9px; background:#f8fafc; }
+  td.cell { padding:3px 5px; }
+  td.cell.empty { color:#cbd5e1; font-style:italic; text-align:center; }
+  .lbl { font-weight:500; font-size:9px; }
+  .sub { font-size:8px; color:#64748b; margin-top:1px; }
+  .sub.muted { font-style:italic; }
+  .mod-head { font-size:8px; font-weight:600; color:#475569; margin-bottom:1px; text-transform:uppercase; letter-spacing:0.04em; }
+  .footer { font-size:9px; color:#64748b; margin-top:8px; padding-top:4px; border-top:0.5px solid #e2e8f0; text-align:center; }
+</style></head><body>
+<div class="toolbar"><button onclick="window.print()">Print</button></div>
+<div class="page">
+  <div class="hdr">
+    <h1>${esc(panelLabel||"Lighting panel")}</h1>
+    <div class="meta">${esc(jobName||"")}${jobAddress?` &middot; ${esc(jobAddress)}`:""} &middot; ${panelSize} slots &middot; ${modules.length} modules &middot; ${feeders.length} feeders</div>
+  </div>
+  <table class="schedule">${rows.join("")}</table>
+  <div class="footer">Homestead Electric — Savant panelized lighting</div>
+</div></body></html>`;
+
+  const win = window.open("", "_blank");
+  if (!win) {
+    if (typeof toast !== "undefined" && toast.error) toast.error("Pop-up blocked — allow pop-ups to print panel schedules.");
+    return;
+  }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
+}
+
+// Print 2: Pull list grouped by room. The wire-puller's view — every switch
+// leg listed under its room, color-coded by its feeder so the puller can
+// match wires back to the panel cover at install time.
+function printSavantV2PullList({ jobName, jobAddress, panelLabel, v2 }) {
+  const esc = (s) => String(s == null ? "" : s)
+    .replace(/&/g,"&amp;").replace(/</g,"&lt;").replace(/>/g,"&gt;")
+    .replace(/"/g,"&quot;").replace(/'/g,"&#39;");
+  const feeders = v2?.feeders || [];
+  const modules = v2?.modules || [];
+
+  // Flatten every output across all modules into rows, with feeder color attached
+  const rows = [];
+  modules.forEach(m => {
+    const meta = savSkuMeta(m.sku);
+    const isSingle = meta.outputs === 1;
+    const aFeeder = feeders.find(f => f.id === m.inputs?.A);
+    const bFeeder = isSingle ? null : feeders.find(f => f.id === m.inputs?.B);
+    const aColor = savV2PrintColor(m.inputs?.A, feeders);
+    const bColor = savV2PrintColor(m.inputs?.B, feeders);
+    if (m.outputs?.A) rows.push({
+      room: m.outputs.A.room || "(no room)",
+      modNum: m.modNum || "?",
+      ch: "A",
+      name: m.outputs.A.name || "(no name)",
+      loadType: m.outputs.A.loadType || "",
+      watts: m.outputs.A.watts || "",
+      breaker: aFeeder ? `${aFeeder.label||""} · ${aFeeder.amps||"20"}A` : "—",
+      color: aColor,
+    });
+    if (!isSingle && m.outputs?.B) rows.push({
+      room: m.outputs.B.room || "(no room)",
+      modNum: m.modNum || "?",
+      ch: "B",
+      name: m.outputs.B.name || "(no name)",
+      loadType: m.outputs.B.loadType || "",
+      watts: m.outputs.B.watts || "",
+      breaker: bFeeder ? `${bFeeder.label||""} · ${bFeeder.amps||"20"}A` : "—",
+      color: bColor,
+    });
+  });
+
+  // Group by room
+  const byRoom = {};
+  rows.forEach(r => {
+    if (!byRoom[r.room]) byRoom[r.room] = [];
+    byRoom[r.room].push(r);
+  });
+  const roomNames = Object.keys(byRoom).sort();
+
+  const renderRoomBlock = (room) => {
+    const items = byRoom[room];
+    const tableRows = items.map(it => {
+      const style = it.color ? `background:${it.color.fill};border-left:3px solid ${it.color.stroke};` : "";
+      return `<tr style="${style}">
+        <td class="r-mod">Mod ${esc(it.modNum)}·${esc(it.ch)}</td>
+        <td class="r-name">${esc(it.name)}</td>
+        <td class="r-type">${esc(it.loadType)}</td>
+        <td class="r-watts">${it.watts?esc(it.watts)+"W":""}</td>
+        <td class="r-bkr">${esc(it.breaker)}</td>
+      </tr>`;
+    }).join("");
+    return `<div class="room-block">
+      <h2>${esc(room)} <span class="count">${items.length}</span></h2>
+      <table><tbody>${tableRows}</tbody></table>
+    </div>`;
+  };
+
+  const html = `<!doctype html><html><head><meta charset="utf-8"/>
+<title>Pull list — ${esc(panelLabel)} — ${esc(jobName||"")}</title>
+<style>
+  @page { size: letter portrait; margin: 0.5in; }
+  body { font-family: -apple-system, "Segoe UI", Helvetica, Arial, sans-serif; color:#0f172a; margin:0; padding:0; }
+  .toolbar { padding:6px 10px; background:#f1f5f9; border-bottom:1px solid #e2e8f0; }
+  .toolbar button { font-family:inherit; font-size:13px; padding:4px 12px; cursor:pointer; }
+  @media print { .toolbar { display:none; } }
+  .page { max-width:7.5in; margin:0 auto; padding:0.15in 0; }
+  .hdr { padding:6px 0 10px; border-bottom:2px solid #0f172a; margin-bottom:14px; }
+  .hdr h1 { margin:0; font-size:18px; letter-spacing:0.02em; }
+  .hdr .meta { font-size:11px; color:#64748b; margin-top:3px; }
+  .room-block { margin-bottom:18px; page-break-inside:avoid; }
+  .room-block h2 { font-size:13px; font-weight:600; margin:0 0 6px; padding:4px 8px; background:#0f172a; color:#fff; border-radius:3px; display:flex; justify-content:space-between; align-items:center; }
+  .room-block h2 .count { font-size:10px; opacity:0.7; font-weight:400; }
+  table { width:100%; border-collapse:collapse; }
+  td { border:0.5px solid #e2e8f0; padding:5px 8px; font-size:11px; vertical-align:middle; line-height:1.3; }
+  td.r-mod { width:80px; font-weight:600; color:#475569; font-variant-numeric:tabular-nums; }
+  td.r-name { font-weight:500; }
+  td.r-type { width:90px; color:#64748b; font-size:10px; }
+  td.r-watts { width:60px; text-align:right; color:#64748b; font-variant-numeric:tabular-nums; font-size:10px; }
+  td.r-bkr { width:120px; color:#64748b; font-size:10px; }
+  .footer { font-size:10px; color:#64748b; margin-top:14px; padding-top:6px; border-top:0.5px solid #e2e8f0; text-align:center; }
+</style></head><body>
+<div class="toolbar"><button onclick="window.print()">Print</button></div>
+<div class="page">
+  <div class="hdr">
+    <h1>Pull list — ${esc(panelLabel||"Lighting panel")}</h1>
+    <div class="meta">${esc(jobName||"")}${jobAddress?` &middot; ${esc(jobAddress)}`:""} &middot; ${rows.length} switch leg${rows.length===1?"":"s"} across ${roomNames.length} room${roomNames.length===1?"":"s"}</div>
+  </div>
+  ${roomNames.length > 0 ? roomNames.map(renderRoomBlock).join("") :
+    `<div style="padding:30px;text-align:center;color:#64748b;font-style:italic;">No outputs to print yet.</div>`}
+  <div class="footer">Homestead Electric — Savant pull list</div>
+</div></body></html>`;
+
+  const win = window.open("", "_blank");
+  if (!win) {
+    if (typeof toast !== "undefined" && toast.error) toast.error("Pop-up blocked — allow pop-ups to print pull lists.");
+    return;
+  }
+  win.document.open();
+  win.document.write(html);
+  win.document.close();
 }
 
 // Lazy-load a script from CDN exactly once. Resolved promise = window has
@@ -14835,10 +15135,12 @@ function buildSavV2SlotMap(v2) {
   return map;
 }
 
-function SavantPanelV2({ job, floor, panelLabel = "Lighting panel", onAssignFeeder = null }) {
+function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
+                          onAssignFeeder = null, onSetRoom = null }) {
   const v2 = getSavantV2ForFloor(job, floor);
   const slotMap = buildSavV2SlotMap(v2);
   const isEditable = typeof onAssignFeeder === "function";
+  const canSetRoom = typeof onSetRoom === "function";
   const panelSize = v2.panelSize || 40;
   const oddSlots  = []; for (let i = 1; i <= panelSize; i += 2) oddSlots.push(i);
   const evenSlots = []; for (let i = 2; i <= panelSize; i += 2) evenSlots.push(i);
@@ -15037,7 +15339,8 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel", onAssignFeed
         const bColor = savV2FeederColor(m.inputs?.B, v2.feeders);
         const outRow = (ch, color, out, breakerInfo) => out ? (
           <div style={{
-            display:"grid", gridTemplateColumns:"90px 1fr 100px 70px",
+            display:"grid",
+            gridTemplateColumns: canSetRoom ? "90px 1fr 110px 90px 60px" : "90px 1fr 100px 70px",
             gap:10, alignItems:"center", padding:"7px 12px",
             background: color ? color.fill : "transparent",
             borderTop: `0.5px solid ${C.border}`,
@@ -15048,6 +15351,16 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel", onAssignFeed
             <span style={{color:C.text, fontSize:13}}>
               {out.name || <span style={{color:C.muted, fontStyle:"italic"}}>(no name)</span>}
             </span>
+            {canSetRoom && (
+              <input
+                value={out.room || ""}
+                onChange={(e)=>onSetRoom(m.modNum || m._legacyMod, ch, e.target.value)}
+                placeholder="Room"
+                title="Used to group this load on the pull-list-by-room print"
+                style={{fontSize:11, padding:"3px 6px", border:`0.5px solid ${C.border}`,
+                  borderRadius:4, background:"#fff", fontFamily:"inherit", color:C.text,
+                  width:"100%"}}/>
+            )}
             <span style={{color:C.dim, fontSize:12}}>{out.loadType || ""}</span>
             <span style={{color:C.dim, fontSize:12, textAlign:"right",
               fontVariantNumeric:"tabular-nums"}}>{out.watts ? `${out.watts}W` : ""}</span>
@@ -15110,6 +15423,39 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel", onAssignFeed
       {/* Load list */}
       {renderLoadList()}
 
+      {/* Print buttons — panel cover + pull list. Both render the V2 shape
+          directly so colors carry through to paper. */}
+      <div style={{display:"flex", gap:8, marginTop:12, flexWrap:"wrap"}}>
+        <button onClick={()=>printSavantV2PanelCover({
+          jobName: job?.name || "",
+          jobAddress: job?.address || "",
+          panelLabel,
+          v2,
+        })}
+          title="Print the color-coded panel schedule (fits a panel cover)"
+          style={{background:"none", border:`1px solid ${C.purple}`, color:C.purple,
+            borderRadius:6, padding:"6px 12px", fontSize:11, fontWeight:700,
+            cursor:"pointer", fontFamily:"inherit", letterSpacing:"0.04em",
+            display:"inline-flex", alignItems:"center", gap:6}}>
+          <Icon name="fileText" size={11} stroke={2}/>
+          PRINT PANEL COVER
+        </button>
+        <button onClick={()=>printSavantV2PullList({
+          jobName: job?.name || "",
+          jobAddress: job?.address || "",
+          panelLabel,
+          v2,
+        })}
+          title="Print the wire-puller's view — switch legs grouped by room"
+          style={{background:"none", border:`1px solid ${C.dim}`, color:C.dim,
+            borderRadius:6, padding:"6px 12px", fontSize:11, fontWeight:700,
+            cursor:"pointer", fontFamily:"inherit", letterSpacing:"0.04em",
+            display:"inline-flex", alignItems:"center", gap:6}}>
+          <Icon name="fileText" size={11} stroke={2}/>
+          PRINT PULL LIST BY ROOM
+        </button>
+      </div>
+
       {/* Step marker so we know what we're looking at during the migration */}
       <div style={{
         marginTop:10, padding:"6px 10px", background:"#fef3c7",
@@ -15158,6 +15504,31 @@ function SavantV2PreviewToggle({ job, floor, panelLabel, onPatch }) {
       },
     });
   } : null;
+  // Room labels — sparse V2-only override; never duplicates V1 data because
+  // V1 has no room field. Empty string clears the entry.
+  const handleSetRoom = onPatch ? (modKey, channel, roomValue) => {
+    if (!modKey || (channel !== "A" && channel !== "B")) return;
+    const pl = job?.panelizedLighting || {};
+    const sav = pl.savantV2 || {};
+    const floorOv = sav[floor] || {};
+    const orMap = floorOv.outputRooms || {};
+    const cur = orMap[modKey] || {};
+    const trimmed = (roomValue || "").trim();
+    const nextChannel = trimmed ? { ...cur, [channel]: trimmed }
+                                : (() => { const c = {...cur}; delete c[channel]; return c; })();
+    const nextOR = (Object.keys(nextChannel).length > 0)
+      ? { ...orMap, [modKey]: nextChannel }
+      : (() => { const i = {...orMap}; delete i[modKey]; return i; })();
+    onPatch({
+      panelizedLighting: {
+        ...pl,
+        savantV2: {
+          ...sav,
+          [floor]: { ...floorOv, outputRooms: nextOR },
+        },
+      },
+    });
+  } : null;
   return (
     <div style={{marginTop:10}}>
       <button onClick={()=>setShow(!show)}
@@ -15172,7 +15543,7 @@ function SavantV2PreviewToggle({ job, floor, panelLabel, onPatch }) {
         <div style={{marginTop:10, padding:12, background:"#fafbfc",
           border:`1px dashed ${C.purple}55`, borderRadius:8}}>
           <SavantPanelV2 job={job} floor={floor} panelLabel={panelLabel}
-            onAssignFeeder={handleAssignFeeder}/>
+            onAssignFeeder={handleAssignFeeder} onSetRoom={handleSetRoom}/>
         </div>
       )}
     </div>
