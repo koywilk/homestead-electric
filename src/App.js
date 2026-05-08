@@ -13758,6 +13758,29 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
           All Loads&nbsp;<span style={{color:`${C.purple}99`,fontWeight:400,textTransform:"none"}}>— define here, assign to keypads &amp; modules below</span>
         </span>
         <div style={{display:"flex",gap:6}}>
+          {loads.length>0 && (() => {
+            // "Pull all" / "Unpull all" — flips the pulled flag on every load.
+            // Toggles based on whether all are currently pulled. Confirms once
+            // before flipping so a stray click can't lose pull state on 100+
+            // loads without intent.
+            const allPulled = loads.every(l => !!l.pulled);
+            const label = allPulled ? "✓ Unpull all" : "✓ Pull all";
+            const action = allPulled ? "Unpull" : "Pull";
+            return (
+              <button onClick={()=>{
+                  const msg = `${action} all ${loads.length} loads on this job?`;
+                  if (window.confirm(msg)) {
+                    onChange(loads.map(l => ({ ...l, pulled: !allPulled })));
+                  }
+                }}
+                style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:99,cursor:"pointer",fontFamily:"inherit",
+                  background:allPulled?`${C.green}18`:"none",
+                  border:`1px solid ${allPulled?C.green:C.border}`,
+                  color:allPulled?C.green:C.dim}}>
+                {label}
+              </button>
+            );
+          })()}
           {loads.length>0&&(
             <button onClick={selecting?exitSelect:()=>setSelecting(true)}
               style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:99,cursor:"pointer",fontFamily:"inherit",
@@ -13860,7 +13883,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
             <div style={{display:"grid",gridTemplateColumns:COL,gap:6,marginBottom:4,paddingBottom:4,borderBottom:`1px solid ${C.border}`,alignItems:"center"}}>
               {selecting&&<input type="checkbox" checked={allSel} onChange={toggleAll}
                 style={{width:14,height:14,accentColor:C.purple,cursor:"pointer",margin:0}}/>}
-              {["✓","#","Load Name","Location","Type","Watts",""].map((h,i)=>(
+              {["✓","#","Load Name","Floor","Panel","Type","Watts",""].map((h,i)=>(
                 <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em",textAlign:i===0?"center":"left"}}>{h}</div>
               ))}
             </div>
@@ -20977,12 +21000,17 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     loads={pl.loads||[]}
                     onChange={v=>u({panelizedLighting:{...pl,loads:v}})}
                     floorOptions={["Main Level","Basement","Upper Level",...(pl.extraFloors||[]).map(ef=>ef.label)]}
-                    panelOptions={[
+                    panelOptions={Array.from(new Set([
                       _labelForStd("upper"),
                       _labelForStd("main"),
                       _labelForStd("basement"),
                       ...(pl.extraFloors||[]).map(ef=>ef.label),
-                    ].filter(Boolean)}
+                      // Also include any panel name already set on a load —
+                      // covers jobs like Robison where loads were imported
+                      // with custom panel names ("LCP 1" / "LCP 2" / etc.)
+                      // before plSectionLabels was customized.
+                      ...((pl.loads||[]).map(l=>(l?.panel||"").trim()).filter(Boolean)),
+                    ])).filter(Boolean).sort()}
                     allModules={allModules}
                     assignedModMap={assignedModMap}
                     onAssignToModule={onAssignToModule}/>
