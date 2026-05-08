@@ -14205,9 +14205,61 @@ function SavantPanelSchedule({
       });
     }
 
-    // Regular breaker
+    // Regular breaker — single (one row) or tandem (two stacked rows in
+    // the same slot, like a real Square D tandem breaker).
     const r = entry.ref;
     const feederColor = feederColorBySlot.get(Number(r.slot)) || null;
+    if (r.tandem) {
+      return (
+        <div style={{
+          minHeight: 24, display:"flex", flexDirection:"column",
+          background: isSelected ? "#fef3c7" : (feederColor ? `${feederColor}1f` : "#fff"),
+          borderLeft: `3px solid ${feederColor || (isSelected ? C.accent : "transparent")}`,
+          borderRight:`1px solid ${C.border}`,
+        }}>
+          <div onClick={()=>{ setSelectedSlot(slot); setAddingAtSlot(null); }}
+            style={{
+              flex:1, minHeight:22, display:"flex", alignItems:"center",
+              cursor:"pointer", position:"relative",
+              borderBottom:`1px dashed ${C.border}`,
+            }}>
+            <span style={{fontSize:8,fontWeight:800,letterSpacing:"0.05em",
+              color:C.dim,padding:"0 5px",textTransform:"uppercase",flexShrink:0}}>T·A</span>
+            <input value={r.description||""}
+              onChange={e=>updReg(r.id,{description:e.target.value})}
+              onClick={e=>e.stopPropagation()}
+              placeholder="Tandem A description…"
+              style={{flex:1,minWidth:0,height:"100%",border:"none",outline:"none",
+                background:"transparent",fontSize:11,fontFamily:"inherit",
+                color:C.text,padding:"0 4px",
+                paddingRight: r.amp ? 30 : 4}}/>
+            {r.amp && <span style={{position:"absolute",right:4,top:"50%",
+              transform:"translateY(-50%)",fontSize:9,fontWeight:700,color:C.dim,
+              opacity:0.7,letterSpacing:"0.02em",pointerEvents:"none"}}>{r.amp}A</span>}
+          </div>
+          <div onClick={()=>{ setSelectedSlot(slot); setAddingAtSlot(null); }}
+            style={{
+              flex:1, minHeight:22, display:"flex", alignItems:"center",
+              cursor:"pointer", position:"relative",
+              borderBottom:`1px solid ${C.border}`,
+            }}>
+            <span style={{fontSize:8,fontWeight:800,letterSpacing:"0.05em",
+              color:C.dim,padding:"0 5px",textTransform:"uppercase",flexShrink:0}}>T·B</span>
+            <input value={r.descriptionB||""}
+              onChange={e=>updReg(r.id,{descriptionB:e.target.value})}
+              onClick={e=>e.stopPropagation()}
+              placeholder="Tandem B description…"
+              style={{flex:1,minWidth:0,height:"100%",border:"none",outline:"none",
+                background:"transparent",fontSize:11,fontFamily:"inherit",
+                color:C.text,padding:"0 4px",
+                paddingRight: r.ampB ? 30 : 4}}/>
+            {r.ampB && <span style={{position:"absolute",right:4,top:"50%",
+              transform:"translateY(-50%)",fontSize:9,fontWeight:700,color:C.dim,
+              opacity:0.7,letterSpacing:"0.02em",pointerEvents:"none"}}>{r.ampB}A</span>}
+          </div>
+        </div>
+      );
+    }
     return compactCell({
       kind: "reg",
       color: feederColor,
@@ -14340,7 +14392,7 @@ function SavantPanelSchedule({
           color:C.dim,textTransform:"uppercase",marginBottom:6}}>
           Or start an empty breaker
         </div>
-        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr 1fr",gap:10}}>
+        <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit, minmax(150px, 1fr))",gap:10}}>
           <button disabled={!canFitSmart}
             onClick={()=>addSmartAtSlot(slot, "DUAL_20A_RELAY")}
             style={{
@@ -14370,7 +14422,26 @@ function SavantPanelSchedule({
               background:"#fff", textAlign:"center", fontFamily:"inherit",
             }}>
             <div style={{fontWeight:700,fontSize:13,color:C.text,marginBottom:4}}>Regular breaker</div>
-            <div style={{fontSize:11,color:C.dim}}>Single-pole or tandem · 1 slot</div>
+            <div style={{fontSize:11,color:C.dim}}>Single-pole · 1 slot</div>
+          </button>
+          <button onClick={()=>{
+              // Add a regular breaker pre-flagged as tandem so the user gets
+              // both halves visible in the editor immediately.
+              const newReg = {
+                id: uid(), slot:String(slot), amp:"", description:"", phase:"",
+                tandem: true, ampB:"", descriptionB:"", phaseB:"",
+              };
+              onRegularChange([...(regularBreakers||[]), newReg]);
+              setSelectedSlot(slot);
+              setAddingAtSlot(null);
+            }}
+            style={{
+              padding:12, border:`1px solid ${C.accent}55`,
+              borderRadius:8, cursor:"pointer",
+              background:`${C.accent}10`, textAlign:"center", fontFamily:"inherit",
+            }}>
+            <div style={{fontWeight:700,fontSize:13,color:C.accent,marginBottom:4}}>Tandem breaker</div>
+            <div style={{fontSize:11,color:C.dim}}>Two 1-pole circuits · 1 slot</div>
           </button>
         </div>
         {!canFitSmart && (
@@ -14631,7 +14702,45 @@ function SavantPanelSchedule({
             <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",marginLeft:8}}>Phase</span>
             <Sel value={r.phase||""} onChange={e=>updReg(r.id,{phase:e.target.value})}
               options={PHASE_OPTS} style={{width:60,fontSize:11}}/>
+            <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,fontWeight:700,
+              color:r.tandem?C.accent:C.dim,letterSpacing:"0.04em",textTransform:"uppercase",
+              cursor:"pointer",marginLeft:8,padding:"3px 9px",borderRadius:5,
+              border:`1px solid ${r.tandem?C.accent:C.border}`,background:r.tandem?`${C.accent}15`:"#fff"}}>
+              <input type="checkbox" checked={!!r.tandem}
+                onChange={e=>updReg(r.id,{tandem:e.target.checked})}
+                style={{margin:0,cursor:"pointer"}}/>
+              Tandem
+            </label>
           </div>
+          {/* Tandem second half — only shown when tandem flag is true. Lets
+              you put TWO 1-pole circuits in the same slot (matching the way
+              real tandem breakers physically share one slot). Stored on the
+              same regular-breaker row as descriptionB / ampB / phaseB so we
+              don't break any existing data shape — fields are ignored when
+              tandem is false. */}
+          {r.tandem && (
+            <div style={{
+              marginTop:10, padding:"10px 12px", background:"#fef3c7",
+              border:`1px dashed ${C.accent}55`, borderRadius:7,
+            }}>
+              <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",
+                color:C.accent,textTransform:"uppercase",marginBottom:8}}>
+                Tandem · second half (same slot {r.slot||"?"})
+              </div>
+              <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase"}}>Amp B</span>
+                <Inp value={r.ampB||""} onChange={e=>updReg(r.id,{ampB:e.target.value})}
+                  placeholder="20" style={{width:60,fontSize:11}}/>
+                <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",marginLeft:8}}>Description B</span>
+                <Inp value={r.descriptionB||""} onChange={e=>updReg(r.id,{descriptionB:e.target.value})}
+                  placeholder="2nd circuit on this tandem"
+                  style={{flex:1,minWidth:160,fontSize:11}}/>
+                <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",marginLeft:8}}>Phase B</span>
+                <Sel value={r.phaseB||""} onChange={e=>updReg(r.id,{phaseB:e.target.value})}
+                  options={PHASE_OPTS} style={{width:60,fontSize:11}}/>
+              </div>
+            </div>
+          )}
         </div>
       );
     }
@@ -14770,6 +14879,13 @@ function SavantPanelSchedule({
         );
       })()}
 
+      {/* Inline editor / add picker — rendered ABOVE the grid so when you
+          click "+ add" or a cell, the options pop up right where you can see
+          them without scrolling down. The picker auto-scrolls itself into
+          view via the ref + effect on the inner section. */}
+      {renderAddPicker()}
+      {renderEditor()}
+
       {/* Schedule grid */}
       <div style={{
         display:"grid", gridTemplateColumns:"40px 1fr 40px 1fr",
@@ -14791,10 +14907,6 @@ function SavantPanelSchedule({
           </Fragment>
         ))}
       </div>
-
-      {/* Inline editor / add picker */}
-      {renderAddPicker()}
-      {renderEditor()}
     </div>
   );
 }
