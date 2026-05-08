@@ -20927,6 +20927,40 @@ const SEED_UPCOMING = [
   {id:"seed13", name:"#1809 - Tuhaye Hollow",                                          city:"Kamas",               sales:"Josh",   customer:"The Housley Group",        notes:"",                                                   lastFollowUp:"",         foreman:""},
 ];
 
+// EditForm hoisted to module scope. Previously this was defined INSIDE
+// UpcomingJobs, which meant React saw a new function reference on every
+// keystroke (because UpcomingJobs re-renders on every `upd()` call).
+// React then unmounted the input, remounted it, and focus was lost —
+// the user had to click the field again after every single character.
+// Hoisting fixes the focus loss with no behavior change.
+function UpcomingEditForm({ u, upd, del, foremenList, onPromote, onPromoteToQuote, setEditingId }) {
+  return (
+    <div style={{flex:1,display:"flex",flexDirection:"column",gap:10}}>
+      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+        <div style={{flex:2.5,minWidth:160}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Job Name</div><Inp value={u.name} onChange={e=>upd(u.id,{name:e.target.value})} placeholder="Job name"/></div>
+        <div style={{flex:1.2,minWidth:100}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>City</div><Inp value={u.city} onChange={e=>upd(u.id,{city:e.target.value})} placeholder="City"/></div>
+        <div style={{flex:1,minWidth:90}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Sales</div><Inp value={u.sales} onChange={e=>upd(u.id,{sales:e.target.value})} placeholder="Sales rep"/></div>
+        <div style={{flex:1.5,minWidth:130}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Customer / GC</div><Inp value={u.customer} onChange={e=>upd(u.id,{customer:e.target.value})} placeholder="Customer or GC"/></div>
+        <div style={{flex:1.1,minWidth:110}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Last Follow Up</div><DateInp value={u.lastFollowUp} onChange={e=>upd(u.id,{lastFollowUp:e.target.value})}/></div>
+        <div style={{flex:1,minWidth:120}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
+          <select value={u.foreman||""} onChange={e=>upd(u.id,{foreman:e.target.value})} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
+            <option value="">— unassigned —</option>
+            {(foremenList||getForemenList()).map(f=><option key={f} value={f}>{f}</option>)}
+          </select>
+        </div>
+      </div>
+      <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Address</div><Inp value={u.address||""} onChange={e=>upd(u.id,{address:e.target.value})} placeholder="Street address for navigation (e.g. 123 Main St, Park City UT)"/></div>
+      <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes</div><TA value={u.notes} onChange={e=>upd(u.id,{notes:e.target.value})} placeholder="Status, timeline, notes…" rows={2}/></div>
+      <div style={{display:"flex",gap:8,marginTop:2,flexWrap:"wrap"}}>
+        <button onClick={()=>setEditingId(null)} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
+        <button onClick={()=>onPromote(u)} style={{background:"none",border:`1px solid ${C.green}`,borderRadius:7,color:C.green,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✓ Promote to Job</button>
+        <button onClick={()=>onPromoteToQuote(u)} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:7,color:C.accent,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>→ Quote</button>
+        <button onClick={()=>del(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>Remove</button>
+      </div>
+    </div>
+  );
+}
+
 function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuote, canManage=false, foremenList }) {
   const [editingId, setEditingId] = useState(null);
   const [confirmDeleteId, setConfirmDeleteId] = useState(null);
@@ -20953,32 +20987,9 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
   };
   const colKeys = Object.keys(COL);
 
-  // Shared edit form used in both layouts
-  const EditForm = ({u}) => (
-    <div style={{flex:1,display:"flex",flexDirection:"column",gap:10}}>
-      <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
-        <div style={{flex:2.5,minWidth:160}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Job Name</div><Inp value={u.name} onChange={e=>upd(u.id,{name:e.target.value})} placeholder="Job name"/></div>
-        <div style={{flex:1.2,minWidth:100}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>City</div><Inp value={u.city} onChange={e=>upd(u.id,{city:e.target.value})} placeholder="City"/></div>
-        <div style={{flex:1,minWidth:90}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Sales</div><Inp value={u.sales} onChange={e=>upd(u.id,{sales:e.target.value})} placeholder="Sales rep"/></div>
-        <div style={{flex:1.5,minWidth:130}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Customer / GC</div><Inp value={u.customer} onChange={e=>upd(u.id,{customer:e.target.value})} placeholder="Customer or GC"/></div>
-        <div style={{flex:1.1,minWidth:110}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Last Follow Up</div><DateInp value={u.lastFollowUp} onChange={e=>upd(u.id,{lastFollowUp:e.target.value})}/></div>
-        <div style={{flex:1,minWidth:120}}><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Foreman</div>
-          <select value={u.foreman||""} onChange={e=>upd(u.id,{foreman:e.target.value})} style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
-            <option value="">— unassigned —</option>
-            {(foremenList||getForemenList()).map(f=><option key={f} value={f}>{f}</option>)}
-          </select>
-        </div>
-      </div>
-      <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Address</div><Inp value={u.address||""} onChange={e=>upd(u.id,{address:e.target.value})} placeholder="Street address for navigation (e.g. 123 Main St, Park City UT)"/></div>
-      <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes</div><TA value={u.notes} onChange={e=>upd(u.id,{notes:e.target.value})} placeholder="Status, timeline, notes…" rows={2}/></div>
-      <div style={{display:"flex",gap:8,marginTop:2,flexWrap:"wrap"}}>
-        <button onClick={()=>setEditingId(null)} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
-        <button onClick={()=>onPromote(u)} style={{background:"none",border:`1px solid ${C.green}`,borderRadius:7,color:C.green,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✓ Promote to Job</button>
-        <button onClick={()=>onPromoteToQuote(u)} style={{background:"none",border:`1px solid ${C.accent}`,borderRadius:7,color:C.accent,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>→ Quote</button>
-        <button onClick={()=>del(u.id)} style={{background:"none",border:"none",color:C.muted,fontSize:12,cursor:"pointer",fontFamily:"inherit",marginLeft:"auto"}}>Remove</button>
-      </div>
-    </div>
-  );
+  // (EditForm wrapper removed — was being redefined every render, causing
+  // the very focus-loss bug we're fixing. Render <UpcomingEditForm.../>
+  // directly at the two call sites below.)
 
   const signedCount = upcoming.filter(u=>u.signed).length;
 
@@ -21023,7 +21034,11 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                 borderLeft: `3px solid ${isSigned ? C.green : C.border}`,
                 borderRadius:11, padding:14, marginBottom:10,
               }}>
-                {isEditing ? <EditForm u={u}/> : (
+                {isEditing ? (
+                  <UpcomingEditForm u={u} upd={upd} del={del} foremenList={foremenList}
+                    onPromote={onPromote} onPromoteToQuote={onPromoteToQuote}
+                    setEditingId={setEditingId}/>
+                ) : (
                   <>
                     <div style={{display:"flex",justifyContent:"space-between",alignItems:"flex-start",marginBottom:6}}>
                       <div style={{flex:1,minWidth:0}}>
@@ -21101,7 +21116,11 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
               }}
                 onMouseEnter={e=>{if(!isEditing)e.currentTarget.style.background=isSigned?`${C.green}12`:C.surface;}}
                 onMouseLeave={e=>{if(!isEditing)e.currentTarget.style.background=isSigned?`${C.green}08`:"none";}}>
-                {isEditing ? <EditForm u={u}/> : (
+                {isEditing ? (
+                  <UpcomingEditForm u={u} upd={upd} del={del} foremenList={foremenList}
+                    onPromote={onPromote} onPromoteToQuote={onPromoteToQuote}
+                    setEditingId={setEditingId}/>
+                ) : (
                   <>
                     <div style={{flex:2.5,paddingRight:12,overflow:"hidden"}}>
                       <div style={{fontSize:13,fontWeight:600,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
