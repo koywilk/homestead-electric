@@ -461,7 +461,21 @@ async function registerFCMToken(userId, force=false) {
     // On iOS, Notification API may not exist unless added to Home Screen as PWA
     if (!("Notification" in window)) return "no_notification_api";
 
-    const permission = await Notification.requestPermission();
+    // Read the current permission state first — only call requestPermission()
+    // when we actually need to prompt. This is THE fix for "iPhone PWA needs
+    // me to hit Enable every time I reopen the app." On iOS Safari PWA,
+    // Notification.requestPermission() only works when invoked from a user
+    // gesture; the auto-keepalive path (visibilitychange / interval) is NOT
+    // a gesture, so calling requestPermission there silently fails even when
+    // permission is already "granted". After a swipe-close, iOS kills the
+    // push subscription, the keepalive fires resetPushSubscriptionAndReregister,
+    // which calls THIS function — and the requestPermission call would bail
+    // until the user manually tapped Enable. Reading .permission directly is
+    // always safe and never requires a user gesture.
+    let permission = Notification.permission;
+    if (permission === "default") {
+      permission = await Notification.requestPermission();
+    }
     if (permission !== "granted") return "permission_denied";
 
     // Explicitly register the Firebase messaging SW and wait for it to activate.
