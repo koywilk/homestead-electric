@@ -1374,6 +1374,43 @@ if (typeof window !== "undefined") {
   window.__HE_SAVANT_V2_MIGRATE = migrateToSavantV2;
   window.__HE_SAVANT_V2_FLATTEN = savantV2ToV1;
   window.__HE_SAVANT_V2_FOR_FLOOR = getSavantV2ForFloor;
+
+  // Console helper — pulls every Savant job from Firestore and prints the
+  // V2-migrated shape for each. Use this after deploy to confirm the
+  // migration produces sane output on real data before we wire up the UI.
+  // Usage: __HE_DEBUG_SAVANT_V2()
+  window.__HE_DEBUG_SAVANT_V2 = async () => {
+    const snap = await getDocs(collection(window.__HE_DB, "jobs"));
+    const savantJobs = snap.docs
+      .map(d => ({ id: d.id, ...d.data() }))
+      .filter(j => j.data?.lightingSystem === "Savant");
+    console.log(`Found ${savantJobs.length} Savant job(s)`);
+    const report = savantJobs.map(j => {
+      const floors = Object.keys(j.data?.panelizedLighting?.cp4Loads || {});
+      const summary = floors.map(f => {
+        const v2 = getSavantV2ForFloor(j, f);
+        return {
+          floor: f,
+          modules: v2.modules.length,
+          feeders: v2.feeders.length,
+          firstModule: v2.modules[0] ? {
+            sku: v2.modules[0].sku,
+            slots: v2.modules[0].slots,
+            outputA: v2.modules[0].outputs?.A?.name || "(empty)",
+            outputB: v2.modules[0].outputs?.B?.name || "(empty)",
+          } : null,
+        };
+      });
+      return { name: j.data?.name || j.id, floors: summary };
+    });
+    console.table(report.map(r => ({
+      job: r.name,
+      floors: r.floors.map(f => `${f.floor}: ${f.modules}m/${f.feeders}f`).join(", "),
+    })));
+    console.log("Full report:", report);
+    console.log("Pull a single job's V2 with: __HE_SAVANT_V2_FOR_FLOOR(jobObj, floorKey)");
+    return report;
+  };
 }
 
 const newKPRow         = (num) => ({ id:uid(), num, name:"", status:"" });
