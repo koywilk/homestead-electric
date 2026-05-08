@@ -14744,6 +14744,340 @@ function SavantPanelSimple({ loads = [], onChange, allLoads = [] }) {
 }
 
 
+// ── SavantPanelV2 (Step 2 — read-only render) ───────────────────────────
+// Reads the V2 shape via getSavantV2ForFloor() and renders the redesigned
+// schedule + load list. NOT wired into the main render path yet — defined
+// here so we can flip the call site in Step 3 with a one-line change.
+//
+// Design follows the approved mockup:
+//   • Two-column slot grid (odd left, even right) like a Square D panel cover
+//   • Each feeder breaker gets a unique color from a fixed palette
+//   • Modules render as bordered blocks spanning their two slots, with A/B
+//     halves colored by their respective input feeders (so a feeder powering
+//     multiple modules shows the same color across all of them)
+//   • Load list at the bottom mirrors the same color logic
+//
+// Read-only for this step — no add/remove/edit. That comes in Step 4.
+const SAV_V2_FEEDER_COLORS = [
+  { name: "purple", fill: "rgba(127,119,221,0.18)", chip: "#7f77dd" },
+  { name: "teal",   fill: "rgba(29,158,117,0.18)",  chip: "#1d9e75" },
+  { name: "coral",  fill: "rgba(216,90,48,0.18)",   chip: "#d85a30" },
+  { name: "pink",   fill: "rgba(212,83,126,0.20)",  chip: "#d4537e" },
+  { name: "amber",  fill: "rgba(186,117,23,0.18)",  chip: "#ba7517" },
+  { name: "blue",   fill: "rgba(24,95,165,0.18)",   chip: "#185fa5" },
+  { name: "green",  fill: "rgba(99,153,34,0.18)",   chip: "#639922" },
+  { name: "rust",   fill: "rgba(160,45,45,0.18)",   chip: "#a32d2d" },
+];
+const savV2FeederColor = (feederId, feeders) => {
+  if (!feederId) return null;
+  const idx = feeders.findIndex(f => f.id === feederId);
+  if (idx < 0) return null;
+  return SAV_V2_FEEDER_COLORS[idx % SAV_V2_FEEDER_COLORS.length];
+};
+
+// Build a slot → cell map. Each cell tells the renderer what occupies that
+// slot: a feeder breaker (1-pole = 1 slot, 2-pole = 2 slots in same column),
+// a module half (top half = Input A at slot N, bottom half = Input B at N+2),
+// or empty.
+function buildSavV2SlotMap(v2) {
+  const map = {};
+  (v2.feeders || []).forEach(f => {
+    const slot = parseInt(f.slot, 10);
+    if (!slot || Number.isNaN(slot)) return;
+    map[slot] = { kind: "feeder", feeder: f, isCont: false };
+    if ((f.poles || 1) === 2) {
+      // 2-pole spans the same column → slot N and slot N+2
+      map[slot + 2] = { kind: "feeder", feeder: f, isCont: true };
+    }
+  });
+  (v2.modules || []).forEach(m => {
+    const slots = m.slots || [];
+    slots.forEach((s, i) => {
+      const slot = parseInt(s, 10);
+      if (!slot || Number.isNaN(slot)) return;
+      // For dual-output modules: i=0 → A, i=1 → B
+      // For single-output: i=0 → A, i=1 → cont (no separate input)
+      const isSingle = savSkuOutputs(m.sku) === 1;
+      map[slot] = {
+        kind: "module-half",
+        module: m,
+        halfIndex: i,
+        channel: i === 0 ? "A" : (isSingle ? null : "B"),
+        isCont: isSingle && i === 1,
+      };
+    });
+  });
+  return map;
+}
+
+function SavantPanelV2({ job, floor, panelLabel = "Lighting panel" }) {
+  const v2 = getSavantV2ForFloor(job, floor);
+  const slotMap = buildSavV2SlotMap(v2);
+  const panelSize = v2.panelSize || 40;
+  const oddSlots  = []; for (let i = 1; i <= panelSize; i += 2) oddSlots.push(i);
+  const evenSlots = []; for (let i = 2; i <= panelSize; i += 2) evenSlots.push(i);
+
+  // ── Slot row renderers ─────────────────────────────────────────────
+  const renderEmpty = (slot) => (
+    <div key={`s${slot}`} style={{
+      display:"grid", gridTemplateColumns:"32px 1fr", gap:8, alignItems:"center",
+      minHeight:32, padding:"5px 9px", borderRadius:4,
+      background:"#f8fafc", marginBottom:3,
+    }}>
+      <span style={{color:C.muted, fontSize:11, textAlign:"right",
+        fontVariantNumeric:"tabular-nums"}}>{slot}</span>
+      <span style={{color:C.muted, fontStyle:"italic", fontSize:12}}>empty</span>
+    </div>
+  );
+
+  const renderFeeder = (slot, feeder, isCont) => {
+    const color = savV2FeederColor(feeder.id, v2.feeders);
+    const label = feeder.label || `F${(v2.feeders.indexOf(feeder) + 1)}`;
+    // Find every module input this feeder powers (for "feeds X" subtitle).
+    const fed = (v2.modules || []).flatMap(m => {
+      const arr = [];
+      if (m.inputs?.A === feeder.id) arr.push(`${m.modNum||"?"}·A`);
+      if (m.inputs?.B === feeder.id) arr.push(`${m.modNum||"?"}·B`);
+      return arr;
+    });
+    return (
+      <div key={`s${slot}`} style={{
+        display:"grid", gridTemplateColumns:"32px 1fr", gap:8, alignItems:"center",
+        minHeight:32, padding:"5px 9px", borderRadius:4,
+        background: color ? color.fill : "#f1f5f9", marginBottom:3,
+        borderLeft: color ? `3px solid ${color.chip}` : `3px solid ${C.border}`,
+      }}>
+        <span style={{color:C.dim, fontSize:11, textAlign:"right",
+          fontVariantNumeric:"tabular-nums"}}>{slot}</span>
+        <div style={{display:"flex", flexDirection:"column", lineHeight:1.3}}>
+          <span style={{color:C.text, fontSize:12, fontWeight:500}}>
+            {isCont ? `${label} cont.` : `${label} · ${feeder.amps||"20"}A${(feeder.poles||1)===2?" 2P":""}`}
+            {!isCont && fed.length > 0 && (
+              <span style={{
+                marginLeft:6, fontSize:10, padding:"1px 5px",
+                background:"rgba(255,255,255,0.65)", borderRadius:3, fontWeight:500,
+              }}>feeds {fed.length}</span>
+            )}
+          </span>
+          {!isCont && fed.length > 0 && (
+            <span style={{color:C.dim, fontSize:11}}>→ {fed.join(" · ")}</span>
+          )}
+          {!isCont && fed.length === 0 && (
+            <span style={{color:C.dim, fontSize:11, fontStyle:"italic"}}>not yet assigned</span>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  const renderModule = (slotA, slotB, m) => {
+    const meta = savSkuMeta(m.sku);
+    const isSingle = meta.outputs === 1;
+    const inputAColor = savV2FeederColor(m.inputs?.A, v2.feeders);
+    const inputBColor = isSingle ? null : savV2FeederColor(m.inputs?.B, v2.feeders);
+    const half = (slot, ch, color, output) => (
+      <div style={{
+        display:"grid", gridTemplateColumns:"32px 24px 1fr", gap:8, alignItems:"center",
+        minHeight:30, padding:"4px 9px", lineHeight:1.25,
+        background: color ? color.fill : "#fafbfc",
+        borderTop: ch === "B" ? `0.5px dashed ${C.border}` : "none",
+      }}>
+        <span style={{color:C.dim, fontSize:11, textAlign:"right",
+          fontVariantNumeric:"tabular-nums"}}>{slot}</span>
+        <span style={{
+          fontSize:11, fontWeight:500, color: color ? color.chip : C.dim,
+          textAlign:"center",
+        }}>{ch || "—"}</span>
+        <span style={{color:C.text, fontSize:12}}>
+          {output?.name || <span style={{color:C.muted, fontStyle:"italic"}}>(no name)</span>}
+          {color && (
+            <span style={{color:C.dim, fontSize:11, marginLeft:6}}>
+              ← {v2.feeders.find(f=>f.id===m.inputs?.[ch])?.label}
+            </span>
+          )}
+          {!color && (
+            <span style={{color:C.muted, fontSize:11, marginLeft:6, fontStyle:"italic"}}>
+              ← unassigned
+            </span>
+          )}
+        </span>
+      </div>
+    );
+    return (
+      <div key={`m${m.id}`} style={{
+        border:`0.5px solid ${C.border}`, borderRadius:6, overflow:"hidden",
+        marginBottom:3, background:"#fff",
+      }}>
+        <div style={{
+          padding:"5px 9px", fontSize:11, fontWeight:500, color:C.text,
+          background:"#f1f5f9", display:"flex", justifyContent:"space-between",
+          alignItems:"center",
+        }}>
+          <span>Mod {m.modNum||"?"} — {meta.label || m.sku || "Unknown SKU"}</span>
+          <span style={{color:C.dim, fontSize:10, fontWeight:400}}>
+            slots {[slotA, slotB].filter(Boolean).join(", ")}
+          </span>
+        </div>
+        {half(slotA, "A", inputAColor, m.outputs?.A)}
+        {!isSingle && slotB && half(slotB, "B", inputBColor, m.outputs?.B)}
+        {isSingle && slotB && (
+          <div style={{
+            padding:"4px 9px", fontSize:11, color:C.dim, fontStyle:"italic",
+            background:"#fafbfc", textAlign:"center",
+          }}>slot {slotB} · single-output cont.</div>
+        )}
+      </div>
+    );
+  };
+
+  const renderColumn = (slots) => {
+    const out = [];
+    for (let i = 0; i < slots.length; i++) {
+      const slot = slots[i];
+      const cell = slotMap[slot];
+      if (!cell) { out.push(renderEmpty(slot)); continue; }
+      if (cell.kind === "feeder" && !cell.isCont) {
+        out.push(renderFeeder(slot, cell.feeder, false));
+        continue;
+      }
+      if (cell.kind === "feeder" && cell.isCont) {
+        out.push(renderFeeder(slot, cell.feeder, true));
+        continue;
+      }
+      if (cell.kind === "module-half" && cell.halfIndex === 0) {
+        // Render the whole module here — it consumes this slot AND the next
+        // slot down in this column (slots[i+1]).
+        const slotB = slots[i+1];
+        out.push(renderModule(slot, slotB, cell.module));
+        // Skip the cont slot, but only if slotMap[slotB] points to the same module
+        if (slotB && slotMap[slotB]?.module?.id === cell.module.id) i++;
+        continue;
+      }
+      // Stray cont half whose top half wasn't placed — render as orphaned
+      if (cell.kind === "module-half" && cell.halfIndex !== 0) {
+        out.push(
+          <div key={`s${slot}`} style={{
+            display:"grid", gridTemplateColumns:"32px 1fr", gap:8, alignItems:"center",
+            minHeight:30, padding:"5px 9px", borderRadius:4,
+            background:"#fff7ed", marginBottom:3, border:`0.5px dashed ${C.orange}`,
+          }}>
+            <span style={{color:C.dim, fontSize:11, textAlign:"right",
+              fontVariantNumeric:"tabular-nums"}}>{slot}</span>
+            <span style={{color:C.orange, fontSize:11, fontStyle:"italic"}}>
+              orphan module half — needs slot fix
+            </span>
+          </div>
+        );
+      }
+    }
+    return out;
+  };
+
+  // ── Load list (one card per module) ────────────────────────────────
+  const renderLoadList = () => (
+    <div style={{marginTop:14}}>
+      <div style={{fontSize:12, fontWeight:600, color:C.dim, marginBottom:8,
+        letterSpacing:"0.04em", textTransform:"uppercase"}}>
+        Load list — switch legs by module
+      </div>
+      {(v2.modules || []).length === 0 && (
+        <div style={{padding:"10px 12px", fontSize:12, color:C.dim, fontStyle:"italic",
+          background:"#fafbfc", border:`0.5px dashed ${C.border}`, borderRadius:6}}>
+          No modules yet.
+        </div>
+      )}
+      {(v2.modules || []).map(m => {
+        const meta = savSkuMeta(m.sku);
+        const isSingle = meta.outputs === 1;
+        const aColor = savV2FeederColor(m.inputs?.A, v2.feeders);
+        const bColor = savV2FeederColor(m.inputs?.B, v2.feeders);
+        const outRow = (ch, color, out, breakerInfo) => out ? (
+          <div style={{
+            display:"grid", gridTemplateColumns:"90px 1fr 100px 70px",
+            gap:10, alignItems:"center", padding:"7px 12px",
+            background: color ? color.fill : "transparent",
+            borderTop: `0.5px solid ${C.border}`,
+          }}>
+            <span style={{fontSize:11, fontWeight:600, color:C.text}}>
+              {ch || "—"} · {breakerInfo}
+            </span>
+            <span style={{color:C.text, fontSize:13}}>
+              {out.name || <span style={{color:C.muted, fontStyle:"italic"}}>(no name)</span>}
+            </span>
+            <span style={{color:C.dim, fontSize:12}}>{out.loadType || ""}</span>
+            <span style={{color:C.dim, fontSize:12, textAlign:"right",
+              fontVariantNumeric:"tabular-nums"}}>{out.watts ? `${out.watts}W` : ""}</span>
+          </div>
+        ) : null;
+        const aFeeder = v2.feeders.find(f => f.id === m.inputs?.A);
+        const bFeeder = v2.feeders.find(f => f.id === m.inputs?.B);
+        return (
+          <div key={m.id} style={{
+            border:`0.5px solid ${C.border}`, borderRadius:6, overflow:"hidden",
+            marginBottom:8, background:"#fff",
+          }}>
+            <div style={{padding:"7px 12px", fontSize:12, fontWeight:600,
+              color:C.text, background:"#f8fafc",
+              display:"flex", justifyContent:"space-between"}}>
+              <span>Module #{m.modNum||"?"} · {meta.label || m.sku || "Unknown"}</span>
+              <span style={{color:C.dim, fontSize:11, fontWeight:400}}>
+                slots {(m.slots||[]).join(", ") || "unplaced"}
+              </span>
+            </div>
+            {outRow("A", aColor, m.outputs?.A,
+              `${aFeeder?.label || "?"} · ${aFeeder?.amps || "?"}A`)}
+            {!isSingle && outRow("B", bColor, m.outputs?.B,
+              `${bFeeder?.label || "?"} · ${bFeeder?.amps || "?"}A`)}
+          </div>
+        );
+      })}
+    </div>
+  );
+
+  // ── Header strip ──────────────────────────────────────────────────
+  const moduleCount = (v2.modules || []).length;
+  const pbcCount    = Math.max(1, Math.ceil(moduleCount / 40));
+  const pbcMaxOK    = moduleCount <= pbcCount * 40;
+
+  return (
+    <div style={{marginBottom:16}}>
+      {/* Header */}
+      <div style={{
+        padding:"10px 14px", marginBottom:10, background:"#f8fafc",
+        border:`0.5px solid ${C.border}`, borderRadius:8,
+        display:"flex", justifyContent:"space-between", alignItems:"baseline",
+      }}>
+        <div>
+          <div style={{fontWeight:600, fontSize:13, color:C.text}}>{panelLabel}</div>
+          <div style={{color:C.dim, fontSize:11}}>{panelSize}-slot panel</div>
+        </div>
+        <div style={{color:C.dim, fontSize:11, textAlign:"right"}}>
+          {moduleCount} module{moduleCount===1?"":"s"} · {pbcCount} PBC{pbcCount===1?"":"s"}
+          {!pbcMaxOK && <span style={{color:C.red, marginLeft:6}}>over 40-module limit</span>}
+        </div>
+      </div>
+
+      {/* Two-column slot grid */}
+      <div style={{display:"grid", gridTemplateColumns:"1fr 1fr", gap:8}}>
+        <div>{renderColumn(oddSlots)}</div>
+        <div>{renderColumn(evenSlots)}</div>
+      </div>
+
+      {/* Load list */}
+      {renderLoadList()}
+
+      {/* Read-only marker so we know what we're looking at during Step 2 */}
+      <div style={{
+        marginTop:10, padding:"6px 10px", background:"#fef3c7",
+        border:`0.5px solid ${C.accent}`, borderRadius:6, fontSize:11,
+        color:C.accent, fontStyle:"italic",
+      }}>
+        Preview only — not yet wired into the live editor (Step 2 of 7).
+      </div>
+    </div>
+  );
+}
+
 function PanelModulesSection({
   modules, onChange, system, allLoads=[],
   // Optional cross-panel move support — when provided, the Move dropdown
