@@ -14631,12 +14631,13 @@ function SavantPanelSchedule({
     // In that mode the input becomes click-through so the whole cell —
     // input area included — responds to the assign click.
     const compactCell = ({ kind, color, leftBadge, rightBadge, ampLabel, value, onChange,
-                            placeholder, onClickRest, onDelete, withDatalist = false,
+                            placeholder, onClickRest, onDelete, onMove, withDatalist = false,
                             armedMode = false }) => {
       const hasFeeder = !!color;
       const fillBg = isSelected ? "#fef3c7" : (hasFeeder ? `${color}1f` : "#fff");
       const ampPad = ampLabel ? 30 : 4;
       const delPad = onDelete ? 22 : 0;
+      const movePad = onMove ? 22 : 0;
       return (
         <div onClick={onClickRest}
           style={{
@@ -14675,11 +14676,22 @@ function SavantPanelSchedule({
           {ampLabel && (
             <span style={{
               position:"absolute",
-              right: 4 + delPad,
+              right: 4 + delPad + movePad,
               top:"50%", transform:"translateY(-50%)",
               fontSize:9, fontWeight:700, color:C.dim, opacity:0.7,
               letterSpacing:"0.02em", pointerEvents:"none",
             }}>{ampLabel}</span>
+          )}
+          {onMove && (
+            <button onClick={(e)=>{ e.stopPropagation(); onMove(); }}
+              title="Move this breaker to a different slot"
+              style={{
+                position:"absolute",
+                right: 2 + delPad,
+                top:"50%", transform:"translateY(-50%)",
+                background:"none", border:"none", color:"#2563eb", cursor:"pointer",
+                fontSize:13, lineHeight:1, padding:"0 4px", fontWeight:700,
+              }}>↔</button>
           )}
           {onDelete && (
             <button onClick={(e)=>{ e.stopPropagation(); onDelete(); }}
@@ -14758,6 +14770,10 @@ function SavantPanelSchedule({
             if (selectedSlot === slot) setSelectedSlot(null);
           }
         },
+        onMove: () => {
+          setMoveSourceSlot(Number(m.slotA));
+          setSelectedSlot(null);
+        },
         withDatalist: true,
       });
     }
@@ -14818,6 +14834,10 @@ function SavantPanelSchedule({
             delSmart(m.id);
             if (selectedSlot === slotA) setSelectedSlot(null);
           }
+        },
+        onMove: () => {
+          setMoveSourceSlot(Number(m.slotA));
+          setSelectedSlot(null);
         },
         withDatalist: true,
       });
@@ -14902,6 +14922,10 @@ function SavantPanelSchedule({
           delReg(r.id);
           if (selectedSlot === slot) setSelectedSlot(null);
         }
+      },
+      onMove: () => {
+        setMoveSourceSlot(Number(r.slot));
+        setSelectedSlot(null);
       },
     });
 
