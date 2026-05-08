@@ -1025,6 +1025,32 @@ const newLoadRow   = (num) => ({ id:uid(), num, name:"", ch:"", loadType:"", wat
 
 const newModuleObj = (modNum) => ({ id:uid(), modNum:String(modNum), moduleType:"", panel:"", breaker:"", phase:"", bus:"", pdu:"", chainPos:"", loads:[newLoadRow(1)] });
 
+// Inverse of migrateFloorToModules — flattens nested module-block format
+// back to a flat list of load rows. Carries up the parent module's mod
+// number / SKU / panel / breaker / phase so pairing info survives the
+// flatten. Safe to run on already-flat data (returns it unchanged).
+//
+// Used by SavantPanelSimple so it can read data that was previously saved
+// in the nested format by PanelModulesSection or SavantPanelSchedule.
+const flattenModulesToRows = (arr) => {
+  if (!arr || arr.length===0) return [];
+  if (arr[0]?.loads === undefined) return arr;  // already flat
+  const out = [];
+  arr.forEach(m => {
+    const carry = {
+      mod: m.modNum || "",
+      moduleType: m.moduleType || "",
+      panel: m.panel || "",
+      breaker: m.breaker || "",
+      phase: m.phase || "",
+    };
+    (m.loads||[]).forEach(l => {
+      out.push({ ...l, ...carry, moduleType: l.moduleType || carry.moduleType });
+    });
+  });
+  return out;
+};
+
 // Migrates old flat-row format → new module-block format (safe to run on already-migrated data)
 const migrateFloorToModules = (arr) => {
   if (!arr || arr.length===0) return [];
@@ -1076,13 +1102,12 @@ function printPanelSchedule({ jobName, jobAddress, system, panelLabel, modules,
     .replace(/"/g, "&quot;").replace(/'/g, "&#39;");
   const stripTags = (s) => String(s == null ? "" : s).replace(/<[^>]*>/g, "");
 
-  // For Savant, decide which layout to render. If any module has a slotA we use
-  // the new schedule layout; otherwise fall back to the legacy module cards so
-  // existing Savant jobs still print exactly as they did before.
-  const savUseSchedule = isSav && (
-    ((modules||[]).some(m => Number(m && m.slotA) > 0)) ||
-    ((regularBreakers||[]).length > 0)
-  );
+  // Savant uses the simple switch-leg list now — print falls through to the
+  // existing module-card layout (which already groups by `mod` field, so
+  // smart breakers print as one card with two legs A/B). The earlier
+  // panel-schedule branch is left in code but disabled.
+  const savUseSchedule = false;
+  // (Earlier: const savUseSchedule = isSav && (modules has slotA OR regularBreakers exist))
 
   const visibleMods = (modules || []).filter(m => m && (m.modNum || m.moduleType || m.slotA || (m.loads||[]).some(l => l && l.name)));
   const totalLoads = visibleMods.reduce((n, m) => n + (m.loads||[]).filter(l => l && (l.name||"").trim()).length, 0);
@@ -13911,6 +13936,263 @@ function slotHeaderStyle(isRight) {
 }
 
 
+// ── SavantPanelSimple ───────────────────────────────────────────────────
+// Replaces the earlier "panel schedule" view per Koy's request — just the
+// panel name (set in the parent via plSectionLabels), a flat list of switch
+// legs typed in directly, and the ability to pair two legs as a single
+// smart breaker. No slot numbers, no feeder breakers, no panel-schedule
+// grid. Each smart breaker = exactly two paired legs + an SKU.
+//
+// Data shape — reuses existing per-load fields in cp4Loads.{floor} to stay
+// fully back-compat:
+//   name, loadType, watts, keypad — existing per-load fields
+//   mod         — smart breaker number ("" for unpaired single switch leg)
+//   ch          — "A" or "B" inside a paired smart breaker; "" for singles
+//   moduleType  — the SKU value (e.g. "DUAL_20A_RELAY") when paired
+// Loads with the same `mod` value form one smart breaker. Empty `mod` =
+// single switch leg. Old data with module-style mod numbers renders as
+// smart breakers automatically (any 2 legs sharing a mod# are paired).
+function SavantPanelSimple({ loads = [], onChange, allLoads = [] }) {
+  // Accept the existing array shape; never mutate in place. Each item is
+  // one switch leg row.
+  const items = loads || [];
+
+  // Group items by `mod`. Items with the same non-empty mod = one smart
+  // breaker. Items with empty mod = single switch legs. Walk the array in
+  // order so the on-screen render order matches Koy's typed order.
+  const groups = [];
+  const seenMods = new Map(); // mod# → groups index
+  items.forEach(it => {
+    const mk = (it.mod || "").trim();
+    if (!mk) {
+      groups.push({ kind: "leg", item: it });
+    } else if (seenMods.has(mk)) {
+      const gi = seenMods.get(mk);
+      groups[gi].items.push(it);
+    } else {
+      seenMods.set(mk, groups.length);
+      groups.push({ kind: "smart", mod: mk, items: [it] });
+    }
+  });
+
+  // ── Mutators (always build a NEW array — Firestore-safe) ──────────────
+  const update = (id, patch) =>
+    onChange(items.map(x => x.id === id ? { ...x, ...patch } : x));
+  const remove = (id) =>
+    onChange(items.filter(x => x.id !== id));
+  const addSwitchLeg = () =>
+    onChange([ ...items, { ...newLoadRow(items.length+1), mod:"", ch:"", moduleType:"" } ]);
+  const addSmartBreaker = () => {
+    // Find next free smart breaker # (1, 2, 3…). Skips numbers already used
+    // by any item currently in mod field (so we don't collide).
+    const used = new Set(items.map(x => (x.mod||"").trim()).filter(Boolean));
+    let n = 1; while (used.has(String(n))) n++;
+    const mod = String(n);
+    onChange([
+      ...items,
+      { ...newLoadRow(items.length+1), mod, ch:"A", moduleType:"DUAL_20A_RELAY" },
+      { ...newLoadRow(items.length+2), mod, ch:"B", moduleType:"DUAL_20A_RELAY" },
+    ]);
+  };
+  // Pair an unpaired single leg with a new partner (so it becomes Leg A
+  // of a new smart breaker; we add an empty Leg B alongside).
+  const promoteToSmart = (id) => {
+    const used = new Set(items.map(x => (x.mod||"").trim()).filter(Boolean));
+    let n = 1; while (used.has(String(n))) n++;
+    const mod = String(n);
+    const idx = items.findIndex(x => x.id === id);
+    if (idx < 0) return;
+    const legA = { ...items[idx], mod, ch:"A", moduleType:"DUAL_20A_RELAY" };
+    const legB = { ...newLoadRow(items.length+1), mod, ch:"B", moduleType:"DUAL_20A_RELAY" };
+    const next = [...items];
+    next[idx] = legA;
+    next.splice(idx+1, 0, legB);
+    onChange(next);
+  };
+  // Unpair a smart breaker → both legs become single switch legs again.
+  // No data lost: name/type/watts stay; only mod/ch/moduleType cleared.
+  const unpairSmart = (mod) =>
+    onChange(items.map(x =>
+      (x.mod||"").trim() === mod
+        ? { ...x, mod:"", ch:"", moduleType:"" }
+        : x
+    ));
+  // Update SKU on both legs of a smart breaker at once.
+  const setSmartSku = (mod, sku) =>
+    onChange(items.map(x =>
+      (x.mod||"").trim() === mod ? { ...x, moduleType: sku } : x
+    ));
+  // Remove a smart breaker entirely (removes both legs).
+  const removeSmart = (mod) =>
+    onChange(items.filter(x => (x.mod||"").trim() !== mod));
+
+  // ── Single switch-leg row ─────────────────────────────────────────────
+  const renderLegRow = (it, opts={}) => {
+    const { showLetter=null, hideRemove=false, hidePromote=false } = opts;
+    return (
+      <div key={it.id} style={{
+        display:"flex", gap:8, alignItems:"center", padding:"6px 10px",
+        background:"#fff", border:`1px solid ${C.border}`, borderRadius:6,
+        marginBottom:6, flexWrap:"wrap",
+      }}>
+        {showLetter && (
+          <span style={{
+            fontWeight:700, color:C.purple, background:"#fff",
+            border:`1px solid ${C.purple}`, borderRadius:3, padding:"1px 5px",
+            fontSize:11, letterSpacing:"0.04em", flexShrink:0,
+          }}>LEG {showLetter}</span>
+        )}
+        <Inp value={it.name||""} onChange={e=>update(it.id,{name:e.target.value})}
+          placeholder="Switch leg name (e.g. Kitchen pendants)"
+          style={{flex:1,minWidth:160,fontSize:12}}/>
+        <Inp value={it.loadType||""} onChange={e=>update(it.id,{loadType:e.target.value})}
+          placeholder="Load type" style={{width:100,fontSize:11}}/>
+        <Inp value={it.watts||""} onChange={e=>update(it.id,{watts:e.target.value})}
+          placeholder="W" style={{width:60,fontSize:11,textAlign:"center"}}/>
+        <label style={{display:"flex",alignItems:"center",gap:4,fontSize:10,
+          fontWeight:600,color:C.dim,cursor:"pointer"}}>
+          <input type="checkbox" checked={!!it.pulled}
+            onChange={e=>update(it.id,{pulled:e.target.checked})}/>
+          pulled
+        </label>
+        {!hidePromote && (
+          <button onClick={()=>promoteToSmart(it.id)}
+            title="Make this leg part of a new smart breaker (adds Leg B alongside)"
+            style={{background:"#fff",border:`1px solid ${C.purple}55`,color:C.purple,
+              borderRadius:5,padding:"3px 8px",fontSize:10,fontWeight:700,cursor:"pointer",
+              fontFamily:"inherit",flexShrink:0,letterSpacing:"0.04em"}}>
+            MAKE SMART
+          </button>
+        )}
+        {!hideRemove && (
+          <button onClick={()=>remove(it.id)}
+            style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+              fontSize:14,padding:"0 4px",flexShrink:0}}>✕</button>
+        )}
+      </div>
+    );
+  };
+
+  // ── Smart breaker block (always 2 legs) ──────────────────────────────
+  const renderSmartBlock = (g) => {
+    const sortedLegs = [...g.items].sort((a,b)=>(a.ch||"").localeCompare(b.ch||""));
+    // Take first 2 as A/B; if more, render the extras at the bottom as
+    // unpaired-style rows so legacy data with >2 legs in one mod isn't lost.
+    const [legA, legB, ...extras] = sortedLegs;
+    const sku = (legA && legA.moduleType) || (legB && legB.moduleType) || "";
+    const skuColor = sku === "DUAL_500W_APD" ? C.accent
+                   : sku === "DUAL_20A_RELAY" ? C.green
+                   : C.purple;
+    return (
+      <div key={g.mod} style={{
+        border:`1px solid ${skuColor}55`, borderRadius:8, marginBottom:10,
+        background:`${skuColor}08`, overflow:"hidden",
+      }}>
+        {/* Smart breaker header — SKU dropdown + remove */}
+        <div style={{
+          padding:"7px 10px", display:"flex", alignItems:"center", gap:8,
+          flexWrap:"wrap", background:`${skuColor}12`,
+          borderBottom:`1px solid ${skuColor}33`,
+        }}>
+          <span style={{
+            fontSize:9, fontWeight:700, letterSpacing:"0.07em", textTransform:"uppercase",
+            background:skuColor, color:"#fff", padding:"2px 8px", borderRadius:99, flexShrink:0,
+          }}>SMART BREAKER #{g.mod}</span>
+          <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",
+            color:C.dim,textTransform:"uppercase"}}>SKU</span>
+          <div style={{minWidth:240,flex:1}}>
+            <Sel value={sku} onChange={e=>setSmartSku(g.mod, e.target.value)}
+              options={SAV_MODULE_TYPES} style={{fontSize:11}}/>
+          </div>
+          <button onClick={()=>{
+              if (window.confirm(`Unpair smart breaker #${g.mod}? Both legs become regular switch legs again. No data lost.`))
+                unpairSmart(g.mod);
+            }}
+            style={{background:"#fff",border:`1px solid ${C.border}`,color:C.dim,
+              borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",
+              fontFamily:"inherit",letterSpacing:"0.04em"}}>
+            UNPAIR
+          </button>
+          <button onClick={()=>{
+              if (window.confirm(`Remove smart breaker #${g.mod} and both legs?`))
+                removeSmart(g.mod);
+            }}
+            style={{background:"none",border:`1px solid ${C.red}55`,color:C.red,
+              borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",
+              fontFamily:"inherit",letterSpacing:"0.04em"}}>
+            REMOVE
+          </button>
+        </div>
+
+        {/* The two legs. We hide the per-row promote/remove so users edit
+            via the SKU/UNPAIR/REMOVE buttons in the header. */}
+        <div style={{padding:"8px 10px"}}>
+          {legA && renderLegRow(legA, { showLetter:"A", hidePromote:true, hideRemove:true })}
+          {legB
+            ? renderLegRow(legB, { showLetter:"B", hidePromote:true, hideRemove:true })
+            : (
+              // Edge case: paired group only has 1 leg (corrupt/legacy).
+              // Show an "Add Leg B" button so user can complete the pair.
+              <button onClick={()=>{
+                  const used = items.filter(x=>(x.mod||"").trim()===g.mod);
+                  const newRow = { ...newLoadRow(items.length+1), mod:g.mod, ch:"B",
+                    moduleType: (used[0]&&used[0].moduleType)||"DUAL_20A_RELAY" };
+                  onChange([...items, newRow]);
+                }}
+                style={{background:"#fff",border:`1px dashed ${C.purple}`,color:C.purple,
+                  borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:700,cursor:"pointer",
+                  fontFamily:"inherit",width:"100%"}}>
+                + Add Leg B
+              </button>
+            )
+          }
+          {extras.length > 0 && (
+            <div style={{marginTop:6,padding:"5px 8px",background:"#fffbe6",
+              border:"1px dashed #fde68a",borderRadius:6,fontSize:11,color:C.dim}}>
+              {extras.length} extra leg{extras.length===1?"":"s"} on this mod# from before
+              (kept so no data is lost). Unpair this smart breaker to convert them all to single switch legs.
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div style={{marginBottom:16}}>
+      {/* Item list */}
+      {groups.length === 0 && (
+        <div style={{padding:"12px 14px",fontSize:12,color:C.dim,fontStyle:"italic",
+          background:"#fafbfc",border:`1px dashed ${C.border}`,borderRadius:8,marginBottom:10}}>
+          No switch legs yet. Use the buttons below to add one.
+        </div>
+      )}
+      {groups.map(g =>
+        g.kind === "smart"
+          ? renderSmartBlock(g)
+          : renderLegRow(g.item)
+      )}
+
+      {/* Add buttons */}
+      <div style={{display:"flex",gap:8,marginTop:8,flexWrap:"wrap"}}>
+        <button onClick={addSwitchLeg}
+          style={{background:"#fff",border:`1px solid ${C.border}`,color:C.text,
+            borderRadius:6,padding:"6px 12px",fontSize:11,fontWeight:700,cursor:"pointer",
+            fontFamily:"inherit",letterSpacing:"0.04em"}}>
+          + ADD SWITCH LEG
+        </button>
+        <button onClick={addSmartBreaker}
+          style={{background:C.purple,border:"none",color:"#fff",
+            borderRadius:6,padding:"6px 12px",fontSize:11,fontWeight:700,cursor:"pointer",
+            fontFamily:"inherit",letterSpacing:"0.04em"}}>
+          + ADD SMART BREAKER
+        </button>
+      </div>
+    </div>
+  );
+}
+
+
 function PanelModulesSection({
   modules, onChange, system, allLoads=[],
   // Optional cross-panel move support — when provided, the Move dropdown
@@ -18247,33 +18529,17 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         DOWNLOAD
                       </button>
                     </div>
-                    {/* Savant gets the Square-D-style panel schedule. Other systems
-                        keep the existing module-card layout untouched. The Savant
-                        view reads/writes `panelizedLighting.panelLayout.{floor}` for
-                        the new fields (panelSize + regularBreakers) — additive so
-                        old jobs render with empty defaults and lose nothing. */}
+                    {/* Savant gets the simple switch-leg list with optional
+                        smart-breaker pairing. Reads/writes the same
+                        cp4Loads.{floor} array as the other systems — pairing
+                        info lives in per-row `mod`+`ch`+`moduleType` so
+                        nothing new is added at the panel-section level. */}
                     {(job.lightingSystem||"Control 4")==="Savant" ? (
-                      <SavantPanelSchedule
+                      <SavantPanelSimple
                         allLoads={alMod}
-                        modules={_mods}
+                        loads={flattenModulesToRows((job.panelizedLighting.cp4Loads||{})[floor]||[])}
                         onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
-                          cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}
-                        regularBreakers={(((job.panelizedLighting.panelLayout)||{})[floor]||{}).regularBreakers||[]}
-                        onRegularChange={(nextArr)=>{
-                          const _pl=job.panelizedLighting; const _pLay=_pl.panelLayout||{};
-                          const _cur=_pLay[floor]||{};
-                          u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[floor]:{..._cur,regularBreakers:nextArr}}}});
-                        }}
-                        panelSize={(((job.panelizedLighting.panelLayout)||{})[floor]||{}).panelSize||40}
-                        onPanelSizeChange={(n)=>{
-                          const _pl=job.panelizedLighting; const _pLay=_pl.panelLayout||{};
-                          const _cur=_pLay[floor]||{};
-                          u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[floor]:{..._cur,panelSize:n}}}});
-                        }}
-                        confirmedProp={job.panelizedLighting?.confirmedModules || {}}
-                        onConfirmedChange={(nextMap)=>u({panelizedLighting:{
-                          ...job.panelizedLighting, confirmedModules: nextMap,
-                        }})}/>
+                          cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}/>
                     ) : (
                       <PanelModulesSection
                         system={job.lightingSystem||"Control 4"}
@@ -18352,30 +18618,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         u({panelizedLighting:updated});
                       }} style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:11,flexShrink:0,marginLeft:6}}>Remove</button>
                     </div>
-                    {/* Same Savant branch as the std-panel section above. Extra-floor
-                        smart breakers live in panelizedLighting[ef.key]; their panel
-                        layout (size + regular breakers) lives in panelLayout[ef.key]. */}
+                    {/* Same Savant branch for extra panels — simple switch-leg
+                        list with smart-breaker pairing. Loads live in
+                        panelizedLighting[ef.key]. */}
                     {(job.lightingSystem||"Control 4")==="Savant" ? (
-                      <SavantPanelSchedule
+                      <SavantPanelSimple
                         allLoads={alMod}
-                        modules={_mods}
-                        onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}
-                        regularBreakers={(((job.panelizedLighting.panelLayout)||{})[ef.key]||{}).regularBreakers||[]}
-                        onRegularChange={(nextArr)=>{
-                          const _pl=job.panelizedLighting; const _pLay=_pl.panelLayout||{};
-                          const _cur=_pLay[ef.key]||{};
-                          u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[ef.key]:{..._cur,regularBreakers:nextArr}}}});
-                        }}
-                        panelSize={(((job.panelizedLighting.panelLayout)||{})[ef.key]||{}).panelSize||40}
-                        onPanelSizeChange={(n)=>{
-                          const _pl=job.panelizedLighting; const _pLay=_pl.panelLayout||{};
-                          const _cur=_pLay[ef.key]||{};
-                          u({panelizedLighting:{..._pl,panelLayout:{..._pLay,[ef.key]:{..._cur,panelSize:n}}}});
-                        }}
-                        confirmedProp={job.panelizedLighting?.confirmedModules || {}}
-                        onConfirmedChange={(nextMap)=>u({panelizedLighting:{
-                          ...job.panelizedLighting, confirmedModules: nextMap,
-                        }})}/>
+                        loads={flattenModulesToRows((job.panelizedLighting[ef.key])||[])}
+                        onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}/>
                     ) : (
                       <PanelModulesSection
                         system={job.lightingSystem||"Control 4"}
