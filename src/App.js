@@ -14244,6 +14244,10 @@ function SavantPanelSchedule({
   const [selectedSlot, setSelectedSlot] = useState(null);
   // When user clicks an empty slot, show the "+ Add" picker instead of an editor.
   const [addingAtSlot, setAddingAtSlot] = useState(null);
+  // Click-to-arm flow: click a load chip → its name goes here. Then click any
+  // empty slot or any smart-breaker half with an empty name to place it.
+  // Two clicks per assignment instead of seven.
+  const [armedLoad, setArmedLoad] = useState(null);  // { name, loadType, watts, location }
 
   const occ = savBuildOccupancy(modules, regularBreakers);
 
