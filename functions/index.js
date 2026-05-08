@@ -123,14 +123,21 @@ async function sendFCM(token, { title, body, jobId, section }) {
         payload: { aps: { contentAvailable: true } },
       },
     });
+    functions.logger.info("[sendFCM] sent OK", {
+      token: token.slice(0, 20), title, jobId, section,
+    });
   } catch (e) {
     const isStale = STALE_TOKEN_CODES.some(
       code => e.code === code || (e.message || "").includes(code)
     );
     if (isStale) {
+      functions.logger.warn("[sendFCM] stale token pruned", { token: token.slice(0, 20), code: e.code });
       await removeStaleToken(token);
     } else {
-      functions.logger.warn("FCM send failed", { token: token.slice(0, 20), error: e.message });
+      functions.logger.warn("[sendFCM] send failed", {
+        token: token.slice(0, 20), title, jobId, section,
+        error: e.message, code: e.code,
+      });
     }
   }
 }
@@ -294,6 +301,12 @@ exports.onJobUpdate = functions.firestore
     const after  = change.after.data()?.data  || {};
     const name   = after.name || "a job";
 
+    // Diagnostic: log every invocation so we can see whether the trigger fires.
+    functions.logger.info("[onJobUpdate] fired", {
+      jobId, name, foreman: after.foreman, lead: after.lead,
+      coCount: (after.changeOrders || []).length,
+    });
+
     const tasks = [];
 
     // ── 1. Foreman assigned / changed ─────────────────────────
@@ -456,6 +469,11 @@ exports.onJobUpdate = functions.firestore
       if (prev.coStatus !== "approved" && co.coStatus === "approved") {
         const leadTokens    = await getTokenForName(after.lead);
         const foremanTokens = await getTokenForName(after.foreman);
+        functions.logger.info("[onJobUpdate] CO approved — sending", {
+          jobId, name, coIndex: i,
+          foreman: after.foreman, foremanTokenCount: foremanTokens.length,
+          lead: after.lead, leadTokenCount: leadTokens.length,
+        });
         tasks.push(sendToName(after.lead, {
           title: "✅ Change Order Approved",
           body:  `Change Order #${i + 1} on ${name} was approved`,

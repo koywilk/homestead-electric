@@ -1353,21 +1353,46 @@ function savantV2ToV1(v2) {
   }
 }
 
-// Read-side accessor: returns V2 data for one floor of a job. Prefers stored
-// V2 shape if present; otherwise migrates from V1 on the fly. Always returns
-// a valid shape. The new component uses this so it works on jobs that have
-// never been touched by the V2 editor.
+// Read-side accessor: returns V2 data for one floor of a job. Always migrates
+// from V1 (cp4Loads + panelLayout) so changes in the legacy editor flow through
+// in real time. Layers any sparse V2-only overrides from
+// `panelizedLighting.savantV2.{floor}` on top — currently only `inputAssignments`
+// (which feeder powers each module input), but expandable in later steps.
+//
+// Storage shape for V2 overrides (sparse, never duplicates V1 data):
+//   panelizedLighting.savantV2.{floor} = {
+//     inputAssignments: { [modNum]: { A: feederId, B: feederId } },
+//     // (room labels, slot overrides, etc. will land here in later steps)
+//   }
+//
+// Why sparse-overlay instead of a duplicate full-shape store: anything the
+// legacy editor changes (load names, watts, SKUs, regular breakers) keeps
+// working without sync hassles, and reverting to V1 only loses V2-only fields
+// (assignments) — never anything that already existed in V1.
 function getSavantV2ForFloor(job, floor) {
   const pl = job?.panelizedLighting || {};
-  const stored = pl.savantV2?.[floor];
-  if (stored && Array.isArray(stored.modules)) return stored;
   const v1Rows = pl.cp4Loads?.[floor] || [];
   const layout = pl.panelLayout?.[floor] || {};
-  return migrateToSavantV2(
-    flattenModulesToRows(v1Rows),  // handles both flat and nested legacy shapes
+  const base = migrateToSavantV2(
+    flattenModulesToRows(v1Rows),
     layout.regularBreakers || [],
     layout.panelSize || 40
   );
+  const overrides = pl.savantV2?.[floor] || {};
+  if (overrides.inputAssignments && typeof overrides.inputAssignments === "object") {
+    base.modules.forEach(m => {
+      const key = m.modNum || m._legacyMod;
+      if (!key) return;
+      const a = overrides.inputAssignments[key]?.A;
+      const b = overrides.inputAssignments[key]?.B;
+      // Only honor an assignment if the feeder still exists — stale IDs
+      // (from a feeder that got deleted in V1) get cleared so colors don't
+      // point at nothing.
+      if (a && base.feeders.some(f => f.id === a)) m.inputs.A = a;
+      if (b && base.feeders.some(f => f.id === b)) m.inputs.B = b;
+    });
+  }
+  return base;
 }
 // Expose on window for console-poking during development.
 if (typeof window !== "undefined") {
@@ -14810,9 +14835,10 @@ function buildSavV2SlotMap(v2) {
   return map;
 }
 
-function SavantPanelV2({ job, floor, panelLabel = "Lighting panel" }) {
+function SavantPanelV2({ job, floor, panelLabel = "Lighting panel", onAssignFeeder = null }) {
   const v2 = getSavantV2ForFloor(job, floor);
   const slotMap = buildSavV2SlotMap(v2);
+  const isEditable = typeof onAssignFeeder === "function";
   const panelSize = v2.panelSize || 40;
   const oddSlots  = []; for (let i = 1; i <= panelSize; i += 2) oddSlots.push(i);
   const evenSlots = []; for (let i = 2; i <= panelSize; i += 2) evenSlots.push(i);
@@ -14877,7 +14903,7 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel" }) {
     const inputBColor = isSingle ? null : savV2FeederColor(m.inputs?.B, v2.feeders);
     const half = (slot, ch, color, output) => (
       <div style={{
-        display:"grid", gridTemplateColumns:"32px 24px 1fr", gap:8, alignItems:"center",
+        display:"grid", gridTemplateColumns:"32px 24px 1fr auto", gap:8, alignItems:"center",
         minHeight:30, padding:"4px 9px", lineHeight:1.25,
         background: color ? color.fill : "#fafbfc",
         borderTop: ch === "B" ? `0.5px dashed ${C.border}` : "none",
@@ -14890,17 +14916,35 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel" }) {
         }}>{ch || "—"}</span>
         <span style={{color:C.text, fontSize:12}}>
           {output?.name || <span style={{color:C.muted, fontStyle:"italic"}}>(no name)</span>}
-          {color && (
+          {color && !isEditable && (
             <span style={{color:C.dim, fontSize:11, marginLeft:6}}>
               ← {v2.feeders.find(f=>f.id===m.inputs?.[ch])?.label}
             </span>
           )}
-          {!color && (
+          {!color && !isEditable && (
             <span style={{color:C.muted, fontSize:11, marginLeft:6, fontStyle:"italic"}}>
               ← unassigned
             </span>
           )}
         </span>
+        {isEditable && ch && (
+          <select
+            value={m.inputs?.[ch] || ""}
+            onChange={(e)=>onAssignFeeder(m.modNum || m._legacyMod, ch, e.target.value || null)}
+            title={`Pick which feeder breaker powers Input ${ch}`}
+            style={{
+              fontSize:11, padding:"2px 4px", border:`0.5px solid ${C.border}`,
+              borderRadius:4, background: color ? "rgba(255,255,255,0.7)" : "#fff",
+              maxWidth:120, color:C.text, fontFamily:"inherit",
+            }}>
+            <option value="">← unassigned</option>
+            {v2.feeders.map(f => (
+              <option key={f.id} value={f.id}>
+                ← {f.label} (slot {f.slot||"?"} · {f.amps||"20"}A{(f.poles||1)===2?" 2P":""})
+              </option>
+            ))}
+          </select>
+        )}
       </div>
     );
     return (
