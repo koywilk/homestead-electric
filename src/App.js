@@ -13691,6 +13691,18 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
 
 // ── Central Loads List ────────────────────────────────────────
 function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],assignedModMap=new Map(),onAssignToModule}) {
+  // Collapsed state per floor section. Set of floor labels that are
+  // currently EXPANDED — anything not in the set is collapsed. Starts empty
+  // so every section comes up collapsed by default; click the header to
+  // expand. State persists per session, not across reloads (intentional —
+  // foreman scans the labels first, opens what's relevant).
+  const [expandedFloors, setExpandedFloors] = useState(new Set());
+  const isFloorExpanded = (fl) => expandedFloors.has(fl);
+  const toggleFloor = (fl) => setExpandedFloors(prev => {
+    const next = new Set(prev);
+    if (next.has(fl)) next.delete(fl); else next.add(fl);
+    return next;
+  });
   const sortByType = (arr) => [...arr].sort((a,b)=>{
     const ai = LOAD_TYPES.indexOf(a.loadType||""), bi = LOAD_TYPES.indexOf(b.loadType||"");
     return (ai<0?999:ai)-(bi<0?999:bi);
@@ -13863,16 +13875,25 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
             const multiFloor = sortedFloors.length>1||(sortedFloors.length===1&&sortedFloors[0]!=="Unassigned");
             return (
               <>
-                {sortedFloors.map(fl=>(
+                {sortedFloors.map(fl=>{
+                  const expanded = isFloorExpanded(fl);
+                  return (
                   <div key={fl}>
                     {multiFloor&&(
-                      <div style={{display:"flex",alignItems:"center",gap:8,margin:"10px 0 4px"}}>
+                      <div onClick={()=>toggleFloor(fl)}
+                        style={{display:"flex",alignItems:"center",gap:8,margin:"10px 0 4px",
+                          cursor:"pointer",userSelect:"none",padding:"3px 4px",borderRadius:5,
+                          background: expanded ? `${C.purple}10` : "transparent"}}>
+                        <span style={{fontSize:11,color:C.purple,flexShrink:0,
+                          fontWeight:700,width:10,textAlign:"center"}}>
+                          {expanded ? "▼" : "▶"}
+                        </span>
                         <span style={{fontSize:10,fontWeight:800,color:C.purple,letterSpacing:"0.08em",textTransform:"uppercase",whiteSpace:"nowrap"}}>{fl}</span>
                         <div style={{flex:1,height:1,background:`${C.purple}28`}}/>
                         <span style={{fontSize:10,color:C.dim,whiteSpace:"nowrap"}}>{groups[fl].length} load{groups[fl].length!==1?"s":""}</span>
                       </div>
                     )}
-                    {groups[fl].map(l=>{
+                    {(!multiFloor || expanded) && groups[fl].map(l=>{
                       const li=flatSorted.indexOf(l);
                       const assignedLabels=assignedModMap.has(l.name?.trim())?assignedModMap.get(l.name.trim()):null;
                       if(mob) return (
@@ -13969,7 +13990,8 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                       );
                     })}
                   </div>
-                ))}
+                  );
+                })}
                 <datalist id="pl-floor-opts">{(floorOptions||[]).map(f=><option key={f} value={f}/>)}</datalist>
                 <datalist id="pl-panel-opts">{(panelOptions||[]).map(p=><option key={p} value={p}/>)}</datalist>
               </>
@@ -14197,7 +14219,7 @@ const savFindFreeSmartPair = (occ, panelSize, preferredStart=1) => {
 //                     [{ id, slot, amp, description, phase }]
 //   panelSize       — NEW number (default 40), total slots in this panel.
 function SavantPanelSchedule({
-  modules, onChange, allLoads=[],
+  modules, onChange, allLoads=[], panelLabel = "",
   regularBreakers = [], onRegularChange = ()=>{},
   panelSize = 40, onPanelSizeChange = ()=>{},
   // Cross-panel move + confirmed state are accepted for parity with
@@ -14205,6 +14227,18 @@ function SavantPanelSchedule({
   // Confirmed-modules toggle is still useful so we keep it wired.
   confirmedProp = null, onConfirmedChange = null,
 }) {
+  // Loads filtered to ones that belong to THIS panel (l.panel matches the
+  // panel's label). Used by the chip pickers so users only see the loads
+  // wired to this LCP. Falls back to all loads when no panel label is set
+  // (legacy jobs that haven't tagged their loads yet).
+  const _panelMatch = (panelLabel || "").trim().toLowerCase();
+  const panelScopedLoads = _panelMatch
+    ? (allLoads || []).filter(l => {
+        const lp = (l?.panel || "").trim().toLowerCase();
+        // No panel set on the load → show it (fallback so legacy data stays usable)
+        return !lp || lp === _panelMatch;
+      })
+    : (allLoads || []);
   // Track which slot the user is currently editing. null = nothing selected.
   // Editing state is purely visual; toggling never touches the modules array.
   const [selectedSlot, setSelectedSlot] = useState(null);
@@ -14252,12 +14286,13 @@ function SavantPanelSchedule({
     setAddingAtSlot(null);
   };
 
-  // Add a regular breaker at a specific slot
+  // Add a regular breaker at a specific slot. Defaults to 15A — typical
+  // 1-pole feeder for Savant lighting modules; user can change in editor.
   const addRegAtSlot = (slot) => {
     const newReg = {
       id: uid(),
       slot: String(slot),
-      amp: "",
+      amp: "15",
       description: "",
       phase: "",
     };
@@ -14521,20 +14556,32 @@ function SavantPanelSchedule({
           minHeight: 24, display:"flex", flexDirection:"column",
           background: isSelected ? "#fef3c7" : (feederColor ? `${feederColor}1f` : "#fff"),
           borderLeft: `3px solid ${feederColor || (isSelected ? C.accent : "transparent")}`,
-          borderRight:`1px solid ${C.border}`,
+          borderRight:`1px solid ${C.border}`, position:"relative",
         }}>
+          {/* Delete the whole tandem (both halves). Confirms once. */}
+          <button onClick={(e)=>{
+              e.stopPropagation();
+              if (window.confirm("Delete this tandem breaker (both halves)?")) {
+                delReg(r.id);
+                if (selectedSlot === slot) setSelectedSlot(null);
+              }
+            }}
+            title="Delete tandem"
+            style={{
+              position:"absolute", right:2, top:2, zIndex:2,
+              background:"none", border:"none", color:C.muted, cursor:"pointer",
+              fontSize:14, lineHeight:1, padding:"0 4px",
+            }}>×</button>
           <div onClick={()=>{ setSelectedSlot(slot); setAddingAtSlot(null); }}
             style={{
               flex:1, minHeight:22, display:"flex", alignItems:"center",
               cursor:"pointer", position:"relative",
               borderBottom:`1px dashed ${C.border}`,
             }}>
-            <span style={{fontSize:8,fontWeight:800,letterSpacing:"0.05em",
-              color:C.dim,padding:"0 5px",textTransform:"uppercase",flexShrink:0}}>T·A</span>
             <input value={r.description||""}
               onChange={e=>updReg(r.id,{description:e.target.value})}
               onClick={e=>e.stopPropagation()}
-              placeholder="Tandem A description…"
+              placeholder="Tandem top…"
               style={{flex:1,minWidth:0,height:"100%",border:"none",outline:"none",
                 background:"transparent",fontSize:11,fontFamily:"inherit",
                 color:C.text,padding:"0 4px",
@@ -14549,12 +14596,10 @@ function SavantPanelSchedule({
               cursor:"pointer", position:"relative",
               borderBottom:`1px solid ${C.border}`,
             }}>
-            <span style={{fontSize:8,fontWeight:800,letterSpacing:"0.05em",
-              color:C.dim,padding:"0 5px",textTransform:"uppercase",flexShrink:0}}>T·B</span>
             <input value={r.descriptionB||""}
               onChange={e=>updReg(r.id,{descriptionB:e.target.value})}
               onClick={e=>e.stopPropagation()}
-              placeholder="Tandem B description…"
+              placeholder="Tandem bottom…"
               style={{flex:1,minWidth:0,height:"100%",border:"none",outline:"none",
                 background:"transparent",fontSize:11,fontFamily:"inherit",
                 color:C.text,padding:"0 4px",
@@ -14624,7 +14669,7 @@ function SavantPanelSchedule({
 
     // Aggregate load names from this panel's existing modules so user can
     // click a chip → smart breaker auto-created with that load placed.
-    const named = (allLoads||[]).filter(l => l && (l.name||"").trim());
+    const named = (panelScopedLoads||[]).filter(l => l && (l.name||"").trim());
 
     // Click a load chip → add a smart breaker (Dual Relay default) at this
     // slot, with the picked load assigned to Load A. Editor opens for B.
@@ -14751,10 +14796,11 @@ function SavantPanelSchedule({
           </button>
           <button onClick={()=>{
               // Add a regular breaker pre-flagged as tandem so the user gets
-              // both halves visible in the editor immediately.
+              // both halves visible in the editor immediately. Both halves
+              // default to 15A (typical Savant lighting feeder).
               const newReg = {
-                id: uid(), slot:String(slot), amp:"", description:"", phase:"",
-                tandem: true, ampB:"", descriptionB:"", phaseB:"",
+                id: uid(), slot:String(slot), amp:"15", description:"", phase:"",
+                tandem: true, ampB:"15", descriptionB:"", phaseB:"",
               };
               onRegularChange([...(regularBreakers||[]), newReg]);
               setSelectedSlot(slot);
@@ -14855,7 +14901,7 @@ function SavantPanelSchedule({
               next empty leg (A first, then B). Visible at all times so loads
               don't "hide" inside a typeahead. */}
           {(() => {
-            const named = (allLoads||[]).filter(l => l && (l.name||"").trim());
+            const named = (panelScopedLoads||[]).filter(l => l && (l.name||"").trim());
             if (named.length === 0) {
               return (
                 <div style={{padding:"6px 10px",fontSize:11,color:C.dim,
@@ -14985,7 +15031,7 @@ function SavantPanelSchedule({
           {/* Quick-pick chips for the regular breaker description from the
               master loads list — same pattern as the smart breaker editor. */}
           {(() => {
-            const named = (allLoads||[]).filter(l => l && (l.name||"").trim());
+            const named = (panelScopedLoads||[]).filter(l => l && (l.name||"").trim());
             if (named.length === 0) return null;
             return (
               <div style={{marginBottom:10}}>
@@ -15020,13 +15066,10 @@ function SavantPanelSchedule({
               style={{width:50,textAlign:"center",fontSize:11}}/>
             <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",marginLeft:8}}>Amp</span>
             <Inp value={r.amp||""} onChange={e=>updReg(r.id,{amp:e.target.value})}
-              placeholder="20" style={{width:60,fontSize:11}}/>
+              placeholder="15" style={{width:60,fontSize:11}}/>
             <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",marginLeft:8}}>Description</span>
             <Inp value={r.description||""} onChange={e=>updReg(r.id,{description:e.target.value})}
               placeholder="Pick a chip above or type" style={{flex:1,minWidth:160,fontSize:11}}/>
-            <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",marginLeft:8}}>Phase</span>
-            <Sel value={r.phase||""} onChange={e=>updReg(r.id,{phase:e.target.value})}
-              options={PHASE_OPTS} style={{width:60,fontSize:11}}/>
             <label style={{display:"flex",alignItems:"center",gap:5,fontSize:11,fontWeight:700,
               color:r.tandem?C.accent:C.dim,letterSpacing:"0.04em",textTransform:"uppercase",
               cursor:"pointer",marginLeft:8,padding:"3px 9px",borderRadius:5,
@@ -15055,14 +15098,11 @@ function SavantPanelSchedule({
               <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                 <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase"}}>Amp B</span>
                 <Inp value={r.ampB||""} onChange={e=>updReg(r.id,{ampB:e.target.value})}
-                  placeholder="20" style={{width:60,fontSize:11}}/>
+                  placeholder="15" style={{width:60,fontSize:11}}/>
                 <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",marginLeft:8}}>Description B</span>
                 <Inp value={r.descriptionB||""} onChange={e=>updReg(r.id,{descriptionB:e.target.value})}
                   placeholder="2nd circuit on this tandem"
                   style={{flex:1,minWidth:160,fontSize:11}}/>
-                <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.05em",color:C.dim,textTransform:"uppercase",marginLeft:8}}>Phase B</span>
-                <Sel value={r.phaseB||""} onChange={e=>updReg(r.id,{phaseB:e.target.value})}
-                  options={PHASE_OPTS} style={{width:60,fontSize:11}}/>
               </div>
             </div>
           )}
@@ -20920,7 +20960,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     const k = n.toLowerCase();
                     if (!seen.has(k)) seen.set(k, { id: extras.id || (n+"_savAgg"), name: n, ...extras });
                   };
-                  (_plM.loads||[]).forEach(l => add(l.name, { id:l.id, location:l.location, watts:l.watts, loadType:l.loadType }));
+                  // Master loads list carries panel field — preserve it so
+                  // SavantPanelSchedule can filter chips by panel.
+                  (_plM.loads||[]).forEach(l => add(l.name, { id:l.id, location:l.location, watts:l.watts, loadType:l.loadType, panel:l.panel }));
                   ["main","basement","upper"].forEach(k => {
                     migrateFloorToModules(_plM.cp4Loads?.[k]||[]).forEach(m => {
                       (m.loads||[]).forEach(l => add(l.name, { id:l.id, watts:l.watts, loadType:l.loadType }));
@@ -21020,12 +21062,44 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 // glance without expanding the section.
                 const PanelCounts = ({mods})=>{
                   const filledMods = mods.filter(m=>m.modNum||m.moduleType);
-                  const loadCount = mods.reduce((n,m)=>n+(m.loads||[]).filter(l=>l.name?.trim()).length,0);
-                  if(filledMods.length===0 && loadCount===0) return null;
+                  // Count placed loads broken down by type so the header reads
+                  // "X mods · 12 dimming · 3 switching · 1 other" — at-a-glance
+                  // breakdown of what's actually wired into this panel.
+                  const byType = {};
+                  let total = 0;
+                  mods.forEach(m => (m.loads||[]).forEach(l => {
+                    if (!(l?.name||"").trim()) return;
+                    total++;
+                    const t = (l.loadType||"").trim() || "other";
+                    byType[t] = (byType[t]||0) + 1;
+                  }));
+                  if(filledMods.length===0 && total===0) return null;
+                  // Show types in a sensible priority order; collapse anything
+                  // that's not Dimming/Switching/Relay into "other"
+                  const order = ["Dimming","Switching","Relay","LED","MLV","ELV","0-10V","Fluorescent","Variable Speed"];
+                  const orderedKeys = [
+                    ...order.filter(k=>byType[k]),
+                    ...Object.keys(byType).filter(k=>!order.includes(k)),
+                  ];
                   return (
                     <span style={{fontSize:10,color:C.dim,fontWeight:600,letterSpacing:"0.04em",
-                      textTransform:"none",flexShrink:0,marginLeft:8}}>
-                      {filledMods.length} mod{filledMods.length===1?"":"s"} · {loadCount} load{loadCount===1?"":"s"}
+                      textTransform:"none",flexShrink:0,marginLeft:8,
+                      display:"inline-flex",alignItems:"center",gap:6,flexWrap:"wrap"}}>
+                      <span>{filledMods.length} mod{filledMods.length===1?"":"s"}</span>
+                      <span style={{color:C.muted}}>·</span>
+                      <span>{total} load{total===1?"":"s"}</span>
+                      {orderedKeys.length > 0 && (
+                        <>
+                          <span style={{color:C.muted}}>(</span>
+                          {orderedKeys.map((k,i) => (
+                            <React.Fragment key={k}>
+                              {i > 0 && <span style={{color:C.muted}}>·</span>}
+                              <span>{byType[k]} {k.toLowerCase()}</span>
+                            </React.Fragment>
+                          ))}
+                          <span style={{color:C.muted}}>)</span>
+                        </>
+                      )}
                     </span>
                   );
                 };
@@ -21104,6 +21178,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     {(job.lightingSystem||"Control 4")==="Savant" ? (
                       <SavantPanelSchedule
                         allLoads={_savAggLoads}
+                        panelLabel={_panelLabel}
                         modules={_mods}
                         onChange={v=>u({panelizedLighting:{...job.panelizedLighting,
                           cp4Loads:{...(job.panelizedLighting.cp4Loads||{}), [floor]:v}}})}
@@ -21216,6 +21291,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     {(job.lightingSystem||"Control 4")==="Savant" ? (
                       <SavantPanelSchedule
                         allLoads={_savAggLoads}
+                        panelLabel={ef.label||""}
                         modules={_mods}
                         onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key]:v}})}
                         regularBreakers={(((job.panelizedLighting.panelLayout)||{})[ef.key]||{}).regularBreakers||[]}
