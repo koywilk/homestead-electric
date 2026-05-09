@@ -14251,34 +14251,24 @@ function SavantPanelSchedule({
   // Confirmed-modules toggle is still useful so we keep it wired.
   confirmedProp = null, onConfirmedChange = null,
 }) {
-  // Loads filtered to ones that belong to THIS panel (l.panel matches the
-  // panel's label). Used by the chip pickers so users only see the loads
-  // wired to this LCP. Falls back to all loads when:
-  //  - no panel label is set on this section (legacy data), OR
-  //  - the strict filter zeroes out (panel section is named differently
-  //    than any load.panel value — common when the user imports loads tagged
-  //    "LCP 1" but hasn't renamed the default "Panel A/B/C" sections yet).
-  // Better to show too many than to show "no loads found" when there ARE.
+  // Strict panel filter: only loads tagged for THIS panel (l.panel exact
+  // match) plus any untagged loads. NEVER falls back to "all loads" — that
+  // was the source of accidentally placing wrong-panel loads on the mod
+  // schedule. If zero match, the strip shows a "no loads tagged for this
+  // panel" message and tells the user how to fix it.
   const _panelMatch = (panelLabel || "").trim().toLowerCase();
   const panelScopedLoads = (() => {
     if (!_panelMatch) return allLoads || [];
-    const filtered = (allLoads || []).filter(l => {
+    return (allLoads || []).filter(l => {
       const lp = (l?.panel || "").trim().toLowerCase();
       return !lp || lp === _panelMatch;
     });
-    return filtered.length > 0 ? filtered : (allLoads || []);
   })();
-  // True when the strict filter has matches — drives the "tip" banner that
-  // tells the user they can rename the section to LCP X to filter properly.
-  const _strictFilterHasMatches = !!_panelMatch && (allLoads||[]).some(l => {
-    const lp = (l?.panel || "").trim().toLowerCase();
-    return lp && lp === _panelMatch;
-  });
-  // Loads exist with different panel tags than this section — surface as
-  // a hint so user can rename header to scope.
-  const _scopeMismatch = !!_panelMatch &&
-    !_strictFilterHasMatches &&
-    (allLoads||[]).some(l => (l?.panel || "").trim());
+  // Sample of other panel names that DO appear on loads — surfaced in the
+  // empty-state message so the user knows what to rename their section to.
+  const _otherPanelNames = !_panelMatch ? [] : Array.from(new Set(
+    (allLoads||[]).map(l => (l?.panel || "").trim()).filter(Boolean)
+  )).filter(n => n.toLowerCase() !== _panelMatch).sort();
   // Names already placed on a smart breaker in this panel — used to filter
   // the "Unassigned loads" strip so each load only shows up until it's placed.
   const placedNamesLower = new Set();
@@ -15538,17 +15528,17 @@ function SavantPanelSchedule({
         );
       })()}
 
-      {/* ── Pair loads & feeders to modules ─────────────────────────────
-          Top-of-section pairing UI. Each module (smart breaker) is one row
-          with inline dropdowns: pick the load name for Input A and Input B
-          from the job's existing loads list, pick the feeder breaker that
-          powers each input, and (optionally) set the slot. The schedule
-          grid below auto-fills from these pairings so you don't have to
-          click slot-by-slot to build the schedule.
-          DATA: writes to the existing `m.loads[i].name` and
-          `m.loads[i].feederSlot` fields — no new data shape. The grid and
-          all existing prints already read these. */}
-      {(() => {
+      {/* ── Pair loads & feeders to modules — REMOVED ─────────────────
+          The table-of-modules pairing UI was a duplicate workflow that
+          confused the build process. The same operations now live in the
+          schedule itself via the click-to-arm flow:
+            • Add modules    — click empty slot in grid, pick SKU
+            • Set load names — arm a load chip above, click an empty A/B half
+            • Set feeders    — arm a feeder chip, click any A/B half
+            • Reorder        — toggle MOVE MODE in the header, click + click
+          One source of truth (the schedule) instead of two ways to do the
+          same thing. */}
+      {false && (() => {
         const allLoadNames = Array.from(new Set([
           ...(allLoads || []).map(l => (l?.name || "").trim()).filter(Boolean),
           ...((modules || []).flatMap(m => (m.loads || []).map(l => (l?.name || "").trim()))).filter(Boolean),
@@ -15782,6 +15772,20 @@ function SavantPanelSchedule({
           half to drop the load there. Auto-creates the right SKU based on
           load type (Dimming → APD, Switching → Relay) when dropped on an
           empty slot. Two clicks per assignment instead of seven. */}
+      {/* Empty state — no loads tagged for this panel. Tells the user
+          exactly how to fix it (rename the section header, or tag loads
+          with this panel name in the master Loads list). Replaces the
+          old behavior that silently showed wrong-panel loads. */}
+      {unassignedLoads.length === 0 && _otherPanelNames.length > 0 && (
+        <div style={{
+          padding:"10px 12px", marginBottom:8, background:"#fffbe6",
+          border:`1px solid #fde68a`, borderRadius:8, fontSize:11, color:"#92400e",
+        }}>
+          <b>No loads tagged for "{panelLabel}".</b> {_otherPanelNames.length} other panel name{_otherPanelNames.length===1?"":"s"} found in the loads list: {_otherPanelNames.map(n=>`"${n}"`).join(", ")}.
+          <br/>
+          To fix: rename this section header above to match one of those, OR set the Panel field on loads in the Loads list to "{panelLabel}".
+        </div>
+      )}
       {unassignedLoads.length > 0 && (() => {
         // Per-type counts of what's still NEEDING to be assigned. Lets you
         // scan "I have 8 dimming + 4 switching left" so you know how many
