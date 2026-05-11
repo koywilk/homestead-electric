@@ -13555,8 +13555,26 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                         borderRadius:5,padding:'3px 6px',fontSize:10,fontFamily:'inherit',
                         outline:'none',color:C.text,boxSizing:'border-box',marginBottom:6}}/>
 
-                    {/* Add to PO */}
-                    {onMatChange&&(addingPO[p]===undefined?(
+                    {/* Add to PO — preview the exact lines before submitting
+                        so the numbers visibly match the chips above. Includes
+                        tandem and quad breakers from tandemInfo so the order
+                        reflects what the panel actually needs, not just the
+                        raw 1-pole/2-pole counts. */}
+                    {onMatChange&&(()=>{
+                      // Build the PO line array once. Same data the preview
+                      // and the actual Add click both use — no chance of
+                      // drift between what's shown and what's written.
+                      const poLines = activeGroups.map(g =>
+                        `${g.count}× ${g.amps}A ${g.poles===2?"2-pole":"1-pole"}`);
+                      if (tandemInfo) {
+                        if (tandemInfo.tandemsNeeded > 0) {
+                          poLines.push(`${tandemInfo.tandemsNeeded}× tandem breaker (15/20A duplex)`);
+                        }
+                        if (tandemInfo.quadsNeeded > 0) {
+                          poLines.push(`${tandemInfo.quadsNeeded}× quad breaker (2-pole + 2× 1-pole)`);
+                        }
+                      }
+                      return addingPO[p]===undefined?(
                       <button onClick={()=>setAddingPO(v=>({...v,[p]:""}))}
                         style={{width:'100%',background:`${C.blue}18`,border:`1px solid ${C.blue}44`,
                           borderRadius:5,padding:'4px 6px',fontSize:10,fontWeight:700,color:C.blue,
@@ -13574,11 +13592,19 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                             <option key={s} value={s}>{s}</option>
                           ))}
                         </select>
+                        {/* Preview — exactly what gets written to the PO. */}
+                        <div style={{marginBottom:6,padding:'6px 8px',background:`${C.blue}08`,
+                          border:`1px dashed ${C.blue}55`,borderRadius:5,fontSize:11,lineHeight:1.5,color:C.text}}>
+                          <div style={{fontSize:9,fontWeight:700,color:C.dim,letterSpacing:'0.07em',
+                            textTransform:'uppercase',marginBottom:3}}>Will add to PO</div>
+                          <b>Breakers — {p}</b>
+                          {poLines.map((line,i) => <div key={i}>{line}</div>)}
+                        </div>
                         <div style={{display:'flex',gap:5}}>
                           <button onClick={()=>{
                             const src=addingPO[p];
                             if(!src) return;
-                            const lines=activeGroups.map(g=>`${g.count}× ${g.amps}A ${g.poles===2?"2-pole":"1-pole"}`).join('<br>');
+                            const lines=poLines.join('<br>');
                             const newItems=`<b>Breakers — ${p}</b><br>${lines}`;
                             const mats=Array.isArray(finishMaterials)?[...finishMaterials]:[];
                             let targetIdx=-1;
@@ -13606,7 +13632,8 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                           </button>
                         </div>
                       </div>
-                    ))}
+                    );
+                    })()}
                     {poConfirm[p]&&(
                       <div style={{marginTop:6,fontSize:10,fontWeight:700,color:'#16a34a',
                         background:'#16a34a12',border:'1px solid #16a34a33',
