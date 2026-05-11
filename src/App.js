@@ -13388,7 +13388,38 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
               }
             }
 
-            return {p,displaySpaces,override,activeGroups,autoGroups,isManual,tandemInfo,driftFromAuto,autoSpaces};
+            // Real tandem + quad counts pulled from the matched panel
+            // schedule (the actual circuits map after auto-fill or manual
+            // edits). The home-runs tab's tandemInfo is a MINIMUM-needed
+            // estimate; the panel schedule may end up placing more quads
+            // (e.g. when the auto-fill algorithm finds room or the user
+            // manually marks them). PO needs the real count, not the
+            // estimate, or you under-order. Falls back to tandemInfo when
+            // no schedule exists yet.
+            const schedulCounts = (() => {
+              if (!matchedSchedule || !matchedSchedule.circuits) return null;
+              const cs = matchedSchedule.circuits || {};
+              let tandems = 0, quadOuterCount = 0;
+              Object.keys(cs).forEach(k => {
+                const c = cs[k];
+                if (!c) return;
+                // Tandem B-half: a "B" slot key with notes starting with "tandem"
+                if (k.endsWith("B") && (c.notes||"").toLowerCase().startsWith("tandem")) {
+                  tandems++;
+                }
+                if (c.quadOuter) quadOuterCount++;
+              });
+              // Each quad has 2 quadOuter circuits (top + bottom 1-pole halves)
+              const quads = Math.floor(quadOuterCount / 2);
+              if (tandems === 0 && quads === 0) return null;
+              return { tandems, quads };
+            })();
+            // What the PO should actually order — real counts when the
+            // panel schedule exists, falls back to tandemInfo estimates
+            // otherwise.
+            const poTandems = schedulCounts?.tandems ?? (tandemInfo?.tandemsNeeded || 0);
+            const poQuads   = schedulCounts?.quads   ?? (tandemInfo?.quadsNeeded   || 0);
+            return {p,displaySpaces,override,activeGroups,autoGroups,isManual,tandemInfo,driftFromAuto,autoSpaces,poTandems,poQuads};
           }).filter(Boolean);
 
           // helpers for breaker override editing
@@ -13404,7 +13435,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
             {/* Panel summary cards */}
             {panelData.length>0&&(
               <div style={{display:'flex',flexWrap:'wrap',gap:8,marginBottom:14}}>
-                {panelData.map(({p,displaySpaces,override,activeGroups,autoGroups,isManual,tandemInfo,driftFromAuto,autoSpaces})=>{
+                {panelData.map(({p,displaySpaces,override,activeGroups,autoGroups,isManual,tandemInfo,driftFromAuto,autoSpaces,poTandems,poQuads})=>{
                   const isEditing=editingBreakers===p;
                   const editGroups=bOvr[p]||activeGroups;
                   return (
@@ -13573,8 +13604,8 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
 
                       // ─ Tandems ─ same-amp first, then mixed-amp leftovers
                       const tandemLines = [];
-                      if (tandemInfo?.tandemsNeeded > 0) {
-                        let budget = tandemInfo.tandemsNeeded;
+                      if (poTandems > 0) {
+                        let budget = poTandems;
                         onePolesRem.forEach(g => {
                           const n = Math.min(Math.floor(g.count / 2), budget);
                           if (n > 0) {
@@ -13605,8 +13636,8 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                       // 2-pole tier). For 1-poles, pulls from whatever's
                       // still left after tandems.
                       const quadLines = [];
-                      if (tandemInfo?.quadsNeeded > 0) {
-                        let budget = tandemInfo.quadsNeeded;
+                      if (poQuads > 0) {
+                        let budget = poQuads;
                         const twoPolesSorted = [...twoPolesRem]
                           .sort((a, b) => b.amps - a.amps);
                         twoPolesSorted.forEach(tp => {
