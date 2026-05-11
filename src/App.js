@@ -14422,6 +14422,90 @@ function SavantPanelSchedule({
   //  - Smart breaker A/B half with empty name: drop the armed load on that
   //    half. Inherits load type and watts.
   // Either way, clears the armed state after placement.
+  // One-click panel fill from all unassigned loads on this panel.
+  // Algorithm:
+  //   1. Group unassigned panel-scoped loads by type (dimming vs switching).
+  //   2. Sort each group alphabetically so similar names pair together.
+  //   3. Pair them up — 2 dimming → 1 APD module; 2 switching → 1 Relay module.
+  //   4. Drop modules into the next available slot pair, top to bottom.
+  //   5. Wire each module's Input A & B to the first available feeder breaker.
+  //   6. If odd-count: last load gets a module with one empty half.
+  // User can review and tweak after. Cuts a 60-module panel from ~480 clicks
+  // to 1 click + a few targeted edits.
+  const autoFillPanelFromLoads = () => {
+    const remainingLoads = panelScopedLoads.filter(l =>
+      l && (l.name||"").trim() && !placedNamesLower.has(l.name.trim().toLowerCase())
+    );
+    if (remainingLoads.length === 0) {
+      window.alert("No unassigned loads on this panel.");
+      return;
+    }
+    if (!window.confirm(`Auto-fill the schedule with ${remainingLoads.length} unassigned loads? Pairs by type (Dimming → APD, Switching → Relay) and drops them in the next available slots. You can edit anything afterward.`)) {
+      return;
+    }
+    // Group by type
+    const dim = remainingLoads.filter(l => (l.loadType||"").toLowerCase().includes("dim"))
+      .sort((a,b) => (a.name||"").toLowerCase().localeCompare((b.name||"").toLowerCase()));
+    const sw  = remainingLoads.filter(l => !(l.loadType||"").toLowerCase().includes("dim"))
+      .sort((a,b) => (a.name||"").toLowerCase().localeCompare((b.name||"").toLowerCase()));
+    // First available feeder for auto-wire
+    const firstFeeder = (regularBreakers||[])
+      .filter(r => Number(r.slot) > 0)
+      .sort((a,b) => Number(a.slot) - Number(b.slot))[0];
+    const autoFs = firstFeeder ? String(firstFeeder.slot) : "";
+    // Mutable working copy of occupancy so we can find next empty slot pair
+    const workOcc = new Map(occ);
+    const findNextPair = () => {
+      for (let s = 1; s + 2 <= panelSize; s++) {
+        if (!workOcc.has(s) && !workOcc.has(s + 2)) return s;
+      }
+      return null;
+    };
+    const newMods = [];
+    let modSeq = (modules||[]).length;
+    const placeOne = (sku, loadA, loadB) => {
+      const sA = findNextPair();
+      if (!sA) return false;
+      const sB = sA + 2;
+      modSeq++;
+      const m = {
+        ...newModuleObj(modSeq),
+        moduleType: sku,
+        slotA: String(sA),
+        slotB: String(sB),
+        loads: [
+          { ...newLoadRow(1), output:"A", feederSlot: autoFs,
+            name: loadA?.name||"", loadType: loadA?.loadType||"", watts: loadA?.watts||"" },
+          { ...newLoadRow(2), output:"B", feederSlot: autoFs,
+            name: loadB?.name||"", loadType: loadB?.loadType||"", watts: loadB?.watts||"" },
+        ],
+      };
+      newMods.push(m);
+      workOcc.set(sA, { kind:"smartA", ref:m });
+      workOcc.set(sB, { kind:"smartB", ref:m });
+      return true;
+    };
+    // Pair dimming loads two at a time → APD modules
+    while (dim.length >= 2) {
+      if (!placeOne("DUAL_500W_APD", dim.shift(), dim.shift())) break;
+    }
+    if (dim.length === 1) placeOne("DUAL_500W_APD", dim.shift(), null);
+    // Pair switching loads two at a time → Relay modules
+    while (sw.length >= 2) {
+      if (!placeOne("DUAL_20A_RELAY", sw.shift(), sw.shift())) break;
+    }
+    if (sw.length === 1) placeOne("DUAL_20A_RELAY", sw.shift(), null);
+    if (newMods.length === 0) {
+      window.alert("No empty slot pairs available — free up some slots or increase panel size.");
+      return;
+    }
+    onChange([...(modules||[]), ...newMods]);
+    const unplaced = dim.length + sw.length;
+    if (unplaced > 0) {
+      window.alert(`Placed ${newMods.length} module${newMods.length===1?"":"s"} (${remainingLoads.length - unplaced} loads). ${unplaced} load${unplaced===1?"":"s"} couldn't fit — increase panel size or remove other breakers.`);
+    }
+  };
+
   const placeArmedAtSlot = (slot) => {
     if (!armedLoad) return false;
     const cell = occ.get(slot);
@@ -14439,15 +14523,21 @@ function SavantPanelSchedule({
       const sku = (aDim || bDim) ? "DUAL_500W_APD" : "DUAL_20A_RELAY";
       const base = newModuleObj((modules||[]).length + 1);
       const pB = armedLoad.pairedB;
+      // Auto-feeder: pick the first regular breaker so the new module is
+      // pre-wired. User can change it via the feeder strip later.
+      const _firstFeeder = (regularBreakers||[])
+        .filter(r => Number(r.slot) > 0)
+        .sort((a,b) => Number(a.slot) - Number(b.slot))[0];
+      const _autoFeederSlot = _firstFeeder ? String(_firstFeeder.slot) : "";
       const newMod = {
         ...base,
         moduleType: sku,
         slotA: String(slot),
         slotB: String(slotB),
         loads: [
-          { ...newLoadRow(1), output:"A", feederSlot:"",
+          { ...newLoadRow(1), output:"A", feederSlot: _autoFeederSlot,
             name: armedLoad.name, loadType: armedLoad.loadType||"", watts: armedLoad.watts||"" },
-          { ...newLoadRow(2), output:"B", feederSlot:"",
+          { ...newLoadRow(2), output:"B", feederSlot: _autoFeederSlot,
             name: pB?.name || "", loadType: pB?.loadType || "", watts: pB?.watts || "" },
         ],
       };
@@ -14466,21 +14556,36 @@ function SavantPanelSchedule({
       if ((targetLoad.name||"").trim()) {
         if (!window.confirm(`Replace "${targetLoad.name}" with "${armedLoad.name}"?`)) return false;
       }
+      // Auto-feeder: when dropping a load on a half that has no feeder
+      // assigned, inherit from the OTHER half (typical: same feeder powers
+      // both halves of an APD). Falls back to the first available regular
+      // breaker. Cuts the assignment from 8 clicks per module to ~4.
+      const autoFeederFor = (currentFeederSlot, otherHalfFeederSlot) => {
+        if (currentFeederSlot) return currentFeederSlot;
+        if (otherHalfFeederSlot) return otherHalfFeederSlot;
+        const first = (regularBreakers||[])
+          .filter(r => Number(r.slot) > 0)
+          .sort((a,b) => Number(a.slot) - Number(b.slot))[0];
+        return first ? String(first.slot) : "";
+      };
+      const otherIdx = loadIdx === 0 ? 1 : 0;
+      const otherLoad = (m.loads||[])[otherIdx] || {};
+      const autoFs = autoFeederFor(targetLoad.feederSlot, otherLoad.feederSlot);
       updSmartLoad(m.id, targetLoad.id, {
         name: armedLoad.name,
         loadType: armedLoad.loadType || targetLoad.loadType || "",
         watts: armedLoad.watts || targetLoad.watts || "",
+        feederSlot: autoFs,
       });
       // If a paired second load was also armed, drop it on the OTHER half
       // of this same module (auto-fills the pair on a half-empty module).
       if (armedLoad.pairedB) {
-        const otherIdx = loadIdx === 0 ? 1 : 0;
-        const otherLoad = (m.loads||[])[otherIdx] || {};
         if (!(otherLoad.name||"").trim()) {
           updSmartLoad(m.id, otherLoad.id, {
             name: armedLoad.pairedB.name,
             loadType: armedLoad.pairedB.loadType || otherLoad.loadType || "",
             watts: armedLoad.pairedB.watts || otherLoad.watts || "",
+            feederSlot: autoFs || otherLoad.feederSlot || "",
           });
         }
       }
@@ -15983,8 +16088,15 @@ function SavantPanelSchedule({
                 CLEAR
               </button>
             )}
+            <button onClick={autoFillPanelFromLoads}
+              title="Pair every unassigned load by type and drop them into the next available slots. Auto-wires feeders. You can edit anything afterward."
+              style={{marginLeft:"auto",background:C.green,border:`1px solid ${C.green}`,
+                color:"#fff",borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:700,
+                cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
+              ⚡ AUTO-FILL
+            </button>
             <button onClick={()=>setChipsExpanded(!chipsExpanded)}
-              style={{marginLeft:"auto",background:"#fff",border:`1px solid ${C.purple}`,
+              style={{background:"#fff",border:`1px solid ${C.purple}`,
                 color:C.purple,borderRadius:5,padding:"2px 8px",fontSize:10,fontWeight:700,
                 cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
               {chipsExpanded ? "✕ CLOSE" : "EXPAND ⤢"}
