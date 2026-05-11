@@ -13561,19 +13561,94 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                         reflects what the panel actually needs, not just the
                         raw 1-pole/2-pole counts. */}
                     {onMatChange&&(()=>{
-                      // Build the PO line array once. Same data the preview
-                      // and the actual Add click both use — no chance of
-                      // drift between what's shown and what's written.
-                      const poLines = activeGroups.map(g =>
-                        `${g.count}× ${g.amps}A ${g.poles===2?"2-pole":"1-pole"}`);
-                      if (tandemInfo) {
-                        if (tandemInfo.tandemsNeeded > 0) {
-                          poLines.push(`${tandemInfo.tandemsNeeded}× tandem breaker (15/20A duplex)`);
-                        }
-                        if (tandemInfo.quadsNeeded > 0) {
-                          poLines.push(`${tandemInfo.quadsNeeded}× quad breaker (2-pole + 2× 1-pole)`);
+                      // Build the PO lines. Tandems AND quads now rebalance
+                      // the underlying 1-pole and 2-pole counts so the order
+                      // doesn't double up. Each tandem absorbs 2× 1-pole
+                      // circuits. Each quad absorbs 1× 2-pole + 2× 1-pole
+                      // circuits (replacing them with a single quad SKU).
+                      const twoPolesRem = activeGroups.filter(g => g.poles === 2)
+                        .map(g => ({ amps:g.amps, count:g.count }));
+                      const onePolesRem = activeGroups.filter(g => g.poles === 1)
+                        .map(g => ({ amps:g.amps, count:g.count }));
+
+                      // ─ Tandems ─ same-amp first, then mixed-amp leftovers
+                      const tandemLines = [];
+                      if (tandemInfo?.tandemsNeeded > 0) {
+                        let budget = tandemInfo.tandemsNeeded;
+                        onePolesRem.forEach(g => {
+                          const n = Math.min(Math.floor(g.count / 2), budget);
+                          if (n > 0) {
+                            tandemLines.push(`${n}× ${g.amps}A tandem breaker`);
+                            g.count -= n * 2;
+                            budget -= n;
+                          }
+                        });
+                        if (budget > 0) {
+                          const leftovers = onePolesRem.filter(g => g.count > 0);
+                          while (budget > 0 && leftovers.length >= 2) {
+                            const a = leftovers[0], b = leftovers[1];
+                            tandemLines.push(`1× ${a.amps}/${b.amps}A mixed tandem`);
+                            a.count--; b.count--;
+                            if (a.count === 0) leftovers.shift();
+                            if (b.count === 0) {
+                              const idx = leftovers.indexOf(b);
+                              if (idx >= 0) leftovers.splice(idx, 1);
+                            }
+                            budget--;
+                          }
                         }
                       }
+
+                      // ─ Quads ─ each consumes 1× 2-pole + 2× 1-pole.
+                      // Prefers highest-amp 2-poles first (matches Square D
+                      // / Eaton quad SKU lineup which is built around the
+                      // 2-pole tier). For 1-poles, pulls from whatever's
+                      // still left after tandems.
+                      const quadLines = [];
+                      if (tandemInfo?.quadsNeeded > 0) {
+                        let budget = tandemInfo.quadsNeeded;
+                        const twoPolesSorted = [...twoPolesRem]
+                          .sort((a, b) => b.amps - a.amps);
+                        twoPolesSorted.forEach(tp => {
+                          while (budget > 0 && tp.count > 0) {
+                            // Find a 1-pole source with ≥2 left (same-amp
+                            // quad), else pair across tiers.
+                            const same = onePolesRem.find(op => op.count >= 2);
+                            if (same) {
+                              quadLines.push(`1× ${tp.amps}A/${same.amps}A quad (2P + 2× 1P)`);
+                              same.count -= 2;
+                              tp.count--;
+                              budget--;
+                              continue;
+                            }
+                            const a = onePolesRem.find(op => op.count >= 1);
+                            const b = onePolesRem.find(op => op !== a && op.count >= 1);
+                            if (a && b) {
+                              quadLines.push(`1× ${tp.amps}A/${a.amps}+${b.amps}A mixed quad (2P + 2× 1P)`);
+                              a.count--; b.count--;
+                              tp.count--;
+                              budget--;
+                            } else {
+                              // Not enough 1-poles left to form another quad —
+                              // bail out, quads stop here.
+                              budget = 0;
+                              break;
+                            }
+                          }
+                        });
+                      }
+
+                      // Final output: remaining 2-poles, tandems, quads,
+                      // remaining 1-poles. Zero-count entries skip.
+                      const poLines = [];
+                      twoPolesRem.forEach(g => {
+                        if (g.count > 0) poLines.push(`${g.count}× ${g.amps}A 2-pole`);
+                      });
+                      poLines.push(...tandemLines);
+                      poLines.push(...quadLines);
+                      onePolesRem.forEach(g => {
+                        if (g.count > 0) poLines.push(`${g.count}× ${g.amps}A 1-pole`);
+                      });
                       return addingPO[p]===undefined?(
                       <button onClick={()=>setAddingPO(v=>({...v,[p]:""}))}
                         style={{width:'100%',background:`${C.blue}18`,border:`1px solid ${C.blue}44`,
