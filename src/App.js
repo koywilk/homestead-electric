@@ -14623,6 +14623,12 @@ function SavantPanelSchedule({
   // clicking an empty slot moves it. Stays on after each move so the user
   // can shuffle a bunch of breakers in a row without toggling per move.
   const [moveModeEnabled, setMoveModeEnabled] = useState(false);
+  // SIMPLE MODE (default on) — shows the savant section as a flat list of
+  // editable module cards with all 4 dropdowns (load A, feeder A, load B,
+  // feeder B) inline. Hides the chip strips, feeders strip, and schedule
+  // grid. The schedule still exists in print form. Toggle to "advanced"
+  // for the previous UI with armed-loads + click-to-place flow.
+  const [simpleMode, setSimpleMode] = useState(true);
   const moveBreakerToSlot = (targetSlot) => {
     if (!moveSourceSlot) return false;
     const source = occ.get(moveSourceSlot);
@@ -16010,11 +16016,296 @@ function SavantPanelSchedule({
           half to drop the load there. Auto-creates the right SKU based on
           load type (Dimming → APD, Switching → Relay) when dropped on an
           empty slot. Two clicks per assignment instead of seven. */}
+      {/* SIMPLE MODE — one editable card per module with all the dropdowns
+          inline. No armed states, no chip strips, no slot-click flows. The
+          schedule grid + chip strips below are hidden in simple mode. */}
+      {simpleMode && (() => {
+        const feederOpts = [{value:"", label:"— pick feeder —"}].concat(
+          (regularBreakers||[]).filter(r => Number(r.slot) > 0)
+            .sort((a,b) => Number(a.slot) - Number(b.slot))
+            .map(r => ({
+              value: String(r.slot),
+              label: `Slot ${r.slot} · ${r.amp||"15"}A${r.description?` · ${r.description}`:""}`,
+            }))
+        );
+        // Loads available for a specific module slot — panel-scoped, not yet
+        // placed (except this module's existing pick stays selectable so
+        // the dropdown shows what's currently there).
+        const loadOptsFor = (currentName, sku) => {
+          const isDimSku = sku === "DUAL_500W_APD";
+          const filterByType = (l) => {
+            const lt = (l?.loadType||"").toLowerCase();
+            if (!lt) return true; // untyped → any
+            if (lt.includes("dim")) return isDimSku;
+            return !isDimSku; // switching loads → relay SKU
+          };
+          const opts = panelScopedLoads
+            .filter(l => l && (l.name||"").trim())
+            .filter(filterByType)
+            .filter(l => {
+              const n = (l.name||"").trim().toLowerCase();
+              const cur = (currentName||"").trim().toLowerCase();
+              // Show if it's the current pick, OR it's not placed anywhere
+              return n === cur || !placedNamesLower.has(n);
+            })
+            .sort((a,b) => (a.name||"").toLowerCase().localeCompare((b.name||"").toLowerCase()));
+          return [{value:"", label:"— pick load —"}].concat(
+            opts.map(l => ({ value: l.name, label: l.name }))
+          );
+        };
+        const nextOpenSlotPair = () => {
+          for (let s = 1; s + 2 <= panelSize; s++) {
+            if (!occ.has(s) && !occ.has(s+2)) return s;
+          }
+          return null;
+        };
+        const addModuleSimple = (sku) => {
+          const slotA = nextOpenSlotPair();
+          if (!slotA) { window.alert("No empty slot pairs available."); return; }
+          const slotB = slotA + 2;
+          const firstFeeder = (regularBreakers||[])
+            .filter(r => Number(r.slot) > 0)
+            .sort((a,b)=>Number(a.slot)-Number(b.slot))[0];
+          const autoFs = firstFeeder ? String(firstFeeder.slot) : "";
+          const newMod = {
+            ...newModuleObj((modules||[]).length + 1),
+            moduleType: sku,
+            slotA: String(slotA),
+            slotB: String(slotB),
+            loads: [
+              { ...newLoadRow(1), output:"A", feederSlot:autoFs },
+              { ...newLoadRow(2), output:"B", feederSlot:autoFs },
+            ],
+          };
+          onChange([...(modules||[]), newMod]);
+        };
+        const addFeederSimple = () => {
+          // Find lowest empty slot, default to 15A
+          let s = 1;
+          while (s <= panelSize && occ.has(s)) s++;
+          if (s > panelSize) { window.alert("Panel is full."); return; }
+          onRegularChange([...(regularBreakers||[]), {
+            id: uid(), slot: String(s), amp:"15", description:"", phase:"",
+          }]);
+        };
+        const newSku = ["DUAL_500W_APD","DUAL_20A_RELAY"];
+        const sortedMods = (modules||[]).slice().sort((a,b) => {
+          const sa = Number(a.slotA)||999, sb = Number(b.slotA)||999;
+          return sa - sb;
+        });
+        return (
+          <div>
+            {/* Action bar */}
+            <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10,
+              padding:"8px 10px",background:"#f8fafc",borderRadius:8,
+              border:`1px solid ${C.border}`}}>
+              <button onClick={()=>addModuleSimple("DUAL_500W_APD")}
+                style={{background:`${C.accent}15`,border:`1px solid ${C.accent}`,
+                  color:C.accent,borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,
+                  cursor:"pointer",fontFamily:"inherit"}}>
+                + APD MODULE
+              </button>
+              <button onClick={()=>addModuleSimple("DUAL_20A_RELAY")}
+                style={{background:`${C.green}15`,border:`1px solid ${C.green}`,
+                  color:C.green,borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,
+                  cursor:"pointer",fontFamily:"inherit"}}>
+                + RELAY MODULE
+              </button>
+              <button onClick={addFeederSimple}
+                style={{background:"#fff",border:`1px solid ${C.purple}`,
+                  color:C.purple,borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,
+                  cursor:"pointer",fontFamily:"inherit"}}>
+                + FEEDER
+              </button>
+              <button onClick={autoFillPanelFromLoads}
+                title="Pair every unassigned load by type into modules and drop them in the next available slots"
+                style={{background:`${C.blue}15`,border:`1px solid ${C.blue}`,
+                  color:C.blue,borderRadius:5,padding:"4px 10px",fontSize:11,fontWeight:700,
+                  cursor:"pointer",fontFamily:"inherit"}}>
+                ⚡ AUTO-FILL FROM LOADS
+              </button>
+              <button onClick={()=>setSimpleMode(false)}
+                style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,
+                  color:C.dim,borderRadius:5,padding:"4px 10px",fontSize:10,fontWeight:700,
+                  cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
+                ADVANCED
+              </button>
+            </div>
+
+            {/* Feeders quick row */}
+            {(regularBreakers||[]).filter(r=>Number(r.slot)>0).length > 0 && (
+              <div style={{marginBottom:10,padding:"6px 10px",background:"#fff",
+                border:`1px solid ${C.border}`,borderRadius:8}}>
+                <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:C.dim,
+                  textTransform:"uppercase",marginBottom:5}}>
+                  Feeder breakers ({(regularBreakers||[]).filter(r=>Number(r.slot)>0).length})
+                </div>
+                <div style={{display:"flex",flexWrap:"wrap",gap:6}}>
+                  {(regularBreakers||[])
+                    .filter(r=>Number(r.slot)>0)
+                    .sort((a,b)=>Number(a.slot)-Number(b.slot))
+                    .map((r,idx) => {
+                      const color = FEEDER_PALETTE[idx % FEEDER_PALETTE.length];
+                      return (
+                        <div key={r.id} style={{
+                          display:"flex",alignItems:"center",gap:5,
+                          background:`${color}1f`,border:`1px solid ${color}`,
+                          borderRadius:5,padding:"3px 8px",fontSize:11,
+                        }}>
+                          <span style={{color:color,fontWeight:700}}>Slot {r.slot}</span>
+                          <input type="number" value={r.amp||""} placeholder="15"
+                            onChange={e=>updReg(r.id,{amp:e.target.value})}
+                            style={{width:42,fontSize:11,padding:"2px 4px",
+                              border:`0.5px solid ${C.border}`,borderRadius:3,
+                              fontFamily:"inherit",textAlign:"center"}}/>
+                          <span style={{fontSize:10,color:C.dim}}>A</span>
+                          <input value={r.description||""}
+                            onChange={e=>updReg(r.id,{description:e.target.value})}
+                            placeholder="Description (optional)"
+                            style={{width:140,fontSize:11,padding:"2px 6px",
+                              border:`0.5px solid ${C.border}`,borderRadius:3,
+                              fontFamily:"inherit"}}/>
+                          <button onClick={()=>{
+                              if (window.confirm(`Delete feeder at slot ${r.slot}?`)) delReg(r.id);
+                            }}
+                            style={{background:"none",border:"none",color:C.muted,
+                              cursor:"pointer",fontSize:14,padding:"0 4px",lineHeight:1}}>×</button>
+                        </div>
+                      );
+                  })}
+                </div>
+              </div>
+            )}
+
+            {/* Modules list — primary editor */}
+            {sortedMods.length === 0 ? (
+              <div style={{padding:"16px 14px",fontSize:12,color:C.dim,fontStyle:"italic",
+                background:"#fafbfc",border:`1px dashed ${C.border}`,borderRadius:8,textAlign:"center"}}>
+                No modules yet. Click + APD MODULE, + RELAY MODULE, or ⚡ AUTO-FILL FROM LOADS to start.
+              </div>
+            ) : (
+              <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                {sortedMods.map((m, i) => {
+                  const meta = savSkuMeta(m.moduleType);
+                  const isApd = m.moduleType === "DUAL_500W_APD";
+                  const skuColor = isApd ? C.accent : C.green;
+                  const loadA = (m.loads||[])[0] || {};
+                  const loadB = (m.loads||[])[1] || {};
+                  return (
+                    <div key={m.id} style={{
+                      border:`1px solid ${C.border}`,borderRadius:8,background:"#fff",
+                      overflow:"hidden",
+                    }}>
+                      {/* Header: SKU + slot + delete */}
+                      <div style={{
+                        display:"flex",alignItems:"center",gap:8,
+                        padding:"6px 10px",background:`${skuColor}10`,
+                        borderBottom:`1px solid ${skuColor}33`,flexWrap:"wrap",
+                      }}>
+                        <span style={{fontSize:10,fontWeight:700,color:skuColor,
+                          letterSpacing:"0.06em",textTransform:"uppercase",
+                          background:"#fff",border:`1px solid ${skuColor}`,
+                          borderRadius:99,padding:"1px 8px"}}>
+                          {isApd ? "APD" : "Relay"}
+                        </span>
+                        <Sel value={m.moduleType||""}
+                          onChange={e=>updSmart(m.id,{moduleType:e.target.value})}
+                          options={newSku.map(s => ({value:s, label: savSkuMeta(s).label}))}
+                          style={{fontSize:11,minWidth:180}}/>
+                        <span style={{fontSize:10,color:C.dim}}>Slots</span>
+                        <input value={m.slotA||""}
+                          onChange={e=>updSmart(m.id,{slotA:e.target.value, slotB: e.target.value ? String(Number(e.target.value)+2) : ""})}
+                          placeholder="—" style={{width:38,textAlign:"center",fontSize:11,
+                            padding:"2px 4px",border:`1px solid ${C.border}`,borderRadius:4,
+                            fontFamily:"inherit"}}/>
+                        <span style={{fontSize:10,color:C.dim}}>+ {m.slotB||"?"}</span>
+                        <button onClick={()=>{
+                            const named = (m.loads||[]).filter(l=>l && (l.name||"").trim()).length;
+                            const msg = named>0 ? `Delete this module? ${named} load assignments will be lost.` : "Delete this module?";
+                            if (window.confirm(msg)) delSmart(m.id);
+                          }}
+                          style={{marginLeft:"auto",background:"none",border:"none",color:C.muted,
+                            fontSize:16,cursor:"pointer",padding:"0 4px",lineHeight:1}}>×</button>
+                      </div>
+                      {/* Input A row */}
+                      <div style={{display:"grid",
+                        gridTemplateColumns:"30px 1fr 1fr 70px",
+                        gap:6,alignItems:"center",padding:"7px 10px",
+                        background: loadFeederColor(loadA) ? `${loadFeederColor(loadA)}1f` : "transparent",
+                        borderBottom:`0.5px solid ${C.border}`,
+                      }}>
+                        <span style={{fontSize:10,fontWeight:700,color:C.text,textAlign:"center"}}>A</span>
+                        <Sel value={loadA.name||""}
+                          options={loadOptsFor(loadA.name, m.moduleType)}
+                          onChange={e=>{
+                            const picked = panelScopedLoads.find(l => (l.name||"") === e.target.value);
+                            updSmartLoad(m.id, loadA.id, {
+                              name: e.target.value,
+                              loadType: picked?.loadType || loadA.loadType || "",
+                              watts: picked?.watts || loadA.watts || "",
+                            });
+                          }}
+                          style={{fontSize:11}}/>
+                        <Sel value={loadA.feederSlot||""} options={feederOpts}
+                          onChange={e=>updSmartLoad(m.id, loadA.id, {feederSlot:e.target.value})}
+                          style={{fontSize:11}}/>
+                        <input value={loadA.watts||""} placeholder="W"
+                          onChange={e=>updSmartLoad(m.id, loadA.id, {watts:e.target.value})}
+                          style={{width:"100%",textAlign:"center",fontSize:11,padding:"3px 6px",
+                            border:`1px solid ${C.border}`,borderRadius:4,fontFamily:"inherit"}}/>
+                      </div>
+                      {/* Input B row */}
+                      <div style={{display:"grid",
+                        gridTemplateColumns:"30px 1fr 1fr 70px",
+                        gap:6,alignItems:"center",padding:"7px 10px",
+                        background: loadFeederColor(loadB) ? `${loadFeederColor(loadB)}1f` : "transparent",
+                      }}>
+                        <span style={{fontSize:10,fontWeight:700,color:C.text,textAlign:"center"}}>B</span>
+                        <Sel value={loadB.name||""}
+                          options={loadOptsFor(loadB.name, m.moduleType)}
+                          onChange={e=>{
+                            const picked = panelScopedLoads.find(l => (l.name||"") === e.target.value);
+                            updSmartLoad(m.id, loadB.id, {
+                              name: e.target.value,
+                              loadType: picked?.loadType || loadB.loadType || "",
+                              watts: picked?.watts || loadB.watts || "",
+                            });
+                          }}
+                          style={{fontSize:11}}/>
+                        <Sel value={loadB.feederSlot||""} options={feederOpts}
+                          onChange={e=>updSmartLoad(m.id, loadB.id, {feederSlot:e.target.value})}
+                          style={{fontSize:11}}/>
+                        <input value={loadB.watts||""} placeholder="W"
+                          onChange={e=>updSmartLoad(m.id, loadB.id, {watts:e.target.value})}
+                          style={{width:"100%",textAlign:"center",fontSize:11,padding:"3px 6px",
+                            border:`1px solid ${C.border}`,borderRadius:4,fontFamily:"inherit"}}/>
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            )}
+          </div>
+        );
+      })()}
+
+      {/* Show "advanced" toggle for users who want the old UI back */}
+      {!simpleMode && (
+        <div style={{marginBottom:8,display:"flex",justifyContent:"flex-end"}}>
+          <button onClick={()=>setSimpleMode(true)}
+            style={{background:"none",border:`1px solid ${C.border}`,
+              color:C.dim,borderRadius:5,padding:"3px 10px",fontSize:10,fontWeight:700,
+              cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
+            ← BACK TO SIMPLE
+          </button>
+        </div>
+      )}
+
       {/* Empty state — no loads tagged for this panel. Tells the user
           exactly how to fix it (rename the section header, or tag loads
           with this panel name in the master Loads list). Replaces the
           old behavior that silently showed wrong-panel loads. */}
-      {unassignedLoads.length === 0 && _otherPanelNames.length > 0 && (
+      {!simpleMode && unassignedLoads.length === 0 && _otherPanelNames.length > 0 && (
         <div style={{
           padding:"10px 12px", marginBottom:8, background:"#fffbe6",
           border:`1px solid #fde68a`, borderRadius:8, fontSize:11, color:"#92400e",
@@ -16024,7 +16315,7 @@ function SavantPanelSchedule({
           To fix: rename this section header above to match one of those, OR set the Panel field on loads in the Loads list to "{panelLabel}".
         </div>
       )}
-      {unassignedLoads.length > 0 && (() => {
+      {!simpleMode && unassignedLoads.length > 0 && (() => {
         // Per-type counts of what's still NEEDING to be assigned. Lets you
         // scan "I have 8 dimming + 4 switching left" so you know how many
         // APD vs Relay modules to add.
@@ -16230,7 +16521,7 @@ function SavantPanelSchedule({
           smart-breaker A or B half to set that load's feederSlot. The mod
           half instantly turns the feeder's color. Stays armed so you can
           rapid-assign across many mods. */}
-      {(regularBreakers||[]).filter(r => Number(r.slot) > 0).length > 0 && (
+      {!simpleMode && (regularBreakers||[]).filter(r => Number(r.slot) > 0).length > 0 && (
         <div style={{
           padding:"8px 10px", marginBottom:8,
           background: armedFeederSlot ? "#dbeafe" : "#fafbfc",
@@ -16332,7 +16623,8 @@ function SavantPanelSchedule({
       {renderAddPicker()}
       {renderEditor()}
 
-      {/* Schedule grid */}
+      {/* Schedule grid — hidden in simple mode (still used for print) */}
+      {!simpleMode && (
       <div style={{
         display:"grid", gridTemplateColumns:"40px 1fr 40px 1fr",
         border:`1px solid ${C.border}`, borderRadius:"0 0 8px 8px",
@@ -16353,6 +16645,7 @@ function SavantPanelSchedule({
           </Fragment>
         ))}
       </div>
+      )}
     </div>
   );
 }
