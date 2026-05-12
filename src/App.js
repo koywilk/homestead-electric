@@ -13639,19 +13639,20 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                       // Prefers highest-amp 2-poles first (matches Square D
                       // / Eaton quad SKU lineup which is built around the
                       // 2-pole tier). For 1-poles, pulls from whatever's
-                      // still left after tandems.
-                      const quadLines = [];
+                      // still left after tandems. Same signatures get
+                      // aggregated into one "Nx ..." line so the PO doesn't
+                      // list "1× ..." three times when it should be "3× ...".
+                      const quadCounts = {};
                       if (poQuads > 0) {
                         let budget = poQuads;
                         const twoPolesSorted = [...twoPolesRem]
                           .sort((a, b) => b.amps - a.amps);
                         twoPolesSorted.forEach(tp => {
                           while (budget > 0 && tp.count > 0) {
-                            // Find a 1-pole source with ≥2 left (same-amp
-                            // quad), else pair across tiers.
                             const same = onePolesRem.find(op => op.count >= 2);
                             if (same) {
-                              quadLines.push(`1× ${tp.amps}A/${same.amps}A quad (2P + 2× 1P)`);
+                              const sig = `${tp.amps}A/${same.amps}A quad`;
+                              quadCounts[sig] = (quadCounts[sig]||0) + 1;
                               same.count -= 2;
                               tp.count--;
                               budget--;
@@ -13660,19 +13661,20 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                             const a = onePolesRem.find(op => op.count >= 1);
                             const b = onePolesRem.find(op => op !== a && op.count >= 1);
                             if (a && b) {
-                              quadLines.push(`1× ${tp.amps}A/${a.amps}+${b.amps}A mixed quad (2P + 2× 1P)`);
+                              const sig = `${tp.amps}A/${a.amps}+${b.amps}A mixed quad`;
+                              quadCounts[sig] = (quadCounts[sig]||0) + 1;
                               a.count--; b.count--;
                               tp.count--;
                               budget--;
                             } else {
-                              // Not enough 1-poles left to form another quad —
-                              // bail out, quads stop here.
                               budget = 0;
                               break;
                             }
                           }
                         });
                       }
+                      const quadLines = Object.entries(quadCounts)
+                        .map(([sig, n]) => `${n}× ${sig}`);
 
                       // Final output: remaining 2-poles, tandems, quads,
                       // remaining 1-poles. Zero-count entries skip.
