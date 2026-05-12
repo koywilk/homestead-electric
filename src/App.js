@@ -13499,15 +13499,20 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                         <div style={{color:'#92400e',fontWeight:700,marginBottom:2}}>
                           <Icon name="alertTriangle" size={9} stroke={2.5}/> {tandemInfo.slotsNeeded} circuits in a {tandemInfo.slotCap}-space panel — need:
                         </div>
-                        {tandemInfo.tandemsNeeded > 0 && (
+                        {/* Banner shows the ACTUAL tandem/quad counts (from
+                            the matched panel schedule) when available, not
+                            the minimum-needed estimate. Stays in sync with
+                            the PO numbers, which use the same poTandems /
+                            poQuads values. */}
+                        {poTandems > 0 && (
                           <div style={{color:'#92400e',fontWeight:700,paddingLeft:14}}>
-                            • <b>{tandemInfo.tandemsNeeded} tandem breaker{tandemInfo.tandemsNeeded===1?'':'s'}</b>
+                            • <b>{poTandems} tandem breaker{poTandems===1?'':'s'}</b>
                             <span style={{color:'#a16207',fontWeight:500}}> (each holds 2 single-pole circuits)</span>
                           </div>
                         )}
-                        {tandemInfo.quadsNeeded > 0 && (
+                        {poQuads > 0 && (
                           <div style={{color:'#92400e',fontWeight:700,paddingLeft:14}}>
-                            • <b>{tandemInfo.quadsNeeded} quad breaker{tandemInfo.quadsNeeded===1?'':'s'}</b>
+                            • <b>{poQuads} quad breaker{poQuads===1?'':'s'}</b>
                             <span style={{color:'#a16207',fontWeight:500}}> (1-poles on the outer, 2-pole on the inner)</span>
                           </div>
                         )}
