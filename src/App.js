@@ -20385,6 +20385,31 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     nextFinish = _flipInFloors(nextFinish, finishHitsOpen, false);
     if (nextRough  !== prev.roughPunch)  patch.roughPunch  = nextRough;
     if (nextFinish !== prev.finishPunch) patch.finishPunch = nextFinish;
+    // 4-way checklist sync — when an RT punch item that originated from a
+    // failed-4-way conversion gets toggled, mirror the done state back to
+    // the matching roughInspectionItems entry (matched by fromRoughInspectionId).
+    // Same one-shot patch — no race with the other punch cascades.
+    const prevRoughInspectionDoneById = new Map();
+    (prev.roughInspectionItems||[]).forEach(it => {
+      if (it && it.id) prevRoughInspectionDoneById.set(it.id, !!it.done);
+    });
+    const nextRoughInspectionDoneById = new Map(); // sourceItemId -> done
+    nextTrips.forEach(rt => {
+      (rt.punch||[]).forEach(p => {
+        if (!p || !p.fromRoughInspectionId) return;
+        nextRoughInspectionDoneById.set(p.fromRoughInspectionId, !!p.done);
+      });
+    });
+    let roughInspectionChanged = false;
+    const updatedRoughInspection = (prev.roughInspectionItems||[]).map(it => {
+      if (!it || !it.id) return it;
+      if (!nextRoughInspectionDoneById.has(it.id)) return it;
+      const desired = nextRoughInspectionDoneById.get(it.id);
+      if (!!it.done === desired) return it;
+      roughInspectionChanged = true;
+      return { ...it, done: desired };
+    });
+    if (roughInspectionChanged) patch.roughInspectionItems = updatedRoughInspection;
     u(patch);
   };
 
@@ -21351,7 +21376,31 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           <div style={{fontSize:10,color:"#dc2626",fontWeight:700,letterSpacing:"0.08em",marginBottom:5}}>FAILED ITEMS</div>
                           {(job.roughInspectionItems||[]).map((item,i)=>(
                             <div key={item.id} style={{display:"flex",gap:6,alignItems:"center",marginBottom:5}}>
-                              <input type="checkbox" checked={!!item.done} onChange={()=>{const items=[...(job.roughInspectionItems||[])];items[i]={...items[i],done:!items[i].done};u({roughInspectionItems:items});}}/>
+                              <input type="checkbox" checked={!!item.done} onChange={()=>{
+                                const items=[...(job.roughInspectionItems||[])];
+                                items[i]={...items[i],done:!items[i].done};
+                                const itemId = items[i].id;
+                                const newDone = items[i].done;
+                                // Mirror the toggle to any RT punch entry
+                                // that was created from this 4-way item
+                                // (matched by fromRoughInspectionId).
+                                let trips = job.returnTrips || [];
+                                if (itemId) {
+                                  trips = trips.map(rt => {
+                                    if (!rt || !Array.isArray(rt.punch)) return rt;
+                                    let touched = false;
+                                    const punch = rt.punch.map(p => {
+                                      if (p && p.fromRoughInspectionId === itemId && !!p.done !== newDone) {
+                                        touched = true;
+                                        return { ...p, done: newDone };
+                                      }
+                                      return p;
+                                    });
+                                    return touched ? { ...rt, punch } : rt;
+                                  });
+                                }
+                                u({roughInspectionItems:items, returnTrips: trips});
+                              }}/>
                               <input value={item.text} onChange={e=>{const items=[...(job.roughInspectionItems||[])];items[i]={...items[i],text:e.target.value};u({roughInspectionItems:items});}}
                                 style={{flex:1,background:"transparent",border:"none",borderBottom:`1px solid ${C.border}`,fontSize:12,color:C.text,padding:"2px 4px",outline:"none",fontFamily:"inherit",textDecoration:item.done?"line-through":"none",opacity:item.done?0.5:1}}/>
                               <button onClick={()=>u({roughInspectionItems:(job.roughInspectionItems||[]).filter((_,j)=>j!==i)})} style={{background:"none",border:"none",color:C.dim,fontSize:14,cursor:"pointer",padding:"0 2px",lineHeight:1}}>×</button>
@@ -21377,7 +21426,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             <button onClick={()=>u({roughInspectionItems:[...(job.roughInspectionItems||[]),{id:uid(),text:"",done:false}]})} style={{fontSize:11,padding:"3px 8px",borderRadius:5,background:C.surface,border:`1px solid ${C.border}`,color:C.text,cursor:"pointer",fontFamily:"inherit"}}>+ Item</button>
                             {(job.roughInspectionItems||[]).filter(x=>!x.done).length>0&&(
                               <button onClick={()=>{
-                                const open=(job.roughInspectionItems||[]).filter(x=>!x.done);
+                                // Carry EVERY 4-way item to the RT (done and
+                                // open), preserving done state so the RT
+                                // reflects the same checklist state the
+                                // rough tab shows. Was filtering to open
+                                // only, which hid checked-off items.
+                                const allItems = (job.roughInspectionItems||[]);
                                 // Carry the inspection report files onto the
                                 // RT so the crew can pull them up alongside
                                 // the punch entries. The job-level reports
@@ -21386,8 +21440,16 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                                   ...r, fromInspection: "rough",
                                 }));
                                 const newRT={id:uid(),date:"",scope:"Failed 4-way inspection items",material:"",
-                                  punch:open.map(x=>({id:uid(),text:x.text,done:false})),
+                                  punch:allItems.map(x=>({id:uid(),text:x.text,done:!!x.done,
+                                    // Backlink so any future edits to this
+                                    // RT punch item can be mirrored to the
+                                    // source 4-way item by id.
+                                    fromRoughInspectionId:x.id||""})),
                                   photos:reports,
+                                  // Marker so we know this RT originated
+                                  // from a 4-way conversion (drives the
+                                  // sync logic below).
+                                  fromFailedRough:true,
                                   assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",
                                   needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:""};
                                 u({returnTrips:[...(job.returnTrips||[]),newRT]});
