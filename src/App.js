@@ -20688,14 +20688,29 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     return () => { cancelled = true; unsub(); };
   }, [isEitherInProgress]);
 
-  // Auto-populate inProgressMode when null — once only. Manual choice wins.
+  // Auto-populate inProgressMode based on Simpro's on-schedule state. Two
+  // rules:
+  //   1) If the mode is unset → derive from Simpro (scheduled vs ongoing).
+  //   2) If the mode is "needsSched" but Simpro says the job IS scheduled →
+  //      flip to "scheduled". This was the bug — once the user manually set
+  //      needsSched, the auto-populate stopped touching it, so scheduling
+  //      the job in Forecast never flipped the card pill.
+  // We only flip needsSched → scheduled (not the other direction), because
+  // a user marking a job "needsSched" while Simpro has it scheduled is the
+  // signal that matters — manual escalations to scheduled win.
   useEffect(() => {
     if (!simproOnSchedulePids || !job.simproNo) return;
     const onSch = simproOnSchedulePids.has(String(job.simproNo));
     const derive = onSch ? "scheduled" : "ongoing";
     const patch = {};
-    if (job.roughStatus === "inprogress" && !job.roughInProgressMode) patch.roughInProgressMode = derive;
-    if (job.finishStatus === "inprogress" && !job.finishInProgressMode) patch.finishInProgressMode = derive;
+    if (job.roughStatus === "inprogress") {
+      if (!job.roughInProgressMode) patch.roughInProgressMode = derive;
+      else if (onSch && job.roughInProgressMode === "needsSched") patch.roughInProgressMode = "scheduled";
+    }
+    if (job.finishStatus === "inprogress") {
+      if (!job.finishInProgressMode) patch.finishInProgressMode = derive;
+      else if (onSch && job.finishInProgressMode === "needsSched") patch.finishInProgressMode = "scheduled";
+    }
     if (Object.keys(patch).length) u(patch);
   }, [simproOnSchedulePids, job.simproNo, job.roughStatus, job.finishStatus, job.roughInProgressMode, job.finishInProgressMode]);
 
