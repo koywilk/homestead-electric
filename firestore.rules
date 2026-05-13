@@ -33,6 +33,18 @@ service cloud.firestore {
       allow delete: if true;
     }
 
+    // ── QUOTE WALKS ───────────────────────────────────────────────────────────
+    // Pre-job site walk notes (replaces Apple Notes capture). Same shape as
+    // /jobs and /manualTasks — data map + ISO updated_at string. UI-level
+    // permission checks handle who sees walks (admin + foreman roles).
+    match /quoteWalks/{walkId} {
+      allow read: if true;
+      allow write: if request.resource.data.keys().hasAll(['data', 'updated_at'])
+                   && request.resource.data.data is map
+                   && request.resource.data.updated_at is string;
+      allow delete: if true;
+    }
+
     // ── HOMEOWNER REQUESTS ────────────────────────────────────────────────────
     // Share link recipients submit answers here — allow creates from anyone.
     // Only the app reads these back, so reads are also open for now.

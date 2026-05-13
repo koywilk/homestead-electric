@@ -1123,6 +1123,26 @@ const newCP4Row    = (num) => ({ id:uid(), num, name:"", moduleType:"", mod:"", 
 
 const newLoadRow   = (num) => ({ id:uid(), num, name:"", ch:"", loadType:"", watts:"", keypad:"", pulled:false });
 
+// Quote walk factory — capture-only record for pre-job site walks. Lives in
+// the top-level `quoteWalks` Firestore collection (separate from jobs because
+// these are pre-job and have a different lifecycle: many walks may happen
+// before a job is awarded, walks can stay dead-ended forever, etc.).
+const newQuoteWalk = (walkedBy = "") => ({
+  id: uid(),
+  address: "",
+  clientName: "",
+  walkedBy,
+  walkedByUid: "",
+  date: new Date().toISOString().slice(0, 10),  // YYYY-MM-DD today
+  notes: "",
+  materials: [],       // [{ id, text }] — free-text list of items to order
+  photos: [],          // [{ id, url, name, takenAt, uploadedBy }] — same shape as job photos
+  status: "walking",   // "walking" | "quote sent"
+  simproQuoteNo: "",
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+});
+
 const newModuleObj = (modNum) => ({ id:uid(), modNum:String(modNum), moduleType:"", panel:"", breaker:"", phase:"", bus:"", pdu:"", chainPos:"", loads:[newLoadRow(1)] });
 
 // Inverse of migrateFloorToModules — flattens nested module-block format
@@ -38693,6 +38713,437 @@ function HuddleConfigPanel() {
   );
 }
 
+// ── Quote Walks tab ───────────────────────────────────────────────────
+// Pre-job site walk note capture. Foreman walks a quote site, takes photos
+// + notes + material observations, picks a status. Admin + other foremen
+// can see every walk in one list. Standalone from Jobs — no Convert-to-Job
+// flow in v1 (per spec).
+function QuoteWalksTab({ walks, onAdd, onUpdate, onDelete, jobs, identity, selected, setSelected }) {
+  const [search, setSearch] = useState("");
+  const [statusFilter, setStatusFilter] = useState("all");
+
+  // Sorted alphabetically by address (case-insensitive). Walks with no
+  // address bubble to the bottom so the list opens with named ones first.
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return (walks||[])
+      .filter(w => statusFilter === "all" ? true : (w.status||"walking") === statusFilter)
+      .filter(w => {
+        if (!q) return true;
+        const addr = (w.address||"").toLowerCase();
+        const client = (w.clientName||"").toLowerCase();
+        const who = (w.walkedBy||"").toLowerCase();
+        return addr.includes(q) || client.includes(q) || who.includes(q);
+      })
+      .sort((a,b) => {
+        const aA = (a.address||"").trim().toLowerCase();
+        const bA = (b.address||"").trim().toLowerCase();
+        if (!aA && bA) return 1;
+        if (aA && !bA) return -1;
+        return aA.localeCompare(bA);
+      });
+  }, [walks, search, statusFilter]);
+
+  // Address-collision lookup — pre-built map so we can flag walks whose
+  // address matches an existing job. Built once per render; jobs change
+  // infrequently. Case-insensitive, trimmed.
+  const jobAddressMap = useMemo(() => {
+    const m = new Map();
+    (jobs||[]).forEach(j => {
+      const a = (j.address||"").trim().toLowerCase();
+      if (a) m.set(a, j);
+    });
+    return m;
+  }, [jobs]);
+
+  if (selected) {
+    return <QuoteWalkDetail walk={selected} onChange={onUpdate} onDelete={onDelete}
+      onBack={()=>setSelected(null)} jobAddressMap={jobAddressMap}/>;
+  }
+
+  return (
+    <div style={{maxWidth:1100, margin:"0 auto", padding:"16px 14px"}}>
+      <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap"}}>
+        <h2 style={{margin:0, fontSize:20, fontWeight:800, color:C.text,
+          letterSpacing:"0.02em"}}>Quote Walks</h2>
+        <span style={{fontSize:12, color:C.dim}}>
+          {walks.length} walk{walks.length===1?"":"s"}
+        </span>
+        <button onClick={async ()=>{ const w = await onAdd(); setSelected(w); }}
+          style={{marginLeft:"auto", background:C.purple, border:"none", color:"#fff",
+            borderRadius:7, padding:"8px 14px", fontSize:13, fontWeight:700,
+            cursor:"pointer", fontFamily:"inherit", letterSpacing:"0.03em"}}>
+          + New Walk
+        </button>
+      </div>
+
+      <div style={{display:"flex", gap:8, marginBottom:12, flexWrap:"wrap"}}>
+        <input value={search} onChange={e=>setSearch(e.target.value)}
+          placeholder="Search by address, client, or walker…"
+          style={{flex:1, minWidth:200, padding:"8px 12px", fontSize:13,
+            border:`1px solid ${C.border}`, borderRadius:7, fontFamily:"inherit",
+            outline:"none", background:"#fff", color:C.text}}/>
+        <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}
+          style={{padding:"8px 10px", fontSize:13, border:`1px solid ${C.border}`,
+            borderRadius:7, fontFamily:"inherit", background:"#fff", color:C.text,
+            cursor:"pointer"}}>
+          <option value="all">All statuses</option>
+          <option value="walking">Walking</option>
+          <option value="quote sent">Quote sent</option>
+        </select>
+      </div>
+
+      {visible.length === 0 ? (
+        <div style={{padding:"40px 20px", textAlign:"center", color:C.dim,
+          background:"#fafbfc", border:`1px dashed ${C.border}`, borderRadius:10,
+          fontSize:13, fontStyle:"italic"}}>
+          {walks.length === 0
+            ? "No quote walks yet. Click + New Walk to start one."
+            : "No walks match the current filter."}
+        </div>
+      ) : (
+        <div style={{display:"flex", flexDirection:"column", gap:6}}>
+          {visible.map(w => {
+            const addrKey = (w.address||"").trim().toLowerCase();
+            const collidingJob = addrKey ? jobAddressMap.get(addrKey) : null;
+            const statusColor = (w.status||"walking") === "quote sent" ? C.green : C.accent;
+            return (
+              <div key={w.id} onClick={()=>setSelected(w)}
+                style={{padding:"10px 14px", background:"#fff",
+                  border:`1px solid ${C.border}`, borderRadius:9,
+                  cursor:"pointer", display:"flex", flexDirection:"column", gap:4,
+                  transition:"background 0.1s"}}
+                onMouseEnter={e=>e.currentTarget.style.background="#fafbfc"}
+                onMouseLeave={e=>e.currentTarget.style.background="#fff"}>
+                <div style={{display:"flex", alignItems:"center", gap:10, flexWrap:"wrap"}}>
+                  <span style={{fontSize:14, fontWeight:600, color:C.text}}>
+                    {w.address || <span style={{color:C.muted, fontStyle:"italic", fontWeight:400}}>(no address yet)</span>}
+                  </span>
+                  {w.clientName && (
+                    <span style={{fontSize:12, color:C.dim}}>· {w.clientName}</span>
+                  )}
+                  <span style={{marginLeft:"auto", fontSize:10, fontWeight:700,
+                    letterSpacing:"0.05em", textTransform:"uppercase",
+                    color:statusColor, background:`${statusColor}15`,
+                    border:`1px solid ${statusColor}33`,
+                    borderRadius:99, padding:"2px 8px"}}>
+                    {w.status || "walking"}
+                  </span>
+                </div>
+                <div style={{display:"flex", alignItems:"center", gap:10, fontSize:11, color:C.dim, flexWrap:"wrap"}}>
+                  <span>{w.walkedBy || "(no walker)"}</span>
+                  <span>·</span>
+                  <span>{w.date || "(no date)"}</span>
+                  {(w.photos||[]).length > 0 && <>
+                    <span>·</span>
+                    <span>{(w.photos||[]).length} photo{(w.photos||[]).length===1?"":"s"}</span>
+                  </>}
+                  {(w.materials||[]).length > 0 && <>
+                    <span>·</span>
+                    <span>{(w.materials||[]).length} material item{(w.materials||[]).length===1?"":"s"}</span>
+                  </>}
+                  {collidingJob && (
+                    <span style={{marginLeft:"auto", fontSize:10, fontWeight:700,
+                      color:C.accent, background:"#fef3c7",
+                      border:`1px solid #fde68a`, borderRadius:5, padding:"2px 6px"}}>
+                      ⚠ Job #{collidingJob.id} at this address
+                    </span>
+                  )}
+                </div>
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+// ── Quote Walk detail (single walk edit screen) ───────────────────────
+function QuoteWalkDetail({ walk, onChange, onDelete, onBack, jobAddressMap }) {
+  // Local state for the editable walk — keeps inputs responsive without
+  // round-tripping through Firestore on every keystroke. Debounced commit
+  // back to the parent via the setter pattern below.
+  const [local, setLocal] = useState(walk);
+  const commitTimer = useRef(null);
+  useEffect(() => { setLocal(walk); }, [walk?.id]);
+
+  const patch = (changes) => {
+    const next = { ...local, ...changes };
+    setLocal(next);
+    if (commitTimer.current) clearTimeout(commitTimer.current);
+    commitTimer.current = setTimeout(() => onChange(next), 600);
+  };
+  // Materials helpers
+  const addMaterial = () => patch({ materials: [...(local.materials||[]), { id: uid(), text: "" }] });
+  const updMaterial = (id, text) => patch({
+    materials: (local.materials||[]).map(m => m.id === id ? { ...m, text } : m),
+  });
+  const delMaterial = (id) => patch({
+    materials: (local.materials||[]).filter(m => m.id !== id),
+  });
+
+  // Photo upload — uses Firebase Storage, same path pattern as job photos.
+  const [uploading, setUploading] = useState(false);
+  const handlePhotoFiles = async (files) => {
+    if (!files || files.length === 0) return;
+    setUploading(true);
+    try {
+      const newPhotos = [];
+      for (const f of Array.from(files)) {
+        const path = `quoteWalks/${local.id}/${uid()}_${f.name}`;
+        const r = ref(storage, path);
+        await uploadBytes(r, f);
+        const url = await getDownloadURL(r);
+        newPhotos.push({
+          id: uid(), url, name: f.name,
+          takenAt: new Date().toISOString(),
+          uploadedBy: local.walkedBy || "",
+        });
+      }
+      const merged = [...(local.photos||[]), ...newPhotos];
+      patch({ photos: merged });
+    } catch (e) {
+      console.error("Photo upload failed:", e);
+      window.alert("Photo upload failed: " + (e?.message || "unknown error"));
+    } finally {
+      setUploading(false);
+    }
+  };
+  const removePhoto = (id) => {
+    if (!window.confirm("Remove this photo?")) return;
+    patch({ photos: (local.photos||[]).filter(p => p.id !== id) });
+  };
+
+  const collidingJob = (() => {
+    const a = (local.address||"").trim().toLowerCase();
+    if (!a) return null;
+    return jobAddressMap?.get(a) || null;
+  })();
+
+  return (
+    <div style={{maxWidth:900, margin:"0 auto", padding:"14px"}}>
+      {/* Top bar */}
+      <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap"}}>
+        <button onClick={onBack}
+          style={{background:"none", border:`1px solid ${C.border}`, color:C.text,
+            borderRadius:7, padding:"6px 12px", fontSize:13, fontWeight:600,
+            cursor:"pointer", fontFamily:"inherit"}}>
+          ← Back
+        </button>
+        <h2 style={{margin:0, fontSize:18, fontWeight:700, color:C.text, flex:1, minWidth:0,
+          overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
+          {local.address || "(new walk)"}
+        </h2>
+        <button onClick={()=>{
+            if (window.confirm(`Delete this walk${local.address?` at ${local.address}`:""}? This cannot be undone.`)) {
+              onDelete(local.id);
+              onBack();
+            }
+          }}
+          style={{background:"none", border:`1px solid ${C.red}55`, color:C.red,
+            borderRadius:7, padding:"6px 12px", fontSize:12, fontWeight:600,
+            cursor:"pointer", fontFamily:"inherit"}}>
+          Delete
+        </button>
+      </div>
+
+      {/* Address collision warning */}
+      {collidingJob && (
+        <div style={{padding:"8px 12px", marginBottom:10, background:"#fef3c7",
+          border:`1px solid #fde68a`, borderRadius:8, fontSize:12, color:"#92400e"}}>
+          <b>⚠ Heads up</b> — job <b>#{collidingJob.id}</b>
+          {collidingJob.name ? ` (${collidingJob.name})` : ""} already exists at this address.
+        </div>
+      )}
+
+      {/* Top fields */}
+      <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))",
+        gap:10, marginBottom:14}}>
+        <Field label="Address">
+          <input value={local.address||""}
+            onChange={e=>patch({address:e.target.value})}
+            placeholder="Site address" autoFocus={!local.address}/>
+        </Field>
+        <Field label="Client name">
+          <input value={local.clientName||""}
+            onChange={e=>patch({clientName:e.target.value})}
+            placeholder="Optional"/>
+        </Field>
+        <Field label="Walked by">
+          <input value={local.walkedBy||""}
+            onChange={e=>patch({walkedBy:e.target.value})}/>
+        </Field>
+        <Field label="Date">
+          <input type="date" value={local.date||""}
+            onChange={e=>patch({date:e.target.value})}/>
+        </Field>
+        <Field label="Status">
+          <select value={local.status||"walking"}
+            onChange={e=>patch({status:e.target.value})}>
+            <option value="walking">Walking</option>
+            <option value="quote sent">Quote sent</option>
+          </select>
+        </Field>
+        {local.status === "quote sent" && (
+          <Field label="Simpro quote #">
+            <input value={local.simproQuoteNo||""}
+              onChange={e=>patch({simproQuoteNo:e.target.value})}
+              placeholder="Optional"/>
+          </Field>
+        )}
+      </div>
+
+      {/* Notes */}
+      <div style={{marginBottom:14}}>
+        <div style={{fontSize:11, color:C.dim, fontWeight:700, letterSpacing:"0.07em",
+          textTransform:"uppercase", marginBottom:5}}>Notes</div>
+        <textarea value={local.notes||""}
+          onChange={e=>patch({notes:e.target.value})}
+          placeholder="Anything the estimator should know — scope, panel condition, attic access, switching layout, special requests…"
+          rows={6}
+          style={{width:"100%", padding:"10px 12px", fontSize:14, lineHeight:1.5,
+            border:`1px solid ${C.border}`, borderRadius:7, fontFamily:"inherit",
+            outline:"none", color:C.text, background:"#fff", resize:"vertical",
+            boxSizing:"border-box"}}/>
+      </div>
+
+      {/* Materials list */}
+      <div style={{marginBottom:14}}>
+        <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:5}}>
+          <span style={{fontSize:11, color:C.dim, fontWeight:700,
+            letterSpacing:"0.07em", textTransform:"uppercase"}}>Material noted</span>
+          <button onClick={addMaterial}
+            style={{marginLeft:"auto", background:"none", border:`1px solid ${C.purple}`,
+              color:C.purple, borderRadius:5, padding:"3px 9px", fontSize:11,
+              fontWeight:700, cursor:"pointer", fontFamily:"inherit",
+              letterSpacing:"0.04em"}}>
+            + Add
+          </button>
+        </div>
+        {(local.materials||[]).length === 0 ? (
+          <div style={{padding:"10px 12px", fontSize:12, color:C.dim,
+            fontStyle:"italic", background:"#fafbfc", border:`1px dashed ${C.border}`,
+            borderRadius:7}}>
+            Add anything you noticed the job will need.
+          </div>
+        ) : (
+          <div style={{display:"flex", flexDirection:"column", gap:5}}>
+            {(local.materials||[]).map(m => (
+              <div key={m.id} style={{display:"flex", gap:6, alignItems:"center"}}>
+                <input value={m.text||""}
+                  onChange={e=>updMaterial(m.id, e.target.value)}
+                  placeholder="e.g. 3× GFCI receptacles, replace 100A panel"
+                  style={{flex:1, padding:"6px 10px", fontSize:13,
+                    border:`1px solid ${C.border}`, borderRadius:6,
+                    fontFamily:"inherit", outline:"none", color:C.text, background:"#fff"}}/>
+                <button onClick={()=>delMaterial(m.id)}
+                  style={{background:"none", border:"none", color:C.muted,
+                    cursor:"pointer", fontSize:16, padding:"0 6px", lineHeight:1}}>×</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Photos */}
+      <div style={{marginBottom:14}}>
+        <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:5}}>
+          <span style={{fontSize:11, color:C.dim, fontWeight:700,
+            letterSpacing:"0.07em", textTransform:"uppercase"}}>
+            Photos {(local.photos||[]).length > 0 && `(${(local.photos||[]).length})`}
+          </span>
+          <label style={{marginLeft:"auto", background:`${C.teal}15`, border:`1px solid ${C.teal}55`,
+            color:C.teal, borderRadius:5, padding:"4px 10px", fontSize:11, fontWeight:700,
+            cursor:uploading?"not-allowed":"pointer", fontFamily:"inherit",
+            letterSpacing:"0.04em", display:"inline-flex", alignItems:"center", gap:5,
+            opacity: uploading ? 0.5 : 1}}>
+            <Icon name="camera" size={12}/> Take Photo
+            <input type="file" accept="image/*" capture="environment"
+              disabled={uploading}
+              onChange={e=>{ handlePhotoFiles(e.target.files); e.target.value=""; }}
+              style={{display:"none"}}/>
+          </label>
+          <label style={{background:`${C.purple}15`, border:`1px solid ${C.purple}55`,
+            color:C.purple, borderRadius:5, padding:"4px 10px", fontSize:11, fontWeight:700,
+            cursor:uploading?"not-allowed":"pointer", fontFamily:"inherit",
+            letterSpacing:"0.04em", display:"inline-flex", alignItems:"center", gap:5,
+            opacity: uploading ? 0.5 : 1}}>
+            <Icon name="image" size={12}/> Upload
+            <input type="file" accept="image/*,application/pdf" multiple
+              disabled={uploading}
+              onChange={e=>{ handlePhotoFiles(e.target.files); e.target.value=""; }}
+              style={{display:"none"}}/>
+          </label>
+        </div>
+        {uploading && (
+          <div style={{padding:"6px 10px", fontSize:11, color:C.purple, fontStyle:"italic"}}>
+            Uploading…
+          </div>
+        )}
+        {(local.photos||[]).length === 0 ? (
+          <div style={{padding:"20px", fontSize:12, color:C.dim, fontStyle:"italic",
+            background:"#fafbfc", border:`1px dashed ${C.border}`, borderRadius:7,
+            textAlign:"center"}}>
+            Tap Take Photo to capture the site.
+          </div>
+        ) : (
+          <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(140px, 1fr))",
+            gap:8}}>
+            {(local.photos||[]).map(p => (
+              <div key={p.id} style={{position:"relative", borderRadius:7,
+                overflow:"hidden", border:`1px solid ${C.border}`, background:"#fff"}}>
+                <a href={p.url} target="_blank" rel="noopener noreferrer">
+                  <img src={p.url} alt={p.name||""}
+                    style={{width:"100%", height:130, objectFit:"cover", display:"block",
+                      cursor:"pointer"}}/>
+                </a>
+                <button onClick={()=>removePhoto(p.id)}
+                  style={{position:"absolute", top:4, right:4,
+                    background:"rgba(0,0,0,0.6)", border:"none", color:"#fff",
+                    borderRadius:99, width:24, height:24, cursor:"pointer",
+                    fontSize:14, lineHeight:1, padding:0,
+                    display:"flex", alignItems:"center", justifyContent:"center"}}>×</button>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// Tiny field wrapper used by QuoteWalkDetail — keeps the inputs visually
+// consistent without dragging in the full PhaseInstructions / Form styles.
+function Field({ label, children }) {
+  return (
+    <label style={{display:"flex", flexDirection:"column", gap:3}}>
+      <span style={{fontSize:10, color:C.dim, fontWeight:700,
+        letterSpacing:"0.07em", textTransform:"uppercase"}}>{label}</span>
+      <div className="qw-field" style={{display:"flex"}}>
+        {children}
+        <style>{`
+          .qw-field input, .qw-field select, .qw-field textarea {
+            width: 100%;
+            padding: 7px 10px;
+            font-size: 13px;
+            border: 1px solid ${C.border};
+            border-radius: 6px;
+            font-family: inherit;
+            outline: none;
+            color: ${C.text};
+            background: #fff;
+            box-sizing: border-box;
+          }
+          .qw-field input:focus, .qw-field select:focus, .qw-field textarea:focus {
+            border-color: ${C.purple};
+          }
+        `}</style>
+      </div>
+    </label>
+  );
+}
+
 function App() {
   // Homeowner page route — ?homeowner=JOB_ID
   const hoParam = new URLSearchParams(window.location.search).get("homeowner");
@@ -38997,6 +39448,11 @@ function App() {
   const [jobs,     setJobs]     = useState([]);
   const [upcoming, setUpcoming] = useState([]);
   const [manualTasks, setManualTasks] = useState([]);
+  // Quote walks — pre-job site walk notes (replaces Apple Notes capture).
+  // Loaded from /quoteWalks Firestore collection. Separate state from jobs
+  // because the lifecycles are independent.
+  const [quoteWalks, setQuoteWalks] = useState([]);
+  const [selectedQuoteWalk, setSelectedQuoteWalk] = useState(null);
   // Simpro inbox — pending Simpro jobs not yet imported into the app.
   // Populated by the scheduledSimproCandidateRefresh cloud function (every
   // 4h) and the on-demand Sync button. Each entry: {simproId, name, address,
@@ -39213,6 +39669,24 @@ function App() {
       (err) => { console.error("Tasks snapshot error:",err); }
     );
 
+    // Load quote walks from Firestore. Same `data` envelope pattern as jobs.
+    const unsubQuoteWalks = onSnapshot(collection(db,"quoteWalks"),
+      (snap) => {
+        const loaded = snap.docs
+          .map(d => { const raw = d.data(); return raw?.data ? { ...raw.data, updated_at: raw.updated_at || "" } : null; })
+          .filter(Boolean);
+        setQuoteWalks(loaded);
+        // Keep the currently-selected walk in sync if it gets edited on
+        // another device — same pattern as the jobs sync.
+        setSelectedQuoteWalk(prev => {
+          if (!prev) return null;
+          const updated = loaded.find(w => w.id === prev.id);
+          return updated || prev;
+        });
+      },
+      (err) => { console.error("Quote walks snapshot error:", err); }
+    );
+
     // Force-reload: watch config/app for version changes AFTER initial load
     let firstVersionSeen = null;
     const unsubVersion = onSnapshot(doc(db,"config","app"), (snap) => {
@@ -39226,7 +39700,7 @@ function App() {
       }
     }, ()=>{});
 
-    return () => { unsub(); unsubUpcoming(); unsubSimproCands(); unsubTasks(); unsubVersion(); }; // cleanup on unmount
+    return () => { unsub(); unsubUpcoming(); unsubSimproCands(); unsubTasks(); unsubQuoteWalks(); unsubVersion(); }; // cleanup on unmount
 
   },[]);
 
@@ -39676,6 +40150,51 @@ function App() {
     setJobs(js => js.map(j => j.id === updated.id ? updated : j));
     setSelected(s => (s && s.id === updated.id) ? updated : s);
     saveJob(updated, patch);
+  };
+
+  // ── Quote walks save / delete / add ────────────────────────────────
+  // Lightweight save — wraps the walk in the same `data` envelope as jobs
+  // so Firestore rules apply consistently. No saveTimers/debounce yet —
+  // walks are small and edits are infrequent enough that immediate writes
+  // are fine. Can add debounce later if needed.
+  const saveQuoteWalk = async (walk) => {
+    if (!walk?.id) return;
+    const next = { ...walk, updatedAt: new Date().toISOString() };
+    try {
+      await setDoc(doc(db, "quoteWalks", walk.id), {
+        data: next,
+        updated_at: next.updatedAt,
+      });
+    } catch (e) {
+      console.error("[HE] saveQuoteWalk failed:", e?.message);
+    }
+  };
+  // Optimistic update — patches local state immediately so the UI feels
+  // snappy, then writes to Firestore. Snapshot listener reconciles on
+  // success/failure.
+  const updateQuoteWalk = (next) => {
+    setQuoteWalks(ws => ws.map(w => w.id === next.id ? next : w));
+    setSelectedQuoteWalk(s => (s && s.id === next.id) ? next : s);
+    saveQuoteWalk(next);
+  };
+  const deleteQuoteWalk = async (id) => {
+    if (!id) return;
+    setQuoteWalks(ws => ws.filter(w => w.id !== id));
+    setSelectedQuoteWalk(s => (s && s.id === id) ? null : s);
+    try {
+      await deleteDoc(doc(db, "quoteWalks", id));
+    } catch (e) {
+      console.error("[HE] deleteQuoteWalk failed:", e?.message);
+    }
+  };
+  const addQuoteWalk = async () => {
+    const me = getIdentity && getIdentity();
+    const walk = newQuoteWalk(me?.name || "");
+    walk.walkedByUid = me?.id || "";
+    setQuoteWalks(ws => [...ws, walk]);
+    setSelectedQuoteWalk(walk);
+    await saveQuoteWalk(walk);
+    return walk;
   };
 
   // ── Simpro inbox handlers ──────────────────────────────────────────
@@ -40532,6 +41051,7 @@ function App() {
               {key:"nav",label:"Nav",icon:"mapPin"},
               {key:"upcoming",label:"Upcoming"},
               ...(can(identity,"quotes.view")?[{key:"quotes",label:"Quotes"}]:[]),
+              {key:"walks",label:"Walks"},
               {key:"tasks",label:"Tasks"},
               ...(can(identity,"settings.view")?[{key:"huddle",label:"Huddle"}]:[]),
               ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors"}]:[]),
@@ -40541,7 +41061,7 @@ function App() {
         ).map(({key,label,icon})=>{
           const active = view===key;
           return (
-            <button key={key} onClick={key==="home"?goHome:key==="safety"?()=>setView("safety"):key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="tasks"?openTasks:key==="nav"?openNav:key==="huddle"?()=>setView("huddle"):key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):openSettings}
+            <button key={key} onClick={key==="home"?goHome:key==="safety"?()=>setView("safety"):key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="walks"?()=>setView("walks"):key==="tasks"?openTasks:key==="nav"?openNav:key==="huddle"?()=>setView("huddle"):key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):openSettings}
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
@@ -41814,6 +42334,19 @@ function App() {
       )}
 
       {view==="nav"&&<NavView jobs={jobs}/>}
+
+      {view==="walks"&&(
+        <QuoteWalksTab
+          walks={quoteWalks}
+          jobs={jobs}
+          identity={identity}
+          selected={selectedQuoteWalk}
+          setSelected={setSelectedQuoteWalk}
+          onAdd={addQuoteWalk}
+          onUpdate={updateQuoteWalk}
+          onDelete={deleteQuoteWalk}
+        />
+      )}
 
       {view==="upcoming"&&can(identity,"pipeline.view")&&(
         <UpcomingJobs
