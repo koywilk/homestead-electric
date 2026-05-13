@@ -19411,7 +19411,7 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
 // lighting tabs constantly. On jobs with NO panelized lighting / NO tape
 // light, though, those tabs are clutter — so `tabsForJob(job)` below moves
 // them to the far right when job.noPanelizedLighting / job.noTapeLight is set.
-const TABS = ["Job Info","Plans & Links","Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
+const TABS = ["Job Info","Activity","Photos","Plans & Links","Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
 
               "Change Orders","Return Trips","Open Items","QC"];
 
@@ -23136,6 +23136,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           )}
 
 
+          {tab==="Activity"&&(
+            <JobActivity job={job} onSetTab={setTab}/>
+          )}
+
+          {tab==="Photos"&&(
+            <JobPhotos job={job} onSetTab={setTab}/>
+          )}
+
           {tab==="Job Info"&&(
 
             <div>
@@ -25581,6 +25589,641 @@ function AddTaskForm({ defaultForeman, onAdd, onCancel, foremenList, jobs, defau
 // collection. Visits are the same records as Return Trips (job.returnTrips[])
 // — we surface them here so Koy sees one unified list.
 //
+// ── Job Activity aggregator ──────────────────────────────────────────
+// Walks a job's existing fields and produces:
+//   todoGroups: [{ key, label, items: [{label, sourceTab, sourceId?, detail?}] }]
+//   timeline:   [{ at, actor, label, sourceTab, kind, detail }] sorted desc
+// No new data, pure read. Source-tab values match TAB labels so click-through
+// can call setTab(item.sourceTab) directly.
+function buildJobActivity(job) {
+  if (!job) return { todoGroups: [], timeline: [] };
+  const groups = [];
+
+  // ── CHANGE ORDERS ─────────────────────────────────────────────────
+  const openCOs = (job.changeOrders || []).filter(co =>
+    co && !["completed","converted"].includes(co.coStatus));
+  if (openCOs.length) {
+    groups.push({
+      key:"changeOrders", label:"Change Orders",
+      items: openCOs.map((co, i) => ({
+        label: `CO #${i+1} — ${co.coStatus || "pending"}`,
+        detail: (co.desc||"").replace(/<[^>]*>/g,"").slice(0,80),
+        sourceTab: "Change Orders",
+      })),
+    });
+  }
+
+  // ── RETURN TRIPS ──────────────────────────────────────────────────
+  const openRTs = (job.returnTrips || []).filter(rt =>
+    rt && !rt.signedOff && (
+      (!rt.scheduledDate && rt.needsSchedule) ||
+      (rt.punch||[]).some(p => !p.done) ||
+      (!rt.signedOff && rt.scheduledDate)
+    ));
+  if (openRTs.length) {
+    groups.push({
+      key:"returnTrips", label:"Return Trips",
+      items: openRTs.map((rt, i) => {
+        const openPunch = (rt.punch||[]).filter(p=>!p.done).length;
+        const bits = [];
+        if (!rt.scheduledDate && rt.needsSchedule) bits.push("unscheduled");
+        if (rt.scheduledDate && !rt.signedOff) bits.push(`scheduled ${rt.scheduledDate}`);
+        if (openPunch > 0) bits.push(`${openPunch} open punch`);
+        return {
+          label: `RT #${i+1}${rt.scope?` — ${rt.scope.slice(0,40)}`:""}`,
+          detail: bits.join(" · "),
+          sourceTab: "Return Trips",
+        };
+      }),
+    });
+  }
+
+  // ── PUNCH (rough + finish + qc) ───────────────────────────────────
+  const punchOpenForPhase = (phase, label) => {
+    const punch = job[`${phase}Punch`] || {};
+    const out = [];
+    const walk = (floorKey, floorLabel) => {
+      const fl = punch[floorKey] || {};
+      ["general","hotcheck"].forEach(k => {
+        (fl[k]||[]).forEach(it => {
+          if (it && !it.done && (it.text||"").trim()) {
+            out.push({ floor:floorLabel, room:k==="general"?"":"Hotcheck", text:(it.text||"").replace(/<[^>]*>/g,"") });
+          }
+        });
+      });
+      (fl.rooms||[]).forEach(r => {
+        (r.punch||[]).forEach(it => {
+          if (it && !it.done && (it.text||"").trim()) {
+            out.push({ floor:floorLabel, room:r.name||"Room", text:(it.text||"").replace(/<[^>]*>/g,"") });
+          }
+        });
+      });
+    };
+    ["upper","main","basement"].forEach(k => {
+      walk(k, k.charAt(0).toUpperCase()+k.slice(1));
+    });
+    (punch.extras||[]).forEach(ex => { if (ex?.key) walk(ex.key, ex.label||ex.key); });
+    return out;
+  };
+  const roughPunchOpen  = punchOpenForPhase("rough");
+  const finishPunchOpen = punchOpenForPhase("finish");
+  const qcPunchOpen     = punchOpenForPhase("qc");
+  const allPunchOpen = [
+    ...roughPunchOpen.map(p => ({...p, phase:"Rough", sourceTab:"Rough"})),
+    ...finishPunchOpen.map(p => ({...p, phase:"Finish", sourceTab:"Finish"})),
+    ...qcPunchOpen.map(p => ({...p, phase:"QC", sourceTab:"QC"})),
+  ];
+  if (allPunchOpen.length) {
+    groups.push({
+      key:"punch", label:"Punch",
+      items: allPunchOpen.map(p => ({
+        label: `${p.phase} · ${p.floor}${p.room?` · ${p.room}`:""}`,
+        detail: p.text.slice(0,80),
+        sourceTab: p.sourceTab,
+      })),
+    });
+  }
+
+  // ── INSPECTIONS ───────────────────────────────────────────────────
+  const inspItems = [];
+  if (job.fourWayTargetDate && !job.roughInspectionResult) {
+    inspItems.push({ label:"Rough / 4-way", detail:`Scheduled ${job.fourWayTargetDate}`, sourceTab:"Rough" });
+  }
+  if (job.roughInspectionResult === "fail" && (job.roughInspectionItems||[]).some(x=>!x.done)) {
+    const open = (job.roughInspectionItems||[]).filter(x=>!x.done).length;
+    inspItems.push({ label:"Failed 4-way — items to resolve", detail:`${open} open`, sourceTab:"Rough" });
+  }
+  if (job.finalInspectionResult === "fail" && (job.finalInspectionItems||[]).some(x=>!x.done)) {
+    const open = (job.finalInspectionItems||[]).filter(x=>!x.done).length;
+    inspItems.push({ label:"Failed final inspection — items to resolve", detail:`${open} open`, sourceTab:"Finish" });
+  }
+  if (inspItems.length) groups.push({ key:"inspections", label:"Inspections", items: inspItems });
+
+  // ── MATTERPORT ────────────────────────────────────────────────────
+  const mpStatus = job.matterportStatus || "";
+  const hasScan = !!(job.matterportLinks?.length || job.matterportLink);
+  if ((mpStatus === "needs" || mpStatus === "scheduled") && !hasScan) {
+    groups.push({
+      key:"matterport", label:"Matterport",
+      items: [{ label: mpStatus === "needs" ? "Scan needed" : "Scan scheduled — no upload yet",
+                sourceTab: "Job Info" }],
+    });
+  }
+
+  // ── MATERIALS & POs ───────────────────────────────────────────────
+  const matsBucket = (arr, phase) => (arr||[]).filter(o => o && o.items &&
+    (o.needsOrder ? !o.ordered : (o.ordered && !o.pickedUp)))
+    .map(o => ({
+      label: `${phase} · ${o.source || "Materials"} · ${
+        (o.needsOrder && !o.ordered) ? "needs ordering" : "ordered — awaiting pickup"}`,
+      detail: (o.items||"").replace(/<[^>]*>/g," ").slice(0,80),
+      sourceTab: phase === "Rough" ? "Rough" : "Finish",
+    }));
+  const matsAll = [...matsBucket(job.roughMaterials,"Rough"), ...matsBucket(job.finishMaterials,"Finish")];
+  if (matsAll.length) groups.push({ key:"materials", label:"Materials & POs", items: matsAll });
+
+  // ── QUESTIONS ─────────────────────────────────────────────────────
+  // Open homeowner-style questions per phase. job.roughQuestions / finishQuestions
+  // are floored objects: { upper:[{question,answer,done}], main:[...], basement:[...] }
+  const qOpen = (qs, phaseLabel, tab) => {
+    if (!qs) return [];
+    const out = [];
+    ["upper","main","basement"].forEach(k => {
+      (qs[k]||[]).forEach(q => {
+        if (q && !q.done && !((q.answer||"").trim()) && (q.question||"").trim()) {
+          out.push({
+            label: `${phaseLabel} · ${k.charAt(0).toUpperCase()+k.slice(1)}`,
+            detail: (q.question||"").slice(0,80),
+            sourceTab: tab,
+          });
+        }
+      });
+    });
+    return out;
+  };
+  const qAll = [...qOpen(job.roughQuestions,"Rough","Rough"), ...qOpen(job.finishQuestions,"Finish","Finish")];
+  if (qAll.length) groups.push({ key:"questions", label:"Questions", items: qAll });
+
+  // ── TIMELINE ──────────────────────────────────────────────────────
+  // Walk over fields that have inherent timestamps + write history.
+  // _saved_by + updated_at on the job give the latest editor; for fine-grained
+  // events we pull from individual records' own timestamps where they exist
+  // (CO statusDates, RT dates, photo takenAt, note createdAt, etc.).
+  const tl = [];
+  const safeDate = (s) => { const t = Date.parse(s||""); return Number.isFinite(t) ? t : null; };
+  const addEvent = (atIso, actor, label, sourceTab, kind, detail) => {
+    const t = safeDate(atIso);
+    if (!t) return;
+    tl.push({ at: t, atIso, actor: actor||"", label, sourceTab, kind, detail });
+  };
+
+  // CO events — created (no explicit date, use addedAt or first ID gap if any),
+  // status flips via coStatusDate.
+  (job.changeOrders||[]).forEach((co, i) => {
+    const tag = `CO #${i+1}`;
+    if (co.coStatusDate) addEvent(co.coStatusDate, "", `${tag} — ${co.coStatus || "status update"}`, "Change Orders", "co");
+  });
+  // RT events
+  (job.returnTrips||[]).forEach((rt, i) => {
+    const tag = `RT #${i+1}`;
+    if (rt.scheduledDate) addEvent(rt.scheduledDate, rt.scheduledBy||"", `${tag} scheduled`, "Return Trips", "rt");
+    if (rt.signedOff && rt.signedOffDate) addEvent(rt.signedOffDate, rt.signedOffBy||"", `${tag} signed off`, "Return Trips", "rt");
+  });
+  // Status flips — job-level. We don't have per-flip timestamps, only the
+  // current updated_at. Show the most recent state of each top-level status
+  // with the job's latest updated_at as the time.
+  if (job.updated_at || job._updated_at) {
+    const at = job.updated_at || job._updated_at;
+    const who = job._saved_by || "";
+    if (job.roughStatus)  addEvent(at, who, `Rough: ${job.roughStatus}`, "Rough", "status", job.roughStage||"");
+    if (job.finishStatus) addEvent(at, who, `Finish: ${job.finishStatus}`, "Finish", "status", job.finishStage||"");
+    if (job.qcStatus)     addEvent(at, who, `QC: ${job.qcStatus}`, "QC", "status");
+    if (job.matterportStatus) addEvent(at, who, `Matterport: ${job.matterportStatus}`, "Job Info", "status");
+  }
+  // Notes — most recent edited note per source
+  (job.jobNotes||[]).forEach(n => {
+    if (n?.createdAt) addEvent(n.createdAt, n.addedBy||"", `Note added${n.scope?` (${n.scope})`:""}`, "Job Info", "note", (n.text||"").replace(/<[^>]*>/g," ").slice(0,80));
+  });
+  // Daily updates
+  (job.dailyUpdates||[]).forEach(d => {
+    if (d?.date) addEvent(d.date, d.author||"", `Daily update — ${d.author||"someone"}`, "Job Info", "daily", (d.notes||"").slice(0,80));
+  });
+  // Sort desc
+  tl.sort((a,b) => b.at - a.at);
+
+  // ── MONTH GROUPING ────────────────────────────────────────────────
+  // Group timeline events under "MAY 2026" / "APRIL 2026" headers as the
+  // user scrolls. Returns timeline as a flat array; the renderer chunks
+  // by month at display time.
+  return { todoGroups: groups, timeline: tl };
+}
+
+// ── Job Photos aggregator ────────────────────────────────────────────
+// Walks every photo source on the job. Each entry includes:
+//   { id, url, name, takenAt, source, sourceTab, sourceId, isFile? }
+// isFile=true for non-image plan files; the JobPhotos UI renders them as a
+// card with a "Plan file" badge rather than a thumbnail.
+function buildJobPhotos(job) {
+  if (!job) return [];
+  const out = [];
+  const addPhoto = (p, source, sourceTab, sourceId, isFile=false) => {
+    if (!p || (!p.url && !p.downloadURL)) return;
+    out.push({
+      id: p.id || `${source}_${out.length}`,
+      url: p.url || p.downloadURL,
+      name: p.name || p.fileName || "",
+      takenAt: p.takenAt || p.uploadedAt || p.addedAt || "",
+      uploadedBy: p.uploadedBy || p.addedBy || "",
+      source, sourceTab, sourceId, isFile,
+    });
+  };
+  // Punch photos (rough + finish + QC) — punch is structured by floor + general/hotcheck/rooms,
+  // and EACH section has its own photos array.
+  const walkPunch = (punch, phase, sourceTab) => {
+    if (!punch) return;
+    const walkFloor = (floor, floorLabel) => {
+      ["general","hotcheck"].forEach(k => {
+        const section = floor[k];
+        if (section?.photos) section.photos.forEach(p =>
+          addPhoto(p, `Punch · ${phase} · ${floorLabel}${k==="hotcheck"?" · Hotcheck":""}`, sourceTab));
+      });
+      (floor.rooms||[]).forEach(r => {
+        (r.photos||[]).forEach(p =>
+          addPhoto(p, `Punch · ${phase} · ${floorLabel} · ${r.name||"Room"}`, sourceTab));
+      });
+    };
+    ["upper","main","basement"].forEach(k => {
+      if (punch[k]) walkFloor(punch[k], k.charAt(0).toUpperCase()+k.slice(1));
+    });
+    (punch.extras||[]).forEach(ex => { if (ex?.key && punch[ex.key]) walkFloor(punch[ex.key], ex.label||ex.key); });
+  };
+  walkPunch(job.roughPunch,  "Rough",  "Rough");
+  walkPunch(job.finishPunch, "Finish", "Finish");
+  walkPunch(job.qcPunch,     "QC",     "QC");
+
+  // Return trip photos
+  (job.returnTrips||[]).forEach((rt, i) => {
+    (rt.photos||[]).forEach(p => addPhoto(p, `RT #${i+1}${rt.scope?` · ${rt.scope.slice(0,40)}`:""}`, "Return Trips", rt.id));
+  });
+
+  // Change order photos
+  (job.changeOrders||[]).forEach((co, i) => {
+    (co.photos||[]).forEach(p => addPhoto(p, `CO #${i+1}`, "Change Orders", co.id));
+  });
+
+  // Plan files — images render as photos, non-images render as "Plan file" cards
+  (job.planFiles||[]).forEach(f => {
+    const name = (f?.name || f?.fileName || "").toLowerCase();
+    const url  = f?.url || f?.downloadURL || "";
+    const isImg = /\.(jpe?g|png|gif|webp|heic|heif)$/i.test(name) ||
+                  /\.(jpe?g|png|gif|webp)$/i.test(url);
+    addPhoto(f, "Plans & Links · Plan file", "Plans & Links", f?.id, !isImg);
+  });
+
+  // Matterport links — listed as cards with the scan label
+  (job.matterportLinks||[]).forEach((m, i) => {
+    if (m?.url) addPhoto({
+      id: `mp_${i}`, url: m.url, name: m.label || `Matterport ${i+1}`,
+    }, `Matterport · ${m.label || `Scan ${i+1}`}`, "Job Info", null, true);
+  });
+
+  // Inspection reports
+  (job.roughInspectionReports||[]).forEach(r => addPhoto(r, "Rough inspection report", "Rough"));
+  (job.finalInspectionReports||[]).forEach(r => addPhoto(r, "Finish inspection report", "Finish"));
+
+  // Job notes photos
+  (job.jobNotes||[]).forEach(n => {
+    (n.photos||[]).forEach(p => addPhoto(p, `Note${n.scope?` · ${n.scope}`:""}`, "Job Info", n.id));
+  });
+
+  // Daily updates photos
+  (job.dailyUpdates||[]).forEach(d => {
+    (d.photos||[]).forEach(p => addPhoto(p, `Daily update · ${d.date||"unknown"}`, "Job Info"));
+  });
+
+  return out;
+}
+
+// ── JobActivity component ────────────────────────────────────────────
+// Renders to-do groups (collapsible) + activity timeline (with month
+// headers). All buttons that click-through to a source call onSetTab.
+function JobActivity({ job, onSetTab }) {
+  const { todoGroups, timeline } = useMemo(() => buildJobActivity(job), [job]);
+  const [expanded, setExpanded] = useState({});  // { groupKey: bool }
+  const [olderShown, setOlderShown] = useState(false);  // false = last 60 days
+  const cutoff = useMemo(() => Date.now() - 60*24*60*60*1000, [olderShown]);
+  const visibleTimeline = useMemo(() => {
+    if (olderShown) return timeline;
+    return timeline.filter(e => e.at >= cutoff);
+  }, [timeline, olderShown, cutoff]);
+
+  // Chunk timeline by month so each header renders once.
+  const chunked = useMemo(() => {
+    const out = [];
+    let lastKey = "";
+    visibleTimeline.forEach(e => {
+      const d = new Date(e.at);
+      const key = `${d.getFullYear()}-${String(d.getMonth()+1).padStart(2,"0")}`;
+      if (key !== lastKey) {
+        out.push({ kind: "month", label: d.toLocaleDateString("en-US", { month:"long", year:"numeric" }).toUpperCase() });
+        lastKey = key;
+      }
+      out.push({ kind: "event", ...e });
+    });
+    return out;
+  }, [visibleTimeline]);
+
+  const totalTodos = todoGroups.reduce((n, g) => n + g.items.length, 0);
+
+  return (
+    <div style={{padding:"4px 0 20px"}}>
+      {/* TO-DO GROUPS */}
+      <div style={{marginBottom:18}}>
+        <div style={{fontSize:11, fontWeight:700, letterSpacing:"0.08em",
+          color:C.dim, textTransform:"uppercase", marginBottom:8,
+          display:"flex", alignItems:"center", gap:8}}>
+          <span>To do on this job</span>
+          <span style={{fontSize:10, color:C.muted}}>
+            {totalTodos === 0 ? "Nothing open" : `${totalTodos} open`}
+          </span>
+        </div>
+        {todoGroups.length === 0 ? (
+          <div style={{padding:"14px 16px", background:"#dcfce7", border:`1px solid ${C.green}55`,
+            borderRadius:8, fontSize:12, color:"#14532d"}}>
+            ✓ Nothing outstanding on this job right now.
+          </div>
+        ) : (
+          <div style={{display:"flex", flexDirection:"column", gap:5}}>
+            {todoGroups.map(g => {
+              const open = !!expanded[g.key];
+              return (
+                <div key={g.key} style={{border:`1px solid ${C.border}`, borderRadius:8, background:"#fff", overflow:"hidden"}}>
+                  <button onClick={()=>setExpanded(e=>({...e, [g.key]:!open}))}
+                    style={{width:"100%", display:"flex", alignItems:"center", gap:8,
+                      padding:"9px 12px", background: open ? "#f8fafc" : "transparent",
+                      border:"none", cursor:"pointer", fontFamily:"inherit",
+                      borderBottom: open ? `1px solid ${C.border}` : "none"}}>
+                    <span style={{fontSize:11, color:C.dim, fontWeight:700,
+                      letterSpacing:"0.05em", width:12, textAlign:"center"}}>
+                      {open ? "▼" : "▶"}
+                    </span>
+                    <span style={{fontSize:13, fontWeight:600, color:C.text}}>{g.label}</span>
+                    <span style={{fontSize:11, color:C.dim, marginLeft:"auto"}}>
+                      {g.items.length} open
+                    </span>
+                  </button>
+                  {open && (
+                    <div style={{padding:"6px 0"}}>
+                      {g.items.map((it, i) => (
+                        <div key={i} onClick={()=>onSetTab && onSetTab(it.sourceTab)}
+                          style={{display:"flex", flexDirection:"column", gap:2,
+                            padding:"8px 14px", cursor:"pointer",
+                            borderTop: i>0 ? `0.5px solid ${C.border}` : "none"}}
+                          onMouseEnter={e=>e.currentTarget.style.background="#fafbfc"}
+                          onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                          <span style={{fontSize:13, color:C.text, fontWeight:500}}>{it.label}</span>
+                          {it.detail && (
+                            <span style={{fontSize:11, color:C.dim, paddingLeft:0}}>{it.detail}</span>
+                          )}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* TIMELINE */}
+      <div>
+        <div style={{fontSize:11, fontWeight:700, letterSpacing:"0.08em",
+          color:C.dim, textTransform:"uppercase", marginBottom:8}}>
+          Activity
+        </div>
+        {chunked.length === 0 ? (
+          <div style={{padding:"14px 16px", background:"#fafbfc", border:`1px dashed ${C.border}`,
+            borderRadius:8, fontSize:12, color:C.dim, fontStyle:"italic"}}>
+            No activity in the last 60 days. {!olderShown && timeline.length > 0 && (
+              <button onClick={()=>setOlderShown(true)}
+                style={{background:"none", border:"none", color:C.purple, cursor:"pointer",
+                  fontFamily:"inherit", fontSize:12, padding:0, marginLeft:4,
+                  textDecoration:"underline"}}>
+                Load older events
+              </button>
+            )}
+          </div>
+        ) : (
+          <div style={{display:"flex", flexDirection:"column", gap:0}}>
+            {chunked.map((row, i) => {
+              if (row.kind === "month") {
+                return (
+                  <div key={`m_${i}`} style={{fontSize:9, fontWeight:800, letterSpacing:"0.12em",
+                    color:C.dim, textTransform:"uppercase", padding:"14px 12px 6px",
+                    borderBottom:`1px solid ${C.border}`, marginBottom:6}}>
+                    {row.label}
+                  </div>
+                );
+              }
+              const e = row;
+              return (
+                <div key={`e_${i}`} onClick={()=>e.sourceTab && onSetTab && onSetTab(e.sourceTab)}
+                  style={{display:"flex", flexDirection:"column", gap:3,
+                    padding:"7px 12px", cursor: e.sourceTab ? "pointer" : "default",
+                    borderRadius:6}}
+                  onMouseEnter={ev=>{ if(e.sourceTab) ev.currentTarget.style.background="#fafbfc"; }}
+                  onMouseLeave={ev=>{ ev.currentTarget.style.background="transparent"; }}>
+                  <div style={{display:"flex", alignItems:"baseline", gap:8, flexWrap:"wrap"}}>
+                    <span style={{fontSize:13, color:C.text}}>{e.label}</span>
+                    <span style={{fontSize:11, color:C.muted, marginLeft:"auto"}}>
+                      {new Date(e.at).toLocaleDateString("en-US", { month:"short", day:"numeric" })}
+                      {e.actor && ` · ${e.actor}`}
+                    </span>
+                  </div>
+                  {e.detail && <span style={{fontSize:11, color:C.dim}}>{e.detail}</span>}
+                </div>
+              );
+            })}
+            {!olderShown && timeline.length > visibleTimeline.length && (
+              <button onClick={()=>setOlderShown(true)}
+                style={{background:"none", border:`1px dashed ${C.border}`, color:C.dim,
+                  borderRadius:7, padding:"8px 12px", fontSize:12, fontWeight:600,
+                  cursor:"pointer", fontFamily:"inherit", marginTop:8}}>
+                Load older events ({timeline.length - visibleTimeline.length} more)
+              </button>
+            )}
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ── JobPhotos component ──────────────────────────────────────────────
+// Aggregated photo + plan-file gallery. Filter chips by source group +
+// search + click-to-fullscreen with "Go to source" navigation.
+function JobPhotos({ job, onSetTab }) {
+  const allPhotos = useMemo(() => buildJobPhotos(job), [job]);
+  const [excluded, setExcluded] = useState(new Set());
+  const [search, setSearch] = useState("");
+  const [lightboxIdx, setLightboxIdx] = useState(null);
+
+  // Build source-group list for the filter chips (collapse to top-level
+  // categories so the chip row isn't a hundred items).
+  const sourceGroups = useMemo(() => {
+    const groupMap = {
+      "Punch": p => p.source.startsWith("Punch · Rough"),
+      "Punch · Finish": p => p.source.startsWith("Punch · Finish"),
+      "Punch · QC": p => p.source.startsWith("Punch · QC"),
+      "Return Trips": p => p.source.startsWith("RT #"),
+      "Change Orders": p => p.source.startsWith("CO #"),
+      "Plan files": p => p.source.startsWith("Plans & Links"),
+      "Matterport": p => p.source.startsWith("Matterport"),
+      "Inspections": p => /inspection/i.test(p.source),
+      "Notes": p => p.source.startsWith("Note"),
+      "Daily updates": p => p.source.startsWith("Daily update"),
+    };
+    return Object.entries(groupMap).map(([label, fn]) => ({
+      label, fn, count: allPhotos.filter(fn).length,
+    })).filter(g => g.count > 0);
+  }, [allPhotos]);
+
+  const visible = useMemo(() => {
+    const q = search.trim().toLowerCase();
+    return allPhotos.filter(p => {
+      // Source filter
+      const inExcluded = sourceGroups.some(g => excluded.has(g.label) && g.fn(p));
+      if (inExcluded) return false;
+      // Search
+      if (q) {
+        const blob = `${p.source} ${p.name||""} ${p.uploadedBy||""}`.toLowerCase();
+        if (!blob.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [allPhotos, excluded, search, sourceGroups]);
+
+  const lightboxPhoto = lightboxIdx != null ? visible[lightboxIdx] : null;
+
+  return (
+    <div style={{padding:"4px 0 20px"}}>
+      <div style={{fontSize:11, fontWeight:700, letterSpacing:"0.08em",
+        color:C.dim, textTransform:"uppercase", marginBottom:8,
+        display:"flex", alignItems:"center", gap:8}}>
+        <span>All photos & files</span>
+        <span style={{fontSize:10, color:C.muted}}>
+          {allPhotos.length === 0 ? "Nothing yet" :
+            `${visible.length} of ${allPhotos.length}`}
+        </span>
+      </div>
+      {allPhotos.length === 0 ? (
+        <div style={{padding:"30px 20px", textAlign:"center", color:C.dim,
+          background:"#fafbfc", border:`1px dashed ${C.border}`, borderRadius:10,
+          fontSize:12, fontStyle:"italic"}}>
+          No photos yet. They'll show up here as you attach them to punch items, RTs, COs, notes, or plans.
+        </div>
+      ) : (
+        <>
+          <input value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Search by filename, source, or uploader…"
+            style={{width:"100%", padding:"8px 12px", fontSize:13,
+              border:`1px solid ${C.border}`, borderRadius:7, fontFamily:"inherit",
+              outline:"none", color:C.text, background:"#fff", marginBottom:8,
+              boxSizing:"border-box"}}/>
+          {sourceGroups.length > 1 && (
+            <div style={{display:"flex", flexWrap:"wrap", gap:5, marginBottom:12}}>
+              {sourceGroups.map(g => {
+                const off = excluded.has(g.label);
+                return (
+                  <button key={g.label}
+                    onClick={()=>setExcluded(prev => {
+                      const n = new Set(prev);
+                      if (n.has(g.label)) n.delete(g.label); else n.add(g.label);
+                      return n;
+                    })}
+                    style={{fontSize:11, padding:"3px 9px", fontWeight:600,
+                      background: off ? "#fff" : C.purple,
+                      color: off ? C.dim : "#fff",
+                      border: `1px solid ${off ? C.border : C.purple}`,
+                      borderRadius:99, cursor:"pointer", fontFamily:"inherit",
+                      textDecoration: off ? "line-through" : "none"}}>
+                    {g.label} <span style={{opacity:0.7, fontSize:10, marginLeft:4}}>{g.count}</span>
+                  </button>
+                );
+              })}
+            </div>
+          )}
+          <div style={{display:"grid",
+            gridTemplateColumns:"repeat(auto-fill, minmax(150px, 1fr))",
+            gap:8}}>
+            {visible.map((p, i) => (
+              <div key={p.id} onClick={()=>setLightboxIdx(i)}
+                style={{cursor:"pointer", border:`1px solid ${C.border}`,
+                  borderRadius:7, overflow:"hidden", background:"#fff",
+                  display:"flex", flexDirection:"column"}}>
+                {p.isFile ? (
+                  <div style={{height:120, background:`${C.purple}10`,
+                    display:"flex", alignItems:"center", justifyContent:"center",
+                    color:C.purple, fontSize:11, fontWeight:700,
+                    letterSpacing:"0.04em", textAlign:"center", padding:8}}>
+                    {p.source.startsWith("Matterport") ? "MATTERPORT" :
+                     p.source.startsWith("Plans") ? "PLAN FILE" : "FILE"}
+                  </div>
+                ) : (
+                  <img src={p.url} alt={p.name||""} loading="lazy"
+                    style={{width:"100%", height:120, objectFit:"cover", display:"block"}}/>
+                )}
+                <div style={{padding:"6px 8px", fontSize:10, color:C.dim, lineHeight:1.3,
+                  display:"flex", flexDirection:"column", gap:2}}>
+                  <span style={{color:C.text, fontWeight:600, overflow:"hidden",
+                    textOverflow:"ellipsis", whiteSpace:"nowrap"}}>{p.source}</span>
+                  {p.takenAt && (
+                    <span>{new Date(p.takenAt).toLocaleDateString("en-US",{month:"short",day:"numeric",year:"numeric"})}</span>
+                  )}
+                </div>
+              </div>
+            ))}
+          </div>
+        </>
+      )}
+
+      {/* Lightbox */}
+      {lightboxPhoto && (
+        <div onClick={()=>setLightboxIdx(null)}
+          style={{position:"fixed", inset:0, background:"rgba(0,0,0,0.85)",
+            zIndex:10000, display:"flex", flexDirection:"column",
+            alignItems:"center", justifyContent:"center", padding:20}}>
+          <div onClick={e=>e.stopPropagation()}
+            style={{maxWidth:"100%", maxHeight:"100%", display:"flex",
+              flexDirection:"column", alignItems:"center", gap:12}}>
+            {lightboxPhoto.isFile ? (
+              <a href={lightboxPhoto.url} target="_blank" rel="noopener noreferrer"
+                style={{background:"#fff", color:C.purple, padding:"30px 40px",
+                  borderRadius:10, fontSize:14, fontWeight:700, textDecoration:"none"}}>
+                Open file ↗
+              </a>
+            ) : (
+              <img src={lightboxPhoto.url} alt={lightboxPhoto.name||""}
+                style={{maxWidth:"90vw", maxHeight:"75vh", objectFit:"contain",
+                  background:"#fff", borderRadius:8}}/>
+            )}
+            <div style={{display:"flex", gap:8, alignItems:"center", flexWrap:"wrap",
+              justifyContent:"center"}}>
+              <span style={{fontSize:12, color:"#fff", background:"rgba(255,255,255,0.15)",
+                padding:"5px 10px", borderRadius:5}}>
+                {lightboxPhoto.source}
+              </span>
+              {lightboxIdx > 0 && (
+                <button onClick={()=>setLightboxIdx(lightboxIdx - 1)}
+                  style={{background:"rgba(255,255,255,0.15)", border:"none", color:"#fff",
+                    padding:"5px 12px", borderRadius:5, fontSize:12, fontWeight:600,
+                    cursor:"pointer", fontFamily:"inherit"}}>← Prev</button>
+              )}
+              {lightboxIdx < visible.length - 1 && (
+                <button onClick={()=>setLightboxIdx(lightboxIdx + 1)}
+                  style={{background:"rgba(255,255,255,0.15)", border:"none", color:"#fff",
+                    padding:"5px 12px", borderRadius:5, fontSize:12, fontWeight:600,
+                    cursor:"pointer", fontFamily:"inherit"}}>Next →</button>
+              )}
+              {lightboxPhoto.sourceTab && (
+                <button onClick={()=>{ onSetTab && onSetTab(lightboxPhoto.sourceTab); setLightboxIdx(null); }}
+                  style={{background:C.purple, border:"none", color:"#fff",
+                    padding:"5px 12px", borderRadius:5, fontSize:12, fontWeight:700,
+                    cursor:"pointer", fontFamily:"inherit"}}>Go to source →</button>
+              )}
+              <button onClick={()=>setLightboxIdx(null)}
+                style={{background:"none", border:"1px solid rgba(255,255,255,0.3)",
+                  color:"#fff", padding:"5px 12px", borderRadius:5, fontSize:12,
+                  fontWeight:600, cursor:"pointer", fontFamily:"inherit"}}>Close</button>
+            </div>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 // Why reference, don't copy: a Visit/Return Trip stays in ONE place
 // (job.returnTrips). This tab just *views* them alongside manualTasks.
 // No sync loop, no ghost writes. Creating a Visit here writes a new RT.
