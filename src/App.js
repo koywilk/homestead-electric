@@ -25597,6 +25597,20 @@ function AddTaskForm({ defaultForeman, onAdd, onCancel, foremenList, jobs, defau
 // can call setTab(item.sourceTab) directly.
 function buildJobActivity(job) {
   if (!job) return { todoGroups: [], timeline: [] };
+  // Clean rich-text content for display: strip HTML tags AND decode the
+  // common entities (&nbsp; &amp; &lt; etc.) so the activity rows don't
+  // show raw "&nbsp;" or "&amp;" in the middle of a description.
+  const cleanText = (s) => String(s||"")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&[a-z]+;/gi, " ")  // any other entity → space, defensive
+    .replace(/\s+/g, " ")
+    .trim();
   const groups = [];
 
   // ── CHANGE ORDERS ─────────────────────────────────────────────────
@@ -25607,7 +25621,7 @@ function buildJobActivity(job) {
       key:"changeOrders", label:"Change Orders",
       items: openCOs.map((co, i) => ({
         label: `CO #${i+1} — ${co.coStatus || "pending"}`,
-        detail: (co.desc||"").replace(/<[^>]*>/g,"").slice(0,80),
+        detail: cleanText(co.desc).slice(0,80),
         sourceTab: "Change Orders",
       })),
     });
@@ -25647,14 +25661,14 @@ function buildJobActivity(job) {
       ["general","hotcheck"].forEach(k => {
         (fl[k]||[]).forEach(it => {
           if (it && !it.done && (it.text||"").trim()) {
-            out.push({ floor:floorLabel, room:k==="general"?"":"Hotcheck", text:(it.text||"").replace(/<[^>]*>/g,"") });
+            out.push({ floor:floorLabel, room:k==="general"?"":"Hotcheck", text: cleanText(it.text) });
           }
         });
       });
       (fl.rooms||[]).forEach(r => {
         (r.punch||[]).forEach(it => {
           if (it && !it.done && (it.text||"").trim()) {
-            out.push({ floor:floorLabel, room:r.name||"Room", text:(it.text||"").replace(/<[^>]*>/g,"") });
+            out.push({ floor:floorLabel, room:r.name||"Room", text: cleanText(it.text) });
           }
         });
       });
@@ -25711,14 +25725,25 @@ function buildJobActivity(job) {
   }
 
   // ── MATERIALS & POs ───────────────────────────────────────────────
-  const matsBucket = (arr, phase) => (arr||[]).filter(o => o && o.items &&
-    (o.needsOrder ? !o.ordered : (o.ordered && !o.pickedUp)))
-    .map(o => ({
-      label: `${phase} · ${o.source || "Materials"} · ${
-        (o.needsOrder && !o.ordered) ? "needs ordering" : "ordered — awaiting pickup"}`,
-      detail: (o.items||"").replace(/<[^>]*>/g," ").slice(0,80),
+  // Strict gating so completed orders never show up:
+  //   pickedUp=true            → hide always (it's done)
+  //   ordered=true             → show as "ordered, awaiting pickup"
+  //   needsOrder=true          → show as "needs ordering"
+  //   else                     → hide (no actionable state)
+  const matsBucket = (arr, phase) => (arr||[]).filter(o => {
+    if (!o || !o.items) return false;
+    if (o.pickedUp) return false;
+    if (o.ordered) return true;
+    if (o.needsOrder) return true;
+    return false;
+  }).map(o => {
+    const status = o.ordered ? "ordered — awaiting pickup" : "needs ordering";
+    return {
+      label: `${phase} · ${o.source || "Materials"} · ${status}`,
+      detail: cleanText(o.items).slice(0,80),
       sourceTab: phase === "Rough" ? "Rough" : "Finish",
-    }));
+    };
+  });
   const matsAll = [...matsBucket(job.roughMaterials,"Rough"), ...matsBucket(job.finishMaterials,"Finish")];
   if (matsAll.length) groups.push({ key:"materials", label:"Materials & POs", items: matsAll });
 
@@ -25733,7 +25758,7 @@ function buildJobActivity(job) {
         if (q && !q.done && !((q.answer||"").trim()) && (q.question||"").trim()) {
           out.push({
             label: `${phaseLabel} · ${k.charAt(0).toUpperCase()+k.slice(1)}`,
-            detail: (q.question||"").slice(0,80),
+            detail: cleanText(q.question).slice(0,80),
             sourceTab: tab,
           });
         }
@@ -25782,11 +25807,11 @@ function buildJobActivity(job) {
   }
   // Notes — most recent edited note per source
   (job.jobNotes||[]).forEach(n => {
-    if (n?.createdAt) addEvent(n.createdAt, n.addedBy||"", `Note added${n.scope?` (${n.scope})`:""}`, "Job Info", "note", (n.text||"").replace(/<[^>]*>/g," ").slice(0,80));
+    if (n?.createdAt) addEvent(n.createdAt, n.addedBy||"", `Note added${n.scope?` (${n.scope})`:""}`, "Job Info", "note", cleanText(n.text).slice(0,80));
   });
   // Daily updates
   (job.dailyUpdates||[]).forEach(d => {
-    if (d?.date) addEvent(d.date, d.author||"", `Daily update — ${d.author||"someone"}`, "Job Info", "daily", (d.notes||"").slice(0,80));
+    if (d?.date) addEvent(d.date, d.author||"", `Daily update — ${d.author||"someone"}`, "Job Info", "daily", cleanText(d.notes).slice(0,80));
   });
   // Sort desc
   tl.sort((a,b) => b.at - a.at);
