@@ -8142,12 +8142,16 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
     for(const file of Array.from(files)) {
       try {
         const photoId = uid();
-        const ext = file.name.split('.').pop()||'jpg';
+        // Default ext if missing — fall back to 'bin' for unknown so the
+        // upload doesn't fail on weird names. Carry the file's MIME type
+        // through to the saved record so the thumbnail renderer can pick
+        // image-vs-file at display time without parsing the filename.
+        const ext = (file.name && file.name.split('.').pop()) || 'bin';
         const storagePath = `jobs/${jobId}/punch-photos/${itemId}/${photoId}.${ext}`;
         const storageRef = ref(storage, storagePath);
         await uploadBytes(storageRef, file);
         const url = await getDownloadURL(storageRef);
-        newPhotos.push({id:photoId, name:file.name, url, storagePath});
+        newPhotos.push({id:photoId, name:file.name, url, storagePath, type:file.type||""});
       } catch(e) { console.error('Punch photo upload failed:', e); }
     }
     if(newPhotos.length) {
@@ -8410,14 +8414,18 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
               </button>
             )}
 
-            {/* Photo upload button */}
+            {/* Photo + file upload button. Accepts images (photos from the
+                field) and PDFs / Office docs / CAD files (plans, sketches,
+                inspection reports) — same scope as the Plans tab so the field
+                crew never has to switch tools to attach context to a punch
+                item. PDFs render as a file-icon thumbnail (handled below). */}
             {jobId && (
-              <label title="Add photo" style={{cursor:'pointer',flexShrink:0,lineHeight:1}}>
-                <input type="file" accept="image/*" multiple style={{display:'none'}}
+              <label title="Add photo, PDF, or plan" style={{cursor:'pointer',flexShrink:0,lineHeight:1}}>
+                <input type="file" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.dwg,.dxf" multiple style={{display:'none'}}
                   onChange={e=>handlePhotoUpload(item.id, e.target.files)}/>
                 <span style={{display:"inline-flex",alignItems:"center",opacity:uploadingId===item.id?0.4:((item.photos||[]).length>0?1:0.4),
                   color:(item.photos||[]).length>0?C.text:C.dim}}>
-                  {uploadingId===item.id ? <Spinner size={14}/> : <Icon name="camera" size={14}/>}
+                  {uploadingId===item.id ? <Spinner size={14}/> : <Icon name="paperclip" size={14}/>}
                   {(item.photos||[]).length>0&&<sup style={{fontSize:8,fontWeight:700,color:C.blue,marginLeft:2}}>{(item.photos||[]).length}</sup>}
                 </span>
               </label>
@@ -8558,26 +8566,50 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
             </div>
           )}
 
-          {/* ── Photo thumbnails ── */}
+          {/* ── Attachment thumbnails ──
+              Images render as a square thumbnail (clicks open the lightbox).
+              PDFs / docs / CAD files render as a file icon tile (clicks open
+              the file in a new tab — Firebase Storage URLs serve inline). */}
           {(item.photos||[]).length>0&&(
             <div style={{display:'flex',flexWrap:'wrap',gap:6,marginTop:6,marginLeft:22}}>
-              {(item.photos||[]).map(photo=>(
-                <div key={photo.id} style={{position:'relative',borderRadius:6,overflow:'hidden',
-                  border:`1px solid ${C.border}`,flexShrink:0}}>
-                  <img src={photo.url} alt={photo.name}
-                    onClick={()=>setLightboxPhoto(photo.url)}
-                    style={{width:64,height:64,objectFit:'cover',cursor:'pointer',display:'block'}}/>
-                  <button onClick={()=>removePhoto(item.id,photo.id)}
-                    style={{position:'absolute',top:1,right:1,background:'rgba(0,0,0,0.55)',
-                      border:'none',borderRadius:99,width:16,height:16,cursor:'pointer',
-                      color:'#fff',fontSize:10,lineHeight:1,padding:0,display:'flex',
-                      alignItems:'center',justifyContent:'center'}}>×</button>
-                </div>
-              ))}
+              {(item.photos||[]).map(photo=>{
+                // Decide image vs file by mime type OR by filename extension
+                // (older saves don't carry a `type` field).
+                const isImg = (photo.type && photo.type.startsWith && photo.type.startsWith("image/"))
+                  || /\.(png|jpe?g|gif|webp|heic|heif|bmp|svg)$/i.test(photo.name||"");
+                return (
+                  <div key={photo.id} style={{position:'relative',borderRadius:6,overflow:'hidden',
+                    border:`1px solid ${C.border}`,flexShrink:0}}>
+                    {isImg ? (
+                      <img src={photo.url} alt={photo.name}
+                        onClick={()=>setLightboxPhoto(photo.url)}
+                        style={{width:64,height:64,objectFit:'cover',cursor:'pointer',display:'block'}}/>
+                    ) : (
+                      <div onClick={()=>window.open(photo.url, "_blank")}
+                        title={photo.name||"file"}
+                        style={{width:64,height:64,cursor:'pointer',background:"#f8fafc",
+                          color:"#475569",display:"flex",flexDirection:"column",
+                          alignItems:"center",justifyContent:"center",gap:3,padding:"4px"}}>
+                        <Icon name="fileText" size={22} stroke={1.75}/>
+                        <span style={{fontSize:8,fontWeight:600,lineHeight:1.1,wordBreak:"break-all",
+                          overflow:"hidden",textOverflow:"ellipsis",display:"-webkit-box",
+                          WebkitLineClamp:2,WebkitBoxOrient:"vertical",textAlign:"center"}}>
+                          {(photo.name||"file").length > 16 ? (photo.name||"file").slice(0,13)+"…" : (photo.name||"file")}
+                        </span>
+                      </div>
+                    )}
+                    <button onClick={()=>removePhoto(item.id,photo.id)}
+                      style={{position:'absolute',top:1,right:1,background:'rgba(0,0,0,0.55)',
+                        border:'none',borderRadius:99,width:16,height:16,cursor:'pointer',
+                        color:'#fff',fontSize:10,lineHeight:1,padding:0,display:'flex',
+                        alignItems:'center',justifyContent:'center'}}>×</button>
+                  </div>
+                );
+              })}
               <label style={{width:64,height:64,border:`1px dashed ${C.border}`,borderRadius:6,
                 display:'flex',alignItems:'center',justifyContent:'center',cursor:'pointer',
                 fontSize:20,color:C.dim,flexShrink:0}}>
-                <input type="file" accept="image/*" multiple style={{display:'none'}}
+                <input type="file" accept="image/*,application/pdf,.doc,.docx,.xls,.xlsx,.dwg,.dxf" multiple style={{display:'none'}}
                   onChange={e=>handlePhotoUpload(item.id, e.target.files)}/>
                 +
               </label>
@@ -11497,7 +11529,12 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
             </button>
           </div>
 
-          <PunchItems items={t.punch||[]} onChange={v=>upd(t.id,{punch:v})}/>
+          {/* Pass jobId so the per-item photo+PDF attach button shows up.
+              Without jobId, PunchItems hides the upload control (the gate at
+              the bottom of each item row checks {jobId && (...)}). RT punch
+              items were missing this because jobId wasn't being threaded
+              through. */}
+          <PunchItems items={t.punch||[]} onChange={v=>upd(t.id,{punch:v})} jobId={jobId}/>
 
 
           {/* Photos */}
