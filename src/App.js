@@ -25722,7 +25722,16 @@ function buildJobActivity(job) {
         });
       });
       (fl.rooms||[]).forEach(r => {
-        (r.punch||[]).forEach(it => {
+        // Canonical shape: room punch items live at r.items (see normFloor +
+        // PunchSection.countOpen). The earlier draft of this walker read
+        // r.punch by mistake — that key doesn't exist, so every room-level
+        // punch item was silently dropped from the Job Activity to-do list.
+        // Keep r.punch as a defensive fallback in case any legacy doc ever
+        // wrote that shape.
+        const items = Array.isArray(r.items) ? r.items
+                    : Array.isArray(r.punch) ? r.punch
+                    : [];
+        items.forEach(it => {
           if (it && !it.done && (it.text||"").trim()) {
             out.push({ floor:floorLabel, room:r.name||"Room", text: cleanText(it.text) });
           }
