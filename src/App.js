@@ -23231,30 +23231,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     <div style={{position:"absolute",left:0,top:0,bottom:0,width:3,
                       background:"#f59e0b",borderTopLeftRadius:8,borderBottomLeftRadius:8}}/>
                   )}
-                  <textarea
-                    value={job.statusUpdate||""}
-                    onChange={e=>{
-                      const v=e.target.value;
-                      u({
-                        statusUpdate: v,
-                        statusUpdateBy: v ? (identity?.name || job.statusUpdateBy || "") : "",
-                        statusUpdateAt: v ? new Date().toISOString() : "",
-                      });
-                    }}
-                    placeholder="e.g. Needs a lift rental · Waiting on panel · Weather delay"
-                    rows={2}
-                    style={{width:"100%",boxSizing:"border-box",
-                      background: C.surface,
-                      border: `1px solid ${C.border}`,
-                      borderRadius:8,
-                      padding: job.statusUpdate ? "8px 10px 8px 14px" : "8px 10px",
-                      fontSize: 13,
-                      fontWeight: 500,
-                      color: C.text,
-                      fontFamily:"inherit",resize:"vertical",outline:"none",lineHeight:1.5,
-                      transition:"border-color 0.15s"}}
-                    onFocus={e=>e.target.style.borderColor=C.accent}
-                    onBlur={e=>e.target.style.borderColor=C.border}/>
+                  <StatusUpdateTextarea
+                    job={job}
+                    identity={identity}
+                    onCommit={patch => u(patch)}
+                    styleVars={C}/>
                 </div>
                 {job.statusUpdate && job.statusUpdateBy && (
                   <div style={{fontSize:10,color:C.dim,marginTop:4}}>
@@ -24326,6 +24307,66 @@ function StatusUpdateInline({ job, onSave, identity=null, fontSize=11, maxWidth=
     >
       <span style={{overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth}}>{job.statusUpdate}</span>
     </div>
+  );
+}
+
+// ── Status update textarea (Job Info page) ───────────────────────────────────
+// Holds a local draft so typing doesn't fire a Firestore write (and a push
+// notification) on every keystroke. Commits on blur or Cmd/Ctrl+Enter.
+// `onCommit({statusUpdate, statusUpdateBy, statusUpdateAt})` does the save.
+function StatusUpdateTextarea({ job, identity, onCommit, styleVars }) {
+  const C = styleVars || {};
+  const [draft, setDraft] = useState(job.statusUpdate || "");
+  const [focused, setFocused] = useState(false);
+  // Keep draft in sync with external changes when not focused (e.g. another
+  // device edits it, Clear button is pressed, switching to another job).
+  useEffect(() => {
+    if(!focused) setDraft(job.statusUpdate || "");
+  }, [job.statusUpdate, focused]);
+
+  const commit = () => {
+    const v = (draft || "").trim();
+    const current = (job.statusUpdate || "").trim();
+    if(v === current) return; // nothing changed → no write, no notification
+    onCommit && onCommit({
+      statusUpdate: v,
+      statusUpdateBy: v ? (identity?.name || job.statusUpdateBy || "") : "",
+      statusUpdateAt: v ? new Date().toISOString() : "",
+    });
+  };
+
+  return (
+    <textarea
+      value={draft}
+      onChange={e=>setDraft(e.target.value)}
+      onFocus={e=>{ setFocused(true); e.target.style.borderColor = C.accent || "#2563eb"; }}
+      onBlur={e=>{ setFocused(false); e.target.style.borderColor = C.border || "#e5e7eb"; commit(); }}
+      onKeyDown={e=>{
+        // Cmd/Ctrl+Enter saves and stays in place
+        if(e.key === "Enter" && (e.metaKey || e.ctrlKey)) {
+          e.preventDefault();
+          commit();
+        }
+        // Escape reverts the draft
+        else if(e.key === "Escape") {
+          e.preventDefault();
+          setDraft(job.statusUpdate || "");
+          e.target.blur();
+        }
+      }}
+      placeholder="e.g. Needs a lift rental · Waiting on panel · Weather delay"
+      rows={2}
+      style={{width:"100%",boxSizing:"border-box",
+        background: C.surface || "#fff",
+        border: `1px solid ${C.border || "#e5e7eb"}`,
+        borderRadius:8,
+        padding: draft ? "8px 10px 8px 14px" : "8px 10px",
+        fontSize: 13,
+        fontWeight: 500,
+        color: C.text || "#0f172a",
+        fontFamily:"inherit",resize:"vertical",outline:"none",lineHeight:1.5,
+        transition:"border-color 0.15s"}}
+    />
   );
 }
 
