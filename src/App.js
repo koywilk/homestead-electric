@@ -25717,7 +25717,7 @@ function buildJobActivity(job) {
       ["general","hotcheck"].forEach(k => {
         (fl[k]||[]).forEach(it => {
           if (it && !it.done && (it.text||"").trim()) {
-            out.push({ floor:floorLabel, room:k==="general"?"":"Hotcheck", text: cleanText(it.text) });
+            out.push({ floor:floorLabel, room:k==="general"?"":"Hotcheck", text: cleanText(it.text), waiting: !!it.waiting });
           }
         });
       });
@@ -25733,7 +25733,7 @@ function buildJobActivity(job) {
                     : [];
         items.forEach(it => {
           if (it && !it.done && (it.text||"").trim()) {
-            out.push({ floor:floorLabel, room:r.name||"Room", text: cleanText(it.text) });
+            out.push({ floor:floorLabel, room:r.name||"Room", text: cleanText(it.text), waiting: !!it.waiting });
           }
         });
       });
@@ -25753,12 +25753,18 @@ function buildJobActivity(job) {
     ...qcPunchOpen.map(p => ({...p, phase:"QC", sourceTab:"QC"})),
   ];
   if (allPunchOpen.length) {
+    // Waiting = an "open" item flagged waiting (mirrors PunchSection.countWaiting).
+    // It's a SUBSET of open, not a separate bucket, so the header reads
+    // "15 open · 6 waiting" exactly the way the Punch List page does.
+    const waitingCount = allPunchOpen.filter(p => p.waiting).length;
     groups.push({
       key:"punch", label:"Punch",
+      waitingCount,
       items: allPunchOpen.map(p => ({
         label: `${p.phase} · ${p.floor}${p.room?` · ${p.room}`:""}`,
         detail: p.text.slice(0,80),
         sourceTab: p.sourceTab,
+        waiting: !!p.waiting,
       })),
     });
   }
@@ -26038,8 +26044,17 @@ function JobActivity({ job, onSetTab }) {
                       {open ? "▼" : "▶"}
                     </span>
                     <span style={{fontSize:13, fontWeight:600, color:C.text}}>{g.label}</span>
-                    <span style={{fontSize:11, color:C.dim, marginLeft:"auto"}}>
-                      {g.items.length} open
+                    <span style={{fontSize:11, color:C.dim, marginLeft:"auto",
+                      display:"inline-flex", alignItems:"center", gap:6}}>
+                      <span>{g.items.length} open</span>
+                      {g.waitingCount > 0 && (
+                        <span style={{fontSize:10, fontWeight:700,
+                          background:"#fef3c7", color:"#92400e",
+                          borderRadius:99, padding:"2px 8px",
+                          border:"1px solid #fcd34d"}}>
+                          {g.waitingCount} waiting
+                        </span>
+                      )}
                     </span>
                   </button>
                   {open && (
@@ -26051,7 +26066,18 @@ function JobActivity({ job, onSetTab }) {
                             borderTop: i>0 ? `0.5px solid ${C.border}` : "none"}}
                           onMouseEnter={e=>e.currentTarget.style.background="#fafbfc"}
                           onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                          <span style={{fontSize:13, color:C.text, fontWeight:500}}>{it.label}</span>
+                          <span style={{fontSize:13, color:C.text, fontWeight:500,
+                            display:"inline-flex", alignItems:"center", gap:6}}>
+                            {it.label}
+                            {it.waiting && (
+                              <span style={{fontSize:9, fontWeight:700,
+                                background:"#fef3c7", color:"#92400e",
+                                borderRadius:99, padding:"1px 6px",
+                                border:"1px solid #fcd34d", letterSpacing:"0.04em"}}>
+                                WAITING
+                              </span>
+                            )}
+                          </span>
                           {it.detail && (
                             <span style={{fontSize:11, color:C.dim, paddingLeft:0}}>{it.detail}</span>
                           )}

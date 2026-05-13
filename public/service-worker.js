@@ -1,4 +1,4 @@
-const CACHE = "homestead-v159";
+const CACHE = "homestead-v160";
 
 // Install — skip waiting immediately
 self.addEventListener("install", e => {
