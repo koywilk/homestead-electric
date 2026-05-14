@@ -3342,9 +3342,9 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
         // just the number and Simpro returns the prefixed form.
         const stripPrefix = (s) => String(s||"").trim().toLowerCase().replace(/^po-/, "");
 
-        // Already linked to a Simpro PO via simproPoId — refresh status,
-        // and count as matched (even though no NEW bind happened) so the
-        // toast reflects the real "this is wired to Simpro" count.
+        // Already linked to a Simpro PO via simproPoId — refresh everything
+        // we can pull from Simpro, fill in any display fields the order is
+        // missing (po, date, simproSupplier), and count as matched.
         //
         // CRITICAL: if simproPoId is set but doesn't correspond to any
         // Simpro PO in the current response (stale from a previous buggy
@@ -3360,12 +3360,44 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
               phase: "_alreadyBound", appOrderId: o.id, simproId: same.simproId,
               poNumber: same.poNumber, supplier: same.supplierName, status: same.status,
             });
-            const newStatus = same.status;
-            if ((o.simproStatus || "") !== newStatus) {
-              changed = true;
-              return { ...o, simproStatus: newStatus, simproSyncedAt: nowIso };
+            // Fill display fields if currently empty. Previous syncs only
+            // refreshed status, leaving po / date blank for orders that
+            // bound during a buggy earlier run — this catches them up.
+            const formatForApp = (raw) => {
+              if (!raw) return "";
+              const t = Date.parse(raw);
+              if (!Number.isFinite(t)) return "";
+              return new Date(t).toLocaleDateString("en-US");
+            };
+            const patch = {
+              simproStatus: same.status,
+              simproSupplier: same.supplierName,
+              simproDateIssued: same.dateIssued || "",
+              simproSyncedAt: nowIso,
+            };
+            if (!o.po || !String(o.po).trim() || String(o.po).trim().toLowerCase() === "po-001") {
+              patch.po = same.poNumber;
             }
-            return o; // bound and status unchanged
+            if (!o.date || !String(o.date).trim()) {
+              const d = formatForApp(same.dateIssued);
+              if (d) patch.date = d;
+            }
+            // Auto-flip status flags from Simpro status if not manually set.
+            const sLower = same.status.toLowerCase();
+            const isReceived = sLower.includes("receiv");
+            const isSent = sLower.includes("approv") || sLower.includes("sent") || sLower.includes("issued");
+            if (isSent && !o.ordered && !o.pickedUp && !o.deliveredToShop) {
+              patch.ordered = true;
+              patch.orderedBy = "Simpro sync";
+              patch.orderedAt = formatForApp(same.dateIssued) || nowIso.slice(0,10);
+            }
+            if (isReceived && !o.pickedUp && !o.deliveredToShop) {
+              patch.pickedUp = true;
+              patch.pickedUpBy = "Simpro sync";
+              patch.pickedUpAt = formatForApp(same.dateIssued) || nowIso.slice(0,10);
+            }
+            changed = true;
+            return { ...o, ...patch };
           }
           // simproPoId set but no current Simpro PO matches — fall through
           // to re-match. Clear simproPoId so we don't keep this stale ref.
