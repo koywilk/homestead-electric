@@ -3369,19 +3369,20 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
               if (!Number.isFinite(t)) return "";
               return new Date(t).toLocaleDateString("en-US");
             };
+            // ALWAYS overwrite po + date when bound to a Simpro PO. Simpro
+            // is the source of truth — whatever a user typed in those
+            // fields takes a back seat to the actual Simpro values. The
+            // earlier conditional version was leaving "PO-001" placeholder
+            // text in place because of edge cases in field value detection.
             const patch = {
+              po: same.poNumber,
               simproStatus: same.status,
               simproSupplier: same.supplierName,
               simproDateIssued: same.dateIssued || "",
               simproSyncedAt: nowIso,
             };
-            if (!o.po || !String(o.po).trim() || String(o.po).trim().toLowerCase() === "po-001") {
-              patch.po = same.poNumber;
-            }
-            if (!o.date || !String(o.date).trim()) {
-              const d = formatForApp(same.dateIssued);
-              if (d) patch.date = d;
-            }
+            const formattedDate = formatForApp(same.dateIssued);
+            if (formattedDate) patch.date = formattedDate;
             // Auto-flip status flags from Simpro status if not manually set.
             const sLower = same.status.toLowerCase();
             const isReceived = sLower.includes("receiv");
