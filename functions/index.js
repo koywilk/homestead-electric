@@ -3555,20 +3555,24 @@ exports.syncSimproPOsForJob = functions
   });
 
 
-// ── Entrypoint 2: scheduled background sync (every 5 minutes) ───────────
-// Quietly pulls Simpro PO data for every active job that might need it.
-// Filtering keeps the API load reasonable:
-//   • Job must have a simproNo
-//   • Job must be active (not Completed / Archived)
-//   • Job must have at least one material order that hasn't been linked to
-//     a Simpro PO yet (no simproPoId set) — otherwise nothing to fetch
-// Runs jobs through the same _syncSimproPOsForOneJob helper, with a
-// concurrency cap so we don't trip Simpro's 60 req/min rate limit.
+// ── Entrypoint 2: scheduled background sync — PAUSED ──────────────────
+// Pulled back because the supplier+date-based matching wasn't accurate
+// enough to trust with field data (was binding wrong Simpro POs to app
+// material orders). The cron is still registered with Firebase to avoid
+// a re-deploy headache when we bring it back, but it returns immediately
+// without touching Simpro or Firestore.
+//
+// To re-enable: delete the `return null;` line below and let the function
+// run again. The matching helper (_syncSimproPOsForOneJob) is intact and
+// will need refinement (likely item-overlap matching) before re-enabling.
 exports.scheduledSimproPOSync = functions
   .runWith({ timeoutSeconds: 540, memory: "512MB" })
   .pubsub.schedule("*/5 * * * *")  // every 5 minutes
   .timeZone("America/Denver")
   .onRun(async () => {
+    functions.logger.info("scheduledSimproPOSync: paused — feature disabled pending matching rework");
+    return null;
+    // eslint-disable-next-line no-unreachable
     const db = admin.firestore();
     const jobsSnap = await db.collection("jobs").get();
 

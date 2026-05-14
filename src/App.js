@@ -9821,59 +9821,16 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
     safeOrders.forEach(o => { m[o.id] = true; }); // all start collapsed
     return m;
   });
-  // Track in-flight Simpro sync so the button can show a spinner. Result
-  // toast surfaces what was matched / left unmatched so the user has a
-  // clear picture of what changed.
-  const [syncing, setSyncing] = useState(false);
+  // Simpro PO sync was pulled back — matching wasn't accurate enough to
+  // trust with field data. The Cloud Function (syncSimproPOsForJob) is
+  // still deployed but no UI calls it. The "SYNC FROM SIMPRO" button is
+  // intentionally not rendered below. When we iterate on matching (probably
+  // item-overlap matching instead of supplier+date), we can re-enable the
+  // button by uncommenting the JSX block in the return. The state and
+  // helper used to live here — removed cleanly.
 
   const SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","Other"];
   const add = () => onChange([...safeOrders, {id:uid(),date:"",po:"",pickupDate:"",source:"",items:"",pickedUp:false,needsOrder:true}]);
-
-  // Call the Cloud Function to sync PO data from Simpro into this job's
-  // material orders. Read-only from Simpro — only fills in missing fields
-  // on app-side material orders (never overwrites a manually-set PO# or
-  // status flag). See functions/index.js → syncSimproPOsForJob.
-  const syncFromSimpro = async () => {
-    if (!simproNo) {
-      if (typeof toast !== "undefined" && toast.error) toast.error("This job has no Simpro number — set it in Job Info first.");
-      return;
-    }
-    if (!jobId) {
-      if (typeof toast !== "undefined" && toast.error) toast.error("Job ID missing — save the job first.");
-      return;
-    }
-    setSyncing(true);
-    try {
-      const fn = httpsCallable(functions, "syncSimproPOsForJob");
-      const r = await fn({ simproJobNo: simproNo, jobId });
-      const result = r?.data || {};
-      // Always console-log the raw result so diagnosing matching issues is
-      // a single F12 instead of a Firebase Functions log dive. Group it so
-      // Koy can paste the whole object easily when something doesn't line up.
-      console.groupCollapsed(`[Simpro PO sync] ${result.totalSimproPOs ?? 0} POs · ${result.matchedCount ?? 0} matched · ${(result.unmatched||[]).length} unmatched`);
-      console.log("Full result:", result);
-      console.log("Matched:", result.matched);
-      console.log("Unmatched (Simpro POs that didn't auto-link):", result.unmatched);
-      console.groupEnd();
-      if (result.ok === false) {
-        if (typeof toast !== "undefined" && toast.error) toast.error(result.error || "Sync failed — check Simpro connection.");
-        return;
-      }
-      const m = result.matchedCount || 0;
-      const u = (result.unmatched || []).length;
-      const t = result.totalSimproPOs || 0;
-      const parts = [];
-      parts.push(`${t} PO${t===1?"":"s"} in Simpro`);
-      if (m > 0) parts.push(`${m} matched`);
-      if (u > 0) parts.push(`${u} unmatched`);
-      if (typeof toast !== "undefined" && toast.success) toast.success(parts.join(" · "));
-    } catch (e) {
-      console.error("Sync from Simpro failed:", e);
-      if (typeof toast !== "undefined" && toast.error) toast.error("Sync failed: " + (e.message || "unknown error"));
-    } finally {
-      setSyncing(false);
-    }
-  };
 
   const upd = (id, p) => {
     onChange(safeOrders.map(o => o.id===id ? {...o,...p} : o));
@@ -9889,29 +9846,10 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
 
   return (
     <div>
-      {/* Sync-from-Simpro button. Only shown when the job has a Simpro# —
-          otherwise there's nothing to sync from. Pulls PO data from Simpro
-          and auto-fills matching app material orders. Read-only against
-          Simpro; writes happen only to the app's Firestore. */}
-      {simproNo && (
-        <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:10,flexWrap:"wrap"}}>
-          <button onClick={syncFromSimpro} disabled={syncing}
-            title="Pull PO# + status from Simpro for this job. Won't overwrite anything you've set manually."
-            style={{
-              background: syncing ? "#f1f5f9" : "#fff",
-              border:`1px solid ${C.blue}`, color: syncing ? C.dim : C.blue,
-              borderRadius:7, padding:"6px 12px", fontSize:11, fontWeight:700,
-              cursor: syncing ? "wait" : "pointer", fontFamily:"inherit",
-              letterSpacing:"0.04em", display:"inline-flex", alignItems:"center", gap:6,
-            }}>
-            {syncing ? <Spinner size={11} color={C.blue}/> : <Icon name="refresh" size={11} stroke={2.25}/>}
-            {syncing ? "SYNCING…" : "SYNC FROM SIMPRO"}
-          </button>
-          <span style={{fontSize:10,color:C.dim,fontStyle:"italic"}}>
-            Fills in PO# + status from Simpro. Won't overwrite anything you set manually.
-          </span>
-        </div>
-      )}
+      {/* Sync-from-Simpro button removed — matching wasn't reliable enough
+          to ship. To re-enable in the future: restore the button JSX here
+          AND the syncFromSimpro / syncing state declared above. The
+          Cloud Function syncSimproPOsForJob is still deployed and callable. */}
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add PO</Btn>
 
       {[...safeOrders]
