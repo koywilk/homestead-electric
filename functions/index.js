@@ -3374,6 +3374,13 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
         // Already has a manual po# — find which Simpro PO it refers to so
         // we can mirror status and other fields. Strip "PO-" prefix on
         // both sides so "6131" matches "PO-6131".
+        //
+        // If the typed po# doesn't match anything in Simpro (placeholder,
+        // typo, or just got created and isn't synced yet), FALL THROUGH to
+        // source-based matching instead of giving up. The user benefits
+        // more from auto-fill than from a stuck garbage value. If their
+        // typed po# was meaningful and a source match overwrites it, they
+        // can always retype.
         if (o.po && String(o.po).trim()) {
           const byNumber = validPOs.find(p =>
             !claimedSimproIds.has(p.simproId) &&
@@ -3395,7 +3402,7 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
               simproSyncedAt: nowIso,
             };
           }
-          return o;
+          // No match by number — fall through to source-based matching.
         }
         // No PO# yet → try to match by source.
         const appSource = o.source || "";
