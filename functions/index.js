@@ -3179,19 +3179,51 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
       const status =
         d?.Status?.Name || d?.Stage ||
         (typeof d?.Status === "string" ? d.Status : "") || "";
+      // CRITICAL: poNumber must be a visible PO# from Simpro — NEVER fall
+      // back to the internal database ID. The internal ID looks like a PO#
+      // but isn't, which led to the app filling in "PO numbers" Koy couldn't
+      // find in Simpro. If none of the visible-number fields exist, leave
+      // poNumber empty and the PO gets filtered out below.
       const poNumber =
-        d?.OrderNo || d?.PONumber || d?.Number || d?.PoNo || String(id);
+        d?.OrderNo || d?.PONumber || d?.Number || d?.PoNo || "";
       const dateIssued = d?.DateIssued || d?.IssuedDate || d?.Date || d?.CreatedAt || "";
       return {
         simproId: String(id),
-        poNumber: String(poNumber || id),
+        poNumber: String(poNumber || "").trim(),
         supplierName: String(supplierName || ""),
         status: String(status || ""),
         dateIssued: String(dateIssued || ""),
       };
     });
     const enriched = await _pLimit(enrichTasks, 4);
-    const validPOs = enriched.filter(Boolean);
+
+    // Log the first PO's full shape so we can see exactly what Simpro
+    // returned and tune our field reading. Only the first one — keeps the
+    // logs readable.
+    const firstRaw = simproPOs[0];
+    const firstEnriched = enriched.find(Boolean);
+    functions.logger.info("syncSimproPOs: first PO shape", {
+      simproJobNo,
+      rawKeys: firstRaw ? Object.keys(firstRaw) : null,
+      enriched: firstEnriched,
+    });
+
+    // Drop POs that don't have a real visible order number (defensive —
+    // catches the case where Simpro returns objects without OrderNo etc.).
+    // Also drop POs older than the date cutoff (default 30 days) so we
+    // don't try to auto-link historical POs that pre-date the app's
+    // material tracking. Override-able via DATE_CUTOFF_DAYS env var.
+    const DATE_CUTOFF_DAYS = Number(process.env.SIMPRO_PO_CUTOFF_DAYS || 30);
+    const cutoffMs = Date.now() - DATE_CUTOFF_DAYS * 24 * 60 * 60 * 1000;
+    const validPOs = enriched.filter(p => {
+      if (!p) return false;
+      if (!p.poNumber) return false; // no visible PO# → skip
+      if (p.dateIssued) {
+        const t = Date.parse(p.dateIssued);
+        if (Number.isFinite(t) && t < cutoffMs) return false;
+      }
+      return true;
+    });
 
     // ── 3. Read the app's job document ──────────────────────────────────
     const db = admin.firestore();
