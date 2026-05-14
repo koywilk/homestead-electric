@@ -9847,6 +9847,14 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
       const fn = httpsCallable(functions, "syncSimproPOsForJob");
       const r = await fn({ simproJobNo: simproNo, jobId });
       const result = r?.data || {};
+      // Always console-log the raw result so diagnosing matching issues is
+      // a single F12 instead of a Firebase Functions log dive. Group it so
+      // Koy can paste the whole object easily when something doesn't line up.
+      console.groupCollapsed(`[Simpro PO sync] ${result.totalSimproPOs ?? 0} POs · ${result.matchedCount ?? 0} matched · ${(result.unmatched||[]).length} unmatched`);
+      console.log("Full result:", result);
+      console.log("Matched:", result.matched);
+      console.log("Unmatched (Simpro POs that didn't auto-link):", result.unmatched);
+      console.groupEnd();
       if (result.ok === false) {
         if (typeof toast !== "undefined" && toast.error) toast.error(result.error || "Sync failed — check Simpro connection.");
         return;
