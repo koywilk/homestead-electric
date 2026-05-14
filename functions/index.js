@@ -3345,6 +3345,13 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
         // Already linked to a Simpro PO via simproPoId — refresh status,
         // and count as matched (even though no NEW bind happened) so the
         // toast reflects the real "this is wired to Simpro" count.
+        //
+        // CRITICAL: if simproPoId is set but doesn't correspond to any
+        // Simpro PO in the current response (stale from a previous buggy
+        // sync, or the PO was deleted in Simpro, or it's outside the
+        // 30-day window) we MUST fall through to re-match by number or
+        // source — otherwise the order stays "stuck" bound to nothing
+        // forever. Don't early-return when same isn't found.
         if (o.simproPoId) {
           const same = validPOs.find(p => String(p.simproId) === String(o.simproPoId));
           if (same) {
@@ -3358,8 +3365,11 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
               changed = true;
               return { ...o, simproStatus: newStatus, simproSyncedAt: nowIso };
             }
+            return o; // bound and status unchanged
           }
-          return o;
+          // simproPoId set but no current Simpro PO matches — fall through
+          // to re-match. Clear simproPoId so we don't keep this stale ref.
+          o = { ...o, simproPoId: "" };
         }
         // Already has a manual po# — find which Simpro PO it refers to so
         // we can mirror status and other fields. Strip "PO-" prefix on
