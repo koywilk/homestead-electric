@@ -3184,19 +3184,34 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
     const resourceName = workingListUrl.includes("/vendorOrders/") ? "vendorOrders" : "purchaseOrders";
     const detailBase = isJobScoped ? `/jobs/${jn}/${resourceName}` : `/${resourceName}`;
 
+    let _firstDetailDumped = false;
     const enrichTasks = simproPOs.map(po => async () => {
       const id = po?.ID ?? po?.Id ?? po?.id;
       if (!id) return null;
       const r = await simproReqWithRetry("GET", `${detailBase}/${id}`);
       if (!r.ok || !r.data) return null;
       const d = r.data;
-      // POST-FILTER by Job.ID — defensive guard against the case where
-      // Simpro ignored our query-param filter and returned all POs.
-      // Check the PO's actual linked job and skip anything that isn't for
-      // this job. If the field is missing entirely we trust the URL filter
-      // (the path-scoped paths are always reliable).
+
+      // Dump the first detail response in full so we can see every field
+      // Simpro returns — including the actual Job reference shape. Only
+      // first one to keep logs readable.
+      if (!_firstDetailDumped) {
+        _firstDetailDumped = true;
+        functions.logger.info("syncSimproPOs: first PO DETAIL response", {
+          simproJobNo, poId: id, fullDetail: d,
+        });
+      }
+
+      // Try every place Simpro might stash the Job reference. Pulled this
+      // list out into a variable so we can also surface it in the unmatched
+      // payload for diagnostics. If nothing matches we get poJobId=null
+      // and the PO passes through (we'd rather show extra than drop the
+      // one we actually need).
       const poJobId =
         d?.Job?.ID ?? d?.Job?.Id ?? d?.JobID ??
+        d?.JobNo ?? d?.JobNumber ??
+        d?.Project?.ID ?? d?.ProjectID ??
+        d?.Reference?.Job?.ID ??
         (typeof d?.Job === "number" || typeof d?.Job === "string" ? d.Job : null);
       if (poJobId != null && String(poJobId) !== String(simproJobNo)) {
         return null; // wrong job — drop it
@@ -3226,6 +3241,13 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
         supplierName: String(supplierName || ""),
         status: String(status || ""),
         dateIssued: String(dateIssued || ""),
+        // Surfaced in the unmatched array so we can see what Job ID Simpro
+        // associates with each PO — tells us if the post-filter is failing
+        // because of a wrong field path.
+        _detectedJobId: poJobId != null ? String(poJobId) : null,
+        // Top-level keys of the detail response — helps spot where Job
+        // info actually lives if the standard paths missed.
+        _detailKeys: Object.keys(d || {}),
         // Keep the raw payload for diagnostics — only used by the first-PO logger.
         _rawSample: d,
       };
@@ -3251,7 +3273,8 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
       } : null,
     });
 
-    // Drop the diagnostic _rawSample before downstream use.
+    // Drop the diagnostic _rawSample before downstream use. Keep
+    // _detectedJobId and _detailKeys so the front-end can show them.
     const enrichedClean = enriched.filter(Boolean).map(p => {
       const { _rawSample, ...rest } = p; return rest;
     });
@@ -3428,6 +3451,11 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
           poNumber: p.poNumber,
           supplierName: p.supplierName,
           status: p.status,
+          dateIssued: p.dateIssued,
+          // Diagnostic — what Job ID did we detect for this PO, and which
+          // top-level fields did the Simpro detail response contain?
+          _detectedJobId: p._detectedJobId,
+          _detailKeys: p._detailKeys,
         })),
       lastSyncedAt: nowIso,
       changed: (roughResult.changed || finishResult.changed),
