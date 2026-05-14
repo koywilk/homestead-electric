@@ -3202,17 +3202,23 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
         });
       }
 
-      // Try every place Simpro might stash the Job reference. Pulled this
-      // list out into a variable so we can also surface it in the unmatched
-      // payload for diagnostics. If nothing matches we get poJobId=null
-      // and the PO passes through (we'd rather show extra than drop the
-      // one we actually need).
-      const poJobId =
+      // Try every place Simpro might stash the Job reference. Confirmed
+      // from production responses: PO detail often doesn't expose Job as
+      // a structured field — instead it lives inside the Reference string
+      // (e.g. "Job No. 1005 - Robison Residence — ..."). Parse that too.
+      let poJobId =
         d?.Job?.ID ?? d?.Job?.Id ?? d?.JobID ??
         d?.JobNo ?? d?.JobNumber ??
         d?.Project?.ID ?? d?.ProjectID ??
         d?.Reference?.Job?.ID ??
         (typeof d?.Job === "number" || typeof d?.Job === "string" ? d.Job : null);
+      // Reference-string parse: "Job No. 1234 — Some Name" or "Job 1234"
+      // → captures "1234". Word-boundary guard so 1005 doesn't match
+      // "10054" or "21005".
+      if (poJobId == null && typeof d?.Reference === "string") {
+        const refMatch = d.Reference.match(/Job\s*(?:No\.?|Number|#)?\s*(\d+)/i);
+        if (refMatch) poJobId = refMatch[1];
+      }
       if (poJobId != null && String(poJobId) !== String(simproJobNo)) {
         return null; // wrong job — drop it
       }
@@ -3331,11 +3337,22 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
       const arr = Array.isArray(orders) ? orders : [];
       let changed = false;
       const next = arr.map(o => {
-        // Already linked to a Simpro PO via simproPoId — refresh status only,
-        // never re-bind to a different Simpro record.
+        // Helper — strip the "PO-" / "po-" prefix so "PO-6131" and "6131"
+        // compare equal. Fixes by-number matching when the app stored
+        // just the number and Simpro returns the prefixed form.
+        const stripPrefix = (s) => String(s||"").trim().toLowerCase().replace(/^po-/, "");
+
+        // Already linked to a Simpro PO via simproPoId — refresh status,
+        // and count as matched (even though no NEW bind happened) so the
+        // toast reflects the real "this is wired to Simpro" count.
         if (o.simproPoId) {
           const same = validPOs.find(p => String(p.simproId) === String(o.simproPoId));
           if (same) {
+            claimedSimproIds.add(same.simproId);
+            matched.push({
+              phase: "_alreadyBound", appOrderId: o.id, simproId: same.simproId,
+              poNumber: same.poNumber, supplier: same.supplierName, status: same.status,
+            });
             const newStatus = same.status;
             if ((o.simproStatus || "") !== newStatus) {
               changed = true;
@@ -3344,12 +3361,13 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
           }
           return o;
         }
-        // Already has a manual po# — don't auto-bind, but try to find which
-        // Simpro PO it refers to so we can mirror status.
+        // Already has a manual po# — find which Simpro PO it refers to so
+        // we can mirror status and other fields. Strip "PO-" prefix on
+        // both sides so "6131" matches "PO-6131".
         if (o.po && String(o.po).trim()) {
           const byNumber = validPOs.find(p =>
             !claimedSimproIds.has(p.simproId) &&
-            String(p.poNumber).trim().toLowerCase() === String(o.po).trim().toLowerCase()
+            stripPrefix(p.poNumber) === stripPrefix(o.po)
           );
           if (byNumber) {
             claimedSimproIds.add(byNumber.simproId);
@@ -3363,6 +3381,7 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
               simproPoId: byNumber.simproId,
               simproStatus: byNumber.status,
               simproSupplier: byNumber.supplierName,
+              simproDateIssued: byNumber.dateIssued || "",
               simproSyncedAt: nowIso,
             };
           }
