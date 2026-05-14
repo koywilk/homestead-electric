@@ -3333,20 +3333,38 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
                        simproStatusLower.includes("sent") ||
                        simproStatusLower.includes("issued");
 
+        // Convert Simpro's date (ISO like "2026-05-13T12:48:00" or
+        // already MM/DD/YYYY) into the MM/DD/YYYY format the app's
+        // DateInp expects. Defensive — falls back to today's date if
+        // Simpro's date is unparseable.
+        const formatForApp = (raw) => {
+          if (!raw) return todayDateStr;
+          const t = Date.parse(raw);
+          if (!Number.isFinite(t)) return todayDateStr;
+          return new Date(t).toLocaleDateString("en-US");
+        };
+        const simproDateOrdered = formatForApp(candidate.dateIssued);
+
         return {
           ...o,
           po: candidate.poNumber,
+          // Date Ordered — what the user sees in the UI. Only fill if
+          // empty (don't overwrite a date they typed in themselves).
+          ...(!(o.date && String(o.date).trim()) ? { date: simproDateOrdered } : {}),
           simproPoId: candidate.simproId,
           simproStatus: candidate.status,
           simproSupplier: candidate.supplierName,
+          simproDateIssued: candidate.dateIssued || "",
           simproSyncedAt: nowIso,
           // Only auto-flip when the manual flag is unset — preserves any
-          // manual override the field crew made earlier.
+          // manual override the field crew made earlier. orderedAt /
+          // pickedUpAt use the Simpro issue date (when the supplier
+          // actually got it) rather than the sync's run time.
           ...(isSent && !o.ordered && !o.pickedUp && !o.deliveredToShop
-            ? { ordered: true, orderedBy: "Simpro sync", orderedAt: todayDateStr }
+            ? { ordered: true, orderedBy: "Simpro sync", orderedAt: simproDateOrdered }
             : {}),
           ...(isReceived && !o.pickedUp && !o.deliveredToShop
-            ? { pickedUp: true, pickedUpBy: "Simpro sync", pickedUpAt: todayDateStr }
+            ? { pickedUp: true, pickedUpBy: "Simpro sync", pickedUpAt: simproDateOrdered }
             : {}),
         };
       });
