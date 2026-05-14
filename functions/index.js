@@ -3179,45 +3179,59 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
       const status =
         d?.Status?.Name || d?.Stage ||
         (typeof d?.Status === "string" ? d.Status : "") || "";
-      // CRITICAL: poNumber must be a visible PO# from Simpro — NEVER fall
-      // back to the internal database ID. The internal ID looks like a PO#
-      // but isn't, which led to the app filling in "PO numbers" Koy couldn't
-      // find in Simpro. If none of the visible-number fields exist, leave
-      // poNumber empty and the PO gets filtered out below.
-      const poNumber =
-        d?.OrderNo || d?.PONumber || d?.Number || d?.PoNo || "";
+      // For Simpro vendor orders, the visible "PO number" is the internal
+      // ID itself — most tenants display it as PO-{ID} in the UI. So use
+      // the ID-based formatted number when no explicit OrderNo field is
+      // populated. Format as PO-{ID} for consistency with how Simpro
+      // typically renders it.
+      const explicitPoNo = d?.OrderNo || d?.PONumber || d?.Number || d?.PoNo || "";
+      const poNumber = String(explicitPoNo || `PO-${id}`).trim();
       const dateIssued = d?.DateIssued || d?.IssuedDate || d?.Date || d?.CreatedAt || "";
       return {
         simproId: String(id),
-        poNumber: String(poNumber || "").trim(),
+        poNumber,
         supplierName: String(supplierName || ""),
         status: String(status || ""),
         dateIssued: String(dateIssued || ""),
+        // Keep the raw payload for diagnostics — only used by the first-PO logger.
+        _rawSample: d,
       };
     });
     const enriched = await _pLimit(enrichTasks, 4);
 
     // Log the first PO's full shape so we can see exactly what Simpro
-    // returned and tune our field reading. Only the first one — keeps the
-    // logs readable.
+    // returned and tune our field reading. Only the first one — keeps logs
+    // readable. Strip _rawSample from anything we ship back to the client.
     const firstRaw = simproPOs[0];
     const firstEnriched = enriched.find(Boolean);
     functions.logger.info("syncSimproPOs: first PO shape", {
       simproJobNo,
-      rawKeys: firstRaw ? Object.keys(firstRaw) : null,
-      enriched: firstEnriched,
+      totalListed: simproPOs.length,
+      rawListKeys: firstRaw ? Object.keys(firstRaw) : null,
+      enrichedSample: firstEnriched ? {
+        simproId: firstEnriched.simproId,
+        poNumber: firstEnriched.poNumber,
+        supplierName: firstEnriched.supplierName,
+        status: firstEnriched.status,
+        dateIssued: firstEnriched.dateIssued,
+        detailKeys: firstEnriched._rawSample ? Object.keys(firstEnriched._rawSample) : null,
+      } : null,
     });
 
-    // Drop POs that don't have a real visible order number (defensive —
-    // catches the case where Simpro returns objects without OrderNo etc.).
-    // Also drop POs older than the date cutoff (default 30 days) so we
-    // don't try to auto-link historical POs that pre-date the app's
-    // material tracking. Override-able via DATE_CUTOFF_DAYS env var.
+    // Drop the diagnostic _rawSample before downstream use.
+    const enrichedClean = enriched.filter(Boolean).map(p => {
+      const { _rawSample, ...rest } = p; return rest;
+    });
+
+    // Date filter: skip Simpro POs older than the cutoff (default 30 days).
+    // This is the main defense against auto-linking historical POs to
+    // brand-new app material orders. Override-able via env var.
+    // If a PO has no dateIssued at all, we let it through (rather than
+    // silently dropping it) and rely on the supplier match as the gate.
     const DATE_CUTOFF_DAYS = Number(process.env.SIMPRO_PO_CUTOFF_DAYS || 30);
     const cutoffMs = Date.now() - DATE_CUTOFF_DAYS * 24 * 60 * 60 * 1000;
-    const validPOs = enriched.filter(p => {
-      if (!p) return false;
-      if (!p.poNumber) return false; // no visible PO# → skip
+    const validPOs = enrichedClean.filter(p => {
+      if (!p.poNumber) return false;
       if (p.dateIssued) {
         const t = Date.parse(p.dateIssued);
         if (Number.isFinite(t) && t < cutoffMs) return false;
