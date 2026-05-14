@@ -301,10 +301,28 @@ exports.onJobUpdate = functions.firestore
     const after  = change.after.data()?.data  || {};
     const name   = after.name || "a job";
 
-    // Diagnostic: log every invocation so we can see whether the trigger fires.
+    // Diagnostic: log every invocation + WHICH top-level fields actually
+    // differ between before and after. When the trigger fires but no branch
+    // matches, this tells us exactly what the user changed (so we can see
+    // whether they edited a field we don't watch for notifications, or
+    // re-saved an already-equal value, or something else).
+    const changedFields = [];
+    const allKeys = new Set([...Object.keys(before), ...Object.keys(after)]);
+    for (const k of allKeys) {
+      const bv = before[k], av = after[k];
+      if (Array.isArray(bv) && Array.isArray(av)) {
+        if (bv.length !== av.length) changedFields.push(`${k}[${bv.length}→${av.length}]`);
+        else if (JSON.stringify(bv) !== JSON.stringify(av)) changedFields.push(`${k}(arr-edit)`);
+      } else if (typeof bv === "object" && bv !== null && typeof av === "object" && av !== null) {
+        if (JSON.stringify(bv) !== JSON.stringify(av)) changedFields.push(`${k}(obj-edit)`);
+      } else if (bv !== av) {
+        changedFields.push(k);
+      }
+    }
     functions.logger.info("[onJobUpdate] fired", {
       jobId, name, foreman: after.foreman, lead: after.lead,
       coCount: (after.changeOrders || []).length,
+      changedFields: changedFields.length ? changedFields : ["(no field changed)"],
     });
 
     const tasks = [];
@@ -3073,3 +3091,347 @@ exports.sendTestNotification = functions.https.onCall(async (data, context) => {
 // Setup steps and credentials are documented at the top of huddleEmail.js.
 exports.dailyHuddleEmail = require("./huddleEmail").dailyHuddleEmail;
 exports.sendTestHuddleEmail = require("./huddleEmail").sendTestHuddleEmail;
+
+
+// ─── Sync Simpro POs into a job's material orders ─────────────────────────
+// Read-only from Simpro. Writes ONLY to the app's Firestore job document.
+// Pulls the open POs Simpro has for one job, matches them to existing
+// roughMaterials / finishMaterials entries by supplier source, and fills
+// in fields the user hasn't manually set yet:
+//   • po           — the Simpro PO number (only if empty)
+//   • ordered      — flipped true only if false (preserves manual override)
+//   • pickedUp     — flipped true only if false AND Simpro says received
+//   • simproPoId / simproStatus / simproSyncedAt / simproSupplier — always
+//     written for traceability
+//
+// Never overwrites a populated `po` field. Never touches `pickedUp:true`
+// once a foreman has marked it. Simpro is GET-only — no POST/PATCH/DELETE
+// to Simpro anywhere in this function.
+//
+// Core logic lives in _syncSimproPOsForOneJob below. Two entrypoints share
+// it: the manual callable (button click) and the scheduled function (every
+// 5 min). Same code path → same behavior.
+async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
+    // ── 1. Discover the working PO endpoint for this tenant ─────────────
+    // Same defensive endpoint-probing approach getSimproJobOrderedQty uses
+    // — Simpro tenants differ on whether POs live at /purchaseOrders/ or
+    // /vendorOrders/ and whether the filter is Job.ID / JobID / Job[ID].
+    const jn = encodeURIComponent(simproJobNo);
+    const bracketJob = encodeURIComponent("Job[ID]");
+    const candidateListUrls = [
+      `/purchaseOrders/?Job.ID=${jn}&pageSize=250`,
+      `/purchaseOrders/?JobID=${jn}&pageSize=250`,
+      `/purchaseOrders/?${bracketJob}=${jn}&pageSize=250`,
+      `/jobs/${jn}/purchaseOrders/?pageSize=250`,
+      `/vendorOrders/?Job.ID=${jn}&pageSize=250`,
+      `/vendorOrders/?JobID=${jn}&pageSize=250`,
+      `/jobs/${jn}/vendorOrders/?pageSize=250`,
+    ];
+
+    let workingListUrl = null;
+    let simproPOs = [];
+    const _debugListAttempts = [];
+    for (const url of candidateListUrls) {
+      const r = await simproReqWithRetry("GET", url, null, { maxAttempts: 2 });
+      _debugListAttempts.push({ url, status: r.status, count: Array.isArray(r.data) ? r.data.length : null });
+      if (r.ok && Array.isArray(r.data)) {
+        // Prefer non-empty; first non-empty wins. Fall through to empty-ok as fallback.
+        if (r.data.length > 0) {
+          workingListUrl = url;
+          simproPOs = r.data;
+          break;
+        }
+        if (!workingListUrl) {
+          workingListUrl = url;
+          simproPOs = [];
+        }
+      }
+    }
+
+    if (!workingListUrl) {
+      functions.logger.warn("syncSimproPOsForJob: no working PO endpoint", { simproJobNo, attempts: _debugListAttempts });
+      return {
+        ok: false,
+        error: "Couldn't find a working Simpro PO endpoint — Simpro may not have POs for this job, or the API shape changed.",
+        _debug: { listAttempts: _debugListAttempts },
+      };
+    }
+
+    // ── 2. Fetch detail for each PO (status + supplier) ─────────────────
+    const isJobScoped = workingListUrl.includes(`/jobs/${jn}/`);
+    const resourceName = workingListUrl.includes("/vendorOrders/") ? "vendorOrders" : "purchaseOrders";
+    const detailBase = isJobScoped ? `/jobs/${jn}/${resourceName}` : `/${resourceName}`;
+
+    const enrichTasks = simproPOs.map(po => async () => {
+      const id = po?.ID ?? po?.Id ?? po?.id;
+      if (!id) return null;
+      const r = await simproReqWithRetry("GET", `${detailBase}/${id}`);
+      if (!r.ok || !r.data) return null;
+      const d = r.data;
+      // Defensive — Simpro v1 PO fields vary by tenant. Pull from any of
+      // the field shapes we've seen. Supplier may be `Vendor` or `Supplier`,
+      // status may be `Status.Name` or `Stage`.
+      const supplierName =
+        d?.Vendor?.CompanyName || d?.Vendor?.Name ||
+        d?.Supplier?.CompanyName || d?.Supplier?.Name ||
+        (typeof d?.Vendor === "string" ? d.Vendor : "") ||
+        (typeof d?.Supplier === "string" ? d.Supplier : "") || "";
+      const status =
+        d?.Status?.Name || d?.Stage ||
+        (typeof d?.Status === "string" ? d.Status : "") || "";
+      const poNumber =
+        d?.OrderNo || d?.PONumber || d?.Number || d?.PoNo || String(id);
+      const dateIssued = d?.DateIssued || d?.IssuedDate || d?.Date || d?.CreatedAt || "";
+      return {
+        simproId: String(id),
+        poNumber: String(poNumber || id),
+        supplierName: String(supplierName || ""),
+        status: String(status || ""),
+        dateIssued: String(dateIssued || ""),
+      };
+    });
+    const enriched = await _pLimit(enrichTasks, 4);
+    const validPOs = enriched.filter(Boolean);
+
+    // ── 3. Read the app's job document ──────────────────────────────────
+    const db = admin.firestore();
+    const jobRef = db.collection("jobs").doc(jobId);
+    const jobSnap = await jobRef.get();
+    if (!jobSnap.exists) {
+      throw new functions.https.HttpsError("not-found", `Job ${jobId} not found in Firestore`);
+    }
+    const jobDoc = jobSnap.data() || {};
+    // Memory says: each job doc has a `data` map. Defensive fallback to
+    // top-level fields for jobs written under the older shape.
+    const jobData = jobDoc.data || jobDoc;
+
+    // ── 4. Normalize supplier names → app's Source dropdown values ──────
+    // Simpro carries "Consolidated Electrical Distributors" etc. — map to
+    // the dropdown values the app already supports.
+    const normalizeSupplier = (name) => {
+      const s = String(name || "").toLowerCase().trim();
+      if (!s) return "";
+      if (s.includes("ced") || s.includes("consolidated electrical")) return "CED";
+      if (s.includes("codale")) return "Codale";
+      if (s.includes("platt")) return "Platt";
+      if (s.includes("home depot") || s.includes("hd supply")) return "Home Depot";
+      if (s.includes("amazon")) return "Amazon";
+      return "Other";
+    };
+
+    // ── 5. Match Simpro POs to app material orders + build update ───────
+    const nowIso = new Date().toISOString();
+    const todayDateStr = new Date().toLocaleDateString("en-US");
+    const matched = []; // { phase, appOrderId, simproId, poNumber, supplier, status }
+    const claimedSimproIds = new Set();
+
+    const reconcilePhase = (orders) => {
+      const arr = Array.isArray(orders) ? orders : [];
+      let changed = false;
+      const next = arr.map(o => {
+        // Already linked to a Simpro PO via simproPoId — refresh status only,
+        // never re-bind to a different Simpro record.
+        if (o.simproPoId) {
+          const same = validPOs.find(p => String(p.simproId) === String(o.simproPoId));
+          if (same) {
+            const newStatus = same.status;
+            if ((o.simproStatus || "") !== newStatus) {
+              changed = true;
+              return { ...o, simproStatus: newStatus, simproSyncedAt: nowIso };
+            }
+          }
+          return o;
+        }
+        // Already has a manual po# — don't auto-bind, but try to find which
+        // Simpro PO it refers to so we can mirror status.
+        if (o.po && String(o.po).trim()) {
+          const byNumber = validPOs.find(p =>
+            !claimedSimproIds.has(p.simproId) &&
+            String(p.poNumber).trim().toLowerCase() === String(o.po).trim().toLowerCase()
+          );
+          if (byNumber) {
+            claimedSimproIds.add(byNumber.simproId);
+            matched.push({
+              phase: "_byNumber", appOrderId: o.id, simproId: byNumber.simproId,
+              poNumber: byNumber.poNumber, supplier: byNumber.supplierName, status: byNumber.status,
+            });
+            changed = true;
+            return {
+              ...o,
+              simproPoId: byNumber.simproId,
+              simproStatus: byNumber.status,
+              simproSupplier: byNumber.supplierName,
+              simproSyncedAt: nowIso,
+            };
+          }
+          return o;
+        }
+        // No PO# yet → try to match by source.
+        const appSource = o.source || "";
+        if (!appSource || appSource === "Shop") return o;
+        const candidate = validPOs.find(p =>
+          !claimedSimproIds.has(p.simproId) &&
+          normalizeSupplier(p.supplierName) === appSource
+        );
+        if (!candidate) return o;
+        claimedSimproIds.add(candidate.simproId);
+        matched.push({
+          phase: "_bySource", appOrderId: o.id, simproId: candidate.simproId,
+          poNumber: candidate.poNumber, supplier: candidate.supplierName, status: candidate.status,
+        });
+        changed = true;
+
+        const simproStatusLower = candidate.status.toLowerCase();
+        const isReceived = simproStatusLower.includes("receiv");
+        const isSent = simproStatusLower.includes("approv") ||
+                       simproStatusLower.includes("sent") ||
+                       simproStatusLower.includes("issued");
+
+        return {
+          ...o,
+          po: candidate.poNumber,
+          simproPoId: candidate.simproId,
+          simproStatus: candidate.status,
+          simproSupplier: candidate.supplierName,
+          simproSyncedAt: nowIso,
+          // Only auto-flip when the manual flag is unset — preserves any
+          // manual override the field crew made earlier.
+          ...(isSent && !o.ordered && !o.pickedUp && !o.deliveredToShop
+            ? { ordered: true, orderedBy: "Simpro sync", orderedAt: todayDateStr }
+            : {}),
+          ...(isReceived && !o.pickedUp && !o.deliveredToShop
+            ? { pickedUp: true, pickedUpBy: "Simpro sync", pickedUpAt: todayDateStr }
+            : {}),
+        };
+      });
+      return { changed, next };
+    };
+
+    const roughResult = reconcilePhase(jobData?.roughMaterials);
+    const finishResult = reconcilePhase(jobData?.finishMaterials);
+
+    // ── 6. Write only if something actually changed ─────────────────────
+    if (roughResult.changed || finishResult.changed) {
+      const payload = {};
+      if (roughResult.changed) payload["data.roughMaterials"] = roughResult.next;
+      if (finishResult.changed) payload["data.finishMaterials"] = finishResult.next;
+      payload["data.simproPOsLastSyncedAt"] = nowIso;
+      await jobRef.update(payload);
+    }
+
+    return {
+      ok: true,
+      totalSimproPOs: validPOs.length,
+      matchedCount: matched.length,
+      matched,
+      unmatched: validPOs
+        .filter(p => !claimedSimproIds.has(p.simproId))
+        .map(p => ({
+          simproId: p.simproId,
+          poNumber: p.poNumber,
+          supplierName: p.supplierName,
+          status: p.status,
+        })),
+      lastSyncedAt: nowIso,
+      changed: (roughResult.changed || finishResult.changed),
+    };
+}
+
+
+// ── Entrypoint 1: manual callable (button click in the app) ─────────────
+// Same arguments as before, same response shape. Lets users force a
+// refresh — useful right after they create a PO in Simpro and don't want
+// to wait for the next scheduled run.
+exports.syncSimproPOsForJob = functions
+  .runWith({ timeoutSeconds: 120, memory: "256MB" })
+  .https.onCall(async (data) => {
+    const { simproJobNo, jobId } = data || {};
+    if (!simproJobNo) {
+      throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
+    }
+    if (!jobId) {
+      throw new functions.https.HttpsError("invalid-argument", "jobId required");
+    }
+    return _syncSimproPOsForOneJob({ simproJobNo, jobId });
+  });
+
+
+// ── Entrypoint 2: scheduled background sync (every 5 minutes) ───────────
+// Quietly pulls Simpro PO data for every active job that might need it.
+// Filtering keeps the API load reasonable:
+//   • Job must have a simproNo
+//   • Job must be active (not Completed / Archived)
+//   • Job must have at least one material order that hasn't been linked to
+//     a Simpro PO yet (no simproPoId set) — otherwise nothing to fetch
+// Runs jobs through the same _syncSimproPOsForOneJob helper, with a
+// concurrency cap so we don't trip Simpro's 60 req/min rate limit.
+exports.scheduledSimproPOSync = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB" })
+  .pubsub.schedule("*/5 * * * *")  // every 5 minutes
+  .timeZone("America/Denver")
+  .onRun(async () => {
+    const db = admin.firestore();
+    const jobsSnap = await db.collection("jobs").get();
+
+    // Pick jobs that need syncing. "Need syncing" = has Simpro# AND has at
+    // least one material order without a simproPoId. Done jobs (status
+    // Completed) get skipped to save API calls.
+    const candidates = [];
+    jobsSnap.forEach(doc => {
+      const d = doc.data() || {};
+      const job = d.data || d;
+      const simproNo = String(job.simproNo || "").trim();
+      if (!simproNo) return;
+      const status = String(job.status || "").toLowerCase();
+      if (status === "completed" || status === "archived" || job.archived) return;
+      const rough = Array.isArray(job.roughMaterials) ? job.roughMaterials : [];
+      const finish = Array.isArray(job.finishMaterials) ? job.finishMaterials : [];
+      const all = [...rough, ...finish];
+      // Has any order not yet linked to a Simpro PO?
+      const hasPending = all.some(o => o && !o.simproPoId && o.source && o.source !== "Shop");
+      if (!hasPending && all.length > 0) return;
+      candidates.push({ jobId: doc.id, simproJobNo: simproNo, jobName: job.name || doc.id });
+    });
+
+    if (candidates.length === 0) {
+      functions.logger.info("scheduledSimproPOSync: no candidate jobs", { totalJobs: jobsSnap.size });
+      return null;
+    }
+
+    functions.logger.info("scheduledSimproPOSync: syncing", {
+      candidates: candidates.length,
+      jobs: candidates.map(c => `${c.simproJobNo} (${c.jobName})`),
+    });
+
+    // Concurrency cap of 3 — Simpro rate-limits at ~60 req/min per token,
+    // and each per-job sync fires multiple GETs (list + per-PO detail).
+    const results = await _pLimit(
+      candidates.map(c => async () => {
+        try {
+          const r = await _syncSimproPOsForOneJob({ simproJobNo: c.simproJobNo, jobId: c.jobId });
+          return { jobId: c.jobId, jobName: c.jobName, ok: r?.ok !== false, matched: r?.matchedCount || 0, total: r?.totalSimproPOs || 0, changed: !!r?.changed };
+        } catch (e) {
+          functions.logger.error("scheduledSimproPOSync: job sync failed", { jobId: c.jobId, error: e.message });
+          return { jobId: c.jobId, jobName: c.jobName, ok: false, error: e.message };
+        }
+      }),
+      3
+    );
+
+    const summary = {
+      jobsScanned: candidates.length,
+      jobsChanged: results.filter(r => r.changed).length,
+      totalMatched: results.reduce((s, r) => s + (r.matched || 0), 0),
+      failures: results.filter(r => !r.ok).length,
+    };
+    functions.logger.info("scheduledSimproPOSync: complete", summary);
+
+    // Stash the run summary on a settings doc so we can surface it in the
+    // app ("last auto-sync: 2 min ago · 4 jobs updated") if we want to.
+    await db.doc("settings/simproSyncStatus").set({
+      lastRunAt: new Date().toISOString(),
+      ...summary,
+    }, { merge: true });
+
+    return null;
+  });

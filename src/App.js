@@ -9813,7 +9813,7 @@ function poItemsPreview(items) {
   return lines.length > 1 ? `${lines[0]} + ${lines.length-1} more` : lines[0];
 }
 
-function MaterialOrders({orders,onChange}) {
+function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
   const safeOrders = Array.isArray(orders) ? orders : [];
 
   const [collapsed, setCollapsed] = useState(() => {
@@ -9821,9 +9821,51 @@ function MaterialOrders({orders,onChange}) {
     safeOrders.forEach(o => { m[o.id] = true; }); // all start collapsed
     return m;
   });
+  // Track in-flight Simpro sync so the button can show a spinner. Result
+  // toast surfaces what was matched / left unmatched so the user has a
+  // clear picture of what changed.
+  const [syncing, setSyncing] = useState(false);
 
   const SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","Other"];
   const add = () => onChange([...safeOrders, {id:uid(),date:"",po:"",pickupDate:"",source:"",items:"",pickedUp:false,needsOrder:true}]);
+
+  // Call the Cloud Function to sync PO data from Simpro into this job's
+  // material orders. Read-only from Simpro — only fills in missing fields
+  // on app-side material orders (never overwrites a manually-set PO# or
+  // status flag). See functions/index.js → syncSimproPOsForJob.
+  const syncFromSimpro = async () => {
+    if (!simproNo) {
+      if (typeof toast !== "undefined" && toast.error) toast.error("This job has no Simpro number — set it in Job Info first.");
+      return;
+    }
+    if (!jobId) {
+      if (typeof toast !== "undefined" && toast.error) toast.error("Job ID missing — save the job first.");
+      return;
+    }
+    setSyncing(true);
+    try {
+      const fn = httpsCallable(functions, "syncSimproPOsForJob");
+      const r = await fn({ simproJobNo: simproNo, jobId });
+      const result = r?.data || {};
+      if (result.ok === false) {
+        if (typeof toast !== "undefined" && toast.error) toast.error(result.error || "Sync failed — check Simpro connection.");
+        return;
+      }
+      const m = result.matchedCount || 0;
+      const u = (result.unmatched || []).length;
+      const t = result.totalSimproPOs || 0;
+      const parts = [];
+      parts.push(`${t} PO${t===1?"":"s"} in Simpro`);
+      if (m > 0) parts.push(`${m} matched`);
+      if (u > 0) parts.push(`${u} unmatched`);
+      if (typeof toast !== "undefined" && toast.success) toast.success(parts.join(" · "));
+    } catch (e) {
+      console.error("Sync from Simpro failed:", e);
+      if (typeof toast !== "undefined" && toast.error) toast.error("Sync failed: " + (e.message || "unknown error"));
+    } finally {
+      setSyncing(false);
+    }
+  };
 
   const upd = (id, p) => {
     onChange(safeOrders.map(o => o.id===id ? {...o,...p} : o));
@@ -9839,6 +9881,29 @@ function MaterialOrders({orders,onChange}) {
 
   return (
     <div>
+      {/* Sync-from-Simpro button. Only shown when the job has a Simpro# —
+          otherwise there's nothing to sync from. Pulls PO data from Simpro
+          and auto-fills matching app material orders. Read-only against
+          Simpro; writes happen only to the app's Firestore. */}
+      {simproNo && (
+        <div style={{display:"flex",gap:8,alignItems:"center",marginBottom:10,flexWrap:"wrap"}}>
+          <button onClick={syncFromSimpro} disabled={syncing}
+            title="Pull PO# + status from Simpro for this job. Won't overwrite anything you've set manually."
+            style={{
+              background: syncing ? "#f1f5f9" : "#fff",
+              border:`1px solid ${C.blue}`, color: syncing ? C.dim : C.blue,
+              borderRadius:7, padding:"6px 12px", fontSize:11, fontWeight:700,
+              cursor: syncing ? "wait" : "pointer", fontFamily:"inherit",
+              letterSpacing:"0.04em", display:"inline-flex", alignItems:"center", gap:6,
+            }}>
+            {syncing ? <Spinner size={11} color={C.blue}/> : <Icon name="refresh" size={11} stroke={2.25}/>}
+            {syncing ? "SYNCING…" : "SYNC FROM SIMPRO"}
+          </button>
+          <span style={{fontSize:10,color:C.dim,fontStyle:"italic"}}>
+            Fills in PO# + status from Simpro. Won't overwrite anything you set manually.
+          </span>
+        </div>
+      )}
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed",marginBottom:12}}>+ Add PO</Btn>
 
       {[...safeOrders]
@@ -9927,6 +9992,51 @@ function MaterialOrders({orders,onChange}) {
                 <div style={{fontSize:10,color:C.dim,marginBottom:4}}>Material List <span style={{color:C.muted}}>(copy & paste into Simpro)</span></div>
                 <TA value={o.items} onChange={e=>upd(o.id,{items:e.target.value})}
                   placeholder={"- 20A breaker x4\n- 12/2 wire 250ft"} rows={4}/>
+
+                {/* Copy-for-Simpro helper. The TA stores items as HTML
+                    (<br> separators + entities) but Simpro's PO line entry
+                    expects clean plain-text — one item per line, no tags.
+                    Click → clean + copy to clipboard, toast confirms. Only
+                    shows when there's something to copy and the source is a
+                    real supplier (not Shop, which doesn't go through Simpro). */}
+                {o.source && o.source !== "Shop" && (o.items||"").replace(/<[^>]*>/g,"").trim() && (
+                  <button onClick={async ()=>{
+                    const cleaned = (o.items||"")
+                      .replace(/<br\s*\/?>/gi, "\n")
+                      .replace(/<\/(p|div|li)>/gi, "\n")
+                      .replace(/<[^>]+>/g, "")
+                      .replace(/&nbsp;/g, " ")
+                      .replace(/&amp;/g, "&")
+                      .replace(/&lt;/g, "<")
+                      .replace(/&gt;/g, ">")
+                      .replace(/&quot;/g, '"')
+                      .replace(/&#39;/g, "'")
+                      .split("\n")
+                      .map(l => l.trim())
+                      .filter(Boolean)
+                      .join("\n");
+                    if (!cleaned) {
+                      if (typeof toast !== "undefined" && toast.error) toast.error("Nothing to copy — type some items first.");
+                      return;
+                    }
+                    try {
+                      await navigator.clipboard.writeText(cleaned);
+                      const lineCount = cleaned.split("\n").length;
+                      if (typeof toast !== "undefined" && toast.success) {
+                        toast.success(`${lineCount} item${lineCount===1?"":"s"} copied — paste into Simpro PO`);
+                      }
+                    } catch(e) {
+                      console.error("Copy failed:", e);
+                      if (typeof toast !== "undefined" && toast.error) toast.error("Couldn't copy — your browser may have blocked clipboard. Select the list manually.");
+                    }
+                  }}
+                    style={{marginTop:8,background:"#fff",border:`1px solid ${C.accent}`,color:C.accent,
+                      borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",
+                      fontFamily:"inherit",letterSpacing:"0.04em",display:"inline-flex",alignItems:"center",gap:6}}>
+                    <Icon name="copy" size={11} stroke={2.25}/>
+                    COPY FOR SIMPRO
+                  </button>
+                )}
 
                 {/* ── Status checkboxes ── */}
                 <div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>
@@ -21616,7 +21726,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               )}
 
               <Section label="Material Tracking" color={C.rough}>
-                <MaterialOrders orders={job.roughMaterials} onChange={v=>u({roughMaterials:v})}/>
+                <MaterialOrders orders={job.roughMaterials} onChange={v=>u({roughMaterials:v})}
+                  simproNo={job.simproNo} jobId={job.id} phase="rough"/>
               </Section>
 
               <Section label="Material Count List" color={C.rough} defaultOpen={false}>
@@ -21924,7 +22035,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <div style={{marginTop:20}}>
 
                 <Section label="Finish Material Tracking" color={C.finish}>
-                  <MaterialOrders orders={job.finishMaterials} onChange={v=>u({finishMaterials:v})}/>
+                  <MaterialOrders orders={job.finishMaterials} onChange={v=>u({finishMaterials:v})}
+                    simproNo={job.simproNo} jobId={job.id} phase="finish"/>
                 </Section>
 
                 <Section label="Finish Material Count List" color={C.finish} defaultOpen={false}>
