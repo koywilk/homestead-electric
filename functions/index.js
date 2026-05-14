@@ -3354,7 +3354,12 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
         // forever. Don't early-return when same isn't found.
         if (o.simproPoId) {
           const same = validPOs.find(p => String(p.simproId) === String(o.simproPoId));
-          if (same) {
+          // CRITICAL: if another order already claimed this same Simpro PO
+          // earlier in the loop, this order's stored simproPoId is a
+          // duplicate from a buggy previous sync. Treat it as stale —
+          // clear and fall through to re-match. Two app orders can't
+          // share one Simpro PO; first one wins, the second re-binds.
+          if (same && !claimedSimproIds.has(same.simproId)) {
             claimedSimproIds.add(same.simproId);
             matched.push({
               phase: "_alreadyBound", appOrderId: o.id, simproId: same.simproId,
