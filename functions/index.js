@@ -3119,13 +3119,21 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
     const jn = encodeURIComponent(simproJobNo);
     const bracketJob = encodeURIComponent("Job[ID]");
     const candidateListUrls = [
+      // Job-scoped paths FIRST. These guarantee the response is filtered to
+      // the specific job because the job ID is in the URL path, not a
+      // query param Simpro might ignore. If these return data, we trust
+      // it without further filtering. If they 404, we fall through to
+      // global endpoints with query-param filters (less reliable — Simpro
+      // sometimes ignores unknown filter params and returns everything).
+      `/jobs/${jn}/purchaseOrders/?pageSize=250`,
+      `/jobs/${jn}/vendorOrders/?pageSize=250`,
+      // Global endpoints with query-param filters. Risky — if Simpro
+      // doesn't recognize the filter param it returns ALL POs (250 cap).
       `/purchaseOrders/?Job.ID=${jn}&pageSize=250`,
       `/purchaseOrders/?JobID=${jn}&pageSize=250`,
       `/purchaseOrders/?${bracketJob}=${jn}&pageSize=250`,
-      `/jobs/${jn}/purchaseOrders/?pageSize=250`,
       `/vendorOrders/?Job.ID=${jn}&pageSize=250`,
       `/vendorOrders/?JobID=${jn}&pageSize=250`,
-      `/jobs/${jn}/vendorOrders/?pageSize=250`,
     ];
 
     let workingListUrl = null;
@@ -3157,6 +3165,20 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
       };
     }
 
+    // Defensive sanity check: if we hit a global endpoint with a query
+    // filter AND got exactly 250 results (the page-size cap), the filter
+    // probably wasn't recognized and we have a global list, not a
+    // job-scoped one. Surface this clearly rather than blindly matching.
+    const usedGlobalEndpoint = !workingListUrl.includes(`/jobs/${jn}/`);
+    const hitPageCap = simproPOs.length === 250;
+    if (usedGlobalEndpoint && hitPageCap) {
+      functions.logger.warn("syncSimproPOsForJob: filter likely ignored — got 250 (page cap) from global endpoint", {
+        simproJobNo, workingListUrl,
+      });
+      // Don't give up yet — we'll post-filter by Job.ID on the detail
+      // fetches below. But the warning is here so we can spot it in logs.
+    }
+
     // ── 2. Fetch detail for each PO (status + supplier) ─────────────────
     const isJobScoped = workingListUrl.includes(`/jobs/${jn}/`);
     const resourceName = workingListUrl.includes("/vendorOrders/") ? "vendorOrders" : "purchaseOrders";
@@ -3168,6 +3190,17 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
       const r = await simproReqWithRetry("GET", `${detailBase}/${id}`);
       if (!r.ok || !r.data) return null;
       const d = r.data;
+      // POST-FILTER by Job.ID — defensive guard against the case where
+      // Simpro ignored our query-param filter and returned all POs.
+      // Check the PO's actual linked job and skip anything that isn't for
+      // this job. If the field is missing entirely we trust the URL filter
+      // (the path-scoped paths are always reliable).
+      const poJobId =
+        d?.Job?.ID ?? d?.Job?.Id ?? d?.JobID ??
+        (typeof d?.Job === "number" || typeof d?.Job === "string" ? d.Job : null);
+      if (poJobId != null && String(poJobId) !== String(simproJobNo)) {
+        return null; // wrong job — drop it
+      }
       // Defensive — Simpro v1 PO fields vary by tenant. Pull from any of
       // the field shapes we've seen. Supplier may be `Vendor` or `Supplier`,
       // status may be `Status.Name` or `Stage`.
