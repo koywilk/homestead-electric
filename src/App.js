@@ -18454,7 +18454,11 @@ function PanelModulesSection({
 
 function TapeLightSection({lights,onChange}) {
 
-  const emptyTL  = () => ({id:uid(),loadName:"",driverLoc:"",length:"",trackLense:"",driverSize:""});
+  // driverOrdered + driverInstalled are new — track what's been bought and
+  // what's actually hung. Cards highlight differently per status so a quick
+  // scan of the tab shows which locations are missing what. Old data
+  // without these fields just renders both as unchecked.
+  const emptyTL  = () => ({id:uid(),loadName:"",driverLoc:"",length:"",trackLense:"",driverSize:"",driverOrdered:false,driverInstalled:false});
 
   const add      = () => onChange([...lights, emptyTL()]);
 
@@ -18506,15 +18510,59 @@ function TapeLightSection({lights,onChange}) {
 
       </div>
 
-      {lights.map((l,i)=>(
+      {/* Summary strip — instant overview of how many drivers are ordered
+          and how many installed, so the field crew knows what's outstanding
+          without expanding each card. */}
+      {lights.length > 0 && (() => {
+        const total = lights.length;
+        const orderedCount = lights.filter(l => l.driverOrdered).length;
+        const installedCount = lights.filter(l => l.driverInstalled).length;
+        return (
+          <div style={{display:"flex",alignItems:"center",gap:14,padding:"8px 12px",
+            background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,
+            marginBottom:10,fontSize:11,color:C.dim,fontWeight:600,flexWrap:"wrap"}}>
+            <span><b style={{color:C.text}}>{total}</b> location{total===1?"":"s"}</span>
+            <span style={{color:orderedCount===total?C.green:"#ea580c"}}>
+              <b>{orderedCount}/{total}</b> driver{orderedCount===1?"":"s"} ordered
+            </span>
+            <span style={{color:installedCount===total?C.green:C.dim}}>
+              <b>{installedCount}/{total}</b> installed
+            </span>
+          </div>
+        );
+      })()}
 
-        <div key={l.id} style={{background:C.surface,border:`1px solid ${C.border}`,
+      {lights.map((l,i)=>{
+
+        // Card tint based on status: outline green when both ordered AND
+        // installed, soft orange when ordered but not yet installed,
+        // default when nothing's checked. Easy visual scan across the list.
+        const cardBg     = l.driverInstalled ? "rgba(22,163,74,0.04)"
+                         : l.driverOrdered   ? "rgba(234,88,12,0.04)"
+                         : C.surface;
+        const cardBorder = l.driverInstalled ? "1px solid #16a34a44"
+                         : l.driverOrdered   ? "1px solid #ea580c44"
+                         : `1px solid ${C.border}`;
+
+        return (
+
+        <div key={l.id} style={{background:cardBg,border:cardBorder,
 
           borderRadius:10,padding:14,marginBottom:12}}>
 
-          <div style={{display:"flex",justifyContent:"space-between",marginBottom:10}}>
+          <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10,gap:8,flexWrap:"wrap"}}>
 
-            <span style={{fontSize:12,color:C.teal,fontWeight:700}}>Tape Light #{i+1}</span>
+            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <span style={{fontSize:12,color:C.teal,fontWeight:700}}>Tape Light #{i+1}</span>
+              {l.driverOrdered && !l.driverInstalled && (
+                <span style={{fontSize:10,fontWeight:700,background:"#ea580c22",color:"#ea580c",
+                  borderRadius:99,padding:"1px 8px"}}>Driver Ordered</span>
+              )}
+              {l.driverInstalled && (
+                <span style={{fontSize:10,fontWeight:700,background:"#16a34a22",color:"#16a34a",
+                  borderRadius:99,padding:"1px 8px"}}>✓ Driver Installed</span>
+              )}
+            </div>
 
             <button onClick={()=>del(l.id)}
 
@@ -18591,9 +18639,51 @@ function TapeLightSection({lights,onChange}) {
 
           </div>
 
+          {/* Driver status checkboxes. Two booleans + who/when stamps so
+              we have an audit trail of who ordered/installed each driver.
+              Same pattern as the rough/finish material order cards. */}
+          <div style={{display:"flex",gap:18,marginTop:12,paddingTop:10,
+            borderTop:`1px dashed ${C.border}`,flexWrap:"wrap"}}>
+            <div style={{display:"flex",flexDirection:"column",gap:2}}>
+              <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
+                <input type="checkbox" checked={!!l.driverOrdered} onChange={e=>{
+                  const val=e.target.checked; const who=getIdentity();
+                  upd(l.id,{driverOrdered:val,
+                    driverOrderedBy:val?(who?.name||""):"",
+                    driverOrderedAt:val?new Date().toLocaleDateString("en-US"):""});
+                }} style={{accentColor:"#ea580c",width:14,height:14,cursor:"pointer"}}/>
+                Driver ordered
+              </label>
+              {l.driverOrdered&&l.driverOrderedBy&&(
+                <span style={{fontSize:9,color:"#ea580c",fontWeight:600,paddingLeft:20}}>
+                  ✓ by {l.driverOrderedBy}{l.driverOrderedAt?" · "+l.driverOrderedAt:""}
+                </span>
+              )}
+            </div>
+
+            <div style={{display:"flex",flexDirection:"column",gap:2}}>
+              <label style={{display:"flex",alignItems:"center",gap:6,cursor:"pointer",fontSize:12,color:C.text}}>
+                <input type="checkbox" checked={!!l.driverInstalled} onChange={e=>{
+                  const val=e.target.checked; const who=getIdentity();
+                  upd(l.id,{driverInstalled:val,
+                    driverInstalledBy:val?(who?.name||""):"",
+                    driverInstalledAt:val?new Date().toLocaleDateString("en-US"):""});
+                }} style={{accentColor:"#16a34a",width:14,height:14,cursor:"pointer"}}/>
+                Driver installed
+              </label>
+              {l.driverInstalled&&l.driverInstalledBy&&(
+                <span style={{fontSize:9,color:"#16a34a",fontWeight:600,paddingLeft:20}}>
+                  ✓ by {l.driverInstalledBy}{l.driverInstalledAt?" · "+l.driverInstalledAt:""}
+                </span>
+              )}
+            </div>
+          </div>
+
         </div>
 
-      ))}
+        );
+
+      })}
 
       <Btn onClick={add} variant="ghost" style={{width:"100%",borderStyle:"dashed"}}>+ Add Tape Light Location</Btn>
 
