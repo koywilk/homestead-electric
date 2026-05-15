@@ -17422,11 +17422,135 @@ function buildSavV2SlotMap(v2) {
   return map;
 }
 
+// ── SavantOutputNameField ──────────────────────────────────────────────
+// Output Name <input> with a built-in load-picker dropdown.
+//
+// Behavior:
+//   • Acts like a normal renaming input — typing updates local state, blur
+//     flushes the new name through onRename (same flow as before).
+//   • When focused AND there are unassigned loads in the master list, a
+//     suggestion dropdown appears below filtered by what's typed.
+//   • Clicking a suggestion calls onPickLoad(loadId), which the parent
+//     uses to remove the load from pl.savantUnassignedLoads and write the
+//     load's name + type + watts + room into the V1 cp4Loads row backing
+//     this output.
+//
+// Defined at module scope (not inside SavantPanelV2's render) so React keeps
+// the input mounted across parent re-renders — otherwise the input would
+// lose focus on every keystroke. Pure controlled component — owns the
+// "what the user is typing right now" state, never the source-of-truth.
+function SavantOutputNameField({ value, onRename, canPickLoad,
+                                  unassignedLoads, onPickLoad }) {
+  const [focused, setFocused] = useState(false);
+  const [query,   setQuery]   = useState(value || "");
+  useEffect(()=>{ setQuery(value || ""); }, [value]);
+  // Keep dropdown open just long enough for a click on a suggestion to
+  // register. Without the delay, blur fires first and the menu hides
+  // before the click handler runs. 120ms is short enough that it doesn't
+  // feel sticky if the user just tabs/clicks away.
+  const closeTimer = useRef(null);
+  useEffect(()=>()=>{ if (closeTimer.current) clearTimeout(closeTimer.current); }, []);
+  const handleBlur = () => {
+    closeTimer.current = setTimeout(()=>setFocused(false), 120);
+    if (onRename && (query || "") !== (value || "")) onRename(query);
+  };
+  const handleFocus = () => {
+    if (closeTimer.current) { clearTimeout(closeTimer.current); closeTimer.current = null; }
+    setFocused(true);
+  };
+  const suggestions = canPickLoad ? (unassignedLoads || []).filter(l => {
+    if (!l || !l.name) return false;
+    const q = (query || "").trim().toLowerCase();
+    if (!q) return true;
+    return l.name.toLowerCase().includes(q)
+        || (l.room || "").toLowerCase().includes(q);
+  }).slice(0, 8) : [];
+  const showMenu = focused && canPickLoad && suggestions.length > 0;
+  return (
+    <div style={{position:"relative", minWidth:0}}>
+      <input
+        value={query}
+        onChange={(e)=>setQuery(e.target.value)}
+        onFocus={handleFocus}
+        onBlur={handleBlur}
+        onKeyDown={(e)=>{
+          if (e.key === "Escape") { setFocused(false); e.target.blur(); }
+          if (e.key === "Enter")  { if (onRename) onRename(query); setFocused(false); e.target.blur(); }
+        }}
+        placeholder="Switch leg name (e.g. Kitchen pendants)"
+        style={{
+          fontSize:13, padding:"4px 7px", border:`0.5px solid ${C.border}`,
+          borderRadius:4, background:"#fff", fontFamily:"inherit", color:C.text,
+          width:"100%", boxSizing:"border-box", outline:"none",
+        }}/>
+      {showMenu && (
+        <div style={{
+          position:"absolute", top:"calc(100% + 2px)", left:0, right:0,
+          zIndex:50, background:"#fff", border:`1px solid ${C.border}`,
+          borderRadius:6, boxShadow:"0 4px 12px rgba(0,0,0,0.08)",
+          maxHeight:220, overflowY:"auto",
+        }}>
+          <div style={{padding:"5px 10px", fontSize:9, fontWeight:700,
+            letterSpacing:"0.07em", textTransform:"uppercase", color:C.dim,
+            background:"#f8fafc", borderBottom:`1px solid ${C.border}`}}>
+            Pick from unassigned loads · {suggestions.length}
+          </div>
+          {suggestions.map(l => (
+            <div key={l.id}
+              onMouseDown={(e)=>{
+                // mousedown fires before blur — commit the pick here so the
+                // click registers even as the input is losing focus.
+                e.preventDefault();
+                onPickLoad && onPickLoad(l.id);
+                setFocused(false);
+              }}
+              style={{padding:"7px 10px", cursor:"pointer",
+                borderBottom:`0.5px solid ${C.border}`,
+                display:"flex", alignItems:"center", gap:8}}
+              onMouseEnter={(e)=>{ e.currentTarget.style.background = "#f1f5f9"; }}
+              onMouseLeave={(e)=>{ e.currentTarget.style.background = "#fff"; }}>
+              <div style={{flex:1, minWidth:0}}>
+                <div style={{fontSize:12, color:C.text, fontWeight:600,
+                  whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis"}}>
+                  {l.name}
+                </div>
+                {(l.room || l.floor || l.wattage || l.type) && (
+                  <div style={{fontSize:10, color:C.dim, marginTop:1}}>
+                    {[l.room, l.floor, l.type, l.wattage && `${l.wattage}W`]
+                      .filter(Boolean).join(" · ")}
+                  </div>
+                )}
+              </div>
+              <span style={{fontSize:9, fontWeight:700, color:C.purple,
+                letterSpacing:"0.06em", textTransform:"uppercase"}}>
+                Pick
+              </span>
+            </div>
+          ))}
+          {(query || "").trim() && (
+            <div style={{padding:"6px 10px", fontSize:10, color:C.muted,
+              fontStyle:"italic", background:"#fafbfc"}}>
+              Or press Enter to keep "{query.trim()}" as a brand-new load on this breaker.
+            </div>
+          )}
+        </div>
+      )}
+    </div>
+  );
+}
+
 function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
                           onAssignFeeder = null, onSetRoom = null,
                           onEditOutput = null, onAddFeeder = null,
                           onAddModule = null, onDeleteModule = null,
-                          onDeleteFeeder = null }) {
+                          onDeleteFeeder = null,
+                          // In-panel-card load picker: list of loads that are
+                          // still unassigned across the whole job, plus the
+                          // handler that wires a chosen load into this output.
+                          // When supplied, the output Name field shows a
+                          // dropdown of matching unassigned loads on focus.
+                          unassignedLoads = [],
+                          onAssignUnassignedLoad = null }) {
   const v2 = getSavantV2ForFloor(job, floor);
   const slotMap = buildSavV2SlotMap(v2);
   const isEditable = typeof onAssignFeeder === "function";
@@ -17436,6 +17560,11 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
   const canDeleteFeeder = typeof onDeleteFeeder === "function";
   const canAddFeeder = typeof onAddFeeder === "function";
   const canAddModule = typeof onAddModule === "function";
+  // Whether the picker UX is wired up. Falls back to plain input when the
+  // parent didn't pass an assign handler (e.g. read-only callers).
+  const canPickLoad = typeof onAssignUnassignedLoad === "function"
+    && Array.isArray(unassignedLoads)
+    && unassignedLoads.length > 0;
 
   // Inline forms for adding (kept simple — slot + amps for feeder, slot + sku for module)
   const [showAddFeeder, setShowAddFeeder] = useState(false);
@@ -17721,6 +17850,22 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
         Modules <span style={{color:C.muted, fontWeight:400, textTransform:"none",
           letterSpacing:0, fontSize:11}}>· {v2.modules.length}</span>
       </div>
+      {/* Discoverability nudge: tells the user the Name input is also a
+          picker when there are unassigned loads waiting in the master list.
+          Without this, the dropdown stays invisible until you click into a
+          name field — easy to miss. */}
+      {canPickLoad && (v2.modules || []).length > 0 && (
+        <div style={{padding:"7px 10px", marginBottom:8,
+          background:"#fef3c7", border:`0.5px solid ${C.accent}55`, borderRadius:6,
+          fontSize:11, color:C.text, lineHeight:1.5}}>
+          <b style={{color:C.accent, letterSpacing:"0.04em"}}>
+            {unassignedLoads.length} unassigned load{unassignedLoads.length===1?"":"s"}
+          </b>{" "}
+          waiting in the master list. Click into any breaker's <b>Name</b> field
+          below to pick one — picking fills name + type + watts + room and
+          removes it from the unassigned list.
+        </div>
+      )}
       {(v2.modules || []).length === 0 && (
         <div style={{padding:"10px 12px", fontSize:12, color:C.dim, fontStyle:"italic",
           background:"#fafbfc", border:`0.5px dashed ${C.border}`, borderRadius:6}}>
@@ -17752,12 +17897,12 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
                 {ch || "—"} · {breakerLabel}
               </span>
               {canEditOutput ? (
-                <input
+                <SavantOutputNameField
                   value={out.name || ""}
-                  onChange={(e)=>onEditOutput(editKey, editChannel, "name", e.target.value)}
-                  placeholder="Switch leg name (e.g. Kitchen pendants)"
-                  style={{fontSize:13, padding:"4px 7px", border:`0.5px solid ${C.border}`,
-                    borderRadius:4, background:"#fff", fontFamily:"inherit", color:C.text}}/>
+                  onRename={(v)=>onEditOutput(editKey, editChannel, "name", v)}
+                  canPickLoad={canPickLoad}
+                  unassignedLoads={unassignedLoads}
+                  onPickLoad={(loadId)=>onAssignUnassignedLoad(editKey, editChannel || (ch || ""), loadId)}/>
               ) : (
                 <span style={{color:C.text, fontSize:13}}>
                   {out.name || <span style={{color:C.muted, fontStyle:"italic"}}>(no name)</span>}
@@ -18719,6 +18864,64 @@ function SavantV2PreviewToggle({ job, floor, panelLabel, onPatch, forceShow=fals
     });
   } : null;
 
+  // ── In-panel-card load picker: assign an unassigned load to a specific
+  // output (modKey + channel) on THIS panel/floor. Writes the load's name +
+  // type + watts + room into the matching V1 cp4Loads row and removes the
+  // load from pl.savantUnassignedLoads in the same patch.
+  //
+  // No data is lost: if the target output already has a name, it gets
+  // overwritten (same behavior as just typing into the input would have
+  // had). The room/type/watts only overwrite when the picked load actually
+  // carries a value, so we don't blank out fields the user already filled in.
+  const handleAssignUnassignedLoad = onPatch ? (modKey, channel, loadId) => {
+    const pl = job?.panelizedLighting || {};
+    const unassigned = Array.isArray(pl.savantUnassignedLoads) ? pl.savantUnassignedLoads : [];
+    const load = unassigned.find(l => l && l.id === loadId);
+    if (!load) return;
+    const flatRows = flattenModulesToRows(pl.cp4Loads?.[floor] || []);
+    let matched = false;
+    let updatedRows = flatRows.map(r => {
+      if (matched) return r;
+      if (String(r.mod || "") !== String(modKey)) return r;
+      if (channel && (r.ch || "") !== channel) return r;
+      matched = true;
+      return {
+        ...r,
+        name: load.name || r.name || "",
+        loadType: load.type === "dim" ? "Dim"
+                  : (load.type === "switch" ? "Switch" : (r.loadType || "")),
+        watts: load.wattage || r.watts || "",
+        room:  load.room    || r.room    || "",
+      };
+    });
+    // If no V1 row exists for this channel yet (e.g. the module only has
+    // an A row in V1 and we're filling B for the first time), append one.
+    if (!matched) {
+      updatedRows = [...flatRows, {
+        id: uid(),
+        num: flatRows.length + 1,
+        name: load.name || "",
+        mod: modKey,
+        moduleType: "",
+        ch: channel || "",
+        slot: "",
+        loadType: load.type === "dim" ? "Dim" : (load.type === "switch" ? "Switch" : ""),
+        watts: load.wattage || "",
+        keypad: "",
+        room: load.room || "",
+        pulled: false,
+        status: "",
+      }];
+    }
+    onPatch({
+      panelizedLighting: {
+        ...pl,
+        cp4Loads: { ...(pl.cp4Loads||{}), [floor]: updatedRows },
+        savantUnassignedLoads: unassigned.filter(l => l && l.id !== loadId),
+      },
+    });
+  } : null;
+
   // ── 4e: Delete feeder ─────────────────────────────────────────────
   // Removes the V1 regular-breaker row AND clears any V2 input assignments
   // that pointed at this feeder (so colors don't dangle). Atomic — one patch.
@@ -18770,7 +18973,11 @@ function SavantV2PreviewToggle({ job, floor, panelLabel, onPatch, forceShow=fals
             onAddFeeder={handleAddFeeder}
             onAddModule={handleAddModule}
             onDeleteModule={handleDeleteModule}
-            onDeleteFeeder={handleDeleteFeeder}/>
+            onDeleteFeeder={handleDeleteFeeder}
+            unassignedLoads={Array.isArray(job?.panelizedLighting?.savantUnassignedLoads)
+              ? job.panelizedLighting.savantUnassignedLoads
+              : []}
+            onAssignUnassignedLoad={handleAssignUnassignedLoad}/>
         </div>
       )}
     </div>
