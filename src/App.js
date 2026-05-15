@@ -1448,11 +1448,182 @@ function getSavantV2ForFloor(job, floor) {
   }
   return base;
 }
+// ─── Master-loads aggregator (Phase 1 of the redesign) ────────────────────
+//
+// The Panelized Lighting redesign treats LOAD as the atomic, addressable
+// entity (matches Savant Blueprint's flat model) — a load can be unassigned
+// (still in planning), or assigned to a specific {floor, module, output}.
+// Below: pure read helpers that aggregate every load on a Savant job into
+// one flat list, regardless of which panel/module it lives in. The UI
+// (Phase 2) renders the master list above the per-panel cards.
+//
+// Storage:
+//   • Assigned loads live inside V2 module outputs (existing — no change)
+//   • Unassigned (planning-stage) loads live in pl.savantUnassignedLoads[]
+//     as plain {id, name, room, floor, type, wattage, pulled, notes}.
+//     Added in the new UI when the user types a load before they know
+//     which panel/breaker it'll go on.
+
+// Infer load type from the module SKU. Falls back to "" when we don't know
+// (e.g. the load is unassigned, or it's on a legacy multi-channel module).
+const savInferLoadType = (sku) => {
+  const meta = savSkuMeta(sku);
+  if (meta.dim || meta.kind === "dimmer") return "dim";
+  if (meta.kind === "relay") return "switch";
+  if (meta.kind === "ctrl24v") return "switch";
+  return "";
+};
+
+// Pull all assigned loads out of V2 across every floor for a job, and merge
+// with the unassigned planning-stage loads. Returns a flat array — each row
+// has an `assignedTo` field that's null when the load is still in planning.
+//
+// Pure read. Does NOT modify the job. Safe to call as often as needed.
+function allSavantLoadsForJob(job) {
+  const pl = job?.panelizedLighting || {};
+  const labels = job?.plSectionLabels || {};
+  const out = [];
+
+  // Standard floors + any extras the user added.
+  const standardFloors = [
+    { key: "main",     defaultLabel: "Main Floor" },
+    { key: "basement", defaultLabel: "Basement" },
+    { key: "upper",    defaultLabel: "Upper Floor" },
+  ];
+  const extraFloors = (pl.extraFloors || []).map(ef => ({
+    key: ef.key, defaultLabel: ef.label || "Extra Floor",
+  }));
+  const allFloors = [...standardFloors, ...extraFloors];
+
+  allFloors.forEach(({ key: floorKey, defaultLabel }) => {
+    const v2 = getSavantV2ForFloor(job, floorKey);
+    const panelLabel = (labels[floorKey] || "").trim() || defaultLabel;
+    (v2.modules || []).forEach(m => {
+      const sku = m.sku || "";
+      const inferredType = savInferLoadType(sku);
+      const pushOutput = (out_, channel) => {
+        if (!out_ || !out_.name) return; // skip empty/un-named outputs
+        out.push({
+          id: out_._legacyId || `${m.id}_${channel}`,
+          name: out_.name || "",
+          room: out_.room || "",
+          floor: floorKey,
+          type: inferredType,
+          wattage: out_.watts || "",
+          pulled: !!out_.pulled,
+          notes: out_.notes || "",
+          assignedTo: {
+            floor: floorKey,
+            panelLabel,
+            moduleId: m.id,
+            modNum: m.modNum || m._legacyMod || "",
+            output: channel,
+            slots: m.slots || [],
+            sku,
+          },
+        });
+      };
+      pushOutput(m.outputs?.A, "A");
+      pushOutput(m.outputs?.B, "B");
+      // Carry forward any legacy stray outputs (mod with >2 channels in V1).
+      (m._legacyExtras || []).forEach((extra, idx) => {
+        if (!extra || !extra.name) return;
+        const channel = String.fromCharCode(65 + 2 + idx); // C, D, …
+        out.push({
+          id: extra._legacyId || `${m.id}_${channel}`,
+          name: extra.name || "",
+          room: extra.room || "",
+          floor: floorKey,
+          type: inferredType,
+          wattage: extra.watts || "",
+          pulled: !!extra.pulled,
+          notes: extra.notes || "",
+          assignedTo: {
+            floor: floorKey, panelLabel,
+            moduleId: m.id, modNum: m.modNum || m._legacyMod || "",
+            output: channel, slots: m.slots || [], sku,
+          },
+        });
+      });
+    });
+  });
+
+  // Unassigned (planning-stage) loads — additive new field, empty by default.
+  (pl.savantUnassignedLoads || []).forEach(l => {
+    if (!l || !l.id) return;
+    out.push({
+      id: l.id,
+      name: l.name || "",
+      room: l.room || "",
+      floor: l.floor || "",  // user can pre-tag floor before assigning to a panel
+      type: l.type || "",
+      wattage: l.wattage || "",
+      pulled: !!l.pulled,
+      notes: l.notes || "",
+      assignedTo: null,
+    });
+  });
+
+  return out;
+}
+
+// Enumerate every Savant panel (floor) on a job with its label and summary
+// counts. Used by the panel-card stack below the master loads list.
+// Pure read.
+function listSavantPanels(job) {
+  const pl = job?.panelizedLighting || {};
+  const labels = job?.plSectionLabels || {};
+  const standardFloors = [
+    { key: "main",     defaultLabel: "Main Floor" },
+    { key: "basement", defaultLabel: "Basement" },
+    { key: "upper",    defaultLabel: "Upper Floor" },
+  ];
+  const extraFloors = (pl.extraFloors || []).map(ef => ({
+    key: ef.key, defaultLabel: ef.label || "Extra Floor",
+  }));
+  const allFloors = [...standardFloors, ...extraFloors];
+  // A floor only counts as a "panel" if it has any V2 modules OR feeders OR
+  // a user-set label. Skip empty standard floors so a job that only uses
+  // Main doesn't show empty Basement+Upper panels in the stack.
+  return allFloors.map(({ key, defaultLabel }) => {
+    const v2 = getSavantV2ForFloor(job, key);
+    const moduleCount = (v2.modules || []).filter(m =>
+      m && (m.modNum || (m.outputs?.A?.name) || (m.outputs?.B?.name) || (m.slots||[]).length > 0)
+    ).length;
+    const feederCount = (v2.feeders || []).length;
+    const userLabel = (labels[key] || "").trim();
+    const isStandard = standardFloors.some(f => f.key === key);
+    const include = !isStandard || moduleCount > 0 || feederCount > 0 || !!userLabel;
+    if (!include) return null;
+    const panelSize = v2.panelSize || 40;
+    // Empty slot count = panelSize minus slots claimed by modules + feeders
+    const claimedSlots = new Set();
+    (v2.modules || []).forEach(m => (m.slots || []).forEach(s => claimedSlots.add(Number(s))));
+    (v2.feeders || []).forEach(f => {
+      const s = Number(f.slot); if (s) claimedSlots.add(s);
+      if ((f.poles || 1) === 2) claimedSlots.add(s + 2);
+    });
+    const emptyCount = Math.max(0, panelSize - claimedSlots.size);
+    return {
+      floor: key,
+      label: userLabel || defaultLabel,
+      description: defaultLabel,
+      panelSize,
+      smartBreakerCount: moduleCount,
+      feederCount,
+      emptyCount,
+      v2,
+    };
+  }).filter(Boolean);
+}
+
 // Expose on window for console-poking during development.
 if (typeof window !== "undefined") {
   window.__HE_SAVANT_V2_MIGRATE = migrateToSavantV2;
   window.__HE_SAVANT_V2_FLATTEN = savantV2ToV1;
   window.__HE_SAVANT_V2_FOR_FLOOR = getSavantV2ForFloor;
+  window.__HE_SAVANT_ALL_LOADS    = allSavantLoadsForJob;
+  window.__HE_SAVANT_PANELS       = listSavantPanels;
 
   // Console helper — bulk-add loads to a specific job's panelizedLighting.loads
   // array. Used to import a foreman's typed-up load list without manually
@@ -3787,10 +3958,34 @@ const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minR
 const MAT_SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","Other"];
 const stripHtml = (s) => (s||'').replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/\s+/g,' ').trim();
 
-const RichMobileSheet = ({initialHtml, initialMaterial='', initialMatSource='', placeholder, onDone, onCancel, addMode, showMaterial=false}) => {
-  const [html, setHtml] = useState(initialHtml || "");
-  const [material, setMaterial] = useState(initialMaterial || "");
-  const [matSource, setMatSource] = useState(initialMatSource || "");
+const RichMobileSheet = ({initialHtml, initialMaterial='', initialMatSource='', placeholder, onDone, onCancel, addMode, showMaterial=false, onLiveSave, draftKey}) => {
+  // ── Draft restore (data-safety belt) ─────────────────────────────────
+  // 2026-05-14: a coworker lost a big typed PO list when the page reloaded
+  // mid-edit (SW cache bump from another deploy). The old design only
+  // committed text on "Done" — anything typed before that lived ONLY in
+  // this component's local state. New safety: if a `draftKey` is provided,
+  // we mirror every keystroke into localStorage and rehydrate from it on
+  // mount when it's NEWER and DIFFERENT from the server value. Restore is
+  // gated to non-empty drafts that don't match initialHtml so we never
+  // resurrect stale text or fight a fresh server write.
+  const initialFromDraft = (() => {
+    if (!draftKey) return null;
+    try {
+      const raw = localStorage.getItem(`he_taDraft_${draftKey}`);
+      if (!raw) return null;
+      const parsed = JSON.parse(raw);
+      if (!parsed || typeof parsed !== 'object') return null;
+      const draftHtml = String(parsed.html || "");
+      // Skip if draft is empty, or already equals what the server gave us.
+      if (!draftHtml.replace(/<[^>]*>/g,"").trim()) return null;
+      if (draftHtml === (initialHtml || "")) return null;
+      return parsed;
+    } catch(e) { return null; }
+  })();
+
+  const [html, setHtml] = useState((initialFromDraft && initialFromDraft.html) || initialHtml || "");
+  const [material, setMaterial] = useState((initialFromDraft && initialFromDraft.material) || initialMaterial || "");
+  const [matSource, setMatSource] = useState((initialFromDraft && initialFromDraft.matSource) || initialMatSource || "");
 
   // Auto-save when phone locks or user switches apps
   useEffect(() => {
@@ -3803,11 +3998,40 @@ const RichMobileSheet = ({initialHtml, initialMaterial='', initialMatSource='', 
     return () => document.removeEventListener('visibilitychange', handleVisibility);
   }, [html, material, matSource]);
 
+  // ── Live-save to parent (Firestore) on every change ───────────────────
+  // Debounced 400ms so we don't fire a Firestore write on every keystroke
+  // for a long list, but tight enough that we never lose more than ~half a
+  // second of typing if the page gets killed (SW reload, browser crash,
+  // OS yanking the tab). `onLiveSave` is optional — call sites that don't
+  // wire it keep the old commit-on-Done behavior.
+  useEffect(() => {
+    if (!onLiveSave) return;
+    const id = setTimeout(() => { try { onLiveSave(html, material, matSource); } catch(e){} }, 400);
+    return () => clearTimeout(id);
+  }, [html, material, matSource, onLiveSave]);
+
+  // ── Mirror in-progress text to localStorage on every change ──────────
+  // Second safety net: even if the parent's Firestore write fails (offline,
+  // permission issue) the draft survives a page reload. Cleared on Done /
+  // explicit Cancel so we never leak stale drafts. Wrapped in try/catch
+  // because Safari private-mode + quota-exceeded both throw here.
+  useEffect(() => {
+    if (!draftKey) return;
+    try {
+      const hasContent = (html||"").replace(/<[^>]*>/g,"").trim() || (material||"").trim();
+      if (!hasContent) { localStorage.removeItem(`he_taDraft_${draftKey}`); return; }
+      localStorage.setItem(`he_taDraft_${draftKey}`,
+        JSON.stringify({ html, material, matSource, savedAt: Date.now() }));
+    } catch(e) {}
+  }, [html, material, matSource, draftKey]);
+
+  const clearDraft = () => { if (draftKey) { try { localStorage.removeItem(`he_taDraft_${draftKey}`); } catch(e){} } };
+
   // Save draft on cancel if there's content — nothing is ever discarded
   const handleCancel = () => {
     const hasContent = (html||"").replace(/<[^>]*>/g,"").trim() || material.trim();
-    if (hasContent) onDone(html, material, matSource);
-    else onCancel();
+    if (hasContent) { clearDraft(); onDone(html, material, matSource); }
+    else { clearDraft(); onCancel(); }
   };
 
   return (
@@ -3824,7 +4048,7 @@ const RichMobileSheet = ({initialHtml, initialMaterial='', initialMatSource='', 
               fontFamily:"inherit",fontWeight:600,cursor:"pointer",padding:"2px 8px"}}>
             Cancel
           </button>
-          <button onClick={()=>onDone(html, material, matSource)}
+          <button onClick={()=>{ clearDraft(); onDone(html, material, matSource); }}
             style={{background:C.accent,border:"none",color:"#fff",fontSize:15,
               fontFamily:"inherit",fontWeight:700,cursor:"pointer",padding:"6px 22px",borderRadius:8}}>
             {addMode ? "Add" : "Done"}
@@ -3936,7 +4160,7 @@ const Sel = ({value,onChange,options:rawOpts,style={}}) => {
 
 
 // TA: full rich text area — toolbar always visible on desktop, sheet on mobile
-const TA = ({value, onChange, placeholder, rows=3, onAdd, onBlur}) => {
+const TA = ({value, onChange, placeholder, rows=3, onAdd, onBlur, draftKey}) => {
   const [modal, setModal] = useState(false);
 
   if(ON_MOBILE) return (
@@ -3951,8 +4175,15 @@ const TA = ({value, onChange, placeholder, rows=3, onAdd, onBlur}) => {
           ? <span dangerouslySetInnerHTML={{__html:value}}/>
           : (placeholder || "Tap to edit…")}
       </div>
+      {/* onLiveSave wires the modal's local html state to the parent on
+          every change (debounced 400ms inside the sheet). Without this,
+          mid-edit typing only existed in the modal's local state until
+          Done — a page reload would wipe it. draftKey enables the
+          localStorage backup so a reload mid-edit can rehydrate the text. */}
       {modal&&<RichMobileSheet initialHtml={value||""} placeholder={placeholder}
         addMode={!!onAdd}
+        onLiveSave={html=>onChange({target:{value:html}})}
+        draftKey={draftKey}
         onDone={html=>{onChange({target:{value:html}});if(onAdd)onAdd();if(onBlur)onBlur(html);setModal(false);}}
         onCancel={()=>setModal(false)}/>}
     </>
@@ -9936,7 +10167,12 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
                 </div>
 
                 <div style={{fontSize:10,color:C.dim,marginBottom:4}}>Material List <span style={{color:C.muted}}>(copy & paste into Simpro)</span></div>
+                {/* draftKey ties this textarea's localStorage draft to the
+                    specific PO row — survives page reloads on mobile so a
+                    coworker can never lose a typed list mid-edit again
+                    (the Dimple Dell 2026-05-14 incident). */}
                 <TA value={o.items} onChange={e=>upd(o.id,{items:e.target.value})}
+                  draftKey={`po_${jobId||'nojob'}_${phase||'nophase'}_${o.id}`}
                   placeholder={"- 20A breaker x4\n- 12/2 wire 250ft"} rows={4}/>
 
                 {/* Copy-for-Simpro helper. The TA stores items as HTML
@@ -17852,6 +18088,325 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
 // — we only write the savantV2.{floor}.inputAssignments map, never duplicate
 // anything that already lives in cp4Loads / panelLayout. Reverting cleanly
 // just means deleting the savantV2 field; V1 data is untouched.
+// ── SavantMasterLoadsList ──────────────────────────────────────────────
+// Renders the flat master loads list that sits at the top of the Savant
+// Panelized Lighting tab. Uses allSavantLoadsForJob() to aggregate every
+// load on the job (assigned to a panel/module/output + unassigned). Filter
+// chips for All / Unassigned / by Room. Click a row → opens an editor.
+//
+// Edits:
+//   • Unassigned load → writes to pl.savantUnassignedLoads
+//   • Assigned load → writes to the matching V2 output's overrides (room)
+//     and (in later phases) the load name/wattage. For Phase 2 only room +
+//     unassigned-load creation are editable; full rename of assigned loads
+//     ships with the panel-card editor in Phase 3/4.
+//
+// Pure component — never mutates `job`. Calls onPatch with a partial
+// panelizedLighting payload when a change happens; parent merges + saves.
+function SavantMasterLoadsList({ job, onPatch }) {
+  const loads = allSavantLoadsForJob(job);
+  const [filter, setFilter]   = useState("all");   // "all" | "unassigned" | room name
+  const [search, setSearch]   = useState("");
+  const [editing, setEditing] = useState(null);    // load id being edited
+  const [adding,  setAdding]  = useState(false);   // inline "+ add load" form
+
+  // Build dynamic chip set: All / Unassigned (if any) + every distinct room
+  // that has at least one load. Stable order by frequency descending.
+  const counts = { all: loads.length, unassigned: 0 };
+  const roomCounts = {};
+  loads.forEach(l => {
+    if (!l.assignedTo) counts.unassigned++;
+    const r = (l.room || "").trim();
+    if (r) roomCounts[r] = (roomCounts[r] || 0) + 1;
+  });
+  const sortedRooms = Object.entries(roomCounts)
+    .sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+
+  // Apply filter + search to the visible list.
+  const visible = loads.filter(l => {
+    if (filter === "unassigned" && l.assignedTo) return false;
+    if (filter !== "all" && filter !== "unassigned" && (l.room || "") !== filter) return false;
+    if (search.trim()) {
+      const q = search.toLowerCase();
+      const hay = `${l.name} ${l.room} ${l.floor} ${l.assignedTo?.panelLabel||""}`.toLowerCase();
+      if (!hay.includes(q)) return false;
+    }
+    return true;
+  });
+
+  // ─ Mutators ─
+  // Add a new unassigned load to pl.savantUnassignedLoads. Pure patch — the
+  // parent merges into job.panelizedLighting.
+  const addUnassigned = (fields) => {
+    const pl = job?.panelizedLighting || {};
+    const list = Array.isArray(pl.savantUnassignedLoads) ? pl.savantUnassignedLoads : [];
+    const next = [...list, {
+      id: uid(),
+      name: (fields.name || "").trim(),
+      room: (fields.room || "").trim(),
+      floor: (fields.floor || "").trim(),
+      type: fields.type || "",
+      wattage: fields.wattage || "",
+      pulled: false,
+      notes: "",
+    }];
+    onPatch && onPatch({ savantUnassignedLoads: next });
+  };
+  const updateUnassigned = (id, patch) => {
+    const pl = job?.panelizedLighting || {};
+    const list = Array.isArray(pl.savantUnassignedLoads) ? pl.savantUnassignedLoads : [];
+    onPatch && onPatch({
+      savantUnassignedLoads: list.map(l => l.id === id ? { ...l, ...patch } : l),
+    });
+  };
+  const removeUnassigned = (id) => {
+    const pl = job?.panelizedLighting || {};
+    const list = Array.isArray(pl.savantUnassignedLoads) ? pl.savantUnassignedLoads : [];
+    onPatch && onPatch({ savantUnassignedLoads: list.filter(l => l.id !== id) });
+  };
+  // Update the room override on an assigned load (writes to savantV2 outputRooms).
+  const updateAssignedRoom = (load, room) => {
+    if (!load.assignedTo) return;
+    const pl = job?.panelizedLighting || {};
+    const sav = pl.savantV2 || {};
+    const { floor, modNum, output } = load.assignedTo;
+    const floorOv = { ...(sav[floor] || {}) };
+    const orMap = { ...(floorOv.outputRooms || {}) };
+    const k = modNum || "_";
+    orMap[k] = { ...(orMap[k] || {}), [output]: (room || "").trim() };
+    onPatch && onPatch({ savantV2: { ...sav, [floor]: { ...floorOv, outputRooms: orMap } } });
+  };
+
+  // ─ Inline add form state ─
+  const [addForm, setAddForm] = useState({ name:"", room:"", floor:"", type:"" });
+  const commitAdd = () => {
+    if (!addForm.name.trim()) { setAdding(false); return; }
+    addUnassigned(addForm);
+    setAddForm({ name:"", room:"", floor:"", type:"" });
+    setAdding(false);
+  };
+
+  // ─ Type pill style ─
+  const typePill = (t) => {
+    const base = { padding:"1px 8px", borderRadius:99, fontSize:10, fontWeight:700,
+      letterSpacing:"0.04em", textTransform:"uppercase" };
+    if (t === "dim")    return { ...base, background:"#fef3c7", color:"#b45309", border:"1px solid #fde68a" };
+    if (t === "switch") return { ...base, background:"#dcfce7", color:"#15803d", border:"1px solid #bbf7d0" };
+    return { ...base, background:"#f1f5f9", color:C.dim, border:`1px solid ${C.border}` };
+  };
+
+  return (
+    <div style={{marginBottom:18}}>
+      {/* Header row + Add button */}
+      <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",
+        marginBottom:8,gap:12,flexWrap:"wrap"}}>
+        <div>
+          <div style={{fontSize:13,fontWeight:700,color:C.text,letterSpacing:"0.02em"}}>
+            Loads <span style={{color:C.dim,fontWeight:600,marginLeft:4}}>· {loads.length} total</span>
+            {counts.unassigned > 0 && (
+              <span style={{color:"#ea580c",fontWeight:700,marginLeft:8,fontSize:11}}>
+                · {counts.unassigned} unassigned
+              </span>
+            )}
+          </div>
+          <div style={{fontSize:10,color:C.dim,marginTop:1}}>
+            Every switch leg on the job — plan loads here, assign them to a panel/breaker below.
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Search loads…"
+            style={{font:"inherit",fontSize:11,padding:"4px 10px",border:`1px solid ${C.border}`,
+              borderRadius:99,width:160,outline:"none",background:"#fff"}}/>
+          <button onClick={()=>setAdding(a=>!a)}
+            style={{background:adding?"#f1f5f9":"#fff",border:`1px solid ${C.border}`,color:C.text,
+              borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",
+              fontFamily:"inherit",letterSpacing:"0.04em"}}>
+            {adding ? "Cancel" : "+ Add load"}
+          </button>
+        </div>
+      </div>
+
+      {/* Filter chips */}
+      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10,alignItems:"center"}}>
+        <button onClick={()=>setFilter("all")}
+          style={{padding:"4px 11px",fontSize:10,fontWeight:700,borderRadius:99,
+            border:`1px solid ${filter==="all"?C.text:C.border}`,
+            background:filter==="all"?C.text:"#fff",
+            color:filter==="all"?"#fff":C.text,
+            cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.04em"}}>
+          All ({counts.all})
+        </button>
+        {counts.unassigned > 0 && (
+          <button onClick={()=>setFilter("unassigned")}
+            style={{padding:"4px 11px",fontSize:10,fontWeight:700,borderRadius:99,
+              border:`1px solid ${filter==="unassigned"?"#b45309":"#fde68a"}`,
+              background:filter==="unassigned"?"#b45309":"#fef3c7",
+              color:filter==="unassigned"?"#fff":"#b45309",
+              cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.04em"}}>
+            Unassigned ({counts.unassigned})
+          </button>
+        )}
+        {sortedRooms.map(([room, n]) => (
+          <button key={room} onClick={()=>setFilter(room)}
+            style={{padding:"4px 11px",fontSize:10,fontWeight:700,borderRadius:99,
+              border:`1px solid ${filter===room?C.text:C.border}`,
+              background:filter===room?C.text:"#fff",
+              color:filter===room?"#fff":C.text,
+              cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.04em"}}>
+            {room} ({n})
+          </button>
+        ))}
+      </div>
+
+      {/* Inline add form */}
+      {adding && (
+        <div style={{padding:"10px 12px",background:"#f8fafc",border:`1px solid ${C.border}`,
+          borderRadius:8,marginBottom:10,display:"grid",
+          gridTemplateColumns:"2fr 1fr 1fr 1fr auto",gap:8,alignItems:"center"}}>
+          <Inp value={addForm.name} onChange={e=>setAddForm(f=>({...f,name:e.target.value}))}
+            placeholder="Load name (e.g. Kitchen island pendants)"
+            onKeyDown={e=>e.key==="Enter"&&commitAdd()}/>
+          <Inp value={addForm.room} onChange={e=>setAddForm(f=>({...f,room:e.target.value}))}
+            placeholder="Room"/>
+          <Inp value={addForm.floor} onChange={e=>setAddForm(f=>({...f,floor:e.target.value}))}
+            placeholder="Floor"/>
+          <Sel value={addForm.type} onChange={e=>setAddForm(f=>({...f,type:e.target.value}))}
+            options={[
+              { value:"",       label:"— type —" },
+              { value:"dim",    label:"Dim" },
+              { value:"switch", label:"Switch" },
+              { value:"other",  label:"Other" },
+            ]}/>
+          <button onClick={commitAdd}
+            style={{background:C.accent,color:"#000",border:"none",borderRadius:7,
+              padding:"6px 14px",fontSize:11,fontWeight:700,cursor:"pointer",
+              fontFamily:"inherit",letterSpacing:"0.04em"}}>
+            Add
+          </button>
+        </div>
+      )}
+
+      {/* Loads table */}
+      {visible.length === 0 ? (
+        <div style={{padding:"24px 14px",textAlign:"center",color:C.dim,fontSize:12,
+          fontStyle:"italic",background:"#fafbfc",border:`1px dashed ${C.border}`,borderRadius:8}}>
+          {loads.length === 0
+            ? "No loads yet. Click \"+ Add load\" to start planning, or add loads inside a panel below."
+            : "No loads match this filter."}
+        </div>
+      ) : (
+        <div style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
+          <div style={{display:"grid",gridTemplateColumns:"1fr 130px 80px 70px 180px",gap:10,
+            padding:"7px 12px",background:"#f8fafc",borderBottom:`2px solid ${C.border}`,
+            fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:C.dim,textTransform:"uppercase"}}>
+            <span>Load name</span><span>Room</span><span>Floor</span><span>Type</span><span>Assigned to</span>
+          </div>
+          {visible.map(l => {
+            const isEditing = editing === l.id;
+            return (
+              <div key={l.id}
+                onClick={()=>setEditing(isEditing ? null : l.id)}
+                style={{display:"grid",gridTemplateColumns:"1fr 130px 80px 70px 180px",gap:10,
+                  padding:"8px 12px",borderBottom:`1px solid #f1f5f9`,alignItems:"center",
+                  fontSize:12,cursor:"pointer",
+                  background: isEditing ? "#f0f9ff" : "#fff"}}>
+                <span style={{fontWeight:600,color:C.text}}>
+                  {l.name || <span style={{color:C.muted,fontStyle:"italic"}}>(unnamed)</span>}
+                </span>
+                <span style={{color:C.text}}>{l.room || <span style={{color:C.muted}}>—</span>}</span>
+                <span style={{color:C.dim,fontSize:11}}>{l.floor || "—"}</span>
+                <span>{l.type && <span style={typePill(l.type)}>{l.type}</span>}</span>
+                <span>
+                  {l.assignedTo ? (
+                    <span style={{fontFamily:"ui-monospace,monospace",fontSize:10,fontWeight:700,
+                      background:"#f0f9ff",color:C.purple,border:"1px solid #bae6fd",
+                      padding:"2px 8px",borderRadius:5,letterSpacing:"0.04em"}}>
+                      {l.assignedTo.panelLabel} · {(l.assignedTo.slots||[]).join("/") || "?"} · Out {l.assignedTo.output}
+                    </span>
+                  ) : (
+                    <span style={{fontSize:10,fontWeight:700,color:"#ea580c",background:"#fff7ed",
+                      border:"1px solid #fed7aa",padding:"2px 8px",borderRadius:5,
+                      letterSpacing:"0.04em",fontStyle:"italic"}}>
+                      Unassigned
+                    </span>
+                  )}
+                </span>
+
+                {/* Inline editor row when expanded */}
+                {isEditing && (
+                  <div style={{gridColumn:"1 / -1",padding:"10px 0 4px",
+                    borderTop:`1px dashed ${C.border}`,marginTop:8,
+                    display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}
+                    onClick={e=>e.stopPropagation()}>
+                    {!l.assignedTo ? (
+                      // Unassigned load — fully editable
+                      <>
+                        <div style={{flex:"2 1 200px"}}>
+                          <div style={{fontSize:9,color:C.dim,marginBottom:3,letterSpacing:"0.07em",textTransform:"uppercase",fontWeight:700}}>Name</div>
+                          <Inp value={l.name} onChange={e=>updateUnassigned(l.id,{name:e.target.value})}/>
+                        </div>
+                        <div style={{flex:"1 1 120px"}}>
+                          <div style={{fontSize:9,color:C.dim,marginBottom:3,letterSpacing:"0.07em",textTransform:"uppercase",fontWeight:700}}>Room</div>
+                          <Inp value={l.room} onChange={e=>updateUnassigned(l.id,{room:e.target.value})}/>
+                        </div>
+                        <div style={{flex:"1 1 100px"}}>
+                          <div style={{fontSize:9,color:C.dim,marginBottom:3,letterSpacing:"0.07em",textTransform:"uppercase",fontWeight:700}}>Floor</div>
+                          <Inp value={l.floor} onChange={e=>updateUnassigned(l.id,{floor:e.target.value})}/>
+                        </div>
+                        <div style={{flex:"0 0 110px"}}>
+                          <div style={{fontSize:9,color:C.dim,marginBottom:3,letterSpacing:"0.07em",textTransform:"uppercase",fontWeight:700}}>Type</div>
+                          <Sel value={l.type} onChange={e=>updateUnassigned(l.id,{type:e.target.value})}
+                            options={[
+                              { value:"",       label:"—" },
+                              { value:"dim",    label:"Dim" },
+                              { value:"switch", label:"Switch" },
+                              { value:"other",  label:"Other" },
+                            ]}/>
+                        </div>
+                        <div style={{flex:"0 0 80px"}}>
+                          <div style={{fontSize:9,color:C.dim,marginBottom:3,letterSpacing:"0.07em",textTransform:"uppercase",fontWeight:700}}>Watts</div>
+                          <Inp value={l.wattage} onChange={e=>updateUnassigned(l.id,{wattage:e.target.value})}/>
+                        </div>
+                        <button onClick={()=>{ removeUnassigned(l.id); setEditing(null); }}
+                          style={{background:"none",border:`1px solid ${C.red}55`,color:C.red,
+                            borderRadius:6,padding:"5px 10px",fontSize:11,fontWeight:700,
+                            cursor:"pointer",fontFamily:"inherit",height:"fit-content"}}>
+                          Delete
+                        </button>
+                      </>
+                    ) : (
+                      // Assigned load — only room is editable here; name/wattage edits happen in the panel card editor below
+                      <>
+                        <div style={{flex:"2 1 200px"}}>
+                          <div style={{fontSize:9,color:C.dim,marginBottom:3,letterSpacing:"0.07em",textTransform:"uppercase",fontWeight:700}}>Name (edit in panel below)</div>
+                          <div style={{padding:"7px 11px",background:"#f8fafc",border:`1px solid ${C.border}`,borderRadius:7,fontSize:12,color:C.text}}>
+                            {l.name}
+                          </div>
+                        </div>
+                        <div style={{flex:"1 1 140px"}}>
+                          <div style={{fontSize:9,color:C.dim,marginBottom:3,letterSpacing:"0.07em",textTransform:"uppercase",fontWeight:700}}>Room</div>
+                          <Inp value={l.room} onChange={e=>updateAssignedRoom(l, e.target.value)}/>
+                        </div>
+                        <div style={{flex:"1 1 200px",fontSize:11,color:C.dim,paddingBottom:6}}>
+                          Wired to <b style={{color:C.text,fontFamily:"ui-monospace,monospace"}}>{l.assignedTo.panelLabel} · {(l.assignedTo.slots||[]).join("/")} · Out {l.assignedTo.output}</b>
+                          <br/>
+                          <span style={{fontSize:10,fontStyle:"italic"}}>To rename or unwire, scroll down to the panel card.</span>
+                        </div>
+                      </>
+                    )}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
+      )}
+    </div>
+  );
+}
+
+
 function SavantV2PreviewToggle({ job, floor, panelLabel, onPatch }) {
   const [show, setShow] = useState(false);
   const handleAssignFeeder = onPatch ? (modKey, channel, feederId) => {
@@ -22617,6 +23172,18 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   );
                 };
                 return (<>
+                {/* Master Loads list — Savant only. Aggregates every load on
+                    the job (assigned + unassigned) and lets the user plan +
+                    edit before/after assigning to a panel. The per-floor
+                    panel cards below are unchanged for now — Phase 3
+                    replaces them with stacked cards that read from V2. */}
+                {(job.lightingSystem||"Control 4")==="Savant" && (
+                  <SavantMasterLoadsList
+                    job={job}
+                    onPatch={(patch)=>u({panelizedLighting:{...(job.panelizedLighting||{}),...patch}})}
+                  />
+                )}
+
                 {_stdPanels.map(({floor,defaultLabel})=>{
                   const _mods = migrateFloorToModules((job.panelizedLighting.cp4Loads?.[floor])||[]);
                   const _panelLabel = (job.plSectionLabels?.[floor]||"").trim() || defaultLabel;
