@@ -18189,6 +18189,91 @@ function SavantMasterLoadsList({ job, onPatch }) {
     const list = Array.isArray(pl.savantUnassignedLoads) ? pl.savantUnassignedLoads : [];
     onPatch && onPatch({ savantUnassignedLoads: list.filter(l => l.id !== id) });
   };
+  // List every empty smart-breaker output across all panels in the job.
+  // Each entry can be picked from the "Assign to..." dropdown to send an
+  // unassigned load there. Empty = the V2 output has no name yet (either
+  // an empty A/B in an existing module, or B is null because the module
+  // only has an A row in V1 and we can add a B row when assigning).
+  const emptyOutputs = (() => {
+    const panels = listSavantPanels(job);
+    const slots = [];
+    panels.forEach(p => {
+      (p.v2.modules || []).forEach(m => {
+        const modNum = m.modNum || m._legacyMod;
+        if (!modNum) return; // skip unpaired/legacy artifacts
+        // A side
+        if (!m.outputs?.A?.name) {
+          slots.push({
+            value: `${p.floor}|${modNum}|A`,
+            label: `${p.label} · ${(m.slots||[]).join("/") || "?"} · Out A (empty)`,
+            floor: p.floor, panelLabel: p.label, modNum, channel: "A",
+            slotsArr: m.slots || [], sku: m.sku || "",
+          });
+        }
+        // B side — only for dual-output SKUs
+        const outputs = savSkuOutputs(m.sku);
+        if (outputs > 1 && !m.outputs?.B?.name) {
+          slots.push({
+            value: `${p.floor}|${modNum}|B`,
+            label: `${p.label} · ${(m.slots||[]).join("/") || "?"} · Out B (empty)`,
+            floor: p.floor, panelLabel: p.label, modNum, channel: "B",
+            slotsArr: m.slots || [], sku: m.sku || "",
+          });
+        }
+      });
+    });
+    return slots;
+  })();
+
+  // Assign an unassigned load to a specific {floor, modNum, channel}. Writes
+  // the load name (+ type, watts) to V1 cp4Loads. If the target row doesn't
+  // exist yet (e.g. module has only an A row), creates the missing row. Also
+  // removes the load from pl.savantUnassignedLoads in the same patch so the
+  // master-list "Unassigned" count drops by 1.
+  const assignLoadToOutput = (load, target) => {
+    const pl = job?.panelizedLighting || {};
+    const v1Rows = pl.cp4Loads?.[target.floor] || [];
+    const flat = flattenModulesToRows(v1Rows);
+    let updated = false;
+    let next = flat.map(r => {
+      if (!updated && String(r.mod) === String(target.modNum) && (r.ch || "") === target.channel) {
+        updated = true;
+        return {
+          ...r,
+          name: load.name || "",
+          loadType: load.type === "dim" ? "Dim" : (load.type === "switch" ? "Switch" : (r.loadType || "")),
+          watts: load.wattage || r.watts || "",
+          room: load.room || r.room || "",
+        };
+      }
+      return r;
+    });
+    if (!updated) {
+      // No existing row for that channel — add one with the next available num.
+      const slotForChannel = target.slotsArr[target.channel === "A" ? 0 : 1];
+      next = [...next, {
+        id: uid(),
+        num: next.length + 1,
+        name: load.name || "",
+        mod: target.modNum,
+        moduleType: target.sku || "",
+        ch: target.channel,
+        slot: slotForChannel ? String(slotForChannel) : "",
+        loadType: load.type === "dim" ? "Dim" : (load.type === "switch" ? "Switch" : ""),
+        watts: load.wattage || "",
+        keypad: "",
+        room: load.room || "",
+        pulled: false,
+        status: "",
+      }];
+    }
+    const remainingUnassigned = (pl.savantUnassignedLoads || []).filter(l => l.id !== load.id);
+    onPatch && onPatch({
+      savantUnassignedLoads: remainingUnassigned,
+      cp4Loads: { ...(pl.cp4Loads || {}), [target.floor]: next },
+    });
+  };
+
   // Update the room override on an assigned load (writes to savantV2 outputRooms).
   const updateAssignedRoom = (load, room) => {
     if (!load.assignedTo) return;
@@ -18358,17 +18443,15 @@ function SavantMasterLoadsList({ job, onPatch }) {
                   )}
                 </span>
 
-                {/* Inline editor row when expanded. stopPropagation on both
-                    click AND mousedown so dropdowns/selects/checkboxes
-                    inside don't bubble up and accidentally close the
-                    editor before the user finishes interacting. */}
+                {/* Inline editor row when expanded. Row onClick only OPENS
+                    the editor (never closes), so we don't need stopPropagation
+                    inside — selects + checkboxes can fire normally. ✕ button
+                    in the top-right closes the editor explicitly. */}
                 {isEditing && (
                   <div style={{gridColumn:"1 / -1",padding:"10px 0 4px",
                     borderTop:`1px dashed ${C.border}`,marginTop:8,
                     display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end",
-                    position:"relative"}}
-                    onClick={e=>e.stopPropagation()}
-                    onMouseDown={e=>e.stopPropagation()}>
+                    position:"relative"}}>
                     <button onClick={()=>setEditing(null)}
                       title="Done editing"
                       style={{position:"absolute",top:0,right:0,
@@ -18409,6 +18492,34 @@ function SavantMasterLoadsList({ job, onPatch }) {
                             cursor:"pointer",fontFamily:"inherit",height:"fit-content"}}>
                           Delete
                         </button>
+                        {/* Assign-to picker — writes the load into an empty
+                            output of an existing smart breaker. After
+                            picking, the load drops out of "Unassigned" and
+                            appears in the panel card below with the typed name. */}
+                        <div style={{flex:"1 1 100%",paddingTop:8,borderTop:`1px dashed ${C.border}`,
+                          marginTop:4,display:"flex",gap:8,alignItems:"flex-end"}}>
+                          <div style={{flex:1}}>
+                            <div style={{fontSize:9,color:C.dim,marginBottom:3,letterSpacing:"0.07em",textTransform:"uppercase",fontWeight:700}}>
+                              Assign to smart breaker output
+                            </div>
+                            <Sel value=""
+                              onChange={e=>{
+                                const v = e.target.value;
+                                if (!v) return;
+                                const target = emptyOutputs.find(o => o.value === v);
+                                if (target) {
+                                  assignLoadToOutput(l, target);
+                                  setEditing(null);
+                                }
+                              }}
+                              options={emptyOutputs.length === 0
+                                ? [{ value:"", label:"— no empty outputs available (add a smart breaker first) —" }]
+                                : [
+                                    { value:"", label:`— pick where to wire this load (${emptyOutputs.length} empty) —` },
+                                    ...emptyOutputs,
+                                  ]}/>
+                          </div>
+                        </div>
                       </>
                     ) : (
                       // Assigned load — only room is editable here; name/wattage edits happen in the panel card editor below
