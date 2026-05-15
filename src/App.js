@@ -1564,6 +1564,31 @@ function allSavantLoadsForJob(job) {
     });
   });
 
+  // Legacy master loads list (pl.loads) — anything here that isn't already
+  // captured above gets surfaced as unassigned so the user can see + assign
+  // it. This is the safety net for jobs that have loads typed into pl.loads
+  // but not yet wired into any panel module.
+  const seenNames = new Set(out.map(l => (l.name||"").trim().toLowerCase()).filter(Boolean));
+  (pl.loads || []).forEach(l => {
+    if (!l) return;
+    const name = (l.name||"").trim();
+    if (!name) return;
+    if (seenNames.has(name.toLowerCase())) return;
+    seenNames.add(name.toLowerCase());
+    out.push({
+      id: l.id || `legacy_${name}`,
+      name,
+      room: l.location || l.room || "",
+      floor: l.floor || "",
+      type: l.loadType ? (l.loadType.toLowerCase().includes("dim") ? "dim" : "switch") : "",
+      wattage: l.watts || "",
+      pulled: !!l.pulled,
+      notes: l.notes || "",
+      assignedTo: null,
+      _fromLegacyMaster: true,  // marker — we may want to migrate these forward later
+    });
+  });
+
   return out;
 }
 
@@ -18306,10 +18331,10 @@ function SavantMasterLoadsList({ job, onPatch }) {
             const isEditing = editing === l.id;
             return (
               <div key={l.id}
-                onClick={()=>setEditing(isEditing ? null : l.id)}
+                onClick={()=>{ if(!isEditing) setEditing(l.id); }}
                 style={{display:"grid",gridTemplateColumns:"1fr 130px 80px 70px 180px",gap:10,
                   padding:"8px 12px",borderBottom:`1px solid #f1f5f9`,alignItems:"center",
-                  fontSize:12,cursor:"pointer",
+                  fontSize:12,cursor:isEditing?"default":"pointer",
                   background: isEditing ? "#f0f9ff" : "#fff"}}>
                 <span style={{fontWeight:600,color:C.text}}>
                   {l.name || <span style={{color:C.muted,fontStyle:"italic"}}>(unnamed)</span>}
@@ -18333,12 +18358,22 @@ function SavantMasterLoadsList({ job, onPatch }) {
                   )}
                 </span>
 
-                {/* Inline editor row when expanded */}
+                {/* Inline editor row when expanded. stopPropagation on both
+                    click AND mousedown so dropdowns/selects/checkboxes
+                    inside don't bubble up and accidentally close the
+                    editor before the user finishes interacting. */}
                 {isEditing && (
                   <div style={{gridColumn:"1 / -1",padding:"10px 0 4px",
                     borderTop:`1px dashed ${C.border}`,marginTop:8,
-                    display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end"}}
-                    onClick={e=>e.stopPropagation()}>
+                    display:"flex",gap:10,flexWrap:"wrap",alignItems:"flex-end",
+                    position:"relative"}}
+                    onClick={e=>e.stopPropagation()}
+                    onMouseDown={e=>e.stopPropagation()}>
+                    <button onClick={()=>setEditing(null)}
+                      title="Done editing"
+                      style={{position:"absolute",top:0,right:0,
+                        background:"none",border:"none",color:C.dim,fontSize:16,
+                        cursor:"pointer",padding:"2px 6px",lineHeight:1}}>✕</button>
                     {!l.assignedTo ? (
                       // Unassigned load — fully editable
                       <>
