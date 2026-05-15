@@ -11066,6 +11066,72 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
 
 // ── Change Orders ─────────────────────────────────────────────
 
+// ── CoQuoteNumberField ────────────────────────────────────────────────
+// Inline editable Quote # input that lives in a Change Order's header row.
+//
+// Behavior:
+//   • Empty state — shows a faint "+ Quote #" chip; click to start typing.
+//   • Filled state — shows "Quote # 4521" as a bold purple pill; click to
+//     edit. Hover reveals "added by X on date" tooltip from the stamp.
+//   • Blur or Enter flushes the new value through onCommit, which writes
+//     to the parent CO via setQuoteNumber (stamps on first save, preserves
+//     stamp on edits).
+//   • Click events stopPropagation so editing the field doesn't collapse
+//     a completed CO whose header is also a toggle target.
+//
+// Defined at module scope so React keeps the input mounted across the
+// parent's re-renders — otherwise typing would lose focus every keystroke
+// (same pattern as SavantOutputNameField).
+function CoQuoteNumberField({ co, onCommit }) {
+  const [editing, setEditing] = useState(false);
+  const [draft,   setDraft]   = useState(co.quoteNumber || "");
+  useEffect(()=>{ setDraft(co.quoteNumber || ""); }, [co.quoteNumber]);
+  const flush = () => {
+    setEditing(false);
+    if ((draft || "") !== (co.quoteNumber || "")) onCommit(draft);
+  };
+  const hasValue = !!(co.quoteNumber && String(co.quoteNumber).trim());
+  const tooltip = hasValue && co.quoteAddedBy
+    ? `Quote # ${co.quoteNumber} — added by ${co.quoteAddedBy}${co.quoteAddedAt ? ` on ${co.quoteAddedAt}` : ""}`
+    : (hasValue ? `Quote # ${co.quoteNumber}` : "Add quote # after sending");
+  if (editing) {
+    return (
+      <input
+        autoFocus
+        value={draft}
+        onClick={(e)=>e.stopPropagation()}
+        onChange={(e)=>setDraft(e.target.value)}
+        onBlur={flush}
+        onKeyDown={(e)=>{
+          if (e.key === "Enter") { flush(); e.target.blur(); }
+          if (e.key === "Escape") { setDraft(co.quoteNumber||""); setEditing(false); }
+        }}
+        placeholder="Quote #"
+        title={tooltip}
+        style={{
+          fontSize:11, fontWeight:700, padding:"2px 8px",
+          border:"1px solid #8b5cf655", borderRadius:99,
+          background:"#fff", color:"#7c3aed", outline:"none",
+          width:90, fontFamily:"inherit",
+        }}/>
+    );
+  }
+  return (
+    <span
+      onClick={(e)=>{ e.stopPropagation(); setEditing(true); }}
+      title={tooltip}
+      style={{
+        fontSize:10, fontWeight:700, padding:"2px 8px", borderRadius:99,
+        cursor:"pointer", letterSpacing:"0.02em",
+        background: hasValue ? "#8b5cf618" : "transparent",
+        border: hasValue ? "1px solid #8b5cf644" : "1px dashed var(--border)",
+        color: hasValue ? "#7c3aed" : "var(--dim)",
+      }}>
+      {hasValue ? `Quote # ${co.quoteNumber}` : "+ Quote #"}
+    </span>
+  );
+}
+
 function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, roughStatus, finishStatus, jobNotes = []}) {
 
   const [expandedCOs, setExpandedCOs] = useState({});
@@ -11079,11 +11145,43 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
       needsHardDate:false, needsByStart:"", needsByEnd:"",
       createdBy: creator?.name || "",
       createdAt: new Date().toLocaleDateString("en-US"),
+      // Quote # captured AFTER the CO is sent (from Simpro). Starts blank;
+      // the user types it in the header field. quoteAddedBy/quoteAddedAt
+      // are stamped on first save below.
+      quoteNumber:"",
+      quoteAddedBy:"",
+      quoteAddedAt:"",
     }]);
   };
 
   const upd = (id, p) => onChange(orders.map(o => o.id===id ? {...o,...p} : o));
   const del = (id)    => onChange(orders.filter(o => o.id!==id));
+
+  // Set the quote # on a CO. Stamps quoteAddedBy + quoteAddedAt the first time
+  // a non-empty value is saved so we can audit who quoted what. Edits after
+  // that update the number but keep the original stamp (so you can fix a typo
+  // without losing the original author). Clearing the field clears the stamp
+  // too — same defensive behavior as createdBy on a fresh CO.
+  const setQuoteNumber = (co, raw) => {
+    const trimmed = (raw || "").trim();
+    if (!trimmed) {
+      upd(co.id, { quoteNumber:"", quoteAddedBy:"", quoteAddedAt:"" });
+      return;
+    }
+    if (co.quoteNumber === trimmed) return; // no-op, don't burn a write
+    const isFirst = !co.quoteNumber;
+    if (isFirst) {
+      const me = getIdentity();
+      upd(co.id, {
+        quoteNumber: trimmed,
+        quoteAddedBy: me?.name || "",
+        quoteAddedAt: new Date().toLocaleDateString("en-US"),
+      });
+    } else {
+      // Already had a number — just update the value, keep original stamp.
+      upd(co.id, { quoteNumber: trimmed });
+    }
+  };
 
   const crewOnSite = roughStatus==="inprogress" || finishStatus==="inprogress";
 
@@ -11163,6 +11261,16 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
                 <span style={{fontSize:12,color:isCompleted?"#16a34a":"var(--accent)",fontWeight:700}}>Change Order #{o._idx+1}</span>
                 {isCompleted&&<span style={{fontSize:10,fontWeight:700,color:"#16a34a",background:"#16a34a18",borderRadius:99,padding:"2px 8px",border:"1px solid #16a34a33"}}>✓ WORK COMPLETED</span>}
                 {isConverted&&<span style={{fontSize:10,fontWeight:700,color:"#6b7280",background:"#6b728018",borderRadius:99,padding:"2px 8px",border:"1px solid #6b728033"}}>CONVERTED TO RT</span>}
+                {/* Quote # — appears right next to the CO title so it's
+                    scannable in a long list. Editable any time, click to
+                    edit; the stamp tells us who quoted it and when. Click
+                    propagation stopped so editing it doesn't accidentally
+                    collapse a completed CO. */}
+                {!isConverted && (
+                  <CoQuoteNumberField
+                    co={o}
+                    onCommit={(val)=>setQuoteNumber(o, val)}/>
+                )}
                 {o.desc&&isCollapsed&&<span style={{fontSize:11,color:"var(--dim)",fontStyle:"italic"}}>{o.desc}</span>}
                 {!isCollapsed&&o.createdBy&&<span style={{fontSize:10,color:"var(--dim)"}}>created by <b>{o.createdBy}</b>{o.createdAt?" · "+o.createdAt:""}</span>}
                 {Array.isArray(o.fromJobNotes) && o.fromJobNotes.length > 0 && (
@@ -42511,7 +42619,12 @@ function App() {
 
     const s  = search.toLowerCase();
 
-    const ms = !s||j.name.toLowerCase().includes(s)||j.address.toLowerCase().includes(s)||j.gc.toLowerCase().includes(s);
+    // Also match CO quote numbers — picks up jobs the search bar wouldn't
+    // otherwise find when someone types e.g. "4521" looking for that quote.
+    const matchesQuoteNo = !!s && (j.changeOrders||[]).some(co =>
+      (co?.quoteNumber||"").toString().toLowerCase().includes(s));
+
+    const ms = !s||j.name.toLowerCase().includes(s)||j.address.toLowerCase().includes(s)||j.gc.toLowerCase().includes(s)||matchesQuoteNo;
 
     const mf = !flagOnly||j.flagged;
 
@@ -43648,6 +43761,8 @@ function App() {
                   const s = search.toLowerCase();
                   const crewJobs = jobs.filter(j=>matchesForeman(j,crewView)).filter(j=>
                     !s||(j.name||"").toLowerCase().includes(s)||(j.address||"").toLowerCase().includes(s)||(j.gc||"").toLowerCase().includes(s)
+                    // Quote # match — same hook as the main job filter.
+                    ||(j.changeOrders||[]).some(co=>(co?.quoteNumber||"").toString().toLowerCase().includes(s))
                   );
                   const fc2 = _foremanColors[crewView]||"#6b7280";
                   if(crewJobs.length===0) return (
@@ -43729,7 +43844,10 @@ function App() {
                   (j.address||"").toLowerCase().includes(s)||
                   (j.gc||"").toLowerCase().includes(s)||
                   (j.foreman||"").toLowerCase().includes(s)||
-                  (j.simproNo||"").toLowerCase().includes(s)
+                  (j.simproNo||"").toLowerCase().includes(s)||
+                  // Quote # match — pull each CO's quoteNumber so the home
+                  // screen search bar can find a job by its quote.
+                  (j.changeOrders||[]).some(co=>(co?.quoteNumber||"").toString().toLowerCase().includes(s))
                 ) : jobs);
                 return <StageSectionList jobs={homeFiltered} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>;
               })()}
