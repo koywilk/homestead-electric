@@ -18786,40 +18786,42 @@ function SavantV2PreviewToggle({ job, floor, panelLabel, onPatch, forceShow=fals
 // + watts + room) keeps working without duplication.
 function SavantPanelCard({ panel, job, onPatch, defaultOpen=false, onRenameLabel, onDelete }) {
   const [open, setOpen] = useState(defaultOpen);
-  const [editingLabel, setEditingLabel] = useState(false);
+  // Local draft for the label input so typing is responsive — flushed to the
+  // job on blur or Enter. Pre-filled from the saved label.
   const [labelDraft, setLabelDraft] = useState(panel.label || "");
-
-  // Keep labelDraft in sync if the panel object changes externally
+  // Keep labelDraft in sync if the panel object changes externally (e.g.
+  // another user renamed it from another device).
   useEffect(()=>{ setLabelDraft(panel.label || ""); }, [panel.label]);
+  const flushLabel = () => {
+    const trimmed = (labelDraft || "").trim();
+    if (trimmed && trimmed !== panel.label) onRenameLabel && onRenameLabel(trimmed);
+  };
 
   return (
     <div style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:10,
       marginBottom:12,overflow:"hidden"}}>
       {/* Header */}
       <div style={{padding:"10px 14px",background:"#f8fafc",borderBottom:open?`1px solid ${C.border}`:"none",
-        display:"flex",alignItems:"center",gap:12,cursor:"pointer",flexWrap:"wrap"}}
-        onClick={()=>setOpen(!open)}>
+        display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
         <div style={{flex:1,minWidth:0}}>
-          {editingLabel ? (
-            <input value={labelDraft}
-              onChange={e=>setLabelDraft(e.target.value)}
-              onBlur={()=>{ onRenameLabel && onRenameLabel(labelDraft); setEditingLabel(false); }}
-              onKeyDown={e=>{ if(e.key==="Enter"){ onRenameLabel && onRenameLabel(labelDraft); setEditingLabel(false); } if(e.key==="Escape"){ setLabelDraft(panel.label||""); setEditingLabel(false); } }}
-              onClick={e=>e.stopPropagation()}
-              autoFocus
-              style={{font:"inherit",fontSize:15,fontWeight:700,border:"none",outline:"none",
-                background:"transparent",color:C.text,width:"60%"}}/>
-          ) : (
-            <div onClick={e=>{e.stopPropagation();setEditingLabel(true);}}
-              style={{fontWeight:700,fontSize:15,color:C.text,cursor:"text"}}
-              title="Click to rename">
-              {panel.label}
-              <span style={{color:C.dim,fontWeight:500,marginLeft:6,fontSize:12}}>
-                {panel.description !== panel.label ? panel.description : ""}
-              </span>
-            </div>
-          )}
-          <div style={{fontSize:11,color:C.dim,fontWeight:600,marginTop:2}}>
+          {/* Always-editable label — looks like a header, types like an input.
+              No "click to reveal" hidden state. The header chevron + summary
+              text below remain clickable to toggle expansion. */}
+          <input value={labelDraft}
+            onChange={e=>setLabelDraft(e.target.value)}
+            onBlur={flushLabel}
+            onKeyDown={e=>{
+              if(e.key==="Enter"){ flushLabel(); e.target.blur(); }
+              if(e.key==="Escape"){ setLabelDraft(panel.label||""); e.target.blur(); }
+            }}
+            placeholder="Panel label (e.g. LCP 1)"
+            style={{font:"inherit",fontSize:15,fontWeight:700,
+              border:`1px solid ${C.border}`,borderRadius:6,
+              outline:"none",background:"#fff",color:C.text,
+              padding:"4px 9px",width:"100%",maxWidth:340,
+              boxSizing:"border-box",fontFamily:"inherit"}}/>
+          <div onClick={()=>setOpen(!open)}
+            style={{fontSize:11,color:C.dim,fontWeight:600,marginTop:4,cursor:"pointer",userSelect:"none"}}>
             <b style={{color:C.text}}>{panel.panelSize}</b> slots ·{" "}
             <b style={{color:C.text}}>{panel.smartBreakerCount}</b> smart ·{" "}
             <b style={{color:C.text}}>{panel.feederCount}</b> feeder{panel.feederCount===1?"":"s"} ·{" "}
