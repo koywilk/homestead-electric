@@ -18407,8 +18407,11 @@ function SavantMasterLoadsList({ job, onPatch }) {
 }
 
 
-function SavantV2PreviewToggle({ job, floor, panelLabel, onPatch }) {
-  const [show, setShow] = useState(false);
+function SavantV2PreviewToggle({ job, floor, panelLabel, onPatch, forceShow=false }) {
+  const [show, setShow] = useState(forceShow);
+  // When `forceShow` is on, the toggle button is hidden and the body always
+  // renders. Used by SavantPanelCard so the V2 editor lives inline inside
+  // the new collapsible card design without a redundant "Preview V2" toggle.
   const handleAssignFeeder = onPatch ? (modKey, channel, feederId) => {
     if (!modKey || (channel !== "A" && channel !== "B")) return;
     const pl = job?.panelizedLighting || {};
@@ -18600,17 +18603,19 @@ function SavantV2PreviewToggle({ job, floor, panelLabel, onPatch }) {
     });
   } : null;
   return (
-    <div style={{marginTop:10}}>
-      <button onClick={()=>setShow(!show)}
-        style={{background:"none", border:`1px dashed ${C.purple}`, color:C.purple,
-          borderRadius:6, padding:"5px 11px", fontSize:11, fontWeight:700,
-          cursor:"pointer", fontFamily:"inherit", letterSpacing:"0.04em",
-          display:"inline-flex", alignItems:"center", gap:6}}>
-        <Icon name={show?"eye":"eye"} size={11} stroke={2}/>
-        {show ? "HIDE V2 PREVIEW" : "PREVIEW V2 (FEEDER ASSIGNMENT LIVE)"}
-      </button>
+    <div style={forceShow ? {} : {marginTop:10}}>
+      {!forceShow && (
+        <button onClick={()=>setShow(!show)}
+          style={{background:"none", border:`1px dashed ${C.purple}`, color:C.purple,
+            borderRadius:6, padding:"5px 11px", fontSize:11, fontWeight:700,
+            cursor:"pointer", fontFamily:"inherit", letterSpacing:"0.04em",
+            display:"inline-flex", alignItems:"center", gap:6}}>
+          <Icon name={show?"eye":"eye"} size={11} stroke={2}/>
+          {show ? "HIDE V2 PREVIEW" : "PREVIEW V2 (FEEDER ASSIGNMENT LIVE)"}
+        </button>
+      )}
       {show && (
-        <div style={{marginTop:10, padding:12, background:"#fafbfc",
+        <div style={forceShow ? {} : {marginTop:10, padding:12, background:"#fafbfc",
           border:`1px dashed ${C.purple}55`, borderRadius:8}}>
           <SavantPanelV2 job={job} floor={floor} panelLabel={panelLabel}
             onAssignFeeder={handleAssignFeeder}
@@ -18620,6 +18625,103 @@ function SavantV2PreviewToggle({ job, floor, panelLabel, onPatch }) {
             onAddModule={handleAddModule}
             onDeleteModule={handleDeleteModule}
             onDeleteFeeder={handleDeleteFeeder}/>
+        </div>
+      )}
+    </div>
+  );
+}
+
+
+// ── SavantPanelCard ────────────────────────────────────────────────────
+// Collapsible card wrapper matching the redesign mockup. Header shows the
+// panel label + summary + Print button + chevron. Body embeds the existing
+// SavantV2PreviewToggle with forceShow=true so all editing (add/edit/delete
+// modules + feeders, assign feeder to module input, edit names + load type
+// + watts + room) keeps working without duplication.
+function SavantPanelCard({ panel, job, onPatch, defaultOpen=false, onRenameLabel, onDelete }) {
+  const [open, setOpen] = useState(defaultOpen);
+  const [editingLabel, setEditingLabel] = useState(false);
+  const [labelDraft, setLabelDraft] = useState(panel.label || "");
+
+  // Keep labelDraft in sync if the panel object changes externally
+  useEffect(()=>{ setLabelDraft(panel.label || ""); }, [panel.label]);
+
+  return (
+    <div style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:10,
+      marginBottom:12,overflow:"hidden"}}>
+      {/* Header */}
+      <div style={{padding:"10px 14px",background:"#f8fafc",borderBottom:open?`1px solid ${C.border}`:"none",
+        display:"flex",alignItems:"center",gap:12,cursor:"pointer",flexWrap:"wrap"}}
+        onClick={()=>setOpen(!open)}>
+        <div style={{flex:1,minWidth:0}}>
+          {editingLabel ? (
+            <input value={labelDraft}
+              onChange={e=>setLabelDraft(e.target.value)}
+              onBlur={()=>{ onRenameLabel && onRenameLabel(labelDraft); setEditingLabel(false); }}
+              onKeyDown={e=>{ if(e.key==="Enter"){ onRenameLabel && onRenameLabel(labelDraft); setEditingLabel(false); } if(e.key==="Escape"){ setLabelDraft(panel.label||""); setEditingLabel(false); } }}
+              onClick={e=>e.stopPropagation()}
+              autoFocus
+              style={{font:"inherit",fontSize:15,fontWeight:700,border:"none",outline:"none",
+                background:"transparent",color:C.text,width:"60%"}}/>
+          ) : (
+            <div onClick={e=>{e.stopPropagation();setEditingLabel(true);}}
+              style={{fontWeight:700,fontSize:15,color:C.text,cursor:"text"}}
+              title="Click to rename">
+              {panel.label}
+              <span style={{color:C.dim,fontWeight:500,marginLeft:6,fontSize:12}}>
+                {panel.description !== panel.label ? panel.description : ""}
+              </span>
+            </div>
+          )}
+          <div style={{fontSize:11,color:C.dim,fontWeight:600,marginTop:2}}>
+            <b style={{color:C.text}}>{panel.panelSize}</b> slots ·{" "}
+            <b style={{color:C.text}}>{panel.smartBreakerCount}</b> smart ·{" "}
+            <b style={{color:C.text}}>{panel.feederCount}</b> feeder{panel.feederCount===1?"":"s"} ·{" "}
+            <b style={{color:C.text}}>{panel.emptyCount}</b> empty
+          </div>
+        </div>
+        <div style={{display:"flex",gap:8,alignItems:"center"}}>
+          {onDelete && (
+            <button onClick={(e)=>{
+                e.stopPropagation();
+                if (window.confirm(`Remove panel "${panel.label}"? Loads currently assigned to it become unassigned in the master list.`)) onDelete();
+              }}
+              style={{background:"none",border:`1px solid ${C.red}55`,color:C.red,
+                borderRadius:6,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",
+                fontFamily:"inherit",letterSpacing:"0.04em"}}>
+              Remove
+            </button>
+          )}
+          <button onClick={(e)=>{
+              e.stopPropagation();
+              printSavantV2PanelCover({
+                jobName: job?.name || "",
+                jobAddress: job?.address || "",
+                panelLabel: panel.label,
+                v2: panel.v2,
+              });
+            }}
+            style={{background:C.text,color:"#fff",border:"none",borderRadius:7,
+              padding:"5px 13px",fontSize:11,fontWeight:700,cursor:"pointer",
+              fontFamily:"inherit",letterSpacing:"0.04em",display:"inline-flex",
+              alignItems:"center",gap:5}}>
+            <Icon name="fileText" size={11} stroke={2}/>
+            Print
+          </button>
+          <span style={{color:C.dim,fontSize:14,padding:"0 4px",cursor:"pointer"}}>
+            {open ? "▾" : "▸"}
+          </span>
+        </div>
+      </div>
+      {/* Body */}
+      {open && (
+        <div style={{padding:"12px 14px"}}>
+          <SavantV2PreviewToggle
+            job={job}
+            floor={panel.floor}
+            panelLabel={panel.label}
+            onPatch={onPatch}
+            forceShow={true}/>
         </div>
       )}
     </div>
@@ -23172,19 +23274,56 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   );
                 };
                 return (<>
-                {/* Master Loads list — Savant only. Aggregates every load on
-                    the job (assigned + unassigned) and lets the user plan +
-                    edit before/after assigning to a panel. The per-floor
-                    panel cards below are unchanged for now — Phase 3
-                    replaces them with stacked cards that read from V2. */}
-                {(job.lightingSystem||"Control 4")==="Savant" && (
+                {/* Savant: brand-new design (master loads list + collapsible
+                    panel cards stacked below). The legacy per-floor panel
+                    rendering below this block is skipped for Savant jobs. */}
+                {(job.lightingSystem||"Control 4")==="Savant" && (<>
                   <SavantMasterLoadsList
                     job={job}
                     onPatch={(patch)=>u({panelizedLighting:{...(job.panelizedLighting||{}),...patch}})}
                   />
-                )}
+                  {(() => {
+                    const panels = listSavantPanels(job);
+                    return (
+                      <div style={{marginTop:10}}>
+                        <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:8,letterSpacing:"0.02em"}}>
+                          Panels <span style={{color:C.dim,fontWeight:600,marginLeft:4}}>· {panels.length}</span>
+                        </div>
+                        {panels.length === 0 ? (
+                          <div style={{padding:"20px 14px",textAlign:"center",color:C.dim,fontSize:12,
+                            fontStyle:"italic",background:"#fafbfc",border:`1px dashed ${C.border}`,borderRadius:8}}>
+                            No panels yet — add one below to start wiring loads to smart breakers.
+                          </div>
+                        ) : panels.map((p, idx) => {
+                          const isExtra = !["main","basement","upper"].includes(p.floor);
+                          return (
+                            <SavantPanelCard
+                              key={p.floor}
+                              panel={p}
+                              job={job}
+                              defaultOpen={idx === 0}
+                              onPatch={(patch)=>u(patch)}
+                              onRenameLabel={(newLabel)=>{
+                                u({plSectionLabels:{...(job.plSectionLabels||{}),[p.floor]:newLabel}});
+                              }}
+                              onDelete={isExtra ? () => {
+                                const newExtras=(job.panelizedLighting.extraFloors||[]).filter(e=>e.key!==p.floor);
+                                const updated={...job.panelizedLighting,extraFloors:newExtras};
+                                delete updated[p.floor];
+                                delete updated[p.floor+"_keypad"];
+                                if (updated.panelLayout) delete updated.panelLayout[p.floor];
+                                if (updated.savantV2) delete updated.savantV2[p.floor];
+                                u({panelizedLighting:updated});
+                              } : null}
+                            />
+                          );
+                        })}
+                      </div>
+                    );
+                  })()}
+                </>)}
 
-                {_stdPanels.map(({floor,defaultLabel})=>{
+                {(job.lightingSystem||"Control 4")!=="Savant" && _stdPanels.map(({floor,defaultLabel})=>{
                   const _mods = migrateFloorToModules((job.panelizedLighting.cp4Loads?.[floor])||[]);
                   const _panelLabel = (job.plSectionLabels?.[floor]||"").trim() || defaultLabel;
                   return (
@@ -23295,7 +23434,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   );
                 })}
 
-                {(job.panelizedLighting.extraFloors||[]).map(ef=>{
+                {(job.lightingSystem||"Control 4")!=="Savant" && (job.panelizedLighting.extraFloors||[]).map(ef=>{
                   const _mods = migrateFloorToModules((job.panelizedLighting[ef.key])||[]);
                   return (
                   <div key={ef.key} style={{marginBottom:16}}>
