@@ -3639,7 +3639,10 @@ function InProgressModePill({ mode, onToggle, onSync, onSetNeedsDate, needsDate,
     }
     return startStr || endStr;
   })();
-  const baseLabel = isScheduled ? (startStr ? `On Schedule · ${startStr}` : "On Schedule")
+  // Scheduled label honors the window too: with an end date set, render
+  // "On Schedule · May 11–22" (same dateRange logic as needsSched). Without
+  // an end date we keep today's behavior verbatim — single date or no date.
+  const baseLabel = isScheduled ? (dateRange ? `On Schedule · ${dateRange}` : (startStr ? `On Schedule · ${startStr}` : "On Schedule"))
                   : isNeedsSched
                     ? (dateRange
                         ? (needsHard ? `Needs: ${dateRange}` : `Sched by ${dateRange}`)
@@ -3668,11 +3671,16 @@ function InProgressModePill({ mode, onToggle, onSync, onSetNeedsDate, needsDate,
         <span style={{width:6,height:6,borderRadius:"50%",background:color,display:"inline-block",flexShrink:0}}/>
         {baseLabel}
       </button>
-      {isNeedsSched && onSetNeedsDate && (
+      {(isNeedsSched || isScheduled) && onSetNeedsDate && (
         <button type="button"
           onClick={(e)=>{ e.stopPropagation(); onSetNeedsDate && onSetNeedsDate(); }}
-          title={needsDate ? `Edit ${needsHard?"hard":"target"} date` : "Set target date or hard deadline"}
-          style={{background:"none",border:"none",cursor:"pointer",color:"#f97316",
+          title={
+            isScheduled
+              ? (needsDate ? "Edit scheduled date / window" : "Set scheduled date / window")
+              : (needsDate ? `Edit ${needsHard?"hard":"target"} date` : "Set target date or hard deadline")
+          }
+          style={{background:"none",border:"none",cursor:"pointer",
+            color: isScheduled ? "#2563eb" : "#f97316",
             padding:2,display:"inline-flex",alignItems:"center",fontSize:10}}>
           <Icon name="calendar" size={size==="sm"?9:10}/>
         </button>
@@ -21895,22 +21903,33 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // The pill's calendar icon now reads/writes the SAME `roughStatusDate` /
   // `finishStatusDate` used by the phase status row — one date field, edited
   // from either place. Only the "hard deadline" flag stays separate.
-  const [needsSchedModal, setNeedsSchedModal] = useState(null); // { phase, date, hard }
+  const [needsSchedModal, setNeedsSchedModal] = useState(null); // { phase, date, endDate, hard }
   const openNeedsSchedModal = (phase) => {
     const dateKey = phase==="rough" ? "roughStatusDate" : "finishStatusDate";
+    const endKey  = phase==="rough" ? "roughScheduledEnd" : "finishScheduledEnd";
     const hardKey = phase==="rough" ? "roughNeedsSchedHard" : "finishNeedsSchedHard";
     setNeedsSchedModal({
       phase,
-      date: job[dateKey] || "",
-      hard: !!job[hardKey],
+      date:    job[dateKey] || "",
+      endDate: job[endKey]  || "",
+      hard:    !!job[hardKey],
     });
   };
+  // Atomic save: writes start (statusDate), optional end (scheduledEnd), and
+  // hard flag in a single patch. Hard deadlines clear the end (single point
+  // in time per the pill spec). Empty end = single-date legacy behavior so
+  // jobs that never set a window keep rendering exactly as before.
   const saveNeedsSchedModal = () => {
     if(!needsSchedModal) return;
-    const { phase, date, hard } = needsSchedModal;
+    const { phase, date, endDate, hard } = needsSchedModal;
     const dateKey = phase==="rough" ? "roughStatusDate" : "finishStatusDate";
+    const endKey  = phase==="rough" ? "roughScheduledEnd" : "finishScheduledEnd";
     const hardKey = phase==="rough" ? "roughNeedsSchedHard" : "finishNeedsSchedHard";
-    u({ [dateKey]: date || "", [hardKey]: !!hard });
+    u({
+      [dateKey]: date || "",
+      [endKey]:  (hard ? "" : (endDate || "")),
+      [hardKey]: !!hard,
+    });
     setNeedsSchedModal(null);
   };
   const handleVoidQCItem = ({ phase, floorKey, roomId, itemId, patch }) => {
@@ -22373,15 +22392,33 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               : "";
               const needsHard = phaseKey==="rough" ? !!job.roughNeedsSchedHard
                               : phaseKey==="finish" ? !!job.finishNeedsSchedHard : false;
+              // Window end — only used when not a hard deadline (matches the
+              // pill component's rules). Empty end falls back to single date,
+              // so legacy jobs render the same as before.
+              const needsEnd = (!needsHard) ? (phaseKey==="rough" ? (job.roughScheduledEnd||"")
+                                            : phaseKey==="finish" ? (job.finishScheduledEnd||"") : "") : "";
               if(!mode && !job.statusUpdate) return null;
               // Pill color + label per mode (inline version of InProgressModePill for card context)
               const pillColor = mode==="scheduled" ? "#2563eb"
                              : mode==="needsSched" ? "#f97316"
                              : mode==="ongoing"   ? "#6b7280" : null;
               const fmtD = d => { try { const dt=new Date(d); if(isNaN(dt)) return ""; return dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); } catch(_){return "";} };
-              const dateStr = mode==="needsSched" && needsDate ? fmtD(needsDate) : "";
-              const pillLabel = mode==="scheduled" ? "On Schedule"
-                              : mode==="needsSched" ? (dateStr ? (needsHard ? `Needs: ${dateStr}` : `Target ${dateStr}`) : "Needs Sched")
+              const fmtDay = d => { try { const dt=new Date(d); if(isNaN(dt)) return ""; return String(dt.getDate()); } catch(_){return "";} };
+              const sameMonth = (a, b) => { try { const da=new Date(a), db=new Date(b); return !isNaN(da)&&!isNaN(db) && da.getMonth()===db.getMonth() && da.getFullYear()===db.getFullYear(); } catch(_){return false;} };
+              const startStr = needsDate ? fmtD(needsDate) : "";
+              const endStr   = needsEnd  ? fmtD(needsEnd)  : "";
+              const dateRange = (() => {
+                if(needsHard) return startStr;
+                if(startStr && endStr) {
+                  if(sameMonth(needsDate, needsEnd)) return `${startStr}–${fmtDay(needsEnd)}`;
+                  return `${startStr} – ${endStr}`;
+                }
+                return startStr || endStr;
+              })();
+              const pillLabel = mode==="scheduled"
+                                  ? (dateRange ? `On Schedule · ${dateRange}` : "On Schedule")
+                              : mode==="needsSched"
+                                  ? (dateRange ? (needsHard ? `Needs: ${dateRange}` : `Target ${dateRange}`) : "Needs Sched")
                               : mode==="ongoing" ? "Ongoing" : null;
               return (
                 <div style={{display:"flex",alignItems:"center",gap:8,marginTop:5,flexWrap:"wrap"}}>
@@ -22622,6 +22659,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           <InProgressModePill
                             mode={deriveScheduleMode(job, "rough")}
                             needsDate={job.roughStatusDate||""}
+                            // Window end — pill renders "May 11–22" when set,
+                            // single date otherwise. Same field powers the
+                            // scheduled + needsSched modes.
+                            needsEndDate={job.roughScheduledEnd||""}
                             needsHard={!!job.roughNeedsSchedHard}
                             onToggle={()=>{
                               const cur = deriveScheduleMode(job, "rough");
@@ -22636,20 +22677,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             showSync={job.roughStatus==="inprogress"}
                           />
                         )}
-                        {rsDef.hasDate&&job.roughStatus!=="date_confirmed"&&(() => {
-                          // Label reflects what this date actually means given the status:
-                          //   scheduled/inprogress → "SCHEDULED FOR" (it IS on the calendar)
-                          //   anything else (needs-scheduling context) → "SCHEDULE BY"
-                          const isOnCalendar = job.roughStatus==="scheduled" || job.roughStatus==="inprogress";
-                          const label = isOnCalendar ? "SCHEDULED FOR" : "SCHEDULE BY";
-                          return (
-                            <div style={{display:"flex",flexDirection:"column",gap:3}}>
-                              <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:rsDef.color}}>{label}</div>
-                              <DateInp value={job.roughStatusDate||""} onChange={e=>u({roughStatusDate:e.target.value})}
-                                style={{width:130,fontSize:12,borderColor:rsDef.color+"55",background:`${rsDef.color}08`}}/>
-                            </div>
-                          );
-                        })()}
+                        {/* Removed: SCHEDULED FOR / SCHEDULE BY duplicate input.
+                            The pill above shows + edits the same date now;
+                            clicking the calendar icon opens the schedule
+                            window modal (start + optional end + hard flag).
+                            All previously-set roughStatusDate values stay
+                            valid — only the redundant UI is gone. */}
                       </div>
 
                       {/* Status Update — inline-editable mirror next to status row */}
@@ -22986,6 +23019,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           <InProgressModePill
                             mode={deriveScheduleMode(job, "finish")}
                             needsDate={job.finishStatusDate||""}
+                            // Window end — same pattern as Rough above.
+                            needsEndDate={job.finishScheduledEnd||""}
                             needsHard={!!job.finishNeedsSchedHard}
                             onToggle={()=>{
                               const cur = deriveScheduleMode(job, "finish");
@@ -23000,17 +23035,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                             showSync={job.finishStatus==="inprogress"}
                           />
                         )}
-                        {fsDef.hasDate&&job.finishStatus!=="date_confirmed"&&(() => {
-                          const isOnCalendar = job.finishStatus==="scheduled" || job.finishStatus==="inprogress";
-                          const label = isOnCalendar ? "SCHEDULED FOR" : "SCHEDULE BY";
-                          return (
-                            <div style={{display:"flex",flexDirection:"column",gap:3}}>
-                              <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:fsDef.color}}>{label}</div>
-                              <DateInp value={job.finishStatusDate||""} onChange={e=>u({finishStatusDate:e.target.value})}
-                                style={{width:130,fontSize:12,borderColor:fsDef.color+"55",background:`${fsDef.color}08`}}/>
-                            </div>
-                          );
-                        })()}
+                        {/* Removed: SCHEDULED FOR / SCHEDULE BY duplicate input
+                            on Finish too — pill is the single edit surface. */}
                       </div>
 
                       {/* Status Update — inline-editable mirror next to status row */}
@@ -24764,11 +24790,35 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             </div>
           </div>
           <div style={{marginBottom:14}}>
-            <div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.1em",marginBottom:5}}>DATE</div>
-            <DateInp value={needsSchedModal.date}
-              onChange={e=>setNeedsSchedModal({...needsSchedModal, date: e.target.value})}/>
-            <div style={{fontSize:10,color:C.muted,marginTop:4,fontStyle:"italic"}}>
-              Leave blank for flexible (no specific date — just flagged as needing scheduling).
+            <div style={{display:"flex",gap:10,flexWrap:"wrap"}}>
+              <div style={{flex:1,minWidth:120}}>
+                <div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.1em",marginBottom:5}}>
+                  {needsSchedModal.hard ? "DATE" : "START"}
+                </div>
+                <DateInp value={needsSchedModal.date}
+                  onChange={e=>setNeedsSchedModal({...needsSchedModal, date: e.target.value})}
+                  style={{width:"100%"}}/>
+              </div>
+              {/* End date for windowed scheduling. Hidden when "Hard deadline"
+                  is on — a hard date is a single point, not a range. Empty end
+                  = single-date legacy display, so the pill keeps rendering
+                  "May 11" exactly like before until the user actually picks
+                  an end date. */}
+              {!needsSchedModal.hard && (
+                <div style={{flex:1,minWidth:120}}>
+                  <div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.1em",marginBottom:5}}>
+                    END <span style={{color:C.muted,fontWeight:500}}>(optional)</span>
+                  </div>
+                  <DateInp value={needsSchedModal.endDate||""}
+                    onChange={e=>setNeedsSchedModal({...needsSchedModal, endDate: e.target.value})}
+                    style={{width:"100%"}}/>
+                </div>
+              )}
+            </div>
+            <div style={{fontSize:10,color:C.muted,marginTop:6,fontStyle:"italic"}}>
+              {needsSchedModal.hard
+                ? "Hard deadlines pin a single date — no window."
+                : "Leave both blank for flexible. Set END to schedule a window (renders as “May 11–22”)."}
             </div>
           </div>
           <label onClick={e=>e.stopPropagation()}
@@ -24794,7 +24844,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 padding:"9px 16px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.dim,
                 fontFamily:"inherit",flex:1}}>Cancel</button>
             {(job[needsSchedModal.phase==="rough"?"roughNeedsSchedDate":"finishNeedsSchedDate"]) && (
-              <button onClick={()=>{ setNeedsSchedModal({...needsSchedModal, date:"", hard:false}); }}
+              <button onClick={()=>{ setNeedsSchedModal({...needsSchedModal, date:"", endDate:"", hard:false}); }}
                 style={{background:"none",border:`1px solid ${C.red}44`,borderRadius:8,
                   padding:"9px 14px",cursor:"pointer",fontSize:11,fontWeight:600,color:C.red,
                   fontFamily:"inherit"}}>Clear</button>
@@ -31453,11 +31503,20 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
                                 {effectiveMode && onUpdateJob && (
                                   <div onClick={e=>e.stopPropagation()} style={{flexShrink:0}}>
                                     {(() => {
-                                      // End-of-window date for the pill. Only meaningful in
-                                      // needsSched mode and only when not a hard deadline.
-                                      // Falls back blank for legacy jobs that never had a window.
-                                      const endKey = phaseKey==="rough" ? "roughNeedsByEnd" : phaseKey==="finish" ? "finishNeedsByEnd" : null;
-                                      const endDate = (phaseMode === "needsSched" && endKey && !job[hardKey]) ? (job[endKey]||"") : "";
+                                      // End-of-window date for the pill.
+                                      //   • needsSched mode  → use the planner's needsBy end (existing behavior).
+                                      //   • scheduled  mode  → use the canonical scheduledEnd (set by the
+                                      //     Job Info schedule-window modal). Per the decision the planner
+                                      //     reads but doesn't write that field — picking a row in the planner
+                                      //     never silently overwrites it.
+                                      //   • hard deadlines ignore the end (single point in time).
+                                      const needsEndKey = phaseKey==="rough" ? "roughNeedsByEnd" : phaseKey==="finish" ? "finishNeedsByEnd" : null;
+                                      const schedEndKey = phaseKey==="rough" ? "roughScheduledEnd" : phaseKey==="finish" ? "finishScheduledEnd" : null;
+                                      let endDate = "";
+                                      if (!job[hardKey]) {
+                                        if (phaseMode === "needsSched" && needsEndKey) endDate = job[needsEndKey] || "";
+                                        else if (phaseMode === "scheduled" && schedEndKey) endDate = job[schedEndKey] || "";
+                                      }
                                       return (
                                     <InProgressModePill
                                       size="sm"
