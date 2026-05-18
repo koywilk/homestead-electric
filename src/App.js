@@ -19339,6 +19339,905 @@ function SavantPanelCard({ panel, job, onPatch, defaultOpen=false, onRenameLabel
   );
 }
 
+// ── SavantSlotFirstTab ─────────────────────────────────────────────────
+// Single-screen, slot-first replacement for the Savant Panelized Lighting
+// tab. Mental model: one panel at a time. The screen IS the panel — a
+// vertical list of slots 1..N. Tap an empty slot to add (feeder / smart
+// breaker / tandem). Tap an occupied slot to edit it. All editing happens
+// in a single bottom sheet — no inline form clutter.
+//
+// Replaces: SavantMasterLoadsList (master loads list at top of tab) +
+// SavantPanelCard (collapsible per-floor cards). Data layer unchanged:
+// reads/writes go through the same cp4Loads / panelLayout.regularBreakers
+// / savantV2 shapes that the older surfaces used, so older jobs render
+// without migration.
+//
+// Why this exists: foremen kept saying "too many fields, too many clicks,
+// hard to find data entry." The old screen modeled data-first; the actual
+// workflow is slot-first ("here's an empty 40-slot panel, fill it in").
+function SavantSlotFirstTab({ job, u }) {
+  const panels = listSavantPanels(job);
+  const [activeFloor, setActiveFloor] = useState(() => panels[0]?.floor || "main");
+  // Sheet state: null | {kind, slot?, modKey?, channel?, feederId?, draft?}
+  const [sheet, setSheet] = useState(null);
+  // Compact panel picker dropdown — opens an inline list to switch panels.
+  const [pickerOpen, setPickerOpen] = useState(false);
+
+  // Recover gracefully if the active panel is deleted from under us
+  // (another tab, another device, or local delete). Falls back to the
+  // first remaining panel; if all are gone we render the empty CTA.
+  useEffect(() => {
+    if (panels.length > 0 && !panels.find(p => p.floor === activeFloor)) {
+      setActiveFloor(panels[0].floor);
+    }
+  }, [panels, activeFloor]);
+
+  // ── First-time empty state ─────────────────────────────────────
+  if (panels.length === 0) {
+    return (
+      <div style={{padding:"40px 20px",textAlign:"center",background:"#fff",
+        border:`1px dashed ${C.border}`,borderRadius:14,marginTop:10}}>
+        <div style={{fontSize:14,fontWeight:700,color:C.text,marginBottom:6}}>
+          No panels yet
+        </div>
+        <div style={{fontSize:12,color:C.dim,marginBottom:14,lineHeight:1.5}}>
+          Add your first lighting panel — pick a floor, then tap slots to drop in
+          feeders and smart breakers.
+        </div>
+        <button onClick={()=>setSheet({kind:"add-panel"})}
+          style={{background:C.purple,border:"none",color:"#fff",borderRadius:8,
+            padding:"10px 18px",fontSize:13,fontWeight:700,cursor:"pointer",
+            fontFamily:"inherit",letterSpacing:"0.03em"}}>
+          + Add first panel
+        </button>
+        {sheet?.kind === "add-panel" && (
+          <SavantSheet onClose={()=>setSheet(null)}>
+            <h2 style={{margin:"0 0 12px",fontSize:15,fontWeight:800}}>Add a panel</h2>
+            <SheetField label="Which floor?">
+              <select autoFocus
+                onChange={(e)=>{
+                  const k = e.target.value;
+                  if (!k) return;
+                  if (k === "extra") {
+                    const label = window.prompt("New panel label? (e.g. \"LCP 1\")");
+                    if (!label) return;
+                    const key = `panel_${Date.now()}`;
+                    const pl = job.panelizedLighting || {};
+                    u({ panelizedLighting: {
+                      ...pl,
+                      extraFloors: [...(pl.extraFloors||[]), {key, label}],
+                    }, plSectionLabels: {...(job.plSectionLabels||{}), [key]: label}});
+                    setActiveFloor(key);
+                  } else {
+                    setActiveFloor(k);
+                  }
+                  setSheet(null);
+                }}
+                style={{font:"inherit",fontSize:14,padding:"10px 12px",border:`1px solid ${C.border}`,
+                  borderRadius:8,background:"#fff",width:"100%"}}>
+                <option value="">— pick a floor —</option>
+                <option value="upper">Upper Floor</option>
+                <option value="main">Main Floor</option>
+                <option value="basement">Basement</option>
+                <option value="extra">+ Custom (name it)…</option>
+              </select>
+            </SheetField>
+          </SavantSheet>
+        )}
+      </div>
+    );
+  }
+
+  const activePanel = panels.find(p => p.floor === activeFloor) || panels[0];
+  const floor = activePanel.floor;
+  const panelLabel = activePanel.label;
+  const v2 = activePanel.v2;
+  const slotMap = buildSavV2SlotMap(v2);
+  const panelSize = v2.panelSize || 40;
+
+  // Slot occupancy stats for the header line.
+  let feederCount = 0, moduleCount = 0, emptyCount = 0;
+  for (let i = 1; i <= panelSize; i++) {
+    const c = slotMap[i];
+    if (!c) { emptyCount++; continue; }
+    if (c.kind === "feeder" && !c.isCont) feederCount++;
+    if (c.kind === "module-half" && c.halfIndex === 0) moduleCount++;
+  }
+
+  // ── Top-level patch wrapper — same shape every old surface used. ─────
+  const patch = (p) => u(p);
+
+  // ── Handlers (lifted from SavantV2PreviewToggle, scoped to `floor`) ──
+  // All write through the same V1 storage so any other code path that
+  // reads cp4Loads / panelLayout.regularBreakers sees the change.
+  const handleEditOutput = (modKey, channel, fieldKey, value) => {
+    const pl = job?.panelizedLighting || {};
+    const flatRows = flattenModulesToRows(pl.cp4Loads?.[floor] || []);
+    let matched = false;
+    const updatedRows = flatRows.map(r => {
+      if (matched) return r;
+      if (String(r.mod || "") !== String(modKey)) return r;
+      if (channel && (r.ch || "") !== channel) return r;
+      matched = true;
+      if (fieldKey === "pulled") return { ...r, pulled: !!value, status: value ? "Pulled" : "" };
+      return { ...r, [fieldKey]: value };
+    });
+    if (!matched) return;
+    patch({ panelizedLighting: { ...pl, cp4Loads: { ...(pl.cp4Loads||{}), [floor]: updatedRows } } });
+  };
+  const handleSetRoom = (modKey, channel, roomValue) => {
+    if (!modKey || (channel !== "A" && channel !== "B")) return;
+    const pl = job?.panelizedLighting || {};
+    const sav = pl.savantV2 || {};
+    const floorOv = sav[floor] || {};
+    const orMap = floorOv.outputRooms || {};
+    const cur = orMap[modKey] || {};
+    const trimmed = (roomValue || "").trim();
+    const nextChannel = trimmed ? { ...cur, [channel]: trimmed }
+                                : (() => { const c = {...cur}; delete c[channel]; return c; })();
+    const nextOR = (Object.keys(nextChannel).length > 0)
+      ? { ...orMap, [modKey]: nextChannel }
+      : (() => { const i = {...orMap}; delete i[modKey]; return i; })();
+    patch({ panelizedLighting: { ...pl, savantV2: { ...sav, [floor]: { ...floorOv, outputRooms: nextOR } } } });
+  };
+  const handleAssignFeeder = (modKey, channel, feederId) => {
+    if (!modKey || (channel !== "A" && channel !== "B")) return;
+    const pl = job?.panelizedLighting || {};
+    const sav = pl.savantV2 || {};
+    const floorOv = sav[floor] || {};
+    const ia = floorOv.inputAssignments || {};
+    const cur = ia[modKey] || {};
+    const nextChannel = feederId ? { ...cur, [channel]: feederId }
+                                  : (() => { const c = {...cur}; delete c[channel]; return c; })();
+    const nextIA = (Object.keys(nextChannel).length > 0)
+      ? { ...ia, [modKey]: nextChannel }
+      : (() => { const i = {...ia}; delete i[modKey]; return i; })();
+    patch({ panelizedLighting: { ...pl, savantV2: { ...sav, [floor]: { ...floorOv, inputAssignments: nextIA } } } });
+  };
+  const handleAddFeeder = ({ slot, amps, poles, label, phase, tandem, ampsB, labelB, phaseB }) => {
+    const pl = job?.panelizedLighting || {};
+    const breakers = pl.panelLayout?.[floor]?.regularBreakers || [];
+    const isTandem = !!tandem;
+    const newBreaker = {
+      id: `fdr_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
+      slot: String(slot || ""), amps: String(amps || "20"),
+      poles: isTandem ? 1 : (poles || 1),
+      label: label || `F${breakers.length + 1}`, phase: phase || "",
+      ...(isTandem ? { tandem:true, ampsB:String(ampsB||amps||"20"),
+        labelB:labelB||`${label||`F${breakers.length+1}`}B`, phaseB:phaseB||"" } : {}),
+    };
+    patch({ panelizedLighting: { ...pl, panelLayout: {
+      ...(pl.panelLayout||{}),
+      [floor]: { ...(pl.panelLayout?.[floor]||{}), regularBreakers: [...breakers, newBreaker] },
+    }}});
+  };
+  const handleEditFeeder = (feederId, p) => {
+    const pl = job?.panelizedLighting || {};
+    const breakers = pl.panelLayout?.[floor]?.regularBreakers || [];
+    const next = breakers.map(b => b.id === feederId ? { ...b, ...p } : b);
+    patch({ panelizedLighting: { ...pl, panelLayout: {
+      ...(pl.panelLayout||{}),
+      [floor]: { ...(pl.panelLayout?.[floor]||{}), regularBreakers: next },
+    }}});
+  };
+  const handleAddModule = ({ sku, slot, modNum }) => {
+    const pl = job?.panelizedLighting || {};
+    const flatRows = flattenModulesToRows(pl.cp4Loads?.[floor] || []);
+    const used = new Set(flatRows.map(r => (r.mod||"").trim()).filter(Boolean));
+    let next = modNum;
+    if (!next) { let n = 1; while (used.has(String(n))) n++; next = String(n); }
+    const meta = savSkuMeta(sku);
+    const isSingle = meta.outputs === 1;
+    const slot0 = String(slot || "");
+    const slot1 = slot0 ? String(parseInt(slot0,10) + 2) : "";
+    const baseRow = { moduleType: sku || "", mod: next, loadType:"", watts:"", keypad:"",
+      pulled:false, status:"", name:"" };
+    const newRows = [{ ...baseRow, id:`mod_${Date.now()}_a`, num:flatRows.length+1,
+      ch:isSingle?"":"A", slot:slot0 }];
+    if (!isSingle) newRows.push({ ...baseRow, id:`mod_${Date.now()}_b`,
+      num:flatRows.length+2, ch:"B", slot:slot1 });
+    patch({ panelizedLighting: { ...pl,
+      cp4Loads:{ ...(pl.cp4Loads||{}), [floor]: [...flatRows, ...newRows] } } });
+  };
+  const handleDeleteModule = (modKey) => {
+    const pl = job?.panelizedLighting || {};
+    const flatRows = flattenModulesToRows(pl.cp4Loads?.[floor] || []);
+    const filtered = flatRows.filter(r => String(r.mod||"") !== String(modKey));
+    const sav = pl.savantV2 || {};
+    const floorOv = sav[floor] || {};
+    const ia = { ...(floorOv.inputAssignments || {}) };
+    const orMap = { ...(floorOv.outputRooms || {}) };
+    delete ia[modKey];
+    delete orMap[modKey];
+    patch({ panelizedLighting: { ...pl,
+      cp4Loads: { ...(pl.cp4Loads||{}), [floor]: filtered },
+      savantV2: { ...sav, [floor]: { ...floorOv, inputAssignments: ia, outputRooms: orMap } } } });
+  };
+  const handleDeleteFeeder = (feederId) => {
+    const pl = job?.panelizedLighting || {};
+    const breakers = pl.panelLayout?.[floor]?.regularBreakers || [];
+    const filtered = breakers.filter(b => b.id !== feederId);
+    const sav = pl.savantV2 || {};
+    const floorOv = sav[floor] || {};
+    const ia = floorOv.inputAssignments || {};
+    const cleanedIA = {};
+    Object.keys(ia).forEach(modKey => {
+      const cur = ia[modKey] || {};
+      const next = {};
+      if (cur.A && cur.A !== feederId) next.A = cur.A;
+      if (cur.B && cur.B !== feederId) next.B = cur.B;
+      if (Object.keys(next).length > 0) cleanedIA[modKey] = next;
+    });
+    patch({ panelizedLighting: { ...pl,
+      panelLayout: { ...(pl.panelLayout||{}),
+        [floor]: { ...(pl.panelLayout?.[floor]||{}), regularBreakers: filtered } },
+      savantV2: { ...sav, [floor]: { ...floorOv, inputAssignments: cleanedIA } } } });
+  };
+
+  // ── Slot row renderer ─────────────────────────────────────────────
+  // Each slot row is either empty (tap to add), a feeder (tap to edit),
+  // or a module half (tap to edit the load on that breaker output).
+  const renderSlotRow = (slot) => {
+    const cell = slotMap[slot];
+    const rowBase = {display:"grid",gridTemplateColumns:"38px 1fr",alignItems:"stretch",
+      borderBottom:`1px solid ${C.border}`,minHeight:46,cursor:"pointer"};
+    const slotN = (
+      <div style={{display:"flex",alignItems:"center",justifyContent:"flex-end",
+        padding:"0 9px",color:C.muted,fontSize:11,fontVariantNumeric:"tabular-nums",
+        background:C.surface,borderRight:`1px solid ${C.border}`}}>{slot}</div>
+    );
+    if (!cell) {
+      return (
+        <div key={slot} style={rowBase}
+          onClick={()=>setSheet({kind:"add", slot})}>
+          {slotN}
+          <div style={{padding:"8px 11px",display:"flex",alignItems:"center",gap:8,
+            color:C.muted,fontStyle:"italic",fontSize:13}}>+ Tap to add</div>
+        </div>
+      );
+    }
+    // Feeder row (or 2-pole cont)
+    if (cell.kind === "feeder") {
+      const feeder = cell.feeder;
+      const isCont = cell.isCont;
+      const color = savV2FeederColor(feeder.id, v2.feeders);
+      const fed = (v2.modules || []).flatMap(m => {
+        const arr = [];
+        if (m.inputs?.A === feeder.id) arr.push(`${m.modNum||"?"}·A`);
+        if (m.inputs?.B === feeder.id) arr.push(`${m.modNum||"?"}·B`);
+        return arr;
+      });
+      return (
+        <div key={slot} style={{...rowBase, cursor: isCont ? "default" : "pointer"}}
+          onClick={isCont ? undefined : ()=>setSheet({kind:"edit-feeder", feederId:feeder.id})}>
+          {slotN}
+          <div style={{padding:"8px 11px",display:"flex",alignItems:"center",gap:8,
+            background: color ? color.fill : "#f1f5f9",
+            borderLeft:`3px solid ${color ? color.chip : C.border}`}}>
+            <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.04em",
+              padding:"1px 6px",borderRadius:99,background:"#92400e18",color:"#92400e",
+              border:"1px solid #92400e44",textTransform:"uppercase",flexShrink:0}}>
+              {feeder.label || "F?"}{feeder.tandem ? ` / ${feeder.labelB||"?"}` : ""}
+            </span>
+            <span style={{fontSize:13,fontWeight:600,color:C.text,flex:1,minWidth:0,
+              overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+              {isCont
+                ? `${feeder.label||"F?"} cont.`
+                : feeder.tandem
+                  ? `${feeder.amps||"20"}A + ${feeder.ampsB||"20"}A`
+                  : `${feeder.amps||"20"}A${(feeder.poles||1)===2?" · 2P":""}`}
+              {feeder.tandem && !isCont && (
+                <span style={{marginLeft:6,fontSize:9,fontWeight:800,padding:"1px 5px",
+                  background:"#fef3c7",color:"#92400e",border:"1px solid #fcd34d",
+                  borderRadius:3,letterSpacing:"0.04em"}}>TANDEM</span>
+              )}
+            </span>
+            {!isCont && (
+              <span style={{fontSize:10,color:C.dim,flexShrink:0,
+                fontStyle:fed.length===0?"italic":"normal"}}>
+                {fed.length === 0 ? "unassigned" : `feeds ${fed.length}`}
+              </span>
+            )}
+          </div>
+        </div>
+      );
+    }
+    // Module half row
+    if (cell.kind === "module-half") {
+      const m = cell.module;
+      const ch = cell.channel;
+      const isContCh = cell.isCont; // single-output module's second slot
+      const editKey = m.modNum || m._legacyMod;
+      const out = ch === "A" ? m.outputs?.A : (ch === "B" ? m.outputs?.B : m.outputs?.A);
+      const fdr = v2.feeders.find(f => f.id === m.inputs?.[ch || "A"]);
+      const fdrIdx = fdr ? v2.feeders.indexOf(fdr) : -1;
+      const fdrColor = fdrIdx >= 0 ? SAV_V2_FEEDER_COLORS[fdrIdx % SAV_V2_FEEDER_COLORS.length] : null;
+      const sku = m.sku || "";
+      const skuShort = SAV_SKU_LABEL[sku] ? SAV_SKU_LABEL[sku].split("(")[0].trim() : (sku || "?");
+      return (
+        <div key={slot} style={rowBase}
+          onClick={isContCh ? undefined : ()=>setSheet({kind:"edit-output",
+            modKey:editKey, channel:ch, sku, slot})}>
+          {slotN}
+          <div style={{padding:"8px 11px",display:"flex",alignItems:"center",gap:8,
+            background:"#fff",borderLeft:`3px solid ${C.purple}`}}>
+            <span style={{fontSize:10,fontWeight:800,color:C.purple,letterSpacing:"0.04em",
+              padding:"1px 6px",borderRadius:99,background:"#7c3aed18",
+              border:"1px solid #7c3aed33",textTransform:"uppercase",flexShrink:0}}>
+              M{m.modNum||"?"}{ch ? `·${ch}` : ""}
+            </span>
+            <span style={{fontSize:13,fontWeight:600,color:out?.name?C.text:C.muted,
+              flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+              fontStyle:out?.name?"normal":"italic"}}>
+              {isContCh
+                ? `${skuShort} cont.`
+                : (out?.name || "no load yet · tap to assign")}
+            </span>
+            {!isContCh && fdr && (
+              <span style={{fontSize:9,fontWeight:800,padding:"1px 6px",borderRadius:99,
+                background:fdrColor?fdrColor.fill:"#f1f5f9",
+                color:fdrColor?fdrColor.chip:C.dim,
+                border:`1px solid ${fdrColor?fdrColor.chip:C.border}`,
+                textTransform:"uppercase",letterSpacing:"0.04em",flexShrink:0}}>
+                {fdr.label||"?"}
+              </span>
+            )}
+            {!isContCh && !fdr && (
+              <span style={{fontSize:9,fontWeight:700,color:"#dc2626",
+                background:"#fee2e2",border:"1px solid #fecaca",padding:"1px 5px",
+                borderRadius:3,letterSpacing:"0.04em",flexShrink:0}}>no feeder</span>
+            )}
+            {!isContCh && out?.loadType && (
+              <span style={{fontSize:10,color:C.dim,flexShrink:0}}>
+                {out.loadType.startsWith("Dim") ? "Dim" : (out.loadType.startsWith("Sw") ? "Sw" : out.loadType)}
+                {out.watts ? ` · ${out.watts}W` : ""}
+              </span>
+            )}
+          </div>
+        </div>
+      );
+    }
+    return null;
+  };
+
+  return (
+    <div style={{marginBottom:14}}>
+      {/* Top: panel picker + add panel button */}
+      <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:12,position:"relative"}}>
+        <div onClick={()=>setPickerOpen(o=>!o)}
+          style={{flex:1,background:"#fff",border:`1px solid ${C.border}`,borderRadius:10,
+            padding:"10px 14px",display:"flex",alignItems:"center",justifyContent:"space-between",
+            cursor:"pointer"}}>
+          <div style={{minWidth:0,flex:1}}>
+            <div style={{fontSize:15,fontWeight:700,color:C.text,
+              whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+              {panelLabel}
+            </div>
+            <div style={{fontSize:11,color:C.dim,marginTop:1}}>
+              {panelSize} slots · {feederCount} feeder{feederCount===1?"":"s"} ·{" "}
+              {moduleCount} module{moduleCount===1?"":"s"} · {emptyCount} empty
+            </div>
+          </div>
+          <span style={{color:C.dim,fontSize:16,marginLeft:8}}>{pickerOpen?"▴":"▾"}</span>
+        </div>
+        <button onClick={()=>setSheet({kind:"add-panel"})}
+          style={{background:"#fff",border:`1px solid ${C.border}`,color:C.text,
+            borderRadius:8,padding:"9px 12px",fontSize:12,fontWeight:700,cursor:"pointer",
+            fontFamily:"inherit",letterSpacing:"0.03em",whiteSpace:"nowrap"}}>
+          + Panel
+        </button>
+        {pickerOpen && (
+          <div style={{position:"absolute",top:"100%",left:0,right:0,zIndex:30,
+            background:"#fff",border:`1px solid ${C.border}`,borderRadius:10,
+            marginTop:4,boxShadow:"0 8px 24px rgba(0,0,0,0.08)",overflow:"hidden"}}>
+            {panels.map(p => (
+              <div key={p.floor} onClick={()=>{ setActiveFloor(p.floor); setPickerOpen(false); }}
+                style={{padding:"10px 14px",cursor:"pointer",
+                  borderBottom:`1px solid ${C.border}`,
+                  background: p.floor===activeFloor ? "#f8fafc" : "#fff",
+                  fontWeight: p.floor===activeFloor ? 700 : 500}}>
+                <div style={{fontSize:13,color:C.text}}>{p.label}</div>
+                <div style={{fontSize:10,color:C.dim,marginTop:1}}>
+                  {p.panelSize} slots · {p.feederCount} feeders · {p.smartBreakerCount} smart
+                </div>
+              </div>
+            ))}
+          </div>
+        )}
+      </div>
+
+      {/* Slot list */}
+      <div style={{background:"#fff",border:`1px solid ${C.border}`,borderRadius:12,
+        overflow:"hidden"}}>
+        {Array.from({length:panelSize}, (_, i) => renderSlotRow(i+1))}
+      </div>
+
+      <div style={{fontSize:11,color:C.dim,margin:"8px 4px 12px",textAlign:"center",
+        fontStyle:"italic"}}>
+        Tap a slot to edit. Tap empty to add a feeder, smart breaker, or tandem.
+      </div>
+
+      {/* Bottom actions */}
+      <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+        <button onClick={()=>printSavantV2PanelCover({jobName:job?.name||"",
+          jobAddress:job?.address||"",panelLabel,v2})}
+          style={{flex:1,background:"#fff",border:`1px solid ${C.border}`,color:C.text,
+            borderRadius:8,padding:"10px 12px",fontSize:12,fontWeight:700,cursor:"pointer",
+            fontFamily:"inherit",letterSpacing:"0.03em"}}>
+          Print panel cover
+        </button>
+        <button onClick={()=>printSavantV2PullList({jobName:job?.name||"",
+          jobAddress:job?.address||"",panelLabel,v2})}
+          style={{flex:1,background:"#fff",border:`1px solid ${C.border}`,color:C.text,
+            borderRadius:8,padding:"10px 12px",fontSize:12,fontWeight:700,cursor:"pointer",
+            fontFamily:"inherit",letterSpacing:"0.03em"}}>
+          Print pull list (by room)
+        </button>
+      </div>
+
+      {/* ── Bottom sheet ── one component, swappable contents ── */}
+      {sheet && (
+        <SavantSheet onClose={()=>setSheet(null)}>
+          <SavantSheetBody
+            sheet={sheet}
+            setSheet={setSheet}
+            v2={v2}
+            floor={floor}
+            panels={panels}
+            handleAddFeeder={handleAddFeeder}
+            handleAddModule={handleAddModule}
+            handleEditOutput={handleEditOutput}
+            handleSetRoom={handleSetRoom}
+            handleAssignFeeder={handleAssignFeeder}
+            handleEditFeeder={handleEditFeeder}
+            handleDeleteFeeder={handleDeleteFeeder}
+            handleDeleteModule={handleDeleteModule}
+            onAddPanel={(label) => {
+              const key = `panel_${Date.now()}`;
+              const pl = job.panelizedLighting || {};
+              u({ panelizedLighting: { ...pl,
+                extraFloors: [...(pl.extraFloors||[]), {key, label}] },
+                plSectionLabels: {...(job.plSectionLabels||{}), [key]: label} });
+              setActiveFloor(key);
+              setSheet(null);
+            }}
+            onPickStandardFloor={(k) => {
+              setActiveFloor(k);
+              setSheet(null);
+            }}/>
+        </SavantSheet>
+      )}
+    </div>
+  );
+}
+
+// ── SavantSheet ─────────────────────────────────────────────────────
+// Generic bottom-sheet shell used by the slot-first tab. Centers on
+// desktop, snaps to bottom on narrow screens. Backdrop click closes.
+function SavantSheet({ onClose, children }) {
+  // Lock body scroll while sheet open so the page underneath doesn't
+  // jump when the user scrolls inside the sheet.
+  useEffect(() => {
+    const prev = document.body.style.overflow;
+    document.body.style.overflow = "hidden";
+    return () => { document.body.style.overflow = prev; };
+  }, []);
+  return (
+    <div onClick={onClose} style={{position:"fixed",inset:0,
+      background:"rgba(15,23,42,0.5)",zIndex:9999,display:"flex",
+      alignItems:"flex-end",justifyContent:"center",backdropFilter:"blur(2px)"}}>
+      <div onClick={e=>e.stopPropagation()}
+        style={{background:"#fff",borderRadius:"18px 18px 0 0",padding:"16px 16px 24px",
+          width:"100%",maxWidth:560,maxHeight:"85vh",overflowY:"auto",
+          boxShadow:"0 -8px 24px rgba(0,0,0,0.12)"}}>
+        <div style={{width:42,height:5,background:C.border,borderRadius:99,
+          margin:"-4px auto 14px"}}/>
+        {children}
+      </div>
+    </div>
+  );
+}
+
+// Field wrapper used inside the sheet for consistent label + input layout.
+function SheetField({ label, children, hint }) {
+  return (
+    <div style={{marginBottom:12}}>
+      {label && <div style={{fontSize:10,fontWeight:800,color:C.dim,
+        letterSpacing:"0.08em",textTransform:"uppercase",marginBottom:5}}>{label}</div>}
+      {children}
+      {hint && <div style={{fontSize:10,color:C.muted,marginTop:4,fontStyle:"italic"}}>{hint}</div>}
+    </div>
+  );
+}
+
+// ── SavantSheetBody ─────────────────────────────────────────────────
+// Big switch on sheet.kind. Each branch renders its own form with local
+// draft state, commits via the passed handlers on Save, and closes.
+function SavantSheetBody({ sheet, setSheet, v2, floor, panels,
+  handleAddFeeder, handleAddModule, handleEditOutput, handleSetRoom,
+  handleAssignFeeder, handleEditFeeder, handleDeleteFeeder, handleDeleteModule,
+  onAddPanel, onPickStandardFloor }) {
+
+  // ── "What goes here?" picker (tap empty slot) ──
+  if (sheet.kind === "add") {
+    const slot = sheet.slot;
+    const choice = (icon, title, desc, kind) => (
+      <button onClick={()=>setSheet({kind, slot, draft:{}})}
+        style={{display:"flex",gap:12,width:"100%",padding:"14px 16px",
+          border:`1px solid ${C.border}`,borderRadius:12,background:"#fff",
+          fontFamily:"inherit",fontSize:14,fontWeight:600,color:C.text,
+          textAlign:"left",cursor:"pointer",marginBottom:8,alignItems:"flex-start"}}>
+        <span style={{fontSize:22,lineHeight:1}}>{icon}</span>
+        <div style={{flex:1}}>
+          <div>{title}</div>
+          <div style={{fontSize:11,color:C.dim,fontWeight:500,marginTop:2}}>{desc}</div>
+        </div>
+      </button>
+    );
+    return (
+      <>
+        <h2 style={{margin:"0 0 4px",fontSize:15,fontWeight:800}}>Slot {slot} · what goes here?</h2>
+        <div style={{fontSize:12,color:C.dim,marginBottom:14}}>Pick one — the form pre-fills slot {slot}.</div>
+        {choice("⚡","Feeder breaker","Single 15A / 20A / 30A breaker powering smart breakers downstream.","add-feeder")}
+        {choice("≡","Tandem feeder","Two 1-pole feeders sharing this slot.","add-tandem")}
+        {choice("▦","Smart breaker (module)","Savant module — uses slots " + slot + " (A) and " + (slot+2) + " (B).","add-module")}
+        <button onClick={()=>setSheet(null)}
+          style={{marginTop:6,background:"none",border:`1px solid ${C.border}`,
+            color:C.dim,borderRadius:8,padding:"10px 12px",fontSize:12,fontWeight:600,
+            cursor:"pointer",fontFamily:"inherit",width:"100%"}}>Cancel</button>
+      </>
+    );
+  }
+
+  // ── Add feeder ──
+  if (sheet.kind === "add-feeder") {
+    const slot = sheet.slot;
+    const d = sheet.draft || {};
+    const set = (p) => setSheet({...sheet, draft:{...d, ...p}});
+    return (
+      <>
+        <h2 style={{margin:"0 0 4px",fontSize:15,fontWeight:800}}>Feeder breaker · slot {slot}</h2>
+        <div style={{fontSize:12,color:C.dim,marginBottom:14}}>Pick amps + (optionally) a label.</div>
+        <SheetField label="Amps">
+          <select value={d.amps||"20"} onChange={e=>set({amps:e.target.value})}
+            style={inputStyle()}>
+            {["15","20","30","40","50","60"].map(a => <option key={a} value={a}>{a}A</option>)}
+          </select>
+        </SheetField>
+        <SheetField label="Poles">
+          <select value={d.poles||1} onChange={e=>set({poles:Number(e.target.value)})}
+            style={inputStyle()}>
+            <option value={1}>1-pole</option>
+            <option value={2}>2-pole (also paints slot {slot+2})</option>
+          </select>
+        </SheetField>
+        <SheetField label="Label (optional)">
+          <input value={d.label||""} onChange={e=>set({label:e.target.value})}
+            placeholder={`e.g. F${(v2.feeders.length||0) + 1}`} style={inputStyle()}/>
+        </SheetField>
+        <SheetActions onCancel={()=>setSheet(null)} onSave={()=>{
+          handleAddFeeder({ slot:String(slot), amps:d.amps||"20", poles:d.poles||1,
+            label:d.label||"", phase:d.phase||"" });
+          setSheet(null);
+        }}/>
+      </>
+    );
+  }
+
+  // ── Add tandem ──
+  if (sheet.kind === "add-tandem") {
+    const slot = sheet.slot;
+    const d = sheet.draft || {};
+    const set = (p) => setSheet({...sheet, draft:{...d, ...p}});
+    return (
+      <>
+        <h2 style={{margin:"0 0 4px",fontSize:15,fontWeight:800}}>Tandem · slot {slot}</h2>
+        <div style={{fontSize:12,color:C.dim,marginBottom:14}}>Two 1-pole breakers in this slot.</div>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <SheetField label="Half A · Amps">
+            <select value={d.amps||"15"} onChange={e=>set({amps:e.target.value})}
+              style={inputStyle()}>
+              {["15","20","30"].map(a => <option key={a} value={a}>{a}A</option>)}
+            </select>
+          </SheetField>
+          <SheetField label="Half B · Amps">
+            <select value={d.ampsB||"15"} onChange={e=>set({ampsB:e.target.value})}
+              style={inputStyle()}>
+              {["15","20","30"].map(a => <option key={a} value={a}>{a}A</option>)}
+            </select>
+          </SheetField>
+          <SheetField label="Half A · Label">
+            <input value={d.label||""} onChange={e=>set({label:e.target.value})}
+              placeholder={`F${(v2.feeders.length||0) + 1}`} style={inputStyle()}/>
+          </SheetField>
+          <SheetField label="Half B · Label">
+            <input value={d.labelB||""} onChange={e=>set({labelB:e.target.value})}
+              placeholder={`F${(v2.feeders.length||0) + 2}`} style={inputStyle()}/>
+          </SheetField>
+        </div>
+        <SheetActions onCancel={()=>setSheet(null)} onSave={()=>{
+          handleAddFeeder({ slot:String(slot), amps:d.amps||"15", poles:1,
+            label:d.label||"", phase:"", tandem:true,
+            ampsB:d.ampsB||"15", labelB:d.labelB||"", phaseB:"" });
+          setSheet(null);
+        }}/>
+      </>
+    );
+  }
+
+  // ── Add module ──
+  if (sheet.kind === "add-module") {
+    const slot = sheet.slot;
+    const d = sheet.draft || {};
+    const set = (p) => setSheet({...sheet, draft:{...d, ...p}});
+    const sku = d.sku || "DUAL_500W_APD";
+    const isSingle = savSkuMeta(sku).outputs === 1;
+    return (
+      <>
+        <h2 style={{margin:"0 0 4px",fontSize:15,fontWeight:800}}>Smart breaker · slot {slot}</h2>
+        <div style={{fontSize:12,color:C.dim,marginBottom:14}}>
+          Takes slot {slot} (Out A){!isSingle && ` and slot ${slot+2} (Out B)`}.
+        </div>
+        <SheetField label="Module type">
+          <select value={sku} onChange={e=>set({sku:e.target.value})} style={inputStyle()}>
+            {SAV_MODULE_TYPES.filter(o => o.value && !o.label?.includes("legacy")).map(o =>
+              <option key={o.value} value={o.value}>{o.label}</option>)}
+          </select>
+        </SheetField>
+        <SheetActions onCancel={()=>setSheet(null)} onSave={()=>{
+          handleAddModule({ sku, slot:String(slot) });
+          setSheet(null);
+        }} saveLabel="Add"/>
+      </>
+    );
+  }
+
+  // ── Edit feeder ──
+  if (sheet.kind === "edit-feeder") {
+    const feederId = sheet.feederId;
+    const f = v2.feeders.find(x => x.id === feederId);
+    if (!f) return <div>Feeder not found.</div>;
+    const fed = (v2.modules||[]).flatMap(m => {
+      const arr = [];
+      if (m.inputs?.A === f.id) arr.push(`${m.modNum||"?"}·A`);
+      if (m.inputs?.B === f.id) arr.push(`${m.modNum||"?"}·B`);
+      return arr;
+    });
+    const d = sheet.draft || { amps: f.amps, label: f.label, poles: f.poles||1,
+      ampsB: f.ampsB||"", labelB: f.labelB||"" };
+    const set = (p) => setSheet({...sheet, draft:{...d, ...p}});
+    return (
+      <>
+        <h2 style={{margin:"0 0 4px",fontSize:15,fontWeight:800}}>
+          {f.tandem ? `Tandem · slot ${f.slot}` : `${f.label||"Feeder"} · slot ${f.slot}`}
+        </h2>
+        <div style={{fontSize:12,color:C.dim,marginBottom:14}}>
+          {fed.length === 0 ? "Not powering any module yet."
+            : `Feeds ${fed.length} input${fed.length===1?"":"s"}: ${fed.join(" · ")}`}
+        </div>
+        {f.tandem ? (
+          <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+            <SheetField label="A · Amps">
+              <select value={d.amps||"15"} onChange={e=>set({amps:e.target.value})} style={inputStyle()}>
+                {["15","20","30"].map(a => <option key={a} value={a}>{a}A</option>)}
+              </select>
+            </SheetField>
+            <SheetField label="B · Amps">
+              <select value={d.ampsB||"15"} onChange={e=>set({ampsB:e.target.value})} style={inputStyle()}>
+                {["15","20","30"].map(a => <option key={a} value={a}>{a}A</option>)}
+              </select>
+            </SheetField>
+            <SheetField label="A · Label">
+              <input value={d.label||""} onChange={e=>set({label:e.target.value})} style={inputStyle()}/>
+            </SheetField>
+            <SheetField label="B · Label">
+              <input value={d.labelB||""} onChange={e=>set({labelB:e.target.value})} style={inputStyle()}/>
+            </SheetField>
+          </div>
+        ) : (
+          <>
+            <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+              <SheetField label="Amps">
+                <select value={d.amps||"20"} onChange={e=>set({amps:e.target.value})} style={inputStyle()}>
+                  {["15","20","30","40","50","60"].map(a => <option key={a} value={a}>{a}A</option>)}
+                </select>
+              </SheetField>
+              <SheetField label="Poles">
+                <select value={d.poles||1} onChange={e=>set({poles:Number(e.target.value)})} style={inputStyle()}>
+                  <option value={1}>1-pole</option>
+                  <option value={2}>2-pole</option>
+                </select>
+              </SheetField>
+            </div>
+            <SheetField label="Label">
+              <input value={d.label||""} onChange={e=>set({label:e.target.value})} style={inputStyle()}/>
+            </SheetField>
+          </>
+        )}
+        <SheetActions
+          onCancel={()=>setSheet(null)}
+          onSave={()=>{
+            handleEditFeeder(feederId, {
+              amps: d.amps,
+              label: d.label,
+              poles: d.poles || 1,
+              ...(f.tandem ? { ampsB: d.ampsB, labelB: d.labelB } : {}),
+            });
+            setSheet(null);
+          }}
+          onDelete={()=>{
+            const msg = fed.length > 0
+              ? `Delete ${f.label||"feeder"}? Powers ${fed.length} input${fed.length===1?"":"s"} — they'll become unassigned.`
+              : `Delete ${f.label||"feeder"}?`;
+            if (window.confirm(msg)) { handleDeleteFeeder(feederId); setSheet(null); }
+          }}
+          deleteLabel="Remove feeder"/>
+      </>
+    );
+  }
+
+  // ── Edit output (the load on a smart breaker output) ──
+  if (sheet.kind === "edit-output") {
+    const { modKey, channel, slot } = sheet;
+    const m = v2.modules.find(x => (x.modNum||x._legacyMod) === modKey);
+    if (!m) return <div>Module not found.</div>;
+    const out = channel === "A" ? m.outputs?.A : (channel === "B" ? m.outputs?.B : m.outputs?.A);
+    const feederPickerCh = channel || "A";
+    const d = sheet.draft || {
+      name: out?.name || "",
+      loadType: out?.loadType || "",
+      watts: out?.watts || "",
+      feederId: m.inputs?.[feederPickerCh] || "",
+      room: out?.room || "",
+      pulled: !!out?.pulled,
+    };
+    const set = (p) => setSheet({...sheet, draft:{...d, ...p}});
+    return (
+      <>
+        <h2 style={{margin:"0 0 4px",fontSize:15,fontWeight:800}}>
+          M{m.modNum||"?"}{channel?`·${channel}`:""} · slot {slot}
+        </h2>
+        <div style={{fontSize:12,color:C.dim,marginBottom:14}}>
+          {SAV_SKU_LABEL[m.sku] || m.sku || "Smart breaker"}
+        </div>
+        <SheetField label="Load name">
+          <input value={d.name} onChange={e=>set({name:e.target.value})}
+            placeholder="e.g. Kitchen island pendants" style={inputStyle()} autoFocus/>
+        </SheetField>
+        <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
+          <SheetField label="Type">
+            <select value={d.loadType} onChange={e=>set({loadType:e.target.value})} style={inputStyle()}>
+              {LOAD_TYPES.map(t => <option key={t} value={t}>{t || "—"}</option>)}
+            </select>
+          </SheetField>
+          <SheetField label="Watts">
+            <input value={d.watts} onChange={e=>set({watts:e.target.value})}
+              inputMode="numeric" placeholder="e.g. 500" style={inputStyle()}/>
+          </SheetField>
+          <SheetField label="Feeder (input)">
+            <select value={d.feederId||""} onChange={e=>set({feederId:e.target.value})} style={inputStyle()}>
+              <option value="">— unassigned —</option>
+              {v2.feeders.map(f => (
+                <option key={f.id} value={f.id}>
+                  {f.label||"?"} · {f.amps||"20"}A
+                </option>
+              ))}
+            </select>
+          </SheetField>
+          <SheetField label="Room">
+            <input value={d.room} onChange={e=>set({room:e.target.value})}
+              placeholder="e.g. Kitchen" style={inputStyle()}/>
+          </SheetField>
+        </div>
+        <SheetField>
+          <label style={{display:"inline-flex",alignItems:"center",gap:8,fontSize:13,
+            fontWeight:600,color:C.text,cursor:"pointer"}}>
+            <input type="checkbox" checked={!!d.pulled}
+              onChange={e=>set({pulled:e.target.checked})}/>
+            Wire pulled
+          </label>
+        </SheetField>
+        <SheetActions
+          onCancel={()=>setSheet(null)}
+          onSave={()=>{
+            const editChannel = channel || null;
+            handleEditOutput(modKey, editChannel, "name", d.name);
+            handleEditOutput(modKey, editChannel, "loadType", d.loadType);
+            handleEditOutput(modKey, editChannel, "watts", d.watts);
+            handleEditOutput(modKey, editChannel, "pulled", d.pulled);
+            handleSetRoom(modKey, feederPickerCh, d.room);
+            handleAssignFeeder(modKey, feederPickerCh, d.feederId || null);
+            setSheet(null);
+          }}
+          onDelete={()=>{
+            if (window.confirm(`Delete this module (M${m.modNum||"?"}) and both outputs?`)) {
+              handleDeleteModule(modKey);
+              setSheet(null);
+            }
+          }}
+          deleteLabel="Remove module"/>
+      </>
+    );
+  }
+
+  // ── Add panel ──
+  if (sheet.kind === "add-panel") {
+    const usedFloors = new Set(panels.map(p => p.floor));
+    const stdAvailable = [
+      {k:"upper", label:"Upper Floor"},
+      {k:"main", label:"Main Floor"},
+      {k:"basement", label:"Basement"},
+    ].filter(x => !usedFloors.has(x.k));
+    return (
+      <>
+        <h2 style={{margin:"0 0 4px",fontSize:15,fontWeight:800}}>Add a panel</h2>
+        <div style={{fontSize:12,color:C.dim,marginBottom:14}}>
+          Pick a standard floor or name your own.
+        </div>
+        {stdAvailable.map(s => (
+          <button key={s.k} onClick={()=>onPickStandardFloor(s.k)}
+            style={{display:"block",width:"100%",padding:"12px 14px",marginBottom:8,
+              border:`1px solid ${C.border}`,borderRadius:10,background:"#fff",
+              fontSize:13,fontWeight:600,color:C.text,cursor:"pointer",textAlign:"left",
+              fontFamily:"inherit"}}>{s.label}</button>
+        ))}
+        <button onClick={()=>{
+            const label = window.prompt("New panel label? (e.g. \"LCP 1\")");
+            if (label) onAddPanel(label);
+          }}
+          style={{display:"block",width:"100%",padding:"12px 14px",
+            border:`1px dashed ${C.purple}`,borderRadius:10,background:"#faf5ff",
+            fontSize:13,fontWeight:700,color:C.purple,cursor:"pointer",textAlign:"left",
+            fontFamily:"inherit",marginBottom:6}}>+ Custom name…</button>
+        <button onClick={()=>setSheet(null)}
+          style={{marginTop:6,background:"none",border:`1px solid ${C.border}`,
+            color:C.dim,borderRadius:8,padding:"10px 12px",fontSize:12,fontWeight:600,
+            cursor:"pointer",fontFamily:"inherit",width:"100%"}}>Cancel</button>
+      </>
+    );
+  }
+
+  return <div>Unknown sheet kind: {sheet.kind}</div>;
+}
+
+// Shared inline style for sheet inputs/selects.
+function inputStyle() {
+  return {
+    font:"inherit", fontSize:14, padding:"10px 12px",
+    border:`1px solid ${C.border}`, borderRadius:8,
+    background:"#fff", color:C.text, outline:"none", width:"100%",
+  };
+}
+
+// Cancel / Save / optional Delete row.
+function SheetActions({ onCancel, onSave, onDelete, saveLabel="Save", deleteLabel="Delete" }) {
+  return (
+    <div style={{display:"flex",gap:8,marginTop:8}}>
+      {onDelete && (
+        <button onClick={onDelete}
+          style={{background:"#fff",border:`1px solid #dc262644`,color:"#dc2626",
+            borderRadius:8,padding:"11px 14px",fontSize:13,fontWeight:700,cursor:"pointer",
+            fontFamily:"inherit"}}>
+          {deleteLabel}
+        </button>
+      )}
+      <button onClick={onCancel}
+        style={{flex:1,background:"#fff",border:`1px solid ${C.border}`,color:C.dim,
+          borderRadius:8,padding:"11px 14px",fontSize:13,fontWeight:600,cursor:"pointer",
+          fontFamily:"inherit"}}>
+        Cancel
+      </button>
+      <button onClick={onSave}
+        style={{flex:1,background:C.purple,border:"none",color:"#fff",
+          borderRadius:8,padding:"11px 14px",fontSize:13,fontWeight:800,cursor:"pointer",
+          fontFamily:"inherit",letterSpacing:"0.03em"}}>
+        {saveLabel}
+      </button>
+    </div>
+  );
+}
+
+
 function PanelModulesSection({
   modules, onChange, system, allLoads=[],
   // Optional cross-panel move support — when provided, the Move dropdown
@@ -23903,54 +24802,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   );
                 };
                 return (<>
-                {/* Savant: brand-new design (master loads list + collapsible
-                    panel cards stacked below). The legacy per-floor panel
-                    rendering below this block is skipped for Savant jobs. */}
-                {(job.lightingSystem||"Control 4")==="Savant" && (<>
-                  <SavantMasterLoadsList
-                    job={job}
-                    onPatch={(patch)=>u({panelizedLighting:{...(job.panelizedLighting||{}),...patch}})}
-                  />
-                  {(() => {
-                    const panels = listSavantPanels(job);
-                    return (
-                      <div style={{marginTop:10}}>
-                        <div style={{fontSize:13,fontWeight:700,color:C.text,marginBottom:8,letterSpacing:"0.02em"}}>
-                          Panels <span style={{color:C.dim,fontWeight:600,marginLeft:4}}>· {panels.length}</span>
-                        </div>
-                        {panels.length === 0 ? (
-                          <div style={{padding:"20px 14px",textAlign:"center",color:C.dim,fontSize:12,
-                            fontStyle:"italic",background:"#fafbfc",border:`1px dashed ${C.border}`,borderRadius:8}}>
-                            No panels yet — add one below to start wiring loads to smart breakers.
-                          </div>
-                        ) : panels.map((p, idx) => {
-                          const isExtra = !["main","basement","upper"].includes(p.floor);
-                          return (
-                            <SavantPanelCard
-                              key={p.floor}
-                              panel={p}
-                              job={job}
-                              defaultOpen={idx === 0}
-                              onPatch={(patch)=>u(patch)}
-                              onRenameLabel={(newLabel)=>{
-                                u({plSectionLabels:{...(job.plSectionLabels||{}),[p.floor]:newLabel}});
-                              }}
-                              onDelete={isExtra ? () => {
-                                const newExtras=(job.panelizedLighting.extraFloors||[]).filter(e=>e.key!==p.floor);
-                                const updated={...job.panelizedLighting,extraFloors:newExtras};
-                                delete updated[p.floor];
-                                delete updated[p.floor+"_keypad"];
-                                if (updated.panelLayout) delete updated.panelLayout[p.floor];
-                                if (updated.savantV2) delete updated.savantV2[p.floor];
-                                u({panelizedLighting:updated});
-                              } : null}
-                            />
-                          );
-                        })}
-                      </div>
-                    );
-                  })()}
-                </>)}
+                {/* Savant: slot-first single-screen tab. One panel at a time,
+                    tap empty slots to add, tap occupied slots to edit. The old
+                    master-loads-list + collapsible-panel-cards design is gone —
+                    SavantMasterLoadsList + SavantPanelCard + SavantV2PreviewToggle
+                    are now dead code (still defined above; cleanup follow-up). */}
+                {(job.lightingSystem||"Control 4")==="Savant" && (
+                  <SavantSlotFirstTab job={job} u={u}/>
+                )}
 
                 {(job.lightingSystem||"Control 4")!=="Savant" && _stdPanels.map(({floor,defaultLabel})=>{
                   const _mods = migrateFloorToModules((job.panelizedLighting.cp4Loads?.[floor])||[]);
