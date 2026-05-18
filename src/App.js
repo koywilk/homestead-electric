@@ -1246,6 +1246,11 @@ function migrateToSavantV2(oldRows = [], regularBreakers = [], panelSize = 40) {
 
     // Build feeders. Each regular breaker becomes one feeder. Default label
     // is "F1", "F2", … (positional). User can rename in the editor.
+    //
+    // Tandem rows (`tandem:true` + ampsB/labelB/phaseB) carry both halves in
+    // a single row to keep the slot→feeder map keys unique. The B-side
+    // fields are surfaced on the feeder so renderers (grid + feeder list +
+    // panel-cover print) can show both halves stacked.
     const feeders = breakers.map((b, i) => ({
       id: b.id || uid(),
       slot: b.slot || "",
@@ -1254,6 +1259,12 @@ function migrateToSavantV2(oldRows = [], regularBreakers = [], panelSize = 40) {
       label: b.label || `F${i+1}`,
       phase: b.phase || "",
       feedsInputs: [],   // populated when user assigns inputs.A/B in the editor
+      ...(b.tandem ? {
+        tandem: true,
+        ampsB:  b.ampsB  || b.amps || "20",
+        labelB: b.labelB || `${b.label || `F${i+1}`}B`,
+        phaseB: b.phaseB || "",
+      } : {}),
     }));
 
     // Group rows by mod#. Each group = one module. Rows without a mod# are
@@ -17684,7 +17695,7 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
 
   // Inline forms for adding (kept simple — slot + amps for feeder, slot + sku for module)
   const [showAddFeeder, setShowAddFeeder] = useState(false);
-  const [newFeeder, setNewFeeder] = useState({ slot:"", amps:"20", poles:1, label:"" });
+  const [newFeeder, setNewFeeder] = useState({ slot:"", amps:"20", poles:1, label:"", tandem:false, ampsB:"20", labelB:"" });
   const [showAddModule, setShowAddModule] = useState(false);
   const [newModule, setNewModule] = useState({ sku:"DUAL_500W_APD", slot:"" });
   const panelSize = v2.panelSize || 40;
@@ -17727,6 +17738,14 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
         <div style={{display:"flex", flexDirection:"column", lineHeight:1.3, minWidth:0}}>
           <span style={{color:C.text, fontSize:12, fontWeight:500}}>
             {isCont ? `${label} cont.` : `${label} · ${feeder.amps||"20"}A${(feeder.poles||1)===2?" 2P":""}`}
+            {/* Tandem badge so the row is obviously a paired breaker. */}
+            {!isCont && feeder.tandem && (
+              <span style={{
+                marginLeft:6, fontSize:9, padding:"1px 5px",
+                background:"#fef3c7", color:"#92400e", border:"1px solid #fcd34d",
+                borderRadius:3, fontWeight:700, letterSpacing:"0.04em",
+              }}>TANDEM</span>
+            )}
             {!isCont && fed.length > 0 && (
               <span style={{
                 marginLeft:6, fontSize:10, padding:"1px 5px",
@@ -17734,6 +17753,14 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
               }}>feeds {fed.length}</span>
             )}
           </span>
+          {/* Second half of a tandem breaker — stacked under the A line so
+              both halves are visible in the same slot row without needing a
+              second slot map entry. Carries its own amps + label. */}
+          {!isCont && feeder.tandem && (
+            <span style={{color:C.text, fontSize:11, fontWeight:500, marginTop:1}}>
+              + {feeder.labelB || `${label}B`} · {feeder.ampsB||"20"}A
+            </span>
+          )}
           {!isCont && fed.length > 0 && (
             <span style={{color:C.dim, fontSize:11}}>→ {fed.join(" · ")}</span>
           )}
@@ -17929,11 +17956,27 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
                   readOnly/>
                 <span style={{fontSize:11, fontWeight:500, color:C.text}}>
                   {f.amps||"20"}A
+                  {/* Tandem rows show both amps stacked since they're two
+                      breakers in one slot with potentially different amps. */}
+                  {f.tandem && (
+                    <span style={{display:"block",fontSize:10,color:C.dim}}>
+                      + {f.ampsB||"20"}A
+                    </span>
+                  )}
                 </span>
                 <span style={{fontSize:11, color:C.dim}}>
-                  {(f.poles||1)===2 ? "2-pole" : "1-pole"}
+                  {f.tandem ? "tandem" : ((f.poles||1)===2 ? "2-pole" : "1-pole")}
                 </span>
-                <span style={{fontSize:11, fontWeight:500, color:C.text}}>{f.label||""}</span>
+                <span style={{fontSize:11, fontWeight:500, color:C.text}}>
+                  {f.label||""}
+                  {/* B-half label stacked under A so both names are visible
+                      at a glance in the feeders list. */}
+                  {f.tandem && (
+                    <span style={{display:"block",fontSize:10,color:C.dim,fontWeight:500}}>
+                      + {f.labelB||""}
+                    </span>
+                  )}
+                </span>
                 <span style={{fontSize:11, color:C.dim, fontStyle: fed.length===0?"italic":"normal"}}>
                   {fed.length === 0 ? "unassigned" :
                     `feeds ${fed.length}: ${fed.join(" · ")}`}
@@ -18252,8 +18295,13 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
                 Poles
                 <select value={newFeeder.poles}
                   onChange={(e)=>setNewFeeder({...newFeeder, poles:Number(e.target.value)})}
+                  disabled={!!newFeeder.tandem}
+                  title={newFeeder.tandem ? "Tandems are always 1-pole — uncheck Tandem to change" : ""}
                   style={{fontSize:12, padding:"4px 6px", border:`0.5px solid ${C.border}`,
-                    borderRadius:4, fontFamily:"inherit", background:"#fff"}}>
+                    borderRadius:4, fontFamily:"inherit",
+                    background: newFeeder.tandem ? "#f1f5f9" : "#fff",
+                    color: newFeeder.tandem ? C.muted : C.text,
+                    cursor: newFeeder.tandem ? "not-allowed" : "pointer"}}>
                   <option value={1}>1-pole</option>
                   <option value={2}>2-pole</option>
                 </select>
@@ -18267,10 +18315,31 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
                   style={{fontSize:12, padding:"4px 6px", border:`0.5px solid ${C.border}`,
                     borderRadius:4, fontFamily:"inherit"}}/>
               </label>
+              {/* Tandem toggle — when on, the breaker is stored as a pair in
+                  one slot. B-side amps + label inputs reveal below. Tandem
+                  forces 1-pole (a tandem and a 2-pole both consume two
+                  slots in different ways — keep them mutually exclusive). */}
+              <label style={{display:"flex", flexDirection:"column", gap:3, fontSize:10,
+                color:C.dim, fontWeight:700, letterSpacing:"0.05em", textTransform:"uppercase",
+                gridColumn:"span 1"}}>
+                Tandem
+                <label style={{display:"inline-flex", alignItems:"center", gap:6,
+                  fontSize:11, fontWeight:600, textTransform:"none", letterSpacing:0,
+                  color:newFeeder.tandem ? "#92400e" : C.text, cursor:"pointer",
+                  padding:"4px 6px", border:`0.5px solid ${newFeeder.tandem?"#fcd34d":C.border}`,
+                  background:newFeeder.tandem?"#fef3c7":"#fff", borderRadius:4}}>
+                  <input type="checkbox" checked={!!newFeeder.tandem}
+                    onChange={(e)=>setNewFeeder({...newFeeder,
+                      tandem: e.target.checked,
+                      poles: e.target.checked ? 1 : newFeeder.poles,
+                    })}/>
+                  <span>2 breakers / slot</span>
+                </label>
+              </label>
               <button onClick={()=>{
                   if (!newFeeder.slot) { window.alert("Slot # is required."); return; }
                   onAddFeeder({ ...newFeeder });
-                  setNewFeeder({ slot:"", amps:"20", poles:1, label:"" });
+                  setNewFeeder({ slot:"", amps:"20", poles:1, label:"", tandem:false, ampsB:"20", labelB:"" });
                   setShowAddFeeder(false);
                 }}
                 style={{background:C.purple, border:"none", color:"#fff", borderRadius:6,
@@ -18278,6 +18347,40 @@ function SavantPanelV2({ job, floor, panelLabel = "Lighting panel",
                   fontFamily:"inherit", letterSpacing:"0.04em"}}>
                 ADD
               </button>
+              {/* Tandem B-side inputs — full-width row under the main inputs.
+                  Only the B-side amps + label are user-editable; slot is the
+                  same as half A, and we force 1-pole for tandems. */}
+              {newFeeder.tandem && (
+                <div style={{gridColumn:"1/-1", display:"grid",
+                  gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))", gap:8,
+                  paddingTop:8, marginTop:4, borderTop:`1px dashed #fcd34d`,
+                  background:"#fef3c708"}}>
+                  <div style={{fontSize:10, fontWeight:700, color:"#92400e",
+                    letterSpacing:"0.05em", textTransform:"uppercase",
+                    display:"flex", alignItems:"center", gridColumn:"1/-1"}}>
+                    Tandem · Half B (shares slot {newFeeder.slot||"?"})
+                  </div>
+                  <label style={{display:"flex", flexDirection:"column", gap:3, fontSize:10,
+                    color:C.dim, fontWeight:700, letterSpacing:"0.05em", textTransform:"uppercase"}}>
+                    Amps B
+                    <select value={newFeeder.ampsB||"20"}
+                      onChange={(e)=>setNewFeeder({...newFeeder, ampsB:e.target.value})}
+                      style={{fontSize:12, padding:"4px 6px", border:`0.5px solid ${C.border}`,
+                        borderRadius:4, fontFamily:"inherit", background:"#fff"}}>
+                      {["15","20","30","40","50","60"].map(a=><option key={a} value={a}>{a}A</option>)}
+                    </select>
+                  </label>
+                  <label style={{display:"flex", flexDirection:"column", gap:3, fontSize:10,
+                    color:C.dim, fontWeight:700, letterSpacing:"0.05em", textTransform:"uppercase"}}>
+                    Label B (optional)
+                    <input value={newFeeder.labelB||""}
+                      onChange={(e)=>setNewFeeder({...newFeeder, labelB:e.target.value})}
+                      placeholder="e.g. F1B"
+                      style={{fontSize:12, padding:"4px 6px", border:`0.5px solid ${C.border}`,
+                        borderRadius:4, fontFamily:"inherit"}}/>
+                  </label>
+                </div>
+              )}
             </div>
           )}
           {showAddModule && canAddModule && (
@@ -18395,6 +18498,11 @@ function SavantMasterLoadsList({ job, onPatch }) {
   const [search, setSearch]   = useState("");
   const [editing, setEditing] = useState(null);    // load id being edited
   const [adding,  setAdding]  = useState(false);   // inline "+ add load" form
+  // Whole section starts collapsed — the per-panel cards below are the
+  // primary edit surface now. Expand the master list when planning new
+  // loads or hunting one across panels. Local-only state — no Firestore
+  // writes needed; cheap to recompute each toggle.
+  const [open,    setOpen]    = useState(false);
 
   // Build dynamic chip set: All / Unassigned (if any) + every distinct room
   // that has at least one load. Stable order by frequency descending.
@@ -18568,11 +18676,18 @@ function SavantMasterLoadsList({ job, onPatch }) {
 
   return (
     <div style={{marginBottom:18}}>
-      {/* Header row + Add button */}
+      {/* Header row + Add button. The whole left side (title + count + the
+          unassigned chip + caption) is the toggle target; the right side
+          (search input + Add) keeps its own click handlers so opening the
+          section doesn't have to happen first. Search/Add auto-open the
+          section so they don't appear to be no-ops when collapsed. */}
       <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",
         marginBottom:8,gap:12,flexWrap:"wrap"}}>
-        <div>
-          <div style={{fontSize:13,fontWeight:700,color:C.text,letterSpacing:"0.02em"}}>
+        <div onClick={()=>setOpen(o=>!o)}
+          style={{cursor:"pointer",userSelect:"none",flex:1,minWidth:0}}>
+          <div style={{fontSize:13,fontWeight:700,color:C.text,letterSpacing:"0.02em",
+            display:"inline-flex",alignItems:"center",gap:6}}>
+            <span style={{color:C.dim,fontSize:14,lineHeight:1,fontWeight:700,width:14,display:"inline-block",textAlign:"center"}}>{open ? "▾" : "▸"}</span>
             Loads <span style={{color:C.dim,fontWeight:600,marginLeft:4}}>· {loads.length} total</span>
             {counts.unassigned > 0 && (
               <span style={{color:"#ea580c",fontWeight:700,marginLeft:8,fontSize:11}}>
@@ -18580,16 +18695,20 @@ function SavantMasterLoadsList({ job, onPatch }) {
               </span>
             )}
           </div>
-          <div style={{fontSize:10,color:C.dim,marginTop:1}}>
-            Every switch leg on the job — plan loads here, assign them to a panel/breaker below.
+          <div style={{fontSize:10,color:C.dim,marginTop:1,paddingLeft:20}}>
+            {open
+              ? "Every switch leg on the job — plan loads here, assign them to a panel/breaker below."
+              : "Click to expand — search, add, and assign loads across all panels."}
           </div>
         </div>
         <div style={{display:"flex",gap:8,alignItems:"center"}}>
-          <input value={search} onChange={e=>setSearch(e.target.value)}
+          <input value={search}
+            onChange={e=>{ setSearch(e.target.value); if(!open) setOpen(true); }}
+            onFocus={()=>{ if(!open) setOpen(true); }}
             placeholder="Search loads…"
             style={{font:"inherit",fontSize:11,padding:"4px 10px",border:`1px solid ${C.border}`,
               borderRadius:99,width:160,outline:"none",background:"#fff"}}/>
-          <button onClick={()=>setAdding(a=>!a)}
+          <button onClick={()=>{ setAdding(a=>!a); if(!open) setOpen(true); }}
             style={{background:adding?"#f1f5f9":"#fff",border:`1px solid ${C.border}`,color:C.text,
               borderRadius:7,padding:"5px 12px",fontSize:11,fontWeight:700,cursor:"pointer",
               fontFamily:"inherit",letterSpacing:"0.04em"}}>
@@ -18597,6 +18716,9 @@ function SavantMasterLoadsList({ job, onPatch }) {
           </button>
         </div>
       </div>
+      {open && (<>
+      {/* Body (filter chips + add form + table) is wrapped in a fragment so
+          the existing JSX below renders unchanged when the section is open. */}
 
       {/* Filter chips */}
       <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:10,alignItems:"center"}}>
@@ -18809,6 +18931,7 @@ function SavantMasterLoadsList({ job, onPatch }) {
           })}
         </div>
       )}
+      </>)}
     </div>
   );
 }
@@ -18899,16 +19022,33 @@ function SavantV2PreviewToggle({ job, floor, panelLabel, onPatch, forceShow=fals
   // ── 4b: Add feeder breaker ─────────────────────────────────────────
   // Writes to V1 panelLayout.regularBreakers so the legacy editor sees it
   // immediately. The V2 view picks it up on next render via the migration.
-  const handleAddFeeder = onPatch ? ({ slot, amps, poles, label, phase }) => {
+  //
+  // Tandem support: when `tandem` is true, the second half is stored on the
+  // SAME row as `ampsB`/`labelB`/`phaseB`. The migration surfaces those onto
+  // the feeder object so the V2 grid + feeder list render both halves in one
+  // slot. Single-row storage matches how the legacy regular-breaker editor
+  // stores tandems (`description/descriptionB`/etc.) and keeps the V2 slot
+  // map's slot→feeder keys unique — no collision handling needed.
+  const handleAddFeeder = onPatch ? ({ slot, amps, poles, label, phase, tandem, ampsB, labelB, phaseB }) => {
     const pl = job?.panelizedLighting || {};
     const breakers = pl.panelLayout?.[floor]?.regularBreakers || [];
+    const isTandem = !!tandem;
     const newBreaker = {
       id: `fdr_${Date.now()}_${Math.random().toString(36).slice(2,7)}`,
       slot: String(slot || ""),
       amps: String(amps || "20"),
-      poles: poles || 1,
+      // Tandems are always single-pole at the panel level — the row carries
+      // two single-pole breakers in one slot. Force poles=1 to keep the slot
+      // map sane (2-pole would also paint slot+2, which a tandem shouldn't).
+      poles: isTandem ? 1 : (poles || 1),
       label: label || `F${breakers.length + 1}`,
       phase: phase || "",
+      ...(isTandem ? {
+        tandem:  true,
+        ampsB:   String(ampsB || amps || "20"),
+        labelB:  labelB || `${label || `F${breakers.length + 1}`}B`,
+        phaseB:  phaseB || "",
+      } : {}),
     };
     onPatch({
       panelizedLighting: {
