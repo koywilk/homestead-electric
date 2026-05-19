@@ -41682,9 +41682,25 @@ function HuddleConfigPanel() {
     try {
       const fn = httpsCallable(functions, "sendTestHuddleEmail");
       const res = await fn({}); // server uses the auth user's email by default
-      const sent = res?.data?.sent || 0;
-      const to = res?.data?.to || "";
-      setTestResult({ ok: true, msg: `Sent ${sent} test email${sent===1?"":"s"} to ${to}.` });
+      const sent    = res?.data?.sent || 0;
+      const to      = res?.data?.to || "";
+      const results = Array.isArray(res?.data?.results) ? res.data.results : [];
+      const errored = results.filter(r => r.status === "error");
+      // Even if the callable didn't throw, individual per-foreman sends can
+      // have errored silently. Surface them with the same red treatment used
+      // for the cron's LAST RUN, otherwise the user sees "Sent 0" with no
+      // explanation and assumes the button is broken.
+      if (errored.length > 0) {
+        setTestResult({
+          ok: sent > 0,  // mixed result if at least one went through
+          msg: sent > 0
+            ? `Sent ${sent} of ${results.length} test emails to ${to}. ${errored.length} errored:`
+            : `0 sent, ${errored.length} errored:`,
+          errors: errored,
+        });
+      } else {
+        setTestResult({ ok: true, msg: `Sent ${sent} test email${sent===1?"":"s"} to ${to}.` });
+      }
     } catch (e) {
       console.error("Huddle test send failed:", e);
       setTestResult({ ok: false, msg: e?.message || "Send failed — check Functions logs." });
@@ -41834,11 +41850,34 @@ function HuddleConfigPanel() {
             {testing ? "Sending…" : "Send test to me"}
           </button>
           {testResult && (
-            <div style={{
-              fontSize: 11, marginTop: 8,
-              color: testResult.ok ? C.green : C.red,
-            }}>
-              {testResult.msg}
+            <div style={{ marginTop: 8 }}>
+              <div style={{
+                fontSize: 11,
+                color: testResult.ok ? C.green : C.red,
+                fontWeight: 600,
+              }}>
+                {testResult.msg}
+              </div>
+              {/* Per-foreman test-send errors. Mirrors the LAST RUN block
+                  formatting so cron + test failures look the same. */}
+              {Array.isArray(testResult.errors) && testResult.errors.length > 0 && (
+                <div style={{ marginTop: 6, display:"flex", flexDirection:"column", gap:4 }}>
+                  {testResult.errors.map((r, i) => (
+                    <div key={i} style={{
+                      fontSize: 11, padding:"6px 9px", borderRadius:6,
+                      background: "#fee2e2", color: "#b91c1c",
+                      border: `1px solid #fca5a5`, lineHeight: 1.4,
+                    }}>
+                      <span style={{ fontWeight:700 }}>✗ {r.foreman || "(unnamed)"}</span>
+                      {r.error && (
+                        <span style={{ marginLeft:6, fontFamily:"ui-monospace,monospace", fontWeight:500 }}>
+                          — {r.error}
+                        </span>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
             </div>
           )}
         </div>
