@@ -41843,25 +41843,59 @@ function HuddleConfigPanel() {
           )}
         </div>
 
-        {/* Status / last run */}
+        {/* Status / last run — when errors occur, show per-foreman details
+            so we can see WHY each send failed without digging into Functions
+            logs. The error message comes from the same results[] array the
+            scheduled function writes to settings/huddleEmailLog. */}
         <div style={{ marginTop: 16, padding: "10px 14px", background: C.surface,
                       border: `1px solid ${C.border}`, borderRadius: 8 }}>
           <div style={{ fontSize: 10, fontWeight: 700, color: C.dim, letterSpacing: "0.08em", marginBottom: 4 }}>
             LAST RUN
           </div>
           {lastLog?.lastRun ? (
-            <div style={{ fontSize: 12, color: C.text }}>
-              {(() => {
-                const d = lastLog.lastRun.toDate ? lastLog.lastRun.toDate() : new Date(lastLog.lastRun);
-                return d.toLocaleString("en-US", { weekday:"short", month:"short", day:"numeric", hour:"numeric", minute:"2-digit" });
-              })()}
-              {Array.isArray(lastLog.results) && (
-                <span style={{ color: C.dim, marginLeft: 8 }}>
-                  · {lastLog.results.filter(r => r.status === "sent").length} sent
-                  {lastLog.results.some(r => r.status === "error") && `, ${lastLog.results.filter(r=>r.status==="error").length} errored`}
-                </span>
+            <>
+              <div style={{ fontSize: 12, color: C.text }}>
+                {(() => {
+                  const d = lastLog.lastRun.toDate ? lastLog.lastRun.toDate() : new Date(lastLog.lastRun);
+                  return d.toLocaleString("en-US", { weekday:"short", month:"short", day:"numeric", hour:"numeric", minute:"2-digit" });
+                })()}
+                {Array.isArray(lastLog.results) && (
+                  <span style={{ color: C.dim, marginLeft: 8 }}>
+                    · {lastLog.results.filter(r => r.status === "sent").length} sent
+                    {lastLog.results.some(r => r.status === "error") && `, ${lastLog.results.filter(r=>r.status==="error").length} errored`}
+                  </span>
+                )}
+              </div>
+              {/* Per-foreman result lines. Sent rows render in green so the
+                  passing cases are obvious; error rows render in red with the
+                  raw error text from Resend (or whatever upstream) so the
+                  root cause is visible without checking Functions logs. */}
+              {Array.isArray(lastLog.results) && lastLog.results.length > 0 && (
+                <div style={{ marginTop: 8, display:"flex", flexDirection:"column", gap:4 }}>
+                  {lastLog.results.map((r, i) => {
+                    const ok = r.status === "sent";
+                    return (
+                      <div key={i} style={{
+                        fontSize: 11, padding:"6px 9px", borderRadius:6,
+                        background: ok ? "#dcfce7" : "#fee2e2",
+                        color:      ok ? "#15803d" : "#b91c1c",
+                        border: `1px solid ${ok ? "#86efac" : "#fca5a5"}`,
+                        lineHeight: 1.4,
+                      }}>
+                        <span style={{ fontWeight:700 }}>
+                          {ok ? "✓" : "✗"} {r.foreman || "(unnamed)"}
+                        </span>
+                        {r.error && (
+                          <span style={{ marginLeft:6, fontFamily:"ui-monospace,monospace", fontWeight:500 }}>
+                            — {r.error}
+                          </span>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
               )}
-            </div>
+            </>
           ) : (
             <div style={{ fontSize: 12, color: C.dim, fontStyle: "italic" }}>
               Hasn't run yet. The cron fires at 6am MT Mon-Fri.
