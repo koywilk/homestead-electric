@@ -1,7 +1,7 @@
 // BUILD_v9_FIXED
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { initializeApp } from "firebase/app";
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, query, where } from "firebase/firestore";
+import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, query, where, serverTimestamp } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable } from "firebase/functions";
@@ -2792,6 +2792,9 @@ const PERMISSIONS = {
   "quotes.convert":  ["admin"],
   "scoreboard.view":        ["admin"],
   "scoreboard.editWeights": ["admin"],
+  // Today command center — office + foreman, NOT lead/crew (explicit, 2026-05-21).
+  // standard = foreman per the legacy access mapping above.
+  "today.view":             ["admin","manager","standard"],
 };
 
 // Resolve access level from user object (supports legacy role-only users)
@@ -22635,6 +22638,788 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
   );
 }
 
+// ─── Up Next: rule engine + panel ───────────────────────────────────────
+// Reads a job's current state and surfaces the literal next action the
+// foreman needs to take. Fed by ~36 deterministic rules ordered by
+// priority. Top rule renders prominently; remaining firing rules are
+// collapsed behind a "▾ N more" expander.
+//
+// Pure read of `job` — never mutates. All writes go through `onAction`
+// which the parent (JobDetail) dispatches to existing handlers
+// (openNeedsSchedModal, u(patch), setTab, etc.).
+//
+// Each rule entry is:
+//   id        — stable identifier (for keys + future analytics)
+//   priority  — number, higher = more prominent
+//   fires     — (job) => boolean
+//   summary   — (job) => string (the rendered sentence; can include <b>)
+//   badge     — (job) => string | null (small urgency badge, e.g. "OVERDUE 6D")
+//   severity  — "urgent" | "needsInput" | "info" | "calm"
+//   actions   — (job) => [{label, kind, payload?, primary?, color?}]
+//
+// Severity drives the panel's background gradient. Calm rules ONLY fire
+// when no other rule does — handled in getUpNextRules below as a fallback.
+
+// Date helpers — safe against missing/garbage values
+function _daysAgo(s) {
+  if (!s) return null;
+  const d = new Date(s);
+  if (isNaN(d)) return null;
+  return Math.floor((Date.now() - d.getTime()) / 86400000);
+}
+function _daysUntil(s) {
+  if (!s) return null;
+  const d = new Date(s);
+  if (isNaN(d)) return null;
+  return Math.floor((d.getTime() - Date.now()) / 86400000);
+}
+
+// Count open punch items across rough + finish punch trees (general + hotcheck
+// + per-room items, across all floors including extras).
+function _countOpenPunch(job) {
+  if (!job) return 0;
+  let count = 0;
+  const countTree = (tree) => {
+    if (!tree || typeof tree !== "object") return;
+    Object.keys(tree).forEach(floorKey => {
+      const floor = tree[floorKey];
+      if (!floor || typeof floor !== "object") return;
+      (floor.general || []).forEach(i => { if (i && !i.done) count++; });
+      (floor.hotcheck || []).forEach(i => { if (i && !i.done) count++; });
+      (floor.rooms || []).forEach(r => (r.items || []).forEach(i => { if (i && !i.done) count++; }));
+    });
+  };
+  countTree(job.roughPunch);
+  countTree(job.finishPunch);
+  return count;
+}
+
+// "Any open punch items at all" — cheap predicate used by multiple rules
+function _hasOpenPunch(job) { return _countOpenPunch(job) > 0; }
+
+// True when the job is genuinely done: complete + signed off + no open items.
+function _isFullyDone(job) {
+  if (!job) return false;
+  if (job.roughStatus !== "complete") return false;
+  if (job.finishStatus !== "complete") return false;
+  if (!job.qcSignedOff) return false;
+  if (_hasOpenPunch(job)) return false;
+  if ((job.returnTrips||[]).some(r => !r.signedOff)) return false;
+  if ((job.changeOrders||[]).some(c => c.coStatus && !["completed","denied","converted"].includes(c.coStatus))) return false;
+  return true;
+}
+
+const UP_NEXT_RULES = [
+
+  // ── Rough scheduling (rules 2, 3, 4, 5) ───────────────────────────────
+  {
+    id: "rough-no-start-date",
+    priority: 55,
+    severity: "needsInput",
+    fires: (j) => (j.roughStatus === "waiting_date" || j.roughStatus === "date_confirmed")
+                  && !j.roughStatusDate
+                  && j.type !== "quote",
+    summary: () => `Rough is approved but <b>no start date</b> picked.`,
+    badge: () => null,
+    actions: () => [
+      { label: "PICK ROUGH START DATE", kind: "openSchedModal", payload: "rough", primary: true, color: "blue" },
+      { label: "Open job info", kind: "tab", payload: "Job Info" },
+    ],
+  },
+  {
+    id: "rough-hard-deadline-near",
+    priority: 92,
+    severity: "urgent",
+    fires: (j) => j.roughNeedsSchedHard && j.roughStatusDate
+                  && _daysUntil(j.roughStatusDate) != null
+                  && _daysUntil(j.roughStatusDate) <= 2
+                  && j.roughStatus !== "scheduled"
+                  && j.roughStatus !== "inprogress"
+                  && j.roughStatus !== "complete",
+    summary: (j) => {
+      const d = _daysUntil(j.roughStatusDate);
+      return `<b>Rough hard deadline</b> ${d < 0 ? "passed" : d === 0 ? "is today" : `is in ${d} day${d===1?"":"s"}`} — still not scheduled.`;
+    },
+    badge: (j) => {
+      const d = _daysUntil(j.roughStatusDate);
+      return d < 0 ? `OVERDUE ${Math.abs(d)}D` : "URGENT";
+    },
+    actions: () => [
+      { label: "PICK ROUGH START DATE", kind: "openSchedModal", payload: "rough", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "rough-start-passed-not-started",
+    priority: 88,
+    severity: "urgent",
+    fires: (j) => j.roughStatus === "scheduled" && j.roughStatusDate
+                  && _daysUntil(j.roughStatusDate) < 0,
+    summary: (j) => {
+      const d = Math.abs(_daysUntil(j.roughStatusDate));
+      return `Rough start date passed <b>${d} day${d===1?"":"s"} ago</b> — not marked started.`;
+    },
+    badge: (j) => `${Math.abs(_daysUntil(j.roughStatusDate))}D LATE`,
+    actions: () => [
+      { label: "MARK ROUGH IN PROGRESS", kind: "patch", payload: { roughStatus: "inprogress" }, primary: true, color: "blue" },
+      { label: "Pick new date", kind: "openSchedModal", payload: "rough" },
+    ],
+  },
+  {
+    id: "rough-scheduled-no-foreman",
+    priority: 45,
+    severity: "info",
+    fires: (j) => j.roughStatus === "scheduled"
+                  && (!j.foreman || j.foreman === "Unassigned" || j.foreman === ""),
+    summary: () => `Rough is scheduled but <b>no foreman assigned</b>.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "blue" },
+    ],
+  },
+
+  // ── Rough in progress (rules 10, 11) ──────────────────────────────────
+  {
+    id: "rough-no-status-update",
+    priority: 60,
+    severity: "needsInput",
+    fires: (j) => j.roughStatus === "inprogress"
+                  && (!j.statusUpdateAt || _daysAgo(j.statusUpdateAt) >= 2),
+    summary: (j) => {
+      const d = j.statusUpdateAt ? _daysAgo(j.statusUpdateAt) : null;
+      return `Crew on site · last status update ${d == null ? "<b>none yet</b>" : `was <b>${d} day${d===1?"":"s"} ago</b>`}.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "LOG STATUS UPDATE", kind: "focusStatus", primary: true, color: "blue" },
+    ],
+  },
+  {
+    id: "rough-daily-update-missing",
+    priority: 35,
+    severity: "info",
+    fires: (j) => {
+      if (j.roughStatus !== "inprogress") return false;
+      const today = new Date().toLocaleDateString("en-US");
+      const today2 = new Date().toISOString().slice(0,10);
+      const updates = j.roughUpdates || [];
+      return !updates.some(u => u && (u.date === today || u.date === today2 || (u.date||"").startsWith(today2)));
+    },
+    summary: () => `<b>Daily update missing</b> for today (rough in progress).`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN ROUGH TAB", kind: "tab", payload: "Rough", primary: true, color: "blue" },
+    ],
+  },
+
+  // ── 4-way inspection (rules 14, 15, 16) ───────────────────────────────
+  {
+    id: "fourway-target-passed",
+    priority: 68,
+    severity: "needsInput",
+    fires: (j) => j.fourWayTargetDate
+                  && _daysUntil(j.fourWayTargetDate) <= 0
+                  && !j.roughInspectionResult,
+    summary: (j) => {
+      const d = Math.abs(_daysUntil(j.fourWayTargetDate));
+      return d === 0
+        ? `4-way is <b>today</b> — enter the result when done.`
+        : `4-way was <b>${d} day${d===1?"":"s"} ago</b> — no pass/fail entered yet.`;
+    },
+    badge: (j) => {
+      const d = Math.abs(_daysUntil(j.fourWayTargetDate));
+      return d > 0 ? `${d}D LATE` : null;
+    },
+    actions: () => [
+      { label: "ENTER 4-WAY RESULT", kind: "tab", payload: "Rough", primary: true, color: "amber" },
+    ],
+  },
+  {
+    id: "fourway-failed-no-rt",
+    priority: 96,
+    severity: "urgent",
+    fires: (j) => {
+      if (j.roughInspectionResult !== "fail") return false;
+      const hasOpen = (j.roughInspectionItems || []).some(i => i && !i.done);
+      if (!hasOpen) return false;
+      const linkedRT = (j.returnTrips || []).some(rt =>
+        (rt.punch || []).some(p => p && p.fromRoughInspectionId));
+      return !linkedRT;
+    },
+    summary: (j) => {
+      const open = (j.roughInspectionItems||[]).filter(i => i && !i.done).length;
+      const d = j.roughInspectionDate ? _daysAgo(j.roughInspectionDate) : null;
+      return `<b>4-way failed${d != null ? ` ${d} day${d===1?"":"s"} ago` : ""}</b> · ${open} item${open===1?"":"s"} open, no Return Trip created.`;
+    },
+    badge: () => `URGENT`,
+    actions: () => [
+      { label: "CONVERT FAILED ITEMS TO RT", kind: "convertFailedToRT", payload: "rough", primary: true, color: "red" },
+      { label: "View open items", kind: "tab", payload: "Rough" },
+    ],
+  },
+  {
+    id: "fourway-failed-rt-unscheduled",
+    priority: 72,
+    severity: "needsInput",
+    fires: (j) => {
+      if (j.roughInspectionResult !== "fail") return false;
+      const rtFromIns = (j.returnTrips||[]).find(rt =>
+        (rt.punch||[]).some(p => p && p.fromRoughInspectionId)
+        && !rt.signedOff
+        && !rt.rtScheduled);
+      return !!rtFromIns;
+    },
+    summary: () => `<b>4-way RT created</b> but not yet scheduled. Finish can't start until cleared.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "amber" },
+    ],
+  },
+
+  // ── Between rough and finish (rule 18) ────────────────────────────────
+  {
+    id: "rough-done-finish-not-scheduled",
+    priority: 40,
+    severity: "info",
+    fires: (j) => j.roughStatus === "complete"
+                  && (!j.finishStatus || j.finishStatus === "" || j.finishStatus === "waiting_date")
+                  && !j.finishStatusDate
+                  && j.qcStatus !== "complete",
+    summary: () => `Rough done · finish not yet scheduled (drywall window).`,
+    badge: () => null,
+    actions: () => [
+      { label: "PICK FINISH START DATE", kind: "openSchedModal", payload: "finish", primary: true, color: "blue" },
+    ],
+  },
+
+  // ── Finish in progress (rule 21) ──────────────────────────────────────
+  {
+    id: "finish-end-passed-still-inprogress",
+    priority: 50,
+    severity: "info",
+    fires: (j) => j.finishStatus === "inprogress" && j.finishScheduledEnd
+                  && _daysUntil(j.finishScheduledEnd) < 0,
+    summary: (j) => {
+      const d = Math.abs(_daysUntil(j.finishScheduledEnd));
+      return `Finish window ended <b>${d} day${d===1?"":"s"} ago</b> — still in progress.`;
+    },
+    badge: (j) => `${Math.abs(_daysUntil(j.finishScheduledEnd))}D OVER`,
+    actions: () => [
+      { label: "MARK FINISH COMPLETE", kind: "patch", payload: { finishStatus: "complete" }, primary: true, color: "green" },
+      { label: "Extend window", kind: "openSchedModal", payload: "finish" },
+    ],
+  },
+
+  // ── Final inspection (rules 23, 24) ───────────────────────────────────
+  {
+    id: "final-target-passed",
+    priority: 70,
+    severity: "needsInput",
+    fires: (j) => j.finalInspectionDate
+                  && _daysUntil(j.finalInspectionDate) <= 0
+                  && !j.finalInspectionResult,
+    summary: (j) => {
+      const d = Math.abs(_daysUntil(j.finalInspectionDate));
+      return d === 0
+        ? `Final is <b>today</b> — enter the result when done.`
+        : `Final was <b>${d} day${d===1?"":"s"} ago</b> — no pass/fail entered yet.`;
+    },
+    badge: (j) => {
+      const d = Math.abs(_daysUntil(j.finalInspectionDate));
+      return d > 0 ? `${d}D LATE` : null;
+    },
+    actions: () => [
+      { label: "ENTER FINAL RESULT", kind: "tab", payload: "Finish", primary: true, color: "amber" },
+    ],
+  },
+  {
+    id: "final-failed",
+    priority: 94,
+    severity: "urgent",
+    fires: (j) => j.finalInspectionResult === "fail"
+                  && (j.finalInspectionItems||[]).some(i => i && !i.done),
+    summary: (j) => {
+      const open = (j.finalInspectionItems||[]).filter(i => i && !i.done).length;
+      return `<b>Final inspection failed</b> · ${open} item${open===1?"":"s"} still open.`;
+    },
+    badge: () => "URGENT",
+    actions: () => [
+      { label: "OPEN FAILED ITEMS", kind: "tab", payload: "Finish", primary: true, color: "red" },
+    ],
+  },
+
+  // ── Punch (rule 28) ───────────────────────────────────────────────────
+  {
+    id: "punch-stale-open",
+    priority: 42,
+    severity: "needsInput",
+    fires: (j) => {
+      // Without per-item createdAt, approximate "stale" with: job in late phase
+      // (rough complete OR finish in progress/complete) AND open punch items
+      // AND job.updated_at older than 7 days (or no recent edits).
+      if (!_hasOpenPunch(j)) return false;
+      if (j.roughStatus !== "complete" && j.finishStatus !== "complete"
+          && j.finishStatus !== "inprogress") return false;
+      const lastTouched = j.updated_at || j.updatedAt || j.statusUpdateAt;
+      const d = _daysAgo(lastTouched);
+      return d != null && d >= 7;
+    },
+    summary: (j) => {
+      const n = _countOpenPunch(j);
+      return `<b>${n} punch item${n===1?"":"s"} open</b> — none touched in a week.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN PUNCH", kind: "tab", payload: "Punch", primary: true, color: "amber" },
+    ],
+  },
+
+  // ── QC walk (rules 30, 32) ────────────────────────────────────────────
+  {
+    id: "qc-walk-not-started",
+    priority: 65,
+    severity: "needsInput",
+    fires: (j) => j.finalInspectionResult === "pass"
+                  && j.finalInspectionDate
+                  && _daysAgo(j.finalInspectionDate) >= 4
+                  && (!j.qcStatus || j.qcStatus === "" || j.qcStatus === "needs"),
+    summary: (j) => {
+      const d = _daysAgo(j.finalInspectionDate);
+      return `Final passed <b>${d} day${d===1?"":"s"} ago</b> — QC walk hasn't started.`;
+    },
+    badge: (j) => `OVERDUE ${_daysAgo(j.finalInspectionDate) - 4}D`,
+    actions: () => [
+      { label: "START QC WALK", kind: "tab", payload: "QC", primary: true, color: "amber" },
+      { label: "Schedule for later", kind: "patch", payload: { qcStatus: "scheduled" } },
+    ],
+  },
+  {
+    id: "qc-done-not-signed-off",
+    priority: 58,
+    severity: "needsInput",
+    fires: (j) => (j.qcStatus === "pass" || j.qcStatus === "complete")
+                  && !j.qcSignedOff,
+    summary: () => `QC walk done — <b>not yet signed off</b>.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN QC", kind: "tab", payload: "QC", primary: true, color: "blue" },
+    ],
+  },
+
+  // ── Change Orders (rules 33, 34, 35, 36) ──────────────────────────────
+  {
+    id: "co-needs-sending-stale",
+    priority: 78,
+    severity: "urgent",
+    fires: (j) => (j.changeOrders||[]).some(co =>
+      co && co.coStatus === "needs_sending"
+      && co.createdAt && _daysAgo(co.createdAt) >= 1),
+    summary: (j) => {
+      const stuck = (j.changeOrders||[]).filter(co =>
+        co && co.coStatus === "needs_sending"
+        && co.createdAt && _daysAgo(co.createdAt) >= 1);
+      const n = stuck.length;
+      return `<b>${n} CO${n===1?"":"s"} still need to be sent</b> (>24h old).`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN CHANGE ORDERS", kind: "tab", payload: "Change Orders", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "co-sent-no-quote-number",
+    priority: 56,
+    severity: "needsInput",
+    fires: (j) => (j.changeOrders||[]).some(co =>
+      co
+      && co.coStatus && co.coStatus !== "needs_sending"
+      && co.coStatus !== "denied" && co.coStatus !== "converted"
+      && !co.quoteNumber
+      && co.createdAt && _daysAgo(co.createdAt) >= 2),
+    summary: (j) => {
+      const stuck = (j.changeOrders||[]).filter(co =>
+        co && co.coStatus && co.coStatus !== "needs_sending"
+        && co.coStatus !== "denied" && co.coStatus !== "converted"
+        && !co.quoteNumber);
+      const n = stuck.length;
+      return `<b>${n} sent CO${n===1?"":"s"} missing Quote #</b> — Brandon usually adds them in a day.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "ADD QUOTE #", kind: "tab", payload: "Change Orders", primary: true, color: "amber" },
+    ],
+  },
+  {
+    id: "co-approved-not-scheduled",
+    priority: 48,
+    severity: "needsInput",
+    fires: (j) => (j.changeOrders||[]).some(co =>
+      co && co.coStatus === "approved" && !co.coStatusDate
+      && !co.needsByStart),
+    summary: () => `<b>CO approved</b> but no work date scheduled yet.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN CO", kind: "tab", payload: "Change Orders", primary: true, color: "blue" },
+    ],
+  },
+  {
+    id: "co-scheduled-crew-not-onsite",
+    priority: 44,
+    severity: "info",
+    fires: (j) => (j.changeOrders||[]).some(co => co && co.coStatus === "approved")
+                  && j.roughStatus !== "inprogress"
+                  && j.finishStatus !== "inprogress",
+    summary: () => `CO is approved but crew not on site — <b>could convert to Return Trip</b>?`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN CHANGE ORDERS", kind: "tab", payload: "Change Orders", primary: true, color: "blue" },
+    ],
+  },
+
+  // ── Return Trips (rules 38, 39, 40) ───────────────────────────────────
+  {
+    id: "rt-needs-scheduling",
+    priority: 52,
+    severity: "needsInput",
+    fires: (j) => (j.returnTrips||[]).some(rt =>
+      rt && rt.rtStatus === "needs" && !rt.rtScheduled && !rt.signedOff),
+    summary: (j) => {
+      const n = (j.returnTrips||[]).filter(rt =>
+        rt && rt.rtStatus === "needs" && !rt.rtScheduled && !rt.signedOff).length;
+      return `<b>${n} Return Trip${n===1?"":"s"}</b> awaiting a scheduled date.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "amber" },
+    ],
+  },
+  {
+    id: "rt-scheduled-date-passed",
+    priority: 85,
+    severity: "urgent",
+    fires: (j) => (j.returnTrips||[]).some(rt =>
+      rt && rt.rtStatusDate && _daysUntil(rt.rtStatusDate) < 0 && !rt.signedOff),
+    summary: (j) => {
+      const stuck = (j.returnTrips||[]).filter(rt =>
+        rt && rt.rtStatusDate && _daysUntil(rt.rtStatusDate) < 0 && !rt.signedOff);
+      const worst = stuck.reduce((max, rt) => {
+        const d = Math.abs(_daysUntil(rt.rtStatusDate));
+        return d > max ? d : max;
+      }, 0);
+      return `<b>${stuck.length} Return Trip${stuck.length===1?"":"s"}</b> with date passed${worst > 0 ? ` (worst: ${worst} day${worst===1?"":"s"} ago)` : ""}.`;
+    },
+    badge: () => "OVERDUE",
+    actions: () => [
+      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "rt-signed-off-punch-still-open",
+    priority: 38,
+    severity: "info",
+    fires: (j) => (j.returnTrips||[]).some(rt =>
+      rt && rt.signedOff && (rt.punch||[]).some(p => p && !p.done)),
+    summary: () => `Signed-off Return Trip still has <b>open punch items</b>.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "blue" },
+    ],
+  },
+
+  // ── Signoff / Invoice (rules 41, 42) ──────────────────────────────────
+  {
+    id: "ready-to-invoice",
+    priority: 75,
+    severity: "calm",
+    fires: (j) => _isFullyDone(j) && !j.readyToInvoice,
+    summary: () => `<b>Everything done.</b> Ready to invoice — no outstanding items.`,
+    badge: () => null,
+    actions: () => [
+      { label: "MARK READY TO INVOICE", kind: "patch",
+        payload: { readyToInvoice: true, readyToInvoiceDate: new Date().toLocaleDateString("en-US") },
+        primary: true, color: "green" },
+    ],
+  },
+  {
+    id: "ready-to-invoice-stale",
+    priority: 62,
+    severity: "needsInput",
+    fires: (j) => j.readyToInvoice && j.readyToInvoiceDate
+                  && _daysAgo(j.readyToInvoiceDate) > 3
+                  && !j.invoiced && !j.invoiceDismissed,
+    summary: (j) => {
+      const d = _daysAgo(j.readyToInvoiceDate);
+      return `Marked ready to invoice <b>${d} days ago</b> — still not invoiced.`;
+    },
+    badge: (j) => `${_daysAgo(j.readyToInvoiceDate)}D STALE`,
+    actions: () => [
+      { label: "MARK INVOICED", kind: "patch", payload: { invoiced: true, invoicedDate: new Date().toLocaleDateString("en-US") }, primary: true, color: "green" },
+      { label: "Dismiss reminder", kind: "patch", payload: { invoiceDismissed: true } },
+    ],
+  },
+
+  // ── Temp ped (rules 43, 44) ───────────────────────────────────────────
+  {
+    id: "tempped-ready-no-date",
+    priority: 54,
+    severity: "needsInput",
+    fires: (j) => j.tempPed && j.tempPedStatus === "ready" && !j.tempPedScheduledDate,
+    summary: () => `Temp ped <b>ready</b> — no pickup date set.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "blue" },
+    ],
+  },
+  {
+    id: "tempped-date-passed",
+    priority: 82,
+    severity: "urgent",
+    fires: (j) => j.tempPed && j.tempPedScheduledDate
+                  && _daysUntil(j.tempPedScheduledDate) < 0
+                  && j.tempPedStatus !== "completed",
+    summary: (j) => {
+      const d = Math.abs(_daysUntil(j.tempPedScheduledDate));
+      return `<b>Temp ped pickup</b> was ${d} day${d===1?"":"s"} ago — not marked completed.`;
+    },
+    badge: (j) => `${Math.abs(_daysUntil(j.tempPedScheduledDate))}D LATE`,
+    actions: () => [
+      { label: "MARK PICKED UP", kind: "patch", payload: { tempPedStatus: "completed" }, primary: true, color: "green" },
+    ],
+  },
+
+  // ── Matterport (rule 45 — note: 4-way pass, not Final per user) ──────
+  {
+    id: "matterport-not-captured",
+    priority: 32,
+    severity: "info",
+    fires: (j) => j.roughInspectionResult === "pass"
+                  && !j.matterportLink
+                  && !(j.matterportLinks && j.matterportLinks.length)
+                  && !j.matterportDismissed,
+    summary: () => `4-way passed — <b>Matterport not yet captured</b>.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN PLANS & LINKS", kind: "tab", payload: "Plans & Links", primary: true, color: "blue" },
+      { label: "Dismiss", kind: "patch", payload: { matterportDismissed: true } },
+    ],
+  },
+  // (Rule 46 — Matterport captured but link not added — skipped: no data
+  // shape distinguishes "captured" from "link missing". Revisit when there's
+  // a clearer signal, e.g. a separate matterportCaptured boolean.)
+
+  // ── External (rule 48 GC answers) — skipped tonight: gcAnswers is
+  // runtime state inside JobDetail, not on the job doc. Need to lift it
+  // before this rule can fire purely from `job`. Will add in a follow-up.
+
+  // ── Health / missing info (rules 51, 52, 53, 54) ──────────────────────
+  {
+    id: "no-foreman",
+    priority: 28,
+    severity: "info",
+    fires: (j) => (!j.foreman || j.foreman === "Unassigned" || j.foreman === "")
+                  && j.type !== "quote",
+    summary: () => `<b>No foreman assigned.</b>`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "blue" },
+    ],
+  },
+  {
+    id: "missing-address",
+    priority: 24,
+    severity: "info",
+    fires: (j) => !j.address || !String(j.address).trim(),
+    summary: () => `Job <b>missing address</b>.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "blue" },
+    ],
+  },
+  {
+    id: "missing-gc-phone",
+    priority: 22,
+    severity: "info",
+    fires: (j) => (!j.phone || !String(j.phone).trim())
+                  && j.gc && j.type !== "quote",
+    summary: () => `Missing <b>GC phone number</b>.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "blue" },
+    ],
+  },
+  {
+    id: "missing-simpro-no",
+    priority: 20,
+    severity: "info",
+    fires: (j) => !j.simproNo && j.type !== "quote",
+    summary: () => `<b>No Simpro Job #</b> linked yet.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "blue" },
+    ],
+  },
+
+  // ── Calm fallbacks (rules 55, 56, 58) — only fire when no other rule
+  // does. getUpNextRules below promotes one of these as the LAST resort. ─
+  {
+    id: "calm-rough-on-track",
+    priority: 12,
+    severity: "calm",
+    fires: (j) => j.roughStatus && j.roughStatus !== "complete"
+                  && j.finishStatus !== "inprogress"
+                  && j.finishStatus !== "complete",
+    summary: (j) => {
+      if (j.roughStatus === "scheduled") return `Rough on schedule. <b>Nothing to do here.</b>`;
+      if (j.roughStatus === "inprogress") return `Rough in progress. <b>Nothing to do here.</b>`;
+      if (j.roughStatus === "waiting_date") return `<b>Awaiting rough start date</b> — nothing else needed yet.`;
+      return `Rough stage on track. <b>Nothing to do here.</b>`;
+    },
+    badge: () => null,
+    actions: () => [],
+  },
+  {
+    id: "calm-finish-on-track",
+    priority: 10,
+    severity: "calm",
+    fires: (j) => j.finishStatus && j.finishStatus !== "complete"
+                  && j.roughStatus === "complete",
+    summary: (j) => {
+      if (j.finishStatus === "scheduled") return `Finish on schedule. <b>Nothing to do here.</b>`;
+      if (j.finishStatus === "inprogress") return `Finish in progress. <b>Nothing to do here.</b>`;
+      if (j.finishStatus === "waiting_date") return `<b>Awaiting finish start date</b> — nothing else needed yet.`;
+      return `Finish stage on track. <b>Nothing to do here.</b>`;
+    },
+    badge: () => null,
+    actions: () => [],
+  },
+  {
+    id: "calm-complete-invoiced",
+    priority: 8,
+    severity: "calm",
+    fires: (j) => _isFullyDone(j) && j.invoiced,
+    summary: () => `<b>Complete and invoiced.</b> Archive when ready.`,
+    badge: () => null,
+    actions: () => [],
+  },
+];
+
+// Pure helper — returns firing rules sorted by priority descending. Calm
+// rules only count if no non-calm rule fires (they're fallback display).
+function getUpNextRules(job) {
+  if (!job) return [];
+  const fired = UP_NEXT_RULES.filter(r => {
+    try { return !!r.fires(job); } catch (e) { return false; }
+  });
+  const nonCalm = fired.filter(r => r.severity !== "calm");
+  const calm    = fired.filter(r => r.severity === "calm");
+  if (nonCalm.length > 0) {
+    return nonCalm.sort((a, b) => b.priority - a.priority);
+  }
+  // No non-calm rule fired — surface the highest-priority calm rule (if any)
+  return calm.sort((a, b) => b.priority - a.priority).slice(0, 1);
+}
+
+// ── UpNextPanel — the rendered card at the top of Job Detail ───────────
+function UpNextPanel({ job, identity, onAction }) {
+  const rules = getUpNextRules(job);
+  const [expanded, setExpanded] = useState(false);
+  if (!rules.length) return null;
+  const top = rules[0];
+  const more = rules.slice(1);
+
+  // Severity → gradient + label color
+  const sev = top.severity || "info";
+  const gradients = {
+    urgent:     "linear-gradient(to bottom, #fef2f2, #fff)",
+    needsInput: "linear-gradient(to bottom, #fffbeb, #fff)",
+    info:       "linear-gradient(to bottom, #f8fafc, #fff)",
+    calm:       "linear-gradient(to bottom, #f0fdf4, #fff)",
+  };
+  const labelColors = {
+    urgent:     "#dc2626",
+    needsInput: "#64748b",
+    info:       "#64748b",
+    calm:       "#16a34a",
+  };
+
+  const renderCard = (rule, isPrimary) => (
+    <div style={{
+      padding: isPrimary ? "12px 22px 14px" : "10px 22px",
+      background: isPrimary ? (gradients[rule.severity] || gradients.info) : "#fafbfc",
+      borderTop: isPrimary ? "none" : `1px solid ${C.border}`,
+    }}>
+      <div style={{
+        fontSize: 10, fontWeight: 800,
+        color: labelColors[rule.severity] || C.dim,
+        letterSpacing: "0.1em", textTransform: "uppercase",
+        marginBottom: 6, display: "flex", alignItems: "center", gap: 6,
+      }}>
+        {isPrimary ? "Up Next" : "Also"}
+        {rule.badge && rule.badge(job) && (
+          <span style={{
+            fontSize: 9, padding: "1px 6px", letterSpacing: "0.06em",
+            color: rule.severity === "urgent" ? "#fff" : "#92400e",
+            background: rule.severity === "urgent" ? "#dc2626" : "rgba(217,119,6,0.12)",
+            border: `1px solid ${rule.severity === "urgent" ? "#b91c1c" : "rgba(217,119,6,0.35)"}`,
+            borderRadius: 99, fontWeight: 800,
+          }}>{rule.badge(job)}</span>
+        )}
+      </div>
+      <div
+        style={{ fontSize: 14, fontWeight: 600, color: C.text, lineHeight: 1.5, marginBottom: 10 }}
+        dangerouslySetInnerHTML={{ __html: rule.summary(job) }}/>
+      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+        {(rule.actions(job) || []).map((a, i) => {
+          const bg = a.primary
+            ? (a.color === "red"   ? "#dc2626"
+              : a.color === "amber" ? "#d97706"
+              : a.color === "green" ? "#16a34a"
+              : a.color === "orange"? "#ea580c"
+              : "#2563eb")
+            : "#fff";
+          const fg = a.primary ? "#fff" : C.text;
+          const bd = a.primary ? "none" : `1px solid ${C.border}`;
+          return (
+            <button
+              key={i}
+              onClick={(e) => { e.stopPropagation(); onAction && onAction(a, rule.id); }}
+              style={{
+                padding: "8px 13px", borderRadius: 8, fontSize: 11, fontWeight: 700,
+                cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.04em",
+                border: bd, background: bg, color: fg, textTransform: "uppercase",
+              }}>
+              {a.label}
+            </button>
+          );
+        })}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ borderBottom: `1px solid ${C.border}`, background: "#fff" }}>
+      {renderCard(top, true)}
+      {more.length > 0 && (
+        <>
+          <div
+            onClick={() => setExpanded(v => !v)}
+            style={{
+              padding: "8px 22px", background: "#fafbfc",
+              borderTop: `1px solid ${C.border}`,
+              fontSize: 11, fontWeight: 700, color: C.dim,
+              letterSpacing: "0.06em", textTransform: "uppercase",
+              cursor: "pointer", userSelect: "none",
+              display: "flex", alignItems: "center", gap: 6,
+            }}>
+            <span style={{ fontSize: 13 }}>{expanded ? "▾" : "▸"}</span>
+            {expanded ? `Hide ${more.length} more` : `${more.length} more item${more.length===1?"":"s"}`}
+          </div>
+          {expanded && more.map(r => <div key={r.id}>{renderCard(r, false)}</div>)}
+        </>
+      )}
+    </div>
+  );
+}
+
 function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, initialTab, users=[], identity=null, manualTasks=[], onSaveManualTask, onDeleteManualTask, jobs=[]}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
@@ -23007,6 +23792,81 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   };
 
   const [tab, setTab] = useState(()=>initialTab && TABS.includes(initialTab) ? initialTab : "Job Info");
+
+  // ── Up Next action dispatcher ───────────────────────────────────────
+  // The UpNextPanel emits abstract actions ({kind, payload}). This routes
+  // each kind to the right existing handler on this component. New action
+  // kinds: add a case here; the panel itself never needs to know how to
+  // mutate state.
+  const handleUpNextAction = (action /* {kind, payload, label, ...} */, ruleId) => {
+    if (!action || !action.kind) return;
+    switch (action.kind) {
+      case "tab":
+        // Switch to a named tab. Safe to no-op if the tab isn't in tabsForJob().
+        if (action.payload) setTab(action.payload);
+        break;
+      case "patch":
+        // Direct mutation — same `u` path everything else uses, so onUpdate
+        // saves to Firestore via the parent's normal flow.
+        if (action.payload && typeof action.payload === "object") u(action.payload);
+        break;
+      case "openSchedModal":
+        // Opens the start+end+hard scheduling modal for "rough" or "finish".
+        if (action.payload === "rough" || action.payload === "finish") {
+          openNeedsSchedModal(action.payload);
+        }
+        break;
+      case "focusStatus":
+        // Jump to Job Info and put the StatusUpdate textarea in focus so the
+        // foreman can dictate / type immediately. Slight delay so the tab
+        // mounts before we hunt for the textarea.
+        setTab("Job Info");
+        setTimeout(() => {
+          const el = document.querySelector('textarea[data-status-update]');
+          if (el && typeof el.focus === "function") {
+            el.focus();
+            try { el.scrollIntoView({ behavior:"smooth", block:"center" }); } catch (_) {}
+          }
+        }, 60);
+        break;
+      case "convertFailedToRT": {
+        // Lifts the existing rough-4-way "convert failed items to RT" flow
+        // out of the inspection section. Keeps the same shape: carries every
+        // item (done + open) and any inspection reports onto a fresh RT.
+        const phase = action.payload === "finish" ? "finish" : "rough";
+        const allItems = phase === "finish"
+          ? (jobRef.current.finalInspectionItems || [])
+          : (jobRef.current.roughInspectionItems || []);
+        const reports = phase === "finish"
+          ? (jobRef.current.finalInspectionReports || [])
+          : (jobRef.current.roughInspectionReports || []);
+        if (!allItems.length) return;
+        const inspectionIdKey = phase === "finish" ? "fromFinalInspectionId" : "fromRoughInspectionId";
+        const newRT = {
+          id: uid(),
+          scope: `${phase === "finish" ? "Final" : "Rough 4-way"} fail`,
+          rtStatus: "needs",
+          rtStatusDate: "",
+          rtScheduled: false,
+          notes: `Converted from ${phase === "finish" ? "Final" : "Rough 4-way"} failed inspection.`,
+          punch: allItems.map(it => ({
+            id: uid(),
+            text: it.text || "",
+            done: !!it.done,
+            [inspectionIdKey]: it.id || null,
+          })),
+          photos: reports,
+          createdAt: new Date().toISOString(),
+        };
+        u({ returnTrips: [newRT, ...(jobRef.current.returnTrips || [])] });
+        setTab("Return Trips");
+        break;
+      }
+      default:
+        console.warn("Unknown Up Next action:", action, "from rule:", ruleId);
+    }
+  };
+
   const [newLightingFloor, setNewLightingFloor] = useState("");
   const [emailData, setEmailData] = useState(null);
   const [convertPrompt, setConvertPrompt] = useState(false);
@@ -23595,6 +24455,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
         </div>
 
+        {/* Up Next panel — sits between header and tabs. Reads job state,
+            surfaces the single most-pressing next action, with "▾ N more"
+            expander for any other firing rules. Calm fallback ("on track"
+            etc.) shows when nothing urgent is up. Pure presentation +
+            dispatch — all writes go through handleUpNextAction → u(). */}
+        <UpNextPanel job={job} identity={identity} onAction={handleUpNextAction}/>
 
         {/* Tabs */}
 
@@ -26740,6 +27606,9 @@ function StatusUpdateTextarea({ job, identity, onCommit, styleVars }) {
 
   return (
     <textarea
+      // Marker for Up Next "Log status update" action — handleUpNextAction
+      // queries [data-status-update] and focuses it after switching to Job Info.
+      data-status-update="true"
       value={draft}
       onChange={e=>setDraft(e.target.value)}
       onFocus={e=>{ setFocused(true); e.target.style.borderColor = C.accent || "#2563eb"; }}
@@ -34885,6 +35754,192 @@ if (typeof window !== "undefined") {
   window.sbv2QualityScoreForJob = sbv2QualityScoreForJob;
 }
 
+// ── Today Command Center ───────────────────────────────────────────────────
+// Office-facing live dashboard. Read-only — never writes Firestore. Reads
+// `lastActivityAt` (added in commit "Add lastActivityAt timestamp on every
+// job write") to drive activity sort, staleness, and the today filter.
+// Spec: memory/project_today_command_center.md
+// Role gating: today.view = admin/manager/standard (foreman). NOT lead/crew.
+function Today({ jobs, users=[], identity, onSelectJob }) {
+  // Defensive timestamp coercer — lastActivityAt can be a Firestore Timestamp
+  // (with .toDate()), a Date, an ISO string, or missing (old jobs that haven't
+  // been touched since the field was introduced). Returns null for unknown.
+  const toDate = (ts) => {
+    if (!ts) return null;
+    if (typeof ts === "object" && typeof ts.toDate === "function") return ts.toDate();
+    if (ts instanceof Date) return ts;
+    if (typeof ts === "string" || typeof ts === "number") { const d = new Date(ts); return isNaN(d) ? null : d; }
+    return null;
+  };
+  const fmtTime = (d) => d ? d.toLocaleTimeString("en-US",{hour:"numeric",minute:"2-digit"}) : "";
+  const fmtDay  = (d) => d ? d.toLocaleDateString("en-US",{weekday:"short",month:"short",day:"numeric"}) : "";
+
+  const now = new Date();
+  const startOfToday = new Date(now); startOfToday.setHours(0,0,0,0);
+  const threeDaysAgo = new Date(now.getTime() - 3*24*60*60*1000);
+
+  // Active = anything not finished. Existing convention uses finishStatus="complete".
+  const allJobs = jobs || [];
+  const activeJobs = allJobs.filter(j => (j.data?.finishStatus || "") !== "complete");
+
+  // Jobs touched today (per lastActivityAt). Used for the today filter + foreman heartbeat.
+  const touchedToday = allJobs.filter(j => { const d = toDate(j.lastActivityAt); return d && d >= startOfToday; });
+
+  // Unique foremen (saved_by) who have written today.
+  const foremenOnAppToday = [...new Set(touchedToday.map(j => j.saved_by).filter(Boolean))];
+
+  // Stale = active job, never touched OR last activity > 3 days ago.
+  const staleJobs = activeJobs.filter(j => { const d = toDate(j.lastActivityAt); return !d || d < threeDaysAgo; })
+    .sort((a,b)=>{ const ad=toDate(a.lastActivityAt); const bd=toDate(b.lastActivityAt); return (ad?ad.getTime():0)-(bd?bd.getTime():0); });
+
+  // All jobs sorted by lastActivityAt desc — drives both activity feed and jobs grid.
+  const byActivityDesc = [...allJobs].sort((a,b)=>{ const ad=toDate(a.lastActivityAt); const bd=toDate(b.lastActivityAt); return (bd?bd.getTime():0)-(ad?ad.getTime():0); });
+  const activeByActivity = byActivityDesc.filter(j => (j.data?.finishStatus || "") !== "complete");
+
+  // Style helpers — match the rest of the app (uses C palette, inline styles).
+  const card = { background: C.card, border:`1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px" };
+  const sectionTitle = { fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 10, display:"flex", alignItems:"center", gap:8, textTransform:"uppercase", letterSpacing:"0.04em" };
+  const pulseCard = { background: C.bg, borderRadius: 8, padding: "10px 12px" };
+  const rowStyle = { display:"flex", alignItems:"center", gap:10, padding:"8px 10px", borderRadius:8, cursor: onSelectJob?"pointer":"default" };
+
+  return (
+    <div style={{padding:"16px 20px", maxWidth: 1240, margin:"0 auto"}}>
+
+      {/* Title bar */}
+      <div style={{display:"flex",alignItems:"baseline",justifyContent:"space-between",marginBottom:14,flexWrap:"wrap",gap:8}}>
+        <div>
+          <div style={{fontSize:22, fontWeight:600, color:C.text}}>Today</div>
+          <div style={{fontSize:12, color:C.dim}}>
+            {now.toLocaleDateString("en-US",{weekday:"long",month:"long",day:"numeric"})} · live
+          </div>
+        </div>
+        <div style={{fontSize:11, color:C.dim, display:"flex",alignItems:"center",gap:6}}>
+          <span style={{width:8,height:8,borderRadius:99,background:C.green,display:"inline-block"}}/>
+          Auto-refreshing
+        </div>
+      </div>
+
+      {/* Pulse bar — 6 counters */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:14}}>
+        <div style={pulseCard}>
+          <div style={{fontSize:11,color:C.dim}}>Active jobs</div>
+          <div style={{fontSize:22,fontWeight:600,color:C.text}}>
+            {activeJobs.length} <span style={{fontSize:11,color:C.muted,fontWeight:400}}>of {allJobs.length}</span>
+          </div>
+        </div>
+        <div style={pulseCard}>
+          <div style={{fontSize:11,color:C.dim}}>Foremen on app today</div>
+          <div style={{fontSize:22,fontWeight:600,color:C.text}}>{foremenOnAppToday.length}</div>
+        </div>
+        <div style={pulseCard}>
+          <div style={{fontSize:11,color:C.dim}}>Jobs touched today</div>
+          <div style={{fontSize:22,fontWeight:600,color:C.text}}>{touchedToday.length}</div>
+        </div>
+        <div style={pulseCard}>
+          <div style={{fontSize:11,color:C.dim}}>Photos</div>
+          <div style={{fontSize:22,fontWeight:600,color:C.muted}}>—</div>
+        </div>
+        <div style={pulseCard}>
+          <div style={{fontSize:11,color:C.dim}}>Punches closed</div>
+          <div style={{fontSize:22,fontWeight:600,color:C.muted}}>—</div>
+        </div>
+        <div style={pulseCard}>
+          <div style={{fontSize:11,color:C.dim}}>COs added</div>
+          <div style={{fontSize:22,fontWeight:600,color:C.muted}}>—</div>
+        </div>
+      </div>
+
+      {/* Needs attention */}
+      <div style={{...card, marginBottom: 12}}>
+        <div style={sectionTitle}>
+          <Icon name="alertTriangle" size={14} stroke={2}/> Needs attention
+          <span style={{marginLeft:"auto",fontSize:11,fontWeight:400,color:C.dim,textTransform:"none",letterSpacing:0}}>{staleJobs.length} items</span>
+        </div>
+        {staleJobs.length === 0 ? (
+          <div style={{fontSize:13,color:C.dim,padding:"8px 10px"}}>Nothing to flag right now.</div>
+        ) : staleJobs.slice(0,8).map(j => {
+          const d = toDate(j.lastActivityAt);
+          return (
+            <div key={j.id} style={{...rowStyle, background:"#fef3c7"}} onClick={() => onSelectJob && onSelectJob(j)}>
+              <Icon name="clock" size={14} stroke={2}/>
+              <div style={{flex:1,fontSize:13,color:"#78350f"}}>
+                <b>{j.data?.name || j.id}</b> · no activity {d ? `since ${fmtDay(d)}` : "ever"}
+              </div>
+              <span style={{fontSize:11,color:"#92400e"}}>stale</span>
+            </div>
+          );
+        })}
+      </div>
+
+      {/* Two-column: live activity (left) + jobs today (right) */}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:12}}>
+
+        {/* Live activity feed */}
+        <div style={card}>
+          <div style={sectionTitle}>
+            <Icon name="zap" size={14} stroke={2}/> Live activity
+          </div>
+          {byActivityDesc.filter(j => toDate(j.lastActivityAt)).slice(0,14).map(j => {
+            const d = toDate(j.lastActivityAt);
+            const isToday = d && d >= startOfToday;
+            return (
+              <div key={j.id} style={{...rowStyle, padding:"6px 8px"}} onClick={() => onSelectJob && onSelectJob(j)}>
+                <span style={{fontSize:11,color:C.muted,minWidth:54}}>{isToday ? fmtTime(d) : fmtDay(d)}</span>
+                <div style={{flex:1,fontSize:13,color:C.text}}>
+                  <b>{j.saved_by || "someone"}</b> touched <span style={{color:C.blue}}>{j.data?.name || j.id}</span>
+                </div>
+              </div>
+            );
+          })}
+          {byActivityDesc.filter(j => toDate(j.lastActivityAt)).length === 0 && (
+            <div style={{fontSize:13,color:C.dim,padding:"8px 10px"}}>No activity logged yet — once the new lastActivityAt field starts populating, recent saves will appear here.</div>
+          )}
+        </div>
+
+        {/* Jobs today */}
+        <div style={card}>
+          <div style={sectionTitle}>
+            <Icon name="hardHat" size={14} stroke={2}/> Jobs today
+          </div>
+          {touchedToday.length === 0 ? (
+            <div style={{fontSize:13,color:C.dim,padding:"8px 10px"}}>No job activity yet today.</div>
+          ) : touchedToday
+              .sort((a,b)=>{ const ad=toDate(a.lastActivityAt); const bd=toDate(b.lastActivityAt); return (bd?bd.getTime():0)-(ad?ad.getTime():0); })
+              .slice(0,12).map(j => {
+            const d = toDate(j.lastActivityAt);
+            return (
+              <div key={j.id} style={{...rowStyle, padding:"8px 10px", borderBottom:`1px solid ${C.border}`}} onClick={() => onSelectJob && onSelectJob(j)}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:13,fontWeight:600,color:C.text}}>{j.data?.name || j.id}</div>
+                  <div style={{fontSize:11,color:C.dim}}>{j.data?.foreman || "—"} · last touched {fmtTime(d)}</div>
+                </div>
+              </div>
+            );
+          })}
+          {/* Stale jobs at the bottom, grayed */}
+          {activeByActivity.filter(j => { const d=toDate(j.lastActivityAt); return !d || d < startOfToday; }).slice(0,4).map(j => {
+            const d = toDate(j.lastActivityAt);
+            return (
+              <div key={j.id} style={{...rowStyle, padding:"6px 10px", opacity:0.55}} onClick={() => onSelectJob && onSelectJob(j)}>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:12,color:C.dim}}>{j.data?.name || j.id}</div>
+                  <div style={{fontSize:11,color:C.muted}}>last touched {d ? fmtDay(d) : "never"}</div>
+                </div>
+              </div>
+            );
+          })}
+        </div>
+
+      </div>
+
+      {/* Footer note — V1 transparency */}
+      <div style={{marginTop:14,padding:"8px 12px",fontSize:11,color:C.dim,textAlign:"center"}}>
+        V1 · pulse + needs attention + activity feed + jobs grid. Photos / heartbeat / per-event counters coming next.
+      </div>
+    </div>
+  );
+}
+
 function Scoreboard({ jobs, users=[], identity }) {
   // ScoreboardV2 console verify hook — exposes the live `jobs` prop to
   // window.__sbJobs while this component is mounted so we can run
@@ -39774,6 +40829,7 @@ function PunchSharePage({ jobId, stage }) {
             };
             await updateDoc(doc(db,'jobs',jobId), {
               [`data.${externalKey}`]: arrayUnion(newItem),
+              lastActivityAt: serverTimestamp(),
             });
             setNewItemText('');
             setAddedCount(c=>c+1);
@@ -42832,7 +43888,7 @@ function App() {
               if(!d) return;
               const daysBetween = Math.floor((Date.now() - d.getTime()) / (1000*60*60*24));
               if(daysBetween >= 60) {
-                updateDoc(doc(db,"jobs",job.id),{"data.finishStatus":"waiting_date",updated_at:new Date().toISOString()}).catch(()=>{});
+                updateDoc(doc(db,"jobs",job.id),{"data.finishStatus":"waiting_date",updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp()}).catch(()=>{});
                 advancedCount++;
               }
             });
@@ -43036,7 +44092,9 @@ function App() {
           // Patch mode: only write the fields that changed.
           // updateDoc with dot-notation is the correct Firebase API for this — it touches ONLY
           // the specified nested fields and leaves everything else in Firestore untouched.
-          const patch = {updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
+          // lastActivityAt: serverTimestamp() is purely additive — drives the Today
+          // command center staleness/activity queries. No existing field is touched.
+          const patch = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId};
           Object.entries(sanitize(accumulated)).forEach(([k,v]) => { patch["data."+k] = v; });
           try {
             await updateDoc(doc(db,"jobs",job.id), patch);
@@ -43073,7 +44131,7 @@ function App() {
               return;
             }
           }
-          const meta = {updated_at:new Date().toISOString(),saved_by:identity?.name||"unknown",device:deviceId};
+          const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId};
           const fullPatch = {...meta};
           Object.entries(sanitized).forEach(([k,v]) => { fullPatch["data."+k] = v; });
           try {
@@ -43209,6 +44267,7 @@ function App() {
         // since we're explicitly flushing). Keep the dot-notation contract.
         const writePatch = {
           updated_at: new Date().toISOString(),
+          lastActivityAt: serverTimestamp(),
           saved_by: identity?.name || "unknown",
           device: localStorage.getItem('he_device_id') || "",
         };
@@ -43245,14 +44304,14 @@ function App() {
       const accumulated = pendingPatches.current[job.id];
       delete pendingPatches.current[job.id];
       if(accumulated && Object.keys(accumulated).length > 0) {
-        const patch = {updated_at:new Date().toISOString()};
+        const patch = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp()};
         Object.entries(sanitize(accumulated)).forEach(([k,v]) => { patch["data."+k] = v; });
         try {
           await updateDoc(doc(db,"jobs",job.id), patch);
         } catch(e) {
           if(e?.code === 'not-found') {
             // New doc — create it
-            try { await setDoc(doc(db,"jobs",job.id), {data:sanitize(job), updated_at:patch.updated_at}); } catch(e2){console.error('[HE] flushJob create error:',e2?.message);}
+            try { await setDoc(doc(db,"jobs",job.id), {data:sanitize(job), updated_at:patch.updated_at, lastActivityAt:serverTimestamp()}); } catch(e2){console.error('[HE] flushJob create error:',e2?.message);}
           } else { console.error('[HE] flushJob save error:',e?.message); }
         }
       }
@@ -43337,11 +44396,11 @@ function App() {
       const accumulated = pendingPatches.current[job.id];
       delete pendingPatches.current[job.id];
       if(accumulated && Object.keys(accumulated).length > 0) {
-        const patch = {updated_at:new Date().toISOString()};
+        const patch = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp()};
         Object.entries(sanitize(accumulated)).forEach(([k,v]) => { patch["data."+k] = v; });
         updateDoc(doc(db,"jobs",job.id), patch).catch(e => {
           if(e?.code === 'not-found') {
-            setDoc(doc(db,"jobs",job.id), {data:sanitize(job), updated_at:patch.updated_at}).catch(e2=>console.error('[HE] flushSaves create error:',e2?.message));
+            setDoc(doc(db,"jobs",job.id), {data:sanitize(job), updated_at:patch.updated_at, lastActivityAt:serverTimestamp()}).catch(e2=>console.error('[HE] flushSaves create error:',e2?.message));
           } else { console.error('[HE] flushSaves error:',e?.message); }
         });
       }
@@ -44295,6 +45354,7 @@ function App() {
           ? [{key:"subcontractors", label:"My Jobs"}]
           : [
               {key:"home",label:"Job Board"},
+              ...(can(identity,"today.view")?[{key:"today",label:"Today"}]:[]),
               {key:"safety",label:"Safety"},
               {key:"schedule",label:"Forecast"},
               {key:"nav",label:"Nav",icon:"mapPin"},
@@ -44310,7 +45370,7 @@ function App() {
         ).map(({key,label,icon})=>{
           const active = view===key;
           return (
-            <button key={key} onClick={key==="home"?goHome:key==="safety"?()=>setView("safety"):key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="walks"?()=>setView("walks"):key==="tasks"?openTasks:key==="nav"?openNav:key==="huddle"?()=>setView("huddle"):key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):openSettings}
+            <button key={key} onClick={key==="home"?goHome:key==="today"?()=>setView("today"):key==="safety"?()=>setView("safety"):key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="walks"?()=>setView("walks"):key==="tasks"?openTasks:key==="nav"?openNav:key==="huddle"?()=>setView("huddle"):key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):openSettings}
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
@@ -45648,6 +46708,10 @@ function App() {
           style={{width:"100%",height:"calc(100vh - 56px)",border:"none",display:"block",background:"#fff"}}
           allow="camera; microphone; geolocation; clipboard-read; clipboard-write"
         />
+      )}
+
+      {view==="today"&&can(identity,"today.view")&&(
+        <Today jobs={jobs} users={users} identity={identity} onSelectJob={setSelected}/>
       )}
 
       {view==="scoreboard"&&can(identity,"scoreboard.editWeights")&&(
