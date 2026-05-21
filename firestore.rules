@@ -89,6 +89,23 @@ service cloud.firestore {
       allow write: if true;
     }
 
+    // ── SUGGESTIONS ───────────────────────────────────────────────────────────
+    // Crew-submitted feature requests / bug reports / improvements, surfaced
+    // on the App Map tab. Creates accepted from anyone (anonymous OK so the
+    // share URL can also collect — though current UI only shows the form
+    // when logged in). Reads open so admin/manager can see the inbox.
+    // Updates allowed (Koy changes status + notes during triage). Deletes
+    // allowed so cleared / spammy entries can be removed.
+    match /suggestions/{id} {
+      allow read: if true;
+      allow create: if request.resource.data.keys().hasAll(['text', 'submittedAt', 'status'])
+                    && request.resource.data.text is string
+                    && request.resource.data.text.size() > 0
+                    && request.resource.data.text.size() < 5000;
+      allow update: if true;
+      allow delete: if true;
+    }
+
     // ── EVERYTHING ELSE ───────────────────────────────────────────────────────
     // Deny all access to any other collection by default.
     match /{document=**} {

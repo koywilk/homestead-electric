@@ -41767,6 +41767,11 @@ const FEATURES_MD_INLINE = String.raw`
   - Drill-down per row
   - "How it works" panel
   - Weight editor (admin only)
+- **App Map** · shipped 2026-05-21 · SW v183 · in-app feature tree (everyone)
+  - Renders this manifest as collapsible tree
+  - Search filter + expand/collapse
+  - Suggest-a-feature form (writes to suggestions collection)
+  - Suggestion inbox + triage (admin/manager only)
 - **Settings** · shipped · admin/manager only
 
 ## Job Detail
@@ -41948,10 +41953,72 @@ function parseAppMapManifest(md) {
   return sections;
 }
 
-function AppMapSharePage() {
+function AppMapSharePage({ identity = null } = {}) {
+  // identity present = in-app view (logged-in user) — show suggest form + maybe inbox
+  // identity null    = share URL — read-only, no form, no inbox
+  const isInApp = !!identity;
+  const access = getAccess(identity);
+  const canTriage = access === "admin" || access === "manager";
+
   const [search, setSearch] = useState("");
   const [collapsed, setCollapsed] = useState(() => new Set());
   const sections = useMemo(() => parseAppMapManifest(FEATURES_MD_INLINE), []);
+
+  // Suggestion form state
+  const [suggText, setSuggText] = useState("");
+  const [suggCategory, setSuggCategory] = useState("feature");
+  const [suggSubmitting, setSuggSubmitting] = useState(false);
+
+  // Inbox (admin/manager only) — live subscription
+  const [suggestions, setSuggestions] = useState([]);
+  const [inboxFilter, setInboxFilter] = useState("all");
+  useEffect(() => {
+    if (!canTriage) return;
+    const unsub = onSnapshot(collection(db, "suggestions"), snap => {
+      const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+      list.sort((a, b) => (b.submittedAt || "").localeCompare(a.submittedAt || ""));
+      setSuggestions(list);
+    }, err => console.warn("suggestions listener error:", err));
+    return unsub;
+  }, [canTriage]);
+
+  const submitSuggestion = async () => {
+    const text = suggText.trim();
+    if (!text) return;
+    setSuggSubmitting(true);
+    try {
+      const id = "sugg_" + Math.random().toString(36).slice(2, 10) + Date.now().toString(36);
+      await setDoc(doc(db, "suggestions", id), {
+        text,
+        category: suggCategory,
+        submittedBy: identity?.name || "anonymous",
+        submittedAt: new Date().toISOString(),
+        status: "new",
+      });
+      setSuggText("");
+      toast.success("Thanks — suggestion added to Koy's inbox.");
+    } catch (e) {
+      toast.error("Couldn't save suggestion: " + (e?.message || "unknown error"));
+    }
+    setSuggSubmitting(false);
+  };
+
+  const updateSuggestionStatus = async (id, status) => {
+    try {
+      await updateDoc(doc(db, "suggestions", id), { status, updatedAt: new Date().toISOString() });
+    } catch (e) { toast.error("Status update failed: " + (e?.message || "")); }
+  };
+  const updateSuggestionNotes = async (id, notes) => {
+    try {
+      await updateDoc(doc(db, "suggestions", id), { notes, updatedAt: new Date().toISOString() });
+    } catch (e) { toast.error("Notes save failed: " + (e?.message || "")); }
+  };
+  const deleteSuggestion = async (id) => {
+    if (!window.confirm("Delete this suggestion?")) return;
+    try { await deleteDoc(doc(db, "suggestions", id)); }
+    catch (e) { toast.error("Delete failed: " + (e?.message || "")); }
+  };
+
   const counts = useMemo(() => {
     const out = { shipped: 0, "in-flight": 0, planned: 0, total: 0 };
     for (const s of sections) for (const it of s.items) {
@@ -42040,8 +42107,125 @@ function AppMapSharePage() {
             </div>
           );
         })}
+
+        {/* Suggestion form — in-app only (hidden on public share URL) */}
+        {isInApp && (
+          <div style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:"14px 16px", marginTop:18}}>
+            <div style={{fontSize:14, fontWeight:600, marginBottom:6}}>Suggest a feature</div>
+            <div style={{fontSize:12, color:C.dim, marginBottom:10}}>
+              Idea, bug, or improvement? Type it below. Koy reviews these and decides what to build next.
+            </div>
+            <textarea
+              value={suggText}
+              onChange={e => setSuggText(e.target.value)}
+              placeholder="What would you like to see in the app?"
+              style={{width:"100%", minHeight:80, padding:"8px 10px", fontSize:13, border:`1px solid ${C.border}`, borderRadius:6, background:C.bg, color:C.text, fontFamily:"inherit", resize:"vertical", boxSizing:"border-box"}}
+            />
+            <div style={{display:"flex", flexWrap:"wrap", alignItems:"center", gap:8, marginTop:8}}>
+              <span style={{fontSize:12, color:C.dim}}>Type:</span>
+              {["feature","bug","improvement"].map(cat => (
+                <button key={cat}
+                  onClick={() => setSuggCategory(cat)}
+                  style={{
+                    padding:"4px 10px", fontSize:12, borderRadius:99,
+                    border:`1px solid ${suggCategory===cat ? C.accent : C.border}`,
+                    background: suggCategory===cat ? C.accent + "15" : C.card,
+                    color: suggCategory===cat ? C.accent : C.dim,
+                    cursor:"pointer", fontWeight: suggCategory===cat ? 500 : 400,
+                  }}>
+                  {cat}
+                </button>
+              ))}
+              <span style={{flex:1}}/>
+              <span style={{fontSize:11, color:C.muted}}>From: {identity?.name || "you"}</span>
+              <button
+                onClick={submitSuggestion}
+                disabled={!suggText.trim() || suggSubmitting}
+                style={{
+                  padding:"6px 14px", fontSize:13, fontWeight:500,
+                  border:`1px solid ${C.accent}`, borderRadius:6,
+                  background: suggText.trim() && !suggSubmitting ? C.accent : C.bg,
+                  color: suggText.trim() && !suggSubmitting ? "#fff" : C.muted,
+                  cursor: suggText.trim() && !suggSubmitting ? "pointer" : "not-allowed",
+                }}>
+                {suggSubmitting ? "Saving…" : "Submit"}
+              </button>
+            </div>
+          </div>
+        )}
+
+        {/* Admin inbox — triage controls */}
+        {isInApp && canTriage && (
+          <div style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:"14px 16px", marginTop:12}}>
+            <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:10, flexWrap:"wrap"}}>
+              <span style={{fontSize:14, fontWeight:600}}>Suggestion inbox</span>
+              <span style={{fontSize:12, color:C.muted}}>{suggestions.length} total</span>
+              <span style={{flex:1}}/>
+              <span style={{fontSize:12, color:C.dim}}>Filter:</span>
+              {["all","new","reviewing","planned","built","declined"].map(s => (
+                <button key={s}
+                  onClick={() => setInboxFilter(s)}
+                  style={{
+                    padding:"3px 8px", fontSize:11, borderRadius:99,
+                    border:`1px solid ${inboxFilter===s ? C.accent : C.border}`,
+                    background: inboxFilter===s ? C.accent + "15" : "transparent",
+                    color: inboxFilter===s ? C.accent : C.dim,
+                    cursor:"pointer",
+                  }}>{s}</button>
+              ))}
+            </div>
+            {suggestions.length === 0 ? (
+              <div style={{fontSize:13, color:C.dim, padding:"10px 0"}}>No suggestions yet. As people submit, they'll show up here.</div>
+            ) : (
+              suggestions
+                .filter(s => inboxFilter === "all" || (s.status || "new") === inboxFilter)
+                .map(s => {
+                  const statusColor = {
+                    "new":      { bg:"#dbeafe", color:"#1d4ed8", border:"#bfdbfe" },
+                    "reviewing":{ bg:"#fef3c7", color:"#a16207", border:"#fde68a" },
+                    "planned":  { bg:"#ede9fe", color:"#6d28d9", border:"#ddd6fe" },
+                    "built":    { bg:"#dcfce7", color:"#15803d", border:"#bbf7d0" },
+                    "declined": { bg:"#f1f5f9", color:"#475569", border:"#cbd5e1" },
+                  }[s.status || "new"];
+                  const submitted = s.submittedAt ? new Date(s.submittedAt).toLocaleString("en-US", {month:"short", day:"numeric", hour:"numeric", minute:"2-digit"}) : "—";
+                  return (
+                    <div key={s.id} style={{padding:"10px 0", borderBottom:`1px solid ${C.border}`}}>
+                      <div style={{fontSize:13, color:C.text, marginBottom:4, whiteSpace:"pre-wrap"}}>{s.text}</div>
+                      <div style={{display:"flex", flexWrap:"wrap", alignItems:"center", gap:8, fontSize:11, color:C.dim, marginBottom:6}}>
+                        <span>{s.submittedBy || "anonymous"} · {submitted}</span>
+                        {s.category && <span style={{padding:"1px 6px", borderRadius:99, border:`1px solid ${C.border}`}}>{s.category}</span>}
+                        <select
+                          value={s.status || "new"}
+                          onChange={e => updateSuggestionStatus(s.id, e.target.value)}
+                          style={{padding:"2px 6px", fontSize:11, fontWeight:500, borderRadius:99,
+                            border:`1px solid ${statusColor.border}`, background:statusColor.bg, color:statusColor.color,
+                            cursor:"pointer"}}>
+                          <option value="new">new</option>
+                          <option value="reviewing">reviewing</option>
+                          <option value="planned">planned</option>
+                          <option value="built">built</option>
+                          <option value="declined">declined</option>
+                        </select>
+                        <span style={{flex:1}}/>
+                        <button onClick={() => deleteSuggestion(s.id)}
+                          style={{padding:"2px 8px", fontSize:11, border:`1px solid ${C.border}`, borderRadius:6, background:"transparent", color:C.dim, cursor:"pointer"}}>Delete</button>
+                      </div>
+                      <input
+                        type="text"
+                        defaultValue={s.notes || ""}
+                        placeholder="Notes (internal — only admins see this)…"
+                        onBlur={e => { const v = e.target.value.trim(); if (v !== (s.notes || "")) updateSuggestionNotes(s.id, v); }}
+                        style={{width:"100%", padding:"4px 8px", fontSize:12, border:`1px solid ${C.border}`, borderRadius:6, background:C.bg, color:C.text, fontFamily:"inherit", boxSizing:"border-box"}}
+                      />
+                    </div>
+                  );
+                })
+            )}
+          </div>
+        )}
+
         <div style={{fontSize:11, color:C.muted, textAlign:"center", padding:"14px 0"}}>
-          Share-only page · always current with the live app · no auth required
+          {isInApp ? "App Map · always current with the live app" : "Share-only page · always current with the live app · no auth required"}
         </div>
       </main>
     </div>
@@ -46116,12 +46300,13 @@ function App() {
               ...(can(identity,"settings.view")?[{key:"huddle",label:"Huddle"}]:[]),
               ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors"}]:[]),
               ...(can(identity,"scoreboard.editWeights")?[{key:"scoreboard",label:"Scoreboard"}]:[]),  // PHASE-4 ADMIN-ONLY: tab hidden for non-admins until boss approves
+              {key:"appmap",label:"App Map"},
               ...(can(identity,"settings.view")?[{key:"settings",label:"Settings",icon:"settings"}]:[]),
             ]
         ).map(({key,label,icon})=>{
           const active = view===key;
           return (
-            <button key={key} onClick={key==="home"?goHome:key==="today"?()=>setView("today"):key==="safety"?()=>setView("safety"):key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="walks"?()=>setView("walks"):key==="tasks"?openTasks:key==="nav"?openNav:key==="huddle"?()=>setView("huddle"):key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):openSettings}
+            <button key={key} onClick={key==="home"?goHome:key==="today"?()=>setView("today"):key==="appmap"?()=>setView("appmap"):key==="safety"?()=>setView("safety"):key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="walks"?()=>setView("walks"):key==="tasks"?openTasks:key==="nav"?openNav:key==="huddle"?()=>setView("huddle"):key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):openSettings}
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
@@ -47463,6 +47648,10 @@ function App() {
 
       {view==="today"&&can(identity,"today.view")&&(
         <Today jobs={jobs} users={users} identity={identity} onSelectJob={setSelected}/>
+      )}
+
+      {view==="appmap"&&(
+        <AppMapSharePage identity={identity}/>
       )}
 
       {view==="scoreboard"&&can(identity,"scoreboard.editWeights")&&(

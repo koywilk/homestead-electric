@@ -40,6 +40,11 @@ Source of truth for every feature in the app, organized by area. The Cowork "App
   - Drill-down per row
   - "How it works" panel
   - Weight editor (admin only)
+- **App Map** · `shipped 2026-05-21` · `SW v183` · in-app feature tree (visible to everyone)
+  - Renders FEATURES.md as collapsible tree with status badges
+  - Search filter + expand/collapse all
+  - Suggest-a-feature form (writes to `suggestions` collection)
+  - Suggestion inbox + triage controls (admin/manager only) — status + notes + delete
 - **Settings** · `shipped` · admin/manager only
 
 ---
