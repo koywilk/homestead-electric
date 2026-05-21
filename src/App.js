@@ -23041,7 +23041,7 @@ const UP_NEXT_RULES = [
         && co.coStatus !== "denied" && co.coStatus !== "converted"
         && !co.quoteNumber);
       const n = stuck.length;
-      return `<b>${n} sent CO${n===1?"":"s"} missing Quote #</b> — Brandon usually adds them in a day.`;
+      return `<b>${n} sent CO${n===1?"":"s"} missing Quote #</b> — add the quote # so this CO is searchable.`;
     },
     badge: () => null,
     actions: () => [
@@ -23302,15 +23302,27 @@ const UP_NEXT_RULES = [
   },
 ];
 
-// Pure helper — returns firing rules sorted by priority descending. Calm
-// rules only count if no non-calm rule fires (they're fallback display).
+// Snooze check — reads job.upNextSnoozed[ruleId] (ISO string of when snooze
+// ends). Returns true if the snooze hasn't expired yet. Safe against missing
+// / corrupt values: a bad date string is treated as "not snoozed" so the
+// panel always errs toward showing the rule.
+function _isSnoozed(job, ruleId) {
+  const s = job && job.upNextSnoozed && job.upNextSnoozed[ruleId];
+  if (!s) return false;
+  const t = new Date(s).getTime();
+  return !isNaN(t) && t > Date.now();
+}
+
+// Pure helper — returns firing, non-snoozed rules sorted by priority desc.
+// Calm rules only count if no non-calm rule fires (fallback display).
 function getUpNextRules(job) {
   if (!job) return [];
   const fired = UP_NEXT_RULES.filter(r => {
     try { return !!r.fires(job); } catch (e) { return false; }
   });
-  const nonCalm = fired.filter(r => r.severity !== "calm");
-  const calm    = fired.filter(r => r.severity === "calm");
+  const active  = fired.filter(r => !_isSnoozed(job, r.id));
+  const nonCalm = active.filter(r => r.severity !== "calm");
+  const calm    = active.filter(r => r.severity === "calm");
   if (nonCalm.length > 0) {
     return nonCalm.sort((a, b) => b.priority - a.priority);
   }
@@ -23318,16 +23330,36 @@ function getUpNextRules(job) {
   return calm.sort((a, b) => b.priority - a.priority).slice(0, 1);
 }
 
+// Rules that WOULD fire but are currently snoozed. Used to render the
+// "N snoozed" un-snooze affordance in the expander.
+function getSnoozedUpNextRules(job) {
+  if (!job) return [];
+  return UP_NEXT_RULES.filter(r => {
+    try { return !!r.fires(job) && _isSnoozed(job, r.id); } catch (e) { return false; }
+  }).sort((a, b) => b.priority - a.priority);
+}
+
 // ── UpNextPanel — the rendered card at the top of Job Detail ───────────
+//
+// Manual bypass / snooze:
+//  - Each card has a small × in the top-right.
+//  - Tap × → inline picker replaces the action row: [1 DAY] [1 WEEK] [1 MONTH] [CANCEL].
+//  - Pick a duration → dispatches { kind: "snoozeRule", payload: { ruleId, hours } }.
+//  - Rule disappears until the snooze expires (or until the rule stops firing).
+//  - Snoozed-but-still-firing rules show at the bottom of the expander as a
+//    "N snoozed" group with an "UN-SNOOZE" button on each.
+//  - Snooze state lives on job.upNextSnoozed = { ruleId: ISOstring }, written
+//    via the same u() patch path as everything else. No new collections.
 function UpNextPanel({ job, identity, onAction }) {
-  const rules = getUpNextRules(job);
-  const [expanded, setExpanded] = useState(false);
-  if (!rules.length) return null;
-  const top = rules[0];
+  const rules   = getUpNextRules(job);
+  const snoozed = getSnoozedUpNextRules(job);
+  const [expanded, setExpanded]   = useState(false);
+  const [snoozeFor, setSnoozeFor] = useState(null); // ruleId currently picking
+  if (!rules.length && !snoozed.length) return null;
+  const top  = rules[0] || null;
   const more = rules.slice(1);
 
   // Severity → gradient + label color
-  const sev = top.severity || "info";
   const gradients = {
     urgent:     "linear-gradient(to bottom, #fef2f2, #fff)",
     needsInput: "linear-gradient(to bottom, #fffbeb, #fff)",
@@ -23341,64 +23373,186 @@ function UpNextPanel({ job, identity, onAction }) {
     calm:       "#16a34a",
   };
 
-  const renderCard = (rule, isPrimary) => (
-    <div style={{
-      padding: isPrimary ? "12px 22px 14px" : "10px 22px",
-      background: isPrimary ? (gradients[rule.severity] || gradients.info) : "#fafbfc",
-      borderTop: isPrimary ? "none" : `1px solid ${C.border}`,
-    }}>
+  const snoozeChoices = [
+    { label: "1 DAY",   hours: 24 },
+    { label: "1 WEEK",  hours: 24 * 7 },
+    { label: "1 MONTH", hours: 24 * 30 },
+  ];
+
+  const renderCard = (rule, isPrimary) => {
+    const picking = snoozeFor === rule.id;
+    return (
       <div style={{
-        fontSize: 10, fontWeight: 800,
-        color: labelColors[rule.severity] || C.dim,
-        letterSpacing: "0.1em", textTransform: "uppercase",
-        marginBottom: 6, display: "flex", alignItems: "center", gap: 6,
+        padding: isPrimary ? "12px 22px 14px" : "10px 22px",
+        background: isPrimary ? (gradients[rule.severity] || gradients.info) : "#fafbfc",
+        borderTop: isPrimary ? "none" : `1px solid ${C.border}`,
+        position: "relative",
       }}>
-        {isPrimary ? "Up Next" : "Also"}
-        {rule.badge && rule.badge(job) && (
-          <span style={{
-            fontSize: 9, padding: "1px 6px", letterSpacing: "0.06em",
-            color: rule.severity === "urgent" ? "#fff" : "#92400e",
-            background: rule.severity === "urgent" ? "#dc2626" : "rgba(217,119,6,0.12)",
-            border: `1px solid ${rule.severity === "urgent" ? "#b91c1c" : "rgba(217,119,6,0.35)"}`,
-            borderRadius: 99, fontWeight: 800,
-          }}>{rule.badge(job)}</span>
+        {/* Snooze (×) — top-right of each card */}
+        <button
+          onClick={(e) => { e.stopPropagation(); setSnoozeFor(picking ? null : rule.id); }}
+          title="Snooze this item"
+          aria-label="Snooze this item"
+          style={{
+            position: "absolute", top: 8, right: 10,
+            width: 22, height: 22, padding: 0,
+            border: "none", background: "transparent",
+            color: C.dim, fontSize: 18, lineHeight: 1,
+            cursor: "pointer", fontFamily: "inherit",
+            borderRadius: 4,
+          }}>
+          ×
+        </button>
+
+        <div style={{
+          fontSize: 10, fontWeight: 800,
+          color: labelColors[rule.severity] || C.dim,
+          letterSpacing: "0.1em", textTransform: "uppercase",
+          marginBottom: 6, display: "flex", alignItems: "center", gap: 6,
+          paddingRight: 24,
+        }}>
+          {isPrimary ? "Up Next" : "Also"}
+          {rule.badge && rule.badge(job) && (
+            <span style={{
+              fontSize: 9, padding: "1px 6px", letterSpacing: "0.06em",
+              color: rule.severity === "urgent" ? "#fff" : "#92400e",
+              background: rule.severity === "urgent" ? "#dc2626" : "rgba(217,119,6,0.12)",
+              border: `1px solid ${rule.severity === "urgent" ? "#b91c1c" : "rgba(217,119,6,0.35)"}`,
+              borderRadius: 99, fontWeight: 800,
+            }}>{rule.badge(job)}</span>
+          )}
+        </div>
+        <div
+          style={{ fontSize: 14, fontWeight: 600, color: C.text, lineHeight: 1.5, marginBottom: 10, paddingRight: 24 }}
+          dangerouslySetInnerHTML={{ __html: rule.summary(job) }}/>
+
+        {/* Action row OR snooze picker row */}
+        {picking ? (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
+            <span style={{
+              fontSize: 10, fontWeight: 700, color: C.dim,
+              letterSpacing: "0.08em", textTransform: "uppercase", marginRight: 2,
+            }}>Snooze</span>
+            {snoozeChoices.map((c, i) => (
+              <button
+                key={i}
+                onClick={(e) => {
+                  e.stopPropagation();
+                  onAction && onAction({ kind: "snoozeRule", payload: { ruleId: rule.id, hours: c.hours } }, rule.id);
+                  setSnoozeFor(null);
+                }}
+                style={{
+                  padding: "6px 11px", borderRadius: 8, fontSize: 11, fontWeight: 700,
+                  cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.04em",
+                  border: `1px solid ${C.border}`, background: "#fff", color: C.text,
+                  textTransform: "uppercase",
+                }}>
+                {c.label}
+              </button>
+            ))}
+            <button
+              onClick={(e) => { e.stopPropagation(); setSnoozeFor(null); }}
+              style={{
+                padding: "6px 9px", borderRadius: 8, fontSize: 11, fontWeight: 700,
+                cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.04em",
+                border: "none", background: "transparent", color: C.dim,
+                textTransform: "uppercase",
+              }}>
+              CANCEL
+            </button>
+          </div>
+        ) : (
+          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
+            {(rule.actions(job) || []).map((a, i) => {
+              const bg = a.primary
+                ? (a.color === "red"   ? "#dc2626"
+                  : a.color === "amber" ? "#d97706"
+                  : a.color === "green" ? "#16a34a"
+                  : a.color === "orange"? "#ea580c"
+                  : "#2563eb")
+                : "#fff";
+              const fg = a.primary ? "#fff" : C.text;
+              const bd = a.primary ? "none" : `1px solid ${C.border}`;
+              return (
+                <button
+                  key={i}
+                  onClick={(e) => { e.stopPropagation(); onAction && onAction(a, rule.id); }}
+                  style={{
+                    padding: "8px 13px", borderRadius: 8, fontSize: 11, fontWeight: 700,
+                    cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.04em",
+                    border: bd, background: bg, color: fg, textTransform: "uppercase",
+                  }}>
+                  {a.label}
+                </button>
+              );
+            })}
+          </div>
         )}
       </div>
-      <div
-        style={{ fontSize: 14, fontWeight: 600, color: C.text, lineHeight: 1.5, marginBottom: 10 }}
-        dangerouslySetInnerHTML={{ __html: rule.summary(job) }}/>
-      <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-        {(rule.actions(job) || []).map((a, i) => {
-          const bg = a.primary
-            ? (a.color === "red"   ? "#dc2626"
-              : a.color === "amber" ? "#d97706"
-              : a.color === "green" ? "#16a34a"
-              : a.color === "orange"? "#ea580c"
-              : "#2563eb")
-            : "#fff";
-          const fg = a.primary ? "#fff" : C.text;
-          const bd = a.primary ? "none" : `1px solid ${C.border}`;
-          return (
-            <button
-              key={i}
-              onClick={(e) => { e.stopPropagation(); onAction && onAction(a, rule.id); }}
-              style={{
-                padding: "8px 13px", borderRadius: 8, fontSize: 11, fontWeight: 700,
-                cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.04em",
-                border: bd, background: bg, color: fg, textTransform: "uppercase",
-              }}>
-              {a.label}
-            </button>
-          );
-        })}
+    );
+  };
+
+  // Snoozed-but-still-firing rules — compact strip in the expander
+  const renderSnoozedRow = (rule) => {
+    const until = job && job.upNextSnoozed && job.upNextSnoozed[rule.id];
+    const d = until ? new Date(until) : null;
+    const untilLabel = d && !isNaN(d) ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+    return (
+      <div key={rule.id} style={{
+        padding: "8px 22px",
+        background: "#fafbfc",
+        borderTop: `1px solid ${C.border}`,
+        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+      }}>
+        <div style={{ flex: 1, minWidth: 0 }}>
+          <div style={{
+            fontSize: 9, fontWeight: 800, color: C.dim,
+            letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 2,
+          }}>
+            Snoozed{untilLabel ? ` · until ${untilLabel}` : ""}
+          </div>
+          <div
+            style={{ fontSize: 12, color: C.dim, lineHeight: 1.4,
+              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+            dangerouslySetInnerHTML={{ __html: rule.summary(job) }}/>
+        </div>
+        <button
+          onClick={(e) => {
+            e.stopPropagation();
+            onAction && onAction({ kind: "unsnoozeRule", payload: { ruleId: rule.id } }, rule.id);
+          }}
+          style={{
+            padding: "5px 9px", borderRadius: 6, fontSize: 10, fontWeight: 700,
+            cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.06em",
+            border: `1px solid ${C.border}`, background: "#fff", color: C.text,
+            textTransform: "uppercase", flexShrink: 0,
+          }}>
+          UN-SNOOZE
+        </button>
       </div>
-    </div>
-  );
+    );
+  };
+
+  // Combined total for the expander label (active "also" + snoozed-firing).
+  const moreCount = more.length + snoozed.length;
 
   return (
     <div style={{ borderBottom: `1px solid ${C.border}`, background: "#fff" }}>
-      {renderCard(top, true)}
-      {more.length > 0 && (
+      {top && renderCard(top, true)}
+      {/* Only snoozed rules exist (nothing fires actively) — surface them directly */}
+      {!top && snoozed.length > 0 && (
+        <>
+          <div style={{
+            padding: "10px 22px 4px",
+            fontSize: 10, fontWeight: 800, color: C.dim,
+            letterSpacing: "0.1em", textTransform: "uppercase",
+          }}>
+            Snoozed
+          </div>
+          {snoozed.map(renderSnoozedRow)}
+        </>
+      )}
+      {top && moreCount > 0 && (
         <>
           <div
             onClick={() => setExpanded(v => !v)}
@@ -23411,9 +23565,12 @@ function UpNextPanel({ job, identity, onAction }) {
               display: "flex", alignItems: "center", gap: 6,
             }}>
             <span style={{ fontSize: 13 }}>{expanded ? "▾" : "▸"}</span>
-            {expanded ? `Hide ${more.length} more` : `${more.length} more item${more.length===1?"":"s"}`}
+            {expanded
+              ? `Hide ${moreCount} more`
+              : `${moreCount} more item${moreCount===1?"":"s"}${snoozed.length ? ` · ${snoozed.length} snoozed` : ""}`}
           </div>
           {expanded && more.map(r => <div key={r.id}>{renderCard(r, false)}</div>)}
+          {expanded && snoozed.map(renderSnoozedRow)}
         </>
       )}
     </div>
@@ -23860,6 +24017,30 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
         };
         u({ returnTrips: [newRT, ...(jobRef.current.returnTrips || [])] });
         setTab("Return Trips");
+        break;
+      }
+      case "snoozeRule": {
+        // Manual bypass — hide this rule for this job until `hours` from now.
+        // Writes to job.upNextSnoozed = { [ruleId]: ISOstring }. Data safety:
+        // additive field, no migration needed. getUpNextRules() filters by
+        // this map; expired snoozes are ignored, so stale entries never
+        // resurface as ghost UI.
+        const p = action.payload || {};
+        if (!p.ruleId) break;
+        const hours = (typeof p.hours === "number" && isFinite(p.hours) && p.hours > 0) ? p.hours : 24;
+        const until = new Date(Date.now() + hours * 3600 * 1000).toISOString();
+        const cur = (jobRef.current && jobRef.current.upNextSnoozed) || {};
+        u({ upNextSnoozed: { ...cur, [p.ruleId]: until } });
+        break;
+      }
+      case "unsnoozeRule": {
+        // Remove the snooze entry so the rule fires again.
+        const p = action.payload || {};
+        if (!p.ruleId) break;
+        const cur = { ...((jobRef.current && jobRef.current.upNextSnoozed) || {}) };
+        if (!(p.ruleId in cur)) break;
+        delete cur[p.ruleId];
+        u({ upNextSnoozed: cur });
         break;
       }
       default:
@@ -35755,11 +35936,14 @@ if (typeof window !== "undefined") {
 }
 
 // ── Today Command Center ───────────────────────────────────────────────────
-// Office-facing live dashboard. Read-only — never writes Firestore. Reads
-// `lastActivityAt` (added in commit "Add lastActivityAt timestamp on every
-// job write") to drive activity sort, staleness, and the today filter.
+// Office + foreman-facing live dashboard. Read-only — never writes Firestore.
+// Reads `lastActivityAt` (added in commit "Add lastActivityAt timestamp on
+// every job write") to drive activity sort, staleness, and the today filter.
+// V2: foreman heartbeat (derived from existing saved_by + checkedBy fields).
+// V3: photos strip (derived from photo arrays on jobs touched today — no new
+// write paths needed; uses parent job's lastActivityAt as recency signal).
 // Spec: memory/project_today_command_center.md
-// Role gating: today.view = admin/manager/standard (foreman). NOT lead/crew.
+// Role gating: today.view = admin/manager/standard. NOT lead/crew.
 function Today({ jobs, users=[], identity, onSelectJob }) {
   // Defensive timestamp coercer — lastActivityAt can be a Firestore Timestamp
   // (with .toDate()), a Date, an ISO string, or missing (old jobs that haven't
@@ -35776,31 +35960,145 @@ function Today({ jobs, users=[], identity, onSelectJob }) {
 
   const now = new Date();
   const startOfToday = new Date(now); startOfToday.setHours(0,0,0,0);
+  const twoHoursAgo  = new Date(now.getTime() - 2*60*60*1000);
   const threeDaysAgo = new Date(now.getTime() - 3*24*60*60*1000);
+  // Existing punch.checkedAt / CO.createdAt use toLocaleDateString("en-US") — match it.
+  const todayLocale  = now.toLocaleDateString("en-US");
 
-  // Active = anything not finished. Existing convention uses finishStatus="complete".
-  const allJobs = jobs || [];
-  const activeJobs = allJobs.filter(j => (j.data?.finishStatus || "") !== "complete");
+  // ── Helpers (pure, no writes) ──
+  // Walk every punch item on a job: rough/finish/qc punches across floors
+  // (upper/main/basement) and their general/hotcheck/rooms branches, plus
+  // returnTrip punch arrays. Calls cb(item, ctx).
+  const forEachPunch = (job, cb) => {
+    const data = job; if (!data) return;
+    ["roughPunch","finishPunch","qcPunch"].forEach(phaseKey => {
+      const phase = data[phaseKey]; if (!phase) return;
+      ["upper","main","basement"].forEach(floorKey => {
+        const floor = phase[floorKey] || {};
+        (floor.general  || []).forEach(i => cb(i, {phaseKey, floorKey, where:"general"}));
+        (floor.hotcheck || []).forEach(i => cb(i, {phaseKey, floorKey, where:"hotcheck"}));
+        (floor.rooms    || []).forEach(r => (r.items || []).forEach(i => cb(i, {phaseKey, floorKey, where:r.name})));
+      });
+    });
+    (data.returnTrips || []).forEach(rt => (rt.punch || []).forEach(i => cb(i, {phaseKey:"returnTrip", rtId:rt.id})));
+  };
+  // Recursive photo collector — anything that has both `url` and `storagePath`
+  // string fields is a photo (matches the shape PhotoAttacher produces). Safe
+  // and generic: covers CO photos, punch photos, RT photos, walk photos, etc.
+  const collectPhotos = (obj, out=[]) => {
+    if (!obj || typeof obj !== "object") return out;
+    if (Array.isArray(obj)) { obj.forEach(o => collectPhotos(o, out)); return out; }
+    if (typeof obj.url === "string" && typeof obj.storagePath === "string") { out.push(obj); return out; }
+    Object.values(obj).forEach(v => collectPhotos(v, out));
+    return out;
+  };
+  // Tolerant name match — saved_by/checkedBy can be full name or first name.
+  const nameMatches = (savedBy, foremanName) => {
+    if (!savedBy || !foremanName) return false;
+    const s = savedBy.toLowerCase().trim();
+    const f = foremanName.toLowerCase().trim();
+    if (s === f) return true;
+    const sFirst = s.split(/\s+/)[0];
+    const fFirst = f.split(/\s+/)[0];
+    return sFirst === fFirst;
+  };
 
-  // Jobs touched today (per lastActivityAt). Used for the today filter + foreman heartbeat.
+  // ── Job sets ──
+  const allJobs    = jobs || [];
+  const activeJobs = allJobs.filter(j => (j.finishStatus || "") !== "complete");
   const touchedToday = allJobs.filter(j => { const d = toDate(j.lastActivityAt); return d && d >= startOfToday; });
-
-  // Unique foremen (saved_by) who have written today.
-  const foremenOnAppToday = [...new Set(touchedToday.map(j => j.saved_by).filter(Boolean))];
+  const foremenOnAppToday = [...new Set(touchedToday.map(j => j._saved_by).filter(Boolean))];
 
   // Stale = active job, never touched OR last activity > 3 days ago.
   const staleJobs = activeJobs.filter(j => { const d = toDate(j.lastActivityAt); return !d || d < threeDaysAgo; })
     .sort((a,b)=>{ const ad=toDate(a.lastActivityAt); const bd=toDate(b.lastActivityAt); return (ad?ad.getTime():0)-(bd?bd.getTime():0); });
 
-  // All jobs sorted by lastActivityAt desc — drives both activity feed and jobs grid.
+  // All jobs sorted by lastActivityAt desc — drives activity feed and jobs grid.
   const byActivityDesc = [...allJobs].sort((a,b)=>{ const ad=toDate(a.lastActivityAt); const bd=toDate(b.lastActivityAt); return (bd?bd.getTime():0)-(ad?ad.getTime():0); });
-  const activeByActivity = byActivityDesc.filter(j => (j.data?.finishStatus || "") !== "complete");
+  const activeByActivity = byActivityDesc.filter(j => (j.finishStatus || "") !== "complete");
 
-  // Style helpers — match the rest of the app (uses C palette, inline styles).
+  // ── Cross-job counters (single walk, multiple outputs) ──
+  let punchesClosedToday = 0;
+  let cosAddedToday = 0;
+  const jobsWithUnassignedPunches = []; // { job, count }
+  const jobsWithCOsMissingQuote   = []; // { job, count }
+  const jobsWithFailedInspection  = []; // { job, kind, open }
+  allJobs.forEach(j => {
+    let unassignedCount = 0;
+    forEachPunch(j, (item) => {
+      if (item?.done && item?.checkedAt === todayLocale) punchesClosedToday++;
+      if (item && !item.done && !item.assignedTo) unassignedCount++;
+    });
+    if (unassignedCount > 0) jobsWithUnassignedPunches.push({ job:j, count:unassignedCount });
+
+    let missingQuoteCount = 0;
+    (j.changeOrders || []).forEach(co => {
+      if (co?.createdAt === todayLocale) cosAddedToday++;
+      if (co && !co.quoteNumber && co.coStatus !== "completed") missingQuoteCount++;
+    });
+    if (missingQuoteCount > 0) jobsWithCOsMissingQuote.push({ job:j, count:missingQuoteCount });
+
+    // Failed inspections — surface only if there are still open items to act on.
+    if (j.roughInspectionResult === "fail") {
+      const open = (j.roughInspectionItems || []).filter(i => i && !i.done).length;
+      if (open > 0) jobsWithFailedInspection.push({ job:j, kind:"Rough", open });
+    }
+    if (j.finalInspectionResult === "fail") {
+      const open = (j.finalInspectionItems || []).filter(i => i && !i.done).length;
+      if (open > 0) jobsWithFailedInspection.push({ job:j, kind:"Final", open });
+    }
+  });
+
+  // ── Photos (V3) — collected from jobs touched today; deduped by URL ──
+  const photoMap = new Map();
+  touchedToday.forEach(j => {
+    collectPhotos(j).forEach(p => {
+      if (p.url && !photoMap.has(p.url)) photoMap.set(p.url, { ...p, jobName:j.name||j.id, jobId:j.id });
+    });
+  });
+  const photosToday = Array.from(photoMap.values());
+
+  // ── Foreman heartbeat (V2) — derived from existing saved_by + checkedBy ──
+  // Foremen list: prefer users prop (filter by title/role), fall back to any
+  // distinct foreman name found on jobs so the row isn't empty if users
+  // are scarce in this client.
+  const foremenFromUsers = (users || []).filter(u => ((u.title||u.role||"").toLowerCase()) === "foreman").map(u => u.name).filter(Boolean);
+  const foremenFromJobs  = [...new Set(allJobs.map(j => j.foreman).filter(n => n && n !== "Unassigned"))];
+  const foremenForBoard = foremenFromUsers.length > 0 ? foremenFromUsers : foremenFromJobs;
+  const heartbeats = foremenForBoard.map(name => {
+    const firstName = (name || "").split(/\s+/)[0];
+    let jobsTouched = 0, punches = 0, cos = 0;
+    let lastSeen = null;
+    allJobs.forEach(j => {
+      if (nameMatches(j._saved_by, name)) {
+        const d = toDate(j.lastActivityAt);
+        if (d && d >= startOfToday) {
+          jobsTouched++;
+          if (!lastSeen || d > lastSeen) lastSeen = d;
+        }
+      }
+      forEachPunch(j, (item) => {
+        if (item?.done && item?.checkedAt === todayLocale && nameMatches(item.checkedBy, name)) punches++;
+      });
+      (j.changeOrders || []).forEach(co => {
+        if (co?.createdAt === todayLocale && nameMatches(co.createdBy, name)) cos++;
+      });
+    });
+    const status = lastSeen && lastSeen >= twoHoursAgo ? "active"
+                 : lastSeen ? "earlier"
+                 : "quiet";
+    return { name: firstName, status, lastSeen, jobsTouched, punches, cos };
+  }).sort((a,b)=> (b.jobsTouched + b.punches + b.cos) - (a.jobsTouched + a.punches + a.cos));
+
+  // ── Style helpers — match the rest of the app (uses C palette, inline styles) ──
   const card = { background: C.card, border:`1px solid ${C.border}`, borderRadius: 12, padding: "14px 16px" };
   const sectionTitle = { fontSize: 13, fontWeight: 600, color: C.text, marginBottom: 10, display:"flex", alignItems:"center", gap:8, textTransform:"uppercase", letterSpacing:"0.04em" };
   const pulseCard = { background: C.bg, borderRadius: 8, padding: "10px 12px" };
   const rowStyle = { display:"flex", alignItems:"center", gap:10, padding:"8px 10px", borderRadius:8, cursor: onSelectJob?"pointer":"default" };
+  const naRow    = (bg, text) => ({...rowStyle, background:bg, color:text});
+
+  // Combined Needs Attention count (drives the header pill)
+  const needsCount = jobsWithFailedInspection.length + staleJobs.length + jobsWithUnassignedPunches.length + jobsWithCOsMissingQuote.length;
 
   return (
     <div style={{padding:"16px 20px", maxWidth: 1240, margin:"0 auto"}}>
@@ -35819,7 +36117,7 @@ function Today({ jobs, users=[], identity, onSelectJob }) {
         </div>
       </div>
 
-      {/* Pulse bar — 6 counters */}
+      {/* Pulse bar — 6 counters (all wired) */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:14}}>
         <div style={pulseCard}>
           <div style={{fontSize:11,color:C.dim}}>Active jobs</div>
@@ -35832,43 +36130,82 @@ function Today({ jobs, users=[], identity, onSelectJob }) {
           <div style={{fontSize:22,fontWeight:600,color:C.text}}>{foremenOnAppToday.length}</div>
         </div>
         <div style={pulseCard}>
-          <div style={{fontSize:11,color:C.dim}}>Jobs touched today</div>
-          <div style={{fontSize:22,fontWeight:600,color:C.text}}>{touchedToday.length}</div>
-        </div>
-        <div style={pulseCard}>
-          <div style={{fontSize:11,color:C.dim}}>Photos</div>
-          <div style={{fontSize:22,fontWeight:600,color:C.muted}}>—</div>
-        </div>
-        <div style={pulseCard}>
           <div style={{fontSize:11,color:C.dim}}>Punches closed</div>
-          <div style={{fontSize:22,fontWeight:600,color:C.muted}}>—</div>
+          <div style={{fontSize:22,fontWeight:600,color:C.text}}>{punchesClosedToday}</div>
         </div>
         <div style={pulseCard}>
           <div style={{fontSize:11,color:C.dim}}>COs added</div>
-          <div style={{fontSize:22,fontWeight:600,color:C.muted}}>—</div>
+          <div style={{fontSize:22,fontWeight:600,color:C.text}}>{cosAddedToday}</div>
+        </div>
+        <div style={pulseCard}>
+          <div style={{fontSize:11,color:C.dim}}>Photos on active jobs</div>
+          <div style={{fontSize:22,fontWeight:600,color:C.text}}>{photosToday.length}</div>
+        </div>
+        <div style={pulseCard}>
+          <div style={{fontSize:11,color:C.dim}}>Failed inspections</div>
+          <div style={{fontSize:22,fontWeight:600,color: jobsWithFailedInspection.length > 0 ? C.red : C.text}}>
+            {jobsWithFailedInspection.length}
+          </div>
         </div>
       </div>
 
-      {/* Needs attention */}
+      {/* Needs attention — failed inspections (red) → stale jobs / unassigned punches (amber) → COs missing quote (neutral) */}
       <div style={{...card, marginBottom: 12}}>
         <div style={sectionTitle}>
           <Icon name="alertTriangle" size={14} stroke={2}/> Needs attention
-          <span style={{marginLeft:"auto",fontSize:11,fontWeight:400,color:C.dim,textTransform:"none",letterSpacing:0}}>{staleJobs.length} items</span>
+          <span style={{marginLeft:"auto",fontSize:11,fontWeight:400,color:C.dim,textTransform:"none",letterSpacing:0}}>{needsCount} items</span>
         </div>
-        {staleJobs.length === 0 ? (
+
+        {needsCount === 0 && (
           <div style={{fontSize:13,color:C.dim,padding:"8px 10px"}}>Nothing to flag right now.</div>
-        ) : staleJobs.slice(0,8).map(j => {
+        )}
+
+        {/* Failed inspections — red */}
+        {jobsWithFailedInspection.slice(0,5).map(({job:j, kind, open}) => (
+          <div key={`fi-${j.id}-${kind}`} style={{...rowStyle, background:"#fee2e2", marginBottom:6}} onClick={() => onSelectJob && onSelectJob(j)}>
+            <Icon name="xCircle" size={14} stroke={2} color="#b91c1c"/>
+            <div style={{flex:1,fontSize:13,color:"#7f1d1d"}}>
+              <b>{kind} inspection failed</b> · {j.name || j.id} · {open} item{open===1?"":"s"} still open
+            </div>
+            <span style={{fontSize:11,color:"#991b1b"}}>red</span>
+          </div>
+        ))}
+
+        {/* Stale jobs — amber */}
+        {staleJobs.slice(0,5).map(j => {
           const d = toDate(j.lastActivityAt);
           return (
-            <div key={j.id} style={{...rowStyle, background:"#fef3c7"}} onClick={() => onSelectJob && onSelectJob(j)}>
-              <Icon name="clock" size={14} stroke={2}/>
+            <div key={`stale-${j.id}`} style={{...rowStyle, background:"#fef3c7", marginBottom:6}} onClick={() => onSelectJob && onSelectJob(j)}>
+              <Icon name="clock" size={14} stroke={2} color="#a16207"/>
               <div style={{flex:1,fontSize:13,color:"#78350f"}}>
-                <b>{j.data?.name || j.id}</b> · no activity {d ? `since ${fmtDay(d)}` : "ever"}
+                <b>No activity {d ? `since ${fmtDay(d)}` : "ever"}</b> · {j.name || j.id}
               </div>
               <span style={{fontSize:11,color:"#92400e"}}>stale</span>
             </div>
           );
         })}
+
+        {/* Unassigned punch items — amber */}
+        {jobsWithUnassignedPunches.slice(0,5).map(({job:j, count}) => (
+          <div key={`up-${j.id}`} style={{...rowStyle, background:"#fef3c7", marginBottom:6}} onClick={() => onSelectJob && onSelectJob(j)}>
+            <Icon name="user" size={14} stroke={2} color="#a16207"/>
+            <div style={{flex:1,fontSize:13,color:"#78350f"}}>
+              <b>{count} unassigned punch item{count===1?"":"s"}</b> · {j.name || j.id}
+            </div>
+            <span style={{fontSize:11,color:"#92400e"}}>amber</span>
+          </div>
+        ))}
+
+        {/* COs missing quote # — neutral */}
+        {jobsWithCOsMissingQuote.slice(0,5).map(({job:j, count}) => (
+          <div key={`coq-${j.id}`} style={{...rowStyle, background:C.bg, marginBottom:6}} onClick={() => onSelectJob && onSelectJob(j)}>
+            <Icon name="dollarSign" size={14} stroke={2} color={C.dim}/>
+            <div style={{flex:1,fontSize:13,color:C.text}}>
+              <b>{count} CO{count===1?"":"s"} without quote #</b> · {j.name || j.id}
+            </div>
+            <span style={{fontSize:11,color:C.dim}}>review</span>
+          </div>
+        ))}
       </div>
 
       {/* Two-column: live activity (left) + jobs today (right) */}
@@ -35886,7 +36223,7 @@ function Today({ jobs, users=[], identity, onSelectJob }) {
               <div key={j.id} style={{...rowStyle, padding:"6px 8px"}} onClick={() => onSelectJob && onSelectJob(j)}>
                 <span style={{fontSize:11,color:C.muted,minWidth:54}}>{isToday ? fmtTime(d) : fmtDay(d)}</span>
                 <div style={{flex:1,fontSize:13,color:C.text}}>
-                  <b>{j.saved_by || "someone"}</b> touched <span style={{color:C.blue}}>{j.data?.name || j.id}</span>
+                  <b>{j._saved_by || "someone"}</b> touched <span style={{color:C.blue}}>{j.name || j.id}</span>
                 </div>
               </div>
             );
@@ -35910,8 +36247,8 @@ function Today({ jobs, users=[], identity, onSelectJob }) {
             return (
               <div key={j.id} style={{...rowStyle, padding:"8px 10px", borderBottom:`1px solid ${C.border}`}} onClick={() => onSelectJob && onSelectJob(j)}>
                 <div style={{flex:1}}>
-                  <div style={{fontSize:13,fontWeight:600,color:C.text}}>{j.data?.name || j.id}</div>
-                  <div style={{fontSize:11,color:C.dim}}>{j.data?.foreman || "—"} · last touched {fmtTime(d)}</div>
+                  <div style={{fontSize:13,fontWeight:600,color:C.text}}>{j.name || j.id}</div>
+                  <div style={{fontSize:11,color:C.dim}}>{j.foreman || "—"} · last touched {fmtTime(d)}</div>
                 </div>
               </div>
             );
@@ -35922,7 +36259,7 @@ function Today({ jobs, users=[], identity, onSelectJob }) {
             return (
               <div key={j.id} style={{...rowStyle, padding:"6px 10px", opacity:0.55}} onClick={() => onSelectJob && onSelectJob(j)}>
                 <div style={{flex:1}}>
-                  <div style={{fontSize:12,color:C.dim}}>{j.data?.name || j.id}</div>
+                  <div style={{fontSize:12,color:C.dim}}>{j.name || j.id}</div>
                   <div style={{fontSize:11,color:C.muted}}>last touched {d ? fmtDay(d) : "never"}</div>
                 </div>
               </div>
@@ -35932,9 +36269,94 @@ function Today({ jobs, users=[], identity, onSelectJob }) {
 
       </div>
 
-      {/* Footer note — V1 transparency */}
+      {/* Foreman heartbeat (V2) — one card per foreman with status dot + tally */}
+      <div style={{...card, marginTop: 12}}>
+        <div style={sectionTitle}>
+          <Icon name="users" size={14} stroke={2}/> Foreman heartbeat
+          <span style={{marginLeft:"auto",fontSize:11,fontWeight:400,color:C.dim,textTransform:"none",letterSpacing:0}}>
+            {heartbeats.filter(h=>h.status==="active").length} active · {heartbeats.filter(h=>h.status==="earlier").length} earlier · {heartbeats.filter(h=>h.status==="quiet").length} quiet
+          </span>
+        </div>
+        {heartbeats.length === 0 ? (
+          <div style={{fontSize:13,color:C.dim,padding:"8px 10px"}}>No foremen on file yet.</div>
+        ) : (
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8}}>
+            {heartbeats.map(h => {
+              const dot = h.status==="active" ? C.green : h.status==="earlier" ? "#ca8a04" : C.muted;
+              const sub = h.status==="active" ? `active · ${fmtTime(h.lastSeen)}`
+                        : h.status==="earlier" ? `last seen ${fmtTime(h.lastSeen)}`
+                        : "not on app today";
+              return (
+                <div key={h.name} style={{background:C.bg,borderRadius:8,padding:"10px 12px", opacity: h.status==="quiet"?0.65:1}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                    <span style={{width:8,height:8,borderRadius:99,background:dot,display:"inline-block",flexShrink:0}}/>
+                    <span style={{fontSize:13,fontWeight:600,color:C.text}}>{h.name}</span>
+                  </div>
+                  <div style={{fontSize:11,color:C.dim,marginBottom:4}}>{sub}</div>
+                  {(h.jobsTouched+h.punches+h.cos)>0 && (
+                    <div style={{fontSize:11,color:C.dim,display:"flex",gap:8,flexWrap:"wrap"}}>
+                      {h.jobsTouched>0 && <span>{h.jobsTouched} job{h.jobsTouched===1?"":"s"}</span>}
+                      {h.punches>0 && <span>· {h.punches} punch{h.punches===1?"":"es"}</span>}
+                      {h.cos>0 && <span>· {h.cos} CO{h.cos===1?"":"s"}</span>}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        )}
+      </div>
+
+      {/* Photos today (V3) — thumbnails from jobs touched today, deduped by URL */}
+      <div style={{...card, marginTop: 12}}>
+        <div style={sectionTitle}>
+          <Icon name="camera" size={14} stroke={2}/> Photos on today's active jobs
+          <span style={{marginLeft:"auto",fontSize:11,fontWeight:400,color:C.dim,textTransform:"none",letterSpacing:0}}>{photosToday.length}</span>
+        </div>
+        {photosToday.length === 0 ? (
+          <div style={{fontSize:13,color:C.dim,padding:"8px 10px"}}>No photos on jobs touched today.</div>
+        ) : (
+          <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:6}}>
+            {photosToday.slice(0,24).map(p => (
+              <div key={p.id || p.url}
+                onClick={() => window.open(p.url, "_blank")}
+                title={`${p.jobName || ""}${p.name ? " · " + p.name : ""}`}
+                style={{
+                  flexShrink:0,
+                  width:72, height:72,
+                  borderRadius:6,
+                  border:`1px solid ${C.border}`,
+                  backgroundImage:`url(${p.url})`,
+                  backgroundSize:"cover",
+                  backgroundPosition:"center",
+                  cursor:"pointer",
+                  position:"relative",
+                }}>
+                <div style={{
+                  position:"absolute",bottom:0,left:0,right:0,
+                  fontSize:9, color:"#fff", padding:"2px 4px",
+                  background:"linear-gradient(transparent, rgba(0,0,0,0.7))",
+                  borderBottomLeftRadius:6, borderBottomRightRadius:6,
+                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+                }}>{p.jobName}</div>
+              </div>
+            ))}
+            {photosToday.length > 24 && (
+              <div style={{
+                flexShrink:0, width:72, height:72,
+                borderRadius:6, border:`1px solid ${C.border}`,
+                background:C.bg,
+                display:"flex",alignItems:"center",justifyContent:"center",
+                fontSize:12, color:C.dim,
+              }}>+{photosToday.length - 24}</div>
+            )}
+          </div>
+        )}
+      </div>
+
+      {/* Footer note */}
       <div style={{marginTop:14,padding:"8px 12px",fontSize:11,color:C.dim,textAlign:"center"}}>
-        V1 · pulse + needs attention + activity feed + jobs grid. Photos / heartbeat / per-event counters coming next.
+        Live · auto-refreshes as foremen and office save changes. Photos shown are from jobs with activity today.
       </div>
     </div>
   );
@@ -43828,7 +44250,7 @@ function App() {
 
         if(!snap.empty) {
 
-          const loaded = migrate(snap.docs.map(d=>{const raw=d.data(); return raw?.data ? {...raw.data, updated_at:raw.updated_at||"", _saved_by:raw.saved_by||"", _device:raw.device||""} : null;}).filter(Boolean));
+          const loaded = migrate(snap.docs.map(d=>{const raw=d.data(); return raw?.data ? {...raw.data, updated_at:raw.updated_at||"", _saved_by:raw.saved_by||"", _device:raw.device||"", lastActivityAt:raw.lastActivityAt||null} : null;}).filter(Boolean));
 
           // Normalize foreman/lead names to match canonical casing from users list
           // This prevents "Vasa mataafa" showing as wrong person in dropdowns
