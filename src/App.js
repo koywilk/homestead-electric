@@ -36007,6 +36007,9 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
   const [feedFilter, setFeedFilter] = useState(() => { try { return localStorage.getItem("today.feedFilter") || "all"; } catch { return "all"; } });
   const [feedExpanded, setFeedExpanded] = useState(false);
   const setFilter = (v) => { setFeedFilter(v); try { localStorage.setItem("today.feedFilter", v); } catch {} };
+  // Per-person drill-down: which person's full day is being inspected.
+  // Key is the lowercased name (matches personMap key).
+  const [activePersonKey, setActivePersonKey] = useState(null);
   // Defensive timestamp coercer — lastActivityAt can be a Firestore Timestamp
   // (with .toDate()), a Date, an ISO string, or missing (old jobs that haven't
   // been touched since the field was introduced). Returns null for unknown.
@@ -36611,8 +36614,7 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
 
       {/* Per-person pulser (P1) — every lead/crew/foreman who did anything today.
           One card per person with action tallies + their last 3 events.
-          This is more granular than the foreman heartbeat below — heartbeat
-          rolls up by foreman, pulser shows EVERY person on the app. */}
+          Click a card to drill into that person's full day. */}
       <div style={{...card, marginTop: 12}}>
         <div style={sectionTitle}>
           <Icon name="users" size={14} stroke={2}/> Per-person pulser
@@ -36623,15 +36625,25 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
         ) : (
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:8}}>
             {people.map(p => {
-              // Build a short tally string. Pick the top 3 event types by count.
+              // Build a short tally string. Pick the top 4 event types by count.
               const tallyKeys = Object.entries(p.counts).sort((a,b) => b[1]-a[1]).slice(0,4);
               const tallyLabels = {
                 punch:"punch", co:"CO", rt:"RT", inspection:"insp", photo:"photo", daily:"daily",
                 status:"status", po:"PO", question:"Q", note:"note", savant:"savant", homerun:"home run",
                 call:"call", task:"task", walk:"walk", suggestion:"idea", presence:"visit", lifecycle:"life",
               };
+              const key = (p.name||"").toLowerCase();
+              const isActive = activePersonKey === key;
               return (
-                <div key={p.name} style={{background:C.bg,borderRadius:8,padding:"10px 12px"}}>
+                <div key={p.name}
+                  onClick={() => setActivePersonKey(isActive ? null : key)}
+                  style={{
+                    background: isActive ? C.card : C.bg,
+                    borderRadius:8, padding:"10px 12px",
+                    border:`1px solid ${isActive ? C.text : "transparent"}`,
+                    cursor:"pointer",
+                    transition:"background 80ms, border-color 80ms",
+                  }}>
                   <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
                     <span style={{width:8,height:8,borderRadius:99,background:C.green,display:"inline-block",flexShrink:0}}/>
                     <span style={{fontSize:13,fontWeight:600,color:C.text}}>{p.name}</span>
@@ -36653,12 +36665,98 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
                         {e.jobName && <span style={{color:C.blue}}> · {e.jobName}</span>}
                       </div>
                     ))}
+                    {p.events.length > 3 && (
+                      <div style={{fontSize:11,color:C.blue,marginTop:4,fontWeight:600}}>
+                        {isActive ? "▾ showing full day below" : `+ ${p.events.length - 3} more · tap for full day →`}
+                      </div>
+                    )}
                   </div>
                 </div>
               );
             })}
           </div>
         )}
+
+        {/* Drill-down detail panel — every event for the active person today.
+            Grouped by job for fast scanning, then sorted by time within each job. */}
+        {(() => {
+          if (!activePersonKey) return null;
+          const p = people.find(x => (x.name||"").toLowerCase() === activePersonKey);
+          if (!p) return null;
+          // Group events by jobName for this person.
+          const byJob = new Map();
+          p.events.forEach(e => {
+            const jobKey = e.jobName || "—";
+            if (!byJob.has(jobKey)) byJob.set(jobKey, { jobId:e.jobId, jobName:jobKey, events:[] });
+            byJob.get(jobKey).events.push(e);
+          });
+          const jobGroups = Array.from(byJob.values())
+            .map(g => ({ ...g, events: g.events.sort((a,b) => b.at.getTime() - a.at.getTime()) }))
+            .sort((a,b) => b.events.length - a.events.length);
+          // Type-count summary
+          const typeCounts = Object.entries(p.counts).sort((a,b) => b[1]-a[1]);
+          const typeLabels = {
+            punch:"punch", co:"CO", rt:"RT", inspection:"inspection", photo:"photo", daily:"daily update",
+            status:"status", po:"PO", question:"question", note:"note", savant:"Savant", homerun:"home run",
+            call:"call", task:"task", walk:"quote walk", suggestion:"idea", presence:"visit", lifecycle:"lifecycle",
+          };
+          return (
+            <div style={{marginTop:12, padding:"12px 14px", background:C.bg, borderRadius:10, border:`1px solid ${C.border}`}}>
+              <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:10, paddingBottom:8, borderBottom:`1px solid ${C.border}`}}>
+                <span style={{width:10,height:10,borderRadius:99,background:C.green,display:"inline-block"}}/>
+                <div style={{flex:1}}>
+                  <div style={{fontSize:14, fontWeight:600, color:C.text}}>{p.name}'s day</div>
+                  <div style={{fontSize:11, color:C.dim, marginTop:2}}>
+                    {p.events.length} action{p.events.length===1?"":"s"} · across {jobGroups.length} job{jobGroups.length===1?"":"s"} · last at {fmtTime(p.lastSeen)}
+                  </div>
+                </div>
+                <button onClick={(e) => { e.stopPropagation(); setActivePersonKey(null); }}
+                  style={{background:"transparent", border:`1px solid ${C.border}`, color:C.dim, fontSize:11, padding:"4px 10px", borderRadius:6, cursor:"pointer", fontFamily:"inherit"}}>
+                  Close ✕
+                </button>
+              </div>
+              {/* Tally row */}
+              <div style={{display:"flex", gap:6, flexWrap:"wrap", marginBottom:12}}>
+                {typeCounts.map(([k,v]) => (
+                  <span key={k} style={{fontSize:11, padding:"2px 8px", borderRadius:99, background:C.card, border:`1px solid ${C.border}`, color:C.text}}>
+                    {v} {typeLabels[k]||k}{v>1?"s":""}
+                  </span>
+                ))}
+              </div>
+              {/* Per-job event lists */}
+              <div style={{display:"flex", flexDirection:"column", gap:10}}>
+                {jobGroups.map(g => (
+                  <div key={g.jobName} style={{background:C.card, borderRadius:8, padding:"8px 10px", border:`1px solid ${C.border}`}}>
+                    <div style={{display:"flex", alignItems:"center", gap:6, marginBottom:6, paddingBottom:5, borderBottom:`1px solid ${C.border}`}}>
+                      <span style={{fontSize:12, fontWeight:600, color:C.blue, cursor: g.jobId ? "pointer" : "default"}}
+                        onClick={(ev) => {
+                          ev.stopPropagation();
+                          if (!g.jobId) return;
+                          const j = allJobs.find(x => x.id === g.jobId);
+                          if (j && onSelectJob) onSelectJob(j);
+                        }}>
+                        {g.jobName}
+                      </span>
+                      <span style={{marginLeft:"auto", fontSize:11, color:C.dim}}>{g.events.length} action{g.events.length===1?"":"s"}</span>
+                    </div>
+                    <div style={{display:"flex", flexDirection:"column", gap:3}}>
+                      {g.events.map((e,i) => (
+                        <div key={i} style={{display:"flex", gap:8, alignItems:"flex-start", fontSize:12, color:C.text, lineHeight:1.45, padding:"3px 0"}}>
+                          <span style={{width:6, height:6, borderRadius:99, background:e.color||C.muted, marginTop:6, flexShrink:0}}/>
+                          <span style={{fontSize:11, color:C.muted, minWidth:54, fontVariantNumeric:"tabular-nums"}}>{fmtTime(e.at)}</span>
+                          <div style={{flex:1}}>
+                            <span>{e.label}</span>
+                            {e.detail && <div style={{fontSize:11, color:C.dim, marginTop:1}}>{e.detail}</div>}
+                          </div>
+                        </div>
+                      ))}
+                    </div>
+                  </div>
+                ))}
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       {/* Foreman heartbeat (V2) — one card per foreman with status dot + tally */}
