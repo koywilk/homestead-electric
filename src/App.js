@@ -23378,6 +23378,10 @@ function UpNextPanel({ job, identity, onAction }) {
     { label: "1 WEEK",  hours: 24 * 7 },
     { label: "1 MONTH", hours: 24 * 30 },
   ];
+  // Dismiss = "indefinite snooze" — uses hours: -1 as sentinel; reducer maps
+  // negative hours to a far-future ISO date so the rule never re-fires unless
+  // explicitly restored from the snoozed-rules expander.
+  const dismissChoice = { label: "DISMISS", hours: -1 };
 
   const renderCard = (rule, isPrimary) => {
     const picking = snoozeFor === rule.id;
@@ -23450,6 +23454,24 @@ function UpNextPanel({ job, identity, onAction }) {
                 {c.label}
               </button>
             ))}
+            {/* Visual separator before the destructive Dismiss action */}
+            <span style={{ width: 1, height: 18, background: C.border, margin: "0 2px" }} aria-hidden="true"/>
+            <button
+              onClick={(e) => {
+                e.stopPropagation();
+                if (!window.confirm("Dismiss this Up Next item indefinitely? It won't show again unless you restore it from the snoozed list.")) return;
+                onAction && onAction({ kind: "snoozeRule", payload: { ruleId: rule.id, hours: dismissChoice.hours } }, rule.id);
+                setSnoozeFor(null);
+              }}
+              title="Hide this item indefinitely. You can restore it later from the snoozed list."
+              style={{
+                padding: "6px 11px", borderRadius: 8, fontSize: 11, fontWeight: 700,
+                cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.04em",
+                border: `1px solid #fecaca`, background: "#fef2f2", color: "#b91c1c",
+                textTransform: "uppercase",
+              }}>
+              {dismissChoice.label}
+            </button>
             <button
               onClick={(e) => { e.stopPropagation(); setSnoozeFor(null); }}
               style={{
@@ -23492,24 +23514,28 @@ function UpNextPanel({ job, identity, onAction }) {
     );
   };
 
-  // Snoozed-but-still-firing rules — compact strip in the expander
+  // Snoozed-but-still-firing rules — compact strip in the expander.
+  // Detects the 9999-12-31 sentinel set by "DISMISS" and shows that row as
+  // dismissed (no expiry date, "RESTORE" button) instead of time-based snooze.
   const renderSnoozedRow = (rule) => {
     const until = job && job.upNextSnoozed && job.upNextSnoozed[rule.id];
     const d = until ? new Date(until) : null;
-    const untilLabel = d && !isNaN(d) ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
+    const isDismissed = d && !isNaN(d) && d.getUTCFullYear() >= 9999;
+    const untilLabel = !isDismissed && d && !isNaN(d) ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
     return (
       <div key={rule.id} style={{
         padding: "8px 22px",
-        background: "#fafbfc",
+        background: isDismissed ? "#fef2f2" : "#fafbfc",
         borderTop: `1px solid ${C.border}`,
         display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
       }}>
         <div style={{ flex: 1, minWidth: 0 }}>
           <div style={{
-            fontSize: 9, fontWeight: 800, color: C.dim,
+            fontSize: 9, fontWeight: 800,
+            color: isDismissed ? "#b91c1c" : C.dim,
             letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 2,
           }}>
-            Snoozed{untilLabel ? ` · until ${untilLabel}` : ""}
+            {isDismissed ? "Dismissed" : `Snoozed${untilLabel ? ` · until ${untilLabel}` : ""}`}
           </div>
           <div
             style={{ fontSize: 12, color: C.dim, lineHeight: 1.4,
@@ -23527,7 +23553,7 @@ function UpNextPanel({ job, identity, onAction }) {
             border: `1px solid ${C.border}`, background: "#fff", color: C.text,
             textTransform: "uppercase", flexShrink: 0,
           }}>
-          UN-SNOOZE
+          {isDismissed ? "RESTORE" : "UN-SNOOZE"}
         </button>
       </div>
     );
@@ -24025,10 +24051,22 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
         // additive field, no migration needed. getUpNextRules() filters by
         // this map; expired snoozes are ignored, so stale entries never
         // resurface as ghost UI.
+        //
+        // Special case: hours < 0 means "dismiss indefinitely" — store a
+        // far-future ISO date (year 9999) which the existing _isSnoozed
+        // check will treat as permanently snoozed. The snoozed-rules UI
+        // detects the 9999 sentinel and shows "Dismissed" instead of a
+        // snooze-until date. Reusing the same field keeps the data model
+        // simple and lets the existing un-snooze flow handle restoration.
         const p = action.payload || {};
         if (!p.ruleId) break;
-        const hours = (typeof p.hours === "number" && isFinite(p.hours) && p.hours > 0) ? p.hours : 24;
-        const until = new Date(Date.now() + hours * 3600 * 1000).toISOString();
+        const isDismiss = typeof p.hours === "number" && p.hours < 0;
+        const hours = isDismiss
+          ? 0  // unused — we set a sentinel ISO directly below
+          : ((typeof p.hours === "number" && isFinite(p.hours) && p.hours > 0) ? p.hours : 24);
+        const until = isDismiss
+          ? "9999-12-31T23:59:59.000Z"
+          : new Date(Date.now() + hours * 3600 * 1000).toISOString();
         const cur = (jobRef.current && jobRef.current.upNextSnoozed) || {};
         u({ upNextSnoozed: { ...cur, [p.ruleId]: until } });
         break;
