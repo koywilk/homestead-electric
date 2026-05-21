@@ -36010,6 +36010,10 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
   // Per-person drill-down: which person's full day is being inspected.
   // Key is the lowercased name (matches personMap key).
   const [activePersonKey, setActivePersonKey] = useState(null);
+  // Live Activity feed starts collapsed — Koy wants the page calm on first
+  // open. Tapping the section header expands it. Filter pills + rows are
+  // hidden while collapsed.
+  const [feedOpen, setFeedOpen] = useState(false);
   // Defensive timestamp coercer — lastActivityAt can be a Firestore Timestamp
   // (with .toDate()), a Date, an ISO string, or missing (old jobs that haven't
   // been touched since the field was introduced). Returns null for unknown.
@@ -36432,63 +36436,21 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
         </div>
       </div>
 
-      {/* Needs attention — failed inspections (red) → stale jobs / unassigned punches (amber) → COs missing quote (neutral) */}
-      <div style={{...card, marginBottom: 12}}>
-        <div style={sectionTitle}>
-          <Icon name="alertTriangle" size={14} stroke={2}/> Needs attention
-          <span style={{marginLeft:"auto",fontSize:11,fontWeight:400,color:C.dim,textTransform:"none",letterSpacing:0}}>{needsCount} items</span>
-        </div>
-
-        {needsCount === 0 && (
-          <div style={{fontSize:13,color:C.dim,padding:"8px 10px"}}>Nothing to flag right now.</div>
-        )}
-
-        {/* Failed inspections — red */}
-        {jobsWithFailedInspection.slice(0,5).map(({job:j, kind, open}) => (
-          <div key={`fi-${j.id}-${kind}`} style={{...rowStyle, background:"#fee2e2", marginBottom:6}} onClick={() => onSelectJob && onSelectJob(j)}>
-            <Icon name="xCircle" size={14} stroke={2} color="#b91c1c"/>
-            <div style={{flex:1,fontSize:13,color:"#7f1d1d"}}>
-              <b>{kind} inspection failed</b> · {j.name || j.id} · {open} item{open===1?"":"s"} still open
-            </div>
-            <span style={{fontSize:11,color:"#991b1b"}}>red</span>
-          </div>
-        ))}
-
-        {/* Stale jobs — amber */}
-        {staleJobs.slice(0,5).map(j => {
-          const d = toDate(j.lastActivityAt);
-          return (
-            <div key={`stale-${j.id}`} style={{...rowStyle, background:"#fef3c7", marginBottom:6}} onClick={() => onSelectJob && onSelectJob(j)}>
-              <Icon name="clock" size={14} stroke={2} color="#a16207"/>
-              <div style={{flex:1,fontSize:13,color:"#78350f"}}>
-                <b>No activity {d ? `since ${fmtDay(d)}` : "ever"}</b> · {j.name || j.id}
-              </div>
-              <span style={{fontSize:11,color:"#92400e"}}>stale</span>
-            </div>
-          );
-        })}
-
-        {/* COs missing quote # — neutral */}
-        {jobsWithCOsMissingQuote.slice(0,5).map(({job:j, count}) => (
-          <div key={`coq-${j.id}`} style={{...rowStyle, background:C.bg, marginBottom:6}} onClick={() => onSelectJob && onSelectJob(j)}>
-            <Icon name="dollarSign" size={14} stroke={2} color={C.dim}/>
-            <div style={{flex:1,fontSize:13,color:C.text}}>
-              <b>{count} CO{count===1?"":"s"} without quote #</b> · {j.name || j.id}
-            </div>
-            <span style={{fontSize:11,color:C.dim}}>review</span>
-          </div>
-        ))}
-      </div>
-
       {/* Two-column: live activity (left) + jobs today (right) */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:12}}>
 
-        {/* Live activity feed — typed events, filter pills, 50-newest with show-more */}
+        {/* Live activity feed — typed events, filter pills, 50-newest with show-more.
+            Starts COLLAPSED — tap header to expand. */}
         <div style={card}>
-          <div style={sectionTitle}>
+          <div style={{...sectionTitle, cursor:"pointer", userSelect:"none"}} onClick={() => setFeedOpen(o => !o)}>
             <Icon name="zap" size={14} stroke={2}/> Live activity
-            <span style={{marginLeft:"auto",fontSize:11,fontWeight:400,color:C.dim,textTransform:"none",letterSpacing:0}}>{eventsToday.length} today</span>
+            <span style={{marginLeft:"auto",fontSize:11,fontWeight:400,color:C.dim,textTransform:"none",letterSpacing:0,display:"flex",alignItems:"center",gap:6}}>
+              {eventsToday.length} today
+              <span style={{fontSize:11,color:C.dim,transform: feedOpen ? "rotate(0deg)" : "rotate(-90deg)", transition:"transform 80ms"}}>▾</span>
+            </span>
           </div>
+          {feedOpen && (
+          <>
           {/* Filter pills */}
           <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:8}}>
             {(() => {
@@ -36574,6 +36536,8 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
               </>
             );
           })()}
+          </>
+          )}
         </div>
 
         {/* Jobs today */}
