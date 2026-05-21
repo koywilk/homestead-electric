@@ -36012,8 +36012,11 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
   const [activePersonKey, setActivePersonKey] = useState(null);
   // Live Activity feed starts collapsed — Koy wants the page calm on first
   // open. Tapping the section header expands it. Filter pills + rows are
-  // hidden while collapsed.
+  // hidden while collapsed. Jobs today starts collapsed too — same pattern.
   const [feedOpen, setFeedOpen] = useState(false);
+  const [jobsTodayOpen, setJobsTodayOpen] = useState(false);
+  const [heartbeatOpen, setHeartbeatOpen] = useState(false);
+  const [photosOpen, setPhotosOpen] = useState(false);
   // Defensive timestamp coercer — lastActivityAt can be a Firestore Timestamp
   // (with .toDate()), a Date, an ISO string, or missing (old jobs that haven't
   // been touched since the field was introduced). Returns null for unknown.
@@ -36540,12 +36543,16 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
           )}
         </div>
 
-        {/* Jobs today */}
+        {/* Jobs today — starts COLLAPSED, header acts as toggle (same pattern as Live activity) */}
         <div style={card}>
-          <div style={sectionTitle}>
+          <div style={{...sectionTitle, cursor:"pointer", userSelect:"none"}} onClick={() => setJobsTodayOpen(o => !o)}>
             <Icon name="hardHat" size={14} stroke={2}/> Jobs today
+            <span style={{marginLeft:"auto",fontSize:11,fontWeight:400,color:C.dim,textTransform:"none",letterSpacing:0,display:"flex",alignItems:"center",gap:6}}>
+              {touchedToday.length} touched
+              <span style={{fontSize:11,color:C.dim,transform: jobsTodayOpen ? "rotate(0deg)" : "rotate(-90deg)", transition:"transform 80ms"}}>▾</span>
+            </span>
           </div>
-          {touchedToday.length === 0 ? (
+          {jobsTodayOpen && (touchedToday.length === 0 ? (
             <div style={{fontSize:13,color:C.dim,padding:"8px 10px"}}>No job activity yet today.</div>
           ) : touchedToday
               .sort((a,b)=>{ const ad=toDate(a.lastActivityAt); const bd=toDate(b.lastActivityAt); return (bd?bd.getTime():0)-(ad?ad.getTime():0); })
@@ -36559,9 +36566,9 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
                 </div>
               </div>
             );
-          })}
+          }))}
           {/* Stale jobs at the bottom, grayed */}
-          {activeByActivity.filter(j => { const d=toDate(j.lastActivityAt); return !d || d < startOfToday; }).slice(0,4).map(j => {
+          {jobsTodayOpen && activeByActivity.filter(j => { const d=toDate(j.lastActivityAt); return !d || d < startOfToday; }).slice(0,4).map(j => {
             const d = toDate(j.lastActivityAt);
             return (
               <div key={j.id} style={{...rowStyle, padding:"6px 10px", opacity:0.55}} onClick={() => onSelectJob && onSelectJob(j)}>
@@ -36723,15 +36730,17 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
         })()}
       </div>
 
-      {/* Foreman heartbeat (V2) — one card per foreman with status dot + tally */}
+      {/* Foreman heartbeat (V2) — one card per foreman with status dot + tally.
+          Starts COLLAPSED — tap header to expand. */}
       <div style={{...card, marginTop: 12}}>
-        <div style={sectionTitle}>
+        <div style={{...sectionTitle, cursor:"pointer", userSelect:"none"}} onClick={() => setHeartbeatOpen(o => !o)}>
           <Icon name="users" size={14} stroke={2}/> Foreman heartbeat
-          <span style={{marginLeft:"auto",fontSize:11,fontWeight:400,color:C.dim,textTransform:"none",letterSpacing:0}}>
+          <span style={{marginLeft:"auto",fontSize:11,fontWeight:400,color:C.dim,textTransform:"none",letterSpacing:0,display:"flex",alignItems:"center",gap:6}}>
             {heartbeats.filter(h=>h.status==="active").length} active · {heartbeats.filter(h=>h.status==="earlier").length} earlier · {heartbeats.filter(h=>h.status==="quiet").length} quiet
+            <span style={{fontSize:11,color:C.dim,transform: heartbeatOpen ? "rotate(0deg)" : "rotate(-90deg)", transition:"transform 80ms"}}>▾</span>
           </span>
         </div>
-        {heartbeats.length === 0 ? (
+        {heartbeatOpen && (heartbeats.length === 0 ? (
           <div style={{fontSize:13,color:C.dim,padding:"8px 10px"}}>No foremen on file yet.</div>
         ) : (
           <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(150px,1fr))",gap:8}}>
@@ -36758,16 +36767,20 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
               );
             })}
           </div>
-        )}
+        ))}
       </div>
 
-      {/* Photos today (V3) — thumbnails from jobs touched today, deduped by URL */}
+      {/* Photos today (V3) — thumbnails from jobs touched today, deduped by URL.
+          Starts COLLAPSED — tap header to expand. */}
       <div style={{...card, marginTop: 12}}>
-        <div style={sectionTitle}>
+        <div style={{...sectionTitle, cursor:"pointer", userSelect:"none"}} onClick={() => setPhotosOpen(o => !o)}>
           <Icon name="camera" size={14} stroke={2}/> Photos on today's active jobs
-          <span style={{marginLeft:"auto",fontSize:11,fontWeight:400,color:C.dim,textTransform:"none",letterSpacing:0}}>{photosToday.length}</span>
+          <span style={{marginLeft:"auto",fontSize:11,fontWeight:400,color:C.dim,textTransform:"none",letterSpacing:0,display:"flex",alignItems:"center",gap:6}}>
+            {photosToday.length}
+            <span style={{fontSize:11,color:C.dim,transform: photosOpen ? "rotate(0deg)" : "rotate(-90deg)", transition:"transform 80ms"}}>▾</span>
+          </span>
         </div>
-        {photosToday.length === 0 ? (
+        {photosOpen && (photosToday.length === 0 ? (
           <div style={{fontSize:13,color:C.dim,padding:"8px 10px"}}>No photos on jobs touched today.</div>
         ) : (
           <div style={{display:"flex",gap:6,overflowX:"auto",paddingBottom:6}}>
@@ -36805,7 +36818,7 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
               }}>+{photosToday.length - 24}</div>
             )}
           </div>
-        )}
+        ))}
       </div>
 
       {/* Footer note */}
