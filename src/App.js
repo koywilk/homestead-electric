@@ -22709,133 +22709,25 @@ function _isFullyDone(job) {
   return true;
 }
 
+// UP_NEXT_RULES — Koy's full job-flow ranking. 69 rules total: 42 urgent,
+// 18 needsInput, 5 info, 4 calm. Up Next is the single home for "what to do
+// next" — this engine subsumes the auto-tasks that used to live only in the
+// Tasks tab (Pre Job Prep, Confirm Start Date, Material Deposit, Order PO,
+// Schedule QC at 80%, Send CO, RT Get Sign-Off, Schedule Matterport, Quick
+// Job, Ready to Invoice, etc.). Each rule's `fires` predicate is mutually
+// exclusive with related rules where the ranges would otherwise overlap
+// (e.g. invoice 0-2d / 3-4d / 5d+ buckets, CO send fresh / 24h+ stale).
+// Tiers: urgent (severity:"urgent", priority 58-100, red) → needsInput
+// (amber, 40-57) → info (blue, 25-29) → calm (green, 1-19, fallback).
 const UP_NEXT_RULES = [
 
-  // ── Rough scheduling (rules 2, 3, 4, 5) ───────────────────────────────
-  {
-    id: "rough-no-start-date",
-    priority: 55,
-    severity: "needsInput",
-    fires: (j) => (j.roughStatus === "waiting_date" || j.roughStatus === "date_confirmed")
-                  && !j.roughStatusDate
-                  && j.type !== "quote",
-    summary: () => `Rough is approved but <b>no start date</b> picked.`,
-    badge: () => null,
-    actions: () => [
-      { label: "PICK ROUGH START DATE", kind: "openSchedModal", payload: "rough", primary: true, color: "blue" },
-      { label: "Open job info", kind: "tab", payload: "Job Info" },
-    ],
-  },
-  {
-    id: "rough-hard-deadline-near",
-    priority: 92,
-    severity: "urgent",
-    fires: (j) => j.roughNeedsSchedHard && j.roughStatusDate
-                  && _daysUntil(j.roughStatusDate) != null
-                  && _daysUntil(j.roughStatusDate) <= 2
-                  && j.roughStatus !== "scheduled"
-                  && j.roughStatus !== "inprogress"
-                  && j.roughStatus !== "complete",
-    summary: (j) => {
-      const d = _daysUntil(j.roughStatusDate);
-      return `<b>Rough hard deadline</b> ${d < 0 ? "passed" : d === 0 ? "is today" : `is in ${d} day${d===1?"":"s"}`} — still not scheduled.`;
-    },
-    badge: (j) => {
-      const d = _daysUntil(j.roughStatusDate);
-      return d < 0 ? `OVERDUE ${Math.abs(d)}D` : "URGENT";
-    },
-    actions: () => [
-      { label: "PICK ROUGH START DATE", kind: "openSchedModal", payload: "rough", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "rough-start-passed-not-started",
-    priority: 88,
-    severity: "urgent",
-    fires: (j) => j.roughStatus === "scheduled" && j.roughStatusDate
-                  && _daysUntil(j.roughStatusDate) < 0,
-    summary: (j) => {
-      const d = Math.abs(_daysUntil(j.roughStatusDate));
-      return `Rough start date passed <b>${d} day${d===1?"":"s"} ago</b> — not marked started.`;
-    },
-    badge: (j) => `${Math.abs(_daysUntil(j.roughStatusDate))}D LATE`,
-    actions: () => [
-      { label: "MARK ROUGH IN PROGRESS", kind: "patch", payload: { roughStatus: "inprogress" }, primary: true, color: "blue" },
-      { label: "Pick new date", kind: "openSchedModal", payload: "rough" },
-    ],
-  },
-  {
-    id: "rough-scheduled-no-foreman",
-    priority: 45,
-    severity: "info",
-    fires: (j) => j.roughStatus === "scheduled"
-                  && (!j.foreman || j.foreman === "Unassigned" || j.foreman === ""),
-    summary: () => `Rough is scheduled but <b>no foreman assigned</b>.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "blue" },
-    ],
-  },
+  // ══════════════════════════════════════════════════════════════════════
+  // URGENT (80-99) — red, top of Up Next, drive immediate action
+  // ══════════════════════════════════════════════════════════════════════
 
-  // ── Rough in progress (rules 10, 11) ──────────────────────────────────
-  {
-    id: "rough-no-status-update",
-    priority: 60,
-    severity: "needsInput",
-    fires: (j) => j.roughStatus === "inprogress"
-                  && (!j.statusUpdateAt || _daysAgo(j.statusUpdateAt) >= 2),
-    summary: (j) => {
-      const d = j.statusUpdateAt ? _daysAgo(j.statusUpdateAt) : null;
-      return `Crew on site · last status update ${d == null ? "<b>none yet</b>" : `was <b>${d} day${d===1?"":"s"} ago</b>`}.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "LOG STATUS UPDATE", kind: "focusStatus", primary: true, color: "blue" },
-    ],
-  },
-  {
-    id: "rough-daily-update-missing",
-    priority: 35,
-    severity: "info",
-    fires: (j) => {
-      if (j.roughStatus !== "inprogress") return false;
-      const today = new Date().toLocaleDateString("en-US");
-      const today2 = new Date().toISOString().slice(0,10);
-      const updates = j.roughUpdates || [];
-      return !updates.some(u => u && (u.date === today || u.date === today2 || (u.date||"").startsWith(today2)));
-    },
-    summary: () => `<b>Daily update missing</b> for today (rough in progress).`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN ROUGH TAB", kind: "tab", payload: "Rough", primary: true, color: "blue" },
-    ],
-  },
-
-  // ── 4-way inspection (rules 14, 15, 16) ───────────────────────────────
-  {
-    id: "fourway-target-passed",
-    priority: 68,
-    severity: "needsInput",
-    fires: (j) => j.fourWayTargetDate
-                  && _daysUntil(j.fourWayTargetDate) <= 0
-                  && !j.roughInspectionResult,
-    summary: (j) => {
-      const d = Math.abs(_daysUntil(j.fourWayTargetDate));
-      return d === 0
-        ? `4-way is <b>today</b> — enter the result when done.`
-        : `4-way was <b>${d} day${d===1?"":"s"} ago</b> — no pass/fail entered yet.`;
-    },
-    badge: (j) => {
-      const d = Math.abs(_daysUntil(j.fourWayTargetDate));
-      return d > 0 ? `${d}D LATE` : null;
-    },
-    actions: () => [
-      { label: "ENTER 4-WAY RESULT", kind: "tab", payload: "Rough", primary: true, color: "amber" },
-    ],
-  },
   {
     id: "fourway-failed-no-rt",
-    priority: 96,
+    priority: 99,
     severity: "urgent",
     fires: (j) => {
       if (j.roughInspectionResult !== "fail") return false;
@@ -22857,62 +22749,329 @@ const UP_NEXT_RULES = [
     ],
   },
   {
-    id: "fourway-failed-rt-unscheduled",
-    priority: 72,
-    severity: "needsInput",
-    fires: (j) => {
-      if (j.roughInspectionResult !== "fail") return false;
-      const rtFromIns = (j.returnTrips||[]).find(rt =>
-        (rt.punch||[]).some(p => p && p.fromRoughInspectionId)
-        && !rt.signedOff
-        && !rt.rtScheduled);
-      return !!rtFromIns;
+    id: "final-failed",
+    priority: 98,
+    severity: "urgent",
+    fires: (j) => j.finalInspectionResult === "fail"
+                  && (j.finalInspectionItems||[]).some(i => i && !i.done),
+    summary: (j) => {
+      const open = (j.finalInspectionItems||[]).filter(i => i && !i.done).length;
+      return `<b>Final inspection failed</b> · ${open} item${open===1?"":"s"} still open.`;
     },
-    summary: () => `<b>4-way RT created</b> but not yet scheduled. Finish can't start until cleared.`,
+    badge: () => "URGENT",
+    actions: () => [
+      { label: "OPEN FAILED ITEMS", kind: "tab", payload: "Finish", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "rough-hard-deadline-near",
+    priority: 97,
+    severity: "urgent",
+    fires: (j) => j.roughNeedsSchedHard && j.roughStatusDate
+                  && _daysUntil(j.roughStatusDate) != null
+                  && _daysUntil(j.roughStatusDate) <= 2
+                  && j.roughStatus !== "scheduled"
+                  && j.roughStatus !== "inprogress"
+                  && j.roughStatus !== "complete",
+    summary: (j) => {
+      const d = _daysUntil(j.roughStatusDate);
+      return `<b>Rough hard deadline</b> ${d < 0 ? "passed" : d === 0 ? "is today" : `is in ${d} day${d===1?"":"s"}`} — still not scheduled.`;
+    },
+    badge: (j) => {
+      const d = _daysUntil(j.roughStatusDate);
+      return d < 0 ? `OVERDUE ${Math.abs(d)}D` : "URGENT";
+    },
+    actions: () => [
+      { label: "PICK ROUGH START DATE", kind: "openSchedModal", payload: "rough", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "rough-start-passed-not-started",
+    priority: 96,
+    severity: "urgent",
+    fires: (j) => j.roughStatus === "scheduled" && j.roughStatusDate
+                  && _daysUntil(j.roughStatusDate) < 0,
+    summary: (j) => {
+      const d = Math.abs(_daysUntil(j.roughStatusDate));
+      return `Rough start date passed <b>${d} day${d===1?"":"s"} ago</b> — not marked started.`;
+    },
+    badge: (j) => `${Math.abs(_daysUntil(j.roughStatusDate))}D LATE`,
+    actions: () => [
+      { label: "MARK ROUGH IN PROGRESS", kind: "patch", payload: { roughStatus: "inprogress" }, primary: true, color: "red" },
+      { label: "Pick new date", kind: "openSchedModal", payload: "rough" },
+    ],
+  },
+  {
+    id: "co-needs-sending-stale",
+    priority: 95,
+    severity: "urgent",
+    fires: (j) => (j.changeOrders||[]).some(co =>
+      co && co.coStatus === "needs_sending"
+      && co.createdAt && _daysAgo(co.createdAt) >= 1),
+    summary: (j) => {
+      const stuck = (j.changeOrders||[]).filter(co =>
+        co && co.coStatus === "needs_sending"
+        && co.createdAt && _daysAgo(co.createdAt) >= 1);
+      const n = stuck.length;
+      return `<b>${n} CO${n===1?"":"s"} still need to be sent</b> (>24h old).`;
+    },
     badge: () => null,
+    actions: () => [
+      { label: "OPEN CHANGE ORDERS", kind: "tab", payload: "Change Orders", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "rt-needs-scheduling",
+    priority: 94,
+    severity: "urgent",
+    fires: (j) => (j.returnTrips||[]).some(rt =>
+      rt && rt.rtStatus === "needs" && !rt.rtScheduled && !rt.signedOff),
+    summary: (j) => {
+      const n = (j.returnTrips||[]).filter(rt =>
+        rt && rt.rtStatus === "needs" && !rt.rtScheduled && !rt.signedOff).length;
+      return `<b>${n} Return Trip${n===1?"":"s"}</b> awaiting a scheduled date.`;
+    },
+    badge: () => "URGENT",
+    actions: () => [
+      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "foreman-not-on-job-3d",
+    priority: 93,
+    severity: "urgent",
+    fires: (j) => {
+      if (!j.foreman || j.foreman === "Unassigned" || j.foreman === "") return false;
+      if (j.roughStatus === "complete" && j.finishStatus === "complete") return false;
+      const lastSeen = j.presence && j.presence[j.foreman];
+      if (!lastSeen) return true; // never opened
+      const d = _daysAgo(lastSeen);
+      return d != null && d >= 3;
+    },
+    summary: (j) => {
+      const lastSeen = j.presence && j.presence[j.foreman];
+      const d = lastSeen ? _daysAgo(lastSeen) : null;
+      return d == null
+        ? `<b>${j.foreman}</b> hasn't opened this job in the app yet.`
+        : `<b>${j.foreman}</b> hasn't opened this job in <b>${d} day${d===1?"":"s"}</b>.`;
+    },
+    badge: () => "URGENT",
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "rt-scheduled-no-crew",
+    priority: 92,
+    severity: "urgent",
+    fires: (j) => (j.returnTrips||[]).some(rt =>
+      rt && rt.rtScheduled && !rt.assignedTo && !rt.signedOff),
+    summary: (j) => {
+      const n = (j.returnTrips||[]).filter(rt =>
+        rt && rt.rtScheduled && !rt.assignedTo && !rt.signedOff).length;
+      return `<b>${n} scheduled Return Trip${n===1?"":"s"}</b> with no crew assigned.`;
+    },
+    badge: () => "URGENT",
+    actions: () => [
+      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "finish-scheduled-no-foreman",
+    priority: 91,
+    severity: "urgent",
+    fires: (j) => j.finishStatus === "scheduled"
+                  && (!j.foreman || j.foreman === "Unassigned" || j.foreman === ""),
+    summary: () => `Finish scheduled but <b>no foreman assigned</b>.`,
+    badge: () => "URGENT",
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "rt-signed-off-punch-still-open",
+    priority: 90,
+    severity: "urgent",
+    fires: (j) => (j.returnTrips||[]).some(rt =>
+      rt && rt.signedOff && (rt.punch||[]).some(p => p && !p.done)),
+    summary: () => `Signed-off Return Trip still has <b>open punch items</b>.`,
+    badge: () => "URGENT",
+    actions: () => [
+      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "open-question-stale",
+    priority: 89,
+    severity: "urgent",
+    fires: (j) => {
+      const walk = (qs) => {
+        if (!qs) return false;
+        return ["upper","main","basement"].some(fl =>
+          (qs[fl]||[]).some(q => q && !q.done && !(q.answer||"").trim()
+            && q.addedAt && _daysAgo(q.addedAt) >= 3));
+      };
+      return walk(j.roughQuestions) || walk(j.finishQuestions);
+    },
+    summary: (j) => {
+      let count = 0, oldest = 0;
+      const walk = (qs) => {
+        if (!qs) return;
+        ["upper","main","basement"].forEach(fl =>
+          (qs[fl]||[]).forEach(q => {
+            if (q && !q.done && !(q.answer||"").trim() && q.addedAt) {
+              const d = _daysAgo(q.addedAt);
+              if (d != null && d >= 3) { count++; if (d > oldest) oldest = d; }
+            }
+          }));
+      };
+      walk(j.roughQuestions); walk(j.finishQuestions);
+      return `<b>${count} open question${count===1?"":"s"}</b> with no answer — oldest <b>${oldest} day${oldest===1?"":"s"}</b>.`;
+    },
+    badge: () => "URGENT",
+    actions: () => [
+      { label: "OPEN QUESTIONS", kind: "tab", payload: "Job Info", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "job-needs-lead",
+    priority: 88,
+    severity: "urgent",
+    fires: (j) => j.needsLead && (!j.lead || j.lead === "Unassigned" || j.lead === ""),
+    summary: () => `Job flagged <b>needs a lead</b> — none assigned yet.`,
+    badge: () => "URGENT",
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "rough-scheduled-no-foreman",
+    priority: 87,
+    severity: "urgent",
+    fires: (j) => j.roughStatus === "scheduled"
+                  && (!j.foreman || j.foreman === "Unassigned" || j.foreman === ""),
+    summary: () => `Rough is scheduled but <b>no foreman assigned</b>.`,
+    badge: () => "URGENT",
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "new-job-no-drive-folder",
+    priority: 86,
+    severity: "urgent",
+    fires: (j) => {
+      if (j.type === "quote") return false;
+      if (j.driveFolderId) return false;
+      if (!j.createdAt) return false;
+      const d = _daysAgo(j.createdAt);
+      return d != null && d >= 2;
+    },
+    summary: (j) => {
+      const d = _daysAgo(j.createdAt);
+      return `Job created <b>${d} day${d===1?"":"s"} ago</b> — no Drive folder linked.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "co-scheduled-crew-not-onsite",
+    priority: 85,
+    severity: "urgent",
+    fires: (j) => (j.changeOrders||[]).some(co => co && co.coStatus === "approved")
+                  && j.roughStatus !== "inprogress"
+                  && j.finishStatus !== "inprogress",
+    summary: () => `CO is approved but crew not on site — <b>could convert to Return Trip</b>?`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN CHANGE ORDERS", kind: "tab", payload: "Change Orders", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "matterport-not-captured",
+    priority: 84,
+    severity: "urgent",
+    fires: (j) => j.roughInspectionResult === "pass"
+                  && !j.matterportLink
+                  && !(j.matterportLinks && j.matterportLinks.length)
+                  && !j.matterportDismissed,
+    summary: () => `4-way passed — <b>Matterport not yet captured</b>.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN PLANS & LINKS", kind: "tab", payload: "Plans & Links", primary: true, color: "red" },
+      { label: "Dismiss", kind: "patch", payload: { matterportDismissed: true } },
+    ],
+  },
+  {
+    id: "missing-address",
+    priority: 83,
+    severity: "urgent",
+    fires: (j) => !j.address || !String(j.address).trim(),
+    summary: () => `Job <b>missing address</b>.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "missing-simpro-no",
+    priority: 82,
+    severity: "urgent",
+    fires: (j) => !j.simproNo && j.type !== "quote",
+    summary: () => `<b>No Simpro Job #</b> linked yet.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "qc-walk-not-started",
+    priority: 81,
+    severity: "urgent",
+    fires: (j) => j.finalInspectionResult === "pass"
+                  && j.finalInspectionDate
+                  && _daysAgo(j.finalInspectionDate) >= 4
+                  && (!j.qcStatus || j.qcStatus === "" || j.qcStatus === "needs"),
+    summary: (j) => {
+      const d = _daysAgo(j.finalInspectionDate);
+      return `Final passed <b>${d} day${d===1?"":"s"} ago</b> — QC walk hasn't started.`;
+    },
+    badge: (j) => `OVERDUE ${_daysAgo(j.finalInspectionDate) - 4}D`,
+    actions: () => [
+      { label: "START QC WALK", kind: "tab", payload: "QC", primary: true, color: "red" },
+      { label: "Schedule for later", kind: "patch", payload: { qcStatus: "scheduled" } },
+    ],
+  },
+
+  // ══════════════════════════════════════════════════════════════════════
+  // SOON (50-79) — amber, expandable below the primary urgent rule
+  // ══════════════════════════════════════════════════════════════════════
+
+  {
+    id: "rt-scheduled-date-passed",
+    priority: 79,
+    severity: "needsInput",
+    fires: (j) => (j.returnTrips||[]).some(rt =>
+      rt && rt.rtStatusDate && _daysUntil(rt.rtStatusDate) < 0 && !rt.signedOff),
+    summary: (j) => {
+      const stuck = (j.returnTrips||[]).filter(rt =>
+        rt && rt.rtStatusDate && _daysUntil(rt.rtStatusDate) < 0 && !rt.signedOff);
+      const worst = stuck.reduce((max, rt) => {
+        const d = Math.abs(_daysUntil(rt.rtStatusDate));
+        return d > max ? d : max;
+      }, 0);
+      return `<b>${stuck.length} Return Trip${stuck.length===1?"":"s"}</b> with date passed${worst > 0 ? ` (worst: ${worst} day${worst===1?"":"s"} ago)` : ""}.`;
+    },
+    badge: () => "OVERDUE",
     actions: () => [
       { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "amber" },
     ],
   },
-
-  // ── Between rough and finish (rule 18) ────────────────────────────────
-  {
-    id: "rough-done-finish-not-scheduled",
-    priority: 40,
-    severity: "info",
-    fires: (j) => j.roughStatus === "complete"
-                  && (!j.finishStatus || j.finishStatus === "" || j.finishStatus === "waiting_date")
-                  && !j.finishStatusDate
-                  && j.qcStatus !== "complete",
-    summary: () => `Rough done · finish not yet scheduled (drywall window).`,
-    badge: () => null,
-    actions: () => [
-      { label: "PICK FINISH START DATE", kind: "openSchedModal", payload: "finish", primary: true, color: "blue" },
-    ],
-  },
-
-  // ── Finish in progress (rule 21) ──────────────────────────────────────
-  {
-    id: "finish-end-passed-still-inprogress",
-    priority: 50,
-    severity: "info",
-    fires: (j) => j.finishStatus === "inprogress" && j.finishScheduledEnd
-                  && _daysUntil(j.finishScheduledEnd) < 0,
-    summary: (j) => {
-      const d = Math.abs(_daysUntil(j.finishScheduledEnd));
-      return `Finish window ended <b>${d} day${d===1?"":"s"} ago</b> — still in progress.`;
-    },
-    badge: (j) => `${Math.abs(_daysUntil(j.finishScheduledEnd))}D OVER`,
-    actions: () => [
-      { label: "MARK FINISH COMPLETE", kind: "patch", payload: { finishStatus: "complete" }, primary: true, color: "green" },
-      { label: "Extend window", kind: "openSchedModal", payload: "finish" },
-    ],
-  },
-
-  // ── Final inspection (rules 23, 24) ───────────────────────────────────
   {
     id: "final-target-passed",
-    priority: 70,
+    priority: 77,
     severity: "needsInput",
     fires: (j) => j.finalInspectionDate
                   && _daysUntil(j.finalInspectionDate) <= 0
@@ -22932,25 +23091,140 @@ const UP_NEXT_RULES = [
     ],
   },
   {
-    id: "final-failed",
-    priority: 94,
-    severity: "urgent",
-    fires: (j) => j.finalInspectionResult === "fail"
-                  && (j.finalInspectionItems||[]).some(i => i && !i.done),
+    id: "fourway-target-passed",
+    priority: 75,
+    severity: "needsInput",
+    fires: (j) => j.fourWayTargetDate
+                  && _daysUntil(j.fourWayTargetDate) <= 0
+                  && !j.roughInspectionResult,
     summary: (j) => {
-      const open = (j.finalInspectionItems||[]).filter(i => i && !i.done).length;
-      return `<b>Final inspection failed</b> · ${open} item${open===1?"":"s"} still open.`;
+      const d = Math.abs(_daysUntil(j.fourWayTargetDate));
+      return d === 0
+        ? `4-way is <b>today</b> — enter the result when done.`
+        : `4-way was <b>${d} day${d===1?"":"s"} ago</b> — no pass/fail entered yet.`;
     },
-    badge: () => "URGENT",
+    badge: (j) => {
+      const d = Math.abs(_daysUntil(j.fourWayTargetDate));
+      return d > 0 ? `${d}D LATE` : null;
+    },
     actions: () => [
-      { label: "OPEN FAILED ITEMS", kind: "tab", payload: "Finish", primary: true, color: "red" },
+      { label: "ENTER 4-WAY RESULT", kind: "tab", payload: "Rough", primary: true, color: "amber" },
     ],
   },
-
-  // ── Punch (rule 28) ───────────────────────────────────────────────────
+  {
+    id: "fourway-failed-rt-unscheduled",
+    priority: 73,
+    severity: "needsInput",
+    fires: (j) => {
+      if (j.roughInspectionResult !== "fail") return false;
+      const rtFromIns = (j.returnTrips||[]).find(rt =>
+        (rt.punch||[]).some(p => p && p.fromRoughInspectionId)
+        && !rt.signedOff
+        && !rt.rtScheduled);
+      return !!rtFromIns;
+    },
+    summary: () => `<b>4-way RT created</b> but not yet scheduled. Finish can't start until cleared.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "amber" },
+    ],
+  },
+  {
+    id: "rough-no-status-update",
+    priority: 71,
+    severity: "needsInput",
+    fires: (j) => j.roughStatus === "inprogress"
+                  && (!j.statusUpdateAt || _daysAgo(j.statusUpdateAt) >= 2),
+    summary: (j) => {
+      const d = j.statusUpdateAt ? _daysAgo(j.statusUpdateAt) : null;
+      return `Crew on site · last status update ${d == null ? "<b>none yet</b>" : `was <b>${d} day${d===1?"":"s"} ago</b>`}.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "LOG STATUS UPDATE", kind: "focusStatus", primary: true, color: "amber" },
+    ],
+  },
+  {
+    // Bounded 3-4 days. Pre-3 covered by ready-to-invoice-task (urgent, days
+    // 0-2). 5+ days covered by invoice-overdue-5d (urgent). Mutually exclusive.
+    id: "ready-to-invoice-stale",
+    priority: 52,
+    severity: "needsInput",
+    fires: (j) => j.readyToInvoice && j.readyToInvoiceDate
+                  && _daysAgo(j.readyToInvoiceDate) >= 3
+                  && _daysAgo(j.readyToInvoiceDate) < 5
+                  && !j.invoiced && !j.invoiceDismissed,
+    summary: (j) => {
+      const d = _daysAgo(j.readyToInvoiceDate);
+      return `Marked ready to invoice <b>${d} days ago</b> — still not invoiced.`;
+    },
+    badge: (j) => `${_daysAgo(j.readyToInvoiceDate)}D STALE`,
+    actions: () => [
+      { label: "MARK INVOICED", kind: "patch", payload: { invoiced: true, invoicedDate: new Date().toLocaleDateString("en-US") }, primary: true, color: "amber" },
+      { label: "Dismiss reminder", kind: "patch", payload: { invoiceDismissed: true } },
+    ],
+  },
+  {
+    id: "rough-no-start-date",
+    priority: 67,
+    severity: "needsInput",
+    fires: (j) => (j.roughStatus === "waiting_date" || j.roughStatus === "date_confirmed")
+                  && !j.roughStatusDate
+                  && j.type !== "quote",
+    summary: () => `Rough is approved but <b>no start date</b> picked.`,
+    badge: () => null,
+    actions: () => [
+      { label: "PICK ROUGH START DATE", kind: "openSchedModal", payload: "rough", primary: true, color: "amber" },
+      { label: "Open job info", kind: "tab", payload: "Job Info" },
+    ],
+  },
+  {
+    id: "tempped-ready-no-date",
+    priority: 65,
+    severity: "needsInput",
+    fires: (j) => j.tempPed && j.tempPedStatus === "ready" && !j.tempPedScheduledDate,
+    summary: () => `Temp ped <b>ready</b> — no pickup date set.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "amber" },
+    ],
+  },
+  {
+    id: "punch-open-on-complete",
+    priority: 63,
+    severity: "needsInput",
+    fires: (j) => j.finishStatus === "complete" && _hasOpenPunch(j),
+    summary: (j) => {
+      const n = _countOpenPunch(j);
+      return `Job marked complete but <b>${n} punch item${n===1?"":"s"} still open</b>.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN PUNCH", kind: "tab", payload: "Punch", primary: true, color: "amber" },
+    ],
+  },
+  {
+    id: "job-in-progress-no-presence-today",
+    priority: 61,
+    severity: "needsInput",
+    fires: (j) => {
+      if (j.roughStatus !== "inprogress" && j.finishStatus !== "inprogress") return false;
+      const today = new Date(); today.setHours(0,0,0,0);
+      const opened = Object.values(j.presence||{}).some(t => {
+        const d = new Date(t);
+        return !isNaN(d) && d >= today;
+      });
+      return !opened;
+    },
+    summary: () => `Job is <b>in progress</b> but nobody opened it in the app today.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "amber" },
+    ],
+  },
   {
     id: "punch-stale-open",
-    priority: 42,
+    priority: 59,
     severity: "needsInput",
     fires: (j) => {
       // Without per-item createdAt, approximate "stale" with: job in late phase
@@ -22972,266 +23246,127 @@ const UP_NEXT_RULES = [
       { label: "OPEN PUNCH", kind: "tab", payload: "Punch", primary: true, color: "amber" },
     ],
   },
+  {
+    id: "material-request-open-stale",
+    priority: 57,
+    severity: "needsInput",
+    fires: (j) => (j.materialRequests||[]).some(mr =>
+      mr && mr.submittedAt && _daysAgo(mr.submittedAt) >= 2 && !mr.filledAt),
+    summary: (j) => {
+      const open = (j.materialRequests||[]).filter(mr =>
+        mr && mr.submittedAt && _daysAgo(mr.submittedAt) >= 2 && !mr.filledAt).length;
+      return `<b>${open} material request${open===1?"":"s"}</b> open 2+ days — needs fulfillment.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "amber" },
+    ],
+  },
+  {
+    id: "note-promoted-rt-orphan",
+    priority: 55,
+    severity: "needsInput",
+    fires: (j) => {
+      const rtIds = new Set((j.returnTrips||[]).map(rt => rt && rt.id).filter(Boolean));
+      return (j.jobNotes||[]).some(n =>
+        (n?.lines||[]).some(l =>
+          l?.promoted && (l.promoted.kind === "rt" || l.promoted.type === "rt")
+          && l.promoted.targetId && !rtIds.has(l.promoted.targetId)));
+    },
+    summary: () => `Note line promoted to RT but the <b>RT no longer exists</b> — was it deleted?`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB NOTES", kind: "tab", payload: "Job Info", primary: true, color: "amber" },
+    ],
+  },
+  {
+    id: "job-on-hold-stale",
+    priority: 53,
+    severity: "needsInput",
+    fires: (j) => {
+      if (!j.roughOnHold && !j.finishOnHold) return false;
+      const ref = j.updated_at || j.updatedAt;
+      if (!ref) return false;
+      const d = _daysAgo(ref);
+      return d != null && d >= 7;
+    },
+    summary: (j) => {
+      const which = j.roughOnHold ? "Rough" : "Finish";
+      const d = _daysAgo(j.updated_at || j.updatedAt);
+      return `<b>${which} on hold</b> for ${d} day${d===1?"":"s"} — revisit?`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "amber" },
+    ],
+  },
 
-  // ── QC walk (rules 30, 32) ────────────────────────────────────────────
-  {
-    id: "qc-walk-not-started",
-    priority: 65,
-    severity: "needsInput",
-    fires: (j) => j.finalInspectionResult === "pass"
-                  && j.finalInspectionDate
-                  && _daysAgo(j.finalInspectionDate) >= 4
-                  && (!j.qcStatus || j.qcStatus === "" || j.qcStatus === "needs"),
-    summary: (j) => {
-      const d = _daysAgo(j.finalInspectionDate);
-      return `Final passed <b>${d} day${d===1?"":"s"} ago</b> — QC walk hasn't started.`;
-    },
-    badge: (j) => `OVERDUE ${_daysAgo(j.finalInspectionDate) - 4}D`,
-    actions: () => [
-      { label: "START QC WALK", kind: "tab", payload: "QC", primary: true, color: "amber" },
-      { label: "Schedule for later", kind: "patch", payload: { qcStatus: "scheduled" } },
-    ],
-  },
-  {
-    id: "qc-done-not-signed-off",
-    priority: 58,
-    severity: "needsInput",
-    fires: (j) => (j.qcStatus === "pass" || j.qcStatus === "complete")
-                  && !j.qcSignedOff,
-    summary: () => `QC walk done — <b>not yet signed off</b>.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN QC", kind: "tab", payload: "QC", primary: true, color: "blue" },
-    ],
-  },
+  // ══════════════════════════════════════════════════════════════════════
+  // INFO (20-49) — blue, low-priority surface area
+  // ══════════════════════════════════════════════════════════════════════
 
-  // ── Change Orders (rules 33, 34, 35, 36) ──────────────────────────────
   {
-    id: "co-needs-sending-stale",
-    priority: 78,
-    severity: "urgent",
-    fires: (j) => (j.changeOrders||[]).some(co =>
-      co && co.coStatus === "needs_sending"
-      && co.createdAt && _daysAgo(co.createdAt) >= 1),
-    summary: (j) => {
-      const stuck = (j.changeOrders||[]).filter(co =>
-        co && co.coStatus === "needs_sending"
-        && co.createdAt && _daysAgo(co.createdAt) >= 1);
-      const n = stuck.length;
-      return `<b>${n} CO${n===1?"":"s"} still need to be sent</b> (>24h old).`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN CHANGE ORDERS", kind: "tab", payload: "Change Orders", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "co-sent-no-quote-number",
-    priority: 56,
-    severity: "needsInput",
-    fires: (j) => (j.changeOrders||[]).some(co =>
-      co
-      && co.coStatus && co.coStatus !== "needs_sending"
-      && co.coStatus !== "denied" && co.coStatus !== "converted"
-      && !co.quoteNumber
-      && co.createdAt && _daysAgo(co.createdAt) >= 2),
-    summary: (j) => {
-      const stuck = (j.changeOrders||[]).filter(co =>
-        co && co.coStatus && co.coStatus !== "needs_sending"
-        && co.coStatus !== "denied" && co.coStatus !== "converted"
-        && !co.quoteNumber);
-      const n = stuck.length;
-      return `<b>${n} sent CO${n===1?"":"s"} missing Quote #</b> — add the quote # so this CO is searchable.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "ADD QUOTE #", kind: "tab", payload: "Change Orders", primary: true, color: "amber" },
-    ],
-  },
-  {
-    id: "co-approved-not-scheduled",
-    priority: 48,
-    severity: "needsInput",
-    fires: (j) => (j.changeOrders||[]).some(co =>
-      co && co.coStatus === "approved" && !co.coStatusDate
-      && !co.needsByStart),
-    summary: () => `<b>CO approved</b> but no work date scheduled yet.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN CO", kind: "tab", payload: "Change Orders", primary: true, color: "blue" },
-    ],
-  },
-  {
-    id: "co-scheduled-crew-not-onsite",
-    priority: 44,
+    id: "question-answered-not-resolved",
+    priority: 49,
     severity: "info",
-    fires: (j) => (j.changeOrders||[]).some(co => co && co.coStatus === "approved")
-                  && j.roughStatus !== "inprogress"
-                  && j.finishStatus !== "inprogress",
-    summary: () => `CO is approved but crew not on site — <b>could convert to Return Trip</b>?`,
+    fires: (j) => {
+      const walk = (qs) => {
+        if (!qs) return false;
+        return ["upper","main","basement"].some(fl =>
+          (qs[fl]||[]).some(q => q && !q.done && (q.answer||"").trim()));
+      };
+      return walk(j.roughQuestions) || walk(j.finishQuestions);
+    },
+    summary: () => `Question has an answer but isn't marked <b>resolved</b>.`,
     badge: () => null,
     actions: () => [
-      { label: "OPEN CHANGE ORDERS", kind: "tab", payload: "Change Orders", primary: true, color: "blue" },
-    ],
-  },
-
-  // ── Return Trips (rules 38, 39, 40) ───────────────────────────────────
-  {
-    id: "rt-needs-scheduling",
-    priority: 52,
-    severity: "needsInput",
-    fires: (j) => (j.returnTrips||[]).some(rt =>
-      rt && rt.rtStatus === "needs" && !rt.rtScheduled && !rt.signedOff),
-    summary: (j) => {
-      const n = (j.returnTrips||[]).filter(rt =>
-        rt && rt.rtStatus === "needs" && !rt.rtScheduled && !rt.signedOff).length;
-      return `<b>${n} Return Trip${n===1?"":"s"}</b> awaiting a scheduled date.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "amber" },
+      { label: "OPEN QUESTIONS", kind: "tab", payload: "Job Info", primary: true, color: "blue" },
     ],
   },
   {
-    id: "rt-scheduled-date-passed",
-    priority: 85,
-    severity: "urgent",
-    fires: (j) => (j.returnTrips||[]).some(rt =>
-      rt && rt.rtStatusDate && _daysUntil(rt.rtStatusDate) < 0 && !rt.signedOff),
-    summary: (j) => {
-      const stuck = (j.returnTrips||[]).filter(rt =>
-        rt && rt.rtStatusDate && _daysUntil(rt.rtStatusDate) < 0 && !rt.signedOff);
-      const worst = stuck.reduce((max, rt) => {
-        const d = Math.abs(_daysUntil(rt.rtStatusDate));
-        return d > max ? d : max;
-      }, 0);
-      return `<b>${stuck.length} Return Trip${stuck.length===1?"":"s"}</b> with date passed${worst > 0 ? ` (worst: ${worst} day${worst===1?"":"s"} ago)` : ""}.`;
-    },
-    badge: () => "OVERDUE",
-    actions: () => [
-      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "rt-signed-off-punch-still-open",
-    priority: 38,
+    id: "finish-daily-update-missing",
+    priority: 40,
     severity: "info",
-    fires: (j) => (j.returnTrips||[]).some(rt =>
-      rt && rt.signedOff && (rt.punch||[]).some(p => p && !p.done)),
-    summary: () => `Signed-off Return Trip still has <b>open punch items</b>.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "blue" },
-    ],
-  },
-
-  // ── Signoff / Invoice (rules 41, 42) ──────────────────────────────────
-  {
-    id: "ready-to-invoice",
-    priority: 75,
-    severity: "calm",
-    fires: (j) => _isFullyDone(j) && !j.readyToInvoice,
-    summary: () => `<b>Everything done.</b> Ready to invoice — no outstanding items.`,
-    badge: () => null,
-    actions: () => [
-      { label: "MARK READY TO INVOICE", kind: "patch",
-        payload: { readyToInvoice: true, readyToInvoiceDate: new Date().toLocaleDateString("en-US") },
-        primary: true, color: "green" },
-    ],
-  },
-  {
-    id: "ready-to-invoice-stale",
-    priority: 62,
-    severity: "needsInput",
-    fires: (j) => j.readyToInvoice && j.readyToInvoiceDate
-                  && _daysAgo(j.readyToInvoiceDate) > 3
-                  && !j.invoiced && !j.invoiceDismissed,
-    summary: (j) => {
-      const d = _daysAgo(j.readyToInvoiceDate);
-      return `Marked ready to invoice <b>${d} days ago</b> — still not invoiced.`;
+    fires: (j) => {
+      if (j.finishStatus !== "inprogress") return false;
+      const today = new Date().toLocaleDateString("en-US");
+      const today2 = new Date().toISOString().slice(0,10);
+      const updates = j.finishUpdates || [];
+      return !updates.some(u => u && (u.date === today || u.date === today2 || (u.date||"").startsWith(today2)));
     },
-    badge: (j) => `${_daysAgo(j.readyToInvoiceDate)}D STALE`,
-    actions: () => [
-      { label: "MARK INVOICED", kind: "patch", payload: { invoiced: true, invoicedDate: new Date().toLocaleDateString("en-US") }, primary: true, color: "green" },
-      { label: "Dismiss reminder", kind: "patch", payload: { invoiceDismissed: true } },
-    ],
-  },
-
-  // ── Temp ped (rules 43, 44) ───────────────────────────────────────────
-  {
-    id: "tempped-ready-no-date",
-    priority: 54,
-    severity: "needsInput",
-    fires: (j) => j.tempPed && j.tempPedStatus === "ready" && !j.tempPedScheduledDate,
-    summary: () => `Temp ped <b>ready</b> — no pickup date set.`,
+    summary: () => `<b>Daily update missing</b> for today (finish in progress).`,
     badge: () => null,
     actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "blue" },
+      { label: "OPEN FINISH TAB", kind: "tab", payload: "Finish", primary: true, color: "blue" },
     ],
   },
   {
-    id: "tempped-date-passed",
-    priority: 82,
-    severity: "urgent",
-    fires: (j) => j.tempPed && j.tempPedScheduledDate
-                  && _daysUntil(j.tempPedScheduledDate) < 0
-                  && j.tempPedStatus !== "completed",
-    summary: (j) => {
-      const d = Math.abs(_daysUntil(j.tempPedScheduledDate));
-      return `<b>Temp ped pickup</b> was ${d} day${d===1?"":"s"} ago — not marked completed.`;
-    },
-    badge: (j) => `${Math.abs(_daysUntil(j.tempPedScheduledDate))}D LATE`,
-    actions: () => [
-      { label: "MARK PICKED UP", kind: "patch", payload: { tempPedStatus: "completed" }, primary: true, color: "green" },
-    ],
-  },
-
-  // ── Matterport (rule 45 — note: 4-way pass, not Final per user) ──────
-  {
-    id: "matterport-not-captured",
-    priority: 32,
+    id: "rough-daily-update-missing",
+    priority: 35,
     severity: "info",
-    fires: (j) => j.roughInspectionResult === "pass"
-                  && !j.matterportLink
-                  && !(j.matterportLinks && j.matterportLinks.length)
-                  && !j.matterportDismissed,
-    summary: () => `4-way passed — <b>Matterport not yet captured</b>.`,
+    fires: (j) => {
+      if (j.roughStatus !== "inprogress") return false;
+      const today = new Date().toLocaleDateString("en-US");
+      const today2 = new Date().toISOString().slice(0,10);
+      const updates = j.roughUpdates || [];
+      return !updates.some(u => u && (u.date === today || u.date === today2 || (u.date||"").startsWith(today2)));
+    },
+    summary: () => `<b>Daily update missing</b> for today (rough in progress).`,
     badge: () => null,
     actions: () => [
-      { label: "OPEN PLANS & LINKS", kind: "tab", payload: "Plans & Links", primary: true, color: "blue" },
-      { label: "Dismiss", kind: "patch", payload: { matterportDismissed: true } },
+      { label: "OPEN ROUGH TAB", kind: "tab", payload: "Rough", primary: true, color: "blue" },
     ],
   },
-  // (Rule 46 — Matterport captured but link not added — skipped: no data
-  // shape distinguishes "captured" from "link missing". Revisit when there's
-  // a clearer signal, e.g. a separate matterportCaptured boolean.)
-
-  // ── External (rule 48 GC answers) — skipped tonight: gcAnswers is
-  // runtime state inside JobDetail, not on the job doc. Need to lift it
-  // before this rule can fire purely from `job`. Will add in a follow-up.
-
-  // ── Health / missing info (rules 51, 52, 53, 54) ──────────────────────
   {
     id: "no-foreman",
-    priority: 28,
-    severity: "info",
+    priority: 58,
+    severity: "urgent",
     fires: (j) => (!j.foreman || j.foreman === "Unassigned" || j.foreman === "")
                   && j.type !== "quote",
     summary: () => `<b>No foreman assigned.</b>`,
     badge: () => null,
     actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "blue" },
-    ],
-  },
-  {
-    id: "missing-address",
-    priority: 24,
-    severity: "info",
-    fires: (j) => !j.address || !String(j.address).trim(),
-    summary: () => `Job <b>missing address</b>.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "blue" },
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
     ],
   },
   {
@@ -23246,20 +23381,24 @@ const UP_NEXT_RULES = [
       { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "blue" },
     ],
   },
+
+  // ══════════════════════════════════════════════════════════════════════
+  // CALM (1-19) — green, only fire as fallback when nothing else does
+  // ══════════════════════════════════════════════════════════════════════
+
   {
-    id: "missing-simpro-no",
-    priority: 20,
-    severity: "info",
-    fires: (j) => !j.simproNo && j.type !== "quote",
-    summary: () => `<b>No Simpro Job #</b> linked yet.`,
+    id: "ready-to-invoice",
+    priority: 19,
+    severity: "calm",
+    fires: (j) => _isFullyDone(j) && !j.readyToInvoice,
+    summary: () => `<b>Everything done.</b> Ready to invoice — no outstanding items.`,
     badge: () => null,
     actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "blue" },
+      { label: "MARK READY TO INVOICE", kind: "patch",
+        payload: { readyToInvoice: true, readyToInvoiceDate: new Date().toLocaleDateString("en-US") },
+        primary: true, color: "green" },
     ],
   },
-
-  // ── Calm fallbacks (rules 55, 56, 58) — only fire when no other rule
-  // does. getUpNextRules below promotes one of these as the LAST resort. ─
   {
     id: "calm-rough-on-track",
     priority: 12,
@@ -23300,7 +23439,567 @@ const UP_NEXT_RULES = [
     badge: () => null,
     actions: () => [],
   },
+
+  // ══════════════════════════════════════════════════════════════════════
+  // FLOW-COMPLETION RULES — added to bring the auto-task engine into Up Next.
+  // These mirror the conditions in computeTasks() so the entire job lifecycle
+  // surfaces in one place. Priorities are interleaved with the existing rules
+  // above; sort happens at fire-time in getUpNextRules.
+  // ══════════════════════════════════════════════════════════════════════
+
+  // ── Phase 16 — Invoice (urgent tier, 5+ days overdue) ───────────────
+  {
+    id: "invoice-overdue-5d",
+    priority: 96,
+    severity: "urgent",
+    fires: (j) => j.readyToInvoice && j.readyToInvoiceDate
+                  && _daysAgo(j.readyToInvoiceDate) >= 5
+                  && !j.invoiced && !j.invoiceDismissed,
+    summary: (j) => {
+      const d = _daysAgo(j.readyToInvoiceDate);
+      return `<b>Invoice overdue — ${d} days</b>. Ready to invoice for over a week.`;
+    },
+    badge: (j) => `${_daysAgo(j.readyToInvoiceDate)}D OVERDUE`,
+    actions: () => [
+      { label: "MARK INVOICED", kind: "patch", payload: { invoiced: true, invoicedDate: new Date().toLocaleDateString("en-US") }, primary: true, color: "red" },
+      { label: "Dismiss reminder", kind: "patch", payload: { invoiceDismissed: true } },
+    ],
+  },
+
+  // ── Phase 2/7 — Confirm Start Date (14-day window) ─────────────────
+  {
+    id: "rough-confirm-start-14d",
+    priority: 95,
+    severity: "urgent",
+    fires: (j) => {
+      if (j.roughStatus !== "scheduled" || !j.roughStatusDate || j.roughStartConfirmed) return false;
+      const days = _daysUntil(j.roughStatusDate);
+      return days != null && days <= 14;
+    },
+    summary: (j) => {
+      const days = _daysUntil(j.roughStatusDate);
+      return days <= 0
+        ? `<b>Confirm rough start</b> with GC — was ${j.roughStatusDate}.`
+        : `<b>Confirm rough start</b> with GC — starts in ${days} day${days === 1 ? "" : "s"} (${j.roughStatusDate}).`;
+    },
+    badge: (j) => {
+      const days = _daysUntil(j.roughStatusDate);
+      return days != null && days <= 3 ? "URGENT" : null;
+    },
+    actions: () => [
+      { label: "MARK CONFIRMED", kind: "patch", payload: { roughStartConfirmed: true }, primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "finish-confirm-start-14d",
+    priority: 94,
+    severity: "urgent",
+    fires: (j) => {
+      if (j.finishStatus !== "scheduled" || !j.finishStatusDate || j.finishStartConfirmed) return false;
+      const days = _daysUntil(j.finishStatusDate);
+      return days != null && days <= 14;
+    },
+    summary: (j) => {
+      const days = _daysUntil(j.finishStatusDate);
+      return days <= 0
+        ? `<b>Confirm finish start</b> with GC — was ${j.finishStatusDate}.`
+        : `<b>Confirm finish start</b> with GC — starts in ${days} day${days === 1 ? "" : "s"} (${j.finishStatusDate}).`;
+    },
+    badge: (j) => {
+      const days = _daysUntil(j.finishStatusDate);
+      return days != null && days <= 3 ? "URGENT" : null;
+    },
+    actions: () => [
+      { label: "MARK CONFIRMED", kind: "patch", payload: { finishStartConfirmed: true }, primary: true, color: "red" },
+    ],
+  },
+
+  // ── Phase 12 — CO send (immediate, before 24h stale rule kicks in) ───
+  {
+    id: "co-send-needed",
+    priority: 92,
+    severity: "urgent",
+    fires: (j) => (j.changeOrders||[]).some(co =>
+      co && (co.coStatus||"needs_sending") === "needs_sending"
+      && (!co.createdAt || _daysAgo(co.createdAt) < 1)),
+    summary: (j) => {
+      const fresh = (j.changeOrders||[]).filter(co =>
+        co && (co.coStatus||"needs_sending") === "needs_sending"
+        && (!co.createdAt || _daysAgo(co.createdAt) < 1));
+      const n = fresh.length;
+      return `<b>${n} CO${n===1?"":"s"} need to be sent</b>.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN CHANGE ORDERS", kind: "tab", payload: "Change Orders", primary: true, color: "red" },
+    ],
+  },
+
+  // ── Phase 5 — In Between (rough done, finish not scheduled, 60+ days) ──
+  {
+    id: "in-between-2-months",
+    priority: 90,
+    severity: "urgent",
+    fires: (j) => {
+      if (j.roughStatus !== "complete") return false;
+      if (j.finishStatus && j.finishStatus !== "" && j.finishStatus !== "waiting_date" && j.finishStatus !== "ready") return false;
+      const ref = j.roughStatusDate || j.roughProjectedStart;
+      if (!ref) return false;
+      const d = _daysAgo(ref);
+      return d != null && d >= 60;
+    },
+    summary: (j) => {
+      const d = _daysAgo(j.roughStatusDate || j.roughProjectedStart);
+      return `<b>In between over 2 months</b> — rough completed ${d} days ago, finish not scheduled.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "PICK FINISH START DATE", kind: "openSchedModal", payload: "finish", primary: true, color: "red" },
+    ],
+  },
+
+  // ── Phase 13 — RT lifecycle (get sign-off, completed merge) ───────────
+  {
+    id: "rt-get-signoff",
+    priority: 86,
+    severity: "urgent",
+    fires: (j) => (j.returnTrips||[]).some(rt =>
+      rt && rt.rtStatus === "scheduled" && !rt.signedOff),
+    summary: (j) => {
+      const n = (j.returnTrips||[]).filter(rt =>
+        rt && rt.rtStatus === "scheduled" && !rt.signedOff).length;
+      return `<b>${n} Return Trip${n===1?"":"s"} scheduled</b> — confirm completion & sign off.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "rt-completed-merge",
+    priority: 85,
+    severity: "urgent",
+    fires: (j) => {
+      const dismissed = j.rtDoneDismissed || [];
+      return (j.returnTrips||[]).some(rt =>
+        rt && rt.rtStatus === "complete" && !dismissed.includes(rt.id));
+    },
+    summary: (j) => {
+      const dismissed = j.rtDoneDismissed || [];
+      const n = (j.returnTrips||[]).filter(rt =>
+        rt && rt.rtStatus === "complete" && !dismissed.includes(rt.id)).length;
+      return `<b>${n} Return Trip${n===1?"":"s"} complete</b> — merge or invoice.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "red" },
+    ],
+  },
+
+  // ── Phase 1/6 — Date confirmed: schedule + PO ─────────────────────────
+  {
+    id: "rough-needs-scheduling-date-confirmed",
+    priority: 80,
+    severity: "urgent",
+    fires: (j) => j.roughStatus === "date_confirmed",
+    summary: (j) => {
+      const start = j.roughNeedsByStart || "";
+      const end = j.roughNeedsByEnd || "";
+      const hard = j.roughNeedsHardDate;
+      const win = hard
+        ? (start ? `Hard date: ${start}` : "Hard date pending")
+        : (start || end) ? `Window: ${start}${end ? " – " + end : ""}` : "Start date confirmed";
+      return `<b>Schedule Rough</b> — ${win}.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "PICK ROUGH START DATE", kind: "openSchedModal", payload: "rough", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "finish-needs-scheduling-date-confirmed",
+    priority: 79,
+    severity: "urgent",
+    fires: (j) => j.finishStatus === "date_confirmed",
+    summary: (j) => {
+      const start = j.finishNeedsByStart || "";
+      const end = j.finishNeedsByEnd || "";
+      const hard = j.finishNeedsHardDate;
+      const win = hard
+        ? (start ? `Hard date: ${start}` : "Hard date pending")
+        : (start || end) ? `Window: ${start}${end ? " – " + end : ""}` : "Start date confirmed";
+      return `<b>Schedule Finish</b> — ${win}.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "PICK FINISH START DATE", kind: "openSchedModal", payload: "finish", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "rough-start-po-needed",
+    priority: 78,
+    severity: "urgent",
+    fires: (j) => j.roughStatus === "date_confirmed",
+    summary: () => `<b>Order Job Start PO</b> — materials needed before rough.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "finish-start-po-needed",
+    priority: 77,
+    severity: "urgent",
+    fires: (j) => j.finishStatus === "date_confirmed",
+    summary: () => `<b>Order Job Start PO</b> — materials needed before finish.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
+    ],
+  },
+
+  // ── Phase 12 — CO schedule RT ────────────────────────────────────────
+  {
+    id: "co-schedule-rt",
+    priority: 76,
+    severity: "urgent",
+    fires: (j) => (j.changeOrders||[]).some(co =>
+      co && co.coStatus === "scheduled" && !co.coStatusDate),
+    summary: (j) => {
+      const n = (j.changeOrders||[]).filter(co =>
+        co && co.coStatus === "scheduled" && !co.coStatusDate).length;
+      return `<b>${n} CO Return Trip${n===1?"":"s"}</b> waiting for a date.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN CHANGE ORDERS", kind: "tab", payload: "Change Orders", primary: true, color: "red" },
+    ],
+  },
+
+  // ── Phase 16 — Ready to invoice (days 0-2 after flag) ────────────────
+  {
+    id: "ready-to-invoice-task",
+    priority: 74,
+    severity: "urgent",
+    fires: (j) => j.readyToInvoice && !j.invoiced && !j.invoiceDismissed
+                  && (!j.readyToInvoiceDate || _daysAgo(j.readyToInvoiceDate) < 3),
+    summary: (j) => {
+      const reason = j.tempPed ? "Temp ped completed"
+                    : (j.finishStatus === "complete" ? "Finish complete" : "Rough complete");
+      return `<b>Ready to invoice</b> — ${reason}.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "MARK INVOICED", kind: "patch", payload: { invoiced: true, invoicedDate: new Date().toLocaleDateString("en-US") }, primary: true, color: "red" },
+      { label: "Dismiss", kind: "patch", payload: { invoiceDismissed: true } },
+    ],
+  },
+
+  // ── Phase 11 — Open punch warnings on complete/invoice jobs ──────────
+  {
+    id: "open-rough-punch-on-complete",
+    priority: 73,
+    severity: "urgent",
+    fires: (j) => {
+      const rs = j.roughStatus || "";
+      if (rs !== "complete" && rs !== "invoice") return false;
+      if (!j.roughPunch) return false;
+      const count = (() => {
+        let n = 0;
+        ["upper","main","basement"].forEach(fl => {
+          const floor = j.roughPunch[fl]; if (!floor) return;
+          n += (floor.general||[]).filter(i => !i.done).length;
+          n += (floor.hotcheck||[]).filter(i => !i.done).length;
+          (floor.rooms||[]).forEach(r => n += (r.items||[]).filter(i => !i.done).length);
+        });
+        return n;
+      })();
+      return count > 0;
+    },
+    summary: (j) => {
+      let n = 0;
+      ["upper","main","basement"].forEach(fl => {
+        const floor = j.roughPunch?.[fl]; if (!floor) return;
+        n += (floor.general||[]).filter(i => !i.done).length;
+        n += (floor.hotcheck||[]).filter(i => !i.done).length;
+        (floor.rooms||[]).forEach(r => n += (r.items||[]).filter(i => !i.done).length);
+      });
+      return `<b>${n} open rough punch item${n===1?"":"s"}</b> on complete/invoice job.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN PUNCH", kind: "tab", payload: "Punch", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "open-finish-punch-on-complete",
+    priority: 72,
+    severity: "urgent",
+    fires: (j) => {
+      const fs = j.finishStatus || "";
+      if (fs !== "complete" && fs !== "invoice") return false;
+      if (!j.finishPunch) return false;
+      let n = 0;
+      ["upper","main","basement"].forEach(fl => {
+        const floor = j.finishPunch[fl]; if (!floor) return;
+        n += (floor.general||[]).filter(i => !i.done).length;
+        n += (floor.hotcheck||[]).filter(i => !i.done).length;
+        (floor.rooms||[]).forEach(r => n += (r.items||[]).filter(i => !i.done).length);
+      });
+      return n > 0;
+    },
+    summary: (j) => {
+      let n = 0;
+      ["upper","main","basement"].forEach(fl => {
+        const floor = j.finishPunch?.[fl]; if (!floor) return;
+        n += (floor.general||[]).filter(i => !i.done).length;
+        n += (floor.hotcheck||[]).filter(i => !i.done).length;
+        (floor.rooms||[]).forEach(r => n += (r.items||[]).filter(i => !i.done).length);
+      });
+      return `<b>${n} open finish punch item${n===1?"":"s"}</b> on complete/invoice job.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN PUNCH", kind: "tab", payload: "Punch", primary: true, color: "red" },
+    ],
+  },
+
+  // ── Phase 15 — Schedule Matterport (rough complete OR needs status) ──
+  {
+    id: "schedule-matterport-task",
+    priority: 71,
+    severity: "urgent",
+    fires: (j) => {
+      const rsComplete = j.roughStatus === "complete";
+      const needs = j.matterportStatus === "needs";
+      if (!rsComplete && !needs) return false;
+      if ((j.matterportStatus||"") === "complete") return false;
+      if (j.matterportLinks?.length || j.matterportLink) return false;
+      if (j.matterportDismissed) return false;
+      return true;
+    },
+    summary: (j) => {
+      const status = j.matterportStatus;
+      return status === "scheduled"
+        ? `<b>Matterport scan scheduled</b>${j.matterportStatusDate ? " for " + j.matterportStatusDate : ""}.`
+        : (status === "needs" && j.matterportStatusDate)
+          ? `<b>Schedule Matterport scan</b> — needs by ${j.matterportStatusDate}.`
+          : `<b>Schedule Matterport scan</b> — rough complete.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN PLANS & LINKS", kind: "tab", payload: "Plans & Links", primary: true, color: "red" },
+      { label: "Dismiss", kind: "patch", payload: { matterportDismissed: true } },
+    ],
+  },
+
+  // ── Phase 10 — QC walk milestones (rough 80%, finish 80%) ────────────
+  {
+    id: "qc-walk-rough-80",
+    priority: 68,
+    severity: "urgent",
+    fires: (j) => j.roughQCTaskFired
+                  && !["scheduled","completed","pass","fail"].includes(j.qcStatus),
+    summary: (j) => `Rough at <b>${j.roughStage || "80%+"}</b> — schedule the QC walk.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN QC", kind: "tab", payload: "QC", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "qc-walk-finish-80",
+    priority: 67,
+    severity: "urgent",
+    fires: (j) => {
+      const pct = parseInt(j.finishStage) || 0;
+      return pct >= 80
+        && !["scheduled","completed","pass","fail"].includes(j.qcStatus);
+    },
+    summary: (j) => `Finish at <b>${j.finishStage || "80%+"}</b> — schedule the final QC walk.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN QC", kind: "tab", payload: "QC", primary: true, color: "red" },
+    ],
+  },
+
+  // ── Phase 14 — Schedule Temp Ped (fires immediately on ready) ────────
+  {
+    id: "schedule-temp-ped-task",
+    priority: 66,
+    severity: "urgent",
+    fires: (j) => j.tempPed && j.tempPedStatus === "ready",
+    summary: (j) => `<b>Schedule Temp Ped${j.tempPedNumber ? " #" + j.tempPedNumber : ""}</b> — ready to be scheduled.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
+    ],
+  },
+
+  // ── Phase 17 — Quick Job lifecycle ───────────────────────────────────
+  {
+    id: "quick-job-new",
+    priority: 65,
+    severity: "urgent",
+    fires: (j) => j.quickJob && (j.quickJobStatus || "new") === "new",
+    summary: (j) => `<b>Schedule Quick Job</b>: ${_cleanHtmlGlobal(j.scope || j.name || "Untitled")}.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
+    ],
+  },
+  {
+    id: "quick-job-upcoming-3d",
+    priority: 64,
+    severity: "urgent",
+    fires: (j) => {
+      if (!j.quickJob || j.quickJobStatus !== "scheduled" || !j.quickJobDate) return false;
+      const days = _daysUntil(j.quickJobDate);
+      return days != null && days <= 3;
+    },
+    summary: (j) => {
+      const days = _daysUntil(j.quickJobDate);
+      const label = days <= 0 ? "today/overdue" : `in ${days} day${days===1?"":"s"}`;
+      return `<b>Quick Job ${label}</b>: ${_cleanHtmlGlobal(j.scope || j.name || "Untitled")}.`;
+    },
+    badge: (j) => {
+      const days = _daysUntil(j.quickJobDate);
+      return days != null && days <= 0 ? "TODAY" : null;
+    },
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
+    ],
+  },
+
+  // ── Phase 0 — Pre Job Prep (always Koy's task) ───────────────────────
+  {
+    id: "pre-job-prep-incomplete",
+    priority: 63,
+    severity: "urgent",
+    fires: (j) => {
+      if (j.tempPed) return false;
+      if (j.type === "quote") return false;
+      return !allPrepDone(j);
+    },
+    summary: (j) => {
+      const c = j.prepChecklist || {};
+      const items = PREP_CHECKLIST_ITEMS;
+      const doneCount = items.filter(i => c[i.key]).length;
+      const nextItem = items.find(i => !c[i.key]);
+      return doneCount === 0
+        ? `<b>Pre-job prep not started.</b>`
+        : `<b>Pre-job prep ${doneCount}/${items.length} complete</b>${nextItem ? ` — next: ${nextItem.label}` : ""}.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
+    ],
+  },
+
+  // ══════════════════════════════════════════════════════════════════════
+  // SOON-TIER FLOW COMPLETIONS
+  // ══════════════════════════════════════════════════════════════════════
+
+  // ── Phase 2/7 — Material deposit ────────────────────────────────────
+  {
+    id: "rough-material-deposit",
+    priority: 42,
+    severity: "needsInput",
+    fires: (j) => j.roughStatus === "scheduled" && !j.roughDepositDismissed,
+    summary: () => `<b>Material Deposit — Rough</b>: collect before start.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "amber" },
+      { label: "Dismiss", kind: "patch", payload: { roughDepositDismissed: true } },
+    ],
+  },
+  {
+    id: "finish-material-deposit",
+    priority: 41,
+    severity: "needsInput",
+    fires: (j) => j.finishStatus === "scheduled" && !j.finishDepositDismissed,
+    summary: () => `<b>Material Deposit — Finish</b>: collect before start.`,
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "amber" },
+      { label: "Dismiss", kind: "patch", payload: { finishDepositDismissed: true } },
+    ],
+  },
+
+  // ── Phase 12 — CO approved follow-up (crew on site → mark complete) ──
+  {
+    id: "co-approved-followup",
+    priority: 43,
+    severity: "needsInput",
+    fires: (j) => (j.changeOrders||[]).some(co => co && co.coStatus === "approved")
+                  && (j.roughStatus === "inprogress" || j.finishStatus === "inprogress"),
+    summary: (j) => {
+      const n = (j.changeOrders||[]).filter(co => co && co.coStatus === "approved").length;
+      return `<b>${n} approved CO${n===1?"":"s"}</b> — crew on site, mark work complete.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN CHANGE ORDERS", kind: "tab", payload: "Change Orders", primary: true, color: "amber" },
+    ],
+  },
+
+  // ── Phase 17 — Invoice Quick Job ─────────────────────────────────────
+  {
+    id: "invoice-quick-job",
+    priority: 40,
+    severity: "needsInput",
+    fires: (j) => j.quickJob
+                  && (j.quickJobStatus === "complete" || j.quickJobStatus === "invoice")
+                  && j.readyToInvoice && !j.invoiceDismissed,
+    summary: (j) => `<b>Invoice Quick Job</b>: ${_cleanHtmlGlobal(j.name || "Untitled")}.`,
+    badge: () => null,
+    actions: () => [
+      { label: "MARK INVOICED", kind: "patch", payload: { invoiced: true, invoicedDate: new Date().toLocaleDateString("en-US") }, primary: true, color: "amber" },
+    ],
+  },
+
+  // ══════════════════════════════════════════════════════════════════════
+  // INFO-TIER FLOW COMPLETIONS
+  // ══════════════════════════════════════════════════════════════════════
+
+  // ── Phase 12 — CO completed merge/invoice (low urgency until dismissed) ──
+  {
+    id: "co-completed-merge",
+    priority: 26,
+    severity: "info",
+    fires: (j) => {
+      const dismissed = j.coDoneDismissed || [];
+      return (j.changeOrders||[]).some(co =>
+        co && co.coStatus === "completed" && !dismissed.includes(co.id));
+    },
+    summary: (j) => {
+      const dismissed = j.coDoneDismissed || [];
+      const n = (j.changeOrders||[]).filter(co =>
+        co && co.coStatus === "completed" && !dismissed.includes(co.id)).length;
+      return `<b>${n} CO${n===1?"":"s"} complete</b> — merge or invoice.`;
+    },
+    badge: () => null,
+    actions: () => [
+      { label: "OPEN CHANGE ORDERS", kind: "tab", payload: "Change Orders", primary: true, color: "blue" },
+    ],
+  },
 ];
+
+// Module-scoped helper for the new rules above. cleanText also exists in the
+// JobActivity closure, but we need a copy at module scope for fires/summary
+// functions that run outside any component. Strips HTML and decodes entities.
+function _cleanHtmlGlobal(s) {
+  return String(s || "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&[a-z]+;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
+}
 
 // Snooze check — reads job.upNextSnoozed[ruleId] (ISO string of when snooze
 // ends). Returns true if the snooze hasn't expired yet. Safe against missing
@@ -36091,6 +36790,22 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
     const d = new Date(v);
     return isNaN(d) ? null : d;
   };
+  // Strip HTML and decode common entities so punch item text (which is
+  // stored as rich HTML from a contenteditable editor) and other rich-text
+  // fields don't render as raw "&nbsp;" / "<p>..." in the activity feed
+  // or the per-person drill-down. Same shape as the cleanText helper in
+  // buildJobActivity (kept local to avoid leaking the closure scope).
+  const _cleanHtml = (s) => String(s || "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&[a-z]+;/gi, " ")
+    .replace(/\s+/g, " ")
+    .trim();
   const ev = []; // mutable accumulator
   const push = (at, who, job, type, kind, label, color, detail) => {
     const d = parseAt(at); if (!d) return;
@@ -36101,15 +36816,15 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
     // 3, 5, 7, 8, 9 — punch item events (some have addedAt, some only checkedAt)
     forEachPunch(j, (item, ctx) => {
       // created — needs item.addedAt
-      if (item?.addedAt) push(item.addedAt, item.addedBy, j, "punch", "created", `Punch item added`, "#a16207", (item.text||"").slice(0,80));
+      if (item?.addedAt) push(item.addedAt, item.addedBy, j, "punch", "created", `Punch item added`, "#a16207", _cleanHtml(item.text).slice(0,80));
       // closed
       if (item?.done && item?.checkedAt) {
         // checkedAt is en-US locale date string; we treat as midday so it lands in the right day bucket
         const checkedDate = new Date(item.checkedAt); if (!isNaN(checkedDate)) checkedDate.setHours(12,0,0,0);
-        push(checkedDate, item.checkedBy, j, "punch", "closed", `Punch closed`, "#16a34a", (item.text||"").slice(0,80));
+        push(checkedDate, item.checkedBy, j, "punch", "closed", `Punch closed`, "#16a34a", _cleanHtml(item.text).slice(0,80));
       }
       // due date set
-      if (item?.dueDateSetAt) push(item.dueDateSetAt, item.dueDateSetBy||item.assignedBy, j, "punch", "due", `Punch due ${item.dueDate||"date"}`, "#0ea5e9", (item.text||"").slice(0,80));
+      if (item?.dueDateSetAt) push(item.dueDateSetAt, item.dueDateSetBy||item.assignedBy, j, "punch", "due", `Punch due ${item.dueDate||"date"}`, "#0ea5e9", _cleanHtml(item.text).slice(0,80));
       // photo added (per-item photos[])
       (item?.photos||[]).forEach(p => {
         const t = p.takenAt || p.uploadedAt || p.addedAt;
@@ -36117,13 +36832,13 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
       });
       // comment / note on punch item
       if (item?.noteUpdatedAt || (item?.note && item?.noteAt)) {
-        push(item.noteUpdatedAt || item.noteAt, item.noteBy||item.assignedBy, j, "punch", "noted", `Punch note added`, "#a16207", (item.note||"").slice(0,80));
+        push(item.noteUpdatedAt || item.noteAt, item.noteBy||item.assignedBy, j, "punch", "noted", `Punch note added`, "#a16207", _cleanHtml(item.note).slice(0,80));
       }
     });
     // 10-15 — change orders
     (j.changeOrders||[]).forEach((co, i) => {
       const tag = `CO #${i+1}${co.quoteNumber?` · #${co.quoteNumber}`:""}`;
-      if (co?.createdAt) push(co.createdAt, co.createdBy, j, "co", "created", `${tag} created`, "#7c3aed", (co.description||"").slice(0,80));
+      if (co?.createdAt) push(co.createdAt, co.createdBy, j, "co", "created", `${tag} created`, "#7c3aed", _cleanHtml(co.description).slice(0,80));
       // status flip — coStatus + coStatusDate is the most recent state
       if (co?.coStatusDate && co?.coStatus) {
         const map = { sent:"sent to client", approved:"approved", declined:"declined", completed:"completed" };
@@ -36140,7 +36855,7 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
     // 16-20 — return trips
     (j.returnTrips||[]).forEach((rt, i) => {
       const tag = `RT #${i+1}`;
-      if (rt?.createdAt) push(rt.createdAt, rt.createdBy, j, "rt", "created", `${tag} created`, "#ea580c", (rt.scope||"").slice(0,80));
+      if (rt?.createdAt) push(rt.createdAt, rt.createdBy, j, "rt", "created", `${tag} created`, "#ea580c", _cleanHtml(rt.scope).slice(0,80));
       if (rt?.scheduledDate) push(rt.scheduledDate, rt.scheduledBy, j, "rt", "scheduled", `${tag} scheduled`, "#ea580c");
       if (rt?.assignedAt || (rt?.assignedTo && rt?.assignedSetAt)) push(rt.assignedAt||rt.assignedSetAt, rt.assignedBy, j, "rt", "assigned", `${tag} assigned to ${rt.assignedTo||"someone"}`, "#ea580c");
       if (rt?.signedOff && rt?.signedOffDate) push(rt.signedOffDate, rt.signedOffBy, j, "rt", "completed", `${tag} signed off`, "#16a34a");
@@ -36173,7 +36888,7 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
     // 31, 32 — daily updates
     (j.dailyUpdates||[]).forEach(d => {
       const t = d?.postedAt || d?.date;
-      if (t) push(t, d.author, j, "daily", d.editedAt?"edited":"posted", `Daily update`, "#0ea5e9", (d.notes||"").slice(0,80));
+      if (t) push(t, d.author, j, "daily", d.editedAt?"edited":"posted", `Daily update`, "#0ea5e9", _cleanHtml(d.notes).slice(0,80));
       if (d?.editedAt && d.editedAt !== d.postedAt) push(d.editedAt, d.editedBy||d.author, j, "daily", "edited", `Daily update edited`, "#0ea5e9");
     });
     // 33, 34, 35, 36, 37 — job lifecycle / status / notes
@@ -36184,20 +36899,20 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
     // 38-41 — purchase orders / material requests
     (j.purchaseOrders||j.poList||[]).forEach((po, i) => {
       const tag = `PO #${po.number||i+1}`;
-      if (po?.createdAt) push(po.createdAt, po.createdBy, j, "po", "created", `${tag} created`, "#9333ea", (po.description||"").slice(0,80));
+      if (po?.createdAt) push(po.createdAt, po.createdBy, j, "po", "created", `${tag} created`, "#9333ea", _cleanHtml(po.description).slice(0,80));
       if (po?.receivedAt) push(po.receivedAt, po.receivedBy, j, "po", "received", `${tag} received`, "#16a34a");
       if (po?.backorderedAt) push(po.backorderedAt, po.backorderedBy, j, "po", "backorder", `${tag} back-ordered`, "#dc2626");
     });
     (j.materialRequests||[]).forEach(mr => {
-      if (mr?.submittedAt) push(mr.submittedAt, mr.submittedBy, j, "po", "request", `Material request`, "#9333ea", (mr.items||"").slice(0,80));
+      if (mr?.submittedAt) push(mr.submittedAt, mr.submittedBy, j, "po", "request", `Material request`, "#9333ea", _cleanHtml(mr.items).slice(0,80));
     });
     // 42-44 — Q&A
     const walkQuestions = (qs, phaseLabel) => {
       if (!qs) return;
       ["upper","main","basement"].forEach(floor => {
         (qs[floor]||[]).forEach(q => {
-          if (q?.addedAt) push(q.addedAt, q.addedBy, j, "question", "posted", `${phaseLabel} Q posted`, "#0ea5e9", (q.question||"").slice(0,80));
-          if (q?.answeredAt) push(q.answeredAt, q.answeredBy, j, "question", "answered", `${phaseLabel} Q answered`, "#16a34a", (q.answer||"").slice(0,80));
+          if (q?.addedAt) push(q.addedAt, q.addedBy, j, "question", "posted", `${phaseLabel} Q posted`, "#0ea5e9", _cleanHtml(q.question).slice(0,80));
+          if (q?.answeredAt) push(q.answeredAt, q.answeredBy, j, "question", "answered", `${phaseLabel} Q answered`, "#16a34a", _cleanHtml(q.answer).slice(0,80));
           if (q?.done && q?.resolvedAt) push(q.resolvedAt, q.resolvedBy||q.answeredBy, j, "question", "resolved", `${phaseLabel} Q resolved`, "#16a34a");
         });
       });
@@ -36206,13 +36921,13 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
     walkQuestions(j.finishQuestions, "Finish");
     // 45, 46, 47 — Job Notes
     (j.jobNotes||[]).forEach(n => {
-      if (n?.createdAt) push(n.createdAt, n.createdBy, j, "note", "added", `Note added${n.phase?` (${n.phase})`:""}`, "#0891b2", (n.title||"").slice(0,80));
+      if (n?.createdAt) push(n.createdAt, n.createdBy, j, "note", "added", `Note added${n.phase?` (${n.phase})`:""}`, "#0891b2", _cleanHtml(n.title).slice(0,80));
       // line-level events
       (n.lines||[]).forEach(line => {
-        if (line?.checkedAt) push(line.checkedAt, line.checkedBy, j, "note", "checked", `Note item checked off`, "#16a34a", (n.title||"").slice(0,80));
+        if (line?.checkedAt) push(line.checkedAt, line.checkedBy, j, "note", "checked", `Note item checked off`, "#16a34a", _cleanHtml(n.title).slice(0,80));
         if (line?.promoted?.promotedAt) {
           const what = line.promoted.kind || line.promoted.type || "destination";
-          push(line.promoted.promotedAt, line.promoted.promotedBy, j, "note", "promoted", `Note → ${what}`, "#7c3aed", (n.title||"").slice(0,80));
+          push(line.promoted.promotedAt, line.promoted.promotedBy, j, "note", "promoted", `Note → ${what}`, "#7c3aed", _cleanHtml(n.title).slice(0,80));
         }
       });
     });
@@ -36239,7 +36954,7 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
     });
     // 53 — Calls (job-level calls log if present)
     (j.calls||j.callLog||[]).forEach(c => {
-      if (c?.loggedAt || c?.at) push(c.loggedAt||c.at, c.loggedBy||c.by, j, "call", "logged", `Call logged`, "#0ea5e9", (c.note||c.subject||"").slice(0,80));
+      if (c?.loggedAt || c?.at) push(c.loggedAt||c.at, c.loggedBy||c.by, j, "call", "logged", `Call logged`, "#0ea5e9", _cleanHtml(c.note||c.subject).slice(0,80));
     });
     // 63, 64, 65 — Job lifecycle
     if (j.createdAt) push(j.createdAt, j.createdBy||j.firstSavedBy, j, "lifecycle", "created", `New job created`, "#16a34a");
@@ -36252,8 +36967,8 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
   });
   // 54, 55 — Manual tasks (separate collection — passed as prop)
   (manualTasks||[]).forEach(t => {
-    if (t?.createdAt) push(t.createdAt, t.createdBy, null, "task", "created", `Manual task: ${(t.text||t.title||"").slice(0,60)}`, "#0ea5e9");
-    if (t?.done && t?.completedAt) push(t.completedAt, t.completedBy, null, "task", "completed", `Manual task done: ${(t.text||t.title||"").slice(0,60)}`, "#16a34a");
+    if (t?.createdAt) push(t.createdAt, t.createdBy, null, "task", "created", `Manual task: ${_cleanHtml(t.text||t.title).slice(0,60)}`, "#0ea5e9");
+    if (t?.done && t?.completedAt) push(t.completedAt, t.completedBy, null, "task", "completed", `Manual task done: ${_cleanHtml(t.text||t.title).slice(0,60)}`, "#16a34a");
   });
   // 56, 57 — Quote walks (separate collection)
   (quoteWalks||[]).forEach(w => {
@@ -36263,7 +36978,7 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
   });
   // 58, 59 — Suggestions (separate collection)
   (suggestions||[]).forEach(s => {
-    if (s?.submittedAt) push(s.submittedAt, s.submittedBy, null, "suggestion", "submitted", `Suggestion: ${(s.text||"").slice(0,60)}`, "#7c3aed");
+    if (s?.submittedAt) push(s.submittedAt, s.submittedBy, null, "suggestion", "submitted", `Suggestion: ${_cleanHtml(s.text).slice(0,60)}`, "#7c3aed");
     if (s?.updatedAt && s.status && s.status !== "new") push(s.updatedAt, s.updatedBy||identity?.name||"", null, "suggestion", s.status, `Suggestion → ${s.status}`, "#7c3aed");
   });
 
