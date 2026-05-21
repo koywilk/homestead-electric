@@ -23613,6 +23613,26 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const jobRef = useRef(job);
   useEffect(()=>{ jobRef.current = job; }, [job]);
 
+  // Presence ping (light) — write once per job open so Today's Live Activity
+  // can show "Koy opened Forth at 2:14pm". Writes to job.presence[name] as
+  // an ISO string. Data safety: presence is its own dedicated map field;
+  // nothing else reads or writes to it, so this is purely additive. We use
+  // `u()` so it flows through the normal saveJob debounce — no Firestore
+  // write storm. Only fires when we have an identity name and the job has
+  // an id (not for the unsaved blank-job sketch path).
+  useEffect(() => {
+    const who = identity?.name;
+    if (!who || !rawJob?.id) return;
+    const nowIso = new Date().toISOString();
+    // Skip if we already pinged within the last 60s — guards against the
+    // job-list ↔ detail bounce flooding presence writes.
+    const last = jobRef.current?.presence?.[who];
+    if (last && (Date.now() - new Date(last).getTime()) < 60*1000) return;
+    const nextPresence = { ...(jobRef.current?.presence || {}), [who]: nowIso };
+    u({ presence: nextPresence });
+  // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [rawJob?.id]);
+
   // Roster of names that can be assigned to a punch item. Drawn from the
   // app's full users list so any crew member is pickable (per Koy's spec —
   // not just foremen/leads). Memoized to a stable array reference so the
@@ -35982,7 +36002,12 @@ if (typeof window !== "undefined") {
 // write paths needed; uses parent job's lastActivityAt as recency signal).
 // Spec: memory/project_today_command_center.md
 // Role gating: today.view = admin/manager/standard. NOT lead/crew.
-function Today({ jobs, users=[], identity, onSelectJob }) {
+function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], identity, onSelectJob }) {
+  // Local UI state — filter pills + feed expansion (50 → all).
+  // Persist filter across reloads so Koy can park on a category.
+  const [feedFilter, setFeedFilter] = useState(() => { try { return localStorage.getItem("today.feedFilter") || "all"; } catch { return "all"; } });
+  const [feedExpanded, setFeedExpanded] = useState(false);
+  const setFilter = (v) => { setFeedFilter(v); try { localStorage.setItem("today.feedFilter", v); } catch {} };
   // Defensive timestamp coercer — lastActivityAt can be a Firestore Timestamp
   // (with .toDate()), a Date, an ISO string, or missing (old jobs that haven't
   // been touched since the field was introduced). Returns null for unknown.
@@ -36041,8 +36066,203 @@ function Today({ jobs, users=[], identity, onSelectJob }) {
     return sFirst === fFirst;
   };
 
+  // ── Unified event collector ──
+  // Single walk over every data source, emitting a normalized event per action.
+  // Event shape: { at, who, jobId, jobName, type, kind, label, color, detail }.
+  // `at` is a Date. `type` is the filter bucket (punch/co/rt/inspection/photo/
+  // daily/status/po/question/note/savant/homerun/call/task/walk/suggestion/
+  // presence/lifecycle). `kind` distinguishes sub-events (created/closed/sent
+  // etc) so the per-person pulser can show "3 punches closed, 2 COs sent".
+  // Only events with parseable timestamps are emitted — undated items are
+  // dropped (safe: they don't pollute the feed with fake "now" entries).
+  const parseAt = (v) => {
+    if (!v) return null;
+    if (typeof v === "object" && typeof v.toDate === "function") return v.toDate();
+    if (v instanceof Date) return v;
+    const d = new Date(v);
+    return isNaN(d) ? null : d;
+  };
+  const ev = []; // mutable accumulator
+  const push = (at, who, job, type, kind, label, color, detail) => {
+    const d = parseAt(at); if (!d) return;
+    ev.push({ at:d, who:who||"", jobId:job?.id||null, jobName:(job?.name||job?.id||"")+"", type, kind, label, color, detail:detail||"" });
+  };
+  const allJobs = jobs || [];
+  allJobs.forEach(j => {
+    // 3, 5, 7, 8, 9 — punch item events (some have addedAt, some only checkedAt)
+    forEachPunch(j, (item, ctx) => {
+      // created — needs item.addedAt
+      if (item?.addedAt) push(item.addedAt, item.addedBy, j, "punch", "created", `Punch item added`, "#a16207", (item.text||"").slice(0,80));
+      // closed
+      if (item?.done && item?.checkedAt) {
+        // checkedAt is en-US locale date string; we treat as midday so it lands in the right day bucket
+        const checkedDate = new Date(item.checkedAt); if (!isNaN(checkedDate)) checkedDate.setHours(12,0,0,0);
+        push(checkedDate, item.checkedBy, j, "punch", "closed", `Punch closed`, "#16a34a", (item.text||"").slice(0,80));
+      }
+      // due date set
+      if (item?.dueDateSetAt) push(item.dueDateSetAt, item.dueDateSetBy||item.assignedBy, j, "punch", "due", `Punch due ${item.dueDate||"date"}`, "#0ea5e9", (item.text||"").slice(0,80));
+      // photo added (per-item photos[])
+      (item?.photos||[]).forEach(p => {
+        const t = p.takenAt || p.uploadedAt || p.addedAt;
+        if (t) push(t, p.uploadedBy||p.addedBy, j, "photo", "punch", `Photo on punch item`, "#0891b2", p.name||"");
+      });
+      // comment / note on punch item
+      if (item?.noteUpdatedAt || (item?.note && item?.noteAt)) {
+        push(item.noteUpdatedAt || item.noteAt, item.noteBy||item.assignedBy, j, "punch", "noted", `Punch note added`, "#a16207", (item.note||"").slice(0,80));
+      }
+    });
+    // 10-15 — change orders
+    (j.changeOrders||[]).forEach((co, i) => {
+      const tag = `CO #${i+1}${co.quoteNumber?` · #${co.quoteNumber}`:""}`;
+      if (co?.createdAt) push(co.createdAt, co.createdBy, j, "co", "created", `${tag} created`, "#7c3aed", (co.description||"").slice(0,80));
+      // status flip — coStatus + coStatusDate is the most recent state
+      if (co?.coStatusDate && co?.coStatus) {
+        const map = { sent:"sent to client", approved:"approved", declined:"declined", completed:"completed" };
+        const label = map[co.coStatus] || co.coStatus;
+        push(co.coStatusDate, co.statusSetBy||co.sentBy||co.approvedBy||co.declinedBy||co.completedBy, j, "co", co.coStatus, `${tag} ${label}`, "#7c3aed");
+      }
+      if (co?.quoteAddedAt) push(co.quoteAddedAt, co.quoteAddedBy, j, "co", "quote", `${tag} quote # added`, "#7c3aed");
+      // photos
+      (co.photos||[]).forEach(p => {
+        const t = p.takenAt || p.uploadedAt || p.addedAt;
+        if (t) push(t, p.uploadedBy||p.addedBy, j, "photo", "co", `Photo on ${tag}`, "#0891b2", p.name||"");
+      });
+    });
+    // 16-20 — return trips
+    (j.returnTrips||[]).forEach((rt, i) => {
+      const tag = `RT #${i+1}`;
+      if (rt?.createdAt) push(rt.createdAt, rt.createdBy, j, "rt", "created", `${tag} created`, "#ea580c", (rt.scope||"").slice(0,80));
+      if (rt?.scheduledDate) push(rt.scheduledDate, rt.scheduledBy, j, "rt", "scheduled", `${tag} scheduled`, "#ea580c");
+      if (rt?.assignedAt || (rt?.assignedTo && rt?.assignedSetAt)) push(rt.assignedAt||rt.assignedSetAt, rt.assignedBy, j, "rt", "assigned", `${tag} assigned to ${rt.assignedTo||"someone"}`, "#ea580c");
+      if (rt?.signedOff && rt?.signedOffDate) push(rt.signedOffDate, rt.signedOffBy, j, "rt", "completed", `${tag} signed off`, "#16a34a");
+      (rt.photos||[]).forEach(p => {
+        const t = p.takenAt || p.uploadedAt || p.addedAt;
+        if (t) push(t, p.uploadedBy||p.addedBy, j, "photo", "rt", `Photo on ${tag}`, "#0891b2", p.name||"");
+      });
+    });
+    // 21-27 — inspections (attempts arrays hold each pass/fail with date+by)
+    (j.roughInspectionAttempts||[]).forEach(a => {
+      if (a?.date) push(a.date, a.by, j, "inspection", a.result==="pass"?"passed":"failed", `Rough inspection ${a.result}`, a.result==="pass"?"#16a34a":"#dc2626");
+    });
+    (j.finalInspectionAttempts||[]).forEach(a => {
+      if (a?.date) push(a.date, a.by, j, "inspection", a.result==="pass"?"passed":"failed", `Finish inspection ${a.result}`, a.result==="pass"?"#16a34a":"#dc2626");
+    });
+    // Scheduled (date-set) events — only emit if the schedule was set today via *SetAt; we approximate from updated_at since we don't track that.
+    // 4-way target
+    if (j.fourWaySetAt) push(j.fourWaySetAt, j.fourWaySetBy||j._saved_by, j, "inspection", "fourway", `4-way target set ${j.fourWayTargetDate||""}`, "#dc2626");
+    // 28 — photos uploaded to a job (general — covers anything not already emitted above)
+    // We rely on photo.takenAt|uploadedAt|addedAt timestamps. Any walked photo that
+    // we haven't already attributed to a punch/CO/RT will land here; we dedupe by url.
+    const seenPhotoUrls = new Set(ev.filter(e => e.type==="photo").map(e => e.detail+e.jobId));
+    collectPhotos(j).forEach(p => {
+      const t = p.takenAt || p.uploadedAt || p.addedAt;
+      if (!t) return;
+      const key = (p.name||"")+j.id;
+      if (seenPhotoUrls.has(key)) return;
+      push(t, p.uploadedBy||p.addedBy, j, "photo", "job", `Photo uploaded`, "#0891b2", p.name||"");
+    });
+    // 31, 32 — daily updates
+    (j.dailyUpdates||[]).forEach(d => {
+      const t = d?.postedAt || d?.date;
+      if (t) push(t, d.author, j, "daily", d.editedAt?"edited":"posted", `Daily update`, "#0ea5e9", (d.notes||"").slice(0,80));
+      if (d?.editedAt && d.editedAt !== d.postedAt) push(d.editedAt, d.editedBy||d.author, j, "daily", "edited", `Daily update edited`, "#0ea5e9");
+    });
+    // 33, 34, 35, 36, 37 — job lifecycle / status / notes
+    if (j.statusChangedAt) push(j.statusChangedAt, j.statusChangedBy||j._saved_by, j, "status", "changed", `Status: ${j.roughStatus||j.finishStatus||"updated"}`, "#475569");
+    if (j.phaseAdvancedAt) push(j.phaseAdvancedAt, j.phaseAdvancedBy||j._saved_by, j, "status", "phase", `Phase advanced`, "#475569");
+    if (j.archivedAt) push(j.archivedAt, j.archivedBy||j._saved_by, j, "status", "archived", `Job archived`, "#64748b");
+    if (j.restoredAt) push(j.restoredAt, j.restoredBy||j._saved_by, j, "status", "restored", `Job restored`, "#16a34a");
+    // 38-41 — purchase orders / material requests
+    (j.purchaseOrders||j.poList||[]).forEach((po, i) => {
+      const tag = `PO #${po.number||i+1}`;
+      if (po?.createdAt) push(po.createdAt, po.createdBy, j, "po", "created", `${tag} created`, "#9333ea", (po.description||"").slice(0,80));
+      if (po?.receivedAt) push(po.receivedAt, po.receivedBy, j, "po", "received", `${tag} received`, "#16a34a");
+      if (po?.backorderedAt) push(po.backorderedAt, po.backorderedBy, j, "po", "backorder", `${tag} back-ordered`, "#dc2626");
+    });
+    (j.materialRequests||[]).forEach(mr => {
+      if (mr?.submittedAt) push(mr.submittedAt, mr.submittedBy, j, "po", "request", `Material request`, "#9333ea", (mr.items||"").slice(0,80));
+    });
+    // 42-44 — Q&A
+    const walkQuestions = (qs, phaseLabel) => {
+      if (!qs) return;
+      ["upper","main","basement"].forEach(floor => {
+        (qs[floor]||[]).forEach(q => {
+          if (q?.addedAt) push(q.addedAt, q.addedBy, j, "question", "posted", `${phaseLabel} Q posted`, "#0ea5e9", (q.question||"").slice(0,80));
+          if (q?.answeredAt) push(q.answeredAt, q.answeredBy, j, "question", "answered", `${phaseLabel} Q answered`, "#16a34a", (q.answer||"").slice(0,80));
+          if (q?.done && q?.resolvedAt) push(q.resolvedAt, q.resolvedBy||q.answeredBy, j, "question", "resolved", `${phaseLabel} Q resolved`, "#16a34a");
+        });
+      });
+    };
+    walkQuestions(j.roughQuestions, "Rough");
+    walkQuestions(j.finishQuestions, "Finish");
+    // 45, 46, 47 — Job Notes
+    (j.jobNotes||[]).forEach(n => {
+      if (n?.createdAt) push(n.createdAt, n.createdBy, j, "note", "added", `Note added${n.phase?` (${n.phase})`:""}`, "#0891b2", (n.title||"").slice(0,80));
+      // line-level events
+      (n.lines||[]).forEach(line => {
+        if (line?.checkedAt) push(line.checkedAt, line.checkedBy, j, "note", "checked", `Note item checked off`, "#16a34a", (n.title||"").slice(0,80));
+        if (line?.promoted?.promotedAt) {
+          const what = line.promoted.kind || line.promoted.type || "destination";
+          push(line.promoted.promotedAt, line.promoted.promotedBy, j, "note", "promoted", `Note → ${what}`, "#7c3aed", (n.title||"").slice(0,80));
+        }
+      });
+    });
+    // 48-50 — Savant slots (panelizedLighting + savantV2)
+    const sv = j.panelizedLighting?.savantV2 || {};
+    Object.values(sv).forEach(floor => {
+      const ia = floor?.inputAssignments || {};
+      Object.values(ia).forEach(slot => {
+        if (slot?.addedAt) push(slot.addedAt, slot.addedBy, j, "savant", "added", `Savant slot added`, "#a855f7", slot.label||"");
+        if (slot?.wiredAt) push(slot.wiredAt, slot.wiredBy, j, "savant", "wired", `Savant slot wired`, "#16a34a", slot.label||"");
+        (slot?.photos||[]).forEach(p => {
+          const t = p.takenAt || p.uploadedAt || p.addedAt;
+          if (t) push(t, p.uploadedBy||p.addedBy, j, "savant", "photo", `Savant photo`, "#0891b2", p.name||"");
+        });
+      });
+    });
+    // 51, 52 — Home runs
+    const hr = j.homeRuns || {};
+    ["upper","main","basement"].forEach(floor => {
+      (hr[floor]||[]).forEach(r => {
+        if (r?.addedAt) push(r.addedAt, r.addedBy, j, "homerun", "added", `Home run added (${floor})`, "#f59e0b", r.label||r.tag||"");
+        if (r?.labeledAt) push(r.labeledAt, r.labeledBy, j, "homerun", "labeled", `Home run labeled`, "#16a34a", r.label||r.tag||"");
+      });
+    });
+    // 53 — Calls (job-level calls log if present)
+    (j.calls||j.callLog||[]).forEach(c => {
+      if (c?.loggedAt || c?.at) push(c.loggedAt||c.at, c.loggedBy||c.by, j, "call", "logged", `Call logged`, "#0ea5e9", (c.note||c.subject||"").slice(0,80));
+    });
+    // 63, 64, 65 — Job lifecycle
+    if (j.createdAt) push(j.createdAt, j.createdBy||j.firstSavedBy, j, "lifecycle", "created", `New job created`, "#16a34a");
+    if (j.foremanAssignedAt) push(j.foremanAssignedAt, j.foremanAssignedBy||j._saved_by, j, "lifecycle", "foreman", `Foreman assigned: ${j.foreman||"—"}`, "#7c3aed");
+    if (j.driveLinkedAt) push(j.driveLinkedAt, j.driveLinkedBy||j._saved_by, j, "lifecycle", "drive", `Drive folder linked`, "#0ea5e9");
+    // 60, 61, 62 — Presence (light: { name: lastSeenISO } map on job)
+    Object.entries(j.presence||{}).forEach(([who, lastSeen]) => {
+      push(lastSeen, who, j, "presence", "opened", `Opened ${j.name||j.id}`, "#22c55e");
+    });
+  });
+  // 54, 55 — Manual tasks (separate collection — passed as prop)
+  (manualTasks||[]).forEach(t => {
+    if (t?.createdAt) push(t.createdAt, t.createdBy, null, "task", "created", `Manual task: ${(t.text||t.title||"").slice(0,60)}`, "#0ea5e9");
+    if (t?.done && t?.completedAt) push(t.completedAt, t.completedBy, null, "task", "completed", `Manual task done: ${(t.text||t.title||"").slice(0,60)}`, "#16a34a");
+  });
+  // 56, 57 — Quote walks (separate collection)
+  (quoteWalks||[]).forEach(w => {
+    const wj = { id: w.id, name: w.name || w.address || w.id };
+    if (w?.createdAt) push(w.createdAt, w.createdBy, wj, "walk", "created", `Quote walk: ${wj.name}`, "#a855f7");
+    if (w?.convertedAt) push(w.convertedAt, w.convertedBy, wj, "walk", "converted", `Quote walk → job: ${wj.name}`, "#16a34a");
+  });
+  // 58, 59 — Suggestions (separate collection)
+  (suggestions||[]).forEach(s => {
+    if (s?.submittedAt) push(s.submittedAt, s.submittedBy, null, "suggestion", "submitted", `Suggestion: ${(s.text||"").slice(0,60)}`, "#7c3aed");
+    if (s?.updatedAt && s.status && s.status !== "new") push(s.updatedAt, s.updatedBy||identity?.name||"", null, "suggestion", s.status, `Suggestion → ${s.status}`, "#7c3aed");
+  });
+
+  // Sort newest first, slice for feed, filter by today for everything else.
+  ev.sort((a,b) => b.at.getTime() - a.at.getTime());
+  const eventsToday = ev.filter(e => e.at >= startOfToday);
+
   // ── Job sets ──
-  const allJobs    = jobs || [];
   const activeJobs = allJobs.filter(j => (j.finishStatus || "") !== "complete");
   const touchedToday = allJobs.filter(j => { const d = toDate(j.lastActivityAt); return d && d >= startOfToday; });
   const foremenOnAppToday = [...new Set(touchedToday.map(j => j._saved_by).filter(Boolean))];
@@ -36136,7 +36356,30 @@ function Today({ jobs, users=[], identity, onSelectJob }) {
   const naRow    = (bg, text) => ({...rowStyle, background:bg, color:text});
 
   // Combined Needs Attention count (drives the header pill)
-  const needsCount = jobsWithFailedInspection.length + staleJobs.length + jobsWithUnassignedPunches.length + jobsWithCOsMissingQuote.length;
+  // NOTE: Unassigned punch items intentionally NOT counted here — Koy moved
+  // that triage out of Today; it lives on the Punch tab where it belongs.
+  const needsCount = jobsWithFailedInspection.length + staleJobs.length + jobsWithCOsMissingQuote.length;
+
+  // ── Per-person pulser (P1) ──
+  // One card per person who did something today. Pulls from eventsToday.who.
+  // Groups by lowercase first+last name; falls back to whatever name the
+  // record carried. Shows top action counts so Koy can see at a glance what
+  // each lead/crew member moved today.
+  const personMap = new Map();
+  eventsToday.forEach(e => {
+    const raw = (e.who || "").trim();
+    if (!raw) return;
+    const key = raw.toLowerCase();
+    if (!personMap.has(key)) personMap.set(key, { name: raw, lastSeen: e.at, events: [], counts: {} });
+    const p = personMap.get(key);
+    p.events.push(e);
+    if (e.at > p.lastSeen) p.lastSeen = e.at;
+    p.counts[e.type] = (p.counts[e.type] || 0) + 1;
+  });
+  const people = Array.from(personMap.values()).sort((a,b) => b.events.length - a.events.length);
+
+  // ── Type filter for Live Activity ──
+  // Filter pills below the feed header. "all" shows everything.
 
   return (
     <div style={{padding:"16px 20px", maxWidth: 1240, margin:"0 auto"}}>
@@ -36223,17 +36466,6 @@ function Today({ jobs, users=[], identity, onSelectJob }) {
           );
         })}
 
-        {/* Unassigned punch items — amber */}
-        {jobsWithUnassignedPunches.slice(0,5).map(({job:j, count}) => (
-          <div key={`up-${j.id}`} style={{...rowStyle, background:"#fef3c7", marginBottom:6}} onClick={() => onSelectJob && onSelectJob(j)}>
-            <Icon name="user" size={14} stroke={2} color="#a16207"/>
-            <div style={{flex:1,fontSize:13,color:"#78350f"}}>
-              <b>{count} unassigned punch item{count===1?"":"s"}</b> · {j.name || j.id}
-            </div>
-            <span style={{fontSize:11,color:"#92400e"}}>amber</span>
-          </div>
-        ))}
-
         {/* COs missing quote # — neutral */}
         {jobsWithCOsMissingQuote.slice(0,5).map(({job:j, count}) => (
           <div key={`coq-${j.id}`} style={{...rowStyle, background:C.bg, marginBottom:6}} onClick={() => onSelectJob && onSelectJob(j)}>
@@ -36249,26 +36481,97 @@ function Today({ jobs, users=[], identity, onSelectJob }) {
       {/* Two-column: live activity (left) + jobs today (right) */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(280px,1fr))",gap:12}}>
 
-        {/* Live activity feed */}
+        {/* Live activity feed — typed events, filter pills, 50-newest with show-more */}
         <div style={card}>
           <div style={sectionTitle}>
             <Icon name="zap" size={14} stroke={2}/> Live activity
+            <span style={{marginLeft:"auto",fontSize:11,fontWeight:400,color:C.dim,textTransform:"none",letterSpacing:0}}>{eventsToday.length} today</span>
           </div>
-          {byActivityDesc.filter(j => toDate(j.lastActivityAt)).slice(0,14).map(j => {
-            const d = toDate(j.lastActivityAt);
-            const isToday = d && d >= startOfToday;
+          {/* Filter pills */}
+          <div style={{display:"flex",gap:4,flexWrap:"wrap",marginBottom:8}}>
+            {(() => {
+              // Build counts per type from eventsToday so empty types are hidden.
+              const counts = { all: eventsToday.length };
+              eventsToday.forEach(e => { counts[e.type] = (counts[e.type]||0) + 1; });
+              const order = [
+                { k:"all",        label:"All" },
+                { k:"punch",      label:"Punch" },
+                { k:"co",         label:"COs" },
+                { k:"rt",         label:"RTs" },
+                { k:"inspection", label:"Inspections" },
+                { k:"photo",      label:"Photos" },
+                { k:"daily",      label:"Daily" },
+                { k:"status",     label:"Status" },
+                { k:"po",         label:"POs" },
+                { k:"question",   label:"Q&A" },
+                { k:"note",       label:"Notes" },
+                { k:"savant",     label:"Savant" },
+                { k:"homerun",    label:"Home runs" },
+                { k:"call",       label:"Calls" },
+                { k:"task",       label:"Tasks" },
+                { k:"walk",       label:"Walks" },
+                { k:"suggestion", label:"Ideas" },
+                { k:"presence",   label:"Presence" },
+                { k:"lifecycle",  label:"Lifecycle" },
+              ];
+              return order.filter(o => o.k === "all" || counts[o.k] > 0).map(o => {
+                const active = feedFilter === o.k;
+                return (
+                  <button key={o.k} onClick={() => setFilter(o.k)}
+                    style={{
+                      fontSize:11, padding:"3px 8px", borderRadius:99,
+                      background: active ? C.text : C.bg,
+                      color: active ? "#fff" : C.dim,
+                      border:`1px solid ${active ? C.text : C.border}`,
+                      cursor:"pointer", fontFamily:"inherit", fontWeight:600,
+                    }}>
+                    {o.label} {counts[o.k] || 0}
+                  </button>
+                );
+              });
+            })()}
+          </div>
+          {/* Feed rows */}
+          {(() => {
+            const filtered = feedFilter === "all" ? eventsToday : eventsToday.filter(e => e.type === feedFilter);
+            if (filtered.length === 0) {
+              return <div style={{fontSize:13,color:C.dim,padding:"8px 10px"}}>{eventsToday.length === 0 ? "No activity yet today." : "Nothing in this category today."}</div>;
+            }
+            const cap = feedExpanded ? filtered.length : 50;
+            const rows = filtered.slice(0, cap);
             return (
-              <div key={j.id} style={{...rowStyle, padding:"6px 8px"}} onClick={() => onSelectJob && onSelectJob(j)}>
-                <span style={{fontSize:11,color:C.muted,minWidth:54}}>{isToday ? fmtTime(d) : fmtDay(d)}</span>
-                <div style={{flex:1,fontSize:13,color:C.text}}>
-                  <b>{j._saved_by || "someone"}</b> touched <span style={{color:C.blue}}>{j.name || j.id}</span>
-                </div>
-              </div>
+              <>
+                {rows.map((e, idx) => {
+                  const j = e.jobId ? allJobs.find(x => x.id === e.jobId) : null;
+                  return (
+                    <div key={`ev-${idx}`} style={{...rowStyle, padding:"6px 8px", borderBottom:`1px solid ${C.border}`}}
+                      onClick={() => j && onSelectJob && onSelectJob(j)}>
+                      <span style={{width:6,height:6,borderRadius:99,background:e.color||C.muted,flexShrink:0}}/>
+                      <span style={{fontSize:11,color:C.muted,minWidth:54}}>{fmtTime(e.at)}</span>
+                      <div style={{flex:1,fontSize:13,color:C.text,lineHeight:1.35}}>
+                        {e.who && <b>{(e.who||"").split(/\s+/)[0]}</b>}{e.who?" · ":""}
+                        <span style={{color:C.text}}>{e.label}</span>
+                        {e.jobName && <span style={{color:C.blue}}> · {e.jobName}</span>}
+                        {e.detail && <div style={{fontSize:11,color:C.dim,marginTop:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{e.detail}</div>}
+                      </div>
+                    </div>
+                  );
+                })}
+                {filtered.length > cap && (
+                  <button onClick={() => setFeedExpanded(true)}
+                    style={{marginTop:8,width:"100%",padding:"6px 8px",fontSize:12,color:C.dim,background:C.bg,border:`1px solid ${C.border}`,borderRadius:6,cursor:"pointer",fontFamily:"inherit"}}>
+                    Show {filtered.length - cap} more →
+                  </button>
+                )}
+                {feedExpanded && filtered.length > 50 && (
+                  <button onClick={() => setFeedExpanded(false)}
+                    style={{marginTop:8,width:"100%",padding:"6px 8px",fontSize:12,color:C.dim,background:"transparent",border:`1px solid ${C.border}`,borderRadius:6,cursor:"pointer",fontFamily:"inherit"}}>
+                    Collapse
+                  </button>
+                )}
+              </>
             );
-          })}
-          {byActivityDesc.filter(j => toDate(j.lastActivityAt)).length === 0 && (
-            <div style={{fontSize:13,color:C.dim,padding:"8px 10px"}}>No activity logged yet — once the new lastActivityAt field starts populating, recent saves will appear here.</div>
-          )}
+          })()}
         </div>
 
         {/* Jobs today */}
@@ -36305,6 +36608,58 @@ function Today({ jobs, users=[], identity, onSelectJob }) {
           })}
         </div>
 
+      </div>
+
+      {/* Per-person pulser (P1) — every lead/crew/foreman who did anything today.
+          One card per person with action tallies + their last 3 events.
+          This is more granular than the foreman heartbeat below — heartbeat
+          rolls up by foreman, pulser shows EVERY person on the app. */}
+      <div style={{...card, marginTop: 12}}>
+        <div style={sectionTitle}>
+          <Icon name="users" size={14} stroke={2}/> Per-person pulser
+          <span style={{marginLeft:"auto",fontSize:11,fontWeight:400,color:C.dim,textTransform:"none",letterSpacing:0}}>{people.length} active today</span>
+        </div>
+        {people.length === 0 ? (
+          <div style={{fontSize:13,color:C.dim,padding:"8px 10px"}}>No one has done anything yet today.</div>
+        ) : (
+          <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(220px,1fr))",gap:8}}>
+            {people.map(p => {
+              // Build a short tally string. Pick the top 3 event types by count.
+              const tallyKeys = Object.entries(p.counts).sort((a,b) => b[1]-a[1]).slice(0,4);
+              const tallyLabels = {
+                punch:"punch", co:"CO", rt:"RT", inspection:"insp", photo:"photo", daily:"daily",
+                status:"status", po:"PO", question:"Q", note:"note", savant:"savant", homerun:"home run",
+                call:"call", task:"task", walk:"walk", suggestion:"idea", presence:"visit", lifecycle:"life",
+              };
+              return (
+                <div key={p.name} style={{background:C.bg,borderRadius:8,padding:"10px 12px"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                    <span style={{width:8,height:8,borderRadius:99,background:C.green,display:"inline-block",flexShrink:0}}/>
+                    <span style={{fontSize:13,fontWeight:600,color:C.text}}>{p.name}</span>
+                    <span style={{marginLeft:"auto",fontSize:11,color:C.dim}}>{p.events.length}</span>
+                  </div>
+                  <div style={{fontSize:11,color:C.dim,marginBottom:6}}>last action {fmtTime(p.lastSeen)}</div>
+                  <div style={{fontSize:11,color:C.dim,display:"flex",gap:6,flexWrap:"wrap",marginBottom:6}}>
+                    {tallyKeys.map(([k,v]) => (
+                      <span key={k} style={{padding:"1px 6px",borderRadius:99,background:C.card,border:`1px solid ${C.border}`}}>
+                        {v} {tallyLabels[k]||k}{v>1?"s":""}
+                      </span>
+                    ))}
+                  </div>
+                  <div style={{fontSize:11,color:C.muted,borderTop:`1px solid ${C.border}`,paddingTop:6}}>
+                    {p.events.slice(0,3).map((e,i) => (
+                      <div key={i} style={{whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",lineHeight:1.5}}
+                        title={e.label + (e.jobName?` · ${e.jobName}`:"")}>
+                        <span style={{color:C.muted}}>{fmtTime(e.at)}</span> · {e.label}
+                        {e.jobName && <span style={{color:C.blue}}> · {e.jobName}</span>}
+                      </div>
+                    ))}
+                  </div>
+                </div>
+              );
+            })}
+          </div>
+        )}
       </div>
 
       {/* Foreman heartbeat (V2) — one card per foreman with status dot + tally */}
@@ -44727,6 +45082,12 @@ function App() {
   // Loaded from /quoteWalks Firestore collection. Separate state from jobs
   // because the lifecycles are independent.
   const [quoteWalks, setQuoteWalks] = useState([]);
+  // Top-level suggestions subscription — feeds the Today tab's Live Activity
+  // events 58/59. AppMapSharePage maintains its own separate subscription for
+  // the inbox UI; this one is intentionally duplicated rather than lifted to
+  // avoid touching that component's gating logic. Cost: one extra listener
+  // on a tiny collection (~few docs). Read-allowed for everyone per rules.
+  const [appSuggestions, setAppSuggestions] = useState([]);
   const [selectedQuoteWalk, setSelectedQuoteWalk] = useState(null);
   // Simpro inbox — pending Simpro jobs not yet imported into the app.
   // Populated by the scheduledSimproCandidateRefresh cloud function (every
@@ -44962,6 +45323,14 @@ function App() {
       (err) => { console.error("Quote walks snapshot error:", err); }
     );
 
+    // Suggestions feed (for Today tab event stream) — read-only listener.
+    // Docs are flat (no `data` envelope) since suggestions are written directly
+    // with the fields at the top level by the App Map share form.
+    const unsubSuggestions = onSnapshot(collection(db,"suggestions"),
+      (snap) => { setAppSuggestions(snap.docs.map(d => ({ id:d.id, ...d.data() }))); },
+      (err) => { console.error("Suggestions snapshot error:", err); }
+    );
+
     // Force-reload: watch config/app for version changes AFTER initial load
     let firstVersionSeen = null;
     const unsubVersion = onSnapshot(doc(db,"config","app"), (snap) => {
@@ -44975,7 +45344,7 @@ function App() {
       }
     }, ()=>{});
 
-    return () => { unsub(); unsubUpcoming(); unsubSimproCands(); unsubTasks(); unsubQuoteWalks(); unsubVersion(); }; // cleanup on unmount
+    return () => { unsub(); unsubUpcoming(); unsubSimproCands(); unsubTasks(); unsubQuoteWalks(); unsubSuggestions(); unsubVersion(); }; // cleanup on unmount
 
   },[]);
 
@@ -47687,7 +48056,7 @@ function App() {
       )}
 
       {view==="today"&&can(identity,"today.view")&&(
-        <Today jobs={jobs} users={users} identity={identity} onSelectJob={setSelected}/>
+        <Today jobs={jobs} users={users} manualTasks={manualTasks} quoteWalks={quoteWalks} suggestions={appSuggestions} identity={identity} onSelectJob={setSelected}/>
       )}
 
       {view==="appmap"&&(
