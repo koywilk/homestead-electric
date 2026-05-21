@@ -42026,11 +42026,10 @@ function AppMapSharePage({ identity = null } = {}) {
     }
     return out;
   }, [sections]);
-  // Start with first 3 expanded, rest collapsed
+  // Start with ALL sections collapsed — page is primarily about the suggest
+  // form + inbox; tree is reference material people expand when they want it.
   useEffect(() => {
-    const c = new Set();
-    sections.forEach((s, i) => { if (i >= 3) c.add(s.title); });
-    setCollapsed(c);
+    setCollapsed(new Set(sections.map(s => s.title)));
   }, [sections]);
   const q = search.trim().toLowerCase();
   const matchesItem = (it) => {
@@ -42070,47 +42069,10 @@ function AppMapSharePage({ identity = null } = {}) {
         </div>
       </header>
       <main style={{padding:"12px 18px 60px", maxWidth:1100, margin:"0 auto"}}>
-        <div style={{fontSize:11, color:C.dim, padding:"10px 0 14px", borderBottom:`1px dashed ${C.border}`, marginBottom:14}}>
-          Every feature in the Homestead Electric app, organized by area. Click a section to expand. Search filters across the whole tree.
-        </div>
-        {sections.map(section => {
-          const visibleItems = section.items.filter(matchesItem);
-          if (q && visibleItems.length === 0) return null;
-          const isCollapsed = collapsed.has(section.title);
-          return (
-            <div key={section.title} style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:10, marginBottom:10, overflow:"hidden"}}>
-              <div onClick={() => toggle(section.title)} style={{display:"flex", alignItems:"center", gap:10, padding:"12px 14px", cursor:"pointer", userSelect:"none"}}>
-                <span style={{fontSize:14, fontWeight:600, flex:1, letterSpacing:"-0.005em"}}>{section.title}</span>
-                <span style={{fontSize:12, color:C.muted, fontWeight:400}}>{visibleItems.length}{visibleItems.length !== section.items.length ? `/${section.items.length}` : ""}</span>
-                <span style={{color:C.dim, transform: isCollapsed ? "rotate(-90deg)" : "rotate(0)", transition:"transform 0.15s"}}>▾</span>
-              </div>
-              {!isCollapsed && (
-                <div style={{padding:"0 14px 12px 14px", borderTop:`1px solid ${C.border}`}}>
-                  {visibleItems.map((it, i) => (
-                    <div key={it.name+i} style={{padding:"8px 0", borderBottom: i < visibleItems.length-1 ? `1px solid ${C.border}` : "none"}}>
-                      <div style={{display:"flex", flexWrap:"wrap", alignItems:"center", gap:6}}>
-                        <span style={{fontWeight:500}}>{it.name}</span>
-                        {it.status && <span style={badgeStyle(it.status)}>{it.status}</span>}
-                        {it.date && <span style={metaBadge}>{it.date}</span>}
-                        {it.sw && <span style={{...metaBadge, fontFamily:"ui-monospace, monospace", fontSize:10}}>{it.sw}</span>}
-                      </div>
-                      {it.desc && <div style={{color:C.dim, fontSize:13, marginTop:2}}>{it.desc}</div>}
-                      {it.subs && it.subs.length > 0 && (
-                        <div style={{marginTop:6, paddingLeft:18, borderLeft:`2px solid ${C.border}`}}>
-                          {it.subs.map((s, j) => <div key={j} style={{fontSize:12.5, color:C.dim, padding:"2px 0"}}>{s}</div>)}
-                        </div>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          );
-        })}
 
-        {/* Suggestion form — in-app only (hidden on public share URL) */}
+        {/* Suggestion form — top of page, in-app only (hidden on public share URL) */}
         {isInApp && (
-          <div style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:"14px 16px", marginTop:18}}>
+          <div style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:"14px 16px", marginBottom:12}}>
             <div style={{fontSize:14, fontWeight:600, marginBottom:6}}>Suggest a feature</div>
             <div style={{fontSize:12, color:C.dim, marginBottom:10}}>
               Idea, bug, or improvement? Type it below. Koy reviews these and decides what to build next.
@@ -42154,9 +42116,9 @@ function AppMapSharePage({ identity = null } = {}) {
           </div>
         )}
 
-        {/* Admin inbox — triage controls */}
+        {/* Admin inbox — triage controls, also at top */}
         {isInApp && canTriage && (
-          <div style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:"14px 16px", marginTop:12}}>
+          <div style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:10, padding:"14px 16px", marginBottom:12}}>
             <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:10, flexWrap:"wrap"}}>
               <span style={{fontSize:14, fontWeight:600}}>Suggestion inbox</span>
               <span style={{fontSize:12, color:C.muted}}>{suggestions.length} total</span>
@@ -42223,6 +42185,46 @@ function AppMapSharePage({ identity = null } = {}) {
             )}
           </div>
         )}
+
+        {/* Feature tree — reference material, all sections start collapsed */}
+        <div style={{fontSize:12, color:C.dim, padding:"4px 0 10px", marginBottom:6}}>
+          {isInApp ? "Every feature in the app, by area — click a section to expand." : "Every feature in the Homestead Electric app. Click a section to expand."}
+        </div>
+        {sections.map(section => {
+          const visibleItems = section.items.filter(matchesItem);
+          if (q && visibleItems.length === 0) return null;
+          const isCollapsed = collapsed.has(section.title);
+          return (
+            <div key={section.title} style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:10, marginBottom:10, overflow:"hidden"}}>
+              <div onClick={() => toggle(section.title)} style={{display:"flex", alignItems:"center", gap:10, padding:"12px 14px", cursor:"pointer", userSelect:"none"}}>
+                <span style={{fontSize:14, fontWeight:600, flex:1, letterSpacing:"-0.005em"}}>{section.title}</span>
+                <span style={{fontSize:12, color:C.muted, fontWeight:400}}>{visibleItems.length}{visibleItems.length !== section.items.length ? `/${section.items.length}` : ""}</span>
+                <span style={{color:C.dim, transform: isCollapsed ? "rotate(-90deg)" : "rotate(0)", transition:"transform 0.15s"}}>▾</span>
+              </div>
+              {!isCollapsed && (
+                <div style={{padding:"0 14px 12px 14px", borderTop:`1px solid ${C.border}`}}>
+                  {visibleItems.map((it, i) => (
+                    <div key={it.name+i} style={{padding:"8px 0", borderBottom: i < visibleItems.length-1 ? `1px solid ${C.border}` : "none"}}>
+                      <div style={{display:"flex", flexWrap:"wrap", alignItems:"center", gap:6}}>
+                        <span style={{fontWeight:500}}>{it.name}</span>
+                        {it.status && <span style={badgeStyle(it.status)}>{it.status}</span>}
+                        {it.date && <span style={metaBadge}>{it.date}</span>}
+                        {it.sw && <span style={{...metaBadge, fontFamily:"ui-monospace, monospace", fontSize:10}}>{it.sw}</span>}
+                      </div>
+                      {it.desc && <div style={{color:C.dim, fontSize:13, marginTop:2}}>{it.desc}</div>}
+                      {it.subs && it.subs.length > 0 && (
+                        <div style={{marginTop:6, paddingLeft:18, borderLeft:`2px solid ${C.border}`}}>
+                          {it.subs.map((s, j) => <div key={j} style={{fontSize:12.5, color:C.dim, padding:"2px 0"}}>{s}</div>)}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+
 
         <div style={{fontSize:11, color:C.muted, textAlign:"center", padding:"14px 0"}}>
           {isInApp ? "App Map · always current with the live app" : "Share-only page · always current with the live app · no auth required"}
