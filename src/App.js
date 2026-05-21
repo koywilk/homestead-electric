@@ -23630,7 +23630,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     if (last && (Date.now() - new Date(last).getTime()) < 60*1000) return;
     const nextPresence = { ...(jobRef.current?.presence || {}), [who]: nowIso };
     u({ presence: nextPresence });
-  // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [rawJob?.id]);
 
   // Roster of names that can be assigned to a punch item. Drawn from the
