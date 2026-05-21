@@ -41723,6 +41723,331 @@ function JobNoteSharePage({ param }) {
 //   uses a `sms:` link — the user picks the recipient in Messages, nothing
 //   sends without their tap.
 // ───────────────────────────────────────────────────────────────────────────
+// ── App Map share page ─────────────────────────────────────────────────────
+// Public share view at /?appmap=1 — renders FEATURES.md as a collapsible
+// feature tree for sharing with the crew. Same pattern as the other share
+// pages (HomeRunsSharePage, PunchSharePage, etc.) — no auth required, anyone
+// with the URL can view. Bundled FEATURES.md content keeps it always-current
+// with each Vercel rebuild on push.
+//
+// Why FEATURES.md is bundled inline rather than fetched: keeping it inline
+// means the page works offline + loads instantly + doesn't need a separate
+// HTTP roundtrip. Trade-off is that when FEATURES.md changes in the repo
+// root, this constant also needs updating. The Monday cron task + commit
+// workflow keeps them in sync.
+const FEATURES_MD_INLINE = String.raw`
+## Top-Level Views (Nav Tabs)
+- **Job Board** · shipped · the home screen
+  - Grouped by stage with collapsible sections
+  - Search bar (job name + CO quote number)
+  - Foreman filter via tabs
+  - Stage filter (rough/finish/QC/etc.)
+  - Flag-only toggle
+  - Drag-to-reorder within stage
+- **Today** · shipped 2026-05-21 · SW v180 · cross-job command center (admin/manager/foreman)
+  - Pulse counters (6 metrics)
+  - Needs Attention (failed inspections, stale, unassigned, missing quote #)
+  - Live Activity feed
+  - Jobs Today grid
+  - Foreman Heartbeat row
+  - Photos strip
+- **Safety** · shipped · safety meetings / topics
+- **Forecast** · shipped · upcoming work calendar view
+- **Nav** · shipped · map view of jobs
+- **Upcoming** · shipped · jobs in the pipeline before they're full jobs
+- **Quotes** · shipped · proposed jobs awaiting conversion
+- **Walks** · shipped · quote walks tracking
+- **Tasks** · shipped · cross-job and manual tasks
+- **Huddle** · shipped · weekly team huddle prep
+- **Subcontractors** · shipped · external contractor view
+- **Scoreboard** · shipped · admin-only, behavior-driven scoring (info + quality)
+  - Foreman board
+  - Lead board
+  - Champions view
+  - Drill-down per row
+  - "How it works" panel
+  - Weight editor (admin only)
+- **Settings** · shipped · admin/manager only
+
+## Job Detail
+- **Job Info** · shipped · basics, address, foreman, lead, Simpro #
+  - Status pills with date windows
+  - Finish stage cleanup + scheduled window · shipped 2026-05-17 · SW v173
+  - InProgressModePill (status with date picker)
+- **Up Next panel** · shipped 2026-05-19 · SW v178 · 36-rule engine
+  - Sits between header and tabs
+  - Primary button for literal next action
+  - "▾ N more" expander
+  - Calm fallback when nothing urgent
+  - Snooze per rule
+- **Phase tracking** · shipped · rough / finish / QC phases
+  - Rough phase
+  - Finish phase
+  - QC phase
+- **Punch lists** · shipped · per-phase, per-floor, per-room
+  - Per-phase: rough, finish, QC
+  - Per-floor: upper, main, basement
+  - Per-room (custom names) + general + hotcheck
+  - Punch assignments (assignedTo) · shipped 2026-04-26 · SW v12
+  - Photos attachable per punch item
+  - Convert punch → Return Trip
+  - "Assigned" tab in foreman view (cross-job)
+- **Change Orders** · shipped · CO list with status pipeline
+  - Quote # field + searchable · shipped 2026-05-15 · SW v172
+  - CO photos
+  - Email CO
+  - Chat CO
+  - Send to Simpro
+- **Return Trips** · shipped · per-RT items + photos
+  - Items list per RT
+  - Schedule RT
+  - Photos per RT
+  - Punch items linked to RT (PunchLinker)
+- **Inspections** · shipped
+  - Rough inspection (pass/fail + items)
+  - 4-way inspection (rules 14/15/16)
+  - Final inspection (rules 23/24)
+  - QC walks
+  - Failed inspection → punch items
+- **Photos** · shipped · shared PhotoAttacher widget
+  - Per punch item
+  - Per CO
+  - Per RT
+  - Per inspection
+  - Per Q&A
+- **Daily Updates** · shipped · auto + manual
+  - Auto-roll from closed punches today · shipped 2026-04-26 · SW v12
+  - Manual updates
+  - Email daily update
+- **Job Notes** · in-flight · phase-scoped checklist notes
+  - Phase-scoped (rough/finish/general)
+  - Multi-select promote to: CO, RT, Punch, PO, Call
+  - REPLACES PhaseInstructions UI slot
+- **Open Items** · shipped · unified visits/punch/purchase/calls backend
+- **Phase Instructions** · shipped · legacy slot (being replaced by Job Notes)
+- **Materials** · shipped
+  - Rough materials
+  - Finish materials
+  - Material orders (POs) per phase
+  - Material tally
+  - Add to PO from punch
+- **Q&A** · shipped · rough + finish question sets
+  - Rough questions
+  - Finish questions
+  - GC answer map (for sharing)
+- **Plans tab** · shipped · plans documents per job
+- **Drive Files** · shipped · Drive folder sync + uploads
+- **Home Runs (panels)** · shipped · per-floor home runs + breaker counts
+- **Savant Lighting** · shipped 2026-05-18 · SW v175 · slot-first rebuild
+  - One screen per panel (slot list 1..N)
+  - Tap empty slot to add, tap occupied to edit
+  - Bottom sheet for forms
+  - Tandem feeder breaker support
+- **Homeowner Q&A** · shipped · submit via share link
+- **Status Update inline** · shipped · status note on job header
+- **Bid Items Panel** · shipped · pulls Simpro cost centers
+
+## Sharing & External Pages
+- **Homeowner page** · shipped · /?homeowner=JOB_ID share link
+- **Home Runs share** · shipped · home runs share view
+- **Lighting share** · shipped · lighting share view
+- **Punch share** · shipped · punch list share view
+- **Questions share** · shipped · Q&A share view
+- **Job Note share** · shipped · job note share view
+- **App Map share** · shipped 2026-05-21 · /?appmap=1 — this page
+
+## Cross-Job Tools
+- **Tasks** · shipped · manual tasks + per-foreman filter
+- **Crew Planner V2** · in-flight · compact rows + click-cell picker
+  - Compact rows
+  - Click-cell picker
+  - Foreman filter
+  - Simpro-driven pill date
+  - Mon-Fri grid
+- **Scheduling Forecast** · shipped · upcoming work calendar
+- **Bulk Edit Table** · shipped · admin tool for bulk job edits
+- **Huddle Sheet** · shipped · weekly team prep
+- **Quote Walks** · shipped · per-walk detail view
+
+## Office Tools
+- **Settings page** · shipped · admin/manager configuration
+  - Activity log
+  - Notification Doctor
+  - Fleet Notification Health (admin only)
+  - User management
+  - Color overrides
+  - Backup / restore
+- **Huddle config** · shipped · huddle template editor
+- **Scoreboard weights editor** · shipped · admin only
+
+## Infrastructure
+- **Service Worker** · shipped · network-first cache, version bumps trigger refresh
+- **Firestore offline support** · shipped · persistentLocalCache + multi-tab manager
+- **Push notifications (FCM)** · shipped · per-foreman push
+- **PWA manifest** · shipped · installable on iOS / Android
+- **Backup system** · shipped · localStorage + email + admin restore
+- **Drive sync** · shipped · auto-link Drive folders to jobs
+- **Simpro sync** · shipped · simproCandidates + Simpro import
+- **Activity tracking (lastActivityAt)** · shipped 2026-05-21 · SW v180 · drives Today screen
+- **Smart merge on reconnect** · shipped · resolves offline edits
+- **Debounced save** · shipped · hot path for all job mutations
+- **Force update mechanism** · shipped · push config/app to force fleet refresh
+
+## In-Flight & Planned
+- **Job Notes** · in-flight · phase-scoped checklist notes
+- **Crew Planner V2 polish** · in-flight · since 2026-04-26
+- **Crew Planner → push schedule to Simpro** · planned · real Simpro scheduling source
+- **Crew Planner → pull in all dated events** · planned · inspections, 4-way, QC walks, RTs
+- **External read-only API for coworker** · planned · material-forecasting tool
+- **Scoreboard celebration UI** · planned · pivot from weights to celebration
+
+## Conventions & Rules
+- **No emojis in app UI** · use Icon component
+- **Mobile + desktop parity** · every flow works on both
+- **Features over refactor** · don't propose standalone refactors
+- **Data safety explanation** · every change needs a specific why-this-won't-lose-data line
+- **Complete Firestore rules** · partial deploys have broken prod
+- **Verify before replacing** · never overwrite functions/index.js, rules, or SW from old snapshot
+`;
+
+// Minimal markdown parser tuned to FEATURES_MD_INLINE structure.
+// Returns: [{title, items: [{name, status, date, sw, desc, subs: []}]}, ...]
+function parseAppMapManifest(md) {
+  const lines = String(md || "").split("\n");
+  const sections = [];
+  let curSection = null, curItem = null;
+  for (const raw of lines) {
+    const line = raw.replace(/\s+$/, "");
+    if (!line.trim()) continue;
+    if (line.startsWith("## ")) {
+      curSection = { title: line.slice(3).trim(), items: [] };
+      sections.push(curSection); curItem = null; continue;
+    }
+    const subMatch = line.match(/^\s{2,}-\s+(.+)$/);
+    if (subMatch && curItem) { curItem.subs.push(subMatch[1].trim()); continue; }
+    const itemMatch = line.match(/^-\s+\*\*(.+?)\*\*(.*)$/);
+    if (itemMatch && curSection) {
+      const name = itemMatch[1].trim();
+      const rest = itemMatch[2].trim().replace(/^[·\s]+/, "");
+      const parts = rest.split("·").map(s => s.trim()).filter(Boolean);
+      let status = null, date = null, sw = null;
+      const descParts = [];
+      for (const p of parts) {
+        const lower = p.toLowerCase();
+        if (!status && /^(shipped|in-flight|planned)\b/.test(lower)) {
+          const m = p.match(/^(shipped|in-flight|planned)(?:\s+(\d{4}-\d{2}-\d{2}))?/i);
+          if (m) { status = m[1].toLowerCase(); if (m[2]) date = m[2]; continue; }
+        }
+        if (!sw && /^sw\s+v?\d/i.test(p)) { sw = p.replace(/^SW\s*/i, "").trim(); continue; }
+        descParts.push(p);
+      }
+      curItem = { name, status, date, sw, desc: descParts.join(" · "), subs: [] };
+      curSection.items.push(curItem);
+    }
+  }
+  return sections;
+}
+
+function AppMapSharePage() {
+  const [search, setSearch] = useState("");
+  const [collapsed, setCollapsed] = useState(() => new Set());
+  const sections = useMemo(() => parseAppMapManifest(FEATURES_MD_INLINE), []);
+  const counts = useMemo(() => {
+    const out = { shipped: 0, "in-flight": 0, planned: 0, total: 0 };
+    for (const s of sections) for (const it of s.items) {
+      out.total++; if (it.status && out[it.status] !== undefined) out[it.status]++;
+    }
+    return out;
+  }, [sections]);
+  // Start with first 3 expanded, rest collapsed
+  useEffect(() => {
+    const c = new Set();
+    sections.forEach((s, i) => { if (i >= 3) c.add(s.title); });
+    setCollapsed(c);
+  }, [sections]);
+  const q = search.trim().toLowerCase();
+  const matchesItem = (it) => {
+    if (!q) return true;
+    const hay = [it.name, it.status||"", it.date||"", it.sw||"", it.desc||"", ...(it.subs||[])].join(" ").toLowerCase();
+    return hay.includes(q);
+  };
+  const toggle = (title) => setCollapsed(prev => {
+    const n = new Set(prev); if (n.has(title)) n.delete(title); else n.add(title); return n;
+  });
+  const expandAll  = () => setCollapsed(new Set());
+  const collapseAll= () => setCollapsed(new Set(sections.map(s => s.title)));
+
+  const SHIPPED = { bg:"#ecfdf5", color:"#15803d", border:"#bbf7d0" };
+  const INFLIGHT = { bg:"#fffbeb", color:"#b45309", border:"#fde68a" };
+  const PLANNED = { bg:"#f1f5f9", color:"#475569", border:"#cbd5e1" };
+  const badgeStyle = (status) => {
+    const c = status === "shipped" ? SHIPPED : status === "in-flight" ? INFLIGHT : PLANNED;
+    return { background:c.bg, color:c.color, border:`1px solid ${c.border}`, padding:"1px 8px", borderRadius:99, fontSize:11, fontWeight:500, display:"inline-flex", alignItems:"center", gap:3, whiteSpace:"nowrap" };
+  };
+  const metaBadge = { background:"transparent", color:C.dim, border:`1px solid ${C.border}`, padding:"1px 8px", borderRadius:99, fontSize:11, display:"inline-block", fontVariantNumeric:"tabular-nums", whiteSpace:"nowrap" };
+
+  return (
+    <div style={{minHeight:"100vh", background:C.bg, color:C.text, fontFamily:"-apple-system, BlinkMacSystemFont, 'Inter', 'Segoe UI', Roboto, sans-serif"}}>
+      <header style={{position:"sticky", top:0, zIndex:10, background:C.bg, borderBottom:`1px solid ${C.border}`, padding:"14px 18px"}}>
+        <h1 style={{fontSize:20, fontWeight:600, margin:"0 0 6px 0", letterSpacing:"-0.01em"}}>Homestead Electric — App Map</h1>
+        <div style={{display:"flex", flexWrap:"wrap", gap:10, alignItems:"center", fontSize:12, color:C.dim}}>
+          <span>App SW v181 · {counts.total} features tracked</span>
+          <span style={badgeStyle("shipped")}><span style={{width:6,height:6,borderRadius:99,background:SHIPPED.color,display:"inline-block"}}/>{counts.shipped} shipped</span>
+          <span style={badgeStyle("in-flight")}><span style={{width:6,height:6,borderRadius:99,background:INFLIGHT.color,display:"inline-block"}}/>{counts["in-flight"]} in-flight</span>
+          <span style={badgeStyle("planned")}><span style={{width:6,height:6,borderRadius:99,background:PLANNED.color,display:"inline-block"}}/>{counts.planned} planned</span>
+          <span style={{flex:1}}/>
+          <input type="search" value={search} onChange={e=>setSearch(e.target.value)} placeholder="Filter features…"
+            style={{flex:"0 1 200px", padding:"6px 10px", fontSize:13, border:`1px solid ${C.border}`, borderRadius:6, background:C.card, color:C.text}}/>
+          <button onClick={expandAll}  style={{padding:"6px 12px", fontSize:12, background:C.card, color:C.text, border:`1px solid ${C.border}`, borderRadius:6, cursor:"pointer"}}>Expand all</button>
+          <button onClick={collapseAll} style={{padding:"6px 12px", fontSize:12, background:C.card, color:C.text, border:`1px solid ${C.border}`, borderRadius:6, cursor:"pointer"}}>Collapse all</button>
+        </div>
+      </header>
+      <main style={{padding:"12px 18px 60px", maxWidth:1100, margin:"0 auto"}}>
+        <div style={{fontSize:11, color:C.dim, padding:"10px 0 14px", borderBottom:`1px dashed ${C.border}`, marginBottom:14}}>
+          Every feature in the Homestead Electric app, organized by area. Click a section to expand. Search filters across the whole tree.
+        </div>
+        {sections.map(section => {
+          const visibleItems = section.items.filter(matchesItem);
+          if (q && visibleItems.length === 0) return null;
+          const isCollapsed = collapsed.has(section.title);
+          return (
+            <div key={section.title} style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:10, marginBottom:10, overflow:"hidden"}}>
+              <div onClick={() => toggle(section.title)} style={{display:"flex", alignItems:"center", gap:10, padding:"12px 14px", cursor:"pointer", userSelect:"none"}}>
+                <span style={{fontSize:14, fontWeight:600, flex:1, letterSpacing:"-0.005em"}}>{section.title}</span>
+                <span style={{fontSize:12, color:C.muted, fontWeight:400}}>{visibleItems.length}{visibleItems.length !== section.items.length ? `/${section.items.length}` : ""}</span>
+                <span style={{color:C.dim, transform: isCollapsed ? "rotate(-90deg)" : "rotate(0)", transition:"transform 0.15s"}}>▾</span>
+              </div>
+              {!isCollapsed && (
+                <div style={{padding:"0 14px 12px 14px", borderTop:`1px solid ${C.border}`}}>
+                  {visibleItems.map((it, i) => (
+                    <div key={it.name+i} style={{padding:"8px 0", borderBottom: i < visibleItems.length-1 ? `1px solid ${C.border}` : "none"}}>
+                      <div style={{display:"flex", flexWrap:"wrap", alignItems:"center", gap:6}}>
+                        <span style={{fontWeight:500}}>{it.name}</span>
+                        {it.status && <span style={badgeStyle(it.status)}>{it.status}</span>}
+                        {it.date && <span style={metaBadge}>{it.date}</span>}
+                        {it.sw && <span style={{...metaBadge, fontFamily:"ui-monospace, monospace", fontSize:10}}>{it.sw}</span>}
+                      </div>
+                      {it.desc && <div style={{color:C.dim, fontSize:13, marginTop:2}}>{it.desc}</div>}
+                      {it.subs && it.subs.length > 0 && (
+                        <div style={{marginTop:6, paddingLeft:18, borderLeft:`2px solid ${C.border}`}}>
+                          {it.subs.map((s, j) => <div key={j} style={{fontSize:12.5, color:C.dim, padding:"2px 0"}}>{s}</div>)}
+                        </div>
+                      )}
+                    </div>
+                  ))}
+                </div>
+              )}
+            </div>
+          );
+        })}
+        <div style={{fontSize:11, color:C.muted, textAlign:"center", padding:"14px 0"}}>
+          Share-only page · always current with the live app · no auth required
+        </div>
+      </main>
+    </div>
+  );
+}
+
 function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
   // YMD helper — local date string, no timezone surprises
   const toYMD = (d) => {
@@ -43894,6 +44219,10 @@ function App() {
   // B2 — Job Note share page route — ?jobnote=JOB_ID:NOTE_ID:TOKEN
   const jnParam = new URLSearchParams(window.location.search).get("jobnote");
   if(jnParam) return <JobNoteSharePage param={jnParam}/>;
+
+  // App Map share page route — ?appmap=1 (no job ID, app-wide feature tree)
+  const amParam = new URLSearchParams(window.location.search).get("appmap");
+  if(amParam) return <AppMapSharePage/>;
 
   // ── Identity ──────────────────────────────────────────────────
   const [identity, setIdentity] = useState(()=>getIdentity());
