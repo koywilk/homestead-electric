@@ -983,6 +983,73 @@ async function fetchSimproOnSchedulePids(httpsCallableFn, functionsInstance, for
 function subscribeSimproPids(cb) { _simproPidsListeners.add(cb); return () => _simproPidsListeners.delete(cb); }
 function getCachedSimproPids() { return _simproPidsCache.pids; }
 
+// ── Simpro Job Basics auto-pull ─────────────────────────────────────────────
+// Called from the Job Info forms in QuickJobDetail / TempPedDetail / JobDetail.
+// When the user enters a Simpro Job # and tabs out (or clicks the refresh
+// glyph next to the field), the form fires this, which reads /jobs/{ID} via
+// the getSimproJobBasics Cloud Function and returns
+//   { name, address, siteContactName, siteContactPhone }.
+// The caller fills BLANK fields only — never overwrites typed text — so a
+// foreman who already typed an address won't see it replaced.
+async function fetchSimproJobBasics(simproJobNo) {
+  const sn = String(simproJobNo || "").trim();
+  if (!sn) return null;
+  const fn = httpsCallable(functions, "getSimproJobBasics");
+  const res = await fn({ simproJobNo: sn });
+  return res?.data || null;
+}
+
+// Shared hook for the 3 Job Info forms (QuickJobDetail / TempPedDetail /
+// JobDetail). Takes the jobRef + update function and returns
+//   { simproPulling, doPullSimpro }
+// Behavior:
+//   • onBlur of the Simpro # field fires doPullSimpro() — skipped if the
+//     same # was already pulled (lastPulledSimproRef de-dupe).
+//   • The "Pull" button passes { force: true } so the user can re-fetch
+//     after a typo correction even if the # is already in the de-dupe ref.
+//   • Fill-BLANKS-only — never overwrites typed text. A foreman who already
+//     entered an address won't see it replaced by what Simpro says.
+//   • Maps Simpro → app fields:
+//       Name              → name
+//       Site.Address      → address  (joined string from structured parts)
+//       SiteContact (full) → gc
+//       SiteContact.Phone → phone   (prefers CellPhone, then Phone, then WorkPhone)
+function useSimproAutoPull(jobRef, u) {
+  const [simproPulling, setSimproPulling] = useState(false);
+  const lastPulledSimproRef = useRef("");
+  async function doPullSimpro({ force = false } = {}) {
+    const sn = String(jobRef.current?.simproNo || "").trim();
+    if (!sn) return;
+    if (simproPulling) return;
+    if (!force && lastPulledSimproRef.current === sn) return;
+    setSimproPulling(true);
+    try {
+      const r = await fetchSimproJobBasics(sn);
+      if (!r) { toast.error("Simpro returned nothing"); return; }
+      const cur = jobRef.current || {};
+      const patch = {};
+      if (r.name             && !String(cur.name    || "").trim()) patch.name    = r.name;
+      if (r.address          && !String(cur.address || "").trim()) patch.address = r.address;
+      if (r.siteContactName  && !String(cur.gc      || "").trim()) patch.gc      = r.siteContactName;
+      if (r.siteContactPhone && !String(cur.phone   || "").trim()) patch.phone   = r.siteContactPhone;
+      if (Object.keys(patch).length) {
+        u(patch);
+        toast.success(`Filled from Simpro #${sn}: ${Object.keys(patch).join(", ")}`);
+      } else {
+        toast(`Simpro #${sn} matched, but no blanks left to fill`);
+      }
+      lastPulledSimproRef.current = sn;
+    } catch (e) {
+      console.error("[HE] doPullSimpro failed", e);
+      const msg = (e?.message || "Simpro fetch failed").slice(0, 140);
+      toast.error(`Simpro lookup failed: ${msg}`);
+    } finally {
+      setSimproPulling(false);
+    }
+  }
+  return { simproPulling, doPullSimpro };
+}
+
 const PREP_STAGES   = ['Redline Walk Scheduled','Redline Walk Completed','Redline CO Doc Made','Redline Plans Made','Redline CO Sent','Redline CO Signed','Redline Plans Need to be Updated','Job Prep Complete'];
 const PREP_STAGE_ALERT = 'Redline Plans Need to be Updated';
 const PREP_CHECKLIST_ITEMS = [
@@ -8608,6 +8675,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                   ...i, done: nowDone,
                   checkedBy: nowDone ? (who?.name||"") : "",
                   checkedAt: nowDone ? new Date().toLocaleDateString("en-US") : "",
+                  checkedAtTs: nowDone ? new Date().toISOString() : "",
                   waiting: nowDone ? false : i.waiting,
                 } : i));
               }}
@@ -9510,6 +9578,7 @@ function QCWalkSection({ phase, punch, onChange, jobId, showHotcheck=false, onAl
       ...i, done:!i.done,
       checkedBy: !i.done ? (who?.name||"") : "",
       checkedAt: !i.done ? new Date().toLocaleDateString("en-US") : "",
+      checkedAtTs: !i.done ? new Date().toISOString() : "",
     } : i);
     let newFloor;
     if(roomId==='general')       newFloor = {...floor, general:upd(floor.general)};
@@ -21983,6 +22052,10 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
     onUpdate(updated, patch);
   };
 
+  // Simpro auto-pull: onBlur of Simpro # + manual Pull button fill blank
+  // name/address/gc/phone from Simpro. Never overwrites typed text.
+  const { simproPulling, doPullSimpro } = useSimproAutoPull(jobRef, u);
+
   const [viewPhoto, setViewPhoto] = useState(null);
   const [emailData, setEmailData] = useState(null);
 
@@ -22107,8 +22180,23 @@ function QuickJobDetail({ job: rawJob, onUpdate, onClose, foremenList, leadsList
             <div style={{ display: "grid", gridTemplateColumns: "1fr 1fr", gap: 10, marginBottom: 10 }}>
               {[["name", "Job Name"], ["address", "Address"], ["gc", "General Contractor / Customer"], ["phone", "Phone"], ["simproNo", "Simpro Job #"]].map(([k, l]) => (
                 <div key={k}>
-                  <div style={{ fontSize: 10, color: C.dim, marginBottom: 3 }}>{l}</div>
-                  <Inp value={job[k] || ""} onChange={e => u({ [k]: e.target.value })} placeholder={l} />
+                  <div style={{ fontSize: 10, color: C.dim, marginBottom: 3, display: "flex", alignItems: "center", justifyContent: "space-between", gap: 6 }}>
+                    <span>{l}</span>
+                    {k === "simproNo" && String(job.simproNo || "").trim() && (
+                      <button type="button" onClick={() => doPullSimpro({ force: true })} disabled={simproPulling}
+                        title="Fill blank fields from Simpro (Site address + Site Contact)"
+                        style={{ background: "none", border: "none", padding: "0 4px", margin: 0,
+                          color: simproPulling ? C.muted : C.accent, fontSize: 9, fontWeight: 700,
+                          cursor: simproPulling ? "wait" : "pointer", fontFamily: "inherit",
+                          letterSpacing: "0.05em", textTransform: "uppercase",
+                          display: "inline-flex", alignItems: "center", gap: 3 }}>
+                        {simproPulling ? <Spinner size={9}/> : <Icon name="refresh" size={9}/>}
+                        {simproPulling ? "Pulling…" : "Pull"}
+                      </button>
+                    )}
+                  </div>
+                  <Inp value={job[k] || ""} onChange={e => u({ [k]: e.target.value })} placeholder={l}
+                    onBlur={k === "simproNo" ? () => doPullSimpro() : undefined} />
                 </div>
               ))}
               <div>
@@ -22338,6 +22426,10 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
     onUpdate(updated, patch);
   };
 
+  // Simpro auto-pull: onBlur of Simpro # + manual Pull button fill blank
+  // name/address/gc/phone from Simpro. Never overwrites typed text.
+  const { simproPulling, doPullSimpro } = useSimproAutoPull(jobRef, u);
+
   const [signOffName, setSignOffName] = useState("");
   const [viewPhoto, setViewPhoto] = useState(null);
 
@@ -22467,8 +22559,23 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
               {[["name","Job Name"],["address","Address"],["gc","General Contractor"],["phone","GC Phone"],["simproNo","Simpro Job #"],["lead","Lead"]].map(([k,l])=>(
                 <div key={k}>
-                  <div style={{fontSize:10,color:C.dim,marginBottom:3}}>{l}</div>
-                  <Inp value={job[k]||""} onChange={e=>u({[k]:e.target.value})} placeholder={l}/>
+                  <div style={{fontSize:10,color:C.dim,marginBottom:3,display:"flex",alignItems:"center",justifyContent:"space-between",gap:6}}>
+                    <span>{l}</span>
+                    {k === "simproNo" && String(job.simproNo||"").trim() && (
+                      <button type="button" onClick={()=>doPullSimpro({force:true})} disabled={simproPulling}
+                        title="Fill blank fields from Simpro (Site address + Site Contact)"
+                        style={{background:"none",border:"none",padding:"0 4px",margin:0,
+                          color: simproPulling?C.muted:C.accent, fontSize:9, fontWeight:700,
+                          cursor: simproPulling?"wait":"pointer", fontFamily:"inherit",
+                          letterSpacing:"0.05em", textTransform:"uppercase",
+                          display:"inline-flex", alignItems:"center", gap:3}}>
+                        {simproPulling ? <Spinner size={9}/> : <Icon name="refresh" size={9}/>}
+                        {simproPulling ? "Pulling…" : "Pull"}
+                      </button>
+                    )}
+                  </div>
+                  <Inp value={job[k]||""} onChange={e=>u({[k]:e.target.value})} placeholder={l}
+                    onBlur={k === "simproNo" ? () => doPullSimpro() : undefined}/>
                 </div>
               ))}
               <div>
@@ -24086,7 +24193,10 @@ function UpNextPanel({ job, identity, onAction }) {
     const picking = snoozeFor === rule.id;
     return (
       <div style={{
-        padding: isPrimary ? "12px 22px 14px" : "10px 22px",
+        // Tightened 2026-05-22: was 12/14 primary, 10 secondary — Up Next was
+        // eating too much vertical above the tabs. Compact pass drops outer
+        // padding ~30%, plus tighter line-height + smaller gaps below.
+        padding: isPrimary ? "8px 22px 9px" : "6px 22px",
         background: isPrimary ? (gradients[rule.severity] || gradients.info) : "#fafbfc",
         borderTop: isPrimary ? "none" : `1px solid ${C.border}`,
         position: "relative",
@@ -24097,10 +24207,10 @@ function UpNextPanel({ job, identity, onAction }) {
           title="Snooze this item"
           aria-label="Snooze this item"
           style={{
-            position: "absolute", top: 8, right: 10,
-            width: 22, height: 22, padding: 0,
+            position: "absolute", top: 4, right: 8,
+            width: 20, height: 20, padding: 0,
             border: "none", background: "transparent",
-            color: C.dim, fontSize: 18, lineHeight: 1,
+            color: C.dim, fontSize: 17, lineHeight: 1,
             cursor: "pointer", fontFamily: "inherit",
             borderRadius: 4,
           }}>
@@ -24111,8 +24221,8 @@ function UpNextPanel({ job, identity, onAction }) {
           fontSize: 10, fontWeight: 800,
           color: labelColors[rule.severity] || C.dim,
           letterSpacing: "0.1em", textTransform: "uppercase",
-          marginBottom: 6, display: "flex", alignItems: "center", gap: 6,
-          paddingRight: 24,
+          marginBottom: 3, display: "flex", alignItems: "center", gap: 6,
+          paddingRight: 22,
         }}>
           {isPrimary ? "Up Next" : "Also"}
           {rule.badge && rule.badge(job) && (
@@ -24126,7 +24236,7 @@ function UpNextPanel({ job, identity, onAction }) {
           )}
         </div>
         <div
-          style={{ fontSize: 14, fontWeight: 600, color: C.text, lineHeight: 1.5, marginBottom: 10, paddingRight: 24 }}
+          style={{ fontSize: 14, fontWeight: 600, color: C.text, lineHeight: 1.35, marginBottom: 7, paddingRight: 22 }}
           dangerouslySetInnerHTML={{ __html: rule.summary(job) }}/>
 
         {/* Action row OR snooze picker row */}
@@ -24199,7 +24309,7 @@ function UpNextPanel({ job, identity, onAction }) {
                   key={i}
                   onClick={(e) => { e.stopPropagation(); onAction && onAction(a, rule.id); }}
                   style={{
-                    padding: "8px 13px", borderRadius: 8, fontSize: 11, fontWeight: 700,
+                    padding: "6px 12px", borderRadius: 7, fontSize: 11, fontWeight: 700,
                     cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.04em",
                     border: bd, background: bg, color: fg, textTransform: "uppercase",
                   }}>
@@ -24282,14 +24392,14 @@ function UpNextPanel({ job, identity, onAction }) {
           <div
             onClick={() => setExpanded(v => !v)}
             style={{
-              padding: "8px 22px", background: "#fafbfc",
+              padding: "5px 22px", background: "#fafbfc",
               borderTop: `1px solid ${C.border}`,
-              fontSize: 11, fontWeight: 700, color: C.dim,
+              fontSize: 10, fontWeight: 700, color: C.dim,
               letterSpacing: "0.06em", textTransform: "uppercase",
               cursor: "pointer", userSelect: "none",
               display: "flex", alignItems: "center", gap: 6,
             }}>
-            <span style={{ fontSize: 13 }}>{expanded ? "▾" : "▸"}</span>
+            <span style={{ fontSize: 12 }}>{expanded ? "▾" : "▸"}</span>
             {expanded
               ? `Hide ${moreCount} more`
               : `${moreCount} more item${moreCount===1?"":"s"}${snoozed.length ? ` · ${snoozed.length} snoozed` : ""}`}
@@ -24359,6 +24469,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     setJob(updated);
     onUpdate(updated, finalPatch);
   };
+
+  // Simpro auto-pull: onBlur of Simpro # + manual Pull button fill blank
+  // name/address/gc/phone from Simpro. Never overwrites typed text.
+  const { simproPulling, doPullSimpro } = useSimproAutoPull(jobRef, u);
 
   // ── QC Fail ↔ Return Trip check-off sync ────────────────────────────
   // When a QC walk fails, every open `fromQC` item in roughPunch/finishPunch
@@ -24540,6 +24654,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
         who = ident?.name || "";
         when = new Date().toLocaleDateString("en-US");
       } catch {}
+      const whenTs = new Date().toISOString();
       const nextTrips = (prev.returnTrips||[]).map(rt => {
         let changed = false;
         const newPunch = (rt.punch||[]).map(p => {
@@ -24552,6 +24667,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             done: target,
             checkedBy: target ? (who||p.checkedBy||"") : "",
             checkedAt: target ? (when||p.checkedAt||"") : "",
+            checkedAtTs: target ? whenTs : "",
           };
         });
         return changed ? { ...rt, punch:newPunch } : rt;
@@ -27354,7 +27470,21 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                   <div key={k}>
 
-                    <div style={{fontSize:10,color:C.dim,marginBottom:3}}>{l}</div>
+                    <div style={{fontSize:10,color:C.dim,marginBottom:3,display:"flex",alignItems:"center",justifyContent:"space-between",gap:6}}>
+                      <span>{l}</span>
+                      {k==="simproNo" && String(job.simproNo||"").trim() && (
+                        <button type="button" onClick={()=>doPullSimpro({force:true})} disabled={simproPulling}
+                          title="Fill blank fields from Simpro (Site address + Site Contact)"
+                          style={{background:"none",border:"none",padding:"0 4px",margin:0,
+                            color: simproPulling?C.muted:C.accent, fontSize:9, fontWeight:700,
+                            cursor: simproPulling?"wait":"pointer", fontFamily:"inherit",
+                            letterSpacing:"0.05em", textTransform:"uppercase",
+                            display:"inline-flex", alignItems:"center", gap:3}}>
+                          {simproPulling ? <Spinner size={9}/> : <Icon name="refresh" size={9}/>}
+                          {simproPulling ? "Pulling…" : "Pull"}
+                        </button>
+                      )}
+                    </div>
 
                     {k==="address" ? (
                       <div style={{display:"flex",gap:4,alignItems:"center"}}>
@@ -27362,7 +27492,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         {job.address && <AddressLink address={job.address} style={{fontSize:11,fontWeight:700,color:"#fff",background:"#2563eb",border:"none",borderRadius:7,padding:"7px 12px",cursor:"pointer",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:5,flexShrink:0}}><Icon name="mapPin" size={11} stroke={2.5}/> Maps</AddressLink>}
                       </div>
                     ) : (
-                      <Inp value={job[k]} onChange={e=>u({[k]:e.target.value})} placeholder={l}/>
+                      <Inp value={job[k]} onChange={e=>u({[k]:e.target.value})} placeholder={l}
+                        onBlur={k==="simproNo" ? ()=>doPullSimpro() : undefined}/>
                     )}
 
                   </div>
@@ -36817,11 +36948,20 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
     forEachPunch(j, (item, ctx) => {
       // created — needs item.addedAt
       if (item?.addedAt) push(item.addedAt, item.addedBy, j, "punch", "created", `Punch item added`, "#a16207", _cleanHtml(item.text).slice(0,80));
-      // closed
-      if (item?.done && item?.checkedAt) {
-        // checkedAt is en-US locale date string; we treat as midday so it lands in the right day bucket
-        const checkedDate = new Date(item.checkedAt); if (!isNaN(checkedDate)) checkedDate.setHours(12,0,0,0);
-        push(checkedDate, item.checkedBy, j, "punch", "closed", `Punch closed`, "#16a34a", _cleanHtml(item.text).slice(0,80));
+      // closed — prefer real ISO timestamp (checkedAtTs, added 2026-05-21).
+      // Fall back to midday of checkedAt for items closed BEFORE the field
+      // existed; that still lands them in the right day bucket but they'll
+      // all read "12:00 PM" until they're touched again.
+      if (item?.done && (item?.checkedAtTs || item?.checkedAt)) {
+        const realTs = item.checkedAtTs ? new Date(item.checkedAtTs) : null;
+        let when;
+        if (realTs && !isNaN(realTs)) {
+          when = realTs;
+        } else {
+          when = new Date(item.checkedAt);
+          if (!isNaN(when)) when.setHours(12,0,0,0);
+        }
+        push(when, item.checkedBy, j, "punch", "closed", `Punch closed`, "#16a34a", _cleanHtml(item.text).slice(0,80));
       }
       // due date set
       if (item?.dueDateSetAt) push(item.dueDateSetAt, item.dueDateSetBy||item.assignedBy, j, "punch", "due", `Punch due ${item.dueDate||"date"}`, "#0ea5e9", _cleanHtml(item.text).slice(0,80));
@@ -46834,6 +46974,10 @@ function App() {
     if(!punch) return null;
     const who = (identity?.name) || (getIdentity && getIdentity()?.name) || "";
     const when = new Date().toLocaleDateString("en-US");
+    // Full ISO timestamp for the Today tab's per-person pulser / activity feed.
+    // Coexists with `checkedAt` (date-only locale string) — existing daily-bucket
+    // filters keep using checkedAt; new event timeline uses whenTs for real time.
+    const whenTs = new Date().toISOString();
     let newDone = null;
     const updateItem = (i) => {
       if(!i || i.id !== itemId) return i;
@@ -46843,6 +46987,7 @@ function App() {
         done: newDone,
         checkedBy: newDone ? who : "",
         checkedAt: newDone ? when : "",
+        checkedAtTs: newDone ? whenTs : "",
         waiting: newDone ? false : i.waiting,
       };
     };
@@ -46885,6 +47030,7 @@ function App() {
             done: newDone,
             checkedBy: newDone ? who : "",
             checkedAt: newDone ? when : "",
+            checkedAtTs: newDone ? whenTs : "",
           };
         });
         if(changed) anyRTChanged = true;

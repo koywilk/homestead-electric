@@ -1056,6 +1056,107 @@ exports.getSimproJobFinancials = functions.https.onCall(async (data) => {
   };
 });
 
+// ─── Get Simpro job basics (name / address / site contact) ───────────────────
+// Reads the single-job endpoint and returns the fields the manual Add Job
+// form wants to prefill: name, full street address (joined from Site.Address
+// when structured), and the Site Contact's name + phone.
+//
+// Defensive about field shape — Simpro's SiteContact object varies (some
+// tenants put phones in CellPhone / WorkPhone / Phone). On every run the
+// raw Site / SiteContact / Customer objects are logged so we can verify
+// the exact shape from Koy's tenant and tighten the parser if needed.
+//
+// Data safety: read-only. Never writes to Simpro or Firestore. Returns
+// only the fields needed for prefill plus raw blobs for forward-compat.
+exports.getSimproJobBasics = functions.https.onCall(async (data) => {
+  const { simproJobNo } = data || {};
+  if (!simproJobNo) {
+    throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
+  }
+
+  // /jobs/{ID} returns the full job record including SiteContact + Site.
+  // The list endpoint (/jobs/?ID=...) only returns requested columns and
+  // strips most of what we need.
+  const resp = await fetch(
+    `${SIMPRO_BASE}/jobs/${encodeURIComponent(simproJobNo)}`,
+    { headers: { Authorization: `Bearer ${SIMPRO_TOKEN}` } }
+  );
+  if (resp.status === 404) {
+    throw new functions.https.HttpsError("not-found", `No Simpro job ${simproJobNo}`);
+  }
+  if (!resp.ok) {
+    const body = await resp.text().catch(() => "");
+    throw new functions.https.HttpsError(
+      "internal",
+      `Simpro error: ${resp.status} ${body.slice(0, 200)}`
+    );
+  }
+  const job = await resp.json();
+
+  // Log the raw shape so the exact field names from this tenant are visible
+  // in Cloud Functions logs. Cheap and only fires when the user explicitly
+  // triggers the pull from the Add Job form.
+  functions.logger.info("getSimproJobBasics raw", {
+    simproJobNo,
+    siteKeys:        job.Site        ? Object.keys(job.Site)        : null,
+    siteContactKeys: job.SiteContact ? Object.keys(job.SiteContact) : null,
+    customerKeys:    job.Customer    ? Object.keys(job.Customer)    : null,
+    siteContactSample: job.SiteContact || null,
+  });
+
+  // ── Name: prefer Name, fall back to Description, then a placeholder.
+  const name =
+    (job.Name && String(job.Name).trim()) ||
+    (job.Description && String(job.Description).trim()) ||
+    `Simpro ${simproJobNo}`;
+
+  // ── Address: Simpro returns Site.Address as either a string or a
+  // structured { Address, City, State, PostalCode } object. Mirrors the
+  // existing candidates flow at functions/index.js _runSimproCandidateRefresh.
+  let address = "";
+  if (job.Site) {
+    if (typeof job.Site.Address === "string") {
+      address = job.Site.Address;
+    } else if (job.Site.Address && typeof job.Site.Address === "object") {
+      const a = job.Site.Address;
+      address = [a.Address, a.City, a.State, a.PostalCode].filter(Boolean).join(", ");
+    } else if (job.Site.Name) {
+      address = job.Site.Name;
+    }
+  }
+
+  // ── Site Contact: name + phone. Simpro typically returns
+  //   SiteContact: { ID, GivenName, FamilyName, Phone, CellPhone, WorkPhone, Email }
+  // but the field set varies by tenant. Try every plausible phone field in
+  // priority order — CellPhone is the most useful on a jobsite.
+  let siteContactName = "";
+  let siteContactPhone = "";
+  const sc = job.SiteContact;
+  if (sc && typeof sc === "object") {
+    const parts = [sc.GivenName, sc.FamilyName].filter(Boolean);
+    if (parts.length) siteContactName = parts.join(" ").trim();
+    else if (sc.Name) siteContactName = String(sc.Name).trim();
+    siteContactPhone =
+      (sc.CellPhone && String(sc.CellPhone).trim()) ||
+      (sc.Phone     && String(sc.Phone).trim())     ||
+      (sc.WorkPhone && String(sc.WorkPhone).trim()) ||
+      (sc.Mobile    && String(sc.Mobile).trim())    ||
+      "";
+  }
+
+  return {
+    name,
+    address,
+    siteContactName,
+    siteContactPhone,
+    // Forward-compat: raw blobs so the client can surface extra fields
+    // without a redeploy if Koy decides he wants email or Customer too.
+    _rawSite:        job.Site        || null,
+    _rawSiteContact: job.SiteContact || null,
+    _rawCustomer:    job.Customer    || null,
+  };
+});
+
 // ─── Get Simpro Job Profit/Loss feed (Scoreboard source) ──────────────────────
 // Pulls every Simpro job that's been touched in the requested year-to-date
 // window. Returns the full P/L picture for each + the technician field so the
