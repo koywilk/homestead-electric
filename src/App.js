@@ -1036,7 +1036,7 @@ function useSimproAutoPull(jobRef, u) {
         u(patch);
         toast.success(`Filled from Simpro #${sn}: ${Object.keys(patch).join(", ")}`);
       } else {
-        toast(`Simpro #${sn} matched, but no blanks left to fill`);
+        toast.info(`Simpro #${sn} matched, but no blanks left to fill`);
       }
       lastPulledSimproRef.current = sn;
     } catch (e) {
