@@ -2755,6 +2755,288 @@ ${bigHeader("Last Week's Decisions")}
   });
 
 // ─────────────────────────────────────────────────────────────
+// SCHEDULED — Daily Job Activity Report
+// Fires at midnight America/Chicago. Walks every job, emits an event for
+// every action that landed in the prior calendar day (CT), then uploads a
+// single HTML report to the same Drive folder as the Friday packet.
+// Read-only on jobs — never writes back. Errors notify Koy via FCM.
+// ─────────────────────────────────────────────────────────────
+exports.dailyJobActivityReport = functions
+  .runWith({ memory: "512MB", timeoutSeconds: 300 })
+  .pubsub.schedule("0 0 * * *")
+  .timeZone("America/Chicago")
+  .onRun(async () => {
+    // Compute "yesterday" boundaries in Central time. We fire at 00:00 CT,
+    // so the day that just ended is the report target. Subtract 1ms from
+    // the current CT clock to land in yesterday, then snap to midnight.
+    const ctNowStr = new Date().toLocaleString("en-US", { timeZone: "America/Chicago" });
+    const ctNow = new Date(ctNowStr);
+    const reportDay = new Date(ctNow.getTime() - 1000);
+    const dayStart = new Date(reportDay); dayStart.setHours(0,0,0,0);
+    const dayEnd   = new Date(reportDay); dayEnd.setHours(23,59,59,999);
+    const reportDayLocale = reportDay.toLocaleDateString("en-US");
+
+    // Defensive date parser — handles ISO strings, locale dates, Firestore
+    // Timestamps, numbers, Date instances. Returns null when unparseable so
+    // we never emit fake "now" events for items without real timestamps.
+    const parseAt = (v) => {
+      if (!v) return null;
+      if (typeof v === "object" && typeof v.toDate === "function") return v.toDate();
+      if (v instanceof Date) return v;
+      const d = new Date(v);
+      return isNaN(d) ? null : d;
+    };
+    const inDay = (d) => d && d >= dayStart && d <= dayEnd;
+    const fmtTime = (d) => d.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" });
+
+    // Walk all punch items on a job. Mirrors the client's forEachPunch.
+    const forEachPunch = (job, cb) => {
+      ["roughPunch","finishPunch","qcPunch"].forEach(phaseKey => {
+        const phase = job[phaseKey]; if (!phase) return;
+        ["upper","main","basement"].forEach(floorKey => {
+          const floor = phase[floorKey] || {};
+          (floor.general  || []).forEach(i => cb(i, phaseKey, floorKey, "general"));
+          (floor.hotcheck || []).forEach(i => cb(i, phaseKey, floorKey, "hotcheck"));
+          (floor.rooms    || []).forEach(r => (r.items || []).forEach(i => cb(i, phaseKey, floorKey, r.name)));
+        });
+      });
+      (job.returnTrips || []).forEach(rt => (rt.punch || []).forEach(i => cb(i, "returnTrip", null, rt.id)));
+    };
+
+    // Recursive photo collector — anything with both url + storagePath
+    // strings is a photo. Mirrors the client's collectPhotos helper.
+    const collectPhotos = (obj, out=[]) => {
+      if (!obj || typeof obj !== "object") return out;
+      if (Array.isArray(obj)) { obj.forEach(o => collectPhotos(o, out)); return out; }
+      if (typeof obj.url === "string" && typeof obj.storagePath === "string") { out.push(obj); return out; }
+      Object.values(obj).forEach(v => collectPhotos(v, out));
+      return out;
+    };
+
+    // Load jobs
+    const snap = await db.collection("jobs").get();
+    const jobs = snap.docs
+      .map(d => { const raw = d.data(); return raw?.data ? { id: d.id, ...raw.data, _saved_by: raw.saved_by || "" } : null; })
+      .filter(Boolean);
+
+    // Collect events for the day
+    const events = []; // { at, who, jobId, jobName, type, label, detail }
+    const push = (at, who, job, type, label, detail) => {
+      const d = parseAt(at); if (!inDay(d)) return;
+      events.push({ at: d, who: who || "", jobId: job.id, jobName: job.name || job.id, type, label, detail: detail || "" });
+    };
+
+    jobs.forEach(j => {
+      // Punch closes (real timestamp via checkedAtTs, fallback to checkedAt date string)
+      forEachPunch(j, (item) => {
+        if (item?.done && (item.checkedAtTs || item.checkedAt)) {
+          const real = item.checkedAtTs ? parseAt(item.checkedAtTs) : null;
+          let when;
+          if (real) when = real;
+          else {
+            // Date-only fallback — checkedAt is en-US locale, only emit if it matches reportDayLocale
+            if (item.checkedAt !== reportDayLocale) return;
+            when = new Date(reportDay); when.setHours(12,0,0,0);
+          }
+          push(when, item.checkedBy, j, "punch closed", "Punch closed", _stripHtml(item.text).slice(0,140));
+        }
+      });
+      // Change Orders
+      (j.changeOrders || []).forEach((co, i) => {
+        const tag = `CO #${i+1}${co.quoteNumber ? ` · #${co.quoteNumber}` : ""}`;
+        if (co.createdAt)     push(co.createdAt,    co.createdBy,    j, "CO created",        `${tag} created`,     _stripHtml(co.description||"").slice(0,140));
+        if (co.coStatusDate)  push(co.coStatusDate, co.statusSetBy || co.sentBy || co.approvedBy || co.declinedBy || co.completedBy, j, `CO ${co.coStatus||"updated"}`, `${tag} ${co.coStatus||"updated"}`, "");
+        if (co.quoteAddedAt)  push(co.quoteAddedAt, co.quoteAddedBy, j, "CO quote#",         `${tag} quote # added`, "");
+      });
+      // Return Trips
+      (j.returnTrips || []).forEach((rt, i) => {
+        const tag = `RT #${i+1}`;
+        if (rt.createdAt)     push(rt.createdAt,     rt.createdBy,    j, "RT created",   `${tag} created`,    _stripHtml(rt.scope||"").slice(0,140));
+        if (rt.scheduledDate) push(rt.scheduledDate, rt.scheduledBy,  j, "RT scheduled", `${tag} scheduled`,  "");
+        if (rt.signedOff && rt.signedOffDate) push(rt.signedOffDate, rt.signedOffBy, j, "RT signed off", `${tag} signed off`, "");
+      });
+      // Inspections (rough + finish attempts)
+      (j.roughInspectionAttempts || []).forEach(a => { if (a.date) push(a.date, a.by, j, `Rough inspection ${a.result}`, `Rough inspection ${a.result}`, ""); });
+      (j.finalInspectionAttempts || []).forEach(a => { if (a.date) push(a.date, a.by, j, `Final inspection ${a.result}`, `Final inspection ${a.result}`, ""); });
+      // Photos (any with takenAt/addedAt/uploadedAt in the day)
+      collectPhotos(j).forEach(p => {
+        const t = p.takenAt || p.uploadedAt || p.addedAt;
+        if (t) push(t, p.uploadedBy || p.addedBy, j, "Photo uploaded", "Photo uploaded", p.name || "");
+      });
+      // Daily updates
+      (j.dailyUpdates || []).forEach(d => {
+        const t = d.postedAt || d.date;
+        if (t) push(t, d.author, j, "Daily update", "Daily update", _stripHtml(d.notes||"").slice(0,140));
+      });
+      // Job notes
+      (j.jobNotes || []).forEach(n => {
+        if (n.createdAt) push(n.createdAt, n.createdBy, j, "Note added", `Note added${n.phase ? ` (${n.phase})` : ""}`, _stripHtml(n.title||"").slice(0,140));
+        (n.lines || []).forEach(line => {
+          if (line.checkedAt) push(line.checkedAt, line.checkedBy, j, "Note checked", "Note item checked off", _stripHtml(n.title||"").slice(0,140));
+        });
+      });
+      // Questions
+      const walkQs = (qs, phaseLabel) => {
+        if (!qs) return;
+        ["upper","main","basement"].forEach(floor => {
+          (qs[floor] || []).forEach(q => {
+            if (q.addedAt)    push(q.addedAt,    q.addedBy,                  j, "Question posted",    `${phaseLabel} Q posted`,    _stripHtml(q.question||"").slice(0,140));
+            if (q.answeredAt) push(q.answeredAt, q.answeredBy || q.addedBy,  j, "Question answered",  `${phaseLabel} Q answered`,  _stripHtml(q.answer||"").slice(0,140));
+          });
+        });
+      };
+      walkQs(j.roughQuestions, "Rough");
+      walkQs(j.finishQuestions, "Finish");
+      // Presence
+      Object.entries(j.presence || {}).forEach(([who, lastSeen]) => {
+        push(lastSeen, who, j, "Opened job", `Opened ${j.name || j.id}`, "");
+      });
+      // Status flips (approximate: use j.statusChangedAt if present, else skip)
+      if (j.statusChangedAt) push(j.statusChangedAt, j.statusChangedBy || j._saved_by, j, "Status changed", `Status: ${j.roughStatus || j.finishStatus || "updated"}`, "");
+    });
+
+    // Sort newest first
+    events.sort((a,b) => b.at.getTime() - a.at.getTime());
+
+    // Group by person
+    const byPerson = new Map();
+    events.forEach(e => {
+      const raw = (e.who || "").trim();
+      if (!raw) return;
+      const key = raw.toLowerCase();
+      if (!byPerson.has(key)) byPerson.set(key, { name: raw, events: [], counts: {} });
+      const p = byPerson.get(key);
+      p.events.push(e);
+      p.counts[e.type] = (p.counts[e.type] || 0) + 1;
+    });
+    const people = Array.from(byPerson.values()).sort((a,b) => b.events.length - a.events.length);
+
+    // Group by job
+    const byJob = new Map();
+    events.forEach(e => {
+      if (!e.jobId) return;
+      if (!byJob.has(e.jobId)) byJob.set(e.jobId, { jobId: e.jobId, jobName: e.jobName, events: [] });
+      byJob.get(e.jobId).events.push(e);
+    });
+    const jobGroups = Array.from(byJob.values()).sort((a,b) => b.events.length - a.events.length);
+
+    // Pulse counters
+    const activeJobs = jobs.filter(j => (j.finishStatus || "") !== "complete").length;
+    const foremenOnApp = new Set(events.filter(e => e.who).map(e => e.who.trim().split(/\s+/)[0])).size;
+    const punchesClosed = events.filter(e => e.type === "punch closed").length;
+    const cosAdded      = events.filter(e => e.type === "CO created").length;
+    const photosCount   = events.filter(e => e.type === "Photo uploaded").length;
+    const failedInsp    = events.filter(e => /failed/i.test(e.type)).length;
+
+    // ── Build HTML ────────────────────────────────────────────
+    const dayLabel = reportDay.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric" });
+    const stat = (label, value, color) => `
+      <div style="background:#f9fafb;border-radius:8px;padding:14px 16px;display:inline-block;min-width:130px;margin:0 8px 8px 0;vertical-align:top">
+        <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em">${_esc(label)}</div>
+        <div style="font-size:22px;font-weight:600;color:${color||"#111827"};margin-top:2px">${value}</div>
+      </div>`;
+    const personSection = people.length === 0
+      ? `<div style="color:#9ca3af;font-style:italic;padding:8px 0">No one logged any actions on this date.</div>`
+      : people.map(p => {
+          const top = Object.entries(p.counts).sort((a,b) => b[1]-a[1]).slice(0,6)
+            .map(([k,v]) => `<span style="background:#eef2ff;color:#3730a3;font-size:11px;padding:2px 8px;border-radius:99px;margin-right:4px">${v} ${_esc(k)}</span>`).join("");
+          const rows = p.events.map(e => `
+            <tr>
+              <td style="padding:3px 8px;color:#6b7280;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;vertical-align:top">${fmtTime(e.at)}</td>
+              <td style="padding:3px 8px;font-size:12px;vertical-align:top"><b>${_esc(e.label)}</b>${e.detail ? ` — ${_esc(e.detail)}` : ""}</td>
+              <td style="padding:3px 8px;font-size:12px;color:#2563eb;vertical-align:top">${_esc(e.jobName)}</td>
+            </tr>`).join("");
+          return `
+            <div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px 14px;margin-bottom:10px">
+              <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px;border-bottom:1px solid #f3f4f6;padding-bottom:6px">
+                <div style="font-size:15px;font-weight:600">${_esc(p.name)}</div>
+                <div style="font-size:12px;color:#6b7280">${p.events.length} action${p.events.length===1?"":"s"}</div>
+              </div>
+              <div style="margin-bottom:8px">${top}</div>
+              <table style="width:100%;border-collapse:collapse"><tbody>${rows}</tbody></table>
+            </div>`;
+        }).join("");
+    const jobSection = jobGroups.length === 0
+      ? ""
+      : jobGroups.map(g => {
+          const rows = g.events.map(e => `
+            <tr>
+              <td style="padding:3px 8px;color:#6b7280;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;vertical-align:top">${fmtTime(e.at)}</td>
+              <td style="padding:3px 8px;font-size:12px;color:#374151;vertical-align:top">${e.who ? `<b>${_esc(e.who.split(/\s+/)[0])}</b> · ` : ""}<b>${_esc(e.label)}</b>${e.detail ? ` — ${_esc(e.detail)}` : ""}</td>
+            </tr>`).join("");
+          return `
+            <div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px 14px;margin-bottom:10px">
+              <div style="font-size:14px;font-weight:600;color:#2563eb;margin-bottom:6px;border-bottom:1px solid #f3f4f6;padding-bottom:5px">${_esc(g.jobName)} · ${g.events.length}</div>
+              <table style="width:100%;border-collapse:collapse"><tbody>${rows}</tbody></table>
+            </div>`;
+        }).join("");
+
+    const html = `<!doctype html><html><body style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111827;max-width:900px;margin:0 auto;padding:24px">
+<div style="margin-bottom:18px">
+  <h1 style="font-size:22px;margin:0 0 2px">Daily Job Activity — ${_esc(dayLabel)}</h1>
+  <div style="font-size:12px;color:#6b7280">${events.length} total action${events.length===1?"":"s"} across ${jobGroups.length} job${jobGroups.length===1?"":"s"} · ${people.length} people on the app</div>
+</div>
+<div style="margin-bottom:18px">
+  ${stat("Active jobs", activeJobs)}
+  ${stat("People on app", foremenOnApp)}
+  ${stat("Punches closed", punchesClosed, punchesClosed > 0 ? "#16a34a" : null)}
+  ${stat("COs created", cosAdded, cosAdded > 0 ? "#7c3aed" : null)}
+  ${stat("Photos uploaded", photosCount)}
+  ${stat("Failed inspections", failedInsp, failedInsp > 0 ? "#dc2626" : null)}
+</div>
+<h2 style="font-size:16px;font-weight:600;margin:18px 0 10px;border-bottom:1px solid #e5e7eb;padding-bottom:6px">Per-person activity</h2>
+${personSection}
+<h2 style="font-size:16px;font-weight:600;margin:18px 0 10px;border-bottom:1px solid #e5e7eb;padding-bottom:6px">Per-job activity</h2>
+${jobSection || `<div style="color:#9ca3af;font-style:italic;padding:8px 0">No job activity logged on this date.</div>`}
+<div style="margin-top:32px;padding-top:14px;border-top:1px solid #e5e7eb;color:#9ca3af;font-size:11px">Generated ${new Date().toLocaleString("en-US", { timeZone: "America/Chicago", dateStyle: "medium", timeStyle: "short" })} CT · Homestead Electric app</div>
+</body></html>`;
+
+    const docTitle = `Daily Job Activity — ${reportDay.toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", year: "numeric" })}`;
+
+    // ── Upload to Drive ───────────────────────────────────────
+    try {
+      if (!PACKET_DRIVE_FOLDER_ID || PACKET_DRIVE_FOLDER_ID === "REPLACE_WITH_FOLDER_ID") {
+        throw new Error("PACKET_DRIVE_FOLDER_ID not configured");
+      }
+      const auth = new google.auth.GoogleAuth({
+        scopes: ["https://www.googleapis.com/auth/drive.file"],
+      });
+      const drive = google.drive({ version: "v3", auth });
+      const createRes = await drive.files.create({
+        requestBody: {
+          name:     docTitle,
+          parents:  [PACKET_DRIVE_FOLDER_ID],
+          mimeType: "application/vnd.google-apps.document",
+        },
+        media: {
+          mimeType: "text/html",
+          body:     html,
+        },
+        fields: "id, webViewLink",
+        supportsAllDrives: true,
+      });
+      functions.logger.info("dailyJobActivityReport uploaded", {
+        docId: createRes.data.id,
+        link: createRes.data.webViewLink,
+        eventCount: events.length,
+        peopleCount: people.length,
+        jobCount: jobGroups.length,
+      });
+    } catch (e) {
+      functions.logger.error("dailyJobActivityReport Drive upload failed", { error: e.message });
+      // Notify Koy on failure so silent breakage gets noticed.
+      try {
+        await sendToName("Koy", {
+          title: "Daily Activity Report Failed",
+          body:  `Drive upload error: ${e.message.slice(0, 120)}`,
+        });
+      } catch {}
+    }
+
+    return null;
+  });
+
+// ─────────────────────────────────────────────────────────────
 // DRIVE — shared helpers for auto-folder-create & nightly sync
 // ─────────────────────────────────────────────────────────────
 
