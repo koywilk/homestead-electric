@@ -24160,6 +24160,13 @@ function UpNextPanel({ job, identity, onAction }) {
   const rules   = getUpNextRules(job);
   const snoozed = getSnoozedUpNextRules(job);
   const [expanded, setExpanded]   = useState(false);
+  // Collapse state for the snoozed-only path (no active rule firing). Default
+  // collapsed so the dismissed/snoozed history doesn't eat half the screen on
+  // mobile. Bug reported 2026-05-23: with no top rule and several dismissed
+  // items, the inline list pushed everything else below the fold. User wanted
+  // to keep the dismissed memory (not CLEAR) but tuck it away. This toggle
+  // gives them that middle state.
+  const [snoozedOpen, setSnoozedOpen] = useState(false);
   const [snoozeFor, setSnoozeFor] = useState(null); // ruleId currently picking
   if (!rules.length && !snoozed.length) return null;
   const top  = rules[0] || null;
@@ -24323,9 +24330,13 @@ function UpNextPanel({ job, identity, onAction }) {
     );
   };
 
-  // Snoozed-but-still-firing rules — compact strip in the expander.
+  // Snoozed-but-still-firing rules — ultra-compact one-line strip.
   // Detects the 9999-12-31 sentinel set by "DISMISS" and shows that row as
   // dismissed (no expiry date, "RESTORE" button) instead of time-based snooze.
+  // Tightened 2026-05-23 from two-line (label above, summary below) to a
+  // single line: [LABEL] [summary truncated] [RESTORE]. Cuts ~half the
+  // vertical space so 5 dismissed rows no longer eat the upper half of a
+  // mobile screen when expanded.
   const renderSnoozedRow = (rule) => {
     const until = job && job.upNextSnoozed && job.upNextSnoozed[rule.id];
     const d = until ? new Date(until) : null;
@@ -24333,61 +24344,67 @@ function UpNextPanel({ job, identity, onAction }) {
     const untilLabel = !isDismissed && d && !isNaN(d) ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
     return (
       <div key={rule.id} style={{
-        padding: "8px 22px",
+        padding: "4px 22px",
         background: isDismissed ? "#fef2f2" : "#fafbfc",
         borderTop: `1px solid ${C.border}`,
-        display: "flex", alignItems: "center", justifyContent: "space-between", gap: 10,
+        display: "flex", alignItems: "center", gap: 8,
       }}>
-        <div style={{ flex: 1, minWidth: 0 }}>
-          <div style={{
-            fontSize: 9, fontWeight: 800,
-            color: isDismissed ? "#b91c1c" : C.dim,
-            letterSpacing: "0.1em", textTransform: "uppercase", marginBottom: 2,
-          }}>
-            {isDismissed ? "Dismissed" : `Snoozed${untilLabel ? ` · until ${untilLabel}` : ""}`}
-          </div>
-          <div
-            style={{ fontSize: 12, color: C.dim, lineHeight: 1.4,
-              overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-            dangerouslySetInnerHTML={{ __html: rule.summary(job) }}/>
-        </div>
+        <span style={{
+          fontSize: 9, fontWeight: 800,
+          color: isDismissed ? "#b91c1c" : C.dim,
+          letterSpacing: "0.08em", textTransform: "uppercase",
+          flexShrink: 0,
+        }}>
+          {isDismissed ? "Dismissed" : `Snoozed${untilLabel ? ` ${untilLabel}` : ""}`}
+        </span>
+        <span
+          style={{ flex: 1, minWidth: 0,
+            fontSize: 12, color: C.dim, lineHeight: 1.3,
+            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
+          dangerouslySetInnerHTML={{ __html: rule.summary(job) }}/>
         <button
           onClick={(e) => {
             e.stopPropagation();
             onAction && onAction({ kind: "unsnoozeRule", payload: { ruleId: rule.id } }, rule.id);
           }}
           style={{
-            padding: "5px 9px", borderRadius: 6, fontSize: 10, fontWeight: 700,
+            padding: "3px 8px", borderRadius: 5, fontSize: 9, fontWeight: 700,
             cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.06em",
             border: `1px solid ${C.border}`, background: "#fff", color: C.text,
             textTransform: "uppercase", flexShrink: 0,
           }}>
-          {isDismissed ? "RESTORE" : "UN-SNOOZE"}
+          {isDismissed ? "Restore" : "Un-snooze"}
         </button>
       </div>
     );
   };
 
-  // Combined total for the expander label (active "also" + snoozed-firing).
-  const moreCount = more.length + snoozed.length;
-
   return (
     <div style={{ borderBottom: `1px solid ${C.border}`, background: "#fff" }}>
       {top && renderCard(top, true)}
-      {/* Only snoozed rules exist (nothing fires actively) — surface them directly */}
+      {/* Only snoozed rules exist (nothing fires actively) — collapsed by
+          default behind a one-line toggle so the dismissed history doesn't
+          dominate the screen. Tap to expand the full list with RESTORE
+          buttons. (Bug fix 2026-05-23.) */}
       {!top && snoozed.length > 0 && (
         <>
-          <div style={{
-            padding: "10px 22px 4px",
-            fontSize: 10, fontWeight: 800, color: C.dim,
-            letterSpacing: "0.1em", textTransform: "uppercase",
-          }}>
-            Snoozed
+          <div
+            onClick={() => setSnoozedOpen(v => !v)}
+            style={{
+              padding: "8px 22px",
+              background: "#fafbfc",
+              fontSize: 10, fontWeight: 800, color: C.dim,
+              letterSpacing: "0.1em", textTransform: "uppercase",
+              cursor: "pointer", userSelect: "none",
+              display: "flex", alignItems: "center", gap: 6,
+            }}>
+            <span style={{ fontSize: 12 }}>{snoozedOpen ? "▾" : "▸"}</span>
+            Snoozed · {snoozed.length} item{snoozed.length === 1 ? "" : "s"}
           </div>
-          {snoozed.map(renderSnoozedRow)}
+          {snoozedOpen && snoozed.map(renderSnoozedRow)}
         </>
       )}
-      {top && moreCount > 0 && (
+      {top && (more.length > 0 || snoozed.length > 0) && (
         <>
           <div
             onClick={() => setExpanded(v => !v)}
@@ -24401,11 +24418,32 @@ function UpNextPanel({ job, identity, onAction }) {
             }}>
             <span style={{ fontSize: 12 }}>{expanded ? "▾" : "▸"}</span>
             {expanded
-              ? `Hide ${moreCount} more`
-              : `${moreCount} more item${moreCount===1?"":"s"}${snoozed.length ? ` · ${snoozed.length} snoozed` : ""}`}
+              ? `Hide details`
+              : `${more.length > 0 ? `${more.length} more item${more.length===1?"":"s"}` : ""}${more.length > 0 && snoozed.length > 0 ? " · " : ""}${snoozed.length > 0 ? `${snoozed.length} snoozed` : ""}`}
           </div>
           {expanded && more.map(r => <div key={r.id}>{renderCard(r, false)}</div>)}
-          {expanded && snoozed.map(renderSnoozedRow)}
+          {/* Snoozed gets its OWN sub-collapse inside the expander so the
+              user isn't hit with the full dismissed history just because
+              they wanted to see one "Also" item. Default collapsed. */}
+          {expanded && snoozed.length > 0 && (
+            <>
+              <div
+                onClick={() => setSnoozedOpen(v => !v)}
+                style={{
+                  padding: "6px 22px",
+                  background: "#fafbfc",
+                  borderTop: `1px solid ${C.border}`,
+                  fontSize: 10, fontWeight: 800, color: C.dim,
+                  letterSpacing: "0.08em", textTransform: "uppercase",
+                  cursor: "pointer", userSelect: "none",
+                  display: "flex", alignItems: "center", gap: 6,
+                }}>
+                <span style={{ fontSize: 12 }}>{snoozedOpen ? "▾" : "▸"}</span>
+                Snoozed · {snoozed.length} item{snoozed.length === 1 ? "" : "s"}
+              </div>
+              {snoozedOpen && snoozed.map(renderSnoozedRow)}
+            </>
+          )}
         </>
       )}
     </div>
