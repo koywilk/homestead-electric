@@ -3090,7 +3090,7 @@ const getNotifDefaults = (title) => {
   return prefs;
 };
 
-function UserManagement({ users, onSave, embedded = false }) {
+function UserManagement({ users, onSave, embedded = false, getPersonColor = null }) {
   const [list,    setList]    = useState(users);
   const [editing, setEditing] = useState(null);
   const [showPin, setShowPin] = useState({});
@@ -3298,28 +3298,53 @@ function UserManagement({ users, onSave, embedded = false }) {
                 </div>
               ) : (
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between"}}>
-                  <div style={{display:"flex",alignItems:"center",gap:12}}>
+                  <div style={{display:"flex",alignItems:"center",gap:12,minWidth:0}}>
                     <div style={{width:36,height:36,borderRadius:"50%",
                       background:`${accessColor[access]||C.dim}22`,
                       display:"flex",alignItems:"center",justifyContent:"center",
-                      fontSize:14,fontWeight:700,color:accessColor[access]||C.dim}}>
+                      fontSize:14,fontWeight:700,color:accessColor[access]||C.dim,flexShrink:0}}>
                       {u.name?u.name[0].toUpperCase():"?"}
                     </div>
-                    <div>
+                    <div style={{minWidth:0}}>
                       <div style={{fontSize:14,fontWeight:600,color:C.text}}>{u.name||"Unnamed"}</div>
-                      <div style={{fontSize:11,color:C.dim,display:"flex",gap:8,alignItems:"center",marginTop:2}}>
+                      <div style={{fontSize:11,color:C.dim,display:"flex",gap:8,
+                        alignItems:"center",marginTop:2,flexWrap:"wrap"}}>
                         <span style={{background:`${accessColor[access]||C.dim}15`,color:accessColor[access]||C.dim,
                           borderRadius:99,padding:"1px 8px",fontSize:10,fontWeight:700}}>
                           {ACCESS_LABELS[access]||access}
                         </span>
                         <span>{TITLE_LABELS[title]||title}</span>
+                        {/* Foreman assignment chip — surfaces who this person's
+                            crew lead is without having to click Edit. Only
+                            shown when foremanId is set (typically crew + lead).
+                            Color matches the foreman, so a glance tells you
+                            which "tribe" this person belongs to. */}
+                        {u.foremanId && (() => {
+                          const fm = list.find(f => f.id === u.foremanId);
+                          if (!fm) return null;
+                          const fmColor = getPersonColor ? getPersonColor(fm.name) : "#6b7280";
+                          const fmFirst = (fm.name||"").split(" ")[0] || fm.name;
+                          return (
+                            <span style={{
+                              display:"inline-flex",alignItems:"center",gap:5,
+                              fontSize:10,fontWeight:700,color:C.text,
+                              background:`${fmColor}1a`,border:`1px solid ${fmColor}66`,
+                              borderRadius:99,padding:"1px 8px",letterSpacing:"0.02em",
+                            }}>
+                              <span style={{width:8,height:8,borderRadius:"50%",
+                                background:fmColor,display:"inline-block",flexShrink:0}}/>
+                              Crew of {fmFirst}
+                            </span>
+                          );
+                        })()}
                         <span style={{color:C.muted}}>PIN: {u.pin?"••••":"not set"}</span>
                       </div>
                     </div>
                   </div>
                   <button onClick={()=>setEditing(u.id)}
                     style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,
-                      color:C.dim,fontSize:12,padding:"6px 14px",cursor:"pointer",fontFamily:"inherit"}}>
+                      color:C.dim,fontSize:12,padding:"6px 14px",cursor:"pointer",
+                      fontFamily:"inherit",flexShrink:0}}>
                     Edit
                   </button>
                 </div>
@@ -41461,12 +41486,56 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
 
       {crewUsers.length>0 && (
         <SettingsSection title={`CREW COLORS (${crewUsers.length})`}>
-          {crewUsers.map(u=>(
-            <SettingsPersonRow key={u.id} user={u}
-              color={getColor(u.name)}
-              colorOptions={COLOR_OPTIONS}
-              onColorChange={col=>setColor(u.name,col)}/>
-          ))}
+          <div style={{fontSize:11,color:"#64748b",marginBottom:10,lineHeight:1.5}}>
+            Crew members assigned to a foreman automatically inherit that
+            foreman's color. To change a crew member's color, change their
+            foreman's color above — or unassign them in Team Members to give
+            them their own.
+          </div>
+          {crewUsers.map(u=>{
+            // If this crew member is assigned to a foreman, render a
+            // read-only "inherited from {foreman}" row so we don't show
+            // a picker that visually does nothing (the picker writes to
+            // colorOverrides[crewName] but getPersonColor now ignores
+            // that override when foremanId is set). Backwards-compatible
+            // for unassigned crew: they still get the editable picker.
+            const foreman = u.foremanId ? users.find(f => f.id === u.foremanId) : null;
+            if (foreman) {
+              const inheritedColor = getColor(foreman.name);
+              const foremanFirst   = (foreman.name||"").split(" ")[0] || foreman.name;
+              return (
+                <div key={u.id} style={{
+                  display:"flex",alignItems:"center",gap:10,padding:"11px 14px",
+                  background:"#f8fafc",borderRadius:10,marginBottom:8,
+                  border:"1px dashed #cbd5e1",borderLeft:`3px solid ${inheritedColor}`,
+                }}>
+                  <div style={{flex:1,display:"flex",alignItems:"center",gap:6,minWidth:0,flexWrap:"wrap"}}>
+                    <span style={{fontSize:14,fontWeight:600,color:"#0f172a",
+                      overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {u.name}
+                    </span>
+                    <span style={{fontSize:10,fontWeight:700,color:"#64748b",
+                      background:"#fff",borderRadius:99,padding:"2px 8px",
+                      border:"1px solid #e2e8f0",letterSpacing:"0.04em"}}>
+                      Crew
+                    </span>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:6,
+                    fontSize:11,color:"#64748b",flexShrink:0}}>
+                    <span style={{width:10,height:10,borderRadius:"50%",
+                      background:inheritedColor,display:"inline-block"}}/>
+                    Inherited from <strong style={{color:"#0f172a"}}>{foremanFirst}</strong>
+                  </div>
+                </div>
+              );
+            }
+            return (
+              <SettingsPersonRow key={u.id} user={u}
+                color={getColor(u.name)}
+                colorOptions={COLOR_OPTIONS}
+                onColorChange={col=>setColor(u.name,col)}/>
+            );
+          })}
         </SettingsSection>
       )}
 
@@ -45995,10 +46064,43 @@ function App() {
     return match || val;
   };
 
-  // Build color map: try full name, then first name
+  // Build color map: foreman-inheritance first, then fall back to direct
+  // colorOverrides (full name → first name → gray).
+  //
+  // Crew-color inheritance (added 2026-05-23): if `name` resolves to a user
+  // who has a `foremanId`, return that foreman's color. This kills the
+  // long-standing divergence where a crew member could be on Justin's crew
+  // (foremanId → Justin) but display in a different color than Justin
+  // because their colorOverride was set independently. Now a crew member's
+  // color always matches their foreman, app-wide, with zero extra clicks.
+  //
+  // Data safety: pure read-side change. The `settings/main.colorOverrides`
+  // doc is untouched — crew rows still have their old override stored, we
+  // just stop reading it when a foremanId is present. Unassigned crew
+  // (no foremanId) and foremen themselves keep their existing behavior.
+  // If a foreman/user lookup fails for any reason, we fall through to the
+  // original colorOverrides path so nothing goes gray unexpectedly.
   const getPersonColor = (name) => {
+    if (name) {
+      const lname = String(name).trim().toLowerCase();
+      const matchedUser = users.find(u => {
+        const un = (u.name||"").toLowerCase();
+        return un === lname
+            || un.startsWith(lname + " ")
+            || (un.split(" ")[0] === lname);
+      });
+      if (matchedUser && matchedUser.foremanId) {
+        const foreman = users.find(u => u.id === matchedUser.foremanId);
+        const fname = foreman && foreman.name;
+        if (fname) {
+          if (_colorOverrides[fname]) return _colorOverrides[fname];
+          const ffirst = fname.split(" ")[0];
+          if (_colorOverrides[ffirst]) return _colorOverrides[ffirst];
+        }
+      }
+    }
     if(_colorOverrides[name]) return _colorOverrides[name];
-    const first = name.split(" ")[0];
+    const first = (name||"").split(" ")[0];
     if(_colorOverrides[first]) return _colorOverrides[first];
     return "#6b7280";
   };
@@ -49098,7 +49200,7 @@ function App() {
           {can(identity,"users.manage")&&(
             <div style={{padding:"0 26px 40px"}}>
               <SettingsSection title="TEAM MEMBERS" defaultOpen={false}>
-                <UserManagement users={users} onSave={saveUsers} embedded={true}/>
+                <UserManagement users={users} onSave={saveUsers} embedded={true} getPersonColor={getPersonColor}/>
               </SettingsSection>
             </div>
           )}
