@@ -41475,12 +41475,55 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
 
       {leadUsers.length>0 && (
         <SettingsSection title={`LEADS COLORS (${leadUsers.length})`}>
-          {leadUsers.map(u=>(
-            <SettingsPersonRow key={u.id} user={u}
-              color={getColor(u.name)}
-              colorOptions={COLOR_OPTIONS}
-              onColorChange={col=>setColor(u.name,col)}/>
-          ))}
+          <div style={{fontSize:11,color:"#64748b",marginBottom:10,lineHeight:1.5}}>
+            Leads assigned to a foreman automatically inherit that foreman's
+            color (same rule as crew). To change an assigned lead's color,
+            change their foreman's color above — or unassign them in Team
+            Members to give them their own.
+          </div>
+          {leadUsers.map(u=>{
+            // Same inheritance logic as crew: a lead with foremanId belongs
+            // to that foreman's tribe and gets their color. Read-only badge
+            // instead of a picker (the picker would write to colorOverrides
+            // but getPersonColor now ignores it when foremanId is set).
+            // Backwards-compatible for unassigned leads.
+            const foreman = u.foremanId ? users.find(f => f.id === u.foremanId) : null;
+            if (foreman) {
+              const inheritedColor = getColor(foreman.name);
+              const foremanFirst   = (foreman.name||"").split(" ")[0] || foreman.name;
+              return (
+                <div key={u.id} style={{
+                  display:"flex",alignItems:"center",gap:10,padding:"11px 14px",
+                  background:"#f8fafc",borderRadius:10,marginBottom:8,
+                  border:"1px dashed #cbd5e1",borderLeft:`3px solid ${inheritedColor}`,
+                }}>
+                  <div style={{flex:1,display:"flex",alignItems:"center",gap:6,minWidth:0,flexWrap:"wrap"}}>
+                    <span style={{fontSize:14,fontWeight:600,color:"#0f172a",
+                      overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {u.name}
+                    </span>
+                    <span style={{fontSize:10,fontWeight:700,color:"#64748b",
+                      background:"#fff",borderRadius:99,padding:"2px 8px",
+                      border:"1px solid #e2e8f0",letterSpacing:"0.04em"}}>
+                      Lead
+                    </span>
+                  </div>
+                  <div style={{display:"flex",alignItems:"center",gap:6,
+                    fontSize:11,color:"#64748b",flexShrink:0}}>
+                    <span style={{width:10,height:10,borderRadius:"50%",
+                      background:inheritedColor,display:"inline-block"}}/>
+                    Inherited from <strong style={{color:"#0f172a"}}>{foremanFirst}</strong>
+                  </div>
+                </div>
+              );
+            }
+            return (
+              <SettingsPersonRow key={u.id} user={u}
+                color={getColor(u.name)}
+                colorOptions={COLOR_OPTIONS}
+                onColorChange={col=>setColor(u.name,col)}/>
+            );
+          })}
         </SettingsSection>
       )}
 
