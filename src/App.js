@@ -4100,6 +4100,40 @@ const RichEditor = ({htmlValue, onHtmlChange, placeholder, autoFocus=false, minR
 const MAT_SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","Other"];
 const stripHtml = (s) => (s||'').replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/\s+/g,' ').trim();
 
+// htmlToText — like stripHtml but PRESERVES line breaks from <br>, </p>,
+// </div>, </li>. Used in copy/share paths (RT chat/email/text, CO chat/email)
+// so the recipient sees the same multi-line structure that's in the app
+// instead of one collapsed blob. stripHtml() above collapses ALL whitespace
+// (including newlines) so it can't be used here.
+const htmlToText = (s) => (s||'')
+  .replace(/<br\s*\/?>/gi, '\n')
+  .replace(/<\/(p|div|li)>/gi, '\n')
+  .replace(/<[^>]+>/g, '')
+  .replace(/&nbsp;/g, ' ')
+  .replace(/&amp;/g, '&')
+  .replace(/&lt;/g, '<')
+  .replace(/&gt;/g, '>')
+  .replace(/&quot;/g, '"')
+  .replace(/&#39;/g, "'")
+  .split('\n')
+  .map(l => l.replace(/\s+$/,'').replace(/^\s+/,''))
+  .filter((line, i, arr) => line || (i > 0 && arr[i-1].trim() !== ''))
+  .join('\n')
+  .trim();
+
+// htmlToLines — split a rich-text HTML string into one trimmed line per
+// item. Used by the Shop PO punchlist so each material line gets its own
+// "found in shop" checkbox. Strips bullet prefixes the user may have typed.
+const htmlToLines = (s) => htmlToText(s)
+  .split('\n')
+  .map(l => l.replace(/^[\s\-•*·]+/, '').trim())
+  .filter(Boolean);
+
+// lineKey — stable identifier for a PO item line. Lowercased, whitespace-
+// collapsed text. If a user edits the line text, its check state resets —
+// acceptable trade-off vs. tracking per-index (which breaks on reorder).
+const lineKey = (s) => (s||'').toLowerCase().replace(/\s+/g, ' ').trim();
+
 const RichMobileSheet = ({initialHtml, initialMaterial='', initialMatSource='', placeholder, onDone, onCancel, addMode, showMaterial=false, onLiveSave, draftKey}) => {
   // ── Draft restore (data-safety belt) ─────────────────────────────────
   // 2026-05-14: a coworker lost a big typed PO list when the page reloaded
@@ -10364,6 +10398,106 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
                   </button>
                 )}
 
+                {/* ── Shop PO punchlist ──────────────────────────────
+                    For Shop-source POs, parse the items textarea into
+                    individual lines and let whoever is walking the shop
+                    tick them off one-by-one. "Copy items still needed"
+                    grabs the unchecked lines as plain text so they can be
+                    pasted into a brand-new PO for whatever supplier covers
+                    the missing pieces.
+
+                    Data: o.foundLines = { [normalizedLineText]: true }.
+                    Editing the items textarea resets check state for any
+                    line whose text changed (intended — that line is now a
+                    different item). Lines that disappear from the textarea
+                    leave stale keys in foundLines, which is harmless. */}
+                {o.source === "Shop" && (() => {
+                  const lines = htmlToLines(o.items);
+                  if (lines.length === 0) return null;
+                  const found = o.foundLines || {};
+                  const isFound = (txt) => !!found[lineKey(txt)];
+                  const missing = lines.filter(l => !isFound(l));
+                  const foundCount = lines.length - missing.length;
+                  const allFound = lines.length > 0 && missing.length === 0;
+                  const toggleLine = (txt) => {
+                    const k = lineKey(txt);
+                    const next = {...found};
+                    if (next[k]) delete next[k]; else next[k] = true;
+                    upd(o.id, { foundLines: next });
+                  };
+                  const copyMissing = async () => {
+                    if (missing.length === 0) {
+                      if (typeof toast !== "undefined" && toast.info) toast.info("Nothing missing — all items found.");
+                      return;
+                    }
+                    try {
+                      await navigator.clipboard.writeText(missing.join("\n"));
+                      if (typeof toast !== "undefined" && toast.success) {
+                        toast.success(`${missing.length} item${missing.length===1?"":"s"} copied — paste into a new PO`);
+                      }
+                    } catch (e) {
+                      console.error("Copy failed:", e);
+                      if (typeof toast !== "undefined" && toast.error) toast.error("Couldn't copy — your browser may have blocked clipboard. Select the list manually.");
+                    }
+                  };
+                  return (
+                    <div style={{
+                      marginTop:10, padding:"10px 12px",
+                      background: allFound ? "#16a34a0a" : "#fff",
+                      border:`1px solid ${allFound ? "#16a34a55" : C.border}`,
+                      borderRadius:9,
+                    }}>
+                      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8,gap:8,flexWrap:"wrap"}}>
+                        <div style={{display:"flex",alignItems:"center",gap:8}}>
+                          <span style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",color:C.dim,textTransform:"uppercase"}}>Pick from shop</span>
+                          <span style={{fontSize:11,fontWeight:700,color: allFound ? "#16a34a" : C.text}}>
+                            {foundCount} of {lines.length} found
+                          </span>
+                        </div>
+                        {missing.length > 0 && (
+                          <button onClick={copyMissing}
+                            style={{background:"#fff",border:`1px solid ${C.accent}`,color:C.accent,
+                              borderRadius:7,padding:"4px 10px",fontSize:10,fontWeight:700,cursor:"pointer",
+                              fontFamily:"inherit",letterSpacing:"0.04em",display:"inline-flex",alignItems:"center",gap:6}}>
+                            <Icon name="copy" size={10} stroke={2.25}/>
+                            COPY {missing.length} STILL NEEDED
+                          </button>
+                        )}
+                      </div>
+                      <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                        {lines.map((txt, idx) => {
+                          const checked = isFound(txt);
+                          return (
+                            <label key={idx} style={{
+                              display:"flex",alignItems:"flex-start",gap:8,
+                              padding:"4px 6px",borderRadius:6,cursor:"pointer",
+                              background: checked ? "transparent" : "#ea580c08",
+                            }}>
+                              <input type="checkbox" checked={checked} onChange={()=>toggleLine(txt)}
+                                style={{accentColor:"#16a34a",width:14,height:14,cursor:"pointer",marginTop:2,flexShrink:0}}/>
+                              <span style={{
+                                fontSize:12,color: checked ? C.muted : C.text,
+                                textDecoration: checked ? "line-through" : "none",
+                                wordBreak:"break-word",lineHeight:1.35,
+                              }}>{txt}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      {allFound && !o.pickedUp && (
+                        <button onClick={()=>{
+                          const who = getIdentity();
+                          upd(o.id,{pickedUp:true,pickedUpBy:who?.name||"",pickedUpAt:new Date().toLocaleDateString("en-US")});
+                        }} style={{marginTop:8,background:"#16a34a",border:"none",color:"#fff",
+                          borderRadius:7,padding:"6px 12px",fontSize:11,fontWeight:700,cursor:"pointer",
+                          fontFamily:"inherit",letterSpacing:"0.04em"}}>
+                          Everything found — mark PO Picked Up
+                        </button>
+                      )}
+                    </div>
+                  );
+                })()}
+
                 {/* ── Status checkboxes ── */}
                 <div style={{display:"flex",gap:16,marginTop:10,flexWrap:"wrap"}}>
                   {o.source==="Shop" ? (<>
@@ -11304,14 +11438,44 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
 
   const crewOnSite = roughStatus==="inprogress" || finishStatus==="inprogress";
 
+  // buildCOShareText — single source of truth for the CO copy/share layout.
+  // Mirrors the in-app CO card: header, status/quote/recipient, then
+  // DESCRIPTION / TASK / MATERIAL sections. htmlToText preserves the
+  // multi-line structure (was getting collapsed by stripHtml previously).
+  const buildCOShareText = (o, i, opts = {}) => {
+    const statusLabel = (() => {
+      const def = (typeof CO_STATUSES_NEW !== "undefined")
+        ? CO_STATUSES_NEW.find(s => s.value === (o.coStatus||""))
+        : null;
+      return def?.label || o.coStatus || "Pending";
+    })();
+    const desc     = htmlToText(o.desc);
+    const task     = htmlToText(o.task);
+    const material = htmlToText(o.material);
+
+    const out = [];
+    out.push(`CHANGE ORDER #${i+1} — ${jobName}`);
+    out.push(`Status:  ${statusLabel}`);
+    if (o.quoteNumber) out.push(`Quote #: ${o.quoteNumber}`);
+    if (o.sendTo)      out.push(`Send to: ${o.sendTo}`);
+    if (opts.includeDate && o.date) out.push(`Date:    ${o.date}`);
+
+    if (desc)     { out.push("", "DESCRIPTION", desc); }
+    if (task)     { out.push("", "TASK", task); }
+    if (material) { out.push("", "MATERIAL", material); }
+    if (o.time)   { out.push("", `ESTIMATED TIME: ${o.time}`); }
+
+    out.push("", "View in app:", "https://homestead-electric.vercel.app/");
+    return out.join("\n");
+  };
+
   const chatCO = (o, i) => {
-    const msg = `Change Order #${i+1} — ${jobName}\n\nDescription: ${stripHtml(o.desc)||"—"}\nTask: ${stripHtml(o.task)||"—"}\nMaterial: ${stripHtml(o.material)||"—"}\nEstimated Time: ${o.time||"—"}\nSend To: ${o.sendTo||"—"}\nStatus: ${o.coStatus||"Pending"}\n\nhttps://homestead-electric.vercel.app/`;
-    openGoogleChat(msg);
+    openGoogleChat(buildCOShareText(o, i));
   };
 
   const emailCO = (o, i) => {
     const subject = `${jobName} — Change Order #${i+1}`;
-    const body = `Change Order #${i+1} — ${jobName}\n\nDate: ${o.date||"—"}\nSend CO To: ${o.sendTo||"—"}\nDescription: ${stripHtml(o.desc)||"—"}\nTask: ${stripHtml(o.task)||"—"}\nMaterial Needed: ${stripHtml(o.material)||"—"}\nEstimated Time: ${o.time||"—"}\nStatus: ${o.coStatus||"Pending"}\n\nPlease review and confirm.\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
+    const body = `${buildCOShareText(o, i, { includeDate: true })}\n\nPlease review and confirm.\n\nThanks`;
     onEmail({subject, body});
   };
 
@@ -11774,22 +11938,52 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
 
   const stripPunchHtml = (html) => (html||"").replace(/<[^>]*>/g,"").replace(/&nbsp;/g," ").replace(/&amp;/g,"&").trim();
 
+  // buildTripShareText — single source of truth for the layout used by
+  // chat/email/text. Mirrors the in-app RT card: header line, then
+  // Scheduled / Assigned, then SCOPE / MATERIAL / WORK TO DO sections.
+  // htmlToText preserves line breaks the user typed instead of collapsing
+  // them into a blob (the complaint from 2026-05-25).
+  const buildTripShareText = (t, i, opts = {}) => {
+    const openPunch = (t.punch||[]).filter(p => !p.done).map(p => stripPunchHtml(p.text)).filter(Boolean);
+    const donePunch = (t.punch||[]).filter(p => p.done).map(p => stripPunchHtml(p.text)).filter(Boolean);
+    const scope    = htmlToText(t.scope);
+    const material = htmlToText(t.material);
+    const photoUrls = opts.includePhotos
+      ? (Array.isArray(t.photos) ? t.photos.map(p => p?.url).filter(Boolean) : [])
+      : [];
+
+    const out = [];
+    out.push(`RETURN TRIP #${i+1} — ${jobName}`);
+    out.push(`Scheduled: ${t.date || "not yet set"}`);
+    out.push(`Assigned:  ${t.assignedTo || "unassigned"}`);
+    if (scope)    { out.push("", "SCOPE", scope); }
+    if (material) { out.push("", "MATERIAL", material); }
+    if (openPunch.length) {
+      out.push("", `WORK TO DO (${openPunch.length} open)`);
+      openPunch.forEach(l => out.push(`• ${l}`));
+    } else {
+      out.push("", "WORK TO DO", "• (no open punch items)");
+    }
+    if (opts.includeDone && donePunch.length) {
+      out.push("", `ALREADY DONE (${donePunch.length})`);
+      donePunch.forEach(l => out.push(`✓ ${l}`));
+    }
+    if (photoUrls.length) {
+      out.push("", `PHOTOS (${photoUrls.length})`);
+      photoUrls.forEach(u => out.push(u));
+    }
+    out.push("", "View in app:", "https://homestead-electric.vercel.app/");
+    return out.join("\n");
+  };
+
   const chatTrip = (t,i) => {
-    const punchOpen = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${stripPunchHtml(p.text)}`).join("\n") || "None";
-    const msg = `Return Trip #${i+1} — ${jobName}\n\nScope of Work: ${stripHtml(t.scope)||"—"}\nMaterial Needed: ${stripHtml(t.material)||"—"}\nOpen Punch Items:\n${punchOpen}\nAssigned To: ${t.assignedTo||"—"}\n\nhttps://homestead-electric.vercel.app/`;
-    openGoogleChat(msg);
+    openGoogleChat(buildTripShareText(t, i));
   };
 
   const emailTrip = (t,i) => {
-
-    const punchLines = (t.punch||[]).filter(p=>!p.done).map(p=>`• ${stripPunchHtml(p.text)}`).join("\n") || "None";
-
     const subject = `${jobName} — Return Trip #${i+1}`;
-
-    const body = `Return Trip #${i+1} — ${jobName}\n\nDate: ${t.date||"—"}\nScope of Work:\n${stripHtml(t.scope)||"—"}\n\nMaterial Needed:\n${stripHtml(t.material)||"—"}\n\nPunch List:\n${punchLines}\n\nThanks\n\nView job board: https://homestead-electric.vercel.app/`;
-
+    const body = buildTripShareText(t, i, { includeDone: true });
     onEmail({subject, body});
-
   };
 
   // Text via the device's native SMS app (sms: URL scheme). Body includes
@@ -11798,24 +11992,9 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
   // taps the link). Closes with a CTA pointing back to the app for full
   // detail (which is also where the photos live in higher resolution).
   const textTrip = (t, i) => {
-    const punchLines = (t.punch||[])
-      .filter(p => !p.done)
-      .map(p => `• ${stripPunchHtml(p.text)}`)
-      .join("\n") || "None";
-    const photos = Array.isArray(t.photos) ? t.photos : [];
-    const photoLines = photos.length > 0
-      ? "\n\nPhotos:\n" + photos.map(p => p?.url).filter(Boolean).join("\n")
-      : "";
-    const lines = [
-      `${jobName} — Return Trip #${i+1}`,
-      "",
-      `Scope: ${stripHtml(t.scope) || "—"}`,
-      t.material ? `Material: ${stripHtml(t.material)}` : null,
-      `Punch:\n${punchLines}`,
-      t.date ? `Schedule by: ${t.date}` : null,
-      t.assignedTo ? `Assigned: ${t.assignedTo}` : null,
-    ].filter(Boolean).join("\n");
-    const body = `${lines}${photoLines}\n\nSee the return trip in the app for more details:\nhttps://homestead-electric.vercel.app/`;
+    // Use the shared layout — same shape as Chat and Email so recipients
+    // get a consistent reading experience regardless of channel.
+    const body = buildTripShareText(t, i, { includePhotos: true });
     // sms:?&body= is the cross-platform format. iOS uses & between body and
     // any other params; Android tolerates both & and ?. Pre-filling the "to"
     // field would require a contact picker we don't have here, so we leave
