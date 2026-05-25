@@ -24200,6 +24200,38 @@ function UpNextPanel({ job, identity, onAction }) {
   const top  = rules[0] || null;
   const more = rules.slice(1);
 
+  // Master panel collapse — Vasa asked for this 2026-05-24. Even with the
+  // compact snoozed rows and sub-collapses, the panel itself still claimed
+  // too much vertical above the tabs on jobs where Up Next was noisy. The
+  // master toggle hides the entire panel down to a single ~22px header
+  // bar, and the state persists PER JOB in localStorage so a job he's
+  // explicitly collapsed stays collapsed every time he reopens it.
+  //
+  // Default state when nothing is in localStorage yet:
+  //   - Top rule firing → expanded (don't hide the urgent thing on first open)
+  //   - Only snoozed remain → collapsed (nothing urgent, get the screen back)
+  //
+  // Data safety: pure UI state. localStorage only — no Firestore writes.
+  const jobId      = job?.id || "";
+  const storageKey = jobId ? `he.upNextOpen.${jobId}` : "";
+  const [panelOpen, setPanelOpen] = useState(() => {
+    if (!storageKey) return !!top;
+    try {
+      const v = localStorage.getItem(storageKey);
+      if (v === "0") return false;
+      if (v === "1") return true;
+    } catch (e) { /* localStorage may be blocked — fall through */ }
+    return !!top;
+  });
+  const togglePanel = () => {
+    setPanelOpen(v => {
+      const next = !v;
+      try { if (storageKey) localStorage.setItem(storageKey, next ? "1" : "0"); }
+      catch (e) { /* ignore */ }
+      return next;
+    });
+  };
+
   // Severity → gradient + label color
   const gradients = {
     urgent:     "linear-gradient(to bottom, #fef2f2, #fff)",
@@ -24407,8 +24439,64 @@ function UpNextPanel({ job, identity, onAction }) {
     );
   };
 
+  // Master-header tint when collapsed — keeps the urgent signal visible
+  // even when the user has tucked the panel away. Mirrors the top card's
+  // severity gradient so red stays red, amber stays amber, etc.
+  const collapsedTint = top
+    ? (top.severity === "urgent"     ? "#fef2f2"
+       : top.severity === "needsInput"? "#fffbeb"
+       : top.severity === "calm"     ? "#f0fdf4"
+       : "#fafbfc")
+    : "#fafbfc";
+  const collapsedAccent = top
+    ? (top.severity === "urgent"     ? "#dc2626"
+       : top.severity === "needsInput"? "#92400e"
+       : top.severity === "calm"     ? "#16a34a"
+       : C.dim)
+    : C.dim;
+
   return (
     <div style={{ borderBottom: `1px solid ${C.border}`, background: "#fff" }}>
+      {/* Master collapse header — always present, click to toggle the entire
+          panel. When collapsed, shows a count summary; when there's an urgent
+          rule firing under the collapse, the header is tinted with that
+          rule's severity color so the user doesn't lose the signal. */}
+      <div
+        onClick={togglePanel}
+        style={{
+          padding: "5px 22px",
+          background: panelOpen ? "#fafbfc" : collapsedTint,
+          fontSize: 10, fontWeight: 800,
+          color: panelOpen ? C.dim : collapsedAccent,
+          letterSpacing: "0.08em", textTransform: "uppercase",
+          cursor: "pointer", userSelect: "none",
+          display: "flex", alignItems: "center", gap: 6,
+          borderBottom: panelOpen ? `1px solid ${C.border}` : "none",
+        }}>
+        <span style={{ fontSize: 12 }}>{panelOpen ? "▾" : "▸"}</span>
+        Up Next
+        {!panelOpen && rules.length > 0 && (
+          <span style={{
+            fontSize: 9, fontWeight: 800, color: collapsedAccent,
+            background: "rgba(255,255,255,0.7)",
+            border: `1px solid ${collapsedAccent}55`,
+            borderRadius: 99, padding: "1px 7px", marginLeft: 2,
+            letterSpacing: "0.04em",
+          }}>
+            {rules.length} firing
+          </span>
+        )}
+        {!panelOpen && snoozed.length > 0 && (
+          <span style={{
+            fontSize: 9, fontWeight: 700, color: C.dim,
+            marginLeft: 2, letterSpacing: "0.04em",
+          }}>
+            · {snoozed.length} snoozed
+          </span>
+        )}
+      </div>
+
+      {panelOpen && (<>
       {top && renderCard(top, true)}
       {/* Only snoozed rules exist (nothing fires actively) — collapsed by
           default behind a one-line toggle so the dismissed history doesn't
@@ -24474,6 +24562,7 @@ function UpNextPanel({ job, identity, onAction }) {
           )}
         </>
       )}
+      </>)}
     </div>
   );
 }
