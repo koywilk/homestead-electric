@@ -2862,6 +2862,9 @@ const PERMISSIONS = {
   // Today command center — office + foreman, NOT lead/crew (explicit, 2026-05-21).
   // standard = foreman per the legacy access mapping above.
   "today.view":             ["admin","manager","standard"],
+  // Change Order tracker — office only. Jeromy sends most COs and needs
+  // one place to see every CO's status across every job (added 2026-05-24).
+  "cos.view":               ["admin","manager"],
 };
 
 // Resolve access level from user object (supports legacy role-only users)
@@ -45849,6 +45852,403 @@ function Field({ label, children }) {
   );
 }
 
+// ── Change Order Tracker ─────────────────────────────────────────────
+// Office-only view (cos.view permission) that pulls every CO across every
+// job into one kanban board. Jeromy sends most COs and needs one place to
+// see what hasn't been sent, what's waiting on approval, what's approved
+// but not scheduled, etc. Status pills are inline-clickable so he can move
+// COs through the pipeline without opening each job.
+//
+// Data: pure read-side. Reads jobs prop, calls onUpdateCO(jobId, coId, patch)
+// for inline status / quote # edits. That handler in App routes through the
+// normal saveJob path — same write surface as the in-job CO editor, so all
+// existing notifications (co_new / co_approved / co_completed Cloud Function
+// branches) fire identically. No new Firestore fields, no schema changes.
+function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getPersonColor }) {
+  const [showClosed, setShowClosed]       = useState(false);
+  const [editingQuote, setEditingQuote]   = useState(null); // co id
+  const [quoteDraft, setQuoteDraft]       = useState("");
+  const [statusOpen, setStatusOpen]       = useState(null); // co id
+  const [foremanFilter, setForemanFilter] = useState("");
+
+  // Aggregate: every CO across every job, with job context stitched on.
+  // Quotes (job.type === "quote") are skipped — they don't have COs in the
+  // operational sense.
+  const allCOs = useMemo(() => {
+    const out = [];
+    (jobs || []).forEach(job => {
+      if (!job || job.type === "quote") return;
+      const cos = job.changeOrders || [];
+      cos.forEach((co, idx) => {
+        if (!co) return;
+        out.push({
+          coId:         co.id,
+          coIndex:      idx + 1,
+          coStatus:     co.coStatus || "needs_sending",
+          coStatusDate: co.coStatusDate || "",
+          createdAt:    co.createdAt || "",
+          createdBy:    co.createdBy || "",
+          desc:         stripHtml(co.desc || "") || stripHtml(co.task || "") || "",
+          quoteNumber:  co.quoteNumber || "",
+          quoteAddedBy: co.quoteAddedBy || "",
+          quoteAddedAt: co.quoteAddedAt || "",
+          jobId:        job.id,
+          jobName:      job.name || job.simproNo || job.id || "(unnamed job)",
+          jobSimproNo:  job.simproNo || "",
+          jobForeman:   job.foreman || "",
+          jobGc:        job.gc || "",
+        });
+      });
+    });
+    return out;
+  }, [jobs]);
+
+  // Foreman names found across the COs — for the filter dropdown.
+  const foremenList = useMemo(() => {
+    const s = new Set();
+    allCOs.forEach(c => { if (c.jobForeman) s.add(c.jobForeman); });
+    return Array.from(s).sort();
+  }, [allCOs]);
+
+  const filteredCOs = useMemo(() => {
+    if (!foremanFilter) return allCOs;
+    const f = foremanFilter.toLowerCase();
+    return allCOs.filter(c => (c.jobForeman || "").toLowerCase() === f);
+  }, [allCOs, foremanFilter]);
+
+  // Group by status. Action columns sort oldest-first (the thing that's
+  // been waiting longest is at the top, so Jeromy clears the queue head-first).
+  // Done columns sort newest-first (most recent at top).
+  const byStatus = useMemo(() => {
+    const map = {};
+    CO_STATUSES_NEW.forEach(s => { map[s.value] = []; });
+    filteredCOs.forEach(co => {
+      const s = co.coStatus || "needs_sending";
+      if (!map[s]) map[s] = [];
+      map[s].push(co);
+    });
+    const doneKeys = ["completed", "converted", "denied"];
+    Object.keys(map).forEach(key => {
+      const isDone = doneKeys.includes(key);
+      map[key].sort((a, b) => {
+        const ad = new Date(a.createdAt || 0).getTime();
+        const bd = new Date(b.createdAt || 0).getTime();
+        return isDone ? bd - ad : ad - bd;
+      });
+    });
+    return map;
+  }, [filteredCOs]);
+
+  const closedKeys = ["converted", "denied"];
+  const visibleStatuses = useMemo(() =>
+    CO_STATUSES_NEW.filter(s => showClosed || !closedKeys.includes(s.value))
+  , [showClosed]);
+
+  const totalCount        = filteredCOs.length;
+  const needsSendingCount = (byStatus["needs_sending"] || []).length;
+  const pendingCount      = (byStatus["pending"]       || []).length;
+  const approvedCount     = (byStatus["approved"]      || []).length;
+
+  // Close the status popover on outside click. The toggle button itself uses
+  // stopPropagation so opening it doesn't immediately close. Editing-quote
+  // closure is handled by the input's onBlur.
+  useEffect(() => {
+    if (!statusOpen) return;
+    const close = (e) => {
+      if (e.target.closest && e.target.closest('[data-co-popover]')) return;
+      setStatusOpen(null);
+    };
+    document.addEventListener('click', close);
+    return () => document.removeEventListener('click', close);
+  }, [statusOpen]);
+
+  const handleSetStatus = (co, newStatus) => {
+    const patch = { coStatus: newStatus };
+    const def   = getStatusDef(CO_STATUSES_NEW, newStatus);
+    if (!def.hasDate) patch.coStatusDate = "";
+    onUpdateCO && onUpdateCO(co.jobId, co.coId, patch);
+    setStatusOpen(null);
+  };
+
+  const handleSetQuote = (co, value) => {
+    const trimmed = (value || "").trim();
+    if (trimmed === (co.quoteNumber || "")) {
+      setEditingQuote(null);
+      return;
+    }
+    const me = identity;
+    const patch = trimmed
+      ? {
+          quoteNumber:  trimmed,
+          quoteAddedBy: co.quoteAddedBy || (me?.name || ""),
+          quoteAddedAt: co.quoteAddedAt || new Date().toLocaleDateString("en-US"),
+        }
+      : { quoteNumber: "", quoteAddedBy: "", quoteAddedAt: "" };
+    onUpdateCO && onUpdateCO(co.jobId, co.coId, patch);
+    setEditingQuote(null);
+  };
+
+  return (
+    <div style={{padding:"16px 18px 40px", maxWidth:"100%"}}>
+      {/* Header */}
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+        flexWrap:"wrap",gap:12,marginBottom:14}}>
+        <div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,
+            letterSpacing:"0.06em",color:C.text,lineHeight:1}}>
+            CHANGE ORDERS
+          </div>
+          <div style={{fontSize:12,color:C.dim,marginTop:4}}>
+            {totalCount} total
+            {needsSendingCount > 0 && (
+              <span style={{color:"#dc2626",fontWeight:700}}> · {needsSendingCount} need sending</span>
+            )}
+            {pendingCount > 0 && (
+              <span style={{color:"#ca8a04",fontWeight:700}}> · {pendingCount} pending</span>
+            )}
+            {approvedCount > 0 && (
+              <span style={{color:"#16a34a",fontWeight:700}}> · {approvedCount} approved</span>
+            )}
+          </div>
+        </div>
+        <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+          <select value={foremanFilter} onChange={e=>setForemanFilter(e.target.value)}
+            style={{padding:"6px 10px",borderRadius:7,border:`1px solid ${C.border}`,
+              fontSize:12,background:"#fff",color:C.text,fontFamily:"inherit",outline:"none"}}>
+            <option value="">All foremen</option>
+            {foremenList.map(f => <option key={f} value={f}>{f}</option>)}
+          </select>
+          <button onClick={()=>setShowClosed(v=>!v)}
+            style={{padding:"6px 12px",borderRadius:7,fontSize:12,
+              border:`1px solid ${C.border}`,
+              background: showClosed ? C.accent : "#fff",
+              color: showClosed ? "#000" : C.dim,
+              cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
+            {showClosed ? "Hide closed" : "Show closed"}
+          </button>
+        </div>
+      </div>
+
+      {/* Kanban — horizontal-scrollable row of columns. Mobile users swipe
+          between columns; desktop sees all visible at once with horizontal
+          scroll if total width exceeds viewport. */}
+      <div style={{
+        display:"flex", gap:12, overflowX:"auto",
+        paddingBottom:12, scrollbarWidth:"thin",
+        WebkitOverflowScrolling:"touch",
+      }}>
+        {visibleStatuses.map(status => {
+          const items = byStatus[status.value] || [];
+          return (
+            <div key={status.value} style={{
+              flex:"0 0 280px", maxWidth:280,
+              background:"#fafbfc",
+              border:`1px solid ${C.border}`,
+              borderRadius:10,
+              borderTop:`3px solid ${status.color}`,
+              display:"flex", flexDirection:"column",
+              maxHeight:"calc(100vh - 220px)",
+            }}>
+              {/* Column header */}
+              <div style={{
+                padding:"10px 12px",
+                borderBottom:`1px solid ${C.border}`,
+                display:"flex", alignItems:"center", justifyContent:"space-between", gap:8,
+                background:"#fff",
+                borderTopLeftRadius:7, borderTopRightRadius:7,
+              }}>
+                <div style={{fontSize:11,fontWeight:800,color:status.color,
+                  letterSpacing:"0.06em",textTransform:"uppercase",lineHeight:1.2,
+                  overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                  {status.label}
+                </div>
+                <div style={{
+                  fontSize:10,fontWeight:800,color:status.color,
+                  background:`${status.color}1a`,border:`1px solid ${status.color}44`,
+                  borderRadius:99,padding:"1px 8px",flexShrink:0,
+                }}>
+                  {items.length}
+                </div>
+              </div>
+
+              {/* Cards */}
+              <div style={{
+                flex:1, overflowY:"auto",
+                padding:"8px 8px 12px",
+                display:"flex", flexDirection:"column", gap:8,
+              }}>
+                {items.length === 0 ? (
+                  <div style={{fontSize:11,color:C.muted,textAlign:"center",
+                    padding:"16px 8px",fontStyle:"italic"}}>
+                    None
+                  </div>
+                ) : items.map(co => {
+                  const fmColor        = getPersonColor ? getPersonColor(co.jobForeman) : "#6b7280";
+                  const isEditingQuote = editingQuote === co.coId;
+                  const isStatusOpen   = statusOpen === co.coId;
+                  return (
+                    <div key={`${co.jobId}_${co.coId}`} style={{
+                      background:"#fff",
+                      border:`1px solid ${C.border}`,
+                      borderLeft:`3px solid ${fmColor}`,
+                      borderRadius:8,
+                      padding:"9px 11px",
+                      fontSize:12, lineHeight:1.4,
+                      position:"relative",
+                    }}>
+                      {/* Job name — click opens the job's CO tab */}
+                      <div onClick={()=>onSelectJob && onSelectJob({id:co.jobId})}
+                        style={{
+                          fontSize:13,fontWeight:700,color:C.text,
+                          marginBottom:4, cursor:"pointer",
+                          overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+                        }}
+                        title={`Open ${co.jobName}`}>
+                        {co.jobSimproNo ? `#${co.jobSimproNo} ` : ""}{co.jobName}
+                      </div>
+
+                      {/* Meta line: CO #, foreman dot+name, GC */}
+                      <div style={{
+                        display:"flex",alignItems:"center",gap:6,
+                        fontSize:10,color:C.dim,marginBottom:5,flexWrap:"wrap",
+                      }}>
+                        <span style={{fontWeight:700,color:C.text}}>CO #{co.coIndex}</span>
+                        {co.jobForeman && (
+                          <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
+                            <span style={{width:7,height:7,borderRadius:"50%",
+                              background:fmColor,display:"inline-block"}}/>
+                            {(co.jobForeman||"").split(" ")[0]}
+                          </span>
+                        )}
+                        {co.jobGc && <span style={{color:C.muted}}>· {co.jobGc}</span>}
+                      </div>
+
+                      {/* Description preview */}
+                      {co.desc && (
+                        <div onClick={()=>onSelectJob && onSelectJob({id:co.jobId})}
+                          style={{
+                            fontSize:11,color:C.text,lineHeight:1.35,marginBottom:7,
+                            cursor:"pointer",
+                            overflow:"hidden",textOverflow:"ellipsis",
+                            display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",
+                          }}
+                          title={co.desc}>
+                          {co.desc}
+                        </div>
+                      )}
+
+                      {/* Quote # inline edit */}
+                      <div style={{marginBottom:6}}>
+                        {isEditingQuote ? (
+                          <input
+                            autoFocus
+                            value={quoteDraft}
+                            onChange={e=>setQuoteDraft(e.target.value)}
+                            onBlur={()=>handleSetQuote(co, quoteDraft)}
+                            onKeyDown={e=>{
+                              if (e.key === "Enter")  handleSetQuote(co, quoteDraft);
+                              if (e.key === "Escape") setEditingQuote(null);
+                            }}
+                            onClick={e=>e.stopPropagation()}
+                            placeholder="Quote #"
+                            style={{
+                              width:"100%",padding:"4px 8px",borderRadius:6,
+                              border:`1px solid ${C.accent}`,fontSize:11,
+                              fontFamily:"inherit",outline:"none",boxSizing:"border-box",
+                            }}/>
+                        ) : (
+                          <button
+                            onClick={e=>{
+                              e.stopPropagation();
+                              setQuoteDraft(co.quoteNumber || "");
+                              setEditingQuote(co.coId);
+                            }}
+                            style={{
+                              fontSize:10,padding:"2px 8px",borderRadius:5,
+                              border:`1px dashed ${co.quoteNumber ? C.border : "#fca5a5"}`,
+                              background: co.quoteNumber ? "#f8fafc" : "#fef2f2",
+                              color: co.quoteNumber ? C.text : "#b91c1c",
+                              cursor:"pointer",fontFamily:"inherit",fontWeight:700,
+                              letterSpacing:"0.02em",
+                            }}>
+                            {co.quoteNumber ? `Quote # ${co.quoteNumber}` : "+ Quote #"}
+                          </button>
+                        )}
+                      </div>
+
+                      {/* Status pill — tap to open dropdown */}
+                      <div style={{position:"relative"}} data-co-popover="true">
+                        <button
+                          onClick={e=>{
+                            e.stopPropagation();
+                            setStatusOpen(isStatusOpen ? null : co.coId);
+                          }}
+                          style={{
+                            display:"inline-flex",alignItems:"center",gap:5,
+                            fontSize:10,fontWeight:800,letterSpacing:"0.04em",
+                            color: status.color,
+                            background:`${status.color}1a`,
+                            border:`1px solid ${status.color}55`,
+                            borderRadius:6,padding:"3px 8px",
+                            cursor:"pointer",fontFamily:"inherit",
+                            textTransform:"uppercase",
+                          }}>
+                          {status.label}
+                          <span style={{fontSize:9}}>▾</span>
+                        </button>
+                        {co.coStatusDate && (
+                          <span style={{fontSize:10,color:C.muted,marginLeft:6}}>
+                            · {co.coStatusDate}
+                          </span>
+                        )}
+                        {isStatusOpen && (
+                          <div data-co-popover="true" style={{
+                            position:"absolute",top:"calc(100% + 4px)",left:0,zIndex:50,
+                            background:"#fff",border:`1px solid ${C.border}`,
+                            borderRadius:8,boxShadow:"0 8px 24px rgba(0,0,0,0.18)",
+                            padding:5,minWidth:200,
+                          }}>
+                            {CO_STATUSES_NEW.map(s => (
+                              <button
+                                key={s.value}
+                                onClick={e=>{
+                                  e.stopPropagation();
+                                  handleSetStatus(co, s.value);
+                                }}
+                                style={{
+                                  display:"flex",alignItems:"center",gap:6,
+                                  width:"100%",padding:"6px 8px",borderRadius:5,
+                                  fontSize:11,fontWeight:600,color:C.text,
+                                  background: s.value === co.coStatus ? `${s.color}10` : "transparent",
+                                  border:"none",cursor:"pointer",fontFamily:"inherit",
+                                  textAlign:"left",
+                                }}>
+                                <span style={{width:8,height:8,borderRadius:"50%",
+                                  background:s.color,flexShrink:0}}/>
+                                {s.label}
+                              </button>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    </div>
+                  );
+                })}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+
+      {totalCount === 0 && (
+        <div style={{textAlign:"center",padding:"40px 20px",color:C.muted,fontStyle:"italic"}}>
+          No change orders {foremanFilter ? `for ${foremanFilter}` : "yet"}.
+        </div>
+      )}
+    </div>
+  );
+}
+
 function App() {
   // Homeowner page route — ?homeowner=JOB_ID
   const hoParam = new URLSearchParams(window.location.search).get("homeowner");
@@ -47817,6 +48217,7 @@ function App() {
           : [
               {key:"home",label:"Job Board"},
               ...(can(identity,"today.view")?[{key:"today",label:"Today"}]:[]),
+              ...(can(identity,"cos.view")?[{key:"cos",label:"COs"}]:[]),
               {key:"safety",label:"Safety"},
               {key:"schedule",label:"Forecast"},
               {key:"nav",label:"Nav",icon:"mapPin"},
@@ -47833,7 +48234,7 @@ function App() {
         ).map(({key,label,icon})=>{
           const active = view===key;
           return (
-            <button key={key} onClick={key==="home"?goHome:key==="today"?()=>setView("today"):key==="appmap"?()=>setView("appmap"):key==="safety"?()=>setView("safety"):key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="walks"?()=>setView("walks"):key==="tasks"?openTasks:key==="nav"?openNav:key==="huddle"?()=>setView("huddle"):key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):openSettings}
+            <button key={key} onClick={key==="home"?goHome:key==="today"?()=>setView("today"):key==="cos"?()=>setView("cos"):key==="appmap"?()=>setView("appmap"):key==="safety"?()=>setView("safety"):key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="walks"?()=>setView("walks"):key==="tasks"?openTasks:key==="nav"?openNav:key==="huddle"?()=>setView("huddle"):key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):openSettings}
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
@@ -49175,6 +49576,27 @@ function App() {
 
       {view==="today"&&can(identity,"today.view")&&(
         <Today jobs={jobs} users={users} manualTasks={manualTasks} quoteWalks={quoteWalks} suggestions={appSuggestions} identity={identity} onSelectJob={setSelected}/>
+      )}
+
+      {view==="cos"&&can(identity,"cos.view")&&(
+        <ChangeOrderTracker
+          jobs={jobs}
+          identity={identity}
+          getPersonColor={getPersonColor}
+          onSelectJob={(j)=>{
+            const full = jobs.find(x => x.id === j.id);
+            if (full) setSelected(full);
+          }}
+          onUpdateCO={(jobId, coId, patch) => {
+            const job = jobs.find(j => j.id === jobId);
+            if (!job) return;
+            const nextCOs = (job.changeOrders || []).map(co =>
+              co && co.id === coId ? { ...co, ...patch } : co
+            );
+            const updated = { ...job, changeOrders: nextCOs };
+            setJobs(prev => prev.map(j => j.id === jobId ? updated : j));
+            saveJob(updated, { changeOrders: nextCOs });
+          }}/>
       )}
 
       {view==="appmap"&&(
