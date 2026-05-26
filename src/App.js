@@ -4183,7 +4183,7 @@ const StatusPill = ({ variant = "neutral", children, size = "sm", bordered = fal
   return (
     <span style={{
       display: "inline-flex", alignItems: "center", gap: 4,
-      fontWeight: 700, letterSpacing: "0.02em",
+      fontWeight: 700, letterSpacing: "0.06em",
       borderRadius: 99,
       background: v.bg, color: v.fg,
       border: bordered ? `1px solid ${v.border}` : "none",
@@ -9321,14 +9321,10 @@ function PunchFloor({ floorKey, floorData, onFloorChange, floorLabel, floorColor
 
         <span style={{ fontWeight: 700, fontSize: 13, color: floorColor, flex: 1 }}>{floorLabel}</span>
 
-        {openCount > 0 && <span style={{ fontSize: 10, background: `${C.red}22`, color: C.red,
-          borderRadius: 99, padding: '2px 8px', fontWeight: 700 }}>{openCount} open</span>}
-        {waitingCount > 0 && <span style={{ fontSize: 10, background: '#fef3c7', color: '#92400e',
-          borderRadius: 99, padding: '2px 8px', fontWeight: 700, border: '1px solid #fcd34d' }}>{waitingCount} waiting</span>}
-        {mineCount > 0 && <span title={`${mineCount} assigned to you on this floor`}
-          style={{ fontSize: 10, background: '#dbeafe', color: '#1d4ed8',
-          borderRadius: 99, padding: '2px 8px', fontWeight: 800, border: '1px solid #93c5fd' }}>
-          {mineCount} for you
+        {openCount > 0 && <Pill label={`${openCount} open`} color={C.red}/>}
+        {waitingCount > 0 && <Pill label={`${waitingCount} waiting`} color="#ca8a04"/>}
+        {mineCount > 0 && <span title={`${mineCount} assigned to you on this floor`}>
+          <Pill label={`${mineCount} for you`} color="#1d4ed8"/>
         </span>}
 
         <span style={{ color: floorColor, fontSize: 12 }}>{collapsed ? '▸' : '▾'}</span>
@@ -25815,7 +25811,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </span>
             )}
             {openCount>0  &&<Pill label={`${openCount} open punch`} color={C.red}/>}
-            {waitingCount>0&&<span style={{fontSize:10,fontWeight:700,letterSpacing:"0.06em",padding:"2px 8px",borderRadius:99,background:"#fef3c7",color:"#92400e",border:"1px solid #fcd34d",whiteSpace:"nowrap"}}>{waitingCount} waiting</span>}
+            {waitingCount>0&&<Pill label={`${waitingCount} waiting`} color="#ca8a04"/>}
 
             {pendingCOs>0 &&<Pill label={`${pendingCOs} CO pending`} color={C.orange}/>}
 
@@ -30790,12 +30786,7 @@ function JobActivity({ job, onSetTab }) {
                       display:"inline-flex", alignItems:"center", gap:6}}>
                       <span>{g.items.length} open</span>
                       {g.waitingCount > 0 && (
-                        <span style={{fontSize:10, fontWeight:700,
-                          background:"#fef3c7", color:"#92400e",
-                          borderRadius:99, padding:"2px 8px",
-                          border:"1px solid #fcd34d"}}>
-                          {g.waitingCount} waiting
-                        </span>
+                        <Pill label={`${g.waitingCount} waiting`} color="#ca8a04"/>
                       )}
                     </span>
                   </button>
@@ -48228,12 +48219,9 @@ function App() {
             {[...(job.roughInstructions||[]),...(job.finishInstructions||[])]
               .filter(e=>e.urgent&&e.label)
               .map(e=>(
-                <span key={e.id} style={{fontSize:9,fontWeight:800,color:'#dc2626',
-                  background:'rgba(220,38,38,0.12)',border:'1px solid rgba(220,38,38,0.35)',
-                  borderRadius:99,padding:'1px 7px',whiteSpace:'nowrap',flexShrink:0,
-                  display:'inline-flex',alignItems:'center',gap:4}}>
+                <StatusPill key={e.id} variant="blocked" size="xs" bordered style={{flexShrink:0}}>
                   <Icon name="alertTriangle" size={9} stroke={2.5}/> {e.label}
-                </span>
+                </StatusPill>
               ))
             }
 
