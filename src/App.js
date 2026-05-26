@@ -4134,6 +4134,66 @@ const htmlToLines = (s) => htmlToText(s)
 // acceptable trade-off vs. tracking per-index (which breaks on reorder).
 const lineKey = (s) => (s||'').toLowerCase().replace(/\s+/g, ' ').trim();
 
+// ── StatusPill ────────────────────────────────────────────────────────
+// Single source of truth for the colored chips that label state across
+// the app (PO header status, CO status, RT status, job status, source
+// labels, etc.). Before this, every feature open-coded its own pill —
+// fontSize bounced between 9/10/11, padding between 1-3px, border on or
+// off — which made every card look subtly different from every other.
+//
+// Pick a variant by INTENT (what the pill means), not by color. That
+// way one palette change later touches one file, not 100 inline styles.
+//
+// Sizes: xs (9px, dense — sub-row chips), sm (10px, default), md (11px,
+// emphasized — headline status). `bordered` adds a 1px ring (use for
+// "completed / done" emphasis where the chip carries extra weight).
+const PILL_VARIANTS = {
+  needs:      { bg:"#ea580c22", fg:"#ea580c", border:"#ea580c66" },
+  inprogress: { bg:"#3b82f622", fg:"#1d4ed8", border:"#3b82f666" },
+  done:       { bg:"#16a34a22", fg:"#16a34a", border:"#16a34a66" },
+  blocked:    { bg:"#dc262622", fg:"#dc2626", border:"#dc262666" },
+  info:       { bg:"#0d948822", fg:"#0d9488", border:"#0d948866" },
+  scheduled:  { bg:"#8b5cf622", fg:"#8b5cf6", border:"#8b5cf666" },
+  neutral:    { bg:"#64748b22", fg:"#64748b", border:"#64748b66" },
+  accent:     { bg:"#d9770618", fg:"#d97706", border:"#d9770644" },
+};
+
+// statusStripe — returns the { border, borderLeft } pair for the
+// "3px colored left edge + 1px ring" card pattern. CO cards have used
+// this for months and it's the most scannable status signal in the app
+// (you can read a column of cards at arm's length without focusing).
+// This helper promotes it to a convention so PO / RT / job cards all
+// share the same shape. Pair the same variant with the card's StatusPill
+// so the stripe color and the pill color agree.
+const statusStripe = (variant) => {
+  const v = PILL_VARIANTS[variant] || PILL_VARIANTS.neutral;
+  return {
+    border: `1px solid ${v.border}`,
+    borderLeft: `3px solid ${v.fg}`,
+  };
+};
+
+const StatusPill = ({ variant = "neutral", children, size = "sm", bordered = false, style }) => {
+  const v = PILL_VARIANTS[variant] || PILL_VARIANTS.neutral;
+  const sizing = size === "xs"
+    ? { fontSize: 9,  padding: "1px 6px" }
+    : size === "md"
+      ? { fontSize: 11, padding: "3px 10px" }
+      : { fontSize: 10, padding: "2px 8px" };
+  return (
+    <span style={{
+      display: "inline-flex", alignItems: "center", gap: 4,
+      fontWeight: 700, letterSpacing: "0.02em",
+      borderRadius: 99,
+      background: v.bg, color: v.fg,
+      border: bordered ? `1px solid ${v.border}` : "none",
+      whiteSpace: "nowrap",
+      ...sizing,
+      ...style,
+    }}>{children}</span>
+  );
+};
+
 const RichMobileSheet = ({initialHtml, initialMaterial='', initialMatSource='', placeholder, onDone, onCancel, addMode, showMaterial=false, onLiveSave, draftKey}) => {
   // ── Draft restore (data-safety belt) ─────────────────────────────────
   // 2026-05-14: a coworker lost a big typed PO list when the page reloaded
@@ -10274,13 +10334,16 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
                          : o.ordered  ? "rgba(59,130,246,0.05)"
                          : o.needsOrder ? "rgba(234,88,12,0.06)"
                          : C.surface;
-        const cardBorder = o.pickedUp ? "1px solid #16a34a44"
-                         : o.deliveredToShop ? "1px solid #16a34a44"
-                         : o.ordered  ? "1px solid #3b82f644"
-                         : o.needsOrder ? "1px solid #ea580c66"
-                         : `1px solid ${C.border}`;
+        // Pick the StatusPill variant once — the stripe and the header
+        // pill stay in sync, and any future palette tweak touches one
+        // map (PILL_VARIANTS) instead of two.
+        const cardVariant = (o.pickedUp || o.deliveredToShop) ? "done"
+                          : o.ordered  ? "inprogress"
+                          : o.needsOrder ? "needs"
+                          : "neutral";
+        const cardStripe = statusStripe(cardVariant);
         return (
-          <div key={o.id} style={{background:cardBg, border:cardBorder, borderRadius:10, marginBottom:12, overflow:"hidden"}}>
+          <div key={o.id} style={{background:cardBg, ...cardStripe, borderRadius:10, marginBottom:12, overflow:"hidden"}}>
 
             {/* ── Header (always visible, click to expand/collapse) ── */}
             <div onClick={()=>toggle(o.id)}
@@ -10288,24 +10351,19 @@ function MaterialOrders({orders,onChange,simproNo,jobId,phase}) {
               <span style={{fontSize:12,color:C.accent,fontWeight:700}}>PO #{i+1}</span>
               {o.po && <span style={{fontSize:11,color:C.muted}}>#{o.po}</span>}
               {o.needsOrder && !o.ordered && !o.pickedUp && !o.deliveredToShop && (
-                <span style={{fontSize:10,fontWeight:700,background:"#ea580c22",color:"#ea580c",
-                  borderRadius:99,padding:"1px 8px"}}>{o.source==="Shop" ? "Needs to be Picked Up" : "Need to Order"}</span>
+                <StatusPill variant="needs">{o.source==="Shop" ? "Needs to be Picked Up" : "Need to Order"}</StatusPill>
               )}
               {o.ordered && !o.pickedUp && !o.deliveredToShop && (
-                <span style={{fontSize:10,fontWeight:700,background:"#3b82f622",color:"#1d4ed8",
-                  borderRadius:99,padding:"1px 8px"}}>Order Sent</span>
+                <StatusPill variant="inprogress">Order Sent</StatusPill>
               )}
               {o.deliveredToShop && !o.pickedUp && (
-                <span style={{fontSize:10,fontWeight:700,background:"#16a34a22",color:"#16a34a",
-                  borderRadius:99,padding:"1px 8px"}}>Delivered to Shop</span>
+                <StatusPill variant="done">Delivered to Shop</StatusPill>
               )}
               {o.pickedUp && (
-                <span style={{fontSize:10,fontWeight:700,background:"#16a34a22",color:"#16a34a",
-                  borderRadius:99,padding:"1px 8px"}}>Picked Up</span>
+                <StatusPill variant="done" bordered>Picked Up</StatusPill>
               )}
               {o.source && (
-                <span style={{fontSize:10,fontWeight:700,background:`${C.accent}18`,color:C.accent,
-                  borderRadius:99,padding:"1px 8px"}}>{o.source}</span>
+                <StatusPill variant="accent">{o.source}</StatusPill>
               )}
               {isCollapsed && o.items && (
                 <span style={{fontSize:11,color:C.muted,flex:1,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",minWidth:0}}>
@@ -11542,8 +11600,8 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
               style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:isCollapsed?0:10,flexWrap:"wrap",gap:8,cursor:isCompleted?"pointer":"default"}}>
               <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
                 <span style={{fontSize:12,color:isCompleted?"#16a34a":"var(--accent)",fontWeight:700}}>Change Order #{o._idx+1}</span>
-                {isCompleted&&<span style={{fontSize:10,fontWeight:700,color:"#16a34a",background:"#16a34a18",borderRadius:99,padding:"2px 8px",border:"1px solid #16a34a33"}}>✓ WORK COMPLETED</span>}
-                {isConverted&&<span style={{fontSize:10,fontWeight:700,color:"#6b7280",background:"#6b728018",borderRadius:99,padding:"2px 8px",border:"1px solid #6b728033"}}>CONVERTED TO RT</span>}
+                {isCompleted&&<StatusPill variant="done" bordered>✓ WORK COMPLETED</StatusPill>}
+                {isConverted&&<StatusPill variant="neutral" bordered>CONVERTED TO RT</StatusPill>}
                 {/* Quote # — appears right next to the CO title so it's
                     scannable in a long list. Editable any time, click to
                     edit; the stamp tells us who quoted it and when. Click
@@ -12134,11 +12192,21 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
           );
         }
 
+        // Variant priority: signedOff (done) wins, then needsSchedule
+        // (blocked), then rtScheduled (scheduled / purple), else neutral.
+        // Background tint stays as the existing soft color — only the
+        // border becomes the 3px-stripe + 1px-ring pattern shared with
+        // PO and CO cards.
+        const tripVariant = t.signedOff ? "done"
+                          : t.needsSchedule ? "blocked"
+                          : t.rtScheduled ? "scheduled"
+                          : "neutral";
+        const tripStripe = statusStripe(tripVariant);
         return (
 
         <div key={t.id} id={"jn-dest-" + t.id} style={{background:t.needsSchedule?"rgba(220,38,38,0.06)":t.rtScheduled?"rgba(139,92,246,0.06)":t.signedOff?`${C.green}0a`:C.surface,
 
-          border:t.needsSchedule?"1px solid #dc262655":t.rtScheduled?"1px solid #8b5cf655":t.signedOff?`1px solid ${C.green}33`:`1px solid ${C.border}`,
+          ...tripStripe,
 
           borderRadius:10,padding:14,marginBottom:14}}>
 
