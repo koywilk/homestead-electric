@@ -25677,16 +25677,19 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
         boxShadow:"0 40px 100px rgba(0,0,0,0.7)"}}>
 
 
-        {/* Header */}
+        {/* Header — compacted 2026-05-25 to give the body more room on
+            mobile. Padding 16→10 top/bottom and 22→18 horizontal, title
+            22→18px. Saves roughly 30-50px vertical before the body
+            starts. Header is still flexShrink:0 (always visible). */}
 
-        <div style={{padding:"16px 22px",borderBottom:`1px solid ${C.border}`,display:"flex",
+        <div style={{padding:"10px 18px",borderBottom:`1px solid ${C.border}`,display:"flex",
 
-          justifyContent:"space-between",alignItems:"center",flexShrink:0,gap:12,flexWrap:"wrap"}}>
+          justifyContent:"space-between",alignItems:"center",flexShrink:0,gap:10,flexWrap:"wrap"}}>
 
           <div>
 
             <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
-              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:22,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.06em",color:C.text,lineHeight:1}}>
 
                 {job.type==="quote"&&<span style={{fontSize:12,color:"#000",fontFamily:"'DM Sans',sans-serif",fontWeight:700,letterSpacing:"0.05em",marginRight:8,background:C.accent,borderRadius:5,padding:"2px 7px"}}>{job.quoteNumber||"QUOTE"}</span>}
 
@@ -25700,11 +25703,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 const isEst = simproFinancials.isEstimate;
                 const mc = m >= 15 ? "#22c55e" : m >= 10 ? C.orange : C.red;
                 return (
-                  <span title={`${isEst ? "Estimated" : "Actual"} net margin · Goal: 15%`}
-                    style={{fontSize:11,fontWeight:800,color:mc,background:`${mc}18`,
-                      border:`1px solid ${mc}44`,borderRadius:99,padding:"2px 9px",
-                      fontFamily:"'DM Sans',sans-serif",letterSpacing:"0.04em",flexShrink:0}}>
-                    {m.toFixed(1)}%{isEst ? " est" : ""}
+                  <span title={`${isEst ? "Estimated" : "Actual"} net margin · Goal: 15%`}>
+                    <Pill label={`${m.toFixed(1)}%${isEst ? " est" : ""}`} color={mc}/>
                   </span>
                 );
               })()}
@@ -25714,11 +25714,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 const over = ha != null && he != null && ha > he;
                 const hc = over ? C.red : "#8b5cf6";
                 return (
-                  <span title="Total labor hours: used / estimated"
-                    style={{fontSize:11,fontWeight:800,color:hc,background:`${hc}18`,
-                      border:`1px solid ${hc}44`,borderRadius:99,padding:"2px 9px",
-                      fontFamily:"'DM Sans',sans-serif",letterSpacing:"0.04em",flexShrink:0}}>
-                    ⏱ {ha != null ? `${Math.round(ha)}` : "?"}h / {he != null ? `${Math.round(he)}` : "?"}h est
+                  <span title="Total labor hours: used / estimated">
+                    <Pill label={`⏱ ${ha != null ? `${Math.round(ha)}` : "?"}h / ${he != null ? `${Math.round(he)}` : "?"}h est`} color={hc}/>
                   </span>
                 );
               })()}
