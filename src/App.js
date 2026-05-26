@@ -48061,7 +48061,12 @@ function App() {
     const isReady    = rs==="date_confirmed"||fs==="date_confirmed"||rs==="waiting_date"||fs==="waiting_date";
     // Priority: red alerts (QC fail / RT needed / redline prep) > RT scheduled > invoice > waiting > scheduled > ready
     const priority = (qcFail||hasRT||prepAlert)?"red":hasRTSch?"purple":isInvoice?"invoice":isWaiting?"hold":isSched?"sched":isReady?"ready":"none";
-    const BG    = {red:"rgba(220,38,38,0.18)",purple:"rgba(139,92,246,0.10)",invoice:"rgba(234,88,12,0.10)",hold:"rgba(234,179,8,0.12)",sched:"rgba(37,99,235,0.08)",ready:"rgba(202,138,4,0.08)",none:C.card};
+    // Background tints toned down 2026-05-25 (calm pass) — the 3px
+    // left-stripe + status pills already carry the status signal; the
+    // whole-row tint was shouting on top. Reds dropped from 18% to 7%,
+    // purples/oranges normalized to 5-6%. The result reads as "calm
+    // colored row" instead of "alarmed colored row."
+    const BG    = {red:"rgba(220,38,38,0.07)",purple:"rgba(139,92,246,0.05)",invoice:"rgba(234,88,12,0.06)",hold:"rgba(234,179,8,0.06)",sched:"rgba(37,99,235,0.05)",ready:"rgba(202,138,4,0.05)",none:C.card};
     const LBORD = {red:"#dc2626",purple:"#8b5cf6",invoice:"#ea580c",hold:"#ca8a04",sched:"#2563eb",ready:"#ca8a04",none:rowFc};
     const BORD  = {red:"2px solid #dc2626",purple:"2px solid #8b5cf6",invoice:"2px solid #ea580c",hold:"1px dashed #ca8a04",sched:"1px dashed #2563eb",ready:"1px dashed #ca8a04",none:`1px solid ${C.border}`};
     const isQuote  = job.type==="quote";
@@ -48072,7 +48077,7 @@ function App() {
     return (
 
       <div className="job-row" onClick={()=>setSelected(job)}
-        style={{background:rowBg,border:rowBord,borderRadius:14,padding:"13px 16px",marginBottom:8,borderLeft:`3px solid ${rowLbord}`}}>
+        style={{background:rowBg,border:rowBord,borderRadius:14,padding:"13px 16px",marginBottom:10,borderLeft:`3px solid ${rowLbord}`}}>
 
         <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
 
@@ -48224,7 +48229,9 @@ function App() {
 
             {qcItems>0&&<Pill label={`${qcItems} QC`} color={C.red}/>}
 
-            {(job.uploadedFiles||[]).length>0&&<Pill label={`${job.uploadedFiles.length} files`} color={C.green}/>}
+            {/* Files pill removed 2026-05-25 — informational only, no
+                action needed, just noise on the row. File count is
+                visible from the Plans & Links tab when you open the job. */}
 
             {[...(job.roughInstructions||[]),...(job.finishInstructions||[])]
               .filter(e=>e.urgent&&e.label)
