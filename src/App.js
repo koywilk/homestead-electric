@@ -25804,7 +25804,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
           </div>
 
-          <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
+          <div style={{display:"flex",gap:5,alignItems:"center",flexWrap:"wrap",justifyContent:"flex-end"}}>
 
             {/* QC FAIL — loud pill so the status can't be missed at a glance. */}
             {/* Stays red until qcStatus moves off "fail" (e.g. back to "fixed" */}
@@ -48249,16 +48249,21 @@ function App() {
             {_foremen.filter(f=>f!==foreman).map(f2=>(
 
               <button key={f2} onClick={e=>{e.stopPropagation();const patch={foreman:f2};updateJob({...job,...patch},patch);}}
-
+                title={`Reassign to ${f2}`}
                 style={{background:"none",border:`1px solid ${_foremanColors[f2]}44`,borderRadius:6,
 
                   color:_foremanColors[f2],fontSize:10,padding:"3px 8px",cursor:"pointer",
 
-                  fontFamily:"inherit",whiteSpace:"nowrap",transition:"opacity 0.15s"}}
+                  fontFamily:"inherit",whiteSpace:"nowrap",transition:"opacity 0.15s",
+                  /* Dimmed default so a board with N foremen × M jobs
+                     doesn't drown the eye in reassign buttons. Full
+                     opacity on hover preserves discoverability — they're
+                     still there, just quieter when you're not aiming. */
+                  opacity:0.4}}
 
-                onMouseEnter={e=>e.currentTarget.style.opacity=".7"}
+                onMouseEnter={e=>e.currentTarget.style.opacity="1"}
 
-                onMouseLeave={e=>e.currentTarget.style.opacity="1"}>→ {f2}</button>
+                onMouseLeave={e=>e.currentTarget.style.opacity="0.4"}>→ {f2}</button>
 
             ))}
 
