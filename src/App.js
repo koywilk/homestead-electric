@@ -4173,20 +4173,26 @@ const statusStripe = (variant) => {
   };
 };
 
-const StatusPill = ({ variant = "neutral", children, size = "sm", bordered = false, style }) => {
+const StatusPill = ({ variant = "neutral", children, size = "sm", bordered = false, dashed = false, style }) => {
   const v = PILL_VARIANTS[variant] || PILL_VARIANTS.neutral;
   const sizing = size === "xs"
     ? { fontSize: 9,  padding: "1px 6px" }
     : size === "md"
       ? { fontSize: 11, padding: "3px 10px" }
       : { fontSize: 10, padding: "2px 8px" };
+  // dashed implies bordered — used by "ongoing" scheduling pill to signal
+  // an informal / soft status. The dashed border is the convention; solid
+  // would read as "confirmed scheduled."
+  const borderStyle = dashed
+    ? `1px dashed ${v.border}`
+    : (bordered ? `1px solid ${v.border}` : "none");
   return (
     <span style={{
       display: "inline-flex", alignItems: "center", gap: 4,
       fontWeight: 700, letterSpacing: "0.06em",
       borderRadius: 99,
       background: v.bg, color: v.fg,
-      border: bordered ? `1px solid ${v.border}` : "none",
+      border: borderStyle,
       whiteSpace: "nowrap",
       ...sizing,
       ...style,
@@ -25767,18 +25773,22 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                               : mode==="needsSched"
                                   ? (dateRange ? (needsHard ? `Needs: ${dateRange}` : `Target ${dateRange}`) : "Needs Sched")
                               : mode==="ongoing" ? "Ongoing" : null;
+              // Map mode → StatusPill variant + border style. "ongoing"
+              // uses dashed to signal informal status; the other modes
+              // use solid bordered. Dot inside uses currentColor so it
+              // tracks the pill's color automatically.
+              const schedVariant = mode==="scheduled"  ? "inprogress"
+                                 : mode==="needsSched" ? "needs"
+                                 : mode==="ongoing"    ? "neutral"
+                                 : "neutral";
               return (
                 <div style={{display:"flex",alignItems:"center",gap:8,marginTop:5,flexWrap:"wrap"}}>
                   {pillColor && pillLabel && (
-                    <span style={{display:"inline-flex",alignItems:"center",gap:4,
-                      fontSize:11,fontWeight:700,letterSpacing:"0.04em",
-                      padding:"2px 9px",borderRadius:99,
-                      background:`${pillColor}18`,color:pillColor,
-                      border:`1px ${mode==="ongoing"?"dashed":"solid"} ${pillColor}55`,
-                      whiteSpace:"nowrap"}}>
-                      <span style={{width:6,height:6,borderRadius:"50%",background:pillColor,display:"inline-block"}}/>
+                    <StatusPill variant={schedVariant} size="md"
+                      bordered={mode!=="ongoing"} dashed={mode==="ongoing"}>
+                      <span style={{width:6,height:6,borderRadius:"50%",background:"currentColor",display:"inline-block"}}/>
                       {pillLabel}
-                    </span>
+                    </StatusPill>
                   )}
                   <StatusUpdateInline job={job} onSave={u} identity={identity} fontSize={12} maxWidth={360}/>
                 </div>
@@ -48129,18 +48139,21 @@ function App() {
               const pillLabel = mode==="scheduled" ? "On Schedule"
                               : mode==="needsSched" ? (dateStr ? (needsHard ? `Needs: ${dateStr}` : `Target ${dateStr}`) : "Needs Sched")
                               : mode==="ongoing" ? "Ongoing" : null;
+              // Same mode → variant mapping as the JobDetail header
+              // scheduling pill. Keeps the two surfaces in lockstep.
+              const schedVariant = mode==="scheduled"  ? "inprogress"
+                                 : mode==="needsSched" ? "needs"
+                                 : mode==="ongoing"    ? "neutral"
+                                 : "neutral";
               return (
                 <div style={{display:"flex",alignItems:"center",gap:8,marginTop:4,flexWrap:"wrap"}}>
                   {pillColor && pillLabel && (
-                    <span style={{display:"inline-flex",alignItems:"center",gap:4,
-                      fontSize:11,fontWeight:700,letterSpacing:"0.04em",
-                      padding:"2px 9px",borderRadius:99,
-                      background:`${pillColor}18`,color:pillColor,
-                      border:`1px ${mode==="ongoing"?"dashed":"solid"} ${pillColor}55`,
-                      whiteSpace:"nowrap",flexShrink:0}}>
-                      <span style={{width:6,height:6,borderRadius:"50%",background:pillColor,display:"inline-block"}}/>
+                    <StatusPill variant={schedVariant} size="md"
+                      bordered={mode!=="ongoing"} dashed={mode==="ongoing"}
+                      style={{flexShrink:0}}>
+                      <span style={{width:6,height:6,borderRadius:"50%",background:"currentColor",display:"inline-block"}}/>
                       {pillLabel}
-                    </span>
+                    </StatusPill>
                   )}
                   {/* Wrap the inline display in StatusUpdateHover so hovering
                       the (possibly truncated) text drops a full-message popover.
