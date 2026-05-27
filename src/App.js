@@ -4106,12 +4106,24 @@ const MAT_SOURCES = ["","Shop","Home Depot","CED","Platt","Amazon","Other"];
 const stripHtml = (s) => (s||'').replace(/<[^>]*>/g,' ').replace(/&nbsp;/g,' ').replace(/&amp;/g,'&').replace(/&lt;/g,'<').replace(/&gt;/g,'>').replace(/&quot;/g,'"').replace(/&#39;/g,"'").replace(/\s+/g,' ').trim();
 
 // htmlToText — like stripHtml but PRESERVES line breaks from <br>, </p>,
-// </div>, </li>. Used in copy/share paths (RT chat/email/text, CO chat/email)
-// so the recipient sees the same multi-line structure that's in the app
-// instead of one collapsed blob. stripHtml() above collapses ALL whitespace
-// (including newlines) so it can't be used here.
+// </div>, </li>, AND opening <p>/<div>/<li> tags. Used in copy/share paths
+// (RT chat/email/text, CO chat/email) so the recipient sees the same
+// multi-line structure that's in the app instead of one collapsed blob.
+// Also used by the Shop PO punchlist parser. stripHtml() above collapses
+// ALL whitespace (including newlines) so it can't be used here.
+//
+// Why split on opening tags too (2026-05-25 bug fix): some contenteditable
+// browsers (Safari, sometimes Chrome) produce DOM like
+//   "first line<div>second line</div><div>third line</div>"
+// — the first line has no opening wrapper. Only splitting on CLOSING tags
+// meant the boundary between the bare "first line" and the next <div> was
+// missed, and they smashed together in the parsed output. The Shop PO
+// punchlist surfaced this: two items merged into one checkbox row while
+// the third (which had a clean closing wrapper before it) rendered
+// correctly. Splitting on opening tags too patches the case.
 const htmlToText = (s) => (s||'')
   .replace(/<br\s*\/?>/gi, '\n')
+  .replace(/<(p|div|li)\b[^>]*>/gi, '\n')
   .replace(/<\/(p|div|li)>/gi, '\n')
   .replace(/<[^>]+>/g, '')
   .replace(/&nbsp;/g, ' ')
@@ -24457,9 +24469,20 @@ function UpNextPanel({ job, identity, onAction }) {
   // bar, and the state persists PER JOB in localStorage so a job he's
   // explicitly collapsed stays collapsed every time he reopens it.
   //
-  // Default state when nothing is in localStorage yet:
-  //   - Top rule firing → expanded (don't hide the urgent thing on first open)
-  //   - Only snoozed remain → collapsed (nothing urgent, get the screen back)
+  // Default state when nothing is in localStorage yet (UPDATED 2026-05-25):
+  //   - Top rule severity === "urgent" → expanded (don't hide a real fire)
+  //   - Anything else (needsInput / info / calm / no rule) → collapsed
+  //
+  // Earlier the default was "expanded any time there's a top rule," which
+  // meant routine stuff like "schedule rough soon" claimed a full panel
+  // worth of vertical space on every job. The severity-tinted master bar
+  // already signals "there's something in there" via its color; the user
+  // taps to expand if they want to act on it. Urgent-only auto-expand
+  // keeps the safety net for real fires.
+  //
+  // localStorage preference still wins over the default — if a user has
+  // explicitly opened OR closed the panel on this job, that choice
+  // persists across reloads.
   //
   // Data safety: pure UI state. localStorage only — no Firestore writes.
   //
@@ -24478,13 +24501,14 @@ function UpNextPanel({ job, identity, onAction }) {
   // signal it had before the move.
   const topPeek = rules[0] || null;
   const [panelOpen, setPanelOpen] = useState(() => {
-    if (!storageKey) return !!topPeek;
+    const urgentDefault = topPeek?.severity === "urgent";
+    if (!storageKey) return urgentDefault;
     try {
       const v = localStorage.getItem(storageKey);
       if (v === "0") return false;
       if (v === "1") return true;
     } catch (e) { /* localStorage may be blocked — fall through */ }
-    return !!topPeek;
+    return urgentDefault;
   });
   const togglePanel = () => {
     setPanelOpen(v => {
@@ -24527,10 +24551,14 @@ function UpNextPanel({ job, identity, onAction }) {
     const picking = snoozeFor === rule.id;
     return (
       <div style={{
-        // Tightened 2026-05-22: was 12/14 primary, 10 secondary — Up Next was
-        // eating too much vertical above the tabs. Compact pass drops outer
-        // padding ~30%, plus tighter line-height + smaller gaps below.
-        padding: isPrimary ? "8px 22px 9px" : "6px 22px",
+        // Tightened twice — first pass 2026-05-22 (12/14 → 8/9 primary,
+        // 10 → 6 secondary), second pass 2026-05-25 to shrink further
+        // since the panel was still claiming too much room when expanded.
+        // Outer padding is now ~half of original: 6/16/7 primary, 5/16
+        // secondary. Summary fontSize 14 → 13. The cumulative drop is
+        // most visible on routine (non-urgent) rules where the action
+        // row is short.
+        padding: isPrimary ? "6px 16px 7px" : "5px 16px",
         background: isPrimary ? (gradients[rule.severity] || gradients.info) : "#fafbfc",
         borderTop: isPrimary ? "none" : `1px solid ${C.border}`,
         position: "relative",
@@ -24570,7 +24598,7 @@ function UpNextPanel({ job, identity, onAction }) {
           )}
         </div>
         <div
-          style={{ fontSize: 14, fontWeight: 600, color: C.text, lineHeight: 1.35, marginBottom: 7, paddingRight: 22 }}
+          style={{ fontSize: 13, fontWeight: 600, color: C.text, lineHeight: 1.3, marginBottom: 6, paddingRight: 22 }}
           dangerouslySetInnerHTML={{ __html: rule.summary(job) }}/>
 
         {/* Action row OR snooze picker row */}
@@ -25931,13 +25959,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
         </div>
 
-        {/* Up Next panel — sits between header and tabs. Reads job state,
-            surfaces the single most-pressing next action, with "▾ N more"
-            expander for any other firing rules. Calm fallback ("on track"
-            etc.) shows when nothing urgent is up. Pure presentation +
-            dispatch — all writes go through handleUpNextAction → u(). */}
-        <UpNextPanel job={job} identity={identity} onAction={handleUpNextAction}/>
-
         {/* Tabs */}
 
         <div style={{display:"flex",gap:1,padding:"8px 22px 0",borderBottom:`1px solid ${C.border}`,
@@ -25969,6 +25990,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
         <div style={{flex:1,overflowY:"auto",padding:"20px 22px"}}>
 
+          {/* Up Next panel — moved inside the body 2026-05-25 so it
+              scrolls with content instead of being pinned above the
+              tabs. Reads job state, surfaces the single most-pressing
+              next action with a "▾ N more" expander for other firing
+              rules. Default-collapsed unless severity === "urgent" so
+              routine items show as just a thin severity-tinted bar.
+              Pure presentation + dispatch — all writes go through
+              handleUpNextAction → u(). */}
+          <UpNextPanel job={job} identity={identity} onAction={handleUpNextAction}/>
 
           {tab==="Rough"&&(
 
