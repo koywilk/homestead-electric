@@ -890,7 +890,12 @@ const ROUGH_STATUSES = [
 const FINISH_STATUSES = ROUGH_STATUSES;
 const CO_STATUSES_NEW = [
   {value:"needs_sending", label:"Needs to be Sent",       color:"#dc2626"},
-  {value:"simpro_task",   label:"Task Made in SimPro",     color:"#f97316"},
+  // 2026-05-25: "Task Made in SimPro" (simpro_task) retired. Team
+  // switched the workflow to use credit card receipts directly instead
+  // of pre-creating a Simpro task. Any existing COs still carrying
+  // coStatus:"simpro_task" will render with no active pill until the
+  // user clicks any other status — chose graceful degradation over a
+  // bulk migration write to avoid surprise updates on historical jobs.
   {value:"pending",       label:"Sent — Pending Approval", color:"#ca8a04"},
   {value:"approved",      label:"Approved",                color:"#16a34a"},
   {value:"scheduled",     label:"Scheduled",               color:"#2563eb", hasDate:true},
@@ -24445,10 +24450,6 @@ function UpNextPanel({ job, identity, onAction }) {
   // gives them that middle state.
   const [snoozedOpen, setSnoozedOpen] = useState(false);
   const [snoozeFor, setSnoozeFor] = useState(null); // ruleId currently picking
-  if (!rules.length && !snoozed.length) return null;
-  const top  = rules[0] || null;
-  const more = rules.slice(1);
-
   // Master panel collapse — Vasa asked for this 2026-05-24. Even with the
   // compact snoozed rows and sub-collapses, the panel itself still claimed
   // too much vertical above the tabs on jobs where Up Next was noisy. The
@@ -24461,16 +24462,29 @@ function UpNextPanel({ job, identity, onAction }) {
   //   - Only snoozed remain → collapsed (nothing urgent, get the screen back)
   //
   // Data safety: pure UI state. localStorage only — no Firestore writes.
+  //
+  // IMPORTANT (2026-05-25 hotfix): this useState MUST live above the
+  // `if (!rules.length && !snoozed.length) return null` early return.
+  // Hooks have to run in the same order on every render — if the panel
+  // returns early on render N (3 hooks) and renders normally on render
+  // N+1 (4 hooks), React throws #310 "Rendered more hooks than during
+  // the previous render" and the whole app crashes. Earlier this hook
+  // sat below the early return; rule sets that flip empty↔non-empty
+  // (e.g. punch items being added/cleared) reliably crashed the app.
   const jobId      = job?.id || "";
   const storageKey = jobId ? `he.upNextOpen.${jobId}` : "";
+  // topPeek: same data the post-early-return code uses for `top`, but
+  // computed up here so the initial useState lazy-init has the same
+  // signal it had before the move.
+  const topPeek = rules[0] || null;
   const [panelOpen, setPanelOpen] = useState(() => {
-    if (!storageKey) return !!top;
+    if (!storageKey) return !!topPeek;
     try {
       const v = localStorage.getItem(storageKey);
       if (v === "0") return false;
       if (v === "1") return true;
     } catch (e) { /* localStorage may be blocked — fall through */ }
-    return !!top;
+    return !!topPeek;
   });
   const togglePanel = () => {
     setPanelOpen(v => {
@@ -24480,6 +24494,10 @@ function UpNextPanel({ job, identity, onAction }) {
       return next;
     });
   };
+
+  if (!rules.length && !snoozed.length) return null;
+  const top  = rules[0] || null;
+  const more = rules.slice(1);
 
   // Severity → gradient + label color
   const gradients = {
