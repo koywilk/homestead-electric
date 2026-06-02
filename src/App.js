@@ -21234,8 +21234,17 @@ const DRIVE_API_KEY = firebaseConfig.apiKey; // reuse Firebase API key (must ena
 
 function extractDriveFolderId(input) {
   if (!input) return "";
-  const match = input.match(/folders\/([a-zA-Z0-9_-]+)/);
-  if (match) return match[1];
+  // Modern Drive share URLs: .../folders/<ID>...
+  const folderMatch = input.match(/folders\/([a-zA-Z0-9_-]+)/);
+  if (folderMatch) return folderMatch[1];
+  // Legacy / alternate share URLs: drive.google.com/open?id=<ID> and
+  // anything else that passes the ID through a ?id= query param.
+  // 2026-05-25 bug: a folder linked via one of these URLs got saved
+  // but never parsed back out, so the DriveFilesSection got stuck in a
+  // dead state (no Edit button, no input — see the LOT 91 - KAMAS report).
+  const idParamMatch = input.match(/[?&]id=([a-zA-Z0-9_-]+)/);
+  if (idParamMatch) return idParamMatch[1];
+  // Raw ID pasted directly (no URL wrapper)
   if (/^[a-zA-Z0-9_-]{10,}$/.test(input.trim())) return input.trim();
   return "";
 }
@@ -21440,8 +21449,27 @@ function DriveFilesSection({ job, onUpdate }) {
         )}
       </div>
 
-      {/* Folder URL input */}
-      {editingFolder && (
+      {/* Broken-link hint — fires when there's something saved on the
+          job but extractDriveFolderId returned empty (couldn't parse the
+          URL or ID). Without this, the user sees a blank section with
+          no indication of WHY the action buttons aren't there. The
+          input below opens automatically in this case so they can fix
+          it without hunting for a hidden "Edit" button. */}
+      {job.driveFolderId && !folderId && (
+        <div style={{ fontSize: 11, color: "#92400e", padding: "8px 12px",
+          background: "#fef3c7", border: "1px solid #fde68a", borderRadius: 8, marginBottom: 10,
+          display: "flex", alignItems: "center", gap: 8 }}>
+          <Icon name="alertTriangle" size={12} stroke={2.25}/>
+          <span>The saved Drive folder link couldn't be read. Paste a fresh folder URL below to re-link.</span>
+        </div>
+      )}
+
+      {/* Folder URL input — also shows when there's no valid parsed
+          folderId, even if the user hasn't clicked Edit. Without this
+          fallback the component renders nothing (no action buttons +
+          no input) when job.driveFolderId is set but unparseable. See
+          LOT 91 - KAMAS 2026-05-25 report. */}
+      {(editingFolder || !folderId) && (
         <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
           <input value={folderInput} onChange={e => setFolderInput(e.target.value)}
             placeholder="Paste Google Drive folder URL..."
