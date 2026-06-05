@@ -37448,19 +37448,32 @@ function _startPODue(ymd) {
   const now = new Date(); now.setHours(0,0,0,0);
   return now >= due;            // due the day before the scheduled start, onward
 }
+// Go-forward cutoff. The worklist should "start accumulating from now" rather
+// than pull in every legacy job that finished but was never checked off in the
+// app. A duty only surfaces if that PHASE is scheduled on/after this date —
+// rough duties gate on roughScheduledDate, finish duties on finishScheduledDate.
+// So a job whose rough was back in May is skipped, but its finish (scheduled
+// later) still shows. Missing date = treated as legacy (suppressed). Bump this
+// one date to re-baseline the whole list.
+const WORKLIST_EPOCH = "2026-06-05";
+function _afterEpoch(ymd) {
+  if (!ymd) return false;
+  const d = new Date(ymd); if (isNaN(d)) return false;
+  return d >= new Date(WORKLIST_EPOCH);
+}
 function getCoordinatorDuties(job) {
   if (!job || job.tempPed) return [];
   const out = [];
   const rough  = parseStage(job.roughStage);
   const finish = parseStage(job.finishStage);
   const base = { jobId: job.id, jobName: job.name || job.id, foreman: job.foreman || "" };
-  if (rough === 100 && !_qcWalkConducted(job.roughPunch) && !job.roughQCWalkDone)
+  if (rough === 100 && _afterEpoch(job.roughScheduledDate) && !_qcWalkConducted(job.roughPunch) && !job.roughQCWalkDone)
     out.push({ ...base, id:"coord_rough_qc",  dutyType:"qc", phase:"rough",  label:"Rough QC walk",   icon:"clipboard", targetTab:"Rough"  });
-  if (finish === 100 && !_qcWalkConducted(job.finishPunch) && !job.finishQCWalkDone)
+  if (finish === 100 && _afterEpoch(job.finishScheduledDate) && !_qcWalkConducted(job.finishPunch) && !job.finishQCWalkDone)
     out.push({ ...base, id:"coord_finish_qc", dutyType:"qc", phase:"finish", label:"Finish QC walk",  icon:"clipboard", targetTab:"Finish" });
-  if (rough < 100 && _startPODue(job.roughScheduledDate) && !job.roughStartPOSent)
+  if (rough < 100 && _afterEpoch(job.roughScheduledDate) && _startPODue(job.roughScheduledDate) && !job.roughStartPOSent)
     out.push({ ...base, id:"coord_rough_po",  dutyType:"po", phase:"rough",  label:"Send rough start PO",  icon:"package", markField:"roughStartPOSent" });
-  if (rough === 100 && finish < 100 && _startPODue(job.finishScheduledDate) && !job.finishStartPOSent)
+  if (rough === 100 && finish < 100 && _afterEpoch(job.finishScheduledDate) && _startPODue(job.finishScheduledDate) && !job.finishStartPOSent)
     out.push({ ...base, id:"coord_finish_po", dutyType:"po", phase:"finish", label:"Send finish start PO", icon:"package", markField:"finishStartPOSent" });
   return out;
 }
