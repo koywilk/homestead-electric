@@ -32089,6 +32089,23 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
     }).filter(fc => fc.staffNames.length > 0);
   }, [users, foremanColors, allStaff]);
 
+  // Coordinator "books" — each coordinator's staff = the union of all their
+  // foremen's crews. Lets you filter / default the schedule to a whole book
+  // (Koy / Brady / Josh) instead of one foreman's crew. Derived from the
+  // coordinator field on foreman user docs (Settings → Team).
+  const coordinatorBooks = useMemo(() => {
+    const byCoord = {};
+    (users||[]).filter(u => (u.title||u.role)==="foreman" && u.coordinator).forEach(f => {
+      const fc = foremanCrews.find(c => c.foremanId === f.id);
+      if (!byCoord[f.coordinator]) byCoord[f.coordinator] = new Set();
+      if (fc) fc.staffNames.forEach(n => byCoord[f.coordinator].add(n));
+    });
+    return Object.entries(byCoord)
+      .map(([coordinator, set]) => ({ coordinator, staffNames: [...set] }))
+      .filter(b => b.staffNames.length > 0)
+      .sort((a,b) => a.coordinator.localeCompare(b.coordinator));
+  }, [users, foremanCrews]);
+
   const [personFilter, setPersonFilter] = useState("all");
   const [prefApplied,  setPrefApplied]  = useState(false);
 
@@ -32106,6 +32123,12 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
     if (pref === "mycrew") {
       if (hasMyCrew) { setPersonFilter("mycrew"); setPrefApplied(true); }
       return; // wait for crew to resolve before marking applied
+    }
+    // Explicit "coord_<coordinatorName>" — pick that coordinator's book
+    if (pref.startsWith("coord_")) {
+      const match = coordinatorBooks.find(b => "coord_" + b.coordinator === pref);
+      if (match) { setPersonFilter(pref); setPrefApplied(true); return; }
+      if (coordinatorBooks.length === 0) return; // wait for books to populate
     }
     // Explicit "crew_<foremanId>" — pick that crew
     if (pref.startsWith("crew_")) {
@@ -32137,9 +32160,11 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
   const byDate = useMemo(() => {
     if (!schedule) return {};
     const jobEntries = schedule.filter(s => s.Type === "job");
-    const crewMatch = personFilter.startsWith("crew_") ? foremanCrews.find(fc => "crew_"+fc.foremanId === personFilter) : null;
+    const crewMatch  = personFilter.startsWith("crew_")  ? foremanCrews.find(fc => "crew_"+fc.foremanId === personFilter) : null;
+    const coordMatch = personFilter.startsWith("coord_") ? coordinatorBooks.find(b => "coord_"+b.coordinator === personFilter) : null;
     const filtered = personFilter === "all" ? jobEntries
       : personFilter === "mycrew" ? jobEntries.filter(s => myCrewNames.includes(s.Staff?.Name))
+      : coordMatch ? jobEntries.filter(s => coordMatch.staffNames.includes(s.Staff?.Name))
       : crewMatch ? jobEntries.filter(s => crewMatch.staffNames.includes(s.Staff?.Name))
       : jobEntries.filter(s => s.Staff?.Name === personFilter);
     const map = {};
@@ -32148,7 +32173,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
       map[s.Date].push(s);
     });
     return map;
-  }, [schedule, personFilter, myCrewNames]);
+  }, [schedule, personFilter, myCrewNames, foremanCrews, coordinatorBooks]);
 
   // For each date, one block per job showing all crew with earliest start → latest end
   const crewByDateAndJob = useMemo(() => {
@@ -32206,9 +32231,18 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
               style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:6,
                 color:C.text,fontSize:11,padding:"4px 8px",cursor:"pointer",fontFamily:"inherit"}}>
               <option value="all">Everyone</option>
-              {foremanCrews.map(fc => (
-                <option key={fc.foremanId} value={"crew_"+fc.foremanId}>{fc.foremanName}'s Crew</option>
-              ))}
+              {coordinatorBooks.length > 0 && (
+                <optgroup label="Books (coordinator)">
+                  {coordinatorBooks.map(b => (
+                    <option key={"coord_"+b.coordinator} value={"coord_"+b.coordinator}>{(b.coordinator||"").split(" ")[0]}'s Book</option>
+                  ))}
+                </optgroup>
+              )}
+              <optgroup label="Crews (foreman)">
+                {foremanCrews.map(fc => (
+                  <option key={fc.foremanId} value={"crew_"+fc.foremanId}>{fc.foremanName}'s Crew</option>
+                ))}
+              </optgroup>
             </select>
           )}
           {/* Week nav */}
@@ -32244,6 +32278,8 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                 const isToday = ymd === todayYMD;
                 const activeCrew = personFilter.startsWith("crew_")
                   ? (foremanCrews.find(fc => "crew_"+fc.foremanId === personFilter)?.staffNames || [])
+                  : personFilter.startsWith("coord_")
+                  ? (coordinatorBooks.find(b => "coord_"+b.coordinator === personFilter)?.staffNames || [])
                   : [];
                 const dayJobs = (crewByDateAndJob[ymd] || []).filter(g =>
                   personFilter === "all" ? true
@@ -41972,6 +42008,9 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
             <option value="">Auto — my own crew</option>
             <option value="all">All crews</option>
             <option value="mycrew">My crew (foreman + crewmates)</option>
+            {[...new Set((users||[]).filter(u=>(u.title||u.role)==="foreman"&&u.coordinator).map(u=>u.coordinator))].sort().map(cn => (
+              <option key={"coord_"+cn} value={"coord_"+cn}>{(cn||"").split(" ")[0]}'s book (whole coordinator)</option>
+            ))}
             {foremanUsers.map(f => (
               <option key={f.id} value={"crew_"+f.id}>{(f.name||"").split(" ")[0]}'s crew</option>
             ))}
@@ -49221,15 +49260,42 @@ function App() {
 
             <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(200px,1fr))",gap:10,marginBottom:40,alignItems:"start"}}>
 
-              {_foremen.map(f=>{
+              {(()=>{
+                // Org-chart grouping: sort foreman cards by their coordinator
+                // (Settings → Team) and drop a full-width header band before each
+                // coordinator's cards. Falls back to the flat layout until any
+                // coordinator is assigned, so nothing changes pre-config.
+                const coordOf = (fname) => { const u=(users||[]).find(x=>x.name===fname&&((x.title||x.role)==="foreman")); return (u&&u.coordinator)||""; };
+                const anyCoord = _foremen.some(f=>coordOf(f));
+                const sortedForemen = anyCoord
+                  ? [..._foremen].sort((a,b)=>{ const ca=coordOf(a)||"￿", cb=coordOf(b)||"￿"; return ca!==cb?ca.localeCompare(cb):a.localeCompare(b); })
+                  : _foremen;
+                let _prevCoord = null, _headerShown = false;
+                return sortedForemen.map(f=>{
                 const fc    = getPersonColor(f);
                 const fJobs = jobs.filter(j=>matchesForeman(j,f));
                 const fCOs  = fJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length,0);
                 const fRT   = fJobs.filter(j=>(j.returnTrips||[]).some(r=>!r.signedOff&&(r.scope||r.date))).length;
                 const rAvg  = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+parseStage(j.roughStage),0)/fJobs.length) : 0;
                 const fnAvg = fJobs.length ? Math.round(fJobs.reduce((a,j)=>a+parseStage(j.finishStage),0)/fJobs.length) : 0;
+                const _coordKey = coordOf(f);
+                const _showHeader = anyCoord && _coordKey !== _prevCoord;
+                const _isFirstHeader = _showHeader && !_headerShown;
+                if (_showHeader) _headerShown = true;
+                _prevCoord = _coordKey;
+                const _headerColor = _coordKey ? (getPersonColor(_coordKey)||C.accent) : "#6b7280";
                 return (
-                  <div key={f}>
+                  <Fragment key={f}>
+                    {_showHeader && (
+                      <div style={{gridColumn:"1 / -1",display:"flex",alignItems:"center",gap:10,
+                        marginTop:_isFirstHeader?0:8,marginBottom:2,paddingBottom:6,borderBottom:`2px solid ${_headerColor}33`}}>
+                        <span style={{width:9,height:9,borderRadius:"50%",background:_headerColor,flexShrink:0}}/>
+                        <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:_headerColor,lineHeight:1}}>
+                          {_coordKey ? `${_coordKey}'s Book` : "No coordinator"}
+                        </span>
+                      </div>
+                    )}
+                  <div>
                     {/* Main card */}
                     <div className="foreman-card" onClick={()=>openForeman(f)}
                       style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,
@@ -49287,15 +49353,26 @@ function App() {
                       <span style={{fontSize:9,color:C.dim,opacity:0.5}}>→</span>
                     </div>
                   </div>
+                  </Fragment>
                 );
-              })}
+                });
+              })()}
 
-              {/* Unassigned */}
+              {/* Unassigned (no foreman) */}
               {(()=>{
                 const fc    = "#6b7280";
                 const uJobs = jobs.filter(j=>!j.foreman||j.foreman==="Unassigned");
                 const uCOs  = uJobs.reduce((a,j)=>a+(j.changeOrders||[]).filter(c=>c.coStatus!=="completed"&&c.coStatus!=="denied"&&c.coStatus!=="converted").length,0);
+                const _anyCoord = (users||[]).some(u=>(u.title||u.role)==="foreman"&&u.coordinator);
                 return (
+                  <Fragment>
+                    {_anyCoord && (
+                      <div style={{gridColumn:"1 / -1",display:"flex",alignItems:"center",gap:10,
+                        marginTop:8,marginBottom:2,paddingBottom:6,borderBottom:`2px solid ${fc}33`}}>
+                        <span style={{width:9,height:9,borderRadius:"50%",background:fc,flexShrink:0}}/>
+                        <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:fc,lineHeight:1}}>Unassigned</span>
+                      </div>
+                    )}
                   <div>
                     <div className="foreman-card" onClick={()=>openForeman("Unassigned")}
                       style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,
@@ -49316,6 +49393,7 @@ function App() {
                       <div style={{fontSize:10,color:C.dim,fontWeight:600,textAlign:"right",opacity:0.7}}>View →</div>
                     </div>
                   </div>
+                  </Fragment>
 
                 );
 
