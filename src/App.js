@@ -3208,6 +3208,24 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                       <div style={{fontSize:10,color:C.muted,marginTop:3}}>Which foreman's crew they belong to</div>
                     </div>
                   )}
+                  {/* Coordinator — office scheduler who owns this foreman's book.
+                      Stored as the coordinator's full name to match how jobs
+                      reference foremen (j.foreman is a name). Options derive from
+                      office-access users so it stays self-maintaining. */}
+                  {title==="foreman" && (
+                    <div>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>COORDINATOR (office scheduler)</div>
+                      <select value={u.coordinator||""} onChange={e=>upd(u.id,{coordinator:e.target.value})}
+                        style={{width:"100%",background:C.surface,border:`1px solid ${C.border}`,
+                          borderRadius:7,color:C.text,padding:"8px 10px",fontSize:13,
+                          fontFamily:"inherit",outline:"none",boxSizing:"border-box"}}>
+                        <option value="">— Unassigned —</option>
+                        {list.filter(o=>{const a=getAccess(o); return a==="admin"||a==="manager";})
+                             .map(o=>(<option key={o.id} value={o.name}>{o.name}</option>))}
+                      </select>
+                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Which office scheduler runs this foreman's book</div>
+                    </div>
+                  )}
                   {/* PIN */}
                   <div>
                     <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>PIN (4 digits)</div>
@@ -32362,11 +32380,45 @@ function NavView({ jobs }) {
 
 // ── Scheduling Forecast ───────────────────────────────────────
 
-function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdateJob }) {
+function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allForemen, identity, onUpdateJob, users=[] }) {
   const [foremanTab, setForemanTab] = useState("All");
   const [viewMode,   setViewMode]   = useState("crew"); // crew | kanban | week | attention | calendar
   const [calMonth,   setCalMonth]   = useState(() => { const d=new Date(); d.setDate(1); d.setHours(0,0,0,0); return d; });
   const [calDayDetail, setCalDayDetail] = useState(null); // date string YYYY-MM-DD for expanded day
+
+  // ── Coordinator "book" filter ────────────────────────────────
+  // Foremen are assigned a coordinator (office scheduler) in Settings → Team.
+  // Selecting a coordinator scopes BOTH the job list and the foreman tabs to
+  // that coordinator's book, so Brady/Josh plan their 8 without the whole-company
+  // firehose. Implemented by re-deriving `jobs` + `foremenList` from the raw
+  // props below — every view (crew/kanban/week/attention/calendar) inherits it.
+  // Additive + read-only: "all" reproduces today's exact behavior.
+  const coordinatorNames = useMemo(() =>
+    [...new Set((users||[])
+      .filter(u => (u.title||u.role)==="foreman" && u.coordinator)
+      .map(u => u.coordinator))].sort()
+  , [users]);
+  const _myName = identity?.name || "";
+  const _iAmCoordinator = coordinatorNames.includes(_myName);
+  const [coordFilter, setCoordFilter] = useState(() => {
+    try { const s = localStorage.getItem("planner.coordFilter"); if (s !== null) return s; } catch {}
+    return _iAmCoordinator ? _myName : "all";
+  });
+  const pickCoord = (v) => { setCoordFilter(v); try { localStorage.setItem("planner.coordFilter", v); } catch {} };
+  const _myForemenSet = useMemo(() => {
+    if (coordFilter === "all") return null;
+    return new Set((users||[])
+      .filter(u => (u.title||u.role)==="foreman" && u.coordinator===coordFilter)
+      .map(u => (u.name||"").toLowerCase()));
+  }, [users, coordFilter]);
+  const jobs = useMemo(() => {
+    if (!_myForemenSet) return _allJobs;
+    return (_allJobs||[]).filter(j => j.foreman && _myForemenSet.has(String(j.foreman).toLowerCase()));
+  }, [_allJobs, _myForemenSet]);
+  const foremenList = useMemo(() => {
+    if (!_myForemenSet) return _allForemen;
+    return (_allForemen||[]).filter(n => _myForemenSet.has(String(n).toLowerCase()));
+  }, [_allForemen, _myForemenSet]);
 
   // Simpro schedule data — which jobs are actually scheduled this month?
   const [simproSchedule, setSimproSchedule] = useState([]);
@@ -33838,6 +33890,27 @@ function SchedulingForecast({ jobs, onSelectJob, foremenList, identity, onUpdate
             ))}
           </div>
         </div>
+        {/* Coordinator book filter — shows once foremen have a coordinator
+            assigned in Settings → Team. "All" = whole company. Scopes the
+            foreman tabs + every view below via the memos at the top. */}
+        {coordinatorNames.length > 0 && (
+          <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:10}}>
+            <span style={{fontSize:11,color:"var(--dim)",marginRight:2}}>Book:</span>
+            {[{k:"all",label:"All"}, ...coordinatorNames.map(n=>({k:n,label:(n||"").split(/\s+/)[0]}))].map(o=>{
+              const active = coordFilter === o.k;
+              return (
+                <button key={o.k} onClick={()=>pickCoord(o.k)}
+                  style={{fontSize:12,padding:"4px 12px",borderRadius:99,
+                    background: active ? C.accent : "none",
+                    color: active ? "#fff" : "var(--dim)",
+                    border:`1px solid ${active ? C.accent : C.border}`,
+                    cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
+                  {o.label}
+                </button>
+              );
+            })}
+          </div>
+        )}
         {/* Foreman tabs */}
         <div style={{display:"flex",gap:6,overflowX:"auto",scrollbarWidth:"none",paddingBottom:1}}>
           {foremanTabs.map(f=>{
@@ -37307,7 +37380,7 @@ if (typeof window !== "undefined") {
 // write paths needed; uses parent job's lastActivityAt as recency signal).
 // Spec: memory/project_today_command_center.md
 // Role gating: today.view = admin/manager/standard. NOT lead/crew.
-function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], identity, onSelectJob }) {
+function Today({ jobs: _allJobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], identity, onSelectJob }) {
   // Local UI state — filter pills + feed expansion (50 → all).
   // Persist filter across reloads so Koy can park on a category.
   const [feedFilter, setFeedFilter] = useState(() => { try { return localStorage.getItem("today.feedFilter") || "all"; } catch { return "all"; } });
@@ -37323,6 +37396,35 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
   const [jobsTodayOpen, setJobsTodayOpen] = useState(false);
   const [heartbeatOpen, setHeartbeatOpen] = useState(false);
   const [photosOpen, setPhotosOpen] = useState(false);
+  // ── Coordinator "book" filter ────────────────────────────────
+  // Each foreman is assigned a coordinator (office scheduler) in Settings → Team.
+  // A coordinator's book = their foremen + those foremen's jobs, so Brady/Josh
+  // can narrow Today to their 8 instead of the whole company. Scoping is applied
+  // by re-deriving `jobs` below from the raw `_allJobs` prop — every downstream
+  // reader (feed, jobs grid, heartbeat, photos) then respects the filter for
+  // free. Fully additive: no writes, "all" = today's exact behavior.
+  const coordinatorNames = useMemo(() =>
+    [...new Set((users||[])
+      .filter(u => (u.title||u.role)==="foreman" && u.coordinator)
+      .map(u => u.coordinator))].sort()
+  , [users]);
+  const _myName = identity?.name || "";
+  const _iAmCoordinator = coordinatorNames.includes(_myName);
+  const [coordFilter, setCoordFilter] = useState(() => {
+    try { const s = localStorage.getItem("today.coordFilter"); if (s !== null) return s; } catch {}
+    return _iAmCoordinator ? _myName : "all";
+  });
+  const pickCoord = (v) => { setCoordFilter(v); try { localStorage.setItem("today.coordFilter", v); } catch {} };
+  const _myForemen = useMemo(() => {
+    if (coordFilter === "all") return null;
+    return new Set((users||[])
+      .filter(u => (u.title||u.role)==="foreman" && u.coordinator===coordFilter)
+      .map(u => (u.name||"").toLowerCase()));
+  }, [users, coordFilter]);
+  const jobs = useMemo(() => {
+    if (!_myForemen) return _allJobs;
+    return (_allJobs||[]).filter(j => j.foreman && _myForemen.has(String(j.foreman).toLowerCase()));
+  }, [_allJobs, _myForemen]);
   // Defensive timestamp coercer — lastActivityAt can be a Firestore Timestamp
   // (with .toDate()), a Date, an ISO string, or missing (old jobs that haven't
   // been touched since the field was introduced). Returns null for unknown.
@@ -37737,6 +37839,29 @@ function Today({ jobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], 
           Auto-refreshing
         </div>
       </div>
+
+      {/* Coordinator book filter — office only, shows once foremen have a
+          coordinator assigned in Settings → Team. "All" = whole company.
+          Selection persists per-device; defaults to the signed-in coordinator's
+          own book. Scopes the whole page via the `jobs` memo at the top. */}
+      {coordinatorNames.length > 0 && can(identity,"settings.view") && (
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",alignItems:"center",marginBottom:14}}>
+          <span style={{fontSize:11,color:C.dim,marginRight:2}}>Book:</span>
+          {[{k:"all",label:"All"}, ...coordinatorNames.map(n=>({k:n,label:(n||"").split(/\s+/)[0]}))].map(o=>{
+            const active = coordFilter === o.k;
+            return (
+              <button key={o.k} onClick={()=>pickCoord(o.k)}
+                style={{fontSize:12,padding:"4px 12px",borderRadius:99,
+                  background: active ? C.text : C.bg,
+                  color: active ? "#fff" : C.dim,
+                  border:`1px solid ${active ? C.text : C.border}`,
+                  cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>
+                {o.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Pulse bar — 6 counters (all wired) */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:14}}>
@@ -49880,7 +50005,7 @@ function App() {
       })()}
 
       {view==="schedule"&&can(identity,"schedule.view")&&(
-        <SchedulingForecast jobs={jobs} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)} foremenList={_foremen} identity={identity} onUpdateJob={updateJob}/>
+        <SchedulingForecast jobs={jobs} users={users} canEdit={can(identity,"schedule.edit")} onSelectJob={(job)=>setSelected(job)} foremenList={_foremen} identity={identity} onUpdateJob={updateJob}/>
       )}
 
       {view==="huddle"&&can(identity,"settings.view")&&(
