@@ -2872,11 +2872,12 @@ const PERMISSIONS = {
   "cos.view":               ["admin","manager"],
   // Coordinator Book Worklist — office/coordinators see the panel.
   "worklist.view":          ["admin","manager"],
-  // Company-wide hats — centralized on Koy now, delegated later by GRANTING
-  // these (don't hardcode names). Default to admin only = Koy today.
-  "jobstart.own":           ["admin"],
-  "jobprep.own":            ["admin"],
-  "redline.own":            ["admin"],
+  // Company-wide hats — NOT tier-based (all 3 coordinators share a tier, so a
+  // tier gate can't single out Koy). Granted PER USER via `caps` in Settings →
+  // Team. Empty tier list = nobody gets it by tier; only an explicit grant does.
+  "jobstart.own":           [],
+  "jobprep.own":            [],
+  "redline.own":            [],
 };
 
 // Resolve access level from user object (supports legacy role-only users)
@@ -2894,7 +2895,11 @@ const can = (identity, feature) => {
   if(!identity) return false;
   const access  = getAccess(identity);
   const allowed = PERMISSIONS[feature] || [];
-  return allowed.includes(access);
+  if(allowed.includes(access)) return true;
+  // Per-user capability grants (e.g. company hats) — granted in Settings → Team,
+  // independent of access tier so two admins can differ. Delegation-ready.
+  if(Array.isArray(identity.caps) && identity.caps.includes(feature)) return true;
+  return false;
 };
 
 // Read identity — returns null if missing or older than 24h
@@ -3199,6 +3204,31 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                     {access==="standard" && "Can view all cards, add tasks, see schedule and pipeline (no manage)"}
                     {access==="limited"  && "Home screen and job editing only — no settings, pipeline, or tasks"}
                   </div>
+                  {/* Company hats — per-user grants for centralized duties (job
+                      prep + redlines, job starts). These surface the Company
+                      section of the Today worklist for THIS person only — not
+                      tied to access tier, so two admins can differ. Grant here
+                      to delegate without a code change (Koy now; others as they
+                      train in). */}
+                  {(access==="admin"||access==="manager") && (
+                    <div>
+                      <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>COMPANY HATS</div>
+                      <div style={{display:"flex",flexDirection:"column",gap:6}}>
+                        {[["jobprep.own","Job prep & redlines"],["jobstart.own","Job starts"]].map(([cap,label])=>{
+                          const on = Array.isArray(u.caps) && u.caps.includes(cap);
+                          return (
+                            <label key={cap} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
+                              <input type="checkbox" checked={on}
+                                onChange={e=>{ const cur=Array.isArray(u.caps)?u.caps:[]; const next=e.target.checked?[...new Set([...cur,cap])]:cur.filter(c=>c!==cap); upd(u.id,{caps:next}); }}
+                                style={{width:14,height:14,accentColor:C.accent,cursor:"pointer",flexShrink:0}}/>
+                              <span style={{fontSize:12,color:on?C.text:C.muted}}>{label}</span>
+                            </label>
+                          );
+                        })}
+                      </div>
+                      <div style={{fontSize:10,color:C.muted,marginTop:3}}>Surfaces the Company section of the Today worklist. Grant as people train in.</div>
+                    </div>
+                  )}
                   {/* Foreman assignment — for crew/lead */}
                   {(title==="crew"||title==="lead") && (
                     <div>
