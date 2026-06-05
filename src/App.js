@@ -2870,6 +2870,13 @@ const PERMISSIONS = {
   // Change Order tracker — office only. Jeromy sends most COs and needs
   // one place to see every CO's status across every job (added 2026-05-24).
   "cos.view":               ["admin","manager"],
+  // Coordinator Book Worklist — office/coordinators see the panel.
+  "worklist.view":          ["admin","manager"],
+  // Company-wide hats — centralized on Koy now, delegated later by GRANTING
+  // these (don't hardcode names). Default to admin only = Koy today.
+  "jobstart.own":           ["admin"],
+  "jobprep.own":            ["admin"],
+  "redline.own":            ["admin"],
 };
 
 // Resolve access level from user object (supports legacy role-only users)
@@ -26044,7 +26051,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               routine items show as just a thin severity-tinted bar.
               Pure presentation + dispatch — all writes go through
               handleUpNextAction → u(). */}
-          <UpNextPanel job={job} identity={identity} onAction={handleUpNextAction}/>
+          {/* Up Next panel retired from Job Detail 2026-06-05 — felt like clutter.
+              Engine (getUpNextRules / UpNextPanel component / handleUpNextAction)
+              is intentionally kept: the Coordinator Book Worklist reuses the same
+              stage-trigger primitives, and a slimmed one-liner can be resurfaced
+              later by re-mounting <UpNextPanel/> here. */}
 
           {tab==="Rough"&&(
 
@@ -37416,7 +37427,55 @@ if (typeof window !== "undefined") {
 // write paths needed; uses parent job's lastActivityAt as recency signal).
 // Spec: memory/project_today_command_center.md
 // Role gating: today.view = admin/manager/standard. NOT lead/crew.
-function Today({ jobs: _allJobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], identity, onSelectJob }) {
+// ── Coordinator duty engine ────────────────────────────────────────────────
+// Stage-triggered obligations a COORDINATOR owns across their book. Sibling to
+// getUpNextRules (same primitives: parseStage, normFloor) but rolled up by the
+// Book Worklist panel below. Pure/read-only — returns rows, writes nothing.
+// A QC walk is "conducted" once it produces fromQC punch items, OR the
+// coordinator explicitly marks it walked (roughQCWalkDone/finishQCWalkDone).
+function _qcWalkConducted(punch) {
+  let n = 0;
+  ['upper','main','basement',...((punch?.extras||[]).map(e=>e.key))].forEach(fk=>{
+    const f = normFloor(punch?.[fk]);
+    [...f.general, ...f.rooms.flatMap(r=>r.items||[]), ...(f.hotcheck||[])].forEach(i=>{ if(i.fromQC && !i.voided) n++; });
+  });
+  return n > 0;
+}
+function _startPODue(ymd) {
+  if (!ymd) return false;
+  const d = new Date(ymd); if (isNaN(d)) return false;
+  const due = new Date(d); due.setDate(due.getDate()-1); due.setHours(0,0,0,0);
+  const now = new Date(); now.setHours(0,0,0,0);
+  return now >= due;            // due the day before the scheduled start, onward
+}
+function getCoordinatorDuties(job) {
+  if (!job || job.tempPed) return [];
+  const out = [];
+  const rough  = parseStage(job.roughStage);
+  const finish = parseStage(job.finishStage);
+  const base = { jobId: job.id, jobName: job.name || job.id, foreman: job.foreman || "" };
+  if (rough === 100 && !_qcWalkConducted(job.roughPunch) && !job.roughQCWalkDone)
+    out.push({ ...base, id:"coord_rough_qc",  dutyType:"qc", phase:"rough",  label:"Rough QC walk",   icon:"clipboard", targetTab:"Rough"  });
+  if (finish === 100 && !_qcWalkConducted(job.finishPunch) && !job.finishQCWalkDone)
+    out.push({ ...base, id:"coord_finish_qc", dutyType:"qc", phase:"finish", label:"Finish QC walk",  icon:"clipboard", targetTab:"Finish" });
+  if (rough < 100 && _startPODue(job.roughScheduledDate) && !job.roughStartPOSent)
+    out.push({ ...base, id:"coord_rough_po",  dutyType:"po", phase:"rough",  label:"Send rough start PO",  icon:"package", markField:"roughStartPOSent" });
+  if (rough === 100 && finish < 100 && _startPODue(job.finishScheduledDate) && !job.finishStartPOSent)
+    out.push({ ...base, id:"coord_finish_po", dutyType:"po", phase:"finish", label:"Send finish start PO", icon:"package", markField:"finishStartPOSent" });
+  return out;
+}
+// Company-wide hats (Koy now; grantable later). Job prep + redlines both live in
+// the prepStage pipeline, so one rule covers both. Pre-rough jobs only.
+function getCompanyDuties(job) {
+  if (!job || job.tempPed) return [];
+  if ((job.prepStage || "") === "Job Prep Complete") return [];
+  if (parseStage(job.roughStage) !== 0) return [];
+  const prep = job.prepStage || "";
+  return [{ jobId: job.id, jobName: job.name || job.id, foreman: job.foreman || "",
+    id:"co_prep", dutyType:"prep", label: prep ? `Prep: ${prep}` : "Job prep — not started", icon:"edit" }];
+}
+
+function Today({ jobs: _allJobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], identity, onSelectJob, onUpdateJob }) {
   // Local UI state — filter pills + feed expansion (50 → all).
   // Persist filter across reloads so Koy can park on a category.
   const [feedFilter, setFeedFilter] = useState(() => { try { return localStorage.getItem("today.feedFilter") || "all"; } catch { return "all"; } });
@@ -37898,6 +37957,58 @@ function Today({ jobs: _allJobs, users=[], manualTasks=[], quoteWalks=[], sugges
           })}
         </div>
       )}
+
+      {/* ── Coordinator Book Worklist ── stage-triggered duties due across the
+          selected book. Read-only except the PO "Mark sent" toggle, which writes
+          data.roughStartPOSent / data.finishStartPOSent via onUpdateJob (rides
+          inside the data map → round-trips, no loader change). */}
+      {can(identity,"worklist.view") && (()=>{
+        const bookDuties    = (jobs||[]).flatMap(getCoordinatorDuties);
+        const companyDuties = can(identity,"jobprep.own") ? (_allJobs||[]).flatMap(getCompanyDuties) : [];
+        const openJob  = (id) => { const j=(_allJobs||[]).find(x=>x.id===id); if(j&&onSelectJob) onSelectJob(j); };
+        const markSent = (d)  => { const j=(_allJobs||[]).find(x=>x.id===d.jobId); if(j&&onUpdateJob&&d.markField) onUpdateJob({...j,[d.markField]:true},{[d.markField]:true}); };
+        const Row = (d) => (
+          <div key={d.jobId+"_"+d.id} onClick={()=>openJob(d.jobId)}
+            style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderBottom:`1px solid ${C.border}`,cursor:"pointer"}}>
+            <Icon name={d.icon||"clipboard"} size={14} stroke={2}/>
+            <div style={{flex:1,minWidth:0}}>
+              <div style={{fontSize:13,color:C.text,fontWeight:600}}>{d.label}</div>
+              <div style={{fontSize:11,color:C.dim,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                {d.jobName}{d.foreman?` · ${d.foreman}`:""}
+              </div>
+            </div>
+            {d.markField && (
+              <button onClick={(e)=>{e.stopPropagation();markSent(d);}}
+                style={{fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:7,border:`1px solid ${C.border}`,
+                  background:C.surface,color:C.dim,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
+                Mark sent
+              </button>
+            )}
+          </div>
+        );
+        const total = bookDuties.length + companyDuties.length;
+        return (
+          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,marginBottom:14,overflow:"hidden"}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,padding:"12px 14px",borderBottom: total>0?`1px solid ${C.border}`:"none"}}>
+              <Icon name="clipboard" size={15} stroke={2}/>
+              <span style={{fontSize:13,fontWeight:700,color:C.text,letterSpacing:"0.02em"}}>Your Worklist</span>
+              <span style={{marginLeft:"auto",fontSize:11,color:C.dim,fontWeight:600}}>{total} due</span>
+            </div>
+            {total===0 && (
+              <div style={{padding:"16px 14px",fontSize:13,color:C.dim,textAlign:"center"}}>You're all caught up.</div>
+            )}
+            {bookDuties.map(Row)}
+            {companyDuties.length>0 && (
+              <>
+                <div style={{padding:"8px 14px",fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim,textTransform:"uppercase",background:C.surface}}>
+                  Company · prep &amp; redlines
+                </div>
+                {companyDuties.map(Row)}
+              </>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Pulse bar — 6 counters (all wired) */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:14}}>
@@ -50200,7 +50311,7 @@ function App() {
       )}
 
       {view==="today"&&can(identity,"today.view")&&(
-        <Today jobs={jobs} users={users} manualTasks={manualTasks} quoteWalks={quoteWalks} suggestions={appSuggestions} identity={identity} onSelectJob={setSelected}/>
+        <Today jobs={jobs} users={users} manualTasks={manualTasks} quoteWalks={quoteWalks} suggestions={appSuggestions} identity={identity} onSelectJob={setSelected} onUpdateJob={updateJob}/>
       )}
 
       {view==="cos"&&can(identity,"cos.view")&&(
