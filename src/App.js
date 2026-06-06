@@ -47115,6 +47115,10 @@ function App() {
 
   // ── Users (team members) — loaded from Firestore ─────────────
   const [users, setUsers] = useState(DEFAULT_USERS);
+  // Timestamp of the team doc this device loaded. saveUsers' stale-write guard
+  // compares against the live doc so an out-of-date device can't silently
+  // overwrite a newer team list (the failure that wiped the coordinator setup).
+  const usersBaseTsRef = useRef(null);
 
   useEffect(()=>{
     // ── Load users ────────────────────────────────────────────
@@ -47124,6 +47128,7 @@ function App() {
       "isaiah","jacob_nuffer","jacob_spackman","jakob","james","noah","payton",
     ]);
     getDoc(doc(db,"settings","users")).then(snap=>{
+      usersBaseTsRef.current = (snap.exists() && snap.data().updated_at) ? snap.data().updated_at : null;
       const raw = snap.exists()&&snap.data().list ? snap.data().list : [];
       const cleaned = raw.filter(u=>!BAD_IDS.has(u.id));
 
@@ -47195,12 +47200,49 @@ function App() {
   },[]);
 
   const saveUsers = async (list) => {
+    // ── Stale-write guard ──────────────────────────────────────
+    // Re-read the live team doc first. If it changed since this device loaded
+    // it, REFUSE to overwrite — that blind overwrite is how a full setup gets
+    // wiped by a second tab/device. Pull the fresh copy down instead so the
+    // user re-applies their change on current data.
+    try {
+      const cur = await getDoc(doc(db,"settings","users"));
+      const remoteTs = cur.exists() ? (cur.data().updated_at || null) : null;
+      const baseTs   = usersBaseTsRef.current;
+      if (remoteTs && baseTs && remoteTs !== baseTs) {
+        const fresh = (cur.data() && cur.data().list) || [];
+        setUsers(fresh);
+        usersBaseTsRef.current = remoteTs;
+        try { toast.error("Team list changed on another device — loaded the latest. Re-apply your change so nothing gets overwritten."); } catch {}
+        return false;
+      }
+    } catch (e) {
+      console.error("[HE] saveUsers guard read failed:", e?.message);
+      try { toast.error("Couldn't verify the team list before saving — NOT saved. Check your connection and retry."); } catch {}
+      return false;
+    }
+    // ── Safe to write ──────────────────────────────────────────
     setUsers(list);
     if(identity) {
       const updated = list.find(u=>u.id===identity.id);
       if(updated) { saveIdentity(updated); setIdentity(updated); }
     }
-    try { await setDoc(doc(db,"settings","users"),{list}); } catch(e){ console.error(e); }
+    const now = new Date().toISOString();
+    try {
+      await setDoc(doc(db,"settings","users"), {
+        list,
+        updated_at: now,
+        saved_by: identity?.name || "unknown",
+        device: localStorage.getItem('he_device_id') || "",
+      });
+      usersBaseTsRef.current = now;
+      try { toast.success("Team saved"); } catch {}
+      return true;
+    } catch(e) {
+      console.error(e);
+      try { toast.error("Team save FAILED — your change was NOT saved. Check your connection and try again."); } catch {}
+      return false;
+    }
   };
 
   // ── Color overrides (keyed by full name) ─────────────────────
