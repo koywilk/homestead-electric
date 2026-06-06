@@ -3073,11 +3073,11 @@ const NOTIF_CATEGORIES = [
   ]},
   { label:"Job Status", items:[
     { key:"ready_invoice",     label:"Ready to invoice",                     roles:["admin","manager","foreman"] },
-    { key:"prep_complete",     label:"Job prep complete",                    roles:["admin","manager","foreman"] },
+    { key:"prep_complete",     label:"Job prep complete",                    roles:["admin","manager","foreman","lead"] },
   ]},
   { label:"QC & Inspections", items:[
     { key:"qc_ready",          label:"QC walk ready to schedule",            roles:["admin","manager"] },
-    { key:"qc_passed",         label:"QC passed",                            roles:["admin","manager","foreman"] },
+    { key:"qc_passed",         label:"QC passed",                            roles:["admin","manager","foreman","lead"] },
     { key:"matterport",        label:"Matterport scan complete",             roles:["admin","manager"] },
   ]},
   { label:"Change Orders", items:[
@@ -3086,11 +3086,11 @@ const NOTIF_CATEGORIES = [
     { key:"co_completed",      label:"Change order work completed",          roles:["admin","manager"] },
   ]},
   { label:"Return Trips", items:[
-    { key:"rt_assigned",       label:"Return trip assigned",                 roles:["admin","manager","foreman"] },
+    { key:"rt_assigned",       label:"Return trip assigned",                 roles:["admin","manager","foreman","lead"] },
     { key:"rt_signed",         label:"Return trip signed off",               roles:["admin","manager"] },
   ]},
   { label:"Updates & Questions", items:[
-    { key:"job_question",      label:"New question on job",                  roles:["admin","manager","foreman"] },
+    { key:"job_question",      label:"New question on job",                  roles:["admin","manager","foreman","lead"] },
     { key:"daily_update",      label:"Daily update added",                   roles:["admin","manager"] },
     { key:"question_answered", label:"Question answered",                    roles:["admin","manager","foreman","lead"] },
   ]},
@@ -47222,6 +47222,28 @@ function App() {
   const _leadUsers    = users.filter(u=>getTitle(u)==="lead");
   const _crewUsers    = users.filter(u=>getTitle(u)==="crew");
 
+  // One-time lead-notification backfill. Leads were created with old defaults
+  // (these keys = false); the crew-relevant categories were added to leads
+  // 2026-06-05. This flips ONLY those keys ON for existing leads, merging into
+  // their saved prefs without touching anything else. Guarded per-device; the
+  // write only fires if something actually changed (idempotent).
+  useEffect(() => {
+    if (!Array.isArray(users) || users.length === 0) return;
+    try { if (localStorage.getItem("heLeadNotifMerge_v1")) return; } catch { return; }
+    const LEAD_KEYS = ["prep_complete","qc_passed","rt_assigned","job_question"];
+    let changed = false;
+    const next = users.map(usr => {
+      if (getTitle(usr) !== "lead") return usr;
+      const prefs = { ...(usr.notifPrefs || getNotifDefaults("lead")) };
+      let touched = false;
+      LEAD_KEYS.forEach(k => { if (prefs[k] !== true) { prefs[k] = true; touched = true; } });
+      if (touched) { changed = true; return { ...usr, notifPrefs: prefs }; }
+      return usr;
+    });
+    try { localStorage.setItem("heLeadNotifMerge_v1", "1"); } catch {}
+    if (changed) saveUsers(next);
+  }, [users]);
+
   // Full-name lists for dropdowns/display
   const _foremen = _foremanUsers.map(u=>u.name);
   const _leads   = _leadUsers.map(u=>u.name);
@@ -48244,6 +48266,20 @@ function App() {
 
   const [view, setView] = useState("home");
   const [activeForeman, setActiveForeman] = useState(null);
+  // Lead "My Crew" landing — a lead now runs their own apprentice, so on login
+  // drop them into their foreman's crew view instead of the full office board.
+  // Reuses the existing foreman drilldown (view==="foreman" + activeForeman).
+  // One-time per session; the lead can still navigate elsewhere afterward.
+  const [leadLandingApplied, setLeadLandingApplied] = useState(false);
+  useEffect(() => {
+    if (leadLandingApplied) return;
+    if (!identity?.id || !Array.isArray(users) || users.length === 0) return;
+    if (getTitle(identity) === "lead" && identity.foremanId) {
+      const fm = users.find(uu => uu.id === identity.foremanId);
+      if (fm?.name) { setActiveForeman(fm.name); setView("foreman"); }
+    }
+    setLeadLandingApplied(true);
+  }, [identity, users, leadLandingApplied]);
   const [quickAddOpen, setQuickAddOpen] = useState(false);
 
   const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
