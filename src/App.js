@@ -5997,6 +5997,7 @@ function JobNoteDestinationPicker({
     co:    `Promote ${selectedLineIds.length} to Change Order`,
     call:  `Promote ${selectedLineIds.length} to Call`,
     po:    `Promote ${selectedLineIds.length} to Purchase Order`,
+    question: `Promote ${selectedLineIds.length} to Question`,
   }[type] || 'Promote';
 
   return (
@@ -6064,6 +6065,12 @@ function JobNoteDestinationPicker({
         )}
         {type === 'po' && (
           <JobNoteDestinationPO
+            note={note} selectedLines={selectedLines} selectedLineIds={selectedLineIds}
+            job={job} onPatch={onPatch} markPromotedInNote={markPromotedInNote}
+            onDone={onDone}/>
+        )}
+        {type === 'question' && (
+          <JobNoteDestinationQuestion
             note={note} selectedLines={selectedLines} selectedLineIds={selectedLineIds}
             job={job} onPatch={onPatch} markPromotedInNote={markPromotedInNote}
             onDone={onDone}/>
@@ -7168,6 +7175,79 @@ function JobNoteDestinationPO({ note, selectedLines, selectedLineIds, job, onPat
 // A single Job Note — card wrapper with header, lines, and footer actions.
 // `onPatch(patch)` writes to the parent job doc atomically. `onChange(note)`
 // is a convenience that just updates this one note in place.
+// ── Destination branch: Question ──────────────────────────────
+// Promote note lines into the job's Q&A list (roughQuestions / finishQuestions,
+// keyed by floor upper/main/basement — no rooms). Each line → one question item
+// carrying a fromJobNote backlink. Single atomic onPatch updating BOTH the
+// {rough|finish}Questions tree AND jobNotes (marking lines promoted, with undo
+// metadata so the chip × can surgically remove the question it created).
+function JobNoteDestinationQuestion({ note, selectedLines, selectedLineIds, job, onPatch, markPromotedInNote, onDone }) {
+  const initialPhase = (note?.phase === 'rough' || note?.phase === 'finish') ? note.phase : 'rough';
+  const [phase, setPhase] = useState(initialPhase);
+  const [floorKey, setFloorKey] = useState('main');
+  const FLOORS = [{ key:'upper', label:'Upper' }, { key:'main', label:'Main' }, { key:'basement', label:'Basement' }];
+
+  const promote = () => {
+    const now = new Date().toISOString();
+    const creator = (getIdentity && getIdentity()) || null;
+    const field = phase === 'rough' ? 'roughQuestions' : 'finishQuestions';
+    const current = job[field] || { upper:[], main:[], basement:[] };
+    const itemIdByLineId = {};
+    const newItems = selectedLines.map(l => {
+      const id = uid();
+      itemIdByLineId[l.id] = id;
+      return {
+        id, question: jobNotePlain(l.text) || '', answer: '', done: false,
+        addedAt: now, addedBy: creator?.name || '',
+        fromJobNote: { noteId: note.id, lineId: l.id },
+      };
+    });
+    const next = { ...current, [floorKey]: [ ...(Array.isArray(current[floorKey]) ? current[floorKey] : []), ...newItems ] };
+    const floorLabel = (FLOORS.find(f => f.key === floorKey) || {}).label || floorKey;
+    const nextJobNotes = markPromotedInNote((l) => ({
+      type: 'question',
+      targetId: itemIdByLineId[l.id],
+      targetLabel: `${phase === 'rough' ? 'Rough' : 'Finish'} Questions · ${floorLabel}`,
+      targetPhase: phase,
+      targetFloorKey: floorKey,
+      undo: { phase, floorKey, questionId: itemIdByLineId[l.id] },
+    }));
+    onPatch && onPatch({ jobNotes: nextJobNotes, [field]: next });
+    onDone && onDone();
+  };
+
+  const pillStyle = (active, color='#0ea5e9') => ({
+    fontSize:11, fontWeight:700,
+    background: active ? color : 'transparent', color: active ? '#fff' : color,
+    border:`1px solid ${color}`, borderRadius:99, padding:'3px 12px', cursor:'pointer', fontFamily:'inherit',
+  });
+
+  return (
+    <div>
+      <div style={{ marginBottom:12 }}>
+        <div style={{ fontSize:10, color:C.dim, fontWeight:700, letterSpacing:'0.06em', marginBottom:5 }}>PHASE</div>
+        <div style={{ display:'flex', gap:6 }}>
+          <button onClick={()=>setPhase('rough')}  style={pillStyle(phase==='rough',  C.rough)}>Rough</button>
+          <button onClick={()=>setPhase('finish')} style={pillStyle(phase==='finish', C.finish)}>Finish</button>
+        </div>
+      </div>
+      <div style={{ marginBottom:14 }}>
+        <div style={{ fontSize:10, color:C.dim, fontWeight:700, letterSpacing:'0.06em', marginBottom:5 }}>FLOOR</div>
+        <select value={floorKey} onChange={e=>setFloorKey(e.target.value)}
+          style={{ width:'100%', background:C.surface, border:`1px solid ${C.border}`, borderRadius:7,
+            padding:'6px 9px', fontSize:12, color:C.text, fontFamily:'inherit', cursor:'pointer', outline:'none' }}>
+          {FLOORS.map(f => <option key={f.key} value={f.key}>{f.label}</option>)}
+        </select>
+      </div>
+      <button onClick={promote}
+        style={{ width:'100%', background:'#0ea5e9', color:'#fff', border:'none', borderRadius:9,
+          padding:'11px', fontSize:13, fontWeight:800, cursor:'pointer', fontFamily:'inherit' }}>
+        Create {selectedLineIds.length} question{selectedLineIds.length!==1?'s':''}
+      </button>
+    </div>
+  );
+}
+
 function JobNoteCard({
   note, onChange, onDelete, onArchive, phaseColor,
   jobId, job, setTab, onPatch,
@@ -7366,6 +7446,8 @@ function JobNoteCard({
       destTab = 'Change Orders';
     } else if (promoted.type === 'call') {
       destTab = 'Open Items';
+    } else if (promoted.type === 'question') {
+      destTab = promoted.targetPhase === 'finish' ? 'Finish' : 'Rough';
     }
     if (!destTab) return;
     setTab(destTab);
@@ -7463,6 +7545,28 @@ function JobNoteCard({
             : co);
 
       onPatch && onPatch({ changeOrders: nextCOs, ...clearedPatch() });
+      return;
+    }
+
+    // ── QUESTION ───────────────────────────────────────────────────────
+    // Remove THIS line's question from rough/finishQuestions[floor]. If it's
+    // already been answered, confirm first (un-promoting deletes it from Q&A).
+    if (p.type === 'question') {
+      const undo = p.undo || {};
+      if (!undo.phase || !undo.floorKey || !undo.questionId) {
+        onPatch && onPatch(clearedPatch());
+        return;
+      }
+      const field = undo.phase === 'rough' ? 'roughQuestions' : 'finishQuestions';
+      const tree  = job?.[field] || {};
+      const floorArr = Array.isArray(tree[undo.floorKey]) ? tree[undo.floorKey] : [];
+      const q = floorArr.find(x => x && x.id === undo.questionId);
+      if (!q) { onPatch && onPatch(clearedPatch()); return; }
+      if (q.done || (q.answer || '').trim()) {
+        if (!(await confirm("This question has already been answered. Un-promoting removes it from the Q&A list. Continue?"))) return;
+      }
+      const nextTree = { ...tree, [undo.floorKey]: floorArr.filter(x => x && x.id !== undo.questionId) };
+      onPatch && onPatch({ [field]: nextTree, ...clearedPatch() });
       return;
     }
 
@@ -8120,9 +8224,9 @@ function JobNoteCard({
             <span style={{ fontSize:11, fontWeight:700, color: C.text, flexShrink:0 }}>
               Promote {selected.size} to:
             </span>
-            {['punch','rt','co','call','po'].map(t => {
-              const labels = { punch:'Punch', rt:'RT', co:'CO', call:'Call', po:'PO' };
-              const colors = { punch:'#7c3aed', rt:'#0d9488', co:'#f59e0b', call:'#2563eb', po:'#ea580c' };
+            {['punch','rt','co','call','po','question'].map(t => {
+              const labels = { punch:'Punch', rt:'RT', co:'CO', call:'Call', po:'PO', question:'Question' };
+              const colors = { punch:'#7c3aed', rt:'#0d9488', co:'#f59e0b', call:'#2563eb', po:'#ea580c', question:'#0ea5e9' };
               const count = tally[t] || 0;
               const isTop = topType === t;
               return (
