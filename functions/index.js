@@ -63,7 +63,7 @@ async function removeStaleToken(token) {
   }
 }
 
-async function sendFCM(token, { title, body, jobId, section }) {
+async function sendFCM(token, { title, body, jobId, section, view }) {
   if (!token) return;
   // Stable tag used for OS-level dedup (Android collapses dup notifications with
   // the same tag; web push uses it the same way). Without this, the iOS->Android
@@ -100,6 +100,7 @@ async function sendFCM(token, { title, body, jobId, section }) {
         body:    body    || "",
         jobId:   jobId   || "",
         section: section || "",
+        view:    view    || "",
         tag,
         link:    linkPath,
       },
@@ -229,6 +230,19 @@ async function sendToRoles(roles, notification, excludeTokens = []) {
     }
   }
   await Promise.all(sends);
+}
+
+// Route a notification to the COORDINATOR who owns this job's foreman's book:
+// foreman name → foreman user → .coordinator → that coordinator's tokens.
+async function sendToJobCoordinator(foremanName, notification) {
+  if (!foremanName) return;
+  const users = await getUsers();
+  const fm = users.find(u => (u.name || "").toLowerCase() === String(foremanName).toLowerCase());
+  const coordName = fm && fm.coordinator;
+  if (!coordName) return;
+  const coord = users.find(u => (u.name || "").toLowerCase() === String(coordName).toLowerCase());
+  if (!coord) return;
+  await Promise.all(getTokens(coord).map(t => sendFCM(t, notification)));
 }
 
 /** Convenience — send the same notification to a name + roles (deduped), with jobId/section. */
@@ -474,6 +488,13 @@ exports.onJobUpdate = functions.firestore
           body:  `A new change order was created on ${name}`,
           jobId, section: "Change Orders",
         }, foremanTokens));
+        // CO chaser — Jeromy quotes/sends COs but isn't always admin/manager,
+        // so the role push above can miss him. Nudge him directly on every new CO.
+        tasks.push(sendToName("Jeromy Cloward", {
+          title: "📝 New CO to quote",
+          body:  `New change order on ${name} — review & get it quoted/sent.`,
+          jobId, section: "Change Orders",
+        }));
       }
     }
 
@@ -614,6 +635,42 @@ exports.onJobUpdate = functions.firestore
         body:  `A daily update was added on ${name}`,
         jobId, section: "Finish",
       }, foremanTokens));
+    }
+
+    // ── Milestone + inspection nudges → the job's coordinator (book-routed) ──
+    if (before.roughStatus !== "complete" && after.roughStatus === "complete") {
+      tasks.push(sendToJobCoordinator(after.foreman, {
+        title: "✅ Rough complete", body: `Rough is complete on ${name} — QC walk is due.`,
+        jobId, section: "Rough",
+      }));
+    }
+    if (before.finishStatus !== "complete" && after.finishStatus === "complete") {
+      tasks.push(sendToJobCoordinator(after.foreman, {
+        title: "✅ Finish complete", body: `Finish is complete on ${name} — QC walk is due.`,
+        jobId, section: "Finish",
+      }));
+    }
+    const _holdRe = /hold|waiting/i;
+    const _wasHold = _holdRe.test(before.roughStatus || "") || _holdRe.test(before.finishStatus || "");
+    const _isHold  = _holdRe.test(after.roughStatus  || "") || _holdRe.test(after.finishStatus  || "");
+    if (!_wasHold && _isHold) {
+      tasks.push(sendToJobCoordinator(after.foreman, {
+        title: "⏸️ Job on hold", body: `${name} is on hold / waiting on something.`, jobId,
+      }));
+    }
+    const _newFail = (b, a) => {
+      const bb = Array.isArray(b) ? b : [], aa = Array.isArray(a) ? a : [];
+      if (aa.length <= bb.length) return false;
+      return aa.slice(bb.length).some(x => /fail/i.test((x && x.result) || ""));
+    };
+    if (_newFail(before.roughInspectionAttempts, after.roughInspectionAttempts) ||
+        _newFail(before.finalInspectionAttempts, after.finalInspectionAttempts)) {
+      tasks.push(sendToName(after.foreman, {
+        title: "❌ Failed inspection", body: `An inspection failed on ${name} — needs attention.`, jobId,
+      }));
+      tasks.push(sendToJobCoordinator(after.foreman, {
+        title: "❌ Failed inspection", body: `An inspection failed on ${name}.`, jobId,
+      }));
     }
 
     await Promise.all(tasks);
@@ -804,6 +861,247 @@ exports.dailyUpdateReminder = functions.pubsub
       body:  "Time to enter your daily job update",
     });
     return null;
+  });
+
+// ─────────────────────────────────────────────────────────────
+// SCHEDULED — Daily Huddle nudge to coordinators (6:30am MT, weekdays)
+// Sends each coordinator a push that deep-links to their Huddle (view=huddle;
+// the Huddle defaults to their own book on their device). Coordinators =
+// users whose NAME appears as a `coordinator` on any foreman user. Recipient
+// resolution + token/prune all reuse the existing helpers — nothing else
+// touched. ADDITIVE: new exports only.
+// ─────────────────────────────────────────────────────────────
+async function sendHuddleNotif(onlyUserId) {
+  const users = await getUsers();
+  const titleOf = u => u.title || u.role || "";
+  const coordNames = Array.from(new Set(
+    users.filter(u => titleOf(u) === "foreman" && u.coordinator).map(u => u.coordinator)
+  ));
+  const notif = {
+    title: "Daily Huddle",
+    body:  "Tap to open your Huddle and line up the day.",
+    view:  "huddle",
+  };
+  const sends = [];
+  let recipients = 0;
+  for (const cn of coordNames) {
+    const cu = users.find(u => (u.name || "").toLowerCase() === String(cn).toLowerCase());
+    if (!cu) continue;
+    if (onlyUserId && cu.id !== onlyUserId) continue;
+    recipients++;
+    for (const t of getTokens(cu)) sends.push(sendFCM(t, notif));
+  }
+  await Promise.all(sends);
+  functions.logger.info("[huddleNotif] sent", { coordinators: coordNames, recipients, onlyUserId: onlyUserId || null });
+  return { coordNames, recipients };
+}
+
+exports.dailyHuddleNotification = functions.pubsub
+  .schedule("30 6 * * 1-5")
+  .timeZone(TZ)
+  .onRun(async () => { await sendHuddleNotif(); return null; });
+
+// Manual test trigger — sends the Huddle push to ONE user (the caller passes
+// their own userId) so delivery + the Huddle deep-link can be verified before
+// the morning schedule matters. Read-only beyond sending a push.
+exports.sendTestHuddleNotification = functions.https.onCall(async (data) => {
+  const userId = (data && data.userId) || "";
+  if (!userId) return { ok: false, error: "userId required" };
+  const r = await sendHuddleNotif(userId);
+  return { ok: true, ...r };
+});
+
+// ─────────────────────────────────────────────────────────────
+// SCHEDULED — Daily CO chase to Jeromy (8am MT, weekdays)
+// Jeromy quotes/sends COs. Scan every job for OPEN COs (not in a terminal
+// status) older than 2 days and nudge him with a count + deep-link to the
+// CO tracker. Read-only scan; the new-CO nudge above handles the immediate
+// "just created" case. ADDITIVE: new export only.
+// ─────────────────────────────────────────────────────────────
+exports.dailyCoChase = functions.pubsub
+  .schedule("0 8 * * 1-5")
+  .timeZone(TZ)
+  .onRun(async () => {
+    const snap = await db.collection("jobs").get();
+    const DONE = new Set(["completed", "complete", "approved", "denied", "converted"]);
+    const now = Date.now();
+    let staleCount = 0;
+    const staleJobs = new Set();
+    snap.forEach(d => {
+      const j = d.data()?.data || {};
+      if (j.type === "quote") return;
+      (j.changeOrders || []).forEach(co => {
+        if (!co || DONE.has(co.coStatus)) return;
+        const t = Date.parse(co.createdAt || co.coStatusDate || "");
+        const ageDays = Number.isFinite(t) ? (now - t) / 86400000 : 99;
+        if (ageDays >= 2) { staleCount++; staleJobs.add(j.name || d.id); }
+      });
+    });
+    if (staleCount > 0) {
+      await sendToName("Jeromy Cloward", {
+        title: "📋 COs waiting",
+        body:  `${staleCount} change order${staleCount !== 1 ? "s" : ""} open across ${staleJobs.size} job${staleJobs.size !== 1 ? "s" : ""} — review & send.`,
+        view:  "cos",
+      });
+    }
+    functions.logger.info("[dailyCoChase] ran", { staleCount, jobs: staleJobs.size });
+    return null;
+  });
+
+// ─────────────────────────────────────────────────────────────
+// SCHEDULED — Unscheduled return trips sitting > 3 days → the job's
+// coordinator (book-routed). Daily 8am weekdays. Read-only scan. ADDITIVE.
+// ─────────────────────────────────────────────────────────────
+exports.dailyRtChase = functions.pubsub
+  .schedule("0 8 * * 1-5")
+  .timeZone(TZ)
+  .onRun(async () => {
+    const users = await getUsers();
+    const coordOf = (foremanName) => {
+      const fm = users.find(u => (u.name || "").toLowerCase() === String(foremanName || "").toLowerCase());
+      if (!fm || !fm.coordinator) return null;
+      return users.find(u => (u.name || "").toLowerCase() === String(fm.coordinator).toLowerCase()) || null;
+    };
+    const snap = await db.collection("jobs").get();
+    const now = Date.now();
+    const byCoord = {};
+    snap.forEach(d => {
+      const j = d.data()?.data || {};
+      if (j.type === "quote") return;
+      (j.returnTrips || []).forEach(rt => {
+        if (!rt || rt.signedOff || rt.rtScheduled || rt.scheduledDate) return;
+        if (!(rt.scope || rt.date)) return;
+        const created = Date.parse(rt.createdAt || rt.date || "");
+        const ageDays = Number.isFinite(created) ? (now - created) / 86400000 : 99;
+        if (ageDays < 3) return;
+        const coord = coordOf(j.foreman);
+        if (!coord) return;
+        if (!byCoord[coord.id]) byCoord[coord.id] = { coord, count: 0 };
+        byCoord[coord.id].count++;
+      });
+    });
+    const sends = [];
+    Object.values(byCoord).forEach(({ coord, count }) => {
+      const notif = { title: "🔁 Return trips waiting", body: `${count} unscheduled return trip${count !== 1 ? "s" : ""} in your book need scheduling.` };
+      getTokens(coord).forEach(t => sends.push(sendFCM(t, notif)));
+    });
+    await Promise.all(sends);
+    functions.logger.info("[dailyRtChase] ran", { coordinators: Object.keys(byCoord).length });
+    return null;
+  });
+
+// ─────────────────────────────────────────────────────────────
+// SCHEDULED — Weekly safety / toolbox-talk reminder (Mon 6:45am MT) → foremen.
+// ─────────────────────────────────────────────────────────────
+exports.weeklySafetyReminder = functions.pubsub
+  .schedule("45 6 * * 1")
+  .timeZone(TZ)
+  .onRun(async () => {
+    await sendToRoles(["foreman"], {
+      title: "🦺 Toolbox talk", body: "Run this week's safety / toolbox talk with your crew.",
+    });
+    return null;
+  });
+
+// ─────────────────────────────────────────────────────────────
+// CLAUDE AGENTS — shared caller + draft-only agents
+// Key lives in the ANTHROPIC_API_KEY secret (functions:secrets:set), bound per
+// function via runWith({secrets}). All outputs are DRAFTS the user reviews —
+// nothing auto-saves or sends. ADDITIVE: new helper + exports only.
+// ─────────────────────────────────────────────────────────────
+const ANTHROPIC_MODEL = "claude-haiku-4-5-20251001";
+async function callClaude({ system, user, model, maxTokens }) {
+  const key = process.env.ANTHROPIC_API_KEY;
+  if (!key) throw new Error("ANTHROPIC_API_KEY not configured");
+  const r = await fetch("https://api.anthropic.com/v1/messages", {
+    method: "POST",
+    headers: {
+      "x-api-key": key,
+      "anthropic-version": "2023-06-01",
+      "content-type": "application/json",
+    },
+    body: JSON.stringify({
+      model: model || ANTHROPIC_MODEL,
+      max_tokens: maxTokens || 400,
+      system: system || "",
+      messages: [{ role: "user", content: String(user || "") }],
+    }),
+  });
+  const data = await r.json();
+  if (!r.ok) {
+    functions.logger.warn("[callClaude] API error", { status: r.status, error: data && data.error });
+    throw new Error((data && data.error && data.error.message) || `Claude API ${r.status}`);
+  }
+  return (data.content || []).map(b => b.text || "").join("").trim();
+}
+
+// Agent 1 — End-of-day update drafter. Client passes the job name + a context
+// string (today's closed punch, etc.); returns a short editable draft.
+exports.draftDailyUpdate = functions
+  .runWith({ secrets: ["ANTHROPIC_API_KEY"] })
+  .https.onCall(async (data) => {
+    const jobName = (data && data.jobName) || "this job";
+    const context = (data && data.context) || "";
+    const system =
+      "You write brief end-of-day field updates for an electrical contractor's daily job log. " +
+      "Write 1-3 plain sentences a foreman would text the office: what got done today and where the job stands. " +
+      "Use ONLY the facts provided — never invent specifics, names, or numbers. " +
+      "No greeting, no sign-off, no markdown, no bullet points. " +
+      "If little or nothing is provided, write a short honest placeholder the foreman can finish.";
+    try {
+      const text = await callClaude({ system, user: `Job: ${jobName}\n\n${context}`, maxTokens: 300 });
+      return { ok: true, text };
+    } catch (e) {
+      functions.logger.warn("[draftDailyUpdate] failed", { error: e.message });
+      return { ok: false, error: e.message || "draft failed" };
+    }
+  });
+
+// Agent 2 — In-app help. Answers a question grounded ONLY in the app's feature
+// reference (passed from the client's FEATURES_MD_INLINE). Read-only.
+exports.appHelp = functions
+  .runWith({ secrets: ["ANTHROPIC_API_KEY"] })
+  .https.onCall(async (data) => {
+    const question = String((data && data.question) || "").trim();
+    const docs = String((data && data.docs) || "");
+    if (!question) return { ok: false, error: "question required" };
+    const system =
+      "You are the in-app help assistant for Homestead Electric's field-ops app. " +
+      "Answer the user's question about how to use THIS app, grounded ONLY in the feature reference provided. " +
+      "Be concise and practical — a few sentences or short numbered steps. If the reference doesn't cover it, " +
+      "say so plainly and suggest asking Koy. Plain text, no markdown headers.";
+    try {
+      const answer = await callClaude({
+        system,
+        user: `Feature reference:\n${docs || "(none provided)"}\n\nQuestion: ${question}`,
+        maxTokens: 500,
+      });
+      return { ok: true, answer };
+    } catch (e) {
+      functions.logger.warn("[appHelp] failed", { error: e.message });
+      return { ok: false, error: e.message || "help failed" };
+    }
+  });
+
+// Agent 3 — Voice note cleanup. Tidies a raw speech transcript into clean note
+// text; the client's existing triage hint then runs on it. Returns text only;
+// on any failure returns the raw transcript so voice notes never break.
+exports.cleanVoiceNote = functions
+  .runWith({ secrets: ["ANTHROPIC_API_KEY"] })
+  .https.onCall(async (data) => {
+    const transcript = String((data && data.transcript) || "").trim();
+    if (!transcript) return { ok: false, error: "transcript required" };
+    const system =
+      "You clean up a spoken field note from an electrician into tidy written text for a job log. " +
+      "Fix grammar and filler words, keep ALL the facts, add nothing. If there are multiple distinct items, " +
+      "put each on its own line starting with '- '. Plain text only, no headers, no commentary.";
+    try {
+      const text = await callClaude({ system, user: transcript, maxTokens: 400 });
+      return { ok: true, text: text || transcript };
+    } catch (e) {
+      functions.logger.warn("[cleanVoiceNote] failed", { error: e.message });
+      return { ok: false, error: e.message || "cleanup failed", text: transcript };
+    }
   });
 
 // ─────────────────────────────────────────────────────────────
