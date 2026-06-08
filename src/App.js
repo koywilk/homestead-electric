@@ -25766,6 +25766,12 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const fqc = countQCWalk(job.finishPunch);
   const qcWalkTotal = rqc.total + fqc.total;
   const qcWalkDone  = rqc.done  + fqc.done;
+  // Open (unanswered) questions across rough + finish — header pill (suggestion #2).
+  // "Open" matches NeedsAttention: not done and no GC answer yet.
+  const openQ = ['roughQuestions','finishQuestions'].reduce((t,k)=>{
+    const qs = job[k]||{};
+    return t + ['upper','main','basement'].reduce((a,fl)=>a + (qs[fl]||[]).filter(q=>q && !q.done && !((q.answer||'').trim())).length, 0);
+  }, 0);
 
   // V2.4 — Scheduled-RT map for punch items. Builds {punchItemId → {date,
   // crew, rtId, phase}} from job.returnTrips, so PunchSection can show a
@@ -25947,6 +25953,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </span>
             )}
             {openCount>0  &&<Pill label={`${openCount} open punch`} color={C.red}/>}
+            {openQ>0      &&<Pill label={`${openQ} open question${openQ!==1?"s":""}`} color={C.blue}/>}
             {waitingCount>0&&<Pill label={`${waitingCount} waiting`} color="#ca8a04"/>}
 
             {pendingCOs>0 &&<Pill label={`${pendingCOs} CO pending`} color={C.orange}/>}
@@ -46598,6 +46605,7 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
   const [quoteDraft, setQuoteDraft]       = useState("");
   const [statusOpen, setStatusOpen]       = useState(null); // co id
   const [foremanFilter, setForemanFilter] = useState("");
+  const [search, setSearch]               = useState(""); // suggestion #3 — CO tab search
 
   // Aggregate: every CO across every job, with job context stitched on.
   // Quotes (job.type === "quote") are skipped — they don't have COs in the
@@ -46639,10 +46647,17 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
   }, [allCOs]);
 
   const filteredCOs = useMemo(() => {
-    if (!foremanFilter) return allCOs;
     const f = foremanFilter.toLowerCase();
-    return allCOs.filter(c => (c.jobForeman || "").toLowerCase() === f);
-  }, [allCOs, foremanFilter]);
+    const q = search.trim().toLowerCase();
+    return allCOs.filter(c => {
+      if (f && (c.jobForeman || "").toLowerCase() !== f) return false;
+      if (q) {
+        const hay = `${c.jobName} ${c.desc} ${c.quoteNumber} ${c.jobGc} ${c.jobSimproNo} ${c.createdBy}`.toLowerCase();
+        if (!hay.includes(q)) return false;
+      }
+      return true;
+    });
+  }, [allCOs, foremanFilter, search]);
 
   // Group by status. Action columns sort oldest-first (the thing that's
   // been waiting longest is at the top, so Jeromy clears the queue head-first).
@@ -46740,6 +46755,11 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
           </div>
         </div>
         <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+          <input value={search} onChange={e=>setSearch(e.target.value)}
+            placeholder="Search COs — job, description, quote #…"
+            style={{padding:"6px 10px",borderRadius:7,border:`1px solid ${C.border}`,
+              fontSize:12,background:"#fff",color:C.text,fontFamily:"inherit",outline:"none",
+              minWidth:240}}/>
           <select value={foremanFilter} onChange={e=>setForemanFilter(e.target.value)}
             style={{padding:"6px 10px",borderRadius:7,border:`1px solid ${C.border}`,
               fontSize:12,background:"#fff",color:C.text,fontFamily:"inherit",outline:"none"}}>
@@ -46973,6 +46993,125 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
           No change orders {foremanFilter ? `for ${foremanFilter}` : "yet"}.
         </div>
       )}
+    </div>
+  );
+}
+
+// ── Crew Board ──────────────────────────────────────────────────────────────
+// Visual org builder for Settings. Arrange people into crews by MOVING cards
+// instead of editing each record. Parity: drag on desktop, tap-to-move on
+// touch (native DnD doesn't fire on touch). Placement only — sets foremanId
+// (crew) and coordinator (book); title/role edits stay in Team Members.
+// Edits stage locally; "Save changes" persists via the guarded saveUsers
+// (stale-write guard + audit stamp + toast). "Discard" reverts. Only the moved
+// users' foremanId/coordinator change — every other field/user is preserved.
+function CrewBoard({ users = [], onSave, getPersonColor = () => "#6b7280" }) {
+  const [list, setList]     = useState(users);
+  const [dirty, setDirty]   = useState(false);
+  const [picked, setPicked] = useState(null);   // person "picked up" for tap-to-move
+  const [saving, setSaving] = useState(false);
+  // Sync from server only when there are no unsaved local moves.
+  useEffect(() => { if (!dirty) setList(users); }, [users, dirty]);
+
+  const T = u => u.title || u.role || "";
+  const foremen    = list.filter(u => T(u) === "foreman");
+  const coordNames = [...new Set(foremen.map(f => f.coordinator).filter(Boolean))].sort();
+  const crewOf = fid => list.filter(u => u.foremanId === fid)
+    .sort((a,b) => (T(a)==="lead"?0:1) - (T(b)==="lead"?0:1) || (a.name||"").localeCompare(b.name||""));
+  const noCoordForemen = foremen.filter(f => !f.coordinator);
+  const unassigned = list.filter(u => T(u) !== "foreman" && T(u) !== "admin" && !u.foremanId);
+
+  const setUser = (id, patch) => { setList(l => l.map(u => u.id===id ? {...u, ...patch} : u)); setDirty(true); };
+  // target: {kind:'foreman',id} | {kind:'coord',name} | {kind:'nocoord'} | {kind:'unassigned'}
+  const applyMove = (person, target) => {
+    if (!person) { setPicked(null); return; }
+    const isForeman = T(person) === "foreman";
+    if (isForeman) {
+      if (target.kind === "coord")   setUser(person.id, { coordinator: target.name });
+      if (target.kind === "nocoord") setUser(person.id, { coordinator: "" });
+    } else {
+      if (target.kind === "foreman")    setUser(person.id, { foremanId: target.id });
+      if (target.kind === "unassigned") setUser(person.id, { foremanId: "" });
+    }
+    setPicked(null);
+  };
+  const tapCard   = person => setPicked(p => (p && p.id === person.id) ? null : person);
+  const tapTarget = target => { if (picked) applyMove(picked, target); };
+  const dragStart = (e, person) => { e.dataTransfer.setData("text/plain", person.id); e.dataTransfer.effectAllowed = "move"; };
+  const drop      = (e, target) => { e.preventDefault(); const p = list.find(u => u.id === e.dataTransfer.getData("text/plain")); applyMove(p, target); };
+  const allowDrop = e => e.preventDefault();
+
+  const save = async () => { setSaving(true); try { await onSave(list); } finally { setSaving(false); setDirty(false); } };
+  const discard = () => { setList(users); setDirty(false); setPicked(null); };
+
+  const isPicked = id => picked && picked.id === id;
+  const card = (person, extra={}) => (
+    <div key={person.id}
+      draggable
+      onDragStart={e => dragStart(e, person)}
+      onClick={e => { e.stopPropagation(); if (extra.onCardClick) extra.onCardClick(); else tapCard(person); }}
+      style={{ display:"flex", alignItems:"center", gap:6, padding:"5px 9px", borderRadius:7,
+        background: isPicked(person.id) ? `${C.accent}22` : C.surface,
+        border:`1px solid ${isPicked(person.id) ? C.accent : C.border}`,
+        cursor:"pointer", fontSize:12, color:C.text, ...(extra.style||{}) }}>
+      <span style={{ width:7, height:7, borderRadius:99, background: getPersonColor(person.name) || "#6b7280", flexShrink:0 }}/>
+      <span style={{ fontWeight: T(person)==="foreman"?700:500 }}>{(person.name||"?").split(" ")[0]} {(person.name||"").split(" ")[1]?.[0]||""}</span>
+      <span style={{ fontSize:9, color:C.dim, textTransform:"uppercase", marginLeft:"auto" }}>{T(person)==="crew"?"app":T(person)}</span>
+    </div>
+  );
+
+  const foremanCard = (f) => (
+    <div key={f.id}
+      onDragOver={allowDrop} onDrop={e => drop(e, { kind:"foreman", id:f.id })}
+      onClick={() => { if (picked && T(picked)!=="foreman") applyMove(picked, { kind:"foreman", id:f.id }); }}
+      style={{ background:C.card, border:`1px solid ${C.border}`, borderTop:`3px solid ${getPersonColor(f.name)||"#6b7280"}`,
+        borderRadius:10, padding:"8px 10px", minWidth:150, flex:"1 1 170px" }}>
+      {card(f, { onCardClick: () => { if (picked && T(picked)!=="foreman") applyMove(picked, { kind:"foreman", id:f.id }); else tapCard(f); },
+                 style:{ background:"transparent", border:"none", padding:"0 0 6px", borderRadius:0 } })}
+      <div style={{ display:"flex", flexDirection:"column", gap:4 }}>
+        {crewOf(f.id).map(p => card(p))}
+        {crewOf(f.id).length === 0 && <div style={{ fontSize:10, color:C.muted, fontStyle:"italic", padding:"2px 0" }}>drop crew here</div>}
+      </div>
+    </div>
+  );
+
+  const group = (label, color, target, children) => (
+    <div onDragOver={allowDrop} onDrop={e => drop(e, target)} onClick={() => tapTarget(target)}
+      style={{ border:`1px solid ${C.border}`, borderRadius:12, padding:"10px 12px", marginBottom:12, background:C.bg }}>
+      <div style={{ display:"flex", alignItems:"center", gap:8, marginBottom:8, paddingBottom:6, borderBottom:`2px solid ${color}33` }}>
+        <span style={{ width:9, height:9, borderRadius:99, background:color }}/>
+        <span style={{ fontFamily:"'Bebas Neue',sans-serif", fontSize:18, letterSpacing:"0.06em", color }}>{label}</span>
+      </div>
+      <div style={{ display:"flex", gap:8, flexWrap:"wrap", alignItems:"flex-start" }}>{children}</div>
+    </div>
+  );
+
+  return (
+    <div>
+      {picked && (
+        <div style={{ position:"sticky", top:0, zIndex:5, background:`${C.accent}18`, border:`1px solid ${C.accent}`,
+          borderRadius:8, padding:"8px 12px", marginBottom:10, fontSize:12, color:C.text, display:"flex", alignItems:"center", gap:10 }}>
+          <Icon name="arrowRight" size={13}/> Moving <b>{picked.name}</b> — tap a {T(picked)==="foreman"?"coordinator":"crew/foreman"} to drop.
+          <button onClick={() => setPicked(null)} style={{ marginLeft:"auto", background:"none", border:`1px solid ${C.border}`, borderRadius:6, color:C.dim, fontSize:11, padding:"3px 9px", cursor:"pointer" }}>Cancel</button>
+        </div>
+      )}
+      <div style={{ fontSize:11, color:C.dim, marginBottom:10 }}>
+        Drag (desktop) or tap-to-move (mobile) to set crews. Sets crew &amp; coordinator only — titles stay in Team Members below.
+      </div>
+      {coordNames.map(cn => group(cn, getPersonColor(cn) || C.accent, { kind:"coord", name:cn },
+        foremen.filter(f => f.coordinator === cn).map(foremanCard)))}
+      {noCoordForemen.length > 0 && group("No coordinator", "#6b7280", { kind:"nocoord" }, noCoordForemen.map(foremanCard))}
+      {group("Unassigned (no crew)", "#6b7280", { kind:"unassigned" },
+        unassigned.length ? unassigned.map(p => card(p)) : [<div key="_e" style={{ fontSize:11, color:C.muted, fontStyle:"italic" }}>Everyone's on a crew.</div>])}
+      <div style={{ display:"flex", gap:8, alignItems:"center", marginTop:6 }}>
+        <button onClick={save} disabled={!dirty || saving}
+          style={{ background: dirty ? C.accent : C.surface, color: dirty ? "#000" : C.dim, border:`1px solid ${dirty?C.accent:C.border}`,
+            borderRadius:8, fontWeight:700, fontSize:13, padding:"8px 18px", cursor: dirty&&!saving?"pointer":"default", fontFamily:"inherit" }}>
+          {saving ? "Saving…" : dirty ? "Save changes" : "Saved"}
+        </button>
+        {dirty && <button onClick={discard} style={{ background:"none", border:`1px solid ${C.border}`, borderRadius:8, color:C.dim, fontSize:12, padding:"8px 14px", cursor:"pointer", fontFamily:"inherit" }}>Discard</button>}
+        {dirty && <span style={{ fontSize:11, color:C.orange, fontWeight:600 }}>Unsaved changes</span>}
+      </div>
     </div>
   );
 }
@@ -50521,6 +50660,9 @@ function App() {
           />
           {can(identity,"users.manage")&&(
             <div style={{padding:"0 26px 40px"}}>
+              <SettingsSection title="CREW BOARD" defaultOpen={false}>
+                <CrewBoard users={users} onSave={saveUsers} getPersonColor={getPersonColor}/>
+              </SettingsSection>
               <SettingsSection title="TEAM MEMBERS" defaultOpen={false}>
                 <UserManagement users={users} onSave={saveUsers} embedded={true} getPersonColor={getPersonColor}/>
               </SettingsSection>
