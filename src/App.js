@@ -8393,6 +8393,7 @@ function JobNotesSection({
   // triage hint (suggestTriageType) renders on the card automatically. Smart
   // LLM cleanup is a later (backend) upgrade.
   const [listening, setListening] = useState(false);
+  const [cleaning, setCleaning] = useState(false);
   const recogRef = useRef(null);
   const startVoiceNote = () => {
     const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
@@ -8403,14 +8404,22 @@ function JobNotesSection({
     let transcript = "";
     r.onresult = (e) => { for (let i = e.resultIndex; i < e.results.length; i++) { if (e.results[i].isFinal) transcript += e.results[i][0].transcript + " "; } };
     r.onerror = () => { setListening(false); };
-    r.onend = () => {
+    r.onend = async () => {
       setListening(false);
-      const text = transcript.trim();
-      if (!text) return;
+      const raw = transcript.trim();
+      if (!raw) return;
+      // Smart cleanup (Agent 3) — tidy the transcript; fall back to raw on any
+      // failure so a voice note never breaks if the API is down.
+      let finalText = raw;
+      try {
+        setCleaning(true);
+        const res = await httpsCallable(functions, "cleanVoiceNote")({ transcript: raw });
+        if (res.data && res.data.text) finalText = res.data.text;
+      } catch {} finally { setCleaning(false); }
       const now = new Date().toISOString();
       const creator = (getIdentity && getIdentity()) || null;
       const note = { id: uid(), title: "", phase: defaultPhase, createdAt: now, createdBy: creator?.name || "", updatedAt: now,
-        lines: [{ id: uid(), text, createdAt: now, photos: [], promoted: null }], photos: [], archived: false, deleted: false, migratedFrom: null };
+        lines: [{ id: uid(), text: finalText, createdAt: now, photos: [], promoted: null }], photos: [], archived: false, deleted: false, migratedFrom: null };
       writeNotes([ ...notes, note ]);
       toast.success("Voice note added — review & triage it.");
     };
@@ -8499,7 +8508,7 @@ function JobNotesSection({
             display:'inline-flex', alignItems:'center', gap:4,
           }}>
           <Icon name="mic" size={11} color={listening ? C.red : '#64748b'}/>
-          <span>{listening ? 'Listening… tap to stop' : 'Voice'}</span>
+          <span>{cleaning ? 'Cleaning…' : listening ? 'Listening… tap to stop' : 'Voice'}</span>
         </button>
         <span style={{
           marginLeft:'auto', fontSize:10, color: C.dim, fontStyle:'italic',
@@ -47276,6 +47285,48 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
   );
 }
 
+// ── In-app help agent ───────────────────────────────────────────────────────
+// Ask-the-app box. Sends the question + the app's own feature reference
+// (FEATURES_MD_INLINE) to the appHelp function (Claude) and shows a grounded
+// answer. Read-only. (v1 lives in Settings; surfacing to field users via a
+// header button is a fast-follow.)
+function AppHelpBox() {
+  const [q, setQ] = useState("");
+  const [answer, setAnswer] = useState("");
+  const [loading, setLoading] = useState(false);
+  const ask = async () => {
+    const question = q.trim();
+    if (!question || loading) return;
+    setLoading(true); setAnswer("");
+    try {
+      const res = await httpsCallable(functions, "appHelp")({ question, docs: FEATURES_MD_INLINE });
+      if (res.data && res.data.ok && res.data.answer) setAnswer(res.data.answer);
+      else setAnswer(res.data && res.data.error ? "Couldn't answer: " + res.data.error : "No answer came back.");
+    } catch (e) {
+      setAnswer("Help failed: " + (e.message || "unknown"));
+    } finally { setLoading(false); }
+  };
+  return (
+    <div>
+      <div style={{fontSize:11,color:C.dim,marginBottom:8}}>Ask how to do something in the app — answered from the app's own feature guide.</div>
+      <div style={{display:"flex",gap:8,marginBottom:10,flexWrap:"wrap"}}>
+        <input value={q} onChange={e=>setQ(e.target.value)} onKeyDown={e=>{ if(e.key==="Enter") ask(); }}
+          placeholder="e.g. How do I turn a note into a CO?"
+          style={{flex:1,minWidth:220,background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,padding:"9px 12px",fontSize:13,fontFamily:"inherit",outline:"none"}}/>
+        <button onClick={ask} disabled={loading}
+          style={{background:C.accent,border:"none",borderRadius:8,color:"#000",fontWeight:700,padding:"9px 18px",fontSize:13,cursor:loading?"default":"pointer",fontFamily:"inherit"}}>
+          {loading ? "Asking…" : "Ask"}
+        </button>
+      </div>
+      {answer && (
+        <div style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"12px 14px",fontSize:13,color:C.text,whiteSpace:"pre-wrap",lineHeight:1.5}}>
+          {answer}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── Crew Board ──────────────────────────────────────────────────────────────
 // Visual org builder for Settings. Arrange people into crews by MOVING cards
 // instead of editing each record. Parity: drag on desktop, tap-to-move on
@@ -50907,6 +50958,9 @@ function App() {
             </SettingsSection>
             <SettingsSection title="NOTIFICATION DOCTOR" accent={{bg:"#eff6ff", border:"#bfdbfe", text:"#1e40af"}} defaultOpen={false}>
               <NotifDoctor identity={identity}/>
+            </SettingsSection>
+            <SettingsSection title="APP HELP" accent={{bg:"#f0fdf4", border:"#bbf7d0", text:"#166534"}} defaultOpen={false}>
+              <AppHelpBox/>
             </SettingsSection>
             {getAccess(identity)==="admin" && (
               <SettingsSection title="FLEET NOTIFICATION HEALTH" accent={{bg:"#fef3c7", border:"#fcd34d", text:"#78350f"}} defaultOpen={false}>
