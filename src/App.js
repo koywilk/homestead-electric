@@ -11016,6 +11016,33 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null}) {
 
   };
 
+  // Agent 1 — end-of-day drafter. Builds context from today's closed punch
+  // (already computed client-side) and asks the draftDailyUpdate function for a
+  // short editable draft, dropped into the input for the foreman to finish.
+  const [drafting, setDrafting] = useState(false);
+  const draftUpdate = async () => {
+    if (drafting) return;
+    setDrafting(true);
+    try {
+      const today = closedByDate.get(_todayYMD) || [];
+      const lines = today.map(i => {
+        const t = String(i.text || "").replace(/<[^>]*>/g, " ").replace(/&nbsp;/g, " ").replace(/\s+/g, " ").trim();
+        const where = [i.floor, (i.room && i.room !== "General") ? i.room : ""].filter(Boolean).join(" / ");
+        return t ? `- ${where ? where + ": " : ""}${t}` : "";
+      }).filter(Boolean);
+      const context = lines.length
+        ? `Punch items closed today:\n${lines.join("\n")}`
+        : "No punch items were checked off today.";
+      const res = await httpsCallable(functions, "draftDailyUpdate")({ jobName, context });
+      if (res.data && res.data.ok && res.data.text) setD(p => ({ ...p, text: res.data.text }));
+      else toast.warn(res.data && res.data.error ? "Draft unavailable: " + res.data.error : "No draft came back — type it instead.");
+    } catch (e) {
+      toast.error("Draft failed: " + (e.message || "unknown"));
+    } finally {
+      setDrafting(false);
+    }
+  };
+
   return (
 
     <div>
@@ -11074,7 +11101,12 @@ function DailyUpdates({updates,onChange,jobName,onEmail,phasePunch=null}) {
 
         </div>
 
-        <Btn onClick={add} variant="primary">+ Log</Btn>
+        <div style={{display:"flex",gap:6,alignItems:"flex-end"}}>
+          <Btn onClick={draftUpdate} variant="ghost" style={{whiteSpace:"nowrap"}}>
+            {drafting ? "Drafting…" : <span style={{display:"inline-flex",alignItems:"center",gap:5}}><Icon name="zap" size={12}/> Draft</span>}
+          </Btn>
+          <Btn onClick={add} variant="primary">+ Log</Btn>
+        </div>
 
       </div>
 
