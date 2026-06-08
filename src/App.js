@@ -1,7 +1,7 @@
 // BUILD_v9_FIXED
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { initializeApp } from "firebase/app";
-import { initializeFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, query, where, serverTimestamp } from "firebase/firestore";
+import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, query, where, serverTimestamp } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable } from "firebase/functions";
@@ -50,6 +50,25 @@ const db        = initializeFirestore(firebaseApp, {
 const storage   = getStorage(firebaseApp);
 const messaging = ("serviceWorker" in navigator) ? getMessaging(firebaseApp) : null;
 const functions = getFunctions(firebaseApp);
+
+// ── FieldInk (TraceVault) read-only link ─────────────────────────────────────
+// The crew's PDF-markup app lives in its OWN Firebase project ("field-ink").
+// Its `shares` collection is public-read by design (it powers the GC live-link
+// viewer), and FieldInk v258+ stamps every share with the plan's Drive folder
+// id (jobFolderId). A second, NAMED Firebase app lets job pages query those
+// shares and auto-show every live plan for the job — READ-ONLY: nothing in
+// this app ever writes to the field-ink project. This web config is public by
+// design (it ships in FieldInk's own bundle); security lives in its rules.
+const fieldinkApp = initializeApp({
+  apiKey: "AIzaSyBOMWFvxcoy-M8Nd14tD-oKeJGFy-7YzNo",
+  authDomain: "field-ink.firebaseapp.com",
+  projectId: "field-ink",
+  storageBucket: "field-ink.firebasestorage.app",
+  messagingSenderId: "1039293996016",
+  appId: "1:1039293996016:web:753477ada5978355191b35",
+}, "fieldink");
+const fieldinkDb = getFirestore(fieldinkApp);
+const FIELDINK_VIEWER_BASE = "https://tracevault-pdf-markup.vercel.app/#/v/";
 
 // Debug helpers exposed to window so we can run one-off scripts from the
 // browser console (cloud-function calls, bulk data loads, etc.).
@@ -21304,9 +21323,14 @@ function extractDriveFolderId(input) {
   return "";
 }
 
-// Recursively fetch all files from a Drive folder and its sub-folders
-async function fetchDriveFilesRecursive(folderId, folderName, depth) {
+// Recursively fetch all files from a Drive folder and its sub-folders.
+// `_folderIds` (optional Set) collects every folder id visited — the FieldInk
+// live-plans query needs the whole folder tree because a share is stamped with
+// the plan's IMMEDIATE parent folder, which is often a subfolder of the job
+// root ("Most updated", etc.). Callers that don't pass it are unaffected.
+async function fetchDriveFilesRecursive(folderId, folderName, depth, _folderIds) {
   if (depth > 3) return []; // safety limit
+  if (_folderIds) _folderIds.add(folderId);
   const url = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&key=${DRIVE_API_KEY}&fields=files(id,name,mimeType,thumbnailLink,size,modifiedTime,webViewLink)&pageSize=100&supportsAllDrives=true&includeItemsFromAllDrives=true&orderBy=name`;
   const resp = await fetch(url);
   const data = await resp.json();
@@ -21317,7 +21341,7 @@ async function fetchDriveFilesRecursive(folderId, folderName, depth) {
     .map(f => ({ ...f, _folder: folderName }));
   // Recurse into each sub-folder
   const subResults = await Promise.all(
-    folders.map(sf => fetchDriveFilesRecursive(sf.id, sf.name, depth + 1))
+    folders.map(sf => fetchDriveFilesRecursive(sf.id, sf.name, depth + 1, _folderIds))
   );
   return [...nonFolders, ...subResults.flat()];
 }
@@ -21377,6 +21401,126 @@ async function syncDriveFoldersToJobs(jobs, updateJob) {
   return { total: driveFolders.length, ...results };
 }
 
+// ── FieldInk live plans ───────────────────────────────────────────────────────
+// Auto-shows every plan in this job's Drive folder tree that has a LIVE
+// FieldInk share — the marked-up, pin-tappable viewer, not the raw PDF.
+// Decision (2026-06-07): AUTO-show, no separate "publish to command center"
+// step. Sharing a plan in FieldInk IS the publish action; turning the link off
+// removes it here too. Hide is the rare manual action, stored on the job
+// (hiddenPlanShares) so it's shared across the office, reversible via "show".
+function FieldInkPlansSection({ folderIds, job, onUpdate }) {
+  const [plans, setPlans] = useState(null);          // null = loading, [] = none
+  const [planErr, setPlanErr] = useState("");
+  const [showHidden, setShowHidden] = useState(false);
+
+  useEffect(() => {
+    if (!folderIds || folderIds.length === 0) { setPlans(null); return; }
+    let cancelled = false;
+    (async () => {
+      try {
+        // Firestore `in` caps at 10 values per query — chunk the folder tree.
+        const chunks = [];
+        for (let i = 0; i < folderIds.length; i += 10) chunks.push(folderIds.slice(i, i + 10));
+        const results = await Promise.all(chunks.map(c =>
+          getDocs(query(collection(fieldinkDb, "shares"), where("jobFolderId", "in", c)))
+        ));
+        if (cancelled) return;
+        const byId = new Map();
+        for (const snap of results) snap.forEach(d => byId.set(d.id, { id: d.id, ...d.data() }));
+        const live = [...byId.values()]
+          .filter(p => !p.revoked)
+          .sort((a, b) => (b.updatedAt?.toMillis?.() || b.version || 0) - (a.updatedAt?.toMillis?.() || a.version || 0));
+        setPlans(live);
+        setPlanErr("");
+      } catch (e) {
+        if (!cancelled) { setPlans([]); setPlanErr(e.message || "Could not load live plans"); }
+      }
+    })();
+    return () => { cancelled = true; };
+  }, [JSON.stringify(folderIds)]); // eslint-disable-line react-hooks/exhaustive-deps
+
+  if (!folderIds || folderIds.length === 0 || plans === null) return null;
+
+  const hiddenIds = Array.isArray(job.hiddenPlanShares) ? job.hiddenPlanShares : [];
+  const visible = plans.filter(p => !hiddenIds.includes(p.id));
+  const hidden = plans.filter(p => hiddenIds.includes(p.id));
+  if (plans.length === 0 && !planErr) return null;   // no live plans — render nothing
+
+  const agoLabel = (p) => {
+    const ms = p.updatedAt?.toMillis?.() || p.version || 0;
+    if (!ms) return "";
+    const mins = Math.max(0, Math.round((Date.now() - ms) / 60000));
+    if (mins < 2) return "just updated";
+    if (mins < 60) return `${mins}m ago`;
+    const hrs = Math.round(mins / 60);
+    if (hrs < 24) return `${hrs}h ago`;
+    const days = Math.round(hrs / 24);
+    return days < 30 ? `${days}d ago` : `${Math.round(days / 30)}mo ago`;
+  };
+  const isFresh = (p) => (Date.now() - (p.updatedAt?.toMillis?.() || p.version || 0)) < 24 * 3600e3;
+  const stripPdf = (n) => String(n || "Plan").replace(/\.pdf$/i, "");
+  const setHidden = (ids) => onUpdate({ hiddenPlanShares: ids });
+
+  const planRow = (p, isHiddenRow) => (
+    <div key={p.id} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap",
+      padding: "9px 12px", borderRadius: 9, marginBottom: 6, opacity: isHiddenRow ? 0.55 : 1,
+      background: C.surface, border: `1px solid ${C.border}` }}>
+      <span style={{ display: "inline-flex", color: C.blue }}><Icon name="fileText" size={15}/></span>
+      <div style={{ flex: 1, minWidth: 140 }}>
+        <div style={{ fontSize: 12.5, fontWeight: 700, color: C.text }}>{stripPdf(p.planName)}</div>
+        <div style={{ fontSize: 10.5, color: C.dim, display: "flex", gap: 8, alignItems: "center", flexWrap: "wrap" }}>
+          <span>{p.pageCount || 1} page{(p.pageCount || 1) === 1 ? "" : "s"}</span>
+          {p.pinsUrl && <span style={{ color: C.blue, fontWeight: 700, letterSpacing: "0.04em" }}>PINS</span>}
+          <span style={{ color: isFresh(p) ? C.green : C.dim, fontWeight: 600 }}>{agoLabel(p)}</span>
+        </div>
+      </div>
+      <div style={{ display: "flex", gap: 6 }}>
+        <a href={FIELDINK_VIEWER_BASE + p.id} target="_blank" rel="noreferrer"
+          style={{ background: C.blue, border: "none", borderRadius: 7, color: "#fff", textDecoration: "none",
+            fontSize: 11, fontWeight: 700, padding: "6px 14px", fontFamily: "inherit" }}>
+          Open
+        </a>
+        {isHiddenRow ? (
+          <button onClick={() => setHidden(hiddenIds.filter(x => x !== p.id))}
+            style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 7, color: C.dim,
+              cursor: "pointer", fontSize: 11, padding: "6px 10px", fontFamily: "inherit" }}>
+            Show
+          </button>
+        ) : (
+          <button onClick={() => setHidden([...new Set([...hiddenIds, p.id])])}
+            style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 7, color: C.dim,
+              cursor: "pointer", fontSize: 11, padding: "6px 10px", fontFamily: "inherit" }}>
+            Hide
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", marginBottom: 8 }}>
+        <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: "0.08em" }}>LIVE PLANS — FIELDINK</div>
+        {hidden.length > 0 && (
+          <button onClick={() => setShowHidden(s => !s)}
+            style={{ background: "none", border: "none", color: C.dim, cursor: "pointer",
+              fontSize: 10.5, fontWeight: 600, padding: 0, fontFamily: "inherit" }}>
+            {showHidden ? "Hide hidden" : `${hidden.length} hidden — show`}
+          </button>
+        )}
+      </div>
+      {planErr && (
+        <div style={{ fontSize: 11, color: C.dim, marginBottom: 8 }}>Live plans unavailable right now ({planErr}).</div>
+      )}
+      {visible.map(p => planRow(p, false))}
+      {showHidden && hidden.map(p => planRow(p, true))}
+      {visible.length === 0 && hidden.length > 0 && !showHidden && (
+        <div style={{ fontSize: 11, color: C.dim }}>All live plans for this job are hidden.</div>
+      )}
+    </div>
+  );
+}
+
 function DriveFilesSection({ job, onUpdate }) {
   const [driveFiles, setDriveFiles] = useState([]);
   const [loading, setLoading] = useState(false);
@@ -21386,18 +21530,21 @@ function DriveFilesSection({ job, onUpdate }) {
   const [editingFolder, setEditingFolder] = useState(!job.driveFolderId);
   const [collapsedFolders, setCollapsedFolders] = useState(new Set());
   const [simproSync, setSimproSync] = useState(null); // null | 'loading' | {uploaded, skipped, errors}
+  const [treeFolderIds, setTreeFolderIds] = useState([]);  // every folder id in the job's Drive tree — feeds FieldInk live plans
 
   const folderId = extractDriveFolderId(job.driveFolderId);
 
   useEffect(() => {
-    if (!folderId) { setDriveFiles([]); return; }
+    if (!folderId) { setDriveFiles([]); setTreeFolderIds([]); return; }
     let cancelled = false;
     setLoading(true);
     setError("");
-    fetchDriveFilesRecursive(folderId, "Root", 0)
+    const fids = new Set();
+    fetchDriveFilesRecursive(folderId, "Root", 0, fids)
       .then(allFiles => {
         if (cancelled) return;
         setDriveFiles(allFiles);
+        setTreeFolderIds([...fids]);
         // Auto-collapse any Archive folders
         const archiveFolders = [...new Set(allFiles.map(f => f._folder))].filter(isArchiveFolder);
         if (archiveFolders.length > 0) {
@@ -21553,6 +21700,13 @@ function DriveFilesSection({ job, onUpdate }) {
             Open in Drive ↗
           </a>
         </div>
+      )}
+
+      {/* FieldInk live plans — the marked-up, pin-tappable viewer links for
+          every plan in this job's folder tree that has an active share.
+          Renders nothing when the job has no live plans. */}
+      {folderId && !editingFolder && (
+        <FieldInkPlansSection folderIds={treeFolderIds} job={job} onUpdate={onUpdate} />
       )}
 
       {/* Simpro sync results */}
