@@ -4650,6 +4650,7 @@ const ICON_PATHS = {
   wifiOff:      <><path d="M2 2l20 20"/><path d="M8.5 16.5a5 5 0 0 1 7 0"/><path d="M2 8.82a15 15 0 0 1 4.17-2.65"/><path d="M10.66 5c4.01-.36 8.14.9 11.34 3.76"/><path d="M16.85 11.25a10 10 0 0 1 2.22 1.68"/><path d="M5 13a10 10 0 0 1 5.24-2.76"/><path d="M12 20h.01"/></>,
   user:         <><path d="M20 21v-2a4 4 0 0 0-4-4H8a4 4 0 0 0-4 4v2"/><circle cx="12" cy="7" r="4"/></>,
   users:        <><path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M22 21v-2a4 4 0 0 0-3-3.87"/><path d="M16 3.13a4 4 0 0 1 0 7.75"/></>,
+  mic:          <><path d="M12 2a3 3 0 0 0-3 3v7a3 3 0 0 0 6 0V5a3 3 0 0 0-3-3Z"/><path d="M19 10v2a7 7 0 0 1-14 0v-2"/><line x1="12" x2="12" y1="19" y2="22"/></>,
   copy:         <><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></>,
   send:         <><path d="M22 2 11 13"/><path d="M22 2l-7 20-4-9-9-4z"/></>,
   truck:        <><path d="M1 3h15v13H1z"/><path d="M16 8h4l3 3v5h-7V8z"/><circle cx="5.5" cy="18.5" r="2.5"/><circle cx="18.5" cy="18.5" r="2.5"/></>,
@@ -8387,6 +8388,37 @@ function JobNotesSection({
     writeNotes([ ...notes, newNote ]);
   };
 
+  // Voice-to-note v1 — browser Web Speech API (no backend). Tap mic, talk, tap
+  // again to stop; the transcript becomes a new note line and the existing
+  // triage hint (suggestTriageType) renders on the card automatically. Smart
+  // LLM cleanup is a later (backend) upgrade.
+  const [listening, setListening] = useState(false);
+  const recogRef = useRef(null);
+  const startVoiceNote = () => {
+    const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+    if (!SR) { toast.warn("Voice input isn't supported on this browser — try Chrome."); return; }
+    if (listening) { try { recogRef.current && recogRef.current.stop(); } catch {} return; }
+    const r = new SR();
+    r.lang = "en-US"; r.interimResults = false; r.continuous = true; r.maxAlternatives = 1;
+    let transcript = "";
+    r.onresult = (e) => { for (let i = e.resultIndex; i < e.results.length; i++) { if (e.results[i].isFinal) transcript += e.results[i][0].transcript + " "; } };
+    r.onerror = () => { setListening(false); };
+    r.onend = () => {
+      setListening(false);
+      const text = transcript.trim();
+      if (!text) return;
+      const now = new Date().toISOString();
+      const creator = (getIdentity && getIdentity()) || null;
+      const note = { id: uid(), title: "", phase: defaultPhase, createdAt: now, createdBy: creator?.name || "", updatedAt: now,
+        lines: [{ id: uid(), text, createdAt: now, photos: [], promoted: null }], photos: [], archived: false, deleted: false, migratedFrom: null };
+      writeNotes([ ...notes, note ]);
+      toast.success("Voice note added — review & triage it.");
+    };
+    recogRef.current = r;
+    setListening(true);
+    try { r.start(); } catch { setListening(false); }
+  };
+
   return (
     <div>
       {filtered.map(note => (
@@ -8456,6 +8488,19 @@ function JobNotesSection({
             onChange={(e)=>{ quickCaptureWithPhotos(e.target.files, 'spec'); e.target.value=''; }}
             style={{display:'none'}}/>
         </label>
+        <button
+          onClick={startVoiceNote}
+          title="Voice note — speak it, we'll drop it in a new note to triage"
+          style={{
+            background: listening ? `${C.red}18` : 'transparent',
+            border:`1px solid ${listening ? C.red : '#64748b55'}`, borderRadius:99,
+            padding:'3px 10px', fontSize:11, fontWeight:700,
+            color: listening ? C.red : '#64748b', cursor:'pointer', fontFamily:'inherit',
+            display:'inline-flex', alignItems:'center', gap:4,
+          }}>
+          <Icon name="mic" size={11} color={listening ? C.red : '#64748b'}/>
+          <span>{listening ? 'Listening… tap to stop' : 'Voice'}</span>
+        </button>
         <span style={{
           marginLeft:'auto', fontSize:10, color: C.dim, fontStyle:'italic',
           whiteSpace:'nowrap',
@@ -44598,7 +44643,7 @@ function AppMapSharePage({ identity = null } = {}) {
   );
 }
 
-function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
+function HuddleSheet({ jobs, manualTasks, foremen, identity, users = [] }) {
   // YMD helper — local date string, no timezone surprises
   const toYMD = (d) => {
     const dt = new Date(d);
@@ -44635,6 +44680,31 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
   }, [identity, foremen]);
   const [scope, setScope] = useState(initialScope);
 
+  // Coordinator "book" filter — a coordinator's huddle defaults to THEIR book
+  // (their foremen's crews), not the all-company view. Books derive from the
+  // coordinator field on foreman user docs. Applied once data resolves; never
+  // overrides a manual choice afterward. (Enables the daily Huddle deep-link.)
+  const coordinatorNames = useMemo(() =>
+    [...new Set((users||[]).filter(u=>(u.title||u.role)==="foreman" && u.coordinator).map(u=>u.coordinator))].sort()
+  , [users]);
+  const [book, setBook] = useState(null);
+  const bookInitRef = useRef(false);
+  useEffect(() => {
+    if (bookInitRef.current) return;
+    if (coordinatorNames.length === 0 || !identity?.name) return;
+    bookInitRef.current = true;
+    if (coordinatorNames.includes(identity.name)) setBook(identity.name);
+  }, [coordinatorNames, identity]);
+  const bookForemen = useMemo(() => {
+    if (!book) return null;
+    return (users||[]).filter(u => (u.title||u.role)==="foreman" && u.coordinator===book).map(u => u.name);
+  }, [users, book]);
+  const inBook = (foremanName) => {
+    if (!bookForemen) return true;
+    const a = (foremanName||"").toLowerCase();
+    return bookForemen.some(fn => { const b=(fn||"").toLowerCase(); return a===b || a.split(" ")[0]===b.split(" ")[0]; });
+  };
+
   // Foreman names whose work shouldn't surface in the huddle. Paul is the
   // owner/partner — he runs his own jobs and doesn't need a daily huddle.
   // TBD variants are placeholders for unsigned-off jobs. "Unassigned" is
@@ -44653,10 +44723,12 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
   // Reuses the app's matchesForeman helper so casing/last-name variants work.
   const inScopeJob = (j) => {
     if(HUDDLE_EXCLUDE_FOREMAN(j.foreman)) return false;
+    if(!inBook(j.foreman)) return false;
     return !scope || matchesForeman(j, scope);
   };
   const inScopeTask = (t) => {
     if(HUDDLE_EXCLUDE_FOREMAN(t.foreman)) return false;
+    if(!inBook(t.foreman)) return false;
     return !scope || ((t.foreman||"").toLowerCase() === scope.toLowerCase());
   };
 
@@ -45830,13 +45902,14 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
   // Foreman pills — All Combined (boss view) + each foreman, in roster order.
   // Excluded foremen (Paul, TBD) get no pill since their work isn't surfaced.
   const scopeOptions = useMemo(() => {
-    const list = [{ label: "All Combined", value: null }];
+    const list = [{ label: book ? `All of ${book.split(" ")[0]}'s` : "All Combined", value: null }];
     (foremen||[]).forEach(f => {
       if(HUDDLE_EXCLUDE_FOREMAN(f)) return;
+      if(!inBook(f)) return;
       list.push({ label: f.split(" ")[0], value: f });
     });
     return list;
-  }, [foremen]);
+  }, [foremen, book, bookForemen]);
 
   return (
     <div style={{maxWidth:680, margin:"0 auto", padding:"16px", color:C.text}}>
@@ -45861,6 +45934,26 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity }) {
           </button>
         </div>
       </div>
+
+      {/* Coordinator book filter — defaults to the signed-in coordinator's
+          book; "All" shows the whole company. Narrows the foreman pills + every
+          section below. Only shows once foremen have coordinators assigned. */}
+      {coordinatorNames.length > 0 && (
+        <div style={{display:"flex", flexWrap:"wrap", gap:6, marginBottom:8, alignItems:"center"}}>
+          <span style={{fontSize:11, color:C.dim, marginRight:2}}>Book:</span>
+          {[{label:"All", value:null}, ...coordinatorNames.map(n=>({label:n.split(" ")[0], value:n}))].map(opt => {
+            const active = book === opt.value;
+            return (
+              <button key={opt.label} onClick={()=>{ setBook(opt.value); setScope(null); }}
+                style={{fontSize:11, fontWeight:active?700:500, padding:"5px 11px", borderRadius:99,
+                  border:`1px solid ${active?C.accent:C.border}`, background:active?C.accent:C.surface,
+                  color:active?"#000":C.text, cursor:"pointer", fontFamily:"inherit"}}>
+                {opt.label}
+              </button>
+            );
+          })}
+        </div>
+      )}
 
       {/* Foreman scope pills — tap to flip between the boss view and each
           foreman's personal huddle. Also affects the text the Send/Copy
@@ -49089,6 +49182,20 @@ function App() {
     setPendingNav(null);
   }, [jobs, pendingNav, openJobById]);
 
+  // Deep-link to a top-level view (e.g. ?view=huddle from the daily Huddle
+  // push). Applied once identity loads + permission allows. The Huddle then
+  // defaults to the signed-in coordinator's own book.
+  const [pendingView, setPendingView] = useState(() => {
+    const v = new URLSearchParams(window.location.search).get("view");
+    if (v) { window.history.replaceState({}, "", window.location.pathname); return v; }
+    return null;
+  });
+  useEffect(() => {
+    if (!pendingView || !identity) return;
+    if (pendingView === "huddle" && can(identity, "settings.view")) setView("huddle");
+    setPendingView(null);
+  }, [pendingView, identity]);
+
   // ── Listen for postMessage from SW (app was already open when notif tapped) ─
   useEffect(() => {
     const handler = e => {
@@ -50612,7 +50719,7 @@ function App() {
       )}
 
       {view==="huddle"&&can(identity,"settings.view")&&(
-        <HuddleSheet jobs={jobs} manualTasks={manualTasks} foremen={_foremen} identity={identity}/>
+        <HuddleSheet jobs={jobs} manualTasks={manualTasks} foremen={_foremen} identity={identity} users={users}/>
       )}
 
       {view==="tasks"&&can(identity,"tasks.view")&&(

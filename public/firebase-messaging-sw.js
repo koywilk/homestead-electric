@@ -55,6 +55,7 @@ messaging.onBackgroundMessage(payload => {
   const body    = payload.data?.body  || payload.notification?.body  || "";
   const jobId   = payload.data?.jobId   || "";
   const section = payload.data?.section || "";
+  const view    = payload.data?.view    || "";
   // Server-supplied tag wins (stable across pushes for the same job+section);
   // fall back to a derived tag for older clients.
   const tag     = payload.data?.tag || `he-${jobId}-${section}`;
@@ -67,7 +68,7 @@ messaging.onBackgroundMessage(payload => {
     badge: "/icon-192.png",
     tag,                                // dedupes notifications for the same job+section
     renotify: false,                    // don't pop a fresh banner if the tag matches
-    data:  { jobId, section },
+    data:  { jobId, section, view },
   });
 });
 
@@ -86,8 +87,11 @@ self.addEventListener("notificationclick", event => {
   const fcmData = fcm.data || {};
   const jobId   = ndata.jobId   || fcmData.jobId   || "";
   const section = ndata.section || fcmData.section || "";
+  const view    = ndata.view    || fcmData.view    || "";
 
-  const url = jobId
+  const url = view
+    ? `${self.location.origin}/?view=${encodeURIComponent(view)}`
+    : jobId
     ? `${self.location.origin}/?jobId=${encodeURIComponent(jobId)}&section=${encodeURIComponent(section || "")}`
     : self.location.origin + "/";
 
@@ -96,10 +100,10 @@ self.addEventListener("notificationclick", event => {
       const appClient = windowClients.find(c => c.url.startsWith(self.location.origin));
       if (appClient) {
         // App already open — navigate to the deep-link URL and focus it.
-        if (jobId && typeof appClient.navigate === "function") {
+        if ((jobId || view) && typeof appClient.navigate === "function") {
           return appClient.navigate(url).then(c => c && c.focus()).catch(() => {
             appClient.focus();
-            appClient.postMessage({ type: "HE_NOTIF_CLICK", jobId, section });
+            if (jobId) appClient.postMessage({ type: "HE_NOTIF_CLICK", jobId, section });
           });
         }
         // Fallback — postMessage so the app opens the job without a full reload.
