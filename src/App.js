@@ -21437,7 +21437,7 @@ function FieldInkPlansSection({ folderIds, job, onUpdate }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [JSON.stringify(folderIds)]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [JSON.stringify(folderIds)]);
 
   if (!folderIds || folderIds.length === 0 || plans === null) return null;
 
