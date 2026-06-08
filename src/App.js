@@ -32299,38 +32299,46 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
     return names;
   }, [schedule]);
 
-  // Build staff name → crew color map using foremanId linkage
-  // Each crew member's name maps to their foreman's color
+  // Match a SimPro staff name to a user's full name. First-name-only matching
+  // conflated people who share a first name (two Jacobs landed in each other's
+  // crew/book + crossed colors). Require first AND last name to match, with the
+  // last name tolerant of an initial ("Jacob S." ↔ "Jacob Spackman").
+  const staffMatchesUser = (staffName, fullName) => {
+    const norm = s => String(s||"").toLowerCase().replace(/[.\s]+/g," ").trim();
+    const a = norm(staffName), b = norm(fullName);
+    if (!a || !b) return false;
+    if (a === b) return true;
+    const at = a.split(" "), bt = b.split(" ");
+    if (at.length < 2 || bt.length < 2) return at[0] === bt[0]; // only a first name available
+    if (at[0] !== bt[0]) return false;
+    const al = at[at.length-1], bl = bt[bt.length-1];
+    return al === bl || al.startsWith(bl) || bl.startsWith(al);
+  };
+
+  // Build staff name → crew color map using foremanId linkage (full-name match).
   const staffColorMap = useMemo(() => {
     const map = {};
-    // Map foreman user IDs → their color
     const foremanColorById = {};
     users.forEach(u => {
       const firstName = (u.name || "").split(" ")[0];
       const color = foremanColors[u.name] || foremanColors[firstName];
       if (color) foremanColorById[u.id] = color;
     });
-    // For each user with a foremanId, map their name to that foreman's color
+    // Crew members → their foreman's color
     users.forEach(u => {
       if (u.foremanId && foremanColorById[u.foremanId]) {
-        // Match by first name or full name against SimPro staff names
-        const firstName = (u.name || "").split(" ")[0].toLowerCase();
         allStaff.forEach(staffName => {
-          if (staffName.toLowerCase().startsWith(firstName)) {
-            map[staffName] = foremanColorById[u.foremanId];
-          }
+          if (staffMatchesUser(staffName, u.name)) map[staffName] = foremanColorById[u.foremanId];
         });
       }
     });
-    // Foremen get their own color too
+    // Foremen → their own color
     users.forEach(u => {
       const firstName = (u.name || "").split(" ")[0];
       const color = foremanColors[u.name] || foremanColors[firstName];
       if (color) {
         allStaff.forEach(staffName => {
-          if (staffName.toLowerCase().startsWith(firstName.toLowerCase())) {
-            map[staffName] = color;
-          }
+          if (staffMatchesUser(staffName, u.name)) map[staffName] = color;
         });
       }
     });
@@ -32340,21 +32348,20 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
   // Build "my crew" names — works for both foremen and crew members
   const myCrewNames = useMemo(() => {
     if (!identity?.id) return [];
-    let firstNames = [];
+    let fullNames = [];
     // Am I a foreman? (crew members have me as their foremanId)
-    const asForeman = users.filter(u => u.foremanId === identity.id).map(u => (u.name||"").split(" ")[0].toLowerCase());
+    const asForeman = users.filter(u => u.foremanId === identity.id).map(u => u.name);
     if (asForeman.length > 0) {
-      // Include self + all my crew
-      firstNames = [...new Set([(identity.name||"").split(" ")[0].toLowerCase(), ...asForeman])];
+      fullNames = [identity.name, ...asForeman];
     } else if (identity.foremanId) {
       // I'm a crew member — include my foreman + all their crew
       const foreman = users.find(u => u.id === identity.foremanId);
-      const crewmates = users.filter(u => u.foremanId === identity.foremanId).map(u => (u.name||"").split(" ")[0].toLowerCase());
-      const foremanFirst = foreman ? (foreman.name||"").split(" ")[0].toLowerCase() : null;
-      firstNames = [...new Set([...(foremanFirst ? [foremanFirst] : []), ...crewmates, (identity.name||"").split(" ")[0].toLowerCase()])];
+      const crewmates = users.filter(u => u.foremanId === identity.foremanId).map(u => u.name);
+      fullNames = [...(foreman ? [foreman.name] : []), ...crewmates, identity.name];
     }
-    if (!firstNames.length) return [];
-    return allStaff.filter(n => firstNames.some(c => n.toLowerCase().startsWith(c)));
+    fullNames = [...new Set(fullNames.filter(Boolean))];
+    if (!fullNames.length) return [];
+    return allStaff.filter(n => fullNames.some(fn => staffMatchesUser(n, fn)));
   }, [users, identity, allStaff]);
 
   const iAmForeman = users.some(u => u.foremanId === identity?.id);
@@ -32369,10 +32376,9 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
     return foremen.map(f => {
       const firstName = (f.name||"").split(" ")[0];
       const color = foremanColors[f.name] || foremanColors[firstName] || C.accent;
-      const crewFirstNames = users
-        .filter(u => u.foremanId === f.id)
-        .map(u => (u.name||"").split(" ")[0].toLowerCase());
-      const staffNames = allStaff.filter(n => crewFirstNames.some(c => n.toLowerCase().startsWith(c)));
+      // The crew = the foreman + everyone assigned to them (full-name matched).
+      const crewNames = [f.name, ...users.filter(u => u.foremanId === f.id).map(u => u.name)];
+      const staffNames = allStaff.filter(n => crewNames.some(cn => staffMatchesUser(n, cn)));
       return { foremanId: f.id, foremanName: firstName, color, staffNames };
     }).filter(fc => fc.staffNames.length > 0);
   }, [users, foremanColors, allStaff]);
