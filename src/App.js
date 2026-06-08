@@ -49193,6 +49193,7 @@ function App() {
   useEffect(() => {
     if (!pendingView || !identity) return;
     if (pendingView === "huddle" && can(identity, "settings.view")) setView("huddle");
+    else if (pendingView === "cos" && can(identity, "cos.view")) setView("cos");
     setPendingView(null);
   }, [pendingView, identity]);
 
