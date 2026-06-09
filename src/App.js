@@ -34815,11 +34815,20 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
           const bookForemen = (foremenList||[]).filter(Boolean);
           const grabbed = new Set(); bookForemen.forEach(f=>grabbed.add(f.toLowerCase()));
           const peopleGroups = bookForemen.map(fm=>{
-            const members = roster.filter(n=> !fmEq(n,fm) && fmEq(foremanOfPerson(n),fm));
+            // crewForemanOf maps a person to their foreman's FIRST name, while
+            // foremenList holds full names — compare on first name so a foreman's
+            // whole crew shows under them (not just the foreman alone).
+            const members = roster.filter(n=> !fmEq(n,fm) && fmEq(foremanOfPerson(n), firstOf(fm)));
             members.forEach(m=>grabbed.add(m.toLowerCase()));
             return { foreman:fm, members };
           });
           const otherCrew = roster.filter(n=> !grabbed.has(n.toLowerCase()));
+          // Set of everyone in the selected book (foremen + their crews) — used to
+          // group teams so this coordinator's teams sort first.
+          const bookPeople = new Set();
+          bookForemen.forEach(f=>bookPeople.add(f.toLowerCase()));
+          peopleGroups.forEach(g=>g.members.forEach(m=>bookPeople.add(m.toLowerCase())));
+          const teamInBook = t => coordFilter!=="all" && teamMembers(t).some(n=>bookPeople.has(n.toLowerCase()));
           // jobs a person is on for a given day
           const personOn = (person,di)=> Object.keys(crewData).map(k=>{
             const {jid,di:kdi}=splitKey(k); if(kdi!==di) return null;
@@ -35075,14 +35084,11 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
                     </div>
                   )}
 
-                  {/* TEAMS view */}
-                  {matchRightView==="teams" && (
-                    <div>
-                      {(!crewTeams||crewTeams.length===0) && <div style={{fontSize:12,color:C.dim,padding:"10px 0"}}>No teams yet. Tap “New team”, then tap crew names below to build it.</div>}
-                      {dayHeader}
-                      {(crewTeams||[]).map((t,idx)=>{
-                        const names=teamMembers(t); const editing=matchTeamEdit===idx; const tc=t.lead?crewGetColor(t.lead):C.accent;
-                        return (
+                  {/* TEAMS view — this coordinator's teams grouped first */}
+                  {matchRightView==="teams" && (()=>{
+                    const renderTeamRow = (t,idx)=>{
+                      const names=teamMembers(t); const editing=matchTeamEdit===idx; const tc=t.lead?crewGetColor(t.lead):C.accent;
+                      return (
                           <div key={t.id||idx} style={{marginBottom:8,border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
                             <div style={{display:"grid",gridTemplateColumns:"108px repeat(5,1fr)",gap:1,background:C.border}}>
                               <div style={{background:"var(--card)",padding:"4px 6px",display:"flex",flexDirection:"column",gap:2}}>
@@ -35125,10 +35131,28 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
                               </div>
                             )}
                           </div>
-                        );
-                      })}
-                    </div>
-                  )}
+                      );
+                    };
+                    const sectionHdr = (txt)=>(<div style={{fontSize:10,fontWeight:700,color:C.dim,letterSpacing:"0.07em",margin:"4px 0 6px"}}>{txt}</div>);
+                    const withIdx = (crewTeams||[]).map((t,idx)=>({t,idx}));
+                    const scoped = coordFilter!=="all";
+                    const mine   = scoped ? withIdx.filter(x=>teamInBook(x.t)) : withIdx;
+                    const others = scoped ? withIdx.filter(x=>!teamInBook(x.t)) : [];
+                    return (
+                      <div>
+                        {(!crewTeams||crewTeams.length===0) && <div style={{fontSize:12,color:C.dim,padding:"10px 0"}}>No teams yet. Tap “New team”, then tap crew names below to build it.</div>}
+                        {crewTeams&&crewTeams.length>0 && dayHeader}
+                        {scoped ? (
+                          <>
+                            {sectionHdr(`${coordFilter==="all"?"":coordFilter+"’S "}TEAMS`)}
+                            {mine.length>0 ? mine.map(x=>renderTeamRow(x.t,x.idx)) : <div style={{fontSize:11,color:C.dim,padding:"2px 0 8px"}}>No teams for this book yet — tap “New team”.</div>}
+                            {others.length>0 && sectionHdr("OTHER TEAMS")}
+                            {others.map(x=>renderTeamRow(x.t,x.idx))}
+                          </>
+                        ) : withIdx.map(x=>renderTeamRow(x.t,x.idx))}
+                      </div>
+                    );
+                  })()}
 
                   <div style={{fontSize:10,color:C.dim,marginTop:6,lineHeight:1.5}}>
                     Pick a job on the left, then tap each person’s (or team’s) day to assign — the job stays selected so you can keep tapping. Tap a job chip in a cell to remove it. OFF = on PTO that day. Planning only — nothing is sent to Simpro.
