@@ -47606,7 +47606,6 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
     const i = coordinators.indexOf(c);
     return pal[(i < 0 ? 0 : i) % pal.length];
   };
-  const initials = (c) => (c || "?").trim().split(/\s+/).map(w => w[0]).slice(0,2).join("").toUpperCase();
 
   const submit = () => {
     const t = dText.trim();
@@ -47656,15 +47655,19 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
           {n.dueBucket === "tomorrow"
             ? pill("Move to week", C.bg, C.dim, "arrowRight", () => patch(n, { dueBucket: "week" }))
             : pill("Pull to tomorrow", C.bg, C.dim, "arrowRight", () => patch(n, { dueBucket: "tomorrow" }))}
+          {coordinators.length > 0 && (canAdd
+            ? <select value={coordinators.includes(n.coordinator) ? n.coordinator : ""}
+                onChange={e => patch(n, { coordinator: e.target.value })}
+                title="Transfer to another book"
+                style={{ fontSize: 11, padding: "2px 8px", borderRadius: 99, fontFamily: "inherit", cursor: "pointer",
+                  border: `1px solid ${coordColor(n.coordinator)}55`, background: `${coordColor(n.coordinator)}18`, color: coordColor(n.coordinator) }}>
+                {!coordinators.includes(n.coordinator) && <option value="">{n.coordinator ? n.coordinator.split(" ")[0] : "Unassigned"}</option>}
+                {coordinators.map(c => <option key={c} value={c}>{c.split(" ")[0]}'s book</option>)}
+              </select>
+            : (n.coordinator && pill(n.coordinator.split(" ")[0], `${coordColor(n.coordinator)}18`, coordColor(n.coordinator), "user")))}
         </div>
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
-        {scope === "all" && n.coordinator && (
-          <div title={n.coordinator}
-            style={{ width: 24, height: 24, borderRadius: "50%", background: `${coordColor(n.coordinator)}22`,
-              color: coordColor(n.coordinator), display: "flex", alignItems: "center", justifyContent: "center",
-              fontSize: 10, fontWeight: 700 }}>{initials(n.coordinator)}</div>
-        )}
         {canAdd && (
           <button onClick={() => markDone(n)} title="Mark done"
             style={{ width: 30, height: 30, border: `1px solid ${C.border}`, background: "none", borderRadius: 8,
