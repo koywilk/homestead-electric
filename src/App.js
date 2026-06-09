@@ -34811,14 +34811,37 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
           // (by first name) to their foreman.
           const roster = (crewRoster||[]).filter(Boolean);
           const firstOf = n => (n||"").trim().split(/\s+/)[0];
-          const foremanOfPerson = n => crewForemanOf[n] || crewForemanOf[firstOf(n)] || "";
+          // Resolve a roster/foreman display name → its user record. Robust to the
+          // roster's mixed formats ("First", "First Last", "First L.") and to
+          // duplicate first names (two Jacobs) by matching on last-initial. We then
+          // group by foreman USER ID, not by name, so a person assigned a foreman
+          // in Settings always lands under that foreman regardless of name shape.
+          const usersList = users||[];
+          const userById = {}; usersList.forEach(u=>{ if(u&&u.id) userById[u.id]=u; });
+          const _norm = s => (s||"").trim().toLowerCase();
+          const userOf = (name)=>{
+            const rn=_norm(name); if(!rn) return null;
+            const exact=usersList.find(x=>_norm(x.name)===rn); if(exact) return exact;
+            const parts=rn.split(/\s+/); const first=parts[0]; const li=parts[1]?parts[1][0]:null;
+            const cands=usersList.filter(x=>_norm(x.name).split(/\s+/)[0]===first);
+            if(cands.length===1) return cands[0];
+            if(li){ const m=cands.find(x=>{ const lp=_norm(x.name).split(/\s+/); const last=lp[lp.length-1]; return last && last[0]===li; }); if(m) return m; }
+            return cands[0]||null;
+          };
+          const foremanIdOf = (name)=>{ const u=userOf(name); return u?u.foremanId:null; };
+          // Each person's dot color: their own foreman/lead color if they have one,
+          // otherwise inherit their foreman's color, otherwise gray.
+          const personColor = (name)=>{
+            const own=crewGetColor(name); if(own && own!=="#6b7280") return own;
+            const u=userOf(name); const fmUser=u&&u.foremanId?userById[u.foremanId]:null;
+            if(fmUser){ const fc=crewGetColor(fmUser.name); if(fc && fc!=="#6b7280") return fc; }
+            return "#6b7280";
+          };
           const bookForemen = (foremenList||[]).filter(Boolean);
           const grabbed = new Set(); bookForemen.forEach(f=>grabbed.add(f.toLowerCase()));
           const peopleGroups = bookForemen.map(fm=>{
-            // crewForemanOf maps a person to their foreman's FIRST name, while
-            // foremenList holds full names — compare on first name so a foreman's
-            // whole crew shows under them (not just the foreman alone).
-            const members = roster.filter(n=> !fmEq(n,fm) && fmEq(foremanOfPerson(n), firstOf(fm)));
+            const fmId = userOf(fm)?.id;
+            const members = roster.filter(n=> !fmEq(n,fm) && fmId && foremanIdOf(n)===fmId);
             members.forEach(m=>grabbed.add(m.toLowerCase()));
             return { foreman:fm, members };
           });
@@ -34909,7 +34932,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
           const personRow = (person,isLead)=>(
             <div key={person} style={{display:"grid",gridTemplateColumns:"108px repeat(5,1fr)",gap:1,background:C.border}}>
               <div style={{display:"flex",alignItems:"center",gap:5,padding:"3px 6px",background:"var(--card)",paddingLeft:isLead?6:16}}>
-                <span style={{width:7,height:7,borderRadius:99,background:crewGetColor(person),flexShrink:0}}/>
+                <span style={{width:7,height:7,borderRadius:99,background:personColor(person),flexShrink:0}}/>
                 <span style={{fontSize:11,fontWeight:isLead?700:500,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{person}</span>
               </div>
               {personCells(person)}
@@ -35121,7 +35144,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
                                     const inTeam=fmEq(t.lead,n)||(t.members||[]).some(m=>fmEq(m,n));
                                     return (
                                       <button key={n} onClick={()=>teamToggleMember(idx,n)}
-                                        style={{background:inTeam?crewGetColor(n)+"26":"transparent",border:`1px solid ${inTeam?crewGetColor(n):C.border}`,
+                                        style={{background:inTeam?personColor(n)+"26":"transparent",border:`1px solid ${inTeam?personColor(n):C.border}`,
                                           borderRadius:99,color:inTeam?"var(--text)":C.dim,padding:"2px 9px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:inTeam?700:500}}>
                                         {n}{isForeman(n)?" ★":""}
                                       </button>
