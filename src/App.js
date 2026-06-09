@@ -33042,6 +33042,20 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
   const [crewPinned, setCrewPinned] = useState([]); // jobIds explicitly pinned for this week
   const [crewFocus,  setCrewFocus]  = useState(false); // focus mode = show only pinned + assigned
   const [crewPinPickerOpen, setCrewPinPickerOpen] = useState(false);
+  // ── Two-panel matcher (reimagined planner) ──────────────────────────────
+  // Mode toggle: "matcher" = new coordinator two-panel matcher, "grid" = the
+  // classic week grid (kept as a fully-working fallback). Persisted so a
+  // device that picks one sticks with it. Default matcher.
+  const [crewPlannerMode, setCrewPlannerMode] = useState(() => {
+    try { const s = localStorage.getItem("planner.mode"); if(s==="grid"||s==="matcher") return s; } catch {}
+    return "matcher";
+  });
+  const setPlannerMode = (m) => { setCrewPlannerMode(m); try { localStorage.setItem("planner.mode", m); } catch {} };
+  // "Needs bodies" manual flags for this week — array of jobIds. Floats a job to
+  // the top of the matcher's left list. Week-scoped: rides inside the
+  // settings/schedule_<wk> doc alongside assignments (see loader + _saveCrewData).
+  const [crewNeedsBodies, setCrewNeedsBodies] = useState([]);
+  const [matchSelJob, setMatchSelJob] = useState(null); // jobId "picked up" for tap-to-assign
   // Tracks which row's hours-needed chip is currently being edited so the
   // chip can render as a clear "WK HRS" display by default and only swap to
   // an input when the user clicks it. Keyed `${jobId}_${phase}` so two rows
@@ -33302,8 +33316,8 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
   // "Sched 8h / Need 12h" chip on the row.
   const [crewHoursByJob, setCrewHoursByJob] = useState({});
   useEffect(() => onSnapshot(doc(db,"settings","schedule_"+crewWK), s => {
-    if(s.exists()){ const d=s.data(); setCrewData(d.assignments||{}); setCrewExtra(d.extraJobs||[]); setCrewJobOrder(d.jobOrder||[]); setCrewPinned(d.pinnedJobs||[]); setCrewFocus(!!d.focus); setCrewHoursByJob(d.hoursByJob||{}); }
-    else { setCrewData({}); setCrewExtra([]); setCrewJobOrder([]); setCrewPinned([]); setCrewFocus(false); setCrewHoursByJob({}); }
+    if(s.exists()){ const d=s.data(); setCrewData(d.assignments||{}); setCrewExtra(d.extraJobs||[]); setCrewJobOrder(d.jobOrder||[]); setCrewPinned(d.pinnedJobs||[]); setCrewFocus(!!d.focus); setCrewHoursByJob(d.hoursByJob||{}); setCrewNeedsBodies(d.needsBodies||[]); }
+    else { setCrewData({}); setCrewExtra([]); setCrewJobOrder([]); setCrewPinned([]); setCrewFocus(false); setCrewHoursByJob({}); setCrewNeedsBodies([]); }
   }), [crewWK]);
 
   // (Removed: the previous approach tracked lastScheduledDate from per-week
@@ -33367,13 +33381,14 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
     crewTeams.forEach(t=>{ if(t.lead) assigned.add(t.lead); t.members.forEach(n=>assigned.add(n)); });
     return (crewRoster||[]).filter(n=>!assigned.has(n));
   }, [crewTeams, crewRoster]);
-  const _saveCrewData = (a,e,o,p,f) => setDoc(doc(db,"settings","schedule_"+crewWK),{
+  const _saveCrewData = (a,e,o,p,f,nb) => setDoc(doc(db,"settings","schedule_"+crewWK),{
     assignments:a,
     extraJobs:e!==undefined?e:crewExtra,
     jobOrder:o!==undefined?o:crewJobOrder,
     pinnedJobs:p!==undefined?p:crewPinned,
     focus:f!==undefined?f:crewFocus,
     hoursByJob:crewHoursByJob,
+    needsBodies:nb!==undefined?nb:crewNeedsBodies,
     updatedAt:new Date().toISOString()
   });
   // Set this week's hours-needed for a single job + phase. Persists alongside
@@ -34762,6 +34777,217 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
         };
         const isForeman = n => foremen.map(f=>f.toLowerCase()).includes(n.toLowerCase());
 
+        // ════════════════════════════════════════════════════════════════
+        // TWO-PANEL MATCHER (reimagined planner, planning-only — no Simpro)
+        // Left: book-scoped jobs with a "needs bodies" flag that floats them to
+        // top. Right: foreman lanes × Mon–Fri with obligations + PTO drawn in.
+        // Pick a job (click/drag) then drop/tap a crew-day to assign. Writes the
+        // same crewData {lead,crew} cells the classic grid uses — fully
+        // interoperable; toggle back to the grid any time.
+        // ════════════════════════════════════════════════════════════════
+        if(crewPlannerMode==="matcher"){
+          const jobById = {}; (jobs||[]).forEach(j=>{ jobById[j.id]=j; });
+          const fmEq = (a,b)=> (a||"").toLowerCase() === (b||"").toLowerCase();
+          const splitKey = k => { const i=k.lastIndexOf("_"); return { jid:k.slice(0,i), di:+k.slice(i+1) }; };
+          const isStaffed = (jid)=> crewDays.some((_,di)=>{ const c=crewData[`${jid}_${di}`]; return !!(c&&(c.lead||(c.crew&&c.crew.length))); });
+          const needsSet = new Set(crewNeedsBodies);
+          const leftJobs = [...(crewPlanJobs||[])].sort((a,b)=>{
+            const an=needsSet.has(a.id)?0:1, bn=needsSet.has(b.id)?0:1; if(an!==bn) return an-bn;
+            const as=isStaffed(a.id)?1:0, bs=isStaffed(b.id)?1:0; if(as!==bs) return as-bs;
+            return (a.name||"").localeCompare(b.name||"");
+          });
+          const lanes = (foremenList||[]).filter(Boolean);
+          const eventsFor = (foreman,di)=> (crewPlanEvents||[]).filter(ev=> ev.dayIdx===di && fmEq(jobById[ev.jobId]?.foreman, foreman));
+          const committedFor = (foreman,di)=> Object.keys(crewData).map(k=>{
+            const {jid,di:kdi}=splitKey(k); if(kdi!==di) return null;
+            const c=crewData[k]; if(!c) return null;
+            if(!(fmEq(c.lead,foreman) || (c.crew||[]).some(p=>fmEq(p,foreman)))) return null;
+            return { jid, cell:c, count:(c.lead?1:0)+((c.crew||[]).length) };
+          }).filter(Boolean);
+          const assignJob = (jid,di,foreman)=>{
+            if(isOnPTO(foreman,crewDays[di])){ toast.warn(`${foreman} is off ${dayLabels[di]} — can't schedule.`); return; }
+            const k=`${jid}_${di}`; const nx={...crewData}; const cur=nx[k]||{lead:"",crew:[]};
+            if(!cur.lead) nx[k]={...cur,lead:foreman};
+            else if(!fmEq(cur.lead,foreman) && !(cur.crew||[]).some(p=>fmEq(p,foreman))) nx[k]={...cur,crew:[...(cur.crew||[]),foreman]};
+            else { toast.info(`${foreman} already on this job ${dayLabels[di]}.`); return; }
+            setCrewData(nx); _saveCrewData(nx);
+            toast.success(`${foreman} → ${(jobById[jid]?.name)||"job"}, ${dayLabels[di]}`);
+          };
+          const unassignFromLane = (jid,di,foreman)=>{
+            const k=`${jid}_${di}`; const nx={...crewData}; const cur=nx[k]; if(!cur) return;
+            const u={...cur}; if(fmEq(cur.lead,foreman)) u.lead=""; u.crew=(cur.crew||[]).filter(p=>!fmEq(p,foreman));
+            if(!u.lead && (!u.crew||u.crew.length===0)) delete nx[k]; else nx[k]=u;
+            setCrewData(nx); _saveCrewData(nx);
+          };
+          const toggleNeeds = (jid)=>{
+            const has=crewNeedsBodies.includes(jid);
+            const next=has?crewNeedsBodies.filter(x=>x!==jid):[...crewNeedsBodies,jid];
+            setCrewNeedsBodies(next); _saveCrewData(crewData,undefined,undefined,undefined,undefined,next);
+          };
+          const onDropTo = (di,foreman)=>{ if(matchSelJob) assignJob(matchSelJob,di,foreman); };
+          const selJobObj = matchSelJob ? jobById[matchSelJob] : null;
+          const modeToggleBtn = (
+            <button onClick={()=>setPlannerMode("grid")} title="Switch to the classic week grid"
+              style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
+                padding:"4px 10px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:600,
+                display:"inline-flex",alignItems:"center",gap:4}}>
+              <Icon name="calendar" size={11}/> Classic grid
+            </button>
+          );
+          return (
+            <div style={{padding:"20px 20px 8px"}}>
+              {/* Header: title + book selector + week nav + mode toggle */}
+              <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:12,flexWrap:"wrap"}}>
+                <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:"var(--text)"}}>
+                  CREW PLANNER
+                </div>
+                <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:C.accent,
+                  background:C.accent+"15",border:`1px solid ${C.accent}40`,borderRadius:99,padding:"2px 8px"}}>MATCHER</span>
+                <div style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap",alignItems:"center"}}>
+                  <button onClick={()=>setCrewWeekOff(crewWeekOff-1)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,padding:"4px 9px",cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>‹</button>
+                  <span style={{fontSize:11,fontWeight:700,color:"var(--text)",minWidth:96,textAlign:"center"}}>{crewFmtD(crewDays[0])} – {crewFmtD(crewDays[4])}</span>
+                  <button onClick={()=>setCrewWeekOff(crewWeekOff+1)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,padding:"4px 9px",cursor:"pointer",fontSize:11,fontFamily:"inherit"}}>›</button>
+                  {crewWeekOff!==0 && <button onClick={()=>setCrewWeekOff(0)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,padding:"4px 9px",cursor:"pointer",fontSize:10,fontFamily:"inherit"}}>This week</button>}
+                  {modeToggleBtn}
+                </div>
+              </div>
+
+              {/* Book selector (coordinator scope). Pick "All" for free cross-book borrowing. */}
+              {coordinatorNames.length>0 && (
+                <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:12,alignItems:"center"}}>
+                  <span style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginRight:2}}>BOOK</span>
+                  {["all",...coordinatorNames].map(c=>{
+                    const active = coordFilter===c;
+                    return (
+                      <button key={c} onClick={()=>pickCoord(c)}
+                        style={{background:active?C.accent:"none",border:`1px solid ${active?C.accent:C.border}`,
+                          borderRadius:99,color:active?"#000":C.dim,padding:"3px 11px",cursor:"pointer",
+                          fontSize:11,fontFamily:"inherit",fontWeight:active?700:500}}>
+                        {c==="all"?"All books":c}
+                      </button>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Picked-up job banner (sticky cue, esp. on mobile) */}
+              {selJobObj && (
+                <div style={{position:"sticky",top:0,zIndex:5,display:"flex",alignItems:"center",gap:8,
+                  background:C.accent+"18",border:`1px solid ${C.accent}55`,borderRadius:8,padding:"7px 12px",marginBottom:10}}>
+                  <Icon name="flag" size={13}/>
+                  <span style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>Assigning: {selJobObj.name||"Untitled"}</span>
+                  <span style={{fontSize:11,color:C.dim}}>— tap or drop on a crew/day</span>
+                  <button onClick={()=>setMatchSelJob(null)} style={{marginLeft:"auto",background:"none",border:"none",color:C.dim,cursor:"pointer",fontSize:12,fontFamily:"inherit"}}>Cancel</button>
+                </div>
+              )}
+
+              {/* Two panels — wrap to stack on narrow screens (mobile parity) */}
+              <div style={{display:"flex",gap:14,flexWrap:"wrap",alignItems:"flex-start"}}>
+
+                {/* LEFT — jobs with needs-bodies flag */}
+                <div style={{flex:"1 1 300px",minWidth:260}}>
+                  <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",color:C.dim,marginBottom:8}}>JOBS — {leftJobs.length}</div>
+                  {leftJobs.length===0 && <div style={{fontSize:12,color:C.dim,padding:"10px 0"}}>No active jobs in this book this week.</div>}
+                  {leftJobs.map(j=>{
+                    const flagged=needsSet.has(j.id); const staffed=isStaffed(j.id); const picked=matchSelJob===j.id;
+                    const evs=(crewPlanEvents||[]).filter(ev=>ev.jobId===j.id);
+                    return (
+                      <div key={j.id} draggable onDragStart={()=>setMatchSelJob(j.id)} onDragEnd={()=>{}}
+                        onClick={()=>setMatchSelJob(picked?null:j.id)}
+                        style={{border:`1px solid ${picked?C.accent:flagged?"#dc2626":C.border}`,
+                          borderLeft:`4px solid ${flagged?"#dc2626":staffed?"#16a34a":C.border}`,
+                          background:picked?C.accent+"14":staffed?"var(--card)":"var(--card)",
+                          opacity:staffed&&!flagged?0.62:1,borderRadius:8,padding:"8px 10px",marginBottom:7,cursor:"pointer"}}>
+                        <div style={{display:"flex",alignItems:"center",gap:8}}>
+                          <button onClick={(e)=>{e.stopPropagation();toggleNeeds(j.id);}}
+                            title={flagged?"Clear needs-bodies flag":"Flag as needs bodies (floats to top)"}
+                            style={{flexShrink:0,width:18,height:18,borderRadius:4,cursor:"pointer",
+                              border:`1.5px solid ${flagged?"#dc2626":C.border}`,background:flagged?"#dc2626":"transparent",
+                              display:"inline-flex",alignItems:"center",justifyContent:"center",padding:0}}>
+                            {flagged && <Icon name="check" size={12} color="#fff"/>}
+                          </button>
+                          <div style={{flex:1,minWidth:0}}>
+                            <div style={{fontSize:13,fontWeight:700,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{j.name||"Untitled"}</div>
+                            <div style={{fontSize:10,color:C.dim,marginTop:1}}>
+                              {flagged && <span style={{color:"#dc2626",fontWeight:700}}>NEEDS BODIES · </span>}
+                              {staffed?<span style={{color:"#16a34a",fontWeight:700}}>Staffed</span>:"Unstaffed"}
+                              {j.foreman?` · ${j.foreman}`:""}
+                            </div>
+                          </div>
+                        </div>
+                        {evs.length>0 && (
+                          <div style={{display:"flex",gap:4,flexWrap:"wrap",marginTop:6}}>
+                            {evs.map(ev=>(
+                              <span key={ev.id} style={{fontSize:9,fontWeight:700,color:ev.color,background:ev.color+"18",
+                                border:`1px solid ${ev.color}40`,borderRadius:4,padding:"1px 5px"}}>
+                                {dayLabels[ev.dayIdx]} · {ev.type==="fourway"?"4-WAY":ev.type==="qc"?"QC":ev.type==="rt"?"RT":"INSP"}
+                              </span>
+                            ))}
+                          </div>
+                        )}
+                      </div>
+                    );
+                  })}
+                </div>
+
+                {/* RIGHT — foreman lanes × Mon–Fri */}
+                <div style={{flex:"2 1 480px",minWidth:300,overflowX:"auto"}}>
+                  <div style={{fontSize:11,fontWeight:700,letterSpacing:"0.07em",color:C.dim,marginBottom:8}}>CREWS — {lanes.length}</div>
+                  {lanes.length===0 && <div style={{fontSize:12,color:C.dim,padding:"10px 0"}}>No foremen in this book. Pick a different book above.</div>}
+                  {lanes.map(foreman=>{
+                    const fc=crewGetColor(foreman);
+                    return (
+                      <div key={foreman} style={{border:`1px solid ${C.border}`,borderRadius:8,marginBottom:8,overflow:"hidden"}}>
+                        <div style={{display:"flex",alignItems:"center",gap:7,padding:"6px 10px",background:fc+"14",borderBottom:`1px solid ${C.border}`}}>
+                          <span style={{width:9,height:9,borderRadius:99,background:fc}}/>
+                          <span style={{fontSize:12,fontWeight:700,color:"var(--text)"}}>{foreman}</span>
+                        </div>
+                        <div style={{display:"grid",gridTemplateColumns:"repeat(5,1fr)",gap:1,background:C.border}}>
+                          {crewDays.map((d,di)=>{
+                            const off=!!isOnPTO(foreman,d);
+                            const evs=eventsFor(foreman,di);
+                            const committed=committedFor(foreman,di);
+                            const isTarget=!!matchSelJob && !off;
+                            return (
+                              <div key={di}
+                                onDragOver={e=>{ if(isTarget) e.preventDefault(); }}
+                                onDrop={()=>{ if(isTarget) onDropTo(di,foreman); }}
+                                onClick={()=>{ if(matchSelJob){ onDropTo(di,foreman); } }}
+                                style={{minHeight:54,background:off?"var(--bg)":"var(--card)",padding:"4px 5px",
+                                  cursor:isTarget?"copy":"default",
+                                  boxShadow:isTarget?`inset 0 0 0 1.5px ${C.accent}66`:"none",opacity:off?0.55:1}}>
+                                <div style={{fontSize:9,fontWeight:700,color:C.dim,letterSpacing:"0.04em",marginBottom:2}}>{dayLabels[di]}{off?" · OFF":""}</div>
+                                {evs.map(ev=>(
+                                  <div key={ev.id} title={ev.label} style={{fontSize:9,fontWeight:700,color:ev.color,background:ev.color+"18",
+                                    borderRadius:3,padding:"1px 4px",marginBottom:2,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                                    {ev.type==="fourway"?"4-WAY":ev.type==="qc"?"QC":ev.type==="rt"?"RT":"INSP"}
+                                  </div>
+                                ))}
+                                {committed.map(c=>(
+                                  <div key={c.jid} title="Tap to remove from this day"
+                                    onClick={(e)=>{e.stopPropagation();unassignFromLane(c.jid,di,foreman);}}
+                                    style={{fontSize:10,fontWeight:600,color:"var(--text)",background:fc+"22",
+                                      border:`1px solid ${fc}44`,borderRadius:4,padding:"2px 5px",marginBottom:2,cursor:"pointer",
+                                      whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                                    {(jobById[c.jid]?.name)||"Job"}{c.count>1?` ·${c.count}`:""}
+                                  </div>
+                                ))}
+                              </div>
+                            );
+                          })}
+                        </div>
+                      </div>
+                    );
+                  })}
+                  <div style={{fontSize:10,color:C.dim,marginTop:6,lineHeight:1.5}}>
+                    Pick a job on the left, then tap a crew's day to assign. Tap a job chip in a cell to remove it. Off = on PTO that day. Planning only — nothing is sent to Simpro.
+                  </div>
+                </div>
+              </div>
+            </div>
+          );
+        }
+
         return (
           <div style={{padding:"20px 20px 8px"}}>
             {/* Title + action buttons (week nav moved down to directly above the schedule grid) */}
@@ -34770,6 +34996,13 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
                 CREW PLANNER
               </div>
               <div style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
+                <button onClick={()=>setPlannerMode("matcher")}
+                  title="Switch to the new two-panel matcher"
+                  style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,
+                    color:C.dim,padding:"4px 10px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:600,
+                    display:"inline-flex",alignItems:"center",gap:4}}>
+                  <Icon name="users" size={11}/> Matcher
+                </button>
                 <button onClick={()=>setCrewPinPickerOpen(true)}
                   title="Pick which jobs you're planning this week. Pinned = shows in the grid."
                   style={{background:crewPinned.length>0?C.accent+"12":"none",
