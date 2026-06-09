@@ -34829,6 +34829,11 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
             return cands[0]||null;
           };
           const foremanIdOf = (name)=>{ const u=userOf(name); return u?u.foremanId:null; };
+          // Display every person as "First Last" by resolving to their user record.
+          // The roster stores a mix (crew = first only, foremen/leads = full); this
+          // normalizes the DISPLAY only — the stored name (used for assignments/PTO)
+          // is untouched, so nothing breaks.
+          const displayName = (name)=> (userOf(name)?.name) || name;
           // Each person's dot color: their own foreman/lead color if they have one,
           // otherwise inherit their foreman's color, otherwise gray.
           const personColor = (name)=>{
@@ -34860,7 +34865,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
           }).filter(Boolean);
           const assignPerson = (jid,di,person)=>{
             if(!jid){ toast.info("Pick a job on the left first."); return; }
-            if(isOnPTO(person,crewDays[di])){ toast.warn(`${person} is off ${dayLabels[di]}.`); return; }
+            if(isOnPTO(person,crewDays[di])){ toast.warn(`${displayName(person)} is off ${dayLabels[di]}.`); return; }
             const k=`${jid}_${di}`; const nx={...crewData}; const cur=nx[k]||{lead:"",crew:[]};
             if(fmEq(cur.lead,person)||(cur.crew||[]).some(p=>fmEq(p,person))) return; // already there — no-op (sticky multi-assign)
             if(!cur.lead && isForeman(person)) nx[k]={...cur,lead:person};
@@ -34874,7 +34879,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
             setCrewData(nx); _saveCrewData(nx);
           };
           const teamMembers = t => [...(t.lead?[t.lead]:[]), ...((t.members)||[])];
-          const teamLabel = t => { const n=teamMembers(t); return n.length ? n.join(", ") : "New team"; };
+          const teamLabel = t => { const n=teamMembers(t).map(displayName); return n.length ? n.join(", ") : "New team"; };
           const assignTeam = (jid,di,t)=>{
             if(!jid){ toast.info("Pick a job on the left first."); return; }
             const names=teamMembers(t).filter(n=>!isOnPTO(n,crewDays[di]));
@@ -34917,7 +34922,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
                   const jb=jobById[jid]; const nm=jb?.name||"Job"; const inBook=bookJobIds.has(jid);
                   return (
                     <div key={jid} title={`${nm}${jb?.foreman?` · ${jb.foreman}`:""}${inBook?"":" · other book"} — tap to remove`}
-                      onClick={e=>{e.stopPropagation(); if(window.confirm(`Remove ${person} from ${nm} on ${dayLabels[di]}?`)) unassignPerson(jid,di,person);}}
+                      onClick={e=>{e.stopPropagation(); if(window.confirm(`Remove ${displayName(person)} from ${nm} on ${dayLabels[di]}?`)) unassignPerson(jid,di,person);}}
                       style={{fontSize:9,fontWeight:600,color:"var(--text)",
                         background:inBook?C.accent+"1e":"#6b728018",
                         border:`1px ${inBook?"solid":"dashed"} ${inBook?C.accent+"40":"#9ca3af"}`,
@@ -34933,7 +34938,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
             <div key={person} style={{display:"grid",gridTemplateColumns:"108px repeat(5,1fr)",gap:1,background:C.border}}>
               <div style={{display:"flex",alignItems:"center",gap:5,padding:"3px 6px",background:"var(--card)",paddingLeft:isLead?6:16}}>
                 <span style={{width:7,height:7,borderRadius:99,background:personColor(person),flexShrink:0}}/>
-                <span style={{fontSize:11,fontWeight:isLead?700:500,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{person}</span>
+                <span style={{fontSize:11,fontWeight:isLead?700:500,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{displayName(person)}</span>
               </div>
               {personCells(person)}
             </div>
@@ -35146,7 +35151,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
                                       <button key={n} onClick={()=>teamToggleMember(idx,n)}
                                         style={{background:inTeam?personColor(n)+"26":"transparent",border:`1px solid ${inTeam?personColor(n):C.border}`,
                                           borderRadius:99,color:inTeam?"var(--text)":C.dim,padding:"2px 9px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:inTeam?700:500}}>
-                                        {n}{isForeman(n)?" ★":""}
+                                        {displayName(n)}{isForeman(n)?" ★":""}
                                       </button>
                                     );
                                   })}
