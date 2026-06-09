@@ -35190,15 +35190,15 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
 
               {/* New / edit team popup — select multiple people at once */}
               {matchTeamModal && (
-                <div onClick={()=>setMatchTeamModal(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
-                  <div onClick={e=>e.stopPropagation()} style={{background:"var(--card)",border:`1px solid ${C.border}`,borderRadius:12,padding:18,width:"100%",maxWidth:460,maxHeight:"80vh",overflowY:"auto",boxShadow:"0 20px 50px rgba(0,0,0,0.3)"}}>
-                    <div style={{fontSize:15,fontWeight:800,color:"var(--text)",marginBottom:4}}>{matchTeamModal.idx==null?"New team":"Edit team"}</div>
+                <div onClick={()=>setMatchTeamModal(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.7)",zIndex:99999,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+                  <div onClick={e=>e.stopPropagation()} style={{background:C.card||C.surface||"#ffffff",border:`1px solid ${C.border}`,borderRadius:12,padding:18,width:"100%",maxWidth:460,maxHeight:"80vh",overflowY:"auto",boxShadow:"0 20px 50px rgba(0,0,0,0.45)"}}>
+                    <div style={{fontSize:15,fontWeight:800,color:C.text||"#0f172a",marginBottom:4}}>{matchTeamModal.idx==null?"New team":"Edit team"}</div>
                     <div style={{fontSize:11,color:C.dim,marginBottom:12}}>Tap people to add them to this team. {matchTeamModal.members.length} selected. (★ = foreman, becomes the lead.)</div>
                     <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:16}}>
                       {roster.map(n=>{ const on=matchTeamModal.members.some(x=>fmEq(x,n)); return (
                         <button key={n} onClick={()=>teamModalToggle(n)}
-                          style={{background:on?personColor(n)+"26":"transparent",border:`1px solid ${on?personColor(n):C.border}`,
-                            borderRadius:99,color:on?"var(--text)":C.dim,padding:"5px 12px",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:on?700:500}}>
+                          style={{background:on?personColor(n)+"26":(C.surface||"#fff"),border:`1px solid ${on?personColor(n):C.border}`,
+                            borderRadius:99,color:on?(C.text||"#0f172a"):(C.text||"#334155"),padding:"5px 12px",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:on?700:500}}>
                           {displayName(n)}{isForeman(n)?" ★":""}
                         </button>
                       );})}
