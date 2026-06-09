@@ -34824,9 +34824,9 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
             const exact=usersList.find(x=>_norm(x.name)===rn); if(exact) return exact;
             const parts=rn.split(/\s+/); const first=parts[0]; const li=parts[1]?parts[1][0]:null;
             const cands=usersList.filter(x=>_norm(x.name).split(/\s+/)[0]===first);
-            if(cands.length===1) return cands[0];
-            if(li){ const m=cands.find(x=>{ const lp=_norm(x.name).split(/\s+/); const last=lp[lp.length-1]; return last && last[0]===li; }); if(m) return m; }
-            return cands[0]||null;
+            if(cands.length===1) return cands[0];               // unique first name → safe
+            if(li){ const m=cands.find(x=>{ const lp=_norm(x.name).split(/\s+/); const last=lp[lp.length-1]; return last && last[0]===li; }); if(m) return m; } // disambiguated by last initial
+            return null; // ambiguous bare first name (e.g. two "Jacob"s) — NEVER guess; show as-is, don't merge/relabel
           };
           const foremanIdOf = (name)=>{ const u=userOf(name); return u?u.foremanId:null; };
           // Display every person as "First Last" by resolving to their user record.
@@ -34906,6 +34906,17 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
             setCrewNeedsBodies(next); _saveCrewData(crewData,undefined,undefined,undefined,undefined,next);
           };
           const selJobObj = matchSelJob ? jobById[matchSelJob] : null;
+          // One-time roster cleanup: replace the crew roster with everyone's FULL
+          // name from Settings → Team, so every person resolves to a unique user
+          // (correct foreman grouping, colors, and names — no first-name guessing).
+          const rebuildRosterFullNames = ()=>{
+            const names=[...new Set((users||[]).map(u=>(u&&u.name||"").trim()).filter(Boolean))].sort((a,b)=>a.localeCompare(b));
+            if(!names.length){ toast.warn("No team members found in Settings → Team."); return; }
+            if(window.confirm(`Rebuild the crew roster from Settings → Team?\n\nSets the roster to ${names.length} full names so everyone groups under their foreman correctly. Any assignments already made this week under a short name may need to be re-tapped.`)){
+              _saveRoster(names);
+              toast.success(`Roster rebuilt — ${names.length} people, full names.`);
+            }
+          };
           // One person's row of 5 day-cells (assign target). Tapping keeps the job
           // selected so you can click person after person without re-picking.
           const personCells = (person)=> crewDays.map((d,di)=>{
@@ -34968,6 +34979,10 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
                   <button onClick={()=>setPlannerMode("grid")} title="Switch to the classic week grid"
                     style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,padding:"4px 10px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:600,display:"inline-flex",alignItems:"center",gap:4}}>
                     <Icon name="calendar" size={11}/> Classic grid
+                  </button>
+                  <button onClick={rebuildRosterFullNames} title="Rebuild the crew roster from Settings → Team so everyone shows their full name and groups under their foreman"
+                    style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,padding:"4px 10px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:600,display:"inline-flex",alignItems:"center",gap:4}}>
+                    <Icon name="refresh" size={11}/> Rebuild roster
                   </button>
                 </div>
               </div>
