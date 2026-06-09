@@ -37879,6 +37879,77 @@ function getCompanyDuties(job) {
     id:"co_prep", dutyType:"prep", label: prep ? `Prep: ${prep}` : "Job prep — not started", icon:"edit" }];
 }
 
+// Coordinator Book Worklist — stage-triggered duties due across a book. Lifted
+// out of Today so it can live (collapsed) at the bottom of the Needs page.
+// `book` is either "all" or a coordinator name. Company prep/redline duties are
+// gated to the BOOK OWNER's `jobprep.own` cap — NOT just the logged-in viewer —
+// so Koy's company-hat tasks no longer bleed into Brady's / Josh's book view.
+function CoordinatorWorklist({ allJobs = [], users = [], identity, book = "all", onSelectJob, onUpdateJob, defaultCollapsed = true }) {
+  const [open, setOpen] = useState(!defaultCollapsed);
+  const bookForemen = useMemo(() => {
+    if (book === "all") return null;
+    return new Set((users || []).filter(u => (u.title || u.role) === "foreman" && u.coordinator === book).map(u => (u.name || "").toLowerCase()));
+  }, [users, book]);
+  const bookJobs = useMemo(() => {
+    if (!bookForemen) return allJobs;
+    return (allJobs || []).filter(j => j.foreman && bookForemen.has(String(j.foreman).toLowerCase()));
+  }, [allJobs, bookForemen]);
+  const bookDuties = bookJobs.flatMap(getCoordinatorDuties);
+  // Company duties belong to whoever holds the hat for THIS book — the book owner
+  // (a named coordinator), or the viewer when looking at "all".
+  const bookOwner = book === "all" ? identity : (users || []).find(u => u.name === book);
+  const companyDuties = can(bookOwner, "jobprep.own") ? (allJobs || []).flatMap(getCompanyDuties) : [];
+  const total = bookDuties.length + companyDuties.length;
+  const openJob  = (id) => { const j = (allJobs || []).find(x => x.id === id); if (j && onSelectJob) onSelectJob(j); };
+  const markSent = (d)  => { const j = (allJobs || []).find(x => x.id === d.jobId); if (j && onUpdateJob && d.markField) onUpdateJob({ ...j, [d.markField]: true }, { [d.markField]: true }); };
+  const Row = (d) => (
+    <div key={d.jobId + "_" + d.id} onClick={() => openJob(d.jobId)}
+      style={{ display: "flex", alignItems: "center", gap: 10, padding: "9px 12px", borderBottom: `1px solid ${C.border}`, cursor: "pointer" }}>
+      <Icon name={d.icon || "clipboard"} size={14} stroke={2} />
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 13, color: C.text, fontWeight: 600 }}>{d.label}</div>
+        <div style={{ fontSize: 11, color: C.dim, whiteSpace: "nowrap", overflow: "hidden", textOverflow: "ellipsis" }}>
+          {d.jobName}{d.foreman ? ` · ${d.foreman}` : ""}
+        </div>
+      </div>
+      {d.markField && (
+        <button onClick={(e) => { e.stopPropagation(); markSent(d); }}
+          style={{ fontSize: 11, fontWeight: 700, padding: "4px 10px", borderRadius: 7, border: `1px solid ${C.border}`,
+            background: C.surface, color: C.dim, cursor: "pointer", fontFamily: "inherit", whiteSpace: "nowrap" }}>
+          Mark sent
+        </button>
+      )}
+    </div>
+  );
+  return (
+    <div style={{ background: C.card, border: `1px solid ${C.border}`, borderRadius: 12, marginTop: 22, overflow: "hidden" }}>
+      <div onClick={() => setOpen(o => !o)}
+        style={{ display: "flex", alignItems: "center", gap: 8, padding: "12px 14px", cursor: "pointer",
+          borderBottom: open && total > 0 ? `1px solid ${C.border}` : "none" }}>
+        <Icon name="clipboard" size={15} stroke={2} />
+        <span style={{ fontSize: 13, fontWeight: 700, color: C.text, letterSpacing: "0.02em" }}>Worklist</span>
+        <span style={{ marginLeft: "auto", fontSize: 11, color: C.dim, fontWeight: 600, display: "flex", alignItems: "center", gap: 6 }}>
+          {total} due <Icon name="chevronRight" size={14} stroke={2.25} style={{ transform: open ? "rotate(90deg)" : "none", transition: "transform 0.15s" }} />
+        </span>
+      </div>
+      {open && (
+        <>
+          {total === 0 && <div style={{ padding: "16px 14px", fontSize: 13, color: C.dim, textAlign: "center" }}>You're all caught up.</div>}
+          {bookDuties.map(Row)}
+          {companyDuties.length > 0 && (
+            <>
+              <div style={{ padding: "8px 14px", fontSize: 10, fontWeight: 800, letterSpacing: "0.1em", color: C.dim, textTransform: "uppercase", background: C.surface }}>
+                Company · prep &amp; redlines
+              </div>
+              {companyDuties.map(Row)}
+            </>
+          )}
+        </>
+      )}
+    </div>
+  );
+}
+
 function Today({ jobs: _allJobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], identity, onSelectJob, onUpdateJob }) {
   // Local UI state — filter pills + feed expansion (50 → all).
   // Persist filter across reloads so Koy can park on a category.
@@ -38362,57 +38433,8 @@ function Today({ jobs: _allJobs, users=[], manualTasks=[], quoteWalks=[], sugges
         </div>
       )}
 
-      {/* ── Coordinator Book Worklist ── stage-triggered duties due across the
-          selected book. Read-only except the PO "Mark sent" toggle, which writes
-          data.roughStartPOSent / data.finishStartPOSent via onUpdateJob (rides
-          inside the data map → round-trips, no loader change). */}
-      {can(identity,"worklist.view") && (()=>{
-        const bookDuties    = (jobs||[]).flatMap(getCoordinatorDuties);
-        const companyDuties = can(identity,"jobprep.own") ? (_allJobs||[]).flatMap(getCompanyDuties) : [];
-        const openJob  = (id) => { const j=(_allJobs||[]).find(x=>x.id===id); if(j&&onSelectJob) onSelectJob(j); };
-        const markSent = (d)  => { const j=(_allJobs||[]).find(x=>x.id===d.jobId); if(j&&onUpdateJob&&d.markField) onUpdateJob({...j,[d.markField]:true},{[d.markField]:true}); };
-        const Row = (d) => (
-          <div key={d.jobId+"_"+d.id} onClick={()=>openJob(d.jobId)}
-            style={{display:"flex",alignItems:"center",gap:10,padding:"9px 12px",borderBottom:`1px solid ${C.border}`,cursor:"pointer"}}>
-            <Icon name={d.icon||"clipboard"} size={14} stroke={2}/>
-            <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:13,color:C.text,fontWeight:600}}>{d.label}</div>
-              <div style={{fontSize:11,color:C.dim,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-                {d.jobName}{d.foreman?` · ${d.foreman}`:""}
-              </div>
-            </div>
-            {d.markField && (
-              <button onClick={(e)=>{e.stopPropagation();markSent(d);}}
-                style={{fontSize:11,fontWeight:700,padding:"4px 10px",borderRadius:7,border:`1px solid ${C.border}`,
-                  background:C.surface,color:C.dim,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
-                Mark sent
-              </button>
-            )}
-          </div>
-        );
-        const total = bookDuties.length + companyDuties.length;
-        return (
-          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,marginBottom:14,overflow:"hidden"}}>
-            <div style={{display:"flex",alignItems:"center",gap:8,padding:"12px 14px",borderBottom: total>0?`1px solid ${C.border}`:"none"}}>
-              <Icon name="clipboard" size={15} stroke={2}/>
-              <span style={{fontSize:13,fontWeight:700,color:C.text,letterSpacing:"0.02em"}}>Your Worklist</span>
-              <span style={{marginLeft:"auto",fontSize:11,color:C.dim,fontWeight:600}}>{total} due</span>
-            </div>
-            {total===0 && (
-              <div style={{padding:"16px 14px",fontSize:13,color:C.dim,textAlign:"center"}}>You're all caught up.</div>
-            )}
-            {bookDuties.map(Row)}
-            {companyDuties.length>0 && (
-              <>
-                <div style={{padding:"8px 14px",fontSize:10,fontWeight:800,letterSpacing:"0.1em",color:C.dim,textTransform:"uppercase",background:C.surface}}>
-                  Company · prep &amp; redlines
-                </div>
-                {companyDuties.map(Row)}
-              </>
-            )}
-          </div>
-        );
-      })()}
+      {/* Coordinator Book Worklist moved to the bottom of the Needs page
+          (collapsed by default). See <CoordinatorWorklist/> on NeedsBoard. */}
 
       {/* Pulse bar — 6 counters (all wired) */}
       <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fit,minmax(140px,1fr))",gap:8,marginBottom:14}}>
@@ -47567,7 +47589,25 @@ function CrewBoard({ users = [], onSave, getPersonColor = () => "#6b7280" }) {
 // quick-add) and never touches the jobs loader. Two urgency lanes (Tomorrow /
 // This Week) + a Done strip that only shows today's closures. Writes are gated
 // by board.add; crew/leads don't see the tab at all (board.view).
-function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, onDeleteNeed, onSelectJob }) {
+// Small inline plan/solution box on each need card. Top-level (not defined
+// inside NeedsBoard) so it doesn't remount on every parent re-render — that
+// would drop focus mid-type. Saves on blur only, so we don't write per keystroke.
+function NeedPlan({ value, onSave }) {
+  const [txt, setTxt] = useState(value || "");
+  const [editing, setEditing] = useState(false);
+  useEffect(() => { if (!editing) setTxt(value || ""); }, [value, editing]);
+  return (
+    <textarea value={txt} placeholder="Plan / solution…" rows={1}
+      onFocus={() => setEditing(true)}
+      onChange={e => setTxt(e.target.value)}
+      onBlur={() => { setEditing(false); if ((value || "") !== txt) onSave(txt); }}
+      style={{ width: "100%", boxSizing: "border-box", marginTop: 10, padding: "7px 10px", fontSize: 13,
+        fontFamily: "inherit", color: C.text, border: `1px solid ${C.border}`, borderRadius: 8,
+        background: C.bg, resize: "vertical", minHeight: 34 }} />
+  );
+}
+
+function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, onDeleteNeed, onSelectJob, onUpdateJob }) {
   const canAdd = can(identity, "board.add");
   const myName = identity?.name || "";
   const coordinators = useMemo(
@@ -47666,6 +47706,9 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
               </select>
             : (n.coordinator && pill(n.coordinator.split(" ")[0], `${coordColor(n.coordinator)}18`, coordColor(n.coordinator), "user")))}
         </div>
+        {canAdd
+          ? <NeedPlan value={n.plan} onSave={(t) => patch(n, { plan: t })} />
+          : (n.plan && <div style={{ marginTop: 10, padding: "7px 10px", fontSize: 13, color: C.text, background: C.bg, borderRadius: 8 }}>{n.plan}</div>)}
       </div>
       <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
         {canAdd && (
@@ -47786,6 +47829,14 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
           ))}
         </div>
       </div>
+
+      {/* Coordinator Book Worklist — relocated from Today, collapsed by default.
+          Scopes to the viewer's book in "Mine", all books in "All". Office only. */}
+      {can(identity, "worklist.view") && (
+        <CoordinatorWorklist allJobs={jobs} users={users} identity={identity}
+          book={scope === "all" ? "all" : (myBook || "all")}
+          onSelectJob={onSelectJob} onUpdateJob={onUpdateJob} defaultCollapsed={true} />
+      )}
     </div>
   );
 }
@@ -51351,7 +51402,7 @@ function App() {
       )}
 
       {view==="needs"&&can(identity,"board.view")&&(
-        <NeedsBoard needs={needs} users={users} identity={identity} jobs={jobs} onSaveNeed={saveNeed} onDeleteNeed={deleteNeed} onSelectJob={setSelected}/>
+        <NeedsBoard needs={needs} users={users} identity={identity} jobs={jobs} onSaveNeed={saveNeed} onDeleteNeed={deleteNeed} onSelectJob={setSelected} onUpdateJob={updateJob}/>
       )}
 
       {view==="cos"&&can(identity,"cos.view")&&(
