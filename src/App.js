@@ -34789,7 +34789,11 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
         // interoperable; toggle back to the grid any time.
         // ════════════════════════════════════════════════════════════════
         if(crewPlannerMode==="matcher"){
-          const jobById = {}; (jobs||[]).forEach(j=>{ jobById[j.id]=j; });
+          // Resolve job names from ALL books (not just the current one) so a
+          // person scheduled on another coordinator's job shows that job's real
+          // name, not a generic "Job". Left list stays book-scoped (uses `jobs`).
+          const jobById = {}; (_allJobs||[]).forEach(j=>{ jobById[j.id]=j; });
+          const bookJobIds = new Set((jobs||[]).map(j=>j.id));
           const fmEq = (a,b)=> (a||"").toLowerCase() === (b||"").toLowerCase();
           const splitKey = k => { const i=k.lastIndexOf("_"); return { jid:k.slice(0,i), di:+k.slice(i+1) }; };
           const isStaffed = (jid)=> crewDays.some((_,di)=>{ const c=crewData[`${jid}_${di}`]; return !!(c&&(c.lead||(c.crew&&c.crew.length))); });
@@ -34838,7 +34842,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
             setCrewData(nx); _saveCrewData(nx);
           };
           const teamMembers = t => [...(t.lead?[t.lead]:[]), ...((t.members)||[])];
-          const teamLabel = t => t.lead ? `${t.lead}'s crew` : (teamMembers(t).length ? teamMembers(t).slice(0,2).join(", ")+(teamMembers(t).length>2?"…":"") : "New team");
+          const teamLabel = t => { const n=teamMembers(t); return n.length ? n.join(", ") : "New team"; };
           const assignTeam = (jid,di,t)=>{
             if(!jid){ toast.info("Pick a job on the left first."); return; }
             const names=teamMembers(t).filter(n=>!isOnPTO(n,crewDays[di]));
@@ -34877,13 +34881,19 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
                 style={{minHeight:28,background:off?"var(--bg)":"var(--card)",padding:"2px 4px",
                   cursor:isTarget?"copy":"default",boxShadow:isTarget?`inset 0 0 0 1.5px ${C.accent}55`:"none",opacity:off?0.45:1}}>
                 {off && <span style={{fontSize:8,color:C.dim,fontWeight:700}}>OFF</span>}
-                {jids.map(jid=>(
-                  <div key={jid} title="Tap to remove" onClick={e=>{e.stopPropagation();unassignPerson(jid,di,person);}}
-                    style={{fontSize:9,fontWeight:600,color:"var(--text)",background:C.accent+"1e",border:`1px solid ${C.accent}40`,
-                      borderRadius:3,padding:"1px 4px",marginBottom:2,cursor:"pointer",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
-                    {(jobById[jid]?.name)||"Job"}
-                  </div>
-                ))}
+                {jids.map(jid=>{
+                  const jb=jobById[jid]; const nm=jb?.name||"Job"; const inBook=bookJobIds.has(jid);
+                  return (
+                    <div key={jid} title={`${nm}${jb?.foreman?` · ${jb.foreman}`:""}${inBook?"":" · other book"} — tap to remove`}
+                      onClick={e=>{e.stopPropagation(); if(window.confirm(`Remove ${person} from ${nm} on ${dayLabels[di]}?`)) unassignPerson(jid,di,person);}}
+                      style={{fontSize:9,fontWeight:600,color:"var(--text)",
+                        background:inBook?C.accent+"1e":"#6b728018",
+                        border:`1px ${inBook?"solid":"dashed"} ${inBook?C.accent+"40":"#9ca3af"}`,
+                        borderRadius:3,padding:"1px 4px",marginBottom:2,cursor:"pointer",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>
+                      {nm}{!inBook&&jb?.foreman?` · ${firstOf(jb.foreman)}`:""}
+                    </div>
+                  );
+                })}
               </div>
             );
           });
@@ -35076,7 +35086,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
                           <div key={t.id||idx} style={{marginBottom:8,border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
                             <div style={{display:"grid",gridTemplateColumns:"108px repeat(5,1fr)",gap:1,background:C.border}}>
                               <div style={{background:"var(--card)",padding:"4px 6px",display:"flex",flexDirection:"column",gap:2}}>
-                                <span style={{fontSize:11,fontWeight:700,color:"var(--text)",whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{teamLabel(t)}</span>
+                                <span style={{fontSize:10,fontWeight:700,color:"var(--text)",whiteSpace:"normal",lineHeight:1.25}}>{teamLabel(t)}</span>
                                 <span style={{fontSize:9,color:C.dim}}>{names.length} ppl</span>
                                 <div style={{display:"flex",gap:6}}>
                                   <button onClick={()=>setMatchTeamEdit(editing?null:idx)} style={{background:"none",border:"none",color:C.accent,cursor:"pointer",fontSize:9,fontFamily:"inherit",fontWeight:700,padding:0}}>{editing?"Done":"Edit"}</button>
