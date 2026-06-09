@@ -2891,6 +2891,10 @@ const PERMISSIONS = {
   "cos.view":               ["admin","manager"],
   // Coordinator Book Worklist — office/coordinators see the panel.
   "worklist.view":          ["admin","manager"],
+  // Needs Board — coordinator obligation board for contractor call-in needs.
+  // Office + foreman can view/add (standard = foreman); leads/crew don't see it.
+  "board.view":             ["admin","manager","standard"],
+  "board.add":              ["admin","manager","standard"],
   // Company-wide hats — NOT tier-based (all 3 coordinators share a tier, so a
   // tier gate can't single out Koy). Granted PER USER via `caps` in Settings →
   // Team. Empty tier list = nobody gets it by tier; only an explicit grant does.
@@ -47556,6 +47560,239 @@ function CrewBoard({ users = [], onSave, getPersonColor = () => "#6b7280" }) {
   );
 }
 
+// ── NEEDS BOARD ──────────────────────────────────────────────────────────────
+// Coordinator-facing board for deadline-bound contractor call-in needs.
+// Each need is its OWN doc in the `needs` collection (data envelope, same shape
+// as manualTasks) so a need can exist with NO job attached (the phone-call
+// quick-add) and never touches the jobs loader. Two urgency lanes (Tomorrow /
+// This Week) + a Done strip that only shows today's closures. Writes are gated
+// by board.add; crew/leads don't see the tab at all (board.view).
+function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, onDeleteNeed, onSelectJob }) {
+  const canAdd = can(identity, "board.add");
+  const myName = identity?.name || "";
+  const coordinators = useMemo(
+    () => [...new Set((users || []).filter(u => (u.title || u.role) === "foreman" && u.coordinator).map(u => u.coordinator))].sort(),
+    [users]
+  );
+  const myCoord = coordinators.includes(myName) ? myName : "";
+  const jobNames = useMemo(() => (jobs || []).map(j => j.name).filter(Boolean).sort(), [jobs]);
+
+  const [scope, setScope]   = useState("mine");      // mine | all
+  const [adding, setAdding] = useState(false);
+  const [dText, setDText]   = useState("");
+  const [dDue,  setDDue]    = useState("tomorrow");   // tomorrow | week
+  const [dJob,  setDJob]    = useState("");
+  const [dCoord,setDCoord]  = useState("");
+  const [dSrc,  setDSrc]    = useState("Call");
+
+  const startToday = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
+  const mine = (n) => n && (n.coordinator === myName || n.createdBy === myName);
+
+  const open    = (needs || []).filter(n => n && n.status !== "done");
+  const scoped  = scope === "all" ? open : open.filter(mine);
+  const lane    = (b) => scoped.filter(n => (b === "tomorrow" ? n.dueBucket === "tomorrow" : n.dueBucket !== "tomorrow"));
+  const tomorrow = lane("tomorrow");
+  const week     = lane("week");
+  const doneToday = (needs || []).filter(n =>
+    n && n.status === "done" && n.doneAt && new Date(n.doneAt).getTime() >= startToday &&
+    (scope === "all" || mine(n))
+  );
+
+  const aged = (n) => n.createdAt && (Date.now() - new Date(n.createdAt).getTime()) > 36 * 3600 * 1000;
+
+  const coordColor = (c) => {
+    const pal = [C.blue, C.teal, C.orange, C.purple, C.green, C.red];
+    const i = coordinators.indexOf(c);
+    return pal[(i < 0 ? 0 : i) % pal.length];
+  };
+  const initials = (c) => (c || "?").trim().split(/\s+/).map(w => w[0]).slice(0,2).join("").toUpperCase();
+
+  const submit = () => {
+    const t = dText.trim();
+    if (!t) return;
+    const job = (jobs || []).find(j => j.name === dJob);
+    const need = {
+      id: "need_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7),
+      text: t,
+      dueBucket: dDue,
+      coordinator: dCoord || myCoord || "",
+      jobId: job ? job.id : "",
+      jobName: dJob || "",
+      source: dSrc || "Call",
+      status: "open",
+      createdBy: myName,
+      createdAt: new Date().toISOString(),
+      doneAt: "",
+    };
+    onSaveNeed && onSaveNeed(need);
+    setDText(""); setDJob(""); setDSrc("Call"); setDDue("tomorrow"); setAdding(false);
+  };
+
+  const patch     = (n, p) => onSaveNeed && onSaveNeed({ ...n, ...p });
+  const markDone  = (n) => patch(n, { status: "done", doneAt: new Date().toISOString() });
+  const reopen    = (n) => patch(n, { status: "open", doneAt: "" });
+  const remove    = (n) => { if (window.confirm("Delete this need?")) onDeleteNeed && onDeleteNeed(n.id); };
+
+  const pill = (text, bg, fg, icon, onClick) => (
+    <span onClick={onClick}
+      style={{ fontSize: 11, padding: "2px 9px", borderRadius: 99, background: bg, color: fg,
+        display: "inline-flex", alignItems: "center", gap: 4, cursor: onClick ? "pointer" : "default", whiteSpace: "nowrap" }}>
+      {icon && <Icon name={icon} size={11} stroke={2.25} />}{text}
+    </span>
+  );
+
+  const Card = (n) => (
+    <div key={n.id}
+      style={{ background: C.card, border: `1px solid ${C.border}`,
+        borderLeft: aged(n) ? `3px solid ${C.red}` : `1px solid ${C.border}`,
+        borderRadius: 10, padding: "12px 14px", display: "flex", gap: 12, alignItems: "flex-start" }}>
+      <div style={{ flex: 1, minWidth: 0 }}>
+        <div style={{ fontSize: 14, lineHeight: 1.45, color: C.text, marginBottom: 8, wordBreak: "break-word" }}>{n.text}</div>
+        <div style={{ display: "flex", gap: 6, alignItems: "center", flexWrap: "wrap" }}>
+          {n.jobName
+            ? pill(n.jobName, C.bg, C.dim, "mapPin", n.jobId && onSelectJob ? () => { const j = (jobs || []).find(x => x.id === n.jobId); if (j) onSelectJob(j); } : null)
+            : pill("No job", C.bg, C.muted)}
+          {n.source && pill(n.source, C.bg, C.dim)}
+          {aged(n) && pill("Carried over", "#fef2f2", C.red, "flag")}
+          {n.dueBucket === "tomorrow"
+            ? pill("Move to week", C.bg, C.dim, "arrowRight", () => patch(n, { dueBucket: "week" }))
+            : pill("Pull to tomorrow", C.bg, C.dim, "arrowRight", () => patch(n, { dueBucket: "tomorrow" }))}
+        </div>
+      </div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, flexShrink: 0 }}>
+        {scope === "all" && n.coordinator && (
+          <div title={n.coordinator}
+            style={{ width: 24, height: 24, borderRadius: "50%", background: `${coordColor(n.coordinator)}22`,
+              color: coordColor(n.coordinator), display: "flex", alignItems: "center", justifyContent: "center",
+              fontSize: 10, fontWeight: 700 }}>{initials(n.coordinator)}</div>
+        )}
+        {canAdd && (
+          <button onClick={() => markDone(n)} title="Mark done"
+            style={{ width: 30, height: 30, border: `1px solid ${C.border}`, background: "none", borderRadius: 8,
+              display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.green }}>
+            <Icon name="check" size={16} stroke={2.25} />
+          </button>
+        )}
+        {canAdd && (
+          <button onClick={() => remove(n)} title="Delete"
+            style={{ width: 30, height: 30, border: `1px solid ${C.border}`, background: "none", borderRadius: 8,
+              display: "flex", alignItems: "center", justifyContent: "center", cursor: "pointer", color: C.dim }}>
+            <Icon name="trash" size={15} stroke={2.25} />
+          </button>
+        )}
+      </div>
+    </div>
+  );
+
+  const Lane = (title, icon, color, items, emptyMsg) => (
+    <div>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 10 }}>
+        <Icon name={icon} size={15} stroke={2.25} color={color} />
+        <span style={{ fontSize: 13, fontWeight: 700, color: C.text, letterSpacing: "0.02em" }}>{title}</span>
+        {items.length > 0 && <span style={{ fontSize: 12, color: C.dim }}>{items.length}</span>}
+      </div>
+      <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+        {items.length === 0
+          ? <div style={{ fontSize: 13, color: C.muted, padding: "8px 2px" }}>{emptyMsg}</div>
+          : items.map(Card)}
+      </div>
+    </div>
+  );
+
+  return (
+    <div style={{ padding: "20px 26px", maxWidth: 1000, margin: "0 auto" }}>
+      {/* Header */}
+      <div style={{ display: "flex", alignItems: "center", justifyContent: "space-between", gap: 12, flexWrap: "wrap", marginBottom: 18 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <Icon name="clipboard" size={22} stroke={2.25} color={C.dim} />
+          <span style={{ fontSize: 18, fontWeight: 700, color: C.text }}>Needs Board</span>
+        </div>
+        <div style={{ display: "flex", alignItems: "center", gap: 10 }}>
+          <div style={{ display: "inline-flex", border: `1px solid ${C.border}`, borderRadius: 8, overflow: "hidden" }}>
+            {["mine", "all"].map(s => (
+              <button key={s} onClick={() => setScope(s)}
+                style={{ padding: "7px 16px", fontSize: 12, fontFamily: "inherit", border: "none", cursor: "pointer",
+                  background: scope === s ? C.accent : "transparent", color: scope === s ? "#000" : C.dim,
+                  fontWeight: scope === s ? 700 : 500 }}>
+                {s === "mine" ? "Mine" : "All"}
+              </button>
+            ))}
+          </div>
+          {canAdd && (
+            <button onClick={() => { setDCoord(myCoord || coordinators[0] || ""); setAdding(a => !a); }}
+              style={{ padding: "7px 14px", fontSize: 12, fontFamily: "inherit", border: `1px solid ${C.border}`,
+                borderRadius: 8, background: C.surface, color: C.text, cursor: "pointer",
+                display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 600 }}>
+              <Icon name="plus" size={14} stroke={2.5} />Add need
+            </button>
+          )}
+        </div>
+      </div>
+
+      {/* Quick-add */}
+      {canAdd && adding && (
+        <div style={{ background: C.bg, borderRadius: 12, padding: 14, marginBottom: 18 }}>
+          <input value={dText} onChange={e => setDText(e.target.value)} autoFocus
+            onKeyDown={e => { if (e.key === "Enter") submit(); }}
+            placeholder="What's needed? e.g. Set panel at Webb before framers"
+            style={{ width: "100%", boxSizing: "border-box", padding: "9px 12px", fontSize: 14, fontFamily: "inherit",
+              border: `1px solid ${C.border}`, borderRadius: 8, marginBottom: 10 }} />
+          <div style={{ display: "flex", gap: 10, flexWrap: "wrap" }}>
+            <select value={dDue} onChange={e => setDDue(e.target.value)}
+              style={{ flex: "1 1 130px", padding: "8px 10px", fontSize: 13, fontFamily: "inherit", border: `1px solid ${C.border}`, borderRadius: 8 }}>
+              <option value="tomorrow">Due tomorrow</option>
+              <option value="week">Due this week</option>
+            </select>
+            <input list="needs-job-list" value={dJob} onChange={e => setDJob(e.target.value)}
+              placeholder="Link a job (optional)"
+              style={{ flex: "1 1 160px", padding: "8px 10px", fontSize: 13, fontFamily: "inherit", border: `1px solid ${C.border}`, borderRadius: 8 }} />
+            <datalist id="needs-job-list">{jobNames.map(n => <option key={n} value={n} />)}</datalist>
+            <select value={dSrc} onChange={e => setDSrc(e.target.value)}
+              style={{ flex: "0 1 120px", padding: "8px 10px", fontSize: 13, fontFamily: "inherit", border: `1px solid ${C.border}`, borderRadius: 8 }}>
+              {["Call", "GC", "Inspector", "Contractor"].map(s => <option key={s} value={s}>{s}</option>)}
+            </select>
+            {coordinators.length > 0 && (
+              <select value={dCoord} onChange={e => setDCoord(e.target.value)}
+                style={{ flex: "0 1 140px", padding: "8px 10px", fontSize: 13, fontFamily: "inherit", border: `1px solid ${C.border}`, borderRadius: 8 }}>
+                {coordinators.map(c => <option key={c} value={c}>{(c || "").split(" ")[0]}'s book</option>)}
+              </select>
+            )}
+            <button onClick={submit}
+              style={{ padding: "8px 18px", fontSize: 13, fontFamily: "inherit", border: "none", borderRadius: 8,
+                background: C.accent, color: "#000", cursor: "pointer", fontWeight: 700 }}>Save</button>
+          </div>
+        </div>
+      )}
+
+      {/* Lanes */}
+      <div style={{ display: "grid", gridTemplateColumns: "repeat(auto-fit, minmax(280px, 1fr))", gap: 16 }}>
+        {Lane("Tomorrow", "clock", C.red, tomorrow, scope === "mine" ? "Nothing owed tomorrow — nice." : "No needs due tomorrow.")}
+        {Lane("This week", "calendar", C.dim, week, "Clear.")}
+      </div>
+
+      {/* Done today */}
+      <div style={{ marginTop: 20, borderTop: `1px solid ${C.border}`, paddingTop: 12 }}>
+        <div style={{ display: "flex", alignItems: "center", gap: 8, color: C.dim, marginBottom: doneToday.length ? 10 : 0 }}>
+          <Icon name="check" size={15} stroke={2.25} />
+          <span style={{ fontSize: 13 }}>Done today{doneToday.length ? ` · ${doneToday.length}` : ""} <span style={{ color: C.muted }}>(clears overnight)</span></span>
+        </div>
+        <div style={{ display: "flex", flexDirection: "column", gap: 6 }}>
+          {doneToday.map(n => (
+            <div key={n.id} style={{ display: "flex", alignItems: "center", gap: 10, fontSize: 13, color: C.dim }}>
+              <span style={{ textDecoration: "line-through", flex: 1, minWidth: 0 }}>{n.text}{n.jobName ? ` · ${n.jobName}` : ""}</span>
+              {canAdd && (
+                <button onClick={() => reopen(n)} title="Reopen"
+                  style={{ border: `1px solid ${C.border}`, background: "none", borderRadius: 6, color: C.dim,
+                    fontSize: 11, fontFamily: "inherit", padding: "3px 8px", cursor: "pointer" }}>Reopen</button>
+              )}
+            </div>
+          ))}
+        </div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   // Homeowner page route — ?homeowner=JOB_ID
   const hoParam = new URLSearchParams(window.location.search).get("homeowner");
@@ -47961,6 +48198,7 @@ function App() {
   const [jobs,     setJobs]     = useState([]);
   const [upcoming, setUpcoming] = useState([]);
   const [manualTasks, setManualTasks] = useState([]);
+  const [needs, setNeeds] = useState([]);
   // Quote walks — pre-job site walk notes (replaces Apple Notes capture).
   // Loaded from /quoteWalks Firestore collection. Separate state from jobs
   // because the lifecycles are independent.
@@ -48188,6 +48426,14 @@ function App() {
       (err) => { console.error("Tasks snapshot error:",err); }
     );
 
+    // Load Needs Board items from Firestore. Same `data` envelope as manualTasks.
+    // Standalone collection so a need can exist with no job and never touches the
+    // jobs loader / data-shape spread.
+    const unsubNeeds = onSnapshot(collection(db,"needs"),
+      (snap) => { const loaded=snap.docs.map(d=>d.data().data).filter(Boolean); setNeeds(loaded); },
+      (err) => { console.error("Needs snapshot error:",err); }
+    );
+
     // Load quote walks from Firestore. Same `data` envelope pattern as jobs.
     const unsubQuoteWalks = onSnapshot(collection(db,"quoteWalks"),
       (snap) => {
@@ -48227,7 +48473,7 @@ function App() {
       }
     }, ()=>{});
 
-    return () => { unsub(); unsubUpcoming(); unsubSimproCands(); unsubTasks(); unsubQuoteWalks(); unsubSuggestions(); unsubVersion(); }; // cleanup on unmount
+    return () => { unsub(); unsubUpcoming(); unsubSimproCands(); unsubTasks(); unsubNeeds(); unsubQuoteWalks(); unsubSuggestions(); unsubVersion(); }; // cleanup on unmount
 
   },[]);
 
@@ -48568,6 +48814,17 @@ function App() {
     try { await deleteDoc(doc(db,"manualTasks",id)); } catch(e){}
   };
 
+  // Needs Board writes — same envelope as manualTasks. Optimistic local update so
+  // the board reflects instantly; the onSnapshot listener reconciles from Firestore.
+  const saveNeed = async (need) => {
+    setNeeds(prev => { const i=(prev||[]).findIndex(n=>n.id===need.id); if(i>=0){ const nx=[...prev]; nx[i]=need; return nx; } return [...(prev||[]), need]; });
+    try { await setDoc(doc(db,"needs",need.id),{data:need,updated_at:new Date().toISOString()}); } catch(e){ console.error("saveNeed error:",e); }
+  };
+  const deleteNeed = async (id) => {
+    setNeeds(prev => (prev||[]).filter(n=>n.id!==id));
+    try { await deleteDoc(doc(db,"needs",id)); } catch(e){ console.error("deleteNeed error:",e); }
+  };
+
   // Save the entire upcoming list as one document — no per-item deletes needed
   const saveAllUpcoming = async (list) => {
     try { await setDoc(doc(db,"settings","upcoming_jobs"),{items:list,updated_at:new Date().toISOString()}); }
@@ -48886,6 +49143,7 @@ function App() {
   // view: "home" = main page, "foreman" = foreman-specific page
 
   const [view, setView] = useState("home");
+  const [moreOpen, setMoreOpen] = useState(false);  // top-nav "More" dropdown
   const [activeForeman, setActiveForeman] = useState(null);
   // Lead "My Crew" landing — a lead now runs their own apprentice, so on login
   // drop them into their foreman's crew view instead of the full office board.
@@ -48913,6 +49171,18 @@ function App() {
   const openNav           = () =>  { setView("nav");           setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openSettings      = () =>  { setView("settings");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openSubcontractor = () =>  { setView("subcontractors");setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  // Shared top-nav click handler (used by both the main tab row and the "More"
+  // dropdown). Every open* helper just setView(key), so this covers all tabs.
+  const navClick = (key) => {
+    if(key==="home") return goHome();
+    if(key==="schedule") return openSchedule();
+    if(key==="upcoming") return openUpcoming();
+    if(key==="tasks") return openTasks();
+    if(key==="nav") return openNav();
+    if(key==="settings") return openSettings();
+    if(key==="subcontractors") return openSubcontractor();
+    return setView(key);  // today, needs, cos, safety, quotes, walks, huddle, scoreboard, appmap
+  };
 
   // ── Contractor users + access helpers ─────────────────────────
   const contractorUsers = (users||[]).filter(u => getAccess(u) === "contractor");
@@ -49629,24 +49899,18 @@ function App() {
           : [
               {key:"home",label:"Job Board"},
               ...(can(identity,"today.view")?[{key:"today",label:"Today"}]:[]),
+              ...(can(identity,"board.view")?[{key:"needs",label:"Needs"}]:[]),
               ...(can(identity,"cos.view")?[{key:"cos",label:"COs"}]:[]),
               {key:"safety",label:"Safety"},
               {key:"schedule",label:"Forecast"},
-              {key:"nav",label:"Nav",icon:"mapPin"},
-              {key:"upcoming",label:"Upcoming"},
-              ...(can(identity,"quotes.view")?[{key:"quotes",label:"Quotes"}]:[]),
-              {key:"walks",label:"Walks"},
-              {key:"tasks",label:"Tasks"},
               ...(can(identity,"settings.view")?[{key:"huddle",label:"Huddle"}]:[]),
-              ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors"}]:[]),
               ...(can(identity,"scoreboard.editWeights")?[{key:"scoreboard",label:"Scoreboard"}]:[]),  // PHASE-4 ADMIN-ONLY: tab hidden for non-admins until boss approves
               {key:"appmap",label:"App Map"},
-              ...(can(identity,"settings.view")?[{key:"settings",label:"Settings",icon:"settings"}]:[]),
             ]
         ).map(({key,label,icon})=>{
           const active = view===key;
           return (
-            <button key={key} onClick={key==="home"?goHome:key==="today"?()=>setView("today"):key==="cos"?()=>setView("cos"):key==="appmap"?()=>setView("appmap"):key==="safety"?()=>setView("safety"):key==="schedule"?openSchedule:key==="upcoming"?openUpcoming:key==="quotes"?()=>setView("quotes"):key==="walks"?()=>setView("walks"):key==="tasks"?openTasks:key==="nav"?openNav:key==="huddle"?()=>setView("huddle"):key==="subcontractors"?openSubcontractor:key==="scoreboard"?()=>setView("scoreboard"):openSettings}
+            <button key={key} onClick={()=>navClick(key)}
               style={{
                 padding:"7px 16px",fontSize:12,fontWeight:active?700:500,fontFamily:"inherit",
                 cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
@@ -49660,6 +49924,65 @@ function App() {
             </button>
           );
         })}
+
+        {/* "More" dropdown — overflow tabs (Nav, Upcoming, Quotes, Walks, Tasks,
+            subcontractor) tucked here to keep the top bar short. Office only. */}
+        {!isContractor && (()=>{
+          const moreItems = [
+            {key:"nav",label:"Nav",icon:"mapPin"},
+            {key:"upcoming",label:"Upcoming",icon:"calendar"},
+            ...(can(identity,"quotes.view")?[{key:"quotes",label:"Quotes",icon:"fileText"}]:[]),
+            {key:"walks",label:"Walks",icon:"clipboard"},
+            {key:"tasks",label:"Tasks",icon:"check"},
+            ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors",icon:"hardHat"}]:[]),
+          ];
+          const moreActive = moreItems.some(i=>i.key===view);
+          return (
+            <div style={{position:"relative",flexShrink:0}}>
+              <button onClick={()=>setMoreOpen(o=>!o)}
+                style={{padding:"7px 14px",fontSize:12,fontWeight:moreActive?700:500,fontFamily:"inherit",
+                  cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
+                  background:moreActive?C.accent:"transparent",color:moreActive?"#000":C.dim,
+                  letterSpacing:"0.02em",display:"inline-flex",alignItems:"center",gap:5}}>
+                <Icon name="moreHoriz" size={13} stroke={2.25}/>More
+              </button>
+              {moreOpen && (
+                <>
+                  <div onClick={()=>setMoreOpen(false)} style={{position:"fixed",inset:0,zIndex:95}}/>
+                  <div style={{position:"absolute",top:"100%",right:0,marginTop:6,minWidth:190,
+                    background:C.card,border:`1px solid ${C.border}`,borderRadius:10,
+                    boxShadow:"0 8px 24px rgba(0,0,0,0.12)",zIndex:96,padding:6,
+                    display:"flex",flexDirection:"column",gap:2}}>
+                    {moreItems.map(({key,label,icon})=>{
+                      const active=view===key;
+                      return (
+                        <button key={key} onClick={()=>{navClick(key);setMoreOpen(false);}}
+                          style={{padding:"9px 12px",fontSize:13,fontFamily:"inherit",cursor:"pointer",
+                            textAlign:"left",border:"none",borderRadius:7,
+                            background:active?`${C.accent}22`:"transparent",color:active?C.text:C.dim,
+                            fontWeight:active?700:500,display:"inline-flex",alignItems:"center",gap:9,whiteSpace:"nowrap"}}>
+                          {icon&&<Icon name={icon} size={15} stroke={2.25}/>}{label}
+                        </button>
+                      );
+                    })}
+                  </div>
+                </>
+              )}
+            </div>
+          );
+        })()}
+
+        {can(identity,"settings.view") && (
+          <button onClick={openSettings}
+            style={{padding:"7px 16px",fontSize:12,fontWeight:view==="settings"?700:500,fontFamily:"inherit",
+              cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,flexShrink:0,
+              background:view==="settings"?C.accent:"transparent",color:view==="settings"?"#000":C.dim,
+              transition:"all 0.15s",letterSpacing:"0.02em",
+              boxShadow:view==="settings"?`0 2px 8px ${C.accent}55`:"none",
+              display:"inline-flex",alignItems:"center",gap:5}}>
+            <Icon name="settings" size={11} stroke={2.25}/>Settings
+          </button>
+        )}
         <div style={{marginLeft:"auto",flexShrink:0,display:"flex",alignItems:"center",gap:8}}>
           <span style={{fontSize:11,color:C.dim,background:C.surface,border:`1px solid ${C.border}`,
             borderRadius:99,padding:"4px 12px",whiteSpace:"nowrap"}}>
@@ -51027,6 +51350,10 @@ function App() {
 
       {view==="today"&&can(identity,"today.view")&&(
         <Today jobs={jobs} users={users} manualTasks={manualTasks} quoteWalks={quoteWalks} suggestions={appSuggestions} identity={identity} onSelectJob={setSelected} onUpdateJob={updateJob}/>
+      )}
+
+      {view==="needs"&&can(identity,"board.view")&&(
+        <NeedsBoard needs={needs} users={users} identity={identity} jobs={jobs} onSaveNeed={saveNeed} onDeleteNeed={deleteNeed} onSelectJob={setSelected}/>
       )}
 
       {view==="cos"&&can(identity,"cos.view")&&(

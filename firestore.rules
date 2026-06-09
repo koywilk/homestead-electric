@@ -106,6 +106,19 @@ service cloud.firestore {
       allow delete: if true;
     }
 
+    // ── NEEDS BOARD ───────────────────────────────────────────────────────────
+    // Coordinator board for deadline-bound contractor call-in needs. Same shape
+    // as /manualTasks and /quoteWalks (data map + ISO updated_at string), so the
+    // same light validation applies. UI-level board.add permission controls who
+    // can write; reads open to match the rest of the app.
+    match /needs/{needId} {
+      allow read: if true;
+      allow write: if request.resource.data.keys().hasAll(['data', 'updated_at'])
+                   && request.resource.data.data is map
+                   && request.resource.data.updated_at is string;
+      allow delete: if true;
+    }
+
     // ── EVERYTHING ELSE ───────────────────────────────────────────────────────
     // Deny all access to any other collection by default.
     match /{document=**} {
