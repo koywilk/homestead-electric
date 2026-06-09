@@ -34801,9 +34801,11 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
           // LEFT list = ALL book jobs (not just active-this-week), minus temp/quick
           // and fully-finished, so nothing the coordinator might schedule is hidden.
           const isDone = j => { const rs=effRS(j),fs=effFS(j); return (rs==="complete"||rs==="invoice") && (fs==="complete"||fs==="invoice"); };
+          // Sort: needs-bodies flagged jobs pinned to top, then alphabetical.
+          // Staffing does NOT re-sort — a job holds its spot and just flips
+          // red→green in place, so the list reads like a stable checklist.
           const leftJobs = (jobs||[]).filter(j=> !j.tempPed && !j.quickJob && !isDone(j)).sort((a,b)=>{
             const an=needsSet.has(a.id)?0:1, bn=needsSet.has(b.id)?0:1; if(an!==bn) return an-bn;
-            const as=isStaffed(a.id)?1:0, bs=isStaffed(b.id)?1:0; if(as!==bs) return as-bs;
             return (a.name||"").localeCompare(b.name||"");
           });
           // People model: roster grouped under the book's foremen. Anyone in the
@@ -35031,15 +35033,15 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
                     return (
                       <div key={j.id} draggable onDragStart={()=>setMatchSelJob(j.id)} onDragEnd={()=>{}}
                         onClick={()=>setMatchSelJob(picked?null:j.id)}
-                        style={{border:`1px solid ${picked?C.accent:flagged?"#dc2626":C.border}`,
-                          borderLeft:`4px solid ${flagged?"#dc2626":staffed?"#16a34a":C.border}`,
-                          background:picked?C.accent+"14":"var(--card)",
-                          opacity:staffed&&!flagged&&!picked?0.66:1,borderRadius:8,padding:"8px 10px",marginBottom:7,cursor:"pointer"}}>
+                        style={{border:`1px solid ${picked?C.accent:C.border}`,
+                          borderLeft:`4px solid ${staffed?"#16a34a":flagged?"#dc2626":C.border}`,
+                          background:picked?C.accent+"14":staffed?"#16a34a0f":"var(--card)",
+                          borderRadius:8,padding:"8px 10px",marginBottom:7,cursor:"pointer"}}>
                         <div style={{display:"flex",alignItems:"center",gap:8}}>
                           <button onClick={(e)=>{e.stopPropagation();toggleNeeds(j.id);}}
-                            title={flagged?"Clear needs-bodies flag":"Flag as needs bodies (floats to top)"}
+                            title={flagged?"Clear needs-bodies flag":"Flag as needs bodies (pins to top)"}
                             style={{flexShrink:0,width:18,height:18,borderRadius:4,cursor:"pointer",
-                              border:`1.5px solid ${flagged?"#dc2626":C.border}`,background:flagged?"#dc2626":"transparent",
+                              border:`1.5px solid ${flagged?(staffed?"#16a34a":"#dc2626"):C.border}`,background:flagged?(staffed?"#16a34a":"#dc2626"):"transparent",
                               display:"inline-flex",alignItems:"center",justifyContent:"center",padding:0}}>
                             {flagged && <Icon name="check" size={12} color="#fff"/>}
                           </button>
@@ -35049,8 +35051,11 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
                               {j.statusUpdate && <span onClick={e=>e.stopPropagation()}><StatusUpdateHover statusUpdate={j.statusUpdate} anchor="left"/></span>}
                             </div>
                             <div style={{fontSize:10,color:C.dim,marginTop:1}}>
-                              {flagged && <span style={{color:"#dc2626",fontWeight:700}}>NEEDS BODIES · </span>}
-                              {staffed?<span style={{color:"#16a34a",fontWeight:700}}>Staffed</span>:"Unstaffed"}
+                              {staffed
+                                ? <span style={{color:"#16a34a",fontWeight:700}}>STAFFED</span>
+                                : flagged
+                                  ? <span style={{color:"#dc2626",fontWeight:700}}>NEEDS BODIES</span>
+                                  : <span>Unstaffed</span>}
                               {j.foreman?` · ${j.foreman}`:""}
                             </div>
                           </div>
