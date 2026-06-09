@@ -33057,7 +33057,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
   const [crewNeedsBodies, setCrewNeedsBodies] = useState([]);
   const [matchSelJob, setMatchSelJob] = useState(null); // jobId "picked up" for tap-to-assign (sticky — stays selected after each assign)
   const [matchRightView, setMatchRightView] = useState("people"); // right panel: "people" | "teams"
-  const [matchTeamEdit, setMatchTeamEdit] = useState(null); // team idx being edited inline, or null
+  const [matchTeamModal, setMatchTeamModal] = useState(null); // team create/edit popup: {idx:number|null, members:string[]} or null
   const [matchNoteJob, setMatchNoteJob] = useState(null); // jobId whose status-note editor is open in the matcher, or null
   // Tracks which row's hours-needed chip is currently being edited so the
   // chip can render as a clear "WK HRS" display by default and only swap to
@@ -34890,15 +34890,17 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
             nx[k]={lead,crew}; setCrewData(nx); _saveCrewData(nx);
             toast.success(`Team → ${(jobById[jid]?.name)||"job"}, ${dayLabels[di]}`);
           };
-          const teamToggleMember = (idx,name)=>{
-            const next=crewTeams.map((t,i)=>{
-              if(i!==idx) return t;
-              const inLead=fmEq(t.lead,name); const inMem=(t.members||[]).some(m=>fmEq(m,name));
-              if(inLead) return {...t, lead:""};
-              if(inMem) return {...t, members:(t.members||[]).filter(m=>!fmEq(m,name))};
-              return {...t, members:[...(t.members||[]), name]};
-            });
-            _saveTeams(next);
+          // Team create/edit popup helpers
+          const teamModalToggle = (name)=> setMatchTeamModal(m=> m ? {...m, members: m.members.some(x=>fmEq(x,name)) ? m.members.filter(x=>!fmEq(x,name)) : [...m.members, name]} : m);
+          const saveTeamModal = ()=>{
+            const m=matchTeamModal; if(!m) return;
+            if(!m.members.length){ toast.warn("Pick at least one person."); return; }
+            const lead = m.members.find(n=>isForeman(n)) || "";
+            const members = m.members.filter(n=>!fmEq(n,lead));
+            if(m.idx==null) _saveTeams([...(crewTeams||[]), {id:Date.now().toString(36), lead, members}]);
+            else _saveTeams((crewTeams||[]).map((t,i)=> i===m.idx ? {...t, lead, members} : t));
+            setMatchTeamModal(null);
+            toast.success(m.idx==null?"Team created.":"Team saved.");
           };
           const toggleNeeds = (jid)=>{
             const has=crewNeedsBodies.includes(jid);
@@ -35100,7 +35102,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
                       ))}
                     </div>
                     {matchRightView==="teams" && (
-                      <button onClick={()=>{ teamAdd(); }} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.accent,padding:"4px 10px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:700,display:"inline-flex",alignItems:"center",gap:4}}>
+                      <button onClick={()=>setMatchTeamModal({idx:null, members:[]})} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.accent,padding:"4px 10px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:700,display:"inline-flex",alignItems:"center",gap:4}}>
                         <Icon name="plus" size={11}/> New team
                       </button>
                     )}
@@ -35130,7 +35132,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
                   {/* TEAMS view — this coordinator's teams grouped first */}
                   {matchRightView==="teams" && (()=>{
                     const renderTeamRow = (t,idx)=>{
-                      const names=teamMembers(t); const editing=matchTeamEdit===idx; const tc=t.lead?crewGetColor(t.lead):C.accent;
+                      const names=teamMembers(t); const tc=t.lead?crewGetColor(t.lead):C.accent;
                       return (
                           <div key={t.id||idx} style={{marginBottom:8,border:`1px solid ${C.border}`,borderRadius:8,overflow:"hidden"}}>
                             <div style={{display:"grid",gridTemplateColumns:"108px repeat(5,1fr)",gap:1,background:C.border}}>
@@ -35138,8 +35140,8 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
                                 <span style={{fontSize:10,fontWeight:700,color:"var(--text)",whiteSpace:"normal",lineHeight:1.25}}>{teamLabel(t)}</span>
                                 <span style={{fontSize:9,color:C.dim}}>{names.length} ppl</span>
                                 <div style={{display:"flex",gap:6}}>
-                                  <button onClick={()=>setMatchTeamEdit(editing?null:idx)} style={{background:"none",border:"none",color:C.accent,cursor:"pointer",fontSize:9,fontFamily:"inherit",fontWeight:700,padding:0}}>{editing?"Done":"Edit"}</button>
-                                  <button onClick={()=>{ if(window.confirm("Delete this team?")){ teamRemove(idx); setMatchTeamEdit(null);} }} style={{background:"none",border:"none",color:C.dim,cursor:"pointer",fontSize:9,fontFamily:"inherit",padding:0}}>Delete</button>
+                                  <button onClick={()=>setMatchTeamModal({idx, members:teamMembers(t)})} style={{background:"none",border:"none",color:C.accent,cursor:"pointer",fontSize:9,fontFamily:"inherit",fontWeight:700,padding:0}}>Edit</button>
+                                  <button onClick={()=>{ if(window.confirm("Delete this team?")) teamRemove(idx); }} style={{background:"none",border:"none",color:C.dim,cursor:"pointer",fontSize:9,fontFamily:"inherit",padding:0}}>Delete</button>
                                 </div>
                               </div>
                               {crewDays.map((d,di)=>{
@@ -35156,23 +35158,6 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
                                 );
                               })}
                             </div>
-                            {editing && (
-                              <div style={{padding:"8px 10px",background:"var(--bg)",borderTop:`1px solid ${C.border}`}}>
-                                <div style={{fontSize:9,color:C.dim,fontWeight:700,marginBottom:6,letterSpacing:"0.05em"}}>TAP NAMES TO ADD / REMOVE</div>
-                                <div style={{display:"flex",gap:5,flexWrap:"wrap"}}>
-                                  {roster.map(n=>{
-                                    const inTeam=fmEq(t.lead,n)||(t.members||[]).some(m=>fmEq(m,n));
-                                    return (
-                                      <button key={n} onClick={()=>teamToggleMember(idx,n)}
-                                        style={{background:inTeam?personColor(n)+"26":"transparent",border:`1px solid ${inTeam?personColor(n):C.border}`,
-                                          borderRadius:99,color:inTeam?"var(--text)":C.dim,padding:"2px 9px",cursor:"pointer",fontSize:10,fontFamily:"inherit",fontWeight:inTeam?700:500}}>
-                                        {displayName(n)}{isForeman(n)?" ★":""}
-                                      </button>
-                                    );
-                                  })}
-                                </div>
-                              </div>
-                            )}
                           </div>
                       );
                     };
@@ -35202,6 +35187,30 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
                   </div>
                 </div>
               </div>
+
+              {/* New / edit team popup — select multiple people at once */}
+              {matchTeamModal && (
+                <div onClick={()=>setMatchTeamModal(null)} style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.45)",zIndex:9999,display:"flex",alignItems:"center",justifyContent:"center",padding:16}}>
+                  <div onClick={e=>e.stopPropagation()} style={{background:"var(--card)",border:`1px solid ${C.border}`,borderRadius:12,padding:18,width:"100%",maxWidth:460,maxHeight:"80vh",overflowY:"auto",boxShadow:"0 20px 50px rgba(0,0,0,0.3)"}}>
+                    <div style={{fontSize:15,fontWeight:800,color:"var(--text)",marginBottom:4}}>{matchTeamModal.idx==null?"New team":"Edit team"}</div>
+                    <div style={{fontSize:11,color:C.dim,marginBottom:12}}>Tap people to add them to this team. {matchTeamModal.members.length} selected. (★ = foreman, becomes the lead.)</div>
+                    <div style={{display:"flex",gap:6,flexWrap:"wrap",marginBottom:16}}>
+                      {roster.map(n=>{ const on=matchTeamModal.members.some(x=>fmEq(x,n)); return (
+                        <button key={n} onClick={()=>teamModalToggle(n)}
+                          style={{background:on?personColor(n)+"26":"transparent",border:`1px solid ${on?personColor(n):C.border}`,
+                            borderRadius:99,color:on?"var(--text)":C.dim,padding:"5px 12px",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:on?700:500}}>
+                          {displayName(n)}{isForeman(n)?" ★":""}
+                        </button>
+                      );})}
+                    </div>
+                    <div style={{display:"flex",gap:8,justifyContent:"flex-end",alignItems:"center"}}>
+                      {matchTeamModal.idx!=null && <button onClick={()=>{ if(window.confirm("Delete this team?")){ teamRemove(matchTeamModal.idx); setMatchTeamModal(null); } }} style={{marginRight:"auto",background:"none",border:"none",color:"#dc2626",cursor:"pointer",fontSize:11,fontFamily:"inherit",fontWeight:600}}>Delete team</button>}
+                      <button onClick={()=>setMatchTeamModal(null)} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:7,color:C.dim,padding:"7px 16px",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:600}}>Cancel</button>
+                      <button onClick={saveTeamModal} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",padding:"7px 18px",cursor:"pointer",fontSize:12,fontFamily:"inherit",fontWeight:700}}>{matchTeamModal.idx==null?"Create team":"Save"}</button>
+                    </div>
+                  </div>
+                </div>
+              )}
             </div>
           );
         }
