@@ -47574,7 +47574,10 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
     () => [...new Set((users || []).filter(u => (u.title || u.role) === "foreman" && u.coordinator).map(u => u.coordinator))].sort(),
     [users]
   );
-  const myCoord = coordinators.includes(myName) ? myName : "";
+  // Auto-assigned book: if the person entering IS a coordinator, their own name;
+  // otherwise the coordinator they're under (their foreman record's `coordinator`).
+  const myUser = useMemo(() => (users || []).find(u => u.id === identity?.id || u.name === myName) || null, [users, identity, myName]);
+  const myBook = coordinators.includes(myName) ? myName : (myUser?.coordinator || myName);
   const jobNames = useMemo(() => (jobs || []).map(j => j.name).filter(Boolean).sort(), [jobs]);
 
   const [scope, setScope]   = useState("mine");      // mine | all
@@ -47582,8 +47585,6 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
   const [dText, setDText]   = useState("");
   const [dDue,  setDDue]    = useState("tomorrow");   // tomorrow | week
   const [dJob,  setDJob]    = useState("");
-  const [dCoord,setDCoord]  = useState("");
-  const [dSrc,  setDSrc]    = useState("Call");
 
   const startToday = (() => { const d = new Date(); d.setHours(0,0,0,0); return d.getTime(); })();
   const mine = (n) => n && (n.coordinator === myName || n.createdBy === myName);
@@ -47615,17 +47616,16 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
       id: "need_" + Date.now() + "_" + Math.random().toString(36).slice(2, 7),
       text: t,
       dueBucket: dDue,
-      coordinator: dCoord || myCoord || "",
+      coordinator: myBook || "",
       jobId: job ? job.id : "",
       jobName: dJob || "",
-      source: dSrc || "Call",
       status: "open",
       createdBy: myName,
       createdAt: new Date().toISOString(),
       doneAt: "",
     };
     onSaveNeed && onSaveNeed(need);
-    setDText(""); setDJob(""); setDSrc("Call"); setDDue("tomorrow"); setAdding(false);
+    setDText(""); setDJob(""); setDDue("tomorrow"); setAdding(false);
   };
 
   const patch     = (n, p) => onSaveNeed && onSaveNeed({ ...n, ...p });
@@ -47652,7 +47652,6 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
           {n.jobName
             ? pill(n.jobName, C.bg, C.dim, "mapPin", n.jobId && onSelectJob ? () => { const j = (jobs || []).find(x => x.id === n.jobId); if (j) onSelectJob(j); } : null)
             : pill("No job", C.bg, C.muted)}
-          {n.source && pill(n.source, C.bg, C.dim)}
           {aged(n) && pill("Carried over", "#fef2f2", C.red, "flag")}
           {n.dueBucket === "tomorrow"
             ? pill("Move to week", C.bg, C.dim, "arrowRight", () => patch(n, { dueBucket: "week" }))
@@ -47719,7 +47718,7 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
             ))}
           </div>
           {canAdd && (
-            <button onClick={() => { setDCoord(myCoord || coordinators[0] || ""); setAdding(a => !a); }}
+            <button onClick={() => setAdding(a => !a)}
               style={{ padding: "7px 14px", fontSize: 12, fontFamily: "inherit", border: `1px solid ${C.border}`,
                 borderRadius: 8, background: C.surface, color: C.text, cursor: "pointer",
                 display: "inline-flex", alignItems: "center", gap: 6, fontWeight: 600 }}>
@@ -47747,20 +47746,15 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
               placeholder="Link a job (optional)"
               style={{ flex: "1 1 160px", padding: "8px 10px", fontSize: 13, fontFamily: "inherit", border: `1px solid ${C.border}`, borderRadius: 8 }} />
             <datalist id="needs-job-list">{jobNames.map(n => <option key={n} value={n} />)}</datalist>
-            <select value={dSrc} onChange={e => setDSrc(e.target.value)}
-              style={{ flex: "0 1 120px", padding: "8px 10px", fontSize: 13, fontFamily: "inherit", border: `1px solid ${C.border}`, borderRadius: 8 }}>
-              {["Call", "GC", "Inspector", "Contractor"].map(s => <option key={s} value={s}>{s}</option>)}
-            </select>
-            {coordinators.length > 0 && (
-              <select value={dCoord} onChange={e => setDCoord(e.target.value)}
-                style={{ flex: "0 1 140px", padding: "8px 10px", fontSize: 13, fontFamily: "inherit", border: `1px solid ${C.border}`, borderRadius: 8 }}>
-                {coordinators.map(c => <option key={c} value={c}>{(c || "").split(" ")[0]}'s book</option>)}
-              </select>
-            )}
             <button onClick={submit}
               style={{ padding: "8px 18px", fontSize: 13, fontFamily: "inherit", border: "none", borderRadius: 8,
                 background: C.accent, color: "#000", cursor: "pointer", fontWeight: 700 }}>Save</button>
           </div>
+          {myBook && (
+            <div style={{ fontSize: 12, color: C.dim, marginTop: 8 }}>
+              Adds to <b style={{ color: C.text }}>{(myBook || "").split(" ")[0]}'s book</b>
+            </div>
+          )}
         </div>
       )}
 
@@ -49144,6 +49138,7 @@ function App() {
 
   const [view, setView] = useState("home");
   const [moreOpen, setMoreOpen] = useState(false);  // top-nav "More" dropdown
+  const [morePos, setMorePos] = useState({top:0,right:8});  // fixed-pos anchor (nav has overflow:auto, can't use absolute)
   const [activeForeman, setActiveForeman] = useState(null);
   // Lead "My Crew" landing — a lead now runs their own apprentice, so on login
   // drop them into their foreman's crew view instead of the full office board.
@@ -49938,8 +49933,8 @@ function App() {
           ];
           const moreActive = moreItems.some(i=>i.key===view);
           return (
-            <div style={{position:"relative",flexShrink:0}}>
-              <button onClick={()=>setMoreOpen(o=>!o)}
+            <div style={{flexShrink:0}}>
+              <button onClick={(e)=>{const r=e.currentTarget.getBoundingClientRect();setMorePos({top:r.bottom+6,right:Math.max(8,window.innerWidth-r.right)});setMoreOpen(o=>!o);}}
                 style={{padding:"7px 14px",fontSize:12,fontWeight:moreActive?700:500,fontFamily:"inherit",
                   cursor:"pointer",whiteSpace:"nowrap",border:"none",borderRadius:8,
                   background:moreActive?C.accent:"transparent",color:moreActive?"#000":C.dim,
@@ -49948,10 +49943,10 @@ function App() {
               </button>
               {moreOpen && (
                 <>
-                  <div onClick={()=>setMoreOpen(false)} style={{position:"fixed",inset:0,zIndex:95}}/>
-                  <div style={{position:"absolute",top:"100%",right:0,marginTop:6,minWidth:190,
+                  <div onClick={()=>setMoreOpen(false)} style={{position:"fixed",inset:0,zIndex:9998}}/>
+                  <div style={{position:"fixed",top:morePos.top,right:morePos.right,minWidth:190,
                     background:C.card,border:`1px solid ${C.border}`,borderRadius:10,
-                    boxShadow:"0 8px 24px rgba(0,0,0,0.12)",zIndex:96,padding:6,
+                    boxShadow:"0 8px 24px rgba(0,0,0,0.12)",zIndex:9999,padding:6,
                     display:"flex",flexDirection:"column",gap:2}}>
                     {moreItems.map(({key,label,icon})=>{
                       const active=view===key;
