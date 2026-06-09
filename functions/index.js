@@ -39,6 +39,24 @@ function getTokens(user) {
   return Array.from(new Set(tokens.filter(Boolean)));
 }
 
+// Per-user notification preference gate. `notifPrefs` is a {key:bool} map saved
+// from Settings → Team. Default TRUE when a key is absent, so a newly-added
+// nudge type still reaches people until they explicitly mute it (opt-out, not
+// opt-in). Used by the new nudges; older functions don't gate yet.
+function wantsNotif(user, key) {
+  if (!user || !key) return true;
+  const p = user.notifPrefs;
+  if (!p || typeof p !== "object") return true;
+  return p[key] !== false;
+}
+
+// The coordinator (office scheduler) who owns a foreman's book, or null.
+function coordUserOf(users, foremanName) {
+  const fm = (users || []).find(u => (u.name || "").toLowerCase() === String(foremanName || "").toLowerCase());
+  if (!fm || !fm.coordinator) return null;
+  return (users || []).find(u => (u.name || "").toLowerCase() === String(fm.coordinator).toLowerCase()) || null;
+}
+
 // Token error codes that mean the token is permanently dead and should be purged.
 const STALE_TOKEN_CODES = [
   "messaging/registration-token-not-registered",
@@ -206,6 +224,31 @@ exports.sendTestPush = functions.https.onCall(async (data) => {
     tokenCount: tokens.length,
     results,
   };
+});
+
+// ─── Manual re-nudge — a button in the app re-pings the ONE person responsible
+// for an open item (question / CO / punch / RT). Respects that person's
+// `renudge` toggle. Returns a small report so the UI can toast the result.
+exports.reNudge = functions.https.onCall(async (data) => {
+  const { toName, title, body, jobId, section, key } = data || {};
+  if (!toName) throw new functions.https.HttpsError("invalid-argument", "toName required");
+  const users = await getUsers();
+  const n = String(toName).toLowerCase().trim();
+  const user = users.find(u => {
+    const un = (u.name || "").toLowerCase();
+    return un === n || un.startsWith(n + " ") || n.startsWith(un.split(" ")[0]);
+  });
+  if (!user) return { ok: false, reason: "not-found", message: `${toName} isn't in the team list.` };
+  if (!wantsNotif(user, key || "renudge")) return { ok: false, reason: "muted", message: `${user.name} has manual reminders turned off.` };
+  const tokens = getTokens(user);
+  if (tokens.length === 0) return { ok: false, reason: "no-tokens", message: `${user.name} has no device registered for notifications.` };
+  await Promise.all(tokens.map(t => sendFCM(t, {
+    title: title || "Reminder",
+    body:  body  || "You have an open item that needs attention.",
+    jobId: jobId || "",
+    section: section || "",
+  })));
+  return { ok: true, to: user.name, tokenCount: tokens.length };
 });
 
 async function sendToName(name, notification) {

@@ -3118,6 +3118,7 @@ const NOTIF_CATEGORIES = [
     { key:"question_answered", label:"Question answered",                    roles:["admin","manager","foreman","lead"] },
   ]},
   { label:"Reminders", items:[
+    { key:"renudge",           label:"Manual reminder from a teammate",       roles:["admin","manager","foreman","lead","crew"] },
     { key:"reminder_plans",    label:"Plans check (2 days before start)",    roles:["admin","manager"] },
     { key:"reminder_prep",     label:"Prep incomplete reminder",             roles:["admin","manager"] },
     { key:"reminder_po",       label:"Daily PO reminder (1 PM weekdays)",    roles:["lead"] },
@@ -4691,6 +4692,78 @@ const Spinner = ({size=12, color="currentColor", stroke=2, style={}}) => (
   </svg>
 );
 
+
+// ── Re-nudge button (shared) ───────────────────────────────────────────────
+// One reusable bell that re-pings a person about an open item (question / CO /
+// punch / RT). Click opens a small picker so you can choose WHO to nudge —
+// defaults to the item's responsible person (`to`) but the full team roster is
+// selectable. Calls the `reNudge` cloud function, which routes to that one
+// person and respects their `renudge` toggle.
+//
+// Roster source: a module-level cache fed by the App users loader, so the bell
+// has the team list everywhere without threading `users` through every parent.
+let _NUDGE_ROSTER = [];
+const _setNudgeRoster = (users) => { _NUDGE_ROSTER = (users||[]).map(u => u && u.name).filter(Boolean); };
+
+function RemindButton({ to = "", title, body, jobId, section, label = "Remind", people }) {
+  const [open, setOpen]   = useState(false);
+  const [pos, setPos]     = useState({ top: 0, left: 0 });
+  const [pick, setPick]   = useState(to);
+  const [state, setState] = useState("idle"); // idle | sending | done | warn
+  const [msg, setMsg]     = useState("");
+  useEffect(() => { if (!open) setPick(to || ""); }, [to, open]);
+  const roster = (people && people.length ? people : _NUDGE_ROSTER) || [];
+  // Show even when unassigned (to === "") as long as there's a roster to pick from.
+  if (!to && roster.length === 0) return null;
+
+  const send = async () => {
+    const target = pick || to;
+    if (!target) { setState("warn"); setMsg("Pick a person"); setTimeout(()=>{setState("idle");setMsg("");},2500); return; }
+    setState("sending"); setMsg("");
+    try {
+      const r = await httpsCallable(functions, "reNudge")({ toName: target, title, body, jobId, section, key: "renudge" });
+      const d = r.data || {};
+      if (d.ok) { setState("done"); setMsg(`Reminded ${(d.to||target).split(" ")[0]}`); setOpen(false); }
+      else { setState("warn"); setMsg(d.message || "Couldn't send"); }
+    } catch (err) { setState("warn"); setMsg("Couldn't send"); }
+    setTimeout(() => { setState("idle"); setMsg(""); }, 3500);
+  };
+  const color = state === "done" ? C.green : state === "warn" ? C.red : C.dim;
+  const options = roster.includes(to) || !to ? roster : [to, ...roster];
+  return (
+    <span style={{ display: "inline-block" }}>
+      <button onClick={(e)=>{ e.stopPropagation(); const r=e.currentTarget.getBoundingClientRect(); setPos({ top:r.bottom+4, left:Math.max(8, r.left) }); setOpen(o=>!o); }}
+        title={to ? `Remind ${to}` : "Send a reminder"}
+        style={{ display:"inline-flex", alignItems:"center", gap:5, padding:"3px 8px", fontSize:11, fontFamily:"inherit",
+          border:`1px solid ${state==="idle"?C.border:color}`, borderRadius:7, background:"none", color,
+          cursor:"pointer", whiteSpace:"nowrap" }}>
+        {state === "sending" ? <Spinner size={12} color={color}/> : <Icon name="bell" size={12} stroke={2.25}/>}
+        {msg || (state==="sending" ? "Sending…" : (to ? `${label} ${to.split(" ")[0]}` : label))}
+      </button>
+      {open && (
+        <>
+          <div onClick={(e)=>{ e.stopPropagation(); setOpen(false); }} style={{ position:"fixed", inset:0, zIndex:9998 }}/>
+          <div onClick={(e)=>e.stopPropagation()}
+            style={{ position:"fixed", top:pos.top, left:pos.left, zIndex:9999, minWidth:200, background:C.card,
+              border:`1px solid ${C.border}`, borderRadius:9, boxShadow:"0 8px 24px rgba(0,0,0,0.14)", padding:10 }}>
+            <div style={{ fontSize:10, color:C.dim, fontWeight:700, letterSpacing:"0.06em", marginBottom:6 }}>REMIND WHO?</div>
+            <select value={pick} onChange={e=>setPick(e.target.value)}
+              style={{ width:"100%", boxSizing:"border-box", padding:"7px 9px", fontSize:13, fontFamily:"inherit",
+                border:`1px solid ${C.border}`, borderRadius:7, marginBottom:8 }}>
+              <option value="">— choose —</option>
+              {options.map(n => <option key={n} value={n}>{n}</option>)}
+            </select>
+            <button onClick={send} disabled={state==="sending"}
+              style={{ width:"100%", padding:"7px 10px", fontSize:12, fontWeight:700, fontFamily:"inherit",
+                border:"none", borderRadius:7, background:C.accent, color:"#000", cursor:"pointer" }}>
+              {state==="sending" ? "Sending…" : "Send reminder"}
+            </button>
+          </div>
+        </>
+      )}
+    </span>
+  );
+}
 
 // ── Photo attacher (shared) ────────────────────────────────────────────────
 // Drop-in upload-and-thumbnail-grid for any record that carries a photos[]
@@ -9204,6 +9277,12 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                   color: C.accent,
                 }}>{item.assignedTo}</span>
               )}
+              {item.assignedTo && (
+                <RemindButton to={item.assignedTo}
+                  title="Punch item reminder"
+                  body={(item.text||"").replace(/<[^>]*>/g,"").trim().slice(0,90) || "Open punch item needs attention."}
+                  jobId={jobId} section="punch"/>
+              )}
             </div>
           )}
 
@@ -11914,6 +11993,12 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
                 }} variant="simpro" style={{fontSize:11,padding:"3px 9px"}}>Simpro</Btn>}
                 {!isConverted&&!isCompleted&&<Btn onClick={()=>chatCO(o,o._idx)} variant="chat" style={{fontSize:11,padding:"3px 9px"}}>Chat</Btn>}
                 {!isConverted&&!isCompleted&&<Btn onClick={()=>emailCO(o,o._idx)} variant="email" style={{fontSize:11,padding:"3px 9px"}}>Email CO</Btn>}
+                {!isConverted&&!isCompleted&&(
+                  <RemindButton to="Jeromy Cloward"
+                    title="Change order reminder"
+                    body={(`CO on ${jobName}: ${stripHtml(o.desc)||stripHtml(o.task)||"needs attention"}`).slice(0,110)}
+                    jobId={jobId} section="cos"/>
+                )}
                 {!isCollapsed&&<button onClick={async e=>{e.stopPropagation(); if(!await showConfirm("Delete this change order?")) return; del(o.id); }} style={{background:"none",border:"none",color:"var(--muted)",cursor:"pointer",fontSize:11}}>Remove</button>}
               </div>
             </div>
@@ -12725,6 +12810,14 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
                   {crewOptions.map(name=><option key={name} value={name}>{name}</option>)}
                 </select>
             }
+            {t.assignedTo && !t.signedOff && (
+              <div style={{marginTop:8}}>
+                <RemindButton to={t.assignedTo}
+                  title="Return trip reminder"
+                  body={(stripHtml(t.scope)||"").trim().slice(0,90) || "Open return trip needs attention."}
+                  jobId={jobId} section="returnTrips"/>
+              </div>
+            )}
 
           </div>
 
@@ -28822,6 +28915,13 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
             onChange={e=>upd(q.id,{answer:e.target.value})}
             onBlur={html=>upd(q.id,{answer:html})}
             placeholder="Type answer here…"/>
+
+          <div style={{marginTop:6}}>
+            <RemindButton
+              title="Question needs an answer"
+              body={(stripHtml(q.question)||"Open question needs an answer.").slice(0,100)}
+              jobId={jobId} section="questions"/>
+          </div>
 
         </div>
 
@@ -47979,6 +48079,7 @@ function App() {
 
   // ── Users (team members) — loaded from Firestore ─────────────
   const [users, setUsers] = useState(DEFAULT_USERS);
+  useEffect(() => { _setNudgeRoster(users); }, [users]);  // feed the RemindButton roster cache
   // Timestamp of the team doc this device loaded. saveUsers' stale-write guard
   // compares against the live doc so an out-of-date device can't silently
   // overwrite a newer team list (the failure that wiped the coordinator setup).
