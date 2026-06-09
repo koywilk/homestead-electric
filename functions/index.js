@@ -1455,6 +1455,93 @@ exports.getSimproJobBasics = functions.https.onCall(async (data) => {
   };
 });
 
+// ─── PROBE: Get Simpro quote status (discovery for CO auto-approval) ───────────
+// Read-only. Given a project quote # (as typed onto a CO in the app), fetch the
+// matching Simpro quote and return its raw status/stage shape. Purpose: this
+// tenant's exact field names + status values aren't known from outside Simpro,
+// and firestore/simpro are unreachable from the dev sandbox — so we log + return
+// the raw object, run it once on a real quote #, and use the result to wire the
+// hourly auto-approval mapping with zero guessing.
+//
+// NEVER writes to Simpro. NEVER writes to Firestore. Pure GET.
+//
+// Tries the direct record first (/quotes/{ID}); if that 404s, walks the quote
+// list a few pages looking for a matching ID/number so we learn the list shape
+// too. Returns whatever it finds (raw) — the caller (Koy, from the console)
+// reports it back so the mapping can be locked down.
+exports.getSimproQuoteStatus = functions
+  .runWith({ timeoutSeconds: 120, memory: "256MB" })
+  .https.onCall(async (data) => {
+    const quoteNo = String((data && data.quoteNo) || "").trim();
+    if (!quoteNo) {
+      throw new functions.https.HttpsError("invalid-argument", "quoteNo required");
+    }
+
+    // 1. Direct record fetch — the common case if the # is the Simpro quote ID.
+    const direct = await simproReqWithRetry(
+      "GET",
+      `/quotes/${encodeURIComponent(quoteNo)}`
+    );
+
+    if (direct.ok && direct.data && typeof direct.data === "object") {
+      const q = direct.data;
+      functions.logger.info("getSimproQuoteStatus direct hit", {
+        quoteNo,
+        topKeys: Object.keys(q),
+        Stage: q.Stage,
+        Status: q.Status,
+        StatusName: q.Status && q.Status.Name,
+      });
+      return {
+        matchedBy: "id",
+        quoteNo,
+        Stage: q.Stage ?? null,
+        Status: q.Status ?? null,
+        Name: q.Name ?? null,
+        Total: q.Total ?? null,
+        // Full raw object so we see every field this tenant returns.
+        _raw: q,
+      };
+    }
+
+    // 2. Fallback — list a few pages and look for a match by ID or any
+    //    field that equals the typed quote #. Also surfaces the list shape.
+    const found = [];
+    let listShape = null;
+    for (let page = 1; page <= 5; page++) {
+      const r = await simproReqWithRetry(
+        "GET",
+        `/quotes/?pageSize=250&page=${page}&columns=ID,Name,Stage,Status,Total,DateIssued`
+      );
+      if (!r.ok || !Array.isArray(r.data) || r.data.length === 0) break;
+      if (!listShape && r.data[0]) listShape = Object.keys(r.data[0]);
+      for (const q of r.data) {
+        const idStr = String(q.ID ?? "").trim();
+        if (idStr === quoteNo) found.push(q);
+      }
+      if (found.length) break;
+      if (r.data.length < 250) break;
+    }
+
+    functions.logger.info("getSimproQuoteStatus fallback", {
+      quoteNo,
+      directStatus: direct.status,
+      listShape,
+      foundCount: found.length,
+      found,
+    });
+
+    return {
+      matchedBy: found.length ? "list" : "none",
+      quoteNo,
+      directStatus: direct.status,
+      directBody:
+        typeof direct.data === "string" ? direct.data.slice(0, 300) : null,
+      listShape,
+      matches: found,
+    };
+  });
+
 // ─── Get Simpro Job Profit/Loss feed (Scoreboard source) ──────────────────────
 // Pulls every Simpro job that's been touched in the requested year-to-date
 // window. Returns the full P/L picture for each + the technician field so the
@@ -4317,5 +4404,216 @@ exports.scheduledSimproPOSync = functions
       ...summary,
     }, { merge: true });
 
+    return null;
+  });
+
+// ─── Auto-approve COs from Simpro quote stage ─────────────────────────────────
+// Watches Simpro project quotes (entered as the Quote # on each CO) and flips
+// the CO's status in the APP to approved/denied. Read-only against Simpro —
+// never writes a single byte back to Simpro.
+//
+// Authoritative signal is the quote's **Stage**, NOT its Status.Name. Real-tenant
+// data proved Status.Name unreliable: quote 2827 was Stage "Approved" while its
+// Status.Name still read "Quote: Sent, Pending Response". So we map on Stage:
+//
+//   Stage "Approved"             → CO "approved"
+//   Stage "Archived"             → CO "denied"   (quote was killed)
+//   Stage "InProgress"/"Complete"→ no-op (still awaiting the customer)
+//   anything else / unknown      → no-op + logged so we can learn new values
+//
+// SAFETY — why this can't wrongly kill a live CO:
+//   • Only COs currently "needs_sending" or "pending" are eligible. Once a CO
+//     is approved/scheduled/completed/converted/denied, the sync ignores it
+//     forever. So a quote that's Approved-then-Archived in its normal lifecycle
+//     never reaches the "denied" branch — its CO already left the eligible set.
+//   • Writes go through a per-job Firestore transaction that re-reads the live
+//     doc and only rewrites data.changeOrders, matching COs by id. Concurrent
+//     field edits to other COs (or other job fields) are preserved.
+//   • Each flip is stamped (coStatusSource:"simpro" + stage + timestamp) so the
+//     origin of every auto-change is auditable.
+const SIMPRO_STAGE_TO_CO = (stage) => {
+  const s = String(stage || "").trim().toLowerCase();
+  if (s === "approved") return "approved";
+  if (s === "archived") return "denied";
+  return null; // inprogress / complete / unknown → leave the CO alone
+};
+const CO_ELIGIBLE_FOR_SIMPRO_FLIP = (coStatus) => {
+  const cur = String(coStatus || "needs_sending");
+  return cur === "needs_sending" || cur === "pending";
+};
+
+exports.scheduledSimproCoStatusSync = functions
+  .runWith({ timeoutSeconds: 540, memory: "512MB" })
+  .pubsub.schedule("0 * * * *") // top of every hour
+  .timeZone("America/Denver")
+  .onRun(async () => {
+    const db = admin.firestore();
+    const nowIso = new Date().toISOString();
+    const jobsSnap = await db.collection("jobs").get();
+
+    // 1. Collect every eligible CO that carries a quote #. Shape per item:
+    //    { jobId, coId, quoteNo, currentStatus }
+    const targets = [];
+    const quoteNos = new Set();
+    jobsSnap.forEach((docSnap) => {
+      const d = docSnap.data() || {};
+      const job = d.data || d;
+      if (job.archived) return; // skip archived jobs
+      const cos = Array.isArray(job.changeOrders) ? job.changeOrders : [];
+      cos.forEach((co) => {
+        if (!co || typeof co !== "object") return;
+        const quoteNo = String(co.quoteNumber || "").trim();
+        if (!quoteNo) return;
+        if (!CO_ELIGIBLE_FOR_SIMPRO_FLIP(co.coStatus)) return;
+        targets.push({
+          jobId: docSnap.id,
+          coId: co.id,
+          quoteNo,
+          currentStatus: co.coStatus || "needs_sending",
+        });
+        quoteNos.add(quoteNo);
+      });
+    });
+
+    if (targets.length === 0) {
+      functions.logger.info("scheduledSimproCoStatusSync: no eligible COs", {
+        totalJobs: jobsSnap.size,
+      });
+      await db.doc("settings/simproCoSyncStatus").set(
+        { lastRunAt: nowIso, eligibleCOs: 0, quotesChecked: 0, flipped: 0 },
+        { merge: true }
+      );
+      return null;
+    }
+
+    // 2. Fetch each unique quote's Stage once (dedupe → fewer Simpro calls).
+    //    Concurrency cap 3 — Simpro rate-limits ~60 req/min per token.
+    const uniqueNos = Array.from(quoteNos);
+    const stageByQuote = {}; // quoteNo → { stage, statusName, ok }
+    const lookups = await _pLimit(
+      uniqueNos.map((qn) => async () => {
+        const r = await simproReqWithRetry(
+          "GET",
+          `/quotes/${encodeURIComponent(qn)}`
+        );
+        if (r.ok && r.data && typeof r.data === "object") {
+          return {
+            qn,
+            stage: r.data.Stage ?? null,
+            statusName: (r.data.Status && r.data.Status.Name) || null,
+            ok: true,
+          };
+        }
+        return { qn, stage: null, statusName: null, ok: false, status: r.status };
+      }),
+      3
+    );
+    lookups.forEach((l) => {
+      if (l && l.qn) stageByQuote[l.qn] = l;
+    });
+
+    // 3. Decide the flip for each eligible CO. Group changes by job.
+    const changesByJob = {}; // jobId → [{ coId, newStatus, stage }]
+    const unknownStages = []; // for logging — stages we didn't recognize
+    const lookupFailures = [];
+    targets.forEach((t) => {
+      const info = stageByQuote[t.quoteNo];
+      if (!info || !info.ok) {
+        lookupFailures.push({ quoteNo: t.quoteNo, jobId: t.jobId });
+        return;
+      }
+      const mapped = SIMPRO_STAGE_TO_CO(info.stage);
+      if (mapped === null) {
+        // Awaiting customer (InProgress/Complete) — silent. Only log truly
+        // unrecognized stages so we can extend the mapping if Simpro adds one.
+        const s = String(info.stage || "").trim().toLowerCase();
+        if (s !== "inprogress" && s !== "complete") {
+          unknownStages.push({ quoteNo: t.quoteNo, stage: info.stage, statusName: info.statusName });
+        }
+        return;
+      }
+      if (mapped === t.currentStatus) return; // already there — no write
+      (changesByJob[t.jobId] = changesByJob[t.jobId] || []).push({
+        coId: t.coId,
+        newStatus: mapped,
+        stage: info.stage,
+      });
+    });
+
+    // 4. Apply per job inside a transaction (re-reads live doc, preserves
+    //    concurrent edits, rewrites only data.changeOrders).
+    const jobIds = Object.keys(changesByJob);
+    let flipped = 0;
+    const flips = [];
+    for (const jobId of jobIds) {
+      const wanted = changesByJob[jobId];
+      const ref = db.collection("jobs").doc(jobId);
+      try {
+        const applied = await db.runTransaction(async (tx) => {
+          const snap = await tx.get(ref);
+          if (!snap.exists) return [];
+          const d = snap.data() || {};
+          const job = d.data || {};
+          const cos = Array.isArray(job.changeOrders) ? job.changeOrders : [];
+          const localFlips = [];
+          const nextCOs = cos.map((co) => {
+            if (!co || typeof co !== "object") return co;
+            const want = wanted.find((w) => w.coId === co.id);
+            if (!want) return co;
+            // Re-check eligibility on the LIVE doc — a human may have already
+            // flipped it since we scanned. Never override a non-eligible CO.
+            if (!CO_ELIGIBLE_FOR_SIMPRO_FLIP(co.coStatus)) return co;
+            if ((co.coStatus || "needs_sending") === want.newStatus) return co;
+            localFlips.push({
+              coId: co.id,
+              from: co.coStatus || "needs_sending",
+              to: want.newStatus,
+              stage: want.stage,
+            });
+            return {
+              ...co,
+              coStatus: want.newStatus,
+              coStatusSource: "simpro",
+              coStatusSyncedStage: want.stage,
+              coStatusSyncedAt: nowIso,
+            };
+          });
+          if (localFlips.length === 0) return [];
+          tx.update(ref, { "data.changeOrders": nextCOs });
+          return localFlips;
+        });
+        if (applied.length) {
+          flipped += applied.length;
+          flips.push({ jobId, changes: applied });
+        }
+      } catch (e) {
+        functions.logger.error("scheduledSimproCoStatusSync: job txn failed", {
+          jobId,
+          error: e.message,
+        });
+      }
+    }
+
+    const summary = {
+      lastRunAt: nowIso,
+      eligibleCOs: targets.length,
+      quotesChecked: uniqueNos.length,
+      flipped,
+      approvedFlips: flips.reduce(
+        (s, f) => s + f.changes.filter((c) => c.to === "approved").length,
+        0
+      ),
+      deniedFlips: flips.reduce(
+        (s, f) => s + f.changes.filter((c) => c.to === "denied").length,
+        0
+      ),
+      lookupFailures: lookupFailures.length,
+      unknownStages,
+    };
+    functions.logger.info("scheduledSimproCoStatusSync: complete", {
+      ...summary,
+      flips,
+    });
+    await db.doc("settings/simproCoSyncStatus").set(summary, { merge: true });
     return null;
   });
