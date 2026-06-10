@@ -4428,6 +4428,16 @@ const RichMobileSheet = ({initialHtml, initialMaterial='', initialMatSource='', 
 };
 
 // Time ago helper for "updated X ago" display
+// Strip emoji (and the variation selectors / ZWJ that glue them together) from
+// any string before rendering in-app. Push titles carry emoji for the OS-level
+// notification, but our UI is emoji-free — so we clean them out of the
+// notification inbox at render time. Covers entries already written by older
+// pushes without needing a backend change.
+const stripEmoji = (s) => String(s == null ? "" : s)
+  .replace(/[\u{1F000}-\u{1FAFF}\u{2600}-\u{27BF}\u{2B00}-\u{2BFF}\u{FE00}-\u{FE0F}\u{200D}]/gu, "")
+  .replace(/\s{2,}/g, " ")
+  .trim();
+
 const timeAgo = (isoStr) => {
   if(!isoStr) return "";
   const d = new Date(isoStr);
@@ -50527,8 +50537,8 @@ function App() {
           boxShadow:"0 8px 32px #0008", cursor:"pointer",
           display:"flex", flexDirection:"column", gap:2,
         }}>
-          <div style={{fontWeight:700, fontSize:14}}>{pushToast.title}</div>
-          {pushToast.body && <div style={{fontSize:13, color:"#cbd5e1"}}>{pushToast.body}</div>}
+          <div style={{fontWeight:700, fontSize:14}}>{stripEmoji(pushToast.title)}</div>
+          {pushToast.body && <div style={{fontSize:13, color:"#cbd5e1"}}>{stripEmoji(pushToast.body)}</div>}
           {pushToast.jobId && <div style={{fontSize:11, color:"#94a3b8", marginTop:2}}>Tap to open →</div>}
         </div>
       )}
@@ -50678,12 +50688,12 @@ function App() {
                     <div style={{display:"flex",alignItems:"center",gap:7}}>
                       {!item.read && <span style={{width:7,height:7,borderRadius:99,background:C.accent,flexShrink:0}}/>}
                       <span style={{fontSize:12,fontWeight:item.read?600:800,color:C.text,flex:1,minWidth:0,
-                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.title||"Notification"}</span>
+                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{stripEmoji(item.title)||"Notification"}</span>
                       <span style={{fontSize:10,color:C.dim,flexShrink:0}}>{item.createdAt?timeAgo(item.createdAt):""}</span>
                     </div>
                     {item.body && (
                       <div style={{fontSize:11.5,color:item.read?C.dim:C.text,marginTop:3,lineHeight:1.35,
-                        paddingLeft:!item.read?14:0}}>{item.body}</div>
+                        paddingLeft:!item.read?14:0}}>{stripEmoji(item.body)}</div>
                     )}
                   </button>
                 ))}
