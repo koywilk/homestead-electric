@@ -119,6 +119,19 @@ service cloud.firestore {
       allow delete: if true;
     }
 
+    // ── NOTIFICATION INBOX ────────────────────────────────────────────────────
+    // Per-user in-app notification inbox: notifications/{userKey}/items/{id}.
+    // ONLY Cloud Functions create these (admin SDK bypasses rules), so client
+    // creates are denied. Clients may read, flip the read flag (and nothing
+    // else — enforced via affectedKeys), and delete (clear) their items.
+    // Reads open to match the rest of the app's posture (UI scopes by user).
+    match /notifications/{userKey}/items/{itemId} {
+      allow read: if true;
+      allow create: if false;
+      allow update: if request.resource.data.diff(resource.data).affectedKeys().hasOnly(['read']);
+      allow delete: if true;
+    }
+
     // ── EVERYTHING ELSE ───────────────────────────────────────────────────────
     // Deny all access to any other collection by default.
     match /{document=**} {

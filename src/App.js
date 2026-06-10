@@ -1,7 +1,7 @@
 // BUILD_v9_FIXED
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { initializeApp } from "firebase/app";
-import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, query, where, serverTimestamp } from "firebase/firestore";
+import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable } from "firebase/functions";
@@ -3092,6 +3092,7 @@ const NOTIF_CATEGORIES = [
   { label:"Job Assignments", items:[
     { key:"job_assigned",      label:"Job assigned to you",                  roles:["foreman","lead","crew"] },
     { key:"lead_assigned",     label:"Lead assigned to job",                 roles:["admin","manager","foreman"] },
+    { key:"punch_assigned",    label:"Punch item assigned to you",           roles:["admin","manager","foreman","lead","crew"] },
     { key:"quote_converted",   label:"Quote converted to job",               roles:["admin","manager"] },
   ]},
   { label:"Job Status", items:[
@@ -50275,6 +50276,33 @@ function App() {
     setPendingView(null);
   }, [pendingView, identity]);
 
+  // ── Notification inbox (bell) ──────────────────────────────────────────────
+  // Live feed of notifications/{userKey}/items — written by Cloud Functions for
+  // every nudge, so nothing is ever missed even when push/tokens fail. userKey
+  // mirrors the backend's inboxKeyOf: user.id, else a name slug for legacy users.
+  const inboxKey = identity ? (identity.id || String(identity.name || "").trim().toLowerCase().replace(/\s+/g, "_")) : null;
+  const [inboxItems, setInboxItems] = useState([]);
+  const [inboxOpen, setInboxOpen] = useState(false);
+  useEffect(() => {
+    if (!inboxKey) { setInboxItems([]); return; }
+    const qy = query(collection(db, "notifications", inboxKey, "items"), orderBy("createdAt", "desc"), limit(50));
+    return onSnapshot(qy,
+      snap => setInboxItems(snap.docs.map(d => ({ id: d.id, ...d.data() }))),
+      err => console.warn("[inbox] listener error", err));
+  }, [inboxKey]);
+  const inboxUnread = inboxItems.filter(i => !i.read).length;
+  const markInboxRead = useCallback((ids) => {
+    if (!inboxKey) return;
+    ids.forEach(id => updateDoc(doc(db, "notifications", inboxKey, "items", id), { read: true }).catch(() => {}));
+  }, [inboxKey]);
+  const openInboxItem = useCallback((item) => {
+    if (!item.read) markInboxRead([item.id]);
+    setInboxOpen(false);
+    if (item.jobId) { openJobById(item.jobId, item.section); return; }
+    if (item.view === "huddle" && can(identity, "settings.view")) setView("huddle");
+    else if (item.view === "cos" && can(identity, "cos.view")) setView("cos");
+  }, [identity, openJobById, markInboxRead]);
+
   // ── Listen for postMessage from SW (app was already open when notif tapped) ─
   useEffect(() => {
     const handler = e => {
@@ -50599,6 +50627,64 @@ function App() {
           </button>
         )}
         <div style={{marginLeft:"auto",flexShrink:0,display:"flex",alignItems:"center",gap:8}}>
+          {/* ── Notification inbox bell ── */}
+          <button onClick={()=>setInboxOpen(o=>!o)} title="Notifications"
+            style={{position:"relative",padding:"6px 9px",border:`1px solid ${C.border}`,borderRadius:99,
+              background:inboxOpen?`${C.accent}22`:"none",color:inboxUnread>0?C.text:C.dim,cursor:"pointer",
+              display:"inline-flex",alignItems:"center",flexShrink:0,fontFamily:"inherit"}}>
+            <Icon name="bell" size={14} stroke={2.25}/>
+            {inboxUnread>0 && (
+              <span style={{position:"absolute",top:-4,right:-4,minWidth:16,height:16,borderRadius:99,
+                background:"#dc2626",color:"#fff",fontSize:9,fontWeight:800,display:"inline-flex",
+                alignItems:"center",justifyContent:"center",padding:"0 4px",boxSizing:"border-box"}}>
+                {inboxUnread>9?"9+":inboxUnread}
+              </span>
+            )}
+          </button>
+          {inboxOpen && (
+            <>
+              <div onClick={()=>setInboxOpen(false)} style={{position:"fixed",inset:0,zIndex:9998}}/>
+              <div style={{position:"fixed",top:52,right:8,zIndex:9999,width:"min(380px, calc(100vw - 16px))",
+                maxHeight:"min(480px, calc(100vh - 70px))",overflowY:"auto",background:C.card,
+                border:`1px solid ${C.border}`,borderRadius:12,boxShadow:"0 12px 32px rgba(0,0,0,0.18)",padding:8}}>
+                <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",padding:"4px 8px 8px"}}>
+                  <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.06em",color:C.text,
+                    display:"inline-flex",alignItems:"center",gap:6}}>
+                    <Icon name="bell" size={12} stroke={2.5}/> NOTIFICATIONS
+                  </span>
+                  {inboxUnread>0 && (
+                    <button onClick={()=>markInboxRead(inboxItems.filter(i=>!i.read).map(i=>i.id))}
+                      style={{fontSize:11,color:C.accent,background:"none",border:"none",cursor:"pointer",
+                        fontFamily:"inherit",fontWeight:700,padding:"2px 4px"}}>
+                      Mark all read
+                    </button>
+                  )}
+                </div>
+                {inboxItems.length===0 && (
+                  <div style={{padding:"22px 12px",textAlign:"center",fontSize:12,color:C.dim}}>
+                    No notifications yet — nudges and reminders will land here.
+                  </div>
+                )}
+                {inboxItems.map(item=>(
+                  <button key={item.id} onClick={()=>openInboxItem(item)}
+                    style={{display:"block",width:"100%",textAlign:"left",padding:"9px 10px",marginBottom:2,
+                      border:"none",borderRadius:9,cursor:"pointer",fontFamily:"inherit",
+                      background:item.read?"transparent":`${C.accent}14`}}>
+                    <div style={{display:"flex",alignItems:"center",gap:7}}>
+                      {!item.read && <span style={{width:7,height:7,borderRadius:99,background:C.accent,flexShrink:0}}/>}
+                      <span style={{fontSize:12,fontWeight:item.read?600:800,color:C.text,flex:1,minWidth:0,
+                        overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{item.title||"Notification"}</span>
+                      <span style={{fontSize:10,color:C.dim,flexShrink:0}}>{item.createdAt?timeAgo(item.createdAt):""}</span>
+                    </div>
+                    {item.body && (
+                      <div style={{fontSize:11.5,color:item.read?C.dim:C.text,marginTop:3,lineHeight:1.35,
+                        paddingLeft:!item.read?14:0}}>{item.body}</div>
+                    )}
+                  </button>
+                ))}
+              </div>
+            </>
+          )}
           <span style={{fontSize:11,color:C.dim,background:C.surface,border:`1px solid ${C.border}`,
             borderRadius:99,padding:"4px 12px",whiteSpace:"nowrap"}}>
             {identity.name} · {ACCESS_LABELS[getAccess(identity)]||getAccess(identity)}

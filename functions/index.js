@@ -57,6 +57,41 @@ function coordUserOf(users, foremanName) {
   return (users || []).find(u => (u.name || "").toLowerCase() === String(fm.coordinator).toLowerCase()) || null;
 }
 
+// ── In-app notification inbox ────────────────────────────────────────────────
+// Every nudge is ALSO written to notifications/{userKey}/items so the app can
+// show a bell inbox that never depends on FCM tokens. Push stays best-effort;
+// the inbox is the guarantee. userKey = user.id, falling back to a name slug
+// for legacy users without ids (the client derives the same key from identity).
+const inboxKeyOf = (user) =>
+  (user && (user.id || String(user.name || "").trim().toLowerCase().replace(/\s+/g, "_"))) || null;
+
+async function logInboxNotif(user, { title, body, jobId, section, view }) {
+  const key = inboxKeyOf(user);
+  if (!key) return;
+  try {
+    await db.collection("notifications").doc(key).collection("items").add({
+      title:   title   || "",
+      body:    body    || "",
+      jobId:   jobId   || "",
+      section: section || "",
+      view:    view    || "",
+      createdAt: new Date().toISOString(),
+      read: false,
+    });
+  } catch (e) {
+    functions.logger.warn("[inbox] write failed", { user: user && user.name, error: e.message });
+  }
+}
+
+// Single delivery chokepoint: inbox write + every device token. Use this for
+// any user-level send so push and inbox can never drift apart.
+async function deliver(user, notif) {
+  if (!user) return;
+  const sends = getTokens(user).map(t => sendFCM(t, notif));
+  sends.push(logInboxNotif(user, notif));
+  await Promise.all(sends);
+}
+
 // Token error codes that mean the token is permanently dead and should be purged.
 const STALE_TOKEN_CODES = [
   "messaging/registration-token-not-registered",
@@ -241,13 +276,14 @@ exports.reNudge = functions.https.onCall(async (data) => {
   if (!user) return { ok: false, reason: "not-found", message: `${toName} isn't in the team list.` };
   if (!wantsNotif(user, key || "renudge")) return { ok: false, reason: "muted", message: `${user.name} has manual reminders turned off.` };
   const tokens = getTokens(user);
-  if (tokens.length === 0) return { ok: false, reason: "no-tokens", message: `${user.name} has no device registered for notifications.` };
-  await Promise.all(tokens.map(t => sendFCM(t, {
+  // Inbox write happens even with zero tokens — the reminder always lands
+  // in their in-app bell, push is best-effort on top.
+  await deliver(user, {
     title: title || "Reminder",
     body:  body  || "You have an open item that needs attention.",
     jobId: jobId || "",
     section: section || "",
-  })));
+  });
   return { ok: true, to: user.name, tokenCount: tokens.length };
 });
 
@@ -260,7 +296,7 @@ async function sendToName(name, notification) {
     return un === n || un.startsWith(n + " ") || n.startsWith(un.split(" ")[0]);
   });
   if (!user) return;
-  await Promise.all(getTokens(user).map(t => sendFCM(t, notification)));
+  await deliver(user, notification);
 }
 
 async function sendToRoles(roles, notification, excludeTokens = []) {
@@ -268,9 +304,10 @@ async function sendToRoles(roles, notification, excludeTokens = []) {
   const targets = users.filter(u => roles.includes(u.title) || roles.includes(u.role));
   const sends = [];
   for (const u of targets) {
-    for (const t of getTokens(u)) {
-      if (!excludeTokens.includes(t)) sends.push(sendFCM(t, notification));
-    }
+    // excludeTokens means "this person already got the direct send" — skip the
+    // whole user (push AND inbox) so nobody gets the same nudge twice.
+    if (getTokens(u).some(t => excludeTokens.includes(t))) continue;
+    sends.push(deliver(u, notification));
   }
   await Promise.all(sends);
 }
@@ -285,14 +322,14 @@ async function sendToJobCoordinator(foremanName, notification) {
   if (!coordName) return;
   const coord = users.find(u => (u.name || "").toLowerCase() === String(coordName).toLowerCase());
   if (!coord) return;
-  await Promise.all(getTokens(coord).map(t => sendFCM(t, notification)));
+  await deliver(coord, notification);
 }
 
 /** Convenience — send the same notification to a name + roles (deduped), with jobId/section. */
 async function notify(name, roles, notif, excludeTokens = []) {
   const nameTokens = name && name !== "Unassigned" ? await getTokenForName(name) : [];
   const tasks = [];
-  if (nameTokens.length) tasks.push(Promise.all(nameTokens.map(t => sendFCM(t, notif))));
+  if (name && name !== "Unassigned") tasks.push(sendToName(name, notif)); // deliver: inbox + tokens
   tasks.push(sendToRoles(roles, notif, [...excludeTokens, ...nameTokens]));
   await Promise.all(tasks);
 }
@@ -716,6 +753,59 @@ exports.onJobUpdate = functions.firestore
       }));
     }
 
+    // ── 11. Punch item assigned → the assignee ────────────────────────────
+    // Walks every punch item (rough/finish/QC phases × floors × general/
+    // hotcheck/rooms, plus return-trip punch lists) and diffs assignedTo by
+    // item id. Grouped: one push per person per save, so bulk-assigning ten
+    // items buzzes once ("10 punch items assigned to you"), not ten times.
+    // Gated per-user on the punch_assigned notification pref (opt-out).
+    {
+      const flatPunch = (j) => {
+        const out = [];
+        ["roughPunch", "finishPunch", "qcPunch"].forEach(pk => {
+          const ph = j[pk]; if (!ph) return;
+          ["upper", "main", "basement"].forEach(fk => {
+            const fl = ph[fk] || {};
+            (fl.general  || []).forEach(i => i && out.push(i));
+            (fl.hotcheck || []).forEach(i => i && out.push(i));
+            (fl.rooms    || []).forEach(r => (r && r.items || []).forEach(i => i && out.push(i)));
+          });
+        });
+        (j.returnTrips || []).forEach(rt => (rt && rt.punch || []).forEach(i => i && out.push(i)));
+        return out;
+      };
+      const prevById = {};
+      flatPunch(before).forEach(i => { if (i.id) prevById[i.id] = i; });
+      const newlyAssigned = {}; // assignee name → [items]
+      flatPunch(after).forEach(i => {
+        if (!i || !i.id || i.done) return;
+        const a = String(i.assignedTo || "").trim();
+        if (!a || a === "Unassigned") return;
+        const prev = prevById[i.id];
+        if (prev && String(prev.assignedTo || "").trim() === a) return; // unchanged
+        (newlyAssigned[a] = newlyAssigned[a] || []).push(i);
+      });
+      const assignees = Object.keys(newlyAssigned);
+      if (assignees.length) {
+        const users = await getUsers();
+        for (const a of assignees) {
+          const an = a.toLowerCase();
+          const u = users.find(x => {
+            const un = (x.name || "").toLowerCase();
+            return un === an || un.startsWith(an + " ") || an.startsWith(un.split(" ")[0]);
+          });
+          if (!u || !wantsNotif(u, "punch_assigned")) continue;
+          const items = newlyAssigned[a];
+          const firstText = String(items[0].text || "").replace(/<[^>]*>/g, "").trim().slice(0, 80);
+          const body = items.length === 1
+            ? `Punch item assigned to you on ${name}: ${firstText || "open item"}`
+            : `${items.length} punch items assigned to you on ${name}`;
+          functions.logger.info("[onJobUpdate] punch assigned — sending", { jobId, name, assignee: u.name, count: items.length });
+          tasks.push(deliver(u, { title: "🔧 Punch Assigned", body, jobId, section: "punch" }));
+        }
+      }
+    }
+
     await Promise.all(tasks);
     return null;
   });
@@ -932,7 +1022,7 @@ async function sendHuddleNotif(onlyUserId) {
     if (!cu) continue;
     if (onlyUserId && cu.id !== onlyUserId) continue;
     recipients++;
-    for (const t of getTokens(cu)) sends.push(sendFCM(t, notif));
+    sends.push(deliver(cu, notif));
   }
   await Promise.all(sends);
   functions.logger.info("[huddleNotif] sent", { coordinators: coordNames, recipients, onlyUserId: onlyUserId || null });
@@ -1026,7 +1116,7 @@ exports.dailyRtChase = functions.pubsub
     const sends = [];
     Object.values(byCoord).forEach(({ coord, count }) => {
       const notif = { title: "🔁 Return trips waiting", body: `${count} unscheduled return trip${count !== 1 ? "s" : ""} in your book need scheduling.` };
-      getTokens(coord).forEach(t => sends.push(sendFCM(t, notif)));
+      sends.push(deliver(coord, notif));
     });
     await Promise.all(sends);
     functions.logger.info("[dailyRtChase] ran", { coordinators: Object.keys(byCoord).length });
@@ -4455,30 +4545,34 @@ exports.scheduledSimproPOSync = functions
 // the CO's status in the APP to approved/denied. Read-only against Simpro —
 // never writes a single byte back to Simpro.
 //
-// Authoritative signal is the quote's **Stage**, NOT its Status.Name. Real-tenant
-// data proved Status.Name unreliable: quote 2827 was Stage "Approved" while its
-// Status.Name still read "Quote: Sent, Pending Response". So we map on Stage:
+// Authoritative signal is the quote's **Status.Name** (the colored status label
+// in Simpro), NOT its Stage. Stage flips to "Approved" early in the quote
+// lifecycle and is NOT customer approval — trusting it mass-approved every CO
+// on 2026-06-09. Status.Name is the human-meaningful workflow label and is the
+// reliable signal on this tenant (confirmed by Koy 2026-06-09):
 //
-//   Stage "Approved"             → CO "approved"
-//   Stage "Archived"             → CO "denied"   (quote was killed)
-//   Stage "InProgress"/"Complete"→ no-op (still awaiting the customer)
-//   anything else / unknown      → no-op + logged so we can learn new values
+//   Status.Name "Quote - Convert to Job"        → CO "approved" (customer accepted)
+//   Status.Name "Quote - Archive Quote"         → CO "denied"   (customer declined / killed)
+//   Status.Name "Quote: Sent, Pending Response" → CO "pending"  (sent, awaiting; auto-marks sent if still needs_sending)
+//   anything else / unknown                     → no-op + logged so we can learn new labels
 //
 // SAFETY — why this can't wrongly kill a live CO:
 //   • Only COs currently "needs_sending" or "pending" are eligible. Once a CO
 //     is approved/scheduled/completed/converted/denied, the sync ignores it
-//     forever. So a quote that's Approved-then-Archived in its normal lifecycle
-//     never reaches the "denied" branch — its CO already left the eligible set.
+//     forever.
+//   • "approved"/"denied" only fire on the explicit accept/archive label — not
+//     on a vague stage — so a sent-but-unanswered quote stays pending.
 //   • Writes go through a per-job Firestore transaction that re-reads the live
 //     doc and only rewrites data.changeOrders, matching COs by id. Concurrent
 //     field edits to other COs (or other job fields) are preserved.
-//   • Each flip is stamped (coStatusSource:"simpro" + stage + timestamp) so the
-//     origin of every auto-change is auditable.
-const SIMPRO_STAGE_TO_CO = (stage) => {
-  const s = String(stage || "").trim().toLowerCase();
-  if (s === "approved") return "approved";
-  if (s === "archived") return "denied";
-  return null; // inprogress / complete / unknown → leave the CO alone
+//   • Each flip is stamped (coStatusSource:"simpro" + label + timestamp) so the
+//     origin of every auto-change is auditable and reversible.
+const SIMPRO_STATUS_TO_CO = (statusName) => {
+  const s = String(statusName || "").trim().toLowerCase();
+  if (s === "quote - convert to job")        return "approved";
+  if (s === "quote - archive quote")         return "denied";
+  if (s === "quote: sent, pending response") return "pending";
+  return null; // any other label → leave the CO alone
 };
 const CO_ELIGIBLE_FOR_SIMPRO_FLIP = (coStatus) => {
   const cur = String(coStatus || "needs_sending");
@@ -4492,6 +4586,24 @@ exports.scheduledSimproCoStatusSync = functions
   .onRun(async () => {
     const db = admin.firestore();
     const nowIso = new Date().toISOString();
+
+    // KILL SWITCH — DISABLED 2026-06-09. Simpro quote "Stage" is NOT a reliable
+    // customer-approval signal on this tenant: Stage reads "Approved" early in the
+    // quote lifecycle, so this auto-approved nearly every eligible CO. Off by
+    // default; the function stays deployed (no-op) so its schedule + history
+    // remain. To re-enable once a trustworthy signal exists, set
+    // settings/simproCoSyncStatus.enabled = true.
+    const cfgSnap = await db.doc("settings/simproCoSyncStatus").get().catch(() => null);
+    const enabled = !!(cfgSnap && cfgSnap.exists && cfgSnap.data() && cfgSnap.data().enabled === true);
+    if (!enabled) {
+      functions.logger.warn("scheduledSimproCoStatusSync: DISABLED (Stage signal unreliable) — no-op until settings/simproCoSyncStatus.enabled=true");
+      await db.doc("settings/simproCoSyncStatus").set(
+        { lastRunAt: nowIso, disabled: true, flipped: 0 },
+        { merge: true }
+      ).catch(() => {});
+      return null;
+    }
+
     const jobsSnap = await db.collection("jobs").get();
 
     // 1. Collect every eligible CO that carries a quote #. Shape per item:
@@ -4565,21 +4677,17 @@ exports.scheduledSimproCoStatusSync = functions
         lookupFailures.push({ quoteNo: t.quoteNo, jobId: t.jobId });
         return;
       }
-      const mapped = SIMPRO_STAGE_TO_CO(info.stage);
+      const mapped = SIMPRO_STATUS_TO_CO(info.statusName);
       if (mapped === null) {
-        // Awaiting customer (InProgress/Complete) — silent. Only log truly
-        // unrecognized stages so we can extend the mapping if Simpro adds one.
-        const s = String(info.stage || "").trim().toLowerCase();
-        if (s !== "inprogress" && s !== "complete") {
-          unknownStages.push({ quoteNo: t.quoteNo, stage: info.stage, statusName: info.statusName });
-        }
+        // Unrecognized status label — log so we can learn/extend the mapping.
+        unknownStages.push({ quoteNo: t.quoteNo, statusName: info.statusName, stage: info.stage });
         return;
       }
       if (mapped === t.currentStatus) return; // already there — no write
       (changesByJob[t.jobId] = changesByJob[t.jobId] || []).push({
         coId: t.coId,
         newStatus: mapped,
-        stage: info.stage,
+        statusLabel: info.statusName,
       });
     });
 
@@ -4611,13 +4719,13 @@ exports.scheduledSimproCoStatusSync = functions
               coId: co.id,
               from: co.coStatus || "needs_sending",
               to: want.newStatus,
-              stage: want.stage,
+              statusLabel: want.statusLabel,
             });
             return {
               ...co,
               coStatus: want.newStatus,
               coStatusSource: "simpro",
-              coStatusSyncedStage: want.stage,
+              coStatusSyncedStatus: want.statusLabel,
               coStatusSyncedAt: nowIso,
             };
           });
@@ -4658,5 +4766,35 @@ exports.scheduledSimproCoStatusSync = functions
       flips,
     });
     await db.doc("settings/simproCoSyncStatus").set(summary, { merge: true });
+    return null;
+  });
+
+// ─────────────────────────────────────────────────────────────
+// SCHEDULED — Notification inbox prune (Sundays 3am MT)
+// Deletes inbox items older than 30 days so the notifications
+// collection can't grow unbounded. Iterates the team list and
+// queries each user's items subcollection directly (collection-
+// scope query — no collection-group index needed). ADDITIVE:
+// new export only; touches nothing but old inbox docs.
+// ─────────────────────────────────────────────────────────────
+exports.notifInboxPrune = functions.pubsub
+  .schedule("0 3 * * 0")
+  .timeZone(TZ)
+  .onRun(async () => {
+    const users = await getUsers();
+    const cutoff = new Date(Date.now() - 30 * 86400000).toISOString();
+    let deleted = 0;
+    for (const u of users) {
+      const key = inboxKeyOf(u);
+      if (!key) continue;
+      const snap = await db.collection("notifications").doc(key).collection("items")
+        .where("createdAt", "<", cutoff).limit(400).get();
+      if (snap.empty) continue;
+      const batch = db.batch();
+      snap.docs.forEach(d => batch.delete(d.ref));
+      await batch.commit();
+      deleted += snap.size;
+    }
+    functions.logger.info("[notifInboxPrune] ran", { deleted });
     return null;
   });
