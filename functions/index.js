@@ -796,7 +796,7 @@ exports.onJobUpdate = functions.firestore
           });
           if (!u || !wantsNotif(u, "punch_assigned")) continue;
           const items = newlyAssigned[a];
-          const firstText = String(items[0].text || "").replace(/<[^>]*>/g, "").trim().slice(0, 80);
+          const firstText = _stripHtml(items[0].text).slice(0, 80);
           const body = items.length === 1
             ? `Punch item assigned to you on ${name}: ${firstText || "open item"}`
             : `${items.length} punch items assigned to you on ${name}`;
@@ -2639,7 +2639,16 @@ function _esc(s) {
 }
 
 function _stripHtml(s) {
-  return String(s || "").replace(/<[^>]*>/g, "").replace(/&nbsp;/g, " ").trim();
+  return String(s || "")
+    .replace(/<[^>]*>/g, " ")
+    .replace(/&nbsp;/g, " ")
+    .replace(/&amp;/g, "&")
+    .replace(/&lt;/g, "<")
+    .replace(/&gt;/g, ">")
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/\s+/g, " ")
+    .trim();
 }
 
 function _flatPunchWaiting(punch) {

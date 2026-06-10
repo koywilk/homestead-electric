@@ -9281,7 +9281,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
               {item.assignedTo && (
                 <RemindButton to={item.assignedTo}
                   title="Punch item reminder"
-                  body={(item.text||"").replace(/<[^>]*>/g,"").trim().slice(0,90) || "Open punch item needs attention."}
+                  body={stripHtml(item.text||"").slice(0,90) || "Open punch item needs attention."}
                   jobId={jobId} section="punch"/>
               )}
             </div>
@@ -26846,7 +26846,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   }}
                   onAddQuestion={(floor, text, source)=>{
                     const who = getIdentity();
-                    const q = {id:uid(), question:text, answer:"", done:false, addedBy:who?.name||"", source:source||""};
+                    const q = {id:uid(), question:text, answer:"", done:false, addedBy:who?.name||"", addedAt:new Date().toISOString(), source:source||""};
                     const qs = job.roughQuestions || {upper:[],main:[],basement:[]};
                     u({roughQuestions:{...qs, [floor]:[...(qs[floor]||[]), q]}});
                   }}
@@ -27147,7 +27147,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   }}
                   onAddQuestion={(floor, text, source)=>{
                     const who = getIdentity();
-                    const q = {id:uid(), question:text, answer:"", done:false, addedBy:who?.name||"", source:source||""};
+                    const q = {id:uid(), question:text, answer:"", done:false, addedBy:who?.name||"", addedAt:new Date().toISOString(), source:source||""};
                     const qs = job.finishQuestions || {upper:[],main:[],basement:[]};
                     u({finishQuestions:{...qs, [floor]:[...(qs[floor]||[]), q]}});
                   }}
@@ -28850,7 +28850,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
 
     const who = getIdentity();
 
-    onChange([...questions, {id:uid(), question:q, answer:"", done:false, addedBy:who?.name||""}]);
+    onChange([...questions, {id:uid(), question:q, answer:"", done:false, addedBy:who?.name||"", addedAt:new Date().toISOString()}]);
 
     setDraft("");
 
@@ -28890,7 +28890,9 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
             onSave={v=>upd(q.id,{question:v})}/>
 
           {q.source&&<span style={{fontSize:9,fontWeight:700,color:C.orange,background:`${C.orange}18`,border:`1px solid ${C.orange}33`,borderRadius:99,padding:'1px 7px',alignSelf:'flex-start',display:'inline-flex',alignItems:'center',gap:4}}><Icon name="mapPin" size={9}/> {q.source}</span>}
-          {q.addedBy&&<span style={{fontSize:9,color:C.dim}}>added by {q.addedBy}</span>}
+          {(q.addedBy||q.addedAt)&&<span style={{fontSize:9,color:C.dim}}>
+            {q.addedBy?`added by ${q.addedBy}`:"added"}{q.addedAt?` · ${new Date(q.addedAt).toLocaleDateString('en-US',{month:'short',day:'numeric'})} (${timeAgo(q.addedAt)})`:""}
+          </span>}
           {filterIds!=null&&<span style={{fontWeight:700,borderRadius:99,padding:'1px 6px',lineHeight:1.6,fontSize:9,
             background:filterIds.has(q.id)?'#dcfce7':'#f3f4f6',
             color:filterIds.has(q.id)?'#16a34a':'#9ca3af',alignSelf:'flex-start'}}>
