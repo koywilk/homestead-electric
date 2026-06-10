@@ -3124,6 +3124,9 @@ const NOTIF_CATEGORIES = [
     { key:"reminder_prep",     label:"Prep incomplete reminder",             roles:["admin","manager"] },
     { key:"reminder_po",       label:"Daily PO reminder (1 PM weekdays)",    roles:["lead"] },
     { key:"reminder_daily",    label:"Daily update reminder (4:30 PM)",      roles:["lead"] },
+    { key:"daily_update_missing", label:"No daily update logged today",      roles:["foreman"] },
+    { key:"stale_job",         label:"Stale job (no update in 5+ days)",     roles:["admin","manager","foreman"] },
+    { key:"book_digest",       label:"Morning book digest (needs attention)", roles:["admin","manager"] },
   ]},
 ];
 

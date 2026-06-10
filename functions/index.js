@@ -92,6 +92,13 @@ async function deliver(user, notif) {
   await Promise.all(sends);
 }
 
+// deliver() but gated on the recipient's per-person toggle. Used by the wave-2
+// nudges so anyone can mute a category without losing the rest.
+async function deliverIfWanted(user, key, notif) {
+  if (!user || !wantsNotif(user, key)) return;
+  await deliver(user, notif);
+}
+
 // Token error codes that mean the token is permanently dead and should be purged.
 const STALE_TOKEN_CODES = [
   "messaging/registration-token-not-registered",
@@ -1133,6 +1140,121 @@ exports.weeklySafetyReminder = functions.pubsub
     await sendToRoles(["foreman"], {
       title: "🦺 Toolbox talk", body: "Run this week's safety / toolbox talk with your crew.",
     });
+    return null;
+  });
+
+// ─────────────────────────────────────────────────────────────
+// WAVE-2 AUTO-NUDGES — book-routed + foreman. All read-only scans; delivery
+// goes through deliverIfWanted (push + inbox, gated on each person's toggle).
+// ADDITIVE: new scheduled exports only.
+// ─────────────────────────────────────────────────────────────
+const _dayInTZ = (s) => { if (!s) return ""; const d = new Date(s); return isNaN(d) ? String(s).slice(0, 10) : d.toLocaleDateString("en-CA", { timeZone: TZ }); };
+const _ageDays = (s) => { const t = Date.parse(s || ""); return Number.isFinite(t) ? (Date.now() - t) / 86400000 : 0; };
+const _isQuote = (j) => j.type === "quote";
+const _finishDone = (j) => (j.finishStatus === "complete") || (parseInt(j.finishStage, 10) === 100);
+const _activeJob = (j) => !_isQuote(j) && !j.tempPed && !_finishDone(j);
+
+// 1) Stale job — active job not touched in 5+ days → its foreman + coordinator.
+// Daily 7:30am weekdays. Digest (one push each), so a quiet week buzzes once.
+exports.dailyStaleJobChase = functions.pubsub
+  .schedule("30 7 * * 1-5")
+  .timeZone(TZ)
+  .onRun(async () => {
+    const users = await getUsers();
+    const snap = await db.collection("jobs").get();
+    const byForeman = {}; // name → count
+    const byCoord = {};    // coordId → {coord, count}
+    snap.forEach(d => {
+      const j = d.data()?.data || {};
+      if (!_activeJob(j)) return;
+      if (_ageDays(j.updated_at) < 5) return;
+      const fm = j.foreman;
+      if (fm && fm !== "Unassigned") byForeman[fm] = (byForeman[fm] || 0) + 1;
+      const coord = coordUserOf(users, fm);
+      if (coord) { if (!byCoord[coord.id]) byCoord[coord.id] = { coord, count: 0 }; byCoord[coord.id].count++; }
+    });
+    const sends = [];
+    Object.entries(byForeman).forEach(([fm, count]) => {
+      const u = users.find(x => (x.name || "").toLowerCase() === fm.toLowerCase());
+      if (u) sends.push(deliverIfWanted(u, "stale_job", { title: "🕸️ Stale job", body: `${count} of your job${count !== 1 ? "s have" : " has"} had no update in 5+ days.` }));
+    });
+    Object.values(byCoord).forEach(({ coord, count }) => {
+      sends.push(deliverIfWanted(coord, "stale_job", { title: "🕸️ Stale jobs in your book", body: `${count} job${count !== 1 ? "s" : ""} in your book ${count !== 1 ? "have" : "has"} gone quiet for 5+ days.` }));
+    });
+    await Promise.all(sends);
+    functions.logger.info("[dailyStaleJobChase] ran", { foremen: Object.keys(byForeman).length, coordinators: Object.keys(byCoord).length });
+    return null;
+  });
+
+// 2) Daily-update missing — active job with a foreman but no daily update logged
+// TODAY → that foreman. 4:45pm weekdays (after the 4:30 lead reminder). Digest.
+exports.dailyUpdateMissing = functions.pubsub
+  .schedule("45 16 * * 1-5")
+  .timeZone(TZ)
+  .onRun(async () => {
+    const users = await getUsers();
+    const today = new Date().toLocaleDateString("en-CA", { timeZone: TZ });
+    const snap = await db.collection("jobs").get();
+    const byForeman = {};
+    snap.forEach(d => {
+      const j = d.data()?.data || {};
+      if (!_activeJob(j)) return;
+      if (parseInt(j.roughStage, 10) === 0 && !j.roughStatus) return; // not started yet — no crew on site
+      const fm = j.foreman;
+      if (!fm || fm === "Unassigned") return;
+      const loggedToday = (j.dailyUpdates || []).some(u => u && (_dayInTZ(u.postedAt || u.date) === today));
+      if (loggedToday) return;
+      byForeman[fm] = (byForeman[fm] || 0) + 1;
+    });
+    const sends = [];
+    Object.entries(byForeman).forEach(([fm, count]) => {
+      const u = users.find(x => (x.name || "").toLowerCase() === fm.toLowerCase());
+      if (u) sends.push(deliverIfWanted(u, "daily_update_missing", { title: "📝 Daily update", body: `${count} of your active job${count !== 1 ? "s have" : " has"} no update logged today.` }));
+    });
+    await Promise.all(sends);
+    functions.logger.info("[dailyUpdateMissing] ran", { foremen: Object.keys(byForeman).length });
+    return null;
+  });
+
+// 3) Book digest — each coordinator gets a morning count of jobs in their book
+// that need attention (open punch / unscheduled RT / pending CO / open Q).
+// 6:50am weekdays (just after the 6:30 Huddle nudge).
+exports.dailyBookDigest = functions.pubsub
+  .schedule("50 6 * * 1-5")
+  .timeZone(TZ)
+  .onRun(async () => {
+    const users = await getUsers();
+    const CO_DONE = new Set(["completed", "complete", "approved", "denied", "converted"]);
+    const punchOpen = (ph) => {
+      if (!ph) return false;
+      return ["upper", "main", "basement"].some(fk => {
+        const fl = ph[fk] || {};
+        return (fl.general || []).some(i => i && !i.done)
+          || (fl.hotcheck || []).some(i => i && !i.done)
+          || (fl.rooms || []).some(r => ((r && r.items) || []).some(i => i && !i.done));
+      });
+    };
+    const qOpen = (q) => q && ["upper", "main", "basement"].some(fk => (q[fk] || []).some(x => x && !x.done));
+    const needsAttention = (j) =>
+      punchOpen(j.roughPunch) || punchOpen(j.finishPunch) || punchOpen(j.qcPunch)
+      || (j.returnTrips || []).some(rt => rt && !rt.signedOff && !rt.rtScheduled && !rt.scheduledDate && (rt.scope || rt.date))
+      || (j.changeOrders || []).some(co => co && !CO_DONE.has(co.coStatus))
+      || qOpen(j.roughQuestions) || qOpen(j.finishQuestions);
+    const snap = await db.collection("jobs").get();
+    const byCoord = {};
+    snap.forEach(d => {
+      const j = d.data()?.data || {};
+      if (_isQuote(j) || j.tempPed) return;
+      if (!needsAttention(j)) return;
+      const coord = coordUserOf(users, j.foreman);
+      if (coord) { if (!byCoord[coord.id]) byCoord[coord.id] = { coord, count: 0 }; byCoord[coord.id].count++; }
+    });
+    const sends = [];
+    Object.values(byCoord).forEach(({ coord, count }) => {
+      sends.push(deliverIfWanted(coord, "book_digest", { title: "📋 Your book", body: `${count} job${count !== 1 ? "s" : ""} in your book need attention today.`, view: "today" }));
+    });
+    await Promise.all(sends);
+    functions.logger.info("[dailyBookDigest] ran", { coordinators: Object.keys(byCoord).length });
     return null;
   });
 
