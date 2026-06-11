@@ -3,6 +3,7 @@ import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "rea
 import { initializeApp } from "firebase/app";
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
+import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
 import { getFunctions, httpsCallable } from "firebase/functions";
 
@@ -69,6 +70,46 @@ const fieldinkApp = initializeApp({
 }, "fieldink");
 const fieldinkDb = getFirestore(fieldinkApp);
 const FIELDINK_VIEWER_BASE = "https://tracevault-pdf-markup.vercel.app/#/v/";
+
+// ── FieldInk job index (the ONE write this app makes to field-ink) ───────────
+// Folder-name inference kept missing plans (renamed job folders, plans outside
+// the matched tree). The robust contract: this app publishes a slim job list
+// into field-ink at ccjobs/index → FieldInk's share panel offers a "Which
+// job?" picker → the share doc carries ccJobId → job pages match by THAT id
+// first (folder matching stays as fallback). Anonymous auth in the field-ink
+// project (same mechanism FieldInk itself uses); rules there allow authed
+// read/write on ccjobs only.
+const fieldinkAuth = getAuth(fieldinkApp);
+let _fiAuthPromise = null;
+function ensureFieldinkAuth() {
+  if (fieldinkAuth.currentUser) return Promise.resolve(fieldinkAuth.currentUser);
+  if (!_fiAuthPromise) {
+    _fiAuthPromise = signInAnonymously(fieldinkAuth)
+      .then(c => c.user)
+      .catch(e => { _fiAuthPromise = null; console.warn("[fieldink] anon auth failed:", e?.message); return null; });
+  }
+  return _fiAuthPromise;
+}
+let _ccJobsLastHash = "";
+async function publishCcJobsIndex(jobs) {
+  try {
+    const slim = (jobs || [])
+      .filter(j => j && j.id != null && j.name && !j.deleted && !j.archivedAt && !j.tempPed)
+      .map(j => ({ id: String(j.id), name: String(j.name) }))
+      .sort((a, b) => a.name.localeCompare(b.name));
+    if (!slim.length) return;
+    // Hash-gated: identical list (the overwhelmingly common case) = no write.
+    const hash = JSON.stringify(slim);
+    let cached = ""; try { cached = localStorage.getItem("he_ccjobs_hash") || "" } catch {}
+    if (hash === _ccJobsLastHash || hash === cached) { _ccJobsLastHash = hash; return; }
+    const user = await ensureFieldinkAuth();
+    if (!user) return;
+    await setDoc(doc(fieldinkDb, "ccjobs", "index"), { jobs: slim, at: serverTimestamp() });
+    _ccJobsLastHash = hash;
+    try { localStorage.setItem("he_ccjobs_hash", hash) } catch {}
+    console.log(`[fieldink] published job index (${slim.length} jobs)`);
+  } catch (e) { console.warn("[fieldink] job index publish failed:", e?.message); }
+}
 
 // Debug helpers exposed to window so we can run one-off scripts from the
 // browser console (cloud-function calls, bulk data loads, etc.).
@@ -21715,19 +21756,33 @@ function FieldInkPlansSection({ folderIds, job, onUpdate }) {
   const [showHidden, setShowHidden] = useState(false);
 
   useEffect(() => {
-    if (!folderIds || folderIds.length === 0) { setPlans(null); return; }
+    const hasFolders = folderIds && folderIds.length > 0;
+    const jobId = job?.id != null ? String(job.id) : null;
+    if (!hasFolders && !jobId) { setPlans(null); return; }
     let cancelled = false;
     (async () => {
       try {
-        // Firestore `in` caps at 10 values per query — chunk the folder tree.
-        const chunks = [];
-        for (let i = 0; i < folderIds.length; i += 10) chunks.push(folderIds.slice(i, i + 10));
-        const results = await Promise.all(chunks.map(c =>
-          getDocs(query(collection(fieldinkDb, "shares"), where("jobFolderId", "in", c)))
-        ));
+        // PRIMARY: explicit assignment — shares stamped with this job's id in
+        // FieldInk's share panel (v307+). Survives folder renames/moves.
+        // FALLBACK: the original Drive-folder-tree inference, kept so legacy
+        // shares (and unassigned ones) still show. Results union by share id.
+        const queries = [];
+        if (jobId) queries.push(getDocs(query(collection(fieldinkDb, "shares"), where("ccJobId", "==", jobId))));
+        if (hasFolders) {
+          // Firestore `in` caps at 10 values per query — chunk the folder tree.
+          const chunks = [];
+          for (let i = 0; i < folderIds.length; i += 10) chunks.push(folderIds.slice(i, i + 10));
+          for (const c of chunks) queries.push(getDocs(query(collection(fieldinkDb, "shares"), where("jobFolderId", "in", c))));
+        }
+        const results = await Promise.all(queries);
         if (cancelled) return;
         const byId = new Map();
         for (const snap of results) snap.forEach(d => byId.set(d.id, { id: d.id, ...d.data() }));
+        // A share explicitly assigned to a DIFFERENT job must not show here
+        // just because it sits in this job's folder tree.
+        for (const [id, p] of [...byId]) {
+          if (p.ccJobId && jobId && String(p.ccJobId) !== jobId) byId.delete(id);
+        }
         const live = [...byId.values()]
           .filter(p => !p.revoked)
           .sort((a, b) => (b.updatedAt?.toMillis?.() || b.version || 0) - (a.updatedAt?.toMillis?.() || a.version || 0));
@@ -21738,9 +21793,9 @@ function FieldInkPlansSection({ folderIds, job, onUpdate }) {
       }
     })();
     return () => { cancelled = true; };
-  }, [JSON.stringify(folderIds)]);
+  }, [JSON.stringify(folderIds), job?.id]);
 
-  if (!folderIds || folderIds.length === 0 || plans === null) return null;
+  if (((!folderIds || folderIds.length === 0) && job?.id == null) || plans === null) return null;
 
   const hiddenIds = Array.isArray(job.hiddenPlanShares) ? job.hiddenPlanShares : [];
   const visible = plans.filter(p => !hiddenIds.includes(p.id));
@@ -22004,9 +22059,11 @@ function DriveFilesSection({ job, onUpdate }) {
       )}
 
       {/* FieldInk live plans — the marked-up, pin-tappable viewer links for
-          every plan in this job's folder tree that has an active share.
-          Renders nothing when the job has no live plans. */}
-      {folderId && !editingFolder && (
+          this job: explicitly-assigned shares (ccJobId, picked in FieldInk's
+          share panel — primary) plus anything in the job's Drive folder tree
+          (legacy fallback). Mounts even with NO Drive folder linked — jobs
+          without one could previously never show plans at all. */}
+      {!editingFolder && (
         <FieldInkPlansSection folderIds={treeFolderIds} job={job} onUpdate={onUpdate} />
       )}
 
@@ -44939,6 +44996,13 @@ const FEATURES_MD_INLINE = String.raw`
   - Search filter + expand/collapse
   - Suggest-a-feature form (writes to suggestions collection)
   - Suggestion inbox + triage (admin/manager only)
+  - Auto-maintained: every deploy adds the shipped feature here · 2026-06-10
+- **Notifications inbox (bell)** · shipped 2026-06-10 · SW v231 · in-app notification feed (everyone)
+  - Bell + unread badge in top nav
+  - Every nudge written to notifications/{userKey}/items — never missed even if push fails
+  - Tap to deep-link (job/section or view), mark-read + mark-all-read
+  - Weekly auto-prune of items older than 30 days
+  - Emoji stripped from in-app rendering (per no-emoji rule)
 - **Settings** · shipped · admin/manager only
 
 ## Job Detail
@@ -44961,6 +45025,7 @@ const FEATURES_MD_INLINE = String.raw`
   - Per-floor: upper, main, basement
   - Per-room (custom names) + general + hotcheck
   - Punch assignments (assignedTo) · shipped 2026-04-26 · SW v12
+  - Punch-assigned auto-nudge → assignee · shipped 2026-06-10 · SW v231 · grouped one push per person per save
   - Photos attachable per punch item
   - Convert punch → Return Trip
   - "Assigned" tab in foreman view (cross-job)
@@ -45007,6 +45072,7 @@ const FEATURES_MD_INLINE = String.raw`
   - Rough questions
   - Finish questions
   - GC answer map (for sharing)
+  - Asked-date stamp (addedAt) shown per question · shipped 2026-06-10 · SW v232
 - **Plans tab** · shipped · plans documents per job
 - **Drive Files** · shipped · Drive folder sync + uploads
 - **Home Runs (panels)** · shipped · per-floor home runs + breaker counts
@@ -48950,6 +49016,11 @@ function App() {
             const updated = loaded.find(j => j.id === prev.id);
             return updated ? normalizeJob(updated) : prev;
           });
+
+          // Publish the slim job index to FieldInk (hash-gated inside, so an
+          // unchanged job list writes nothing). Delayed off the snapshot so it
+          // never competes with the UI work above.
+          setTimeout(() => publishCcJobsIndex(loaded), 8000);
 
           // Auto-advance: one-time — if rough complete and finish has no status for 60+ days,
           // set finish to "waiting_date" so the "Get Finish Start Date" task fires
