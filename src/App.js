@@ -93,10 +93,29 @@ function ensureFieldinkAuth() {
 let _ccJobsLastHash = "";
 async function publishCcJobsIndex(jobs) {
   try {
+    // Only deleted/archived are excluded — tempPed and quickJob are REAL jobs
+    // (a new build starts as a temp ped). Diagnostic breakdown logs exactly
+    // what got dropped and why, so "not all jobs are showing" is answerable
+    // from one console line instead of guesswork.
+    const drop = { noId: [], noName: [], deleted: 0, archived: 0 };
     const slim = (jobs || [])
-      .filter(j => j && j.id != null && j.name && !j.deleted && !j.archivedAt && !j.tempPed)
-      .map(j => ({ id: String(j.id), name: String(j.name) }))
-      .sort((a, b) => a.name.localeCompare(b.name));
+      .filter(j => {
+        if (!j) return false;
+        if (j.id == null) { drop.noId.push(j.name || "(unnamed)"); return false; }
+        if (!j.name) { drop.noName.push(String(j.id)); return false; }
+        if (j.deleted) { drop.deleted++; return false; }
+        if (j.archivedAt) { drop.archived++; return false; }
+        return true;
+      })
+      .map(j => ({ id: String(j.id), name: String(j.name), number: String(j.simproNo || j.number || j.jobNumber || "") }))
+      // Newest job numbers first (that's how Koy thinks of the active list),
+      // un-numbered jobs after, alphabetical within each group.
+      .sort((a, b) => {
+        const an = parseInt(a.number, 10), bn = parseInt(b.number, 10);
+        if (!isNaN(an) && !isNaN(bn) && an !== bn) return bn - an;
+        if (!isNaN(an) !== !isNaN(bn)) return isNaN(an) ? 1 : -1;
+        return a.name.localeCompare(b.name);
+      });
     if (!slim.length) return;
     // Hash-gated: identical list (the overwhelmingly common case) = no write.
     const hash = JSON.stringify(slim);
@@ -107,7 +126,10 @@ async function publishCcJobsIndex(jobs) {
     await setDoc(doc(fieldinkDb, "ccjobs", "index"), { jobs: slim, at: serverTimestamp() });
     _ccJobsLastHash = hash;
     try { localStorage.setItem("he_ccjobs_hash", hash) } catch {}
-    console.log(`[fieldink] published job index (${slim.length} jobs)`);
+    console.log(`[fieldink] published job index: ${slim.length} of ${(jobs || []).length} jobs`,
+      (drop.noId.length || drop.noName.length || drop.deleted || drop.archived)
+        ? { droppedNoId: drop.noId, droppedNoName: drop.noName, deleted: drop.deleted, archived: drop.archived }
+        : "(nothing dropped)");
   } catch (e) { console.warn("[fieldink] job index publish failed:", e?.message); }
 }
 
