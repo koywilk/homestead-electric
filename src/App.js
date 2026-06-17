@@ -21909,6 +21909,7 @@ function DriveFilesSection({ job, onUpdate }) {
   const [collapsedFolders, setCollapsedFolders] = useState(new Set());
   const [simproSync, setSimproSync] = useState(null); // null | 'loading' | {uploaded, skipped, errors}
   const [treeFolderIds, setTreeFolderIds] = useState([]);  // every folder id in the job's Drive tree — feeds FieldInk live plans
+  const [creating, setCreating] = useState(false);  // "Create Drive folder" button in flight
 
   const folderId = extractDriveFolderId(job.driveFolderId);
 
@@ -21942,6 +21943,33 @@ function DriveFilesSection({ job, onUpdate }) {
     const id = extractDriveFolderId(folderInput);
     onUpdate({ driveFolderId: id || folderInput.trim() });
     setEditingFolder(false);
+  };
+
+  // Manually create the Drive folder once the name is final. Folders are no
+  // longer auto-created mid-typing (see createJobDriveFolder in functions).
+  // The callable prefers an existing hand-made folder before making a new
+  // one, and persists driveFolderId server-side; we mirror it locally.
+  const handleCreateFolder = async () => {
+    if (creating) return;
+    if (!String(job.name || "").trim()) { setError("Give the job a name first."); return; }
+    setCreating(true);
+    setError("");
+    try {
+      const fn = httpsCallable(functions, "createJobDriveFolder");
+      const res = await fn({ jobId: job.id });
+      const fid = res?.data?.folderId;
+      if (fid) {
+        onUpdate({ driveFolderId: fid });
+        setFolderInput(fid);
+        setEditingFolder(false);
+      } else {
+        setError("Could not create the Drive folder.");
+      }
+    } catch (e) {
+      setError(e.message || "Could not create the Drive folder.");
+    } finally {
+      setCreating(false);
+    }
   };
 
   const handleRemoveFolder = async () => {
@@ -22050,17 +22078,33 @@ function DriveFilesSection({ job, onUpdate }) {
           no input) when job.driveFolderId is set but unparseable. See
           LOT 91 - KAMAS 2026-05-25 report. */}
       {(editingFolder || !folderId) && (
-        <div style={{ display: "flex", gap: 6, marginBottom: 12 }}>
-          <input value={folderInput} onChange={e => setFolderInput(e.target.value)}
-            placeholder="Paste Google Drive folder URL..."
-            style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7,
-              padding: "8px 12px", fontSize: 12, color: C.text, fontFamily: "inherit", outline: "none" }} />
-          <button onClick={handleSaveFolder} disabled={!folderInput.trim()}
-            style={{ background: C.blue, border: "none", borderRadius: 7, color: "#fff",
-              fontSize: 11, fontWeight: 600, padding: "8px 16px", cursor: "pointer",
-              opacity: folderInput.trim() ? 1 : 0.4, fontFamily: "inherit" }}>
-            Link Folder
-          </button>
+        <div style={{ marginBottom: 12 }}>
+          <div style={{ display: "flex", gap: 6 }}>
+            <input value={folderInput} onChange={e => setFolderInput(e.target.value)}
+              placeholder="Paste Google Drive folder URL..."
+              style={{ flex: 1, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7,
+                padding: "8px 12px", fontSize: 12, color: C.text, fontFamily: "inherit", outline: "none" }} />
+            <button onClick={handleSaveFolder} disabled={!folderInput.trim()}
+              style={{ background: C.blue, border: "none", borderRadius: 7, color: "#fff",
+                fontSize: 11, fontWeight: 600, padding: "8px 16px", cursor: "pointer",
+                opacity: folderInput.trim() ? 1 : 0.4, fontFamily: "inherit" }}>
+              Link Folder
+            </button>
+          </div>
+          {/* No folder yet? Make one now — only once the name is final.
+              Folders are no longer auto-created while you're still typing. */}
+          <div style={{ display: "flex", alignItems: "center", gap: 8, marginTop: 8 }}>
+            <span style={{ fontSize: 11, color: C.dim }}>No folder yet?</span>
+            <button onClick={handleCreateFolder} disabled={creating || !String(job.name || "").trim()}
+              style={{ background: "none", border: `1px solid ${C.green}55`, borderRadius: 7, color: C.green,
+                fontSize: 11, fontWeight: 600, padding: "6px 12px", fontFamily: "inherit",
+                cursor: creating ? "wait" : "pointer",
+                opacity: (creating || !String(job.name || "").trim()) ? 0.5 : 1,
+                display: "inline-flex", alignItems: "center", gap: 6 }}>
+              <Icon name="folder" size={12} />
+              {creating ? "Creating…" : "Create Drive folder"}
+            </button>
+          </div>
         </div>
       )}
 

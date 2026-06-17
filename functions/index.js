@@ -3887,22 +3887,16 @@ exports.ensureJobDriveFolder = functions.firestore
         folderId   = existing[0].id;
         folderName = existing[0].name;
       } else if (existing.length === 0) {
-        // 2. Create a new folder.
-        const wantName = _jobFolderName(after);
-        const createRes = await drive.files.create({
-          requestBody: {
-            name:     wantName,
-            parents:  [JOBS_PARENT_FOLDER_ID],
-            mimeType: "application/vnd.google-apps.folder",
-          },
-          fields: "id,name",
-          supportsAllDrives: true,
-        });
-        folderId   = createRes.data.id || "";
-        folderName = createRes.data.name || wantName;
-        createdNew = true;
+        // No matching folder yet. Do NOT create one here. This trigger
+        // fires on EVERY save to a job doc — including while the name is
+        // still being typed — so auto-creating produced folders named
+        // after a half-typed job name. Folder creation is now manual via
+        // the "Create Drive folder" button (createJobDriveFolder callable).
+        // This branch stays link-only: it still auto-links a folder Koy
+        // made by hand, which is never wrong.
+        return null;
       } else {
-        // Ambiguous — bail out and let nightlyDriveSync / human review resolve.
+        // Ambiguous — bail out and let human review resolve.
         functions.logger.info("ensureJobDriveFolder ambiguous match", {
           jobId, name: after.name, candidates: existing.map(e => e.name),
         });
@@ -3995,24 +3989,11 @@ exports.nightlyDriveSync = functions.pubsub
           });
           linked.push({ job: j.data.name, folder: matches[0].name });
         } else if (matches.length === 0) {
-          // Create a new folder for this job.
-          const wantName = _jobFolderName(j.data);
-          const drive = _driveClient();
-          const createRes = await drive.files.create({
-            requestBody: {
-              name:     wantName,
-              parents:  [JOBS_PARENT_FOLDER_ID],
-              mimeType: "application/vnd.google-apps.folder",
-            },
-            fields: "id,name",
-            supportsAllDrives: true,
-          });
-          await j.ref.update({
-            "data.driveFolderId": createRes.data.id,
-            updated_at: admin.firestore.FieldValue.serverTimestamp(),
-          });
-          created.push({ job: j.data.name, folder: createRes.data.name || wantName });
-          driveFolders.push({ id: createRes.data.id, name: createRes.data.name || wantName });
+          // No matching folder — leave it. Auto-creation is intentionally
+          // disabled (here and in ensureJobDriveFolder) so a job never gets
+          // a folder named after an unfinished name. Folders are created
+          // deliberately via the manual "Create Drive folder" button.
+          // This sweep stays link-only as a backstop for hand-made folders.
         } else {
           ambiguous.push({ job: j.data.name, folders: matches.map(m => m.name) });
         }
@@ -4047,6 +4028,94 @@ exports.nightlyDriveSync = functions.pubsub
 
     return null;
   });
+
+// ─────────────────────────────────────────────────────────────
+// CALLABLE — createJobDriveFolder
+// Manually create (or link to an existing) Drive folder for a job.
+// Triggered by the "Create Drive folder" button on Job Info, so the
+// folder is only ever made once the name is final — no more folders
+// named after a half-typed job name.
+// Idempotent: if the job already has a driveFolderId, returns it.
+// Prefers an existing hand-made folder before creating a new one.
+// Read-only on Drive except the one folder it creates; writes only the
+// single job's driveFolderId.
+// ─────────────────────────────────────────────────────────────
+exports.createJobDriveFolder = functions.https.onCall(async (data, context) => {
+  const jobId = String((data && data.jobId) || "").trim();
+  if (!jobId) {
+    throw new functions.https.HttpsError("invalid-argument", "Missing jobId");
+  }
+
+  const ref  = db.collection("jobs").doc(jobId);
+  const snap = await ref.get();
+  if (!snap.exists) {
+    throw new functions.https.HttpsError("not-found", "Job not found");
+  }
+
+  const job = snap.data()?.data || {};
+  if (job.driveFolderId) {
+    return { folderId: job.driveFolderId, alreadyLinked: true };
+  }
+
+  const name = String(job.name || "").trim();
+  if (!name || name.length < 3) {
+    throw new functions.https.HttpsError("failed-precondition", "Give the job a name first.");
+  }
+
+  let folderId = "", folderName = "", createdNew = false;
+  try {
+    const drive = _driveClient();
+
+    // Prefer an existing hand-made folder before creating a new one.
+    const listRes = await drive.files.list({
+      q: `'${JOBS_PARENT_FOLDER_ID}' in parents and mimeType='application/vnd.google-apps.folder' and trashed=false`,
+      fields: "files(id,name)",
+      pageSize: 200,
+      supportsAllDrives: true,
+      includeItemsFromAllDrives: true,
+    });
+    const existing = (listRes.data.files || []).filter(f => _namesMatch(f.name, name));
+
+    if (existing.length >= 1) {
+      folderId   = existing[0].id;
+      folderName = existing[0].name;
+    } else {
+      const wantName = _jobFolderName(job);
+      const createRes = await drive.files.create({
+        requestBody: {
+          name:     wantName,
+          parents:  [JOBS_PARENT_FOLDER_ID],
+          mimeType: "application/vnd.google-apps.folder",
+        },
+        fields: "id,name",
+        supportsAllDrives: true,
+      });
+      folderId   = createRes.data.id || "";
+      folderName = createRes.data.name || wantName;
+      createdNew = true;
+    }
+  } catch (e) {
+    functions.logger.error("createJobDriveFolder drive error", { jobId, error: e.message });
+    throw new functions.https.HttpsError("internal", e.message || "Drive request failed");
+  }
+
+  if (!folderId) {
+    throw new functions.https.HttpsError("internal", "Could not create the Drive folder.");
+  }
+
+  try {
+    await ref.update({
+      "data.driveFolderId": folderId,
+      updated_at: admin.firestore.FieldValue.serverTimestamp(),
+    });
+  } catch (e) {
+    functions.logger.error("createJobDriveFolder save error", { jobId, folderId, error: e.message });
+    throw new functions.https.HttpsError("internal", "Folder made but couldn't save the link — paste it manually.");
+  }
+
+  functions.logger.info("createJobDriveFolder done", { jobId, name, folderId, folderName, createdNew });
+  return { folderId, folderName, createdNew };
+});
 
 // ─────────────────────────────────────────────────────────────
 // CALLABLE — sendTestNotification
