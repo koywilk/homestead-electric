@@ -133,6 +133,52 @@ async function publishCcJobsIndex(jobs) {
   } catch (e) { console.warn("[fieldink] job index publish failed:", e?.message); }
 }
 
+// ── FieldInk HOMERUNS publish (office → field circuit lists) ──────────────────
+// The SECOND write this app makes to field-ink (after ccjobs/index). When the
+// office types a panel schedule here, publish its circuit IDENTITY (panel ·
+// slot · name · amps — NO geometry) to field-ink at cchomeruns/<jobId>, so the
+// FieldInk app can offer "place N from the office" rapid-mapping on the matching
+// job. Mirrors publishCcJobsIndex exactly: anon field-ink auth, per-job hash-
+// gate (identical panels = no write), fire-and-forget (never blocks the save,
+// never throws). Each circuit row carries a STABLE id (`<panelId>:<slotKey>`)
+// so the field side can round-trip it. REQUIRES the field-ink `cchomeruns`
+// rules block deployed; until then the write is denied and silently skipped.
+const _ccHomerunsHash = {};
+async function publishCcHomeruns(jobId, electricalPanels) {
+  try {
+    if (jobId == null) return;
+    const jid = String(jobId);
+    const panels = (electricalPanels || []).map(p => ({
+      id: String(p?.id ?? ""),
+      name: p?.label || "",
+      size: p?.size || "",
+      slotCount: p?.slotCount || 40,
+      circuits: Object.entries(p?.circuits || {})
+        .filter(([, c]) => c && (c.name || c.amps))
+        .map(([k, c]) => {
+          const m = String(k).match(/^(\d+)/);
+          const slot = m ? parseInt(m[1], 10) : null;
+          return {
+            id: `${p?.id ?? ""}:${k}`,
+            slots: slot != null ? [slot] : [],
+            name: c.name || "",
+            amperage: (c.amps != null && c.amps !== "") ? Number(c.amps) : null,
+            poles: 1,
+            source: "office",
+          };
+        }),
+    })).filter(p => p.id);
+    // Per-job hash gate: identical schedule = no write (the common case).
+    const hash = JSON.stringify(panels);
+    if (_ccHomerunsHash[jid] === hash) return;
+    const user = await ensureFieldinkAuth();
+    if (!user) return;
+    await setDoc(doc(fieldinkDb, "cchomeruns", jid), { panels, updatedAt: serverTimestamp(), updatedBy: "office" }, { merge: true });
+    _ccHomerunsHash[jid] = hash;
+    console.log(`[fieldink] published homeruns for job ${jid}: ${panels.reduce((n, p) => n + p.circuits.length, 0)} circuit(s)`);
+  } catch (e) { console.warn("[fieldink] homeruns publish failed (rules deployed?):", e?.message); }
+}
+
 // Debug helpers exposed to window so we can run one-off scripts from the
 // browser console (cloud-function calls, bulk data loads, etc.).
 //   _hsCall(name, params)       — invoke a callable cloud function
@@ -27353,7 +27399,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
             <HomeRunsTab homeRuns={job.homeRuns} panelCounts={job.panelCounts} jobId={job.id} jobName={job.name} jobAddress={job.address}
               electricalPanels={job.electricalPanels||[]}
-              onElectricalPanelsChange={v=>u({electricalPanels:v})}
+              onElectricalPanelsChange={v=>{u({electricalPanels:v}); try{publishCcHomeruns(job.id,v);}catch{}}}
               onHRChange={v=>u({homeRuns:v})} onCountChange={v=>u({panelCounts:v})}
               finishMaterials={job.finishMaterials} onMatChange={v=>u({finishMaterials:v})}
               breakerOverrides={job.breakerOverrides} onBreakersChange={v=>u({breakerOverrides:v})}/>
