@@ -45151,7 +45151,7 @@ const FEATURES_MD_INLINE = String.raw`
 - **Nav** · shipped · map view of jobs
 - **Upcoming** · shipped · jobs in the pipeline before they're full jobs
   - Progress photos per upcoming job (add in edit form, thumbnails on card + table) · shipped 2026-06-26 · SW v237
-- **Coordinator Book page** · shipped 2026-06-26 · SW v238 · tap an "X's Book" header band on Home to see every job across all that coordinator's foremen in one spot, grouped by foreman then stage, with shared search/stage/flag filters
+- **Coordinator Book page** · shipped 2026-06-26 · SW v238 (decluttered v239) · "Show all jobs" button on each Home "X's Book" band opens a combined list of every job across that coordinator's foremen — flat by stage, foreman tag on each row, completed hidden behind a toggle, shared search/stage/flag filters
 - **Quotes** · shipped · proposed jobs awaiting conversion
 - **Walks** · shipped · quote walks tracking
 - **Tasks** · shipped · cross-job and manual tasks
@@ -50039,6 +50039,7 @@ function App() {
 
   const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
   const [activeBook, setActiveBook] = useState(null); // coordinator name whose whole book is open, or null
+  const [showBookCompleted, setShowBookCompleted] = useState(false); // book page: completed jobs hidden by default
   const openBook     = (coord) => { setActiveBook(coord); setActiveForeman(null); setView("book"); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const [crewView, setCrewView] = useState(null); // foreman name or null
   const [showUtilMenu, setShowUtilMenu] = useState(false);
@@ -51405,7 +51406,7 @@ function App() {
                         <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:_headerColor,lineHeight:1}}>
                           {_coordKey ? `${_coordKey}'s Book` : "No coordinator"}
                         </span>
-                        {_coordKey&&<span style={{marginLeft:"auto",fontSize:10,fontWeight:700,color:_headerColor,opacity:0.85}}>See all jobs →</span>}
+                        {_coordKey&&<button onClick={(e)=>{e.stopPropagation();openBook(_coordKey);}} style={{marginLeft:"auto",fontSize:11,fontWeight:700,color:"#fff",background:_headerColor,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Show all jobs →</button>}
                       </div>
                     )}
                   <div>
@@ -52137,7 +52138,7 @@ function App() {
               <button onClick={goHome} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,padding:"6px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>← Back</button>
               <span style={{width:10,height:10,borderRadius:"50%",background:bookColor,flexShrink:0}}/>
               <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:bookColor,lineHeight:1}}>{activeBook}'s Book</div>
-              <div style={{fontSize:11,color:C.dim}}>{bookForemen.length} foreman{bookForemen.length!==1?"":""} · {totalShown} job site{totalShown!==1?"s":""}</div>
+              <div style={{fontSize:11,color:C.dim}}>{bookForemen.length} {bookForemen.length===1?"foreman":"foremen"} · {totalShown} job site{totalShown!==1?"s":""}</div>
               <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
                 <span style={{fontSize:11,color:syncColor}}>{syncLabel}</span>
               </div>
@@ -52161,25 +52162,28 @@ function App() {
           <div style={{padding:"10px 26px 40px"}}>
             {bookForemen.length===0?(
               <div style={{textAlign:"center",padding:"60px 0",color:C.muted,fontSize:13}}>No foremen are assigned to {activeBook}'s book yet. Assign coordinators in Settings → Team.</div>
-            ):bookForemen.map(f=>{
-              const fJobs = jobs.filter(j=>matchesForeman(j,f)).filter(passFilters);
-              const fc = _foremanColors[f]||getPersonColor(f)||"#6b7280";
+            ):(()=>{
+              // Flat, by-stage across the whole book. No fc passed → each row shows
+              // its foreman tag. Completed hidden by default (biggest noise source);
+              // a toggle reveals them.
+              const bookJobs = jobs.filter(j=>bookForemen.some(f=>matchesForeman(j,f))).filter(passFilters);
+              const completedCount = bookJobs.filter(j=>parseStage(j.finishStage)===100).length;
+              const shown = showBookCompleted ? bookJobs : bookJobs.filter(j=>parseStage(j.finishStage)!==100);
               return (
-                <div key={f} style={{marginBottom:18}}>
-                  <div onClick={()=>openForeman(f)} style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",marginBottom:8,paddingBottom:6,borderBottom:`2px solid ${fc}33`}}>
-                    <span style={{width:9,height:9,borderRadius:"50%",background:fc,flexShrink:0}}/>
-                    <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:fc,lineHeight:1}}>{f}</span>
-                    <span style={{fontSize:11,color:C.dim}}>{fJobs.length} job{fJobs.length!==1?"s":""}</span>
-                    <span style={{marginLeft:"auto",fontSize:10,fontWeight:700,color:C.dim,opacity:0.7}}>Open foreman →</span>
-                  </div>
-                  {fJobs.length===0?(
-                    <div style={{fontSize:12,color:C.muted,fontStyle:"italic",padding:"2px 0 6px"}}>No jobs match the current filters.</div>
+                <>
+                  {shown.length===0?(
+                    <div style={{textAlign:"center",padding:"50px 0",color:C.muted,fontSize:13}}>No {showBookCompleted?"":"active "}jobs match the current filters.</div>
                   ):(
-                    <StageSectionList jobs={fJobs} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} fc={fc} startCollapsed={true}/>
+                    <StageSectionList jobs={shown} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} startCollapsed={true}/>
                   )}
-                </div>
+                  {completedCount>0&&(
+                    <button onClick={()=>setShowBookCompleted(v=>!v)} style={{marginTop:14,background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+                      {showBookCompleted?`Hide completed (${completedCount})`:`Show completed (${completedCount})`}
+                    </button>
+                  )}
+                </>
               );
-            })}
+            })()}
           </div>
         </div>
         );
