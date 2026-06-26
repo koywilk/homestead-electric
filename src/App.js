@@ -51406,7 +51406,7 @@ function App() {
                         <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:_headerColor,lineHeight:1}}>
                           {_coordKey ? `${_coordKey}'s Book` : "No coordinator"}
                         </span>
-                        {_coordKey&&<button onClick={(e)=>{e.stopPropagation();openBook(_coordKey);}} style={{marginLeft:"auto",fontSize:11,fontWeight:700,color:"#fff",background:_headerColor,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Show all jobs →</button>}
+                        {_coordKey&&<button onClick={(e)=>{e.stopPropagation();openBook(_coordKey);}} style={{fontSize:11,fontWeight:700,color:"#fff",background:_headerColor,border:"none",borderRadius:7,padding:"5px 12px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>Show all jobs →</button>}
                       </div>
                     )}
                   <div>
