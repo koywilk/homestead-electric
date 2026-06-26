@@ -45153,6 +45153,7 @@ const FEATURES_MD_INLINE = String.raw`
 - **Upcoming** · shipped · jobs in the pipeline before they're full jobs
   - Progress photos per upcoming job (add in edit form, thumbnails on card + table) · shipped 2026-06-26 · SW v237
 - **Coordinator Book page** · shipped 2026-06-26 · SW v238 (decluttered v239) · "Show all jobs" button on each Home "X's Book" band opens a combined list of every job across that coordinator's foremen — flat by stage, foreman tag on each row, completed hidden behind a toggle, shared search/stage/flag filters
+- **Time Off** · shipped 2026-06-26 · SW v244 · crew request time off (More menu); admins + the requester's coordinator approve/deny; approved days flow onto the Crew Planner PTO calendar. Stored in settings/timeOffRequests (no rules change)
 - **Quotes** · shipped · proposed jobs awaiting conversion
 - **Walks** · shipped · quote walks tracking
 - **Tasks** · shipped · cross-job and manual tasks
@@ -45361,6 +45362,164 @@ function parseAppMapManifest(md) {
     }
   }
   return sections;
+}
+
+// ── Time Off ──────────────────────────────────────────────────────────────
+// Crew request time off; admins + the requester's coordinator approve/deny.
+// Stored in settings/timeOffRequests (settings is open read/write, so NO rules
+// change needed). Approving mirrors the entry into settings/crewPTO so it shows
+// on the existing Crew Planner calendar — same list the planner already reads.
+function TimeOffPage({ identity = null, users = [] }) {
+  const me = identity?.name || "";
+  const access = getAccess(identity);
+  const [requests, setRequests] = useState([]);
+  const [ptoList, setPtoList] = useState([]);
+  const [draft, setDraft] = useState({ start:"", end:"", note:"" });
+  const [submitting, setSubmitting] = useState(false);
+  const [showDecided, setShowDecided] = useState(false);
+
+  useEffect(() => {
+    const u1 = onSnapshot(doc(db,"settings","timeOffRequests"), s => setRequests(s.exists() ? (s.data().list||[]) : []), err => console.warn("timeOff listener:", err));
+    const u2 = onSnapshot(doc(db,"settings","crewPTO"), s => setPtoList(s.exists() ? (s.data().list||[]) : []));
+    return () => { u1&&u1(); u2&&u2(); };
+  }, []);
+
+  const _saveRequests = (list) => setDoc(doc(db,"settings","timeOffRequests"), { list, updatedAt:new Date().toISOString() });
+
+  // Coordinator detection + book scoping: a person's coordinator is their own
+  // (if foreman) or their foreman's (crew/lead via foremanId).
+  const coordinatorNames = useMemo(() => new Set((users||[]).filter(u=>(u.title||u.role)==="foreman" && u.coordinator).map(u=>u.coordinator)), [users]);
+  const iAmCoordinator = coordinatorNames.has(me);
+  const isAdmin = access === "admin";
+  const coordOfPerson = (name) => {
+    const u = (users||[]).find(x => x.name === name);
+    if (!u) return "";
+    if ((u.title||u.role)==="foreman" && u.coordinator) return u.coordinator;
+    if (u.foremanId) { const fm = (users||[]).find(x => x.id === u.foremanId); return (fm && fm.coordinator) || ""; }
+    return "";
+  };
+  const canApproveReq = (r) => isAdmin || (iAmCoordinator && coordOfPerson(r.name) === me);
+  const isApprover = isAdmin || iAmCoordinator;
+
+  const submitRequest = async () => {
+    if (!me) { toast.error("Pick who you are first."); return; }
+    if (!draft.start) { toast.error("Choose a start date."); return; }
+    setSubmitting(true);
+    try {
+      const entry = { id:"to_"+Math.random().toString(36).slice(2,9)+Date.now().toString(36),
+        name:me, start:draft.start, end:draft.end||draft.start, note:(draft.note||"").trim(),
+        status:"pending", requestedAt:new Date().toISOString() };
+      await _saveRequests([entry, ...requests]); // append onto the freshest subscribed list
+      setDraft({ start:"", end:"", note:"" });
+      toast.success("Time-off request submitted.");
+    } catch(e) { toast.error("Couldn't submit: "+(e?.message||"")); }
+    setSubmitting(false);
+  };
+
+  const decide = async (r, status) => {
+    try {
+      await _saveRequests(requests.map(x => x.id===r.id ? { ...x, status, decidedBy:me, decidedAt:new Date().toISOString() } : x));
+      if (status === "approved" && !(ptoList||[]).some(p => p.timeoffId === r.id)) {
+        const entry = { id:"pto_"+r.id, timeoffId:r.id, name:r.name, start:r.start, end:r.end||r.start, note:r.note||"Time off" };
+        await setDoc(doc(db,"settings","crewPTO"), { list:[...(ptoList||[]), entry], updatedAt:new Date().toISOString() });
+      }
+      if (status !== "approved") {
+        // pull any previously-mirrored PTO entry back out if it's being un-approved
+        const filtered = (ptoList||[]).filter(p => p.timeoffId !== r.id);
+        if (filtered.length !== (ptoList||[]).length) await setDoc(doc(db,"settings","crewPTO"), { list:filtered, updatedAt:new Date().toISOString() });
+      }
+      toast.success(status==="approved" ? "Approved — added to the calendar." : "Request "+status+".");
+    } catch(e) { toast.error("Update failed: "+(e?.message||"")); }
+  };
+
+  const deleteRequest = async (r) => {
+    if (!window.confirm("Remove this request?")) return;
+    try {
+      await _saveRequests(requests.filter(x => x.id !== r.id));
+      const filtered = (ptoList||[]).filter(p => p.timeoffId !== r.id);
+      if (filtered.length !== (ptoList||[]).length) await setDoc(doc(db,"settings","crewPTO"), { list:filtered, updatedAt:new Date().toISOString() });
+    } catch(e) { toast.error("Delete failed: "+(e?.message||"")); }
+  };
+
+  const myRequests = requests.filter(r => r.name === me);
+  const pending = requests.filter(r => r.status === "pending" && canApproveReq(r));
+  const decided = requests.filter(r => r.status !== "pending" && canApproveReq(r));
+  const fmtRange = (r) => (r.end && r.end !== r.start) ? `${r.start} → ${r.end}` : r.start;
+  const STATUS = {
+    pending: { bg:"#fef3c7", color:"#a16207", border:"#fde68a", label:"pending" },
+    approved:{ bg:"#dcfce7", color:"#15803d", border:"#bbf7d0", label:"approved" },
+    denied:  { bg:"#fee2e2", color:"#b91c1c", border:"#fecaca", label:"denied" },
+  };
+  const statusPill = (st) => { const c = STATUS[st]||STATUS.pending; return <span style={{fontSize:11, fontWeight:600, color:c.color, background:c.bg, border:`1px solid ${c.border}`, borderRadius:99, padding:"1px 9px"}}>{c.label}</span>; };
+  const card = (r, withActions) => (
+    <div key={r.id} style={{padding:"11px 0", borderBottom:`1px solid ${C.border}`}}>
+      <div style={{display:"flex", alignItems:"center", gap:8, flexWrap:"wrap"}}>
+        <span style={{fontSize:13, fontWeight:600, color:C.text}}>{r.name}</span>
+        <span style={{fontSize:12, color:C.dim, fontVariantNumeric:"tabular-nums"}}>{fmtRange(r)}</span>
+        {statusPill(r.status)}
+        <span style={{flex:1}}/>
+        {withActions && r.status==="pending" && (<>
+          <button onClick={()=>decide(r,"approved")} style={{padding:"4px 12px", fontSize:12, fontWeight:700, border:"none", borderRadius:7, background:"#15803d", color:"#fff", cursor:"pointer", fontFamily:"inherit"}}>Approve</button>
+          <button onClick={()=>decide(r,"denied")} style={{padding:"4px 12px", fontSize:12, fontWeight:600, border:`1px solid ${C.border}`, borderRadius:7, background:"transparent", color:C.dim, cursor:"pointer", fontFamily:"inherit"}}>Deny</button>
+        </>)}
+        {(r.name===me || isAdmin) && <button onClick={()=>deleteRequest(r)} style={{padding:"3px 8px", fontSize:11, border:`1px solid ${C.border}`, borderRadius:6, background:"transparent", color:C.muted, cursor:"pointer", fontFamily:"inherit"}}>Remove</button>}
+      </div>
+      {r.note && <div style={{fontSize:12, color:C.dim, marginTop:4}}>{r.note}</div>}
+      {r.decidedBy && r.status!=="pending" && <div style={{fontSize:10.5, color:C.muted, marginTop:3}}>{r.status} by {r.decidedBy}{r.decidedAt?` · ${new Date(r.decidedAt).toLocaleDateString("en-US",{month:"short",day:"numeric"})}`:""}</div>}
+    </div>
+  );
+
+  return (
+    <div style={{padding:"18px 26px 60px", maxWidth:760, margin:"0 auto"}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif", fontSize:30, letterSpacing:"0.05em", color:C.text, marginBottom:4}}>TIME OFF</div>
+      <div style={{fontSize:12, color:C.dim, marginBottom:18}}>Request days off — your coordinator or the office approves, and approved days show on the crew schedule.</div>
+
+      {/* Request form */}
+      <div style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:"14px 16px", marginBottom:16}}>
+        <div style={{fontSize:14, fontWeight:600, marginBottom:10}}>Request time off{me?` — ${me}`:""}</div>
+        <div style={{display:"flex", gap:12, flexWrap:"wrap", marginBottom:10}}>
+          <div><div style={{fontSize:10, color:C.dim, marginBottom:3}}>Start</div><DateInp value={draft.start} onChange={e=>setDraft({...draft, start:e.target.value})}/></div>
+          <div><div style={{fontSize:10, color:C.dim, marginBottom:3}}>End <span style={{color:C.muted}}>(optional)</span></div><DateInp value={draft.end} onChange={e=>setDraft({...draft, end:e.target.value})}/></div>
+        </div>
+        <div style={{marginBottom:10}}><div style={{fontSize:10, color:C.dim, marginBottom:3}}>Reason / note <span style={{color:C.muted}}>(optional)</span></div>
+          <input type="text" value={draft.note} onChange={e=>setDraft({...draft, note:e.target.value})} placeholder="e.g. family trip, appointment…"
+            style={{width:"100%", padding:"7px 10px", fontSize:13, border:`1px solid ${C.border}`, borderRadius:7, background:C.bg, color:C.text, fontFamily:"inherit", boxSizing:"border-box"}}/>
+        </div>
+        <button onClick={submitRequest} disabled={!draft.start||submitting}
+          style={{padding:"8px 18px", fontSize:13, fontWeight:700, border:"none", borderRadius:8, background:(draft.start&&!submitting)?C.accent:C.bg, color:(draft.start&&!submitting)?"#000":C.muted, cursor:(draft.start&&!submitting)?"pointer":"not-allowed", fontFamily:"inherit"}}>
+          {submitting?"Submitting…":"Submit request"}
+        </button>
+      </div>
+
+      {/* Approver inbox */}
+      {isApprover && (
+        <div style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:"14px 16px", marginBottom:16}}>
+          <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:6}}>
+            <span style={{fontSize:14, fontWeight:600}}>Pending approvals</span>
+            <span style={{fontSize:11, color:"#a16207", background:"#fef3c7", border:"1px solid #fde68a", borderRadius:99, padding:"1px 8px"}}>{pending.length}</span>
+            <span style={{fontSize:11, color:C.muted}}>{isAdmin?"all crew":"your book"}</span>
+          </div>
+          {pending.length===0 ? <div style={{fontSize:13, color:C.dim, padding:"8px 0"}}>Nothing waiting on you.</div> : pending.map(r=>card(r, true))}
+          {decided.length>0 && (
+            <div style={{marginTop:6}}>
+              <div onClick={()=>setShowDecided(o=>!o)} style={{display:"flex", alignItems:"center", gap:8, padding:"8px 0 4px", cursor:"pointer", userSelect:"none"}}>
+                <span style={{fontSize:12, fontWeight:600, color:C.dim}}>Decided</span>
+                <span style={{fontSize:11, color:C.muted}}>{decided.length}</span>
+                <span style={{marginLeft:"auto", color:C.dim, transform:showDecided?"rotate(0)":"rotate(-90deg)", transition:"transform 0.15s"}}>▾</span>
+              </div>
+              {showDecided && decided.map(r=>card(r, false))}
+            </div>
+          )}
+        </div>
+      )}
+
+      {/* My requests */}
+      <div style={{background:C.card, border:`1px solid ${C.border}`, borderRadius:12, padding:"14px 16px"}}>
+        <div style={{fontSize:14, fontWeight:600, marginBottom:6}}>My requests</div>
+        {myRequests.length===0 ? <div style={{fontSize:13, color:C.dim, padding:"8px 0"}}>No requests yet.</div> : myRequests.map(r=>card(r, false))}
+      </div>
+    </div>
+  );
 }
 
 function AppMapSharePage({ identity = null } = {}) {
@@ -50945,6 +51104,7 @@ function App() {
             ...(can(identity,"quotes.view")?[{key:"quotes",label:"Quotes",icon:"fileText"}]:[]),
             {key:"walks",label:"Walks",icon:"clipboard"},
             {key:"tasks",label:"Tasks",icon:"check"},
+            {key:"timeoff",label:"Time Off",icon:"calendar"},
             ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors",icon:"hardHat"}]:[]),
           ];
           const moreActive = moreItems.some(i=>i.key===view);
@@ -52430,6 +52590,8 @@ function App() {
       )}
 
       {view==="nav"&&<NavView jobs={jobs}/>}
+
+      {view==="timeoff"&&<TimeOffPage identity={identity} users={users}/>}
 
       {view==="walks"&&(
         <QuoteWalksTab
