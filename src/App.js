@@ -45171,6 +45171,7 @@ const FEATURES_MD_INLINE = String.raw`
   - Suggest-a-feature form (writes to suggestions collection)
   - Suggestion inbox + triage (admin/manager only)
   - Auto-maintained: every deploy adds the shipped feature here · 2026-06-10
+  - What's New panel + NEW badges (30-day) + decluttered tree (status dots, quiet dates) · shipped 2026-06-26 · SW v242
 - **Notifications inbox (bell)** · shipped 2026-06-10 · SW v231 · in-app notification feed (everyone)
   - Bell + unread badge in top nav
   - Every nudge written to notifications/{userKey}/items — never missed even if push fails
@@ -45434,6 +45435,38 @@ function AppMapSharePage({ identity = null } = {}) {
     }
     return out;
   }, [sections]);
+
+  // ── "New" detection ──────────────────────────────────────────────
+  // A feature reads as NEW for 30 days after its ship date. Works for
+  // top-level items (parsed it.date) AND for dated sub-bullets (e.g. a new
+  // capability added under an existing feature, like upcoming progress photos).
+  const NEW_DAYS = 30;
+  const isNewDate = (d) => {
+    if (!d) return false;
+    const t = new Date(d).getTime();
+    if (isNaN(t)) return false;
+    const age = Date.now() - t;
+    return age <= NEW_DAYS * 86400000 && age >= -86400000; // within window, not far-future
+  };
+  const newItems = useMemo(() => {
+    const out = [];
+    const dateRe = /(\d{4}-\d{2}-\d{2})/;
+    for (const s of sections) for (const it of s.items) {
+      if (it.status === "shipped" && isNewDate(it.date)) {
+        out.push({ name: it.name, section: s.title, date: it.date, sw: it.sw, desc: it.desc });
+      }
+      for (const sub of (it.subs || [])) {
+        const m = sub.match(dateRe);
+        if (m && isNewDate(m[1])) {
+          const swm = sub.match(/SW\s*v?(\d+)/i);
+          const clean = sub.replace(/·\s*shipped\s*\d{4}-\d{2}-\d{2}.*$/i, "").replace(/·\s*SW\s*v?\d+.*$/i, "").trim();
+          out.push({ name: clean || it.name, section: s.title, parent: it.name, date: m[1], sw: swm ? ("v" + swm[1]) : null });
+        }
+      }
+    }
+    out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    return out;
+  }, [sections]);
   // Start with ALL sections collapsed — page is primarily about the suggest
   // form + inbox; tree is reference material people expand when they want it.
   useEffect(() => {
@@ -45594,6 +45627,29 @@ function AppMapSharePage({ identity = null } = {}) {
           </div>
         )}
 
+        {/* What's New — auto-collected recently shipped features (top-level + dated sub-features) */}
+        {!q && newItems.length > 0 && (
+          <div style={{background:C.card, border:`1px solid ${C.accent}55`, borderRadius:12, marginBottom:14, overflow:"hidden"}}>
+            <div style={{display:"flex", alignItems:"center", gap:8, padding:"11px 14px", background:`${C.accent}10`, borderBottom:`1px solid ${C.accent}33`}}>
+              <span style={{width:7,height:7,borderRadius:99,background:C.accent,flexShrink:0}}/>
+              <span style={{fontSize:13, fontWeight:700, letterSpacing:"0.04em", color:C.text}}>WHAT'S NEW</span>
+              <span style={{fontSize:11, color:C.dim}}>last 30 days · {newItems.length}</span>
+            </div>
+            <div style={{padding:"2px 14px 8px"}}>
+              {newItems.slice(0,12).map((n, i) => (
+                <div key={n.name+i} style={{display:"flex", alignItems:"baseline", gap:8, padding:"7px 0", borderBottom: i < Math.min(newItems.length,12)-1 ? `1px solid ${C.border}` : "none"}}>
+                  <span style={{fontSize:9, fontWeight:800, letterSpacing:"0.05em", color:"#fff", background:C.accent, borderRadius:5, padding:"2px 6px", flexShrink:0}}>NEW</span>
+                  <div style={{flex:1, minWidth:0}}>
+                    <span style={{fontSize:13.5, fontWeight:600, color:C.text}}>{n.parent ? `${n.parent}: ` : ""}{n.name}</span>
+                    <span style={{fontSize:11, color:C.muted, marginLeft:8}}>{n.section}</span>
+                  </div>
+                  <span style={{fontSize:11, color:C.dim, flexShrink:0, fontVariantNumeric:"tabular-nums"}}>{n.date}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        )}
+
         {/* Feature tree — reference material, all sections start collapsed */}
         <div style={{fontSize:12, color:C.dim, padding:"4px 0 10px", marginBottom:6}}>
           {isInApp ? "Every feature in the app, by area — click a section to expand." : "Every feature in the Homestead Electric app. Click a section to expand."}
@@ -45613,11 +45669,12 @@ function AppMapSharePage({ identity = null } = {}) {
                 <div style={{padding:"0 14px 12px 14px", borderTop:`1px solid ${C.border}`}}>
                   {visibleItems.map((it, i) => (
                     <div key={it.name+i} style={{padding:"8px 0", borderBottom: i < visibleItems.length-1 ? `1px solid ${C.border}` : "none"}}>
-                      <div style={{display:"flex", flexWrap:"wrap", alignItems:"center", gap:6}}>
+                      <div style={{display:"flex", flexWrap:"wrap", alignItems:"center", gap:7}}>
+                        <span title={it.status||""} style={{width:7,height:7,borderRadius:99,flexShrink:0,background: it.status==="shipped"?"#22c55e": it.status==="in-flight"?"#f59e0b": it.status==="planned"?"#94a3b8":"#cbd5e1"}}/>
                         <span style={{fontWeight:500}}>{it.name}</span>
-                        {it.status && <span style={badgeStyle(it.status)}>{it.status}</span>}
-                        {it.date && <span style={metaBadge}>{it.date}</span>}
-                        {it.sw && <span style={{...metaBadge, fontFamily:"ui-monospace, monospace", fontSize:10}}>{it.sw}</span>}
+                        {isNewDate(it.date) && <span style={{fontSize:9, fontWeight:800, letterSpacing:"0.05em", color:"#fff", background:C.accent, borderRadius:5, padding:"1px 6px"}}>NEW</span>}
+                        {it.status && it.status!=="shipped" && <span style={badgeStyle(it.status)}>{it.status}</span>}
+                        {it.date && <span style={{fontSize:11, color:C.muted, fontVariantNumeric:"tabular-nums"}}>{it.date}</span>}
                       </div>
                       {it.desc && <div style={{color:C.dim, fontSize:13, marginTop:2}}>{it.desc}</div>}
                       {it.subs && it.subs.length > 0 && (
