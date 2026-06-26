@@ -1,5 +1,6 @@
 // BUILD_v9_FIXED
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
+import { createPortal } from "react-dom";
 import { initializeApp } from "firebase/app";
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
@@ -50852,12 +50853,12 @@ function App() {
                   letterSpacing:"0.02em",display:"inline-flex",alignItems:"center",gap:5}}>
                 <Icon name="moreHoriz" size={13} stroke={2.25}/>More
               </button>
-              {moreOpen && (
+              {moreOpen && createPortal(
                 <>
-                  <div onClick={()=>setMoreOpen(false)} style={{position:"fixed",inset:0,zIndex:9998}}/>
+                  <div onClick={()=>setMoreOpen(false)} style={{position:"fixed",inset:0,zIndex:99998}}/>
                   <div style={{position:"fixed",top:morePos.top,right:morePos.right,minWidth:190,
                     background:C.card,border:`1px solid ${C.border}`,borderRadius:10,
-                    boxShadow:"0 8px 24px rgba(0,0,0,0.12)",zIndex:9999,padding:6,
+                    boxShadow:"0 8px 24px rgba(0,0,0,0.12)",zIndex:99999,padding:6,
                     display:"flex",flexDirection:"column",gap:2}}>
                     {moreItems.map(({key,label,icon})=>{
                       const active=view===key;
@@ -50872,7 +50873,8 @@ function App() {
                       );
                     })}
                   </div>
-                </>
+                </>,
+                document.body
               )}
             </div>
           );
