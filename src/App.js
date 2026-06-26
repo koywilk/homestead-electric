@@ -26413,6 +26413,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     return t + ['upper','main','basement'].reduce((a,fl)=>a + (qs[fl]||[]).filter(q=>q && !q.done && !((q.answer||'').trim())).length, 0);
   }, 0);
 
+  // Route the header punch/question pills to the Rough or Finish tab (both hold
+  // the punch list + questions for that phase). Prefer the phase that actually
+  // has open items; otherwise fall back to whichever stage the job is in.
+  const _phaseInProgress = (parseStage(job?.roughStage) >= 100) ? "Finish" : "Rough";
+  const _punchOpenIn = (key) => { const p = job?.[key]||{}; return countFloor(p.upper)+countFloor(p.main)+countFloor(p.basement)+((p.extras||[]).reduce((s,e)=>s+countFloor(p[e.key]||{}),0)); };
+  const punchTab = _punchOpenIn('roughPunch')>0 ? "Rough" : _punchOpenIn('finishPunch')>0 ? "Finish" : _phaseInProgress;
+  const _qOpenIn = (key) => { const qs=job?.[key]||{}; return ['upper','main','basement'].reduce((a,fl)=>a+(qs[fl]||[]).filter(q=>q&&!q.done&&!((q.answer||'').trim())).length,0); };
+  const questionTab = _qOpenIn('roughQuestions')>0 ? "Rough" : _qOpenIn('finishQuestions')>0 ? "Finish" : _phaseInProgress;
+
   // V2.4 — Scheduled-RT map for punch items. Builds {punchItemId → {date,
   // crew, rtId, phase}} from job.returnTrips, so PunchSection can show a
   // "📅 on DATE w/ CREW" badge next to items that are already on a scheduled
@@ -26592,8 +26601,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 QC Fail
               </span>
             )}
-            {openCount>0  &&<Pill label={`${openCount} open punch`} color={C.red} onClick={()=>setTab("Open Items")}/>}
-            {openQ>0      &&<Pill label={`${openQ} open question${openQ!==1?"s":""}`} color={C.blue} onClick={()=>setTab("Open Items")}/>}
+            {openCount>0  &&<Pill label={`${openCount} open punch`} color={C.red} onClick={()=>setTab(punchTab)}/>}
+            {openQ>0      &&<Pill label={`${openQ} open question${openQ!==1?"s":""}`} color={C.blue} onClick={()=>setTab(questionTab)}/>}
             {waitingCount>0&&<Pill label={`${waitingCount} waiting`} color="#ca8a04"/>}
 
             {pendingCOs>0 &&<Pill label={`${pendingCOs} CO pending`} color={C.orange} onClick={()=>setTab("Change Orders")}/>}
@@ -45152,7 +45161,7 @@ const FEATURES_MD_INLINE = String.raw`
   - Grouped by stage with collapsible sections
   - Search bar (job name + CO quote number)
   - Foreman filter via tabs
-  - Clickable pills: tap a status/count pill to jump to that section (job row → opens job to the tab; in-job header pills → switch tab); long-press a board pill to filter the board to matching jobs (removable chip) · shipped 2026-06-26 · SW v245
+  - Clickable pills: tap a status/count pill to jump to that section (job row → opens job to the tab; in-job header pills → switch tab); open-punch/open-question pills route to the Rough or Finish tab (whichever phase has the open items / the job is in); long-press a board pill to filter the board to matching jobs (removable chip) · shipped 2026-06-26 · SW v246
   - Stage filter (rough/finish/QC/etc.)
   - Flag-only toggle
   - Drag-to-reorder within stage
