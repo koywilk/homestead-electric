@@ -3902,13 +3902,28 @@ function EmailModal({ subject, body, onClose }) {
 
 // ── Atoms ─────────────────────────────────────────────────────
 
-const Pill = ({label,color}) => (
-
-  <span style={{fontSize:10,fontWeight:700,letterSpacing:"0.06em",padding:"2px 8px",borderRadius:99,
-
-    background:`${color}22`,color,border:`1px solid ${color}44`,whiteSpace:"nowrap"}}>{label}</span>
-
-);
+// Pill — display by default. Pass onClick to make it tappable (jumps to the
+// relevant section), and/or onHold for a ~450ms long-press (used to filter the
+// board). Interactive pills stop click propagation so they don't also trigger
+// the row/card they sit inside.
+const Pill = ({label, color, onClick, onHold, title}) => {
+  const holdRef = useRef(null);
+  const heldRef = useRef(false);
+  const interactive = !!(onClick || onHold);
+  const startHold = () => { if (!onHold) return; heldRef.current = false; holdRef.current = setTimeout(() => { heldRef.current = true; onHold(); }, 450); };
+  const clearHold = () => { if (holdRef.current) { clearTimeout(holdRef.current); holdRef.current = null; } };
+  return (
+    <span
+      onClick={interactive ? (e) => { e.stopPropagation(); if (heldRef.current) { heldRef.current = false; return; } onClick && onClick(); } : undefined}
+      onPointerDown={onHold ? startHold : undefined}
+      onPointerUp={onHold ? clearHold : undefined}
+      onPointerLeave={onHold ? clearHold : undefined}
+      title={title || (onHold ? "Tap to open · hold to filter the board" : (onClick ? "Tap to open" : undefined))}
+      style={{fontSize:10,fontWeight:700,letterSpacing:"0.06em",padding:"2px 8px",borderRadius:99,
+        background:`${color}22`,color,border:`1px solid ${color}44`,whiteSpace:"nowrap",
+        cursor: interactive ? "pointer" : "default", userSelect:"none"}}>{label}</span>
+  );
+};
 
 
 // ── InProgressModePill ────────────────────────────────────────
@@ -26577,24 +26592,24 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 QC Fail
               </span>
             )}
-            {openCount>0  &&<Pill label={`${openCount} open punch`} color={C.red}/>}
-            {openQ>0      &&<Pill label={`${openQ} open question${openQ!==1?"s":""}`} color={C.blue}/>}
+            {openCount>0  &&<Pill label={`${openCount} open punch`} color={C.red} onClick={()=>setTab("Open Items")}/>}
+            {openQ>0      &&<Pill label={`${openQ} open question${openQ!==1?"s":""}`} color={C.blue} onClick={()=>setTab("Open Items")}/>}
             {waitingCount>0&&<Pill label={`${waitingCount} waiting`} color="#ca8a04"/>}
 
-            {pendingCOs>0 &&<Pill label={`${pendingCOs} CO pending`} color={C.orange}/>}
+            {pendingCOs>0 &&<Pill label={`${pendingCOs} CO pending`} color={C.orange} onClick={()=>setTab("Change Orders")}/>}
 
             {(job.returnTrips||[]).filter(r=>!r.signedOff).length>0&&
 
-              <Pill label={`${(job.returnTrips||[]).filter(r=>!r.signedOff).length} return trip${(job.returnTrips||[]).filter(r=>!r.signedOff).length>1?"s":""} pending`} color={C.red}/>}
+              <Pill label={`${(job.returnTrips||[]).filter(r=>!r.signedOff).length} return trip${(job.returnTrips||[]).filter(r=>!r.signedOff).length>1?"s":""} pending`} color={C.red} onClick={()=>setTab("Return Trips")}/>}
 
             {qcWalkTotal>0&&(
               <Pill
                 label={qcWalkDone===qcWalkTotal
                   ? `✓ ${qcWalkTotal} QC resolved`
                   : `${qcWalkDone}/${qcWalkTotal} QC resolved`}
-                color={qcWalkDone===qcWalkTotal ? C.green : C.orange}/>
+                color={qcWalkDone===qcWalkTotal ? C.green : C.orange} onClick={()=>setTab("QC")}/>
             )}
-            {qcWalkTotal===0&&qcCount>0&&<Pill label={`${qcCount} QC item${qcCount!==1?"s":""}`} color={C.red}/>}
+            {qcWalkTotal===0&&qcCount>0&&<Pill label={`${qcCount} QC item${qcCount!==1?"s":""}`} color={C.red} onClick={()=>setTab("QC")}/>}
 
             
 
@@ -45137,6 +45152,7 @@ const FEATURES_MD_INLINE = String.raw`
   - Grouped by stage with collapsible sections
   - Search bar (job name + CO quote number)
   - Foreman filter via tabs
+  - Clickable pills: tap a status/count pill to jump to that section (job row → opens job to the tab; in-job header pills → switch tab); long-press a board pill to filter the board to matching jobs (removable chip) · shipped 2026-06-26 · SW v245
   - Stage filter (rough/finish/QC/etc.)
   - Flag-only toggle
   - Drag-to-reorder within stage
@@ -50285,6 +50301,7 @@ function App() {
   const [moreOpen, setMoreOpen] = useState(false);  // top-nav "More" dropdown
   const [morePos, setMorePos] = useState({top:0,right:8});  // fixed-pos anchor (nav has overflow:auto, can't use absolute)
   const [activeForeman, setActiveForeman] = useState(null);
+  const [pillFilter, setPillFilter] = useState(null); // {label, test(job)} — set by long-pressing a pill, filters the board
   // Lead "My Crew" landing — a lead now runs their own apprentice, so on login
   // drop them into their foreman's crew view instead of the full office board.
   // Reuses the existing foreman drilldown (view==="foreman" + activeForeman).
@@ -50307,7 +50324,7 @@ function App() {
   const openBook     = (coord) => { setActiveBook(coord); setActiveForeman(null); setView("book"); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const [crewView, setCrewView] = useState(null); // foreman name or null
   const [showUtilMenu, setShowUtilMenu] = useState(false);
-  const goHome            = () =>  { setView("home");           setActiveForeman(null); setActiveBook(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const goHome            = () =>  { setView("home");           setActiveForeman(null); setActiveBook(null); setSearch(""); setStageF("All"); setFlagOnly(false); setPillFilter(null); };
   const openSchedule      = () =>  { setView("schedule");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openUpcoming      = () =>  { setView("upcoming");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openTasks         = () =>  { setView("tasks");         setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
@@ -50492,7 +50509,9 @@ function App() {
 
       stageF==="finish" ? (fPct>0 && fPct<100) : true;
 
-    return ms&&mf&&mt;
+    const mp = !pillFilter || (()=>{ try { return pillFilter.test(j); } catch { return true; } })();
+
+    return ms&&mf&&mt&&mp;
 
   });
 
@@ -50679,12 +50698,12 @@ function App() {
                 <Icon name="alertTriangle" size={10} stroke={2.5}/> QC FAIL
               </span>
             )}
-            {hasRT&&<Pill label="Return trip needed" color="#dc2626"/>}
-            {prepAlert&&<Pill label="Redline plans need update" color="#dc2626"/>}
-            {hasRTSch&&!hasRT&&<Pill label="Return trip scheduled" color="#8b5cf6"/>}
-            {rs&&!(rs==="complete"&&fs&&fs!=="waiting_date"&&fs!=="date_confirmed")&&<Pill label={rs==="scheduled"&&job.roughStatusDate?"Rough: "+fmtDisplay(job.roughStatusDate):rs==="date_confirmed"&&job.roughStatusDate?"Rough: "+fmtDisplay(job.roughStatusDate):("Rough: "+(getStatusDef(ROUGH_STATUSES,rs).label||rs))} color={getStatusDef(ROUGH_STATUSES,rs).color||C.dim}/>}
-            {fs&&<Pill label={fs==="scheduled"&&job.finishStatusDate?"Finish: "+fmtDisplay(job.finishStatusDate):("Finish: "+(getStatusDef(FINISH_STATUSES,fs).label||fs))} color={getStatusDef(FINISH_STATUSES,fs).color||C.dim}/>}
-            {job.matterportStatus&&job.matterportStatus!=="complete"&&<Pill label={job.matterportStatus==="scheduled"&&job.matterportStatusDate?"Matterport: "+fmtDisplay(job.matterportStatusDate):("Matterport: "+(getStatusDef(MATTERPORT_STATUSES,job.matterportStatus).label||job.matterportStatus))} color={getStatusDef(MATTERPORT_STATUSES,job.matterportStatus).color||C.dim}/>}
+            {hasRT&&<Pill label="Return trip needed" color="#dc2626" onClick={()=>openJobById(job.id,"Return Trips")} onHold={()=>setPillFilter({label:"Return trip needed", test:j=>(j.returnTrips||[]).some(r=>!r.signedOff)})}/>}
+            {prepAlert&&<Pill label="Redline plans need update" color="#dc2626" onClick={()=>openJobById(job.id,"Plans & Links")} onHold={()=>setPillFilter({label:"Redline needs update", test:j=>j.prepStage===PREP_STAGE_ALERT})}/>}
+            {hasRTSch&&!hasRT&&<Pill label="Return trip scheduled" color="#8b5cf6" onClick={()=>openJobById(job.id,"Return Trips")}/>}
+            {rs&&!(rs==="complete"&&fs&&fs!=="waiting_date"&&fs!=="date_confirmed")&&<Pill label={rs==="scheduled"&&job.roughStatusDate?"Rough: "+fmtDisplay(job.roughStatusDate):rs==="date_confirmed"&&job.roughStatusDate?"Rough: "+fmtDisplay(job.roughStatusDate):("Rough: "+(getStatusDef(ROUGH_STATUSES,rs).label||rs))} color={getStatusDef(ROUGH_STATUSES,rs).color||C.dim} onClick={()=>openJobById(job.id,"Rough")} onHold={()=>setPillFilter({label:"Rough: "+(getStatusDef(ROUGH_STATUSES,rs).label||rs), test:j=>effRS(j)===rs})}/>}
+            {fs&&<Pill label={fs==="scheduled"&&job.finishStatusDate?"Finish: "+fmtDisplay(job.finishStatusDate):("Finish: "+(getStatusDef(FINISH_STATUSES,fs).label||fs))} color={getStatusDef(FINISH_STATUSES,fs).color||C.dim} onClick={()=>openJobById(job.id,"Finish")} onHold={()=>setPillFilter({label:"Finish: "+(getStatusDef(FINISH_STATUSES,fs).label||fs), test:j=>effFS(j)===fs})}/>}
+            {job.matterportStatus&&job.matterportStatus!=="complete"&&<Pill label={job.matterportStatus==="scheduled"&&job.matterportStatusDate?"Matterport: "+fmtDisplay(job.matterportStatusDate):("Matterport: "+(getStatusDef(MATTERPORT_STATUSES,job.matterportStatus).label||job.matterportStatus))} color={getStatusDef(MATTERPORT_STATUSES,job.matterportStatus).color||C.dim} onClick={()=>openJobById(job.id,"Plans & Links")}/>}
             {open>0   &&<Pill label={`${open} open`} color={C.red}/>}
 
             {pendCO>0 &&<Pill label={`${pendCO} CO`} color={C.orange}/>}
@@ -51379,6 +51398,15 @@ function App() {
 
 
       {/* ── HOME PAGE ── */}
+
+      {pillFilter && (view==="home"||view==="foreman"||view==="book") && (
+        <div style={{display:"flex",alignItems:"center",gap:8,padding:"8px 26px",background:`${C.accent}10`,borderBottom:`1px solid ${C.border}`,flexWrap:"wrap"}}>
+          <Icon name="flag" size={12} stroke={2.25}/>
+          <span style={{fontSize:12,color:C.dim}}>Showing only:</span>
+          <span style={{fontSize:12,fontWeight:700,color:C.text}}>{pillFilter.label}</span>
+          <button onClick={()=>setPillFilter(null)} style={{marginLeft:4,fontSize:11,fontWeight:700,color:"#fff",background:C.accent,border:"none",borderRadius:7,padding:"3px 10px",cursor:"pointer",fontFamily:"inherit"}}>Clear</button>
+        </div>
+      )}
 
       {view==="home"&&(
 
@@ -52394,7 +52422,8 @@ function App() {
           const mf = !flagOnly||j.flagged;
           const rPct=parseStage(j.roughStage), fPct=parseStage(j.finishStage);
           const mt = stageF==="All"?true:stageF==="rough"?(rPct>0&&rPct<100&&fPct===0):stageF==="between"?(rPct===100&&fPct===0):stageF==="finish"?(fPct>0&&fPct<100):true;
-          return ms&&mf&&mt;
+          const mp = !pillFilter || (()=>{ try { return pillFilter.test(j); } catch { return true; } })();
+          return ms&&mf&&mt&&mp;
         };
         const totalShown = jobs.filter(j=>bookForemen.some(f=>matchesForeman(j,f))).filter(passFilters).length;
         return (
