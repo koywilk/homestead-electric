@@ -45172,6 +45172,7 @@ const FEATURES_MD_INLINE = String.raw`
   - Suggestion inbox + triage (admin/manager only)
   - Auto-maintained: every deploy adds the shipped feature here · 2026-06-10
   - What's New panel + NEW badges (30-day) + decluttered tree (status dots, quiet dates) · shipped 2026-06-26 · SW v242
+  - Suggestions marked built auto-surface in What's New for everyone; inbox 'Built' items auto-collapse into their own section · shipped 2026-06-26 · SW v243
 - **Notifications inbox (bell)** · shipped 2026-06-10 · SW v231 · in-app notification feed (everyone)
   - Bell + unread badge in top nav
   - Every nudge written to notifications/{userKey}/items — never missed even if push fails
@@ -45381,15 +45382,19 @@ function AppMapSharePage({ identity = null } = {}) {
   // Inbox (admin/manager only) — live subscription
   const [suggestions, setSuggestions] = useState([]);
   const [inboxFilter, setInboxFilter] = useState("all");
+  const [builtInboxOpen, setBuiltInboxOpen] = useState(false); // built section collapsed by default
   useEffect(() => {
-    if (!canTriage) return;
+    // Load for ALL logged-in users (not just triagers): the admin inbox is
+    // still gated by canTriage in the UI, but everyone needs the built ones
+    // to populate the What's New panel.
+    if (!isInApp) return;
     const unsub = onSnapshot(collection(db, "suggestions"), snap => {
       const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
       list.sort((a, b) => (b.submittedAt || "").localeCompare(a.submittedAt || ""));
       setSuggestions(list);
     }, err => console.warn("suggestions listener error:", err));
     return unsub;
-  }, [canTriage]);
+  }, [isInApp]);
 
   const submitSuggestion = async () => {
     const text = suggText.trim();
@@ -45426,6 +45431,49 @@ function AppMapSharePage({ identity = null } = {}) {
     if (!window.confirm("Delete this suggestion?")) return;
     try { await deleteDoc(doc(db, "suggestions", id)); }
     catch (e) { toast.error("Delete failed: " + (e?.message || "")); }
+  };
+
+  // One inbox card — reused for the active list and the collapsed Built section.
+  const renderSuggestionCard = (s) => {
+    const statusColor = {
+      "new":      { bg:"#dbeafe", color:"#1d4ed8", border:"#bfdbfe" },
+      "reviewing":{ bg:"#fef3c7", color:"#a16207", border:"#fde68a" },
+      "planned":  { bg:"#ede9fe", color:"#6d28d9", border:"#ddd6fe" },
+      "built":    { bg:"#dcfce7", color:"#15803d", border:"#bbf7d0" },
+      "declined": { bg:"#f1f5f9", color:"#475569", border:"#cbd5e1" },
+    }[s.status || "new"];
+    const submitted = s.submittedAt ? new Date(s.submittedAt).toLocaleString("en-US", {month:"short", day:"numeric", hour:"numeric", minute:"2-digit"}) : "—";
+    return (
+      <div key={s.id} style={{padding:"10px 0", borderBottom:`1px solid ${C.border}`}}>
+        <div style={{fontSize:13, color:C.text, marginBottom:4, whiteSpace:"pre-wrap"}}>{s.text}</div>
+        <div style={{display:"flex", flexWrap:"wrap", alignItems:"center", gap:8, fontSize:11, color:C.dim, marginBottom:6}}>
+          <span>{s.submittedBy || "anonymous"} · {submitted}</span>
+          {s.category && <span style={{padding:"1px 6px", borderRadius:99, border:`1px solid ${C.border}`}}>{s.category}</span>}
+          <select
+            value={s.status || "new"}
+            onChange={e => updateSuggestionStatus(s.id, e.target.value)}
+            style={{padding:"2px 6px", fontSize:11, fontWeight:500, borderRadius:99,
+              border:`1px solid ${statusColor.border}`, background:statusColor.bg, color:statusColor.color,
+              cursor:"pointer"}}>
+            <option value="new">new</option>
+            <option value="reviewing">reviewing</option>
+            <option value="planned">planned</option>
+            <option value="built">built</option>
+            <option value="declined">declined</option>
+          </select>
+          <span style={{flex:1}}/>
+          <button onClick={() => deleteSuggestion(s.id)}
+            style={{padding:"2px 8px", fontSize:11, border:`1px solid ${C.border}`, borderRadius:6, background:"transparent", color:C.dim, cursor:"pointer"}}>Delete</button>
+        </div>
+        <input
+          type="text"
+          defaultValue={s.notes || ""}
+          placeholder="Notes (internal — only admins see this)…"
+          onBlur={e => { const v = e.target.value.trim(); if (v !== (s.notes || "")) updateSuggestionNotes(s.id, v); }}
+          style={{width:"100%", padding:"4px 8px", fontSize:12, border:`1px solid ${C.border}`, borderRadius:6, background:C.bg, color:C.text, fontFamily:"inherit", boxSizing:"border-box"}}
+        />
+      </div>
+    );
   };
 
   const counts = useMemo(() => {
@@ -45467,6 +45515,22 @@ function AppMapSharePage({ identity = null } = {}) {
     out.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
     return out;
   }, [sections]);
+
+  // Suggestions marked "built" in the last 30 days — surface them in What's New
+  // so the crew sees their ideas landed. updatedAt is stamped when status flips.
+  const builtNew = useMemo(() => {
+    return (suggestions || [])
+      .filter(s => s.status === "built" && isNewDate((s.updatedAt || s.submittedAt || "").slice(0, 10)))
+      .map(s => ({ id: s.id, name: (s.text || "").trim(), date: (s.updatedAt || s.submittedAt || "").slice(0, 10), by: s.submittedBy || "", kind: "suggestion" }))
+      .sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+  }, [suggestions]);
+
+  // Combined What's New feed: shipped features (from the manifest) + built suggestions.
+  const whatsNew = useMemo(() => {
+    const combined = [...newItems.map(n => ({ ...n, kind: "feature" })), ...builtNew];
+    combined.sort((a, b) => (b.date || "").localeCompare(a.date || ""));
+    return combined;
+  }, [newItems, builtNew]);
   // Start with ALL sections collapsed — page is primarily about the suggest
   // form + inbox; tree is reference material people expand when they want it.
   useEffect(() => {
@@ -45579,69 +45643,52 @@ function AppMapSharePage({ identity = null } = {}) {
             </div>
             {suggestions.length === 0 ? (
               <div style={{fontSize:13, color:C.dim, padding:"10px 0"}}>No suggestions yet. As people submit, they'll show up here.</div>
-            ) : (
-              suggestions
-                .filter(s => inboxFilter === "all" || (s.status || "new") === inboxFilter)
-                .map(s => {
-                  const statusColor = {
-                    "new":      { bg:"#dbeafe", color:"#1d4ed8", border:"#bfdbfe" },
-                    "reviewing":{ bg:"#fef3c7", color:"#a16207", border:"#fde68a" },
-                    "planned":  { bg:"#ede9fe", color:"#6d28d9", border:"#ddd6fe" },
-                    "built":    { bg:"#dcfce7", color:"#15803d", border:"#bbf7d0" },
-                    "declined": { bg:"#f1f5f9", color:"#475569", border:"#cbd5e1" },
-                  }[s.status || "new"];
-                  const submitted = s.submittedAt ? new Date(s.submittedAt).toLocaleString("en-US", {month:"short", day:"numeric", hour:"numeric", minute:"2-digit"}) : "—";
-                  return (
-                    <div key={s.id} style={{padding:"10px 0", borderBottom:`1px solid ${C.border}`}}>
-                      <div style={{fontSize:13, color:C.text, marginBottom:4, whiteSpace:"pre-wrap"}}>{s.text}</div>
-                      <div style={{display:"flex", flexWrap:"wrap", alignItems:"center", gap:8, fontSize:11, color:C.dim, marginBottom:6}}>
-                        <span>{s.submittedBy || "anonymous"} · {submitted}</span>
-                        {s.category && <span style={{padding:"1px 6px", borderRadius:99, border:`1px solid ${C.border}`}}>{s.category}</span>}
-                        <select
-                          value={s.status || "new"}
-                          onChange={e => updateSuggestionStatus(s.id, e.target.value)}
-                          style={{padding:"2px 6px", fontSize:11, fontWeight:500, borderRadius:99,
-                            border:`1px solid ${statusColor.border}`, background:statusColor.bg, color:statusColor.color,
-                            cursor:"pointer"}}>
-                          <option value="new">new</option>
-                          <option value="reviewing">reviewing</option>
-                          <option value="planned">planned</option>
-                          <option value="built">built</option>
-                          <option value="declined">declined</option>
-                        </select>
-                        <span style={{flex:1}}/>
-                        <button onClick={() => deleteSuggestion(s.id)}
-                          style={{padding:"2px 8px", fontSize:11, border:`1px solid ${C.border}`, borderRadius:6, background:"transparent", color:C.dim, cursor:"pointer"}}>Delete</button>
+            ) : (()=>{
+              const isAll = inboxFilter === "all";
+              // In the default "all" view, built items live in their own collapsed
+              // section so they don't take up space. Any explicit filter (incl.
+              // "built") just lists those inline.
+              const active = suggestions.filter(s => isAll ? (s.status || "new") !== "built" : (s.status || "new") === inboxFilter);
+              const built  = isAll ? suggestions.filter(s => (s.status || "new") === "built") : [];
+              return (
+                <>
+                  {active.length === 0 && built.length === 0 && (
+                    <div style={{fontSize:13, color:C.dim, padding:"10px 0"}}>Nothing matches this filter.</div>
+                  )}
+                  {active.map(renderSuggestionCard)}
+                  {isAll && built.length > 0 && (
+                    <div style={{marginTop:4}}>
+                      <div onClick={() => setBuiltInboxOpen(o => !o)}
+                        style={{display:"flex", alignItems:"center", gap:8, padding:"10px 0 6px", cursor:"pointer", userSelect:"none"}}>
+                        <span style={{fontSize:12, fontWeight:700, color:"#15803d"}}>Built</span>
+                        <span style={{fontSize:11, color:"#15803d", background:"#dcfce7", border:"1px solid #bbf7d0", borderRadius:99, padding:"1px 8px"}}>{built.length}</span>
+                        <span style={{fontSize:11, color:C.dim}}>{builtInboxOpen ? "shipped" : "shipped — tap to show"}</span>
+                        <span style={{marginLeft:"auto", color:C.dim, transform: builtInboxOpen ? "rotate(0)" : "rotate(-90deg)", transition:"transform 0.15s"}}>▾</span>
                       </div>
-                      <input
-                        type="text"
-                        defaultValue={s.notes || ""}
-                        placeholder="Notes (internal — only admins see this)…"
-                        onBlur={e => { const v = e.target.value.trim(); if (v !== (s.notes || "")) updateSuggestionNotes(s.id, v); }}
-                        style={{width:"100%", padding:"4px 8px", fontSize:12, border:`1px solid ${C.border}`, borderRadius:6, background:C.bg, color:C.text, fontFamily:"inherit", boxSizing:"border-box"}}
-                      />
+                      {builtInboxOpen && built.map(renderSuggestionCard)}
                     </div>
-                  );
-                })
-            )}
+                  )}
+                </>
+              );
+            })()}
           </div>
         )}
 
-        {/* What's New — auto-collected recently shipped features (top-level + dated sub-features) */}
-        {!q && newItems.length > 0 && (
+        {/* What's New — recently shipped features (manifest) + suggestions marked built */}
+        {!q && whatsNew.length > 0 && (
           <div style={{background:C.card, border:`1px solid ${C.accent}55`, borderRadius:12, marginBottom:14, overflow:"hidden"}}>
             <div style={{display:"flex", alignItems:"center", gap:8, padding:"11px 14px", background:`${C.accent}10`, borderBottom:`1px solid ${C.accent}33`}}>
               <span style={{width:7,height:7,borderRadius:99,background:C.accent,flexShrink:0}}/>
               <span style={{fontSize:13, fontWeight:700, letterSpacing:"0.04em", color:C.text}}>WHAT'S NEW</span>
-              <span style={{fontSize:11, color:C.dim}}>last 30 days · {newItems.length}</span>
+              <span style={{fontSize:11, color:C.dim}}>last 30 days · {whatsNew.length}</span>
             </div>
             <div style={{padding:"2px 14px 8px"}}>
-              {newItems.slice(0,12).map((n, i) => (
-                <div key={n.name+i} style={{display:"flex", alignItems:"baseline", gap:8, padding:"7px 0", borderBottom: i < Math.min(newItems.length,12)-1 ? `1px solid ${C.border}` : "none"}}>
+              {whatsNew.slice(0,12).map((n, i) => (
+                <div key={(n.id||n.name)+i} style={{display:"flex", alignItems:"baseline", gap:8, padding:"7px 0", borderBottom: i < Math.min(whatsNew.length,12)-1 ? `1px solid ${C.border}` : "none"}}>
                   <span style={{fontSize:9, fontWeight:800, letterSpacing:"0.05em", color:"#fff", background:C.accent, borderRadius:5, padding:"2px 6px", flexShrink:0}}>NEW</span>
                   <div style={{flex:1, minWidth:0}}>
                     <span style={{fontSize:13.5, fontWeight:600, color:C.text}}>{n.parent ? `${n.parent}: ` : ""}{n.name}</span>
-                    <span style={{fontSize:11, color:C.muted, marginLeft:8}}>{n.section}</span>
+                    <span style={{fontSize:11, color:C.muted, marginLeft:8}}>{n.kind==="suggestion" ? `suggested by ${n.by||"crew"}` : n.section}</span>
                   </div>
                   <span style={{fontSize:11, color:C.dim, flexShrink:0, fontVariantNumeric:"tabular-nums"}}>{n.date}</span>
                 </div>
