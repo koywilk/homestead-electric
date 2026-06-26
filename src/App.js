@@ -26276,7 +26276,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       ['upper','main','basement'].forEach(floor => {
         updated[floor] = (current?.[floor]||[]).map(q => {
           const gcAns = (gcPhase?.[floor]||[]).find(a=>a.id===q.id);
-          if(gcAns?.answer && !q.done) { changed=true; return {...q, answer:gcAns.answer, done:true, gcAnswered:true}; }
+          if(gcAns?.answer && !q.done) { changed=true; return {...q, answer:gcAns.answer, done:true, gcAnswered:true, answeredVia:'link', answeredBy:gcAnswers.answeredBy||'', answeredAt:gcAnswers.answeredAt||new Date().toISOString()}; }
           return q;
         });
       });
@@ -29056,7 +29056,22 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
 
         <input type="checkbox" checked={q.done}
 
-          onChange={()=>upd(q.id,{done:!q.done})}
+          onChange={()=>{
+            if(!q.done){
+              // Marking answered. Stamp who/when/how — but only for in-person
+              // answers; GC-via-link answers carry their own stamp (see merge above).
+              const who=getIdentity();
+              const patch={done:true};
+              if(!q.gcAnswered){ patch.answeredVia='in-person'; patch.answeredBy=who?.name||''; patch.answeredAt=new Date().toISOString(); }
+              upd(q.id,patch);
+            } else {
+              // Re-opening — clear an in-person stamp so the trail stays accurate;
+              // leave any GC stamp intact as historical record.
+              const patch={done:false};
+              if(q.answeredVia==='in-person'){ patch.answeredVia=''; patch.answeredBy=''; patch.answeredAt=''; }
+              upd(q.id,patch);
+            }
+          }}
 
           style={{accentColor:C.green,width:14,height:14,cursor:"pointer",flexShrink:0,marginTop:2}}/>
 
@@ -29114,9 +29129,25 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
 
       {q.done&&q.answer&&(
 
-        <div style={{marginLeft:22,marginTop:4,fontSize:11,color:C.dim,display:"flex",alignItems:"flex-start",gap:6}}>
-          {q.gcAnswered&&<span style={{fontSize:9,fontWeight:700,color:"#16a34a",background:"#dcfce7",borderRadius:4,padding:"1px 5px",flexShrink:0,marginTop:1}}>GC</span>}
-          <div style={{fontStyle:"italic",flex:1,lineHeight:1.5}} dangerouslySetInnerHTML={{__html:q.answer}}/>
+        <div style={{marginLeft:22,marginTop:4}}>
+          <div style={{fontSize:11,color:C.dim,display:"flex",alignItems:"flex-start",gap:6}}>
+            {q.gcAnswered&&<span style={{fontSize:9,fontWeight:700,color:"#16a34a",background:"#dcfce7",borderRadius:4,padding:"1px 5px",flexShrink:0,marginTop:1}}>GC</span>}
+            <div style={{fontStyle:"italic",flex:1,lineHeight:1.5}} dangerouslySetInnerHTML={{__html:q.answer}}/>
+          </div>
+          {(()=>{
+            // Paper trail: how the answer came in (link vs in person), who took
+            // it, and when. Older answers without a stamp just render nothing.
+            const via = q.answeredVia || (q.gcAnswered ? 'link' : '');
+            const methodLabel = via==='link' ? 'Via link' : via==='in-person' ? 'In person' : '';
+            const when = q.answeredAt ? new Date(q.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
+            if(!methodLabel && !q.answeredBy && !when) return null;
+            return (
+              <div style={{fontSize:9,color:C.dim,marginTop:3,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
+                {methodLabel&&<span style={{fontWeight:700,color:via==='link'?'#16a34a':'#2563eb',background:via==='link'?'#dcfce7':'#dbeafe',borderRadius:4,padding:'1px 5px'}}>{methodLabel}</span>}
+                {(q.answeredBy||when)&&<span>Answered{q.answeredBy?` by ${q.answeredBy}`:''}{when?` · ${when}`:''}</span>}
+              </div>
+            );
+          })()}
         </div>
 
       )}
@@ -30149,7 +30180,7 @@ function deepMergeJob(remote, local) {
 // ── Upcoming Jobs ─────────────────────────────────────────────
 
 function blankUpcoming() {
-  return { id: uid(), name:"", address:"", city:"", sales:"", customer:"", notes:"", lastFollowUp:"", foreman:"" };
+  return { id: uid(), name:"", address:"", city:"", sales:"", customer:"", notes:"", lastFollowUp:"", foreman:"", photos:[] };
 }
 
 const SEED_UPCOMING = [
@@ -30192,6 +30223,15 @@ function UpcomingEditForm({ u, upd, del, foremenList, onPromote, onPromoteToQuot
       </div>
       <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Address</div><Inp value={u.address||""} onChange={e=>upd(u.id,{address:e.target.value})} placeholder="Street address for navigation (e.g. 123 Main St, Park City UT)"/></div>
       <div><div style={{fontSize:10,color:C.dim,marginBottom:3}}>Notes</div><TA value={u.notes} onChange={e=>upd(u.id,{notes:e.target.value})} placeholder="Status, timeline, notes…" rows={2}/></div>
+      <div>
+        <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Progress Photos</div>
+        <PhotoAttacher
+          storagePath={`upcoming/${u.id}`}
+          photos={u.photos||[]}
+          onChange={(photos)=>upd(u.id,{photos})}
+          color={C.accent}
+          label="Add progress photo"/>
+      </div>
       <div style={{display:"flex",gap:8,marginTop:2,flexWrap:"wrap"}}>
         <button onClick={()=>setEditingId(null)} style={{background:C.accent,border:"none",borderRadius:7,color:"#000",fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Done</button>
         <button onClick={()=>onPromote(u)} style={{background:"none",border:`1px solid ${C.green}`,borderRadius:7,color:C.green,fontWeight:700,padding:"6px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>✓ Promote to Job</button>
@@ -30328,6 +30368,15 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                       {u.lastFollowUp&&<div style={{fontSize:11,color:C.dim}}><span style={{color:C.muted,fontSize:10}}>Follow Up </span>{u.lastFollowUp}</div>}
                     </div>
                     {u.notes&&<div style={{fontSize:12,color:C.dim,marginTop:4,lineHeight:1.4}}>{u.notes}</div>}
+                    {(u.photos||[]).length>0&&(
+                      <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:8}}>
+                        {(u.photos||[]).map(p=>(
+                          <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer" style={{display:"block",width:54,height:54,borderRadius:7,overflow:"hidden",border:`1px solid ${C.border}`,flexShrink:0}}>
+                            <img src={p.url} alt={p.name||"progress"} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+                          </a>
+                        ))}
+                      </div>
+                    )}
                   </>
                 )}
               </div>
@@ -30370,6 +30419,16 @@ function UpcomingJobs({ upcoming, onChange, onDelete, onPromote, onPromoteToQuot
                       </div>
                       {u.address&&<div style={{marginTop:2,fontSize:10,color:C.muted,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",display:"flex",alignItems:"center",gap:4}}><Icon name="mapPin" size={9}/> {u.address}</div>}
                       {isSigned&&<div style={{marginTop:2}}><SignedBadge/></div>}
+                      {(u.photos||[]).length>0&&(
+                        <div style={{marginTop:3,display:"flex",gap:4,alignItems:"center"}}>
+                          {(u.photos||[]).slice(0,4).map(p=>(
+                            <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer" style={{display:"block",width:28,height:28,borderRadius:5,overflow:"hidden",border:`1px solid ${C.border}`,flexShrink:0}}>
+                              <img src={p.url} alt={p.name||"progress"} style={{width:"100%",height:"100%",objectFit:"cover",display:"block"}}/>
+                            </a>
+                          ))}
+                          {(u.photos||[]).length>4&&<span style={{fontSize:10,color:C.muted,fontWeight:700}}>+{(u.photos||[]).length-4}</span>}
+                        </div>
+                      )}
                     </div>
                     <div style={{flex:1.2,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.city||"—"}</div>
                     <div style={{flex:1,paddingRight:12,fontSize:12,color:C.dim,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{u.sales||"—"}</div>
@@ -45091,6 +45150,8 @@ const FEATURES_MD_INLINE = String.raw`
 - **Forecast** · shipped · upcoming work calendar view
 - **Nav** · shipped · map view of jobs
 - **Upcoming** · shipped · jobs in the pipeline before they're full jobs
+  - Progress photos per upcoming job (add in edit form, thumbnails on card + table) · shipped 2026-06-26 · SW v237
+- **Coordinator Book page** · shipped 2026-06-26 · SW v238 · tap an "X's Book" header band on Home to see every job across all that coordinator's foremen in one spot, grouped by foreman then stage, with shared search/stage/flag filters
 - **Quotes** · shipped · proposed jobs awaiting conversion
 - **Walks** · shipped · quote walks tracking
 - **Tasks** · shipped · cross-job and manual tasks
@@ -45185,6 +45246,7 @@ const FEATURES_MD_INLINE = String.raw`
   - Finish questions
   - GC answer map (for sharing)
   - Asked-date stamp (addedAt) shown per question · shipped 2026-06-10 · SW v232
+  - Answer trail: method (via link vs in person) + who + when, per answered question · shipped 2026-06-26 · SW v237
 - **Plans tab** · shipped · plans documents per job
 - **Drive Files** · shipped · Drive folder sync + uploads
 - **Home Runs (panels)** · shipped · per-floor home runs + breaker counts
@@ -49976,9 +50038,11 @@ function App() {
   const [quickAddOpen, setQuickAddOpen] = useState(false);
 
   const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const [activeBook, setActiveBook] = useState(null); // coordinator name whose whole book is open, or null
+  const openBook     = (coord) => { setActiveBook(coord); setActiveForeman(null); setView("book"); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const [crewView, setCrewView] = useState(null); // foreman name or null
   const [showUtilMenu, setShowUtilMenu] = useState(false);
-  const goHome            = () =>  { setView("home");           setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
+  const goHome            = () =>  { setView("home");           setActiveForeman(null); setActiveBook(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openSchedule      = () =>  { setView("schedule");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openUpcoming      = () =>  { setView("upcoming");      setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
   const openTasks         = () =>  { setView("tasks");         setActiveForeman(null); setSearch(""); setStageF("All"); setFlagOnly(false); };
@@ -51335,12 +51399,13 @@ function App() {
                 return (
                   <Fragment key={f}>
                     {_showHeader && (
-                      <div style={{gridColumn:"1 / -1",display:"flex",alignItems:"center",gap:10,
-                        marginTop:_isFirstHeader?0:8,marginBottom:2,paddingBottom:6,borderBottom:`2px solid ${_headerColor}33`}}>
+                      <div onClick={_coordKey?()=>openBook(_coordKey):undefined} style={{gridColumn:"1 / -1",display:"flex",alignItems:"center",gap:10,
+                        marginTop:_isFirstHeader?0:8,marginBottom:2,paddingBottom:6,borderBottom:`2px solid ${_headerColor}33`,cursor:_coordKey?"pointer":"default"}}>
                         <span style={{width:9,height:9,borderRadius:"50%",background:_headerColor,flexShrink:0}}/>
                         <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:_headerColor,lineHeight:1}}>
                           {_coordKey ? `${_coordKey}'s Book` : "No coordinator"}
                         </span>
+                        {_coordKey&&<span style={{marginLeft:"auto",fontSize:10,fontWeight:700,color:_headerColor,opacity:0.85}}>See all jobs →</span>}
                       </div>
                     )}
                   <div>
@@ -52049,6 +52114,76 @@ function App() {
           </div>
         </div>
       )}
+
+      {/* ── BOOK PAGE (all of a coordinator's foremen's jobs in one spot) ── */}
+      {view==="book"&&(()=>{
+        const coordOf = (fname) => { const u=(users||[]).find(x=>x.name===fname&&((x.title||x.role)==="foreman")); return (u&&u.coordinator)||""; };
+        const bookForemen = (_foremen||[]).filter(f=>coordOf(f)===activeBook).sort((a,b)=>a.localeCompare(b));
+        const bookColor = getPersonColor(activeBook)||C.accent;
+        const s = (search||"").toLowerCase();
+        const passFilters = (j) => {
+          const matchesQuoteNo = !!s && (j.changeOrders||[]).some(co=>(co?.quoteNumber||"").toString().toLowerCase().includes(s));
+          const ms = !s||j.name.toLowerCase().includes(s)||j.address.toLowerCase().includes(s)||j.gc.toLowerCase().includes(s)||matchesQuoteNo;
+          const mf = !flagOnly||j.flagged;
+          const rPct=parseStage(j.roughStage), fPct=parseStage(j.finishStage);
+          const mt = stageF==="All"?true:stageF==="rough"?(rPct>0&&rPct<100&&fPct===0):stageF==="between"?(rPct===100&&fPct===0):stageF==="finish"?(fPct>0&&fPct<100):true;
+          return ms&&mf&&mt;
+        };
+        const totalShown = jobs.filter(j=>bookForemen.some(f=>matchesForeman(j,f))).filter(passFilters).length;
+        return (
+        <div>
+          <div style={{padding:"18px 26px 0",borderBottom:`1px solid ${C.border}`}}>
+            <div style={{display:"flex",alignItems:"center",gap:14,marginBottom:16,flexWrap:"wrap"}}>
+              <button onClick={goHome} style={{background:"none",border:`1px solid ${C.border}`,borderRadius:8,color:C.dim,padding:"6px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>← Back</button>
+              <span style={{width:10,height:10,borderRadius:"50%",background:bookColor,flexShrink:0}}/>
+              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:28,letterSpacing:"0.06em",color:bookColor,lineHeight:1}}>{activeBook}'s Book</div>
+              <div style={{fontSize:11,color:C.dim}}>{bookForemen.length} foreman{bookForemen.length!==1?"":""} · {totalShown} job site{totalShown!==1?"s":""}</div>
+              <div style={{marginLeft:"auto",display:"flex",gap:8,alignItems:"center"}}>
+                <span style={{fontSize:11,color:syncColor}}>{syncLabel}</span>
+              </div>
+            </div>
+            <div style={{display:"flex",gap:8,paddingBottom:14,flexWrap:"wrap",alignItems:"center"}}>
+              <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search jobs, GC, address…"
+                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none",width:220}}/>
+              <select value={stageF} onChange={e=>setStageF(e.target.value)}
+                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,color:C.text,padding:"7px 12px",fontSize:12,fontFamily:"inherit",outline:"none"}}>
+                <option value="All">All Jobs</option>
+                <option value="rough">Rough In Progress</option>
+                <option value="between">In Between</option>
+                <option value="finish">Finish In Progress</option>
+              </select>
+              <button onClick={()=>setFlagOnly(f=>!f)}
+                style={{background:flagOnly?`${C.accent}22`:C.surface,border:`1px solid ${flagOnly?C.accent:C.border}`,borderRadius:8,color:flagOnly?C.accent:C.dim,padding:"7px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit",display:"inline-flex",alignItems:"center",gap:6}}>
+                <Icon name="flag" size={12} stroke={2.25}/> {flagOnly?"Flagged Only":"All Jobs"}
+              </button>
+            </div>
+          </div>
+          <div style={{padding:"10px 26px 40px"}}>
+            {bookForemen.length===0?(
+              <div style={{textAlign:"center",padding:"60px 0",color:C.muted,fontSize:13}}>No foremen are assigned to {activeBook}'s book yet. Assign coordinators in Settings → Team.</div>
+            ):bookForemen.map(f=>{
+              const fJobs = jobs.filter(j=>matchesForeman(j,f)).filter(passFilters);
+              const fc = _foremanColors[f]||getPersonColor(f)||"#6b7280";
+              return (
+                <div key={f} style={{marginBottom:18}}>
+                  <div onClick={()=>openForeman(f)} style={{display:"flex",alignItems:"center",gap:10,cursor:"pointer",marginBottom:8,paddingBottom:6,borderBottom:`2px solid ${fc}33`}}>
+                    <span style={{width:9,height:9,borderRadius:"50%",background:fc,flexShrink:0}}/>
+                    <span style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:20,letterSpacing:"0.06em",color:fc,lineHeight:1}}>{f}</span>
+                    <span style={{fontSize:11,color:C.dim}}>{fJobs.length} job{fJobs.length!==1?"s":""}</span>
+                    <span style={{marginLeft:"auto",fontSize:10,fontWeight:700,color:C.dim,opacity:0.7}}>Open foreman →</span>
+                  </div>
+                  {fJobs.length===0?(
+                    <div style={{fontSize:12,color:C.muted,fontStyle:"italic",padding:"2px 0 6px"}}>No jobs match the current filters.</div>
+                  ):(
+                    <StageSectionList jobs={fJobs} JobRow={JobRow} TempPedCard={TempPedCard} onSelectJob={(j)=>setSelected(j)} onSaveJob={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }} onDeleteJob={(id)=>deleteJob(id)} fc={fc} startCollapsed={true}/>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </div>
+        );
+      })()}
 
       {/* ── SUBCONTRACTORS TAB ── */}
       {view==="subcontractors"&&(()=>{
