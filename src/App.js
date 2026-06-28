@@ -3928,6 +3928,51 @@ const Pill = ({label, color, onClick, onHold, title}) => {
 };
 
 
+// ── Header date + weather (command console) ───────────────────
+// Free open-meteo current/daily forecast (no API key). Hardcoded to the
+// company's service area; falls back to date-only if the fetch fails.
+function wxCondition(c){
+  if(c==null) return "";
+  if(c===0) return "Clear";
+  if(c<=2) return "Partly Cloudy";
+  if(c===3) return "Overcast";
+  if(c<=48) return "Fog";
+  if(c<=57) return "Drizzle";
+  if(c<=67) return "Rain";
+  if(c<=77) return "Snow";
+  if(c<=82) return "Showers";
+  if(c<=86) return "Snow";
+  if(c<=99) return "Storm";
+  return "";
+}
+function HeaderDateWeather(){
+  const [wx,setWx]=useState(null);
+  useEffect(()=>{
+    let alive=true;
+    const url="https://api.open-meteo.com/v1/forecast?latitude=40.51&longitude=-111.41&current_weather=true&daily=temperature_2m_max,temperature_2m_min&temperature_unit=fahrenheit&timezone=auto";
+    fetch(url).then(r=>r.json()).then(d=>{ if(!alive) return;
+      const code=d?.current_weather?.weathercode;
+      const hi=d?.daily?.temperature_2m_max?.[0];
+      const lo=d?.daily?.temperature_2m_min?.[0];
+      setWx({hi:hi!=null?Math.round(hi):null, lo:lo!=null?Math.round(lo):null, cond:wxCondition(code)});
+    }).catch(()=>{});
+    return ()=>{ alive=false; };
+  },[]);
+  const now=new Date();
+  const wd=now.toLocaleDateString("en-US",{weekday:"short"}).toUpperCase();
+  const md=now.toLocaleDateString("en-US",{month:"short",day:"numeric"}).toUpperCase();
+  return (
+    <div style={{textAlign:"right",lineHeight:1}}>
+      <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:".07em",color:"#F4F1EA",lineHeight:1,whiteSpace:"nowrap"}}>{wd} · {md}</div>
+      {wx && (wx.hi!=null || wx.cond) && (
+        <div style={{font:"600 9px system-ui",letterSpacing:".08em",textTransform:"uppercase",color:"#8A93A3",marginTop:3,whiteSpace:"nowrap"}}>
+          {wx.hi!=null?`${wx.hi}° / ${wx.lo}°`:""}{wx.cond?`${wx.hi!=null?" · ":""}${wx.cond}`:""}
+        </div>
+      )}
+    </div>
+  );
+}
+
 // ── InProgressModePill ────────────────────────────────────────
 // Shows "On Schedule" (blue solid) or "Ongoing" (gray dashed) next to
 // an In Progress status. Tap to toggle. Optional onSync for manual
@@ -33085,12 +33130,13 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                           const sortedEntries = [...visibleEntries].sort((a,b) =>
                             (a.Blocks?.[0]?.StartTime||"").localeCompare(b.Blocks?.[0]?.StartTime||""));
                           // Block color from first visible entry
+                          const jobFmColor = appJob?.foreman ? (foremanColors[appJob.foreman] || foremanColors[(appJob.foreman||"").split(" ")[0]]) : null;
                           const blockColor = (() => {
                             for (const e of sortedEntries) {
                               const c = staffColorMap[e.Staff?.Name];
                               if (c) return c;
                             }
-                            return C.muted;
+                            return jobFmColor || C.muted;
                           })();
                           return (
                             <div key={g.projectId}
@@ -33109,7 +33155,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                                 const fullName  = e.Staff?.Name || "";
                                 const parts     = fullName.split(" ");
                                 const shortName = parts.length > 1 ? `${parts[0]} ${parts[parts.length-1][0]}.` : parts[0];
-                                const nameColor = staffColorMap[fullName] || C.text;
+                                const nameColor = staffColorMap[fullName] || jobFmColor || C.text;
                                 const eStart    = fmtTime(e.Blocks?.[0]?.StartTime);
                                 const eEnd      = fmtTime(e.Blocks?.[e.Blocks?.length-1]?.EndTime);
                                 return shortName ? (
@@ -51111,6 +51157,9 @@ function App() {
             <span style={{display:"inline-flex",alignItems:"center",gap:6,font:"700 10px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:"#5FE39C"}}><span className="cmd-live" style={{width:7,height:7,borderRadius:"50%",background:D.live,display:"inline-block"}}/>Live</span>
             <span style={{width:3,height:3,borderRadius:"50%",background:"#3A4150"}}/>
             <span style={{font:"500 11px system-ui",color:"#8A93A3"}}>{jobs.length} active jobs</span>
+          </div>
+          <div style={{marginLeft:"auto",display:"flex",alignItems:"center",gap:14}}>
+            <HeaderDateWeather/>
           </div>
         </div>
         {/* ROW 2 — nav tabs */}
