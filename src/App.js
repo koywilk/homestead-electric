@@ -51094,8 +51094,23 @@ function App() {
 
 
       {/* ── COMMAND NAV (dark console) ── */}
-      <div style={{display:"flex",gap:6,padding:"8px 14px",borderBottom:`1px solid ${D.hair}`,background:"linear-gradient(180deg,#141821 0%,#1B2030 100%)",position:"sticky",top:0,zIndex:90,overflowX:"auto",scrollbarWidth:"none",alignItems:"center"}}>
-        <div onClick={goHome} className="flagtext flag-stripes" title="Homestead Electric" style={{fontSize:20,letterSpacing:".04em",lineHeight:1,whiteSpace:"nowrap",marginRight:8,cursor:"pointer",flexShrink:0}}>HOMESTEAD ELECTRIC</div>
+      <div style={{position:"sticky",top:0,zIndex:90,background:"linear-gradient(180deg,#141821 0%,#1B2030 100%)",borderBottom:`1px solid ${D.hair}`}}>
+        {/* ROW 1 — flag wordmark + live status */}
+        <div style={{display:"flex",alignItems:"center",gap:13,padding:"12px 16px 6px",flexWrap:"wrap"}}>
+          <div style={{width:40,height:34,background:"linear-gradient(180deg,#23429E,#1C357F)",borderRadius:3,boxShadow:"0 2px 5px rgba(0,0,0,.45),inset 0 0 0 1px rgba(255,255,255,.12)",display:"flex",flexDirection:"column",alignItems:"center",justifyContent:"center",gap:2,flexShrink:0,overflow:"hidden"}}>
+            <div style={{color:"#fff",fontSize:7,lineHeight:1,letterSpacing:"2px"}}>★★★</div>
+            <div style={{color:"#fff",fontSize:7,lineHeight:1,letterSpacing:"3px",paddingLeft:2}}>★★</div>
+            <div style={{color:"#fff",fontSize:7,lineHeight:1,letterSpacing:"2px"}}>★★★</div>
+          </div>
+          <div onClick={goHome} className="flagtext flag-stripes" title="Homestead Electric" style={{fontSize:34,letterSpacing:".04em",lineHeight:.85,whiteSpace:"nowrap",cursor:"pointer"}}>HOMESTEAD ELECTRIC</div>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:2}}>
+            <span style={{display:"inline-flex",alignItems:"center",gap:6,font:"700 10px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:"#5FE39C"}}><span className="cmd-live" style={{width:7,height:7,borderRadius:"50%",background:D.live,display:"inline-block"}}/>Live</span>
+            <span style={{width:3,height:3,borderRadius:"50%",background:"#3A4150"}}/>
+            <span style={{font:"500 11px system-ui",color:"#8A93A3"}}>{jobs.length} active jobs</span>
+          </div>
+        </div>
+        {/* ROW 2 — nav tabs */}
+        <div style={{display:"flex",gap:6,padding:"2px 12px 9px",overflowX:"auto",scrollbarWidth:"none",alignItems:"center"}}>
         {(isContractor
           ? [{key:"subcontractors", label:"My Jobs"}]
           : [
@@ -51258,6 +51273,7 @@ function App() {
             title="Switch user">
             <Icon name="arrowLeft" size={11}/> Switch
           </button>
+        </div>
         </div>
       </div>
 
