@@ -33090,18 +33090,18 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                               const c = staffColorMap[e.Staff?.Name];
                               if (c) return c;
                             }
-                            return C.accent;
+                            return C.muted;
                           })();
                           return (
                             <div key={g.projectId}
                               onClick={()=>{ if(appJob) onSelectJob(appJob); }}
-                              style={{background:C.surface,border:`1px solid ${blockColor}44`,
-                                borderLeft:`3px solid ${blockColor}`,borderRadius:7,
-                                padding:"8px 10px",marginBottom:6,
+                              style={{background:C.card,border:`1px solid ${C.border}`,
+                                borderLeft:`3px solid ${blockColor}`,borderRadius:8,
+                                padding:"9px 11px",marginBottom:6,
                                 cursor:appJob?"pointer":"default",
                                 transition:"background 0.15s"}}
                               onMouseEnter={e=>{if(appJob)e.currentTarget.style.background=`${blockColor}11`;}}
-                              onMouseLeave={e=>{e.currentTarget.style.background=C.surface;}}>
+                              onMouseLeave={e=>{e.currentTarget.style.background=C.card;}}>
                               <div style={{fontSize:11,fontWeight:700,color:C.text,
                                 whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",
                                 marginBottom:5}}>{jobName}</div>
@@ -33109,7 +33109,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                                 const fullName  = e.Staff?.Name || "";
                                 const parts     = fullName.split(" ");
                                 const shortName = parts.length > 1 ? `${parts[0]} ${parts[parts.length-1][0]}.` : parts[0];
-                                const nameColor = staffColorMap[fullName] || C.accent;
+                                const nameColor = staffColorMap[fullName] || C.text;
                                 const eStart    = fmtTime(e.Blocks?.[0]?.StartTime);
                                 const eEnd      = fmtTime(e.Blocks?.[e.Blocks?.length-1]?.EndTime);
                                 return shortName ? (
@@ -49323,6 +49323,10 @@ function App() {
   const _leadColors    = {};
   _foremen.forEach(n=>{ _foremanColors[n]=getPersonColor(n); });
   _leads.forEach(n=>  { _leadColors[n]   =getPersonColor(n); });
+  // Full person → book-color map (foremen + leads + crew) so the crew schedule
+  // can color EVERY name by its book/foreman, not just foremen.
+  const _allPersonColors = {};
+  (users||[]).forEach(u=>{ if(u&&u.name){ const c=getPersonColor(u.name); _allPersonColors[u.name]=c; const fn=u.name.split(" ")[0]; if(fn&&!_allPersonColors[fn]) _allPersonColors[fn]=c; } });
 
   // Keep module-level vars in sync so legacy getForemenList()/LEADS refs still work
   // Wrapped in useEffect to avoid mutations during render
@@ -51583,7 +51587,7 @@ function App() {
             jobs={jobs}
             identity={identity}
             users={users}
-            foremanColors={_foremanColors}
+            foremanColors={_allPersonColors}
             onSelectJob={(j)=>setSelected(j)}
           />
 
@@ -51754,49 +51758,26 @@ function App() {
                           {fJobs.length}
                         </div>
                       </div>
-                      {/* Stats row */}
-                      <div style={{display:"flex",gap:6,marginBottom:10,flexWrap:"wrap"}}>
-                        {[[fCOs,"COs",fCOs>0?C.blue:C.muted],[fRT,"RTs",fRT>0?"#B23A3A":C.muted]].map(([v,l,col])=>(
-                          <div key={l} style={{background:C.surface,borderRadius:7,padding:"5px 8px",flex:1,minWidth:44}}>
-                            <div style={{fontFamily:"'Bebas Neue'",fontSize:18,color:col,lineHeight:1}}>{v}</div>
-                            <div style={{fontSize:9,color:C.dim,marginTop:1}}>{l}</div>
+                      {/* Rough / Finish progress bars (compact) */}
+                      <div style={{display:"flex",gap:10}}>
+                        {[["Rough",rAvg],["Finish",fnAvg]].map(([lbl,pct])=>(
+                          <div key={lbl} style={{flex:1}}>
+                            <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
+                              <span style={{fontSize:9,color:C.dim}}>{lbl}</span>
+                              <span style={{fontSize:9,fontWeight:600,color:C.text}}>{pct}%</span>
+                            </div>
+                            <div style={{height:4,background:"#EAECEF",borderRadius:4,overflow:"hidden"}}>
+                              <div style={{height:"100%",width:`${pct}%`,background:fc,borderRadius:4,transition:"width 0.3s"}}/>
+                            </div>
                           </div>
                         ))}
                       </div>
-                      {/* Rough / Finish progress bars */}
-                      <div style={{display:"flex",gap:6,marginTop:8}}>
-                        <div style={{flex:1}}>
-                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-                            <span style={{fontSize:9,color:C.dim}}>Rough</span>
-                            <span style={{fontSize:9,color:C.rough,fontWeight:600}}>{rAvg}%</span>
-                          </div>
-                          <div style={{height:4,background:`${C.rough}22`,borderRadius:4,overflow:"hidden"}}>
-                            <div style={{height:"100%",width:`${rAvg}%`,background:C.rough,borderRadius:4,transition:"width 0.3s"}}/>
-                          </div>
-                        </div>
-                        <div style={{flex:1}}>
-                          <div style={{display:"flex",justifyContent:"space-between",marginBottom:3}}>
-                            <span style={{fontSize:9,color:C.dim}}>Finish</span>
-                            <span style={{fontSize:9,color:C.finish,fontWeight:600}}>{fnAvg}%</span>
-                          </div>
-                          <div style={{height:4,background:`${C.finish}22`,borderRadius:4,overflow:"hidden"}}>
-                            <div style={{height:"100%",width:`${fnAvg}%`,background:C.finish,borderRadius:4,transition:"width 0.3s"}}/>
-                          </div>
-                        </div>
+                      {/* slim crew access */}
+                      <div onClick={e=>{e.stopPropagation();setCrewView(f);}}
+                        style={{marginTop:10,paddingTop:8,borderTop:`1px solid ${C.border}`,display:"flex",alignItems:"center",justifyContent:"space-between",cursor:"pointer"}}>
+                        <span style={{fontSize:9,fontWeight:700,letterSpacing:"0.06em",textTransform:"uppercase",color:C.muted}}>Crew Access</span>
+                        <span style={{fontSize:10,color:C.dim}}>→</span>
                       </div>
-
-                      <div style={{marginTop:10,fontSize:10,color:C.dim,fontWeight:600,textAlign:"right",opacity:0.7}}>View →</div>
-                    </div>
-                    {/* Crew Access */}
-                    <div onClick={e=>{e.stopPropagation();setCrewView(f);}}
-                      style={{marginTop:4,background:C.surface,border:`1px dashed ${C.border}`,
-                        borderRadius:8,padding:"6px 12px",cursor:"pointer",
-                        display:"flex",alignItems:"center",justifyContent:"space-between",
-                        transition:"background 0.15s"}}
-                      onMouseEnter={e=>e.currentTarget.style.background=`${fc}10`}
-                      onMouseLeave={e=>e.currentTarget.style.background=C.surface}>
-                      <span style={{fontSize:10,fontWeight:600,color:C.dim}}>Crew Access</span>
-                      <span style={{fontSize:9,color:C.dim,opacity:0.5}}>→</span>
                     </div>
                   </div>
                   </Fragment>
