@@ -2943,7 +2943,7 @@ const getFC = (name) => (FOREMEN_COLORS[name]||"#6E7682");
 const getForemenList = () => FOREMEN;
 const getLeadsList = () => LEADS;
 const getLeadFC = (name) => (LEAD_COLORS[name]||"#6E7682");
-const COLOR_OPTIONS = ["#3B5BA5","#B06A2C","#46916A","#6A5E97","#ec4899","#14b8a6","#B0892C","#B23A3A","#06b6d4","#a855f7","#84cc16","#f43f5e"];
+const COLOR_OPTIONS = ["#3B5BA5","#B06A2C","#46916A","#6A5E97","#ec4899","#14b8a6","#B0892C","#B23A3A","#06b6d4","#6A5E97","#84cc16","#f43f5e"];
 
 // ── Identity & Permissions ────────────────────────────────────
 const IDENTITY_KEY   = "he_identity";
@@ -11723,11 +11723,11 @@ function BidItemsPanel({simproNo, data, error, refreshing, onRefresh}) {
   const kindPill = (k) => {
     const bg = k==="catalog" ? "#6A7BAA22"
             : k==="oneOff" ? "#B0892C22"
-            : k==="prebuild" ? "#a855f722"
+            : k==="prebuild" ? "#6A5E9722"
             : "#88888822";
     const fg = k==="catalog" ? "#6A7BAA"
             : k==="oneOff" ? "#B0892C"
-            : k==="prebuild" ? "#a855f7"
+            : k==="prebuild" ? "#6A5E97"
             : "#888";
     const label = k==="catalog" ? "Catalog"
               : k==="oneOff" ? "One-off"
@@ -39060,7 +39060,7 @@ function Today({ jobs: _allJobs, users=[], manualTasks=[], quoteWalks=[], sugges
     Object.values(sv).forEach(floor => {
       const ia = floor?.inputAssignments || {};
       Object.values(ia).forEach(slot => {
-        if (slot?.addedAt) push(slot.addedAt, slot.addedBy, j, "savant", "added", `Savant slot added`, "#a855f7", slot.label||"");
+        if (slot?.addedAt) push(slot.addedAt, slot.addedBy, j, "savant", "added", `Savant slot added`, "#6A5E97", slot.label||"");
         if (slot?.wiredAt) push(slot.wiredAt, slot.wiredBy, j, "savant", "wired", `Savant slot wired`, "#3E7D5A", slot.label||"");
         (slot?.photos||[]).forEach(p => {
           const t = p.takenAt || p.uploadedAt || p.addedAt;
@@ -39097,7 +39097,7 @@ function Today({ jobs: _allJobs, users=[], manualTasks=[], quoteWalks=[], sugges
   // 56, 57 — Quote walks (separate collection)
   (quoteWalks||[]).forEach(w => {
     const wj = { id: w.id, name: w.name || w.address || w.id };
-    if (w?.createdAt) push(w.createdAt, w.createdBy, wj, "walk", "created", `Quote walk: ${wj.name}`, "#a855f7");
+    if (w?.createdAt) push(w.createdAt, w.createdBy, wj, "walk", "created", `Quote walk: ${wj.name}`, "#6A5E97");
     if (w?.convertedAt) push(w.convertedAt, w.convertedBy, wj, "walk", "converted", `Quote walk → job: ${wj.name}`, "#3E7D5A");
   });
   // 58, 59 — Suggestions (separate collection)
@@ -42246,7 +42246,7 @@ function ScoreboardV2({ jobs, users = [], identity }) {
               <div>
                 <div style={{ fontSize: 9, color: "var(--dim, #888)", textTransform: "uppercase",
                               letterSpacing: "0.06em", fontWeight: 700, marginBottom: 3 }}>Quality</div>
-                <ScoreBar value={row.quality} color="#a855f7" />
+                <ScoreBar value={row.quality} color="#6A5E97" />
               </div>
 
               {/* Combined */}
@@ -42336,12 +42336,12 @@ function ScoreboardV2Drilldown({ row }) {
                 {jr.info == null ? "—" : `${Math.round(jr.info * 100)}`}
               </div>
               <div style={{ ...cell, textAlign: "right",
-                            color: qcCountVal == null ? "var(--dim, #888)" : "#a855f7" }}
+                            color: qcCountVal == null ? "var(--dim, #888)" : "#6A5E97" }}
                    title={qcCountVal == null ? "no QC items on this job" : (qcCount?.detail || "")}>
                 {qcCountVal == null ? "—" : `${Math.round(qcCountVal * 100)}`}
               </div>
               <div style={{ ...cell, textAlign: "right",
-                            color: inspVal == null ? "var(--dim, #888)" : "#a855f7" }}
+                            color: inspVal == null ? "var(--dim, #888)" : "#6A5E97" }}
                    title={inspVal == null ? "no inspection attempts on this job" : (insp?.detail || "")}>
                 {inspVal == null ? "—" : `${Math.round(inspVal * 100)}`}
               </div>
@@ -44596,10 +44596,10 @@ function PunchSharePage({ jobId, stage }) {
         <div style={{marginTop:10}}>
           <div style={{display:'flex',justifyContent:'space-between',fontSize:11,color:'rgba(255,255,255,0.7)',marginBottom:5}}>
             <span>{doneItems} of {totalItems} items complete</span>
-            <span style={{fontWeight:700,color:pct===100?'#4ade80':'rgba(255,255,255,0.9)'}}>{pct}%</span>
+            <span style={{fontWeight:700,color:pct===100?'#46916A':'rgba(255,255,255,0.9)'}}>{pct}%</span>
           </div>
           <div style={{background:'rgba(255,255,255,0.15)',borderRadius:4,height:6}}>
-            <div style={{background:pct===100?'#4ade80':stageColor,width:`${pct}%`,height:6,borderRadius:4,transition:'width 0.3s'}}/>
+            <div style={{background:pct===100?'#46916A':stageColor,width:`${pct}%`,height:6,borderRadius:4,transition:'width 0.3s'}}/>
           </div>
         </div>
       </div>
