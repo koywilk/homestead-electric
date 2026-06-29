@@ -33141,13 +33141,13 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                           return (
                             <div key={g.projectId}
                               onClick={()=>{ if(appJob) onSelectJob(appJob); }}
-                              style={{background:C.surface,border:`1px solid ${C.border}`,
-                                borderLeft:`3px solid ${blockColor}`,borderRadius:7,
+                              style={{background:isToday?`${C.accent}0d`:C.surface,border:`1px solid ${C.border}`,
+                                borderLeft:`3px solid ${isToday?C.accent:C.text}`,borderRadius:7,
                                 padding:"7px 10px",marginBottom:6,
                                 cursor:appJob?"pointer":"default",
                                 transition:"background 0.15s"}}
-                              onMouseEnter={e=>{if(appJob)e.currentTarget.style.background=`${blockColor}11`;}}
-                              onMouseLeave={e=>{e.currentTarget.style.background=C.surface;}}>
+                              onMouseEnter={e=>{if(appJob)e.currentTarget.style.background=`${C.accent}14`;}}
+                              onMouseLeave={e=>{e.currentTarget.style.background=isToday?`${C.accent}0d`:C.surface;}}>
                               <div style={{fontSize:11,fontWeight:700,color:C.text,
                                 whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",
                                 marginBottom:3}}>{jobName}</div>
