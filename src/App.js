@@ -33025,7 +33025,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
 
   const fmtWeekday = d => d.toLocaleDateString("en-US", { weekday:"short" }).toUpperCase();
   const fmtDate    = d => d.toLocaleDateString("en-US", { month:"short", day:"numeric" });
-  const fmtTime    = t => { if (!t) return ""; const [h,m] = t.split(":"); const hr=parseInt(h); return `${hr>12?hr-12:hr||12}:${m}${hr>=12?"pm":"am"}`; };
+  const fmtTime    = t => { if (!t) return ""; const [h,m] = t.split(":"); const hr=parseInt(h); return `${hr>12?hr-12:hr||12}:${m}${hr>=12?"p":"a"}`; };
 
   const hasAnyThisWeek = weekDates.some(d => (crewByDateAndJob[toYMD(d)]||[]).length > 0);
 
@@ -33110,8 +33110,8 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                       background:isToday?C.accent:"transparent",
                       textAlign:"center"}}>
                       <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.08em",
-                        color:isToday?"#000":C.dim}}>{fmtWeekday(d)}</div>
-                      <div style={{fontSize:11,fontWeight:600,color:isToday?"#000":C.text}}>
+                        color:isToday?"#fff":C.dim}}>{fmtWeekday(d)}</div>
+                      <div style={{fontSize:11,fontWeight:600,color:isToday?"#fff":C.text}}>
                         {fmtDate(d)}
                       </div>
                     </div>
@@ -33141,13 +33141,13 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                           return (
                             <div key={g.projectId}
                               onClick={()=>{ if(appJob) onSelectJob(appJob); }}
-                              style={{background:C.card,border:`1px solid ${C.border}`,
+                              style={{background:C.surface,border:`1px solid ${C.border}`,
                                 borderLeft:`3px solid ${blockColor}`,borderRadius:7,
-                                padding:"6px 9px",marginBottom:5,
+                                padding:"7px 10px",marginBottom:6,
                                 cursor:appJob?"pointer":"default",
                                 transition:"background 0.15s"}}
                               onMouseEnter={e=>{if(appJob)e.currentTarget.style.background=`${blockColor}11`;}}
-                              onMouseLeave={e=>{e.currentTarget.style.background=C.card;}}>
+                              onMouseLeave={e=>{e.currentTarget.style.background=C.surface;}}>
                               <div style={{fontSize:11,fontWeight:700,color:C.text,
                                 whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",
                                 marginBottom:3}}>{jobName}</div>
