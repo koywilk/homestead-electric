@@ -27351,7 +27351,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     </div>
                   );
                 })()}
-                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const finishOpen=punchOpen(job.finishPunch);const qcOpen=punchOpen(job.qcPunch);const total=finishOpen+qcOpen;if(total>0){const parts=[];if(finishOpen>0)parts.push(`${finishOpen} finish punch item${finishOpen!==1?"s":""}`);if(qcOpen>0)parts.push(`${qcOpen} QC item${qcOpen!==1?"s":""}`);toast.warn(`Cannot set Finish to 100% — ${parts.join(" and ")} still open. Clear them first.`);return;}}const invoiceFire=pct>=85&&!job.finishInvoiceFired?{finishInvoiceFired:true,finishInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{finishInvoiceFired:false,finishInvoiceDismissed:false}:{};u({finishStage:v,...invoiceFire,...invoiceReset,...(v==="100%"?{finishStatus:"complete"}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
+                <Sel value={job.finishStage} onChange={e=>{const v=e.target.value;const pct=parseInt(v)||0;if(v==="100%"){const finishOpen=punchOpen(job.finishPunch);const qcOpen=punchOpen(job.qcPunch);const total=finishOpen+qcOpen;if(total>0){const parts=[];if(finishOpen>0)parts.push(`${finishOpen} finish punch item${finishOpen!==1?"s":""}`);if(qcOpen>0)parts.push(`${qcOpen} QC item${qcOpen!==1?"s":""}`);toast.warn(`Cannot set Finish to 100% — ${parts.join(" and ")} still open. Clear them first.`);return;}}const invoiceFire=pct>=85&&!job.finishInvoiceFired?{finishInvoiceFired:true,finishInvoiceDismissed:false,readyToInvoice:true,readyToInvoiceDate:new Date().toLocaleDateString("en-US")}:{};const invoiceReset=pct<85?{finishInvoiceFired:false,finishInvoiceDismissed:false}:{};const finishQcFlip=((pct>=80)||(v==="100%"))&&!job.finishQcStatus?{finishQcStatus:"needs"}:{};u({finishStage:v,...invoiceFire,...invoiceReset,...finishQcFlip,...(v==="100%"?{finishStatus:"complete"}:pct>0?{finishStatus:"inprogress"}:{})});}} options={FINISH_STAGES}/>
                 <div style={{marginTop:8,marginBottom:12}}><StageBar stages={FINISH_STAGES} current={job.finishStage} color={C.finish}/></div>
                 {/* J8 — Job Notes (primary capture surface for Finish phase). */}
                 <JobNotesSection
@@ -28416,7 +28416,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 const qcDef = getStatusDef(QC_STATUSES, job.qcStatus||"");
                 return (
                   <div style={{marginBottom:16,padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
-                    <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>QC STATUS</div>
+                    <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>ROUGH QC STATUS</div>
                     <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
                       <select value={job.qcStatus||""} onChange={e=>{
                         const v=e.target.value;
@@ -28486,6 +28486,46 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:qcDef.color}}>QC DATE</div>
                           <DateInp value={job.qcStatusDate||""} onChange={e=>u({qcStatusDate:e.target.value})}
                             style={{width:140,fontSize:12,borderColor:qcDef.color+"55",background:`${qcDef.color}08`}}/>
+                        </div>
+                      )}
+                    </div>
+                  </div>
+                );
+              })()}
+
+              {/* FINISH QC STATUS — parallel to rough; auto-flips to "needs" when finish stage advances. */}
+              {(()=>{
+                const fDef = getStatusDef(QC_STATUSES, job.finishQcStatus||"");
+                return (
+                  <div style={{marginBottom:16,padding:"12px 14px",background:C.surface,border:`1px solid ${C.border}`,borderRadius:9}}>
+                    <div style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.08em",marginBottom:8}}>FINISH QC STATUS</div>
+                    <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+                      <select value={job.finishQcStatus||""} onChange={e=>{
+                        const v=e.target.value;
+                        const patch={finishQcStatus:v,finishQcStatusDate:getStatusDef(QC_STATUSES,v).hasDate?job.finishQcStatusDate:""};
+                        if(v==="fail"){
+                          const existing=(job.returnTrips||[]).some(r=>!r.signedOff&&typeof r.scope==="string"&&r.scope.startsWith("QC Fail"));
+                          if(!existing){
+                            const openQC=[];
+                            const fls=[...["upper","main","basement"].map(k=>job.finishPunch&&job.finishPunch[k]).filter(Boolean),...(((job.finishPunch&&job.finishPunch.extras)||[]).map(x=>x&&x.key?job.finishPunch[x.key]:null).filter(Boolean))];
+                            fls.forEach(fl=>{ if(!fl) return;
+                              (fl.general||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});});
+                              (fl.rooms||[]).forEach(r=>(r.items||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});}));
+                              (fl.hotcheck||[]).forEach(i=>{if(i&&i.fromQC&&!i.done&&!i.voided)openQC.push({...i,__phase:"finish"});});
+                            });
+                            const newRT={id:uid(),date:"",scope:"QC Fail — return trip needed",material:"",punch:openQC.map(x=>({id:uid(),text:x.text||"",done:false,fromQC:true,originItemId:x.id,originPhase:x.__phase,photos:Array.isArray(x.photos)?x.photos.slice():[],materialNeeded:x.materialNeeded||"",materialSource:x.materialSource||""})),photos:[],assignedTo:"",signedOff:false,signedOffBy:"",signedOffDate:"",needsSchedule:true,needsScheduleDate:"",rtScheduled:false,scheduledDate:"",rtStatus:"needs",fromQCFail:true};
+                            patch.returnTrips=[...(job.returnTrips||[]),newRT];
+                            toast.success(`Finish QC Fail logged — return trip queued${openQC.length?` with ${openQC.length} item${openQC.length>1?'s':''}`:''}`);
+                          }
+                        }
+                        u(patch);
+                      }} style={{background:fDef.color?`${fDef.color}18`:C.surface,color:fDef.color||C.dim,border:`1px solid ${fDef.color||C.border}`,borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",fontWeight:fDef.color?700:400,outline:"none",cursor:"pointer"}}>
+                        {QC_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label}</option>)}
+                      </select>
+                      {fDef.hasDate&&(
+                        <div style={{display:"flex",flexDirection:"column",gap:2}}>
+                          <div style={{fontSize:9,fontWeight:700,letterSpacing:"0.07em",color:fDef.color}}>QC DATE</div>
+                          <DateInp value={job.finishQcStatusDate||""} onChange={e=>u({finishQcStatusDate:e.target.value})} style={{width:140,fontSize:12,borderColor:fDef.color+"55",background:`${fDef.color}08`}}/>
                         </div>
                       )}
                     </div>
@@ -28662,33 +28702,44 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   color={C.teal}/>
               )}
 
-              <div style={{marginTop:16,padding:"14px 16px",background:job.qcSignedOff?`${C.green}10`:C.surface,border:`1px solid ${job.qcSignedOff?C.green+"55":C.border}`,borderRadius:10}}>
-                <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:job.qcSignedOff?C.green:C.dim,marginBottom:10}}>QC SIGN-OFF</div>
-                {job.qcSignedOff?(
-                  <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:8}}>
-                      <div style={{width:20,height:20,borderRadius:"50%",background:C.green,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#fff",fontWeight:700}}>✓</div>
-                      <div>
-                        <div style={{fontSize:13,fontWeight:700,color:C.green}}>Signed Off</div>
-                        <div style={{fontSize:11,color:C.dim}}>by {job.qcSignedOffBy||"—"} · {job.qcSignedOffDate||"—"}</div>
-                      </div>
+              {(()=>{
+                const signoffBlock = (label, doneKey, byKey, dateKey) => {
+                  const done = !!job[doneKey];
+                  return (
+                    <div style={{marginTop:16,padding:"14px 16px",background:done?`${C.green}10`:C.surface,border:`1px solid ${done?C.green+"55":C.border}`,borderRadius:10}}>
+                      <div style={{fontSize:10,fontWeight:700,letterSpacing:"0.08em",color:done?C.green:C.dim,marginBottom:10}}>{label}</div>
+                      {done?(
+                        <div style={{display:"flex",alignItems:"center",gap:12,flexWrap:"wrap"}}>
+                          <div style={{display:"flex",alignItems:"center",gap:8}}>
+                            <div style={{width:20,height:20,borderRadius:"50%",background:C.green,display:"flex",alignItems:"center",justifyContent:"center",fontSize:12,color:"#fff",fontWeight:700}}>✓</div>
+                            <div>
+                              <div style={{fontSize:13,fontWeight:700,color:C.green}}>Signed Off</div>
+                              <div style={{fontSize:11,color:C.dim}}>by {job[byKey]||"—"} · {job[dateKey]||"—"}</div>
+                            </div>
+                          </div>
+                          <button onClick={()=>u({[doneKey]:false,[byKey]:"",[dateKey]:""})} style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.muted,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Undo</button>
+                        </div>
+                      ):(
+                        <div style={{display:"flex",gap:8,alignItems:"flex-end",flexWrap:"wrap"}}>
+                          <div style={{flex:1,minWidth:120}}>
+                            <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Lead Name</div>
+                            <Inp value={job[byKey]||""} onChange={e=>u({[byKey]:e.target.value})} placeholder="Lead who completed QC"/>
+                          </div>
+                          <div style={{minWidth:110}}>
+                            <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Signed Off</div>
+                            <DateInp value={job[dateKey]||""} onChange={e=>u({[dateKey]:e.target.value})} style={{width:140}}/>
+                          </div>
+                          <button onClick={()=>{if(job[byKey])u({[doneKey]:true});}} style={{background:C.green,border:"none",borderRadius:7,color:"#fff",fontWeight:700,padding:"8px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>✓ Sign Off</button>
+                        </div>
+                      )}
                     </div>
-                    <button onClick={()=>u({qcSignedOff:false,qcSignedOffBy:"",qcSignedOffDate:""})} style={{marginLeft:"auto",background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.muted,fontSize:11,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>Undo</button>
-                  </div>
-                ):(
-                  <div style={{display:"flex",gap:8,alignItems:"flex-end",flexWrap:"wrap"}}>
-                    <div style={{flex:1,minWidth:120}}>
-                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Lead Name</div>
-                      <Inp value={job.qcSignedOffBy||""} onChange={e=>u({qcSignedOffBy:e.target.value})} placeholder="Lead who completed QC"/>
-                    </div>
-                    <div style={{minWidth:110}}>
-                      <div style={{fontSize:10,color:C.dim,marginBottom:3}}>Date Signed Off</div>
-                      <DateInp value={job.qcSignedOffDate||""} onChange={e=>u({qcSignedOffDate:e.target.value})} style={{width:140}}/>
-                    </div>
-                    <button onClick={()=>{if(job.qcSignedOffBy)u({qcSignedOff:true});}} style={{background:C.green,border:"none",borderRadius:7,color:"#fff",fontWeight:700,padding:"8px 16px",fontSize:12,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>✓ Sign Off</button>
-                  </div>
-                )}
-              </div>
+                  );
+                };
+                return (<>
+                  {signoffBlock("ROUGH QC SIGN-OFF","qcSignedOff","qcSignedOffBy","qcSignedOffDate")}
+                  {signoffBlock("FINISH QC SIGN-OFF","finishQcSignedOff","finishQcSignedOffBy","finishQcSignedOffDate")}
+                </>);
+              })()}
 
             </div>
 
@@ -33253,20 +33304,37 @@ function QCView({ jobs, onSelectJob, identity }) {
   const unmatchedCal = useMemo(()=> (calMatches||[]).filter(c=>!c.jobId), [calMatches]);
   const rows = useMemo(()=>{
     const s = q.trim().toLowerCase();
-    return (jobs||[]).map(j=>{
-      const status = j.qcStatus||"";
-      const failed = countOpen(j.qcPunch) + countOpen(j.roughPunch,true) + countOpen(j.finishPunch,true);
+    const out = [];
+    (jobs||[]).forEach(j=>{
+      const label = jobLabel(j)||"Untitled";
+      if(s && !label.toLowerCase().includes(s)) return;
       const cal = calByJob[j.id];
-      if(!status && failed===0 && !cal) return null;
-      const stage = parseStage(j.roughStage)>=100 ? "Finish" : "Rough";
-      const def = getStatusDef(QC_STATUSES, status);
-      return { id:j.id, job:j, name:jobLabel(j)||"Untitled", stage, status, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.qcStatusDate||(cal?cal.date:"")), failed, cal:!!cal };
-    }).filter(Boolean).filter(r=> !s || r.name.toLowerCase().includes(s));
+      // A calendar-scheduled walk attaches to the phase that's currently relevant.
+      const calPhase = cal ? ((j.qcStatus==="pass"||j.qcStatus==="fixed"||j.qcStatus==="completed") ? "finish" : "rough") : null;
+      // Rough QC (legacy qcStatus is rough-driven)
+      const rStatus=j.qcStatus||"", rFailed=countOpen(j.roughPunch,true), rCal=calPhase==="rough";
+      if(rStatus||rFailed>0||rCal){ const def=getStatusDef(QC_STATUSES,rStatus); out.push({ key:j.id+"-r", job:j, name:label, phase:"Rough", status:rStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.qcStatusDate||(rCal?cal.date:"")), failed:rFailed, cal:rCal }); }
+      // Finish QC
+      const fInProgress=parseStage(j.finishStage)>=80, fStatus=j.finishQcStatus||(fInProgress?"needs":""), fFailed=countOpen(j.finishPunch,true)+countOpen(j.qcPunch), fCal=calPhase==="finish";
+      if(fStatus||fFailed>0||fCal){ const def=getStatusDef(QC_STATUSES,fStatus); out.push({ key:j.id+"-f", job:j, name:label, phase:"Finish", status:fStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.finishQcStatusDate||(fCal?cal.date:"")), failed:fFailed, cal:fCal }); }
+    });
+    return out;
   }, [jobs, q, calByJob]);
 
-  const bucketOf = (r) => r.status==="fail" ? "failed" : r.status==="needs" ? "needs" : (r.status==="scheduled"||r.cal) ? "scheduled" : (r.status==="pass"||r.status==="fixed"||r.status==="completed") ? "done" : "other";
+  const _td=new Date(); const todayYmd=`${_td.getFullYear()}-${String(_td.getMonth()+1).padStart(2,"0")}-${String(_td.getDate()).padStart(2,"0")}`;
+  // Smart bucketing: a resulted status (pass/fail) goes to its bucket regardless
+  // of date; a "scheduled" walk whose date has passed moves out of Scheduled into
+  // "Past due — log result" so it can't be forgotten.
+  const bucketOf = (r) => {
+    if(r.status==="fail") return "failed";
+    if(r.status==="pass"||r.status==="fixed"||r.status==="completed") return "done";
+    if(r.status==="scheduled"||r.cal) return (r.date && r.date < todayYmd) ? "overdue" : "scheduled";
+    if(r.status==="needs") return "needs";
+    return "other";
+  };
   const BUCKETS = [
     {key:"failed",    label:"Failed — needs return", color:"#B23A3A"},
+    {key:"overdue",   label:"Past due — log result", color:"#B0892C"},
     {key:"needs",     label:"Needs scheduling",      color:"#B0892C"},
     {key:"scheduled", label:"Scheduled",             color:"#3B5BA5"},
     {key:"other",     label:"Has QC items",          color:C.dim},
@@ -33282,7 +33350,7 @@ function QCView({ jobs, onSelectJob, identity }) {
     <div style={{padding:"18px 26px 60px", maxWidth:980, margin:"0 auto"}}>
       <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",marginBottom:4}}>
         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,letterSpacing:"0.05em",color:C.text}}>QC WALKS</div>
-        <div style={{fontSize:12,color:C.dim}}>{rows.length} jobs with QC activity</div>
+        <div style={{fontSize:12,color:C.dim}}>{rows.length} QC walks (rough + finish)</div>
         <span style={{flex:1}}/>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search jobs…"
           style={{padding:"7px 12px",fontSize:12,border:`1px solid ${C.border}`,borderRadius:8,background:C.card,color:C.text,fontFamily:"inherit",width:200}}/>
@@ -33305,7 +33373,7 @@ function QCView({ jobs, onSelectJob, identity }) {
 
       {BUCKETS.map(b=>{
         let list = rows.filter(r=>bucketOf(r)===b.key);
-        if(b.key==="scheduled") list = [...list].sort((a,b)=>(a.date||"").localeCompare(b.date||""));
+        if(b.key==="scheduled"||b.key==="overdue") list = [...list].sort((a,b)=>(a.date||"").localeCompare(b.date||""));
         if(list.length===0) return null;
         return (
           <div key={b.key} style={{marginBottom:22}}>
@@ -33316,12 +33384,12 @@ function QCView({ jobs, onSelectJob, identity }) {
             </div>
             <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
               {list.map((r,i)=>(
-                <div key={r.id} onClick={()=>onSelectJob&&onSelectJob(r.job)}
+                <div key={r.key} onClick={()=>onSelectJob&&onSelectJob(r.job)}
                   style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",cursor:"pointer",
                     borderBottom:i<list.length-1?`1px solid ${C.border}`:"none"}}
                   onMouseEnter={e=>e.currentTarget.style.background=C.surface}
                   onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
-                  {stagePill(r.stage)}
+                  {stagePill(r.phase)}
                   <span style={{fontSize:13,fontWeight:600,color:C.text,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</span>
                   {r.failed>0 && <span style={{fontSize:11,fontWeight:700,color:"#B23A3A",background:"#F6EAEA",border:"1px solid #EAD2D2",borderRadius:99,padding:"1px 9px",whiteSpace:"nowrap"}}>{r.failed} item{r.failed!==1?"s":""}</span>}
                   {r.date && <span style={{fontSize:11,color:C.dim,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"}}>{fmtD(r.date)}</span>}
