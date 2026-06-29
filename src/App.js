@@ -29088,6 +29088,17 @@ function QAInlineEdit({value, done, label, onSave}) {
 }
 
 
+// How a question's answer came in — context options for the paper trail.
+const ANSWER_METHODS = [
+  {v:'onsite',    l:'On site'},
+  {v:'text_gc',   l:'Text from GC'},
+  {v:'phone',     l:'Phone call'},
+  {v:'in_person', l:'In person'},
+  {v:'link',      l:'Via link'},
+  {v:'other',     l:'Other'},
+];
+const answerMethodLabel = (v) => { const m = ANSWER_METHODS.find(x=>x.v===v); return m ? m.l : ''; };
+
 function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterIds=null, jobId=null, photoFolder=""}) {
 
   // guard: old data may be a string instead of array
@@ -29130,17 +29141,15 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
 
           onChange={()=>{
             if(!q.done){
-              // Marking answered. Stamp who/when/how — but only for in-person
-              // answers; GC-via-link answers carry their own stamp (see merge above).
+              // Marking answered — stamp who + when. Keep whatever method the
+              // user picked in the chips below; GC-via-link carries its own stamp.
               const who=getIdentity();
-              const patch={done:true};
-              if(!q.gcAnswered){ patch.answeredVia='in-person'; patch.answeredBy=who?.name||''; patch.answeredAt=new Date().toISOString(); }
-              upd(q.id,patch);
+              upd(q.id,{done:true, answeredBy:q.answeredBy||who?.name||"", answeredAt:q.answeredAt||new Date().toISOString()});
             } else {
-              // Re-opening — clear an in-person stamp so the trail stays accurate;
-              // leave any GC stamp intact as historical record.
+              // Re-opening — drop the who/when stamp (no longer answered) but keep
+              // the picked method + note for re-answer. GC stamp stays as history.
               const patch={done:false};
-              if(q.answeredVia==='in-person'){ patch.answeredVia=''; patch.answeredBy=''; patch.answeredAt=''; }
+              if(!q.gcAnswered){ patch.answeredBy=''; patch.answeredAt=''; }
               upd(q.id,patch);
             }
           }}
@@ -29188,6 +29197,22 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
             onBlur={html=>upd(q.id,{answer:html})}
             placeholder="Type answer here…"/>
 
+          {/* How answered? — method chips + optional context note (paper trail) */}
+          <div style={{marginTop:8}}>
+            <div style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginBottom:4}}>HOW ANSWERED?</div>
+            <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:6}}>
+              {ANSWER_METHODS.map(m=>{
+                const sel=q.answeredVia===m.v;
+                return <button key={m.v} type="button" onClick={()=>upd(q.id,{answeredVia:sel?'':m.v})}
+                  style={{fontSize:10,fontWeight:600,padding:"3px 9px",borderRadius:99,cursor:"pointer",fontFamily:"inherit",
+                    border:`1px solid ${sel?color:C.border}`,background:sel?`${color}18`:C.card,color:sel?color:C.dim}}>{m.l}</button>;
+              })}
+            </div>
+            <input type="text" value={q.answerNote||""} onChange={e=>upd(q.id,{answerNote:e.target.value})}
+              placeholder="Optional context — e.g. Dusty confirmed panel location"
+              style={{width:"100%",padding:"5px 8px",fontSize:11,border:`1px solid ${C.border}`,borderRadius:6,background:C.card,color:C.text,fontFamily:"inherit",boxSizing:"border-box"}}/>
+          </div>
+
           <div style={{marginTop:6}}>
             <RemindButton
               title="Question needs an answer"
@@ -29210,13 +29235,14 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
             // Paper trail: how the answer came in (link vs in person), who took
             // it, and when. Older answers without a stamp just render nothing.
             const via = q.answeredVia || (q.gcAnswered ? 'link' : '');
-            const methodLabel = via==='link' ? 'Via link' : via==='in-person' ? 'In person' : '';
+            const methodLabel = answerMethodLabel(via);
             const when = q.answeredAt ? new Date(q.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
-            if(!methodLabel && !q.answeredBy && !when) return null;
+            if(!methodLabel && !q.answeredBy && !when && !q.answerNote) return null;
             return (
               <div style={{fontSize:9,color:C.dim,marginTop:3,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
                 {methodLabel&&<span style={{fontWeight:700,color:via==='link'?'#3E7D5A':'#3B5BA5',background:via==='link'?'#DEEFE6':'#E0E8F3',borderRadius:4,padding:'1px 5px'}}>{methodLabel}</span>}
                 {(q.answeredBy||when)&&<span>Answered{q.answeredBy?` by ${q.answeredBy}`:''}{when?` · ${when}`:''}</span>}
+                {q.answerNote&&<span style={{fontStyle:'italic'}}>· {q.answerNote}</span>}
               </div>
             );
           })()}
