@@ -33216,8 +33216,26 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
 // ── QC Walk tracker (admin/manager) ──────────────────────────────────────
 // One place for every job's QC walk: status, stage (rough/finish), scheduled
 // date, and open failed items. Read-only aggregation over the jobs list.
-function QCView({ jobs, onSelectJob }) {
+function QCView({ jobs, onSelectJob, identity }) {
   const [q, setQ] = useState("");
+  const [calUrl, setCalUrl] = useState("");
+  const [urlDraft, setUrlDraft] = useState("");
+  const [calMatches, setCalMatches] = useState([]);
+  const [calMeta, setCalMeta] = useState(null);
+  const [syncing, setSyncing] = useState(false);
+  const isAdmin = getAccess(identity)==="admin";
+  useEffect(()=>{
+    const u1 = onSnapshot(doc(db,"settings","qcCalendar"), s=>{ const u=s.exists()?(s.data().url||""):""; setCalUrl(u); setUrlDraft(u); }, ()=>{});
+    const u2 = onSnapshot(doc(db,"settings","qcCalendarMatches"), s=>{ if(s.exists()){ setCalMatches(s.data().matches||[]); setCalMeta(s.data()); } }, ()=>{});
+    return ()=>{ u1&&u1(); u2&&u2(); };
+  },[]);
+  const saveUrl = () => { setDoc(doc(db,"settings","qcCalendar"),{url:(urlDraft||"").trim(),updatedAt:new Date().toISOString()}).then(()=>toast.success("Calendar URL saved.")).catch(e=>toast.error("Save failed: "+(e?.message||""))); };
+  const syncNow = async () => {
+    setSyncing(true);
+    try { const fn=httpsCallable(functions,"runQcCalendarSync"); const res=await fn(); const d=res.data||{}; if(d.ok) toast.success(`Synced — ${d.matched} of ${d.kept} events matched to jobs.`); else toast.error(d.error||"Sync failed."); }
+    catch(e){ toast.error("Sync failed: "+(e?.message||"")); }
+    setSyncing(false);
+  };
   const countOpen = (punch, onlyFromQC=false) => {
     if(!punch) return 0;
     const fl = (f) => {
@@ -33228,19 +33246,22 @@ function QCView({ jobs, onSelectJob }) {
     };
     return fl(punch.upper)+fl(punch.main)+fl(punch.basement)+((punch.extras||[]).reduce((s,e)=>s+fl(punch[e.key]||{}),0));
   };
+  const calByJob = useMemo(()=>{ const m={}; (calMatches||[]).forEach(c=>{ if(c.jobId && !m[c.jobId]) m[c.jobId]=c; }); return m; }, [calMatches]);
+  const unmatchedCal = useMemo(()=> (calMatches||[]).filter(c=>!c.jobId), [calMatches]);
   const rows = useMemo(()=>{
     const s = q.trim().toLowerCase();
     return (jobs||[]).map(j=>{
       const status = j.qcStatus||"";
       const failed = countOpen(j.qcPunch) + countOpen(j.roughPunch,true) + countOpen(j.finishPunch,true);
-      if(!status && failed===0) return null;
+      const cal = calByJob[j.id];
+      if(!status && failed===0 && !cal) return null;
       const stage = parseStage(j.roughStage)>=100 ? "Finish" : "Rough";
       const def = getStatusDef(QC_STATUSES, status);
-      return { id:j.id, job:j, name:j.name||"Untitled", stage, status, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:j.qcStatusDate||"", failed };
+      return { id:j.id, job:j, name:j.name||"Untitled", stage, status, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.qcStatusDate||(cal?cal.date:"")), failed, cal:!!cal };
     }).filter(Boolean).filter(r=> !s || r.name.toLowerCase().includes(s));
-  }, [jobs, q]);
+  }, [jobs, q, calByJob]);
 
-  const bucketOf = (st) => st==="fail" ? "failed" : st==="needs" ? "needs" : st==="scheduled" ? "scheduled" : (st==="pass"||st==="fixed"||st==="completed") ? "done" : "other";
+  const bucketOf = (r) => r.status==="fail" ? "failed" : r.status==="needs" ? "needs" : (r.status==="scheduled"||r.cal) ? "scheduled" : (r.status==="pass"||r.status==="fixed"||r.status==="completed") ? "done" : "other";
   const BUCKETS = [
     {key:"failed",    label:"Failed — needs return", color:"#B23A3A"},
     {key:"needs",     label:"Needs scheduling",      color:"#B0892C"},
@@ -33264,8 +33285,23 @@ function QCView({ jobs, onSelectJob }) {
           style={{padding:"7px 12px",fontSize:12,border:`1px solid ${C.border}`,borderRadius:8,background:C.card,color:C.text,fontFamily:"inherit",width:200}}/>
       </div>
       <div style={{fontSize:12,color:C.dim,marginBottom:16}}>Every job's QC walk — status, stage, scheduled date, and open failed items, all in one spot.</div>
+
+      {isAdmin && (
+        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",marginBottom:18}}>
+          <div style={{fontSize:12,fontWeight:600,marginBottom:5}}>Google Calendar feed</div>
+          <div style={{fontSize:11,color:C.dim,marginBottom:8}}>Paste your calendar's secret iCal URL (Calendar settings → that calendar → "Secret address in iCal format"). QC walks scheduled there get pulled in + matched to jobs every hour.</div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            <input value={urlDraft} onChange={e=>setUrlDraft(e.target.value)} placeholder="https://calendar.google.com/calendar/ical/…/basic.ics"
+              style={{flex:1,minWidth:240,padding:"7px 10px",fontSize:11,border:`1px solid ${C.border}`,borderRadius:7,background:C.bg,color:C.text,fontFamily:"inherit"}}/>
+            <button onClick={saveUrl} style={{padding:"7px 14px",fontSize:12,fontWeight:700,border:"none",borderRadius:7,background:C.accent,color:"#fff",cursor:"pointer",fontFamily:"inherit"}}>Save</button>
+            <button onClick={syncNow} disabled={syncing||!calUrl} style={{padding:"7px 14px",fontSize:12,fontWeight:600,border:`1px solid ${C.border}`,borderRadius:7,background:"transparent",color:C.dim,cursor:(syncing||!calUrl)?"default":"pointer",fontFamily:"inherit"}}>{syncing?"Syncing…":"Sync now"}</button>
+          </div>
+          {calMeta && <div style={{fontSize:10,color:C.muted,marginTop:6}}>{calMeta.matchedCount||0} of {(calMatches||[]).length} events matched to jobs · updated {calMeta.updatedAt?timeAgo(calMeta.updatedAt):"—"}</div>}
+        </div>
+      )}
+
       {BUCKETS.map(b=>{
-        let list = rows.filter(r=>bucketOf(r.status)===b.key);
+        let list = rows.filter(r=>bucketOf(r)===b.key);
         if(b.key==="scheduled") list = [...list].sort((a,b)=>(a.date||"").localeCompare(b.date||""));
         if(list.length===0) return null;
         return (
@@ -33286,6 +33322,7 @@ function QCView({ jobs, onSelectJob }) {
                   <span style={{fontSize:13,fontWeight:600,color:C.text,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</span>
                   {r.failed>0 && <span style={{fontSize:11,fontWeight:700,color:"#B23A3A",background:"#F6EAEA",border:"1px solid #EAD2D2",borderRadius:99,padding:"1px 9px",whiteSpace:"nowrap"}}>{r.failed} item{r.failed!==1?"s":""}</span>}
                   {r.date && <span style={{fontSize:11,color:C.dim,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"}}>{fmtD(r.date)}</span>}
+                  {r.cal && <span title="Pulled from your calendar" style={{fontSize:8,fontWeight:800,letterSpacing:"0.04em",color:C.accent,background:`${C.accent}18`,border:`1px solid ${C.accent}33`,borderRadius:3,padding:"1px 4px",whiteSpace:"nowrap"}}>CAL</span>}
                   <span style={{fontSize:10,fontWeight:600,color:r.statusColor,background:`${r.statusColor}18`,border:`1px solid ${r.statusColor}33`,borderRadius:99,padding:"2px 9px",whiteSpace:"nowrap"}}>{r.statusLabel}</span>
                 </div>
               ))}
@@ -33293,7 +33330,24 @@ function QCView({ jobs, onSelectJob }) {
           </div>
         );
       })}
-      {rows.length===0 && <div style={{textAlign:"center",padding:"60px 0",color:C.muted,fontSize:13}}>No jobs have QC activity yet.</div>}
+      {unmatchedCal.length>0 && (
+        <div style={{marginBottom:22}}>
+          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,paddingBottom:6,borderBottom:`2px solid #B0892C33`}}>
+            <span style={{width:8,height:8,borderRadius:"50%",background:"#B0892C",flexShrink:0}}/>
+            <span style={{fontSize:13,fontWeight:700,letterSpacing:"0.04em",color:"#B0892C"}}>Calendar — couldn't match to a job</span>
+            <span style={{fontSize:11,color:C.dim}}>{unmatchedCal.length}</span>
+          </div>
+          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
+            {unmatchedCal.map((c,i)=>(
+              <div key={(c.title||"")+i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 14px",borderBottom:i<unmatchedCal.length-1?`1px solid ${C.border}`:"none"}}>
+                <span style={{fontSize:13,color:C.text,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.title||"(untitled event)"}</span>
+                {c.date && <span style={{fontSize:11,color:C.dim,fontVariantNumeric:"tabular-nums"}}>{fmtD(c.date)}</span>}
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+      {rows.length===0 && unmatchedCal.length===0 && <div style={{textAlign:"center",padding:"60px 0",color:C.muted,fontSize:13}}>No jobs have QC activity yet.</div>}
     </div>
   );
 }
@@ -52800,7 +52854,7 @@ function App() {
 
       {view==="nav"&&<NavView jobs={jobs}/>}
 
-      {view==="qc"&&(getAccess(identity)==="admin"||getAccess(identity)==="manager")&&<QCView jobs={jobs} onSelectJob={(j)=>setSelected(j)}/>}
+      {view==="qc"&&(getAccess(identity)==="admin"||getAccess(identity)==="manager")&&<QCView jobs={jobs} onSelectJob={(j)=>setSelected(j)} identity={identity}/>}
 
       {view==="timeoff"&&<TimeOffPage identity={identity} users={users}/>}
 
