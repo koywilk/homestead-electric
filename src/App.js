@@ -33142,15 +33142,15 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                             <div key={g.projectId}
                               onClick={()=>{ if(appJob) onSelectJob(appJob); }}
                               style={{background:C.card,border:`1px solid ${C.border}`,
-                                borderLeft:`3px solid ${blockColor}`,borderRadius:8,
-                                padding:"9px 11px",marginBottom:6,
+                                borderLeft:`3px solid ${blockColor}`,borderRadius:7,
+                                padding:"6px 9px",marginBottom:5,
                                 cursor:appJob?"pointer":"default",
                                 transition:"background 0.15s"}}
                               onMouseEnter={e=>{if(appJob)e.currentTarget.style.background=`${blockColor}11`;}}
                               onMouseLeave={e=>{e.currentTarget.style.background=C.card;}}>
                               <div style={{fontSize:11,fontWeight:700,color:C.text,
                                 whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis",
-                                marginBottom:5}}>{jobName}</div>
+                                marginBottom:3}}>{jobName}</div>
                               {sortedEntries.map(e => {
                                 const fullName  = e.Staff?.Name || "";
                                 const parts     = fullName.split(" ");
@@ -33160,7 +33160,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                                 const eEnd      = fmtTime(e.Blocks?.[e.Blocks?.length-1]?.EndTime);
                                 return shortName ? (
                                   <div key={fullName} style={{display:"flex",justifyContent:"space-between",
-                                    alignItems:"center",marginBottom:3}}>
+                                    alignItems:"center",marginBottom:1}}>
                                     <span style={{fontSize:10,fontWeight:700,color:nameColor}}>{shortName}</span>
                                     {(eStart||eEnd) && (
                                       <span style={{fontSize:9,color:C.dim,fontWeight:500}}>
