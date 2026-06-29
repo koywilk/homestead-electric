@@ -33272,7 +33272,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
 // date, and open failed items. Read-only aggregation over the jobs list.
 function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
   const [q, setQ] = useState("");
-  const [collapsed, setCollapsed] = useState(()=>new Set(["failed","overdue","needs","scheduled","other","done"]));
+  const [collapsed, setCollapsed] = useState(()=>new Set(["failed","overdue","needs","scheduled","other","done","unmatched"]));
   const toggleBucket = (k) => setCollapsed(p=>{ const n=new Set(p); n.has(k)?n.delete(k):n.add(k); return n; });
   const [showDates, setShowDates] = useState(()=>{ try { return localStorage.getItem("qc.showDates")!=="0"; } catch { return true; } });
   const toggleDates = () => setShowDates(v=>{ const nv=!v; try { localStorage.setItem("qc.showDates", nv?"1":"0"); } catch {} return nv; });
@@ -33425,13 +33425,15 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
           </div>
         );
       })}
-      {unmatchedCal.length>0 && (
-        <div style={{marginBottom:22}}>
-          <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,paddingBottom:6,borderBottom:`2px solid #B0892C33`}}>
+      {unmatchedCal.length>0 && (()=>{ const isCol=collapsed.has("unmatched"); return (
+        <div style={{marginBottom:14}}>
+          <div onClick={()=>toggleBucket("unmatched")} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,paddingBottom:6,borderBottom:`2px solid #B0892C33`,cursor:"pointer",userSelect:"none"}}>
             <span style={{width:8,height:8,borderRadius:"50%",background:"#B0892C",flexShrink:0}}/>
             <span style={{fontSize:13,fontWeight:700,letterSpacing:"0.04em",color:"#B0892C"}}>Calendar — couldn't match to a job</span>
-            <span style={{fontSize:11,color:C.dim}}>{unmatchedCal.length}</span>
+            <span style={{fontSize:11,fontWeight:700,color:"#B0892C",background:"#B0892C18",borderRadius:99,padding:"0 8px"}}>{unmatchedCal.length}</span>
+            <span style={{marginLeft:"auto",color:"#B0892C",fontSize:13,fontWeight:700,transform:isCol?"rotate(-90deg)":"none",transition:"transform 0.15s",display:"inline-block"}}>▾</span>
           </div>
+          {!isCol && (
           <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
             {unmatchedCal.map((c,i)=>(
               <div key={(c.title||"")+i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 14px",borderBottom:i<unmatchedCal.length-1?`1px solid ${C.border}`:"none"}}>
@@ -33440,8 +33442,9 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
               </div>
             ))}
           </div>
+          )}
         </div>
-      )}
+      ); })()}
       {rows.length===0 && unmatchedCal.length===0 && <div style={{textAlign:"center",padding:"60px 0",color:C.muted,fontSize:13}}>No jobs have QC activity yet.</div>}
     </div>
   );
