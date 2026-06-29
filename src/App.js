@@ -33272,8 +33272,10 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
 // date, and open failed items. Read-only aggregation over the jobs list.
 function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
   const [q, setQ] = useState("");
-  const [collapsed, setCollapsed] = useState(()=>new Set(["done","other"]));
+  const [collapsed, setCollapsed] = useState(()=>new Set(["failed","overdue","needs","scheduled","other","done"]));
   const toggleBucket = (k) => setCollapsed(p=>{ const n=new Set(p); n.has(k)?n.delete(k):n.add(k); return n; });
+  const [showDates, setShowDates] = useState(()=>{ try { return localStorage.getItem("qc.showDates")!=="0"; } catch { return true; } });
+  const toggleDates = () => setShowDates(v=>{ const nv=!v; try { localStorage.setItem("qc.showDates", nv?"1":"0"); } catch {} return nv; });
   const setStatus = (r, v) => {
     const hasDate = getStatusDef(QC_STATUSES, v).hasDate;
     if(r.phase==="Rough") onPatchJob && onPatchJob(r.job.id, { qcStatus:v, qcStatusDate: hasDate ? (r.job.qcStatusDate||"") : "" });
@@ -33326,10 +33328,10 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
       const calPhase = cal ? ((j.qcStatus==="pass"||j.qcStatus==="fixed"||j.qcStatus==="completed") ? "finish" : "rough") : null;
       // Rough QC (legacy qcStatus is rough-driven)
       const rStatus=j.qcStatus||"", rFailed=countOpen(j.roughPunch,true), rCal=calPhase==="rough";
-      if(rStatus||rFailed>0||rCal){ const def=getStatusDef(QC_STATUSES,rStatus); out.push({ key:j.id+"-r", job:j, name:label, phase:"Rough", status:rStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.qcStatusDate||(rCal?cal.date:"")), failed:rFailed, cal:rCal }); }
+      if(rStatus||rFailed>0||rCal){ const def=getStatusDef(QC_STATUSES,rStatus); out.push({ key:j.id+"-r", job:j, name:label, phase:"Rough", status:rStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.qcStatusDate||(rCal?cal.date:"")), failed:rFailed, cal:rCal, started:parseStage(j.roughStage)>0 }); }
       // Finish QC
       const fInProgress=parseStage(j.finishStage)>=80, fStatus=j.finishQcStatus||(fInProgress?"needs":""), fFailed=countOpen(j.finishPunch,true)+countOpen(j.qcPunch), fCal=calPhase==="finish";
-      if(fStatus||fFailed>0||fCal){ const def=getStatusDef(QC_STATUSES,fStatus); out.push({ key:j.id+"-f", job:j, name:label, phase:"Finish", status:fStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.finishQcStatusDate||(fCal?cal.date:"")), failed:fFailed, cal:fCal }); }
+      if(fStatus||fFailed>0||fCal){ const def=getStatusDef(QC_STATUSES,fStatus); out.push({ key:j.id+"-f", job:j, name:label, phase:"Finish", status:fStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.finishQcStatusDate||(fCal?cal.date:"")), failed:fFailed, cal:fCal, started:parseStage(j.finishStage)>0 }); }
     });
     return out;
   }, [jobs, q, calByJob]);
@@ -33341,7 +33343,7 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
   const bucketOf = (r) => {
     if(r.status==="fail") return "failed";
     if(r.status==="pass"||r.status==="fixed"||r.status==="completed") return "done";
-    if(r.status==="scheduled"||r.cal) return (r.date && r.date < todayYmd) ? "overdue" : "scheduled";
+    if(r.status==="scheduled"||r.cal){ if(r.date && r.date < todayYmd) return r.started ? "overdue" : "needs"; return "scheduled"; }
     if(r.status==="needs") return "needs";
     return "other";
   };
@@ -33365,6 +33367,7 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,letterSpacing:"0.05em",color:C.text}}>QC WALKS</div>
         <div style={{fontSize:12,color:C.dim}}>{rows.length} QC walks (rough + finish)</div>
         <span style={{flex:1}}/>
+        <button onClick={toggleDates} title="Show/hide scheduled dates" style={{padding:"7px 12px",fontSize:12,fontWeight:600,border:`1px solid ${showDates?C.accent:C.border}`,borderRadius:8,background:showDates?`${C.accent}15`:"transparent",color:showDates?C.accent:C.dim,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>{showDates?"Dates: on":"Dates: off"}</button>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search jobs…"
           style={{padding:"7px 12px",fontSize:12,border:`1px solid ${C.border}`,borderRadius:8,background:C.card,color:C.text,fontFamily:"inherit",width:200}}/>
       </div>
@@ -33407,7 +33410,7 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
                   {stagePill(r.phase)}
                   <span onClick={()=>onSelectJob&&onSelectJob(r.job)} title="Open job" style={{fontSize:13,fontWeight:600,color:C.text,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",cursor:"pointer"}}>{r.name}</span>
                   {r.failed>0 && <span title="open QC items" style={{fontSize:11,fontWeight:700,color:"#B23A3A",background:"#F6EAEA",border:"1px solid #EAD2D2",borderRadius:99,padding:"1px 9px",whiteSpace:"nowrap"}}>{r.failed}</span>}
-                  {r.date && <span style={{fontSize:sched?13:11,fontWeight:sched?800:500,color:dateColor,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"}}>{fmtD(r.date)}</span>}
+                  {showDates && sched && r.date && <span style={{fontSize:13,fontWeight:800,color:dateColor,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"}}>{fmtD(r.date)}</span>}
                   {r.cal && <span title="From your calendar" style={{fontSize:8,fontWeight:800,letterSpacing:"0.04em",color:C.accent,background:`${C.accent}18`,border:`1px solid ${C.accent}33`,borderRadius:3,padding:"1px 4px",whiteSpace:"nowrap"}}>CAL</span>}
                   <button onClick={()=>scheduleOnCal(r)} title="Schedule on Google Calendar" style={{fontSize:10,fontWeight:700,color:C.accent,background:"transparent",border:`1px solid ${C.accent}55`,borderRadius:6,padding:"3px 8px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}><Icon name="calendar" size={11} stroke={2.25}/>Schedule</button>
                   <select value={r.status} onChange={e=>setStatus(r,e.target.value)}
