@@ -33213,6 +33213,91 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
 
 // ── Nav View ──────────────────────────────────────────────────
 
+// ── QC Walk tracker (admin/manager) ──────────────────────────────────────
+// One place for every job's QC walk: status, stage (rough/finish), scheduled
+// date, and open failed items. Read-only aggregation over the jobs list.
+function QCView({ jobs, onSelectJob }) {
+  const [q, setQ] = useState("");
+  const countOpen = (punch, onlyFromQC=false) => {
+    if(!punch) return 0;
+    const fl = (f) => {
+      if(!f || Array.isArray(f)) return 0;
+      const ok = (i) => i && !i.done && !i.voided && (!onlyFromQC || i.fromQC);
+      return (f.general||[]).filter(ok).length + (f.hotcheck||[]).filter(ok).length +
+        (f.rooms||[]).reduce((a,r)=>a+(Array.isArray(r.items)?r.items.filter(ok).length:0),0);
+    };
+    return fl(punch.upper)+fl(punch.main)+fl(punch.basement)+((punch.extras||[]).reduce((s,e)=>s+fl(punch[e.key]||{}),0));
+  };
+  const rows = useMemo(()=>{
+    const s = q.trim().toLowerCase();
+    return (jobs||[]).map(j=>{
+      const status = j.qcStatus||"";
+      const failed = countOpen(j.qcPunch) + countOpen(j.roughPunch,true) + countOpen(j.finishPunch,true);
+      if(!status && failed===0) return null;
+      const stage = parseStage(j.roughStage)>=100 ? "Finish" : "Rough";
+      const def = getStatusDef(QC_STATUSES, status);
+      return { id:j.id, job:j, name:j.name||"Untitled", stage, status, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:j.qcStatusDate||"", failed };
+    }).filter(Boolean).filter(r=> !s || r.name.toLowerCase().includes(s));
+  }, [jobs, q]);
+
+  const bucketOf = (st) => st==="fail" ? "failed" : st==="needs" ? "needs" : st==="scheduled" ? "scheduled" : (st==="pass"||st==="fixed"||st==="completed") ? "done" : "other";
+  const BUCKETS = [
+    {key:"failed",    label:"Failed — needs return", color:"#B23A3A"},
+    {key:"needs",     label:"Needs scheduling",      color:"#B0892C"},
+    {key:"scheduled", label:"Scheduled",             color:"#3B5BA5"},
+    {key:"other",     label:"Has QC items",          color:C.dim},
+    {key:"done",      label:"Passed / done",         color:"#46916A"},
+  ];
+  const stagePill = (stage) => (
+    <span style={{fontSize:9,fontWeight:800,letterSpacing:"0.06em",textTransform:"uppercase",borderRadius:4,padding:"1px 6px",flexShrink:0,
+      color:stage==="Finish"?C.finish:C.rough, background:`${stage==="Finish"?C.finish:C.rough}18`, border:`1px solid ${stage==="Finish"?C.finish:C.rough}33`}}>{stage}</span>
+  );
+  const fmtD = (d) => { if(!d) return ""; const dt=new Date(d); return isNaN(dt)?d:dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
+
+  return (
+    <div style={{padding:"18px 26px 60px", maxWidth:980, margin:"0 auto"}}>
+      <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",marginBottom:4}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,letterSpacing:"0.05em",color:C.text}}>QC WALKS</div>
+        <div style={{fontSize:12,color:C.dim}}>{rows.length} jobs with QC activity</div>
+        <span style={{flex:1}}/>
+        <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search jobs…"
+          style={{padding:"7px 12px",fontSize:12,border:`1px solid ${C.border}`,borderRadius:8,background:C.card,color:C.text,fontFamily:"inherit",width:200}}/>
+      </div>
+      <div style={{fontSize:12,color:C.dim,marginBottom:16}}>Every job's QC walk — status, stage, scheduled date, and open failed items, all in one spot.</div>
+      {BUCKETS.map(b=>{
+        let list = rows.filter(r=>bucketOf(r.status)===b.key);
+        if(b.key==="scheduled") list = [...list].sort((a,b)=>(a.date||"").localeCompare(b.date||""));
+        if(list.length===0) return null;
+        return (
+          <div key={b.key} style={{marginBottom:22}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,paddingBottom:6,borderBottom:`2px solid ${b.color}33`}}>
+              <span style={{width:8,height:8,borderRadius:"50%",background:b.color,flexShrink:0}}/>
+              <span style={{fontSize:13,fontWeight:700,letterSpacing:"0.04em",color:b.color}}>{b.label}</span>
+              <span style={{fontSize:11,color:C.dim}}>{list.length}</span>
+            </div>
+            <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
+              {list.map((r,i)=>(
+                <div key={r.id} onClick={()=>onSelectJob&&onSelectJob(r.job)}
+                  style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",cursor:"pointer",
+                    borderBottom:i<list.length-1?`1px solid ${C.border}`:"none"}}
+                  onMouseEnter={e=>e.currentTarget.style.background=C.surface}
+                  onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+                  {stagePill(r.stage)}
+                  <span style={{fontSize:13,fontWeight:600,color:C.text,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</span>
+                  {r.failed>0 && <span style={{fontSize:11,fontWeight:700,color:"#B23A3A",background:"#F6EAEA",border:"1px solid #EAD2D2",borderRadius:99,padding:"1px 9px",whiteSpace:"nowrap"}}>{r.failed} item{r.failed!==1?"s":""}</span>}
+                  {r.date && <span style={{fontSize:11,color:C.dim,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"}}>{fmtD(r.date)}</span>}
+                  <span style={{fontSize:10,fontWeight:600,color:r.statusColor,background:`${r.statusColor}18`,border:`1px solid ${r.statusColor}33`,borderRadius:99,padding:"2px 9px",whiteSpace:"nowrap"}}>{r.statusLabel}</span>
+                </div>
+              ))}
+            </div>
+          </div>
+        );
+      })}
+      {rows.length===0 && <div style={{textAlign:"center",padding:"60px 0",color:C.muted,fontSize:13}}>No jobs have QC activity yet.</div>}
+    </div>
+  );
+}
+
 function NavView({ jobs }) {
   const [search, setSearch] = useState("");
   const s = search.toLowerCase().trim();
@@ -51201,6 +51286,7 @@ function App() {
               {key:"schedule",label:"Forecast"},
               ...(can(identity,"settings.view")?[{key:"huddle",label:"Huddle"}]:[]),
               ...(can(identity,"scoreboard.editWeights")?[{key:"scoreboard",label:"Scoreboard"}]:[]),  // PHASE-4 ADMIN-ONLY: tab hidden for non-admins until boss approves
+              ...((getAccess(identity)==="admin"||getAccess(identity)==="manager")?[{key:"qc",label:"QC"}]:[]),
               {key:"appmap",label:"App Map"},
             ]
         ).map(({key,label,icon})=>{
@@ -52713,6 +52799,8 @@ function App() {
       )}
 
       {view==="nav"&&<NavView jobs={jobs}/>}
+
+      {view==="qc"&&(getAccess(identity)==="admin"||getAccess(identity)==="manager")&&<QCView jobs={jobs} onSelectJob={(j)=>setSelected(j)}/>}
 
       {view==="timeoff"&&<TimeOffPage identity={identity} users={users}/>}
 
