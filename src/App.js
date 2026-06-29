@@ -1077,6 +1077,9 @@ const QUICK_JOB_TYPES = [
   {value:"other",      label:"Other",           color:"#6E7682"},
 ];
 const getStatusDef = (arr, val) => arr.find(x=>x.value===val)||{};
+// Job display label with the Simpro job number in front, so the crew can read
+// the # everywhere a job name shows without opening the job.
+const jobLabel = (j) => j ? `${j.simproNo?`#${j.simproNo} `:""}${j.name||""}`.trim() : "";
 
 // ── Simpro "on current schedule" cache ─────────────────────────
 // Used by the In Progress → On Schedule / Ongoing pill on Rough/Finish phases.
@@ -33147,7 +33150,7 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
                           fontStyle:"italic"}}>—</div>
                       : dayJobs.map(g => {
                           const appJob   = jobBySimproNo[g.projectId];
-                          const jobName  = appJob?.name || g.ref || `Job #${g.projectId}`;
+                          const jobName  = (appJob ? jobLabel(appJob) : "") || g.ref || `Job #${g.projectId}`;
                           // Filter entries to only the active crew when filtered
                           const visibleEntries = personFilter === "all"
                             ? g.entries
@@ -33257,7 +33260,7 @@ function QCView({ jobs, onSelectJob, identity }) {
       if(!status && failed===0 && !cal) return null;
       const stage = parseStage(j.roughStage)>=100 ? "Finish" : "Rough";
       const def = getStatusDef(QC_STATUSES, status);
-      return { id:j.id, job:j, name:j.name||"Untitled", stage, status, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.qcStatusDate||(cal?cal.date:"")), failed, cal:!!cal };
+      return { id:j.id, job:j, name:jobLabel(j)||"Untitled", stage, status, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.qcStatusDate||(cal?cal.date:"")), failed, cal:!!cal };
     }).filter(Boolean).filter(r=> !s || r.name.toLowerCase().includes(s));
   }, [jobs, q, calByJob]);
 
@@ -50797,7 +50800,7 @@ function App() {
 
               {job.type==="quote"&&<span style={{fontSize:10,fontWeight:700,color:"#000",background:C.accent,borderRadius:4,padding:"1px 6px",flexShrink:0}}>{job.quoteNumber||"Q"}</span>}
 
-              <span style={{fontWeight:600,fontSize:13,color:C.text}}>{job.name||"Untitled Job"}</span>
+              <span style={{fontWeight:600,fontSize:13,color:C.text}}>{job.simproNo&&<span style={{color:C.dim,fontWeight:700,marginRight:5}}>#{job.simproNo}</span>}{job.name||"Untitled Job"}</span>
 
               <StatusUpdateHover statusUpdate={job.statusUpdate} anchor="left"/>
 
