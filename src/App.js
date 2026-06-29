@@ -33270,8 +33270,21 @@ function SimproCrewSchedule({ jobs, identity, users=[], foremanColors={}, onSele
 // ── QC Walk tracker (admin/manager) ──────────────────────────────────────
 // One place for every job's QC walk: status, stage (rough/finish), scheduled
 // date, and open failed items. Read-only aggregation over the jobs list.
-function QCView({ jobs, onSelectJob, identity }) {
+function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
   const [q, setQ] = useState("");
+  const [collapsed, setCollapsed] = useState(()=>new Set(["done","other"]));
+  const toggleBucket = (k) => setCollapsed(p=>{ const n=new Set(p); n.has(k)?n.delete(k):n.add(k); return n; });
+  const setStatus = (r, v) => {
+    const hasDate = getStatusDef(QC_STATUSES, v).hasDate;
+    if(r.phase==="Rough") onPatchJob && onPatchJob(r.job.id, { qcStatus:v, qcStatusDate: hasDate ? (r.job.qcStatusDate||"") : "" });
+    else onPatchJob && onPatchJob(r.job.id, { finishQcStatus:v, finishQcStatusDate: hasDate ? (r.job.finishQcStatusDate||"") : "" });
+    if(v==="fail") toast.warn("QC Fail set — open the job to queue the return trip.");
+  };
+  const scheduleOnCal = (r) => {
+    const title = encodeURIComponent(`${r.phase} QC Walk — ${r.name}`);
+    const details = encodeURIComponent(`Homestead Electric — ${r.phase} QC walk for ${r.name}.`);
+    window.open(`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${details}`, "_blank", "noopener");
+  };
   const [calUrl, setCalUrl] = useState("");
   const [urlDraft, setUrlDraft] = useState("");
   const [calMatches, setCalMatches] = useState([]);
@@ -33375,29 +33388,37 @@ function QCView({ jobs, onSelectJob, identity }) {
         let list = rows.filter(r=>bucketOf(r)===b.key);
         if(b.key==="scheduled"||b.key==="overdue") list = [...list].sort((a,b)=>(a.date||"").localeCompare(b.date||""));
         if(list.length===0) return null;
+        const isCol = collapsed.has(b.key);
         return (
-          <div key={b.key} style={{marginBottom:22}}>
-            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,paddingBottom:6,borderBottom:`2px solid ${b.color}33`}}>
+          <div key={b.key} style={{marginBottom:14}}>
+            <div onClick={()=>toggleBucket(b.key)} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,paddingBottom:6,borderBottom:`2px solid ${b.color}33`,cursor:"pointer",userSelect:"none"}}>
               <span style={{width:8,height:8,borderRadius:"50%",background:b.color,flexShrink:0}}/>
               <span style={{fontSize:13,fontWeight:700,letterSpacing:"0.04em",color:b.color}}>{b.label}</span>
-              <span style={{fontSize:11,color:C.dim}}>{list.length}</span>
+              <span style={{fontSize:11,fontWeight:700,color:b.color,background:`${b.color}18`,borderRadius:99,padding:"0 8px"}}>{list.length}</span>
+              <span style={{marginLeft:"auto",color:b.color,fontSize:13,fontWeight:700,transform:isCol?"rotate(-90deg)":"none",transition:"transform 0.15s",display:"inline-block"}}>▾</span>
             </div>
+            {!isCol && (
             <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
-              {list.map((r,i)=>(
-                <div key={r.key} onClick={()=>onSelectJob&&onSelectJob(r.job)}
-                  style={{display:"flex",alignItems:"center",gap:10,padding:"10px 14px",cursor:"pointer",
-                    borderBottom:i<list.length-1?`1px solid ${C.border}`:"none"}}
-                  onMouseEnter={e=>e.currentTarget.style.background=C.surface}
-                  onMouseLeave={e=>e.currentTarget.style.background="transparent"}>
+              {list.map((r,i)=>{
+                const sched = b.key==="scheduled"||b.key==="overdue";
+                const dateColor = b.key==="overdue" ? "#B23A3A" : sched ? C.accent : C.dim;
+                return (
+                <div key={r.key} style={{display:"flex",alignItems:"center",gap:9,padding:"9px 14px",borderBottom:i<list.length-1?`1px solid ${C.border}`:"none"}}>
                   {stagePill(r.phase)}
-                  <span style={{fontSize:13,fontWeight:600,color:C.text,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{r.name}</span>
-                  {r.failed>0 && <span style={{fontSize:11,fontWeight:700,color:"#B23A3A",background:"#F6EAEA",border:"1px solid #EAD2D2",borderRadius:99,padding:"1px 9px",whiteSpace:"nowrap"}}>{r.failed} item{r.failed!==1?"s":""}</span>}
-                  {r.date && <span style={{fontSize:11,color:C.dim,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"}}>{fmtD(r.date)}</span>}
-                  {r.cal && <span title="Pulled from your calendar" style={{fontSize:8,fontWeight:800,letterSpacing:"0.04em",color:C.accent,background:`${C.accent}18`,border:`1px solid ${C.accent}33`,borderRadius:3,padding:"1px 4px",whiteSpace:"nowrap"}}>CAL</span>}
-                  <span style={{fontSize:10,fontWeight:600,color:r.statusColor,background:`${r.statusColor}18`,border:`1px solid ${r.statusColor}33`,borderRadius:99,padding:"2px 9px",whiteSpace:"nowrap"}}>{r.statusLabel}</span>
+                  <span onClick={()=>onSelectJob&&onSelectJob(r.job)} title="Open job" style={{fontSize:13,fontWeight:600,color:C.text,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",cursor:"pointer"}}>{r.name}</span>
+                  {r.failed>0 && <span title="open QC items" style={{fontSize:11,fontWeight:700,color:"#B23A3A",background:"#F6EAEA",border:"1px solid #EAD2D2",borderRadius:99,padding:"1px 9px",whiteSpace:"nowrap"}}>{r.failed}</span>}
+                  {r.date && <span style={{fontSize:sched?13:11,fontWeight:sched?800:500,color:dateColor,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"}}>{fmtD(r.date)}</span>}
+                  {r.cal && <span title="From your calendar" style={{fontSize:8,fontWeight:800,letterSpacing:"0.04em",color:C.accent,background:`${C.accent}18`,border:`1px solid ${C.accent}33`,borderRadius:3,padding:"1px 4px",whiteSpace:"nowrap"}}>CAL</span>}
+                  <button onClick={()=>scheduleOnCal(r)} title="Schedule on Google Calendar" style={{fontSize:10,fontWeight:700,color:C.accent,background:"transparent",border:`1px solid ${C.accent}55`,borderRadius:6,padding:"3px 8px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}><Icon name="calendar" size={11} stroke={2.25}/>Schedule</button>
+                  <select value={r.status} onChange={e=>setStatus(r,e.target.value)}
+                    style={{fontSize:11,fontWeight:600,color:r.statusColor,background:`${r.statusColor}14`,border:`1px solid ${r.statusColor}44`,borderRadius:99,padding:"3px 8px",fontFamily:"inherit",cursor:"pointer",outline:"none",maxWidth:160,flexShrink:0}}>
+                    {QC_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label||"— set —"}</option>)}
+                  </select>
                 </div>
-              ))}
+                );
+              })}
             </div>
+            )}
           </div>
         );
       })}
@@ -52925,7 +52946,7 @@ function App() {
 
       {view==="nav"&&<NavView jobs={jobs}/>}
 
-      {view==="qc"&&(getAccess(identity)==="admin"||getAccess(identity)==="manager")&&<QCView jobs={jobs} onSelectJob={(j)=>setSelected(j)} identity={identity}/>}
+      {view==="qc"&&(getAccess(identity)==="admin"||getAccess(identity)==="manager")&&<QCView jobs={jobs} onSelectJob={(j)=>setSelected(j)} identity={identity} onPatchJob={(jobId,patch)=>{ const j=jobs.find(x=>x.id===jobId); if(j){ const updated={...j,...patch}; updateJob(updated,patch); } }}/>}
 
       {view==="timeoff"&&<TimeOffPage identity={identity} users={users}/>}
 
