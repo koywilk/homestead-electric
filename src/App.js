@@ -3233,6 +3233,9 @@ const NOTIF_CATEGORIES = [
     { key:"daily_update",      label:"Daily update added",                   roles:["admin","manager"] },
     { key:"question_answered", label:"Question answered",                    roles:["admin","manager","foreman","lead"] },
   ]},
+  { label:"Time Off", items:[
+    { key:"timeoff_requested", label:"Time off requested (your crew)",        roles:["admin","manager","foreman"] },
+  ]},
   { label:"Reminders", items:[
     { key:"renudge",           label:"Manual reminder from a teammate",       roles:["admin","manager","foreman","lead","crew"] },
     { key:"reminder_plans",    label:"Plans check (2 days before start)",    roles:["admin","manager"] },
@@ -45497,7 +45500,7 @@ const FEATURES_MD_INLINE = String.raw`
 - **Upcoming** · shipped · jobs in the pipeline before they're full jobs
   - Progress photos per upcoming job (add in edit form, thumbnails on card + table) · shipped 2026-06-26 · SW v237
 - **Coordinator Book page** · shipped 2026-06-26 · SW v238 (decluttered v239) · "Show all jobs" button on each Home "X's Book" band opens a combined list of every job across that coordinator's foremen — flat by stage, foreman tag on each row, completed hidden behind a toggle, shared search/stage/flag filters
-- **Time Off** · shipped 2026-06-26 · SW v244 · crew request time off (More menu); admins + the requester's coordinator approve/deny; approved days flow onto the Crew Planner PTO calendar. Stored in settings/timeOffRequests (no rules change)
+- **Time Off** · shipped 2026-06-26 · SW v244 · crew request time off (More menu); admins + the requester's coordinator approve/deny; approved days flow onto the Crew Planner PTO calendar. Stored in settings/timeOffRequests (no rules change). v265: PTO-vs-unpaid choice on each request (PTO/UNPAID pill, carried onto the calendar) + approvers get a notification when a request comes in (timeoff_requested pref)
 - **Quotes** · shipped · proposed jobs awaiting conversion
 - **Walks** · shipped · quote walks tracking
 - **Tasks** · shipped · cross-job and manual tasks
@@ -45718,7 +45721,7 @@ function TimeOffPage({ identity = null, users = [] }) {
   const access = getAccess(identity);
   const [requests, setRequests] = useState([]);
   const [ptoList, setPtoList] = useState([]);
-  const [draft, setDraft] = useState({ start:"", end:"", note:"" });
+  const [draft, setDraft] = useState({ start:"", end:"", note:"", usePaid:true });
   const [submitting, setSubmitting] = useState(false);
   const [showDecided, setShowDecided] = useState(false);
 
@@ -45752,10 +45755,14 @@ function TimeOffPage({ identity = null, users = [] }) {
     try {
       const entry = { id:"to_"+Math.random().toString(36).slice(2,9)+Date.now().toString(36),
         name:me, start:draft.start, end:draft.end||draft.start, note:(draft.note||"").trim(),
+        usePaid: draft.usePaid !== false,
         status:"pending", requestedAt:new Date().toISOString() };
       await _saveRequests([entry, ...requests]); // append onto the freshest subscribed list
-      setDraft({ start:"", end:"", note:"" });
+      setDraft({ start:"", end:"", note:"", usePaid:true });
       toast.success("Time-off request submitted.");
+      // Notify approvers (admins/managers + this person's coordinator). Best-effort.
+      try { httpsCallable(functions,"notifyTimeOffRequest")({ requesterName:me, start:entry.start, end:entry.end, note:entry.note, usePaid:entry.usePaid }); }
+      catch(_) {}
     } catch(e) { toast.error("Couldn't submit: "+(e?.message||"")); }
     setSubmitting(false);
   };
@@ -45764,7 +45771,7 @@ function TimeOffPage({ identity = null, users = [] }) {
     try {
       await _saveRequests(requests.map(x => x.id===r.id ? { ...x, status, decidedBy:me, decidedAt:new Date().toISOString() } : x));
       if (status === "approved" && !(ptoList||[]).some(p => p.timeoffId === r.id)) {
-        const entry = { id:"pto_"+r.id, timeoffId:r.id, name:r.name, start:r.start, end:r.end||r.start, note:r.note||"Time off" };
+        const entry = { id:"pto_"+r.id, timeoffId:r.id, name:r.name, start:r.start, end:r.end||r.start, note:r.note||"Time off", usePaid:r.usePaid!==false };
         await setDoc(doc(db,"settings","crewPTO"), { list:[...(ptoList||[]), entry], updatedAt:new Date().toISOString() });
       }
       if (status !== "approved") {
@@ -45801,6 +45808,9 @@ function TimeOffPage({ identity = null, users = [] }) {
         <span style={{fontSize:13, fontWeight:600, color:C.text}}>{r.name}</span>
         <span style={{fontSize:12, color:C.dim, fontVariantNumeric:"tabular-nums"}}>{fmtRange(r)}</span>
         {statusPill(r.status)}
+        {r.usePaid===false
+          ? <span style={{fontSize:10.5, fontWeight:700, color:C.dim, background:C.surface, border:`1px solid ${C.border}`, borderRadius:99, padding:"1px 8px"}}>UNPAID</span>
+          : <span style={{fontSize:10.5, fontWeight:700, color:C.accent, background:`${C.accent}14`, border:`1px solid ${C.accent}33`, borderRadius:99, padding:"1px 8px"}}>PTO</span>}
         <span style={{flex:1}}/>
         {withActions && r.status==="pending" && (<>
           <button onClick={()=>decide(r,"approved")} style={{padding:"4px 12px", fontSize:12, fontWeight:700, border:"none", borderRadius:7, background:"#2C5C40", color:"#fff", cursor:"pointer", fontFamily:"inherit"}}>Approve</button>
@@ -45824,6 +45834,17 @@ function TimeOffPage({ identity = null, users = [] }) {
         <div style={{display:"flex", gap:12, flexWrap:"wrap", marginBottom:10}}>
           <div><div style={{fontSize:10, color:C.dim, marginBottom:3}}>Start</div><DateInp value={draft.start} onChange={e=>setDraft({...draft, start:e.target.value})}/></div>
           <div><div style={{fontSize:10, color:C.dim, marginBottom:3}}>End <span style={{color:C.muted}}>(optional)</span></div><DateInp value={draft.end} onChange={e=>setDraft({...draft, end:e.target.value})}/></div>
+        </div>
+        <div style={{marginBottom:10}}>
+          <div style={{fontSize:10, color:C.dim, marginBottom:4}}>Pay</div>
+          <div style={{display:"inline-flex", border:`1px solid ${C.border}`, borderRadius:8, overflow:"hidden"}}>
+            {[{v:true,label:"Use PTO (paid)"},{v:false,label:"Unpaid"}].map((o,i)=>{
+              const on = draft.usePaid===o.v;
+              return <button key={String(o.v)} onClick={()=>setDraft({...draft, usePaid:o.v})}
+                style={{padding:"7px 14px", fontSize:12, fontWeight:on?700:600, border:"none", borderLeft:i?`1px solid ${C.border}`:"none",
+                  background:on?C.accent:"transparent", color:on?"#fff":C.dim, cursor:"pointer", fontFamily:"inherit"}}>{o.label}</button>;
+            })}
+          </div>
         </div>
         <div style={{marginBottom:10}}><div style={{fontSize:10, color:C.dim, marginBottom:3}}>Reason / note <span style={{color:C.muted}}>(optional)</span></div>
           <input type="text" value={draft.note} onChange={e=>setDraft({...draft, note:e.target.value})} placeholder="e.g. family trip, appointment…"

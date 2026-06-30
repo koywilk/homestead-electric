@@ -294,6 +294,50 @@ exports.reNudge = functions.https.onCall(async (data) => {
   return { ok: true, to: user.name, tokenCount: tokens.length };
 });
 
+// Notify approvers when someone requests time off. Recipients = all admins/managers
+// + the requester's own coordinator. Gated by the `timeoff_requested` pref
+// (default on). Inbox write always happens; push is best-effort on top.
+exports.notifyTimeOffRequest = functions.https.onCall(async (data) => {
+  const { requesterName, start, end, note, usePaid } = data || {};
+  if (!requesterName) throw new functions.https.HttpsError("invalid-argument", "requesterName required");
+  const users = await getUsers();
+  const accessOf = (u) => {
+    if (u.access) return u.access;
+    const m = { admin:"admin", justin:"admin", jeromy:"manager", foreman:"standard", lead:"limited", crew:"limited" };
+    return m[u.role] || "limited";
+  };
+  // Find the requester's coordinator (their own if foreman, else their foreman's).
+  const reqUser = users.find(u => (u.name||"").toLowerCase() === String(requesterName).toLowerCase());
+  let coordName = "";
+  if (reqUser) {
+    if ((reqUser.title||reqUser.role)==="foreman" && reqUser.coordinator) coordName = reqUser.coordinator;
+    else if (reqUser.foremanId) { const fm = users.find(u=>u.id===reqUser.foremanId); coordName = (fm&&fm.coordinator)||""; }
+  }
+  const targets = users.filter(u => {
+    const acc = accessOf(u);
+    if (acc==="admin" || acc==="manager") return true;
+    if (coordName && (u.name||"").toLowerCase()===String(coordName).toLowerCase()) return true;
+    return false;
+  });
+  const range = (end && end!==start) ? `${start} → ${end}` : start;
+  const payTag = usePaid===false ? " (unpaid)" : " (PTO)";
+  const seen = new Set();
+  const sends = [];
+  for (const u of targets) {
+    const id = u.id || u.name;
+    if (seen.has(id)) continue; seen.add(id);
+    if (!wantsNotif(u, "timeoff_requested")) continue;
+    sends.push(deliver(u, {
+      title: "Time off requested",
+      body: `${requesterName} requested ${range}${payTag}${note?` — ${note}`:""}`,
+      jobId: "",
+      section: "timeoff",
+    }));
+  }
+  await Promise.all(sends);
+  return { ok: true, notified: sends.length };
+});
+
 async function sendToName(name, notification) {
   if (!name || name === "Unassigned") return;
   const users = await getUsers();
@@ -4998,3 +5042,73 @@ exports.notifInboxPrune = functions.pubsub
     functions.logger.info("[notifInboxPrune] ran", { deleted });
     return null;
   });
+
+// ─── QC walk calendar sync ───────────────────────────────────────────────
+// Pulls QC walks scheduled on Koy's Google Calendar. The secret iCal URL is
+// stored in settings/qcCalendar (entered in-app) — NEVER in this repo, since it
+// grants read access to the calendar. Fuzzy-matches event titles to jobs and
+// writes results to settings/qcCalendarMatches for the QC tab to read.
+function _icsUnfold(t){ return String(t||"").replace(/\r\n[ \t]/g,"").replace(/\n[ \t]/g,""); }
+function _icsParse(text){
+  const out=[];
+  const blocks=_icsUnfold(text).split("BEGIN:VEVENT").slice(1);
+  for(const b of blocks){
+    const body=b.split("END:VEVENT")[0];
+    const get=(k)=>{ const m=body.match(new RegExp("(?:^|\\n)"+k+"[^:\\n]*:(.*)")); return m?m[1].trim():""; };
+    const summary=get("SUMMARY");
+    const dtRaw=get("DTSTART");
+    if(!summary) continue;
+    const dm=dtRaw.match(/(\d{4})(\d{2})(\d{2})/);
+    out.push({ summary, date: dm?`${dm[1]}-${dm[2]}-${dm[3]}`:"" });
+  }
+  return out;
+}
+function _qcNorm(s){ return String(s||"").toLowerCase().replace(/[^a-z0-9 ]/g," ").replace(/\s+/g," ").trim(); }
+function _qcMatchJob(summary, jobs){
+  const ns=_qcNorm(summary);
+  const num=(summary.match(/#?\s?(\d{3,5})\b/)||[])[1];
+  if(num){
+    const byNum=jobs.find(j=> (_qcNorm(j.name).match(/\b(\d{3,5})\b/)||[])[1]===num || String(j.simproNo||"")===num);
+    if(byNum) return byNum;
+  }
+  let best=null, bestScore=0;
+  for(const j of jobs){
+    const nj=_qcNorm(j.name); if(!nj) continue;
+    const jtok=nj.split(" ").filter(w=>w.length>=4 && !/^\d+$/.test(w));
+    if(!jtok.length) continue;
+    const hit=jtok.filter(w=>ns.includes(w)).length;
+    const score=hit/jtok.length;
+    if(hit>0 && score>bestScore){ bestScore=score; best=j; }
+  }
+  return (best && bestScore>=0.5) ? best : null;
+}
+async function _qcCalendarSync(){
+  const cfg = await db.doc("settings/qcCalendar").get();
+  const url = cfg.exists ? (cfg.data().url||"") : "";
+  if(!url) return { ok:false, error:"No calendar URL set." };
+  let text="";
+  try { const res = await fetch(url); text = await res.text(); }
+  catch(e){ return { ok:false, error:"Couldn't fetch calendar: "+e.message }; }
+  const events=_icsParse(text);
+  const jobsSnap=await db.collection("jobs").get();
+  const jobs=jobsSnap.docs.map(d=>{ const raw=d.data(); const data=(raw&&raw.data)?raw.data:{}; return { id:d.id, name:data.name||"", simproNo:data.simproNo||"" }; }).filter(j=>j.name);
+  const matches=[];
+  for(const e of events){
+    const looksQc=/\bqc\b|quality|walk/i.test(e.summary);
+    const j=_qcMatchJob(e.summary, jobs);
+    if(!looksQc && !j) continue;
+    matches.push({ title:e.summary, date:e.date, jobId:j?j.id:null, jobName:j?j.name:"" });
+  }
+  matches.sort((a,b)=>(a.date||"").localeCompare(b.date||""));
+  await db.doc("settings/qcCalendarMatches").set({ matches, updatedAt:new Date().toISOString(), eventCount:events.length, matchedCount:matches.filter(m=>m.jobId).length });
+  return { ok:true, events:events.length, kept:matches.length, matched:matches.filter(m=>m.jobId).length };
+}
+exports.syncQcCalendar = functions.pubsub.schedule("every 60 minutes").timeZone(TZ).onRun(async ()=>{
+  const r = await _qcCalendarSync();
+  functions.logger.info("[syncQcCalendar] ran", r);
+  return null;
+});
+// Manual trigger so Koy can pull immediately after setting the URL (admin-gated in UI).
+exports.runQcCalendarSync = functions.https.onCall(async () => {
+  return await _qcCalendarSync();
+});
