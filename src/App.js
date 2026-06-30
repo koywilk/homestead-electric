@@ -5280,29 +5280,31 @@ function NeedsAttention({jobs, onSelectJob}) {
 
   const total = startingSoon.length+unanswered.length+unsentPOs.length+waitingItems.length+pendingCOs.length+unscheduledRTs.length;
 
-  const SectionHeader = ({icon, label, count, color}) => count===0 ? null : (
-    <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:8,marginTop:14}}>
-      <span style={{color,display:'inline-flex',alignItems:'center'}}><Icon name={icon} size={13} stroke={2.25}/></span>
-      <span style={{fontSize:11,fontWeight:800,color,letterSpacing:'0.06em',textTransform:'uppercase'}}>{label}</span>
-      <span style={{fontSize:10,fontWeight:700,background:`${color}22`,color,borderRadius:99,padding:'1px 7px',border:`1px solid ${color}44`}}>{count}</span>
+  const SectionHeader = ({label, count, accent}) => count===0 ? null : (
+    <div style={{display:'flex',alignItems:'center',gap:7,margin:'14px 0 8px'}}>
+      <span style={{width:7,height:7,borderRadius:'50%',background:accent?C.accent:'#8A94A3',display:'inline-block',flexShrink:0}}/>
+      <span style={{fontSize:11,fontWeight:800,letterSpacing:'0.05em',textTransform:'uppercase',color:C.text}}>{label}</span>
+      <span style={{fontSize:10,fontWeight:700,background:accent?'#EAF0FA':C.surface,color:accent?C.accent:C.dim,border:`1px solid ${accent?'#C7D6EE':C.border}`,borderRadius:99,padding:'1px 7px'}}>{count}</span>
     </div>
   );
 
-  const JobRow = ({job, name, badge, badgeColor, detail, urgent}) => (
+  const JobRow = ({job, name, badge, detail, urgent}) => (
     <div onClick={()=>onSelectJob(job)}
       style={{display:'flex',alignItems:'flex-start',gap:10,padding:'8px 12px',marginBottom:5,
-        background: urgent?'rgba(178,58,58,0.05)':C.surface,
-        border:`1px solid ${urgent?'rgba(178,58,58,0.3)':C.border}`,
-        borderLeft:`3px solid ${badgeColor}`,
+        background: urgent?'#F3F6FB':C.card,
+        border:`1px solid ${C.border}`,
+        borderLeft:`3px solid ${urgent?C.accent:C.muted}`,
         borderRadius:8,cursor:'pointer',transition:'background 0.1s'}}
-      onMouseEnter={e=>e.currentTarget.style.background=urgent?'rgba(178,58,58,0.08)':`${C.border}66`}
-      onMouseLeave={e=>e.currentTarget.style.background=urgent?'rgba(178,58,58,0.05)':C.surface}>
+      onMouseEnter={e=>e.currentTarget.style.background=urgent?'#EAF0FA':C.surface}
+      onMouseLeave={e=>e.currentTarget.style.background=urgent?'#F3F6FB':C.card}>
       <div style={{flex:1,minWidth:0}}>
         <div style={{fontSize:12,fontWeight:700,color:C.text,marginBottom:2}}>{name}</div>
         {detail&&<div style={{fontSize:10,color:C.dim,lineHeight:1.4}}>{detail}</div>}
       </div>
-      {badge&&<span style={{fontSize:10,fontWeight:700,background:`${badgeColor}20`,color:badgeColor,
-        borderRadius:99,padding:'2px 8px',border:`1px solid ${badgeColor}44`,whiteSpace:'nowrap',flexShrink:0}}>
+      {badge&&<span style={{fontSize:10,fontWeight:700,
+        background:urgent?'#EAF0FA':C.surface,color:urgent?C.accent:C.dim,
+        border:`1px solid ${urgent?'#C7D6EE':C.border}`,
+        borderRadius:99,padding:'2px 8px',whiteSpace:'nowrap',flexShrink:0}}>
         {badge}
       </span>}
     </div>
@@ -5310,7 +5312,7 @@ function NeedsAttention({jobs, onSelectJob}) {
 
   if(total===0) return (
     <div style={{padding:'14px 26px 0'}}>
-      <div style={{background:'rgba(22,163,74,0.06)',border:'1px solid rgba(22,163,74,0.25)',
+      <div style={{background:'#EEF4F0',border:'1px solid #CBE0D4',
         borderRadius:10,padding:'12px 16px',display:'flex',alignItems:'center',gap:10}}>
         <span style={{color:'#3E7D5A',display:'inline-flex',alignItems:'center'}}><Icon name="checkCircle" size={16} stroke={2.25}/></span>
         <span style={{fontSize:13,fontWeight:600,color:'#3E7D5A'}}>All clear — nothing needs attention right now</span>
@@ -5324,62 +5326,62 @@ function NeedsAttention({jobs, onSelectJob}) {
         {/* Header */}
         <div onClick={()=>setOpen(o=>!o)} style={{display:'flex',alignItems:'center',gap:10,
           padding:'12px 16px',cursor:'pointer',userSelect:'none',
-          background:'rgba(178,58,58,0.04)',borderBottom:open?`1px solid ${C.border}`:'none'}}>
-          <span style={{color:'#B23A3A',display:'inline-flex',alignItems:'center'}}><Icon name="bell" size={16} stroke={2.25}/></span>
+          background:C.surface,borderBottom:open?`1px solid ${C.border}`:'none'}}>
+          <span style={{width:15,height:15,border:`2px solid ${C.accent}`,borderRadius:'4px 4px 6px 6px',display:'inline-block',flexShrink:0}}/>
           <span style={{fontSize:13,fontWeight:800,color:C.text,flex:1}}>Needs Attention</span>
-          <span style={{fontSize:12,fontWeight:700,background:'rgba(178,58,58,0.15)',color:'#B23A3A',
-            borderRadius:99,padding:'2px 10px',border:'1px solid rgba(178,58,58,0.3)'}}>{total}</span>
-          <span style={{color:C.dim,fontSize:12}}>{open?'▾':'▸'}</span>
+          <span style={{fontSize:12,fontWeight:700,background:'#EAF0FA',color:C.accent,
+            borderRadius:99,padding:'2px 10px',border:'1px solid #C7D6EE'}}>{total}</span>
+          <span style={{color:'#979DA7',fontSize:12}}>{open?'▾':'▸'}</span>
         </div>
 
         {open&&(
           <div style={{padding:'4px 16px 16px'}}>
 
             {/* Starting Soon */}
-            <SectionHeader icon="rocket" label="Starting Soon — Prep Incomplete" count={startingSoon.length} color="#B23A3A"/>
+            <SectionHeader label="Starting Soon — Prep Incomplete" count={startingSoon.length} accent/>
             {startingSoon.map(({job,name,label,urgent})=>(
               <JobRow key={job.id} job={job} name={name}
-                badge={label} badgeColor="#B23A3A" urgent={urgent}
+                badge={label} urgent={urgent}
                 detail={`Rough scheduled · Prep stage: ${job.prepStage||'Not started'}`}/>
             ))}
 
             {/* Unanswered Questions */}
-            <SectionHeader icon="help" label="Unanswered Questions" count={unanswered.length} color={C.orange}/>
+            <SectionHeader label="Unanswered Questions" count={unanswered.length}/>
             {unanswered.map(({job,name,count,phase,questions})=>(
               <JobRow key={job.id+phase} job={job} name={name}
-                badge={`${count} ${phase}`} badgeColor={C.orange}
+                badge={`${count} ${phase}`}
                 detail={questions.slice(0,2).map(q=>stripHtml(q.question)).filter(Boolean).join(' · ')+(questions.length>2?` +${questions.length-2} more`:'')}/>
             ))}
 
             {/* Unsent POs */}
-            <SectionHeader icon="package" label="Unsent Purchase Orders" count={unsentPOs.length} color={C.blue}/>
+            <SectionHeader label="Unsent Purchase Orders" count={unsentPOs.length}/>
             {unsentPOs.map(({job,name,count,phase,orders})=>(
               <JobRow key={job.id+phase} job={job} name={name}
-                badge={`${count} PO${count>1?'s':''} · ${phase}`} badgeColor={C.blue}
+                badge={`${count} PO${count>1?'s':''} · ${phase}`}
                 detail={orders.map(o=>o.source||'No supplier').join(', ')}/>
             ))}
 
             {/* Waiting Punch Items */}
-            <SectionHeader icon="pause" label="On Hold — Waiting on Something" count={waitingItems.length} color="#B0892C"/>
+            <SectionHeader label="On Hold — Waiting on Something" count={waitingItems.length}/>
             {waitingItems.map(({job,name,count,phase,items})=>(
               <JobRow key={job.id+phase} job={job} name={name}
-                badge={`${count} waiting · ${phase}`} badgeColor="#B0892C"
+                badge={`${count} waiting · ${phase}`}
                 detail={items.slice(0,2).map(i=>i.waitingOn||stripHtml(i.text)).filter(Boolean).join(' · ')+(items.length>2?` +${items.length-2} more`:'')}/>
             ))}
 
             {/* Pending COs */}
-            <SectionHeader icon="clipboard" label="Change Orders Pending" count={pendingCOs.length} color={C.purple||'#6A5E97'}/>
+            <SectionHeader label="Change Orders Pending" count={pendingCOs.length}/>
             {pendingCOs.map(({job,name,count,cos})=>(
               <JobRow key={job.id} job={job} name={name}
-                badge={`${count} CO${count>1?'s':''}`} badgeColor={C.purple||'#6A5E97'}
+                badge={`${count} CO${count>1?'s':''}`}
                 detail={cos.slice(0,2).map(co=>co.desc||co.task||'No description').filter(Boolean).join(' · ')}/>
             ))}
 
             {/* Unscheduled Return Trips */}
-            <SectionHeader icon="rotateCw" label="Unscheduled Return Trips" count={unscheduledRTs.length} color={C.teal||'#3E7D7A'}/>
+            <SectionHeader label="Unscheduled Return Trips" count={unscheduledRTs.length}/>
             {unscheduledRTs.map(({job,name,count,trips})=>(
               <JobRow key={job.id} job={job} name={name}
-                badge={`${count} RT${count>1?'s':''}`} badgeColor={C.teal||'#3E7D7A'}
+                badge={`${count} RT${count>1?'s':''}`}
                 detail={trips.slice(0,2).map(t=>t.scope||'No scope').filter(Boolean).join(' · ')}/>
             ))}
 
