@@ -33278,6 +33278,9 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
   const toggleBucket = (k) => setCollapsed(p=>{ const n=new Set(p); n.has(k)?n.delete(k):n.add(k); return n; });
   const [showDates, setShowDates] = useState(()=>{ try { return localStorage.getItem("qc.showDates")!=="0"; } catch { return true; } });
   const toggleDates = () => setShowDates(v=>{ const nv=!v; try { localStorage.setItem("qc.showDates", nv?"1":"0"); } catch {} return nv; });
+  const [winW, setWinW] = useState(typeof window!=="undefined"?window.innerWidth:1200);
+  useEffect(()=>{ const h=()=>setWinW(window.innerWidth); window.addEventListener("resize",h); return ()=>window.removeEventListener("resize",h); },[]);
+  const narrow = winW < 640;
   const setStatus = (r, v) => {
     const hasDate = getStatusDef(QC_STATUSES, v).hasDate;
     if(r.phase==="Rough") onPatchJob && onPatchJob(r.job.id, { qcStatus:v, qcStatusDate: hasDate ? (r.job.qcStatusDate||"") : "" });
@@ -33364,14 +33367,14 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
   const fmtD = (d) => { if(!d) return ""; const dt=new Date(d); return isNaN(dt)?d:dt.toLocaleDateString("en-US",{month:"short",day:"numeric"}); };
 
   return (
-    <div style={{padding:"18px 26px 60px", maxWidth:980, margin:"0 auto"}}>
-      <div style={{display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",marginBottom:4}}>
+    <div style={{padding:narrow?"16px 12px 60px":"18px 26px 60px", maxWidth:980, margin:"0 auto"}}>
+      <div style={{display:"flex",alignItems:"center",gap:narrow?8:14,flexWrap:"wrap",marginBottom:4}}>
         <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:30,letterSpacing:"0.05em",color:C.text}}>QC WALKS</div>
         <div style={{fontSize:12,color:C.dim}}>{rows.length} QC walks (rough + finish)</div>
         <span style={{flex:1}}/>
         <button onClick={toggleDates} title="Show/hide scheduled dates" style={{padding:"7px 12px",fontSize:12,fontWeight:600,border:`1px solid ${showDates?C.accent:C.border}`,borderRadius:8,background:showDates?`${C.accent}15`:"transparent",color:showDates?C.accent:C.dim,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>{showDates?"Dates: on":"Dates: off"}</button>
         <input value={q} onChange={e=>setQ(e.target.value)} placeholder="Search jobs…"
-          style={{padding:"7px 12px",fontSize:12,border:`1px solid ${C.border}`,borderRadius:8,background:C.card,color:C.text,fontFamily:"inherit",width:200}}/>
+          style={{padding:"7px 12px",fontSize:12,border:`1px solid ${C.border}`,borderRadius:8,background:C.card,color:C.text,fontFamily:"inherit",width:narrow?"100%":200,boxSizing:"border-box"}}/>
       </div>
       <div style={{fontSize:12,color:C.dim,marginBottom:16}}>Every job's QC walk — status, stage, scheduled date, and open failed items, all in one spot.</div>
 
@@ -33408,17 +33411,19 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
                 const sched = b.key==="scheduled"||b.key==="overdue";
                 const dateColor = b.key==="overdue" ? "#B23A3A" : sched ? C.accent : C.dim;
                 return (
-                <div key={r.key} style={{display:"flex",alignItems:"center",gap:9,padding:"9px 14px",borderBottom:i<list.length-1?`1px solid ${C.border}`:"none"}}>
+                <div key={r.key} style={{display:"flex",alignItems:"center",gap:9,padding:"9px 14px",borderBottom:i<list.length-1?`1px solid ${C.border}`:"none",flexWrap:narrow?"wrap":"nowrap"}}>
                   {stagePill(r.phase)}
-                  <span onClick={()=>onSelectJob&&onSelectJob(r.job)} title="Open job" style={{fontSize:13,fontWeight:600,color:C.text,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",cursor:"pointer"}}>{r.name}</span>
-                  {r.failed>0 && <span title="open QC items" style={{fontSize:11,fontWeight:700,color:"#B23A3A",background:"#F6EAEA",border:"1px solid #EAD2D2",borderRadius:99,padding:"1px 9px",whiteSpace:"nowrap"}}>{r.failed}</span>}
-                  {showDates && sched && r.date && <span style={{fontSize:13,fontWeight:800,color:dateColor,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap"}}>{fmtD(r.date)}</span>}
-                  {r.cal && <span title="From your calendar" style={{fontSize:8,fontWeight:800,letterSpacing:"0.04em",color:C.accent,background:`${C.accent}18`,border:`1px solid ${C.accent}33`,borderRadius:3,padding:"1px 4px",whiteSpace:"nowrap"}}>CAL</span>}
-                  <button onClick={()=>scheduleOnCal(r)} title="Schedule on Google Calendar" style={{fontSize:10,fontWeight:700,color:C.accent,background:"transparent",border:`1px solid ${C.accent}55`,borderRadius:6,padding:"3px 8px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}><Icon name="calendar" size={11} stroke={2.25}/>Schedule</button>
-                  <select value={r.status} onChange={e=>setStatus(r,e.target.value)}
-                    style={{fontSize:11,fontWeight:600,color:r.statusColor,background:`${r.statusColor}14`,border:`1px solid ${r.statusColor}44`,borderRadius:99,padding:"3px 8px",fontFamily:"inherit",cursor:"pointer",outline:"none",maxWidth:160,flexShrink:0}}>
-                    {QC_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label||"— set —"}</option>)}
-                  </select>
+                  <span onClick={()=>onSelectJob&&onSelectJob(r.job)} title="Open job" style={{fontSize:13,fontWeight:600,color:C.text,flex:"1 1 auto",minWidth:narrow?100:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",cursor:"pointer"}}>{r.name}</span>
+                  {r.failed>0 && <span title="open QC items" style={{fontSize:11,fontWeight:700,color:"#B23A3A",background:"#F6EAEA",border:"1px solid #EAD2D2",borderRadius:99,padding:"1px 9px",whiteSpace:"nowrap",flexShrink:0}}>{r.failed}</span>}
+                  {showDates && sched && r.date && <span style={{fontSize:13,fontWeight:800,color:dateColor,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap",flexShrink:0}}>{fmtD(r.date)}</span>}
+                  {r.cal && <span title="From your calendar" style={{fontSize:8,fontWeight:800,letterSpacing:"0.04em",color:C.accent,background:`${C.accent}18`,border:`1px solid ${C.accent}33`,borderRadius:3,padding:"1px 4px",whiteSpace:"nowrap",flexShrink:0}}>CAL</span>}
+                  <div style={{display:"flex",alignItems:"center",gap:9,flexShrink:0,...(narrow?{flex:"1 1 100%",justifyContent:"flex-end",marginTop:4}:{})}}>
+                    <button onClick={()=>scheduleOnCal(r)} title="Schedule on Google Calendar" style={{fontSize:10,fontWeight:700,color:C.accent,background:"transparent",border:`1px solid ${C.accent}55`,borderRadius:6,padding:"3px 8px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}><Icon name="calendar" size={11} stroke={2.25}/>Schedule</button>
+                    <select value={r.status} onChange={e=>setStatus(r,e.target.value)}
+                      style={{fontSize:11,fontWeight:600,color:r.statusColor,background:`${r.statusColor}14`,border:`1px solid ${r.statusColor}44`,borderRadius:99,padding:"3px 8px",fontFamily:"inherit",cursor:"pointer",outline:"none",maxWidth:160,flexShrink:0}}>
+                      {QC_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label||"— set —"}</option>)}
+                    </select>
+                  </div>
                 </div>
                 );
               })}
