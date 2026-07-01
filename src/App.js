@@ -13548,6 +13548,62 @@ const wireWatts    = (wire) => {
   return b.poles===2 ? b.amps*240 : b.amps*120;
 };
 
+// Realistic running/starting watt presets, keyword-matched against load names.
+// wireWatts() above is BREAKER CAPACITY (worst case) — sizing off it would
+// recommend a 26kW for every house. These are typical appliance draws instead.
+// Order matters: more specific keywords first ("water heater" before "heater").
+// run = continuous watts, surge = starting watts (motors pull 2-3x at start).
+const GEN_LOAD_PRESETS = [
+  { keys:["water heater","hot water"],           run:4500, surge:4500 },
+  { keys:["tankless"],                           run:18000,surge:18000 },
+  { keys:["heat pump","condenser","a/c","ac unit"," ac","air cond","hvac"], run:3800, surge:5500 },
+  { keys:["furnace","air handler","blower"],     run:800,  surge:2350 },
+  { keys:["boiler","circulator"],                run:500,  surge:1000 },
+  { keys:["well"],                               run:1500, surge:3000 },
+  { keys:["sump"],                               run:900,  surge:2000 },
+  { keys:["septic","sewage","ejector"],          run:900,  surge:2000 },
+  { keys:["fridge","refrigerator"],              run:700,  surge:2200 },
+  { keys:["freezer"],                            run:700,  surge:2100 },
+  { keys:["range","oven","stove"],               run:5000, surge:5000 },
+  { keys:["cooktop"],                            run:4000, surge:4000 },
+  { keys:["microwave"],                          run:1200, surge:1200 },
+  { keys:["dishwasher"],                         run:1200, surge:1400 },
+  { keys:["disposal"],                           run:900,  surge:2000 },
+  { keys:["dryer"],                              run:5400, surge:6750 },
+  { keys:["washer","laundry"],                   run:1150, surge:2250 },
+  { keys:["garage door","opener"],               run:800,  surge:1600 },
+  { keys:["ev","car charger","tesla"],           run:7200, surge:7200 },
+  { keys:["hot tub","spa"],                      run:6000, surge:7000 },
+  { keys:["pool"],                               run:1500, surge:3000 },
+  { keys:["kitchen","counter","small appliance"],run:1500, surge:1500 },
+  { keys:["light","lts","cans"],                 run:600,  surge:600 },
+  { keys:["plug","recep","outlet"],              run:600,  surge:600 },
+];
+const genPresetFor = (name) => {
+  const n = " "+(name||"").toLowerCase();
+  return GEN_LOAD_PRESETS.find(p => p.keys.some(k => n.includes(k))) || null;
+};
+
+// Sizing math (included loads only):
+//   running    = sum of running watts of everything on the generator at once
+//   surgeDelta = single largest (starting - running) — motors don't all start
+//                together, so only the biggest surge rides on top
+//   required   = running + surgeDelta → smallest standard size that covers it
+// Loads without a surge value are treated as resistive (surge = running).
+const genSizing = (loads) => {
+  const inc = (loads||[]).filter(l=>l.included);
+  const running = inc.reduce((s,l)=>s+(parseFloat(l.watts)||0),0);
+  const surgeDelta = inc.reduce((m,l)=>{
+    const run = parseFloat(l.watts)||0;
+    const su  = parseFloat(l.surge)||run;
+    return Math.max(m, su-run);
+  },0);
+  const required = Math.round(running + surgeDelta);
+  return { running: Math.round(running), surgeDelta: Math.round(surgeDelta),
+    required, pick: required>0 ? genRecommend(required) : null,
+    over: required > GEN_SIZES_W[GEN_SIZES_W.length-1] };
+};
+
 
 function BreakerCounts({homeRuns, panelCounts, onCountChange, electricalPanels = [], onElectricalPanelsChange = null}) {
 
@@ -13809,18 +13865,43 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
       ...(homeRuns.extraFloors||[]).flatMap(e=>homeRuns[e.key]||[]),
     ].filter(r=>(r.name||'').trim() && r.wire);
     const existing = new Set(loads.map(l=>l.name));
-    const added = rows.filter(r=>!existing.has(r.name)).map(r=>({
-      id: uid(), name: r.name, wire: r.wire,
-      watts: wireWatts(r.wire), recommended: false, included: true,
-    }));
+    const added = rows.filter(r=>!existing.has(r.name)).map(r=>{
+      // Prefer realistic preset watts over breaker capacity when the name matches
+      const p = genPresetFor(r.name);
+      return {
+        id: uid(), name: r.name, wire: r.wire,
+        watts: p ? p.run : wireWatts(r.wire),
+        surge: p ? p.surge : undefined,
+        recommended: false, included: true,
+      };
+    });
     if (!added.length) { toast.info('No new named+wired loads to import.'); return; }
     commit([...loads, ...added]);
+  };
+
+  // Fill realistic watts from name-matched presets. Only touches rows whose
+  // watts still look untouched (0 or the wire-derived breaker default) so a
+  // hand-typed value is never overwritten.
+  const suggestWatts = () => {
+    let hits = 0;
+    const next = loads.map(l=>{
+      const p = genPresetFor(l.name);
+      if (!p) return l;
+      const untouched = !l.watts || l.watts === wireWatts(l.wire);
+      if (!untouched && l.surge != null) return l;
+      hits++;
+      return { ...l, watts: untouched ? p.run : l.watts, surge: l.surge != null ? l.surge : p.surge };
+    });
+    if (!hits) { toast.info('No load names matched a preset (or all were hand-edited).'); return; }
+    commit(next);
+    toast.success(`Suggested watts on ${hits} load${hits===1?'':'s'}.`);
   };
 
   const toggle  = (id, key) => commit(loads.map(l=>l.id===id?{...l,[key]:!l[key]}:l));
   const updName = (id, name) => commit(loads.map(l=>l.id===id?{...l,name}:l));
   const updWire = (id, wire) => commit(loads.map(l=>l.id===id?{...l,wire,watts:wireWatts(wire)}:l));
   const updWatts= (id, watts) => commit(loads.map(l=>l.id===id?{...l,watts:parseFloat(watts)||0}:l));
+  const updSurge= (id, surge) => commit(loads.map(l=>l.id===id?{...l,surge:parseFloat(surge)||0}:l));
   const del     = (id) => commit(loads.filter(l=>l.id!==id));
   const addRow  = () => commit([...loads,{id:uid(),name:'',wire:'',watts:0,recommended:false,included:true}]);
 
@@ -13846,6 +13927,14 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
             color:C.green,fontSize:12,fontWeight:600,padding:'7px 14px',cursor:'pointer',fontFamily:'inherit'}}>
           + Add Manually
         </button>
+        {loads.length>0&&(
+          <button onClick={suggestWatts}
+            title="Fill realistic running + surge watts from load names (fridge, well pump, AC…). Never overwrites hand-typed watts."
+            style={{background:`${C.accent}12`,border:`1px solid ${C.accent}44`,borderRadius:8,
+              color:C.accent,fontSize:12,fontWeight:700,padding:'7px 14px',cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:6}}>
+            <Icon name="zap" size={12}/> Suggest Watts
+          </button>
+        )}
         {loads.length>0&&(
           <button onClick={async ()=>{if(await showConfirm('Clear all loads?')) commit([]);}}
             style={{marginLeft:'auto',background:'none',border:`1px solid ${C.border}`,borderRadius:8,
@@ -13900,10 +13989,18 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
             ))}
           </select>
           <input value={load.watts||0} onChange={e=>updWatts(load.id,e.target.value)}
-            style={{width:50,background:'transparent',border:`1px solid ${C.border}`,borderRadius:6,
+            title="Running watts (continuous draw)"
+            style={{width:44,background:'transparent',border:`1px solid ${C.border}`,borderRadius:6,
               color:C.accent,fontSize:11,fontWeight:700,fontFamily:'inherit',outline:'none',
               padding:'3px 5px',textAlign:'right',flexShrink:0}}/>
-          <span style={{fontSize:9,color:C.dim,flexShrink:0}}>W</span>
+          <span title="Running watts" style={{fontSize:9,color:C.dim,flexShrink:0}}>W</span>
+          <input value={load.surge!=null?load.surge:''} onChange={e=>updSurge(load.id,e.target.value)}
+            placeholder={String(load.watts||0)}
+            title="Starting / surge watts (motors pull 2–3× running at start). Blank = same as running."
+            style={{width:44,background:'transparent',border:`1px solid ${C.border}`,borderRadius:6,
+              color:C.orange,fontSize:11,fontWeight:700,fontFamily:'inherit',outline:'none',
+              padding:'3px 5px',textAlign:'right',flexShrink:0}}/>
+          <span title="Starting / surge watts" style={{fontSize:9,color:C.dim,flexShrink:0}}>SURGE</span>
           {/* ★ Recommended — KEY FIX: reads from local `load` which updates immediately */}
           <button onClick={()=>toggle(load.id,'recommended')}
             title={load.recommended?'Remove recommendation':'Mark recommended'}
@@ -13919,6 +14016,71 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
               fontSize:12,flexShrink:0,padding:'0 2px'}}>✕</button>
         </div>
       ))}
+
+      {/* ── Sizing card (internal only — never shown on the homeowner page) ──
+          Running = sum of included loads' running watts.
+          Surge   = single largest (starting − running) delta; motors don't
+                    all start at once, so only the biggest one stacks on top.
+          Required = running + surge → smallest GEN_SIZES_W that covers it. */}
+      {loads.some(l=>l.included)&&(()=>{
+        const sz = genSizing(loads);
+        return (
+          <div style={{marginTop:14,background:C.surface,border:`1px solid ${C.border}`,
+            borderRadius:12,padding:'14px 16px'}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+              <Icon name="zap" size={13} stroke={2.5}/>
+              <span style={{fontSize:11,fontWeight:700,color:C.accent,letterSpacing:'0.08em'}}>GENERATOR SIZING</span>
+              <span style={{fontSize:10,color:C.dim,marginLeft:'auto'}}>{loads.filter(l=>l.included).length} loads included</span>
+            </div>
+            <div style={{display:'flex',gap:18,flexWrap:'wrap',marginBottom:12}}>
+              {[
+                ['RUNNING', sz.running.toLocaleString()+' W', C.text, 'Continuous draw of all included loads'],
+                ['LARGEST SURGE', '+'+sz.surgeDelta.toLocaleString()+' W', C.orange, 'Biggest single motor-start on top of running'],
+                ['REQUIRED', sz.required.toLocaleString()+' W', C.accent, 'Running + largest surge'],
+              ].map(([lbl,val,col,tip])=>(
+                <div key={lbl} title={tip}>
+                  <div style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:'0.08em',marginBottom:2}}>{lbl}</div>
+                  <div style={{fontSize:16,fontWeight:800,color:col}}>{val}</div>
+                </div>
+              ))}
+            </div>
+            <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
+              {GEN_SIZES_W.map(s=>{
+                const over  = sz.required > s;
+                const tight = !over && sz.required > s*0.8;
+                const pick  = s === sz.pick && !sz.over;
+                const col   = over ? C.muted : tight ? C.orange : C.green;
+                return (
+                  <div key={s} title={over?'Too small':tight?'Fits, but over 80% loaded — go up a size for headroom':'Fits with headroom'}
+                    style={{borderRadius:8,padding:'5px 10px',fontSize:11,fontWeight:700,
+                      color:pick?'#000':col,
+                      background:pick?C.accent:over?'transparent':`${col}10`,
+                      border:`1px solid ${pick?C.accent:over?C.border:col+'55'}`,
+                      opacity:over?0.5:1,textDecoration:over?'line-through':'none'}}>
+                    {genFmtKw(s)}
+                  </div>
+                );
+              })}
+            </div>
+            {sz.over ? (
+              <div style={{fontSize:11,color:C.orange,fontWeight:600,display:'inline-flex',alignItems:'center',gap:6}}>
+                <Icon name="alertTriangle" size={12} stroke={2.5}/>
+                Over {genFmtKw(GEN_SIZES_W[GEN_SIZES_W.length-1])} air-cooled range — drop loads, add load management, or quote liquid-cooled.
+              </div>
+            ) : (
+              <div style={{fontSize:12,color:C.text}}>
+                Recommended: <span style={{fontWeight:800,color:C.accent}}>{genFmtKw(sz.pick)}</span>
+                {sz.required > sz.pick*0.8 && (
+                  <span style={{color:C.dim}}> — over 80% loaded; consider {genFmtKw(GEN_SIZES_W[GEN_SIZES_W.indexOf(sz.pick)+1]||sz.pick)} for headroom</span>
+                )}
+              </div>
+            )}
+            <div style={{fontSize:10,color:C.dim,marginTop:8,fontStyle:'italic'}}>
+              Sized from running + largest single surge. Whole-house with no load management still needs an NEC 220.83 / 220.87 check.
+            </div>
+          </div>
+        );
+      })()}
 
     </div>
   );
@@ -45894,6 +46056,10 @@ const FEATURES_MD_INLINE = String.raw`
 - **Plans tab** · shipped · plans documents per job
 - **Drive Files** · shipped · Drive folder sync + uploads
 - **Home Runs (panels)** · shipped · per-floor home runs + breaker counts
+- **Generator Load Selection** · shipped · pick circuits for standby generator
+  - Import loads from Home Runs, drag to reorder priority, ★ recommended
+  - Homeowner share link to pick + sign off on circuits
+  - Sizing calculator: running + surge watts per load (Suggest Watts presets by load name), recommends generator size from 7.5–26kW ladder · shipped 2026-07-01 · SW v277
 - **Savant Lighting** · shipped 2026-05-18 · SW v175 · slot-first rebuild
   - One screen per panel (slot list 1..N)
   - Tap empty slot to add, tap occupied to edit
