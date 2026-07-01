@@ -180,6 +180,60 @@ async function publishCcHomeruns(jobId, electricalPanels) {
   } catch (e) { console.warn("[fieldink] homeruns publish failed (rules deployed?):", e?.message); }
 }
 
+// ── FieldInk CHANGE-ORDER publish (office → field) ────────────────────────────
+// The THIRD write this app makes to field-ink (after ccjobs/index + cchomeruns).
+// When a job's change orders change here, publish a slim CO list to field-ink at
+// cccos/<jobId> so the FieldInk app can show a "From Command Center" list the
+// crew can pick and redline. Mirrors publishCcHomeruns: anon field-ink auth,
+// per-job hash-gate, fire-and-forget (never blocks the save, never throws).
+// The office OWNS number/title/status; the FIELD owns each CO's `fieldink` block
+// (markedUp + which plan) — so we READ the remote first and PRESERVE fieldink
+// per id, never wiping the field's write-back. REQUIRES the field-ink `cccos`
+// rules block deployed; until then the write is denied and silently skipped.
+const _ccCosHash = {};
+function _ccCoStatus(s) {
+  switch (s) {
+    case "approved": case "completed": case "converted": return "approved";
+    case "denied": case "rejected": return "denied";
+    case "scheduled": case "sent": case "simpro_task": return "sent";
+    default: return "draft"; // needs_sending, needs, empty, etc.
+  }
+}
+async function publishCcChangeOrders(jobId, changeOrders) {
+  try {
+    if (jobId == null) return;
+    const jid = String(jobId);
+    const slim = (changeOrders || [])
+      .filter(co => co && co.id)
+      .map((co, i) => ({
+        id: String(co.id),
+        number: i + 1,
+        title: co.desc || "",
+        status: _ccCoStatus(co.coStatus),
+        amount: null,
+        at: co.createdAt ? (new Date(co.createdAt).getTime() || Date.now()) : Date.now(),
+        source: "office",
+        ...(co.quoteNumber ? { quoteNumber: String(co.quoteNumber) } : {}),
+      }));
+    // Per-job hash gate: identical CO list = no write (the common case).
+    const hash = JSON.stringify(slim);
+    if (_ccCosHash[jid] === hash) return;
+    const user = await ensureFieldinkAuth();
+    if (!user) return;
+    // Read-merge so the FIELD's per-CO `fieldink` block is preserved (Firestore
+    // merge doesn't deep-merge arrays, so we merge by id ourselves).
+    const ref = doc(fieldinkDb, "cccos", jid);
+    let remote = null;
+    try { const snap = await getDoc(ref); remote = snap.exists() ? snap.data() : null; } catch {}
+    const fieldinkById = {};
+    for (const c of (remote?.cos || [])) if (c && c.id && c.fieldink) fieldinkById[c.id] = c.fieldink;
+    const cos = slim.map(c => (fieldinkById[c.id] ? { ...c, fieldink: fieldinkById[c.id] } : c));
+    await setDoc(ref, { cos, updatedAt: serverTimestamp(), updatedBy: "office" }, { merge: true });
+    _ccCosHash[jid] = hash;
+    console.log(`[fieldink] published change orders for job ${jid}: ${cos.length} CO(s)`);
+  } catch (e) { console.warn("[fieldink] change-order publish failed (rules deployed?):", e?.message); }
+}
+
 // Debug helpers exposed to window so we can run one-off scripts from the
 // browser console (cloud-function calls, bulk data loads, etc.).
 //   _hsCall(name, params)       — invoke a callable cloud function
@@ -33421,28 +33475,28 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
     else onPatchJob && onPatchJob(r.job.id, { finishQcStatus:v, finishQcStatusDate: hasDate ? (r.job.finishQcStatusDate||"") : "" });
     if(v==="fail") toast.warn("QC Fail set — open the job to queue the return trip.");
   };
-  const scheduleOnCal = (r) => {
+  const [schedFor, setSchedFor] = useState(null); // r.key currently picking a schedule date
+  const scheduleOnCal = (r, dateStr) => {
     const title = encodeURIComponent(`${r.phase} QC Walk — ${r.name}`);
     const details = encodeURIComponent(`Homestead Electric — ${r.phase} QC walk for ${r.name}.`);
-    window.open(`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${details}`, "_blank", "noopener");
+    let dates = "";
+    if(dateStr){
+      const start = dateStr.replace(/-/g,"");
+      const d2 = new Date(dateStr+"T00:00:00"); d2.setDate(d2.getDate()+1);
+      const end = `${d2.getFullYear()}${String(d2.getMonth()+1).padStart(2,"0")}${String(d2.getDate()).padStart(2,"0")}`;
+      dates = `&dates=${start}/${end}`;
+    }
+    window.open(`https://calendar.google.com/calendar/render?action=TEMPLATE&text=${title}&details=${details}${dates}`, "_blank", "noopener");
   };
-  const [calUrl, setCalUrl] = useState("");
-  const [urlDraft, setUrlDraft] = useState("");
-  const [calMatches, setCalMatches] = useState([]);
-  const [calMeta, setCalMeta] = useState(null);
-  const [syncing, setSyncing] = useState(false);
-  const isAdmin = getAccess(identity)==="admin";
-  useEffect(()=>{
-    const u1 = onSnapshot(doc(db,"settings","qcCalendar"), s=>{ const u=s.exists()?(s.data().url||""):""; setCalUrl(u); setUrlDraft(u); }, ()=>{});
-    const u2 = onSnapshot(doc(db,"settings","qcCalendarMatches"), s=>{ if(s.exists()){ setCalMatches(s.data().matches||[]); setCalMeta(s.data()); } }, ()=>{});
-    return ()=>{ u1&&u1(); u2&&u2(); };
-  },[]);
-  const saveUrl = () => { setDoc(doc(db,"settings","qcCalendar"),{url:(urlDraft||"").trim(),updatedAt:new Date().toISOString()}).then(()=>toast.success("Calendar URL saved.")).catch(e=>toast.error("Save failed: "+(e?.message||""))); };
-  const syncNow = async () => {
-    setSyncing(true);
-    try { const fn=httpsCallable(functions,"runQcCalendarSync"); const res=await fn(); const d=res.data||{}; if(d.ok) toast.success(`Synced — ${d.matched} of ${d.kept} events matched to jobs.`); else toast.error(d.error||"Sync failed."); }
-    catch(e){ toast.error("Sync failed: "+(e?.message||"")); }
-    setSyncing(false);
+  // Scheduling happens ONLY here: pick a date on the Schedule button → it marks
+  // the walk "scheduled" with that date in the app AND opens Google Calendar
+  // prefilled. (No auto-pull from an external calendar — those dates were off.)
+  const setScheduled = (r, dateStr) => {
+    if(!dateStr){ setSchedFor(null); return; }
+    if(r.phase==="Rough") onPatchJob && onPatchJob(r.job.id, { qcStatus:"scheduled", qcStatusDate:dateStr });
+    else onPatchJob && onPatchJob(r.job.id, { finishQcStatus:"scheduled", finishQcStatusDate:dateStr });
+    scheduleOnCal(r, dateStr);
+    setSchedFor(null);
   };
   const countOpen = (punch, onlyFromQC=false) => {
     if(!punch) return 0;
@@ -33454,26 +33508,21 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
     };
     return fl(punch.upper)+fl(punch.main)+fl(punch.basement)+((punch.extras||[]).reduce((s,e)=>s+fl(punch[e.key]||{}),0));
   };
-  const calByJob = useMemo(()=>{ const m={}; (calMatches||[]).forEach(c=>{ if(c.jobId && !m[c.jobId]) m[c.jobId]=c; }); return m; }, [calMatches]);
-  const unmatchedCal = useMemo(()=> (calMatches||[]).filter(c=>!c.jobId), [calMatches]);
   const rows = useMemo(()=>{
     const s = q.trim().toLowerCase();
     const out = [];
     (jobs||[]).forEach(j=>{
       const label = jobLabel(j)||"Untitled";
       if(s && !label.toLowerCase().includes(s)) return;
-      const cal = calByJob[j.id];
-      // A calendar-scheduled walk attaches to the phase that's currently relevant.
-      const calPhase = cal ? ((j.qcStatus==="pass"||j.qcStatus==="fixed"||j.qcStatus==="completed") ? "finish" : "rough") : null;
-      // Rough QC (legacy qcStatus is rough-driven)
-      const rStatus=j.qcStatus||"", rFailed=countOpen(j.roughPunch,true), rCal=calPhase==="rough";
-      if(rStatus||rFailed>0||rCal){ const def=getStatusDef(QC_STATUSES,rStatus); out.push({ key:j.id+"-r", job:j, name:label, phase:"Rough", status:rStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.qcStatusDate||(rCal?cal.date:"")), failed:rFailed, cal:rCal, started:parseStage(j.roughStage)>0 }); }
+      // Rough QC (legacy qcStatus is rough-driven). Date is manual only.
+      const rStatus=j.qcStatus||"", rFailed=countOpen(j.roughPunch,true);
+      if(rStatus||rFailed>0){ const def=getStatusDef(QC_STATUSES,rStatus); out.push({ key:j.id+"-r", job:j, name:label, phase:"Rough", status:rStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.qcStatusDate||""), failed:rFailed, started:parseStage(j.roughStage)>0 }); }
       // Finish QC
-      const fInProgress=parseStage(j.finishStage)>=80, fStatus=j.finishQcStatus||(fInProgress?"needs":""), fFailed=countOpen(j.finishPunch,true)+countOpen(j.qcPunch), fCal=calPhase==="finish";
-      if(fStatus||fFailed>0||fCal){ const def=getStatusDef(QC_STATUSES,fStatus); out.push({ key:j.id+"-f", job:j, name:label, phase:"Finish", status:fStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.finishQcStatusDate||(fCal?cal.date:"")), failed:fFailed, cal:fCal, started:parseStage(j.finishStage)>0 }); }
+      const fInProgress=parseStage(j.finishStage)>=80, fStatus=j.finishQcStatus||(fInProgress?"needs":""), fFailed=countOpen(j.finishPunch,true)+countOpen(j.qcPunch);
+      if(fStatus||fFailed>0){ const def=getStatusDef(QC_STATUSES,fStatus); out.push({ key:j.id+"-f", job:j, name:label, phase:"Finish", status:fStatus, statusLabel:def.label||"No status", statusColor:def.color||C.dim, date:(j.finishQcStatusDate||""), failed:fFailed, started:parseStage(j.finishStage)>0 }); }
     });
     return out;
-  }, [jobs, q, calByJob]);
+  }, [jobs, q]);
 
   const _td=new Date(); const todayYmd=`${_td.getFullYear()}-${String(_td.getMonth()+1).padStart(2,"0")}-${String(_td.getDate()).padStart(2,"0")}`;
   // Smart bucketing: a resulted status (pass/fail) goes to its bucket regardless
@@ -33482,7 +33531,7 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
   const bucketOf = (r) => {
     if(r.status==="fail") return "failed";
     if(r.status==="pass"||r.status==="fixed"||r.status==="completed") return "done";
-    if(r.status==="scheduled"||r.cal){ if(r.date && r.date < todayYmd) return r.started ? "overdue" : "needs"; return "scheduled"; }
+    if(r.status==="scheduled"){ if(r.date && r.date < todayYmd) return r.started ? "overdue" : "needs"; return "scheduled"; }
     if(r.status==="needs") return "needs";
     return "other";
   };
@@ -33512,20 +33561,6 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
       </div>
       <div style={{fontSize:12,color:C.dim,marginBottom:16}}>Every job's QC walk — status, stage, scheduled date, and open failed items, all in one spot.</div>
 
-      {isAdmin && (
-        <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,padding:"12px 14px",marginBottom:18}}>
-          <div style={{fontSize:12,fontWeight:600,marginBottom:5}}>Google Calendar feed</div>
-          <div style={{fontSize:11,color:C.dim,marginBottom:8}}>Paste your calendar's secret iCal URL (Calendar settings → that calendar → "Secret address in iCal format"). QC walks scheduled there get pulled in + matched to jobs every hour.</div>
-          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
-            <input value={urlDraft} onChange={e=>setUrlDraft(e.target.value)} placeholder="https://calendar.google.com/calendar/ical/…/basic.ics"
-              style={{flex:1,minWidth:240,padding:"7px 10px",fontSize:11,border:`1px solid ${C.border}`,borderRadius:7,background:C.bg,color:C.text,fontFamily:"inherit"}}/>
-            <button onClick={saveUrl} style={{padding:"7px 14px",fontSize:12,fontWeight:700,border:"none",borderRadius:7,background:C.accent,color:"#fff",cursor:"pointer",fontFamily:"inherit"}}>Save</button>
-            <button onClick={syncNow} disabled={syncing||!calUrl} style={{padding:"7px 14px",fontSize:12,fontWeight:600,border:`1px solid ${C.border}`,borderRadius:7,background:"transparent",color:C.dim,cursor:(syncing||!calUrl)?"default":"pointer",fontFamily:"inherit"}}>{syncing?"Syncing…":"Sync now"}</button>
-          </div>
-          {calMeta && <div style={{fontSize:10,color:C.muted,marginTop:6}}>{calMeta.matchedCount||0} of {(calMatches||[]).length} events matched to jobs · updated {calMeta.updatedAt?timeAgo(calMeta.updatedAt):"—"}</div>}
-        </div>
-      )}
-
       {BUCKETS.map(b=>{
         let list = rows.filter(r=>bucketOf(r)===b.key);
         if(b.key==="scheduled"||b.key==="overdue") list = [...list].sort((a,b)=>(a.date||"").localeCompare(b.date||""));
@@ -33550,9 +33585,15 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
                   <span onClick={()=>onSelectJob&&onSelectJob(r.job)} title="Open job" style={{fontSize:13,fontWeight:600,color:C.text,flex:"1 1 auto",minWidth:narrow?100:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",cursor:"pointer"}}>{r.name}</span>
                   {r.failed>0 && <span title="open QC items" style={{fontSize:11,fontWeight:700,color:"#B23A3A",background:"#F6EAEA",border:"1px solid #EAD2D2",borderRadius:99,padding:"1px 9px",whiteSpace:"nowrap",flexShrink:0}}>{r.failed}</span>}
                   {showDates && sched && r.date && <span style={{fontSize:13,fontWeight:800,color:dateColor,fontVariantNumeric:"tabular-nums",whiteSpace:"nowrap",flexShrink:0}}>{fmtD(r.date)}</span>}
-                  {r.cal && <span title="From your calendar" style={{fontSize:8,fontWeight:800,letterSpacing:"0.04em",color:C.accent,background:`${C.accent}18`,border:`1px solid ${C.accent}33`,borderRadius:3,padding:"1px 4px",whiteSpace:"nowrap",flexShrink:0}}>CAL</span>}
                   <div style={{display:"flex",alignItems:"center",gap:9,flexShrink:0,...(narrow?{flex:"1 1 100%",justifyContent:"flex-end",marginTop:4}:{})}}>
-                    <button onClick={()=>scheduleOnCal(r)} title="Schedule on Google Calendar" style={{fontSize:10,fontWeight:700,color:C.accent,background:"transparent",border:`1px solid ${C.accent}55`,borderRadius:6,padding:"3px 8px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}><Icon name="calendar" size={11} stroke={2.25}/>Schedule</button>
+                    {schedFor===r.key ? (
+                      <input type="date" autoFocus defaultValue={r.date||todayYmd}
+                        onChange={e=>setScheduled(r, e.target.value)}
+                        onBlur={()=>setSchedFor(null)}
+                        style={{fontSize:11,padding:"3px 6px",border:`1px solid ${C.accent}66`,borderRadius:6,fontFamily:"inherit",outline:"none",background:C.card,color:C.text,flexShrink:0}}/>
+                    ) : (
+                      <button onClick={()=>setSchedFor(r.key)} title="Pick a date — sets it here and opens Google Calendar" style={{fontSize:10,fontWeight:700,color:C.accent,background:"transparent",border:`1px solid ${C.accent}55`,borderRadius:6,padding:"3px 8px",cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap",display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}><Icon name="calendar" size={11} stroke={2.25}/>Schedule</button>
+                    )}
                     <select value={r.status} onChange={e=>setStatus(r,e.target.value)}
                       style={{fontSize:11,fontWeight:600,color:r.statusColor,background:`${r.statusColor}14`,border:`1px solid ${r.statusColor}44`,borderRadius:99,padding:"3px 8px",fontFamily:"inherit",cursor:"pointer",outline:"none",maxWidth:160,flexShrink:0}}>
                       {QC_STATUSES.map(s=><option key={s.value} value={s.value}>{s.label||"— set —"}</option>)}
@@ -33566,27 +33607,7 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
           </div>
         );
       })}
-      {unmatchedCal.length>0 && (()=>{ const isCol=collapsed.has("unmatched"); return (
-        <div style={{marginBottom:14}}>
-          <div onClick={()=>toggleBucket("unmatched")} style={{display:"flex",alignItems:"center",gap:8,marginBottom:8,paddingBottom:6,borderBottom:`2px solid #B0892C33`,cursor:"pointer",userSelect:"none"}}>
-            <span style={{width:8,height:8,borderRadius:"50%",background:"#B0892C",flexShrink:0}}/>
-            <span style={{fontSize:13,fontWeight:700,letterSpacing:"0.04em",color:"#B0892C"}}>Calendar — couldn't match to a job</span>
-            <span style={{fontSize:11,fontWeight:700,color:"#B0892C",background:"#B0892C18",borderRadius:99,padding:"0 8px"}}>{unmatchedCal.length}</span>
-            <span style={{marginLeft:"auto",color:"#B0892C",fontSize:13,fontWeight:700,transform:isCol?"rotate(-90deg)":"none",transition:"transform 0.15s",display:"inline-block"}}>▾</span>
-          </div>
-          {!isCol && (
-          <div style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,overflow:"hidden"}}>
-            {unmatchedCal.map((c,i)=>(
-              <div key={(c.title||"")+i} style={{display:"flex",alignItems:"center",gap:10,padding:"9px 14px",borderBottom:i<unmatchedCal.length-1?`1px solid ${C.border}`:"none"}}>
-                <span style={{fontSize:13,color:C.text,flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{c.title||"(untitled event)"}</span>
-                {c.date && <span style={{fontSize:11,color:C.dim,fontVariantNumeric:"tabular-nums"}}>{fmtD(c.date)}</span>}
-              </div>
-            ))}
-          </div>
-          )}
-        </div>
-      ); })()}
-      {rows.length===0 && unmatchedCal.length===0 && <div style={{textAlign:"center",padding:"60px 0",color:C.muted,fontSize:13}}>No jobs have QC activity yet.</div>}
+      {rows.length===0 && <div style={{textAlign:"center",padding:"60px 0",color:C.muted,fontSize:13}}>No jobs have QC activity yet.</div>}
     </div>
   );
 }
@@ -50283,6 +50304,12 @@ function App() {
     // Accumulate patches for this job so we only write changed fields
     if(patch) {
       pendingPatches.current[job.id] = {...(pendingPatches.current[job.id]||{}), ...patch};
+      // Mirror change orders to FieldInk when they change (fire-and-forget,
+      // hash-gated internally, separate field-ink project — cannot affect this
+      // job's save). Only runs when a CO field is in the patch.
+      if ('changeOrders' in patch) {
+        try { publishCcChangeOrders(job.id, patch.changeOrders || job.changeOrders || []); } catch(e){}
+      }
     }
 
     // Always write to localStorage immediately
