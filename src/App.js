@@ -13840,7 +13840,7 @@ function HRAddFloor({homeRuns, onHRChange}) {
 }
 
 // ── Generator Load Section ────────────────────────────────────
-function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
+function GeneratorLoadSection({ homeRuns, genLoads, onSave, hoResponse }) {
   // KEY FIX: local state so ★ toggle and checkboxes update instantly
   const [loads, setLoads] = useState(genLoads || []);
   const [dragIdx, setDragIdx] = useState(null);
@@ -14018,19 +14018,42 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
       ))}
 
       {/* ── Sizing card (internal only — never shown on the homeowner page) ──
-          Running = sum of included loads' running watts.
+          BASIS:
+            before homeowner submits → the ★ recommended loads (our proposal)
+            after they submit        → their actual circuit selections, matched
+                                       back to current loads by id so edited
+                                       watts/surge stay live (falls back to the
+                                       snapshot if a load was since deleted)
+          Running = sum of basis loads' running watts.
           Surge   = single largest (starting − running) delta; motors don't
                     all start at once, so only the biggest one stacks on top.
           Required = running + surge → smallest GEN_SIZES_W that covers it. */}
-      {loads.some(l=>l.included)&&(()=>{
-        const sz = genSizing(loads);
+      {(()=>{
+        const submitted = !!hoResponse?.submitted;
+        const basis = submitted
+          ? (hoResponse.items||[]).filter(i=>i.included).map(i=>{
+              const cur = loads.find(l=>l.id===i.id);
+              return {...(cur||i), included:true};
+            })
+          : loads.filter(l=>l.recommended).map(l=>({...l,included:true}));
+        if (!basis.length) return loads.length>0 ? (
+          <div style={{marginTop:14,border:`1px dashed ${C.border}`,borderRadius:12,
+            padding:'12px 16px',fontSize:11,color:C.muted,fontStyle:'italic'}}>
+            Mark loads ★ Recommended to size a generator. Once the homeowner submits, sizing switches to their selections.
+          </div>
+        ) : null;
+        const sz = genSizing(basis);
         return (
           <div style={{marginTop:14,background:C.surface,border:`1px solid ${C.border}`,
             borderRadius:12,padding:'14px 16px'}}>
-            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10}}>
+            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10,flexWrap:'wrap'}}>
               <Icon name="zap" size={13} stroke={2.5}/>
               <span style={{fontSize:11,fontWeight:700,color:C.accent,letterSpacing:'0.08em'}}>GENERATOR SIZING</span>
-              <span style={{fontSize:10,color:C.dim,marginLeft:'auto'}}>{loads.filter(l=>l.included).length} loads included</span>
+              <span style={{marginLeft:'auto',fontSize:10,fontWeight:700,letterSpacing:'0.06em',
+                color:submitted?C.green:C.accent,background:submitted?`${C.green}12`:`${C.accent}12`,
+                border:`1px solid ${submitted?C.green:C.accent}44`,borderRadius:99,padding:'2px 9px'}}>
+                {submitted?`HOMEOWNER SELECTION · ${basis.length}`:`★ RECOMMENDED · ${basis.length}`}
+              </span>
             </div>
             <div style={{display:'flex',gap:18,flexWrap:'wrap',marginBottom:12}}>
               {[
@@ -14768,7 +14791,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           </div>
         )}
 
-        <GeneratorLoadSection homeRuns={homeRuns} genLoads={genLoads} onSave={saveGenLoads}/>
+        <GeneratorLoadSection homeRuns={homeRuns} genLoads={genLoads} onSave={saveGenLoads} hoResponse={hoResponse}/>
 
         <div style={{marginTop:14,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
           {!hoResponse?.submitted?(
