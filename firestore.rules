@@ -49,10 +49,14 @@ service cloud.firestore {
     // Share link recipients submit answers here — allow creates from anyone.
     // Only the app reads these back, so reads are also open for now.
     match /homeowner_requests/{docId} {
-      allow create: if request.resource.data.keys().hasAll(['jobId', 'submittedAt'])
-                    && request.resource.data.jobId is string;
+      // Share-link recipients submit AND resubmit answers here; the app also
+      // writes gen-load + lighting-collab requests to the same doc. Validate
+      // lightly (jobId must be a string, consistent with /jobs) and allow
+      // updates so resubmits/edits work. Never allow deletes.
       allow read: if true;
-      allow update, delete: if false;
+      allow create: if request.resource.data.jobId is string;
+      allow update: if request.resource.data.jobId is string;
+      allow delete: if false;
     }
 
     // ── QUESTION SHARES ───────────────────────────────────────────────────────

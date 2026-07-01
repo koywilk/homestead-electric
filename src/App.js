@@ -45289,16 +45289,20 @@ function QuestionsSharePage({ jobId }) {
   // Filter from Firestore — saved by crew via Share picker.
   // A named share link (?s=<id>) uses that share's question set; otherwise fall
   // back to the legacy single questionsFilter so old links keep working.
+  const shareObj = shareParam ? (job?.questionShares||[]).find(s=>s.id===shareParam) : null;
+  // A ?s= link whose share has been deleted is REVOKED — show nothing, never
+  // fall back to all questions (that would expose more, not less).
+  const linkRevoked = !!shareParam && !!job && !shareObj;
   const filterIds = (() => {
     if(shareParam){
-      const sh = (job?.questionShares||[]).find(s=>s.id===shareParam);
-      if(sh && Array.isArray(sh.ids)) return new Set(sh.ids);
+      if(shareObj && Array.isArray(shareObj.ids)) return new Set(shareObj.ids);
+      return new Set(); // link present but share missing → show nothing
     }
     const raw = job?.questionsFilter;
     if (!Array.isArray(raw) || raw.length === 0) return null;
     return new Set(raw);
   })();
-  const shareName = (job?.questionShares||[]).find(s=>s.id===shareParam)?.name || '';
+  const shareName = shareObj?.name || '';
 
   // Live listener — questions update in real-time as crew adds them
   useEffect(() => {
@@ -45377,6 +45381,8 @@ function QuestionsSharePage({ jobId }) {
       await setDoc(doc(db,'homeowner_requests',jobId), {
         ...existingData,
         jobId, jobName:job?.name||'', questionAnswers,
+        submittedAt: existingData.submittedAt || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
       });
       try { localStorage.removeItem(draftKey); } catch(e){}
       setSubmitted(true);
@@ -45401,6 +45407,13 @@ function QuestionsSharePage({ jobId }) {
 
   if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6E7682',fontSize:14}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#B23A3A',fontSize:14,padding:24,textAlign:'center'}}>{error}</div>;
+  if(linkRevoked) return (
+    <div style={{maxWidth:600,margin:'0 auto',padding:'60px 24px',textAlign:'center',fontFamily:'system-ui,sans-serif'}}>
+      <div style={{marginBottom:16,color:'#B0892C',display:'flex',justifyContent:'center'}}><Icon name="alertTriangle" size={44} stroke={2}/></div>
+      <div style={{fontSize:20,fontWeight:700,color:'#111',marginBottom:8}}>This link is no longer active</div>
+      <div style={{fontSize:14,color:'#6E7682',lineHeight:1.6}}>This questions link has been closed by Homestead Electric. Please reach out to us for an updated link.</div>
+    </div>
+  );
   if(submitted) return (
     <div style={{maxWidth:600,margin:'0 auto',padding:'60px 24px',textAlign:'center',fontFamily:'system-ui,sans-serif'}}>
       <div style={{marginBottom:16,color:'#3E7D5A',display:'flex',justifyContent:'center'}}><Icon name="checkCircle" size={48} stroke={2}/></div>
