@@ -45390,10 +45390,14 @@ function QuestionsSharePage({ jobId }) {
 
   return (
     <div style={{maxWidth:640,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#EEF0F3',minHeight:'100vh'}}>
-      <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:22}}>
-        <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>HOMESTEAD ELECTRIC</div>
-        <div style={{fontSize:19,fontWeight:700,color:'#fff',marginBottom:2}}>{job?.name||'Project Questions'}</div>
-        {job?.address&&<div style={{fontSize:12,color:'rgba(255,255,255,0.65)'}}>{job.address}</div>}
+      <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:22,display:'flex',alignItems:'center',gap:14}}>
+        <img src="/icon-192.png" alt="Homestead Electric" onError={e=>{e.currentTarget.style.display='none';}}
+          style={{width:48,height:48,borderRadius:11,flexShrink:0,background:'#fff',padding:5,boxSizing:'border-box',objectFit:'contain'}}/>
+        <div style={{minWidth:0}}>
+          <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>HOMESTEAD ELECTRIC</div>
+          <div style={{fontSize:19,fontWeight:700,color:'#fff',marginBottom:2}}>{job?.name||'Project Questions'}</div>
+          {job?.address&&<div style={{fontSize:12,color:'rgba(255,255,255,0.65)'}}>{job.address}</div>}
+        </div>
       </div>
 
       {prevAnsweredBy&&<div style={{background:'#F3E9CF',border:'1px solid #B0892C',borderRadius:8,padding:'10px 14px',marginBottom:16,fontSize:12,color:'#6E5212',display:'flex',alignItems:'center',gap:8}}><Icon name="pencil" size={13}/><span>You previously submitted answers as <b>{prevAnsweredBy}</b>. You can update them below and resubmit.</span></div>}
