@@ -29251,7 +29251,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
             return (
               <div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:4,alignSelf:'flex-start',marginTop:2}}>
                 {others.map(r=>(
-                  <button key={r} type="button" onClick={()=>{upd(q.id,{for:r});setEditRecip(null);}}
+                  <button key={r} type="button" onMouseDown={e=>{e.preventDefault();upd(q.id,{for:r});setEditRecip(null);}}
                     style={{fontSize:9,fontWeight:600,borderRadius:99,padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',border:`1px solid ${C.border}`,background:C.card,color:C.dim}}>{r}</button>
                 ))}
                 <input autoFocus defaultValue={cur} placeholder="Type recipient…"
