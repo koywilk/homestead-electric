@@ -44086,8 +44086,8 @@ function HomeownerPage({ jobId }) {
     setSubmitting(false);
   };
 
-  const A='#8A6A1E', AB='#F3E9CF';
-  const base={fontFamily:'system-ui,-apple-system,sans-serif',minHeight:'100vh',background:'#F4F6F8',color:'#1B1F24'};
+  const A='#3B5BA5', AB='#EAF0FA', ABorder='#C7D6EE';
+  const base={fontFamily:'system-ui,-apple-system,sans-serif',minHeight:'100vh',background:'#EEF0F3',color:'#1B1F24'};
   const card={background:'#fff',border:'0.5px solid #E1E4E9',borderRadius:10,marginBottom:6,padding:'12px 14px'};
 
   if(loading) return <div style={{...base,display:'flex',alignItems:'center',justifyContent:'center'}}><div style={{fontSize:14,color:'#8A929D'}}>Loading…</div></div>;
@@ -44104,26 +44104,31 @@ function HomeownerPage({ jobId }) {
   );
 
   return (
-    <div style={{...base,maxWidth:500,margin:'0 auto',padding:'0 0 80px'}}>
+    <div style={{...base,maxWidth:560,margin:'0 auto',padding:'24px 16px 80px'}}>
       {/* Header */}
-      <div style={{padding:'24px 20px 20px',borderBottom:'0.5px solid #E1E4E9'}}>
-        <div style={{fontSize:10,fontWeight:500,color:'#8A929D',letterSpacing:'0.1em',marginBottom:6}}>HOMESTEAD ELECTRIC</div>
-        <div style={{fontSize:20,fontWeight:500,marginBottom:4}}>{job?.name||'Generator Load Selection'}</div>
-        <div style={{fontSize:13,color:'#5E6670',lineHeight:1.55}}>
-          Review the circuits below — check the ones you want on your generator, drag to reorder by priority (most important first), and submit when done.
+      <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:16,display:'flex',alignItems:'center',gap:14}}>
+        <img src="/icon-192.png" alt="Homestead Electric" onError={e=>{e.currentTarget.style.display='none';}}
+          style={{width:48,height:48,borderRadius:11,flexShrink:0,background:'#fff',padding:5,boxSizing:'border-box',objectFit:'contain'}}/>
+        <div style={{minWidth:0}}>
+          <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>HOMESTEAD ELECTRIC</div>
+          <div style={{fontSize:19,fontWeight:700,color:'#fff',marginBottom:2}}>{job?.name||'Generator Load Selection'}</div>
+          {job?.address&&<div style={{fontSize:12,color:'rgba(255,255,255,0.65)'}}>{job.address}</div>}
         </div>
+      </div>
+      <div style={{fontSize:13,color:'#5E6670',lineHeight:1.55,marginBottom:14}}>
+        Review the circuits below — check the ones you want on your generator, drag to reorder by priority (most important first), and submit when done.
       </div>
 
       {/* Instructions */}
-      <div style={{margin:'16px 16px 0',padding:'12px 14px',background:AB,border:'0.5px solid #EAD9A6',borderRadius:10}}>
-        <div style={{fontSize:12,fontWeight:500,color:A,marginBottom:4}}>How to complete</div>
-        <div style={{fontSize:12,color:'#6E5212',lineHeight:1.6}}>
+      <div style={{padding:'12px 14px',background:AB,border:`1px solid ${ABorder}`,borderRadius:10,marginBottom:4}}>
+        <div style={{fontSize:12,fontWeight:700,color:A,marginBottom:4}}>How to complete</div>
+        <div style={{fontSize:12,color:'#3A4A63',lineHeight:1.6}}>
           ★ = Recommended by Homestead Electric<br/>
           Check/uncheck circuits · Drag ⠿ to reorder · Sign &amp; submit
         </div>
       </div>
 
-      <div style={{padding:'20px 16px 0'}}>
+      <div style={{padding:'16px 0 0'}}>
 
         {/* ON GENERATOR */}
         <div style={{fontSize:10,fontWeight:500,color:'#8A929D',letterSpacing:'0.08em',marginBottom:10}}>
@@ -44144,20 +44149,16 @@ function HomeownerPage({ jobId }) {
               borderLeft:`3px solid ${it.recommended?A:'#E1E4E9'}`}}>
             <div style={{display:'flex',alignItems:'center',gap:10}}>
               <div style={{color:'#CDD3DB',fontSize:15,flexShrink:0}}>⠿</div>
-              <div style={{width:22,height:22,borderRadius:'50%',background:AB,border:'0.5px solid #EAD9A6',
+              <div style={{width:22,height:22,borderRadius:'50%',background:AB,border:`0.5px solid ${ABorder}`,
                 display:'flex',alignItems:'center',justifyContent:'center',
                 fontSize:10,fontWeight:500,color:A,flexShrink:0}}>
                 {included.indexOf(it)+1}
               </div>
               <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:13,fontWeight:500,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap',marginBottom:2}}>
+                <div style={{fontSize:13,fontWeight:500,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                   {it.name||'Unnamed'}
                   {it.recommended&&<span style={{fontSize:9,fontWeight:700,color:A,background:AB,
-                    borderRadius:99,padding:'1px 7px',border:'0.5px solid #EAD9A6',flexShrink:0}}>★ Recommended</span>}
-                </div>
-                <div style={{fontSize:11,color:'#8A929D',display:'flex',gap:8}}>
-                  {it.wire&&<span>{it.wire}</span>}
-                  {it.watts>0&&<span style={{color:A,fontWeight:500}}>{it.watts}W</span>}
+                    borderRadius:99,padding:'1px 7px',border:`0.5px solid ${ABorder}`,flexShrink:0}}>★ Recommended</span>}
                 </div>
               </div>
               <button onClick={()=>toggle(it.id)}
