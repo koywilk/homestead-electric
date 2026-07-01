@@ -13988,9 +13988,15 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, hoResponse }) {
               </option>
             ))}
           </select>
+          {/* Amber border = still the wire-derived BREAKER-CAPACITY default,
+              not a real appliance draw — needs Suggest Watts or a hand edit
+              before the sizing card means anything. */}
           <input value={load.watts||0} onChange={e=>updWatts(load.id,e.target.value)}
-            title="Running watts (continuous draw)"
-            style={{width:44,background:'transparent',border:`1px solid ${C.border}`,borderRadius:6,
+            title={load.wire&&(parseFloat(load.watts)||0)===wireWatts(load.wire)
+              ?'Breaker-capacity default — not real draw. Type the actual running watts or tap Suggest Watts.'
+              :'Running watts (continuous draw)'}
+            style={{width:44,background:'transparent',borderRadius:6,
+              border:`1px solid ${load.wire&&(parseFloat(load.watts)||0)===wireWatts(load.wire)?C.orange+'88':C.border}`,
               color:C.accent,fontSize:11,fontWeight:700,fontFamily:'inherit',outline:'none',
               padding:'3px 5px',textAlign:'right',flexShrink:0}}/>
           <span title="Running watts" style={{fontSize:9,color:C.dim,flexShrink:0}}>W</span>
@@ -14043,9 +14049,22 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, hoResponse }) {
           </div>
         ) : null;
         const sz = genSizing(basis);
+        // Loads still carrying the wire-derived default = breaker CAPACITY,
+        // not real appliance draw. Sizing off those inflates wildly (30
+        // circuits at breaker rating ≈ 80kW+). Flag them so the number is
+        // never trusted until real watts are in.
+        const atDefault = basis.filter(l=>l.wire && (parseFloat(l.watts)||0)===wireWatts(l.wire)).length;
         return (
           <div style={{marginTop:14,background:C.surface,border:`1px solid ${C.border}`,
             borderRadius:12,padding:'14px 16px'}}>
+            {atDefault>0&&(
+              <div style={{background:`${C.orange}12`,border:`1px solid ${C.orange}44`,borderRadius:9,
+                padding:'8px 12px',marginBottom:12,fontSize:11,color:C.orange,fontWeight:600,
+                display:'flex',alignItems:'flex-start',gap:7}}>
+                <Icon name="alertTriangle" size={13} stroke={2.5} style={{flexShrink:0,marginTop:1}}/>
+                <span>{atDefault} of {basis.length} loads still have breaker-capacity watts (worst case, not real draw) — this size is inflated. Tap Suggest Watts or type actual wattages.</span>
+              </div>
+            )}
             <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10,flexWrap:'wrap'}}>
               <Icon name="zap" size={13} stroke={2.5}/>
               <span style={{fontSize:11,fontWeight:700,color:C.accent,letterSpacing:'0.08em'}}>GENERATOR SIZING</span>
