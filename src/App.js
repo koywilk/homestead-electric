@@ -27150,9 +27150,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <div style={{marginTop:20}}>
                 <Section label="Questions" color={C.rough} action={
                   <QuestionPicker roughQuestions={job.roughQuestions} finishQuestions={job.finishQuestions} jobId={job.id} color={C.rough}
-                    filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}/>
+                    filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
+                    questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
                 }>
-                  {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{if(a.answer&&!((job.roughQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null} jobId={job.id} photoFolder="rough"/>;})()}
+                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{const qq=(job.roughQuestions?.[f]||[]).find(q=>q.id===a.id);if(a.answer&&!(qq?.done))m[a.id]=a.answer;if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m} gcNoteMap={nmap} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null} jobId={job.id} photoFolder="rough"/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
@@ -27454,9 +27455,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <div style={{marginTop:20}}>
                 <Section label="Questions" color={C.finish} action={
                   <QuestionPicker roughQuestions={job.roughQuestions} finishQuestions={job.finishQuestions} jobId={job.id} color={C.finish}
-                    filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}/>
+                    filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
+                    questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
                 }>
-                  {(()=>{const m={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{if(a.answer&&!((job.finishQuestions?.[f]||[]).find(q=>q.id===a.id)?.done))m[a.id]=a.answer;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null} jobId={job.id} photoFolder="finish"/>;})()}
+                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{const qq=(job.finishQuestions?.[f]||[]).find(q=>q.id===a.id);if(a.answer&&!(qq?.done))m[a.id]=a.answer;if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} gcNoteMap={nmap} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null} jobId={job.id} photoFolder="finish"/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
@@ -29158,7 +29160,7 @@ const ANSWER_METHODS = [
 ];
 const answerMethodLabel = (v) => { const m = ANSWER_METHODS.find(x=>x.v===v); return m ? m.l : ''; };
 
-function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null}) {
+function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null}) {
 
   // guard: old data may be a string instead of array
 
@@ -29205,6 +29207,13 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
       borderRadius:10,padding:12,marginBottom:10,transition:"opacity 0.2s"}}>
 
       <div style={{display:"flex",alignItems:"flex-start",gap:8,marginBottom:q.done?0:8}}>
+
+        {selectMode && (
+          <input type="checkbox" checked={!!(selectedIds&&selectedIds.has(q.id))}
+            onChange={()=>onToggleSelect&&onToggleSelect(q.id)}
+            title="Select for bulk assign"
+            style={{accentColor:color,width:16,height:16,cursor:"pointer",flexShrink:0,marginTop:1}}/>
+        )}
 
         <input type="checkbox" checked={q.done}
 
@@ -29374,6 +29383,13 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
         </div>
       )}
 
+      {(gcNoteMap[q.id]||"").trim()&&(
+        <div style={{marginLeft:22,marginTop:6,background:"#FCF6E7",border:"1px solid #E3D3A6",borderRadius:6,padding:"6px 10px",fontSize:11}}>
+          <span style={{fontSize:9,fontWeight:700,color:"#8A6A1E",background:"#F3E9CF",borderRadius:4,padding:"1px 5px",marginRight:6}}>GC ASKED</span>
+          <span style={{color:"#6E5212",fontStyle:"italic"}}>{gcNoteMap[q.id]}</span>
+        </div>
+      )}
+
     </div>
 
   );
@@ -29428,7 +29444,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
 }
 
 
-function QASection({questions: _questions, onChange, color, gcAnswerMap={}, filterIds=null, jobId=null, photoFolder=""}) {
+function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, filterIds=null, jobId=null, photoFolder=""}) {
 
   // guard: normalize questions to always be object with array values
 
@@ -29450,6 +29466,22 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, filt
   const [recipFilter, setRecipFilter] = useState(null);
   const countFor = (r) => allQs.filter(q=>(q.for||"")===r).length;
 
+  // Bulk assign — select multiple questions across floors and set their
+  // recipient in one shot.
+  const [selectMode, setSelectMode] = useState(false);
+  const [selectedIds, setSelectedIds] = useState(()=>new Set());
+  const toggleSelect = (id) => setSelectedIds(p=>{ const n=new Set(p); n.has(id)?n.delete(id):n.add(id); return n; });
+  const matchFilter = (q) => recipFilter==null ? true : recipFilter==="__unassigned__" ? !(q.for||"").trim() : (q.for||"")===recipFilter;
+  const visibleQs = allQs.filter(matchFilter);
+  const exitSelect = () => { setSelectMode(false); setSelectedIds(new Set()); };
+  const assignSelectedTo = (val) => {
+    if(selectedIds.size===0) return;
+    const next = {...questions};
+    ["upper","main","basement"].forEach(k=>{ next[k] = (Array.isArray(questions[k])?questions[k]:[]).map(q=> selectedIds.has(q.id) ? {...q, for:val} : q); });
+    onChange(next);
+    setSelectedIds(new Set());
+  };
+
   const chip = (active, label, onClick, key) => (
     <button key={key} type="button" onClick={onClick}
       style={{fontSize:11,fontWeight:active?700:600,padding:"4px 11px",borderRadius:99,cursor:"pointer",fontFamily:"inherit",
@@ -29466,11 +29498,41 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, filt
         </div>
       )}
 
-      {(recipients.length>0 || unassignedCount<allQs.length) && allQs.length>0 && (
-        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:16}}>
-          {chip(recipFilter==null, `All (${allQs.length})`, ()=>setRecipFilter(null), "__all")}
-          {recipients.map(r=>chip(recipFilter===r, `${r} (${countFor(r)})`, ()=>setRecipFilter(r), r))}
-          {unassignedCount>0 && chip(recipFilter==="__unassigned__", `Unassigned (${unassignedCount})`, ()=>setRecipFilter("__unassigned__"), "__un")}
+      {allQs.length>0 && (
+        <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:6,marginBottom:16}}>
+          {(recipients.length>0 || unassignedCount<allQs.length) && <>
+            {chip(recipFilter==null, `All (${allQs.length})`, ()=>setRecipFilter(null), "__all")}
+            {recipients.map(r=>chip(recipFilter===r, `${r} (${countFor(r)})`, ()=>setRecipFilter(r), r))}
+            {unassignedCount>0 && chip(recipFilter==="__unassigned__", `Unassigned (${unassignedCount})`, ()=>setRecipFilter("__unassigned__"), "__un")}
+          </>}
+          <span style={{flex:1,minWidth:12}}/>
+          <button type="button" onClick={()=> selectMode ? exitSelect() : setSelectMode(true)}
+            style={{fontSize:11,fontWeight:700,padding:"4px 11px",borderRadius:99,cursor:"pointer",fontFamily:"inherit",
+              border:`1px solid ${selectMode?color:C.border}`,background:selectMode?`${color}18`:C.card,color:selectMode?color:C.dim}}>
+            {selectMode?"Cancel":"Select"}
+          </button>
+        </div>
+      )}
+
+      {selectMode && (
+        <div style={{position:"sticky",top:8,zIndex:5,background:C.card,border:`1px solid ${color}66`,borderRadius:10,padding:"10px 12px",marginBottom:16,display:"flex",flexWrap:"wrap",alignItems:"center",gap:8,boxShadow:"0 2px 10px rgba(0,0,0,0.08)"}}>
+          <span style={{fontSize:12,fontWeight:800,color:C.text}}>{selectedIds.size} selected</span>
+          <button type="button" onClick={()=>setSelectedIds(new Set(visibleQs.map(q=>q.id)))}
+            style={{fontSize:10,fontWeight:600,color:C.dim,background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",textDecoration:"underline"}}>Select all{recipFilter!=null?" shown":""}</button>
+          {selectedIds.size>0 && <button type="button" onClick={()=>setSelectedIds(new Set())}
+            style={{fontSize:10,fontWeight:600,color:C.dim,background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",textDecoration:"underline"}}>Clear</button>}
+          <span style={{width:1,height:16,background:C.border,margin:"0 2px"}}/>
+          <span style={{fontSize:11,color:C.dim}}>Assign to:</span>
+          {recipients.map(r=>(
+            <button key={r} type="button" disabled={!selectedIds.size} onClick={()=>assignSelectedTo(r)}
+              style={{fontSize:10,fontWeight:600,padding:"3px 9px",borderRadius:99,fontFamily:"inherit",cursor:selectedIds.size?"pointer":"not-allowed",
+                border:`1px solid ${C.border}`,background:C.card,color:selectedIds.size?color:C.muted,opacity:selectedIds.size?1:0.6}}>{r}</button>
+          ))}
+          <input placeholder="New recipient…" disabled={!selectedIds.size}
+            onKeyDown={e=>{ if(e.key==="Enter"&&e.currentTarget.value.trim()){ assignSelectedTo(e.currentTarget.value.trim()); e.currentTarget.value=""; } }}
+            style={{fontSize:11,padding:"3px 8px",border:`1px solid ${C.border}`,borderRadius:99,fontFamily:"inherit",width:130,outline:"none",background:C.card,color:C.text}}/>
+          <button type="button" disabled={!selectedIds.size} onClick={()=>assignSelectedTo("")}
+            style={{fontSize:10,fontWeight:600,padding:"3px 9px",borderRadius:99,fontFamily:"inherit",cursor:selectedIds.size?"pointer":"not-allowed",border:`1px solid ${C.border}`,background:C.card,color:C.dim,opacity:selectedIds.size?1:0.6}}>Unassign</button>
         </div>
       )}
 
@@ -29488,10 +29550,14 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, filt
 
             color={color}
             gcAnswerMap={gcAnswerMap}
+            gcNoteMap={gcNoteMap}
             filterIds={filterIds}
             jobId={jobId}
             recipients={recipients}
             recipFilter={recipFilter}
+            selectMode={selectMode}
+            selectedIds={selectedIds}
+            onToggleSelect={toggleSelect}
             photoFolder={`${photoFolder?photoFolder+"-":""}${k}`}/>
 
         </div>
@@ -44475,9 +44541,11 @@ function LightingSharePage({ jobId }) {
 }
 
 // ─── Question Picker (selective share modal) ─────────────────────────────────
-function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=null, onSaveFilter }) {
+function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=null, onSaveFilter, questionShares=[], onSaveShares }) {
   const [open,     setOpen]     = useState(false);
   const [selected, setSelected] = useState(new Set());
+  const [shareLabel, setShareLabel] = useState("");
+  const [editingId, setEditingId] = useState(null); // saved-share being edited, or null for a new one
 
   const flatQs = (qs, phase) => {
     if(!qs || typeof qs !== 'object') return [];
@@ -44492,81 +44560,102 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
     ...flatQs(roughQuestions, 'rough'),
     ...flatQs(finishQuestions, 'finish'),
   ];
+  const qById = (id) => allQs.find(q=>q.id===id);
+  const shares = Array.isArray(questionShares) ? questionShares : [];
 
   const openPicker = () => {
-    // Pre-select from saved filter if one exists, otherwise select all
-    const initIds = filter ? new Set(filter) : new Set(allQs.map(q=>q.id));
-    setSelected(initIds);
+    setSelected(new Set());
+    setShareLabel("");
+    setEditingId(null);
     setOpen(true);
   };
 
-  const toggle = (id) => {
-    setSelected(prev => {
-      const next = new Set(prev);
-      next.has(id) ? next.delete(id) : next.add(id);
-      return next;
-    });
+  const toggle = (id) => setSelected(prev => { const n=new Set(prev); n.has(id)?n.delete(id):n.add(id); return n; });
+  const toggleAll = (ids) => setSelected(prev => { const allOn=ids.every(id=>prev.has(id)); const n=new Set(prev); ids.forEach(id=>allOn?n.delete(id):n.add(id)); return n; });
+
+  // Recipient buckets, in first-seen order. "" → Unassigned.
+  const recipKeys = [];
+  allQs.forEach(q=>{ const k=(q.for||'').trim()||'__un'; if(!recipKeys.includes(k)) recipKeys.push(k); });
+  const groupLabel = (k) => k==='__un' ? 'Unassigned' : k;
+
+  // When the selection is all one recipient, offer that as the link name.
+  const selectedRecip = (() => {
+    const set = new Set([...selected].map(id=>((qById(id)?.for||'').trim()||'__un')));
+    if(set.size===1){ const only=[...set][0]; return only==='__un'?'':only; }
+    return '';
+  })();
+
+  const copyLink = (shareId) => {
+    const link = shareId ? `${window.location.origin}/?questions=${jobId}&s=${shareId}`
+                         : `${window.location.origin}/?questions=${jobId}`;
+    navigator.clipboard.writeText(link).then(()=>toast.success('Link copied to clipboard.')).catch(()=>toast.info(link));
   };
 
-  const toggleAll = (ids) => {
-    setSelected(prev => {
-      const allOn = ids.every(id=>prev.has(id));
-      const next = new Set(prev);
-      ids.forEach(id => allOn ? next.delete(id) : next.add(id));
-      return next;
-    });
-  };
-
-  const saveFilter = () => {
+  const saveShare = () => {
     if(!selected.size){ toast.warn('Select at least one question.'); return; }
-    if(onSaveFilter) onSaveFilter([...selected]);
-    const link = `${window.location.origin}/?questions=${jobId}`;
-    navigator.clipboard.writeText(link)
-      .then(()=>toast.success('Filter saved! Link copied to clipboard.'))
-      .catch(()=>toast.success('Filter saved!'));
+    const name = (shareLabel.trim() || selectedRecip || 'Share');
+    const ids = [...selected];
+    let shareId, next;
+    const match = editingId ? shares.find(s=>s.id===editingId) : shares.find(s=>(s.name||'').toLowerCase()===name.toLowerCase());
+    if(match){ shareId=match.id; next=shares.map(s=>s.id===match.id?{...s,name,ids,updatedAt:new Date().toISOString()}:s); }
+    else { shareId='s_'+Math.random().toString(36).slice(2,9); next=[...shares,{id:shareId,name,ids,createdAt:new Date().toISOString()}]; }
+    if(onSaveShares) onSaveShares(next);
+    copyLink(shareId);
     setOpen(false);
   };
 
-  const clearFilter = () => {
-    if(onSaveFilter) onSaveFilter(null);
+  const deleteShare = (id) => { if(onSaveShares) onSaveShares(shares.filter(s=>s.id!==id)); if(editingId===id){ setEditingId(null); setSelected(new Set()); setShareLabel(""); } };
+  const loadShare = (s) => { setSelected(new Set((s.ids||[]).filter(id=>qById(id)))); setShareLabel(s.name||''); setEditingId(s.id); };
+  const startNew = () => { setSelected(new Set()); setShareLabel(""); setEditingId(null); };
+
+  const shareEverything = () => {
+    if(onSaveFilter) onSaveFilter(null); // clear legacy single-filter so the base link shows all
+    copyLink(null);
     setOpen(false);
   };
 
   if(!allQs.length) return null;
 
-  const roughQs  = allQs.filter(q=>q.phase==='rough');
-  const finishQs = allQs.filter(q=>q.phase==='finish');
   const phaseColor = { rough:'#3B5BA5', finish:'#6A7BAA' };
+  const totalShares = shares.length;
 
-  const renderGroup = (qs, label, pc, iconName) => {
+  const renderRecipientGroup = (k) => {
+    const qs = allQs.filter(q=>((q.for||'').trim()||'__un')===k);
     if(!qs.length) return null;
     const ids = qs.map(q=>q.id);
     const allOn = ids.every(id=>selected.has(id));
+    const someOn = ids.some(id=>selected.has(id));
+    const dot = k==='__un' ? '#99A0AA' : color;
     return (
-      <div style={{marginBottom:16}}>
+      <div key={k} style={{marginBottom:16}}>
         <div style={{display:'flex',alignItems:'center',justifyContent:'space-between',
-          borderBottom:`2px solid ${pc}33`,paddingBottom:5,marginBottom:8}}>
-          <span style={{fontSize:11,fontWeight:700,color:pc,letterSpacing:'0.08em',display:'inline-flex',alignItems:'center',gap:5}}>{iconName&&<Icon name={iconName} size={12}/>} {label}</span>
+          borderBottom:`2px solid ${color}33`,paddingBottom:5,marginBottom:8}}>
+          <span style={{fontSize:12,fontWeight:800,color:'#1B1F24',letterSpacing:'0.02em',display:'inline-flex',alignItems:'center',gap:6}}>
+            <span style={{width:8,height:8,borderRadius:'50%',background:dot,display:'inline-block'}}/>{groupLabel(k)}
+            <span style={{fontSize:10,fontWeight:600,color:'#99A0AA'}}>({qs.length})</span>
+          </span>
           <button onClick={()=>toggleAll(ids)}
-            style={{fontSize:10,color:pc,background:'none',border:`1px solid ${pc}55`,borderRadius:4,
+            style={{fontSize:10,color:color,background:'none',border:`1px solid ${color}55`,borderRadius:4,
               padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',fontWeight:600}}>
-            {allOn?'Deselect All':'Select All'}
+            {allOn?'Deselect all':someOn?'Select rest':'Select all'}
           </button>
         </div>
-        {qs.map((q,i)=>(
+        {qs.map((q)=>(
           <div key={q.id} onClick={()=>toggle(q.id)}
             style={{display:'flex',alignItems:'flex-start',gap:10,padding:'8px 10px',marginBottom:4,
               borderRadius:7,cursor:'pointer',
-              background:selected.has(q.id)?`${pc}10`:'#f9fafb',
-              border:`1px solid ${selected.has(q.id)?pc+'44':'#E1E4E9'}`}}>
-            <div style={{width:16,height:16,borderRadius:4,border:`2px solid ${selected.has(q.id)?pc:'#CDD3DB'}`,
-              background:selected.has(q.id)?pc:'#fff',flexShrink:0,marginTop:1,
+              background:selected.has(q.id)?`${color}10`:'#f9fafb',
+              border:`1px solid ${selected.has(q.id)?color+'44':'#E1E4E9'}`}}>
+            <div style={{width:16,height:16,borderRadius:4,border:`2px solid ${selected.has(q.id)?color:'#CDD3DB'}`,
+              background:selected.has(q.id)?color:'#fff',flexShrink:0,marginTop:1,
               display:'flex',alignItems:'center',justifyContent:'center'}}>
               {selected.has(q.id)&&<span style={{color:'#fff',fontSize:9,fontWeight:900}}>✓</span>}
             </div>
             <div style={{flex:1,minWidth:0}}>
-              <div style={{fontSize:10,color:'#99A0AA',fontWeight:600,marginBottom:1}}>{q.floor}</div>
-              <div style={{fontSize:13,color:'#1B1F24',lineHeight:1.4}}>Q{i+1}: {q.question}</div>
+              <div style={{fontSize:10,color:'#99A0AA',fontWeight:600,marginBottom:1}}>
+                <span style={{color:phaseColor[q.phase],fontWeight:700}}>{q.phase==='rough'?'Rough':'Finish'}</span> · {q.floor}
+              </div>
+              <div style={{fontSize:13,color:'#1B1F24',lineHeight:1.4}}>{q.question}</div>
             </div>
           </div>
         ))}
@@ -44580,52 +44669,79 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
         style={{background:`${color}15`,border:`1px solid ${color}55`,borderRadius:6,
           color,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',
           fontFamily:'inherit',letterSpacing:'0.05em'}}>
-        {filter ? `Shared (${filter.length}) ↗` : 'Share ↗'}
+        {totalShares ? `Share links (${totalShares}) ↗` : filter ? `Shared (${filter.length}) ↗` : 'Share ↗'}
       </button>
 
       {open&&(
         <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.55)',zIndex:9999,
           display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
           onClick={e=>{if(e.target===e.currentTarget)setOpen(false);}}>
-          <div style={{background:'#fff',borderRadius:14,width:'100%',maxWidth:520,
-            maxHeight:'85vh',display:'flex',flexDirection:'column',overflow:'hidden',
+          <div style={{background:'#fff',borderRadius:14,width:'100%',maxWidth:540,
+            maxHeight:'88vh',display:'flex',flexDirection:'column',overflow:'hidden',
             boxShadow:'0 20px 60px rgba(0,0,0,0.3)'}}>
             {/* Modal header */}
             <div style={{padding:'16px 20px',borderBottom:'1px solid #E1E4E9',display:'flex',
               alignItems:'center',justifyContent:'space-between',flexShrink:0}}>
               <div>
-                <div style={{fontSize:15,fontWeight:700,color:'#111'}}>Select Questions to Share</div>
+                <div style={{fontSize:15,fontWeight:700,color:'#111'}}>Share Questions</div>
                 <div style={{fontSize:11,color:'#99A0AA',marginTop:2}}>
-                  {selected.size} of {allQs.length} selected · recipient will only see chosen questions
+                  {selected.size} selected · make a separate link per person — they only see the questions you choose
                 </div>
               </div>
               <button onClick={()=>setOpen(false)}
                 style={{background:'none',border:'none',fontSize:20,cursor:'pointer',color:'#99A0AA',padding:'0 4px',lineHeight:1}}>✕</button>
             </div>
-            {/* Question list */}
+            {/* Body */}
             <div style={{padding:'16px 20px',overflowY:'auto',flex:1}}>
-              {renderGroup(roughQs, 'ROUGH PHASE', phaseColor.rough, 'zap')}
-              {renderGroup(finishQs, 'FINISH PHASE', phaseColor.finish, 'flag')}
+
+              {/* Saved links — track each person's link */}
+              {totalShares>0 && (
+                <div style={{marginBottom:18,background:'#F4F6F8',border:'1px solid #E1E4E9',borderRadius:10,padding:'10px 12px'}}>
+                  <div style={{fontSize:11,fontWeight:800,color:'#5E6670',letterSpacing:'0.06em',marginBottom:6}}>SAVED LINKS</div>
+                  {shares.map(s=>{
+                    const cnt=(s.ids||[]).length;
+                    return (
+                      <div key={s.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderTop:'1px solid #E7EAEF'}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:12.5,fontWeight:700,color:'#1B1F24',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.name}{editingId===s.id&&<span style={{fontSize:10,fontWeight:600,color:color,marginLeft:6}}>editing</span>}</div>
+                          <div style={{fontSize:10,color:'#99A0AA'}}>{cnt} question{cnt!==1?'s':''}</div>
+                        </div>
+                        <button onClick={()=>loadShare(s)} style={{fontSize:10.5,fontWeight:600,color:'#5E6670',background:'#fff',border:'1px solid #D7DBE1',borderRadius:6,padding:'4px 9px',cursor:'pointer',fontFamily:'inherit'}}>Edit</button>
+                        <button onClick={()=>copyLink(s.id)} style={{fontSize:10.5,fontWeight:700,color:'#fff',background:'#1e3a5f',border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit'}}>Copy link</button>
+                        <button onClick={()=>deleteShare(s.id)} title="Delete link" style={{fontSize:13,color:'#B23A3A',background:'none',border:'none',cursor:'pointer',padding:'0 2px'}}>✕</button>
+                      </div>
+                    );
+                  })}
+                  {editingId && <button onClick={startNew} style={{marginTop:8,fontSize:11,fontWeight:700,color:color,background:'none',border:`1px dashed ${color}66`,borderRadius:6,padding:'5px 12px',cursor:'pointer',fontFamily:'inherit'}}>+ Start a new link</button>}
+                </div>
+              )}
+
+              {recipKeys.map(k=>renderRecipientGroup(k))}
             </div>
             {/* Footer */}
-            <div style={{padding:'12px 20px',borderTop:'1px solid #E1E4E9',display:'flex',gap:8,flexShrink:0}}>
-              <button onClick={saveFilter}
-                style={{flex:1,background:'#1e3a5f',color:'#fff',border:'none',borderRadius:8,
-                  padding:'10px 16px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
-                Save & Copy Link ({selected.size} question{selected.size!==1?'s':''})
-              </button>
-              {filter&&(
-                <button onClick={clearFilter}
-                  style={{background:'#F6EAEA',color:'#B23A3A',border:'1px solid #EAD2D2',borderRadius:8,
-                    padding:'10px 12px',fontSize:12,cursor:'pointer',fontFamily:'inherit',fontWeight:600}}>
-                  Share All
+            <div style={{padding:'12px 20px',borderTop:'1px solid #E1E4E9',flexShrink:0}}>
+              <div style={{display:'flex',gap:8,marginBottom:8}}>
+                <input value={shareLabel} onChange={e=>setShareLabel(e.target.value)}
+                  placeholder={selectedRecip ? `Name (default: ${selectedRecip})` : 'Name this link (e.g. Designer, Haley)'}
+                  style={{flex:1,border:'1px solid #CDD3DB',borderRadius:8,padding:'9px 11px',fontSize:13,fontFamily:'inherit',outline:'none',boxSizing:'border-box'}}/>
+              </div>
+              <div style={{display:'flex',gap:8}}>
+                <button onClick={saveShare}
+                  style={{flex:1,background:'#1e3a5f',color:'#fff',border:'none',borderRadius:8,
+                    padding:'10px 16px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
+                  {editingId?'Update':'Save'} & Copy Link ({selected.size})
                 </button>
-              )}
-              <button onClick={()=>setOpen(false)}
-                style={{background:'#EEF0F3',color:'#6E7682',border:'none',borderRadius:8,
-                  padding:'10px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
-                Cancel
-              </button>
+                <button onClick={shareEverything}
+                  style={{background:'#EEF2F7',color:'#1e3a5f',border:'1px solid #CBD6E4',borderRadius:8,
+                    padding:'10px 12px',fontSize:12,cursor:'pointer',fontFamily:'inherit',fontWeight:600}}>
+                  Share all
+                </button>
+                <button onClick={()=>setOpen(false)}
+                  style={{background:'#EEF0F3',color:'#6E7682',border:'none',borderRadius:8,
+                    padding:'10px 14px',fontSize:13,fontWeight:600,cursor:'pointer',fontFamily:'inherit'}}>
+                  Cancel
+                </button>
+              </div>
             </div>
           </div>
         </div>
@@ -45128,8 +45244,11 @@ function QuestionsSharePage({ jobId }) {
   const [job,            setJob]           = useState(null);
   const [loading,        setLoading]       = useState(true);
   const [error,          setError]         = useState(null);
-  const draftKey = `he_qdraft_${jobId}_${new URLSearchParams(window.location.search).get('share')||'x'}`;
+  const shareParam = new URLSearchParams(window.location.search).get('s') || '';
+  const draftKey = `he_qdraft_${jobId}_${shareParam||new URLSearchParams(window.location.search).get('share')||'x'}`;
   const [answers,        setAnswers]       = useState(() => { try { return JSON.parse(localStorage.getItem(draftKey)||'{}'); } catch(e) { return {}; } });
+  const [notes,          setNotes]         = useState({}); // per-question "ask for more info" notes back to the crew
+  const [noteOpen,       setNoteOpen]      = useState(new Set()); // which cards have the note field expanded
   const [submitting,     setSubmitting]    = useState(false);
   const [submitted,      setSubmitted]     = useState(false);
   const [respondentName, setRespondentName]= useState('');
@@ -45146,12 +45265,19 @@ function QuestionsSharePage({ jobId }) {
     if(Object.keys(answers).length) localStorage.setItem(draftKey, JSON.stringify(answers));
   }, [answers]);
 
-  // Filter from Firestore — saved by crew via Share picker
+  // Filter from Firestore — saved by crew via Share picker.
+  // A named share link (?s=<id>) uses that share's question set; otherwise fall
+  // back to the legacy single questionsFilter so old links keep working.
   const filterIds = (() => {
+    if(shareParam){
+      const sh = (job?.questionShares||[]).find(s=>s.id===shareParam);
+      if(sh && Array.isArray(sh.ids)) return new Set(sh.ids);
+    }
     const raw = job?.questionsFilter;
     if (!Array.isArray(raw) || raw.length === 0) return null;
     return new Set(raw);
   })();
+  const shareName = (job?.questionShares||[]).find(s=>s.id===shareParam)?.name || '';
 
   // Live listener — questions update in real-time as crew adds them
   useEffect(() => {
@@ -45170,15 +45296,18 @@ function QuestionsSharePage({ jobId }) {
         const qa = snap.data().questionAnswers;
         setPrevAnsweredBy(qa.answeredBy || '');
         const ans = {};
+        const nts = {};
         const aSet = new Set();
         ['rough','finish'].forEach(phase => {
           ['upper','main','basement'].forEach(floor => {
             (qa[phase]?.[floor] || []).forEach(a => {
               if(a.answer) { ans[a.id] = a.answer; if(a.answer.trim()) aSet.add(a.id); }
+              if(a.clarify) nts[a.id] = a.clarify;
             });
           });
         });
         setAnswers(ans);
+        setNotes(prev => ({...nts, ...prev}));
         setAnsweredIds(prev => new Set([...prev, ...aSet]));
       }
     }).catch(()=>{});
@@ -45201,9 +45330,9 @@ function QuestionsSharePage({ jobId }) {
         (existingFloor || []).forEach(a => { exMap[a.id] = a; });
         return (allQs || []).map(q => {
           if(!filterIds || filterIds.has(q.id)) {
-            return { id:q.id, question:q.question, answer:answers[q.id]||'' };
+            return { id:q.id, question:q.question, answer:answers[q.id]||'', clarify:(notes[q.id]||'').trim() };
           }
-          // Not shown to this recipient — preserve existing answer
+          // Not shown to this recipient — preserve existing answer/note
           return exMap[q.id] || { id:q.id, question:q.question, answer:'' };
         });
       };
@@ -45276,7 +45405,7 @@ function QuestionsSharePage({ jobId }) {
         </div>
       ) : (
         <>
-          <div style={{fontSize:13,color:'#6E7682',marginBottom:18,lineHeight:1.6}}>Please answer the questions below. Your responses go directly to our team. This page updates automatically if new questions are added.</div>
+          <div style={{fontSize:13,color:'#6E7682',marginBottom:18,lineHeight:1.6}}>Please answer the questions below.{shareName?<> These questions are for <b>{shareName}</b>.</>:null} <b style={{color:'#2E3640'}}>Nothing is sent until you press “Submit Answers” at the bottom of this page.</b> If you need more detail before you can answer, tap <b>“Ask for more info”</b> on any question to send a note back to our team instead of an answer. This page updates automatically if new questions are added.</div>
 
           {roughQs.length>0&&(
             <div style={{marginBottom:20}}>
@@ -45294,6 +45423,17 @@ function QuestionsSharePage({ jobId }) {
                     <textarea value={answers[q.id]||''} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))}
                       onBlur={e=>{if(e.target.value.trim())setAnsweredIds(s=>new Set([...s,q.id]));else setAnsweredIds(s=>{const n=new Set(s);n.delete(q.id);return n;});}}
                       placeholder="Type your answer here…" rows={3} style={taStyle}/>
+                    {(noteOpen.has(q.id)||!!(notes[q.id]&&notes[q.id].trim())) ? (
+                      <div style={{marginTop:8}}>
+                        <div style={{fontSize:11,fontWeight:700,color:'#B0892C',marginBottom:4}}>Ask our team for more info</div>
+                        <textarea value={notes[q.id]||''} onChange={e=>setNotes(n=>({...n,[q.id]:e.target.value}))}
+                          placeholder="e.g. Which panel do you mean? Send a note and we'll follow up — you don't have to answer yet."
+                          rows={2} style={{...taStyle,borderColor:'#E3D3A6',background:'#FCF8EE'}}/>
+                      </div>
+                    ) : (
+                      <button type="button" onClick={()=>setNoteOpen(s=>new Set([...s,q.id]))}
+                        style={{marginTop:8,fontSize:11,fontWeight:600,color:'#B0892C',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0}}>+ Ask for more info instead</button>
+                    )}
                   </div>
                 );
               })}
@@ -45316,6 +45456,17 @@ function QuestionsSharePage({ jobId }) {
                     <textarea value={answers[q.id]||''} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))}
                       onBlur={e=>{if(e.target.value.trim())setAnsweredIds(s=>new Set([...s,q.id]));else setAnsweredIds(s=>{const n=new Set(s);n.delete(q.id);return n;});}}
                       placeholder="Type your answer here…" rows={3} style={taStyle}/>
+                    {(noteOpen.has(q.id)||!!(notes[q.id]&&notes[q.id].trim())) ? (
+                      <div style={{marginTop:8}}>
+                        <div style={{fontSize:11,fontWeight:700,color:'#B0892C',marginBottom:4}}>Ask our team for more info</div>
+                        <textarea value={notes[q.id]||''} onChange={e=>setNotes(n=>({...n,[q.id]:e.target.value}))}
+                          placeholder="e.g. Which panel do you mean? Send a note and we'll follow up — you don't have to answer yet."
+                          rows={2} style={{...taStyle,borderColor:'#E3D3A6',background:'#FCF8EE'}}/>
+                      </div>
+                    ) : (
+                      <button type="button" onClick={()=>setNoteOpen(s=>new Set([...s,q.id]))}
+                        style={{marginTop:8,fontSize:11,fontWeight:600,color:'#B0892C',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0}}>+ Ask for more info instead</button>
+                    )}
                   </div>
                 );
               })}
@@ -45665,8 +45816,10 @@ const FEATURES_MD_INLINE = String.raw`
   - GC answer map (for sharing)
   - Asked-date stamp (addedAt) shown per question · shipped 2026-06-10 · SW v232
   - Answer trail: method (via link vs in person) + who + when, per answered question · shipped 2026-06-26 · SW v237
-  - Recipient sections: tag each question with who it's for (Designer / GC / Owner / custom, free-text per job), filter chip row per phase, tap the "For:" tag to move a question to another section · shipped 2026-06-29 · SW v266
+  - Recipient sections: tag each question with who it's for (Designer / GC / Owner / custom, free-text per job), filter chip row per phase, tap the "For:" tag to move a question to another section; "Select" mode for bulk-assigning many questions to a recipient at once (checkboxes across floors + assign bar with Select-all/Unassign) · shipped 2026-06-29 · SW v266/v269
   - Note / suggestion per question (q.note): optional line you add to a question (e.g. "we recommend a 200A panel"); shows on the GC share page as a "Note from Homestead" callout under the question · shipped 2026-06-29 · SW v267
+  - Multiple share links per job (questionShares): the Share modal is grouped by recipient with per-group Select-all; save a named link per person (Designer/GC/Haley/…), each its own URL (?questions=<job>&s=<id>); Saved Links list to copy/edit/delete and track them. Legacy single ?questions link still works · shipped 2026-06-29 · SW v270
+  - GC "Ask for more info" (a.clarify): on the share page the recipient can send a note back asking for context instead of answering; surfaces on the crew Q&A as a "GC ASKED" callout. Share-page instructions now state nothing sends until they press Submit · shipped 2026-06-29 · SW v270
 - **Plans tab** · shipped · plans documents per job
 - **Drive Files** · shipped · Drive folder sync + uploads
 - **Home Runs (panels)** · shipped · per-floor home runs + breaker counts
