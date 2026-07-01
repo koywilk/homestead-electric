@@ -45420,6 +45420,18 @@ function QuestionsSharePage({ jobId }) {
                     </div>
                     <div style={{fontSize:14,fontWeight:600,color:'#111',marginBottom:10}}>Q{i+1}: {q.question}</div>
                     {(q.note||'').trim()&&<div style={{fontSize:12,color:'#2C5C40',background:'#ECF2EE',border:'1px solid #CBE0D4',borderRadius:7,padding:'7px 10px',marginBottom:10,lineHeight:1.5}}><span style={{fontSize:10,fontWeight:700,letterSpacing:'0.04em',color:'#3E7D5A'}}>NOTE FROM HOMESTEAD</span><br/>{q.note}</div>}
+                    {Array.isArray(q.photos)&&q.photos.filter(p=>p&&p.url).length>0&&(
+                      <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
+                        {q.photos.filter(p=>p&&p.url).map(p=>{
+                          const isImg=(p.type&&p.type.startsWith&&p.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
+                          return isImg
+                            ? <img key={p.id} src={p.url} alt={p.name||'photo'} onClick={()=>window.open(p.url,'_blank')}
+                                style={{width:74,height:74,objectFit:'cover',borderRadius:8,border:'1px solid #E1E4E9',cursor:'pointer',display:'block'}}/>
+                            : <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer"
+                                style={{width:74,height:74,borderRadius:8,border:'1px solid #E1E4E9',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:600,color:'#475569',background:'#F4F6F8',textAlign:'center',padding:4,textDecoration:'none',wordBreak:'break-all',overflow:'hidden'}}>{(p.name||'file').slice(0,18)}</a>;
+                        })}
+                      </div>
+                    )}
                     <textarea value={answers[q.id]||''} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))}
                       onBlur={e=>{if(e.target.value.trim())setAnsweredIds(s=>new Set([...s,q.id]));else setAnsweredIds(s=>{const n=new Set(s);n.delete(q.id);return n;});}}
                       placeholder="Type your answer here…" rows={3} style={taStyle}/>
@@ -45453,6 +45465,18 @@ function QuestionsSharePage({ jobId }) {
                     </div>
                     <div style={{fontSize:14,fontWeight:600,color:'#111',marginBottom:10}}>Q{i+1}: {q.question}</div>
                     {(q.note||'').trim()&&<div style={{fontSize:12,color:'#2C5C40',background:'#ECF2EE',border:'1px solid #CBE0D4',borderRadius:7,padding:'7px 10px',marginBottom:10,lineHeight:1.5}}><span style={{fontSize:10,fontWeight:700,letterSpacing:'0.04em',color:'#3E7D5A'}}>NOTE FROM HOMESTEAD</span><br/>{q.note}</div>}
+                    {Array.isArray(q.photos)&&q.photos.filter(p=>p&&p.url).length>0&&(
+                      <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
+                        {q.photos.filter(p=>p&&p.url).map(p=>{
+                          const isImg=(p.type&&p.type.startsWith&&p.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
+                          return isImg
+                            ? <img key={p.id} src={p.url} alt={p.name||'photo'} onClick={()=>window.open(p.url,'_blank')}
+                                style={{width:74,height:74,objectFit:'cover',borderRadius:8,border:'1px solid #E1E4E9',cursor:'pointer',display:'block'}}/>
+                            : <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer"
+                                style={{width:74,height:74,borderRadius:8,border:'1px solid #E1E4E9',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:600,color:'#475569',background:'#F4F6F8',textAlign:'center',padding:4,textDecoration:'none',wordBreak:'break-all',overflow:'hidden'}}>{(p.name||'file').slice(0,18)}</a>;
+                        })}
+                      </div>
+                    )}
                     <textarea value={answers[q.id]||''} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))}
                       onBlur={e=>{if(e.target.value.trim())setAnsweredIds(s=>new Set([...s,q.id]));else setAnsweredIds(s=>{const n=new Set(s);n.delete(q.id);return n;});}}
                       placeholder="Type your answer here…" rows={3} style={taStyle}/>
@@ -45820,6 +45844,7 @@ const FEATURES_MD_INLINE = String.raw`
   - Note / suggestion per question (q.note): optional line you add to a question (e.g. "we recommend a 200A panel"); shows on the GC share page as a "Note from Homestead" callout under the question · shipped 2026-06-29 · SW v267
   - Multiple share links per job (questionShares): the Share modal is grouped by recipient with per-group Select-all; save a named link per person (Designer/GC/Haley/…), each its own URL (?questions=<job>&s=<id>); Saved Links list to copy/edit/delete and track them. Legacy single ?questions link still works · shipped 2026-06-29 · SW v270
   - GC "Ask for more info" (a.clarify): on the share page the recipient can send a note back asking for context instead of answering; surfaces on the crew Q&A as a "GC ASKED" callout. Share-page instructions now state nothing sends until they press Submit · shipped 2026-06-29 · SW v270
+  - Question photos show on the share page: any images attached to a question (q.photos) render as a read-only thumbnail grid under the question so the recipient sees the picture context; tap to open full size · shipped 2026-06-29 · SW v271
 - **Plans tab** · shipped · plans documents per job
 - **Drive Files** · shipped · Drive folder sync + uploads
 - **Home Runs (panels)** · shipped · per-floor home runs + breaker counts
