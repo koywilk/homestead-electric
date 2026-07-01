@@ -45419,7 +45419,12 @@ function QuestionsSharePage({ jobId }) {
     <div style={{maxWidth:600,margin:'0 auto',padding:'60px 24px',textAlign:'center',fontFamily:'system-ui,sans-serif'}}>
       <div style={{marginBottom:16,color:'#3E7D5A',display:'flex',justifyContent:'center'}}><Icon name="checkCircle" size={48} stroke={2}/></div>
       <div style={{fontSize:22,fontWeight:700,color:'#111',marginBottom:8}}>Answers Submitted</div>
-      <div style={{fontSize:14,color:'#6E7682',lineHeight:1.6}}>Thank you, {respondentName}. Homestead Electric has received your responses and will follow up if needed.</div>
+      <div style={{fontSize:14,color:'#6E7682',lineHeight:1.6,marginBottom:24}}>Thank you, {respondentName}. Homestead Electric has received your responses and will follow up if needed.</div>
+      <button onClick={()=>setSubmitted(false)}
+        style={{padding:'11px 20px',fontSize:14,fontWeight:700,border:'1px solid #CBD6E4',borderRadius:10,background:'#EEF2F7',color:'#1e3a5f',cursor:'pointer',fontFamily:'inherit'}}>
+        Review / edit my answers
+      </button>
+      <div style={{fontSize:12,color:'#99A0AA',marginTop:12}}>You can update any answer and submit again.</div>
     </div>
   );
 
@@ -45471,12 +45476,13 @@ function QuestionsSharePage({ jobId }) {
                         })}
                       </div>
                     )}
-                    <textarea value={answers[q.id]||''} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))}
+                    {isAns && <div style={{fontSize:11,fontWeight:700,color:'#3E7D5A',marginBottom:5,display:'flex',alignItems:'center',gap:5}}><Icon name="pencil" size={11}/>Your answer — edit here if needed</div>}
+                    <textarea value={answers[q.id]!==undefined ? answers[q.id] : (q.answer||'').replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').trim()} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))}
                       onBlur={e=>{if(e.target.value.trim())setAnsweredIds(s=>new Set([...s,q.id]));else setAnsweredIds(s=>{const n=new Set(s);n.delete(q.id);return n;});}}
                       placeholder="Type your answer here…" rows={3} style={taStyle}/>
                     {(noteOpen.has(q.id)||!!(notes[q.id]&&notes[q.id].trim())) ? (
                       <div style={{marginTop:8}}>
-                        <div style={{fontSize:11,fontWeight:700,color:'#B0892C',marginBottom:4}}>Ask our team for more info</div>
+                        <div style={{fontSize:11,fontWeight:700,color:'#B0892C',marginBottom:4}}>{(notes[q.id]||'').trim()?'Edit your note to our team':'Ask our team for more info'}</div>
                         <textarea value={notes[q.id]||''} onChange={e=>setNotes(n=>({...n,[q.id]:e.target.value}))}
                           placeholder="e.g. Which panel do you mean? Send a note and we'll follow up — you don't have to answer yet."
                           rows={2} style={{...taStyle,borderColor:'#E3D3A6',background:'#FCF8EE'}}/>
@@ -45516,12 +45522,13 @@ function QuestionsSharePage({ jobId }) {
                         })}
                       </div>
                     )}
-                    <textarea value={answers[q.id]||''} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))}
+                    {isAns && <div style={{fontSize:11,fontWeight:700,color:'#3E7D5A',marginBottom:5,display:'flex',alignItems:'center',gap:5}}><Icon name="pencil" size={11}/>Your answer — edit here if needed</div>}
+                    <textarea value={answers[q.id]!==undefined ? answers[q.id] : (q.answer||'').replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').trim()} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))}
                       onBlur={e=>{if(e.target.value.trim())setAnsweredIds(s=>new Set([...s,q.id]));else setAnsweredIds(s=>{const n=new Set(s);n.delete(q.id);return n;});}}
                       placeholder="Type your answer here…" rows={3} style={taStyle}/>
                     {(noteOpen.has(q.id)||!!(notes[q.id]&&notes[q.id].trim())) ? (
                       <div style={{marginTop:8}}>
-                        <div style={{fontSize:11,fontWeight:700,color:'#B0892C',marginBottom:4}}>Ask our team for more info</div>
+                        <div style={{fontSize:11,fontWeight:700,color:'#B0892C',marginBottom:4}}>{(notes[q.id]||'').trim()?'Edit your note to our team':'Ask our team for more info'}</div>
                         <textarea value={notes[q.id]||''} onChange={e=>setNotes(n=>({...n,[q.id]:e.target.value}))}
                           placeholder="e.g. Which panel do you mean? Send a note and we'll follow up — you don't have to answer yet."
                           rows={2} style={{...taStyle,borderColor:'#E3D3A6',background:'#FCF8EE'}}/>
