@@ -29158,13 +29158,18 @@ const ANSWER_METHODS = [
 ];
 const answerMethodLabel = (v) => { const m = ANSWER_METHODS.find(x=>x.v===v); return m ? m.l : ''; };
 
-function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterIds=null, jobId=null, photoFolder=""}) {
+function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null}) {
 
   // guard: old data may be a string instead of array
 
   const questions = Array.isArray(_questions) ? _questions : [];
 
   const [draft, setDraft] = useState("");
+  const [editRecip, setEditRecip] = useState(null); // q.id whose recipient tag is being edited
+
+  // Default a new question's recipient to whatever section is being filtered to,
+  // so "viewing Designer → add" tags it Designer automatically.
+  const defaultFor = (recipFilter && recipFilter!=="__unassigned__") ? recipFilter : "";
 
   const add = (textArg) => {
 
@@ -29174,7 +29179,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
 
     const who = getIdentity();
 
-    onChange([...questions, {id:uid(), question:q, answer:"", done:false, addedBy:who?.name||"", addedAt:new Date().toISOString()}]);
+    onChange([...questions, {id:uid(), question:q, answer:"", done:false, for:defaultFor, addedBy:who?.name||"", addedAt:new Date().toISOString()}]);
 
     setDraft("");
 
@@ -29184,9 +29189,14 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
 
   const del = (id) => onChange(questions.filter(q=>q.id!==id));
 
-  const open     = questions.filter(q=>!q.done);
+  // Recipient ("for") filter — null = all, "__unassigned__" = no recipient set.
+  const matchesRecip = (q) => recipFilter==null ? true
+    : recipFilter==="__unassigned__" ? !(q.for||"").trim()
+    : (q.for||"")===recipFilter;
 
-  const answered = questions.filter(q=>q.done);
+  const open     = questions.filter(q=>!q.done && matchesRecip(q));
+
+  const answered = questions.filter(q=>q.done && matchesRecip(q));
 
   const renderQ  = (q,i,globalIdx) => (
 
@@ -29230,6 +29240,29 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
           {(q.addedBy||q.addedAt)&&<span style={{fontSize:9,color:C.dim}}>
             {q.addedBy?`added by ${q.addedBy}`:"added"}{q.addedAt?` · ${new Date(q.addedAt).toLocaleDateString('en-US',{month:'short',day:'numeric'})} (${timeAgo(q.addedAt)})`:""}
           </span>}
+          {(()=>{ const cur=(q.for||"").trim(); const isEd=editRecip===q.id; const others=recipients.filter(r=>r&&r!==cur);
+            if(!isEd) return (
+              <button type="button" onClick={()=>setEditRecip(q.id)} title="Set who this question is for"
+                style={{alignSelf:'flex-start',fontSize:9,fontWeight:700,borderRadius:99,padding:'1px 8px',cursor:'pointer',fontFamily:'inherit',
+                  border:`1px solid ${cur?color+'55':C.border}`,background:cur?`${color}14`:C.card,color:cur?color:C.muted}}>
+                {cur?`For: ${cur}`:'+ recipient'}
+              </button>
+            );
+            return (
+              <div style={{display:'flex',flexWrap:'wrap',alignItems:'center',gap:4,alignSelf:'flex-start',marginTop:2}}>
+                {others.map(r=>(
+                  <button key={r} type="button" onClick={()=>{upd(q.id,{for:r});setEditRecip(null);}}
+                    style={{fontSize:9,fontWeight:600,borderRadius:99,padding:'2px 8px',cursor:'pointer',fontFamily:'inherit',border:`1px solid ${C.border}`,background:C.card,color:C.dim}}>{r}</button>
+                ))}
+                <input autoFocus defaultValue={cur} placeholder="Type recipient…"
+                  onKeyDown={e=>{ if(e.key==='Enter'){upd(q.id,{for:e.currentTarget.value.trim()});setEditRecip(null);} else if(e.key==='Escape'){setEditRecip(null);} }}
+                  onBlur={e=>{ upd(q.id,{for:e.currentTarget.value.trim()}); setEditRecip(null); }}
+                  style={{fontSize:10,padding:'2px 7px',border:`1px solid ${color}55`,borderRadius:99,fontFamily:'inherit',width:120,outline:'none',background:C.card,color:C.text}}/>
+                {cur&&<button type="button" onMouseDown={e=>{e.preventDefault();upd(q.id,{for:''});setEditRecip(null);}} style={{fontSize:9,color:C.muted,background:'none',border:'none',cursor:'pointer',fontFamily:'inherit'}}>clear</button>}
+              </div>
+            );
+          })()}
+          {q.done&&(q.note||"").trim()&&<span style={{fontSize:10,color:C.dim,fontStyle:'italic',alignSelf:'flex-start'}}>Note: {q.note}</span>}
           {filterIds!=null&&<span style={{fontWeight:700,borderRadius:99,padding:'1px 6px',lineHeight:1.6,fontSize:9,
             background:filterIds.has(q.id)?'#DEEFE6':'#EEF0F3',
             color:filterIds.has(q.id)?'#3E7D5A':'#99A0AA',alignSelf:'flex-start'}}>
@@ -29248,6 +29281,13 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
       {!q.done&&(
 
         <div style={{marginLeft:22}}>
+
+          <div style={{marginBottom:10}}>
+            <div style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginBottom:4}}>NOTE / SUGGESTION <span style={{color:C.muted,fontWeight:600}}>(GC sees this)</span></div>
+            <input type="text" value={q.note||""} onChange={e=>upd(q.id,{note:e.target.value})}
+              placeholder="e.g. We recommend a 200A panel here"
+              style={{width:"100%",padding:"5px 8px",fontSize:11,border:`1px solid ${C.border}`,borderRadius:6,background:C.card,color:C.text,fontFamily:"inherit",boxSizing:"border-box"}}/>
+          </div>
 
           <div style={{fontSize:10,color:color,fontWeight:700,marginBottom:4,letterSpacing:"0.08em"}}>ANSWER</div>
 
@@ -29342,7 +29382,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, filterI
 
     <div>
 
-      {open.length===0&&answered.length===0&&(
+      {open.length===0&&answered.length===0&&recipFilter==null&&(
 
         <div style={{fontSize:11,color:C.muted,fontStyle:"italic",marginBottom:8}}>No questions yet</div>
 
@@ -29401,6 +29441,21 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, filt
   ].map(q=>q.id) : [];
   const sharedQCount = filterIds!=null ? allQIds.filter(id=>filterIds.has(id)).length : 0;
 
+  // Recipient ("for") sections — fully custom per job, derived from whatever's
+  // been typed on the questions. Lets you slice the list by who it's for
+  // (Designer / GC / Owner / …) without losing the floor layout.
+  const allQs = [...(questions.upper||[]), ...(questions.main||[]), ...(questions.basement||[])];
+  const recipients = Array.from(new Set(allQs.map(q=>(q.for||"").trim()).filter(Boolean))).sort((a,b)=>a.localeCompare(b));
+  const unassignedCount = allQs.filter(q=>!(q.for||"").trim()).length;
+  const [recipFilter, setRecipFilter] = useState(null);
+  const countFor = (r) => allQs.filter(q=>(q.for||"")===r).length;
+
+  const chip = (active, label, onClick, key) => (
+    <button key={key} type="button" onClick={onClick}
+      style={{fontSize:11,fontWeight:active?700:600,padding:"4px 11px",borderRadius:99,cursor:"pointer",fontFamily:"inherit",
+        border:`1px solid ${active?color:C.border}`,background:active?`${color}18`:C.card,color:active?color:C.dim}}>{label}</button>
+  );
+
   return (
 
     <div>
@@ -29408,6 +29463,14 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, filt
       {filterIds!=null&&allQIds.length>0&&(
         <div style={{fontSize:10,fontWeight:600,color:sharedQCount===allQIds.length?C.green:C.muted,marginBottom:8}}>
           {sharedQCount} of {allQIds.length} shared
+        </div>
+      )}
+
+      {(recipients.length>0 || unassignedCount<allQs.length) && allQs.length>0 && (
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:16}}>
+          {chip(recipFilter==null, `All (${allQs.length})`, ()=>setRecipFilter(null), "__all")}
+          {recipients.map(r=>chip(recipFilter===r, `${r} (${countFor(r)})`, ()=>setRecipFilter(r), r))}
+          {unassignedCount>0 && chip(recipFilter==="__unassigned__", `Unassigned (${unassignedCount})`, ()=>setRecipFilter("__unassigned__"), "__un")}
         </div>
       )}
 
@@ -29427,6 +29490,8 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, filt
             gcAnswerMap={gcAnswerMap}
             filterIds={filterIds}
             jobId={jobId}
+            recipients={recipients}
+            recipFilter={recipFilter}
             photoFolder={`${photoFolder?photoFolder+"-":""}${k}`}/>
 
         </div>
@@ -45225,6 +45290,7 @@ function QuestionsSharePage({ jobId }) {
                       {isAns&&<div style={{fontSize:10,fontWeight:700,color:'#3E7D5A',background:'#DEEFE6',borderRadius:99,padding:'1px 8px'}}>✓ Answered</div>}
                     </div>
                     <div style={{fontSize:14,fontWeight:600,color:'#111',marginBottom:10}}>Q{i+1}: {q.question}</div>
+                    {(q.note||'').trim()&&<div style={{fontSize:12,color:'#2C5C40',background:'#ECF2EE',border:'1px solid #CBE0D4',borderRadius:7,padding:'7px 10px',marginBottom:10,lineHeight:1.5}}><span style={{fontSize:10,fontWeight:700,letterSpacing:'0.04em',color:'#3E7D5A'}}>NOTE FROM HOMESTEAD</span><br/>{q.note}</div>}
                     <textarea value={answers[q.id]||''} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))}
                       onBlur={e=>{if(e.target.value.trim())setAnsweredIds(s=>new Set([...s,q.id]));else setAnsweredIds(s=>{const n=new Set(s);n.delete(q.id);return n;});}}
                       placeholder="Type your answer here…" rows={3} style={taStyle}/>
@@ -45246,6 +45312,7 @@ function QuestionsSharePage({ jobId }) {
                       {isAns&&<div style={{fontSize:10,fontWeight:700,color:'#3E7D5A',background:'#DEEFE6',borderRadius:99,padding:'1px 8px'}}>✓ Answered</div>}
                     </div>
                     <div style={{fontSize:14,fontWeight:600,color:'#111',marginBottom:10}}>Q{i+1}: {q.question}</div>
+                    {(q.note||'').trim()&&<div style={{fontSize:12,color:'#2C5C40',background:'#ECF2EE',border:'1px solid #CBE0D4',borderRadius:7,padding:'7px 10px',marginBottom:10,lineHeight:1.5}}><span style={{fontSize:10,fontWeight:700,letterSpacing:'0.04em',color:'#3E7D5A'}}>NOTE FROM HOMESTEAD</span><br/>{q.note}</div>}
                     <textarea value={answers[q.id]||''} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))}
                       onBlur={e=>{if(e.target.value.trim())setAnsweredIds(s=>new Set([...s,q.id]));else setAnsweredIds(s=>{const n=new Set(s);n.delete(q.id);return n;});}}
                       placeholder="Type your answer here…" rows={3} style={taStyle}/>
@@ -45598,6 +45665,8 @@ const FEATURES_MD_INLINE = String.raw`
   - GC answer map (for sharing)
   - Asked-date stamp (addedAt) shown per question · shipped 2026-06-10 · SW v232
   - Answer trail: method (via link vs in person) + who + when, per answered question · shipped 2026-06-26 · SW v237
+  - Recipient sections: tag each question with who it's for (Designer / GC / Owner / custom, free-text per job), filter chip row per phase, tap the "For:" tag to move a question to another section · shipped 2026-06-29 · SW v266
+  - Note / suggestion per question (q.note): optional line you add to a question (e.g. "we recommend a 200A panel"); shows on the GC share page as a "Note from Homestead" callout under the question · shipped 2026-06-29 · SW v267
 - **Plans tab** · shipped · plans documents per job
 - **Drive Files** · shipped · Drive folder sync + uploads
 - **Home Runs (panels)** · shipped · per-floor home runs + breaker counts
