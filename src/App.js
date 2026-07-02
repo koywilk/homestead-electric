@@ -280,6 +280,9 @@ async function _publishCcQuestionsNow(jobId, roughQuestions, finishQuestions) {
             n,
             text: text.slice(0, 1000),
             answer: answer.slice(0, 2000),
+            // v283: `who` = the recipient alone (FieldInk groups the question
+            // list by it); askedOf stays the combined display string.
+            who: String(q.for || "").trim().slice(0, 60),
             askedOf: [String(q.for || "").trim(), `${phase} ${FLOOR_LABEL[floor]}`].filter(Boolean).join(" · ").slice(0, 80),
             status: (q.done || answer) ? "answered" : "sent",
             at: (q.createdAt || q.addedAt) ? (new Date(q.createdAt || q.addedAt).getTime() || 0) : 0,
