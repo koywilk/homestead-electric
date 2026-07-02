@@ -13539,71 +13539,11 @@ const WIRE_BREAKER = {
 
 };
 
-// ── Generator constants ───────────────────────────────────────
-const GEN_SIZES_W = [7500, 10000, 14000, 20000, 22000, 24000, 26000];
-const genRecommend = (w) => GEN_SIZES_W.find(s=>s>=w) || GEN_SIZES_W[GEN_SIZES_W.length-1];
-const genFmtKw     = (w) => (w/1000).toFixed(1).replace(/\.0$/,'')+'kW';
-const wireWatts    = (wire) => {
-  const b=WIRE_BREAKER[wire]; if(!b) return 0;
-  return b.poles===2 ? b.amps*240 : b.amps*120;
-};
-
-// Realistic running/starting watt presets, keyword-matched against load names.
-// wireWatts() above is BREAKER CAPACITY (worst case) — sizing off it would
-// recommend a 26kW for every house. These are typical appliance draws instead.
-// Order matters: more specific keywords first ("water heater" before "heater").
-// run = continuous watts, surge = starting watts (motors pull 2-3x at start).
-const GEN_LOAD_PRESETS = [
-  { keys:["water heater","hot water"],           run:4500, surge:4500 },
-  { keys:["tankless"],                           run:18000,surge:18000 },
-  { keys:["heat pump","condenser","a/c","ac unit"," ac","air cond","hvac"], run:3800, surge:5500 },
-  { keys:["furnace","air handler","blower"],     run:800,  surge:2350 },
-  { keys:["boiler","circulator"],                run:500,  surge:1000 },
-  { keys:["well"],                               run:1500, surge:3000 },
-  { keys:["sump"],                               run:900,  surge:2000 },
-  { keys:["septic","sewage","ejector"],          run:900,  surge:2000 },
-  { keys:["fridge","refrigerator"],              run:700,  surge:2200 },
-  { keys:["freezer"],                            run:700,  surge:2100 },
-  { keys:["range","oven","stove"],               run:5000, surge:5000 },
-  { keys:["cooktop"],                            run:4000, surge:4000 },
-  { keys:["microwave"],                          run:1200, surge:1200 },
-  { keys:["dishwasher"],                         run:1200, surge:1400 },
-  { keys:["disposal"],                           run:900,  surge:2000 },
-  { keys:["dryer"],                              run:5400, surge:6750 },
-  { keys:["washer","laundry"],                   run:1150, surge:2250 },
-  { keys:["garage door","opener"],               run:800,  surge:1600 },
-  { keys:["ev","car charger","tesla"],           run:7200, surge:7200 },
-  { keys:["hot tub","spa"],                      run:6000, surge:7000 },
-  { keys:["pool"],                               run:1500, surge:3000 },
-  { keys:["kitchen","counter","small appliance"],run:1500, surge:1500 },
-  { keys:["light","lts","cans"],                 run:600,  surge:600 },
-  { keys:["plug","recep","outlet"],              run:600,  surge:600 },
-];
-const genPresetFor = (name) => {
-  const n = " "+(name||"").toLowerCase();
-  return GEN_LOAD_PRESETS.find(p => p.keys.some(k => n.includes(k))) || null;
-};
-
-// Sizing math (included loads only):
-//   running    = sum of running watts of everything on the generator at once
-//   surgeDelta = single largest (starting - running) — motors don't all start
-//                together, so only the biggest surge rides on top
-//   required   = running + surgeDelta → smallest standard size that covers it
-// Loads without a surge value are treated as resistive (surge = running).
-const genSizing = (loads) => {
-  const inc = (loads||[]).filter(l=>l.included);
-  const running = inc.reduce((s,l)=>s+(parseFloat(l.watts)||0),0);
-  const surgeDelta = inc.reduce((m,l)=>{
-    const run = parseFloat(l.watts)||0;
-    const su  = parseFloat(l.surge)||run;
-    return Math.max(m, su-run);
-  },0);
-  const required = Math.round(running + surgeDelta);
-  return { running: Math.round(running), surgeDelta: Math.round(surgeDelta),
-    required, pick: required>0 ? genRecommend(required) : null,
-    over: required > GEN_SIZES_W[GEN_SIZES_W.length-1] };
-};
-
+// Generator sizing / wattage was removed 2026-07-01 (SW v280) at Koy's
+// request — sizing off circuit data misled more than it helped. The
+// Generator Load Selection below is circuit PICKING only (name + wire +
+// priority + ★ recommended). Old genLoads docs may still carry watts/surge
+// fields in homeowner_requests; they're simply ignored.
 
 function BreakerCounts({homeRuns, panelCounts, onCountChange, electricalPanels = [], onElectricalPanelsChange = null}) {
 
@@ -13840,7 +13780,7 @@ function HRAddFloor({homeRuns, onHRChange}) {
 }
 
 // ── Generator Load Section ────────────────────────────────────
-function GeneratorLoadSection({ homeRuns, genLoads, onSave, hoResponse }) {
+function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
   // KEY FIX: local state so ★ toggle and checkboxes update instantly
   const [loads, setLoads] = useState(genLoads || []);
   const [dragIdx, setDragIdx] = useState(null);
@@ -13865,45 +13805,19 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, hoResponse }) {
       ...(homeRuns.extraFloors||[]).flatMap(e=>homeRuns[e.key]||[]),
     ].filter(r=>(r.name||'').trim() && r.wire);
     const existing = new Set(loads.map(l=>l.name));
-    const added = rows.filter(r=>!existing.has(r.name)).map(r=>{
-      // Prefer realistic preset watts over breaker capacity when the name matches
-      const p = genPresetFor(r.name);
-      return {
-        id: uid(), name: r.name, wire: r.wire,
-        watts: p ? p.run : wireWatts(r.wire),
-        surge: p ? p.surge : undefined,
-        recommended: false, included: true,
-      };
-    });
+    const added = rows.filter(r=>!existing.has(r.name)).map(r=>({
+      id: uid(), name: r.name, wire: r.wire,
+      recommended: false, included: true,
+    }));
     if (!added.length) { toast.info('No new named+wired loads to import.'); return; }
     commit([...loads, ...added]);
   };
 
-  // Fill realistic watts from name-matched presets. Only touches rows whose
-  // watts still look untouched (0 or the wire-derived breaker default) so a
-  // hand-typed value is never overwritten.
-  const suggestWatts = () => {
-    let hits = 0;
-    const next = loads.map(l=>{
-      const p = genPresetFor(l.name);
-      if (!p) return l;
-      const untouched = !l.watts || l.watts === wireWatts(l.wire);
-      if (!untouched && l.surge != null) return l;
-      hits++;
-      return { ...l, watts: untouched ? p.run : l.watts, surge: l.surge != null ? l.surge : p.surge };
-    });
-    if (!hits) { toast.info('No load names matched a preset (or all were hand-edited).'); return; }
-    commit(next);
-    toast.success(`Suggested watts on ${hits} load${hits===1?'':'s'}.`);
-  };
-
   const toggle  = (id, key) => commit(loads.map(l=>l.id===id?{...l,[key]:!l[key]}:l));
   const updName = (id, name) => commit(loads.map(l=>l.id===id?{...l,name}:l));
-  const updWire = (id, wire) => commit(loads.map(l=>l.id===id?{...l,wire,watts:wireWatts(wire)}:l));
-  const updWatts= (id, watts) => commit(loads.map(l=>l.id===id?{...l,watts:parseFloat(watts)||0}:l));
-  const updSurge= (id, surge) => commit(loads.map(l=>l.id===id?{...l,surge:parseFloat(surge)||0}:l));
+  const updWire = (id, wire) => commit(loads.map(l=>l.id===id?{...l,wire}:l));
   const del     = (id) => commit(loads.filter(l=>l.id!==id));
-  const addRow  = () => commit([...loads,{id:uid(),name:'',wire:'',watts:0,recommended:false,included:true}]);
+  const addRow  = () => commit([...loads,{id:uid(),name:'',wire:'',recommended:false,included:true}]);
 
   const onDragStart = (i) => setDragIdx(i);
   const onDragOver  = (e,i) => { e.preventDefault(); setOverIdx(i); };
@@ -13927,14 +13841,6 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, hoResponse }) {
             color:C.green,fontSize:12,fontWeight:600,padding:'7px 14px',cursor:'pointer',fontFamily:'inherit'}}>
           + Add Manually
         </button>
-        {loads.length>0&&(
-          <button onClick={suggestWatts}
-            title="Fill realistic running + surge watts from load names (fridge, well pump, AC…). Never overwrites hand-typed watts."
-            style={{background:`${C.accent}12`,border:`1px solid ${C.accent}44`,borderRadius:8,
-              color:C.accent,fontSize:12,fontWeight:700,padding:'7px 14px',cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:6}}>
-            <Icon name="zap" size={12}/> Suggest Watts
-          </button>
-        )}
         {loads.length>0&&(
           <button onClick={async ()=>{if(await showConfirm('Clear all loads?')) commit([]);}}
             style={{marginLeft:'auto',background:'none',border:`1px solid ${C.border}`,borderRadius:8,
@@ -13988,25 +13894,6 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, hoResponse }) {
               </option>
             ))}
           </select>
-          {/* Amber border = still the wire-derived BREAKER-CAPACITY default,
-              not a real appliance draw — needs Suggest Watts or a hand edit
-              before the sizing card means anything. */}
-          <input value={load.watts||0} onChange={e=>updWatts(load.id,e.target.value)}
-            title={load.wire&&(parseFloat(load.watts)||0)===wireWatts(load.wire)
-              ?'Breaker-capacity default — not real draw. Type the actual running watts or tap Suggest Watts.'
-              :'Running watts (continuous draw)'}
-            style={{width:44,background:'transparent',borderRadius:6,
-              border:`1px solid ${load.wire&&(parseFloat(load.watts)||0)===wireWatts(load.wire)?C.orange+'88':C.border}`,
-              color:C.accent,fontSize:11,fontWeight:700,fontFamily:'inherit',outline:'none',
-              padding:'3px 5px',textAlign:'right',flexShrink:0}}/>
-          <span title="Running watts" style={{fontSize:9,color:C.dim,flexShrink:0}}>W</span>
-          <input value={load.surge!=null?load.surge:''} onChange={e=>updSurge(load.id,e.target.value)}
-            placeholder={String(load.watts||0)}
-            title="Starting / surge watts (motors pull 2–3× running at start). Blank = same as running."
-            style={{width:44,background:'transparent',border:`1px solid ${C.border}`,borderRadius:6,
-              color:C.orange,fontSize:11,fontWeight:700,fontFamily:'inherit',outline:'none',
-              padding:'3px 5px',textAlign:'right',flexShrink:0}}/>
-          <span title="Starting / surge watts" style={{fontSize:9,color:C.dim,flexShrink:0}}>SURGE</span>
           {/* ★ Recommended — KEY FIX: reads from local `load` which updates immediately */}
           <button onClick={()=>toggle(load.id,'recommended')}
             title={load.recommended?'Remove recommendation':'Mark recommended'}
@@ -14022,107 +13909,6 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, hoResponse }) {
               fontSize:12,flexShrink:0,padding:'0 2px'}}>✕</button>
         </div>
       ))}
-
-      {/* ── Sizing card (internal only — never shown on the homeowner page) ──
-          BASIS:
-            before homeowner submits → the ★ recommended loads (our proposal)
-            after they submit        → their actual circuit selections, matched
-                                       back to current loads by id so edited
-                                       watts/surge stay live (falls back to the
-                                       snapshot if a load was since deleted)
-          Running = sum of basis loads' running watts.
-          Surge   = single largest (starting − running) delta; motors don't
-                    all start at once, so only the biggest one stacks on top.
-          Required = running + surge → smallest GEN_SIZES_W that covers it. */}
-      {(()=>{
-        const submitted = !!hoResponse?.submitted;
-        const basis = submitted
-          ? (hoResponse.items||[]).filter(i=>i.included).map(i=>{
-              const cur = loads.find(l=>l.id===i.id);
-              return {...(cur||i), included:true};
-            })
-          : loads.filter(l=>l.recommended).map(l=>({...l,included:true}));
-        if (!basis.length) return loads.length>0 ? (
-          <div style={{marginTop:14,border:`1px dashed ${C.border}`,borderRadius:12,
-            padding:'12px 16px',fontSize:11,color:C.muted,fontStyle:'italic'}}>
-            Mark loads ★ Recommended to size a generator. Once the homeowner submits, sizing switches to their selections.
-          </div>
-        ) : null;
-        const sz = genSizing(basis);
-        // Loads still carrying the wire-derived default = breaker CAPACITY,
-        // not real appliance draw. Sizing off those inflates wildly (30
-        // circuits at breaker rating ≈ 80kW+). Flag them so the number is
-        // never trusted until real watts are in.
-        const atDefault = basis.filter(l=>l.wire && (parseFloat(l.watts)||0)===wireWatts(l.wire)).length;
-        return (
-          <div style={{marginTop:14,background:C.surface,border:`1px solid ${C.border}`,
-            borderRadius:12,padding:'14px 16px'}}>
-            {atDefault>0&&(
-              <div style={{background:`${C.orange}12`,border:`1px solid ${C.orange}44`,borderRadius:9,
-                padding:'8px 12px',marginBottom:12,fontSize:11,color:C.orange,fontWeight:600,
-                display:'flex',alignItems:'flex-start',gap:7}}>
-                <Icon name="alertTriangle" size={13} stroke={2.5} style={{flexShrink:0,marginTop:1}}/>
-                <span>{atDefault} of {basis.length} loads still have breaker-capacity watts (worst case, not real draw) — this size is inflated. Tap Suggest Watts or type actual wattages.</span>
-              </div>
-            )}
-            <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:10,flexWrap:'wrap'}}>
-              <Icon name="zap" size={13} stroke={2.5}/>
-              <span style={{fontSize:11,fontWeight:700,color:C.accent,letterSpacing:'0.08em'}}>GENERATOR SIZING</span>
-              <span style={{marginLeft:'auto',fontSize:10,fontWeight:700,letterSpacing:'0.06em',
-                color:submitted?C.green:C.accent,background:submitted?`${C.green}12`:`${C.accent}12`,
-                border:`1px solid ${submitted?C.green:C.accent}44`,borderRadius:99,padding:'2px 9px'}}>
-                {submitted?`HOMEOWNER SELECTION · ${basis.length}`:`★ RECOMMENDED · ${basis.length}`}
-              </span>
-            </div>
-            <div style={{display:'flex',gap:18,flexWrap:'wrap',marginBottom:12}}>
-              {[
-                ['RUNNING', sz.running.toLocaleString()+' W', C.text, 'Continuous draw of all included loads'],
-                ['LARGEST SURGE', '+'+sz.surgeDelta.toLocaleString()+' W', C.orange, 'Biggest single motor-start on top of running'],
-                ['REQUIRED', sz.required.toLocaleString()+' W', C.accent, 'Running + largest surge'],
-              ].map(([lbl,val,col,tip])=>(
-                <div key={lbl} title={tip}>
-                  <div style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:'0.08em',marginBottom:2}}>{lbl}</div>
-                  <div style={{fontSize:16,fontWeight:800,color:col}}>{val}</div>
-                </div>
-              ))}
-            </div>
-            <div style={{display:'flex',gap:6,flexWrap:'wrap',marginBottom:10}}>
-              {GEN_SIZES_W.map(s=>{
-                const over  = sz.required > s;
-                const tight = !over && sz.required > s*0.8;
-                const pick  = s === sz.pick && !sz.over;
-                const col   = over ? C.muted : tight ? C.orange : C.green;
-                return (
-                  <div key={s} title={over?'Too small':tight?'Fits, but over 80% loaded — go up a size for headroom':'Fits with headroom'}
-                    style={{borderRadius:8,padding:'5px 10px',fontSize:11,fontWeight:700,
-                      color:pick?'#000':col,
-                      background:pick?C.accent:over?'transparent':`${col}10`,
-                      border:`1px solid ${pick?C.accent:over?C.border:col+'55'}`,
-                      opacity:over?0.5:1,textDecoration:over?'line-through':'none'}}>
-                    {genFmtKw(s)}
-                  </div>
-                );
-              })}
-            </div>
-            {sz.over ? (
-              <div style={{fontSize:11,color:C.orange,fontWeight:600,display:'inline-flex',alignItems:'center',gap:6}}>
-                <Icon name="alertTriangle" size={12} stroke={2.5}/>
-                Over {genFmtKw(GEN_SIZES_W[GEN_SIZES_W.length-1])} air-cooled range — drop loads, add load management, or quote liquid-cooled.
-              </div>
-            ) : (
-              <div style={{fontSize:12,color:C.text}}>
-                Recommended: <span style={{fontWeight:800,color:C.accent}}>{genFmtKw(sz.pick)}</span>
-                {sz.required > sz.pick*0.8 && (
-                  <span style={{color:C.dim}}> — over 80% loaded; consider {genFmtKw(GEN_SIZES_W[GEN_SIZES_W.indexOf(sz.pick)+1]||sz.pick)} for headroom</span>
-                )}
-              </div>
-            )}
-            <div style={{fontSize:10,color:C.dim,marginTop:8,fontStyle:'italic'}}>
-              Sized from running + largest single surge. Whole-house with no load management still needs an NEC 220.83 / 220.87 check.
-            </div>
-          </div>
-        );
-      })()}
 
     </div>
   );
@@ -14810,7 +14596,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           </div>
         )}
 
-        <GeneratorLoadSection homeRuns={homeRuns} genLoads={genLoads} onSave={saveGenLoads} hoResponse={hoResponse}/>
+        <GeneratorLoadSection homeRuns={homeRuns} genLoads={genLoads} onSave={saveGenLoads}/>
 
         <div style={{marginTop:14,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
           {!hoResponse?.submitted?(
@@ -14894,7 +14680,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                         background:'#F3E9CF',borderRadius:99,padding:'1px 6px',border:'0.5px solid #EAD9A6'}}>★ REC</span>}
                     </div>
                     <div style={{fontSize:11,color:'#8A929D',marginTop:2}}>
-                      {it.wire||''}{it.watts?` · ${it.watts}W`:''}
+                      {it.wire||''}
                     </div>
                     {it.notes&&<div style={{fontSize:11,color:'#5E6670',marginTop:2,fontStyle:'italic'}}>"{it.notes}"</div>}
                   </div>
@@ -26620,19 +26406,30 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // Auto-pass QC when all fromQC items are checked, even if the user didn't just
   // toggle one (e.g. job reopens with all items already done from a prior session).
   // Only fires when qcStatus is in a pre-pass state — never overrides a manual pass/fail/completed.
+  //
+  // ONE-SHOT GUARD (bug fix): this used to re-fire on every qcStatus change,
+  // which CLAMPED the status — on any job whose fromQC items were all done,
+  // picking needs/scheduled/fail in the QC tab instantly snapped back to
+  // "fixed", so the select looked broken. The ref makes the auto-advance fire
+  // once per "all items done" episode: it re-arms only if an item reopens
+  // (or the job changes), so manual selections stick afterwards.
+  const qcAutoAdvancedRef = useRef(false);
+  useEffect(() => { qcAutoAdvancedRef.current = false; }, [job.id]);
   useEffect(() => {
     const collectQC = p => {
       const out = [];
       ['upper','main','basement',...(p?.extras||[]).map(e=>e.key)].forEach(fk=>{
         const f = normFloor(p?.[fk]);
         [...f.general,...f.rooms.flatMap(r=>r.items||[]),...(f.hotcheck||[])]
-          .forEach(i=>{ if(i.fromQC) out.push(i); });
+          .forEach(i=>{ if(i.fromQC && !i.voided) out.push(i); });
       });
       return out;
     };
     const all = [...collectQC(job.roughPunch), ...collectQC(job.finishPunch)];
     if(all.length === 0) return;
-    if(!all.every(i=>i.done)) return;
+    if(!all.every(i=>i.done)) { qcAutoAdvancedRef.current = false; return; }
+    if(qcAutoAdvancedRef.current) return;
+    qcAutoAdvancedRef.current = true; // consumed for this all-done episode
     // Only auto-advance from walk-active states; leave manual pass/fail/completed/fixed alone
     const advanceable = ["", "needs", "scheduled", "fail"];
     if(!advanceable.includes(job.qcStatus||"")) return;
@@ -46101,7 +45898,7 @@ const FEATURES_MD_INLINE = String.raw`
 - **Generator Load Selection** · shipped · pick circuits for standby generator
   - Import loads from Home Runs, drag to reorder priority, ★ recommended
   - Homeowner share link to pick + sign off on circuits
-  - Sizing calculator: running + surge watts per load (Suggest Watts presets by load name), recommends generator size from 7.5–26kW ladder · shipped 2026-07-01 · SW v277
+  - No wattage/sizing on purpose — circuit picking only (sizing tried + removed 2026-07-01)
 - **Savant Lighting** · shipped 2026-05-18 · SW v175 · slot-first rebuild
   - One screen per panel (slot list 1..N)
   - Tap empty slot to add, tap occupied to edit
