@@ -234,6 +234,65 @@ async function publishCcChangeOrders(jobId, changeOrders) {
   } catch (e) { console.warn("[fieldink] change-order publish failed (rules deployed?):", e?.message); }
 }
 
+// The FOURTH write this app makes to field-ink (ccjobs → cchomeruns → cccos →
+// ccquestions). When a job's DESIGNER QUESTIONS change here, publish the slim
+// list to ccquestions/<jobId> so TraceVault shows them on the plan and the
+// crew can tie a markup to the SPECIFIC question it answers (TraceVault v447).
+// Mirrors publishCcChangeOrders exactly: anon field-ink auth, per-job hash
+// gate, read-merge preserving the FIELD-owned `fieldink` block per id, fire-
+// and-forget (never blocks the save, never throws). Requires the field-ink
+// `ccquestions` rules block (ships with TraceVault v447).
+const _ccQHash = {};
+// Per-job trailing debounce (1.5s): the DQ tab is textarea-primary, so the
+// patch hook fires per keystroke — without this, every keystroke would cost a
+// getDoc+setDoc to the field-ink project. Fire-and-forget preserved; worst
+// case is a 1.5s-stale mirror, self-healed by the next edit (hash gate is
+// only set on a successful publish).
+const _ccQTimers = {};
+function publishCcQuestions(jobId, designerQuestions) {
+  if (jobId == null) return;
+  const jid = String(jobId);
+  clearTimeout(_ccQTimers[jid]);
+  _ccQTimers[jid] = setTimeout(() => { _publishCcQuestionsNow(jobId, designerQuestions); }, 1500);
+}
+async function _publishCcQuestionsNow(jobId, designerQuestions) {
+  try {
+    if (jobId == null) return;
+    const jid = String(jobId);
+    const slim = (designerQuestions || [])
+      .filter(q => q && q.id && (q.text || "").trim())
+      .map((q, i) => ({
+        id: String(q.id),
+        n: i + 1,
+        text: String(q.text || "").slice(0, 1000),
+        answer: String(q.answer || "").slice(0, 2000),
+        askedOf: String(q.askedOf || "").slice(0, 80),
+        status: (q.answer || "").trim() ? "answered" : (q.sent ? "sent" : "open"),
+        at: q.createdAt ? (new Date(q.createdAt).getTime() || Date.now()) : Date.now(),
+        source: "office",
+      }));
+    // Per-job hash gate: identical question list = no write (the common case).
+    const hash = JSON.stringify(slim);
+    if (_ccQHash[jid] === hash) return;
+    const user = await ensureFieldinkAuth();
+    if (!user) return;
+    // Read-merge so the FIELD's per-question `fieldink` block survives every
+    // office republish; a field-linked question also stays 'answered' even if
+    // the office hasn't pasted the answer text yet.
+    const ref = doc(fieldinkDb, "ccquestions", jid);
+    let remote = null;
+    try { const snap = await getDoc(ref); remote = snap.exists() ? snap.data() : null; } catch {}
+    const fieldinkById = {};
+    for (const q of (remote?.questions || [])) if (q && q.id && q.fieldink) fieldinkById[q.id] = q.fieldink;
+    const questions = slim.map(q => (fieldinkById[q.id]
+      ? { ...q, fieldink: fieldinkById[q.id], ...(fieldinkById[q.id].linked ? { status: "answered" } : {}) }
+      : q));
+    await setDoc(ref, { questions, updatedAt: serverTimestamp(), updatedBy: "office" }, { merge: true });
+    _ccQHash[jid] = hash;
+    console.log(`[fieldink] published designer questions for job ${jid}: ${questions.length}`);
+  } catch (e) { console.warn("[fieldink] questions publish failed (rules deployed?):", e?.message); }
+}
+
 // Debug helpers exposed to window so we can run one-off scripts from the
 // browser console (cloud-function calls, bulk data loads, etc.).
 //   _hsCall(name, params)       — invoke a callable cloud function
@@ -3058,6 +3117,10 @@ const PERMISSIONS = {
   // Change Order tracker — office only. Jeromy sends most COs and needs
   // one place to see every CO's status across every job (added 2026-05-24).
   "cos.view":               ["admin","manager"],
+  // Designer Questions (job tab) — questions sent to the designer/architect,
+  // mirrored to TraceVault so the crew ties answer markups to them. Everyone
+  // can SEE the tab; office + foreman can edit (leads/crew read-only).
+  "designerQuestions.edit": ["admin","manager","standard"],
   // Coordinator Book Worklist — office/coordinators see the panel.
   "worklist.view":          ["admin","manager"],
   // Needs Board — coordinator obligation board for contractor call-in needs.
@@ -22951,7 +23014,7 @@ function PlansTab({job, onUpdate, simproCostCenters, simproCostCentersErr, simpr
 // them to the far right when job.noPanelizedLighting / job.noTapeLight is set.
 const TABS = ["Job Info","Activity","Photos","Plans & Links","Rough","Finish","Home Runs","Panelized Lighting","Tape Light",
 
-              "Change Orders","Return Trips","Open Items","QC"];
+              "Change Orders","Designer Questions","Return Trips","Open Items","QC"];
 
 // Per-job tab order. Tabs the job doesn't use get shuffled to the end so the
 // leading edge of the tab bar stays focused on what that job actually needs.
@@ -25680,6 +25743,90 @@ function UpNextPanel({ job, identity, onAction }) {
         </>
       )}
       </>)}
+    </div>
+  );
+}
+
+// ─── Designer Questions (TraceVault question↔markup bridge) ────────────────
+// Questions the office sends the designer/architect, tracked per job and
+// mirrored to the field-ink project (ccquestions/<jobId>) so TraceVault can
+// tie a plan markup to the SPECIFIC question it answers. The FIELD owns each
+// question's `fieldink` block (linked/plan/page/shareId) — surfaced here as
+// the live "On plan" badge + viewer link. The office owns text/askedOf/
+// answer/sent. Ids are self-minted random strings (NOT uid() — that's a
+// session counter, and these ids are the cross-app merge key).
+const dqId = () => "dq_" + Date.now().toString(36) + Math.random().toString(36).slice(2, 7);
+function DesignerQuestions({ questions, onChange, jobId, canEdit }) {
+  const [fieldLinks, setFieldLinks] = useState({});
+  useEffect(() => {
+    if (jobId == null) return;
+    let dead = false, unsub = null;
+    ensureFieldinkAuth().then(u2 => {
+      if (dead || !u2) return;
+      try {
+        unsub = onSnapshot(doc(fieldinkDb, "ccquestions", String(jobId)), snap => {
+          const d = snap.exists() ? snap.data() : null;
+          const m = {};
+          for (const q of (d?.questions || [])) if (q && q.id && q.fieldink) m[q.id] = q.fieldink;
+          setFieldLinks(m);
+        }, () => {});
+      } catch {}
+    });
+    return () => { dead = true; try { unsub && unsub(); } catch {} };
+  }, [jobId]);
+  const list = questions || [];
+  const set = (i, patch) => { const next = [...list]; next[i] = { ...next[i], ...patch }; onChange(next); };
+  const badge = (bg, color, border, text, href) => href
+    ? <a href={href} target="_blank" rel="noreferrer" style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: bg, color, border: `1px solid ${border}`, textDecoration: "none", whiteSpace: "nowrap" }}>{text}</a>
+    : <span style={{ fontSize: 10, fontWeight: 700, padding: "2px 8px", borderRadius: 999, background: bg, color, border: `1px solid ${border}`, whiteSpace: "nowrap" }}>{text}</span>;
+  return (
+    <div style={{ display: "flex", flexDirection: "column", gap: 10 }}>
+      {list.length === 0 && (
+        <div style={{ fontSize: 12, color: C.dim, lineHeight: 1.5 }}>
+          No questions yet. Track what you send the designer here — the crew sees them on the plan in TraceVault, and when they mark up an answer it links straight back to the question.
+        </div>
+      )}
+      {list.map((q, i) => {
+        const fl = fieldLinks[q.id];
+        const linked = !!(fl && fl.linked);
+        const answered = !!(q.answer && String(q.answer).trim()) || linked;
+        return (
+          <div key={q.id} style={{ border: `1px solid ${C.border}`, borderRadius: 8, padding: "8px 10px", background: C.surface }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 6, flexWrap: "wrap" }}>
+              <span style={{ fontSize: 11, fontWeight: 700, color: "#8b80c9" }}>Q{i + 1}</span>
+              <input value={q.askedOf || ""} placeholder="who (designer)…" disabled={!canEdit}
+                onChange={e => set(i, { askedOf: e.target.value })}
+                style={{ width: 130, background: "transparent", border: "none", borderBottom: `1px solid ${C.border}`, fontSize: 11, color: C.dim, padding: "2px 4px", outline: "none", fontFamily: "inherit" }} />
+              <label style={{ display: "flex", alignItems: "center", gap: 4, fontSize: 11, color: C.dim, marginLeft: "auto", cursor: canEdit ? "pointer" : "default" }}>
+                <input type="checkbox" checked={!!q.sent} disabled={!canEdit} onChange={e => set(i, { sent: e.target.checked })} /> sent
+              </label>
+              {linked
+                ? badge("rgba(22,163,74,0.15)", "#16a34a", "rgba(22,163,74,0.4)",
+                    `On plan${fl.page ? " p." + fl.page : ""} — ${fl.shareId ? "view" : (fl.planName || "linked")}`,
+                    fl.shareId ? FIELDINK_VIEWER_BASE + fl.shareId : null)
+                : answered
+                  ? badge("rgba(22,163,74,0.12)", "#16a34a", "rgba(22,163,74,0.3)", "answered", null)
+                  : q.sent
+                    ? badge("rgba(245,166,35,0.15)", "#b45309", "rgba(245,166,35,0.4)", "waiting", null)
+                    : null}
+              {canEdit && <button onClick={() => onChange(list.filter((_, j) => j !== i))} title="Delete question" style={{ background: "none", border: "none", color: C.dim, fontSize: 14, cursor: "pointer", padding: "0 2px", lineHeight: 1 }}>×</button>}
+            </div>
+            <textarea value={q.text || ""} placeholder="Question for the designer…" disabled={!canEdit} rows={2}
+              onChange={e => set(i, { text: e.target.value })}
+              style={{ width: "100%", boxSizing: "border-box", background: "transparent", border: "none", borderBottom: `1px solid ${C.border}`, fontSize: 12, color: C.text, padding: "2px 4px", outline: "none", fontFamily: "inherit", resize: "vertical" }} />
+            <textarea value={q.answer || ""} placeholder="Designer's answer (paste it here when it comes back)…" disabled={!canEdit} rows={2}
+              onChange={e => set(i, { answer: e.target.value })}
+              style={{ width: "100%", boxSizing: "border-box", background: "transparent", border: "none", borderBottom: `1px solid ${C.border}`, fontSize: 12, color: answered ? "#16a34a" : C.text, padding: "2px 4px", outline: "none", fontFamily: "inherit", resize: "vertical", marginTop: 4 }} />
+          </div>
+        );
+      })}
+      {canEdit && (
+        <button
+          onClick={() => onChange([...(list || []), { id: dqId(), text: "", askedOf: (list[list.length - 1]?.askedOf) || "", answer: "", sent: false, createdAt: new Date().toISOString() }])}
+          style={{ alignSelf: "flex-start", fontSize: 11, padding: "4px 10px", borderRadius: 5, background: C.surface, border: `1px solid ${C.border}`, color: C.text, cursor: "pointer", fontFamily: "inherit" }}>
+          + Question
+        </button>
+      )}
     </div>
   );
 }
@@ -28413,6 +28560,24 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   roughStatus={job.roughStatus||""}
                   finishStatus={job.finishStatus||""}
                   jobNotes={job.jobNotes||[]}
+                />
+              </Section>
+
+            </div>
+
+          )}
+
+
+          {tab==="Designer Questions"&&(
+
+            <div>
+
+              <Section label="Designer Questions" color="#8b80c9" defaultOpen={true}>
+                <DesignerQuestions
+                  questions={job.designerQuestions||[]}
+                  onChange={qs => u({designerQuestions: qs})}
+                  jobId={job.id}
+                  canEdit={can(identity, "designerQuestions.edit")}
                 />
               </Section>
 
@@ -50342,6 +50507,12 @@ function App() {
       // job's save). Only runs when a CO field is in the patch.
       if ('changeOrders' in patch) {
         try { publishCcChangeOrders(job.id, patch.changeOrders || job.changeOrders || []); } catch(e){}
+      }
+      // Mirror designer questions to FieldInk the same way (fire-and-forget,
+      // hash-gated internally, separate field-ink project — cannot affect this
+      // job's save). Only runs when the questions field is in the patch.
+      if ('designerQuestions' in patch) {
+        try { publishCcQuestions(job.id, patch.designerQuestions || job.designerQuestions || []); } catch(e){}
       }
     }
 
