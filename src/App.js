@@ -26482,6 +26482,49 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
             const hasQs = jr && ['roughQuestions','finishQuestions'].some(k => ['upper','main','basement'].some(f => (jr[k]?.[f]||[]).length));
             if (hasQs) { try { publishCcQuestions(job.id, jr.roughQuestions, jr.finishQuestions); } catch {} }
           }
+          // Adopt FIELD-TYPED answers (SW v284): the crew can type an answer in
+          // FieldInk (lands in fieldink.answer). Apply it like a question-link
+          // answer (answeredVia:'fieldink'). Adopts only when the question has
+          // no answer yet, or when a NEWER field edit arrives (answeredAtMs
+          // stamp beats the last adopted stamp) on an already-field-answered
+          // question — an office-typed answer is never overwritten. Terminates:
+          // adoption sets the stamp equal to the field's, so the re-publish
+          // echo no-ops.
+          try {
+            const fiAns = {};
+            for (const q of (d?.questions || [])) if (q && q.id && q.fieldink && String(q.fieldink.answer||'').trim()) fiAns[q.id] = q.fieldink;
+            if (Object.keys(fiAns).length) {
+              const jr = jobRef.current;
+              const applyPhase = (cur) => {
+                let changed = false;
+                const updated = {};
+                ['upper','main','basement'].forEach(fl => {
+                  updated[fl] = (cur?.[fl]||[]).map(q => {
+                    const fi = fiAns[q.id];
+                    if (!fi) return q;
+                    const ts = fi.answeredAtMs || 0;
+                    // Both clauses require a NEWER stamp than the last adopted
+                    // one — so an office clear/reject can't be resurrected by
+                    // the same old field answer; only a genuinely newer field
+                    // edit re-adopts.
+                    const should = (!String(q.answer||'').trim() && !q.done && ts > (q.fieldinkAnsweredAtMs||0))
+                      || (q.answeredVia === 'fieldink' && ts > (q.fieldinkAnsweredAtMs||0));
+                    if (!should) return q;
+                    changed = true;
+                    // Escape — office answers render via dangerouslySetInnerHTML,
+                    // and this text arrives from the (anon-authed) field project.
+                    const safe = String(fi.answer).replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+                    return {...q, answer: safe, done: true, answeredVia: 'fieldink', answeredBy: fi.answeredBy || '', answeredAt: new Date(ts || Date.now()).toISOString(), fieldinkAnsweredAtMs: ts};
+                  });
+                });
+                return {updated, changed};
+              };
+              const r1 = applyPhase(jr?.roughQuestions);
+              const f1 = applyPhase(jr?.finishQuestions);
+              if (r1.changed) u({roughQuestions: r1.updated});
+              if (f1.changed) u({finishQuestions: f1.updated});
+            }
+          } catch {}
         }, ()=>{});
       } catch {}
     });
@@ -29320,6 +29363,7 @@ const ANSWER_METHODS = [
   {v:'phone',     l:'Phone call'},
   {v:'in_person', l:'In person'},
   {v:'link',      l:'Via link'},
+  {v:'fieldink',  l:'From the field'},
   {v:'other',     l:'Other'},
 ];
 const answerMethodLabel = (v) => { const m = ANSWER_METHODS.find(x=>x.v===v); return m ? m.l : ''; };
