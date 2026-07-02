@@ -33500,12 +33500,19 @@ function QCView({ jobs, onSelectJob, identity, onPatchJob }) {
     setSchedFor(null);
   };
   const countOpen = (punch, onlyFromQC=false) => {
+    // BUG FIX: this used to skip legacy ARRAY-shaped floors entirely
+    // (`if(Array.isArray(f)) return 0`), so jobs whose punch floors are still
+    // in the old flat-array shape showed their QC items inside the job (the
+    // QC tab normalizes via normFloor) but counted 0 here and never got a
+    // tracker row. Route everything through normFloor so both surfaces agree.
+    const ok = (i) => i && !i.done && !i.voided && (!onlyFromQC || i.fromQC);
     if(!punch) return 0;
-    const fl = (f) => {
-      if(!f || Array.isArray(f)) return 0;
-      const ok = (i) => i && !i.done && !i.voided && (!onlyFromQC || i.fromQC);
-      return (f.general||[]).filter(ok).length + (f.hotcheck||[]).filter(ok).length +
-        (f.rooms||[]).reduce((a,r)=>a+(Array.isArray(r.items)?r.items.filter(ok).length:0),0);
+    if(Array.isArray(punch)) return punch.filter(ok).length; // legacy flat punch list (old qcPunch)
+    const fl = (v) => {
+      if(!v) return 0;
+      const f = normFloor(v); // handles both floor shapes: {general,rooms,hotcheck} and legacy []
+      return f.general.filter(ok).length + f.hotcheck.filter(ok).length +
+        f.rooms.reduce((a,r)=>a+(Array.isArray(r.items)?r.items.filter(ok).length:0),0);
     };
     return fl(punch.upper)+fl(punch.main)+fl(punch.basement)+((punch.extras||[]).reduce((s,e)=>s+fl(punch[e.key]||{}),0));
   };
