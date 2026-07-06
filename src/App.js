@@ -2,7 +2,7 @@
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { createPortal } from "react-dom";
 import { initializeApp } from "firebase/app";
-import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, query, where, orderBy, limit, serverTimestamp } from "firebase/firestore";
+import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, query, where, orderBy, limit, serverTimestamp, runTransaction } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
@@ -22041,184 +22041,6 @@ async function syncDriveFoldersToJobs(jobs, updateJob) {
 // step. Sharing a plan in FieldInk IS the publish action; turning the link off
 // removes it here too. Hide is the rare manual action, stored on the job
 // (hiddenPlanShares) so it's shared across the office, reversible via "show".
-// ── FIELD QUESTIONS from live links (crew → office; TraceVault v468 bridge) ───
-// The office half of "field questions → Command Center." Two field-ink
-// SUBCOLLECTIONS, both keyed by this job's id:
-//   ccjoblinks/<jobId>/plans/<shareId>  — the job's live plan links (FieldInk
-//     publishes them). We hand the signed-in user a CREW-TAGGED link,
-//     …/#/v/<shareId>?crew=<crewId>&crewName=<name>, so a Question/Problem they
-//     drop on that plan forwards back here stamped with who asked.
-//   ccfieldnotes/<jobId>/notes/<noteId> — the questions/problems the crew asked.
-//     The office answers here; answerFieldNote() relays the answer onto the
-//     crew's live pin. Field owns the question fields; office owns answer/…
-// Both reads are anon-auth-gated on the field-ink app, exactly like
-// FieldInkPlansSection. All-additive + inert until FieldInk writes into these.
-function FieldNotesSection({ job, identity }) {
-  const [plans, setPlans] = useState([]);       // ccjoblinks/<job>/plans (+ shares fallback)
-  const [notes, setNotes] = useState([]);       // ccfieldnotes/<job>/notes
-  const [drafts, setDrafts] = useState({});     // noteId → answer text
-  const [sending, setSending] = useState({});   // noteId → bool
-
-  const jobId = job?.id != null ? String(job.id) : null;
-  const canAnswer = ["admin", "manager"].includes(getAccess(identity));   // office only
-
-  // The job's live plan links. PRIMARY: ccjoblinks (the map FieldInk publishes
-  // for exactly this). FALLBACK: the same `shares`-by-ccJobId query
-  // FieldInkPlansSection uses, so a crew-tagged link still appears during
-  // rollout before ccjoblinks has populated. Union by shareId, ccjoblinks wins.
-  useEffect(() => {
-    if (!jobId) { setPlans([]); return; }
-    let dead = false, unsub = null;
-    ensureFieldinkAuth().then(async u => {
-      if (dead || !u) return;
-      let fallback = [];
-      try {
-        const snap = await getDocs(query(collection(fieldinkDb, "shares"), where("ccJobId", "==", jobId)));
-        fallback = snap.docs.filter(d => !d.data()?.revoked).map(d => ({ shareId: d.id, planName: d.data()?.planName || "" }));
-      } catch {}
-      if (dead) return;
-      try {
-        unsub = onSnapshot(collection(fieldinkDb, "ccjoblinks", jobId, "plans"), snap => {
-          const byId = new Map();
-          for (const f of fallback) byId.set(f.shareId, f);
-          snap.docs.forEach(d => byId.set(d.id, { shareId: d.id, ...d.data() }));
-          setPlans([...byId.values()]);
-        }, () => { setPlans(fallback); });
-      } catch { setPlans(fallback); }
-    });
-    return () => { dead = true; try { unsub && unsub(); } catch {} };
-  }, [jobId]);
-
-  // The job's field notes.
-  useEffect(() => {
-    if (!jobId) { setNotes([]); return; }
-    let dead = false, unsub = null;
-    ensureFieldinkAuth().then(u => {
-      if (dead || !u) return;
-      try {
-        unsub = onSnapshot(collection(fieldinkDb, "ccfieldnotes", jobId, "notes"), snap => {
-          const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
-          list.sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0));   // newest first
-          setNotes(list);
-        }, () => {});
-      } catch {}
-    });
-    return () => { dead = true; try { unsub && unsub(); } catch {} };
-  }, [jobId]);
-
-  if (!jobId) return null;
-
-  // Crew identity for the ?crew= tag: whoever is signed into THIS office app.
-  const crewId = identity?.id ? String(identity.id) : "";
-  const crewName = identity?.name ? String(identity.name) : "";
-  const crewLink = (shareId) => FIELDINK_VIEWER_BASE + shareId +
-    (crewId ? "?crew=" + encodeURIComponent(crewId) + (crewName ? "&crewName=" + encodeURIComponent(crewName) : "") : "");
-
-  // Flag a note whose crewId isn't a known user (a client who hand-appended
-  // ?crew=). Best-effort from the cached roster; skip the check if unavailable.
-  let roster = [];
-  try { const r = JSON.parse(localStorage.getItem("he_users") || "null"); roster = Array.isArray(r) ? r : (Array.isArray(r?.list) ? r.list : []); } catch {}
-  const knownCrew = (cid) => !cid || !roster.length || roster.some(x => String(x.id) === String(cid));
-
-  const openCount = notes.filter(n => n.status !== "answered" && !n.answer).length;
-  const stripPdf = (s) => String(s || "Plan").replace(/\.pdf$/i, "");
-  const ago = (ms) => { ms = Number(ms) || 0; if (!ms) return ""; const m = Math.max(0, Math.round((Date.now() - ms) / 60000)); if (m < 2) return "just now"; if (m < 60) return m + "m ago"; const h = Math.round(m / 60); if (h < 24) return h + "h ago"; const d = Math.round(h / 24); return d < 30 ? d + "d ago" : Math.round(d / 30) + "mo ago"; };
-
-  const sendAnswer = async (n) => {
-    const text = (drafts[n.id] || "").trim();
-    if (!text) return;
-    setSending(s => ({ ...s, [n.id]: true }));
-    const ok = await answerFieldNote(jobId, n.id, text, crewName);
-    setSending(s => ({ ...s, [n.id]: false }));
-    if (ok) setDrafts(d => ({ ...d, [n.id]: "" }));
-    else alert("Couldn't send the answer — check your connection and try again.");
-  };
-
-  if (plans.length === 0 && notes.length === 0) return null;   // nothing for this job yet
-
-  return (
-    <div style={{ marginTop: 16, marginBottom: 16 }}>
-      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
-        <span style={{ display: "inline-flex", color: C.blue }}><Icon name="inbox" size={15}/></span>
-        <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: "0.08em" }}>FIELD QUESTIONS — FROM CREW</div>
-        {openCount > 0 && (
-          <span style={{ background: C.red, color: "#fff", fontSize: 10, fontWeight: 800, borderRadius: 20, padding: "1px 8px" }}>{openCount} open</span>
-        )}
-      </div>
-
-      {plans.length > 0 && (
-        <div style={{ marginBottom: 12 }}>
-          {plans.map(p => (
-            <div key={p.shareId} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "8px 12px", borderRadius: 9, marginBottom: 6, background: C.surface, border: `1px solid ${C.border}` }}>
-              <span style={{ display: "inline-flex", color: C.blue }}><Icon name="fileText" size={14}/></span>
-              <div style={{ flex: 1, minWidth: 140, fontSize: 12.5, fontWeight: 700, color: C.text }}>{stripPdf(p.planName)}</div>
-              <a href={crewLink(p.shareId)} target="_blank" rel="noreferrer"
-                style={{ background: C.blue, border: "none", borderRadius: 7, color: "#fff", textDecoration: "none", fontSize: 11, fontWeight: 700, padding: "6px 14px", fontFamily: "inherit" }}>
-                Open{crewName ? " as " + crewName.split(" ")[0] : ""}
-              </a>
-            </div>
-          ))}
-          <div style={{ fontSize: 10.5, color: C.dim, marginTop: 2 }}>
-            Opens the live plan tagged as you — any Question or Problem you drop comes back here.
-          </div>
-        </div>
-      )}
-
-      {notes.length === 0 ? (
-        <div style={{ fontSize: 11.5, color: C.dim, padding: "4px 2px" }}>No field questions on this job yet.</div>
-      ) : notes.map(n => {
-        const answered = !!(n.answer || n.status === "answered");
-        const isProblem = n.type === "problem";
-        const tint = isProblem ? C.red : C.blue;
-        const busy = !!sending[n.id];
-        const draft = drafts[n.id] || "";
-        return (
-          <div key={n.id} style={{ borderRadius: 9, marginBottom: 8, background: C.card, border: `1px solid ${C.border}`, borderLeft: `3px solid ${tint}`, padding: "10px 12px", opacity: answered ? 0.78 : 1 }}>
-            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
-              <span style={{ background: tint, color: "#fff", fontSize: 9.5, fontWeight: 800, borderRadius: 5, padding: "1px 7px", letterSpacing: "0.04em" }}>{isProblem ? "PROBLEM" : "QUESTION"}</span>
-              <span style={{ fontSize: 11.5, fontWeight: 700, color: C.text }}>{n.crewName || "Crew"}</span>
-              {!knownCrew(n.crewId) && <span style={{ fontSize: 9.5, color: C.orange, fontWeight: 700 }} title="Sender is not in the crew roster">UNVERIFIED</span>}
-              <span style={{ fontSize: 10.5, color: C.dim }}>{stripPdf(n.planName)}{n.page ? " · p" + n.page : ""} · {ago(n.at)}</span>
-              {answered && <span style={{ marginLeft: "auto", fontSize: 10, color: C.green, fontWeight: 700 }}>ANSWERED</span>}
-            </div>
-            <div style={{ fontSize: 13, color: C.text, whiteSpace: "pre-wrap", marginBottom: 6 }}>{n.text}</div>
-            {n.shareId && (
-              <div style={{ marginBottom: answered ? 6 : 8 }}>
-                <a href={FIELDINK_VIEWER_BASE + n.shareId} target="_blank" rel="noreferrer"
-                  style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700, color: C.blue, textDecoration: "none" }}>
-                  <Icon name="external" size={12}/> Open on plan
-                </a>
-              </div>
-            )}
-            {answered ? (
-              n.answer ? (
-                <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 10px", fontSize: 12.5, color: C.text }}>
-                  <span style={{ fontWeight: 700, color: C.green }}>{n.answeredBy || "Office"}: </span>{n.answer}
-                </div>
-              ) : null
-            ) : canAnswer ? (
-              <div style={{ display: "flex", gap: 6, alignItems: "flex-end", flexWrap: "wrap" }}>
-                <textarea
-                  value={draft}
-                  onChange={e => setDrafts(d => ({ ...d, [n.id]: e.target.value }))}
-                  placeholder="Type an answer — it lands on the crew's pin…"
-                  rows={2}
-                  style={{ flex: 1, minWidth: 180, resize: "vertical", fontFamily: "inherit", fontSize: 12.5, color: C.text, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: "6px 9px" }}
-                />
-                <button onClick={() => sendAnswer(n)} disabled={busy || !draft.trim()}
-                  style={{ background: C.green, border: "none", borderRadius: 7, color: "#fff", cursor: (busy || !draft.trim()) ? "default" : "pointer", fontSize: 11.5, fontWeight: 700, padding: "8px 14px", fontFamily: "inherit", opacity: (busy || !draft.trim()) ? 0.6 : 1 }}>
-                  {busy ? "Sending…" : "Send answer"}
-                </button>
-              </div>
-            ) : (
-              <div style={{ fontSize: 11, color: C.dim, fontStyle: "italic" }}>Awaiting an office answer.</div>
-            )}
-          </div>
-        );
-      })}
-    </div>
-  );
-}
 
 function FieldInkPlansSection({ folderIds, job, onUpdate }) {
   const [plans, setPlans] = useState(null);          // null = loading, [] = none
@@ -26739,6 +26561,96 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     return () => { dead = true; try { unsub && unsub(); } catch {} };
   }, [job.id]);
 
+  // ── CREW FIELD QUESTIONS → the job's Questions ────────────────────────────
+  // A crew drops a Question/Problem on a live plan link (?crew=) → FieldInk
+  // forwards it to field-ink ccfieldnotes/<jobId>/notes. Fold each one into the
+  // job's Questions so it reads and behaves like any other question — floors,
+  // assign-to, Share ↗ to designer/GC, answer — instead of a separate box. Lands
+  // in Rough → Main, Unassigned, tagged "From the field" with the plan spot (the
+  // fromFieldNote backlink drives the on-plan badge + the answer relay below).
+  // Mirrors the field-ANSWER adoption above: `answer` is HTML-escaped (that field
+  // is rendered as rich HTML, and this text is from the anon-authed field
+  // project); `question` is plain text (QAInlineEdit), left raw like the
+  // Job-Note→Question promoter. Dedup by fromFieldNote.noteId so a note adopts
+  // exactly once — re-snapshots no-op. Inert on jobs with no notes.
+  // noteId → last answer text relayed down to the crew's pin (dedup). Declared
+  // before the adopt effect so adoption can SEED it with the field's own answer.
+  const relayedFieldRef = useRef({});
+  useEffect(() => {
+    let dead = false, unsub = null;
+    // Clamp a field timestamp to a Date-able ms value — a Firestore Timestamp
+    // object or an out-of-range number falls back — so .toISOString() can't throw
+    // and abort the whole adopt batch.
+    const iso = (v, alt) => {
+      const n = Number(v);
+      const a = Number(alt);
+      const ms = (Number.isFinite(n) && Math.abs(n) < 8.64e15) ? n : (Number.isFinite(a) && Math.abs(a) < 8.64e15 ? a : Date.now());
+      return new Date(ms).toISOString();
+    };
+    ensureFieldinkAuth().then(u2 => {
+      if (dead || !u2) return;
+      try {
+        unsub = onSnapshot(collection(fieldinkDb, "ccfieldnotes", String(job.id), "notes"), snap => {
+          const notes = snap.docs.map(d => ({ ...d.data(), id: (d.data()||{}).id || d.id }));
+          if (!notes.length) return;
+          const jr = jobRef.current;
+          const seen = new Set();
+          for (const k of ['roughQuestions','finishQuestions'])
+            for (const fl of ['upper','main','basement'])
+              for (const q of (jr?.[k]?.[fl]||[])) if (q?.fromFieldNote?.noteId) seen.add(String(q.fromFieldNote.noteId));
+          const fresh = notes
+            .filter(n => n && n.id && String(n.text||'').trim() && !seen.has(String(n.id)))
+            .sort((a, b) => (Number(a.at)||0) - (Number(b.at)||0));   // oldest first, so a backlog reads chronologically
+          if (!fresh.length) return;
+          const esc = (s) => String(s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');
+          const items = fresh.map(n => {
+            const answered = !!(String(n.answer||'').trim() || n.status === 'answered');
+            const ans = answered ? esc(n.answer) : '';
+            // Seed the relay dedup with the FIELD's OWN answer so it's never echoed
+            // back down. The relay then fires only when the office CHANGES the answer
+            // to something else — robust against the user-pickable "From the field"
+            // method chip (which would otherwise mislabel a real office answer).
+            if (answered && ans) relayedFieldRef.current[String(n.id)] = ans.trim();
+            return {
+              id: uid(),
+              question: String(n.text||''),                 // plain-text render — leave raw (like note→question)
+              answer: ans,                                  // rich-HTML render — MUST escape untrusted field text
+              done: answered,
+              for: '',
+              addedBy: n.crewName || 'Crew',
+              addedAt: iso(n.at),
+              source: n.type === 'problem' ? 'Field · PROBLEM' : 'From the field',
+              ...(answered ? { answeredVia: 'fieldink', answeredBy: n.answeredBy || '', answeredAt: iso(n.answeredAt, n.at) } : {}),
+              fromFieldNote: { noteId: String(n.id), shareId: n.shareId || '', page: Number(n.page) || 1, planName: n.planName || '' },
+            };
+          });
+          const cur = jr?.roughQuestions || { upper: [], main: [], basement: [] };
+          u({ roughQuestions: { ...cur, main: [ ...(cur.main || []), ...items ] } });
+        }, ()=>{});
+      } catch {}
+    });
+    return () => { dead = true; try { unsub && unsub(); } catch {} };
+  }, [job.id]);
+
+  // Relay an OFFICE answer on a field-sourced question back to the crew's live
+  // pin. Fires when a fromFieldNote question gains an answer that DIFFERS from what
+  // the field last sent (the dedup is seeded with the field's own answer at
+  // adoption). Guarding on the answer VALUE — not the user-pickable answeredVia —
+  // means the "From the field" method chip can't accidentally suppress the relay.
+  // answerFieldNote is a merge write, so a repeat would be harmless anyway.
+  useEffect(() => {
+    for (const k of ['roughQuestions','finishQuestions'])
+      for (const fl of ['upper','main','basement'])
+        for (const q of (job?.[k]?.[fl]||[])) {
+          const nid = q?.fromFieldNote?.noteId;
+          if (!nid || !q.done) continue;
+          const ans = String(q.answer||'').trim();
+          if (!ans || relayedFieldRef.current[nid] === ans) continue;
+          relayedFieldRef.current[nid] = ans;
+          try { answerFieldNote(job.id, nid, ans, q.answeredBy || 'Office'); } catch {}
+        }
+  }, [job.roughQuestions, job.finishQuestions]);
+
   // Auto-apply GC answers — mark each answered question as done and fill in the answer
   const appliedGcRef = useRef(null);
   useEffect(() => {
@@ -28818,7 +28730,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
 
           {tab==="Plans & Links"&&(
-            <>
             <PlansTab
               job={job}
               onUpdate={u}
@@ -28827,9 +28738,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               simproCostCentersRefreshing={simproCostCentersRefreshing}
               onRefreshSimproCostCenters={refetchSimproCostCenters}
             />
-
-            <FieldNotesSection job={job} identity={identity}/>
-            </>
           )}
 
 
@@ -29578,6 +29486,74 @@ const ANSWER_METHODS = [
 ];
 const answerMethodLabel = (v) => { const m = ANSWER_METHODS.find(x=>x.v===v); return m ? m.l : ''; };
 
+// ── QAThread ────────────────────────────────────────────────────────────────
+// Two-way conversation under a single question. Same component on the crew side
+// (JobDetail Q&A) and the public share page. Messages live on q.thread[] (nested
+// on the question object, so they ride the loader). Each message:
+//   { id, by, role:'crew'|'client', text, photos:[{id,name,url,type}], at }
+// onPost({text, photos}) is where the two sides differ: crew appends via the
+// normal job update; the share page does a fresh read-modify-write on the job.
+function QAThread({ messages = [], onPost, jobId, qid, color = '#3B5BA5', photoBase = 'question-threads', canPost = true, compact = false }) {
+  const [text, setText]     = useState('');
+  const [photos, setPhotos] = useState([]);
+  const [busy, setBusy]     = useState(false);
+  const list = Array.isArray(messages) ? messages : [];
+  const send = async () => {
+    if(!text.trim() && photos.length === 0) return;
+    setBusy(true);
+    try { await onPost({ text: text.trim(), photos }); setText(''); setPhotos([]); }
+    catch(e){ (toast.error||toast.warn||(()=>{}))('Could not send — try again.'); }
+    setBusy(false);
+  };
+  const isImg = (p) => (p.type && p.type.startsWith && p.type.startsWith('image/')) || /\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
+  const bubble = (m) => {
+    const crew = m.role === 'crew';
+    return (
+      <div key={m.id} style={{alignSelf: crew?'flex-end':'flex-start', maxWidth:'88%'}}>
+        <div style={{fontSize:9, fontWeight:700, color: crew?color:'#5E6670', marginBottom:2, textAlign: crew?'right':'left'}}>
+          {crew ? (m.by||'Homestead Electric') : (m.by||'Client')}{m.at ? ` · ${timeAgo(m.at)}` : ''}
+        </div>
+        <div style={{background: crew?`${color}14`:'#EEF0F3', border:`1px solid ${crew?color+'33':'#E1E4E9'}`, borderRadius:10, padding:'7px 10px'}}>
+          {m.text && <div style={{fontSize:12, color:'#1B1F24', lineHeight:1.45, whiteSpace:'pre-wrap', wordBreak:'break-word'}}>{m.text}</div>}
+          {(m.photos||[]).filter(p=>p&&p.url).length>0 && (
+            <div style={{display:'flex', flexWrap:'wrap', gap:5, marginTop: m.text?6:0}}>
+              {(m.photos||[]).filter(p=>p&&p.url).map(p => isImg(p)
+                ? <img key={p.id} src={p.url} alt={p.name||'photo'} onClick={()=>window.open(p.url,'_blank')} style={{width:64,height:64,objectFit:'cover',borderRadius:7,border:'1px solid #E1E4E9',cursor:'pointer',display:'block'}}/>
+                : <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer" style={{maxWidth:150,fontSize:11,fontWeight:600,color: crew?color:'#475569',background:'#fff',border:'1px solid #E1E4E9',borderRadius:6,padding:'4px 8px',textDecoration:'none',display:'inline-flex',alignItems:'center',gap:4,overflow:'hidden',whiteSpace:'nowrap',textOverflow:'ellipsis'}}><Icon name="fileText" size={11}/>{p.name||'file'}</a>
+              )}
+            </div>
+          )}
+        </div>
+      </div>
+    );
+  };
+  return (
+    <div style={{marginTop:10}}>
+      {list.length>0 && (
+        <div style={{display:'flex', flexDirection:'column', gap:7, marginBottom:8, paddingLeft: compact?0:2}}>
+          {list.map(bubble)}
+        </div>
+      )}
+      {canPost && (
+        <div style={{border:`1px solid #E1E4E9`, borderRadius:9, padding:'8px 9px', background:'#fff'}}>
+          <textarea value={text} onChange={e=>setText(e.target.value)} rows={2}
+            placeholder={list.length ? 'Reply…' : 'Add a reply or comment…'}
+            style={{width:'100%', boxSizing:'border-box', border:'none', outline:'none', resize:'vertical', fontSize:12, fontFamily:'inherit', color:'#1B1F24', background:'transparent', minHeight:34}}/>
+          <div style={{display:'flex', alignItems:'center', gap:8, marginTop:4}}>
+            <PhotoAttacher storagePath={`jobs/${jobId}/${photoBase}/${qid}`} photos={photos} onChange={setPhotos} color={color} label="Attach file / photo"/>
+            <span style={{flex:1}}/>
+            <button type="button" onClick={send} disabled={busy || (!text.trim() && photos.length===0)}
+              style={{fontSize:12, fontWeight:700, padding:'6px 16px', borderRadius:8, border:'none', fontFamily:'inherit',
+                background:(busy || (!text.trim() && photos.length===0))?'#E1E4E9':color, color:(busy || (!text.trim() && photos.length===0))?'#99A0AA':'#fff', cursor:(busy || (!text.trim() && photos.length===0))?'default':'pointer'}}>
+              {busy?'Sending…':'Send'}
+            </button>
+          </div>
+        </div>
+      )}
+    </div>
+  );
+}
+
 function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null, fieldinkMap={}}) {
 
   // guard: old data may be a string instead of array
@@ -29793,6 +29769,16 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
         </div>
       )}
 
+      {/* Field question (crew raised it from a live plan link): jump to the spot. */}
+      {q.fromFieldNote?.shareId && (
+        <div style={{marginLeft:22,marginTop:5}}>
+          <a href={FIELDINK_VIEWER_BASE + q.fromFieldNote.shareId} target="_blank" rel="noreferrer"
+             style={{fontSize:9,fontWeight:700,color:'#3B5BA5',background:'#E7ECF7',border:'1px solid #3B5BA544',borderRadius:4,padding:'2px 7px',textDecoration:'none',display:'inline-flex',alignItems:'center',gap:4}}>
+            <Icon name="external" size={10} stroke={2.5}/> On plan{q.fromFieldNote.page?` · p.${q.fromFieldNote.page}`:''}{q.fromFieldNote.planName?` · ${q.fromFieldNote.planName}`:''} — view
+          </a>
+        </div>
+      )}
+
       {/* Photos — visible whether the question is open or already answered.
           Lets the field crew snap a photo of the area in question for the
           GC, and lets the GC see context after their answer is recorded.
@@ -29822,6 +29808,19 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
         <div style={{marginLeft:22,marginTop:6,background:"#FCF6E7",border:"1px solid #E3D3A6",borderRadius:6,padding:"6px 10px",fontSize:11}}>
           <span style={{fontSize:9,fontWeight:700,color:"#8A6A1E",background:"#F3E9CF",borderRadius:4,padding:"1px 5px",marginRight:6}}>GC ASKED</span>
           <span style={{color:"#6E5212",fontStyle:"italic"}}>{gcNoteMap[q.id]}</span>
+        </div>
+      )}
+
+      {/* Two-way thread — crew ↔ the people it's shared with, with attachments */}
+      {jobId && (
+        <div style={{marginLeft:22,marginTop:8}}>
+          {(q.thread||[]).length>0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",color:C.dim,marginBottom:2}}>DISCUSSION</div>}
+          <QAThread
+            messages={q.thread||[]}
+            jobId={jobId}
+            qid={q.id}
+            color={color}
+            onPost={({text,photos})=>{ const who=getIdentity(); upd(q.id,{thread:[...(q.thread||[]),{id:uid(),by:who?.name||'Homestead Electric',role:'crew',text,photos,at:new Date().toISOString()}]}); }}/>
         </div>
       )}
 
@@ -45780,6 +45779,22 @@ function QuestionsSharePage({ jobId }) {
     setSubmitting(false);
   };
 
+  // Post a thread message from the recipient. Fresh read-modify-write on the job
+  // doc so we never clobber other fields; the live snapshot refreshes the view.
+  const postThread = async (q, message) => {
+    const snap = await getDoc(doc(db,'jobs',jobId));
+    if(!snap.exists()) throw new Error('Job unavailable');
+    const full = snap.data() || {};
+    const data = full.data || {};
+    const field = q.phase==='rough' ? 'roughQuestions' : 'finishQuestions';
+    const floorKey = q.floor==='Upper Level'?'upper':q.floor==='Main Level'?'main':'basement';
+    const qs = data[field] || {};
+    const arr = Array.isArray(qs[floorKey]) ? qs[floorKey] : [];
+    const nextArr = arr.map(item => item.id===q.id ? {...item, thread:[...(item.thread||[]), message]} : item);
+    const nextData = {...data, [field]:{...qs, [floorKey]:nextArr}};
+    await setDoc(doc(db,'jobs',jobId), {...full, data: nextData, updated_at: new Date().toISOString()});
+  };
+
   const roughQs = (job ? [
     ...(job.roughQuestions?.upper||[]).map(q=>({...q,floor:'Upper Level'})),
     ...(job.roughQuestions?.main||[]).map(q=>({...q,floor:'Main Level'})),
@@ -45880,6 +45895,9 @@ function QuestionsSharePage({ jobId }) {
                       <button type="button" onClick={()=>setNoteOpen(s=>new Set([...s,q.id]))}
                         style={{marginTop:8,fontSize:11,fontWeight:600,color:'#B0892C',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0}}>+ Ask for more info instead</button>
                     )}
+                    {(q.thread||[]).length>0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:'0.08em',color:'#99A0AA',margin:'12px 0 0'}}>DISCUSSION WITH HOMESTEAD ELECTRIC</div>}
+                    <QAThread messages={q.thread||[]} jobId={jobId} qid={q.id} color="#3B5BA5" photoBase="question-threads"
+                      onPost={({text,photos})=>postThread(q,{id:uid(),by:(respondentName.trim()||shareName||'Client'),role:'client',text,photos,at:new Date().toISOString()})}/>
                   </div>
                 );
               })}
@@ -45926,6 +45944,9 @@ function QuestionsSharePage({ jobId }) {
                       <button type="button" onClick={()=>setNoteOpen(s=>new Set([...s,q.id]))}
                         style={{marginTop:8,fontSize:11,fontWeight:600,color:'#B0892C',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0}}>+ Ask for more info instead</button>
                     )}
+                    {(q.thread||[]).length>0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:'0.08em',color:'#99A0AA',margin:'12px 0 0'}}>DISCUSSION WITH HOMESTEAD ELECTRIC</div>}
+                    <QAThread messages={q.thread||[]} jobId={jobId} qid={q.id} color="#3B5BA5" photoBase="question-threads"
+                      onPost={({text,photos})=>postThread(q,{id:uid(),by:(respondentName.trim()||shareName||'Client'),role:'client',text,photos,at:new Date().toISOString()})}/>
                   </div>
                 );
               })}
@@ -46280,6 +46301,7 @@ const FEATURES_MD_INLINE = String.raw`
   - Multiple share links per job (questionShares): the Share modal is grouped by recipient with per-group Select-all; save a named link per person (Designer/GC/Haley/…), each its own URL (?questions=<job>&s=<id>); Saved Links list to copy/edit/delete and track them. Legacy single ?questions link still works · shipped 2026-06-29 · SW v270
   - GC "Ask for more info" (a.clarify): on the share page the recipient can send a note back asking for context instead of answering; surfaces on the crew Q&A as a "GC ASKED" callout. Share-page instructions now state nothing sends until they press Submit · shipped 2026-06-29 · SW v270
   - Question photos show on the share page: any images attached to a question (q.photos) render as a read-only thumbnail grid under the question so the recipient sees the picture context; tap to open full size · shipped 2026-06-29 · SW v271
+  - Two-way question thread (q.thread): a real back-and-forth conversation under each question — crew (in-app) and the people it's shared with (on the link) can post replies with file/photo attachments on either side, unlimited turns. Shared QAThread component; recipient posts via a fresh read-modify-write on the job doc. Shows as a DISCUSSION bubble stream on both sides · shipped 2026-07-06 · SW v287
 - **Plans tab** · shipped · plans documents per job
 - **Drive Files** · shipped · Drive folder sync + uploads
 - **Home Runs (panels)** · shipped · per-floor home runs + breaker counts
@@ -50483,6 +50505,18 @@ function App() {
             if(j.lead)    { const fixed = normalizeName(j.lead);    if(fixed !== j.lead)    j.lead = fixed; }
           });
 
+          // Record the three-way-merge BASELINE: the server state this
+          // device's local copy is derived from. Only updated when this job
+          // has no pending local save — while an edit is in flight the local
+          // copy still derives from the OLD server state, and moving the
+          // baseline forward would defeat the merge. Read-only bookkeeping;
+          // never written back to Firestore.
+          loaded.forEach(j => {
+            const hasTimer = !!saveTimers.current[j.id];
+            const hasPending = !!(pendingPatches.current[j.id] && Object.keys(pendingPatches.current[j.id]).length > 0);
+            if(!hasTimer && !hasPending) serverBaselines.current[j.id] = j;
+          });
+
           // One-time fix v2: DISABLED — was using setDoc (full overwrite) which can wipe data
           // when localStorage is cleared and the fix re-runs. If needed, use updateDoc with dot-notation.
           // The fix has already run on all devices, so this is safe to leave disabled.
@@ -50707,6 +50741,108 @@ function App() {
   // so concurrent edits to different fields don't overwrite each other
   const pendingPatches = useRef({}); // jobId → accumulated patch fields
 
+  // ── Concurrent-edit protection (Cougar Moon punch-loss fix, 2026-07-06) ──
+  // serverBaselines holds, per job, the last server state this device's LOCAL
+  // copy was synced from (recorded in the jobs onSnapshot handler, only when
+  // no save is pending). It is the "base" of a three-way merge: base vs what
+  // this device wants to write (client) vs what the server holds NOW (server).
+  // This lets a save on a collection field (roughPunch, changeOrders, …)
+  // preserve rooms/items other people added since we loaded, while still
+  // honoring deletes this user made on purpose.
+  const serverBaselines = useRef({}); // jobId → last-synced job data object
+
+  const _jeq = (a, b) => {
+    if (a === b) return true;
+    try { return JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b); }
+    catch { return false; }
+  };
+
+  // Three-way structural merge. Rules:
+  //  • If the server hasn't changed since our baseline → the client's write
+  //    applies verbatim (so deletes work exactly like today).
+  //  • If the client didn't change the field vs baseline → keep the server's.
+  //  • Both changed → merge: arrays of {id} objects union by id, with
+  //    base-awareness so "present in base, missing on one side, unchanged on
+  //    the other" is treated as a deliberate delete instead of resurrected.
+  //    An item ADDED on either side (absent from base) is always kept — this
+  //    is the line that stops the Cougar Moon wipe.
+  //  • No baseline available (first load edge) → union merge, never drop.
+  //  • Plain objects recurse per key; primitives/unmergeable → client wins
+  //    (same as today's behavior).
+  const _threeWayMerge = (base, client, server) => {
+    if (server === undefined || server === null) return client;
+    if (client === undefined || client === null) return server;
+    if (_jeq(server, base)) return client;   // nobody else touched it
+    if (_jeq(client, base)) return server;   // we didn't touch it
+    // Both sides changed → structural merge
+    if (Array.isArray(client) && Array.isArray(server)) {
+      const idsOk = (arr) => arr.every(x => x && typeof x === "object" && x.id != null);
+      if (idsOk(client) && idsOk(server)) {
+        const baseArr = Array.isArray(base) ? base.filter(x => x && typeof x === "object" && x.id != null) : [];
+        const bMap = new Map(baseArr.map(x => [x.id, x]));
+        const sMap = new Map(server.map(x => [x.id, x]));
+        const cIds = new Set(client.map(x => x.id));
+        const out = [];
+        // Client's order first (their screen), merged per item against server
+        client.forEach(c => {
+          const s = sMap.get(c.id), b = bMap.get(c.id);
+          if (s !== undefined) { out.push(_threeWayMerge(b, c, s)); return; }
+          if (b === undefined) { out.push(c); return; }          // client added → keep
+          if (!_jeq(c, b)) { out.push(c); return; }              // server deleted, client edited → keep client
+          /* server deleted, client unchanged → honor the delete */
+        });
+        // Server-side items the client doesn't have
+        server.forEach(s => {
+          if (cIds.has(s.id)) return;
+          const b = bMap.get(s.id);
+          if (b === undefined) { out.push(s); return; }          // someone else added → KEEP (the fix)
+          if (!_jeq(s, b)) { out.push(s); return; }              // client deleted, server edited → keep server
+          /* client deleted, server unchanged → honor the delete */
+        });
+        return out;
+      }
+      return client; // arrays without stable ids → client wins (today's behavior)
+    }
+    if (client && server && typeof client === "object" && typeof server === "object" && !Array.isArray(client) && !Array.isArray(server)) {
+      const b = (base && typeof base === "object" && !Array.isArray(base)) ? base : {};
+      const out = {};
+      new Set([...Object.keys(client), ...Object.keys(server)]).forEach(k => {
+        const cv = client[k], sv = server[k], bv = b[k];
+        if (cv !== undefined && sv !== undefined) { out[k] = _threeWayMerge(bv, cv, sv); return; }
+        if (sv === undefined) { // key only on client
+          if (bv === undefined || !_jeq(cv, bv)) out[k] = cv;    // added/edited by client → keep
+          /* else: server deleted the key, client unchanged → honor delete */
+          return;
+        }
+        // key only on server
+        if (bv === undefined || !_jeq(sv, bv)) out[k] = sv;      // added/edited by server → keep
+        /* else: client deleted the key, server unchanged → honor delete */
+      });
+      return out;
+    }
+    return client; // primitives / mixed types → client wins
+  };
+
+  // Apply the three-way merge to every structural (object/array) field of a
+  // patch against the server's current data. Scalars pass through untouched.
+  // Returns the dot-notation write patch. Logs whenever the merge rescued
+  // server-side changes the client's blind write would have destroyed.
+  const _mergePatchAgainstServer = (jobId, jobName, cleanPatch, serverData) => {
+    const base = serverBaselines.current[jobId] || {};
+    const writePatch = {};
+    Object.entries(cleanPatch).forEach(([k, v]) => {
+      let out = v;
+      if (v && typeof v === "object" && serverData[k] !== undefined && serverData[k] !== null) {
+        out = _threeWayMerge(base[k], v, serverData[k]);
+        if (!_jeq(out, v)) {
+          console.log(`[HE] concurrent-edit merge: preserved server changes on "${k}" for ${jobName || jobId}`);
+        }
+      }
+      writePatch["data." + k] = out;
+    });
+    return writePatch;
+  };
+
   const saveJob = (job, patch) => {
 
     if(initialLoad.current) return;
@@ -50769,21 +50905,31 @@ function App() {
         const deviceId = localStorage.getItem('he_device_id') || (() => { const id = 'dev_' + Math.random().toString(36).slice(2,8); localStorage.setItem('he_device_id', id); return id; })();
 
         if(accumulatedKeys.length > 0) {
-          // Patch mode: only write the fields that changed.
-          // updateDoc with dot-notation is the correct Firebase API for this — it touches ONLY
-          // the specified nested fields and leaves everything else in Firestore untouched.
-          // lastActivityAt: serverTimestamp() is purely additive — drives the Today
-          // command center staleness/activity queries. No existing field is touched.
-          const patch = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId};
-          Object.entries(sanitize(accumulated)).forEach(([k,v]) => { patch["data."+k] = v; });
-          try {
-            await updateDoc(doc(db,"jobs",job.id), patch);
-          } catch(notFound) {
-            // Document doesn't exist yet (new job created but first setDoc hasn't landed) — create it now
-            if(notFound?.code === 'not-found') {
-              await setDoc(doc(db,"jobs",job.id), {data:sanitize(job), updated_at:patch.updated_at, saved_by:patch.saved_by, device:patch.device});
-            } else { throw notFound; }
-          }
+          // Patch mode: only write the fields that changed — but for structural
+          // fields (roughPunch, changeOrders, returnTrips, updates, materials,
+          // Q&A, …) the value the UI hands us is the ENTIRE field rebuilt from
+          // this device's local copy. Writing it blind is exactly what wiped
+          // Daegan's main-floor punch rooms on Cougar Moon (2026-07-06): a
+          // device holding a stale copy replaces the whole tree, last write
+          // wins. So instead of a blind updateDoc we run a TRANSACTION that
+          // re-reads the server's current value and three-way merges
+          // (baseline vs ours vs server) before writing. Items added by
+          // someone else since we loaded are preserved; this user's explicit
+          // deletes still go through. Scalars behave exactly as before.
+          const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId};
+          const cleanPatch = sanitize(accumulated);
+          await runTransaction(db, async (tx) => {
+            const jref = doc(db,"jobs",job.id);
+            const snap = await tx.get(jref);
+            if(!snap.exists()) {
+              // Document doesn't exist yet (new job created but first setDoc hasn't landed) — create it now
+              tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, saved_by:meta.saved_by, device:meta.device});
+              return;
+            }
+            const serverData = snap.data()?.data || {};
+            const writePatch = {...meta, ..._mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData)};
+            tx.update(jref, writePatch);
+          });
           // Write succeeded — clear ONLY the keys we just wrote. New patches
           // that arrived during the await stay in the queue for next flush.
           if (pendingPatches.current[job.id]) {
@@ -50812,16 +50958,25 @@ function App() {
             }
           }
           const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId};
-          const fullPatch = {...meta};
-          Object.entries(sanitized).forEach(([k,v]) => { fullPatch["data."+k] = v; });
-          try {
-            await updateDoc(doc(db,"jobs",job.id), fullPatch);
-          } catch(notFound) {
-            // New document — create it with full structure
-            if(notFound?.code === 'not-found') {
-              await setDoc(doc(db,"jobs",job.id), {data:sanitized, ...meta});
-            } else { throw notFound; }
-          }
+          // MODE-B FIX (Cougar Moon, 2026-07-06): this branch used to rewrite
+          // EVERY field of the job from this device's local snapshot. The old
+          // dot-notation write protected fields this device had never seen,
+          // but for fields it DID know (like roughPunch) it pushed its own —
+          // possibly stale — copy back up, erasing rooms other people added.
+          // Now: brand-new docs are still created whole (nothing to wipe),
+          // but for an EXISTING doc every structural field is three-way
+          // merged against the server's current value first.
+          await runTransaction(db, async (tx) => {
+            const jref = doc(db,"jobs",job.id);
+            const snap = await tx.get(jref);
+            if(!snap.exists()) {
+              tx.set(jref, {data:sanitized, ...meta});
+              return;
+            }
+            const serverData = snap.data()?.data || {};
+            const fullPatch = {...meta, ..._mergePatchAgainstServer(job.id, job.name, sanitized, serverData)};
+            tx.update(jref, fullPatch);
+          });
         }
 
         isDirty.current = false;
@@ -50847,6 +51002,19 @@ function App() {
           console.error(`[HE] Save failed (size). Run: ${cmd}`);
         } else {
           setSyncStatus("error");
+          // Transactions (unlike the old updateDoc) fail immediately when
+          // offline instead of queueing — so re-arm a retry while this job's
+          // patch is still pending. The patch was NOT cleared above, so no
+          // edit is lost; the offline→online re-merge effect also covers us.
+          // Guard: only retry if patches are actually still pending (the
+          // reconnect flush may have already drained them), so this can never
+          // route a job through the no-patch full-save branch.
+          if(!saveTimers.current[job.id]) {
+            setTimeout(() => {
+              const p = pendingPatches.current[job.id];
+              if (p && Object.keys(p).length > 0 && !saveTimers.current[job.id]) saveJob(job);
+            }, 5000);
+          }
         }
 
       }
@@ -50964,10 +51132,13 @@ function App() {
         }
         console.log(`[HE] Re-merged + saved job ${jid}`);
       } catch (e) {
-        console.warn(`[HE] Re-merge failed for job ${jid}, falling back to plain re-save:`, e?.message);
-        // Fallback: original behavior (just re-trigger saveJob)
+        console.warn(`[HE] Re-merge failed for job ${jid}, falling back to patch re-save:`, e?.message);
+        // Fallback: re-queue ONLY the fields that were pending (they'll go
+        // through saveJob's transactional merge). The old fallback here was
+        // saveJob(job) with NO patch — a full save from a possibly-stale
+        // snapshot, i.e. Mode B of the Cougar Moon punch wipe. Never again.
         const job = (jobsRef.current || []).find(j => j.id === jid);
-        if (job) saveJob(job);
+        if (job) saveJob(job, localPatch);
       }
     });
   }, [isOnline]);
@@ -50984,15 +51155,25 @@ function App() {
       const accumulated = pendingPatches.current[job.id];
       delete pendingPatches.current[job.id];
       if(accumulated && Object.keys(accumulated).length > 0) {
-        const patch = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp()};
-        Object.entries(sanitize(accumulated)).forEach(([k,v]) => { patch["data."+k] = v; });
+        const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp()};
+        const cleanPatch = sanitize(accumulated);
         try {
-          await updateDoc(doc(db,"jobs",job.id), patch);
+          // Same transactional three-way merge as saveJob — a close-flush
+          // from a stale device must not overwrite punch/CO/etc. wholesale.
+          await runTransaction(db, async (tx) => {
+            const jref = doc(db,"jobs",job.id);
+            const snap = await tx.get(jref);
+            if(!snap.exists()) {
+              tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, lastActivityAt:serverTimestamp()});
+              return;
+            }
+            const serverData = snap.data()?.data || {};
+            tx.update(jref, {...meta, ..._mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData)});
+          });
         } catch(e) {
-          if(e?.code === 'not-found') {
-            // New doc — create it
-            try { await setDoc(doc(db,"jobs",job.id), {data:sanitize(job), updated_at:patch.updated_at, lastActivityAt:serverTimestamp()}); } catch(e2){console.error('[HE] flushJob create error:',e2?.message);}
-          } else { console.error('[HE] flushJob save error:',e?.message); }
+          console.error('[HE] flushJob save error:',e?.message);
+          // Put the patch back so the retry / reconnect paths can deliver it.
+          pendingPatches.current[job.id] = {...cleanPatch, ...(pendingPatches.current[job.id]||{})};
         }
       }
       // No else — never do a full overwrite from flushJob, it can wipe other users' data
