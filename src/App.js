@@ -313,6 +313,35 @@ async function _publishCcQuestionsNow(jobId, roughQuestions, finishQuestions) {
   } catch (e) { console.warn("[fieldink] questions publish failed (rules deployed?):", e?.message); }
 }
 
+// The FIFTH field-ink touch (ccjobs → cchomeruns → cccos → ccquestions →
+// ccfieldnotes) and the ONE write-BACK: the crew↔office field-question loop.
+// A crew member (tagged by THIS app via ?crew= on the live link) drops a
+// Question/Problem on a plan; FieldInk forwards it to the SUBCOLLECTION
+// ccfieldnotes/<jobId>/notes/<noteId>. When the office answers here, we merge
+// the answer onto that SAME note doc — FieldInk relays it back down onto the
+// crew's live pin. merge:true so the field-owned question fields are never
+// touched; office owns ONLY answer/answeredBy/answeredAt/status. One-shot and
+// user-triggered, so (unlike publishCcQuestions) NO debounce and NO hash gate.
+// Requires the field-ink `ccfieldnotes` rules block (ships with TraceVault v468).
+async function answerFieldNote(jobId, noteId, answerText, answeredBy) {
+  try {
+    if (jobId == null || noteId == null) return false;
+    const text = stripHtml(String(answerText || "")).slice(0, 1000);
+    if (!text) return false;
+    const user = await ensureFieldinkAuth();
+    if (!user) return false;
+    // 4-segment SUBCOLLECTION path (unlike the 2-segment top-level bridge docs);
+    // doc() takes the alternating collection/doc args directly.
+    await setDoc(
+      doc(fieldinkDb, "ccfieldnotes", String(jobId), "notes", String(noteId)),
+      { answer: text, answeredBy: (answeredBy || "office"), answeredAt: serverTimestamp(), status: "answered" },
+      { merge: true }
+    );
+    console.log(`[fieldink] answered field note ${noteId} on job ${jobId}`);
+    return true;
+  } catch (e) { console.warn("[fieldink] field-note answer failed (rules deployed?):", e?.message); return false; }
+}
+
 // Debug helpers exposed to window so we can run one-off scripts from the
 // browser console (cloud-function calls, bulk data loads, etc.).
 //   _hsCall(name, params)       — invoke a callable cloud function
@@ -22012,6 +22041,185 @@ async function syncDriveFoldersToJobs(jobs, updateJob) {
 // step. Sharing a plan in FieldInk IS the publish action; turning the link off
 // removes it here too. Hide is the rare manual action, stored on the job
 // (hiddenPlanShares) so it's shared across the office, reversible via "show".
+// ── FIELD QUESTIONS from live links (crew → office; TraceVault v468 bridge) ───
+// The office half of "field questions → Command Center." Two field-ink
+// SUBCOLLECTIONS, both keyed by this job's id:
+//   ccjoblinks/<jobId>/plans/<shareId>  — the job's live plan links (FieldInk
+//     publishes them). We hand the signed-in user a CREW-TAGGED link,
+//     …/#/v/<shareId>?crew=<crewId>&crewName=<name>, so a Question/Problem they
+//     drop on that plan forwards back here stamped with who asked.
+//   ccfieldnotes/<jobId>/notes/<noteId> — the questions/problems the crew asked.
+//     The office answers here; answerFieldNote() relays the answer onto the
+//     crew's live pin. Field owns the question fields; office owns answer/…
+// Both reads are anon-auth-gated on the field-ink app, exactly like
+// FieldInkPlansSection. All-additive + inert until FieldInk writes into these.
+function FieldNotesSection({ job, identity }) {
+  const [plans, setPlans] = useState([]);       // ccjoblinks/<job>/plans (+ shares fallback)
+  const [notes, setNotes] = useState([]);       // ccfieldnotes/<job>/notes
+  const [drafts, setDrafts] = useState({});     // noteId → answer text
+  const [sending, setSending] = useState({});   // noteId → bool
+
+  const jobId = job?.id != null ? String(job.id) : null;
+  const canAnswer = ["admin", "manager"].includes(getAccess(identity));   // office only
+
+  // The job's live plan links. PRIMARY: ccjoblinks (the map FieldInk publishes
+  // for exactly this). FALLBACK: the same `shares`-by-ccJobId query
+  // FieldInkPlansSection uses, so a crew-tagged link still appears during
+  // rollout before ccjoblinks has populated. Union by shareId, ccjoblinks wins.
+  useEffect(() => {
+    if (!jobId) { setPlans([]); return; }
+    let dead = false, unsub = null;
+    ensureFieldinkAuth().then(async u => {
+      if (dead || !u) return;
+      let fallback = [];
+      try {
+        const snap = await getDocs(query(collection(fieldinkDb, "shares"), where("ccJobId", "==", jobId)));
+        fallback = snap.docs.filter(d => !d.data()?.revoked).map(d => ({ shareId: d.id, planName: d.data()?.planName || "" }));
+      } catch {}
+      if (dead) return;
+      try {
+        unsub = onSnapshot(collection(fieldinkDb, "ccjoblinks", jobId, "plans"), snap => {
+          const byId = new Map();
+          for (const f of fallback) byId.set(f.shareId, f);
+          snap.docs.forEach(d => byId.set(d.id, { shareId: d.id, ...d.data() }));
+          setPlans([...byId.values()]);
+        }, () => { setPlans(fallback); });
+      } catch { setPlans(fallback); }
+    });
+    return () => { dead = true; try { unsub && unsub(); } catch {} };
+  }, [jobId]);
+
+  // The job's field notes.
+  useEffect(() => {
+    if (!jobId) { setNotes([]); return; }
+    let dead = false, unsub = null;
+    ensureFieldinkAuth().then(u => {
+      if (dead || !u) return;
+      try {
+        unsub = onSnapshot(collection(fieldinkDb, "ccfieldnotes", jobId, "notes"), snap => {
+          const list = snap.docs.map(d => ({ id: d.id, ...d.data() }));
+          list.sort((a, b) => (Number(b.at) || 0) - (Number(a.at) || 0));   // newest first
+          setNotes(list);
+        }, () => {});
+      } catch {}
+    });
+    return () => { dead = true; try { unsub && unsub(); } catch {} };
+  }, [jobId]);
+
+  if (!jobId) return null;
+
+  // Crew identity for the ?crew= tag: whoever is signed into THIS office app.
+  const crewId = identity?.id ? String(identity.id) : "";
+  const crewName = identity?.name ? String(identity.name) : "";
+  const crewLink = (shareId) => FIELDINK_VIEWER_BASE + shareId +
+    (crewId ? "?crew=" + encodeURIComponent(crewId) + (crewName ? "&crewName=" + encodeURIComponent(crewName) : "") : "");
+
+  // Flag a note whose crewId isn't a known user (a client who hand-appended
+  // ?crew=). Best-effort from the cached roster; skip the check if unavailable.
+  let roster = [];
+  try { const r = JSON.parse(localStorage.getItem("he_users") || "null"); roster = Array.isArray(r) ? r : (Array.isArray(r?.list) ? r.list : []); } catch {}
+  const knownCrew = (cid) => !cid || !roster.length || roster.some(x => String(x.id) === String(cid));
+
+  const openCount = notes.filter(n => n.status !== "answered" && !n.answer).length;
+  const stripPdf = (s) => String(s || "Plan").replace(/\.pdf$/i, "");
+  const ago = (ms) => { ms = Number(ms) || 0; if (!ms) return ""; const m = Math.max(0, Math.round((Date.now() - ms) / 60000)); if (m < 2) return "just now"; if (m < 60) return m + "m ago"; const h = Math.round(m / 60); if (h < 24) return h + "h ago"; const d = Math.round(h / 24); return d < 30 ? d + "d ago" : Math.round(d / 30) + "mo ago"; };
+
+  const sendAnswer = async (n) => {
+    const text = (drafts[n.id] || "").trim();
+    if (!text) return;
+    setSending(s => ({ ...s, [n.id]: true }));
+    const ok = await answerFieldNote(jobId, n.id, text, crewName);
+    setSending(s => ({ ...s, [n.id]: false }));
+    if (ok) setDrafts(d => ({ ...d, [n.id]: "" }));
+    else alert("Couldn't send the answer — check your connection and try again.");
+  };
+
+  if (plans.length === 0 && notes.length === 0) return null;   // nothing for this job yet
+
+  return (
+    <div style={{ marginTop: 16, marginBottom: 16 }}>
+      <div style={{ display: "flex", alignItems: "center", gap: 8, marginBottom: 8 }}>
+        <span style={{ display: "inline-flex", color: C.blue }}><Icon name="inbox" size={15}/></span>
+        <div style={{ fontSize: 10, color: C.dim, fontWeight: 700, letterSpacing: "0.08em" }}>FIELD QUESTIONS — FROM CREW</div>
+        {openCount > 0 && (
+          <span style={{ background: C.red, color: "#fff", fontSize: 10, fontWeight: 800, borderRadius: 20, padding: "1px 8px" }}>{openCount} open</span>
+        )}
+      </div>
+
+      {plans.length > 0 && (
+        <div style={{ marginBottom: 12 }}>
+          {plans.map(p => (
+            <div key={p.shareId} style={{ display: "flex", alignItems: "center", gap: 10, flexWrap: "wrap", padding: "8px 12px", borderRadius: 9, marginBottom: 6, background: C.surface, border: `1px solid ${C.border}` }}>
+              <span style={{ display: "inline-flex", color: C.blue }}><Icon name="fileText" size={14}/></span>
+              <div style={{ flex: 1, minWidth: 140, fontSize: 12.5, fontWeight: 700, color: C.text }}>{stripPdf(p.planName)}</div>
+              <a href={crewLink(p.shareId)} target="_blank" rel="noreferrer"
+                style={{ background: C.blue, border: "none", borderRadius: 7, color: "#fff", textDecoration: "none", fontSize: 11, fontWeight: 700, padding: "6px 14px", fontFamily: "inherit" }}>
+                Open{crewName ? " as " + crewName.split(" ")[0] : ""}
+              </a>
+            </div>
+          ))}
+          <div style={{ fontSize: 10.5, color: C.dim, marginTop: 2 }}>
+            Opens the live plan tagged as you — any Question or Problem you drop comes back here.
+          </div>
+        </div>
+      )}
+
+      {notes.length === 0 ? (
+        <div style={{ fontSize: 11.5, color: C.dim, padding: "4px 2px" }}>No field questions on this job yet.</div>
+      ) : notes.map(n => {
+        const answered = !!(n.answer || n.status === "answered");
+        const isProblem = n.type === "problem";
+        const tint = isProblem ? C.red : C.blue;
+        const busy = !!sending[n.id];
+        const draft = drafts[n.id] || "";
+        return (
+          <div key={n.id} style={{ borderRadius: 9, marginBottom: 8, background: C.card, border: `1px solid ${C.border}`, borderLeft: `3px solid ${tint}`, padding: "10px 12px", opacity: answered ? 0.78 : 1 }}>
+            <div style={{ display: "flex", alignItems: "center", gap: 8, flexWrap: "wrap", marginBottom: 4 }}>
+              <span style={{ background: tint, color: "#fff", fontSize: 9.5, fontWeight: 800, borderRadius: 5, padding: "1px 7px", letterSpacing: "0.04em" }}>{isProblem ? "PROBLEM" : "QUESTION"}</span>
+              <span style={{ fontSize: 11.5, fontWeight: 700, color: C.text }}>{n.crewName || "Crew"}</span>
+              {!knownCrew(n.crewId) && <span style={{ fontSize: 9.5, color: C.orange, fontWeight: 700 }} title="Sender is not in the crew roster">UNVERIFIED</span>}
+              <span style={{ fontSize: 10.5, color: C.dim }}>{stripPdf(n.planName)}{n.page ? " · p" + n.page : ""} · {ago(n.at)}</span>
+              {answered && <span style={{ marginLeft: "auto", fontSize: 10, color: C.green, fontWeight: 700 }}>ANSWERED</span>}
+            </div>
+            <div style={{ fontSize: 13, color: C.text, whiteSpace: "pre-wrap", marginBottom: 6 }}>{n.text}</div>
+            {n.shareId && (
+              <div style={{ marginBottom: answered ? 6 : 8 }}>
+                <a href={FIELDINK_VIEWER_BASE + n.shareId} target="_blank" rel="noreferrer"
+                  style={{ display: "inline-flex", alignItems: "center", gap: 4, fontSize: 11, fontWeight: 700, color: C.blue, textDecoration: "none" }}>
+                  <Icon name="external" size={12}/> Open on plan
+                </a>
+              </div>
+            )}
+            {answered ? (
+              n.answer ? (
+                <div style={{ background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: "7px 10px", fontSize: 12.5, color: C.text }}>
+                  <span style={{ fontWeight: 700, color: C.green }}>{n.answeredBy || "Office"}: </span>{n.answer}
+                </div>
+              ) : null
+            ) : canAnswer ? (
+              <div style={{ display: "flex", gap: 6, alignItems: "flex-end", flexWrap: "wrap" }}>
+                <textarea
+                  value={draft}
+                  onChange={e => setDrafts(d => ({ ...d, [n.id]: e.target.value }))}
+                  placeholder="Type an answer — it lands on the crew's pin…"
+                  rows={2}
+                  style={{ flex: 1, minWidth: 180, resize: "vertical", fontFamily: "inherit", fontSize: 12.5, color: C.text, background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7, padding: "6px 9px" }}
+                />
+                <button onClick={() => sendAnswer(n)} disabled={busy || !draft.trim()}
+                  style={{ background: C.green, border: "none", borderRadius: 7, color: "#fff", cursor: (busy || !draft.trim()) ? "default" : "pointer", fontSize: 11.5, fontWeight: 700, padding: "8px 14px", fontFamily: "inherit", opacity: (busy || !draft.trim()) ? 0.6 : 1 }}>
+                  {busy ? "Sending…" : "Send answer"}
+                </button>
+              </div>
+            ) : (
+              <div style={{ fontSize: 11, color: C.dim, fontStyle: "italic" }}>Awaiting an office answer.</div>
+            )}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
 function FieldInkPlansSection({ folderIds, job, onUpdate }) {
   const [plans, setPlans] = useState(null);          // null = loading, [] = none
   const [planErr, setPlanErr] = useState("");
@@ -28610,7 +28818,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
 
           {tab==="Plans & Links"&&(
-
+            <>
             <PlansTab
               job={job}
               onUpdate={u}
@@ -28620,6 +28828,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               onRefreshSimproCostCenters={refetchSimproCostCenters}
             />
 
+            <FieldNotesSection job={job} identity={identity}/>
+            </>
           )}
 
 
