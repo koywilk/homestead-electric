@@ -45779,20 +45779,26 @@ function QuestionsSharePage({ jobId }) {
     setSubmitting(false);
   };
 
-  // Post a thread message from the recipient. Fresh read-modify-write on the job
-  // doc so we never clobber other fields; the live snapshot refreshes the view.
+  // Post a thread message from the recipient. Runs in a TRANSACTION and
+  // writes ONLY the one floor's question array via dot-notation — the old
+  // version setDoc'd the ENTIRE job doc from a moments-old snapshot, which
+  // is the same stale-overwrite class as the Cougar Moon punch wipe: any
+  // crew save landing between the read and the write got destroyed. Now the
+  // blast radius is one nested array, and the transactional read means we
+  // always thread onto the server's current copy of the question.
   const postThread = async (q, message) => {
-    const snap = await getDoc(doc(db,'jobs',jobId));
-    if(!snap.exists()) throw new Error('Job unavailable');
-    const full = snap.data() || {};
-    const data = full.data || {};
-    const field = q.phase==='rough' ? 'roughQuestions' : 'finishQuestions';
-    const floorKey = q.floor==='Upper Level'?'upper':q.floor==='Main Level'?'main':'basement';
-    const qs = data[field] || {};
-    const arr = Array.isArray(qs[floorKey]) ? qs[floorKey] : [];
-    const nextArr = arr.map(item => item.id===q.id ? {...item, thread:[...(item.thread||[]), message]} : item);
-    const nextData = {...data, [field]:{...qs, [floorKey]:nextArr}};
-    await setDoc(doc(db,'jobs',jobId), {...full, data: nextData, updated_at: new Date().toISOString()});
+    await runTransaction(db, async (tx) => {
+      const jref = doc(db,'jobs',jobId);
+      const snap = await tx.get(jref);
+      if(!snap.exists()) throw new Error('Job unavailable');
+      const data = snap.data()?.data || {};
+      const field = q.phase==='rough' ? 'roughQuestions' : 'finishQuestions';
+      const floorKey = q.floor==='Upper Level'?'upper':q.floor==='Main Level'?'main':'basement';
+      const qs = data[field] || {};
+      const arr = Array.isArray(qs[floorKey]) ? qs[floorKey] : [];
+      const nextArr = arr.map(item => item.id===q.id ? {...item, thread:[...(item.thread||[]), message]} : item);
+      tx.update(jref, { ['data.'+field+'.'+floorKey]: nextArr, updated_at: new Date().toISOString() });
+    });
   };
 
   const roughQs = (job ? [
