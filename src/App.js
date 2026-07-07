@@ -23135,13 +23135,20 @@ const _threeWayMerge = (base, client, server) => {
         if (!_jeq(c, b)) { out.push(c); return; }              // server deleted, client edited → keep client
         /* server deleted, client unchanged → honor the delete */
       });
-      // Server-side items the client doesn't have
+      // Server-side items the client doesn't have.
       server.forEach(s => {
         if (cIds.has(s.id)) return;
         const b = bMap.get(s.id);
-        if (b === undefined) { out.push(s); return; }          // someone else added → KEEP (the fix)
-        if (!_jeq(s, b)) { out.push(s); return; }              // client deleted, server edited → keep server
-        /* client deleted, server unchanged → honor the delete */
+        if (b === undefined) { out.push(s); return; }          // present on server but NOT in base ⇒ another device ADDED it since we loaded → KEEP
+        /* Item existed in base and the client removed it ⇒ HONOR THE DELETE,
+           even if the server also edited it. The old code kept the server's copy
+           when server≠base ("client deleted, server edited → keep server"), which
+           — because the baseline is easily stale (whole-collection snapshots,
+           async saves) — made a normal solo delete look like a lost edit-vs-delete
+           race and RESURRECTED the item. Verified with _threeWayMerge: with this
+           branch removed, edit-then-delete against a stale base yields the delete
+           (A,C) instead of resurrection (A,X,C), while a genuine concurrent ADD
+           from another device (item absent from base) is still preserved above. */
       });
       return out;
     }
