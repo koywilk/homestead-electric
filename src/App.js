@@ -51310,6 +51310,14 @@ function App() {
       if ('roughQuestions' in patch || 'finishQuestions' in patch) {
         try { publishCcQuestions(job.id, patch.roughQuestions || job.roughQuestions, patch.finishQuestions || job.finishQuestions); } catch(e){}
       }
+      // Mirror the electrical panel schedule (home runs) to FieldInk the same way
+      // (fire-and-forget, hash-gated internally, separate field-ink project — cannot
+      // affect this job's save). Runs whenever the panel schedule is in the patch, so
+      // FieldInk's "From Command Center" circuit list stays current on every save —
+      // not only the live BreakerCounts onChange at ~L27957.
+      if ('electricalPanels' in patch) {
+        try { publishCcHomeruns(job.id, patch.electricalPanels || job.electricalPanels || []); } catch(e){}
+      }
     }
 
     // Always write to localStorage immediately
