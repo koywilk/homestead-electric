@@ -51494,65 +51494,25 @@ function App() {
 
   };
 
-  // RECONNECT FLUSH: when the browser transitions offline→online, re-fetch
-  // each job's CURRENT server state, smart-merge our queued offline patch
-  // on top of it, and write the merged result. This way another user's
-  // edits during the offline window aren't clobbered by the offline user's
-  // stale field copy.
+  // RECONNECT FLUSH: when the browser transitions offline→online, push each
+  // job's queued offline patch to Firestore, merged against the server's
+  // CURRENT state so another user's edits during the offline window aren't
+  // clobbered by the offline user's stale field copy.
   //
-  // SMART MERGE strategy (per field in the pending patch):
-  //   • Arrays of objects with `id` (punch items, rooms, RTs, COs, etc.) →
-  //     union by id. For matching ids, the one with the LATER timestamp
-  //     wins (checks updated_at, checkedAt, addedAt, doneAt). If neither
-  //     has a timestamp, client wins (their explicit offline edit).
-  //   • Plain arrays → client wins (no way to align without ids).
-  //   • Plain objects → recursive smart-merge.
-  //   • Primitives → client wins (the patch was their explicit edit).
-  // This keeps Vasa's "marked done" flags on items the offline foreman
-  // didn't touch, while preserving any new items the offline foreman added.
-  const _smartMergeForReconnect = (server, client) => {
-    if (server === null || server === undefined) return client;
-    if (client === null || client === undefined) return server;
-    // Array merge
-    if (Array.isArray(server) && Array.isArray(client)) {
-      const idsOk = (arr) => arr.length > 0 && arr.every(x => x && typeof x === "object" && x.id != null);
-      if (idsOk(server) && idsOk(client)) {
-        // Newer-timestamp wins per id; never drop ids that exist on either side.
-        const tsOf = (o) => {
-          const cands = [o?.updated_at, o?.checkedAt, o?.doneAt, o?.addedAt, o?.createdAt, o?.uploadedAt];
-          for (const t of cands) {
-            if (!t) continue;
-            const d = (typeof t === "string" || typeof t === "number") ? new Date(t).getTime() : 0;
-            if (!isNaN(d) && d > 0) return d;
-          }
-          return 0;
-        };
-        const out = new Map();
-        server.forEach(s => out.set(s.id, s));
-        client.forEach(c => {
-          if (!out.has(c.id)) { out.set(c.id, c); return; }
-          const s = out.get(c.id);
-          const sT = tsOf(s), cT = tsOf(c);
-          if (sT > cT) {
-            // Server is newer overall — but still recurse into nested arrays
-            // (e.g. a room's items[]) so individual items merge correctly.
-            out.set(c.id, _smartMergeForReconnect(c, s));
-          } else {
-            out.set(c.id, _smartMergeForReconnect(s, c));
-          }
-        });
-        return [...out.values()];
-      }
-      return client; // ids missing → can't safely merge, client wins
-    }
-    // Object merge
-    if (typeof server === "object" && typeof client === "object" && !Array.isArray(server) && !Array.isArray(client)) {
-      const merged = { ...server };
-      Object.keys(client).forEach(k => { merged[k] = _smartMergeForReconnect(server[k], client[k]); });
-      return merged;
-    }
-    return client; // primitives or type mismatch → client wins
-  };
+  // HISTORY (2026-07-07, SW v302): this used to smart-merge each field with
+  // `_smartMergeForReconnect`, a two-way id-UNION merge with NO baseline. Because
+  // it had no common ancestor it re-added every server item, so anything DELETED
+  // while offline (punch items, rooms, change orders, return trips) RESURRECTED
+  // on reconnect. That merge is removed. The flush now re-drives pending patches
+  // through saveJob's transactional, base-aware `_threeWayMerge` — the SAME merge
+  // the online path uses. The baseline is frozen at the last server state before
+  // we went offline (the snapshot listener won't advance it while patches are
+  // pending, and offline saves fail so the post-save advance never runs), so an
+  // offline delete is honored (item in baseline, gone from our copy → dropped)
+  // while items other devices added during the offline window (absent from the
+  // baseline) are preserved. Trade-off: a same-item edit made both offline and
+  // (newer) on the server now resolves local-device-wins instead of
+  // newest-timestamp-wins — consistent with the online merge policy.
 
   const wasOnlineRef = useRef(isOnline);
   useEffect(() => {
@@ -51565,52 +51525,25 @@ function App() {
     if (pending.length === 0) return;
     console.log(`[HE] Back online — re-merging ${pending.length} pending job save(s) with latest server state`);
 
-    // Per-job: fetch latest, smart-merge each pending field, write merged result.
-    pending.forEach(async (jid) => {
+    // Per-job: re-drive each job's pending OFFLINE patch through saveJob's
+    // TRANSACTIONAL, base-aware three-way merge (frozen baseline vs our offline
+    // copy vs the server's CURRENT value) — the SAME merge the online save path
+    // uses. So an item DELETED while offline is HONORED: it's present in our
+    // frozen baseline but gone from our local copy, so the merge drops it —
+    // while items other devices ADDED during the offline window (absent from the
+    // baseline) are still preserved. The previous reconnect merge
+    // (_smartMergeForReconnect) unioned arrays by id with NO baseline, so it
+    // re-added every server item and any punch item / room / CO / return-trip
+    // deleted while offline came back on reconnect. saveJob re-reads the live
+    // server doc inside a transaction (a stale local copy can't clobber another
+    // device's concurrent additions) and advances the merge baseline + clears
+    // the flushed keys for us. The pending patch values already carry the
+    // offline deletes/edits, so nothing else needs to be reconstructed here.
+    pending.forEach((jid) => {
       const localPatch = { ...(pendingPatches.current[jid] || {}) };
-      try {
-        const snap = await getDoc(doc(db, "jobs", jid));
-        if (!snap.exists()) {
-          // Doc gone — fall back to existing saveJob behavior (will recreate)
-          const job = (jobsRef.current || []).find(j => j.id === jid);
-          if (job) saveJob(job);
-          return;
-        }
-        const serverData = snap.data()?.data || {};
-        // Replace each pending field with a smart-merged version, then write.
-        const mergedFields = {};
-        Object.keys(localPatch).forEach(field => {
-          mergedFields[field] = _smartMergeForReconnect(serverData[field], localPatch[field]);
-        });
-        // Write only the merged fields directly (bypass the saveJob timer
-        // since we're explicitly flushing). Keep the dot-notation contract.
-        const writePatch = {
-          updated_at: new Date().toISOString(),
-          lastActivityAt: serverTimestamp(),
-          saved_by: identity?.name || "unknown",
-          device: localStorage.getItem('he_device_id') || "",
-        };
-        Object.entries(sanitize(mergedFields)).forEach(([k, v]) => { writePatch["data." + k] = v; });
-        await updateDoc(doc(db, "jobs", jid), writePatch);
-        // Drop the keys we just merged + wrote from the queue.
-        if (pendingPatches.current[jid]) {
-          Object.keys(localPatch).forEach(k => {
-            if (pendingPatches.current[jid][k] === localPatch[k]) {
-              delete pendingPatches.current[jid][k];
-            }
-          });
-          if (Object.keys(pendingPatches.current[jid]).length === 0) delete pendingPatches.current[jid];
-        }
-        console.log(`[HE] Re-merged + saved job ${jid}`);
-      } catch (e) {
-        console.warn(`[HE] Re-merge failed for job ${jid}, falling back to patch re-save:`, e?.message);
-        // Fallback: re-queue ONLY the fields that were pending (they'll go
-        // through saveJob's transactional merge). The old fallback here was
-        // saveJob(job) with NO patch — a full save from a possibly-stale
-        // snapshot, i.e. Mode B of the Cougar Moon punch wipe. Never again.
-        const job = (jobsRef.current || []).find(j => j.id === jid);
-        if (job) saveJob(job, localPatch);
-      }
+      if (Object.keys(localPatch).length === 0) return;
+      const job = (jobsRef.current || []).find(j => j.id === jid);
+      if (job) saveJob(job, localPatch);
     });
   }, [isOnline]);
 
