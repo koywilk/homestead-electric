@@ -27592,7 +27592,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
                     questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
                 }>
-                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{const qq=(job.roughQuestions?.[f]||[]).find(q=>q.id===a.id);if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m} gcNoteMap={nmap} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null} jobId={job.id} photoFolder="rough" fieldinkMap={fiQLinks}/>;})()}
+                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{const qq=(job.roughQuestions?.[f]||[]).find(q=>q.id===a.id);if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m} gcNoteMap={nmap} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder="rough" fieldinkMap={fiQLinks}/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
@@ -27897,7 +27897,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
                     questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
                 }>
-                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{const qq=(job.finishQuestions?.[f]||[]).find(q=>q.id===a.id);if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} gcNoteMap={nmap} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null} jobId={job.id} photoFolder="finish" fieldinkMap={fiQLinks}/>;})()}
+                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{const qq=(job.finishQuestions?.[f]||[]).find(q=>q.id===a.id);if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} gcNoteMap={nmap} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder="finish" fieldinkMap={fiQLinks}/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
@@ -29598,6 +29598,30 @@ const ANSWER_METHODS = [
 ];
 const answerMethodLabel = (v) => { const m = ANSWER_METHODS.find(x=>x.v===v); return m ? m.l : ''; };
 
+// Which question ids are actually visible on SOME live link right now:
+// legacy questionsFilter picks + every named share's manual ids + (live by
+// recipient, 2026-07-06) any question whose For: tag matches a share's name.
+// Drives the "Shared / Not shared" badges + counts on the crew Q&A so they
+// tell the truth about what the link people can see. Returns null when the
+// job has no sharing at all (badges hidden, same as before).
+const computeEffectiveSharedIds = (job) => {
+  if(!job) return null;
+  const ids = new Set(Array.isArray(job.questionsFilter) ? job.questionsFilter : []);
+  const shares = Array.isArray(job.questionShares) ? job.questionShares : [];
+  const shareNames = new Set();
+  shares.forEach(s => {
+    (Array.isArray(s?.ids) ? s.ids : []).forEach(id => ids.add(id));
+    const nm = (s?.name||'').trim().toLowerCase();
+    if(nm) shareNames.add(nm);
+  });
+  if(shareNames.size){
+    ['roughQuestions','finishQuestions'].forEach(fk => ['upper','main','basement'].forEach(fl => {
+      (job[fk]?.[fl]||[]).forEach(q => { const f=(q?.for||'').trim().toLowerCase(); if(f && shareNames.has(f) && q.id!=null) ids.add(q.id); });
+    }));
+  }
+  return ids.size ? ids : null;
+};
+
 // ── QAThread ────────────────────────────────────────────────────────────────
 // Two-way conversation under a single question. Same component on the crew side
 // (JobDetail Q&A) and the public share page. Messages live on q.thread[] (nested
@@ -29666,7 +29690,7 @@ function QAThread({ messages = [], onPost, jobId, qid, color = '#3B5BA5', photoB
   );
 }
 
-function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null, fieldinkMap={}, statusFilter=null}) {
+function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null, fieldinkMap={}, statusFilter=null, hideAdd=false, excludeIds=null}) {
 
   // guard: old data may be a string instead of array
 
@@ -29711,6 +29735,10 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
   let open       = questions.filter(q=>!q.done && matchesRecip(q));
   if(statusFilter==='needs') open = open.filter(needsReplyQ);
+  // excludeIds (2026-07-06): questions already shown in the "Incoming from
+  // links" panel above the floor groups — don't render them twice. Once the
+  // crew replies/answers, they fall out of the panel and reappear here.
+  if(excludeIds) open = open.filter(q=>!excludeIds.has(q.id));
 
   const answered = questions.filter(q=>q.done && matchesRecip(q));
   const showOpenSection     = statusFilter!=='answered';
@@ -30029,6 +30057,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
       )}
 
+      {!hideAdd && (
       <div style={{display:"flex",gap:6,marginTop:8}}>
 
         <Inp value={draft} onChange={e=>setDraft(e.target.value)}
@@ -30041,6 +30070,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
         <Btn onClick={add} variant="primary">+</Btn>
 
       </div>
+      )}
 
     </div>
 
@@ -30166,6 +30196,52 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
         </div>
       )}
 
+      {/* ── INCOMING FROM LINKS (2026-07-06) — inbox panel at the top of the
+          phase collecting everything the link people just sent: answers
+          waiting to apply, "ask for more info" notes, and discussion replies
+          where they spoke last. Cards are fully interactive here; once the
+          crew answers/replies, the card falls out of this panel and reappears
+          under its floor below (excludeIds keeps them from showing twice).
+          Hidden while a status chip is active — the chips take over then. */}
+      {(()=>{
+        if(statusFilter!=null) return null;
+        const incomingByFloor = {};
+        ["upper","main","basement"].forEach(k=>{ incomingByFloor[k] = (Array.isArray(questions[k])?questions[k]:[]).filter(needsReplyQ); });
+        const nIncoming = incomingByFloor.upper.length + incomingByFloor.main.length + incomingByFloor.basement.length;
+        if(!nIncoming) return null;
+        return (
+          <div style={{background:"#FCF8EE",border:"1px solid #E3D3A6",borderRadius:12,padding:"12px 12px 4px",marginBottom:18}}>
+            <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:10}}>
+              <Icon name="external" size={13} color="#8A6A1E"/>
+              <span style={{fontSize:11,fontWeight:800,letterSpacing:"0.1em",color:"#8A6A1E"}}>INCOMING FROM LINKS ({nIncoming})</span>
+              <span style={{fontSize:10,color:"#B0892C"}}>— waiting on the crew</span>
+            </div>
+            {[["upper","Upper Level"],["main","Main Level"],["basement","Basement"]].map(([k,l])=> incomingByFloor[k].length>0 && (
+              <div key={"in_"+k} style={{marginBottom:6}}>
+                <div style={{fontSize:10,color:"#B0892C",fontWeight:700,marginBottom:6}}>{l}</div>
+                <QAList
+                  questions={Array.isArray(questions[k]) ? questions[k] : []}
+                  onChange={v=>onChange({...questions,[k]:v})}
+                  color={color}
+                  gcAnswerMap={gcAnswerMap}
+                  gcNoteMap={gcNoteMap}
+                  filterIds={filterIds}
+                  jobId={jobId}
+                  recipients={recipients}
+                  recipFilter={recipFilter}
+                  selectMode={selectMode}
+                  selectedIds={selectedIds}
+                  onToggleSelect={toggleSelect}
+                  fieldinkMap={fieldinkMap}
+                  statusFilter="needs"
+                  hideAdd={true}
+                  photoFolder={`${photoFolder?photoFolder+"-":""}${k}`}/>
+              </div>
+            ))}
+          </div>
+        );
+      })()}
+
       {[["upper","Upper Level"],["main","Main Level"],["basement","Basement"]].map(([k,l])=>(
 
         <div key={k} style={{marginBottom:18}}>
@@ -30190,6 +30266,7 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
             onToggleSelect={toggleSelect}
             fieldinkMap={fieldinkMap}
             statusFilter={statusFilter}
+            excludeIds={statusFilter==null ? new Set((Array.isArray(questions[k])?questions[k]:[]).filter(needsReplyQ).map(q=>q.id)) : null}
             photoFolder={`${photoFolder?photoFolder+"-":""}${k}`}/>
 
         </div>
@@ -45902,7 +45979,22 @@ function QuestionsSharePage({ jobId }) {
   const linkRevoked = !!shareParam && !!job && !shareObj;
   const filterIds = (() => {
     if(shareParam){
-      if(shareObj && Array.isArray(shareObj.ids)) return new Set(shareObj.ids);
+      if(shareObj){
+        const ids = new Set(Array.isArray(shareObj.ids) ? shareObj.ids : []);
+        // LIVE BY RECIPIENT (2026-07-06): a named link isn't a frozen list
+        // anymore. Any question the crew tags "For: <this share's name>"
+        // flows onto the link automatically — the job snapshot above is
+        // live, so it appears within seconds of the crew adding it, no
+        // re-share needed. Manual picks in share.ids still count; this only
+        // ever ADDS the recipient's own questions, never exposes others'.
+        const nm = (shareObj.name||'').trim().toLowerCase();
+        if(nm && job){
+          ['roughQuestions','finishQuestions'].forEach(fk=>['upper','main','basement'].forEach(fl=>{
+            (job[fk]?.[fl]||[]).forEach(q=>{ if(q && q.id && (q.for||'').trim().toLowerCase()===nm) ids.add(q.id); });
+          }));
+        }
+        return ids;
+      }
       return new Set(); // link present but share missing → show nothing
     }
     const raw = job?.questionsFilter;
@@ -46534,6 +46626,8 @@ const FEATURES_MD_INLINE = String.raw`
   - Two-way question thread (q.thread): a real back-and-forth conversation under each question — crew (in-app) and the people it's shared with (on the link) can post replies with file/photo attachments on either side, unlimited turns. Shared QAThread component; recipient posts a targeted transactional update of just that question array. Shows as a DISCUSSION bubble stream on both sides · shipped 2026-07-06 · SW v287 (write path hardened v289)
   - Q&A cleanup: status chips (All / Open / Needs reply / Answered) on each phase, answered section collapsed by default, compact question cards (note/how-answered/reminder/photo/discussion behind a More toggle). Share page groups open questions first with a "N need your answer" summary and a collapsible answered section · shipped 2026-07-06 · SW v291
   - Answer attachments: people answering from a share link can attach photos/files to the ANSWER itself (not just the thread); attachments ride the submission, show in the green GC callout, and stick to the question (answerPhotos) when the answer auto-applies · shipped 2026-07-06 · SW v291
+  - Incoming from links: amber inbox panel at the top of each phase's Q&A collecting everything the link people just sent — pending answers, ask-for-more-info notes, and discussion replies where they spoke last. Cards are fully interactive in the panel and move back under their floor once the crew handles them · shipped 2026-07-06 · SW v292
+  - Live links by recipient: a named share link is no longer a frozen question list — any question the crew tags "For: <that person>" appears on their existing link automatically within seconds (their page listens live), no re-share needed. Crew-side Shared/Not-shared badges reflect the real union of manual picks + recipient-tagged questions · shipped 2026-07-06 · SW v293
 - **Data-loss protection** · shipped · every job save (and Crew Planner / Time Off / PTO / Upcoming saves) is a transactional three-way merge — concurrent edits union instead of last-write-wins (Cougar Moon fix) · 2026-07-06 · SW v288–v290
 - **Nightly Firestore backup** · shipped · 1:00 AM MT cloud function snapshots all collections to Storage backups/ (30-day retention) + runBackupNow callable + settings/backupStatus stamp · 2026-07-06
 - **Plans tab** · shipped · plans documents per job
