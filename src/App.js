@@ -25915,8 +25915,23 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
-  // Re-sync local state when Firestore pushes updated data
-  useEffect(()=>{ setJob(normalizeJob(rawJob)); }, [rawJob?.id, rawJob?.updated_at, rawJob?.foreman, rawJob?.lead]);
+  // Re-sync local state when Firestore pushes updated data — but NOT from this
+  // device's own save echo. saveJob writes the doc a beat after our optimistic
+  // edit; the resulting snapshot round-trips back with a new updated_at while
+  // the user is still typing/deleting, and blindly re-seeding from it reverted
+  // punch deletes and wiped a box mid-keystroke. Rules:
+  //   • Different job opened → always load it.
+  //   • Same job, change from ANOTHER device → load it (live cross-device sync).
+  //   • Same job, OUR OWN device's echo → skip (our local copy is the freshest).
+  const _lastJobIdRef = useRef(rawJob?.id);
+  useEffect(()=>{
+    const idChanged = rawJob?.id !== _lastJobIdRef.current;
+    _lastJobIdRef.current = rawJob?.id;
+    if (idChanged) { setJob(normalizeJob(rawJob)); return; }
+    let myDev = ''; try { myDev = localStorage.getItem('he_device_id') || ''; } catch {}
+    if (rawJob && rawJob._device && myDev && rawJob._device === myDev) return; // our own write echo — don't clobber in-progress edits
+    setJob(normalizeJob(rawJob));
+  }, [rawJob?.id, rawJob?.updated_at, rawJob?.foreman, rawJob?.lead]);
 
   const jobRef = useRef(job);
   useEffect(()=>{ jobRef.current = job; }, [job]);
