@@ -26771,7 +26771,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       ['upper','main','basement'].forEach(floor => {
         updated[floor] = (current?.[floor]||[]).map(q => {
           const gcAns = (gcPhase?.[floor]||[]).find(a=>a.id===q.id);
-          if(gcAns?.answer && !q.done) { changed=true; return {...q, answer:gcAns.answer, done:true, gcAnswered:true, answeredVia:'link', answeredBy:gcAnswers.answeredBy||'', answeredAt:gcAnswers.answeredAt||new Date().toISOString()}; }
+          // Photos-only answers count too (2026-07-06): the link people can
+          // now answer with just an attachment. answerPhotos is additive —
+          // nested on the question object so it rides the loader untouched.
+          const hasGc = gcAns && (String(gcAns.answer||'').trim() || (gcAns.photos||[]).length);
+          if(hasGc && !q.done) { changed=true; return {...q, answer:gcAns.answer||'', answerPhotos:(gcAns.photos||[]).length?gcAns.photos:(q.answerPhotos||[]), done:true, gcAnswered:true, answeredVia:'link', answeredBy:gcAnswers.answeredBy||'', answeredAt:gcAnswers.answeredAt||new Date().toISOString()}; }
           return q;
         });
       });
@@ -27588,7 +27592,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
                     questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
                 }>
-                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{const qq=(job.roughQuestions?.[f]||[]).find(q=>q.id===a.id);if(a.answer&&!(qq?.done))m[a.id]=a.answer;if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m} gcNoteMap={nmap} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null} jobId={job.id} photoFolder="rough" fieldinkMap={fiQLinks}/>;})()}
+                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{const qq=(job.roughQuestions?.[f]||[]).find(q=>q.id===a.id);if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m} gcNoteMap={nmap} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null} jobId={job.id} photoFolder="rough" fieldinkMap={fiQLinks}/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
@@ -27893,7 +27897,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
                     questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
                 }>
-                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{const qq=(job.finishQuestions?.[f]||[]).find(q=>q.id===a.id);if(a.answer&&!(qq?.done))m[a.id]=a.answer;if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} gcNoteMap={nmap} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null} jobId={job.id} photoFolder="finish" fieldinkMap={fiQLinks}/>;})()}
+                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{const qq=(job.finishQuestions?.[f]||[]).find(q=>q.id===a.id);if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} gcNoteMap={nmap} filterIds={job.questionsFilter ? new Set(job.questionsFilter) : null} jobId={job.id} photoFolder="finish" fieldinkMap={fiQLinks}/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
@@ -29662,7 +29666,7 @@ function QAThread({ messages = [], onPost, jobId, qid, color = '#3B5BA5', photoB
   );
 }
 
-function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null, fieldinkMap={}}) {
+function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null, fieldinkMap={}, statusFilter=null}) {
 
   // guard: old data may be a string instead of array
 
@@ -29670,6 +29674,13 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
   const [draft, setDraft] = useState("");
   const [editRecip, setEditRecip] = useState(null); // q.id whose recipient tag is being edited
+  // 2026-07-06 cleanup: open cards show just the question + answer box by
+  // default; the secondary controls (note, how-answered, reminder, photo
+  // attach, new discussion) live behind a per-question "More" toggle so the
+  // list stops being a wall of inputs. Answered section collapses by default.
+  const [moreOpen, setMoreOpen] = useState(()=>new Set());
+  const [showAnswered, setShowAnswered] = useState(false);
+  const needsReplyQ = (q) => !q.done && ( !!gcAnswerMap[q.id] || !!(gcNoteMap[q.id]||"").trim() || ((q.thread||[]).length>0 && q.thread[q.thread.length-1]?.role==='client') );
 
   // Default a new question's recipient to whatever section is being filtered to,
   // so "viewing Designer → add" tags it Designer automatically.
@@ -29698,11 +29709,20 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
     : recipFilter==="__unassigned__" ? !(q.for||"").trim()
     : (q.for||"")===recipFilter;
 
-  const open     = questions.filter(q=>!q.done && matchesRecip(q));
+  let open       = questions.filter(q=>!q.done && matchesRecip(q));
+  if(statusFilter==='needs') open = open.filter(needsReplyQ);
 
   const answered = questions.filter(q=>q.done && matchesRecip(q));
+  const showOpenSection     = statusFilter!=='answered';
+  const showAnsweredSection = statusFilter==null || statusFilter==='answered';
+  const answeredExpanded    = showAnswered || statusFilter==='answered';
 
-  const renderQ  = (q,i,globalIdx) => (
+  const renderQ  = (q,i,globalIdx) => {
+    // Cards with existing note/method content stay fully expanded (they have
+    // things the crew needs to see); bare cards start compact.
+    const hasMoreContent = !!(q.note||"").trim() || !!(q.answerNote||"").trim() || !!q.answeredVia;
+    const more = moreOpen.has(q.id) || (!q.done && hasMoreContent);
+    return (
 
     <div key={q.id} style={{background:C.surface,border:`1px solid ${q.done?C.border:color+"33"}`,
 
@@ -29793,12 +29813,14 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
         <div style={{marginLeft:22}}>
 
-          <div style={{marginBottom:10}}>
-            <div style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginBottom:4}}>NOTE / SUGGESTION <span style={{color:C.muted,fontWeight:600}}>(GC sees this)</span></div>
-            <input type="text" value={q.note||""} onChange={e=>upd(q.id,{note:e.target.value})}
-              placeholder="e.g. We recommend a 200A panel here"
-              style={{width:"100%",padding:"5px 8px",fontSize:11,border:`1px solid ${C.border}`,borderRadius:6,background:C.card,color:C.text,fontFamily:"inherit",boxSizing:"border-box"}}/>
-          </div>
+          {more && (
+            <div style={{marginBottom:10}}>
+              <div style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginBottom:4}}>NOTE / SUGGESTION <span style={{color:C.muted,fontWeight:600}}>(GC sees this)</span></div>
+              <input type="text" value={q.note||""} onChange={e=>upd(q.id,{note:e.target.value})}
+                placeholder="e.g. We recommend a 200A panel here"
+                style={{width:"100%",padding:"5px 8px",fontSize:11,border:`1px solid ${C.border}`,borderRadius:6,background:C.card,color:C.text,fontFamily:"inherit",boxSizing:"border-box"}}/>
+            </div>
+          )}
 
           <div style={{fontSize:10,color:color,fontWeight:700,marginBottom:4,letterSpacing:"0.08em"}}>ANSWER</div>
 
@@ -29808,6 +29830,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
             placeholder="Type answer here…"/>
 
           {/* How answered? — method chips + optional context note (paper trail) */}
+          {more && (
           <div style={{marginTop:8}}>
             <div style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.06em",marginBottom:4}}>HOW ANSWERED?</div>
             <div style={{display:"flex",flexWrap:"wrap",gap:5,marginBottom:6}}>
@@ -29822,25 +29845,38 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
               placeholder="Optional context — e.g. Dusty confirmed panel location"
               style={{width:"100%",padding:"5px 8px",fontSize:11,border:`1px solid ${C.border}`,borderRadius:6,background:C.card,color:C.text,fontFamily:"inherit",boxSizing:"border-box"}}/>
           </div>
+          )}
 
+          {more && (
           <div style={{marginTop:6}}>
             <RemindButton
               title="Question needs an answer"
               body={(stripHtml(q.question)||"Open question needs an answer.").slice(0,100)}
               jobId={jobId} section="questions"/>
           </div>
+          )}
 
         </div>
 
       )}
 
-      {q.done&&q.answer&&(
+      {q.done&&(q.answer||(q.answerPhotos||[]).length>0)&&(
 
         <div style={{marginLeft:22,marginTop:4}}>
           <div style={{fontSize:11,color:C.dim,display:"flex",alignItems:"flex-start",gap:6}}>
             {q.gcAnswered&&<span style={{fontSize:9,fontWeight:700,color:"#3E7D5A",background:"#DEEFE6",borderRadius:4,padding:"1px 5px",flexShrink:0,marginTop:1}}>GC</span>}
-            <div style={{fontStyle:"italic",flex:1,lineHeight:1.5}} dangerouslySetInnerHTML={{__html:q.answer}}/>
+            <div style={{fontStyle:"italic",flex:1,lineHeight:1.5}} dangerouslySetInnerHTML={{__html:q.answer||'(answered with attachments)'}}/>
           </div>
+          {(q.answerPhotos||[]).filter(p=>p&&p.url).length>0&&(
+            <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:5}}>
+              {(q.answerPhotos||[]).filter(p=>p&&p.url).map(p=>{
+                const isImg=(p.type&&p.type.startsWith&&p.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
+                return isImg
+                  ? <img key={p.id} src={p.url} alt={p.name||'photo'} onClick={()=>window.open(p.url,'_blank')} style={{width:56,height:56,objectFit:"cover",borderRadius:6,border:`1px solid ${C.border}`,cursor:"pointer",display:"block"}}/>
+                  : <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer" style={{maxWidth:140,fontSize:10,fontWeight:600,color:C.dim,background:C.card,border:`1px solid ${C.border}`,borderRadius:5,padding:"3px 7px",textDecoration:"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",display:"inline-block"}}>{p.name||'file'}</a>;
+              })}
+            </div>
+          )}
           {(()=>{
             // Paper trail: how the answer came in (link vs in person), who took
             // it, and when. Older answers without a stamp just render nothing.
@@ -29892,7 +29928,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
           GC, and lets the GC see context after their answer is recorded.
           Stored on q.photos[] (additive — old questions without it just
           render an empty grid until a photo is added). */}
-      {jobId && (
+      {jobId && ((q.photos||[]).length>0 || (!q.done && more)) && (
         <div style={{marginLeft:22,marginTop:6}}>
           <PhotoAttacher
             storagePath={`jobs/${jobId}/question-photos/${photoFolder?photoFolder+"/":""}${q.id}`}
@@ -29903,12 +29939,24 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
         </div>
       )}
 
-      {/* If GC has answered but it hasn't been applied yet, show a pending indicator */}
+      {/* If GC has answered but it hasn't been applied yet, show a pending
+          indicator. gcAnswerMap values are {answer, photos} as of 2026-07-06
+          (answers can carry attachments now); plain strings still render for
+          anything cached in an older shape. */}
       {!q.done&&gcAnswerMap[q.id]&&(
         <div style={{marginLeft:22,marginTop:6,background:"#ECF2EE",border:"1px solid #3E7D5A44",borderRadius:6,padding:"6px 10px",fontSize:11}}>
           <span style={{fontSize:9,fontWeight:700,color:"#3E7D5A",background:"#DEEFE6",borderRadius:4,padding:"1px 5px",marginRight:6}}>GC</span>
-          <span style={{color:"#2C5C40",fontStyle:"italic"}} dangerouslySetInnerHTML={{__html:gcAnswerMap[q.id]||''}}/>
-
+          <span style={{color:"#2C5C40",fontStyle:"italic"}} dangerouslySetInnerHTML={{__html:(typeof gcAnswerMap[q.id]==='object'?gcAnswerMap[q.id].answer:gcAnswerMap[q.id])||''}}/>
+          {typeof gcAnswerMap[q.id]==='object'&&(gcAnswerMap[q.id].photos||[]).filter(p=>p&&p.url).length>0&&(
+            <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:6}}>
+              {(gcAnswerMap[q.id].photos||[]).filter(p=>p&&p.url).map(p=>{
+                const isImg=(p.type&&p.type.startsWith&&p.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
+                return isImg
+                  ? <img key={p.id} src={p.url} alt={p.name||'photo'} onClick={()=>window.open(p.url,'_blank')} style={{width:56,height:56,objectFit:"cover",borderRadius:6,border:"1px solid #CBE0D4",cursor:"pointer",display:"block"}}/>
+                  : <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer" style={{maxWidth:140,fontSize:10,fontWeight:600,color:"#2C5C40",background:"#fff",border:"1px solid #CBE0D4",borderRadius:5,padding:"3px 7px",textDecoration:"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",display:"inline-block"}}>{p.name||'file'}</a>;
+              })}
+            </div>
+          )}
         </div>
       )}
 
@@ -29919,8 +29967,10 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
         </div>
       )}
 
-      {/* Two-way thread — crew ↔ the people it's shared with, with attachments */}
-      {jobId && (
+      {/* Two-way thread — crew ↔ the people it's shared with, with attachments.
+          Visible whenever a conversation exists; starting a NEW one lives
+          behind the More toggle so untouched cards stay compact. */}
+      {jobId && ((q.thread||[]).length>0 || (!q.done && more)) && (
         <div style={{marginLeft:22,marginTop:8}}>
           {(q.thread||[]).length>0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",color:C.dim,marginBottom:2}}>DISCUSSION</div>}
           <QAThread
@@ -29932,35 +29982,48 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
         </div>
       )}
 
+      {/* Compact-card expander */}
+      {!q.done && !hasMoreContent && (
+        <div style={{marginLeft:22,marginTop:6}}>
+          <button type="button"
+            onClick={()=>setMoreOpen(s=>{const n=new Set(s); n.has(q.id)?n.delete(q.id):n.add(q.id); return n;})}
+            style={{fontSize:10,fontWeight:600,color:C.dim,background:"none",border:"none",cursor:"pointer",fontFamily:"inherit",padding:0}}>
+            {more ? "▴ Less" : "▾ More — note · photo · reminder · discussion"}
+          </button>
+        </div>
+      )}
+
     </div>
 
-  );
+  );};
 
   return (
 
     <div>
 
-      {open.length===0&&answered.length===0&&recipFilter==null&&(
+      {open.length===0&&answered.length===0&&recipFilter==null&&statusFilter==null&&(
 
         <div style={{fontSize:11,color:C.muted,fontStyle:"italic",marginBottom:8}}>No questions yet</div>
 
       )}
 
-      {open.map((q,i)=>renderQ(q,i,questions.indexOf(q)))}
+      {showOpenSection && open.map((q,i)=>renderQ(q,i,questions.indexOf(q)))}
 
-      {answered.length>0&&(
+      {/* Answered — collapsed by default (2026-07-06 cleanup) so the list
+          reads as "what's still open". Header click expands; the Answered
+          status chip up top shows them expanded across all floors. */}
+      {showAnsweredSection && answered.length>0&&(
 
         <div style={{marginTop:10}}>
 
-          <div style={{fontSize:10,fontWeight:800,letterSpacing:"0.12em",color:C.green,
+          <button type="button" onClick={()=>setShowAnswered(v=>!v)}
+            style={{display:"block",width:"100%",textAlign:"left",fontSize:10,fontWeight:800,letterSpacing:"0.12em",color:C.green,
+              background:"none",border:"none",borderBottom:`1px solid ${C.green}33`,padding:0,paddingBottom:4,marginBottom:8,
+              cursor:statusFilter==='answered'?"default":"pointer",fontFamily:"inherit"}}>
+            ✓ ANSWERED ({answered.length}){statusFilter==='answered'?'':(answeredExpanded?' ▴':' ▾')}
+          </button>
 
-            borderBottom:`1px solid ${C.green}33`,paddingBottom:4,marginBottom:8}}>
-
-            ✓ ANSWERED ({answered.length})
-
-          </div>
-
-          {answered.map((q,i)=>renderQ(q,i,questions.indexOf(q)))}
+          {answeredExpanded && answered.map((q,i)=>renderQ(q,i,questions.indexOf(q)))}
 
         </div>
 
@@ -30030,6 +30093,16 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
         border:`1px solid ${active?color:C.border}`,background:active?`${color}18`:C.card,color:active?color:C.dim}}>{label}</button>
   );
 
+  // Status filter (2026-07-06 cleanup): scan open vs answered vs needs-reply
+  // at a glance instead of scrolling one long mixed list. "Needs reply" =
+  // open questions where the other side is waiting on US: a pending GC
+  // answer, a GC ask-back note, or a thread whose last message is theirs.
+  const needsReplyQ = (q) => !q.done && ( !!gcAnswerMap[q.id] || !!(gcNoteMap[q.id]||"").trim() || ((q.thread||[]).length>0 && q.thread[q.thread.length-1]?.role==='client') );
+  const [statusFilter, setStatusFilter] = useState(null); // null | 'open' | 'needs' | 'answered'
+  const openCount  = allQs.filter(q=>!q.done).length;
+  const needsCount = allQs.filter(needsReplyQ).length;
+  const ansCount   = allQs.filter(q=>q.done).length;
+
   return (
 
     <div>
@@ -30037,6 +30110,21 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
       {filterIds!=null&&allQIds.length>0&&(
         <div style={{fontSize:10,fontWeight:600,color:sharedQCount===allQIds.length?C.green:C.muted,marginBottom:8}}>
           {sharedQCount} of {allQIds.length} shared
+        </div>
+      )}
+
+      {allQs.length>0 && (
+        <div style={{display:"flex",flexWrap:"wrap",gap:6,marginBottom:8}}>
+          {chip(statusFilter==null, "All", ()=>setStatusFilter(null), "__stAll")}
+          {chip(statusFilter==='open', `Open (${openCount})`, ()=>setStatusFilter('open'), "__stOpen")}
+          {needsCount>0 && (
+            <button key="__stNeeds" type="button" onClick={()=>setStatusFilter('needs')}
+              style={{fontSize:11,fontWeight:700,padding:"4px 11px",borderRadius:99,cursor:"pointer",fontFamily:"inherit",
+                border:`1px solid ${statusFilter==='needs'?'#B0892C':'#E3D3A6'}`,background:statusFilter==='needs'?'#F3E9CF':'#FCF8EE',color:'#8A6A1E'}}>
+              Needs reply ({needsCount})
+            </button>
+          )}
+          {chip(statusFilter==='answered', `Answered (${ansCount})`, ()=>setStatusFilter('answered'), "__stAns")}
         </div>
       )}
 
@@ -30101,6 +30189,7 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
             selectedIds={selectedIds}
             onToggleSelect={toggleSelect}
             fieldinkMap={fieldinkMap}
+            statusFilter={statusFilter}
             photoFolder={`${photoFolder?photoFolder+"-":""}${k}`}/>
 
         </div>
@@ -45781,6 +45870,13 @@ function QuestionsSharePage({ jobId }) {
   const [answers,        setAnswers]       = useState(() => { try { return JSON.parse(localStorage.getItem(draftKey)||'{}'); } catch(e) { return {}; } });
   const [notes,          setNotes]         = useState({}); // per-question "ask for more info" notes back to the crew
   const [noteOpen,       setNoteOpen]      = useState(new Set()); // which cards have the note field expanded
+  // Photos/files attached to ANSWERS (qid → [{id,name,url,type}]). Uploaded
+  // immediately by PhotoAttacher (so a draft photo survives a refresh via the
+  // draft key below); submitted onto the answer entry in questionAnswers.
+  const [ansPhotos,      setAnsPhotos]     = useState(() => { try { return JSON.parse(localStorage.getItem(draftKey+'_p')||'{}'); } catch(e) { return {}; } });
+  useEffect(() => { try { localStorage.setItem(draftKey+'_p', JSON.stringify(ansPhotos)); } catch(e){} }, [ansPhotos]);
+  // Answered questions collapse into a compact section so the list stays clean.
+  const [showAnswered,   setShowAnswered]  = useState(false);
   const [submitting,     setSubmitting]    = useState(false);
   const [submitted,      setSubmitted]     = useState(false);
   const [respondentName, setRespondentName]= useState('');
@@ -45834,16 +45930,19 @@ function QuestionsSharePage({ jobId }) {
         const ans = {};
         const nts = {};
         const aSet = new Set();
+        const phs = {};
         ['rough','finish'].forEach(phase => {
           ['upper','main','basement'].forEach(floor => {
             (qa[phase]?.[floor] || []).forEach(a => {
               if(a.answer) { ans[a.id] = a.answer; if(a.answer.trim()) aSet.add(a.id); }
               if(a.clarify) nts[a.id] = a.clarify;
+              if(Array.isArray(a.photos) && a.photos.length) { phs[a.id] = a.photos; if(!a.answer||!a.answer.trim()) aSet.add(a.id); }
             });
           });
         });
         setAnswers(ans);
         setNotes(prev => ({...nts, ...prev}));
+        setAnsPhotos(prev => ({...phs, ...prev}));
         setAnsweredIds(prev => new Set([...prev, ...aSet]));
       }
     }).catch(()=>{});
@@ -45866,7 +45965,11 @@ function QuestionsSharePage({ jobId }) {
         (existingFloor || []).forEach(a => { exMap[a.id] = a; });
         return (allQs || []).map(q => {
           if(!filterIds || filterIds.has(q.id)) {
-            return { id:q.id, question:q.question, answer:answers[q.id]||'', clarify:(notes[q.id]||'').trim() };
+            // photos: this recipient's current attachment set for the answer
+            // (already uploaded to Storage); falls back to what was previously
+            // submitted so an unrelated re-submit can't drop them.
+            const ph = ansPhotos[q.id] !== undefined ? ansPhotos[q.id] : (exMap[q.id]?.photos || []);
+            return { id:q.id, question:q.question, answer:answers[q.id]||'', clarify:(notes[q.id]||'').trim(), photos: ph };
           }
           // Not shown to this recipient — preserve existing answer/note
           return exMap[q.id] || { id:q.id, question:q.question, answer:'' };
@@ -45936,6 +46039,68 @@ function QuestionsSharePage({ jobId }) {
   const hasQs = roughQs.length+finishQs.length > 0;
 
   const cardStyle = {background:'#fff',border:'1px solid #E1E4E9',borderRadius:10,padding:16,marginBottom:12};
+
+  // ── Cleaner organization (2026-07-06): one shared card renderer for both
+  // phases (was two duplicated ~50-line blocks); open questions stay up top,
+  // answered ones collapse into a compact section at the bottom; answers can
+  // now carry photo/file attachments.
+  const isAnsQ = (q) => answeredIds.has(q.id) || !!q.done || !!(q.answer?.trim()) || (ansPhotos[q.id]||[]).length > 0;
+  const renderShareCard = (q, i, accent, phaseLabel) => {
+    const isAns = isAnsQ(q);
+    return (
+      <div key={q.id} style={{...cardStyle,borderLeft:`3px solid ${isAns?'#3E7D5A':accent}`,transition:'opacity 0.2s,border-color 0.2s'}}>
+        <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:3,flexWrap:'wrap'}}>
+          <div style={{fontSize:10,color:'#99A0AA',fontWeight:600}}>{phaseLabel} · {q.floor}</div>
+          {isAns&&<div style={{fontSize:10,fontWeight:700,color:'#3E7D5A',background:'#DEEFE6',borderRadius:99,padding:'1px 8px'}}>✓ Answered</div>}
+        </div>
+        <div style={{fontSize:14,fontWeight:600,color:'#111',marginBottom:10}}>{q.question}</div>
+        {(q.note||'').trim()&&<div style={{fontSize:12,color:'#2C5C40',background:'#ECF2EE',border:'1px solid #CBE0D4',borderRadius:7,padding:'7px 10px',marginBottom:10,lineHeight:1.5}}><span style={{fontSize:10,fontWeight:700,letterSpacing:'0.04em',color:'#3E7D5A'}}>NOTE FROM HOMESTEAD</span><br/>{q.note}</div>}
+        {Array.isArray(q.photos)&&q.photos.filter(p=>p&&p.url).length>0&&(
+          <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
+            {q.photos.filter(p=>p&&p.url).map(p=>{
+              const isImg=(p.type&&p.type.startsWith&&p.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
+              return isImg
+                ? <img key={p.id} src={p.url} alt={p.name||'photo'} onClick={()=>window.open(p.url,'_blank')}
+                    style={{width:74,height:74,objectFit:'cover',borderRadius:8,border:'1px solid #E1E4E9',cursor:'pointer',display:'block'}}/>
+                : <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer"
+                    style={{width:74,height:74,borderRadius:8,border:'1px solid #E1E4E9',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:600,color:'#475569',background:'#F4F6F8',textAlign:'center',padding:4,textDecoration:'none',wordBreak:'break-all',overflow:'hidden'}}>{(p.name||'file').slice(0,18)}</a>;
+            })}
+          </div>
+        )}
+        {isAns && <div style={{fontSize:11,fontWeight:700,color:'#3E7D5A',marginBottom:5,display:'flex',alignItems:'center',gap:5}}><Icon name="pencil" size={11}/>Your answer — edit here if needed</div>}
+        <textarea value={answers[q.id]!==undefined ? answers[q.id] : (q.answer||'').replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').trim()} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))}
+          onBlur={e=>{if(e.target.value.trim()||(ansPhotos[q.id]||[]).length)setAnsweredIds(s=>new Set([...s,q.id]));else setAnsweredIds(s=>{const n=new Set(s);n.delete(q.id);return n;});}}
+          placeholder="Type your answer here…" rows={3} style={taStyle}/>
+        {/* Attach photos/files to the ANSWER itself (2026-07-06). Uploads
+            immediately to the job's Storage folder; rides the answer entry on
+            submit so the crew sees them right under the answer. */}
+        <div style={{marginTop:6}}>
+          <PhotoAttacher storagePath={`jobs/${jobId}/question-answers/${q.id}`} photos={ansPhotos[q.id]||[]}
+            onChange={p=>{ setAnsPhotos(s=>({...s,[q.id]:p})); if(p.length) setAnsweredIds(s=>new Set([...s,q.id])); }}
+            color={accent} label="Attach photo / file to your answer"/>
+        </div>
+        {(noteOpen.has(q.id)||!!(notes[q.id]&&notes[q.id].trim())) ? (
+          <div style={{marginTop:8}}>
+            <div style={{fontSize:11,fontWeight:700,color:'#B0892C',marginBottom:4}}>{(notes[q.id]||'').trim()?'Edit your note to our team':'Ask our team for more info'}</div>
+            <textarea value={notes[q.id]||''} onChange={e=>setNotes(n=>({...n,[q.id]:e.target.value}))}
+              placeholder="e.g. Which panel do you mean? Send a note and we'll follow up — you don't have to answer yet."
+              rows={2} style={{...taStyle,borderColor:'#E3D3A6',background:'#FCF8EE'}}/>
+          </div>
+        ) : (
+          <button type="button" onClick={()=>setNoteOpen(s=>new Set([...s,q.id]))}
+            style={{marginTop:8,fontSize:11,fontWeight:600,color:'#B0892C',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0}}>+ Ask for more info instead</button>
+        )}
+        {(q.thread||[]).length>0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:'0.08em',color:'#99A0AA',margin:'12px 0 0'}}>DISCUSSION WITH HOMESTEAD ELECTRIC</div>}
+        <QAThread messages={q.thread||[]} jobId={jobId} qid={q.id} color="#3B5BA5" photoBase="question-threads"
+          onPost={({text,photos})=>postThread(q,{id:uid(),by:(respondentName.trim()||shareName||'Client'),role:'client',text,photos,at:new Date().toISOString()})}/>
+      </div>
+    );
+  };
+  const openRough  = roughQs.filter(q=>!isAnsQ(q));
+  const ansRough   = roughQs.filter(isAnsQ);
+  const openFinish = finishQs.filter(q=>!isAnsQ(q));
+  const ansFinish  = finishQs.filter(isAnsQ);
+  const answeredCount = ansRough.length + ansFinish.length;
   const taStyle = {width:'100%',border:'1px solid #CDD3DB',borderRadius:7,padding:'8px 10px',fontSize:13,fontFamily:'inherit',resize:'vertical',boxSizing:'border-box',outline:'none'};
 
   if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6E7682',fontSize:14}}>Loading…</div>;
@@ -45983,101 +46148,38 @@ function QuestionsSharePage({ jobId }) {
         <>
           <div style={{fontSize:13,color:'#6E7682',marginBottom:18,lineHeight:1.6}}>Please answer the questions below.{shareName?<> These questions are for <b>{shareName}</b>.</>:null} <b style={{color:'#2E3640'}}>Nothing is sent until you press “Submit Answers” at the bottom of this page.</b> If you need more detail before you can answer, tap <b>“Ask for more info”</b> on any question to send a note back to our team instead of an answer. This page updates automatically if new questions are added.</div>
 
-          {roughQs.length>0&&(
+          {/* Summary chips — see at a glance what still needs attention */}
+          <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:14}}>
+            <div style={{fontSize:12,fontWeight:800,color:(openRough.length+openFinish.length)?'#3B5BA5':'#3E7D5A',background:(openRough.length+openFinish.length)?'#E7ECF7':'#DEEFE6',border:`1px solid ${(openRough.length+openFinish.length)?'#3B5BA544':'#3E7D5A44'}`,borderRadius:99,padding:'4px 12px'}}>
+              {(openRough.length+openFinish.length)>0 ? `${openRough.length+openFinish.length} need${(openRough.length+openFinish.length)===1?'s':''} your answer` : 'All questions answered — thank you!'}
+            </div>
+            {answeredCount>0&&(
+              <button type="button" onClick={()=>setShowAnswered(v=>!v)}
+                style={{fontSize:12,fontWeight:700,color:'#3E7D5A',background:'#fff',border:'1px solid #3E7D5A44',borderRadius:99,padding:'4px 12px',cursor:'pointer',fontFamily:'inherit'}}>
+                ✓ {answeredCount} answered {showAnswered?'▴ hide':'▾ view / edit'}
+              </button>
+            )}
+          </div>
+
+          {openRough.length>0&&(
             <div style={{marginBottom:20}}>
-              <div style={{fontSize:11,fontWeight:700,color:'#3B5BA5',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #3B5BA533',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="zap" size={12}/> ROUGH PHASE</div>
-              {[...roughQs].sort((a,b)=>((answeredIds.has(a.id)||!!a.done||!!(a.answer?.trim()))?1:0)-((answeredIds.has(b.id)||!!b.done||!!(b.answer?.trim()))?1:0)).map((q,i)=>{
-                const isAns=answeredIds.has(q.id)||!!q.done||!!(q.answer?.trim());
-                return (
-                  <div key={q.id} style={{...cardStyle,borderLeft:`3px solid ${isAns?'#3E7D5A':'#3B5BA5'}`,opacity:isAns?0.72:1,transition:'opacity 0.2s,border-color 0.2s'}}>
-                    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:3}}>
-                      <div style={{fontSize:10,color:'#99A0AA',fontWeight:600}}>{q.floor}</div>
-                      {isAns&&<div style={{fontSize:10,fontWeight:700,color:'#3E7D5A',background:'#DEEFE6',borderRadius:99,padding:'1px 8px'}}>✓ Answered</div>}
-                    </div>
-                    <div style={{fontSize:14,fontWeight:600,color:'#111',marginBottom:10}}>Q{i+1}: {q.question}</div>
-                    {(q.note||'').trim()&&<div style={{fontSize:12,color:'#2C5C40',background:'#ECF2EE',border:'1px solid #CBE0D4',borderRadius:7,padding:'7px 10px',marginBottom:10,lineHeight:1.5}}><span style={{fontSize:10,fontWeight:700,letterSpacing:'0.04em',color:'#3E7D5A'}}>NOTE FROM HOMESTEAD</span><br/>{q.note}</div>}
-                    {Array.isArray(q.photos)&&q.photos.filter(p=>p&&p.url).length>0&&(
-                      <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
-                        {q.photos.filter(p=>p&&p.url).map(p=>{
-                          const isImg=(p.type&&p.type.startsWith&&p.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
-                          return isImg
-                            ? <img key={p.id} src={p.url} alt={p.name||'photo'} onClick={()=>window.open(p.url,'_blank')}
-                                style={{width:74,height:74,objectFit:'cover',borderRadius:8,border:'1px solid #E1E4E9',cursor:'pointer',display:'block'}}/>
-                            : <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer"
-                                style={{width:74,height:74,borderRadius:8,border:'1px solid #E1E4E9',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:600,color:'#475569',background:'#F4F6F8',textAlign:'center',padding:4,textDecoration:'none',wordBreak:'break-all',overflow:'hidden'}}>{(p.name||'file').slice(0,18)}</a>;
-                        })}
-                      </div>
-                    )}
-                    {isAns && <div style={{fontSize:11,fontWeight:700,color:'#3E7D5A',marginBottom:5,display:'flex',alignItems:'center',gap:5}}><Icon name="pencil" size={11}/>Your answer — edit here if needed</div>}
-                    <textarea value={answers[q.id]!==undefined ? answers[q.id] : (q.answer||'').replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').trim()} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))}
-                      onBlur={e=>{if(e.target.value.trim())setAnsweredIds(s=>new Set([...s,q.id]));else setAnsweredIds(s=>{const n=new Set(s);n.delete(q.id);return n;});}}
-                      placeholder="Type your answer here…" rows={3} style={taStyle}/>
-                    {(noteOpen.has(q.id)||!!(notes[q.id]&&notes[q.id].trim())) ? (
-                      <div style={{marginTop:8}}>
-                        <div style={{fontSize:11,fontWeight:700,color:'#B0892C',marginBottom:4}}>{(notes[q.id]||'').trim()?'Edit your note to our team':'Ask our team for more info'}</div>
-                        <textarea value={notes[q.id]||''} onChange={e=>setNotes(n=>({...n,[q.id]:e.target.value}))}
-                          placeholder="e.g. Which panel do you mean? Send a note and we'll follow up — you don't have to answer yet."
-                          rows={2} style={{...taStyle,borderColor:'#E3D3A6',background:'#FCF8EE'}}/>
-                      </div>
-                    ) : (
-                      <button type="button" onClick={()=>setNoteOpen(s=>new Set([...s,q.id]))}
-                        style={{marginTop:8,fontSize:11,fontWeight:600,color:'#B0892C',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0}}>+ Ask for more info instead</button>
-                    )}
-                    {(q.thread||[]).length>0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:'0.08em',color:'#99A0AA',margin:'12px 0 0'}}>DISCUSSION WITH HOMESTEAD ELECTRIC</div>}
-                    <QAThread messages={q.thread||[]} jobId={jobId} qid={q.id} color="#3B5BA5" photoBase="question-threads"
-                      onPost={({text,photos})=>postThread(q,{id:uid(),by:(respondentName.trim()||shareName||'Client'),role:'client',text,photos,at:new Date().toISOString()})}/>
-                  </div>
-                );
-              })}
+              <div style={{fontSize:11,fontWeight:700,color:'#3B5BA5',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #3B5BA533',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="zap" size={12}/> ROUGH PHASE — {openRough.length} OPEN</div>
+              {openRough.map((q,i)=>renderShareCard(q,i,'#3B5BA5','Rough'))}
             </div>
           )}
 
-          {finishQs.length>0&&(
+          {openFinish.length>0&&(
             <div style={{marginBottom:20}}>
-              <div style={{fontSize:11,fontWeight:700,color:'#6A7BAA',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #6A7BAA33',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="flag" size={12}/> FINISH PHASE</div>
-              {[...finishQs].sort((a,b)=>((answeredIds.has(a.id)||!!a.done||!!(a.answer?.trim()))?1:0)-((answeredIds.has(b.id)||!!b.done||!!(b.answer?.trim()))?1:0)).map((q,i)=>{
-                const isAns=answeredIds.has(q.id)||!!q.done||!!(q.answer?.trim());
-                return (
-                  <div key={q.id} style={{...cardStyle,borderLeft:`3px solid ${isAns?'#3E7D5A':'#6A7BAA'}`,opacity:isAns?0.72:1,transition:'opacity 0.2s,border-color 0.2s'}}>
-                    <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:3}}>
-                      <div style={{fontSize:10,color:'#99A0AA',fontWeight:600}}>{q.floor}</div>
-                      {isAns&&<div style={{fontSize:10,fontWeight:700,color:'#3E7D5A',background:'#DEEFE6',borderRadius:99,padding:'1px 8px'}}>✓ Answered</div>}
-                    </div>
-                    <div style={{fontSize:14,fontWeight:600,color:'#111',marginBottom:10}}>Q{i+1}: {q.question}</div>
-                    {(q.note||'').trim()&&<div style={{fontSize:12,color:'#2C5C40',background:'#ECF2EE',border:'1px solid #CBE0D4',borderRadius:7,padding:'7px 10px',marginBottom:10,lineHeight:1.5}}><span style={{fontSize:10,fontWeight:700,letterSpacing:'0.04em',color:'#3E7D5A'}}>NOTE FROM HOMESTEAD</span><br/>{q.note}</div>}
-                    {Array.isArray(q.photos)&&q.photos.filter(p=>p&&p.url).length>0&&(
-                      <div style={{display:'flex',flexWrap:'wrap',gap:6,marginBottom:10}}>
-                        {q.photos.filter(p=>p&&p.url).map(p=>{
-                          const isImg=(p.type&&p.type.startsWith&&p.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
-                          return isImg
-                            ? <img key={p.id} src={p.url} alt={p.name||'photo'} onClick={()=>window.open(p.url,'_blank')}
-                                style={{width:74,height:74,objectFit:'cover',borderRadius:8,border:'1px solid #E1E4E9',cursor:'pointer',display:'block'}}/>
-                            : <a key={p.id} href={p.url} target="_blank" rel="noopener noreferrer"
-                                style={{width:74,height:74,borderRadius:8,border:'1px solid #E1E4E9',display:'flex',alignItems:'center',justifyContent:'center',fontSize:9,fontWeight:600,color:'#475569',background:'#F4F6F8',textAlign:'center',padding:4,textDecoration:'none',wordBreak:'break-all',overflow:'hidden'}}>{(p.name||'file').slice(0,18)}</a>;
-                        })}
-                      </div>
-                    )}
-                    {isAns && <div style={{fontSize:11,fontWeight:700,color:'#3E7D5A',marginBottom:5,display:'flex',alignItems:'center',gap:5}}><Icon name="pencil" size={11}/>Your answer — edit here if needed</div>}
-                    <textarea value={answers[q.id]!==undefined ? answers[q.id] : (q.answer||'').replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').trim()} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))}
-                      onBlur={e=>{if(e.target.value.trim())setAnsweredIds(s=>new Set([...s,q.id]));else setAnsweredIds(s=>{const n=new Set(s);n.delete(q.id);return n;});}}
-                      placeholder="Type your answer here…" rows={3} style={taStyle}/>
-                    {(noteOpen.has(q.id)||!!(notes[q.id]&&notes[q.id].trim())) ? (
-                      <div style={{marginTop:8}}>
-                        <div style={{fontSize:11,fontWeight:700,color:'#B0892C',marginBottom:4}}>{(notes[q.id]||'').trim()?'Edit your note to our team':'Ask our team for more info'}</div>
-                        <textarea value={notes[q.id]||''} onChange={e=>setNotes(n=>({...n,[q.id]:e.target.value}))}
-                          placeholder="e.g. Which panel do you mean? Send a note and we'll follow up — you don't have to answer yet."
-                          rows={2} style={{...taStyle,borderColor:'#E3D3A6',background:'#FCF8EE'}}/>
-                      </div>
-                    ) : (
-                      <button type="button" onClick={()=>setNoteOpen(s=>new Set([...s,q.id]))}
-                        style={{marginTop:8,fontSize:11,fontWeight:600,color:'#B0892C',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0}}>+ Ask for more info instead</button>
-                    )}
-                    {(q.thread||[]).length>0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:'0.08em',color:'#99A0AA',margin:'12px 0 0'}}>DISCUSSION WITH HOMESTEAD ELECTRIC</div>}
-                    <QAThread messages={q.thread||[]} jobId={jobId} qid={q.id} color="#3B5BA5" photoBase="question-threads"
-                      onPost={({text,photos})=>postThread(q,{id:uid(),by:(respondentName.trim()||shareName||'Client'),role:'client',text,photos,at:new Date().toISOString()})}/>
-                  </div>
-                );
-              })}
+              <div style={{fontSize:11,fontWeight:700,color:'#6A7BAA',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #6A7BAA33',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="flag" size={12}/> FINISH PHASE — {openFinish.length} OPEN</div>
+              {openFinish.map((q,i)=>renderShareCard(q,i,'#6A7BAA','Finish'))}
+            </div>
+          )}
+
+          {showAnswered&&answeredCount>0&&(
+            <div style={{marginBottom:20,opacity:0.85}}>
+              <div style={{fontSize:11,fontWeight:700,color:'#3E7D5A',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #3E7D5A33',display:'inline-flex',alignItems:'center',gap:5}}>✓ ANSWERED ({answeredCount})</div>
+              {ansRough.map((q,i)=>renderShareCard(q,i,'#3B5BA5','Rough'))}
+              {ansFinish.map((q,i)=>renderShareCard(q,i,'#6A7BAA','Finish'))}
             </div>
           )}
 
@@ -46429,7 +46531,11 @@ const FEATURES_MD_INLINE = String.raw`
   - Multiple share links per job (questionShares): the Share modal is grouped by recipient with per-group Select-all; save a named link per person (Designer/GC/Haley/…), each its own URL (?questions=<job>&s=<id>); Saved Links list to copy/edit/delete and track them. Legacy single ?questions link still works · shipped 2026-06-29 · SW v270
   - GC "Ask for more info" (a.clarify): on the share page the recipient can send a note back asking for context instead of answering; surfaces on the crew Q&A as a "GC ASKED" callout. Share-page instructions now state nothing sends until they press Submit · shipped 2026-06-29 · SW v270
   - Question photos show on the share page: any images attached to a question (q.photos) render as a read-only thumbnail grid under the question so the recipient sees the picture context; tap to open full size · shipped 2026-06-29 · SW v271
-  - Two-way question thread (q.thread): a real back-and-forth conversation under each question — crew (in-app) and the people it's shared with (on the link) can post replies with file/photo attachments on either side, unlimited turns. Shared QAThread component; recipient posts via a fresh read-modify-write on the job doc. Shows as a DISCUSSION bubble stream on both sides · shipped 2026-07-06 · SW v287
+  - Two-way question thread (q.thread): a real back-and-forth conversation under each question — crew (in-app) and the people it's shared with (on the link) can post replies with file/photo attachments on either side, unlimited turns. Shared QAThread component; recipient posts a targeted transactional update of just that question array. Shows as a DISCUSSION bubble stream on both sides · shipped 2026-07-06 · SW v287 (write path hardened v289)
+  - Q&A cleanup: status chips (All / Open / Needs reply / Answered) on each phase, answered section collapsed by default, compact question cards (note/how-answered/reminder/photo/discussion behind a More toggle). Share page groups open questions first with a "N need your answer" summary and a collapsible answered section · shipped 2026-07-06 · SW v291
+  - Answer attachments: people answering from a share link can attach photos/files to the ANSWER itself (not just the thread); attachments ride the submission, show in the green GC callout, and stick to the question (answerPhotos) when the answer auto-applies · shipped 2026-07-06 · SW v291
+- **Data-loss protection** · shipped · every job save (and Crew Planner / Time Off / PTO / Upcoming saves) is a transactional three-way merge — concurrent edits union instead of last-write-wins (Cougar Moon fix) · 2026-07-06 · SW v288–v290
+- **Nightly Firestore backup** · shipped · 1:00 AM MT cloud function snapshots all collections to Storage backups/ (30-day retention) + runBackupNow callable + settings/backupStatus stamp · 2026-07-06
 - **Plans tab** · shipped · plans documents per job
 - **Drive Files** · shipped · Drive folder sync + uploads
 - **Home Runs (panels)** · shipped · per-floor home runs + breaker counts
