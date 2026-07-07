@@ -50985,7 +50985,19 @@ function App() {
           loaded.forEach(j => {
             const hasTimer = !!saveTimers.current[j.id];
             const hasPending = !!(pendingPatches.current[j.id] && Object.keys(pendingPatches.current[j.id]).length > 0);
-            if(!hasTimer && !hasPending) serverBaselines.current[j.id] = j;
+            if(!hasTimer && !hasPending) {
+              // ONLY move the baseline FORWARD. This is a whole-COLLECTION
+              // listener, so an unrelated job's change fires it carrying a
+              // cached/older copy of THIS job. Resetting the baseline backward to
+              // that stale copy defeats the three-way merge: the user's own
+              // just-saved edit then looks like a "server change", and deleting
+              // that item afterward RESURRECTS it (verified via _threeWayMerge).
+              // Guard on updated_at so a stale snapshot can't roll us back.
+              const prev = serverBaselines.current[j.id];
+              if(!prev || !prev.updated_at || !j.updated_at || String(j.updated_at) >= String(prev.updated_at)) {
+                serverBaselines.current[j.id] = j;
+              }
+            }
           });
 
           // One-time fix v2: DISABLED — was using setDoc (full overwrite) which can wipe data
@@ -51239,12 +51251,25 @@ function App() {
   // Returns the dot-notation write patch. Logs whenever the merge rescued
   // server-side changes the client's blind write would have destroyed.
   const _mergePatchAgainstServer = (jobId, jobName, cleanPatch, serverData) => {
-    const base = serverBaselines.current[jobId] || {};
+    // ROOT-CAUSE FIX (punch/anything reverting): the baseline was stored from the
+    // snapshot loader (NORMALIZED/migrated shape) while `serverData` inside the
+    // save transaction is the RAW Firestore doc. Different shapes ⇒ `_jeq(server,
+    // base)` is ALWAYS false ⇒ the merge never takes its "nobody else touched it →
+    // client wins" fast path ⇒ it structural-merges every save. There a normalized
+    // item never equals a raw item, so the merge decides "server changed this item"
+    // and KEEPS it — resurrecting the user's own delete (and reverting edits). Fix:
+    // normalize BOTH base and server to the SAME shape the client's patch values
+    // use, so an untouched field compares equal and the client's change applies
+    // verbatim. Concurrency still works — a genuine other-device change still makes
+    // server ≠ base and structural-merges (now item-vs-item on matching shapes).
+    const base = normalizeJob(serverBaselines.current[jobId] || {});
+    const nServer = normalizeJob(serverData || {});
     const writePatch = {};
     Object.entries(cleanPatch).forEach(([k, v]) => {
       let out = v;
-      if (v && typeof v === "object" && serverData[k] !== undefined && serverData[k] !== null) {
-        out = _threeWayMerge(base[k], v, serverData[k]);
+      const sv = nServer[k];
+      if (v && typeof v === "object" && sv !== undefined && sv !== null) {
+        out = _threeWayMerge(base[k], v, sv);
         if (!_jeq(out, v)) {
           console.log(`[HE] concurrent-edit merge: preserved server changes on "${k}" for ${jobName || jobId}`);
         }
@@ -51355,6 +51380,9 @@ function App() {
           if (_writtenPatch) {
             const _b = serverBaselines.current[job.id] ? { ...serverBaselines.current[job.id] } : {};
             Object.keys(_writtenPatch).forEach(pk => { if (pk.indexOf("data.") === 0) _b[pk.slice(5)] = _writtenPatch[pk]; });
+            // Stamp our write time so the snapshot's forward-only guard treats
+            // this advanced baseline as the latest and a stale echo can't undo it.
+            if (_writtenPatch.updated_at) _b.updated_at = _writtenPatch.updated_at;
             serverBaselines.current[job.id] = _b;
           }
           // Write succeeded — clear ONLY the keys we just wrote. New patches
@@ -51410,6 +51438,7 @@ function App() {
           if (_writtenFull) {
             const _b = serverBaselines.current[job.id] ? { ...serverBaselines.current[job.id] } : {};
             Object.keys(_writtenFull).forEach(pk => { if (pk.indexOf("data.") === 0) _b[pk.slice(5)] = _writtenFull[pk]; });
+            if (_writtenFull.updated_at) _b.updated_at = _writtenFull.updated_at;
             serverBaselines.current[job.id] = _b;
           }
         }
