@@ -45954,6 +45954,21 @@ function QuestionsSharePage({ jobId }) {
   useEffect(() => { try { localStorage.setItem(draftKey+'_p', JSON.stringify(ansPhotos)); } catch(e){} }, [ansPhotos]);
   // Answered questions collapse into a compact section so the list stays clean.
   const [showAnswered,   setShowAnswered]  = useState(false);
+  // "New since your last visit" (2026-07-06): the share page has no login, so
+  // the last-open marker lives in this device's localStorage, per link. We
+  // read the previous stamp once when the job first loads, then immediately
+  // write a fresh one for next time. prevVisitAt===null → first ever visit
+  // (nothing badged NEW). Read-only against the job — never written to
+  // Firestore.
+  const seenKey = `he_qseen_${jobId}_${shareParam||'legacy'}`;
+  const [prevVisitAt, setPrevVisitAt] = useState(undefined); // undefined = not read yet
+  useEffect(() => {
+    if(!job || prevVisitAt !== undefined) return;
+    let prev = null;
+    try { prev = JSON.parse(localStorage.getItem(seenKey)||'null'); } catch(e){}
+    setPrevVisitAt(prev?.at || null);
+    try { localStorage.setItem(seenKey, JSON.stringify({ at: new Date().toISOString() })); } catch(e){}
+  }, [job]);
   const [submitting,     setSubmitting]    = useState(false);
   const [submitted,      setSubmitted]     = useState(false);
   const [respondentName, setRespondentName]= useState('');
@@ -46144,6 +46159,9 @@ function QuestionsSharePage({ jobId }) {
         <div style={{display:'flex',alignItems:'center',gap:8,marginBottom:3,flexWrap:'wrap'}}>
           <div style={{fontSize:10,color:'#99A0AA',fontWeight:600}}>{phaseLabel} · {q.floor}</div>
           {isAns&&<div style={{fontSize:10,fontWeight:700,color:'#3E7D5A',background:'#DEEFE6',borderRadius:99,padding:'1px 8px'}}>✓ Answered</div>}
+          {isNewQ(q)&&<div style={{fontSize:10,fontWeight:800,color:'#8A6A1E',background:'#F3E9CF',border:'1px solid #E3D3A6',borderRadius:99,padding:'1px 8px'}}>NEW</div>}
+          {!isNewQ(q)&&newReplyQ(q)&&<div style={{fontSize:10,fontWeight:800,color:'#3B5BA5',background:'#E7ECF7',border:'1px solid #3B5BA544',borderRadius:99,padding:'1px 8px'}}>New reply from Homestead</div>}
+          {!isNewQ(q)&&!newReplyQ(q)&&newAnswerQ(q)&&<div style={{fontSize:10,fontWeight:800,color:'#3E7D5A',background:'#DEEFE6',border:'1px solid #3E7D5A44',borderRadius:99,padding:'1px 8px'}}>Updated</div>}
         </div>
         <div style={{fontSize:14,fontWeight:600,color:'#111',marginBottom:10}}>{q.question}</div>
         {(q.note||'').trim()&&<div style={{fontSize:12,color:'#2C5C40',background:'#ECF2EE',border:'1px solid #CBE0D4',borderRadius:7,padding:'7px 10px',marginBottom:10,lineHeight:1.5}}><span style={{fontSize:10,fontWeight:700,letterSpacing:'0.04em',color:'#3E7D5A'}}>NOTE FROM HOMESTEAD</span><br/>{q.note}</div>}
@@ -46188,11 +46206,31 @@ function QuestionsSharePage({ jobId }) {
       </div>
     );
   };
-  const openRough  = roughQs.filter(q=>!isAnsQ(q));
+  // Newness + waiting-state helpers (2026-07-06). All computed against the
+  // last-visit stamp; live-arriving questions also read as new because their
+  // addedAt is after the previous visit too.
+  const isNewQ     = (q) => !!(prevVisitAt && q.addedAt && q.addedAt > prevVisitAt);
+  const newReplyQ  = (q) => !!(prevVisitAt && (q.thread||[]).some(m=>m && m.role==='crew' && m.at && m.at > prevVisitAt));
+  const newAnswerQ = (q) => !!(prevVisitAt && q.done && q.answeredAt && q.answeredAt > prevVisitAt);
+  // Waiting on Homestead = they moved last and the ball is in the crew's
+  // court: they asked for more info (and no crew reply has landed since), or
+  // the discussion under the question ends with THEIR message.
+  const waitingQ = (q) => !isAnsQ(q) && (
+    ((q.thread||[]).length>0 && q.thread[q.thread.length-1]?.role==='client') ||
+    (!!(notes[q.id]||'').trim() && !((q.thread||[]).length>0 && q.thread[q.thread.length-1]?.role==='crew'))
+  );
+  const sortNewFirst = (arr) => [...arr].sort((a,b)=>((isNewQ(b)||newReplyQ(b))?1:0)-((isNewQ(a)||newReplyQ(a))?1:0));
+  const needRough  = sortNewFirst(roughQs.filter(q=>!isAnsQ(q) && !waitingQ(q)));
+  const needFinish = sortNewFirst(finishQs.filter(q=>!isAnsQ(q) && !waitingQ(q)));
+  const needCount  = needRough.length + needFinish.length;
+  const waitQs     = [
+    ...roughQs.filter(q=>!isAnsQ(q) && waitingQ(q)).map(q=>({q, accent:'#3B5BA5', ph:'Rough'})),
+    ...finishQs.filter(q=>!isAnsQ(q) && waitingQ(q)).map(q=>({q, accent:'#6A7BAA', ph:'Finish'})),
+  ];
   const ansRough   = roughQs.filter(isAnsQ);
-  const openFinish = finishQs.filter(q=>!isAnsQ(q));
   const ansFinish  = finishQs.filter(isAnsQ);
   const answeredCount = ansRough.length + ansFinish.length;
+  const newCount   = [...roughQs, ...finishQs].filter(q=>isNewQ(q)||newReplyQ(q)).length;
   const taStyle = {width:'100%',border:'1px solid #CDD3DB',borderRadius:7,padding:'8px 10px',fontSize:13,fontFamily:'inherit',resize:'vertical',boxSizing:'border-box',outline:'none'};
 
   if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6E7682',fontSize:14}}>Loading…</div>;
@@ -46240,11 +46278,23 @@ function QuestionsSharePage({ jobId }) {
         <>
           <div style={{fontSize:13,color:'#6E7682',marginBottom:18,lineHeight:1.6}}>Please answer the questions below.{shareName?<> These questions are for <b>{shareName}</b>.</>:null} <b style={{color:'#2E3640'}}>Nothing is sent until you press “Submit Answers” at the bottom of this page.</b> If you need more detail before you can answer, tap <b>“Ask for more info”</b> on any question to send a note back to our team instead of an answer. This page updates automatically if new questions are added.</div>
 
-          {/* Summary chips — see at a glance what still needs attention */}
+          {/* Summary chips — the whole page state at a glance:
+              what YOU owe · what's NEW since your last visit · what
+              HOMESTEAD owes you · what's already done. */}
           <div style={{display:'flex',gap:8,flexWrap:'wrap',marginBottom:14}}>
-            <div style={{fontSize:12,fontWeight:800,color:(openRough.length+openFinish.length)?'#3B5BA5':'#3E7D5A',background:(openRough.length+openFinish.length)?'#E7ECF7':'#DEEFE6',border:`1px solid ${(openRough.length+openFinish.length)?'#3B5BA544':'#3E7D5A44'}`,borderRadius:99,padding:'4px 12px'}}>
-              {(openRough.length+openFinish.length)>0 ? `${openRough.length+openFinish.length} need${(openRough.length+openFinish.length)===1?'s':''} your answer` : 'All questions answered — thank you!'}
+            <div style={{fontSize:12,fontWeight:800,color:needCount?'#3B5BA5':'#3E7D5A',background:needCount?'#E7ECF7':'#DEEFE6',border:`1px solid ${needCount?'#3B5BA544':'#3E7D5A44'}`,borderRadius:99,padding:'4px 12px'}}>
+              {needCount>0 ? `${needCount} need${needCount===1?'s':''} your answer` : 'All questions answered — thank you!'}
             </div>
+            {newCount>0&&(
+              <div style={{fontSize:12,fontWeight:800,color:'#8A6A1E',background:'#F3E9CF',border:'1px solid #E3D3A6',borderRadius:99,padding:'4px 12px'}}>
+                {newCount} new since your last visit
+              </div>
+            )}
+            {waitQs.length>0&&(
+              <div style={{fontSize:12,fontWeight:700,color:'#5E6670',background:'#EEF0F3',border:'1px solid #E1E4E9',borderRadius:99,padding:'4px 12px'}}>
+                {waitQs.length} waiting on Homestead
+              </div>
+            )}
             {answeredCount>0&&(
               <button type="button" onClick={()=>setShowAnswered(v=>!v)}
                 style={{fontSize:12,fontWeight:700,color:'#3E7D5A',background:'#fff',border:'1px solid #3E7D5A44',borderRadius:99,padding:'4px 12px',cursor:'pointer',fontFamily:'inherit'}}>
@@ -46253,17 +46303,28 @@ function QuestionsSharePage({ jobId }) {
             )}
           </div>
 
-          {openRough.length>0&&(
+          {needRough.length>0&&(
             <div style={{marginBottom:20}}>
-              <div style={{fontSize:11,fontWeight:700,color:'#3B5BA5',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #3B5BA533',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="zap" size={12}/> ROUGH PHASE — {openRough.length} OPEN</div>
-              {openRough.map((q,i)=>renderShareCard(q,i,'#3B5BA5','Rough'))}
+              <div style={{fontSize:11,fontWeight:700,color:'#3B5BA5',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #3B5BA533',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="zap" size={12}/> ROUGH PHASE — {needRough.length} NEED YOUR ANSWER</div>
+              {needRough.map((q,i)=>renderShareCard(q,i,'#3B5BA5','Rough'))}
             </div>
           )}
 
-          {openFinish.length>0&&(
+          {needFinish.length>0&&(
             <div style={{marginBottom:20}}>
-              <div style={{fontSize:11,fontWeight:700,color:'#6A7BAA',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #6A7BAA33',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="flag" size={12}/> FINISH PHASE — {openFinish.length} OPEN</div>
-              {openFinish.map((q,i)=>renderShareCard(q,i,'#6A7BAA','Finish'))}
+              <div style={{fontSize:11,fontWeight:700,color:'#6A7BAA',letterSpacing:'0.08em',marginBottom:10,paddingBottom:6,borderBottom:'2px solid #6A7BAA33',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="flag" size={12}/> FINISH PHASE — {needFinish.length} NEED YOUR ANSWER</div>
+              {needFinish.map((q,i)=>renderShareCard(q,i,'#6A7BAA','Finish'))}
+            </div>
+          )}
+
+          {/* Waiting on Homestead — they asked for more info or replied last;
+              the ball is in the crew's court. Kept out of the needs-answer
+              list so it's obvious nothing is expected of them here yet. */}
+          {waitQs.length>0&&(
+            <div style={{marginBottom:20}}>
+              <div style={{fontSize:11,fontWeight:700,color:'#8A6A1E',letterSpacing:'0.08em',marginBottom:4,paddingBottom:6,borderBottom:'2px solid #E3D3A6',display:'inline-flex',alignItems:'center',gap:5}}><Icon name="external" size={12}/> WAITING ON HOMESTEAD ({waitQs.length})</div>
+              <div style={{fontSize:11,color:'#8A6A1E',marginBottom:10}}>You asked for more info or replied last — our team is on it. You can still answer or add to the discussion any time.</div>
+              {waitQs.map(({q,accent,ph},i)=>renderShareCard(q,i,accent,ph))}
             </div>
           )}
 
@@ -46628,6 +46689,7 @@ const FEATURES_MD_INLINE = String.raw`
   - Answer attachments: people answering from a share link can attach photos/files to the ANSWER itself (not just the thread); attachments ride the submission, show in the green GC callout, and stick to the question (answerPhotos) when the answer auto-applies · shipped 2026-07-06 · SW v291
   - Incoming from links: amber inbox panel at the top of each phase's Q&A collecting everything the link people just sent — pending answers, ask-for-more-info notes, and discussion replies where they spoke last. Cards are fully interactive in the panel and move back under their floor once the crew handles them · shipped 2026-07-06 · SW v292
   - Live links by recipient: a named share link is no longer a frozen question list — any question the crew tags "For: <that person>" appears on their existing link automatically within seconds (their page listens live), no re-share needed. Crew-side Shared/Not-shared badges reflect the real union of manual picks + recipient-tagged questions · shipped 2026-07-06 · SW v293
+  - Share page triage view: summary chips (N need your answer · N new since your last visit · N waiting on Homestead · N answered), NEW / New-reply / Updated badges per question (last-visit marker stored on the visitor's device), and a separate "Waiting on Homestead" section for questions where they asked for more info or replied last · shipped 2026-07-06 · SW v294
 - **Data-loss protection** · shipped · every job save (and Crew Planner / Time Off / PTO / Upcoming saves) is a transactional three-way merge — concurrent edits union instead of last-write-wins (Cougar Moon fix) · 2026-07-06 · SW v288–v290
 - **Nightly Firestore backup** · shipped · 1:00 AM MT cloud function snapshots all collections to Storage backups/ (30-day retention) + runBackupNow callable + settings/backupStatus stamp · 2026-07-06
 - **Plans tab** · shipped · plans documents per job
