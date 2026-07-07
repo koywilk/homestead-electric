@@ -50967,13 +50967,21 @@ function App() {
           // when localStorage is cleared and the fix re-runs. If needed, use updateDoc with dot-notation.
           // The fix has already run on all devices, so this is safe to leave disabled.
 
-          // Merge snapshot data with any pending local edits
-          // Jobs with active save timers should keep their local version
+          // Merge snapshot data with any pending local edits. A job's local copy
+          // must win while an edit is IN FLIGHT — which is NOT just "has a save
+          // timer". Between the debounce firing (timer→null) and Firestore
+          // confirming the transaction, the timer is null but the write hasn't
+          // landed yet; `pendingPatches` still holds the edit and is only cleared
+          // on confirm. Checking the timer ALONE let an incoming snapshot (this
+          // is a whole-collection listener, so ANY job's change fires it) revert
+          // the optimistic edit during that window — punch deletes "reappeared"
+          // and a box being typed vanished mid-keystroke. Guard on BOTH.
+          const _inFlight = (id) => !!saveTimers.current[id] ||
+            !!(pendingPatches.current[id] && Object.keys(pendingPatches.current[id]).length > 0);
           setJobs(prev => {
-            const pendingIds = new Set(Object.keys(saveTimers.current).filter(k => saveTimers.current[k]));
-            if(pendingIds.size === 0) return loaded;
+            if(!loaded.some(j => _inFlight(j.id))) return loaded;
             return loaded.map(sj => {
-              if(pendingIds.has(sj.id)) {
+              if(_inFlight(sj.id)) {
                 const local = prev.find(p => p.id === sj.id);
                 return local || sj;
               }
@@ -50984,8 +50992,9 @@ function App() {
           // Keep selected job in sync with Firestore updates
           setSelected(prev => {
             if(!prev) return null;
-            // Don't overwrite if there's a pending save for this job
-            if(saveTimers.current[prev.id]) return prev;
+            // Don't overwrite while an edit for this job is in flight (timer OR
+            // an unconfirmed pending patch — see _inFlight note above).
+            if(_inFlight(prev.id)) return prev;
             const updated = loaded.find(j => j.id === prev.id);
             return updated ? normalizeJob(updated) : prev;
           });
