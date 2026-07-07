@@ -27521,7 +27521,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               <Section label="Punch List" color={C.rough} action={
                 <PunchPicker punch={job.roughPunch||{}} jobId={job.id} stage="Rough" color={C.rough} showHotcheck={false}
-                  filter={job.roughPunchFilter||null} filterLabel={job.roughPunchFilterLabel||''} onSaveFilter={(v,lbl)=>u({roughPunchFilter:v,roughPunchFilterLabel:lbl})}/>
+                  filter={job.roughPunchFilter||null} filterLabel={job.roughPunchFilterLabel||''} onSaveFilter={(v,lbl)=>u({roughPunchFilter:v,roughPunchFilterLabel:lbl})}
+                  shares={job.roughPunchShares||[]} onSaveShares={v=>u({roughPunchShares:v})}/>
               }>
 
                 <PunchSection punch={job.roughPunch} onChange={v=>handlePhasePunchChange("rough", v)}
@@ -27825,7 +27826,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               <Section label="Punch List" color={C.finish} action={
                 <PunchPicker punch={job.finishPunch||{}} jobId={job.id} stage="Finish" color={C.finish} showHotcheck={false}
-                  filter={job.finishPunchFilter||null} filterLabel={job.finishPunchFilterLabel||''} onSaveFilter={(v,lbl)=>u({finishPunchFilter:v,finishPunchFilterLabel:lbl})}/>
+                  filter={job.finishPunchFilter||null} filterLabel={job.finishPunchFilterLabel||''} onSaveFilter={(v,lbl)=>u({finishPunchFilter:v,finishPunchFilterLabel:lbl})}
+                  shares={job.finishPunchShares||[]} onSaveShares={v=>u({finishPunchShares:v})}/>
               }>
                 <PunchSection punch={job.finishPunch} onChange={v=>handlePhasePunchChange("finish", v)} jobName={job.name||"This Job"} phase="Finish" onEmail={setEmailData}
                   filterIds={job.finishPunchFilter ? new Set(job.finishPunchFilter) : null}
@@ -45449,10 +45451,12 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
 }
 
 // ─── Punch Picker (selective punch list share modal) ────────────────────────
-function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, filterLabel='', onSaveFilter }) {
-  const [open,     setOpen]     = useState(false);
-  const [selected, setSelected] = useState(new Set());
-  const [label,    setLabel]    = useState('');
+function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, filterLabel='', onSaveFilter, shares=[], onSaveShares }) {
+  const [open,      setOpen]      = useState(false);
+  const [selected,  setSelected]  = useState(new Set());
+  const [label,     setLabel]     = useState('');
+  const [editingId, setEditingId] = useState(null); // saved share being edited, or null for a new one
+  const shareList = Array.isArray(shares) ? shares : [];
 
   const normF = (f) => (f && typeof f === 'object' ? f : {});
 
@@ -45490,10 +45494,9 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
   const allItems = getAllItems();
 
   const openPicker = () => {
-    // Pre-select from saved filter if one exists, otherwise select all
-    const initIds = filter ? new Set(filter) : new Set(allItems.map(i=>i.id));
-    setSelected(initIds);
-    setLabel(filterLabel || '');
+    setSelected(new Set());
+    setLabel('');
+    setEditingId(null);
     setOpen(true);
   };
 
@@ -45508,18 +45511,34 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
     return n;
   });
 
-  const saveFilter = () => {
+  const idExists = (id) => allItems.some(i=>i.id===id);
+  const copyLink = (shareId) => {
+    const link = shareId ? `${window.location.origin}/?${stageParam}=${jobId}&s=${shareId}`
+                         : `${window.location.origin}/?${stageParam}=${jobId}`;
+    navigator.clipboard.writeText(link).then(()=>toast.success('Link copied to clipboard.')).catch(()=>toast.info(link));
+  };
+
+  // Save a NAMED share (its own link). Multiple people can each get their own.
+  const saveShare = () => {
     if(!selected.size){ toast.warn('Select at least one item.'); return; }
-    if(onSaveFilter) onSaveFilter([...selected], label.trim() || 'GC');
-    const link = `${window.location.origin}/?${stageParam}=${jobId}`;
-    navigator.clipboard.writeText(link)
-      .then(()=>toast.success('Filter saved! Link copied to clipboard.'))
-      .catch(()=>toast.success('Filter saved!'));
+    const name = (label.trim() || 'GC');
+    const ids = [...selected];
+    let shareId, next;
+    const match = editingId ? shareList.find(s=>s.id===editingId) : shareList.find(s=>(s.name||'').toLowerCase()===name.toLowerCase());
+    if(match){ shareId=match.id; next=shareList.map(s=>s.id===match.id?{...s,name,ids,updatedAt:new Date().toISOString()}:s); }
+    else { shareId='s_'+Math.random().toString(36).slice(2,9); next=[...shareList,{id:shareId,name,ids,createdAt:new Date().toISOString()}]; }
+    if(onSaveShares) onSaveShares(next);
+    copyLink(shareId);
     setOpen(false);
   };
 
-  const clearFilter = () => {
-    if(onSaveFilter) onSaveFilter(null);
+  const deleteShare = (id) => { if(onSaveShares) onSaveShares(shareList.filter(s=>s.id!==id)); if(editingId===id){ setEditingId(null); setSelected(new Set()); setLabel(''); } };
+  const loadShare = (s) => { setSelected(new Set((s.ids||[]).filter(idExists))); setLabel(s.name||''); setEditingId(s.id); };
+  const startNew = () => { setSelected(new Set()); setLabel(''); setEditingId(null); };
+
+  const shareEverything = () => {
+    if(onSaveFilter) onSaveFilter(null); // clear legacy single-filter so the base link shows all
+    copyLink(null);
     setOpen(false);
   };
 
@@ -45537,7 +45556,7 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
         style={{background:`${color}15`,border:`1px solid ${color}55`,borderRadius:6,
           color,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',
           fontFamily:'inherit',letterSpacing:'0.05em'}}>
-        {filter ? `Shared (${filter.length}) ↗` : 'Share ↗'}
+        {shareList.length ? `Share links (${shareList.length}) ↗` : filter ? `Shared (${filter.length}) ↗` : 'Share ↗'}
       </button>
 
       {open&&(
@@ -45571,6 +45590,26 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
 
             {/* Item list */}
             <div style={{overflowY:'auto',flex:1,padding:'14px 22px'}}>
+              {shareList.length>0 && (
+                <div style={{marginBottom:16,background:'#F4F6F8',border:'1px solid #E1E4E9',borderRadius:10,padding:'10px 12px'}}>
+                  <div style={{fontSize:11,fontWeight:800,color:'#5E6670',letterSpacing:'0.06em',marginBottom:6}}>SAVED LINKS</div>
+                  {shareList.map(s=>{
+                    const cnt=(s.ids||[]).length;
+                    return (
+                      <div key={s.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderTop:'1px solid #E7EAEF'}}>
+                        <div style={{flex:1,minWidth:0}}>
+                          <div style={{fontSize:12.5,fontWeight:700,color:'#1B1F24',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.name}{editingId===s.id&&<span style={{fontSize:10,fontWeight:600,color,marginLeft:6}}>editing</span>}</div>
+                          <div style={{fontSize:10,color:'#99A0AA'}}>{cnt} item{cnt!==1?'s':''}</div>
+                        </div>
+                        <button onClick={()=>loadShare(s)} style={{fontSize:10.5,fontWeight:600,color:'#5E6670',background:'#fff',border:'1px solid #D7DBE1',borderRadius:6,padding:'4px 9px',cursor:'pointer',fontFamily:'inherit'}}>Edit</button>
+                        <button onClick={()=>copyLink(s.id)} style={{fontSize:10.5,fontWeight:700,color:'#fff',background:'#1e3a5f',border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit'}}>Copy link</button>
+                        <button onClick={()=>deleteShare(s.id)} title="Delete link" style={{fontSize:13,color:'#B23A3A',background:'none',border:'none',cursor:'pointer',padding:'0 2px'}}>✕</button>
+                      </div>
+                    );
+                  })}
+                  {editingId && <button onClick={startNew} style={{marginTop:8,fontSize:11,fontWeight:700,color,background:'none',border:`1px dashed ${color}66`,borderRadius:6,padding:'5px 12px',cursor:'pointer',fontFamily:'inherit'}}>+ Start a new link</button>}
+                </div>
+              )}
               {byFloor.map(({k, floorLabel, items})=>{
                 const ids   = items.map(i=>i.id);
                 const allOn = ids.every(id=>selected.has(id));
@@ -45632,18 +45671,16 @@ function PunchPicker({ punch, jobId, stage, color, showHotcheck, filter=null, fi
             {/* Footer */}
             <div style={{padding:'12px 22px',borderTop:'1px solid #E1E4E9',
               display:'flex',gap:8,flexShrink:0,flexWrap:'wrap'}}>
-              <button onClick={saveFilter}
-                style={{flex:1,background:'#1e3a5f',color:'#fff',border:'none',borderRadius:8,
+              <button onClick={saveShare}
+                style={{flex:1,minWidth:180,background:'#1e3a5f',color:'#fff',border:'none',borderRadius:8,
                   padding:'10px 16px',fontSize:13,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
-                Save & Copy Link — {selected.size} item{selected.size!==1?'s':''}
+                {editingId?'Update':'Save'} & Copy Link — {selected.size} item{selected.size!==1?'s':''}
               </button>
-              {filter&&(
-                <button onClick={clearFilter}
-                  style={{background:'#F6EAEA',color:'#B23A3A',border:'1px solid #EAD2D2',borderRadius:8,
-                    padding:'10px 12px',fontSize:12,cursor:'pointer',fontFamily:'inherit',fontWeight:600}}>
-                  Share All
-                </button>
-              )}
+              <button onClick={shareEverything}
+                style={{background:'#EEF2F7',color:'#1e3a5f',border:'1px solid #CBD6E4',borderRadius:8,
+                  padding:'10px 12px',fontSize:12,cursor:'pointer',fontFamily:'inherit',fontWeight:600}}>
+                Share all
+              </button>
               <button onClick={()=>setOpen(false)}
                 style={{background:'#EEF0F3',color:'#6E7682',border:'none',borderRadius:8,
                   padding:'10px 14px',fontSize:13,cursor:'pointer',fontFamily:'inherit'}}>
@@ -45728,12 +45765,21 @@ function PunchSharePage({ jobId, stage }) {
   const showHotcheck = stage==='QC';
   const punch        = job?.[punchKey] || {};
 
-  // Filter from Firestore — saved by crew via Share picker
+  // Filter from Firestore. A named share link (?s=<id>) uses that share's item
+  // set; otherwise fall back to the legacy single filter so old links keep working.
+  const shareParam = new URLSearchParams(window.location.search).get('s') || '';
+  const shareObj = shareParam ? (job?.[punchKey+'Shares']||[]).find(s=>s.id===shareParam) : null;
+  const linkRevoked = !!shareParam && !!job && !shareObj; // link points at a deleted share
   const filterIds = (() => {
+    if(shareParam){
+      if(shareObj && Array.isArray(shareObj.ids)) return new Set(shareObj.ids);
+      return new Set(); // present but not found → show nothing
+    }
     const raw = job?.[punchKey + 'Filter'];
     if (!Array.isArray(raw) || raw.length === 0) return null;
     return new Set(raw);
   })();
+  const shareLabel = shareObj?.name || job?.[punchKey+'FilterLabel'] || '';
 
   const normF = (f) => f && typeof f==='object' ? f : {};
   const FLOOR_KEYS = [
@@ -45780,6 +45826,13 @@ function PunchSharePage({ jobId, stage }) {
 
   if(loading) return <div style={{textAlign:'center',padding:60,color:'#99A0AA',fontFamily:'system-ui,sans-serif'}}>Loading…</div>;
   if(error)   return <div style={{textAlign:'center',padding:60,color:'#B23A3A',fontFamily:'system-ui,sans-serif'}}>{error}</div>;
+  if(linkRevoked) return (
+    <div style={{maxWidth:600,margin:'0 auto',padding:'60px 24px',textAlign:'center',fontFamily:'system-ui,sans-serif'}}>
+      <div style={{marginBottom:16,color:'#B0892C',display:'flex',justifyContent:'center'}}><Icon name="alertTriangle" size={44} stroke={2}/></div>
+      <div style={{fontSize:20,fontWeight:700,color:'#111',marginBottom:8}}>This link is no longer active</div>
+      <div style={{fontSize:14,color:'#6E7682',lineHeight:1.6}}>This punch list link has been closed by Homestead Electric. Please reach out to us for an updated link.</div>
+    </div>
+  );
 
   return (
     <div style={{maxWidth:640,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#EEF0F3',minHeight:'100vh'}}>
@@ -46633,6 +46686,7 @@ const FEATURES_MD_INLINE = String.raw`
   - Punch-assigned auto-nudge → assignee · shipped 2026-06-10 · SW v231 · grouped one push per person per save
   - Photos attachable per punch item
   - Convert punch → Return Trip
+  - Multiple punch share links per job (roughPunchShares/finishPunchShares): Share modal saves a NAMED link per recipient (own ?…punch=<job>&s=<id> URL), Saved Links list to copy/edit/delete, revoked links show "no longer active". Mirrors the questions multi-link. Legacy single filter/link still works · shipped 2026-07-06 · SW v295
   - "Assigned" tab in foreman view (cross-job)
 - **Change Orders** · shipped · CO list with status pipeline
   - Quote # field + searchable · shipped 2026-05-15 · SW v172
