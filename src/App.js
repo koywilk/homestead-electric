@@ -23182,6 +23182,7 @@ const _settingsBaselines = {};
 // wins), identical to old behavior. Throws on failure so callers can toast.
 async function mergeSaveSettingsFields(docId, fields) {
   const base = _settingsBaselines[docId] || {};
+  let _wrote = null;
   await runTransaction(db, async (tx) => {
     const dref = doc(db, "settings", docId);
     const snap = await tx.get(dref);
@@ -23197,8 +23198,17 @@ async function mergeSaveSettingsFields(docId, fields) {
       }
       out[k] = merged;
     });
+    _wrote = out;
     tx.update(dref, out);
   });
+  // Advance the baseline to what we just wrote so back-to-back settings edits
+  // (crew-planner week, PTO, time-off) don't merge against a frozen-old baseline
+  // and revert — same fix as the job save path.
+  if (_wrote) {
+    const b = { ..._settingsBaselines[docId] };
+    Object.keys(_wrote).forEach(k => { if (k !== "updatedAt") b[k] = _wrote[k]; });
+    _settingsBaselines[docId] = b;
+  }
 }
 
 // ── Job Notes — lazy idempotent migration ──────────────────────
@@ -51304,6 +51314,7 @@ function App() {
           // deletes still go through. Scalars behave exactly as before.
           const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId};
           const cleanPatch = sanitize(accumulated);
+          let _writtenPatch = null;
           await runTransaction(db, async (tx) => {
             const jref = doc(db,"jobs",job.id);
             const snap = await tx.get(jref);
@@ -51314,8 +51325,23 @@ function App() {
             }
             const serverData = snap.data()?.data || {};
             const writePatch = {...meta, ..._mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData)};
+            _writtenPatch = writePatch;
             tx.update(jref, writePatch);
           });
+          // CRITICAL: advance the three-way-merge baseline to EXACTLY what we just
+          // wrote. Otherwise `serverBaselines` only moves forward on an idle
+          // snapshot — which never happens during a burst of edits (typing, or
+          // delete-then-keep-editing). Every save in the burst then three-way
+          // merges its patch against a FROZEN-OLD baseline, so the merge decides
+          // the server "changed" the item and preserves it: the punch item you
+          // just deleted reappears, and a box you're typing reverts. Advancing the
+          // baseline to our written value makes the next edit's `server === base`
+          // check pass, so the client's change applies verbatim (deletes included).
+          if (_writtenPatch) {
+            const _b = serverBaselines.current[job.id] ? { ...serverBaselines.current[job.id] } : {};
+            Object.keys(_writtenPatch).forEach(pk => { if (pk.indexOf("data.") === 0) _b[pk.slice(5)] = _writtenPatch[pk]; });
+            serverBaselines.current[job.id] = _b;
+          }
           // Write succeeded — clear ONLY the keys we just wrote. New patches
           // that arrived during the await stay in the queue for next flush.
           if (pendingPatches.current[job.id]) {
@@ -51352,6 +51378,7 @@ function App() {
           // Now: brand-new docs are still created whole (nothing to wipe),
           // but for an EXISTING doc every structural field is three-way
           // merged against the server's current value first.
+          let _writtenFull = null;
           await runTransaction(db, async (tx) => {
             const jref = doc(db,"jobs",job.id);
             const snap = await tx.get(jref);
@@ -51361,8 +51388,15 @@ function App() {
             }
             const serverData = snap.data()?.data || {};
             const fullPatch = {...meta, ..._mergePatchAgainstServer(job.id, job.name, sanitized, serverData)};
+            _writtenFull = fullPatch;
             tx.update(jref, fullPatch);
           });
+          // Advance the baseline to what we wrote (see the patch-mode note above).
+          if (_writtenFull) {
+            const _b = serverBaselines.current[job.id] ? { ...serverBaselines.current[job.id] } : {};
+            Object.keys(_writtenFull).forEach(pk => { if (pk.indexOf("data.") === 0) _b[pk.slice(5)] = _writtenFull[pk]; });
+            serverBaselines.current[job.id] = _b;
+          }
         }
 
         isDirty.current = false;
