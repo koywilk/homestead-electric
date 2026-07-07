@@ -163,7 +163,7 @@ async function publishCcHomeruns(jobId, electricalPanels) {
             id: `${p?.id ?? ""}:${k}`,
             slots: slot != null ? [slot] : [],
             name: c.name || "",
-            amperage: (c.amps != null && c.amps !== "") ? Number(c.amps) : null,
+            amperage: (c.amps != null && c.amps !== "") ? (parseFloat(String(c.amps).replace(/[^0-9.]/g, "")) || null) : null,
             poles: 1,
             source: "office",
           };
