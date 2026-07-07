@@ -134,49 +134,50 @@ async function publishCcJobsIndex(jobs) {
   } catch (e) { console.warn("[fieldink] job index publish failed:", e?.message); }
 }
 
-// ── FieldInk HOMERUNS publish (office → field circuit lists) ──────────────────
-// The SECOND write this app makes to field-ink (after ccjobs/index). When the
-// office types a panel schedule here, publish its circuit IDENTITY (panel ·
-// slot · name · amps — NO geometry) to field-ink at cchomeruns/<jobId>, so the
-// FieldInk app can offer "place N from the office" rapid-mapping on the matching
-// job. Mirrors publishCcJobsIndex exactly: anon field-ink auth, per-job hash-
-// gate (identical panels = no write), fire-and-forget (never blocks the save,
-// never throws). Each circuit row carries a STABLE id (`<panelId>:<slotKey>`)
-// so the field side can round-trip it. REQUIRES the field-ink `cchomeruns`
-// rules block deployed; until then the write is denied and silently skipped.
+// ── FieldInk HOMERUNS publish (office → field) ───────────────────────────────
+// Publish the job's HOME-RUN LIST (built early, during rough) to field-ink at
+// cchomeruns/<jobId>, so FieldInk shows a "From Command Center" list Koy can draw
+// out on the plan. We publish home runs, NOT the panel schedule (electricalPanels)
+// — that's rarely made until finish. homeRuns = { main:[], upper:[], basement:[],
+// extraFloors:[{key,label}], <key>:[] }; each row = { id, num, wire, name, status,
+// panel }. Flatten every floor, keep NAMED rows, group by `panel`, and emit the
+// same {panels:[{...,circuits}]} shape FieldInk already reads — each home run as a
+// circuit with NO slot yet (the breaker slot is assigned later at panel-schedule
+// time). Mirrors the other cc* publishers: anon field-ink auth, per-job hash-gate,
+// fire-and-forget. REQUIRES the field-ink `cchomeruns` rules block deployed.
 const _ccHomerunsHash = {};
-async function publishCcHomeruns(jobId, electricalPanels) {
+async function publishCcHomeruns(jobId, homeRuns) {
   try {
     if (jobId == null) return;
     const jid = String(jobId);
-    const panels = (electricalPanels || []).map(p => ({
-      id: String(p?.id ?? ""),
-      name: p?.label || "",
-      size: p?.size || "",
-      slotCount: p?.slotCount || 40,
-      circuits: Object.entries(p?.circuits || {})
-        .filter(([, c]) => c && (c.name || c.amps))
-        .map(([k, c]) => {
-          const m = String(k).match(/^(\d+)/);
-          const slot = m ? parseInt(m[1], 10) : null;
-          return {
-            id: `${p?.id ?? ""}:${k}`,
-            slots: slot != null ? [slot] : [],
-            name: c.name || "",
-            amperage: (c.amps != null && c.amps !== "") ? (parseFloat(String(c.amps).replace(/[^0-9.]/g, "")) || null) : null,
-            poles: 1,
-            source: "office",
-          };
-        }),
-    })).filter(p => p.id);
-    // Per-job hash gate: identical schedule = no write (the common case).
+    const hr = homeRuns || {};
+    // Every floor's rows: fixed main/upper/basement + any extra floors' keyed arrays.
+    const floorKeys = ["main", "upper", "basement", ...((hr.extraFloors || []).map(ef => ef && ef.key).filter(Boolean))];
+    const rows = floorKeys.flatMap(k => Array.isArray(hr[k]) ? hr[k] : []);
+    const named = rows.filter(r => r && r.id && (r.name || "").trim());
+    // Group by panel (blank panel → a catch-all "Home Runs" bucket).
+    const byPanel = new Map();
+    for (const r of named) {
+      const pName = (r.panel || "").trim() || "Home Runs";
+      if (!byPanel.has(pName)) byPanel.set(pName, []);
+      byPanel.get(pName).push({
+        id: `hr:${r.id}`,
+        slots: [],                                                 // no breaker slot yet
+        name: (r.name || "").trim() + (r.wire ? ` (${r.wire})` : ""),
+        amperage: null,
+        poles: 1,
+        source: "office",
+      });
+    }
+    const panels = [...byPanel.entries()].map(([name, circuits]) => ({ id: name, name, size: "", slotCount: 40, circuits }));
+    // Per-job hash gate: identical list = no write (the common case).
     const hash = JSON.stringify(panels);
     if (_ccHomerunsHash[jid] === hash) return;
     const user = await ensureFieldinkAuth();
     if (!user) return;
     await setDoc(doc(fieldinkDb, "cchomeruns", jid), { panels, updatedAt: serverTimestamp(), updatedBy: "office" }, { merge: true });
     _ccHomerunsHash[jid] = hash;
-    console.log(`[fieldink] published homeruns for job ${jid}: ${panels.reduce((n, p) => n + p.circuits.length, 0)} circuit(s)`);
+    console.log(`[fieldink] published homeruns for job ${jid}: ${panels.reduce((n, p) => n + p.circuits.length, 0)} run(s)`);
   } catch (e) { console.warn("[fieldink] homeruns publish failed (rules deployed?):", e?.message); }
 }
 
@@ -27954,7 +27955,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
             <HomeRunsTab homeRuns={job.homeRuns} panelCounts={job.panelCounts} jobId={job.id} jobName={job.name} jobAddress={job.address}
               electricalPanels={job.electricalPanels||[]}
-              onElectricalPanelsChange={v=>{u({electricalPanels:v}); try{publishCcHomeruns(job.id,v);}catch{}}}
+              onElectricalPanelsChange={v=>u({electricalPanels:v})}
               onHRChange={v=>u({homeRuns:v})} onCountChange={v=>u({panelCounts:v})}
               finishMaterials={job.finishMaterials} onMatChange={v=>u({finishMaterials:v})}
               breakerOverrides={job.breakerOverrides} onBreakersChange={v=>u({breakerOverrides:v})}/>
@@ -51310,13 +51311,12 @@ function App() {
       if ('roughQuestions' in patch || 'finishQuestions' in patch) {
         try { publishCcQuestions(job.id, patch.roughQuestions || job.roughQuestions, patch.finishQuestions || job.finishQuestions); } catch(e){}
       }
-      // Mirror the electrical panel schedule (home runs) to FieldInk the same way
-      // (fire-and-forget, hash-gated internally, separate field-ink project — cannot
-      // affect this job's save). Runs whenever the panel schedule is in the patch, so
-      // FieldInk's "From Command Center" circuit list stays current on every save —
-      // not only the live BreakerCounts onChange at ~L27957.
-      if ('electricalPanels' in patch) {
-        try { publishCcHomeruns(job.id, patch.electricalPanels || job.electricalPanels || []); } catch(e){}
+      // Mirror the job's HOME-RUN LIST to FieldInk the same way (fire-and-forget,
+      // hash-gated internally, separate field-ink project — cannot affect this job's
+      // save). Runs whenever homeRuns is in the patch, so FieldInk's "From Command
+      // Center" list stays current on every save.
+      if ('homeRuns' in patch) {
+        try { publishCcHomeruns(job.id, patch.homeRuns || job.homeRuns || {}); } catch(e){}
       }
     }
 
