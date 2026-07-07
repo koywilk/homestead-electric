@@ -5112,3 +5112,69 @@ exports.syncQcCalendar = functions.pubsub.schedule("every 60 minutes").timeZone(
 exports.runQcCalendarSync = functions.https.onCall(async () => {
   return await _qcCalendarSync();
 });
+
+// ─────────────────────────────────────────────────────────────
+// NIGHTLY FIRESTORE BACKUP — Cougar Moon insurance (2026-07-06)
+// The punch-list data loss was unrecoverable because there was no
+// server-side history. This snapshots every user-generated collection
+// to Cloud Storage every night at 1:00 AM MT, gzipped, keeping 30
+// days. READ-ONLY on Firestore data collections — the only Firestore
+// write is a small status stamp to settings/backupStatus so the app
+// (and Koy) can see the last successful run.
+//
+// Restore path: download backups/firestore-YYYY-MM-DD.json.gz from the
+// Firebase console → Storage, gunzip, then restore jobs via the in-app
+// "restore from file" tool or __HE_RESTORE in the DevTools console.
+// ─────────────────────────────────────────────────────────────
+const BACKUP_COLLECTIONS = ["jobs","settings","manualTasks","needs","quoteWalks","suggestions","homeowner_requests"];
+const BACKUP_KEEP_DAYS = 30;
+
+async function _runFirestoreBackup(trigger) {
+  const zlib = require("zlib");
+  const bucket = admin.storage().bucket();
+  const startedAt = new Date();
+  const stamp = startedAt.toLocaleDateString("en-CA", { timeZone: TZ }); // YYYY-MM-DD
+  const out = { createdAt: startedAt.toISOString(), trigger: trigger || "scheduled", collections: {} };
+  let docCount = 0;
+  for (const coll of BACKUP_COLLECTIONS) {
+    const snap = await db.collection(coll).get();
+    const docsOut = {};
+    snap.forEach(d => { docsOut[d.id] = d.data(); docCount++; });
+    out.collections[coll] = docsOut;
+  }
+  const gz = zlib.gzipSync(Buffer.from(JSON.stringify(out)));
+  const path = `backups/firestore-${stamp}.json.gz`;
+  await bucket.file(path).save(gz, { contentType: "application/gzip", resumable: false });
+  // Prune anything older than BACKUP_KEEP_DAYS.
+  const [files] = await bucket.getFiles({ prefix: "backups/firestore-" });
+  const cutoff = Date.now() - BACKUP_KEEP_DAYS * 24 * 60 * 60 * 1000;
+  let pruned = 0;
+  for (const f of files) {
+    const created = new Date(f.metadata.timeCreated).getTime();
+    if (created < cutoff) { try { await f.delete(); pruned++; } catch(e) { functions.logger.warn("[backup] prune failed", f.name, e.message); } }
+  }
+  const status = { lastRunAt: new Date().toISOString(), ok: true, file: path, docCount, bytes: gz.length, pruned, trigger: trigger || "scheduled" };
+  await db.doc("settings/backupStatus").set(status);
+  functions.logger.info("[nightlyFirestoreBackup] done", status);
+  return status;
+}
+
+exports.nightlyFirestoreBackup = functions
+  .runWith({ memory: "1GB", timeoutSeconds: 540 })
+  .pubsub.schedule("0 1 * * *")
+  .timeZone(TZ)
+  .onRun(async () => {
+    try { return await _runFirestoreBackup("scheduled"); }
+    catch (e) {
+      functions.logger.error("[nightlyFirestoreBackup] FAILED", e.message);
+      try { await db.doc("settings/backupStatus").set({ lastRunAt: new Date().toISOString(), ok: false, error: e.message }); } catch(_){}
+      throw e;
+    }
+  });
+
+// Manual trigger so Koy can run + verify a backup immediately after deploy.
+exports.runBackupNow = functions
+  .runWith({ memory: "1GB", timeoutSeconds: 540 })
+  .https.onCall(async () => {
+    return await _runFirestoreBackup("manual");
+  });

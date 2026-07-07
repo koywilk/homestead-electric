@@ -23093,6 +23093,114 @@ const sanitize = (obj) => {
   return obj;
 };
 
+// ── Three-way merge (Cougar Moon data-loss fix, 2026-07-06) ──────────────────
+// Module scope so every view (jobs saveJob, Crew Planner, Time Off, pipeline)
+// uses the identical merge. See saveJob for the full story.
+const _jeq = (a, b) => {
+  if (a === b) return true;
+  try { return JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b); }
+  catch { return false; }
+};
+
+// Three-way structural merge. Rules:
+//  • If the server hasn't changed since our baseline → the client's write
+//    applies verbatim (so deletes work exactly like today).
+//  • If the client didn't change the field vs baseline → keep the server's.
+//  • Both changed → merge: arrays of {id} objects union by id, with
+//    base-awareness so "present in base, missing on one side, unchanged on
+//    the other" is treated as a deliberate delete instead of resurrected.
+//    An item ADDED on either side (absent from base) is always kept.
+//  • No baseline available (first load edge) → union merge, never drop.
+//  • Plain objects recurse per key; primitives/unmergeable → client wins
+//    (same as the old behavior).
+const _threeWayMerge = (base, client, server) => {
+  if (server === undefined || server === null) return client;
+  if (client === undefined || client === null) return server;
+  if (_jeq(server, base)) return client;   // nobody else touched it
+  if (_jeq(client, base)) return server;   // we didn't touch it
+  // Both sides changed → structural merge
+  if (Array.isArray(client) && Array.isArray(server)) {
+    const idsOk = (arr) => arr.every(x => x && typeof x === "object" && x.id != null);
+    if (idsOk(client) && idsOk(server)) {
+      const baseArr = Array.isArray(base) ? base.filter(x => x && typeof x === "object" && x.id != null) : [];
+      const bMap = new Map(baseArr.map(x => [x.id, x]));
+      const sMap = new Map(server.map(x => [x.id, x]));
+      const cIds = new Set(client.map(x => x.id));
+      const out = [];
+      // Client's order first (their screen), merged per item against server
+      client.forEach(c => {
+        const s = sMap.get(c.id), b = bMap.get(c.id);
+        if (s !== undefined) { out.push(_threeWayMerge(b, c, s)); return; }
+        if (b === undefined) { out.push(c); return; }          // client added → keep
+        if (!_jeq(c, b)) { out.push(c); return; }              // server deleted, client edited → keep client
+        /* server deleted, client unchanged → honor the delete */
+      });
+      // Server-side items the client doesn't have
+      server.forEach(s => {
+        if (cIds.has(s.id)) return;
+        const b = bMap.get(s.id);
+        if (b === undefined) { out.push(s); return; }          // someone else added → KEEP (the fix)
+        if (!_jeq(s, b)) { out.push(s); return; }              // client deleted, server edited → keep server
+        /* client deleted, server unchanged → honor the delete */
+      });
+      return out;
+    }
+    return client; // arrays without stable ids → client wins (old behavior)
+  }
+  if (client && server && typeof client === "object" && typeof server === "object" && !Array.isArray(client) && !Array.isArray(server)) {
+    const b = (base && typeof base === "object" && !Array.isArray(base)) ? base : {};
+    const out = {};
+    new Set([...Object.keys(client), ...Object.keys(server)]).forEach(k => {
+      const cv = client[k], sv = server[k], bv = b[k];
+      if (cv !== undefined && sv !== undefined) { out[k] = _threeWayMerge(bv, cv, sv); return; }
+      if (sv === undefined) { // key only on client
+        if (bv === undefined || !_jeq(cv, bv)) out[k] = cv;    // added/edited by client → keep
+        /* else: server deleted the key, client unchanged → honor delete */
+        return;
+      }
+      // key only on server
+      if (bv === undefined || !_jeq(sv, bv)) out[k] = sv;      // added/edited by server → keep
+      /* else: client deleted the key, server unchanged → honor delete */
+    });
+    return out;
+  }
+  return client; // primitives / mixed types → client wins
+};
+
+// Baselines for shared settings/* docs (crewPTO, timeOffRequests, crewTeams,
+// schedule_<wk>, upcoming_jobs, …): docId → the last server data this client
+// synced from. Updated in each doc's onSnapshot listener. Read-only
+// bookkeeping — never written to Firestore.
+const _settingsBaselines = {};
+
+// Transactionally merge-write the given fields of settings/<docId>.
+// Same recipe as saveJob: read the server's CURRENT doc inside a
+// transaction, three-way merge every structural field (baseline vs what
+// this client wants to write vs server), write only those fields. Fields
+// not passed are never touched — so a save can no longer push a stale copy
+// of a field the caller didn't even edit. Scalars pass through (client
+// wins), identical to old behavior. Throws on failure so callers can toast.
+async function mergeSaveSettingsFields(docId, fields) {
+  const base = _settingsBaselines[docId] || {};
+  await runTransaction(db, async (tx) => {
+    const dref = doc(db, "settings", docId);
+    const snap = await tx.get(dref);
+    const stamp = { updatedAt: new Date().toISOString() };
+    if (!snap.exists()) { tx.set(dref, { ...sanitize(fields), ...stamp }); return; }
+    const server = snap.data() || {};
+    const out = { ...stamp };
+    Object.entries(sanitize(fields)).forEach(([k, v]) => {
+      let merged = v;
+      if (v && typeof v === "object" && server[k] !== undefined && server[k] !== null) {
+        merged = _threeWayMerge(base[k], v, server[k]);
+        if (!_jeq(merged, v)) console.log(`[HE] concurrent-edit merge: preserved server changes on settings/${docId}.${k}`);
+      }
+      out[k] = merged;
+    });
+    tx.update(dref, out);
+  });
+}
+
 // ── Job Notes — lazy idempotent migration ──────────────────────
 // Data safety (spec §"Replacement of PhaseInstructions"):
 //   1. `job.roughInstructions` / `job.finishInstructions` are NEVER mutated
@@ -34276,10 +34384,13 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
   const [crewForemanFilter, setCrewForemanFilter] = useState(null);
   const [crewPTODraft, setCrewPTODraft] = useState({ name:"", start:"", end:"", note:"" });
   useEffect(() => onSnapshot(doc(db,"settings","crewPTO"), s => {
+    _settingsBaselines["crewPTO"] = s.exists() ? (s.data()||{}) : {};
     if(s.exists()) setCrewPTOList(s.data().list||[]);
     else setCrewPTOList([]);
   }), []);
-  const _savePTO = (list) => { setCrewPTOList(list); setDoc(doc(db,"settings","crewPTO"),{list, updatedAt:new Date().toISOString()}); };
+  // Merge-save (data safety): entries are id'd, so concurrent PTO edits from
+  // the Time Off approver flow and the planner union instead of last-write-wins.
+  const _savePTO = (list) => { setCrewPTOList(list); mergeSaveSettingsFields("crewPTO",{list}).catch(e=>{console.error("[HE] crewPTO save:",e?.message);toast.error("PTO save failed — check connection and retry.");}); };
   const addPTO = () => {
     if(!crewPTODraft.name || !crewPTODraft.start) return;
     const entry = { ...crewPTODraft, end: crewPTODraft.end || crewPTODraft.start, id: Date.now().toString(36) };
@@ -34449,6 +34560,7 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
   // "Sched 8h / Need 12h" chip on the row.
   const [crewHoursByJob, setCrewHoursByJob] = useState({});
   useEffect(() => onSnapshot(doc(db,"settings","schedule_"+crewWK), s => {
+    _settingsBaselines["schedule_"+crewWK] = s.exists() ? (s.data()||{}) : {};
     if(s.exists()){ const d=s.data(); setCrewData(d.assignments||{}); setCrewExtra(d.extraJobs||[]); setCrewJobOrder(d.jobOrder||[]); setCrewPinned(d.pinnedJobs||[]); setCrewFocus(!!d.focus); setCrewHoursByJob(d.hoursByJob||{}); setCrewNeedsBodies(d.needsBodies||[]); }
     else { setCrewData({}); setCrewExtra([]); setCrewJobOrder([]); setCrewPinned([]); setCrewFocus(false); setCrewHoursByJob({}); setCrewNeedsBodies([]); }
   }), [crewWK]);
@@ -34461,10 +34573,12 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
 
   // Teams
   useEffect(() => onSnapshot(doc(db,"settings","crewTeams"), s => {
+    _settingsBaselines["crewTeams"] = s.exists() ? (s.data()||{}) : {};
     if(s.exists()) setCrewTeams(s.data().teams||[]);
     else setCrewTeams([]);
   }), []);
-  const _saveTeams = t => { setCrewTeams(t); setDoc(doc(db,"settings","crewTeams"),{teams:t,updatedAt:new Date().toISOString()}); };
+  // Merge-save: teams are id'd, so two people editing different teams both land.
+  const _saveTeams = t => { setCrewTeams(t); mergeSaveSettingsFields("crewTeams",{teams:t}).catch(e=>{console.error("[HE] crewTeams save:",e?.message);toast.error("Teams save failed — retry.");}); };
   const teamAdd = () => _saveTeams([...crewTeams,{id:Date.now().toString(36),lead:"",members:[]}]);
   const teamRemove = idx => _saveTeams(crewTeams.filter((_,i)=>i!==idx));
   const teamSetLead = (idx,name) => {
@@ -34514,16 +34628,25 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
     crewTeams.forEach(t=>{ if(t.lead) assigned.add(t.lead); t.members.forEach(n=>assigned.add(n)); });
     return (crewRoster||[]).filter(n=>!assigned.has(n));
   }, [crewTeams, crewRoster]);
-  const _saveCrewData = (a,e,o,p,f,nb) => setDoc(doc(db,"settings","schedule_"+crewWK),{
-    assignments:a,
-    extraJobs:e!==undefined?e:crewExtra,
-    jobOrder:o!==undefined?o:crewJobOrder,
-    pinnedJobs:p!==undefined?p:crewPinned,
-    focus:f!==undefined?f:crewFocus,
-    hoursByJob:crewHoursByJob,
-    needsBodies:nb!==undefined?nb:crewNeedsBodies,
-    updatedAt:new Date().toISOString()
-  });
+  // DATA SAFETY REWRITE (2026-07-06, same class as the Cougar Moon punch
+  // wipe): this used to setDoc the ENTIRE week document — including fields
+  // the caller never touched, filled from this device's possibly-stale local
+  // state. With 3 coordinators planning concurrently, two people editing the
+  // same week meant last-write-wins on the whole grid. Now:
+  //   • only the fields the caller actually changed are written at all
+  //     (undefined args are simply not sent — the server's value survives);
+  //   • each written field is three-way merged in a transaction, so two
+  //     coordinators editing different cells of `assignments` both land.
+  const _saveCrewData = (a,e,o,p,f,nb) => {
+    const fields = { assignments: a };
+    if(e!==undefined)  fields.extraJobs   = e;
+    if(o!==undefined)  fields.jobOrder    = o;
+    if(p!==undefined)  fields.pinnedJobs  = p;
+    if(f!==undefined)  fields.focus       = f;
+    if(nb!==undefined) fields.needsBodies = nb;
+    mergeSaveSettingsFields("schedule_"+crewWK, fields)
+      .catch(e2=>{console.error("[HE] schedule save:",e2?.message);toast.error("Schedule save failed — check connection and retry.");});
+  };
   // Set this week's hours-needed for a single job + phase. Persists alongside
   // the rest of the schedule_<wk> doc so it travels with the week.
   const setCrewHoursForJob = (jobId, phase, hours) => {
@@ -34538,10 +34661,9 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
       next[jobId] = { ...cur, [phaseKey]: Number(hours) };
     }
     setCrewHoursByJob(next);
-    setDoc(doc(db,"settings","schedule_"+crewWK),{
-      hoursByJob: next,
-      updatedAt: new Date().toISOString(),
-    }, { merge: true });
+    // Merge-save: only hoursByJob is written, three-way merged per job key.
+    mergeSaveSettingsFields("schedule_"+crewWK, { hoursByJob: next })
+      .catch(e=>{console.error("[HE] hoursByJob save:",e?.message);toast.error("Hours save failed — retry.");});
   };
   // Per-Simpro-entry hour estimate. Simpro returns time as a Blocks array on
   // each schedule entry — e.g. Blocks[0].StartTime "07:00", Blocks[N-1].EndTime
@@ -46440,12 +46562,14 @@ function TimeOffPage({ identity = null, users = [] }) {
   const [showDecided, setShowDecided] = useState(false);
 
   useEffect(() => {
-    const u1 = onSnapshot(doc(db,"settings","timeOffRequests"), s => setRequests(s.exists() ? (s.data().list||[]) : []), err => console.warn("timeOff listener:", err));
-    const u2 = onSnapshot(doc(db,"settings","crewPTO"), s => setPtoList(s.exists() ? (s.data().list||[]) : []));
+    const u1 = onSnapshot(doc(db,"settings","timeOffRequests"), s => { _settingsBaselines["timeOffRequests"] = s.exists() ? (s.data()||{}) : {}; setRequests(s.exists() ? (s.data().list||[]) : []); }, err => console.warn("timeOff listener:", err));
+    const u2 = onSnapshot(doc(db,"settings","crewPTO"), s => { _settingsBaselines["crewPTO"] = s.exists() ? (s.data()||{}) : {}; setPtoList(s.exists() ? (s.data().list||[]) : []); });
     return () => { u1&&u1(); u2&&u2(); };
   }, []);
 
-  const _saveRequests = (list) => setDoc(doc(db,"settings","timeOffRequests"), { list, updatedAt:new Date().toISOString() });
+  // Merge-save (data safety): requests are id'd — a crew member submitting
+  // while an approver decides another request no longer last-write-wins the list.
+  const _saveRequests = (list) => mergeSaveSettingsFields("timeOffRequests", { list });
 
   // Coordinator detection + book scoping: a person's coordinator is their own
   // (if foreman) or their foreman's (crew/lead via foremanId).
@@ -46486,12 +46610,12 @@ function TimeOffPage({ identity = null, users = [] }) {
       await _saveRequests(requests.map(x => x.id===r.id ? { ...x, status, decidedBy:me, decidedAt:new Date().toISOString() } : x));
       if (status === "approved" && !(ptoList||[]).some(p => p.timeoffId === r.id)) {
         const entry = { id:"pto_"+r.id, timeoffId:r.id, name:r.name, start:r.start, end:r.end||r.start, note:r.note||"Time off", usePaid:r.usePaid!==false };
-        await setDoc(doc(db,"settings","crewPTO"), { list:[...(ptoList||[]), entry], updatedAt:new Date().toISOString() });
+        await mergeSaveSettingsFields("crewPTO", { list:[...(ptoList||[]), entry] });
       }
       if (status !== "approved") {
         // pull any previously-mirrored PTO entry back out if it's being un-approved
         const filtered = (ptoList||[]).filter(p => p.timeoffId !== r.id);
-        if (filtered.length !== (ptoList||[]).length) await setDoc(doc(db,"settings","crewPTO"), { list:filtered, updatedAt:new Date().toISOString() });
+        if (filtered.length !== (ptoList||[]).length) await mergeSaveSettingsFields("crewPTO", { list:filtered });
       }
       toast.success(status==="approved" ? "Approved — added to the calendar." : "Request "+status+".");
     } catch(e) { toast.error("Update failed: "+(e?.message||"")); }
@@ -50638,6 +50762,7 @@ function App() {
     // collection is now inert (no code reads from it). The doc is the sole source of
     // truth for the Upcoming list.
     const unsubUpcoming = onSnapshot(doc(db,"settings","upcoming_jobs"), snap => {
+      _settingsBaselines["upcoming_jobs"] = snap.exists() ? (snap.data()||{}) : {};
       if(snap.exists()) {
         setUpcoming(snap.data().items || []);
       } else {
@@ -50756,78 +50881,8 @@ function App() {
   // preserve rooms/items other people added since we loaded, while still
   // honoring deletes this user made on purpose.
   const serverBaselines = useRef({}); // jobId → last-synced job data object
-
-  const _jeq = (a, b) => {
-    if (a === b) return true;
-    try { return JSON.stringify(a === undefined ? null : a) === JSON.stringify(b === undefined ? null : b); }
-    catch { return false; }
-  };
-
-  // Three-way structural merge. Rules:
-  //  • If the server hasn't changed since our baseline → the client's write
-  //    applies verbatim (so deletes work exactly like today).
-  //  • If the client didn't change the field vs baseline → keep the server's.
-  //  • Both changed → merge: arrays of {id} objects union by id, with
-  //    base-awareness so "present in base, missing on one side, unchanged on
-  //    the other" is treated as a deliberate delete instead of resurrected.
-  //    An item ADDED on either side (absent from base) is always kept — this
-  //    is the line that stops the Cougar Moon wipe.
-  //  • No baseline available (first load edge) → union merge, never drop.
-  //  • Plain objects recurse per key; primitives/unmergeable → client wins
-  //    (same as today's behavior).
-  const _threeWayMerge = (base, client, server) => {
-    if (server === undefined || server === null) return client;
-    if (client === undefined || client === null) return server;
-    if (_jeq(server, base)) return client;   // nobody else touched it
-    if (_jeq(client, base)) return server;   // we didn't touch it
-    // Both sides changed → structural merge
-    if (Array.isArray(client) && Array.isArray(server)) {
-      const idsOk = (arr) => arr.every(x => x && typeof x === "object" && x.id != null);
-      if (idsOk(client) && idsOk(server)) {
-        const baseArr = Array.isArray(base) ? base.filter(x => x && typeof x === "object" && x.id != null) : [];
-        const bMap = new Map(baseArr.map(x => [x.id, x]));
-        const sMap = new Map(server.map(x => [x.id, x]));
-        const cIds = new Set(client.map(x => x.id));
-        const out = [];
-        // Client's order first (their screen), merged per item against server
-        client.forEach(c => {
-          const s = sMap.get(c.id), b = bMap.get(c.id);
-          if (s !== undefined) { out.push(_threeWayMerge(b, c, s)); return; }
-          if (b === undefined) { out.push(c); return; }          // client added → keep
-          if (!_jeq(c, b)) { out.push(c); return; }              // server deleted, client edited → keep client
-          /* server deleted, client unchanged → honor the delete */
-        });
-        // Server-side items the client doesn't have
-        server.forEach(s => {
-          if (cIds.has(s.id)) return;
-          const b = bMap.get(s.id);
-          if (b === undefined) { out.push(s); return; }          // someone else added → KEEP (the fix)
-          if (!_jeq(s, b)) { out.push(s); return; }              // client deleted, server edited → keep server
-          /* client deleted, server unchanged → honor the delete */
-        });
-        return out;
-      }
-      return client; // arrays without stable ids → client wins (today's behavior)
-    }
-    if (client && server && typeof client === "object" && typeof server === "object" && !Array.isArray(client) && !Array.isArray(server)) {
-      const b = (base && typeof base === "object" && !Array.isArray(base)) ? base : {};
-      const out = {};
-      new Set([...Object.keys(client), ...Object.keys(server)]).forEach(k => {
-        const cv = client[k], sv = server[k], bv = b[k];
-        if (cv !== undefined && sv !== undefined) { out[k] = _threeWayMerge(bv, cv, sv); return; }
-        if (sv === undefined) { // key only on client
-          if (bv === undefined || !_jeq(cv, bv)) out[k] = cv;    // added/edited by client → keep
-          /* else: server deleted the key, client unchanged → honor delete */
-          return;
-        }
-        // key only on server
-        if (bv === undefined || !_jeq(sv, bv)) out[k] = sv;      // added/edited by server → keep
-        /* else: client deleted the key, server unchanged → honor delete */
-      });
-      return out;
-    }
-    return client; // primitives / mixed types → client wins
-  };
+  // (_jeq / _threeWayMerge moved to module scope so the Crew Planner,
+  //  Time Off, and pipeline views can use the same merge — see above sanitize)
 
   // Apply the three-way merge to every structural (object/array) field of a
   // patch against the server's current data. Scalars pass through untouched.
@@ -51221,8 +51276,10 @@ function App() {
 
   // Save the entire upcoming list as one document — no per-item deletes needed
   const saveAllUpcoming = async (list) => {
-    try { await setDoc(doc(db,"settings","upcoming_jobs"),{items:list,updated_at:new Date().toISOString()}); }
-    catch(e){ console.error("saveAllUpcoming error:",e); }
+    // Merge-save (data safety): items are id'd — two pipeline editors no
+    // longer last-write-wins the whole list. updated_at kept for back-compat.
+    try { await mergeSaveSettingsFields("upcoming_jobs",{items:list,updated_at:new Date().toISOString()}); }
+    catch(e){ console.error("saveAllUpcoming error:",e); toast.error("Upcoming-jobs save failed — retry."); }
   };
   // Keep these names for call-site compatibility but they now just save the full list
   const saveUpcomingItem = (_item) => {}; // no-op — caller uses onChange which calls saveAllUpcoming
@@ -53563,7 +53620,7 @@ function App() {
               };
               const next = [u, ...upcoming];
               try {
-                await setDoc(doc(db,"settings","upcoming_jobs"),
+                await mergeSaveSettingsFields("upcoming_jobs",
                   {items:next, updated_at:new Date().toISOString()});
               } catch(err) {
                 console.error("Move-quote-back save failed:", err);
