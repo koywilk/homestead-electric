@@ -23414,6 +23414,12 @@ const normalizeJob = (raw) => ({
   // Additive: legacy roughInstructions/finishInstructions stay on raw as-is.
   jobNotes:             normalizeJobNotes(raw),
   jobNotesMigratedAt:   raw?.jobNotesMigratedAt || null,
+  // Additive: guarantee panelizedLighting.baseline is at least null (the loads-share
+  // baseline lock). Spreads existing panelizedLighting first so nothing is dropped.
+  panelizedLighting: {
+    ...(raw?.panelizedLighting || {}),
+    baseline: raw?.panelizedLighting?.baseline || null,
+  },
 });
 
 
@@ -28134,7 +28140,27 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               )}
 
-              <SectionHead label="Loads" color={C.purple}/>
+              <SectionHead label="Loads" color={C.purple} action={<>
+                <button title={job.panelizedLighting?.baseline ? "Re-snapshot the current loads as the new baseline" : "Snapshot the current loads as the original-plans baseline"}
+                  onClick={()=>{
+                    const snap = allSavantLoadsForJob(job).map(l=>({ id:l.id, name:l.name, channel:l.assignedTo?.output||"", type:l.type, watts:l.wattage, keypad:l.keypad||"", room:l.room, floor:l.floor, panel:l.assignedTo?.panelLabel||"" }));
+                    const pl0 = job.panelizedLighting || {};
+                    if(pl0.baseline && !window.confirm("Overwrite the current baseline snapshot with today's loads?")) return;
+                    u({ panelizedLighting: { ...pl0, baseline: { lockedAt:new Date().toISOString(), lockedBy: identity?.name||"", loads: snap } } });
+                  }}
+                  style={{padding:"6px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:C.muted,border:`1px solid ${C.border}`,display:"inline-flex",alignItems:"center",gap:5}}>
+                  <Icon name="lock" size={11} stroke={2.25}/>{job.panelizedLighting?.baseline ? "Update baseline" : "Set baseline"}
+                </button>
+                <button title="Copy a read-only link to send the Lutron / AV programmer"
+                  onClick={()=>{
+                    const link = `${window.location.origin}/?loads=${job.id}`;
+                    try { navigator.clipboard.writeText(link); } catch {}
+                    try { toast.success("Loads link copied — send it to the programmer."); } catch { window.alert("Loads link:\n"+link); }
+                  }}
+                  style={{padding:"6px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:C.purple,color:"#fff",border:"none",display:"inline-flex",alignItems:"center",gap:5}}>
+                  Share loads
+                </button>
+              </>}/>
 
               {(()=>{
                 const pl = job.panelizedLighting;
@@ -45067,6 +45093,105 @@ function HomeRunsSharePage({ jobId }) {
   );
 }
 
+// Panelized loads share — read-only view for the Lutron/AV programmer. Reads the
+// office job directly (public jobs read), flattens loads via allSavantLoadsForJob,
+// and flags each load NEW / CHANGED against the locked baseline snapshot.
+function LoadsSharePage({ jobId }) {
+  const [job, setJob] = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState(null);
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
+      if(!snap.exists()){ setError('Not found.'); setLoading(false); return; }
+      setJob(snap.data()?.data);
+      setLoading(false);
+    }, () => { setError('Failed to load.'); setLoading(false); });
+    return () => unsub();
+  }, [jobId]);
+
+  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6E7682',fontSize:14}}>Loading…</div>;
+  if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#B23A3A',fontSize:14}}>{error}</div>;
+
+  const loads = allSavantLoadsForJob(job);
+  const baseline = job?.panelizedLighting?.baseline || null;
+  const baseById = {}, baseByName = {};
+  (baseline?.loads || []).forEach(b => { if(b.id) baseById[b.id]=b; const n=(b.name||'').trim().toLowerCase(); if(n) baseByName[n]=b; });
+  const flagOf = (l) => {
+    if(!baseline) return null;
+    const b = baseById[l.id] || baseByName[(l.name||'').trim().toLowerCase()];
+    if(!b) return 'new';
+    const chg = (String(b.watts||'')!==String(l.wattage||'')) || ((b.type||'')!==(l.type||'')) || ((b.channel||'')!==(l.assignedTo?.output||''));
+    return chg ? 'changed' : null;
+  };
+
+  const groups = {};
+  loads.forEach(l => { const key = l.assignedTo?.panelLabel || 'Unassigned'; (groups[key]=groups[key]||[]).push(l); });
+  const groupKeys = Object.keys(groups).sort((a,b)=> a==='Unassigned'?1 : b==='Unassigned'?-1 : a.localeCompare(b));
+
+  const typeLabel = (t) => t==='dim' ? 'Dimmer' : t==='switch' ? 'Switched' : (t||'');
+  const flag = (f) => f==='new'
+    ? <span style={{fontSize:10,fontWeight:800,background:'#E6F6EE',color:'#2E9E6B',borderRadius:5,padding:'2px 7px'}}>NEW</span>
+    : f==='changed'
+    ? <span style={{fontSize:10,fontWeight:800,background:'#FBF3E0',color:'#B0892C',borderRadius:5,padding:'2px 7px'}}>CHANGED</span>
+    : null;
+  const newCount = baseline ? loads.filter(l=>flagOf(l)==='new').length : 0;
+  const chgCount = baseline ? loads.filter(l=>flagOf(l)==='changed').length : 0;
+
+  return (
+    <div style={{maxWidth:760,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#EEF0F3',minHeight:'100vh'}}>
+      <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:18}}>
+        <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>HOMESTEAD ELECTRIC — PANELIZED LOADS</div>
+        <div style={{fontSize:19,fontWeight:700,color:'#fff',marginBottom:2}}>{job?.name||'Job'}</div>
+        {job?.address&&<div style={{fontSize:12,color:'rgba(255,255,255,0.65)'}}>{job.address}</div>}
+      </div>
+
+      <div style={{background:'#fff',border:'1px solid #E1E4E9',borderRadius:10,padding:'12px 16px',marginBottom:16,display:'flex',alignItems:'center',gap:12,flexWrap:'wrap'}}>
+        {baseline ? (
+          <>
+            <span style={{fontSize:12.5,fontWeight:700,color:'#3E7D5A'}}>🔒 Baseline locked — {(baseline.lockedAt||'').slice(0,10)}</span>
+            <span style={{fontSize:12,color:'#6E7682'}}>{(baseline.loads||[]).length} loads captured</span>
+            <span style={{flex:1}}/>
+            {newCount>0&&<span style={{fontSize:11.5,fontWeight:700,color:'#2E9E6B'}}>{newCount} new</span>}
+            {chgCount>0&&<span style={{fontSize:11.5,fontWeight:700,color:'#B0892C'}}>{chgCount} changed</span>}
+          </>
+        ) : (
+          <span style={{fontSize:12,color:'#6E7682'}}>No baseline set — showing the full current load list ({loads.length}).</span>
+        )}
+      </div>
+
+      {loads.length===0 ? (
+        <div style={{textAlign:'center',padding:'48px 20px',color:'#99A0AA',background:'#fff',borderRadius:12}}>No loads have been added yet.</div>
+      ) : groupKeys.map(gk => {
+        const rows = groups[gk];
+        return (
+          <div key={gk} style={{background:'#fff',border:'1px solid #E1E4E9',borderRadius:10,marginBottom:12,overflow:'hidden'}}>
+            <div style={{background:'#3B5BA5',padding:'8px 16px',display:'flex',justifyContent:'space-between'}}>
+              <span style={{fontSize:11,fontWeight:700,color:'#fff',letterSpacing:'0.06em'}}>{gk.toUpperCase()}</span>
+              <span style={{fontSize:11,color:'rgba(255,255,255,0.7)'}}>{rows.length} loads</span>
+            </div>
+            <div style={{padding:'0 4px'}}>
+              {rows.map((l,i) => {
+                const f = flagOf(l);
+                const bg = f==='new'?'#E6F6EE':f==='changed'?'#FBF3E0':'#fff';
+                return (
+                  <div key={l.id} style={{display:'flex',alignItems:'center',gap:10,padding:'9px 12px',borderBottom:i<rows.length-1?'1px solid #EEF0F3':'none',background:bg}}>
+                    <span style={{fontSize:11,fontFamily:'ui-monospace,monospace',color:'#99A0AA',width:24,flexShrink:0,textAlign:'center'}}>{l.assignedTo?.output||''}</span>
+                    <span style={{flex:1,fontSize:13,fontWeight:600,color:'#111'}}>{l.name||<span style={{color:'#99A0AA',fontStyle:'italic'}}>Unnamed</span>}</span>
+                    {l.type&&<span style={{fontSize:11,color:'#6E7682'}}>{typeLabel(l.type)}</span>}
+                    {l.wattage&&<span style={{fontSize:12,fontVariantNumeric:'tabular-nums',color:'#6E7682'}}>{l.wattage}W</span>}
+                    {flag(f)}
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        );
+      })}
+      <div style={{textAlign:'center',color:'#99A0AA',fontSize:11,padding:'14px 0 24px'}}>Homestead Electric · live — updates as loads change</div>
+    </div>
+  );
+}
+
 // ── Lighting Collab Share Page ─────────────────────────────────
 function LightingSharePage({ jobId }) {
   const [job,        setJob]       = useState(null);
@@ -49696,8 +49821,20 @@ function RedlineWalkBoard({ walks = [], jobs = [], identity, onAdd, onUpdate, on
   const [adding, setAdding] = useState(false);
   const [draft, setDraft]   = useState({ jobId: "", address: "", walkDate: "" });
 
-  const jobName = (id) => { const j = (jobs || []).find(x => x.id === id); return j ? (j.name || j.simproNo || j.id) : ""; };
-  const jobOpts = useMemo(() => (jobs || []).filter(j => j && j.type !== "quote").map(j => ({ id: j.id, name: j.name || j.simproNo || j.id })), [jobs]);
+  const jobName = (id) => { const j = (jobs || []).find(x => x.id === id); return j ? (jobLabel(j) || j.name || j.id) : ""; };
+  // Jobs AND quotes are selectable. Show the job number (#simproNo) / quote number,
+  // and organize the list by number (numbered first ascending, unnumbered last).
+  const jobOpts = useMemo(() => {
+    const rows = (jobs || []).filter(j => j && (j.name || j.simproNo || j.quoteNumber)).map(j => ({
+      id: j.id,
+      label: j.type === "quote"
+        ? `${j.quoteNumber ? `Q${j.quoteNumber} · ` : ""}${j.name || "(quote)"} · quote`
+        : (jobLabel(j) || j.name || j.id),
+      sortNum: (parseInt(String(j.simproNo || j.quoteNumber || "").replace(/\D/g, ""), 10) || 999999),
+    }));
+    rows.sort((a, b) => (a.sortNum - b.sortNum) || a.label.localeCompare(b.label));
+    return rows;
+  }, [jobs]);
 
   const byStatus = {};
   REDLINE_STATUSES.forEach(s => { byStatus[s.value] = []; });
@@ -49757,8 +49894,8 @@ function RedlineWalkBoard({ walks = [], jobs = [], identity, onAdd, onUpdate, on
           <div style={{ fontWeight: 800, fontSize: 14, color: C.text, marginBottom: 10 }}>New redline walk</div>
           <label style={lbl}>Job (optional — leave blank if it's not in the app yet)
             <select value={draft.jobId} onChange={e => setDraft(d => ({ ...d, jobId: e.target.value }))} style={inp}>
-              <option value="">— no job yet —</option>
-              {jobOpts.map(j => <option key={j.id} value={j.id}>{j.name}</option>)}
+              <option value="">— no job / quote yet —</option>
+              {jobOpts.map(o => <option key={o.id} value={o.id}>{o.label}</option>)}
             </select>
           </label>
           <div style={{ display: "grid", gridTemplateColumns: "1fr 150px", gap: 10, marginTop: 10 }}>
@@ -50652,6 +50789,10 @@ function App() {
   // Home Runs share page route — ?homeruns=JOB_ID
   const hrParam = new URLSearchParams(window.location.search).get("homeruns");
   if(hrParam) return <HomeRunsSharePage jobId={hrParam}/>;
+
+  // Panelized loads share page route — ?loads=JOB_ID (Lutron/AV programmer view)
+  const ldParam = new URLSearchParams(window.location.search).get("loads");
+  if(ldParam) return <LoadsSharePage jobId={ldParam}/>;
 
   // Lighting collab share page route — ?lighting=JOB_ID
   const ltParam = new URLSearchParams(window.location.search).get("lighting");
