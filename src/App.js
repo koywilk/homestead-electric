@@ -1536,6 +1536,14 @@ const newRedlineWalk = (walkedBy = "") => ({
   statusDate: "",                                   // scheduled walk date / co-owed date
   itemsAdded: "",                                   // free-text note of what was added on the walk
   coQuoteNumber: "",                                // the redline CO's quote # once sent
+  // Once coQuoteNumber is set, this walk ALSO surfaces in the Change Orders
+  // board and tracks through the normal CO lifecycle (CO_STATUSES_NEW). These
+  // mirror the real-CO fields so the shared CO-board handlers can write them
+  // back through onUpdateRedline (see ChangeOrderTracker.handleSetStatus/Quote).
+  coStatus: "",                                     // CO_STATUSES_NEW value (defaults to "pending" once quoted)
+  coStatusDate: "",
+  quoteAddedBy: "",
+  quoteAddedAt: "",
   notes: "",
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
@@ -49872,13 +49880,13 @@ function RedlineWalkBoard({ walks = [], jobs = [], identity, onAdd, onUpdate, on
           <label style={lbl}>Walk date
             <input type="date" defaultValue={w.walkDate || ""} onBlur={e => { if (e.target.value !== (w.walkDate || "")) onUpdate?.({ ...w, walkDate: e.target.value }); }} style={inp} />
           </label>
-          <label style={lbl}>Items added
-            <input defaultValue={w.itemsAdded || ""} placeholder="e.g. 12 items" onBlur={e => { if (e.target.value !== (w.itemsAdded || "")) onUpdate?.({ ...w, itemsAdded: e.target.value }); }} style={inp} />
+          <label style={lbl}>Redline CO Quote #
+            <input defaultValue={w.coQuoteNumber || ""} placeholder="Quote # from SimPro" onBlur={e => { const v = e.target.value.trim(); if (v !== (w.coQuoteNumber || "")) onUpdate?.({ ...w, coQuoteNumber: v }); }} style={inp} />
           </label>
-          {(w.status === "co_sent" || w.status === "signed") && (
-            <label style={lbl}>Redline CO Quote #
-              <input defaultValue={w.coQuoteNumber || ""} placeholder="Quote #" onBlur={e => { if (e.target.value !== (w.coQuoteNumber || "")) onUpdate?.({ ...w, coQuoteNumber: e.target.value }); }} style={inp} />
-            </label>
+          {(w.coQuoteNumber || "").trim() && (
+            <div style={{ fontSize: 10.5, color: "#3E7D5A", fontWeight: 700, letterSpacing: "0.02em", marginTop: -3 }}>
+              ✓ Now tracking in Change Orders
+            </div>
           )}
         </div>
       </div>
@@ -49971,8 +49979,39 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
         });
       });
     });
+    // Redline walks that have a quote # ALSO track here as COs (Koy: once a
+    // redline CO is quoted it should "auto track like any other CO"). They're
+    // sourced from the separate redlineWalks collection, so status/quote edits
+    // route back through onUpdateRedline (see handleSetStatus/handleSetQuote),
+    // NOT onUpdateCO. Only quoted walks surface — an un-quoted walk stays only
+    // in the Redline Walks sub-view.
+    (redlineWalks || []).forEach(w => {
+      if (!w) return;
+      const q = (w.coQuoteNumber || "").trim();
+      if (!q) return;
+      const linked = w.jobId ? (jobs || []).find(j => j && j.id === w.jobId) : null;
+      out.push({
+        coId:         w.id,
+        coIndex:      "R",
+        coStatus:     w.coStatus || "pending",
+        coStatusDate: w.coStatusDate || "",
+        createdAt:    w.createdAt || "",
+        createdBy:    w.walkedBy || "",
+        desc:         (w.itemsAdded || "").trim() || "Redline CO",
+        quoteNumber:  q,
+        quoteAddedBy: w.quoteAddedBy || "",
+        quoteAddedAt: w.quoteAddedAt || "",
+        jobId:        w.jobId || "",
+        jobName:      linked ? (linked.name || linked.simproNo || linked.id) : ((w.address || "").trim() || "Redline walk"),
+        jobSimproNo:  linked ? (linked.simproNo || "") : "",
+        jobForeman:   linked ? (linked.foreman || "") : (w.walkedBy || ""),
+        jobGc:        linked ? (linked.gc || "") : "",
+        source:       "redline",
+        redlineId:    w.id,
+      });
+    });
     return out;
-  }, [jobs]);
+  }, [jobs, redlineWalks]);
 
   // Foreman names found across the COs — for the filter dropdown.
   const foremenList = useMemo(() => {
@@ -50044,7 +50083,12 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
     const patch = { coStatus: newStatus };
     const def   = getStatusDef(CO_STATUSES_NEW, newStatus);
     if (!def.hasDate) patch.coStatusDate = "";
-    onUpdateCO && onUpdateCO(co.jobId, co.coId, patch);
+    if (co.source === "redline") {
+      const w = (redlineWalks || []).find(x => x && x.id === co.redlineId);
+      if (w) onUpdateRedline && onUpdateRedline({ ...w, ...patch });
+    } else {
+      onUpdateCO && onUpdateCO(co.jobId, co.coId, patch);
+    }
     setStatusOpen(null);
   };
 
@@ -50055,6 +50099,24 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
       return;
     }
     const me = identity;
+    // Redline-sourced rows store the quote on coQuoteNumber (the field the
+    // Redline board edits); clearing it drops the row out of the CO board on
+    // the next render (allCOs only surfaces walks with a quote #).
+    if (co.source === "redline") {
+      const w = (redlineWalks || []).find(x => x && x.id === co.redlineId);
+      if (w) {
+        const patch = trimmed
+          ? {
+              coQuoteNumber: trimmed,
+              quoteAddedBy:  w.quoteAddedBy || (me?.name || ""),
+              quoteAddedAt:  w.quoteAddedAt || new Date().toLocaleDateString("en-US"),
+            }
+          : { coQuoteNumber: "", quoteAddedBy: "", quoteAddedAt: "" };
+        onUpdateRedline && onUpdateRedline({ ...w, ...patch });
+      }
+      setEditingQuote(null);
+      return;
+    }
     const patch = trimmed
       ? {
           quoteNumber:  trimmed,
@@ -50204,14 +50266,14 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                       fontSize:12, lineHeight:1.4,
                       position:"relative",
                     }}>
-                      {/* Job name — click opens the job's CO tab */}
-                      <div onClick={()=>onSelectJob && onSelectJob({id:co.jobId})}
+                      {/* Job name — click opens the job's CO tab (redline rows may be job-less) */}
+                      <div onClick={()=>co.jobId && onSelectJob && onSelectJob({id:co.jobId})}
                         style={{
                           fontSize:13,fontWeight:700,color:C.text,
-                          marginBottom:4, cursor:"pointer",
+                          marginBottom:4, cursor: co.jobId ? "pointer" : "default",
                           overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
                         }}
-                        title={`Open ${co.jobName}`}>
+                        title={co.jobId ? `Open ${co.jobName}` : co.jobName}>
                         {co.jobSimproNo ? `#${co.jobSimproNo} ` : ""}{co.jobName}
                       </div>
 
@@ -50220,7 +50282,9 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
                         display:"flex",alignItems:"center",gap:6,
                         fontSize:10,color:C.dim,marginBottom:5,flexWrap:"wrap",
                       }}>
-                        <span style={{fontWeight:700,color:C.text}}>CO #{co.coIndex}</span>
+                        {co.source === "redline"
+                          ? <span style={{fontWeight:800,color:"#8a6d2e",background:"#f0ece1",border:"1px solid #d9cca8",borderRadius:4,padding:"0 6px",fontSize:9,letterSpacing:"0.05em",textTransform:"uppercase"}}>Redline CO</span>
+                          : <span style={{fontWeight:700,color:C.text}}>CO #{co.coIndex}</span>}
                         {co.jobForeman && (
                           <span style={{display:"inline-flex",alignItems:"center",gap:4}}>
                             <span style={{width:7,height:7,borderRadius:"50%",
@@ -50233,10 +50297,10 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
 
                       {/* Description preview */}
                       {co.desc && (
-                        <div onClick={()=>onSelectJob && onSelectJob({id:co.jobId})}
+                        <div onClick={()=>co.jobId && onSelectJob && onSelectJob({id:co.jobId})}
                           style={{
                             fontSize:11,color:C.text,lineHeight:1.35,marginBottom:7,
-                            cursor:"pointer",
+                            cursor: co.jobId ? "pointer" : "default",
                             overflow:"hidden",textOverflow:"ellipsis",
                             display:"-webkit-box",WebkitLineClamp:2,WebkitBoxOrient:"vertical",
                           }}
