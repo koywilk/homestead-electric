@@ -1197,6 +1197,15 @@ const CO_STATUSES_NEW = [
   {value:"converted",     label:"Converted to RT",         color:"#6E7682"},
   {value:"denied",        label:"Denied",                  color:"#B23A3A"},
 ];
+// Redline-walk lifecycle (Jeromy's flow): every job gets a redline walk, then a
+// redline CO for the items added. Buckets match the CO-tab board. `hasDate` marks
+// the stages that carry a date (the scheduled walk, and the walk-done/CO-owed date).
+const REDLINE_STATUSES = [
+  {value:"scheduled", label:"Walk Scheduled",       color:"#3B5BA5", hasDate:true},
+  {value:"co_owed",   label:"Walk Done — CO Owed",  color:"#B23A3A", hasDate:true},
+  {value:"co_sent",   label:"Redline CO Sent",      color:"#B0892C"},
+  {value:"signed",    label:"CO Signed",            color:"#46916A"},
+];
 const RT_STATUSES = [
   {value:"",          label:"— set status —",        color:null},
   // Giving "needs" a date lets Koy set a "schedule by" target on unscheduled
@@ -1508,6 +1517,26 @@ const newQuoteWalk = (walkedBy = "") => ({
   photos: [],          // [{ id, url, name, takenAt, uploadedBy }] — same shape as job photos
   status: "walking",   // "walking" | "quote sent"
   simproQuoteNo: "",
+  createdAt: new Date().toISOString(),
+  updatedAt: new Date().toISOString(),
+});
+
+// Redline-walk factory — a standalone record (top-level `redlineWalks` collection,
+// same `data` envelope as quoteWalks) so a walk can be logged with a CUSTOM NAME
+// before the job is even in the app; `jobId` optionally links it to a real job.
+const newRedlineWalk = (walkedBy = "") => ({
+  id: uid(),
+  jobId: "",                                        // optional link to a real job
+  address: "",                                      // custom name / address (works with NO job)
+  clientName: "",
+  walkedBy,
+  walkedByUid: "",
+  walkDate: new Date().toISOString().slice(0, 10),  // YYYY-MM-DD
+  status: "scheduled",                              // REDLINE_STATUSES value
+  statusDate: "",                                   // scheduled walk date / co-owed date
+  itemsAdded: "",                                   // free-text note of what was added on the walk
+  coQuoteNumber: "",                                // the redline CO's quote # once sent
+  notes: "",
   createdAt: new Date().toISOString(),
   updatedAt: new Date().toISOString(),
 });
@@ -49660,13 +49689,121 @@ function Field({ label, children }) {
 // normal saveJob path — same write surface as the in-job CO editor, so all
 // existing notifications (co_new / co_approved / co_completed Cloud Function
 // branches) fire identically. No new Firestore fields, no schema changes.
-function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getPersonColor }) {
+// ── Redline Walks board — the COs-tab sub-view ──────────────────────────────
+// Standalone redline-walk records (custom names, optional job link) as a status
+// board mirroring the CO kanban. Reuses C + REDLINE_STATUSES.
+function RedlineWalkBoard({ walks = [], jobs = [], identity, onAdd, onUpdate, onDelete }) {
+  const [adding, setAdding] = useState(false);
+  const [draft, setDraft]   = useState({ jobId: "", address: "", walkDate: "" });
+
+  const jobName = (id) => { const j = (jobs || []).find(x => x.id === id); return j ? (j.name || j.simproNo || j.id) : ""; };
+  const jobOpts = useMemo(() => (jobs || []).filter(j => j && j.type !== "quote").map(j => ({ id: j.id, name: j.name || j.simproNo || j.id })), [jobs]);
+
+  const byStatus = {};
+  REDLINE_STATUSES.forEach(s => { byStatus[s.value] = []; });
+  (walks || []).forEach(w => { const s = w.status || "scheduled"; (byStatus[s] = byStatus[s] || []).push(w); });
+  Object.keys(byStatus).forEach(k => byStatus[k].sort((a, b) => (a.walkDate || "").localeCompare(b.walkDate || "")));
+
+  const submitAdd = async () => {
+    const name = (draft.address || "").trim();
+    if (!name && !draft.jobId) return;
+    await onAdd?.({ jobId: draft.jobId || "", address: name, walkDate: draft.walkDate || new Date().toISOString().slice(0, 10), status: "scheduled", statusDate: draft.walkDate || "" });
+    setDraft({ jobId: "", address: "", walkDate: "" });
+    setAdding(false);
+  };
+
+  const inp = { width: "100%", padding: "6px 8px", borderRadius: 6, border: `1px solid ${C.border}`, fontSize: 12.5, fontFamily: "inherit", color: C.text, background: "#fff", outline: "none", marginTop: 3 };
+  const lbl = { fontSize: 9.5, color: C.dim, textTransform: "uppercase", fontWeight: 700, letterSpacing: "0.03em", display: "block" };
+
+  const card = (w) => {
+    const label = (w.address || "").trim() || jobName(w.jobId) || "(unnamed walk)";
+    const linked = !!w.jobId;
+    return (
+      <div key={w.id} style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 9, padding: "10px 11px", marginBottom: 8 }}>
+        <div style={{ display: "flex", justifyContent: "space-between", alignItems: "flex-start", gap: 8 }}>
+          <div style={{ fontWeight: 700, fontSize: 13.5, color: C.text, lineHeight: 1.25 }}>{label}</div>
+          <button title="Delete" onClick={() => { if (window.confirm("Delete this redline walk?")) onDelete?.(w.id); }}
+            style={{ border: "none", background: "none", color: C.dim, cursor: "pointer", fontSize: 16, lineHeight: 1, padding: 0 }}>×</button>
+        </div>
+        <span style={{ fontSize: 9.5, fontWeight: 800, letterSpacing: "0.03em", textTransform: "uppercase", color: linked ? "#3B5BA5" : "#8a6d2e", background: linked ? "#eaf0fb" : "#f0ece1", borderRadius: 4, padding: "1px 6px", display: "inline-block", marginTop: 6 }}>{linked ? "Linked job" : "Custom name"}</span>
+        <div style={{ display: "flex", flexDirection: "column", gap: 8, marginTop: 10 }}>
+          <label style={lbl}>Status
+            <select value={w.status || "scheduled"} onChange={e => onUpdate?.({ ...w, status: e.target.value })} style={inp}>
+              {REDLINE_STATUSES.map(s => <option key={s.value} value={s.value}>{s.label}</option>)}
+            </select>
+          </label>
+          <label style={lbl}>Walk date
+            <input type="date" defaultValue={w.walkDate || ""} onBlur={e => { if (e.target.value !== (w.walkDate || "")) onUpdate?.({ ...w, walkDate: e.target.value }); }} style={inp} />
+          </label>
+          <label style={lbl}>Items added
+            <input defaultValue={w.itemsAdded || ""} placeholder="e.g. 12 items" onBlur={e => { if (e.target.value !== (w.itemsAdded || "")) onUpdate?.({ ...w, itemsAdded: e.target.value }); }} style={inp} />
+          </label>
+          {(w.status === "co_sent" || w.status === "signed") && (
+            <label style={lbl}>Redline CO Quote #
+              <input defaultValue={w.coQuoteNumber || ""} placeholder="Quote #" onBlur={e => { if (e.target.value !== (w.coQuoteNumber || "")) onUpdate?.({ ...w, coQuoteNumber: e.target.value }); }} style={inp} />
+            </label>
+          )}
+        </div>
+      </div>
+    );
+  };
+
+  return (
+    <div>
+      {!adding ? (
+        <button onClick={() => setAdding(true)} style={{ padding: "9px 16px", borderRadius: 8, border: "none", background: C.accent, color: "#000", fontWeight: 700, fontSize: 13, fontFamily: "inherit", cursor: "pointer", marginBottom: 14 }}>+ Add redline walk</button>
+      ) : (
+        <div style={{ background: "#fff", border: `1px solid ${C.border}`, borderRadius: 10, padding: "14px 16px", maxWidth: 520, marginBottom: 16, boxShadow: "0 4px 16px rgba(15,31,61,0.08)" }}>
+          <div style={{ fontWeight: 800, fontSize: 14, color: C.text, marginBottom: 10 }}>New redline walk</div>
+          <label style={lbl}>Job (optional — leave blank if it's not in the app yet)
+            <select value={draft.jobId} onChange={e => setDraft(d => ({ ...d, jobId: e.target.value }))} style={inp}>
+              <option value="">— no job yet —</option>
+              {jobOpts.map(j => <option key={j.id} value={j.id}>{j.name}</option>)}
+            </select>
+          </label>
+          <div style={{ display: "grid", gridTemplateColumns: "1fr 150px", gap: 10, marginTop: 10 }}>
+            <label style={lbl}>Custom name / address
+              <input value={draft.address} onChange={e => setDraft(d => ({ ...d, address: e.target.value }))} placeholder="e.g. Miller Custom Home" style={inp} />
+            </label>
+            <label style={lbl}>Walk date
+              <input type="date" value={draft.walkDate} onChange={e => setDraft(d => ({ ...d, walkDate: e.target.value }))} style={inp} />
+            </label>
+          </div>
+          <div style={{ display: "flex", gap: 8, marginTop: 14 }}>
+            <button onClick={submitAdd} style={{ padding: "8px 16px", borderRadius: 8, border: "none", background: C.accent, color: "#000", fontWeight: 700, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>Add walk</button>
+            <button onClick={() => { setAdding(false); setDraft({ jobId: "", address: "", walkDate: "" }); }} style={{ padding: "8px 14px", borderRadius: 8, border: `1px solid ${C.border}`, background: "#fff", color: C.dim, fontWeight: 600, fontSize: 13, fontFamily: "inherit", cursor: "pointer" }}>Cancel</button>
+          </div>
+        </div>
+      )}
+
+      <div style={{ display: "flex", gap: 12, overflowX: "auto", paddingBottom: 12, scrollbarWidth: "thin", WebkitOverflowScrolling: "touch" }}>
+        {REDLINE_STATUSES.map(s => {
+          const items = byStatus[s.value] || [];
+          return (
+            <div key={s.value} style={{ flex: "0 0 260px", maxWidth: 260, background: "#F7F8FA", border: `1px solid ${C.border}`, borderRadius: 10, borderTop: `3px solid ${s.color}`, display: "flex", flexDirection: "column", maxHeight: "calc(100vh - 240px)" }}>
+              <div style={{ padding: "10px 12px", borderBottom: `1px solid ${C.border}`, display: "flex", justifyContent: "space-between", alignItems: "center" }}>
+                <span style={{ fontSize: 11.5, fontWeight: 800, textTransform: "uppercase", letterSpacing: "0.04em", color: s.color }}>{s.label}</span>
+                <span style={{ fontSize: 11, fontWeight: 700, color: C.dim, background: "#fff", border: `1px solid ${C.border}`, borderRadius: 20, padding: "0 8px" }}>{items.length}</span>
+              </div>
+              <div style={{ padding: 10, overflowY: "auto" }}>
+                {items.length === 0 ? <div style={{ fontSize: 12, color: C.dim, textAlign: "center", padding: "18px 0" }}>—</div> : items.map(card)}
+              </div>
+            </div>
+          );
+        })}
+      </div>
+    </div>
+  );
+}
+
+function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getPersonColor, redlineWalks = [], onAddRedline, onUpdateRedline, onDeleteRedline }) {
   const [showClosed, setShowClosed]       = useState(false);
   const [editingQuote, setEditingQuote]   = useState(null); // co id
   const [quoteDraft, setQuoteDraft]       = useState("");
   const [statusOpen, setStatusOpen]       = useState(null); // co id
   const [foremanFilter, setForemanFilter] = useState("");
   const [search, setSearch]               = useState(""); // suggestion #3 — CO tab search
+  const [subView, setSubView]             = useState("cos"); // "cos" | "redline" — Redline Walks sub-view
 
   // Aggregate: every CO across every job, with job context stitched on.
   // Quotes (job.type === "quote") are skipped — they don't have COs in the
@@ -49792,8 +49929,33 @@ function ChangeOrderTracker({ jobs = [], identity, onSelectJob, onUpdateCO, getP
     setEditingQuote(null);
   };
 
+  // Sub-view toggle: Change Orders | Redline Walks (Koy's call — no new tab).
+  const tabStrip = (
+    <div style={{display:"flex",gap:2,borderBottom:`2px solid ${C.border}`,marginBottom:16,maxWidth:460}}>
+      {[["cos","Change Orders"],["redline","Redline Walks"]].map(([k,label])=>(
+        <button key={k} onClick={()=>setSubView(k)} style={{
+          padding:"9px 18px",fontSize:14,fontWeight:subView===k?800:600,fontFamily:"inherit",
+          color:subView===k?C.text:C.dim,background:"none",border:"none",cursor:"pointer",
+          borderBottom:subView===k?`2px solid ${C.accent}`:"2px solid transparent",marginBottom:-2}}>
+          {label}{k==="redline"&&redlineWalks.length>0?` · ${redlineWalks.length}`:""}
+        </button>
+      ))}
+    </div>
+  );
+
+  if (subView === "redline") {
+    return (
+      <div style={{padding:"16px 18px 40px", maxWidth:"100%"}}>
+        {tabStrip}
+        <RedlineWalkBoard walks={redlineWalks} jobs={jobs} identity={identity}
+          onAdd={onAddRedline} onUpdate={onUpdateRedline} onDelete={onDeleteRedline} />
+      </div>
+    );
+  }
+
   return (
     <div style={{padding:"16px 18px 40px", maxWidth:"100%"}}>
+      {tabStrip}
       {/* Header */}
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
         flexWrap:"wrap",gap:12,marginBottom:14}}>
@@ -50893,6 +51055,7 @@ function App() {
   // Loaded from /quoteWalks Firestore collection. Separate state from jobs
   // because the lifecycles are independent.
   const [quoteWalks, setQuoteWalks] = useState([]);
+  const [redlineWalks, setRedlineWalks] = useState([]);   // Redline-walk tracker (COs tab sub-view)
   // Top-level suggestions subscription — feeds the Today tab's Live Activity
   // events 58/59. AppMapSharePage maintains its own separate subscription for
   // the inbox UI; this one is intentionally duplicated rather than lifted to
@@ -51181,6 +51344,17 @@ function App() {
       (err) => { console.error("Quote walks snapshot error:", err); }
     );
 
+    // Redline walks — same top-level collection + `data` envelope as quoteWalks.
+    const unsubRedlineWalks = onSnapshot(collection(db,"redlineWalks"),
+      (snap) => {
+        const loaded = snap.docs
+          .map(d => { const raw = d.data(); return raw?.data ? { ...raw.data, updated_at: raw.updated_at || "" } : null; })
+          .filter(Boolean);
+        setRedlineWalks(loaded);
+      },
+      (err) => { console.error("Redline walks snapshot error:", err); }
+    );
+
     // Suggestions feed (for Today tab event stream) — read-only listener.
     // Docs are flat (no `data` envelope) since suggestions are written directly
     // with the fields at the top level by the App Map share form.
@@ -51202,7 +51376,7 @@ function App() {
       }
     }, ()=>{});
 
-    return () => { unsub(); unsubUpcoming(); unsubSimproCands(); unsubTasks(); unsubNeeds(); unsubQuoteWalks(); unsubSuggestions(); unsubVersion(); }; // cleanup on unmount
+    return () => { unsub(); unsubUpcoming(); unsubSimproCands(); unsubTasks(); unsubNeeds(); unsubQuoteWalks(); unsubRedlineWalks(); unsubSuggestions(); unsubVersion(); }; // cleanup on unmount
 
   },[]);
 
@@ -51783,6 +51957,32 @@ function App() {
     setQuoteWalks(ws => [...ws, walk]);
     setSelectedQuoteWalk(walk);
     await saveQuoteWalk(walk);
+    return walk;
+  };
+
+  // ── Redline walks save / update / delete / add (mirror quoteWalks) ──────────
+  const saveRedlineWalk = async (walk) => {
+    if (!walk?.id) return;
+    const next = { ...walk, updatedAt: new Date().toISOString() };
+    try {
+      await setDoc(doc(db, "redlineWalks", walk.id), { data: next, updated_at: next.updatedAt });
+    } catch (e) { console.error("[HE] saveRedlineWalk failed:", e?.message); }
+  };
+  const updateRedlineWalk = (next) => {
+    setRedlineWalks(ws => ws.map(w => w.id === next.id ? next : w));
+    saveRedlineWalk(next);
+  };
+  const deleteRedlineWalk = async (id) => {
+    if (!id) return;
+    setRedlineWalks(ws => ws.filter(w => w.id !== id));
+    try { await deleteDoc(doc(db, "redlineWalks", id)); }
+    catch (e) { console.error("[HE] deleteRedlineWalk failed:", e?.message); }
+  };
+  const addRedlineWalk = async (patch = {}) => {
+    const me = getIdentity && getIdentity();
+    const walk = { ...newRedlineWalk(me?.name || ""), walkedByUid: me?.id || "", ...patch };
+    setRedlineWalks(ws => [...ws, walk]);
+    await saveRedlineWalk(walk);
     return walk;
   };
 
@@ -54352,6 +54552,10 @@ function App() {
           jobs={jobs}
           identity={identity}
           getPersonColor={getPersonColor}
+          redlineWalks={redlineWalks}
+          onAddRedline={addRedlineWalk}
+          onUpdateRedline={updateRedlineWalk}
+          onDeleteRedline={deleteRedlineWalk}
           onSelectJob={(j)=>{
             const full = jobs.find(x => x.id === j.id);
             if (full) setSelected(full);

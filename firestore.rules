@@ -45,6 +45,16 @@ service cloud.firestore {
       allow delete: if true;
     }
 
+    // Redline walks — same envelope + validation as /quoteWalks (data map + ISO
+    // updated_at string). UI-level permission controls who edits.
+    match /redlineWalks/{walkId} {
+      allow read: if true;
+      allow write: if request.resource.data.keys().hasAll(['data', 'updated_at'])
+                   && request.resource.data.data is map
+                   && request.resource.data.updated_at is string;
+      allow delete: if true;
+    }
+
     // ── HOMEOWNER REQUESTS ────────────────────────────────────────────────────
     // Share link recipients submit answers here — allow creates from anyone.
     // Only the app reads these back, so reads are also open for now.
