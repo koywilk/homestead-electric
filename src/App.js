@@ -23559,6 +23559,14 @@ const _jeq = (a, b) => {
   catch { return false; }
 };
 
+// Per-TAB identity for save-echo detection (Kweller punch wipe, 2026-07-09).
+// `he_device_id` lives in localStorage, so every tab in the same browser
+// shares it — one tab's write looked like another tab's "own echo", the
+// stale tab never re-seeded, and its next save wiped the fresh tab's work.
+// A module-scope id is unique per tab/app-instance by construction. Written
+// to the doc as `tab` alongside `device`; read back as `_tab` by the loader.
+const TAB_ID = 'tab_' + Math.random().toString(36).slice(2, 10);
+
 // Three-way structural merge. Rules:
 //  • If the server hasn't changed since our baseline → the client's write
 //    applies verbatim (so deletes work exactly like today).
@@ -26399,7 +26407,19 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     _lastJobIdRef.current = rawJob?.id;
     if (idChanged) { setJob(normalizeJob(rawJob)); return; }
     let myDev = ''; try { myDev = localStorage.getItem('he_device_id') || ''; } catch {}
-    if (rawJob && rawJob._device && myDev && rawJob._device === myDev) return; // our own write echo — don't clobber in-progress edits
+    // Own-echo detection is per-TAB (`tab` written by v312+ clients; falls back
+    // to per-device for docs last written by older clients — he_device_id is
+    // shared by every tab in the same browser, so device alone made one tab
+    // blind to a sibling tab's writes and it later saved over them). And an
+    // echo whose transaction MERGED IN another device's concurrent changes
+    // (`_merged`) must be adopted even by the tab that wrote it: this tab's
+    // local copy is missing the rescued content, and skipping the re-seed is
+    // what let the next tap-burst save bulldoze it (Kweller punch wipe,
+    // 2026-07-09 — checkmarks reverted, other crew's added items deleted).
+    const ownEcho = rawJob && rawJob._tab
+      ? rawJob._tab === TAB_ID
+      : !!(rawJob && rawJob._device && myDev && rawJob._device === myDev);
+    if (ownEcho && !rawJob?._merged) return; // clean own echo — local copy is already the freshest
     setJob(normalizeJob(rawJob));
   }, [rawJob?.id, rawJob?.updated_at, rawJob?.foreman, rawJob?.lead]);
 
@@ -51923,7 +51943,7 @@ function App() {
 
         if(!snap.empty) {
 
-          const loaded = migrate(snap.docs.map(d=>{const raw=d.data(); return raw?.data ? {...raw.data, updated_at:raw.updated_at||"", _saved_by:raw.saved_by||"", _device:raw.device||"", lastActivityAt:raw.lastActivityAt||null} : null;}).filter(Boolean));
+          const loaded = migrate(snap.docs.map(d=>{const raw=d.data(); return raw?.data ? {...raw.data, updated_at:raw.updated_at||"", _saved_by:raw.saved_by||"", _device:raw.device||"", _tab:raw.tab||"", _merged:!!raw.merged, lastActivityAt:raw.lastActivityAt||null} : null;}).filter(Boolean));
 
           // Normalize foreman/lead names to match canonical casing from users list
           // This prevents "Vasa mataafa" showing as wrong person in dropdowns
@@ -52217,7 +52237,12 @@ function App() {
   // patch against the server's current data. Scalars pass through untouched.
   // Returns the dot-notation write patch. Logs whenever the merge rescued
   // server-side changes the client's blind write would have destroyed.
-  const _mergePatchAgainstServer = (jobId, jobName, cleanPatch, serverData) => {
+  // `rescuedKeys` (optional array, cleared by the caller per transaction
+  // attempt): filled with the names of fields where the merge output differs
+  // from what the client sent — i.e. the write is about to carry server-side
+  // content this device's LOCAL copy does not have. Callers use it to keep
+  // the baseline honest (see the post-save baseline note in saveJob).
+  const _mergePatchAgainstServer = (jobId, jobName, cleanPatch, serverData, rescuedKeys) => {
     // ROOT-CAUSE FIX (punch/anything reverting): the baseline was stored from the
     // snapshot loader (NORMALIZED/migrated shape) while `serverData` inside the
     // save transaction is the RAW Firestore doc. Different shapes ⇒ `_jeq(server,
@@ -52239,6 +52264,7 @@ function App() {
         out = _threeWayMerge(base[k], v, sv);
         if (!_jeq(out, v)) {
           console.log(`[HE] concurrent-edit merge: preserved server changes on "${k}" for ${jobName || jobId}`);
+          if (rescuedKeys) rescuedKeys.push(k);
         }
       }
       writePatch["data." + k] = out;
@@ -52326,19 +52352,26 @@ function App() {
           // (baseline vs ours vs server) before writing. Items added by
           // someone else since we loaded are preserved; this user's explicit
           // deletes still go through. Scalars behave exactly as before.
-          const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId};
+          const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId,tab:TAB_ID};
           const cleanPatch = sanitize(accumulated);
           let _writtenPatch = null;
+          const _rescued = [];
           await runTransaction(db, async (tx) => {
+            _rescued.length = 0; // transactions retry on contention — start each attempt clean
             const jref = doc(db,"jobs",job.id);
             const snap = await tx.get(jref);
             if(!snap.exists()) {
               // Document doesn't exist yet (new job created but first setDoc hasn't landed) — create it now
-              tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, saved_by:meta.saved_by, device:meta.device});
+              tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, saved_by:meta.saved_by, device:meta.device, tab:TAB_ID});
               return;
             }
             const serverData = snap.data()?.data || {};
-            const writePatch = {...meta, ..._mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData)};
+            const writePatch = {...meta, ..._mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _rescued)};
+            // Flag writes whose transaction merged in ANOTHER device's concurrent
+            // changes. The echo of a merged write must be re-adopted even by the
+            // tab that wrote it — its local copy is missing the rescued content
+            // (JobDetail reads this back as `_merged`).
+            writePatch.merged = _rescued.length > 0;
             _writtenPatch = writePatch;
             tx.update(jref, writePatch);
           });
@@ -52353,7 +52386,21 @@ function App() {
           // check pass, so the client's change applies verbatim (deletes included).
           if (_writtenPatch) {
             const _b = serverBaselines.current[job.id] ? { ...serverBaselines.current[job.id] } : {};
-            Object.keys(_writtenPatch).forEach(pk => { if (pk.indexOf("data.") === 0) _b[pk.slice(5)] = _writtenPatch[pk]; });
+            Object.keys(_writtenPatch).forEach(pk => {
+              if (pk.indexOf("data.") !== 0) return;
+              const f = pk.slice(5);
+              // KWELLER WIPE FIX (2026-07-09): if the merge RESCUED server changes
+              // on this field, what we WROTE is fresher than what our LOCAL copy
+              // holds. Advancing the baseline to the written (merged) value made
+              // the very next save in a tap-burst hit the "server == base →
+              // client wins verbatim" fast path with a stale client tree —
+              // bulldozing the content the previous merge had just rescued
+              // (checkmarks reverted, other crew's added items deleted). Keep
+              // the baseline at the value the LOCAL copy actually derives from
+              // (what we SENT), so every subsequent save structural-merges again
+              // until the local copy truly re-syncs from a snapshot.
+              _b[f] = _rescued.includes(f) ? cleanPatch[f] : _writtenPatch[pk];
+            });
             // Stamp our write time so the snapshot's forward-only guard treats
             // this advanced baseline as the latest and a stale echo can't undo it.
             if (_writtenPatch.updated_at) _b.updated_at = _writtenPatch.updated_at;
@@ -52386,7 +52433,7 @@ function App() {
               return;
             }
           }
-          const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId};
+          const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),saved_by:identity?.name||"unknown",device:deviceId,tab:TAB_ID};
           // MODE-B FIX (Cougar Moon, 2026-07-06): this branch used to rewrite
           // EVERY field of the job from this device's local snapshot. The old
           // dot-notation write protected fields this device had never seen,
@@ -52396,7 +52443,9 @@ function App() {
           // but for an EXISTING doc every structural field is three-way
           // merged against the server's current value first.
           let _writtenFull = null;
+          const _rescuedFull = [];
           await runTransaction(db, async (tx) => {
+            _rescuedFull.length = 0; // transactions retry on contention — start each attempt clean
             const jref = doc(db,"jobs",job.id);
             const snap = await tx.get(jref);
             if(!snap.exists()) {
@@ -52404,14 +52453,22 @@ function App() {
               return;
             }
             const serverData = snap.data()?.data || {};
-            const fullPatch = {...meta, ..._mergePatchAgainstServer(job.id, job.name, sanitized, serverData)};
+            const fullPatch = {...meta, ..._mergePatchAgainstServer(job.id, job.name, sanitized, serverData, _rescuedFull)};
+            fullPatch.merged = _rescuedFull.length > 0; // see patch-mode note — echo of a merged write must be re-adopted
             _writtenFull = fullPatch;
             tx.update(jref, fullPatch);
           });
-          // Advance the baseline to what we wrote (see the patch-mode note above).
+          // Advance the baseline to what we wrote (see the patch-mode note above) —
+          // EXCEPT fields the merge rescued: there the local copy still holds what
+          // we SENT, so the baseline stays at the sent value to force the next
+          // save to structural-merge instead of fast-pathing over the rescue.
           if (_writtenFull) {
             const _b = serverBaselines.current[job.id] ? { ...serverBaselines.current[job.id] } : {};
-            Object.keys(_writtenFull).forEach(pk => { if (pk.indexOf("data.") === 0) _b[pk.slice(5)] = _writtenFull[pk]; });
+            Object.keys(_writtenFull).forEach(pk => {
+              if (pk.indexOf("data.") !== 0) return;
+              const f = pk.slice(5);
+              _b[f] = _rescuedFull.includes(f) ? sanitized[f] : _writtenFull[pk];
+            });
             if (_writtenFull.updated_at) _b.updated_at = _writtenFull.updated_at;
             serverBaselines.current[job.id] = _b;
           }
@@ -52526,7 +52583,7 @@ function App() {
       const accumulated = pendingPatches.current[job.id];
       delete pendingPatches.current[job.id];
       if(accumulated && Object.keys(accumulated).length > 0) {
-        const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp()};
+        const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),tab:TAB_ID};
         const cleanPatch = sanitize(accumulated);
         try {
           // Same transactional three-way merge as saveJob — a close-flush
@@ -52535,11 +52592,13 @@ function App() {
             const jref = doc(db,"jobs",job.id);
             const snap = await tx.get(jref);
             if(!snap.exists()) {
-              tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, lastActivityAt:serverTimestamp()});
+              tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, lastActivityAt:serverTimestamp(), tab:TAB_ID});
               return;
             }
             const serverData = snap.data()?.data || {};
-            tx.update(jref, {...meta, ..._mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData)});
+            const _fr = [];
+            const wp = _mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _fr);
+            tx.update(jref, {...meta, merged:_fr.length > 0, ...wp});
           });
         } catch(e) {
           console.error('[HE] flushJob save error:',e?.message);
