@@ -15827,8 +15827,15 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
 // before writing lutronRooms, so no sibling field (loads, keypad sections,
 // panel/module assignments, confirmedKeypads, lightingCollab) is ever
 // touched. Spec: LUTRON_PACKAGE_TRACKER_SPEC.md.
+// NOTE on color: this feature deliberately does NOT use C.purple. Purple is
+// already the default section-accent color for every other block on this tab
+// (Loads, Keypads, Panel Loads, Return Trips, Finish QC Walk all use it), so
+// it doesn't read as distinct. Orange is the app's existing "needs attention /
+// deviates from the plan" color (pending CO, unsaved changes, manual override,
+// not scheduled in Simpro) — a better semantic and visual fit for "this wasn't
+// in the original package" and it actually stands out on this all-purple tab.
 const LUTRON_ITEM_TYPES = ["Load","Keypad","Shade","Other"];
-const lutronTypeColor = (t) => t==="Load" ? C.blue : t==="Keypad" ? C.purple : t==="Shade" ? C.teal : C.dim;
+const lutronTypeColor = (t) => t==="Load" ? C.blue : t==="Keypad" ? C.teal : t==="Shade" ? C.green : C.dim;
 
 function LutronRoomsSection({ job, u }) {
   const rooms = job.panelizedLighting?.lutronRooms || [];
@@ -15883,24 +15890,54 @@ function LutronRoomsSection({ job, u }) {
     saveRooms(rooms.map(r => r.id === roomId ? { ...r, items: (r.items||[]).filter(i => i.id !== itemId) } : r));
   };
 
+  const copySummary = () => {
+    const lines = [`${job.name||"This job"} — additions after original bid/plans`, ""];
+    let any = false;
+    rooms.forEach(room => {
+      if (!(room.items||[]).length) return;
+      any = true;
+      lines.push(room.name+":");
+      room.items.forEach(item => {
+        lines.push("  - ["+item.itemType+"] "+item.location+(item.notes?" ("+item.notes+")":""));
+      });
+    });
+    if (!any) lines.push("(nothing logged yet)");
+    const text = lines.join("\n");
+    if (navigator.clipboard) navigator.clipboard.writeText(text).catch(()=>{});
+    toast.success("Copied — ready to paste into an email");
+  };
+
   return (
     <div style={{marginBottom:22}}>
-      <SectionHead label="Lutron Rooms" color={C.purple}
-        action={!addingRoom && (
-          <button onClick={()=>setAddingRoom(true)}
-            style={{background:"none",border:`1px dashed ${C.purple}55`,color:C.purple,borderRadius:6,
-              padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
-              display:"inline-flex",alignItems:"center",gap:4}}>
-            <Icon name="plus" size={11} stroke={2.25}/>
-            Add Room
-          </button>
-        )}/>
-
-      <div style={{display:"flex",alignItems:"center",gap:6,background:`${C.purple}10`,
-        border:`1px solid ${C.purple}33`,borderRadius:7,padding:"6px 10px",marginBottom:12}}>
-        <Icon name="info" size={12} color={C.purple} style={{flexShrink:0}}/>
-        <span style={{fontSize:11,color:C.purple}}>Added since bid — not in the original plans</span>
+      <div style={{display:"flex",alignItems:"center",gap:8,background:`${C.orange}1a`,
+        border:`1.5px solid ${C.orange}77`,borderRadius:8,padding:"10px 12px",marginBottom:12}}>
+        <Icon name="alertTriangle" size={15} color={C.orange} style={{flexShrink:0}}/>
+        <span style={{fontSize:12.5,color:C.orange,fontWeight:800}}>
+          Additions after original bid/plans — not part of the original package
+        </span>
       </div>
+
+      <SectionHead label="Additions After Original Bid/Plans" color={C.orange}
+        action={
+          <div style={{display:"flex",gap:8}}>
+            <button onClick={copySummary}
+              style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,borderRadius:6,
+                padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                display:"inline-flex",alignItems:"center",gap:4}}>
+              <Icon name="copy" size={11} stroke={2.25}/>
+              Copy
+            </button>
+            {!addingRoom && (
+              <button onClick={()=>setAddingRoom(true)}
+                style={{background:"none",border:`1px dashed ${C.orange}88`,color:C.orange,borderRadius:6,
+                  padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+                  display:"inline-flex",alignItems:"center",gap:4}}>
+                <Icon name="plus" size={11} stroke={2.25}/>
+                Add Room
+              </button>
+            )}
+          </div>
+        }/>
 
       {addingRoom && (
         <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
@@ -15911,7 +15948,7 @@ function LutronRoomsSection({ job, u }) {
             style={{flex:1,minWidth:200,background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
               color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none"}}/>
           <button onClick={addRoom}
-            style={{background:C.purple,color:"#fff",border:"none",borderRadius:7,padding:"7px 14px",
+            style={{background:C.orange,color:"#fff",border:"none",borderRadius:7,padding:"7px 14px",
               fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
             Add
           </button>
@@ -15937,7 +15974,7 @@ function LutronRoomsSection({ job, u }) {
           <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
             marginBottom:(room.items||[]).length?8:0}}>
             <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}>
-              <Icon name="mapPin" size={12} color={C.purple} style={{flexShrink:0}}/>
+              <Icon name="mapPin" size={12} color={C.orange} style={{flexShrink:0}}/>
               <span style={{fontSize:12,fontWeight:700,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{room.name}</span>
               <span style={{fontSize:10,color:C.dim,background:C.bg,borderRadius:99,padding:"1px 7px",flexShrink:0}}>
                 {(room.items||[]).length}
@@ -15987,7 +16024,7 @@ function LutronRoomsSection({ job, u }) {
                   padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none"}}/>
               <div style={{display:"flex",gap:6}}>
                 <button onClick={()=>addItem(room.id)}
-                  style={{background:C.purple,color:"#fff",border:"none",borderRadius:7,padding:"6px 14px",
+                  style={{background:C.orange,color:"#fff",border:"none",borderRadius:7,padding:"6px 14px",
                     fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
                   Add item
                 </button>
@@ -16000,7 +16037,7 @@ function LutronRoomsSection({ job, u }) {
             </div>
           ) : (
             <button onClick={()=>startAddItem(room.id)}
-              style={{marginTop:8,background:"none",border:"none",color:C.purple,fontSize:11,fontWeight:700,
+              style={{marginTop:8,background:"none",border:"none",color:C.orange,fontSize:11,fontWeight:700,
                 cursor:"pointer",fontFamily:"inherit",padding:"2px 0",display:"flex",alignItems:"center",gap:4}}>
               <Icon name="plus" size={11} stroke={2.25}/>
               Add item
@@ -16026,13 +16063,17 @@ function LutronAdditionsView({ jobs, onSelectJob }) {
   const [expanded, setExpanded] = useState(() => new Set());
   const [copied, setCopied]     = useState(false);
 
+  // Every job on a Lutron package — not just ones with additions logged yet.
+  // Koy tracks the whole roster of jobs coordinating with the plans company
+  // here, not just the ones that already have a change to report.
   const lutronJobs = useMemo(() => {
     return (jobs||[])
       .filter(j => (j.lightingSystem||"")==="Lutron")
       .map(j => ({ job:j, rooms:(j.panelizedLighting?.lutronRooms||[]).filter(r=>(r.items||[]).length>0) }))
-      .filter(x => x.rooms.length>0)
       .sort((a,b) => (a.job.name||"").localeCompare(b.job.name||""));
   }, [jobs]);
+
+  const jobsWithAdditions = lutronJobs.filter(x=>x.rooms.length>0).length;
 
   const toggle = (jobId) => setExpanded(prev => {
     const next = new Set(prev);
@@ -16041,8 +16082,11 @@ function LutronAdditionsView({ jobs, onSelectJob }) {
   });
 
   const copySummary = () => {
-    const lines = ["Lutron additions since bid",""];
+    const lines = ["Additions after original bid/plans",""];
+    let any = false;
     lutronJobs.forEach(({job,rooms}) => {
+      if (!rooms.length) return;
+      any = true;
       lines.push((job.name||"(unnamed job)")+":");
       rooms.forEach(room => {
         lines.push("  "+room.name+":");
@@ -16052,6 +16096,7 @@ function LutronAdditionsView({ jobs, onSelectJob }) {
       });
       lines.push("");
     });
+    if (!any) lines.push("(nothing logged yet)");
     const text = lines.join("\n");
     if (navigator.clipboard) navigator.clipboard.writeText(text).catch(()=>{});
     setCopied(true);
@@ -16062,8 +16107,13 @@ function LutronAdditionsView({ jobs, onSelectJob }) {
   return (
     <div style={{maxWidth:760,margin:"0 auto",padding:"20px 16px"}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
-        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.06em",color:C.text}}>
-          Lutron Additions
+        <div>
+          <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.06em",color:C.text}}>
+            Additions After Original Bid/Plans
+          </div>
+          <div style={{fontSize:11,color:C.dim,marginTop:2}}>
+            Every Lutron job &middot; {jobsWithAdditions} with additions logged
+          </div>
         </div>
         {lutronJobs.length>0 && (
           <button onClick={copySummary}
@@ -16076,84 +16126,78 @@ function LutronAdditionsView({ jobs, onSelectJob }) {
         )}
       </div>
 
-      <div style={{display:"flex",alignItems:"center",gap:6,background:`${C.purple}10`,
-        border:`1px solid ${C.purple}33`,borderRadius:7,padding:"8px 12px",margin:"10px 0 16px"}}>
-        <Icon name="info" size={13} color={C.purple} style={{flexShrink:0}}/>
-        <span style={{fontSize:12,color:C.purple}}>
-          Added since bid — not in the original plans. This is a change log, not the full package;
-          no entries under a job means nothing's changed since bid.
+      <div style={{display:"flex",alignItems:"center",gap:8,background:`${C.orange}1a`,
+        border:`1.5px solid ${C.orange}77`,borderRadius:8,padding:"10px 12px",margin:"10px 0 16px"}}>
+        <Icon name="alertTriangle" size={15} color={C.orange} style={{flexShrink:0}}/>
+        <span style={{fontSize:12.5,color:C.orange,fontWeight:800}}>
+          Not part of the original package — logged after bid, job by job.
         </span>
       </div>
 
       {lutronJobs.length===0 ? (
         <div style={{fontSize:13,color:C.dim,padding:24,textAlign:"center",
           border:`1px dashed ${C.border}`,borderRadius:10}}>
-          No Lutron jobs have any post-bid additions logged yet.
+          No jobs are set to Lutron yet.
         </div>
       ) : (
-        <>
-          <div style={{fontSize:11,color:C.dim,marginBottom:10}}>
-            Sorted by job &middot; {lutronJobs.length} job{lutronJobs.length===1?"":"s"} with additions
-          </div>
-          <div style={{display:"flex",flexDirection:"column",gap:8}}>
-            {lutronJobs.map(({job,rooms}) => {
-              const isOpen = expanded.has(job.id);
-              const itemCount = rooms.reduce((n,r)=>n+(r.items||[]).length,0);
-              return (
-                <div key={job.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
-                  <div onClick={()=>toggle(job.id)}
-                    style={{display:"flex",alignItems:"center",justifyContent:"space-between",
-                      padding:"12px 14px",cursor:"pointer"}}>
-                    <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
-                      <Icon name="chevronRight" size={13} color={C.dim}
-                        style={{flexShrink:0,transition:"transform 0.12s",transform:isOpen?"rotate(90deg)":"none"}}/>
-                      <span style={{fontSize:13,fontWeight:700,color:C.text,overflow:"hidden",
-                        textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{job.name||"(unnamed job)"}</span>
-                      <span style={{fontSize:10,color:C.dim,flexShrink:0}}>
-                        {rooms.length} room{rooms.length===1?"":"s"} &middot; {itemCount} item{itemCount===1?"":"s"}
-                      </span>
-                    </div>
-                    <button onClick={(e)=>{e.stopPropagation(); onSelectJob&&onSelectJob(job);}}
-                      style={{background:"none",border:"none",color:C.purple,fontSize:11,fontWeight:700,
-                        cursor:"pointer",fontFamily:"inherit",flexShrink:0,display:"inline-flex",
-                        alignItems:"center",gap:4}}>
-                      Open job<Icon name="external" size={11} stroke={2.25}/>
-                    </button>
+        <div style={{display:"flex",flexDirection:"column",gap:8}}>
+          {lutronJobs.map(({job,rooms}) => {
+            const isOpen = expanded.has(job.id);
+            const itemCount = rooms.reduce((n,r)=>n+(r.items||[]).length,0);
+            return (
+              <div key={job.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+                <div onClick={()=>rooms.length&&toggle(job.id)}
+                  style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                    padding:"12px 14px",cursor:rooms.length?"pointer":"default"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+                    {rooms.length>0 && <Icon name="chevronRight" size={13} color={C.dim}
+                      style={{flexShrink:0,transition:"transform 0.12s",transform:isOpen?"rotate(90deg)":"none"}}/>}
+                    <span style={{fontSize:13,fontWeight:700,color:C.text,overflow:"hidden",
+                      textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{job.name||"(unnamed job)"}</span>
+                    <span style={{fontSize:10,color:rooms.length?C.dim:C.muted,flexShrink:0}}>
+                      {rooms.length ? `${rooms.length} room${rooms.length===1?"":"s"} · ${itemCount} item${itemCount===1?"":"s"}` : "No additions logged yet"}
+                    </span>
                   </div>
-                  {isOpen && (
-                    <div style={{borderTop:`1px solid ${C.border}`,padding:"10px 14px 12px",
-                      display:"flex",flexDirection:"column",gap:10}}>
-                      {rooms.map(room => (
-                        <div key={room.id}>
-                          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
-                            <Icon name="mapPin" size={11} color={C.purple}/>
-                            <span style={{fontSize:12,fontWeight:700,color:C.text}}>{room.name}</span>
-                          </div>
-                          {(room.items||[]).map(item => (
-                            <div key={item.id} style={{display:"flex",alignItems:"flex-start",gap:8,
-                              padding:"4px 0 4px 17px"}}>
-                              <span style={{flexShrink:0,fontSize:10,fontWeight:700,color:lutronTypeColor(item.itemType),
-                                background:`${lutronTypeColor(item.itemType)}18`,borderRadius:5,padding:"2px 7px"}}>
-                                {item.itemType}
-                              </span>
-                              <div style={{flex:1,minWidth:0}}>
-                                <div style={{fontSize:12,color:C.text}}>{item.location}</div>
-                                {item.notes && <div style={{fontSize:11,color:C.dim,marginTop:1}}>{item.notes}</div>}
-                                <div style={{fontSize:10,color:C.dim,opacity:0.7,marginTop:2}}>
-                                  {timeAgo(item.addedAt)}{item.addedBy?` by ${item.addedBy}`:""}
-                                </div>
+                  <button onClick={(e)=>{e.stopPropagation(); onSelectJob&&onSelectJob(job);}}
+                    style={{background:"none",border:"none",color:C.orange,fontSize:11,fontWeight:700,
+                      cursor:"pointer",fontFamily:"inherit",flexShrink:0,display:"inline-flex",
+                      alignItems:"center",gap:4}}>
+                    Open job<Icon name="external" size={11} stroke={2.25}/>
+                  </button>
+                </div>
+                {isOpen && rooms.length>0 && (
+                  <div style={{borderTop:`1px solid ${C.border}`,padding:"10px 14px 12px",
+                    display:"flex",flexDirection:"column",gap:10}}>
+                    {rooms.map(room => (
+                      <div key={room.id}>
+                        <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                          <Icon name="mapPin" size={11} color={C.orange}/>
+                          <span style={{fontSize:12,fontWeight:700,color:C.text}}>{room.name}</span>
+                        </div>
+                        {(room.items||[]).map(item => (
+                          <div key={item.id} style={{display:"flex",alignItems:"flex-start",gap:8,
+                            padding:"4px 0 4px 17px"}}>
+                            <span style={{flexShrink:0,fontSize:10,fontWeight:700,color:lutronTypeColor(item.itemType),
+                              background:`${lutronTypeColor(item.itemType)}18`,borderRadius:5,padding:"2px 7px"}}>
+                              {item.itemType}
+                            </span>
+                            <div style={{flex:1,minWidth:0}}>
+                              <div style={{fontSize:12,color:C.text}}>{item.location}</div>
+                              {item.notes && <div style={{fontSize:11,color:C.dim,marginTop:1}}>{item.notes}</div>}
+                              <div style={{fontSize:10,color:C.dim,opacity:0.7,marginTop:2}}>
+                                {timeAgo(item.addedAt)}{item.addedBy?` by ${item.addedBy}`:""}
                               </div>
                             </div>
-                          ))}
-                        </div>
-                      ))}
-                    </div>
-                  )}
-                </div>
-              );
-            })}
-          </div>
-        </>
+                          </div>
+                        ))}
+                      </div>
+                    ))}
+                  </div>
+                )}
+              </div>
+            );
+          })}
+        </div>
       )}
     </div>
   );
@@ -28411,11 +28455,24 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 <button onClick={()=>{
                   const link=`${window.location.origin}/?lighting=${job.id}`;
                   navigator.clipboard.writeText(link).then(()=>toast.success('Lighting collab link copied! The low voltage company can view assignments and add their module/channel info.',{duration:5000})).catch(()=>toast.info('Link: '+link,{duration:8000}));
-                }} style={{background:`${C.purple}15`,border:`1px solid ${C.purple}55`,borderRadius:6,
-                  color:C.purple,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.05em'}}>
+                }} style={{background:`${C.blue}15`,border:`1px solid ${C.blue}55`,borderRadius:6,
+                  color:C.blue,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.05em'}}>
                   Share ↗
                 </button>
                 <span style={{fontSize:11,color:C.dim}}>LV company can add module/channel assignments</span>
+                {(job.lightingSystem||"Control 4")==="Lutron" && (
+                  <>
+                    <span style={{width:1,height:16,background:C.border}}/>
+                    <button onClick={()=>{
+                      const link=`${window.location.origin}/?lightinghub=1`;
+                      navigator.clipboard.writeText(link).then(()=>toast.success('Hub link copied! One link for the plans company — lists every Lutron job, no re-sending needed as new jobs start.',{duration:5000})).catch(()=>toast.info('Link: '+link,{duration:8000}));
+                    }} style={{background:"none",border:`1px dashed ${C.blue}55`,borderRadius:6,
+                      color:C.blue,fontSize:11,fontWeight:700,padding:'4px 12px',cursor:'pointer',fontFamily:'inherit',letterSpacing:'0.05em'}}>
+                      Copy hub link ↗
+                    </button>
+                    <span style={{fontSize:11,color:C.dim}}>One-time link — lists every Lutron job for them</span>
+                  </>
+                )}
               </div>
 
               {/* Lighting Control System Selector */}
@@ -45717,7 +45774,12 @@ function LightingSharePage({ jobId }) {
     return idx >= 0 ? `Panel ${String.fromCharCode(65+3+idx)}` : k;
   };
 
-  const SP = { accent:'#6A7BAA', accentDark:'#0284c7', accentBg:'#EAEEF6', accentBorder:'#6A7BAA',
+  // Palette matches the app's other public share pages (QuestionsSharePage,
+  // LoadsSharePage, HomeRunsSharePage, PunchSharePage) instead of a one-off
+  // set of colors — same navy header (#1e3a5f), same blue accent (#3B5BA5 —
+  // C.blue/C.accent), same system-ui font. This page used to look like a
+  // different app; it doesn't anymore.
+  const SP = { accent:'#3B5BA5', accentDark:'#2E477D', accentBg:'#EAEEF6', accentBorder:'#3B5BA5',
                bg:'#EEF0F3', card:'#ffffff', border:'#E1E4E9', text:'#1B1F24', dim:'#5E6670', muted:'#8A929D',
                green:'#3E7D5A', amber:'#d97706' };
   const inputStyle = {background:SP.bg,border:`1px solid ${SP.border}`,borderRadius:6,padding:'5px 8px',fontSize:12,fontFamily:'inherit',outline:'none',width:'100%',boxSizing:'border-box',color:SP.text};
@@ -45727,13 +45789,23 @@ function LightingSharePage({ jobId }) {
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#B23A3A'}}>{error}</div>;
 
   return (
-    <div style={{maxWidth:680,margin:'0 auto',padding:'28px 16px',fontFamily:"'DM Sans',system-ui,sans-serif",background:SP.bg,minHeight:'100vh'}}>
-      {/* Header */}
-      <div style={{background:SP.text,borderRadius:14,padding:'20px 22px',marginBottom:6}}>
-        <div style={{fontSize:10,color:'rgba(255,255,255,0.45)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>HOMESTEAD ELECTRIC — {sys.toUpperCase()} LIGHTING</div>
-        <div style={{fontSize:19,fontWeight:700,color:'#fff',marginBottom:2}}>{job?.name||'Job'}</div>
-        {job?.address&&<div style={{fontSize:12,color:'rgba(255,255,255,0.55)'}}>{job.address}</div>}
-        <div style={{marginTop:8,display:'inline-block',background:SP.accent,borderRadius:6,padding:'2px 10px',fontSize:10,fontWeight:700,color:'#fff',letterSpacing:'0.06em'}}>{sys}</div>
+    <div style={{maxWidth:680,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:SP.bg,minHeight:'100vh'}}>
+      {sys==='Lutron' && (
+        <div style={{marginBottom:10}}>
+          <a href="/?lightinghub=1" style={{fontSize:12,color:SP.dim,textDecoration:'none',display:'inline-flex',alignItems:'center',gap:5}}>
+            <Icon name="arrowLeft" size={12}/> All Lutron jobs
+          </a>
+        </div>
+      )}
+      {/* Header — same navy card + logo as the other share pages */}
+      <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:6,display:'flex',alignItems:'center',gap:14}}>
+        <img src="/icon-192.png" alt="Homestead Electric" onError={e=>{e.currentTarget.style.display='none';}}
+          style={{width:48,height:48,borderRadius:11,flexShrink:0,background:'#fff',padding:5,boxSizing:'border-box',objectFit:'contain'}}/>
+        <div style={{minWidth:0,flex:1}}>
+          <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>HOMESTEAD ELECTRIC — {sys.toUpperCase()} LIGHTING</div>
+          <div style={{fontSize:19,fontWeight:700,color:'#fff',marginBottom:2}}>{job?.name||'Job'}</div>
+          {job?.address&&<div style={{fontSize:12,color:'rgba(255,255,255,0.65)'}}>{job.address}</div>}
+        </div>
       </div>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 4px 14px'}}>
         <div style={{fontSize:11,color:SP.dim}}>Add your module assignments and circuit additions below. Changes save automatically.</div>
@@ -45869,6 +45941,71 @@ function LightingSharePage({ jobId }) {
           style={{width:'100%',border:`1px solid ${SP.border}`,borderRadius:7,padding:'8px 10px',fontSize:13,fontFamily:'inherit',resize:'vertical',boxSizing:'border-box',outline:'none',color:SP.text,background:SP.bg}}/>
       </div>
       <div style={{textAlign:'center',fontSize:11,color:SP.muted}}>Changes save automatically as you type.</div>
+    </div>
+  );
+}
+
+// ─── Lighting Hub — one link for the LV plans company to see every Lutron job ──
+// Public, no jobId in the URL (?lightinghub=1). Lists every job currently set
+// to Lutron, each linking into that job's LightingSharePage (?lighting=<id>).
+// One bookmark for the plans company instead of Koy re-sending a new link
+// every time a job starts — Koy (2026-07-08): "this will only work if it is
+// convenient enough and tracks all jobs they are helping us on." Read-only
+// index; all editing still happens on each job's own LightingSharePage. Same
+// open-read jobs collection as every other share link in this app
+// (firestore.rules — reads are open by design so links work without login),
+// so listing every Lutron job here doesn't expose anything that isn't
+// already reachable one link at a time.
+function LightingHubPage() {
+  const [jobsList, setJobsList] = useState(null); // null = loading
+  const [error, setError]       = useState(null);
+
+  useEffect(() => {
+    getDocs(collection(db,'jobs')).then(snap => {
+      const all = snap.docs.map(d => {
+        const raw = d.data();
+        return raw?.data ? { id: d.id, ...raw.data } : null;
+      }).filter(Boolean);
+      setJobsList(all.filter(j => (j.lightingSystem||'')==='Lutron')
+        .sort((a,b) => (a.name||'').localeCompare(b.name||'')));
+    }).catch(() => setError('Failed to load.'));
+  }, []);
+
+  if(error) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#B23A3A'}}>{error}</div>;
+  if(jobsList===null) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6E7682'}}>Loading…</div>;
+
+  return (
+    <div style={{maxWidth:680,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#EEF0F3',minHeight:'100vh'}}>
+      <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:18,display:'flex',alignItems:'center',gap:14}}>
+        <img src="/icon-192.png" alt="Homestead Electric" onError={e=>{e.currentTarget.style.display='none';}}
+          style={{width:48,height:48,borderRadius:11,flexShrink:0,background:'#fff',padding:5,boxSizing:'border-box',objectFit:'contain'}}/>
+        <div style={{minWidth:0}}>
+          <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>HOMESTEAD ELECTRIC — LUTRON LIGHTING</div>
+          <div style={{fontSize:19,fontWeight:700,color:'#fff'}}>All Lutron Jobs</div>
+        </div>
+      </div>
+      <div style={{fontSize:12,color:'#5E6670',marginBottom:16,lineHeight:1.6}}>
+        Every job currently on a Lutron package. Open a job to add your module assignments and circuit additions — changes save automatically.
+      </div>
+
+      {jobsList.length===0 ? (
+        <div style={{textAlign:'center',padding:'48px 20px',color:'#99A0AA',background:'#fff',borderRadius:12}}>No Lutron jobs yet. Check back later.</div>
+      ) : (
+        <div style={{display:'flex',flexDirection:'column',gap:8}}>
+          {jobsList.map(job => (
+            <a key={job.id} href={`/?lighting=${job.id}`}
+              style={{display:'flex',alignItems:'center',gap:10,background:'#fff',border:'1px solid #E1E4E9',
+                borderRadius:10,padding:'12px 14px',textDecoration:'none',color:'inherit'}}>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:14,fontWeight:700,color:'#1B1F24'}}>{job.name||'(unnamed job)'}</div>
+                {job.address&&<div style={{fontSize:12,color:'#5E6670',marginTop:1}}>{job.address}</div>}
+              </div>
+              <span style={{fontSize:11,fontWeight:700,color:'#3B5BA5'}}>Open →</span>
+            </a>
+          ))}
+        </div>
+      )}
+      <div style={{textAlign:'center',color:'#99A0AA',fontSize:11,padding:'20px 0 10px'}}>Homestead Electric · this list updates as new jobs are set to Lutron</div>
     </div>
   );
 }
@@ -51300,6 +51437,11 @@ function App() {
   const ltParam = new URLSearchParams(window.location.search).get("lighting");
   if(ltParam) return <LightingSharePage jobId={ltParam}/>;
 
+  // Lighting hub route — ?lightinghub=1 (one link for the LV plans company;
+  // lists every Lutron job, each linking into its own ?lighting=<id> page)
+  const lhParam = new URLSearchParams(window.location.search).get("lightinghub");
+  if(lhParam) return <LightingHubPage/>;
+
   // Punch list share page routes — ?roughpunch / ?finishpunch / ?qcpunch
   const rpParam = new URLSearchParams(window.location.search).get("roughpunch");
   if(rpParam) return <PunchSharePage jobId={rpParam} stage="Rough"/>;
@@ -53632,7 +53774,7 @@ function App() {
             {key:"upcoming",label:"Upcoming",icon:"calendar"},
             ...(can(identity,"quotes.view")?[{key:"quotes",label:"Quotes",icon:"fileText"}]:[]),
             {key:"walks",label:"Walks",icon:"clipboard"},
-            ...(can(identity,"lutron.view")?[{key:"lutron",label:"Lutron Additions",icon:"mapPin"}]:[]),
+            ...(can(identity,"lutron.view")?[{key:"lutron",label:"Bid Additions",icon:"mapPin"}]:[]),
             {key:"tasks",label:"Tasks",icon:"check"},
             {key:"timeoff",label:"Time Off",icon:"calendar"},
             ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors",icon:"hardHat"}]:[]),
