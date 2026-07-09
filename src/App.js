@@ -3210,6 +3210,10 @@ const PERMISSIONS = {
   // Office + foreman can view/add (standard = foreman); leads/crew don't see it.
   "board.view":             ["admin","manager","standard"],
   "board.add":              ["admin","manager","standard"],
+  // Lutron Additions viewer — cross-job rollup of the per-job Lutron Rooms
+  // tracker (Panelized Lighting tab). Same access as the tab itself: no tier
+  // gate on adding rooms/items in-job, so the nav tab is open to everyone too.
+  "lutron.view":            ["admin","manager","standard","limited"],
   // Company-wide hats — NOT tier-based (all 3 coordinators share a tier, so a
   // tier gate can't single out Koy). Granted PER USER via `caps` in Settings →
   // Team. Empty tier list = nobody gets it by tier; only an explicit grant does.
@@ -13685,6 +13689,14 @@ const WIRE_BREAKER = {
 
 };
 
+// Homeowner-facing spec label derived from a wire's breaker: "20A · 120V".
+// 1-pole => 120V, 2-pole => 240V. Blank/unknown wire => "" (caller hides it).
+const wireAmpsVolts = (wire) => {
+  const b = WIRE_BREAKER[wire];
+  if (!b) return "";
+  return `${b.amps}A · ${b.poles === 1 ? 120 : 240}V`;
+};
+
 // Generator sizing / wattage was removed 2026-07-01 (SW v280) at Koy's
 // request — sizing off circuit data misled more than it helped. The
 // Generator Load Selection below is circuit PICKING only (name + wire +
@@ -14655,7 +14667,11 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
     if (!genLoads.length) { toast.warn('Add loads first.'); return; }
     setSending(true);
     try {
+      // Preserve the other features living on this shared homeowner_requests
+      // doc (lightingCollab, questionAnswers) — only reset the generator fields.
+      const ex = await getDoc(doc(db,'homeowner_requests',jobId));
       await setDoc(doc(db,'homeowner_requests',jobId),{
+        ...(ex.exists()?ex.data():{}),
         jobId, jobName:jobName||'', genLoads,
         submitted:false, submittedAt:null, signature:'', signedDate:'', items:[],
         sentAt:new Date().toISOString(),
@@ -14673,7 +14689,10 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
     if (!await showConfirm(msg)) return;
     setSending(true);
     try {
+      // Preserve lighting-collab / Q&A on the shared doc; reset generator fields.
+      const ex = await getDoc(doc(db,'homeowner_requests',jobId));
       await setDoc(doc(db,'homeowner_requests',jobId),{
+        ...(ex.exists()?ex.data():{}),
         jobId, jobName:jobName||'', genLoads,
         submitted:false, submittedAt:null, signature:'', signedDate:'', items:[],
         sentAt:new Date().toISOString(),
@@ -14826,7 +14845,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                         background:'#F3E9CF',borderRadius:99,padding:'1px 6px',border:'0.5px solid #EAD9A6'}}>★ REC</span>}
                     </div>
                     <div style={{fontSize:11,color:'#8A929D',marginTop:2}}>
-                      {it.wire||''}
+                      {wireAmpsVolts(it.wire)}
                     </div>
                     {it.notes&&<div style={{fontSize:11,color:'#5E6670',marginTop:2,fontStyle:'italic'}}>"{it.notes}"</div>}
                   </div>
@@ -15784,6 +15803,362 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
     </div>
   );
 }
+
+// ── Lutron Rooms — post-bid additions tracker ──────────────────────────────
+// Tracks loads/keypads/shades added to a Lutron job's package AFTER the
+// original bid + plan set were made. The outside low-voltage company designs
+// the actual system and emails Koy's team the finished plans (load schedule,
+// keypad plans, shade plans — those PDFs live in Plans & Links). This is NOT
+// that circuit engineering — it's a lightweight coordination log so Koy's
+// team can track what's changed since bid without re-reading a PDF or email
+// thread every time.
+//
+// Rooms are the organizing unit: create a room matching whatever label the
+// plans company put on their own plan, then log items inside it. Pure
+// addition log — no installed/status field of any kind (Koy: "this is just
+// a clean list of additions"). Caption text is fixed per spec — phase-
+// agnostic ("since bid"), not "during rough", because additions can rarely
+// still happen during finish and a phase-named caption would be wrong then.
+//
+// Data lives at job.panelizedLighting.lutronRooms = [{id,name,items:[...]}]
+// — nested inside the existing panelizedLighting object, so it's already
+// covered by the job loader's `{...raw.data}` spread (no loader change
+// needed — see L44066). Every save below spreads job.panelizedLighting
+// before writing lutronRooms, so no sibling field (loads, keypad sections,
+// panel/module assignments, confirmedKeypads, lightingCollab) is ever
+// touched. Spec: LUTRON_PACKAGE_TRACKER_SPEC.md.
+const LUTRON_ITEM_TYPES = ["Load","Keypad","Shade","Other"];
+const lutronTypeColor = (t) => t==="Load" ? C.blue : t==="Keypad" ? C.purple : t==="Shade" ? C.teal : C.dim;
+
+function LutronRoomsSection({ job, u }) {
+  const rooms = job.panelizedLighting?.lutronRooms || [];
+  const [addingRoom, setAddingRoom]       = useState(false);
+  const [newRoomName, setNewRoomName]     = useState("");
+  const [addingItemFor, setAddingItemFor] = useState(null); // room id, or null
+  const [newItem, setNewItem]             = useState({ itemType:"Load", location:"", notes:"" });
+
+  const saveRooms = (next) => u({ panelizedLighting: { ...job.panelizedLighting, lutronRooms: next } });
+
+  const addRoom = () => {
+    const name = newRoomName.trim();
+    if (!name) return;
+    saveRooms([...rooms, { id: uid(), name, items: [] }]);
+    setNewRoomName("");
+    setAddingRoom(false);
+  };
+
+  const deleteRoom = async (room) => {
+    if ((room.items||[]).length) {
+      const ok = await showConfirm({
+        title: "Delete room?",
+        message: `"${room.name}" has ${room.items.length} item${room.items.length===1?"":"s"} logged. Deleting the room deletes them too.`,
+        danger: true,
+      });
+      if (!ok) return;
+    }
+    saveRooms(rooms.filter(r => r.id !== room.id));
+  };
+
+  const startAddItem = (roomId) => {
+    setAddingItemFor(roomId);
+    setNewItem({ itemType:"Load", location:"", notes:"" });
+  };
+
+  const addItem = (roomId) => {
+    const location = newItem.location.trim();
+    if (!location) return;
+    const item = {
+      id: uid(),
+      itemType: newItem.itemType || "Load",
+      location,
+      notes: newItem.notes.trim(),
+      addedBy: getIdentity()?.name || "",
+      addedAt: new Date().toISOString(),
+    };
+    saveRooms(rooms.map(r => r.id === roomId ? { ...r, items: [...(r.items||[]), item] } : r));
+    setAddingItemFor(null);
+  };
+
+  const deleteItem = (roomId, itemId) => {
+    saveRooms(rooms.map(r => r.id === roomId ? { ...r, items: (r.items||[]).filter(i => i.id !== itemId) } : r));
+  };
+
+  return (
+    <div style={{marginBottom:22}}>
+      <SectionHead label="Lutron Rooms" color={C.purple}
+        action={!addingRoom && (
+          <button onClick={()=>setAddingRoom(true)}
+            style={{background:"none",border:`1px dashed ${C.purple}55`,color:C.purple,borderRadius:6,
+              padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+              display:"inline-flex",alignItems:"center",gap:4}}>
+            <Icon name="plus" size={11} stroke={2.25}/>
+            Add Room
+          </button>
+        )}/>
+
+      <div style={{display:"flex",alignItems:"center",gap:6,background:`${C.purple}10`,
+        border:`1px solid ${C.purple}33`,borderRadius:7,padding:"6px 10px",marginBottom:12}}>
+        <Icon name="info" size={12} color={C.purple} style={{flexShrink:0}}/>
+        <span style={{fontSize:11,color:C.purple}}>Added since bid — not in the original plans</span>
+      </div>
+
+      {addingRoom && (
+        <div style={{display:"flex",gap:8,marginBottom:12,flexWrap:"wrap"}}>
+          <input value={newRoomName} onChange={e=>setNewRoomName(e.target.value)}
+            onKeyDown={e=>e.key==="Enter"&&addRoom()}
+            placeholder="Room name, matching the plan (e.g. Primary Bedroom)"
+            autoFocus
+            style={{flex:1,minWidth:200,background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,
+              color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none"}}/>
+          <button onClick={addRoom}
+            style={{background:C.purple,color:"#fff",border:"none",borderRadius:7,padding:"7px 14px",
+              fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+            Add
+          </button>
+          <button onClick={()=>{setAddingRoom(false); setNewRoomName("");}}
+            style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,borderRadius:7,
+              padding:"7px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+            Cancel
+          </button>
+        </div>
+      )}
+
+      {rooms.length===0 && !addingRoom && (
+        <div style={{fontSize:12,color:C.dim,padding:"14px",border:`1px dashed ${C.border}`,
+          borderRadius:8,textAlign:"center"}}>
+          No rooms yet. Add one to match the plan and start logging what's added.
+        </div>
+      )}
+
+      {rooms.map(room => (
+        <div key={room.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:10,
+          padding:"10px 12px",marginBottom:8}}>
+
+          <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+            marginBottom:(room.items||[]).length?8:0}}>
+            <div style={{display:"flex",alignItems:"center",gap:6,minWidth:0}}>
+              <Icon name="mapPin" size={12} color={C.purple} style={{flexShrink:0}}/>
+              <span style={{fontSize:12,fontWeight:700,color:C.text,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{room.name}</span>
+              <span style={{fontSize:10,color:C.dim,background:C.bg,borderRadius:99,padding:"1px 7px",flexShrink:0}}>
+                {(room.items||[]).length}
+              </span>
+            </div>
+            <button onClick={()=>deleteRoom(room)} title="Delete room"
+              style={{background:"none",border:"none",color:C.muted,cursor:"pointer",padding:2,flexShrink:0}}>
+              <Icon name="trash" size={12} stroke={2}/>
+            </button>
+          </div>
+
+          {(room.items||[]).map(item => (
+            <div key={item.id} style={{display:"flex",alignItems:"flex-start",gap:8,padding:"6px 0",
+              borderTop:`1px solid ${C.border}`}}>
+              <span style={{flexShrink:0,fontSize:10,fontWeight:700,color:lutronTypeColor(item.itemType),
+                background:`${lutronTypeColor(item.itemType)}18`,borderRadius:5,padding:"2px 7px"}}>
+                {item.itemType}
+              </span>
+              <div style={{flex:1,minWidth:0}}>
+                <div style={{fontSize:12,color:C.text}}>{item.location}</div>
+                {item.notes && <div style={{fontSize:11,color:C.dim,marginTop:1}}>{item.notes}</div>}
+                <div style={{fontSize:10,color:C.dim,opacity:0.7,marginTop:2}}>
+                  {timeAgo(item.addedAt)}{item.addedBy?` by ${item.addedBy}`:""}
+                </div>
+              </div>
+              <button onClick={()=>deleteItem(room.id,item.id)} title="Delete item"
+                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",padding:2,flexShrink:0}}>
+                <Icon name="x" size={12} stroke={2}/>
+              </button>
+            </div>
+          ))}
+
+          {addingItemFor===room.id ? (
+            <div style={{borderTop:(room.items||[]).length?`1px solid ${C.border}`:"none",
+              paddingTop:8,marginTop:8,display:"flex",flexDirection:"column",gap:6}}>
+              <Sel value={newItem.itemType} onChange={e=>setNewItem({...newItem,itemType:e.target.value})}
+                options={LUTRON_ITEM_TYPES}/>
+              <input value={newItem.location} onChange={e=>setNewItem({...newItem,location:e.target.value})}
+                placeholder="Location within this room"
+                autoFocus
+                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+                  padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none"}}/>
+              <input value={newItem.notes} onChange={e=>setNewItem({...newItem,notes:e.target.value})}
+                placeholder="Notes (optional)"
+                onKeyDown={e=>e.key==="Enter"&&addItem(room.id)}
+                style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+                  padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none"}}/>
+              <div style={{display:"flex",gap:6}}>
+                <button onClick={()=>addItem(room.id)}
+                  style={{background:C.purple,color:"#fff",border:"none",borderRadius:7,padding:"6px 14px",
+                    fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                  Add item
+                </button>
+                <button onClick={()=>setAddingItemFor(null)}
+                  style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,borderRadius:7,
+                    padding:"6px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+                  Cancel
+                </button>
+              </div>
+            </div>
+          ) : (
+            <button onClick={()=>startAddItem(room.id)}
+              style={{marginTop:8,background:"none",border:"none",color:C.purple,fontSize:11,fontWeight:700,
+                cursor:"pointer",fontFamily:"inherit",padding:"2px 0",display:"flex",alignItems:"center",gap:4}}>
+              <Icon name="plus" size={11} stroke={2.25}/>
+              Add item
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+
+// ── Lutron Additions viewer — cross-job rollup ─────────────────────────────
+// Read-only surface that rolls up every job with at least one Lutron Rooms
+// item logged, grouped by job (sorted alphabetically by job name). Adding
+// still happens on the job's own Panelized Lighting tab — this is purely for
+// seeing everything at a glance and coordinating with the plans company.
+// No data model of its own: derives entirely from the jobs array already
+// held in memory client-side (same array Today/Scoreboard/etc. read), so
+// there's no new Firestore query, no new collection, and nothing here can
+// go stale or drop data on its own. Spec: LUTRON_PACKAGE_TRACKER_SPEC.md (P0-8).
+function LutronAdditionsView({ jobs, onSelectJob }) {
+  const [expanded, setExpanded] = useState(() => new Set());
+  const [copied, setCopied]     = useState(false);
+
+  const lutronJobs = useMemo(() => {
+    return (jobs||[])
+      .filter(j => (j.lightingSystem||"")==="Lutron")
+      .map(j => ({ job:j, rooms:(j.panelizedLighting?.lutronRooms||[]).filter(r=>(r.items||[]).length>0) }))
+      .filter(x => x.rooms.length>0)
+      .sort((a,b) => (a.job.name||"").localeCompare(b.job.name||""));
+  }, [jobs]);
+
+  const toggle = (jobId) => setExpanded(prev => {
+    const next = new Set(prev);
+    next.has(jobId) ? next.delete(jobId) : next.add(jobId);
+    return next;
+  });
+
+  const copySummary = () => {
+    const lines = ["Lutron additions since bid",""];
+    lutronJobs.forEach(({job,rooms}) => {
+      lines.push((job.name||"(unnamed job)")+":");
+      rooms.forEach(room => {
+        lines.push("  "+room.name+":");
+        (room.items||[]).forEach(item => {
+          lines.push("    - ["+item.itemType+"] "+item.location+(item.notes?" ("+item.notes+")":""));
+        });
+      });
+      lines.push("");
+    });
+    const text = lines.join("\n");
+    if (navigator.clipboard) navigator.clipboard.writeText(text).catch(()=>{});
+    setCopied(true);
+    setTimeout(()=>setCopied(false), 1600);
+    toast.success("Summary copied");
+  };
+
+  return (
+    <div style={{maxWidth:760,margin:"0 auto",padding:"20px 16px"}}>
+      <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
+        <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.06em",color:C.text}}>
+          Lutron Additions
+        </div>
+        {lutronJobs.length>0 && (
+          <button onClick={copySummary}
+            style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,borderRadius:7,
+              padding:"6px 12px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit",
+              display:"inline-flex",alignItems:"center",gap:6}}>
+            <Icon name={copied?"check":"copy"} size={12} stroke={2.25}/>
+            {copied?"Copied":"Copy summary"}
+          </button>
+        )}
+      </div>
+
+      <div style={{display:"flex",alignItems:"center",gap:6,background:`${C.purple}10`,
+        border:`1px solid ${C.purple}33`,borderRadius:7,padding:"8px 12px",margin:"10px 0 16px"}}>
+        <Icon name="info" size={13} color={C.purple} style={{flexShrink:0}}/>
+        <span style={{fontSize:12,color:C.purple}}>
+          Added since bid — not in the original plans. This is a change log, not the full package;
+          no entries under a job means nothing's changed since bid.
+        </span>
+      </div>
+
+      {lutronJobs.length===0 ? (
+        <div style={{fontSize:13,color:C.dim,padding:24,textAlign:"center",
+          border:`1px dashed ${C.border}`,borderRadius:10}}>
+          No Lutron jobs have any post-bid additions logged yet.
+        </div>
+      ) : (
+        <>
+          <div style={{fontSize:11,color:C.dim,marginBottom:10}}>
+            Sorted by job &middot; {lutronJobs.length} job{lutronJobs.length===1?"":"s"} with additions
+          </div>
+          <div style={{display:"flex",flexDirection:"column",gap:8}}>
+            {lutronJobs.map(({job,rooms}) => {
+              const isOpen = expanded.has(job.id);
+              const itemCount = rooms.reduce((n,r)=>n+(r.items||[]).length,0);
+              return (
+                <div key={job.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
+                  <div onClick={()=>toggle(job.id)}
+                    style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                      padding:"12px 14px",cursor:"pointer"}}>
+                    <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
+                      <Icon name="chevronRight" size={13} color={C.dim}
+                        style={{flexShrink:0,transition:"transform 0.12s",transform:isOpen?"rotate(90deg)":"none"}}/>
+                      <span style={{fontSize:13,fontWeight:700,color:C.text,overflow:"hidden",
+                        textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{job.name||"(unnamed job)"}</span>
+                      <span style={{fontSize:10,color:C.dim,flexShrink:0}}>
+                        {rooms.length} room{rooms.length===1?"":"s"} &middot; {itemCount} item{itemCount===1?"":"s"}
+                      </span>
+                    </div>
+                    <button onClick={(e)=>{e.stopPropagation(); onSelectJob&&onSelectJob(job);}}
+                      style={{background:"none",border:"none",color:C.purple,fontSize:11,fontWeight:700,
+                        cursor:"pointer",fontFamily:"inherit",flexShrink:0,display:"inline-flex",
+                        alignItems:"center",gap:4}}>
+                      Open job<Icon name="external" size={11} stroke={2.25}/>
+                    </button>
+                  </div>
+                  {isOpen && (
+                    <div style={{borderTop:`1px solid ${C.border}`,padding:"10px 14px 12px",
+                      display:"flex",flexDirection:"column",gap:10}}>
+                      {rooms.map(room => (
+                        <div key={room.id}>
+                          <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:4}}>
+                            <Icon name="mapPin" size={11} color={C.purple}/>
+                            <span style={{fontSize:12,fontWeight:700,color:C.text}}>{room.name}</span>
+                          </div>
+                          {(room.items||[]).map(item => (
+                            <div key={item.id} style={{display:"flex",alignItems:"flex-start",gap:8,
+                              padding:"4px 0 4px 17px"}}>
+                              <span style={{flexShrink:0,fontSize:10,fontWeight:700,color:lutronTypeColor(item.itemType),
+                                background:`${lutronTypeColor(item.itemType)}18`,borderRadius:5,padding:"2px 7px"}}>
+                                {item.itemType}
+                              </span>
+                              <div style={{flex:1,minWidth:0}}>
+                                <div style={{fontSize:12,color:C.text}}>{item.location}</div>
+                                {item.notes && <div style={{fontSize:11,color:C.dim,marginTop:1}}>{item.notes}</div>}
+                                <div style={{fontSize:10,color:C.dim,opacity:0.7,marginTop:2}}>
+                                  {timeAgo(item.addedAt)}{item.addedBy?` by ${item.addedBy}`:""}
+                                </div>
+                              </div>
+                            </div>
+                          ))}
+                        </div>
+                      ))}
+                    </div>
+                  )}
+                </div>
+              );
+            })}
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
 
 function KeypadSection({loads,onChange,label,allLoads=[],confirmedProp=false,onConfirmedChange=null}) {
 
@@ -28776,6 +29151,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   </div>
                 );
               })()}
+
+              {(job.lightingSystem||"Control 4")==="Lutron" && (
+                <LutronRoomsSection job={job} u={u}/>
+              )}
 
               {/* LV Company Additions */}
               {lvCollab&&(()=>{
@@ -44797,9 +45176,8 @@ function HomeownerPage({ jobId }) {
   const [submitting, setSubmitting] = useState(false);
   const [error,      setError]      = useState(null);
   const [sigName,    setSigName]    = useState('');
-  const [sigDate,    setSigDate]    = useState('');
+  const [sigDate,    setSigDate]    = useState(()=>new Date().toISOString().slice(0,10));
   const [sigErr,     setSigErr]     = useState(false);
-  const dragIdx = useRef(null);
 
   useEffect(()=>{
     (async()=>{
@@ -44815,44 +45193,59 @@ function HomeownerPage({ jobId }) {
         } else {
           const gl = rsnap.exists()?(rsnap.data().genLoads||[]):[];
           setGenLoads(gl);
-          setItems(gl.map((l,i)=>({...l,priority:i+1,included:true,notes:''})));
+          // Recommended loads start "pending" (awaiting the homeowner's
+          // confirm/remove); everything else starts "off" (not on generator,
+          // add-able). Nothing is pre-selected onto the generator.
+          setItems(gl.map((l,i)=>({...l,priority:i+1,notes:'',status:l.recommended?'pending':'off'})));
         }
       } catch(e){ setError('Failed to load. Please try again.'); }
       setLoading(false);
     })();
   },[jobId]);
 
-  const glById = {};
-  genLoads.forEach(g=>{ glById[g.id]=g; });
+  // All interactions use local state → instant UI, no round-trip wait.
+  // status: 'chosen' (on generator) | 'pending' (recommended, awaiting a
+  // decision) | 'off' (not on generator, add-able).
+  const setStatus = (id,s) => setItems(its=>its.map(it=>it.id===id?{...it,status:s}:it));
+  const setNote   = (id,v) => setItems(its=>its.map(it=>it.id===id?{...it,notes:v}:it));
 
-  // KEY FIX: all interactions use local state → instant UI, no round-trip wait
-  const toggle  = (id) => setItems(its=>its.map(it=>it.id===id?{...it,included:!it.included}:it));
-  const setNote = (id,v) => setItems(its=>its.map(it=>it.id===id?{...it,notes:v}:it));
+  // Reorder within the on-generator list: swap the two chosen items' array
+  // slots directly, so any pending/off items between them are undisturbed.
+  const move = (id,dir) => setItems(its=>{
+    const chosen = its.filter(x=>x.status==='chosen');
+    const idx = chosen.findIndex(x=>x.id===id);
+    const j = idx + dir;
+    if(idx<0 || j<0 || j>=chosen.length) return its;
+    const a = its.indexOf(chosen[idx]);
+    const b = its.indexOf(chosen[j]);
+    const next=[...its]; const t=next[a]; next[a]=next[b]; next[b]=t;
+    return next;
+  });
 
-  const onDragStart = (i) => { dragIdx.current=i; };
-  const onDragOver  = (e,i) => {
-    e.preventDefault();
-    if(dragIdx.current===null||dragIdx.current===i) return;
-    setItems(its=>{
-      const a=[...its]; const [m]=a.splice(dragIdx.current,1); a.splice(i,0,m);
-      dragIdx.current=i;
-      return a.map((x,idx)=>({...x,priority:idx+1}));
-    });
-  };
-  const onDragEnd = ()=>{ dragIdx.current=null; };
-
-  const included = items.filter(it=>it.included);
-  const excluded = items.filter(it=>!it.included);
+  const chosenItems  = items.filter(it=>it.status==='chosen');
+  const pendingItems = items.filter(it=>it.status==='pending');
+  const offItems     = items.filter(it=>it.status==='off');
 
   const submit = async () => {
     if(!sigName.trim()||!sigDate){ setSigErr(true); return; }
     setSigErr(false); setSubmitting(true);
     try {
+      // Persist the office-readable shape: `included` (on generator) drives the
+      // office response view; priority numbers the on-generator list top→bottom.
+      let p = 0;
+      const outItems = items.map(it=>{
+        const included = it.status==='chosen';
+        return {...it, included, confirmed:included, priority: included ? (++p) : 0};
+      });
+      // Merge onto the shared homeowner_requests doc so lighting-collab / Q&A
+      // data written by other share links isn't wiped.
+      const ex = await getDoc(doc(db,'homeowner_requests',jobId));
       await setDoc(doc(db,'homeowner_requests',jobId),{
+        ...(ex.exists()?ex.data():{}),
         jobId, jobName:job?.name||'', submitted:true,
         submittedAt:new Date().toISOString(),
         signature:sigName.trim(), signedDate:sigDate,
-        items:items.map((it,i)=>({...it,priority:i+1})),
+        items: outItems,
         genLoads,
       });
       setSubmitted(true);
@@ -44890,7 +45283,7 @@ function HomeownerPage({ jobId }) {
         </div>
       </div>
       <div style={{fontSize:13,color:'#5E6670',lineHeight:1.55,marginBottom:14}}>
-        Review the circuits below — check the ones you want on your generator, drag to reorder by priority (most important first), and submit when done.
+        During a power outage your standby generator powers the circuits below <b>in priority order</b>. Confirm the ones we recommend, add any others you want covered, then sign &amp; submit.
       </div>
 
       {/* Instructions */}
@@ -44898,35 +45291,36 @@ function HomeownerPage({ jobId }) {
         <div style={{fontSize:12,fontWeight:700,color:A,marginBottom:4}}>How to complete</div>
         <div style={{fontSize:12,color:'#3A4A63',lineHeight:1.6}}>
           ★ = Recommended by Homestead Electric<br/>
-          Check/uncheck circuits · Drag ⠿ to reorder · Sign &amp; submit
+          Confirm or remove each · Add any others · ▲▼ set priority · Sign &amp; submit
         </div>
       </div>
 
       <div style={{padding:'16px 0 0'}}>
 
-        {/* ON GENERATOR */}
-        <div style={{fontSize:10,fontWeight:500,color:'#8A929D',letterSpacing:'0.08em',marginBottom:10}}>
-          ON GENERATOR · {included.length}
+        {/* ON GENERATOR — confirmed + added, organized top list with priority arrows */}
+        <div style={{fontSize:10,fontWeight:700,color:'#2F8F5B',letterSpacing:'0.08em',marginBottom:10}}>
+          ON GENERATOR · {chosenItems.length}
         </div>
-        {included.length===0&&(
-          <div style={{textAlign:'center',padding:'20px',fontSize:13,color:'#8A929D',
-            border:'0.5px dashed #E1E4E9',borderRadius:10,marginBottom:12}}>
-            No circuits selected
+        {chosenItems.length===0&&(
+          <div style={{textAlign:'center',padding:'18px 16px',fontSize:13,color:'#8A929D',
+            border:'0.5px dashed #CDE6D7',background:'#F7FBF9',borderRadius:10,marginBottom:12}}>
+            Confirm the circuits below and they'll appear here — in the order the generator will power them.
           </div>
         )}
-        {items.map((it,i)=>!it.included?null:(
-          <div key={it.id} draggable
-            onDragStart={()=>onDragStart(i)}
-            onDragOver={e=>onDragOver(e,i)}
-            onDragEnd={onDragEnd}
-            style={{...card,cursor:'grab',userSelect:'none',
-              borderLeft:`3px solid ${it.recommended?A:'#E1E4E9'}`}}>
+        {chosenItems.map((it,i)=>(
+          <div key={it.id} style={{...card,borderLeft:'3px solid #2F8F5B'}}>
             <div style={{display:'flex',alignItems:'center',gap:10}}>
-              <div style={{color:'#CDD3DB',fontSize:15,flexShrink:0}}>⠿</div>
-              <div style={{width:22,height:22,borderRadius:'50%',background:AB,border:`0.5px solid ${ABorder}`,
-                display:'flex',alignItems:'center',justifyContent:'center',
-                fontSize:10,fontWeight:500,color:A,flexShrink:0}}>
-                {included.indexOf(it)+1}
+              <div style={{display:'flex',flexDirection:'column',gap:2,flexShrink:0}}>
+                <button onClick={()=>move(it.id,-1)} disabled={i===0}
+                  style={{width:28,height:22,border:'0.5px solid #E1E4E9',background:'#F4F6F8',borderRadius:6,
+                    fontSize:10,color:'#5E6670',cursor:i===0?'default':'pointer',opacity:i===0?0.35:1,fontFamily:'inherit'}}>▲</button>
+                <button onClick={()=>move(it.id,1)} disabled={i===chosenItems.length-1}
+                  style={{width:28,height:22,border:'0.5px solid #E1E4E9',background:'#F4F6F8',borderRadius:6,
+                    fontSize:10,color:'#5E6670',cursor:i===chosenItems.length-1?'default':'pointer',opacity:i===chosenItems.length-1?0.35:1,fontFamily:'inherit'}}>▼</button>
+              </div>
+              <div style={{width:24,height:24,borderRadius:'50%',background:'#ECF2EE',border:'0.5px solid #CDE6D7',
+                display:'flex',alignItems:'center',justifyContent:'center',fontSize:11,fontWeight:700,color:'#2F8F5B',flexShrink:0}}>
+                {i+1}
               </div>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:13,fontWeight:500,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
@@ -44934,15 +45328,18 @@ function HomeownerPage({ jobId }) {
                   {it.recommended&&<span style={{fontSize:9,fontWeight:700,color:A,background:AB,
                     borderRadius:99,padding:'1px 7px',border:`0.5px solid ${ABorder}`,flexShrink:0}}>★ Recommended</span>}
                 </div>
+                {wireAmpsVolts(it.wire)&&<div style={{fontSize:11,color:'#8A929D',marginTop:3,fontWeight:600}}>{wireAmpsVolts(it.wire)}</div>}
               </div>
-              <button onClick={()=>toggle(it.id)}
-                style={{background:'none',border:'0.5px solid #E1E4E9',borderRadius:7,
-                  padding:'4px 10px',fontSize:11,cursor:'pointer',color:'#8A929D',
-                  flexShrink:0,fontFamily:'inherit'}}>
+            </div>
+            <div style={{marginTop:10,paddingLeft:42,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+              <span style={{fontSize:11,fontWeight:700,color:'#2F8F5B'}}>✓ {it.recommended?'Confirmed':'Added'}</span>
+              <button onClick={()=>setStatus(it.id,'off')}
+                style={{marginLeft:'auto',background:'none',border:'0.5px solid #E1E4E9',borderRadius:7,
+                  padding:'6px 12px',fontSize:11,cursor:'pointer',color:'#8A929D',flexShrink:0,fontFamily:'inherit'}}>
                 Remove
               </button>
             </div>
-            <div style={{marginTop:8,paddingLeft:32}}>
+            <div style={{marginTop:8,paddingLeft:42}}>
               <input value={it.notes||''} onChange={e=>setNote(it.id,e.target.value)}
                 placeholder="Add a note (optional)…"
                 style={{width:'100%',boxSizing:'border-box',border:'0.5px solid #E1E4E9',
@@ -44952,21 +45349,62 @@ function HomeownerPage({ jobId }) {
           </div>
         ))}
 
-        {/* NOT ON GENERATOR */}
-        {excluded.length>0&&(
+        {/* RECOMMENDED BY HOMESTEAD — awaiting the homeowner's confirm/remove */}
+        {pendingItems.length>0&&(
           <>
-            <div style={{fontSize:10,fontWeight:500,color:'#CDD3DB',letterSpacing:'0.08em',margin:'20px 0 10px'}}>
-              NOT ON GENERATOR · {excluded.length}
+            <div style={{fontSize:10,fontWeight:700,color:A,letterSpacing:'0.08em',margin:'22px 0 10px'}}>
+              RECOMMENDED BY HOMESTEAD · {pendingItems.length}
             </div>
-            {items.map(it=>it.included?null:(
-              <div key={it.id} style={{...card,opacity:0.6}}>
+            {pendingItems.map(it=>(
+              <div key={it.id} style={{...card,background:'#FBFCFE',borderLeft:`3px solid ${A}`}}>
                 <div style={{display:'flex',alignItems:'center',gap:10}}>
-                  <div style={{flex:1,fontSize:13,color:'#8A929D'}}>{it.name||'Unnamed'}</div>
-                  <button onClick={()=>toggle(it.id)}
-                    style={{background:'none',border:'0.5px solid #E1E4E9',borderRadius:7,
-                      padding:'4px 10px',fontSize:11,cursor:'pointer',color:A,
-                      flexShrink:0,fontFamily:'inherit'}}>
-                    Add back
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:500,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                      {it.name||'Unnamed'}
+                      <span style={{fontSize:9,fontWeight:700,color:A,background:AB,
+                        borderRadius:99,padding:'1px 7px',border:`0.5px solid ${ABorder}`,flexShrink:0}}>★ Recommended</span>
+                    </div>
+                    {wireAmpsVolts(it.wire)&&<div style={{fontSize:11,color:'#8A929D',marginTop:3,fontWeight:600}}>{wireAmpsVolts(it.wire)}</div>}
+                  </div>
+                </div>
+                <div style={{marginTop:10,display:'flex',gap:8,flexWrap:'wrap'}}>
+                  <button onClick={()=>setStatus(it.id,'chosen')}
+                    style={{background:'#2F8F5B',border:'0.5px solid #2F8F5B',borderRadius:8,
+                      padding:'9px 15px',fontSize:12,fontWeight:600,cursor:'pointer',color:'#fff',fontFamily:'inherit'}}>
+                    ✓ Confirm
+                  </button>
+                  <button onClick={()=>setStatus(it.id,'off')}
+                    style={{background:'#fff',border:'0.5px solid #E1E4E9',borderRadius:8,
+                      padding:'9px 15px',fontSize:12,fontWeight:600,cursor:'pointer',color:'#8A929D',fontFamily:'inherit'}}>
+                    Remove
+                  </button>
+                </div>
+              </div>
+            ))}
+          </>
+        )}
+
+        {/* NOT ON GENERATOR — add-able (removed items land here too) */}
+        {offItems.length>0&&(
+          <>
+            <div style={{fontSize:10,fontWeight:700,color:'#CDD3DB',letterSpacing:'0.08em',margin:'22px 0 10px'}}>
+              NOT ON GENERATOR · {offItems.length}
+            </div>
+            {offItems.map(it=>(
+              <div key={it.id} style={{...card}}>
+                <div style={{display:'flex',alignItems:'center',gap:10}}>
+                  <div style={{flex:1,minWidth:0}}>
+                    <div style={{fontSize:13,fontWeight:500,color:'#5E6670',display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
+                      {it.name||'Unnamed'}
+                      {it.recommended&&<span style={{fontSize:9,fontWeight:700,color:A,background:AB,
+                        borderRadius:99,padding:'1px 7px',border:`0.5px solid ${ABorder}`,flexShrink:0}}>★ Recommended</span>}
+                    </div>
+                    {wireAmpsVolts(it.wire)&&<div style={{fontSize:11,color:'#8A929D',marginTop:3,fontWeight:600}}>{wireAmpsVolts(it.wire)}</div>}
+                  </div>
+                  <button onClick={()=>setStatus(it.id,'chosen')}
+                    style={{background:A,border:`0.5px solid ${A}`,borderRadius:8,
+                      padding:'9px 14px',fontSize:12,fontWeight:600,cursor:'pointer',color:'#fff',flexShrink:0,fontFamily:'inherit'}}>
+                    + Add to generator
                   </button>
                 </div>
               </div>
@@ -53194,6 +53632,7 @@ function App() {
             {key:"upcoming",label:"Upcoming",icon:"calendar"},
             ...(can(identity,"quotes.view")?[{key:"quotes",label:"Quotes",icon:"fileText"}]:[]),
             {key:"walks",label:"Walks",icon:"clipboard"},
+            ...(can(identity,"lutron.view")?[{key:"lutron",label:"Lutron Additions",icon:"mapPin"}]:[]),
             {key:"tasks",label:"Tasks",icon:"check"},
             {key:"timeoff",label:"Time Off",icon:"calendar"},
             ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors",icon:"hardHat"}]:[]),
@@ -54750,6 +55189,10 @@ function App() {
 
       {view==="needs"&&can(identity,"board.view")&&(
         <NeedsBoard needs={needs} users={users} identity={identity} jobs={jobs} onSaveNeed={saveNeed} onDeleteNeed={deleteNeed} onSelectJob={setSelected} onUpdateJob={updateJob}/>
+      )}
+
+      {view==="lutron"&&can(identity,"lutron.view")&&(
+        <LutronAdditionsView jobs={jobs} onSelectJob={(job)=>openJobById(job.id,"Panelized Lighting")}/>
       )}
 
       {view==="cos"&&can(identity,"cos.view")&&(
