@@ -33,3 +33,12 @@ _*_backup.js
 src/App [0-9]*.js
 src/*.bak*
 src/sync_test.txt
+
+# Obsidian second-brain vault (local only, do not deploy)
+Homestead-Electric-Brain/
+
+# session artifacts
+*.zip
+firebase-debug*.log
+graphify-out/
+_redesign_pkg/

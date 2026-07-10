@@ -1,10 +1,10 @@
 # Homestead Electric — Feature Tree
 
-Source of truth for every feature in the app, organized by area. The Cowork "App Map" artifact reads this file and renders it as a collapsible tree with status badges and ship dates.
+Source of truth for every feature in the app, organized by area. The in-app App Map page (`/?appmap=1`) and the AI help box are grounded on a copy of this file that is synced into the bundle automatically at build time — see "How this file is maintained" at the bottom.
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-05-21 · App SW version: v181
+**Last manifest update:** 2026-07-10 · App SW version: v319
 
 ---
 
@@ -129,22 +129,28 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
 - **Home Runs (panels)** · `shipped` · `HomeRunsTab`, `HomeRunLevel`
   - Per-floor home runs
   - Bulk paste home runs
-  - Meter loads
-  - Breaker counts
   - Generator load section
   - Electrical panel schedules
+  - FieldInk home-runs publish (mirror to the PDF markup app)
 - **Savant Lighting** · `shipped 2026-05-18` · `SW v175` · slot-first rebuild
   - `SavantSlotFirstTab` (one screen per panel, slot list 1..N)
-  - `SavantPanelSchedule`, `SavantPanelSimple`, `SavantPanelCard`
   - Tap empty slot to add, tap occupied to edit
   - Bottom sheet for forms (`SavantSheet`, `SavantSheetBody`)
   - Tandem feeder breaker support
   - Loads list (`LoadsList`)
   - Keypad section
-  - Master loads (`SavantMasterLoadsList`) — still available for review
+  - (Savant V1/V1.5 editor chain removed in the 2026-07-10 cleanup · SW v319)
+- **Panelized Lighting tab (Lutron / Control 4 / Crestron)** · `shipped` · system pills + lock, Loads / Keypads / Panel Loads sections, system-accent colors (blue = Lutron) · `SW v310`
+  - **Plan Changes log ("Changes From Original Plan")** · `shipped 2026-07-09` · `SW v313–v317` · Lutron jobs, sits at the TOP of the tab
+    - Rooms matching plan labels; items with change types Added / Moved / Removed / Changed (Moved carries from → to)
+    - Per-change and job-level discussion threads with file/photo attach (`QAThread` reuse) — Tech Lighting asks, crew replies
+    - "Incorporated" green line once Tech Lighting folds a change into plans + quote
+    - Copy-summary buttons for email pastes
+  - **On Tech Lighting's link checkbox** · `shipped 2026-07-09` · `SW v315` · office-only (`lutron.manage`), confirm on uncheck; same flag as the Plan Changes hide/Restore
 - **Homeowner Q&A** · `shipped` · `HomeownerPage`
   - Submit answers via share link
   - Lighting collab section
+  - Generator page: confirm-first flow + amps/volts · `shipped 2026-07-08` · `SW v307`
 - **Status Update inline** · `shipped` · `StatusUpdateInline`
 - **Bid Items Panel** · `shipped` · pulls Simpro cost centers
 
@@ -154,12 +160,19 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
 
 Pages designed to be opened by people outside the company via share links (no auth).
 
-- **Homeowner page** · `shipped` · `HomeownerPage` · `/homeowner/:jobId`
+- **Homeowner page** · `shipped` · `HomeownerPage` · `?homeowner=`
 - **Home Runs share** · `shipped` · `HomeRunsSharePage`
-- **Lighting share** · `shipped` · `LightingSharePage`
+- **Lighting collab share** · `shipped` · `LightingSharePage` · `?lighting=` · LV company adds module/channel assignments; per-row three-way merge so a stale tab can't drop rows · `SW v313`
+- **Panelized loads share** · `shipped 2026-07-07` · `SW v305` · `LoadsSharePage` · `?loads=` · read-only, baseline-locked
+- **Lighting hub (Tech Lighting portal)** · `shipped 2026-07-08` · `SW v308/v315` · `LightingHubPage` · `?lightinghub=1` · lists every on-link Lutron job, "to review" + "replies" badges, auto-refetch on refocus, Try-again error state
+- **Plan Changes share** · `shipped 2026-07-09` · `SW v313` · `LutronAdditionsSharePage` · `?lutronshare=<jobId>` · per-job change list, Mark incorporated (+ undo, plan-rev note), questions with attachments, job discussion; honors the On-their-link switch
 - **Punch share** · `shipped` · `PunchSharePage`
 - **Questions share** · `shipped` · `QuestionsSharePage`
+  - Answers/notes/photos AUTO-SAVE as recipients type (no Submit needed); Submit stays the formal "done" that closes questions · `shipped 2026-07-09` · `SW v314`
+  - Discussion replies live in `homeowner_requests.questionThreads` (side doc — crew saves can never wipe them) · `SW v313`
+  - Respondent name badges (replaces hardcoded "GC") · `SW v316`
 - **Job Note share** · `shipped` · `JobNoteSharePage`
+- **All public pages**: error toasts render (HEToastHost mounted), failures speak instead of silently dropping input · `SW v315`
 
 ---
 
@@ -178,7 +191,12 @@ Pages designed to be opened by people outside the company via share links (no au
   - **Coming:** push schedule to Simpro (instead of duplicating)
   - **Coming:** pull in all dated events (inspections, 4-way, QC walks, RTs)
 - **Scheduling Forecast** · `shipped` · `SchedulingForecast`
-- **Bulk Edit Table** · `shipped` · admin tool · `BulkEditTable`
+- **Plan Changes view** · `shipped 2026-07-09` · `SW v313–v317` · `LutronAdditionsView` · nav More → Plan Changes
+  - Every Lutron job, unprocessed + awaiting-reply badges, awaiting-first sort
+  - Reply to Tech Lighting questions inline; job-level discussions
+  - "Manage their link" master list (office-only) — see/edit every job's on-link state in one spot · `SW v317`
+- **Needs board** · `shipped` · coordinator board for deadline-bound contractor call-ins (`needs` collection)
+- **Redline walks → CO tracking** · `shipped 2026-07-08` · `SW v306` · quoted walks surface in the Change Orders board
 - **Huddle Sheet** · `shipped` · `HuddleSheet`, `HuddleConfigPanel`
 - **Quote Walks** · `shipped` · `QuoteWalksTab`, `QuoteWalkDetail`
 - **Job Activity (per job)** · `shipped` · `JobActivity`
@@ -192,11 +210,13 @@ Pages designed to be opened by people outside the company via share links (no au
   - Activity log · `ActivityLog`
   - Notification Doctor · `NotifDoctor`
   - Fleet Notification Health · `FleetHealth` (admin only)
+  - Devices — app versions · `DeviceVersionsCard` (admin only) · fleet list vs latest deployed version, stale devices glow red · `shipped 2026-07-10` · `SW v318`
   - User management · `UserManagement`
   - Color overrides
-  - Backup / restore
+  - Backup / restore + Force Update All Devices
 - **Huddle config** · `shipped` · `HuddleConfigPanel`
 - **Scoreboard weights editor** · `shipped` · admin only
+- **Backup-status banner** · `shipped 2026-07-09` · `SW v313` · red strip for admin/manager when the nightly Firestore backup is missing or >48h stale
 
 ---
 
@@ -240,9 +260,12 @@ Pages designed to be opened by people outside the company via share links (no au
   - Loader at L44066 preserves the field through unwrap
   - Drives the Today command center's activity sort + staleness
 - **Smart merge on reconnect** · `shipped` · `_smartMergeForReconnect`
-- **Debounced save (`saveJob`)** · `shipped` · hot path for all job mutations
+- **Debounced save (`saveJob`)** · `shipped` · hot path for all job mutations; three-way merge + per-tab echo identity (`TAB_ID`, Kweller burst-wipe fix) · `SW v312`
 - **Pending patches queue** · `shipped` · `pendingPatches.current` per-job patch accumulator
 - **Force update mechanism** · `shipped` · admin can push `config/app` doc to force fleet refresh
+- **Always-current auto-update** · `shipped 2026-07-10` · `SW v318` · bundle-baked version (prebuild) vs served SW version; safe self-reload (never mid-typing / with unsaved work), bottom-left update pill, loop guard, device-version pings
+- **Link Safety funnel** · `shipped 2026-07-09` · `SW v313` · every `homeowner_requests` write goes through `saveHomeownerRequest` with version snapshots (last 10 per job, `versions` subcollection) — any clobber is a 2-minute restore
+- **Nightly Firestore backup** · `shipped 2026-07-09 (deployed)` · 1:00 AM MT cloud function, 30-day retention in Storage `backups/`, `runBackupNow` manual trigger, `settings/backupStatus` stamp feeding the in-app banner
 
 ---
 
@@ -260,6 +283,9 @@ Pages designed to be opened by people outside the company via share links (no au
   - `quotes.view` / `quotes.convert`
   - `scoreboard.view` / `scoreboard.editWeights` (both admin only currently)
   - `today.view` (admin/manager/standard) · `shipped 2026-05-21`
+  - `board.view` / `board.add` (admin/manager/standard) · Needs board
+  - `lutron.view` (everyone) · Plan Changes nav tab
+  - `lutron.manage` (admin/manager) · On-Tech-Lighting's-link checkbox + hide/Restore · `SW v315`
 
 ---
 
@@ -299,10 +325,8 @@ These exist to keep the codebase consistent and avoid past incidents.
 
 ## How this file is maintained
 
-This file is the source of truth. The Cowork "App Map" artifact reads it (via `mcp__workspace__bash` to run `cat` against the repo) and renders it as a collapsible tree.
+This file is the source of truth. The in-app App Map page (`/?appmap=1`) and the AI help box are grounded on `FEATURES_MD_INLINE` in `src/App.js`, which is **synced from this file automatically by the prebuild script** (`scripts/version-from-sw.js`) on every `npm run build` — the bundled copy can no longer drift from this file.
 
-When something new ships:
-- I (Claude) update this file alongside the App.js change as part of the same commit
-- The Monday cron task that refreshes the `homestead-electric-app` skill also checks this file for drift and offers an update
+Enforcement: **the build FAILS if this file does not mention the service-worker version being shipped** (e.g. `v319`). That means every deploy that bumps the SW cache must also add or update at least one entry here tagged with that version — a feature can't ship without its App Map entry, by construction (Koy, 2026-07-10: "the app map should be flipped and updated whenever one of the features there is built").
 
 If you spot a feature missing, just tell me and I'll add it.
