@@ -47483,7 +47483,7 @@ function QuestionsSharePage({ jobId }) {
   const shareParam = new URLSearchParams(window.location.search).get('s') || '';
   const draftKey = `he_qdraft_${jobId}_${shareParam||new URLSearchParams(window.location.search).get('share')||'x'}`;
   const [answers,        setAnswers]       = useState(() => { try { return JSON.parse(localStorage.getItem(draftKey)||'{}'); } catch(e) { return {}; } });
-  const [notes,          setNotes]         = useState({}); // per-question "ask for more info" notes back to the crew
+  const [notes,          setNotes]         = useState(() => { try { return JSON.parse(localStorage.getItem(draftKey+'_n')||'{}'); } catch(e) { return {}; } }); // per-question "ask for more info" notes back to the crew
   const [noteOpen,       setNoteOpen]      = useState(new Set()); // which cards have the note field expanded
   // Photos/files attached to ANSWERS (qid → [{id,name,url,type}]). Uploaded
   // immediately by PhotoAttacher (so a draft photo survives a refresh via the
@@ -47519,9 +47519,26 @@ function QuestionsSharePage({ jobId }) {
     catch(e){ return new Set(); }
   });
 
+  // Auto-save state (2026-07-09): answers/notes/photos persist as the
+  // recipient types — no Submit required. Recipients forgot to Submit
+  // constantly; answers + attached photos sat only in their browser while
+  // the crew waited days (a real 11.5MB answer photo was found orphaned in
+  // Storage with no submit). Submit stays as the formal "I'm done" step.
+  const [saving,  setSaving]  = useState(false);
+  const [savedAt, setSavedAt] = useState(null);
+  const autoSaveTimer    = useRef(null);
+  const userEditedRef    = useRef(false); // guards prefill/mount loads from firing the debounce
+  const autoSaveInFlight = useRef(false);
+  const autoSaveQueued   = useRef(false); // coalesce: re-run once if edits land mid-flight
+
   useEffect(() => {
     if(Object.keys(answers).length) localStorage.setItem(draftKey, JSON.stringify(answers));
   }, [answers]);
+  // Notes get the same localStorage safety net as answers/photos (they had
+  // none before — a clarify note typed then tab-closed pre-debounce was lost).
+  useEffect(() => {
+    try { if(Object.keys(notes).length) localStorage.setItem(draftKey+'_n', JSON.stringify(notes)); } catch(e){}
+  }, [notes]);
 
   // Filter from Firestore — saved by crew via Share picker.
   // A named share link (?s=<id>) uses that share's question set; otherwise fall
@@ -47555,6 +47572,11 @@ function QuestionsSharePage({ jobId }) {
     return new Set(raw);
   })();
   const shareName = shareObj?.name || '';
+
+  // Prefill the name from the share's own label (e.g. "Haley - Design") so
+  // autosaved answers carry attribution even before the recipient types it.
+  // Fires once when the share resolves; doesn't fight a cleared field later.
+  useEffect(() => { if(shareName && !respondentName) setRespondentName(shareName); }, [shareName]);
 
   // Live listener — questions update in real-time as crew adds them
   useEffect(() => {
@@ -47610,61 +47632,123 @@ function QuestionsSharePage({ jobId }) {
     }).catch(()=>{});
   }, [jobId]);
 
+  // buildAnswerPayload: shared by handleSubmit AND runAutoSave so the
+  // per-question "only overwrite what THIS recipient can see" rule
+  // (filterIds) can never drift between the two write paths. For each
+  // question shown to this recipient the current local answer/note/photos
+  // win; everything else keeps whatever was already saved (other recipients'
+  // answers survive).
+  const buildAnswerPayload = (existingQA, curAnsPhotos) => {
+    const mergeFloor = (allQs, existingFloor) => {
+      const exMap = {};
+      (existingFloor || []).forEach(a => { exMap[a.id] = a; });
+      return (allQs || []).map(q => {
+        if(!filterIds || filterIds.has(q.id)) {
+          // photos: this recipient's current attachment set for the answer
+          // (already uploaded to Storage); falls back to what was previously
+          // submitted so an unrelated re-save can't drop them.
+          const ph = curAnsPhotos[q.id] !== undefined ? curAnsPhotos[q.id] : (exMap[q.id]?.photos || []);
+          return { id:q.id, question:q.question, answer:answers[q.id]||'', clarify:(notes[q.id]||'').trim(), photos: ph };
+        }
+        // Not shown to this recipient — preserve existing answer/note
+        return exMap[q.id] || { id:q.id, question:q.question, answer:'' };
+      });
+    };
+    return {
+      rough: {
+        upper:    mergeFloor(job?.roughQuestions?.upper,    existingQA.rough?.upper),
+        main:     mergeFloor(job?.roughQuestions?.main,     existingQA.rough?.main),
+        basement: mergeFloor(job?.roughQuestions?.basement, existingQA.rough?.basement),
+      },
+      finish: {
+        upper:    mergeFloor(job?.finishQuestions?.upper,    existingQA.finish?.upper),
+        main:     mergeFloor(job?.finishQuestions?.main,     existingQA.finish?.main),
+        basement: mergeFloor(job?.finishQuestions?.basement, existingQA.finish?.basement),
+      },
+    };
+  };
+
   const handleSubmit = async () => {
     if(!respondentName.trim()){ setNameErr(true); return; }
     setSubmitting(true);
     try {
-      // Always fetch existing doc first so we can safely merge answers
-      const ex = await getDoc(doc(db,'homeowner_requests',jobId));
-      const existingData = ex.exists() ? ex.data() : {};
-      const existingQA   = existingData.questionAnswers || {};
-
-      // mergeFloor: for each question, use the new answer only if it was shown
-      // to this recipient (i.e., it's in filterIds, or no filter was applied).
-      // Questions that weren't shown keep whatever answer was already saved.
-      const mergeFloor = (allQs, existingFloor) => {
-        const exMap = {};
-        (existingFloor || []).forEach(a => { exMap[a.id] = a; });
-        return (allQs || []).map(q => {
-          if(!filterIds || filterIds.has(q.id)) {
-            // photos: this recipient's current attachment set for the answer
-            // (already uploaded to Storage); falls back to what was previously
-            // submitted so an unrelated re-submit can't drop them.
-            const ph = ansPhotos[q.id] !== undefined ? ansPhotos[q.id] : (exMap[q.id]?.photos || []);
-            return { id:q.id, question:q.question, answer:answers[q.id]||'', clarify:(notes[q.id]||'').trim(), photos: ph };
-          }
-          // Not shown to this recipient — preserve existing answer/note
-          return exMap[q.id] || { id:q.id, question:q.question, answer:'' };
-        });
-      };
-
-      const questionAnswers = {
-        ...existingQA,
-        rough: {
-          upper:    mergeFloor(job?.roughQuestions?.upper,    existingQA.rough?.upper),
-          main:     mergeFloor(job?.roughQuestions?.main,     existingQA.rough?.main),
-          basement: mergeFloor(job?.roughQuestions?.basement, existingQA.rough?.basement),
-        },
-        finish: {
-          upper:    mergeFloor(job?.finishQuestions?.upper,    existingQA.finish?.upper),
-          main:     mergeFloor(job?.finishQuestions?.main,     existingQA.finish?.main),
-          basement: mergeFloor(job?.finishQuestions?.basement, existingQA.finish?.basement),
-        },
-        answeredBy: respondentName.trim(),
-        answeredAt: new Date().toISOString(),
-      };
-
       // Funnel write: version snapshot stashed first (Kweller hardening L4).
-      await saveHomeownerRequest(jobId, (prev) => ({
-        jobName:job?.name||'', questionAnswers,
-        submittedAt: (prev&&prev.submittedAt) || new Date().toISOString(),
-        updatedAt: new Date().toISOString(),
-      }), 'QuestionsSharePage-submit');
+      // Reads the existing doc via the mutator's prev — one fetch immediately
+      // before the write (the old outer getDoc created a wider race window).
+      await saveHomeownerRequest(jobId, (prev) => {
+        const existingQA = (prev && prev.questionAnswers) || {};
+        return {
+          jobName: job?.name || (prev&&prev.jobName) || '',
+          questionAnswers: {
+            ...existingQA,
+            ...buildAnswerPayload(existingQA, ansPhotos),
+            answeredBy: respondentName.trim(),
+            // Submit is the ONLY writer of a fresh answeredAt — JobDetail's
+            // auto-apply effect keys on it to flip q.done on the job.
+            answeredAt: new Date().toISOString(),
+          },
+          submittedAt: (prev&&prev.submittedAt) || new Date().toISOString(),
+          updatedAt: new Date().toISOString(),
+        };
+      }, 'QuestionsSharePage-submit');
       try { localStorage.removeItem(draftKey); } catch(e){}
       setSubmitted(true);
     } catch(e){ toast.error('Failed to submit. Please try again.'); }
     setSubmitting(false);
   };
+
+  // Auto-save (2026-07-09): same merge, same funnel, but NEVER a new
+  // answeredAt — JobDetail's appliedGcRef effect auto-marks q.done=true the
+  // instant answeredAt changes (that drives Open Items / Scoreboard / Today
+  // counts). Bumping it on every debounce would close out half-typed answers
+  // before the recipient ever clicks Submit. Carry the last real submission's
+  // value forward untouched (or null if never submitted). Failure is silent
+  // by design: the localStorage draft still holds everything for retry.
+  const runAutoSave = async ({ansPhotosOverride}={}) => {
+    if(!job) return;
+    if(autoSaveInFlight.current){ autoSaveQueued.current = true; return; }
+    autoSaveInFlight.current = true;
+    setSaving(true);
+    try {
+      const curAnsPhotos = ansPhotosOverride || ansPhotos;
+      await saveHomeownerRequest(jobId, (prev) => {
+        const existingQA = (prev && prev.questionAnswers) || {};
+        return {
+          jobName: job?.name || (prev&&prev.jobName) || '',
+          questionAnswers: {
+            ...existingQA,
+            ...buildAnswerPayload(existingQA, curAnsPhotos),
+            answeredBy: respondentName.trim() || shareName || existingQA.answeredBy || '',
+            answeredAt: existingQA.answeredAt || null,
+          },
+          updatedAt: new Date().toISOString(),
+        };
+      }, 'QuestionsSharePage-autosave');
+      setSavedAt(new Date());
+    } catch(e) { /* best-effort — the localStorage draft still has it */ }
+    setSaving(false);
+    autoSaveInFlight.current = false;
+    if(autoSaveQueued.current){ autoSaveQueued.current = false; runAutoSave(); }
+  };
+
+  // Debounce: fire 1.2s after the last keystroke in any answer/note.
+  useEffect(() => {
+    if(!userEditedRef.current) return; // skip mount + the one-shot prefill resolve
+    clearTimeout(autoSaveTimer.current);
+    autoSaveTimer.current = setTimeout(runAutoSave, 1200);
+    return () => clearTimeout(autoSaveTimer.current);
+  }, [answers, notes]);
+
+  // Best-effort flush on tab hide/close — mirrors the app's flushSaves
+  // precedent. Not guaranteed by browsers; the localStorage draft remains
+  // the real safety net for a tab killed mid-debounce.
+  useEffect(() => {
+    const flush = () => { if(autoSaveTimer.current){ clearTimeout(autoSaveTimer.current); runAutoSave(); } };
+    const onVis = () => { if(document.visibilityState==='hidden') flush(); };
+    document.addEventListener('visibilitychange', onVis);
+    window.addEventListener('beforeunload', flush);
+    return () => { document.removeEventListener('visibilitychange', onVis); window.removeEventListener('beforeunload', flush); };
+  });
 
   // Post a thread message from the recipient (Kweller hardening Layer 2).
   // Writes to homeowner_requests.questionThreads — NEVER jobs/{id} — so no
@@ -47727,7 +47811,7 @@ function QuestionsSharePage({ jobId }) {
           </div>
         )}
         {isAns && <div style={{fontSize:11,fontWeight:700,color:'#3E7D5A',marginBottom:5,display:'flex',alignItems:'center',gap:5}}><Icon name="pencil" size={11}/>Your answer — edit here if needed</div>}
-        <textarea value={answers[q.id]!==undefined ? answers[q.id] : (q.answer||'').replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').trim()} onChange={e=>setAnswers(a=>({...a,[q.id]:e.target.value}))}
+        <textarea value={answers[q.id]!==undefined ? answers[q.id] : (q.answer||'').replace(/<[^>]*>/g,'').replace(/&nbsp;/g,' ').trim()} onChange={e=>{ userEditedRef.current=true; setAnswers(a=>({...a,[q.id]:e.target.value})); }}
           onBlur={e=>{if(e.target.value.trim()||(ansPhotos[q.id]||[]).length)setAnsweredIds(s=>new Set([...s,q.id]));else setAnsweredIds(s=>{const n=new Set(s);n.delete(q.id);return n;});}}
           placeholder="Type your answer here…" rows={3} style={taStyle}/>
         {/* Attach photos/files to the ANSWER itself (2026-07-06). Uploads
@@ -47735,13 +47819,21 @@ function QuestionsSharePage({ jobId }) {
             submit so the crew sees them right under the answer. */}
         <div style={{marginTop:6}}>
           <PhotoAttacher storagePath={`jobs/${jobId}/question-answers/${q.id}`} photos={ansPhotos[q.id]||[]}
-            onChange={p=>{ setAnsPhotos(s=>({...s,[q.id]:p})); if(p.length) setAnsweredIds(s=>new Set([...s,q.id])); }}
+            onChange={p=>{
+              // Save IMMEDIATELY on attach/remove (upload already finished) —
+              // and pass the fresh set explicitly: setState hasn't applied
+              // yet, so runAutoSave's closure would still see the old photos.
+              const nextPhotos = {...ansPhotos, [q.id]: p};
+              setAnsPhotos(s=>({...s,[q.id]:p}));
+              if(p.length) setAnsweredIds(s=>new Set([...s,q.id]));
+              runAutoSave({ansPhotosOverride: nextPhotos});
+            }}
             color={accent} label="Attach photo / file to your answer"/>
         </div>
         {(noteOpen.has(q.id)||!!(notes[q.id]&&notes[q.id].trim())) ? (
           <div style={{marginTop:8}}>
             <div style={{fontSize:11,fontWeight:700,color:'#B0892C',marginBottom:4}}>{(notes[q.id]||'').trim()?'Edit your note to our team':'Ask our team for more info'}</div>
-            <textarea value={notes[q.id]||''} onChange={e=>setNotes(n=>({...n,[q.id]:e.target.value}))}
+            <textarea value={notes[q.id]||''} onChange={e=>{ userEditedRef.current=true; setNotes(n=>({...n,[q.id]:e.target.value})); }}
               placeholder="e.g. Which panel do you mean? Send a note and we'll follow up — you don't have to answer yet."
               rows={2} style={{...taStyle,borderColor:'#E3D3A6',background:'#FCF8EE'}}/>
           </div>
@@ -47826,7 +47918,14 @@ function QuestionsSharePage({ jobId }) {
         </div>
       ) : (
         <>
-          <div style={{fontSize:13,color:'#6E7682',marginBottom:18,lineHeight:1.6}}>Please answer the questions below.{shareName?<> These questions are for <b>{shareName}</b>.</>:null} <b style={{color:'#2E3640'}}>Nothing is sent until you press “Submit Answers” at the bottom of this page.</b> If you need more detail before you can answer, tap <b>“Ask for more info”</b> on any question to send a note back to our team instead of an answer. This page updates automatically if new questions are added.</div>
+          <div style={{fontSize:13,color:'#6E7682',marginBottom:18,lineHeight:1.6}}>Please answer the questions below.{shareName?<> These questions are for <b>{shareName}</b>.</>:null} <b style={{color:'#2E3640'}}>Your answers save automatically as you type</b> — press “Submit Answers” at the bottom when you're completely done, so our team knows you've finished. If you need more detail before you can answer, tap <b>“Ask for more info”</b> on any question to send a note back to our team instead of an answer. This page updates automatically if new questions are added.</div>
+          <div style={{position:'sticky',top:0,zIndex:50,display:'flex',justifyContent:'flex-end',padding:'2px 4px 8px'}}>
+            <span style={{fontSize:11,fontWeight:700,color:saving?'#8A929D':'#3E7D5A',background:'#fff',
+              border:'1px solid #E1E4E9',borderRadius:99,padding:'3px 12px',
+              visibility:(saving||savedAt)?'visible':'hidden'}}>
+              {saving?'Saving…':savedAt?`✓ Saved ${savedAt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`:'—'}
+            </span>
+          </div>
 
           {/* Summary chips — the whole page state at a glance:
               what YOU owe · what's NEW since your last visit · what
@@ -47893,6 +47992,9 @@ function QuestionsSharePage({ jobId }) {
             {nameErr&&<div style={{color:'#B23A3A',fontSize:11,marginTop:4}}>Please enter your name</div>}
           </div>
 
+          <div style={{textAlign:'center',fontSize:11,fontWeight:600,color:saving?'#8A929D':'#3E7D5A',marginBottom:8}}>
+            {saving?'Saving…':savedAt?`Answers saved ${savedAt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})} — press Submit when you're done`:'Answers save automatically as you type'}
+          </div>
           <button onClick={handleSubmit} disabled={submitting}
             style={{width:'100%',background:'#1e3a5f',color:'#fff',border:'none',borderRadius:10,padding:14,fontSize:15,fontWeight:700,cursor:submitting?'not-allowed':'pointer',fontFamily:'inherit',opacity:submitting?0.7:1,marginBottom:16}}>
             {submitting?'Submitting…':'Submit Answers'}
