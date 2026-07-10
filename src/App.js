@@ -27706,7 +27706,22 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           // now answer with just an attachment. answerPhotos is additive —
           // nested on the question object so it rides the loader untouched.
           const hasGc = gcAns && (String(gcAns.answer||'').trim() || (gcAns.photos||[]).length);
-          if(hasGc && !q.done) { changed=true; return {...q, answer:gcAns.answer||'', answerPhotos:(gcAns.photos||[]).length?gcAns.photos:(q.answerPhotos||[]), done:true, gcAnswered:true, answeredVia:'link', answeredBy:gcAnswers.answeredBy||'', answeredAt:gcAnswers.answeredAt||new Date().toISOString()}; }
+          // Catch-up (2026-07-09): a link answer already applied once
+          // (q.gcAnswered) can come back with a newer edit or an added photo
+          // on a later Submit — the old !q.done gate silently dropped those
+          // forever. Compare the batch stamp; never touches a crew/phone-
+          // answered question (done && !gcAnswered) even if it shares an id.
+          const staleApply = q.done && q.gcAnswered && q.answeredAt !== gcAnswers.answeredAt;
+          if(hasGc && (!q.done || staleApply)) {
+            changed=true;
+            return {...q,
+              answer: gcAns.answer || (staleApply ? q.answer : ''),
+              answerPhotos: (gcAns.photos||[]).length ? gcAns.photos : (q.answerPhotos||[]),
+              done:true, gcAnswered:true, answeredVia:'link',
+              answeredBy: gcAnswers.answeredBy || q.answeredBy || '',
+              answeredAt: gcAnswers.answeredAt || new Date().toISOString(),
+            };
+          }
           return q;
         });
       });
@@ -28524,7 +28539,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
                     questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
                 }>
-                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{const qq=(job.roughQuestions?.[f]||[]).find(q=>q.id===a.id);if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m} gcNoteMap={nmap} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder="rough" fieldinkMap={fiQLinks} questionThreads={questionThreads}/>;})()}
+                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{const qq=(job.roughQuestions?.[f]||[]).find(q=>q.id===a.id);if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m} gcNoteMap={nmap} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder="rough" fieldinkMap={fiQLinks} questionThreads={questionThreads} gcAnsweredBy={gcAnswers?.answeredBy||''} shareNames={new Set((job.questionShares||[]).map(s=>(s.name||'').trim().toLowerCase()).filter(Boolean))}/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
@@ -28830,7 +28845,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
                     questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
                 }>
-                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{const qq=(job.finishQuestions?.[f]||[]).find(q=>q.id===a.id);if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} gcNoteMap={nmap} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder="finish" fieldinkMap={fiQLinks} questionThreads={questionThreads}/>;})()}
+                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{const qq=(job.finishQuestions?.[f]||[]).find(q=>q.id===a.id);if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} gcNoteMap={nmap} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder="finish" fieldinkMap={fiQLinks} questionThreads={questionThreads} gcAnsweredBy={gcAnswers?.answeredBy||''} shareNames={new Set((job.questionShares||[]).map(s=>(s.name||'').trim().toLowerCase()).filter(Boolean))}/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
@@ -30632,20 +30647,27 @@ const answerMethodLabel = (v) => { const m = ANSWER_METHODS.find(x=>x.v===v); re
 // Drives the "Shared / Not shared" badges + counts on the crew Q&A so they
 // tell the truth about what the link people can see. Returns null when the
 // job has no sharing at all (badges hidden, same as before).
+// Effective (live) question ids for ONE named share: manual picks (share.ids)
+// UNION any question whose q.for matches the share's name case-insensitively —
+// the same rule the public QuestionsSharePage applies. Single source of truth
+// for "what is actually on this recipient's link", used by both the merged
+// shared-badge (computeEffectiveSharedIds) and the SAVED LINKS modal counts,
+// so the numbers can't disagree again (they used to: the modal counted only
+// the static manual picks, frozen at share-save time).
+const effectiveShareIds = (share, allQs) => {
+  const ids = new Set(Array.isArray(share?.ids) ? share.ids : []);
+  const nm = (share?.name||'').trim().toLowerCase();
+  if (nm) (allQs||[]).forEach(q => { if (q && q.id!=null && (q.for||'').trim().toLowerCase()===nm) ids.add(q.id); });
+  return ids;
+};
 const computeEffectiveSharedIds = (job) => {
   if(!job) return null;
   const ids = new Set(Array.isArray(job.questionsFilter) ? job.questionsFilter : []);
   const shares = Array.isArray(job.questionShares) ? job.questionShares : [];
-  const shareNames = new Set();
-  shares.forEach(s => {
-    (Array.isArray(s?.ids) ? s.ids : []).forEach(id => ids.add(id));
-    const nm = (s?.name||'').trim().toLowerCase();
-    if(nm) shareNames.add(nm);
-  });
-  if(shareNames.size){
-    ['roughQuestions','finishQuestions'].forEach(fk => ['upper','main','basement'].forEach(fl => {
-      (job[fk]?.[fl]||[]).forEach(q => { const f=(q?.for||'').trim().toLowerCase(); if(f && shareNames.has(f) && q.id!=null) ids.add(q.id); });
-    }));
+  if(shares.length){
+    const allQs = [];
+    ['roughQuestions','finishQuestions'].forEach(fk => ['upper','main','basement'].forEach(fl => allQs.push(...(job[fk]?.[fl]||[]))));
+    shares.forEach(s => effectiveShareIds(s, allQs).forEach(id => ids.add(id)));
   }
   return ids.size ? ids : null;
 };
@@ -30718,7 +30740,7 @@ function QAThread({ messages = [], onPost, jobId, qid, color = '#3B5BA5', photoB
   );
 }
 
-function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null, fieldinkMap={}, statusFilter=null, hideAdd=false, excludeIds=null, questionThreads=null}) {
+function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null, fieldinkMap={}, statusFilter=null, hideAdd=false, excludeIds=null, questionThreads=null, gcAnsweredBy=''}) {
 
   // guard: old data may be a string instead of array
 
@@ -30809,7 +30831,27 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
               // Marking answered — stamp who + when. Keep whatever method the
               // user picked in the chips below; GC-via-link carries its own stamp.
               const who=getIdentity();
-              upd(q.id,{done:true, answeredBy:q.answeredBy||who?.name||"", answeredAt:q.answeredAt||new Date().toISOString()});
+              const pending = gcAnswerMap[q.id];
+              if(pending){
+                // Crew checked the box directly while a link answer sat
+                // PENDING (common — recipients often skip Submit). Adopt it
+                // now: the pending card is gated on !q.done and disappears
+                // the instant this flips, so this is the only chance to keep
+                // the answer text + photos from being orphaned.
+                const pAnswer = typeof pending==='object' ? (pending.answer||'') : (pending||'');
+                const pPhotos = typeof pending==='object' ? (pending.photos||[]) : [];
+                upd(q.id,{
+                  done:true,
+                  answer: q.answer || pAnswer,
+                  answerPhotos: (q.answerPhotos||[]).length ? q.answerPhotos : pPhotos,
+                  gcAnswered:true,
+                  answeredVia: q.answeredVia||'link',
+                  answeredBy: q.answeredBy || gcAnsweredBy || who?.name || "",
+                  answeredAt: q.answeredAt||new Date().toISOString(),
+                });
+              } else {
+                upd(q.id,{done:true, answeredBy:q.answeredBy||who?.name||"", answeredAt:q.answeredAt||new Date().toISOString()});
+              }
             } else {
               // Re-opening — drop the who/when stamp (no longer answered) but keep
               // the picked method + note for re-answer. GC stamp stays as history.
@@ -30929,7 +30971,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
         <div style={{marginLeft:22,marginTop:4}}>
           <div style={{fontSize:11,color:C.dim,display:"flex",alignItems:"flex-start",gap:6}}>
-            {q.gcAnswered&&<span style={{fontSize:9,fontWeight:700,color:"#3E7D5A",background:"#DEEFE6",borderRadius:4,padding:"1px 5px",flexShrink:0,marginTop:1}}>GC</span>}
+            {q.gcAnswered&&<span style={{fontSize:9,fontWeight:700,color:"#3E7D5A",background:"#DEEFE6",borderRadius:4,padding:"1px 5px",flexShrink:0,marginTop:1}}>{q.answeredBy||'Link'}</span>}
             <div style={{fontStyle:"italic",flex:1,lineHeight:1.5}} dangerouslySetInnerHTML={{__html:q.answer||'(answered with attachments)'}}/>
           </div>
           {(q.answerPhotos||[]).filter(p=>p&&p.url).length>0&&(
@@ -31010,7 +31052,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
           anything cached in an older shape. */}
       {!q.done&&gcAnswerMap[q.id]&&(
         <div style={{marginLeft:22,marginTop:6,background:"#ECF2EE",border:"1px solid #3E7D5A44",borderRadius:6,padding:"6px 10px",fontSize:11}}>
-          <span style={{fontSize:9,fontWeight:700,color:"#3E7D5A",background:"#DEEFE6",borderRadius:4,padding:"1px 5px",marginRight:6}}>GC</span>
+          <span style={{fontSize:9,fontWeight:700,color:"#3E7D5A",background:"#DEEFE6",borderRadius:4,padding:"1px 5px",marginRight:6}}>{gcAnsweredBy||'Link'}</span>
           <span style={{color:"#2C5C40",fontStyle:"italic"}} dangerouslySetInnerHTML={{__html:(typeof gcAnswerMap[q.id]==='object'?gcAnswerMap[q.id].answer:gcAnswerMap[q.id])||''}}/>
           {typeof gcAnswerMap[q.id]==='object'&&(gcAnswerMap[q.id].photos||[]).filter(p=>p&&p.url).length>0&&(
             <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:6}}>
@@ -31119,7 +31161,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 }
 
 
-function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, filterIds=null, jobId=null, photoFolder="", fieldinkMap={}, questionThreads=null}) {
+function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, filterIds=null, jobId=null, photoFolder="", fieldinkMap={}, questionThreads=null, gcAnsweredBy='', shareNames=null}) {
 
   // guard: normalize questions to always be object with array values
 
@@ -31213,7 +31255,15 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
         <div style={{display:"flex",flexWrap:"wrap",alignItems:"center",gap:6,marginBottom:16}}>
           {(recipients.length>0 || unassignedCount<allQs.length) && <>
             {chip(recipFilter==null, `All (${allQs.length})`, ()=>setRecipFilter(null), "__all")}
-            {recipients.map(r=>chip(recipFilter===r, `${r} (${countFor(r)})`, ()=>setRecipFilter(r), r))}
+            {recipients.map(r=>{
+              // Tagging a recipient only puts questions on a link if a saved
+              // share with EXACTLY that name exists — warn when it doesn't,
+              // so "assigned" isn't silently mistaken for "on their link".
+              const noLink = shareNames && shareNames.size>0 && !shareNames.has(r.trim().toLowerCase());
+              return chip(recipFilter===r,
+                <>{r} ({countFor(r)}){noLink && <Icon name="alertTriangle" size={9} color="#B0892C" style={{marginLeft:4}}/>}</>,
+                ()=>setRecipFilter(r), r);
+            })}
             {unassignedCount>0 && chip(recipFilter==="__unassigned__", `Unassigned (${unassignedCount})`, ()=>setRecipFilter("__unassigned__"), "__un")}
           </>}
           <span style={{flex:1,minWidth:12}}/>
@@ -31287,6 +31337,7 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
                   statusFilter="needs"
                   hideAdd={true}
                   questionThreads={questionThreads}
+                  gcAnsweredBy={gcAnsweredBy}
                   photoFolder={`${photoFolder?photoFolder+"-":""}${k}`}/>
               </div>
             ))}
@@ -31320,6 +31371,7 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
             statusFilter={statusFilter}
             excludeIds={statusFilter==null ? new Set((Array.isArray(questions[k])?questions[k]:[]).filter(q=>needsReplyQ(q,k)).map(q=>q.id)) : null}
             questionThreads={questionThreads}
+            gcAnsweredBy={gcAnsweredBy}
             photoFolder={`${photoFolder?photoFolder+"-":""}${k}`}/>
 
         </div>
@@ -46977,12 +47029,19 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
                 <div style={{marginBottom:18,background:'#F4F6F8',border:'1px solid #E1E4E9',borderRadius:10,padding:'10px 12px'}}>
                   <div style={{fontSize:11,fontWeight:800,color:'#5E6670',letterSpacing:'0.06em',marginBottom:6}}>SAVED LINKS</div>
                   {shares.map(s=>{
-                    const cnt=(s.ids||[]).length;
+                    // Show what the recipient's link ACTUALLY contains: manual
+                    // picks UNION questions tagged "For: <this share's name>"
+                    // (live) — same rule the public page applies. The old count
+                    // ((s.ids||[]).length) was only the picks, frozen at share-
+                    // save time, and disagreed with the recipient chips.
+                    const eff = effectiveShareIds(s, allQs);
+                    const cnt = eff.size;
+                    const picked = (s.ids||[]).length;
                     return (
                       <div key={s.id} style={{display:'flex',alignItems:'center',gap:8,padding:'7px 0',borderTop:'1px solid #E7EAEF'}}>
                         <div style={{flex:1,minWidth:0}}>
                           <div style={{fontSize:12.5,fontWeight:700,color:'#1B1F24',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>{s.name}{editingId===s.id&&<span style={{fontSize:10,fontWeight:600,color:color,marginLeft:6}}>editing</span>}</div>
-                          <div style={{fontSize:10,color:'#99A0AA'}}>{cnt} question{cnt!==1?'s':''}</div>
+                          <div style={{fontSize:10,color:'#99A0AA'}}>{cnt} question{cnt!==1?'s':''} on link{picked!==cnt && <span style={{color:'#B0892C'}}> · {picked} hand-picked + {cnt-picked} auto-assigned</span>}</div>
                         </div>
                         <button onClick={()=>loadShare(s)} style={{fontSize:10.5,fontWeight:600,color:'#5E6670',background:'#fff',border:'1px solid #D7DBE1',borderRadius:6,padding:'4px 9px',cursor:'pointer',fontFamily:'inherit'}}>Edit</button>
                         <button onClick={()=>copyLink(s.id)} style={{fontSize:10.5,fontWeight:700,color:'#fff',background:'#1e3a5f',border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit'}}>Copy link</button>
