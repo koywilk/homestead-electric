@@ -10,6 +10,7 @@
   },
   "scripts": {
     "start": "react-scripts start",
+    "prebuild": "node scripts/version-from-sw.js",
     "build": "react-scripts build",
     "test": "react-scripts test"
   },

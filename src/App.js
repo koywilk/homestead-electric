@@ -45315,6 +45315,65 @@ function NotifDoctor({ identity }) {
 // is the same path the Notification Doctor uses for self-test — it
 // triggers FCM sends but no Firestore writes (other than server-side
 // stale-token pruning which already happens on every push attempt).
+// ── Device versions card (Settings → DEVICES) ──────────────────────────────
+// Observability half of the always-current system: every device pings
+// settings/deviceVersions (name, running version, lastSeen) from the update
+// poll in App(). This card shows the fleet vs the latest deployed version —
+// a device on an old version that's been seen recently glows red, so a stale
+// environment is IMPOSSIBLE TO HIDE (same philosophy as FleetHealth below
+// and the backup banner). Read-only here; pings happen elsewhere.
+function DeviceVersionsCard() {
+  const [devices, setDevices] = useState(null);
+  const [latest, setLatest] = useState(null);
+
+  const load = async () => {
+    try {
+      const snap = await getDoc(doc(db, "settings", "deviceVersions"));
+      setDevices(snap.exists() ? (snap.data().devices || {}) : {});
+    } catch (e) { console.warn("[HE devices] load failed:", e.message); }
+    try {
+      const res = await fetch(`/service-worker.js?t=${Date.now()}`, { cache: "no-store" });
+      const m = (await res.text()).match(/CACHE\s*=\s*"([^"]+)"/);
+      setLatest(m ? m[1] : null);
+    } catch(e) {}
+  };
+
+  useEffect(() => { load(); const id = setInterval(load, 60*1000); return () => clearInterval(id); }, []);
+
+  const list = Object.entries(devices || {}).map(([id, d]) => ({ id, ...d }))
+    .sort((a,b) => new Date(b.lastSeenAt||0) - new Date(a.lastSeenAt||0));
+  const sevenDaysAgo = Date.now() - 7*24*60*60*1000;
+
+  return (
+    <div style={{padding:"12px 14px"}}>
+      <div style={{fontSize:11,color:C.dim,marginBottom:12}}>
+        Latest deployed version: <strong>{latest || "…"}</strong> — devices on an older version reload themselves within minutes of coming back into view; red rows are recently-active devices still behind.
+      </div>
+      <div style={{display:"flex",flexDirection:"column",gap:4}}>
+        {list.map(d => {
+          const stale = latest && d.version !== latest && Date.parse(d.lastSeenAt||0) > sevenDaysAgo;
+          return (
+            <div key={d.id} style={{display:"flex",alignItems:"center",gap:10,fontSize:12,
+              padding:"6px 8px",borderRadius:6,
+              background:stale?"rgba(178,58,58,0.06)":"transparent",
+              border:`1px solid ${stale?"rgba(178,58,58,0.20)":"transparent"}`}}>
+              <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap",
+                color:C.text,fontWeight:stale?700:500}}>{d.name||d.id}</span>
+              <span style={{fontSize:10,fontWeight:700,color:stale?"#B23A3A":C.dim,flexShrink:0}}>{d.version}</span>
+              <span style={{fontSize:10,color:C.dim,minWidth:110,textAlign:"right",flexShrink:0}}>
+                {d.lastSeenAt ? new Date(d.lastSeenAt).toLocaleString([], {month:'numeric',day:'numeric',hour:'numeric',minute:'2-digit'}) : ""}
+              </span>
+            </div>
+          );
+        })}
+        {list.length===0 && <div style={{fontSize:11,color:C.dim,textAlign:"center",padding:8}}>
+          {devices===null?"Loading…":"No devices reported yet — they appear as the fleet picks up this version."}
+        </div>}
+      </div>
+    </div>
+  );
+}
+
 function FleetHealth({ identity }) {
   const [snapshot, setSnapshot] = useState(null);
   const [refreshing, setRefreshing] = useState(false);
@@ -53769,6 +53828,111 @@ function App() {
 
   },[]);
 
+  // ── Always-current: self-detecting update + safe auto-reload ─────────────
+  // The SW is network-first, so a RELOAD always gets the fresh bundle — the
+  // staleness problem is tabs/PWAs that never reload. This compares the
+  // version BAKED INTO THIS BUNDLE (REACT_APP_VERSION, injected at build from
+  // the SW's CACHE const by scripts/version-from-sw.js — do NOT ask the SW:
+  // skipWaiting means the NEW worker controls while an OLD bundle still runs)
+  // against the version currently served at /service-worker.js. On mismatch:
+  // reload automatically ONLY when safe (visible tab, no pending saves, no
+  // focused input); otherwise show the bottom-left update pill and retry
+  // every 60s so an idle tab self-heals. sessionStorage guard prevents
+  // reload loops if a mismatch survives a reload (e.g. CDN edge lag).
+  const [updateReady, setUpdateReady] = useState(false);
+  const latestVersionRef = useRef(null);
+  const RELOAD_GUARD = "he_sw_reload_pending";
+
+  const getLatestVersion = async () => {
+    try {
+      const res = await fetch(`/service-worker.js?t=${Date.now()}`, { cache: "no-store" });
+      const m = (await res.text()).match(/CACHE\s*=\s*"([^"]+)"/);
+      return m ? m[1] : null;
+    } catch { return null; }
+  };
+
+  const hasPendingSaves = () =>
+    Object.values(saveTimers.current || {}).some(Boolean) ||
+    Object.values(pendingPatches.current || {}).some(p => p && Object.keys(p).length > 0) ||
+    isDirty.current;
+
+  const isTypingFocused = () => {
+    const el = document.activeElement;
+    return !!el && (el.tagName === "INPUT" || el.tagName === "TEXTAREA" || el.isContentEditable);
+  };
+
+  const tryAutoReload = () => {
+    if (document.visibilityState !== "visible") return;
+    if (hasPendingSaves() || isTypingFocused()) return;
+    if (sessionStorage.getItem(RELOAD_GUARD)) return;
+    try { sessionStorage.setItem(RELOAD_GUARD, "1"); } catch(e){}
+    flushSaves();
+    // flushSaves is fire-and-forget (same accepted race as beforeunload) —
+    // give in-flight writes a beat before tearing the page down.
+    setTimeout(() => window.location.reload(), 700);
+  };
+
+  // Device-version ping — Koy's observability into who runs what (Settings →
+  // Devices). settings/deviceVersions map keyed by he_device_id; transaction
+  // merge so concurrent devices can't stomp each other; prunes >30d entries.
+  const pingDeviceVersion = async (version) => {
+    if (!identity?.name || !version) return;
+    try {
+      let deviceId = localStorage.getItem('he_device_id');
+      if (!deviceId) { deviceId = 'dev_' + Math.random().toString(36).slice(2,8); localStorage.setItem('he_device_id', deviceId); }
+      await runTransaction(db, async (tx) => {
+        const dref = doc(db, "settings", "deviceVersions");
+        const snap = await tx.get(dref);
+        const cutoff = Date.now() - 30*24*60*60*1000;
+        const devices = snap.exists() ? { ...(snap.data().devices || {}) } : {};
+        Object.keys(devices).forEach(k => {
+          const t = Date.parse(devices[k]?.lastSeenAt || "");
+          if (!t || t < cutoff) delete devices[k];
+        });
+        devices[deviceId] = {
+          name: identity.name, version,
+          lastSeenAt: new Date().toISOString(),
+          ua: (navigator.userAgent || "").slice(0, 120),
+        };
+        if (!snap.exists()) tx.set(dref, { devices });
+        else tx.update(dref, { devices });
+      });
+    } catch (e) { console.warn("[HE] deviceVersions ping failed:", e?.message); }
+  };
+  const pingRef = useRef(pingDeviceVersion);
+  pingRef.current = pingDeviceVersion;
+
+  useEffect(() => {
+    let cancelled = false;
+    const running = process.env.REACT_APP_VERSION || "";
+    const checkForUpdate = async () => {
+      const latest = await getLatestVersion();
+      if (cancelled || !latest) return;
+      latestVersionRef.current = latest;
+      pingRef.current(running || latest);
+      if (!running) return; // dev server / env missing — observe only, never reload
+      if (running === latest) {
+        try { sessionStorage.removeItem(RELOAD_GUARD); } catch(e){}
+        setUpdateReady(false);
+        return;
+      }
+      setUpdateReady(true);
+      try { const reg = await navigator.serviceWorker?.getRegistration('/service-worker.js'); reg?.update().catch(()=>{}); } catch(e){}
+      tryAutoReload();
+    };
+    checkForUpdate();
+    const onVis = () => { if (document.visibilityState === "visible") checkForUpdate(); };
+    document.addEventListener("visibilitychange", onVis);
+    const poll = setInterval(checkForUpdate, 10 * 60 * 1000);
+    return () => { cancelled = true; document.removeEventListener("visibilitychange", onVis); clearInterval(poll); };
+  }, []);
+
+  useEffect(() => {
+    if (!updateReady) return;
+    const retry = setInterval(tryAutoReload, 60 * 1000);
+    return () => clearInterval(retry);
+  }, [updateReady]);
+
 
   // Update a job everywhere it lives: jobs list, selected (if open), Firestore.
   // CRITICAL: setSelected must NOT unconditionally write `updated` — that
@@ -54626,6 +54790,25 @@ function App() {
           </div>
         );
       })()}
+
+      {/* Update pill — bottom-left (SIMPRO owns bottom-right). Shows when a
+          newer bundle is deployed and the safe auto-reload couldn't fire yet
+          (unsaved work or a focused input). Tap = flush + reload. The 60s
+          retry in the update effect clears it automatically once idle. */}
+      {updateReady && (
+        <button onClick={() => { try{sessionStorage.removeItem(RELOAD_GUARD);}catch(e){} flushSaves(); setTimeout(()=>window.location.reload(),300); }}
+          style={{
+            position:"fixed", bottom:24, left:24, zIndex:9000,
+            background:C.blue, color:"#fff", border:"none", borderRadius:99,
+            padding:"12px 18px", cursor:"pointer", fontFamily:"inherit",
+            fontWeight:700, fontSize:13,
+            boxShadow:"0 6px 20px rgba(59,91,165,0.4), 0 2px 6px rgba(0,0,0,0.15)",
+            display:"inline-flex", alignItems:"center", gap:8,
+          }}>
+          <Icon name="rotateCw" size={16} stroke={2.25}/>
+          New version ready — tap to update
+        </button>
+      )}
 
       {/* Simpro Inbox — floating button + modal. Admin-only: the badge is
           hidden for non-admin users (crew/foreman) so they don't see "3
@@ -56491,6 +56674,11 @@ function App() {
             {getAccess(identity)==="admin" && (
               <SettingsSection title="FLEET NOTIFICATION HEALTH" accent={{bg:"#F3E9CF", border:"#D9BC6B", text:"#78350f"}} defaultOpen={false}>
                 <FleetHealth identity={identity}/>
+              </SettingsSection>
+            )}
+            {getAccess(identity)==="admin" && (
+              <SettingsSection title="DEVICES — APP VERSIONS" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}} defaultOpen={false}>
+                <DeviceVersionsCard/>
               </SettingsSection>
             )}
           </div>
