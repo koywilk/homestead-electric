@@ -1501,26 +1501,6 @@ const newCP4Row    = (num) => ({ id:uid(), num, name:"", moduleType:"", mod:"", 
 
 const newLoadRow   = (num) => ({ id:uid(), num, name:"", ch:"", loadType:"", watts:"", keypad:"", pulled:false });
 
-// Quote walk factory — capture-only record for pre-job site walks. Lives in
-// the top-level `quoteWalks` Firestore collection (separate from jobs because
-// these are pre-job and have a different lifecycle: many walks may happen
-// before a job is awarded, walks can stay dead-ended forever, etc.).
-const newQuoteWalk = (walkedBy = "") => ({
-  id: uid(),
-  address: "",
-  clientName: "",
-  walkedBy,
-  walkedByUid: "",
-  date: new Date().toISOString().slice(0, 10),  // YYYY-MM-DD today
-  notes: "",
-  materials: [],       // [{ id, text }] — free-text list of items to order
-  photos: [],          // [{ id, url, name, takenAt, uploadedBy }] — same shape as job photos
-  status: "walking",   // "walking" | "quote sent"
-  simproQuoteNo: "",
-  createdAt: new Date().toISOString(),
-  updatedAt: new Date().toISOString(),
-});
-
 // Redline-walk factory — a standalone record (top-level `redlineWalks` collection,
 // same `data` envelope as quoteWalks) so a walk can be logged with a CUSTOM NAME
 // before the job is even in the app; `jobId` optionally links it to a real job.
@@ -3178,25 +3158,21 @@ const ROLE_OPTIONS = ["admin","foreman","lead","crew"];
 // manager  = everything except delete jobs
 // standard = foreman-level (cards, tasks, schedule, pipeline view)
 // limited  = home + job editing only (lead/crew)
+// (2026-07-10 cleanup: dead keys removed — home.view/home.edit/co.edit/
+// foreman.cards granted all tiers and were never checked; tasks.addTask/
+// tasks.setDueDate/reports.view/scoreboard.view/redline.own/jobstart.own
+// had zero can() call sites. Every key below is verified wired.)
 const PERMISSIONS = {
-  "home.view":       ["admin","manager","standard","limited"],
-  "home.edit":       ["admin","manager","standard","limited"],
-  "co.edit":         ["admin","manager","standard","limited"],
-  "foreman.cards":   ["admin","manager","standard","limited"],
   "tasks.view":      ["admin","manager","standard"],
-  "tasks.addTask":   ["admin","manager","standard"],
-  "tasks.setDueDate":["admin","manager","standard"],
   "schedule.view":   ["admin","manager","standard"],
   "schedule.edit":   ["admin","manager"],
   "pipeline.view":   ["admin","manager","standard"],
   "pipeline.manage": ["admin","manager"],
-  "reports.view":    ["admin","manager","standard"],
   "settings.view":   ["admin","manager"],
   "users.manage":    ["admin","manager"],
   "job.delete":      ["admin"],
   "quotes.view":     ["admin","manager","standard"],
   "quotes.convert":  ["admin"],
-  "scoreboard.view":        ["admin"],
   "scoreboard.editWeights": ["admin"],
   // Today command center — office + foreman, NOT lead/crew (explicit, 2026-05-21).
   // standard = foreman per the legacy access mapping above.
@@ -3224,9 +3200,7 @@ const PERMISSIONS = {
   // Company-wide hats — NOT tier-based (all 3 coordinators share a tier, so a
   // tier gate can't single out Koy). Granted PER USER via `caps` in Settings →
   // Team. Empty tier list = nobody gets it by tier; only an explicit grant does.
-  "jobstart.own":           [],
   "jobprep.own":            [],
-  "redline.own":            [],
 };
 
 // Resolve access level from user object (supports legacy role-only users)
@@ -3424,11 +3398,15 @@ const NOTIF_CATEGORIES = [
   { label:"Job Status", items:[
     { key:"ready_invoice",     label:"Ready to invoice",                     roles:["admin","manager","foreman"] },
     { key:"prep_complete",     label:"Job prep complete",                    roles:["admin","manager","foreman","lead"] },
+    { key:"status_update",     label:"Status update changed",                roles:["admin","manager","foreman"] },
+    { key:"milestone_complete",label:"Rough/finish phase complete",          roles:["admin","manager"] },
+    { key:"job_hold",          label:"Job put on hold / waiting",            roles:["admin","manager"] },
   ]},
   { label:"QC & Inspections", items:[
     { key:"qc_ready",          label:"QC walk ready to schedule",            roles:["admin","manager"] },
     { key:"qc_passed",         label:"QC passed",                            roles:["admin","manager","foreman","lead"] },
     { key:"matterport",        label:"Matterport scan complete",             roles:["admin","manager"] },
+    { key:"failed_inspection", label:"Inspection failed",                    roles:["admin","manager","foreman"] },
   ]},
   { label:"Change Orders", items:[
     { key:"co_new",            label:"New change order created",             roles:["admin","manager","foreman"] },
@@ -3449,15 +3427,20 @@ const NOTIF_CATEGORIES = [
   ]},
   { label:"Reminders", items:[
     { key:"renudge",           label:"Manual reminder from a teammate",       roles:["admin","manager","foreman","lead","crew"] },
-    { key:"reminder_plans",    label:"Plans check (2 days before start)",    roles:["admin","manager"] },
-    { key:"reminder_prep",     label:"Prep incomplete reminder",             roles:["admin","manager"] },
     { key:"reminder_po",       label:"Daily PO reminder (1 PM weekdays)",    roles:["lead"] },
     { key:"reminder_daily",    label:"Daily update reminder (4:30 PM)",      roles:["lead"] },
+    { key:"reminder_safety",   label:"Weekly safety reminder (Mon)",         roles:["foreman"] },
     { key:"daily_update_missing", label:"No daily update logged today",      roles:["foreman"] },
     { key:"stale_job",         label:"Stale job (no update in 5+ days)",     roles:["admin","manager","foreman"] },
     { key:"book_digest",       label:"Morning book digest (needs attention)", roles:["admin","manager"] },
+    { key:"co_chase",          label:"Morning CO chase (open 2+ days)",      roles:["admin","manager","crew"] },
+    { key:"rt_chase",          label:"Morning RT chase (needs scheduling)",  roles:["admin","manager"] },
   ]},
 ];
+// Every key above is enforced server-side via deliverIfWanted/wantsNotif
+// (2026-07-10 honest-notifications pass) — no placebo toggles. reminder_plans
+// and reminder_prep were removed: they described Koy-personal morning checks
+// that intentionally stay ungated.
 
 const getNotifDefaults = (title) => {
   const prefs = {};
@@ -3571,7 +3554,7 @@ function UserManagement({ users, onSave, embedded = false, getPersonColor = null
                     <div>
                       <div style={{fontSize:10,color:C.dim,marginBottom:4,fontWeight:700,letterSpacing:"0.08em"}}>COMPANY HATS</div>
                       <div style={{display:"flex",flexDirection:"column",gap:6}}>
-                        {[["jobprep.own","Job prep & redlines"],["jobstart.own","Job starts"]].map(([cap,label])=>{
+                        {[["jobprep.own","Job prep & redlines"]].map(([cap,label])=>{
                           const on = Array.isArray(u.caps) && u.caps.includes(cap);
                           return (
                             <label key={cap} style={{display:"flex",alignItems:"center",gap:8,cursor:"pointer"}}>
@@ -5963,7 +5946,7 @@ function jobNoteLooksLikeHtml(s) {
 // A5 — Suggested triage heuristics.
 // Given a job-note line, returns { type, score } with the most likely
 // destination if any of the patterns match strongly enough. `type` is one
-// of 'punch' | 'rt' | 'co' | 'call' | 'po', or null if no confident match.
+// of 'punch' | 'rt' | 'co' | 'po', or null if no confident match.
 //
 // The scoring is intentionally simple — keyword + regex hits per category.
 // The winner is the category with the highest score (>=2). Ties and low
@@ -5979,7 +5962,7 @@ function suggestTriageType(line) {
   const materials = Array.isArray(line.materials) ? line.materials.filter(Boolean) : [];
   if (!text && materials.length === 0) return null;
 
-  const scores = { punch: 0, rt: 0, co: 0, call: 0, po: 0 };
+  const scores = { punch: 0, rt: 0, co: 0, po: 0 };
 
   // ---- CO: money, extra work, out of scope -----------------------------
   if (/\$\s*\d/.test(text)) scores.co += 3;
@@ -5990,12 +5973,6 @@ function suggestTriageType(line) {
   if (/\b(not\s+in\s+(?:bid|scope|contract)|wasn'?t\s+in\s+(?:bid|scope))\b/.test(text)) scores.co += 3;
   if (/\bquote\b/.test(text)) scores.co += 1;
 
-  // ---- Call: contact someone -------------------------------------------
-  if (/\b(call|ring|phone|text|email)\s+[a-z]/.test(text)) scores.call += 3;
-  if (/\b(ask|reach\s*out\s+to|follow\s*up\s+with|check\s+with|contact)\s+[a-z]/.test(text)) scores.call += 2;
-  if (/\b(question\s+for|need\s+to\s+ask|talk\s+to)\b/.test(text)) scores.call += 2;
-  if (/\b\d{3}[-. ]?\d{3}[-. ]?\d{4}\b/.test(text)) scores.call += 3;
-  if (/\b(gc|general\s+contractor|builder|homeowner|ho|super|supervisor|designer|architect|inspector)\b/.test(text)) scores.call += 1;
 
   // ---- Punch: fix / broken / missing ------------------------------------
   if (/\b(fix|repair|replace|swap)\b/.test(text)) scores.punch += 2;
@@ -6431,7 +6408,7 @@ function JobNoteLine({
 //   manualTasks doc per line).
 function JobNoteDestinationPicker({
   type, note, selectedLineIds = [], job, onPatch,
-  manualTasks = [], onSaveManualTask, onClose, onDone,
+  onClose, onDone,
 }) {
   const selectedLines = (note?.lines || []).filter(l => selectedLineIds.includes(l.id));
 
@@ -6523,13 +6500,6 @@ function JobNoteDestinationPicker({
           <JobNoteDestinationCO
             note={note} selectedLines={selectedLines} selectedLineIds={selectedLineIds}
             job={job} onPatch={onPatch} markPromotedInNote={markPromotedInNote}
-            onDone={onDone}/>
-        )}
-        {type === 'call' && (
-          <JobNoteDestinationCall
-            note={note} selectedLines={selectedLines} selectedLineIds={selectedLineIds}
-            job={job} onPatch={onPatch} markPromotedInNote={markPromotedInNote}
-            manualTasks={manualTasks} onSaveManualTask={onSaveManualTask}
             onDone={onDone}/>
         )}
         {type === 'po' && (
@@ -7277,94 +7247,6 @@ function JobNoteDestinationCO({ note, selectedLines, selectedLineIds, job, onPat
   );
 }
 
-// ── Destination branch: Call ──────────────────────────────────
-// No "existing" concept — calls are always new manualTasks. One doc per
-// line. Atomic-ish: we fire all onSaveManualTask calls + a single onPatch
-// for the note update (which is the auditing ground truth). If the
-// manualTasks writes partially fail, the note still records them via
-// `promoted`, so the user can see the intent and re-try via the Open Items
-// tab if a row is missing.
-function JobNoteDestinationCall({ note, selectedLines, selectedLineIds, job, onPatch, markPromotedInNote, manualTasks, onSaveManualTask, onDone }) {
-  const [foreman, setForeman] = useState(job?.foreman || 'Koy');
-  const [dueDate, setDueDate] = useState('');
-
-  const promote = () => {
-    const creator = (getIdentity && getIdentity()) || null;
-    const color = (typeof ITEM_TYPE_COLORS !== 'undefined' && ITEM_TYPE_COLORS?.Call) || '#3B5BA5';
-    const tasks = selectedLines.map(l => ({
-      id: uid(),
-      title: jobNotePlain(l.text).slice(0, 200) || 'Call',
-      foreman,
-      notes: '',
-      dueDate: dueDate || '',
-      type: 'manual', category: 'manual',
-      color,
-      cleared: false,
-      createdAt: new Date().toISOString(),
-      jobId: job.id,
-      itemType: 'Call',
-      requestedBy: creator?.name || '',
-      status: 'open',
-      fromJobNote: { jobNoteId: note.id, lineId: l.id, noteTitle: note.title || '' },
-    }));
-    // Fire one write per task. onSaveManualTask in App wires both a Firestore
-    // write AND the local state update, so each call is self-contained.
-    tasks.forEach(t => onSaveManualTask && onSaveManualTask(t));
-
-    // Mark source lines promoted — one call each so every line has its own
-    // targetId (pointing at its manualTask doc). Per-line undo carries the
-    // manualTask id so A2 un-promote can locate and delete THIS call
-    // without touching other calls that may have been created in the same
-    // batch. Calls are always new (no "add to existing") so wasNewTarget
-    // is always true.
-    const now = new Date().toISOString();
-    const creatorName = creator?.name || '';
-    const nextLines = (note.lines || []).map(l => {
-      const idx = selectedLines.findIndex(s => s.id === l.id);
-      if (idx < 0) return l;
-      const t = tasks[idx];
-      return { ...l, promoted: {
-        type: 'call', targetId: t.id, targetLabel: `Call · ${t.title.slice(0,40)}`,
-        promotedAt: now, promotedBy: creatorName,
-        undo: { manualTaskId: t.id, wasNewTarget: true },
-      }};
-    });
-    const nextNote = { ...note, lines: nextLines, updatedAt: now };
-    const nextJobNotes = (job.jobNotes || []).map(n => n.id === note.id ? nextNote : n);
-    onPatch && onPatch({ jobNotes: nextJobNotes });
-    onDone && onDone();
-  };
-
-  return (
-    <div>
-      <div style={{ fontSize:12, color: C.dim, marginBottom:10, padding:'8px 10px', background: C.surface, border:`1px solid ${C.border}`, borderRadius:7 }}>
-        Creates one Call task per line in Open Items. Assign a foreman so it shows up on their list.
-      </div>
-      <div style={{ display:'grid', gap:8, marginBottom:12, gridTemplateColumns:'1fr 1fr' }}>
-        <div>
-          <div style={{ fontSize:10, color: C.dim, fontWeight:700, letterSpacing:'0.06em', marginBottom:5 }}>ASSIGN TO</div>
-          <input value={foreman} onChange={e=>setForeman(e.target.value)}
-            placeholder="Foreman / person"
-            style={{ width:'100%', boxSizing:'border-box', background: C.surface, border:`1px solid ${C.border}`, borderRadius:7, padding:'6px 9px', fontSize:12, color: C.text, fontFamily:'inherit', outline:'none' }}/>
-        </div>
-        <div>
-          <div style={{ fontSize:10, color: C.dim, fontWeight:700, letterSpacing:'0.06em', marginBottom:5 }}>DUE (optional)</div>
-          <input type="date" value={dueDate} onChange={e=>setDueDate(e.target.value)}
-            style={{ width:'100%', boxSizing:'border-box', background: C.surface, border:`1px solid ${C.border}`, borderRadius:7, padding:'6px 9px', fontSize:12, color: C.text, fontFamily:'inherit', outline:'none' }}/>
-        </div>
-      </div>
-      <button onClick={promote}
-        style={{
-          width:'100%', background: '#3B5BA5', color:'#fff',
-          border:'none', borderRadius:8,
-          padding:'9px 0', fontSize:13, fontWeight:800,
-          cursor:'pointer', fontFamily:'inherit',
-        }}>
-        Create {selectedLineIds.length} Call{selectedLineIds.length!==1?'s':''}
-      </button>
-    </div>
-  );
-}
 
 // ── Job Note → Purchase Order branch ────────────────────────────────────────
 // A1 (V2): promote selected bullets into a phase-scoped PO entry in
@@ -7720,7 +7602,6 @@ function JobNoteDestinationQuestion({ note, selectedLines, selectedLineIds, job,
 function JobNoteCard({
   note, onChange, onDelete, onArchive, phaseColor,
   jobId, job, setTab, onPatch,
-  manualTasks = [], onSaveManualTask, onDeleteManualTask,
   onViewPhoto,
 }) {
   const [editing, setEditing] = useState(() => !(note?.title) && (note?.lines||[]).every(l=>!l.text));
@@ -7741,7 +7622,7 @@ function JobNoteCard({
   // mode, so it expands automatically. Clicking the chevron or title flips
   // this for read-only notes.
   const [collapsed, setCollapsed] = useState(true);
-  // J4 — active destination type when the picker is open ('punch'|'rt'|'co'|'call').
+  // J4 — active destination type when the picker is open ('punch'|'rt'|'co'|'po'|'question').
   // J5 & J6 actually render the picker body; J4 wires the UI state only.
   const [pickerType, setPickerType] = useState(null);
   // Undo toast after a successful promote. Branches that supply a snapshot
@@ -7912,10 +7793,7 @@ function JobNoteCard({
     } else if (promoted.type === 'rt') {
       destTab = 'Return Trips';
     } else if (promoted.type === 'co') {
-      destTab = 'Change Orders';
-    } else if (promoted.type === 'call') {
-      destTab = 'Open Items';
-    } else if (promoted.type === 'question') {
+      destTab = 'Change Orders';    } else if (promoted.type === 'question') {
       destTab = promoted.targetPhase === 'finish' ? 'Finish' : 'Rough';
     }
     if (!destTab) return;
@@ -8157,41 +8035,6 @@ function JobNoteCard({
             : rt);
 
       onPatch && onPatch({ returnTrips: nextTrips, ...clearedPatch() });
-      return;
-    }
-
-    // ── CALL ───────────────────────────────────────────────────────────
-    // Calls are always new — delete the manualTask if it still exists
-    // and hasn't been completed/cleared. One manualTask per line so
-    // there's no "empty husk" concern.
-    if (p.type === 'call') {
-      const undo = p.undo || {};
-      const taskId = undo.manualTaskId || p.targetId;
-      if (!taskId) { onPatch && onPatch(clearedPatch()); return; }
-
-      const targetTask = (manualTasks || []).find(t => t && t.id === taskId);
-      if (!targetTask) { onPatch && onPatch(clearedPatch()); return; }
-
-      const warnings = [`Delete this call (${p.targetLabel || taskId})?`];
-      if (targetTask.cleared || targetTask.status === 'completed') {
-        warnings.push(`This call is already completed/cleared. Un-promoting deletes the task record.`);
-      }
-      if ((targetTask.notes || '').trim()) {
-        warnings.push(`The call has notes added: "${targetTask.notes.slice(0, 80)}${targetTask.notes.length > 80 ? '…' : ''}". Those notes will be lost.`);
-      }
-      if (!(await confirm(warnings.join('\n\n')))) return;
-
-      // Two writes here — onDeleteManualTask fires a separate Firestore
-      // delete (manualTasks live in their own collection), then onPatch
-      // clears the line flag on the job doc. If the delete fails but
-      // the clear succeeds, the call becomes an orphan but the line is
-      // triageable again; the user can manually delete the orphan.
-      if (typeof onDeleteManualTask === 'function') {
-        onDeleteManualTask(taskId);
-      } else {
-        toast.warn && toast.warn("Call delete isn't wired here — clearing the line flag but the call record stays.");
-      }
-      onPatch && onPatch(clearedPatch());
       return;
     }
 
@@ -8672,7 +8515,7 @@ function JobNoteCard({
         // lines. The badge on each button shows how many selected lines the
         // heuristic thinks belong there; the "top" pick gets a subtle glow.
         // Purely advisory — user still taps the button they want.
-        const tally = { punch:0, rt:0, co:0, call:0, po:0 };
+        const tally = { punch:0, rt:0, co:0, po:0 };
         for (const l of lines) {
           if (!selected.has(l.id)) continue;
           const s = suggestTriageType(l);
@@ -8693,7 +8536,7 @@ function JobNoteCard({
             <span style={{ fontSize:11, fontWeight:700, color: C.text, flexShrink:0 }}>
               Promote {selected.size} to:
             </span>
-            {['punch','rt','co','call','po','question'].map(t => {
+            {['punch','rt','co','po','question'].map(t => {
               const labels = { punch:'Punch', rt:'RT', co:'CO', call:'Call', po:'PO', question:'Question' };
               const colors = { punch:'#6A5E97', rt:'#3E7D7A', co:'#B0892C', call:'#3B5BA5', po:'#B06A2C', question:'#6A7BAA' };
               const count = tally[t] || 0;
@@ -8744,8 +8587,6 @@ function JobNoteCard({
           selectedLineIds={Array.from(selected)}
           job={job}
           onPatch={onPatch}
-          manualTasks={manualTasks}
-          onSaveManualTask={onSaveManualTask}
           onClose={()=>setPickerType(null)}
           onDone={(undoBundle)=>{
             // After a successful promote: clear selection, keep triage ON
@@ -8849,7 +8690,6 @@ function JobNoteCard({
 // `scope`: 'rough' | 'finish' | 'general' | 'all' (Open Items tab = 'all').
 function JobNotesSection({
   job, scope = 'all', onPatch, phaseColor,
-  manualTasks = [], onSaveManualTask, onDeleteManualTask,
   setTab,
   onViewPhoto,
 }) {
@@ -9011,9 +8851,6 @@ function JobNotesSection({
           job={job}
           setTab={setTab}
           onPatch={onPatch}
-          manualTasks={manualTasks}
-          onSaveManualTask={onSaveManualTask}
-          onDeleteManualTask={onDeleteManualTask}
           onChange={(next)=>upsertNote(next)}
           onDelete={()=>softDeleteNote(note.id)}
           onArchive={()=>archiveNote(note.id)}
@@ -22688,1759 +22525,9 @@ function _isFullyDone(job) {
   return true;
 }
 
-// UP_NEXT_RULES — Koy's full job-flow ranking. 69 rules total: 42 urgent,
-// 18 needsInput, 5 info, 4 calm. Up Next is the single home for "what to do
-// next" — this engine subsumes the auto-tasks that used to live only in the
-// Tasks tab (Pre Job Prep, Confirm Start Date, Material Deposit, Order PO,
-// Schedule QC at 80%, Send CO, RT Get Sign-Off, Schedule Matterport, Quick
-// Job, Ready to Invoice, etc.). Each rule's `fires` predicate is mutually
-// exclusive with related rules where the ranges would otherwise overlap
-// (e.g. invoice 0-2d / 3-4d / 5d+ buckets, CO send fresh / 24h+ stale).
-// Tiers: urgent (severity:"urgent", priority 58-100, red) → needsInput
-// (amber, 40-57) → info (blue, 25-29) → calm (green, 1-19, fallback).
-const UP_NEXT_RULES = [
 
-  // ══════════════════════════════════════════════════════════════════════
-  // URGENT (80-99) — red, top of Up Next, drive immediate action
-  // ══════════════════════════════════════════════════════════════════════
 
-  {
-    id: "fourway-failed-no-rt",
-    priority: 99,
-    severity: "urgent",
-    fires: (j) => {
-      if (j.roughInspectionResult !== "fail") return false;
-      const hasOpen = (j.roughInspectionItems || []).some(i => i && !i.done);
-      if (!hasOpen) return false;
-      const linkedRT = (j.returnTrips || []).some(rt =>
-        (rt.punch || []).some(p => p && p.fromRoughInspectionId));
-      return !linkedRT;
-    },
-    summary: (j) => {
-      const open = (j.roughInspectionItems||[]).filter(i => i && !i.done).length;
-      const d = j.roughInspectionDate ? _daysAgo(j.roughInspectionDate) : null;
-      return `<b>4-way failed${d != null ? ` ${d} day${d===1?"":"s"} ago` : ""}</b> · ${open} item${open===1?"":"s"} open, no Return Trip created.`;
-    },
-    badge: () => `URGENT`,
-    actions: () => [
-      { label: "CONVERT FAILED ITEMS TO RT", kind: "convertFailedToRT", payload: "rough", primary: true, color: "red" },
-      { label: "View open items", kind: "tab", payload: "Rough" },
-    ],
-  },
-  {
-    id: "final-failed",
-    priority: 98,
-    severity: "urgent",
-    fires: (j) => j.finalInspectionResult === "fail"
-                  && (j.finalInspectionItems||[]).some(i => i && !i.done),
-    summary: (j) => {
-      const open = (j.finalInspectionItems||[]).filter(i => i && !i.done).length;
-      return `<b>Final inspection failed</b> · ${open} item${open===1?"":"s"} still open.`;
-    },
-    badge: () => "URGENT",
-    actions: () => [
-      { label: "OPEN FAILED ITEMS", kind: "tab", payload: "Finish", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "rough-hard-deadline-near",
-    priority: 97,
-    severity: "urgent",
-    fires: (j) => j.roughNeedsSchedHard && j.roughStatusDate
-                  && _daysUntil(j.roughStatusDate) != null
-                  && _daysUntil(j.roughStatusDate) <= 2
-                  && j.roughStatus !== "scheduled"
-                  && j.roughStatus !== "inprogress"
-                  && j.roughStatus !== "complete",
-    summary: (j) => {
-      const d = _daysUntil(j.roughStatusDate);
-      return `<b>Rough hard deadline</b> ${d < 0 ? "passed" : d === 0 ? "is today" : `is in ${d} day${d===1?"":"s"}`} — still not scheduled.`;
-    },
-    badge: (j) => {
-      const d = _daysUntil(j.roughStatusDate);
-      return d < 0 ? `OVERDUE ${Math.abs(d)}D` : "URGENT";
-    },
-    actions: () => [
-      { label: "PICK ROUGH START DATE", kind: "openSchedModal", payload: "rough", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "rough-start-passed-not-started",
-    priority: 96,
-    severity: "urgent",
-    fires: (j) => j.roughStatus === "scheduled" && j.roughStatusDate
-                  && _daysUntil(j.roughStatusDate) < 0,
-    summary: (j) => {
-      const d = Math.abs(_daysUntil(j.roughStatusDate));
-      return `Rough start date passed <b>${d} day${d===1?"":"s"} ago</b> — not marked started.`;
-    },
-    badge: (j) => `${Math.abs(_daysUntil(j.roughStatusDate))}D LATE`,
-    actions: () => [
-      { label: "MARK ROUGH IN PROGRESS", kind: "patch", payload: { roughStatus: "inprogress" }, primary: true, color: "red" },
-      { label: "Pick new date", kind: "openSchedModal", payload: "rough" },
-    ],
-  },
-  {
-    id: "co-needs-sending-stale",
-    priority: 95,
-    severity: "urgent",
-    fires: (j) => (j.changeOrders||[]).some(co =>
-      co && co.coStatus === "needs_sending"
-      && co.createdAt && _daysAgo(co.createdAt) >= 1),
-    summary: (j) => {
-      const stuck = (j.changeOrders||[]).filter(co =>
-        co && co.coStatus === "needs_sending"
-        && co.createdAt && _daysAgo(co.createdAt) >= 1);
-      const n = stuck.length;
-      return `<b>${n} CO${n===1?"":"s"} still need to be sent</b> (>24h old).`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN CHANGE ORDERS", kind: "tab", payload: "Change Orders", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "rt-needs-scheduling",
-    priority: 94,
-    severity: "urgent",
-    fires: (j) => (j.returnTrips||[]).some(rt =>
-      rt && rt.rtStatus === "needs" && !rt.rtScheduled && !rt.signedOff),
-    summary: (j) => {
-      const n = (j.returnTrips||[]).filter(rt =>
-        rt && rt.rtStatus === "needs" && !rt.rtScheduled && !rt.signedOff).length;
-      return `<b>${n} Return Trip${n===1?"":"s"}</b> awaiting a scheduled date.`;
-    },
-    badge: () => "URGENT",
-    actions: () => [
-      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "foreman-not-on-job-3d",
-    priority: 93,
-    severity: "urgent",
-    fires: (j) => {
-      if (!j.foreman || j.foreman === "Unassigned" || j.foreman === "") return false;
-      if (j.roughStatus === "complete" && j.finishStatus === "complete") return false;
-      const lastSeen = j.presence && j.presence[j.foreman];
-      if (!lastSeen) return true; // never opened
-      const d = _daysAgo(lastSeen);
-      return d != null && d >= 3;
-    },
-    summary: (j) => {
-      const lastSeen = j.presence && j.presence[j.foreman];
-      const d = lastSeen ? _daysAgo(lastSeen) : null;
-      return d == null
-        ? `<b>${j.foreman}</b> hasn't opened this job in the app yet.`
-        : `<b>${j.foreman}</b> hasn't opened this job in <b>${d} day${d===1?"":"s"}</b>.`;
-    },
-    badge: () => "URGENT",
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "rt-scheduled-no-crew",
-    priority: 92,
-    severity: "urgent",
-    fires: (j) => (j.returnTrips||[]).some(rt =>
-      rt && rt.rtScheduled && !rt.assignedTo && !rt.signedOff),
-    summary: (j) => {
-      const n = (j.returnTrips||[]).filter(rt =>
-        rt && rt.rtScheduled && !rt.assignedTo && !rt.signedOff).length;
-      return `<b>${n} scheduled Return Trip${n===1?"":"s"}</b> with no crew assigned.`;
-    },
-    badge: () => "URGENT",
-    actions: () => [
-      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "finish-scheduled-no-foreman",
-    priority: 91,
-    severity: "urgent",
-    fires: (j) => j.finishStatus === "scheduled"
-                  && (!j.foreman || j.foreman === "Unassigned" || j.foreman === ""),
-    summary: () => `Finish scheduled but <b>no foreman assigned</b>.`,
-    badge: () => "URGENT",
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "rt-signed-off-punch-still-open",
-    priority: 90,
-    severity: "urgent",
-    fires: (j) => (j.returnTrips||[]).some(rt =>
-      rt && rt.signedOff && (rt.punch||[]).some(p => p && !p.done)),
-    summary: () => `Signed-off Return Trip still has <b>open punch items</b>.`,
-    badge: () => "URGENT",
-    actions: () => [
-      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "open-question-stale",
-    priority: 89,
-    severity: "urgent",
-    fires: (j) => {
-      const walk = (qs) => {
-        if (!qs) return false;
-        return ["upper","main","basement"].some(fl =>
-          (qs[fl]||[]).some(q => q && !q.done && !(q.answer||"").trim()
-            && q.addedAt && _daysAgo(q.addedAt) >= 3));
-      };
-      return walk(j.roughQuestions) || walk(j.finishQuestions);
-    },
-    summary: (j) => {
-      let count = 0, oldest = 0;
-      const walk = (qs) => {
-        if (!qs) return;
-        ["upper","main","basement"].forEach(fl =>
-          (qs[fl]||[]).forEach(q => {
-            if (q && !q.done && !(q.answer||"").trim() && q.addedAt) {
-              const d = _daysAgo(q.addedAt);
-              if (d != null && d >= 3) { count++; if (d > oldest) oldest = d; }
-            }
-          }));
-      };
-      walk(j.roughQuestions); walk(j.finishQuestions);
-      return `<b>${count} open question${count===1?"":"s"}</b> with no answer — oldest <b>${oldest} day${oldest===1?"":"s"}</b>.`;
-    },
-    badge: () => "URGENT",
-    actions: () => [
-      { label: "OPEN QUESTIONS", kind: "tab", payload: "Job Info", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "job-needs-lead",
-    priority: 88,
-    severity: "urgent",
-    fires: (j) => j.needsLead && (!j.lead || j.lead === "Unassigned" || j.lead === ""),
-    summary: () => `Job flagged <b>needs a lead</b> — none assigned yet.`,
-    badge: () => "URGENT",
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "rough-scheduled-no-foreman",
-    priority: 87,
-    severity: "urgent",
-    fires: (j) => j.roughStatus === "scheduled"
-                  && (!j.foreman || j.foreman === "Unassigned" || j.foreman === ""),
-    summary: () => `Rough is scheduled but <b>no foreman assigned</b>.`,
-    badge: () => "URGENT",
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "new-job-no-drive-folder",
-    priority: 86,
-    severity: "urgent",
-    fires: (j) => {
-      if (j.type === "quote") return false;
-      if (j.driveFolderId) return false;
-      if (!j.createdAt) return false;
-      const d = _daysAgo(j.createdAt);
-      return d != null && d >= 2;
-    },
-    summary: (j) => {
-      const d = _daysAgo(j.createdAt);
-      return `Job created <b>${d} day${d===1?"":"s"} ago</b> — no Drive folder linked.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "co-scheduled-crew-not-onsite",
-    priority: 85,
-    severity: "urgent",
-    fires: (j) => (j.changeOrders||[]).some(co => co && co.coStatus === "approved")
-                  && j.roughStatus !== "inprogress"
-                  && j.finishStatus !== "inprogress",
-    summary: () => `CO is approved but crew not on site — <b>could convert to Return Trip</b>?`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN CHANGE ORDERS", kind: "tab", payload: "Change Orders", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "matterport-not-captured",
-    priority: 84,
-    severity: "urgent",
-    fires: (j) => j.roughInspectionResult === "pass"
-                  && !j.matterportLink
-                  && !(j.matterportLinks && j.matterportLinks.length)
-                  && !j.matterportDismissed,
-    summary: () => `4-way passed — <b>Matterport not yet captured</b>.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN PLANS & LINKS", kind: "tab", payload: "Plans & Links", primary: true, color: "red" },
-      { label: "Dismiss", kind: "patch", payload: { matterportDismissed: true } },
-    ],
-  },
-  {
-    id: "missing-address",
-    priority: 83,
-    severity: "urgent",
-    fires: (j) => !j.address || !String(j.address).trim(),
-    summary: () => `Job <b>missing address</b>.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "missing-simpro-no",
-    priority: 82,
-    severity: "urgent",
-    fires: (j) => !j.simproNo && j.type !== "quote",
-    summary: () => `<b>No Simpro Job #</b> linked yet.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "qc-walk-not-started",
-    priority: 81,
-    severity: "urgent",
-    fires: (j) => j.finalInspectionResult === "pass"
-                  && j.finalInspectionDate
-                  && _daysAgo(j.finalInspectionDate) >= 4
-                  && (!j.qcStatus || j.qcStatus === "" || j.qcStatus === "needs"),
-    summary: (j) => {
-      const d = _daysAgo(j.finalInspectionDate);
-      return `Final passed <b>${d} day${d===1?"":"s"} ago</b> — QC walk hasn't started.`;
-    },
-    badge: (j) => `OVERDUE ${_daysAgo(j.finalInspectionDate) - 4}D`,
-    actions: () => [
-      { label: "START QC WALK", kind: "tab", payload: "QC", primary: true, color: "red" },
-      { label: "Schedule for later", kind: "patch", payload: { qcStatus: "scheduled" } },
-    ],
-  },
-
-  // ══════════════════════════════════════════════════════════════════════
-  // SOON (50-79) — amber, expandable below the primary urgent rule
-  // ══════════════════════════════════════════════════════════════════════
-
-  {
-    id: "rt-scheduled-date-passed",
-    priority: 79,
-    severity: "needsInput",
-    fires: (j) => (j.returnTrips||[]).some(rt =>
-      rt && rt.rtStatusDate && _daysUntil(rt.rtStatusDate) < 0 && !rt.signedOff),
-    summary: (j) => {
-      const stuck = (j.returnTrips||[]).filter(rt =>
-        rt && rt.rtStatusDate && _daysUntil(rt.rtStatusDate) < 0 && !rt.signedOff);
-      const worst = stuck.reduce((max, rt) => {
-        const d = Math.abs(_daysUntil(rt.rtStatusDate));
-        return d > max ? d : max;
-      }, 0);
-      return `<b>${stuck.length} Return Trip${stuck.length===1?"":"s"}</b> with date passed${worst > 0 ? ` (worst: ${worst} day${worst===1?"":"s"} ago)` : ""}.`;
-    },
-    badge: () => "OVERDUE",
-    actions: () => [
-      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "amber" },
-    ],
-  },
-  {
-    id: "final-target-passed",
-    priority: 77,
-    severity: "needsInput",
-    fires: (j) => j.finalInspectionDate
-                  && _daysUntil(j.finalInspectionDate) <= 0
-                  && !j.finalInspectionResult,
-    summary: (j) => {
-      const d = Math.abs(_daysUntil(j.finalInspectionDate));
-      return d === 0
-        ? `Final is <b>today</b> — enter the result when done.`
-        : `Final was <b>${d} day${d===1?"":"s"} ago</b> — no pass/fail entered yet.`;
-    },
-    badge: (j) => {
-      const d = Math.abs(_daysUntil(j.finalInspectionDate));
-      return d > 0 ? `${d}D LATE` : null;
-    },
-    actions: () => [
-      { label: "ENTER FINAL RESULT", kind: "tab", payload: "Finish", primary: true, color: "amber" },
-    ],
-  },
-  {
-    id: "fourway-target-passed",
-    priority: 75,
-    severity: "needsInput",
-    fires: (j) => j.fourWayTargetDate
-                  && _daysUntil(j.fourWayTargetDate) <= 0
-                  && !j.roughInspectionResult,
-    summary: (j) => {
-      const d = Math.abs(_daysUntil(j.fourWayTargetDate));
-      return d === 0
-        ? `4-way is <b>today</b> — enter the result when done.`
-        : `4-way was <b>${d} day${d===1?"":"s"} ago</b> — no pass/fail entered yet.`;
-    },
-    badge: (j) => {
-      const d = Math.abs(_daysUntil(j.fourWayTargetDate));
-      return d > 0 ? `${d}D LATE` : null;
-    },
-    actions: () => [
-      { label: "ENTER 4-WAY RESULT", kind: "tab", payload: "Rough", primary: true, color: "amber" },
-    ],
-  },
-  {
-    id: "fourway-failed-rt-unscheduled",
-    priority: 73,
-    severity: "needsInput",
-    fires: (j) => {
-      if (j.roughInspectionResult !== "fail") return false;
-      const rtFromIns = (j.returnTrips||[]).find(rt =>
-        (rt.punch||[]).some(p => p && p.fromRoughInspectionId)
-        && !rt.signedOff
-        && !rt.rtScheduled);
-      return !!rtFromIns;
-    },
-    summary: () => `<b>4-way RT created</b> but not yet scheduled. Finish can't start until cleared.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "amber" },
-    ],
-  },
-  {
-    id: "rough-no-status-update",
-    priority: 71,
-    severity: "needsInput",
-    fires: (j) => j.roughStatus === "inprogress"
-                  && (!j.statusUpdateAt || _daysAgo(j.statusUpdateAt) >= 2),
-    summary: (j) => {
-      const d = j.statusUpdateAt ? _daysAgo(j.statusUpdateAt) : null;
-      return `Crew on site · last status update ${d == null ? "<b>none yet</b>" : `was <b>${d} day${d===1?"":"s"} ago</b>`}.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "LOG STATUS UPDATE", kind: "focusStatus", primary: true, color: "amber" },
-    ],
-  },
-  {
-    // Bounded 3-4 days. Pre-3 covered by ready-to-invoice-task (urgent, days
-    // 0-2). 5+ days covered by invoice-overdue-5d (urgent). Mutually exclusive.
-    id: "ready-to-invoice-stale",
-    priority: 52,
-    severity: "needsInput",
-    fires: (j) => j.readyToInvoice && j.readyToInvoiceDate
-                  && _daysAgo(j.readyToInvoiceDate) >= 3
-                  && _daysAgo(j.readyToInvoiceDate) < 5
-                  && !j.invoiced && !j.invoiceDismissed,
-    summary: (j) => {
-      const d = _daysAgo(j.readyToInvoiceDate);
-      return `Marked ready to invoice <b>${d} days ago</b> — still not invoiced.`;
-    },
-    badge: (j) => `${_daysAgo(j.readyToInvoiceDate)}D STALE`,
-    actions: () => [
-      { label: "MARK INVOICED", kind: "patch", payload: { invoiced: true, invoicedDate: new Date().toLocaleDateString("en-US") }, primary: true, color: "amber" },
-      { label: "Dismiss reminder", kind: "patch", payload: { invoiceDismissed: true } },
-    ],
-  },
-  {
-    id: "rough-no-start-date",
-    priority: 67,
-    severity: "needsInput",
-    fires: (j) => (j.roughStatus === "waiting_date" || j.roughStatus === "date_confirmed")
-                  && !j.roughStatusDate
-                  && j.type !== "quote",
-    summary: () => `Rough is approved but <b>no start date</b> picked.`,
-    badge: () => null,
-    actions: () => [
-      { label: "PICK ROUGH START DATE", kind: "openSchedModal", payload: "rough", primary: true, color: "amber" },
-      { label: "Open job info", kind: "tab", payload: "Job Info" },
-    ],
-  },
-  {
-    id: "tempped-ready-no-date",
-    priority: 65,
-    severity: "needsInput",
-    fires: (j) => j.tempPed && j.tempPedStatus === "ready" && !j.tempPedScheduledDate,
-    summary: () => `Temp ped <b>ready</b> — no pickup date set.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "amber" },
-    ],
-  },
-  {
-    id: "punch-open-on-complete",
-    priority: 63,
-    severity: "needsInput",
-    fires: (j) => j.finishStatus === "complete" && _hasOpenPunch(j),
-    summary: (j) => {
-      const n = _countOpenPunch(j);
-      return `Job marked complete but <b>${n} punch item${n===1?"":"s"} still open</b>.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN PUNCH", kind: "tab", payload: "Punch", primary: true, color: "amber" },
-    ],
-  },
-  {
-    id: "job-in-progress-no-presence-today",
-    priority: 61,
-    severity: "needsInput",
-    fires: (j) => {
-      if (j.roughStatus !== "inprogress" && j.finishStatus !== "inprogress") return false;
-      const today = new Date(); today.setHours(0,0,0,0);
-      const opened = Object.values(j.presence||{}).some(t => {
-        const d = new Date(t);
-        return !isNaN(d) && d >= today;
-      });
-      return !opened;
-    },
-    summary: () => `Job is <b>in progress</b> but nobody opened it in the app today.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "amber" },
-    ],
-  },
-  {
-    id: "punch-stale-open",
-    priority: 59,
-    severity: "needsInput",
-    fires: (j) => {
-      // Without per-item createdAt, approximate "stale" with: job in late phase
-      // (rough complete OR finish in progress/complete) AND open punch items
-      // AND job.updated_at older than 7 days (or no recent edits).
-      if (!_hasOpenPunch(j)) return false;
-      if (j.roughStatus !== "complete" && j.finishStatus !== "complete"
-          && j.finishStatus !== "inprogress") return false;
-      const lastTouched = j.updated_at || j.updatedAt || j.statusUpdateAt;
-      const d = _daysAgo(lastTouched);
-      return d != null && d >= 7;
-    },
-    summary: (j) => {
-      const n = _countOpenPunch(j);
-      return `<b>${n} punch item${n===1?"":"s"} open</b> — none touched in a week.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN PUNCH", kind: "tab", payload: "Punch", primary: true, color: "amber" },
-    ],
-  },
-  {
-    id: "material-request-open-stale",
-    priority: 57,
-    severity: "needsInput",
-    fires: (j) => (j.materialRequests||[]).some(mr =>
-      mr && mr.submittedAt && _daysAgo(mr.submittedAt) >= 2 && !mr.filledAt),
-    summary: (j) => {
-      const open = (j.materialRequests||[]).filter(mr =>
-        mr && mr.submittedAt && _daysAgo(mr.submittedAt) >= 2 && !mr.filledAt).length;
-      return `<b>${open} material request${open===1?"":"s"}</b> open 2+ days — needs fulfillment.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "amber" },
-    ],
-  },
-  {
-    id: "note-promoted-rt-orphan",
-    priority: 55,
-    severity: "needsInput",
-    fires: (j) => {
-      const rtIds = new Set((j.returnTrips||[]).map(rt => rt && rt.id).filter(Boolean));
-      return (j.jobNotes||[]).some(n =>
-        (n?.lines||[]).some(l =>
-          l?.promoted && (l.promoted.kind === "rt" || l.promoted.type === "rt")
-          && l.promoted.targetId && !rtIds.has(l.promoted.targetId)));
-    },
-    summary: () => `Note line promoted to RT but the <b>RT no longer exists</b> — was it deleted?`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB NOTES", kind: "tab", payload: "Job Info", primary: true, color: "amber" },
-    ],
-  },
-  {
-    id: "job-on-hold-stale",
-    priority: 53,
-    severity: "needsInput",
-    fires: (j) => {
-      if (!j.roughOnHold && !j.finishOnHold) return false;
-      const ref = j.updated_at || j.updatedAt;
-      if (!ref) return false;
-      const d = _daysAgo(ref);
-      return d != null && d >= 7;
-    },
-    summary: (j) => {
-      const which = j.roughOnHold ? "Rough" : "Finish";
-      const d = _daysAgo(j.updated_at || j.updatedAt);
-      return `<b>${which} on hold</b> for ${d} day${d===1?"":"s"} — revisit?`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "amber" },
-    ],
-  },
-
-  // ══════════════════════════════════════════════════════════════════════
-  // INFO (20-49) — blue, low-priority surface area
-  // ══════════════════════════════════════════════════════════════════════
-
-  {
-    id: "question-answered-not-resolved",
-    priority: 49,
-    severity: "info",
-    fires: (j) => {
-      const walk = (qs) => {
-        if (!qs) return false;
-        return ["upper","main","basement"].some(fl =>
-          (qs[fl]||[]).some(q => q && !q.done && (q.answer||"").trim()));
-      };
-      return walk(j.roughQuestions) || walk(j.finishQuestions);
-    },
-    summary: () => `Question has an answer but isn't marked <b>resolved</b>.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN QUESTIONS", kind: "tab", payload: "Job Info", primary: true, color: "blue" },
-    ],
-  },
-  {
-    id: "finish-daily-update-missing",
-    priority: 40,
-    severity: "info",
-    fires: (j) => {
-      if (j.finishStatus !== "inprogress") return false;
-      const today = new Date().toLocaleDateString("en-US");
-      const today2 = new Date().toISOString().slice(0,10);
-      const updates = j.finishUpdates || [];
-      return !updates.some(u => u && (u.date === today || u.date === today2 || (u.date||"").startsWith(today2)));
-    },
-    summary: () => `<b>Daily update missing</b> for today (finish in progress).`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN FINISH TAB", kind: "tab", payload: "Finish", primary: true, color: "blue" },
-    ],
-  },
-  {
-    id: "rough-daily-update-missing",
-    priority: 35,
-    severity: "info",
-    fires: (j) => {
-      if (j.roughStatus !== "inprogress") return false;
-      const today = new Date().toLocaleDateString("en-US");
-      const today2 = new Date().toISOString().slice(0,10);
-      const updates = j.roughUpdates || [];
-      return !updates.some(u => u && (u.date === today || u.date === today2 || (u.date||"").startsWith(today2)));
-    },
-    summary: () => `<b>Daily update missing</b> for today (rough in progress).`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN ROUGH TAB", kind: "tab", payload: "Rough", primary: true, color: "blue" },
-    ],
-  },
-  {
-    id: "no-foreman",
-    priority: 58,
-    severity: "urgent",
-    fires: (j) => (!j.foreman || j.foreman === "Unassigned" || j.foreman === "")
-                  && j.type !== "quote",
-    summary: () => `<b>No foreman assigned.</b>`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "missing-gc-phone",
-    priority: 22,
-    severity: "info",
-    fires: (j) => (!j.phone || !String(j.phone).trim())
-                  && j.gc && j.type !== "quote",
-    summary: () => `Missing <b>GC phone number</b>.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "blue" },
-    ],
-  },
-
-  // ══════════════════════════════════════════════════════════════════════
-  // CALM (1-19) — green, only fire as fallback when nothing else does
-  // ══════════════════════════════════════════════════════════════════════
-
-  {
-    id: "ready-to-invoice",
-    priority: 19,
-    severity: "calm",
-    fires: (j) => _isFullyDone(j) && !j.readyToInvoice,
-    summary: () => `<b>Everything done.</b> Ready to invoice — no outstanding items.`,
-    badge: () => null,
-    actions: () => [
-      { label: "MARK READY TO INVOICE", kind: "patch",
-        payload: { readyToInvoice: true, readyToInvoiceDate: new Date().toLocaleDateString("en-US") },
-        primary: true, color: "green" },
-    ],
-  },
-  {
-    id: "calm-rough-on-track",
-    priority: 12,
-    severity: "calm",
-    fires: (j) => j.roughStatus && j.roughStatus !== "complete"
-                  && j.finishStatus !== "inprogress"
-                  && j.finishStatus !== "complete",
-    summary: (j) => {
-      if (j.roughStatus === "scheduled") return `Rough on schedule. <b>Nothing to do here.</b>`;
-      if (j.roughStatus === "inprogress") return `Rough in progress. <b>Nothing to do here.</b>`;
-      if (j.roughStatus === "waiting_date") return `<b>Awaiting rough start date</b> — nothing else needed yet.`;
-      return `Rough stage on track. <b>Nothing to do here.</b>`;
-    },
-    badge: () => null,
-    actions: () => [],
-  },
-  {
-    id: "calm-finish-on-track",
-    priority: 10,
-    severity: "calm",
-    fires: (j) => j.finishStatus && j.finishStatus !== "complete"
-                  && j.roughStatus === "complete",
-    summary: (j) => {
-      if (j.finishStatus === "scheduled") return `Finish on schedule. <b>Nothing to do here.</b>`;
-      if (j.finishStatus === "inprogress") return `Finish in progress. <b>Nothing to do here.</b>`;
-      if (j.finishStatus === "waiting_date") return `<b>Awaiting finish start date</b> — nothing else needed yet.`;
-      return `Finish stage on track. <b>Nothing to do here.</b>`;
-    },
-    badge: () => null,
-    actions: () => [],
-  },
-  {
-    id: "calm-complete-invoiced",
-    priority: 8,
-    severity: "calm",
-    fires: (j) => _isFullyDone(j) && j.invoiced,
-    summary: () => `<b>Complete and invoiced.</b> Archive when ready.`,
-    badge: () => null,
-    actions: () => [],
-  },
-
-  // ══════════════════════════════════════════════════════════════════════
-  // FLOW-COMPLETION RULES — added to bring the auto-task engine into Up Next.
-  // These mirror the conditions in computeTasks() so the entire job lifecycle
-  // surfaces in one place. Priorities are interleaved with the existing rules
-  // above; sort happens at fire-time in getUpNextRules.
-  // ══════════════════════════════════════════════════════════════════════
-
-  // ── Phase 16 — Invoice (urgent tier, 5+ days overdue) ───────────────
-  {
-    id: "invoice-overdue-5d",
-    priority: 96,
-    severity: "urgent",
-    fires: (j) => j.readyToInvoice && j.readyToInvoiceDate
-                  && _daysAgo(j.readyToInvoiceDate) >= 5
-                  && !j.invoiced && !j.invoiceDismissed,
-    summary: (j) => {
-      const d = _daysAgo(j.readyToInvoiceDate);
-      return `<b>Invoice overdue — ${d} days</b>. Ready to invoice for over a week.`;
-    },
-    badge: (j) => `${_daysAgo(j.readyToInvoiceDate)}D OVERDUE`,
-    actions: () => [
-      { label: "MARK INVOICED", kind: "patch", payload: { invoiced: true, invoicedDate: new Date().toLocaleDateString("en-US") }, primary: true, color: "red" },
-      { label: "Dismiss reminder", kind: "patch", payload: { invoiceDismissed: true } },
-    ],
-  },
-
-  // ── Phase 2/7 — Confirm Start Date (14-day window) ─────────────────
-  {
-    id: "rough-confirm-start-14d",
-    priority: 95,
-    severity: "urgent",
-    fires: (j) => {
-      if (j.roughStatus !== "scheduled" || !j.roughStatusDate || j.roughStartConfirmed) return false;
-      const days = _daysUntil(j.roughStatusDate);
-      return days != null && days <= 14;
-    },
-    summary: (j) => {
-      const days = _daysUntil(j.roughStatusDate);
-      return days <= 0
-        ? `<b>Confirm rough start</b> with GC — was ${j.roughStatusDate}.`
-        : `<b>Confirm rough start</b> with GC — starts in ${days} day${days === 1 ? "" : "s"} (${j.roughStatusDate}).`;
-    },
-    badge: (j) => {
-      const days = _daysUntil(j.roughStatusDate);
-      return days != null && days <= 3 ? "URGENT" : null;
-    },
-    actions: () => [
-      { label: "MARK CONFIRMED", kind: "patch", payload: { roughStartConfirmed: true }, primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "finish-confirm-start-14d",
-    priority: 94,
-    severity: "urgent",
-    fires: (j) => {
-      if (j.finishStatus !== "scheduled" || !j.finishStatusDate || j.finishStartConfirmed) return false;
-      const days = _daysUntil(j.finishStatusDate);
-      return days != null && days <= 14;
-    },
-    summary: (j) => {
-      const days = _daysUntil(j.finishStatusDate);
-      return days <= 0
-        ? `<b>Confirm finish start</b> with GC — was ${j.finishStatusDate}.`
-        : `<b>Confirm finish start</b> with GC — starts in ${days} day${days === 1 ? "" : "s"} (${j.finishStatusDate}).`;
-    },
-    badge: (j) => {
-      const days = _daysUntil(j.finishStatusDate);
-      return days != null && days <= 3 ? "URGENT" : null;
-    },
-    actions: () => [
-      { label: "MARK CONFIRMED", kind: "patch", payload: { finishStartConfirmed: true }, primary: true, color: "red" },
-    ],
-  },
-
-  // ── Phase 12 — CO send (immediate, before 24h stale rule kicks in) ───
-  {
-    id: "co-send-needed",
-    priority: 92,
-    severity: "urgent",
-    fires: (j) => (j.changeOrders||[]).some(co =>
-      co && (co.coStatus||"needs_sending") === "needs_sending"
-      && (!co.createdAt || _daysAgo(co.createdAt) < 1)),
-    summary: (j) => {
-      const fresh = (j.changeOrders||[]).filter(co =>
-        co && (co.coStatus||"needs_sending") === "needs_sending"
-        && (!co.createdAt || _daysAgo(co.createdAt) < 1));
-      const n = fresh.length;
-      return `<b>${n} CO${n===1?"":"s"} need to be sent</b>.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN CHANGE ORDERS", kind: "tab", payload: "Change Orders", primary: true, color: "red" },
-    ],
-  },
-
-  // ── Phase 5 — In Between (rough done, finish not scheduled, 60+ days) ──
-  {
-    id: "in-between-2-months",
-    priority: 90,
-    severity: "urgent",
-    fires: (j) => {
-      if (j.roughStatus !== "complete") return false;
-      if (j.finishStatus && j.finishStatus !== "" && j.finishStatus !== "waiting_date" && j.finishStatus !== "ready") return false;
-      const ref = j.roughStatusDate || j.roughProjectedStart;
-      if (!ref) return false;
-      const d = _daysAgo(ref);
-      return d != null && d >= 60;
-    },
-    summary: (j) => {
-      const d = _daysAgo(j.roughStatusDate || j.roughProjectedStart);
-      return `<b>In between over 2 months</b> — rough completed ${d} days ago, finish not scheduled.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "PICK FINISH START DATE", kind: "openSchedModal", payload: "finish", primary: true, color: "red" },
-    ],
-  },
-
-  // ── Phase 13 — RT lifecycle (get sign-off, completed merge) ───────────
-  {
-    id: "rt-get-signoff",
-    priority: 86,
-    severity: "urgent",
-    fires: (j) => (j.returnTrips||[]).some(rt =>
-      rt && rt.rtStatus === "scheduled" && !rt.signedOff),
-    summary: (j) => {
-      const n = (j.returnTrips||[]).filter(rt =>
-        rt && rt.rtStatus === "scheduled" && !rt.signedOff).length;
-      return `<b>${n} Return Trip${n===1?"":"s"} scheduled</b> — confirm completion & sign off.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "rt-completed-merge",
-    priority: 85,
-    severity: "urgent",
-    fires: (j) => {
-      const dismissed = j.rtDoneDismissed || [];
-      return (j.returnTrips||[]).some(rt =>
-        rt && rt.rtStatus === "complete" && !dismissed.includes(rt.id));
-    },
-    summary: (j) => {
-      const dismissed = j.rtDoneDismissed || [];
-      const n = (j.returnTrips||[]).filter(rt =>
-        rt && rt.rtStatus === "complete" && !dismissed.includes(rt.id)).length;
-      return `<b>${n} Return Trip${n===1?"":"s"} complete</b> — merge or invoice.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN RETURN TRIPS", kind: "tab", payload: "Return Trips", primary: true, color: "red" },
-    ],
-  },
-
-  // ── Phase 1/6 — Date confirmed: schedule + PO ─────────────────────────
-  {
-    id: "rough-needs-scheduling-date-confirmed",
-    priority: 80,
-    severity: "urgent",
-    fires: (j) => j.roughStatus === "date_confirmed",
-    summary: (j) => {
-      const start = j.roughNeedsByStart || "";
-      const end = j.roughNeedsByEnd || "";
-      const hard = j.roughNeedsHardDate;
-      const win = hard
-        ? (start ? `Hard date: ${start}` : "Hard date pending")
-        : (start || end) ? `Window: ${start}${end ? " – " + end : ""}` : "Start date confirmed";
-      return `<b>Schedule Rough</b> — ${win}.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "PICK ROUGH START DATE", kind: "openSchedModal", payload: "rough", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "finish-needs-scheduling-date-confirmed",
-    priority: 79,
-    severity: "urgent",
-    fires: (j) => j.finishStatus === "date_confirmed",
-    summary: (j) => {
-      const start = j.finishNeedsByStart || "";
-      const end = j.finishNeedsByEnd || "";
-      const hard = j.finishNeedsHardDate;
-      const win = hard
-        ? (start ? `Hard date: ${start}` : "Hard date pending")
-        : (start || end) ? `Window: ${start}${end ? " – " + end : ""}` : "Start date confirmed";
-      return `<b>Schedule Finish</b> — ${win}.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "PICK FINISH START DATE", kind: "openSchedModal", payload: "finish", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "rough-start-po-needed",
-    priority: 78,
-    severity: "urgent",
-    fires: (j) => j.roughStatus === "date_confirmed",
-    summary: () => `<b>Order Job Start PO</b> — materials needed before rough.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "finish-start-po-needed",
-    priority: 77,
-    severity: "urgent",
-    fires: (j) => j.finishStatus === "date_confirmed",
-    summary: () => `<b>Order Job Start PO</b> — materials needed before finish.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
-    ],
-  },
-
-  // ── Phase 12 — CO schedule RT ────────────────────────────────────────
-  {
-    id: "co-schedule-rt",
-    priority: 76,
-    severity: "urgent",
-    fires: (j) => (j.changeOrders||[]).some(co =>
-      co && co.coStatus === "scheduled" && !co.coStatusDate),
-    summary: (j) => {
-      const n = (j.changeOrders||[]).filter(co =>
-        co && co.coStatus === "scheduled" && !co.coStatusDate).length;
-      return `<b>${n} CO Return Trip${n===1?"":"s"}</b> waiting for a date.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN CHANGE ORDERS", kind: "tab", payload: "Change Orders", primary: true, color: "red" },
-    ],
-  },
-
-  // ── Phase 16 — Ready to invoice (days 0-2 after flag) ────────────────
-  {
-    id: "ready-to-invoice-task",
-    priority: 74,
-    severity: "urgent",
-    fires: (j) => j.readyToInvoice && !j.invoiced && !j.invoiceDismissed
-                  && (!j.readyToInvoiceDate || _daysAgo(j.readyToInvoiceDate) < 3),
-    summary: (j) => {
-      const reason = j.tempPed ? "Temp ped completed"
-                    : (j.finishStatus === "complete" ? "Finish complete" : "Rough complete");
-      return `<b>Ready to invoice</b> — ${reason}.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "MARK INVOICED", kind: "patch", payload: { invoiced: true, invoicedDate: new Date().toLocaleDateString("en-US") }, primary: true, color: "red" },
-      { label: "Dismiss", kind: "patch", payload: { invoiceDismissed: true } },
-    ],
-  },
-
-  // ── Phase 11 — Open punch warnings on complete/invoice jobs ──────────
-  {
-    id: "open-rough-punch-on-complete",
-    priority: 73,
-    severity: "urgent",
-    fires: (j) => {
-      const rs = j.roughStatus || "";
-      if (rs !== "complete" && rs !== "invoice") return false;
-      if (!j.roughPunch) return false;
-      const count = (() => {
-        let n = 0;
-        ["upper","main","basement"].forEach(fl => {
-          const floor = j.roughPunch[fl]; if (!floor) return;
-          n += (floor.general||[]).filter(i => !i.done).length;
-          n += (floor.hotcheck||[]).filter(i => !i.done).length;
-          (floor.rooms||[]).forEach(r => n += (r.items||[]).filter(i => !i.done).length);
-        });
-        return n;
-      })();
-      return count > 0;
-    },
-    summary: (j) => {
-      let n = 0;
-      ["upper","main","basement"].forEach(fl => {
-        const floor = j.roughPunch?.[fl]; if (!floor) return;
-        n += (floor.general||[]).filter(i => !i.done).length;
-        n += (floor.hotcheck||[]).filter(i => !i.done).length;
-        (floor.rooms||[]).forEach(r => n += (r.items||[]).filter(i => !i.done).length);
-      });
-      return `<b>${n} open rough punch item${n===1?"":"s"}</b> on complete/invoice job.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN PUNCH", kind: "tab", payload: "Punch", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "open-finish-punch-on-complete",
-    priority: 72,
-    severity: "urgent",
-    fires: (j) => {
-      const fs = j.finishStatus || "";
-      if (fs !== "complete" && fs !== "invoice") return false;
-      if (!j.finishPunch) return false;
-      let n = 0;
-      ["upper","main","basement"].forEach(fl => {
-        const floor = j.finishPunch[fl]; if (!floor) return;
-        n += (floor.general||[]).filter(i => !i.done).length;
-        n += (floor.hotcheck||[]).filter(i => !i.done).length;
-        (floor.rooms||[]).forEach(r => n += (r.items||[]).filter(i => !i.done).length);
-      });
-      return n > 0;
-    },
-    summary: (j) => {
-      let n = 0;
-      ["upper","main","basement"].forEach(fl => {
-        const floor = j.finishPunch?.[fl]; if (!floor) return;
-        n += (floor.general||[]).filter(i => !i.done).length;
-        n += (floor.hotcheck||[]).filter(i => !i.done).length;
-        (floor.rooms||[]).forEach(r => n += (r.items||[]).filter(i => !i.done).length);
-      });
-      return `<b>${n} open finish punch item${n===1?"":"s"}</b> on complete/invoice job.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN PUNCH", kind: "tab", payload: "Punch", primary: true, color: "red" },
-    ],
-  },
-
-  // ── Phase 15 — Schedule Matterport (rough complete OR needs status) ──
-  {
-    id: "schedule-matterport-task",
-    priority: 71,
-    severity: "urgent",
-    fires: (j) => {
-      const rsComplete = j.roughStatus === "complete";
-      const needs = j.matterportStatus === "needs";
-      if (!rsComplete && !needs) return false;
-      if ((j.matterportStatus||"") === "complete") return false;
-      if (j.matterportLinks?.length || j.matterportLink) return false;
-      if (j.matterportDismissed) return false;
-      return true;
-    },
-    summary: (j) => {
-      const status = j.matterportStatus;
-      return status === "scheduled"
-        ? `<b>Matterport scan scheduled</b>${j.matterportStatusDate ? " for " + j.matterportStatusDate : ""}.`
-        : (status === "needs" && j.matterportStatusDate)
-          ? `<b>Schedule Matterport scan</b> — needs by ${j.matterportStatusDate}.`
-          : `<b>Schedule Matterport scan</b> — rough complete.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN PLANS & LINKS", kind: "tab", payload: "Plans & Links", primary: true, color: "red" },
-      { label: "Dismiss", kind: "patch", payload: { matterportDismissed: true } },
-    ],
-  },
-
-  // ── Phase 10 — QC walk milestones (rough 80%, finish 80%) ────────────
-  {
-    id: "qc-walk-rough-80",
-    priority: 68,
-    severity: "urgent",
-    fires: (j) => j.roughQCTaskFired
-                  && !["scheduled","completed","pass","fail"].includes(j.qcStatus),
-    summary: (j) => `Rough at <b>${j.roughStage || "80%+"}</b> — schedule the QC walk.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN QC", kind: "tab", payload: "QC", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "qc-walk-finish-80",
-    priority: 67,
-    severity: "urgent",
-    fires: (j) => {
-      const pct = parseInt(j.finishStage) || 0;
-      return pct >= 80
-        && !["scheduled","completed","pass","fail"].includes(j.qcStatus);
-    },
-    summary: (j) => `Finish at <b>${j.finishStage || "80%+"}</b> — schedule the final QC walk.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN QC", kind: "tab", payload: "QC", primary: true, color: "red" },
-    ],
-  },
-
-  // ── Phase 14 — Schedule Temp Ped (fires immediately on ready) ────────
-  {
-    id: "schedule-temp-ped-task",
-    priority: 66,
-    severity: "urgent",
-    fires: (j) => j.tempPed && j.tempPedStatus === "ready",
-    summary: (j) => `<b>Schedule Temp Ped${j.tempPedNumber ? " #" + j.tempPedNumber : ""}</b> — ready to be scheduled.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
-    ],
-  },
-
-  // ── Phase 17 — Quick Job lifecycle ───────────────────────────────────
-  {
-    id: "quick-job-new",
-    priority: 65,
-    severity: "urgent",
-    fires: (j) => j.quickJob && (j.quickJobStatus || "new") === "new",
-    summary: (j) => `<b>Schedule Quick Job</b>: ${_cleanHtmlGlobal(j.scope || j.name || "Untitled")}.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
-    ],
-  },
-  {
-    id: "quick-job-upcoming-3d",
-    priority: 64,
-    severity: "urgent",
-    fires: (j) => {
-      if (!j.quickJob || j.quickJobStatus !== "scheduled" || !j.quickJobDate) return false;
-      const days = _daysUntil(j.quickJobDate);
-      return days != null && days <= 3;
-    },
-    summary: (j) => {
-      const days = _daysUntil(j.quickJobDate);
-      const label = days <= 0 ? "today/overdue" : `in ${days} day${days===1?"":"s"}`;
-      return `<b>Quick Job ${label}</b>: ${_cleanHtmlGlobal(j.scope || j.name || "Untitled")}.`;
-    },
-    badge: (j) => {
-      const days = _daysUntil(j.quickJobDate);
-      return days != null && days <= 0 ? "TODAY" : null;
-    },
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
-    ],
-  },
-
-  // ── Phase 0 — Pre Job Prep (always Koy's task) ───────────────────────
-  {
-    id: "pre-job-prep-incomplete",
-    priority: 63,
-    severity: "urgent",
-    fires: (j) => {
-      if (j.tempPed) return false;
-      if (j.type === "quote") return false;
-      return !allPrepDone(j);
-    },
-    summary: (j) => {
-      const c = j.prepChecklist || {};
-      const items = PREP_CHECKLIST_ITEMS;
-      const doneCount = items.filter(i => c[i.key]).length;
-      const nextItem = items.find(i => !c[i.key]);
-      return doneCount === 0
-        ? `<b>Pre-job prep not started.</b>`
-        : `<b>Pre-job prep ${doneCount}/${items.length} complete</b>${nextItem ? ` — next: ${nextItem.label}` : ""}.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "red" },
-    ],
-  },
-
-  // ══════════════════════════════════════════════════════════════════════
-  // SOON-TIER FLOW COMPLETIONS
-  // ══════════════════════════════════════════════════════════════════════
-
-  // ── Phase 2/7 — Material deposit ────────────────────────────────────
-  {
-    id: "rough-material-deposit",
-    priority: 42,
-    severity: "needsInput",
-    fires: (j) => j.roughStatus === "scheduled" && !j.roughDepositDismissed,
-    summary: () => `<b>Material Deposit — Rough</b>: collect before start.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "amber" },
-      { label: "Dismiss", kind: "patch", payload: { roughDepositDismissed: true } },
-    ],
-  },
-  {
-    id: "finish-material-deposit",
-    priority: 41,
-    severity: "needsInput",
-    fires: (j) => j.finishStatus === "scheduled" && !j.finishDepositDismissed,
-    summary: () => `<b>Material Deposit — Finish</b>: collect before start.`,
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN JOB INFO", kind: "tab", payload: "Job Info", primary: true, color: "amber" },
-      { label: "Dismiss", kind: "patch", payload: { finishDepositDismissed: true } },
-    ],
-  },
-
-  // ── Phase 12 — CO approved follow-up (crew on site → mark complete) ──
-  {
-    id: "co-approved-followup",
-    priority: 43,
-    severity: "needsInput",
-    fires: (j) => (j.changeOrders||[]).some(co => co && co.coStatus === "approved")
-                  && (j.roughStatus === "inprogress" || j.finishStatus === "inprogress"),
-    summary: (j) => {
-      const n = (j.changeOrders||[]).filter(co => co && co.coStatus === "approved").length;
-      return `<b>${n} approved CO${n===1?"":"s"}</b> — crew on site, mark work complete.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN CHANGE ORDERS", kind: "tab", payload: "Change Orders", primary: true, color: "amber" },
-    ],
-  },
-
-  // ── Phase 17 — Invoice Quick Job ─────────────────────────────────────
-  {
-    id: "invoice-quick-job",
-    priority: 40,
-    severity: "needsInput",
-    fires: (j) => j.quickJob
-                  && (j.quickJobStatus === "complete" || j.quickJobStatus === "invoice")
-                  && j.readyToInvoice && !j.invoiceDismissed,
-    summary: (j) => `<b>Invoice Quick Job</b>: ${_cleanHtmlGlobal(j.name || "Untitled")}.`,
-    badge: () => null,
-    actions: () => [
-      { label: "MARK INVOICED", kind: "patch", payload: { invoiced: true, invoicedDate: new Date().toLocaleDateString("en-US") }, primary: true, color: "amber" },
-    ],
-  },
-
-  // ══════════════════════════════════════════════════════════════════════
-  // INFO-TIER FLOW COMPLETIONS
-  // ══════════════════════════════════════════════════════════════════════
-
-  // ── Phase 12 — CO completed merge/invoice (low urgency until dismissed) ──
-  {
-    id: "co-completed-merge",
-    priority: 26,
-    severity: "info",
-    fires: (j) => {
-      const dismissed = j.coDoneDismissed || [];
-      return (j.changeOrders||[]).some(co =>
-        co && co.coStatus === "completed" && !dismissed.includes(co.id));
-    },
-    summary: (j) => {
-      const dismissed = j.coDoneDismissed || [];
-      const n = (j.changeOrders||[]).filter(co =>
-        co && co.coStatus === "completed" && !dismissed.includes(co.id)).length;
-      return `<b>${n} CO${n===1?"":"s"} complete</b> — merge or invoice.`;
-    },
-    badge: () => null,
-    actions: () => [
-      { label: "OPEN CHANGE ORDERS", kind: "tab", payload: "Change Orders", primary: true, color: "blue" },
-    ],
-  },
-];
-
-// Module-scoped helper for the new rules above. cleanText also exists in the
-// JobActivity closure, but we need a copy at module scope for fires/summary
-// functions that run outside any component. Strips HTML and decodes entities.
-function _cleanHtmlGlobal(s) {
-  return String(s || "")
-    .replace(/<[^>]*>/g, " ")
-    .replace(/&nbsp;/g, " ")
-    .replace(/&amp;/g, "&")
-    .replace(/&lt;/g, "<")
-    .replace(/&gt;/g, ">")
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&[a-z]+;/gi, " ")
-    .replace(/\s+/g, " ")
-    .trim();
-}
-
-// Snooze check — reads job.upNextSnoozed[ruleId] (ISO string of when snooze
-// ends). Returns true if the snooze hasn't expired yet. Safe against missing
-// / corrupt values: a bad date string is treated as "not snoozed" so the
-// panel always errs toward showing the rule.
-function _isSnoozed(job, ruleId) {
-  const s = job && job.upNextSnoozed && job.upNextSnoozed[ruleId];
-  if (!s) return false;
-  const t = new Date(s).getTime();
-  return !isNaN(t) && t > Date.now();
-}
-
-// Pure helper — returns firing, non-snoozed rules sorted by priority desc.
-// Calm rules only count if no non-calm rule fires (fallback display).
-function getUpNextRules(job) {
-  if (!job) return [];
-  const fired = UP_NEXT_RULES.filter(r => {
-    try { return !!r.fires(job); } catch (e) { return false; }
-  });
-  const active  = fired.filter(r => !_isSnoozed(job, r.id));
-  const nonCalm = active.filter(r => r.severity !== "calm");
-  const calm    = active.filter(r => r.severity === "calm");
-  if (nonCalm.length > 0) {
-    return nonCalm.sort((a, b) => b.priority - a.priority);
-  }
-  // No non-calm rule fired — surface the highest-priority calm rule (if any)
-  return calm.sort((a, b) => b.priority - a.priority).slice(0, 1);
-}
-
-// Rules that WOULD fire but are currently snoozed. Used to render the
-// "N snoozed" un-snooze affordance in the expander.
-function getSnoozedUpNextRules(job) {
-  if (!job) return [];
-  return UP_NEXT_RULES.filter(r => {
-    try { return !!r.fires(job) && _isSnoozed(job, r.id); } catch (e) { return false; }
-  }).sort((a, b) => b.priority - a.priority);
-}
-
-// ── UpNextPanel — the rendered card at the top of Job Detail ───────────
-//
-// Manual bypass / snooze:
-//  - Each card has a small × in the top-right.
-//  - Tap × → inline picker replaces the action row: [1 DAY] [1 WEEK] [1 MONTH] [CANCEL].
-//  - Pick a duration → dispatches { kind: "snoozeRule", payload: { ruleId, hours } }.
-//  - Rule disappears until the snooze expires (or until the rule stops firing).
-//  - Snoozed-but-still-firing rules show at the bottom of the expander as a
-//    "N snoozed" group with an "UN-SNOOZE" button on each.
-//  - Snooze state lives on job.upNextSnoozed = { ruleId: ISOstring }, written
-//    via the same u() patch path as everything else. No new collections.
-function UpNextPanel({ job, identity, onAction }) {
-  const rules   = getUpNextRules(job);
-  const snoozed = getSnoozedUpNextRules(job);
-  const [expanded, setExpanded]   = useState(false);
-  // Collapse state for the snoozed-only path (no active rule firing). Default
-  // collapsed so the dismissed/snoozed history doesn't eat half the screen on
-  // mobile. Bug reported 2026-05-23: with no top rule and several dismissed
-  // items, the inline list pushed everything else below the fold. User wanted
-  // to keep the dismissed memory (not CLEAR) but tuck it away. This toggle
-  // gives them that middle state.
-  const [snoozedOpen, setSnoozedOpen] = useState(false);
-  const [snoozeFor, setSnoozeFor] = useState(null); // ruleId currently picking
-  // Master panel collapse — Vasa asked for this 2026-05-24. Even with the
-  // compact snoozed rows and sub-collapses, the panel itself still claimed
-  // too much vertical above the tabs on jobs where Up Next was noisy. The
-  // master toggle hides the entire panel down to a single ~22px header
-  // bar, and the state persists PER JOB in localStorage so a job he's
-  // explicitly collapsed stays collapsed every time he reopens it.
-  //
-  // Default state when nothing is in localStorage yet (UPDATED 2026-05-25):
-  //   - Top rule severity === "urgent" → expanded (don't hide a real fire)
-  //   - Anything else (needsInput / info / calm / no rule) → collapsed
-  //
-  // Earlier the default was "expanded any time there's a top rule," which
-  // meant routine stuff like "schedule rough soon" claimed a full panel
-  // worth of vertical space on every job. The severity-tinted master bar
-  // already signals "there's something in there" via its color; the user
-  // taps to expand if they want to act on it. Urgent-only auto-expand
-  // keeps the safety net for real fires.
-  //
-  // localStorage preference still wins over the default — if a user has
-  // explicitly opened OR closed the panel on this job, that choice
-  // persists across reloads.
-  //
-  // Data safety: pure UI state. localStorage only — no Firestore writes.
-  //
-  // IMPORTANT (2026-05-25 hotfix): this useState MUST live above the
-  // `if (!rules.length && !snoozed.length) return null` early return.
-  // Hooks have to run in the same order on every render — if the panel
-  // returns early on render N (3 hooks) and renders normally on render
-  // N+1 (4 hooks), React throws #310 "Rendered more hooks than during
-  // the previous render" and the whole app crashes. Earlier this hook
-  // sat below the early return; rule sets that flip empty↔non-empty
-  // (e.g. punch items being added/cleared) reliably crashed the app.
-  const jobId      = job?.id || "";
-  const storageKey = jobId ? `he.upNextOpen.${jobId}` : "";
-  // topPeek: same data the post-early-return code uses for `top`, but
-  // computed up here so the initial useState lazy-init has the same
-  // signal it had before the move.
-  const topPeek = rules[0] || null;
-  const [panelOpen, setPanelOpen] = useState(() => {
-    const urgentDefault = topPeek?.severity === "urgent";
-    if (!storageKey) return urgentDefault;
-    try {
-      const v = localStorage.getItem(storageKey);
-      if (v === "0") return false;
-      if (v === "1") return true;
-    } catch (e) { /* localStorage may be blocked — fall through */ }
-    return urgentDefault;
-  });
-  const togglePanel = () => {
-    setPanelOpen(v => {
-      const next = !v;
-      try { if (storageKey) localStorage.setItem(storageKey, next ? "1" : "0"); }
-      catch (e) { /* ignore */ }
-      return next;
-    });
-  };
-
-  if (!rules.length && !snoozed.length) return null;
-  const top  = rules[0] || null;
-  const more = rules.slice(1);
-
-  // Severity → gradient + label color
-  const gradients = {
-    urgent:     "linear-gradient(to bottom, #F6EAEA, #fff)",
-    needsInput: "linear-gradient(to bottom, #F6F1E6, #fff)",
-    info:       "linear-gradient(to bottom, #F4F6F8, #fff)",
-    calm:       "linear-gradient(to bottom, #ECF2EE, #fff)",
-  };
-  const labelColors = {
-    urgent:     "#B23A3A",
-    needsInput: "#5E6670",
-    info:       "#5E6670",
-    calm:       "#3E7D5A",
-  };
-
-  const snoozeChoices = [
-    { label: "1 DAY",   hours: 24 },
-    { label: "1 WEEK",  hours: 24 * 7 },
-    { label: "1 MONTH", hours: 24 * 30 },
-  ];
-  // Dismiss = "indefinite snooze" — uses hours: -1 as sentinel; reducer maps
-  // negative hours to a far-future ISO date so the rule never re-fires unless
-  // explicitly restored from the snoozed-rules expander.
-  const dismissChoice = { label: "DISMISS", hours: -1 };
-
-  const renderCard = (rule, isPrimary) => {
-    const picking = snoozeFor === rule.id;
-    return (
-      <div style={{
-        // Tightened twice — first pass 2026-05-22 (12/14 → 8/9 primary,
-        // 10 → 6 secondary), second pass 2026-05-25 to shrink further
-        // since the panel was still claiming too much room when expanded.
-        // Outer padding is now ~half of original: 6/16/7 primary, 5/16
-        // secondary. Summary fontSize 14 → 13. The cumulative drop is
-        // most visible on routine (non-urgent) rules where the action
-        // row is short.
-        padding: isPrimary ? "6px 16px 7px" : "5px 16px",
-        background: isPrimary ? (gradients[rule.severity] || gradients.info) : "#F7F8FA",
-        borderTop: isPrimary ? "none" : `1px solid ${C.border}`,
-        position: "relative",
-      }}>
-        {/* Snooze (×) — top-right of each card */}
-        <button
-          onClick={(e) => { e.stopPropagation(); setSnoozeFor(picking ? null : rule.id); }}
-          title="Snooze this item"
-          aria-label="Snooze this item"
-          style={{
-            position: "absolute", top: 4, right: 8,
-            width: 20, height: 20, padding: 0,
-            border: "none", background: "transparent",
-            color: C.dim, fontSize: 17, lineHeight: 1,
-            cursor: "pointer", fontFamily: "inherit",
-            borderRadius: 4,
-          }}>
-          ×
-        </button>
-
-        <div style={{
-          fontSize: 10, fontWeight: 800,
-          color: labelColors[rule.severity] || C.dim,
-          letterSpacing: "0.1em", textTransform: "uppercase",
-          marginBottom: 3, display: "flex", alignItems: "center", gap: 6,
-          paddingRight: 22,
-        }}>
-          {isPrimary ? "Up Next" : "Also"}
-          {rule.badge && rule.badge(job) && (
-            <span style={{
-              fontSize: 9, padding: "1px 6px", letterSpacing: "0.06em",
-              color: rule.severity === "urgent" ? "#fff" : "#6E5212",
-              background: rule.severity === "urgent" ? "#B23A3A" : "rgba(217,119,6,0.12)",
-              border: `1px solid ${rule.severity === "urgent" ? "#9A3030" : "rgba(217,119,6,0.35)"}`,
-              borderRadius: 99, fontWeight: 800,
-            }}>{rule.badge(job)}</span>
-          )}
-        </div>
-        <div
-          style={{ fontSize: 13, fontWeight: 600, color: C.text, lineHeight: 1.3, marginBottom: 6, paddingRight: 22 }}
-          dangerouslySetInnerHTML={{ __html: rule.summary(job) }}/>
-
-        {/* Action row OR snooze picker row */}
-        {picking ? (
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap", alignItems: "center" }}>
-            <span style={{
-              fontSize: 10, fontWeight: 700, color: C.dim,
-              letterSpacing: "0.08em", textTransform: "uppercase", marginRight: 2,
-            }}>Snooze</span>
-            {snoozeChoices.map((c, i) => (
-              <button
-                key={i}
-                onClick={(e) => {
-                  e.stopPropagation();
-                  onAction && onAction({ kind: "snoozeRule", payload: { ruleId: rule.id, hours: c.hours } }, rule.id);
-                  setSnoozeFor(null);
-                }}
-                style={{
-                  padding: "6px 11px", borderRadius: 8, fontSize: 11, fontWeight: 700,
-                  cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.04em",
-                  border: `1px solid ${C.border}`, background: "#fff", color: C.text,
-                  textTransform: "uppercase",
-                }}>
-                {c.label}
-              </button>
-            ))}
-            {/* Visual separator before the destructive Dismiss action */}
-            <span style={{ width: 1, height: 18, background: C.border, margin: "0 2px" }} aria-hidden="true"/>
-            <button
-              onClick={(e) => {
-                e.stopPropagation();
-                if (!window.confirm("Dismiss this Up Next item indefinitely? It won't show again unless you restore it from the snoozed list.")) return;
-                onAction && onAction({ kind: "snoozeRule", payload: { ruleId: rule.id, hours: dismissChoice.hours } }, rule.id);
-                setSnoozeFor(null);
-              }}
-              title="Hide this item indefinitely. You can restore it later from the snoozed list."
-              style={{
-                padding: "6px 11px", borderRadius: 8, fontSize: 11, fontWeight: 700,
-                cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.04em",
-                border: `1px solid #EAD2D2`, background: "#F6EAEA", color: "#9A3030",
-                textTransform: "uppercase",
-              }}>
-              {dismissChoice.label}
-            </button>
-            <button
-              onClick={(e) => { e.stopPropagation(); setSnoozeFor(null); }}
-              style={{
-                padding: "6px 9px", borderRadius: 8, fontSize: 11, fontWeight: 700,
-                cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.04em",
-                border: "none", background: "transparent", color: C.dim,
-                textTransform: "uppercase",
-              }}>
-              CANCEL
-            </button>
-          </div>
-        ) : (
-          <div style={{ display: "flex", gap: 6, flexWrap: "wrap" }}>
-            {(rule.actions(job) || []).map((a, i) => {
-              const bg = a.primary
-                ? (a.color === "red"   ? "#B23A3A"
-                  : a.color === "amber" ? "#d97706"
-                  : a.color === "green" ? "#3E7D5A"
-                  : a.color === "orange"? "#B06A2C"
-                  : "#3B5BA5")
-                : "#fff";
-              const fg = a.primary ? "#fff" : C.text;
-              const bd = a.primary ? "none" : `1px solid ${C.border}`;
-              return (
-                <button
-                  key={i}
-                  onClick={(e) => { e.stopPropagation(); onAction && onAction(a, rule.id); }}
-                  style={{
-                    padding: "6px 12px", borderRadius: 7, fontSize: 11, fontWeight: 700,
-                    cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.04em",
-                    border: bd, background: bg, color: fg, textTransform: "uppercase",
-                  }}>
-                  {a.label}
-                </button>
-              );
-            })}
-          </div>
-        )}
-      </div>
-    );
-  };
-
-  // Snoozed-but-still-firing rules — ultra-compact one-line strip.
-  // Detects the 9999-12-31 sentinel set by "DISMISS" and shows that row as
-  // dismissed (no expiry date, "RESTORE" button) instead of time-based snooze.
-  // Tightened 2026-05-23 from two-line (label above, summary below) to a
-  // single line: [LABEL] [summary truncated] [RESTORE]. Cuts ~half the
-  // vertical space so 5 dismissed rows no longer eat the upper half of a
-  // mobile screen when expanded.
-  const renderSnoozedRow = (rule) => {
-    const until = job && job.upNextSnoozed && job.upNextSnoozed[rule.id];
-    const d = until ? new Date(until) : null;
-    const isDismissed = d && !isNaN(d) && d.getUTCFullYear() >= 9999;
-    const untilLabel = !isDismissed && d && !isNaN(d) ? d.toLocaleDateString(undefined, { month: "short", day: "numeric" }) : "";
-    return (
-      <div key={rule.id} style={{
-        padding: "4px 22px",
-        background: isDismissed ? "#F6EAEA" : "#F7F8FA",
-        borderTop: `1px solid ${C.border}`,
-        display: "flex", alignItems: "center", gap: 8,
-      }}>
-        <span style={{
-          fontSize: 9, fontWeight: 800,
-          color: isDismissed ? "#9A3030" : C.dim,
-          letterSpacing: "0.08em", textTransform: "uppercase",
-          flexShrink: 0,
-        }}>
-          {isDismissed ? "Dismissed" : `Snoozed${untilLabel ? ` ${untilLabel}` : ""}`}
-        </span>
-        <span
-          style={{ flex: 1, minWidth: 0,
-            fontSize: 12, color: C.dim, lineHeight: 1.3,
-            overflow: "hidden", textOverflow: "ellipsis", whiteSpace: "nowrap" }}
-          dangerouslySetInnerHTML={{ __html: rule.summary(job) }}/>
-        <button
-          onClick={(e) => {
-            e.stopPropagation();
-            onAction && onAction({ kind: "unsnoozeRule", payload: { ruleId: rule.id } }, rule.id);
-          }}
-          style={{
-            padding: "3px 8px", borderRadius: 5, fontSize: 9, fontWeight: 700,
-            cursor: "pointer", fontFamily: "inherit", letterSpacing: "0.06em",
-            border: `1px solid ${C.border}`, background: "#fff", color: C.text,
-            textTransform: "uppercase", flexShrink: 0,
-          }}>
-          {isDismissed ? "Restore" : "Un-snooze"}
-        </button>
-      </div>
-    );
-  };
-
-  // Master-header tint when collapsed — keeps the urgent signal visible
-  // even when the user has tucked the panel away. Mirrors the top card's
-  // severity gradient so red stays red, amber stays amber, etc.
-  const collapsedTint = top
-    ? (top.severity === "urgent"     ? "#F6EAEA"
-       : top.severity === "needsInput"? "#F6F1E6"
-       : top.severity === "calm"     ? "#ECF2EE"
-       : "#F7F8FA")
-    : "#F7F8FA";
-  const collapsedAccent = top
-    ? (top.severity === "urgent"     ? "#B23A3A"
-       : top.severity === "needsInput"? "#6E5212"
-       : top.severity === "calm"     ? "#3E7D5A"
-       : C.dim)
-    : C.dim;
-
-  return (
-    <div style={{ borderBottom: `1px solid ${C.border}`, background: "#fff" }}>
-      {/* Master collapse header — always present, click to toggle the entire
-          panel. When collapsed, shows a count summary; when there's an urgent
-          rule firing under the collapse, the header is tinted with that
-          rule's severity color so the user doesn't lose the signal. */}
-      <div
-        onClick={togglePanel}
-        style={{
-          padding: "5px 22px",
-          background: panelOpen ? "#F7F8FA" : collapsedTint,
-          fontSize: 10, fontWeight: 800,
-          color: panelOpen ? C.dim : collapsedAccent,
-          letterSpacing: "0.08em", textTransform: "uppercase",
-          cursor: "pointer", userSelect: "none",
-          display: "flex", alignItems: "center", gap: 6,
-          borderBottom: panelOpen ? `1px solid ${C.border}` : "none",
-        }}>
-        <span style={{ fontSize: 12 }}>{panelOpen ? "▾" : "▸"}</span>
-        Up Next
-        {!panelOpen && rules.length > 0 && (
-          <span style={{
-            fontSize: 9, fontWeight: 800, color: collapsedAccent,
-            background: "rgba(255,255,255,0.7)",
-            border: `1px solid ${collapsedAccent}55`,
-            borderRadius: 99, padding: "1px 7px", marginLeft: 2,
-            letterSpacing: "0.04em",
-          }}>
-            {rules.length} firing
-          </span>
-        )}
-        {!panelOpen && snoozed.length > 0 && (
-          <span style={{
-            fontSize: 9, fontWeight: 700, color: C.dim,
-            marginLeft: 2, letterSpacing: "0.04em",
-          }}>
-            · {snoozed.length} snoozed
-          </span>
-        )}
-      </div>
-
-      {panelOpen && (<>
-      {top && renderCard(top, true)}
-      {/* Only snoozed rules exist (nothing fires actively) — collapsed by
-          default behind a one-line toggle so the dismissed history doesn't
-          dominate the screen. Tap to expand the full list with RESTORE
-          buttons. (Bug fix 2026-05-23.) */}
-      {!top && snoozed.length > 0 && (
-        <>
-          <div
-            onClick={() => setSnoozedOpen(v => !v)}
-            style={{
-              padding: "8px 22px",
-              background: "#F7F8FA",
-              fontSize: 10, fontWeight: 800, color: C.dim,
-              letterSpacing: "0.1em", textTransform: "uppercase",
-              cursor: "pointer", userSelect: "none",
-              display: "flex", alignItems: "center", gap: 6,
-            }}>
-            <span style={{ fontSize: 12 }}>{snoozedOpen ? "▾" : "▸"}</span>
-            Snoozed · {snoozed.length} item{snoozed.length === 1 ? "" : "s"}
-          </div>
-          {snoozedOpen && snoozed.map(renderSnoozedRow)}
-        </>
-      )}
-      {top && (more.length > 0 || snoozed.length > 0) && (
-        <>
-          <div
-            onClick={() => setExpanded(v => !v)}
-            style={{
-              padding: "5px 22px", background: "#F7F8FA",
-              borderTop: `1px solid ${C.border}`,
-              fontSize: 10, fontWeight: 700, color: C.dim,
-              letterSpacing: "0.06em", textTransform: "uppercase",
-              cursor: "pointer", userSelect: "none",
-              display: "flex", alignItems: "center", gap: 6,
-            }}>
-            <span style={{ fontSize: 12 }}>{expanded ? "▾" : "▸"}</span>
-            {expanded
-              ? `Hide details`
-              : `${more.length > 0 ? `${more.length} more item${more.length===1?"":"s"}` : ""}${more.length > 0 && snoozed.length > 0 ? " · " : ""}${snoozed.length > 0 ? `${snoozed.length} snoozed` : ""}`}
-          </div>
-          {expanded && more.map(r => <div key={r.id}>{renderCard(r, false)}</div>)}
-          {/* Snoozed gets its OWN sub-collapse inside the expander so the
-              user isn't hit with the full dismissed history just because
-              they wanted to see one "Also" item. Default collapsed. */}
-          {expanded && snoozed.length > 0 && (
-            <>
-              <div
-                onClick={() => setSnoozedOpen(v => !v)}
-                style={{
-                  padding: "6px 22px",
-                  background: "#F7F8FA",
-                  borderTop: `1px solid ${C.border}`,
-                  fontSize: 10, fontWeight: 800, color: C.dim,
-                  letterSpacing: "0.08em", textTransform: "uppercase",
-                  cursor: "pointer", userSelect: "none",
-                  display: "flex", alignItems: "center", gap: 6,
-                }}>
-                <span style={{ fontSize: 12 }}>{snoozedOpen ? "▾" : "▸"}</span>
-                Snoozed · {snoozed.length} item{snoozed.length === 1 ? "" : "s"}
-              </div>
-              {snoozedOpen && snoozed.map(renderSnoozedRow)}
-            </>
-          )}
-        </>
-      )}
-      </>)}
-    </div>
-  );
-}
-
-function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, initialTab, users=[], identity=null, manualTasks=[], onSaveManualTask, onDeleteManualTask, jobs=[]}) {
+function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canConvertQuote=false, onConvertQuote, onMoveQuoteBackToUpcoming, initialTab, users=[], identity=null, jobs=[]}) {
 
   const [job, setJob] = useState(()=>normalizeJob(rawJob));
 
@@ -24866,114 +22953,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const [tab, setTab] = useState(()=>initialTab && TABS.includes(initialTab) ? initialTab : "Job Info");
 
   // ── Up Next action dispatcher ───────────────────────────────────────
-  // The UpNextPanel emits abstract actions ({kind, payload}). This routes
-  // each kind to the right existing handler on this component. New action
-  // kinds: add a case here; the panel itself never needs to know how to
-  // mutate state.
-  const handleUpNextAction = (action /* {kind, payload, label, ...} */, ruleId) => {
-    if (!action || !action.kind) return;
-    switch (action.kind) {
-      case "tab":
-        // Switch to a named tab. Safe to no-op if the tab isn't in tabsForJob().
-        if (action.payload) setTab(action.payload);
-        break;
-      case "patch":
-        // Direct mutation — same `u` path everything else uses, so onUpdate
-        // saves to Firestore via the parent's normal flow.
-        if (action.payload && typeof action.payload === "object") u(action.payload);
-        break;
-      case "openSchedModal":
-        // Opens the start+end+hard scheduling modal for "rough" or "finish".
-        if (action.payload === "rough" || action.payload === "finish") {
-          openNeedsSchedModal(action.payload);
-        }
-        break;
-      case "focusStatus":
-        // Jump to Job Info and put the StatusUpdate textarea in focus so the
-        // foreman can dictate / type immediately. Slight delay so the tab
-        // mounts before we hunt for the textarea.
-        setTab("Job Info");
-        setTimeout(() => {
-          const el = document.querySelector('textarea[data-status-update]');
-          if (el && typeof el.focus === "function") {
-            el.focus();
-            try { el.scrollIntoView({ behavior:"smooth", block:"center" }); } catch (_) {}
-          }
-        }, 60);
-        break;
-      case "convertFailedToRT": {
-        // Lifts the existing rough-4-way "convert failed items to RT" flow
-        // out of the inspection section. Keeps the same shape: carries every
-        // item (done + open) and any inspection reports onto a fresh RT.
-        const phase = action.payload === "finish" ? "finish" : "rough";
-        const allItems = phase === "finish"
-          ? (jobRef.current.finalInspectionItems || [])
-          : (jobRef.current.roughInspectionItems || []);
-        const reports = phase === "finish"
-          ? (jobRef.current.finalInspectionReports || [])
-          : (jobRef.current.roughInspectionReports || []);
-        if (!allItems.length) return;
-        const inspectionIdKey = phase === "finish" ? "fromFinalInspectionId" : "fromRoughInspectionId";
-        const newRT = {
-          id: uid(),
-          scope: `${phase === "finish" ? "Final" : "Rough 4-way"} fail`,
-          rtStatus: "needs",
-          rtStatusDate: "",
-          rtScheduled: false,
-          notes: `Converted from ${phase === "finish" ? "Final" : "Rough 4-way"} failed inspection.`,
-          punch: allItems.map(it => ({
-            id: uid(),
-            text: it.text || "",
-            done: !!it.done,
-            [inspectionIdKey]: it.id || null,
-          })),
-          photos: reports,
-          createdAt: new Date().toISOString(),
-        };
-        u({ returnTrips: [newRT, ...(jobRef.current.returnTrips || [])] });
-        setTab("Return Trips");
-        break;
-      }
-      case "snoozeRule": {
-        // Manual bypass — hide this rule for this job until `hours` from now.
-        // Writes to job.upNextSnoozed = { [ruleId]: ISOstring }. Data safety:
-        // additive field, no migration needed. getUpNextRules() filters by
-        // this map; expired snoozes are ignored, so stale entries never
-        // resurface as ghost UI.
-        //
-        // Special case: hours < 0 means "dismiss indefinitely" — store a
-        // far-future ISO date (year 9999) which the existing _isSnoozed
-        // check will treat as permanently snoozed. The snoozed-rules UI
-        // detects the 9999 sentinel and shows "Dismissed" instead of a
-        // snooze-until date. Reusing the same field keeps the data model
-        // simple and lets the existing un-snooze flow handle restoration.
-        const p = action.payload || {};
-        if (!p.ruleId) break;
-        const isDismiss = typeof p.hours === "number" && p.hours < 0;
-        const hours = isDismiss
-          ? 0  // unused — we set a sentinel ISO directly below
-          : ((typeof p.hours === "number" && isFinite(p.hours) && p.hours > 0) ? p.hours : 24);
-        const until = isDismiss
-          ? "9999-12-31T23:59:59.000Z"
-          : new Date(Date.now() + hours * 3600 * 1000).toISOString();
-        const cur = (jobRef.current && jobRef.current.upNextSnoozed) || {};
-        u({ upNextSnoozed: { ...cur, [p.ruleId]: until } });
-        break;
-      }
-      case "unsnoozeRule": {
-        // Remove the snooze entry so the rule fires again.
-        const p = action.payload || {};
-        if (!p.ruleId) break;
-        const cur = { ...((jobRef.current && jobRef.current.upNextSnoozed) || {}) };
-        if (!(p.ruleId in cur)) break;
-        delete cur[p.ruleId];
-        u({ upNextSnoozed: cur });
-        break;
-      }
-      default:
-        console.warn("Unknown Up Next action:", action, "from rule:", ruleId);
-    }
-  };
 
   const [newLightingFloor, setNewLightingFloor] = useState("");
   const [emailData, setEmailData] = useState(null);
@@ -26054,9 +24033,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   scope="rough"
                   phaseColor={C.rough}
                   onPatch={(patch)=>u(patch)}
-                  manualTasks={manualTasks}
-                  onSaveManualTask={onSaveManualTask}
-                  onDeleteManualTask={onDeleteManualTask}
                   setTab={setTab}
                   onViewPhoto={(url)=>window.open(url,'_blank')}
                 />
@@ -26361,9 +24337,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   scope="finish"
                   phaseColor={C.finish}
                   onPatch={(patch)=>u(patch)}
-                  manualTasks={manualTasks}
-                  onSaveManualTask={onSaveManualTask}
-                  onDeleteManualTask={onDeleteManualTask}
                   setTab={setTab}
                   onViewPhoto={(url)=>window.open(url,'_blank')}
                 />
@@ -27481,9 +25454,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               <Section label="Open Items" color="#3B5BA5" defaultOpen={true}>
                 <JobOpenItems
                   job={job}
-                  manualTasks={manualTasks}
-                  onSaveManualTask={onSaveManualTask}
-                  onDeleteManualTask={onDeleteManualTask}
                   foremenList={foremenList}
                   jobs={jobs}
                   onUpdateJob={u}
@@ -30617,76 +28587,6 @@ function TaskCard({ task, jobs, onSelectJob, onDismiss, onSetDueDate, onManualCl
   );
 }
 
-function AddTaskForm({ defaultForeman, onAdd, onCancel, foremenList, jobs, defaultJobId, defaultItemType, lockJob }) {
-  const [t, setT] = useState({
-    title:"",
-    foreman:defaultForeman||"Koy",
-    notes:"",
-    dueDate:"",
-    jobId: defaultJobId || "",
-    itemType: defaultItemType || "",
-    requestedBy: "",
-  });
-  // Sort jobs by name for the picker; include a blank option for "No job"
-  const sortedJobs = Array.isArray(jobs)
-    ? [...jobs].filter(j=>j && !j.tempPed).sort((a,b)=>(a.name||"").localeCompare(b.name||""))
-    : null;
-  return (
-    <div style={{padding:"14px 16px",background:"var(--surface)",border:"1px solid var(--border)",borderRadius:12,marginBottom:16}}>
-      <div style={{fontSize:11,fontWeight:700,color:"var(--dim)",letterSpacing:"0.08em",marginBottom:12}}>NEW TASK</div>
-      {/* Job picker (first, per Koy's preference). Only renders if jobs passed in. */}
-      {sortedJobs && (
-        <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
-          <div style={{flex:2,minWidth:180}}>
-            <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Job {lockJob?"":"(optional)"}</div>
-            <select value={t.jobId} onChange={e=>setT(x=>({...x,jobId:e.target.value}))} disabled={!!lockJob}
-              style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:7,color:"var(--text)",padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:lockJob?"default":"pointer",width:"100%",opacity:lockJob?0.85:1}}>
-              <option value="">— No job / general —</option>
-              {sortedJobs.map(j=><option key={j.id} value={j.id}>{j.name||"Untitled Job"}</option>)}
-            </select>
-          </div>
-          <div style={{flex:1,minWidth:130}}>
-            <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Type</div>
-            <select value={t.itemType} onChange={e=>setT(x=>({...x,itemType:e.target.value}))}
-              style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:7,color:"var(--text)",padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
-              <option value="">— pick type —</option>
-              {ITEM_TYPES.map(it=><option key={it} value={it}>{it}</option>)}
-            </select>
-          </div>
-          <div style={{flex:1,minWidth:130}}>
-            <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Requested By</div>
-            <Inp value={t.requestedBy} onChange={e=>setT(x=>({...x,requestedBy:e.target.value}))} placeholder="GC / contractor"/>
-          </div>
-        </div>
-      )}
-      <div style={{display:"flex",gap:10,flexWrap:"wrap",marginBottom:10}}>
-        <div style={{flex:3,minWidth:180}}>
-          <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Task</div>
-          <Inp value={t.title} onChange={e=>setT(x=>({...x,title:e.target.value}))} placeholder="What needs to be done?"/>
-        </div>
-        <div style={{flex:1,minWidth:110}}>
-          <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Assign To</div>
-          <select value={t.foreman} onChange={e=>setT(x=>({...x,foreman:e.target.value}))}
-            style={{background:"var(--surface)",border:"1px solid var(--border)",borderRadius:7,color:"var(--text)",padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none",cursor:"pointer",width:"100%"}}>
-            {(foremenList||getForemenList()).map(f=><option key={f} value={f}>{f}</option>)}
-          </select>
-        </div>
-        <div style={{flex:1,minWidth:110}}>
-          <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Due Date</div>
-          <DateInp value={t.dueDate} onChange={e=>setT(x=>({...x,dueDate:e.target.value}))}/>
-        </div>
-      </div>
-      <div style={{marginBottom:12}}>
-        <div style={{fontSize:10,color:"var(--dim)",marginBottom:3}}>Notes</div>
-        <TA value={t.notes} onChange={e=>setT(x=>({...x,notes:e.target.value}))} placeholder="Additional context..." rows={2}/>
-      </div>
-      <div style={{display:"flex",gap:8}}>
-        <button onClick={()=>{if(t.title.trim())onAdd(t);}} style={{background:"var(--accent)",border:"none",borderRadius:7,color:"#000",fontWeight:800,padding:"8px 20px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Add Task</button>
-        <button onClick={onCancel} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",padding:"8px 14px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>Cancel</button>
-      </div>
-    </div>
-  );
-}
 
 // ── JobOpenItems ─────────────────────────────────────────────────────
 // Per-job "Open Items" panel rendered inside the Open Items tab on JobDetail.
@@ -30930,8 +28830,12 @@ function buildJobActivity(job) {
     if (n?.createdAt) addEvent(n.createdAt, n.addedBy||"", `Note added${n.scope?` (${n.scope})`:""}`, "Job Info", "note", cleanText(n.text).slice(0,80));
   });
   // Daily updates
-  (job.dailyUpdates||[]).forEach(d => {
-    if (d?.date) addEvent(d.date, d.author||"", `Daily update — ${d.author||"someone"}`, "Job Info", "daily", cleanText(d.notes).slice(0,80));
+  // Live daily updates ride job.roughUpdates/finishUpdates ({date,text,addedBy,
+  // createdAt}) — the old job.dailyUpdates field was a dead pre-refactor name,
+  // which silently hid every update from this timeline (fixed 2026-07-10).
+  [...(job.roughUpdates||[]), ...(job.finishUpdates||[])].forEach(d => {
+    const t = d?.createdAt || d?.date;
+    if (t) addEvent(t, d.addedBy||"", `Daily update — ${d.addedBy||"someone"}`, "Job Info", "daily", cleanText(d.text).slice(0,80));
   });
   // Sort desc
   tl.sort((a,b) => b.at - a.at);
@@ -31022,7 +28926,7 @@ function buildJobPhotos(job) {
   });
 
   // Daily updates photos
-  (job.dailyUpdates||[]).forEach(d => {
+  [...(job.roughUpdates||[]), ...(job.finishUpdates||[])].forEach(d => {
     (d.photos||[]).forEach(p => addPhoto(p, `Daily update · ${d.date||"unknown"}`, "Job Info"));
   });
 
@@ -31384,20 +29288,15 @@ function JobPhotos({ job, onSetTab }) {
   );
 }
 
-// Why reference, don't copy: a Visit/Return Trip stays in ONE place
-// (job.returnTrips). This tab just *views* them alongside manualTasks.
-// No sync loop, no ghost writes. Creating a Visit here writes a new RT.
-function JobOpenItems({ job, manualTasks, onSaveManualTask, onDeleteManualTask, foremenList, jobs, onUpdateJob, onGoToReturnTrips, setTab }) {
-  const [showAdd, setShowAdd] = useState(false);
-
-  // manualTasks filtered to this job (Purchase/Call/Other + legacy Visits
-  // that were created before V2.1 routed Visits to returnTrips — we still
-  // show them in the Visit group so Koy doesn't lose anything).
-  const items = (manualTasks||[]).filter(t => t && t.jobId === job.id);
-
-  // Return trips adapted into the same display shape as manualTasks so the
-  // existing render code can handle them. We tag `__rt:true` to branch the
-  // "done" / "delete" actions — RT lifecycle uses signedOff, not cleared.
+// Open Items (2026-07-10 ops revisit): the manual-task layer was retired —
+// the manualTasks collection sat empty in prod and the Needs board is the
+// one manual to-do surface now. This tab keeps its two live jobs: the
+// cross-phase Job Notes front door (the ONLY mount of scope="all" notes)
+// and a read-only Return Trips summary (job.returnTrips stays the single
+// source of truth — sign-off here uses the same write path as the RT tab).
+function JobOpenItems({ job, foremenList, jobs, onUpdateJob, onGoToReturnTrips, setTab }) {
+  // Return trips adapted into a display shape. We tag `__rt:true` to branch
+  // the "done" actions — RT lifecycle uses signedOff, not cleared.
   const rtAsItems = (job.returnTrips||[]).map((rt, i) => {
     const isDone = !!rt.signedOff;
     const whenLabel = rt.scheduledDate || rt.needsScheduleDate || rt.date || "";
@@ -31420,55 +29319,6 @@ function JobOpenItems({ job, manualTasks, onSaveManualTask, onDeleteManualTask, 
     };
   });
 
-  const grouped = { Visit:[], Purchase:[], Call:[], Other:[], __nocat:[] };
-  items.forEach(t => {
-    const k = (t.itemType && grouped[t.itemType]) ? t.itemType : "__nocat";
-    grouped[k].push(t);
-  });
-  // Prepend RTs so scheduled visits show at the top of the Visit section.
-  grouped.Visit = [...rtAsItems, ...grouped.Visit];
-
-  const handleAdd = (t) => {
-    // Visits become Return Trips (one source of truth per spec). Everything
-    // else stays in the manualTasks collection.
-    if (t.itemType === "Visit") {
-      if (!onUpdateJob) return;
-      const newRT = {
-        id: uid(),
-        date: "",
-        scope: t.title,
-        material: t.notes || "",
-        punch: [],
-        photos: [],
-        assignedTo: t.foreman || "",
-        signedOff: false, signedOffBy: "", signedOffDate: "",
-        needsSchedule: !t.dueDate,
-        needsScheduleDate: "",
-        rtScheduled: !!t.dueDate,
-        rtStatus: t.dueDate ? "scheduled" : "needs",
-        scheduledDate: t.dueDate || "",
-        // Audit fields — non-breaking additions
-        createdAt: new Date().toISOString(),
-        requestedBy: t.requestedBy || "",
-      };
-      onUpdateJob({ returnTrips: [ ...(job.returnTrips||[]), newRT ] });
-      setShowAdd(false);
-      return;
-    }
-    const itemColor = (t.itemType && ITEM_TYPE_COLORS[t.itemType]) || "#6E7682";
-    const task = {
-      id: uid(), title: t.title, foreman: t.foreman,
-      notes: t.notes, dueDate: t.dueDate||"", type:"manual", category:"manual",
-      color: itemColor, cleared:false, createdAt: new Date().toISOString(),
-      jobId: job.id,
-      itemType: t.itemType||"",
-      requestedBy: t.requestedBy||"",
-      status: "open",
-    };
-    onSaveManualTask && onSaveManualTask(task);
-    setShowAdd(false);
-  };
-
   // Mark RT signed off. Uses onUpdateJob so the full job doc is patched
   // atomically — same write path used by the Return Trips tab.
   const markRTDone = (rtId) => {
@@ -31486,39 +29336,17 @@ function JobOpenItems({ job, manualTasks, onSaveManualTask, onDeleteManualTask, 
     onUpdateJob({ returnTrips: next });
   };
 
-  const markDone = (t) => {
-    if (t.__rt) return markRTDone(t.id);
-    const updated = { ...t, cleared: true, status: "done", completedAt: new Date().toISOString() };
-    onSaveManualTask && onSaveManualTask(updated);
-  };
+  const markDone = (t) => markRTDone(t.id);
+  const reopen   = (t) => reopenRT(t.id);
 
-  const reopen = (t) => {
-    if (t.__rt) return reopenRT(t.id);
-    const updated = { ...t, cleared: false, status: "open", completedAt: "" };
-    onSaveManualTask && onSaveManualTask(updated);
-  };
-
-  const removeItem = (itm) => {
-    if (itm && itm.__rt) {
-      // Don't delete an RT from here — too destructive (linked punch items,
-      // photos). Send the user to the Return Trips tab to handle it.
-      if (onGoToReturnTrips) onGoToReturnTrips();
-      return;
-    }
-    if (window.confirm("Permanently remove this item? (This won't affect anything else in the app.)")) {
-      onDeleteManualTask && onDeleteManualTask(itm.id);
-    }
-  };
-
-  const allItems = [...items, ...rtAsItems];
-  const openCount = allItems.filter(t => t.status !== "done" && !t.cleared).length;
+  const openCount = rtAsItems.filter(t => t.status !== "done" && !t.cleared).length;
 
   return (
     <div>
-      {/* J9 — Job Notes sit ON TOP of Open Items. This is the capture front door:
-          free-form scratch lines here, then Triage to promote to RT/CO/Punch/Call.
-          The existing Open Items list below still shows ALL manualTasks + RTs
-          for this job (including ones spawned from notes). */}
+      {/* J9 — Job Notes sit ON TOP of Open Items. This is the capture front
+          door: free-form scratch lines here, then Triage to promote to
+          RT/CO/Punch/PO/Question. (The manual-item list that used to sit
+          below was retired 2026-07-10 — manualTasks collection was empty.) */}
       <div style={{marginBottom:14}}>
         <div style={{fontSize:10,fontWeight:700,color:"var(--dim)",
           letterSpacing:"0.08em",marginBottom:6}}>JOB NOTES</div>
@@ -31527,42 +29355,23 @@ function JobOpenItems({ job, manualTasks, onSaveManualTask, onDeleteManualTask, 
           scope="all"
           phaseColor={C.blue || '#3B5BA5'}
           onPatch={(patch)=>onUpdateJob && onUpdateJob(patch)}
-          manualTasks={manualTasks}
-          onSaveManualTask={onSaveManualTask}
-          onDeleteManualTask={onDeleteManualTask}
           setTab={setTab}
           onViewPhoto={(url)=>window.open(url,'_blank')}
         />
       </div>
       <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:10}}>
         <div style={{fontSize:11,fontWeight:700,color:"var(--dim)",letterSpacing:"0.06em"}}>
-          {openCount} OPEN · {items.length} TOTAL
+          RETURN TRIPS · {openCount} OPEN · {rtAsItems.length} TOTAL
         </div>
-        <button onClick={()=>setShowAdd(v=>!v)}
-          style={{background:"var(--accent)",border:"none",borderRadius:7,color:"#000",fontWeight:700,padding:"6px 14px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
-          {showAdd ? "Cancel" : "+ Add Item"}
-        </button>
       </div>
-      {showAdd && (
-        <AddTaskForm
-          defaultForeman={job.foreman||"Koy"}
-          onAdd={handleAdd}
-          onCancel={()=>setShowAdd(false)}
-          foremenList={foremenList}
-          jobs={jobs}
-          defaultJobId={job.id}
-          lockJob={true}
-        />
-      )}
-      {allItems.length === 0 && !showAdd && (
+      {rtAsItems.length === 0 && (
         <div style={{textAlign:"center",padding:"24px 0",color:"var(--muted)",fontSize:12,fontStyle:"italic"}}>
-          No open items for this job. Tap "+ Add Item" to capture one.
+          No return trips on this job yet — add one from the Return Trips tab.
         </div>
       )}
-      {ITEM_TYPES.concat(["__nocat"]).map(key => {
-        const list = grouped[key];
+      {[["Visit", rtAsItems]].map(([key, list]) => {
         if (!list || list.length === 0) return null;
-        const label = key === "__nocat" ? "Other / Untyped" : key;
+        const label = key;
         const color = ITEM_TYPE_COLORS[key] || "#6E7682";
         return (
           <div key={key} style={{marginBottom:14}}>
@@ -31618,12 +29427,6 @@ function JobOpenItems({ job, manualTasks, onSaveManualTask, onDeleteManualTask, 
                       <button onClick={()=>reopen(t)}
                         style={{background:"none",border:"1px solid var(--border)",borderRadius:6,color:"var(--dim)",padding:"4px 10px",fontSize:10,cursor:"pointer",fontFamily:"inherit"}}>
                         Reopen
-                      </button>
-                    )}
-                    {!isRT && (
-                      <button onClick={()=>removeItem(t)}
-                        style={{background:"none",border:"1px solid var(--border)",borderRadius:6,color:"var(--dim)",padding:"4px 8px",fontSize:11,cursor:"pointer",fontFamily:"inherit"}}>
-                        ✕
                       </button>
                     )}
                   </div>
@@ -31723,7 +29526,7 @@ function PrepTaskList({ jobs, onSelectJob, onUpdateJob }) {
 
 // ── ForemanTaskCard — collapsible task card shown on foreman page ──
 // For Koy it shows two tabs: Prep | Tasks. For others just Tasks.
-function ForemanTaskCard({ isKoy, fTasks, prepTasks, jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJob, activeForeman, foremenList }) {
+function ForemanTaskCard({ isKoy, fTasks, prepTasks, jobs, onSelectJob, onUpdateJob, activeForeman, foremenList }) {
   const [prepOpen,  setPrepOpen]  = useState(false); // starts collapsed
   const [tasksOpen, setTasksOpen] = useState(true);  // starts expanded
 
@@ -31783,8 +29586,6 @@ function ForemanTaskCard({ isKoy, fTasks, prepTasks, jobs, manualTasks, onManual
             ? <div style={{fontSize:12,color:"var(--muted)",textAlign:"center",padding:"12px 0"}}>✓ No open tasks</div>
             : <Tasks
                 jobs={jobs}
-                manualTasks={manualTasks}
-                onManualTasksChange={onManualTasksChange}
                 onSelectJob={onSelectJob}
                 onUpdateJob={onUpdateJob}
                 filterForeman={activeForeman}
@@ -31797,16 +29598,13 @@ function ForemanTaskCard({ isKoy, fTasks, prepTasks, jobs, manualTasks, onManual
   );
 }
 
-function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJob, filterForeman, compact, foremenList }) {
-  const [showAdd,          setShowAdd]          = useState(false);
+function Tasks({ jobs, onSelectJob, onUpdateJob, filterForeman, compact, foremenList }) {
   const [collapsedForemen, setCollapsedForemen] = useState({});
   const [catFilter,        setCatFilter]        = useState("all");
   const [prepOpen,         setPrepOpen]         = useState(false); // collapsed by default
   const toggleForeman = (f) => setCollapsedForemen(c=>({...c,[f]:!c[f]}));
 
   const handleSetDueDate = (taskId, date) => {
-    const isManual = (manualTasks||[]).find(t => t.id === taskId);
-    if(isManual) { onManualTasksChange((manualTasks||[]).map(t => t.id===taskId ? {...t, dueDate:date} : t)); return; }
     const autoTasks = computeTasks(jobs);
     const task = autoTasks.find(t => t.id === taskId);
     if(task && task.jobId && onUpdateJob) {
@@ -31815,22 +29613,6 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
     }
   };
 
-  const handleAdd = (t) => {
-    const itemColor = (t.itemType && ITEM_TYPE_COLORS[t.itemType]) || "#6E7682";
-    const task = { id: uid(), title: t.title, foreman: t.foreman,
-      notes: t.notes, dueDate: t.dueDate||"", type:"manual", category:"manual",
-      color: itemColor, cleared:false, createdAt: new Date().toISOString(),
-      // New Open Items fields (all optional, additive — old tasks ignore them):
-      jobId: t.jobId||"",
-      itemType: t.itemType||"",
-      requestedBy: t.requestedBy||"",
-      status: "open",
-    };
-    onManualTasksChange([...(manualTasks||[]), task]);
-    setShowAdd(false);
-  };
-
-  const dismissManual        = (id)        => { onManualTasksChange((manualTasks||[]).filter(t=>t.id!==id)); };
   const dismissInvoiceTask   = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId, invoiceSentPatch(job)); };
   const dismissRoughDeposit  = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{roughDepositDismissed:true}); };
   const dismissFinishDeposit = (jobId)     => { const job=jobs.find(j=>j.id===jobId); if(job&&onUpdateJob) onUpdateJob(jobId,{finishDepositDismissed:true}); };
@@ -31918,7 +29700,6 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
   const autoTasks = computeTasks(jobs);
   const allTasks = [
     ...autoTasks.map(t=>{ const d=allTaskDueDates[t.id]; return d!==undefined?{...t,dueDate:d||t.dueDate||""}:t; }),
-    ...(manualTasks||[]).map(t=>({...t,type:"manual"}))
   ].filter(t => t.category !== "prep" && (!filterForeman || t.foreman === filterForeman) && !allClearedTasks.has(t.id));
 
   const URGENCY_FN = (due) => {
@@ -31952,7 +29733,6 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
   const overdueCount = sorted.filter(t=>{ const u=URGENCY_FN(t.dueDate); return u&&u.days<0; }).length;
 
   const dismissFor = (task) =>
-    task.type==="manual"                    ? ()=>dismissManual(task.id) :
     task.id.endsWith("_rough_deposit")      ? ()=>dismissRoughDeposit(task.jobId) :
     task.id.endsWith("_finish_deposit")     ? ()=>dismissFinishDeposit(task.jobId) :
     task.id.endsWith("_rough_invoice")      ? ()=>dismissRoughInvoice(task.jobId) :
@@ -32055,19 +29835,12 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
                 <option value="invoice">$  Ready to Invoice</option>
                 <option value="other">Tasks Only</option>
               </select>
-              <button onClick={()=>setShowAdd(v=>!v)}
-                style={{background:"var(--accent)",border:"none",borderRadius:9,color:"#000",
-                  fontWeight:800,padding:"9px 22px",fontSize:13,cursor:"pointer",fontFamily:"inherit"}}>
-                + Add Task
-              </button>
             </div>
           </div>
         </div>
       )}
 
       <div style={{padding:filterForeman||compact?"0":"16px 26px"}}>
-        {showAdd&&<AddTaskForm defaultForeman={filterForeman||"Koy"} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList} jobs={jobs}/>}
-
         {/* Pre Job Prep — only on main Tasks page (not foreman filter), collapsible, starts collapsed */}
         {!filterForeman&&catFilter!=="invoice"&&(()=>{
           const prepJobs = jobs.filter(j=>!j.tempPed&&(j.prepStage||"")!=="Job Prep Complete");
@@ -32109,9 +29882,7 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
               <div>
                 <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:10}}>
                   <div style={{fontSize:11,fontWeight:700,color:"var(--dim)",letterSpacing:"0.06em"}}>TASKS</div>
-                  <button onClick={()=>setShowAdd(v=>!v)} style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:11,padding:"4px 12px",cursor:"pointer",fontFamily:"inherit",fontWeight:600}}>+ Add Task</button>
                 </div>
-                {showAdd&&<AddTaskForm defaultForeman={filterForeman} onAdd={handleAdd} onCancel={()=>setShowAdd(false)} foremenList={foremenList} jobs={jobs}/>}
                 {sorted.map(task=>(
                   <TaskCard key={task.id} task={task} jobs={jobs} onSelectJob={onSelectJob}
                     onDismiss={dismissFor(task)} onSetDueDate={handleSetDueDate} onManualClear={handleManualClear} onSignOffRT={handleSignOffRT}/>
@@ -32125,7 +29896,6 @@ function Tasks({ jobs, manualTasks, onManualTasksChange, onSelectJob, onUpdateJo
                 {key:'qc',         label:'QC Walks',        icon:'checkCircle',    color:'#3E7D7A', cats:['qc']},
                 {key:'po',         label:'Purchase Orders', icon:'package',        color:'#3B5BA5', cats:['po']},
                 {key:'punch',      label:'Open Punch',      icon:'alertTriangle',  color:'#B06A2C', cats:['punch']},
-                {key:'manual',     label:'Manual Tasks',    icon:'note',           color:'#6E7682', cats:['manual']},
               ].map(group=>{
                 const groupTasks = sorted.filter(t=>group.cats.includes(t.category));
                 if(groupTasks.length===0) return null;
@@ -38401,7 +36171,7 @@ function CoordinatorWorklist({ allJobs = [], users = [], identity, book = "all",
   );
 }
 
-function Today({ jobs: _allJobs, users=[], manualTasks=[], quoteWalks=[], suggestions=[], identity, onSelectJob, onUpdateJob }) {
+function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob, onUpdateJob }) {
   // Local UI state — filter pills + feed expansion (50 → all).
   // Persist filter across reloads so Koy can park on a category.
   const [feedFilter, setFeedFilter] = useState(() => { try { return localStorage.getItem("today.feedFilter") || "all"; } catch { return "all"; } });
@@ -38625,10 +36395,9 @@ function Today({ jobs: _allJobs, users=[], manualTasks=[], quoteWalks=[], sugges
       push(t, p.uploadedBy||p.addedBy, j, "photo", "job", `Photo uploaded`, "#0891b2", p.name||"");
     });
     // 31, 32 — daily updates
-    (j.dailyUpdates||[]).forEach(d => {
-      const t = d?.postedAt || d?.date;
-      if (t) push(t, d.author, j, "daily", d.editedAt?"edited":"posted", `Daily update`, "#6A7BAA", _cleanHtml(d.notes).slice(0,80));
-      if (d?.editedAt && d.editedAt !== d.postedAt) push(d.editedAt, d.editedBy||d.author, j, "daily", "edited", `Daily update edited`, "#6A7BAA");
+    [...(j.roughUpdates||[]), ...(j.finishUpdates||[])].forEach(d => {
+      const t = d?.createdAt || d?.date;
+      if (t) push(t, d.addedBy, j, "daily", "posted", `Daily update`, "#6A7BAA", _cleanHtml(d.text).slice(0,80));
     });
     // 33, 34, 35, 36, 37 — job lifecycle / status / notes
     if (j.statusChangedAt) push(j.statusChangedAt, j.statusChangedBy||j._saved_by, j, "status", "changed", `Status: ${j.roughStatus||j.finishStatus||"updated"}`, "#475569");
@@ -38705,16 +36474,7 @@ function Today({ jobs: _allJobs, users=[], manualTasks=[], quoteWalks=[], sugges
     });
   });
   // 54, 55 — Manual tasks (separate collection — passed as prop)
-  (manualTasks||[]).forEach(t => {
-    if (t?.createdAt) push(t.createdAt, t.createdBy, null, "task", "created", `Manual task: ${_cleanHtml(t.text||t.title).slice(0,60)}`, "#6A7BAA");
-    if (t?.done && t?.completedAt) push(t.completedAt, t.completedBy, null, "task", "completed", `Manual task done: ${_cleanHtml(t.text||t.title).slice(0,60)}`, "#3E7D5A");
-  });
   // 56, 57 — Quote walks (separate collection)
-  (quoteWalks||[]).forEach(w => {
-    const wj = { id: w.id, name: w.name || w.address || w.id };
-    if (w?.createdAt) push(w.createdAt, w.createdBy, wj, "walk", "created", `Quote walk: ${wj.name}`, "#6A5E97");
-    if (w?.convertedAt) push(w.convertedAt, w.convertedBy, wj, "walk", "converted", `Quote walk → job: ${wj.name}`, "#3E7D5A");
-  });
   // 58, 59 — Suggestions (separate collection)
   (suggestions||[]).forEach(s => {
     if (s?.submittedAt) push(s.submittedAt, s.submittedBy, null, "suggestion", "submitted", `Suggestion: ${_cleanHtml(s.text).slice(0,60)}`, "#6A5E97");
@@ -38954,9 +36714,7 @@ function Today({ jobs: _allJobs, users=[], manualTasks=[], quoteWalks=[], sugges
                 { k:"note",       label:"Notes" },
                 { k:"savant",     label:"Savant" },
                 { k:"homerun",    label:"Home runs" },
-                { k:"call",       label:"Calls" },
                 { k:"task",       label:"Tasks" },
-                { k:"walk",       label:"Walks" },
                 { k:"suggestion", label:"Ideas" },
                 { k:"presence",   label:"Presence" },
                 { k:"lifecycle",  label:"Lifecycle" },
@@ -40429,7 +38187,7 @@ function SettingsSection({ title, accent, defaultOpen = false, children }) {
   );
 }
 
-function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverrides, jobs, upcoming, manualTasks, onRestoreFromBackup, onRestoreFromFile, identity }) {
+function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverrides, jobs, upcoming, onRestoreFromBackup, onRestoreFromFile, identity }) {
   const [colors, setColors] = useState({...colorOverrides});
   const [saved,  setSaved]  = useState(false);
   const [restoring, setRestoring] = useState(false);
@@ -40442,7 +38200,6 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
       version: "v1",
       jobs: jobs || [],
       upcoming: upcoming || [],
-      manualTasks: manualTasks || [],
       users: users || [],
       colorOverrides: colors,
     };
@@ -43361,7 +41118,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-10 · App SW version: v320
+**Last manifest update:** 2026-07-10 · App SW version: v321
 
 ---
 
@@ -43386,8 +41143,8 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 - **Nav** · 'shipped' · 'NavView' · map view of jobs
 - **Upcoming** · 'shipped' · 'UpcomingJobs' · jobs in the pipeline before they're full jobs
 - **Quotes** · 'shipped' · proposed jobs awaiting conversion
-- **Walks** · 'shipped' · 'QuoteWalksTab' · quote walks tracking
-- **Tasks** · 'shipped' · 'Tasks' · cross-job and manual tasks
+- **Tasks** · 'shipped' · 'Tasks' · auto-generated tasks only (invoice-ready, pre-job prep, unscheduled inspections) — manual-task layer removed 2026-07-10 ('manualTasks' collection was empty; Needs Board is THE manual to-do surface) · 'SW v321'
+  - (Walks nav tab + Quote Walks feature removed in the 2026-07-10 ops revisit — zero docs, redline walks in the CO board replaced it · 'SW v321')
 - **Huddle** · 'shipped' · 'HuddleSheet' · weekly team huddle prep
 - **Subcontractors** · 'shipped' · external contractor view
 - **Scoreboard** · 'shipped' · 'ScoreboardV2' · admin-only, behavior-driven scoring (info + quality)
@@ -43414,12 +41171,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Status pills with date windows
   - Finish stage cleanup + scheduled window (May 11–22) · 'shipped 2026-05-17' · 'SW v173'
   - InProgressModePill (rough/finish status with date picker)
-- **Up Next panel** · 'shipped 2026-05-19' · 'SW v178' · 'UpNextPanel' · '36-rule engine'
-  - Sits between header and tabs
-  - Primary button for literal next action
-  - "▾ N more" expander
-  - Calm fallback when nothing urgent
-  - Snooze per rule (recent) · '_isSnoozed' helper + 'getSnoozedUpNextRules'
+- (Up Next panel — retired 2026-06-05, engine code fully deleted in the 2026-07-10 ops revisit · 'SW v321')
 - **Phase tracking** · 'shipped' · rough / finish / QC phases each with their own tab + workflow
   - Rough phase
   - Finish phase
@@ -43463,11 +41215,11 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Email daily update
 - **Job Notes** · 'in-flight' · 'JobNoteCard', 'JobNotesSection', 'JobNoteLine'
   - Phase-scoped checklist notes (rough/finish/general)
-  - Multi-select promote to: CO, RT, Punch, PO, Call
-  - Destination pickers: Punch / RT / CO / Call / PO ('JobNoteDestination*')
+  - Multi-select promote to: CO, RT, Punch, PO (Call destination removed with the manual-capture layer · 'SW v321')
+  - Destination pickers: Punch / RT / CO / PO ('JobNoteDestination*')
   - Sits on top of Open Items (doesn't replace it)
   - REPLACES PhaseInstructions UI slot (Option A, 7-layer data safety migration)
-- **Open Items** · 'shipped' · 'JobOpenItems' · unified visits/punch/purchase/calls backend
+- **Open Items** · 'shipped' · 'JobOpenItems' · return-trips summary + the job's general-scope Job Notes (manual visit/call/purchase capture removed in the 2026-07-10 ops revisit — return trips + Needs Board cover it · 'SW v321')
 - **Phase Instructions** · 'shipped' · 'PhaseInstructions' (legacy slot, being replaced by Job Notes)
 - **Materials** · 'shipped'
   - Rough materials
@@ -43536,10 +41288,10 @@ Pages designed to be opened by people outside the company via share links (no au
 
 ## Cross-Job Tools
 
-- **Tasks** · 'shipped' · 'Tasks', 'TaskCard', 'AddTaskForm'
-  - Manual tasks (Firestore 'manualTasks' collection)
+- **Tasks** · 'shipped' · 'Tasks', 'TaskCard' · auto-generated from job state ('computeTasks')
   - Per-foreman task filtering
   - Pre-job prep tasks
+  - Due-date editing on auto tasks ('taskDueDates')
 - **Crew Planner V2** · 'in-flight' · 'SimproCrewSchedule'
   - Compact rows, click-cell picker
   - Foreman filter
@@ -43555,8 +41307,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - "Manage their link" master list (office-only) — see/edit every job's on-link state in one spot · 'SW v317'
 - **Needs board** · 'shipped' · coordinator board for deadline-bound contractor call-ins ('needs' collection)
 - **Redline walks → CO tracking** · 'shipped 2026-07-08' · 'SW v306' · quoted walks surface in the Change Orders board
-- **Huddle Sheet** · 'shipped' · 'HuddleSheet', 'HuddleConfigPanel'
-- **Quote Walks** · 'shipped' · 'QuoteWalksTab', 'QuoteWalkDetail'
+- **Huddle Sheet** · 'shipped' · 'HuddleSheet' · content revisit (auto-tasks instead of dead manual tasks) · 'SW v321'
 - **Job Activity (per job)** · 'shipped' · 'JobActivity'
 - **Job Photos (per job)** · 'shipped' · 'JobPhotos'
 
@@ -43572,7 +41323,6 @@ Pages designed to be opened by people outside the company via share links (no au
   - User management · 'UserManagement'
   - Color overrides
   - Backup / restore + Force Update All Devices
-- **Huddle config** · 'shipped' · 'HuddleConfigPanel'
 - **Scoreboard weights editor** · 'shipped' · admin only
 - **Backup-status banner** · 'shipped 2026-07-09' · 'SW v313' · red strip for admin/manager when the nightly Firestore backup is missing or >48h stale
 
@@ -43604,6 +41354,10 @@ Pages designed to be opened by people outside the company via share links (no au
   - Bumped on every deploy that changes bundle
 - **Firestore offline support** · 'shipped' · 'persistentLocalCache' + 'persistentMultipleTabManager'
 - **Push notifications (FCM)** · 'shipped' · per-foreman; 'FCM_MSG.data' shape (NOT 'webpush.notification.data')
+- **Honest notification prefs** · 'shipped 2026-07-10' · 'SW v321' · every toggle in Settings → Notifications is enforced server-side ('sendToNameIfWanted' / 'sendToJobCoordinatorIfWanted'); placebo keys removed, 7 real keys added (status_update, milestone_complete, job_hold, failed_inspection, reminder_safety, co_chase, rt_chase); admin blast on every event replaced with coordinator-routed sends
+- **Thursday Packet v2** · 'shipped 2026-07-10' · 'SW v321' · weekly email keeps the update-compliance section; dead "Last Week's Decisions" stub dropped; adds Tech Lighting loop status, PTO next 7 days, open App Map suggestions, fleet staleness line
+- (Daily huddle EMAIL removed 2026-07-10 — SMTP had been failing 100% and Koy killed it rather than fix it; the in-app Huddle view and the 6:30 AM huddle push to coordinators both stay · 'SW v321')
+- (Daily Job Activity report — deleted in the 2026-07-10 ops revisit; Today view + Thursday Packet cover it · 'SW v321')
 - **PWA manifest** · 'shipped' · installable on iOS/Android
 - **Backup system** · 'shipped'
   - localStorage 'hejobs_backup' (per-device snapshot)
@@ -43630,16 +41384,17 @@ Pages designed to be opened by people outside the company via share links (no au
 ## Permissions Model
 
 - **Access tiers** (highest → lowest): 'admin' · 'manager' · 'standard' (foreman) · 'limited' (lead/crew)
-- **Permission feature flags** ('PERMISSIONS' map at ~L2770):
-  - 'tasks.view' / 'tasks.addTask' / 'tasks.setDueDate'
+- **Permission feature flags** ('PERMISSIONS' map, src/App.js ~L3165 — dead keys pruned 2026-07-10 · 'SW v321'):
+  - 'tasks.view'
   - 'schedule.view' / 'schedule.edit'
   - 'pipeline.view' / 'pipeline.manage'
-  - 'reports.view'
   - 'settings.view'
   - 'users.manage'
   - 'job.delete' (admin only)
   - 'quotes.view' / 'quotes.convert'
-  - 'scoreboard.view' / 'scoreboard.editWeights' (both admin only currently)
+  - 'scoreboard.editWeights' (admin only)
+  - 'cos.view' / 'worklist.view' (office)
+  - 'jobprep.own' (company-hats checkbox: job prep & redlines)
   - 'today.view' (admin/manager/standard) · 'shipped 2026-05-21'
   - 'board.view' / 'board.add' (admin/manager/standard) · Needs board
   - 'lutron.view' (everyone) · Plan Changes nav tab
@@ -44290,7 +42045,7 @@ function AppMapSharePage({ identity = null } = {}) {
   );
 }
 
-function HuddleSheet({ jobs, manualTasks, foremen, identity, users = [] }) {
+function HuddleSheet({ jobs, foremen, identity, users = [] }) {
   // YMD helper — local date string, no timezone surprises
   const toYMD = (d) => {
     const dt = new Date(d);
@@ -44819,7 +42574,6 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity, users = [] }) {
         const d = allTaskDueDates[t.id];
         return d !== undefined ? { ...t, dueDate: d || t.dueDate || "" } : t;
       }),
-      ...(manualTasks||[]),
     ];
     const openTasks = merged
       .filter(t => t
@@ -44959,7 +42713,7 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity, users = [] }) {
       ptoOut,
       stuckItems,
     };
-  }, [jobs, crewData, dayIdx, manualTasks, targetYMD, yesterdayYMD, scope, simproByJob, ptoList, targetDate]);
+  }, [jobs, crewData, dayIdx, targetYMD, yesterdayYMD, scope, simproByJob, ptoList, targetDate]);
 
   // ── Render the message text ──────────────────────────────────────────
   // Structure: when scope is set, render that one foreman's huddle. When scope
@@ -45261,261 +43015,6 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity, users = [] }) {
     if(blocksRendered === 0) out.push("(nothing to report)");
 
     return out.join("\n");
-    /* OLD per-section rendering removed — kept this comment so the diff is
-       readable; the per-foreman block above replaces all of it. */
-    // eslint-disable-next-line no-unreachable
-    // (deliberately unreachable — left here for safety while the new block
-    // proves out; remove once stable.)
-    // BEGIN_DEAD_CODE
-    /*
-    const recapDow = (() => {
-      const d = parseAnyDate(yesterdayYMD);
-      return d ? d.toLocaleDateString("en-US", { weekday:"short" }).toUpperCase() : "";
-    })();
-    lines.push(`RECAP — ${recapDow}`);
-    if(data.punchClosedCount > 0) {
-      if(scope) {
-        const lbl = data.punchClosedJobs.length <= 3
-          ? data.punchClosedJobs.join(", ")
-          : `${data.punchClosedJobs.length} jobs`;
-        lines.push(`- ${data.punchClosedCount} punch closed (${lbl})`);
-      } else {
-        const fNames = Object.keys(data.punchClosedByForeman).sort((a,b)=>{
-          if(a==="Unassigned") return -1; if(b==="Unassigned") return 1;
-          return a.localeCompare(b);
-        });
-        fNames.forEach((name, idx) => {
-          const g = data.punchClosedByForeman[name];
-          const jobs = Array.from(g.jobs);
-          const lbl = jobs.length <= 2 ? jobs.join(", ") : `${jobs.length} jobs`;
-          if(idx > 0 || data.punchClosedCount > 0) {} // no blank line — keep tight
-          lines.push(`  ${name.split(" ")[0]}: ${g.count} punch closed (${lbl})`);
-        });
-      }
-    }
-    if(data.updatesPosted.length > 0) {
-      const updates = data.updatesPosted.slice(0, 6);
-      if(scope) {
-        updates.forEach(u => lines.push(`- ${u.jobName} — ${u.phase} update logged`));
-      } else {
-        const names = foremanOrder(updates);
-        names.forEach(name => {
-          const group = updates.filter(u => (u.foreman||"Unassigned") === name);
-          group.forEach(u => lines.push(`  ${name.split(" ")[0]}: ${u.jobName} — ${u.phase} update`));
-        });
-      }
-    }
-
-    // Inspection pass/fail recorded on the recap day. Renders inline in the
-    // recap so wins / re-attempts surface alongside punch closes and updates.
-    if(data.inspectionResults.length > 0) {
-      const labelFor = (r) => {
-        const k = (r||"").toLowerCase();
-        if(k === "pass" || k === "fixed" || k === "completed") return "PASS";
-        if(k === "fail") return "FAIL";
-        return (r||"").toUpperCase();
-      };
-      if(scope) {
-        data.inspectionResults.forEach(i =>
-          lines.push(`- ${i.jobName} — ${i.type} ${labelFor(i.result)}`));
-      } else {
-        const names = foremanOrder(data.inspectionResults);
-        names.forEach(name => {
-          const group = data.inspectionResults.filter(i => (i.foreman||"Unassigned") === name);
-          group.forEach(i =>
-            lines.push(`  ${name.split(" ")[0]}: ${i.jobName} — ${i.type} ${labelFor(i.result)}`));
-        });
-      }
-    }
-
-    if(data.punchClosedCount === 0 && data.updatesPosted.length === 0 && data.inspectionResults.length === 0) {
-      lines.push("- (quiet)");
-    }
-    lines.push("");
-
-    // PLAN — crew assignments on targetDate. Header shows the actual weekday
-    // so "TUE CREWS" / "MON CREWS" reads right whether the user is sending
-    // tonight for tomorrow or stepping back to review a different day.
-    const dayName = targetDate.toLocaleDateString("en-US", { weekday:"short" }).toUpperCase();
-    lines.push(`${dayName} CREWS`);
-    if(data.crewToday.length === 0) {
-      lines.push("- No assignments");
-    } else {
-      const renderCrew = (c) => {
-        const people = [];
-        if(c.lead) people.push(c.lead.split(" ")[0]);
-        c.crew.forEach(p => people.push(p.split(" ")[0]));
-        const peopleStr = people.length > 4
-          ? `${people.slice(0,3).join(", ")} +${people.length-3}`
-          : people.join(", ");
-        const timeStr = c.time ? ` · ${c.time}` : "";
-        return `${c.jobName} — ${peopleStr || "(no names)"}${timeStr}`;
-      };
-      renderSection(data.crewToday, renderCrew);
-    }
-    lines.push("");
-
-    // INSPECTIONS — landing on targetDate
-    if(data.inspections.length > 0) {
-      lines.push(`INSPECTIONS — ${dayName} (${data.inspections.length})`);
-      renderSection(data.inspections, i => `${i.jobName} — ${i.type}`);
-      lines.push("");
-    }
-
-    // PENDING RESULTS — inspections whose date has passed without a pass/fail
-    // recorded. Surfaces stuck inspections so somebody chases the outcome.
-    if(data.pendingResults.length > 0) {
-      lines.push(`PENDING RESULTS (${data.pendingResults.length})`);
-      renderSection(data.pendingResults, p => `${p.jobName} — ${p.type} (${p.scheduledDate})`);
-      lines.push("");
-    }
-
-    // ACTIVE ROUGH / FINISH — every job currently in either phase. Surfaces
-    // jobs even when the status field wasn't set correctly (effRS/effFS pick
-    // up roughStage/finishStage progress as a fallback). Items already sorted
-    // so urgent statuses (Awaiting Start Date, Start Date Set) lead.
-    if(data.activePhases.length > 0) {
-      lines.push(`ACTIVE ROUGH / FINISH (${data.activePhases.length})`);
-      renderSection(
-        data.activePhases,
-        a => `${a.jobName} — ${a.phase}: ${a.dateOrLabel}`
-      );
-      lines.push("");
-    }
-
-    // QC + MATTERPORT — split into separate "needs scheduling" and
-    // "scheduled" buckets per item type so the boss can see at a glance
-    // what's missing a calendar slot and what's locked in. Each section
-    // groups by foreman (boss view) or renders flat (single-foreman view).
-    if(data.qcNeeds.length > 0) {
-      lines.push(`QC — NEEDS SCHEDULING (${data.qcNeeds.length})`);
-      renderSection(data.qcNeeds, q =>
-        `${q.jobName}${q.byDate ? ` — sched by ${q.byDate}` : ""}`);
-      lines.push("");
-    }
-    if(data.qcScheduled.length > 0) {
-      lines.push(`QC — SCHEDULED (${data.qcScheduled.length})`);
-      renderSection(data.qcScheduled, q => `${q.jobName} — ${q.date}`);
-      lines.push("");
-    }
-    if(data.matterNeeds.length > 0) {
-      lines.push(`MATTERPORT — NEEDS SCHEDULING (${data.matterNeeds.length})`);
-      renderSection(data.matterNeeds, m =>
-        `${m.jobName}${m.byDate ? ` — sched by ${m.byDate}` : ""}`);
-      lines.push("");
-    }
-    if(data.matterScheduled.length > 0) {
-      lines.push(`MATTERPORT — SCHEDULED (${data.matterScheduled.length})`);
-      renderSection(data.matterScheduled, m => `${m.jobName} — ${m.date}`);
-      lines.push("");
-    }
-
-    // TEMP PEDS / QUICK JOBS — small jobs with their current status
-    if(data.smallJobs.length > 0) {
-      lines.push(`TEMP PEDS / QUICK JOBS (${data.smallJobs.length})`);
-      renderSection(data.smallJobs, s => `${s.jobName} — ${s.kind}: ${s.status}${s.dateBit}`);
-      lines.push("");
-    }
-
-    // OPEN PUNCH / RT
-    if(data.punchSummary.length > 0) {
-      const cap = scope ? 8 : 4; // per-foreman cap when grouped
-      const renderP = (p) => {
-        const bits = [];
-        if(p.rtToday) bits.push("RT today");
-        if(p.rtNeeds) bits.push("RT needs sched");
-        if(p.openPunch > 0) bits.push(`${p.openPunch} punch`);
-        return `${p.jobName} — ${bits.join(", ")}`;
-      };
-      // Apply per-foreman cap so a single noisy foreman doesn't drown the rest
-      let toRender;
-      if(scope) {
-        toRender = data.punchSummary.slice(0, 8);
-        lines.push(`OPEN PUNCH / RT (${data.punchSummary.length})`);
-        toRender.forEach(p => lines.push(`- ${renderP(p)}`));
-        if(data.punchSummary.length > 8) lines.push(`- ...and ${data.punchSummary.length - 8} more`);
-      } else {
-        lines.push(`OPEN PUNCH / RT (${data.punchSummary.length})`);
-        const names = foremanOrder(data.punchSummary);
-        names.forEach((name, idx) => {
-          const group = data.punchSummary.filter(p => (p.foreman||"Unassigned") === name).slice(0, cap);
-          const total = data.punchSummary.filter(p => (p.foreman||"Unassigned") === name).length;
-          if(idx > 0) lines.push("");
-          lines.push(`  ${name.split(" ")[0]}`);
-          group.forEach(p => lines.push(`  - ${renderP(p)}`));
-          if(total > cap) lines.push(`  - ...and ${total - cap} more`);
-        });
-      }
-      lines.push("");
-    }
-
-    // TASKS — split by category so each kind has its own section. QC and RT
-    // already have their own breakouts above (and tempped is covered by
-    // TEMP PEDS / QUICK JOBS), so we drop those categories here to avoid
-    // double-listing. Sections render in priority order; each one only
-    // renders when it has items.
-    const renderT = (t) => {
-      let due = "";
-      if(t.dueDate) {
-        const d = parseAnyDate(t.dueDate);
-        if(d) {
-          const dYMD = toYMD(d);
-          if(dYMD < targetYMD) due = ", overdue";
-          else if(dYMD === targetYMD) due = ", today";
-          else {
-            const days = Math.round((d - new Date(targetDate)) / (24*60*60*1000));
-            if(days > 0 && days <= 3) due = `, in ${days}d`;
-          }
-        }
-      }
-      const job = t.jobName ? ` [${t.jobName.substring(0,18)}]` : "";
-      const title = (t.title || "(no title)").substring(0, 44);
-      return `${title}${job}${due}`;
-    };
-    const renderTaskSection = (label, tasks) => {
-      if(!tasks.length) return;
-      lines.push(`${label} (${tasks.length})`);
-      if(scope) {
-        const CAP = 10;
-        tasks.slice(0, CAP).forEach(t => lines.push(`- ${renderT(t)}`));
-        if(tasks.length > CAP) lines.push(`- ...and ${tasks.length - CAP} more`);
-      } else {
-        const PER = 6;
-        const names = foremanOrder(tasks);
-        names.forEach((name, idx) => {
-          const group = tasks.filter(t => (t.foreman||"Unassigned") === name);
-          if(idx > 0) lines.push("");
-          lines.push(`  ${name.split(" ")[0]} (${group.length})`);
-          group.slice(0, PER).forEach(t => lines.push(`  - ${renderT(t)}`));
-          if(group.length > PER) lines.push(`  - ...and ${group.length - PER} more`);
-        });
-      }
-      lines.push("");
-    };
-
-    // Bucket by category. "qc" / "rt" / "tempped" already covered elsewhere
-    // — drop them so they don't show up twice. Anything not matching a known
-    // bucket lands in OTHER as a catch-all.
-    const tasksByCat = { co:[], po:[], invoice:[], rough:[], finish:[], manual:[], other:[] };
-    const SKIP_CATEGORIES = new Set(["qc","rt","tempped"]);
-    data.openTasks.forEach(t => {
-      const cat = t.category || "manual";
-      if(SKIP_CATEGORIES.has(cat)) return;
-      if(tasksByCat[cat]) tasksByCat[cat].push(t);
-      else tasksByCat.other.push(t);
-    });
-
-    renderTaskSection("CHANGE ORDERS",   tasksByCat.co);
-    renderTaskSection("PURCHASE ORDERS", tasksByCat.po);
-    renderTaskSection("INVOICES",        tasksByCat.invoice);
-    renderTaskSection("ROUGH TASKS",     tasksByCat.rough);
-    renderTaskSection("FINISH TASKS",    tasksByCat.finish);
-    renderTaskSection("MANUAL TASKS",    tasksByCat.manual);
-    renderTaskSection("OTHER TASKS",     tasksByCat.other);
-
-    return lines.join("\n");
-    */
-    // END_DEAD_CODE
   }, [data, targetDate, targetYMD, yesterdayYMD, scope, jobs]);
 
   // Copy: prefer Clipboard API, fall back to legacy textarea hack on older browsers
@@ -45650,834 +43149,6 @@ function HuddleSheet({ jobs, manualTasks, foremen, identity, users = [] }) {
         with the text pre-filled; you pick the recipient.
       </div>
     </div>
-  );
-}
-
-// ───────────────────────────────────────────────────────────────────────────
-// Daily Huddle Email — recipient config panel
-//   Lives inside the Settings page. Edits the settings/huddleConfig Firestore
-//   doc which the dailyHuddleEmail Cloud Function reads at 6am every weekday.
-//   Three lists: foremen (each gets their own email), bosses (cc'd on every
-//   foreman's email), and the sender Gmail address.
-//
-//   DATA SAFETY: this panel only writes to settings/huddleConfig — it can't
-//   touch jobs or users. Save uses setDoc with merge:false so the doc shape
-//   stays clean (no orphaned fields from old structures).
-// ───────────────────────────────────────────────────────────────────────────
-
-// Input that holds local state during typing and commits on blur. Without
-// this wrapper, every keystroke triggered a Firestore write + onSnapshot
-// echo + re-render, which dropped characters and jumped the cursor.
-function HuddleInput({ value, onCommit, type, placeholder, style, ...rest }) {
-  const [v, setV] = useState(value || "");
-  const focusedRef = useRef(false);
-  useEffect(() => {
-    // Only sync from the prop when the field isn't being actively edited —
-    // prevents external doc updates from stomping on what the user is typing.
-    if (!focusedRef.current) setV(value || "");
-  }, [value]);
-  return (
-    <input
-      {...rest}
-      type={type}
-      placeholder={placeholder}
-      style={style}
-      value={v}
-      onFocus={() => { focusedRef.current = true; }}
-      onChange={e => setV(e.target.value)}
-      onBlur={() => {
-        focusedRef.current = false;
-        if (v !== (value || "")) onCommit(v);
-      }}
-      onKeyDown={e => {
-        if (e.key === "Enter") {
-          e.preventDefault();
-          e.target.blur(); // triggers commit via onBlur
-        }
-      }}
-    />
-  );
-}
-
-function HuddleConfigPanel() {
-  const [cfg, setCfg] = useState({ foremen: [], bosses: [], sender: "" });
-  const [lastLog, setLastLog] = useState(null);
-  const [saving, setSaving] = useState(false);
-  const [savedToast, setSavedToast] = useState(false);
-  const [testing, setTesting] = useState(false);
-  const [testResult, setTestResult] = useState(null); // {ok, msg} | null
-
-  // Live config
-  useEffect(() => {
-    const unsub = onSnapshot(doc(db, "settings", "huddleConfig"), s => {
-      if(s.exists()) {
-        const d = s.data() || {};
-        setCfg({
-          foremen: Array.isArray(d.foremen) ? d.foremen : [],
-          bosses:  Array.isArray(d.bosses)  ? d.bosses  : [],
-          sender:  d.sender || "",
-        });
-      }
-    });
-    return unsub;
-  }, []);
-
-  // Last-run log (so the user can see "yes, the cron fired this morning")
-  useEffect(() => {
-    const unsub = onSnapshot(doc(db, "settings", "huddleEmailLog"), s => {
-      if(s.exists()) setLastLog(s.data());
-    });
-    return unsub;
-  }, []);
-
-  const save = async (next) => {
-    setSaving(true);
-    try {
-      await setDoc(doc(db, "settings", "huddleConfig"), next);
-      setCfg(next);
-      setSavedToast(true);
-      setTimeout(() => setSavedToast(false), 1800);
-    } catch(e) {
-      console.error("Huddle config save failed:", e);
-    } finally {
-      setSaving(false);
-    }
-  };
-
-  const updateForeman = (idx, key, val) => {
-    const list = cfg.foremen.map((f,i) => i===idx ? { ...f, [key]: val } : f);
-    save({ ...cfg, foremen: list });
-  };
-  const removeForeman = (idx) => save({ ...cfg, foremen: cfg.foremen.filter((_,i)=>i!==idx) });
-  const addForeman = () => save({ ...cfg, foremen: [...cfg.foremen, { name:"", email:"" }] });
-
-  const updateBoss = (idx, val) => {
-    const list = cfg.bosses.map((b,i) => i===idx ? val : b);
-    save({ ...cfg, bosses: list });
-  };
-  const removeBoss = (idx) => save({ ...cfg, bosses: cfg.bosses.filter((_,i)=>i!==idx) });
-  const addBoss = () => save({ ...cfg, bosses: [...cfg.bosses, ""] });
-
-  const setSender = (val) => save({ ...cfg, sender: val });
-
-  // Run the same email path as the 6am cron, but route every email to the
-  // current user's address. Each foreman in the config produces one [TEST]
-  // email so Koy sees exactly what each person would receive — no risk to
-  // the team. Errors surface inline below the button.
-  const sendTestEmail = async () => {
-    if (testing) return;
-    setTestResult(null);
-    if (!cfg.foremen.length) {
-      setTestResult({ ok: false, msg: "Add at least one foreman before testing." });
-      return;
-    }
-    setTesting(true);
-    try {
-      const fn = httpsCallable(functions, "sendTestHuddleEmail");
-      const res = await fn({}); // server uses the auth user's email by default
-      const sent    = res?.data?.sent || 0;
-      const to      = res?.data?.to || "";
-      const results = Array.isArray(res?.data?.results) ? res.data.results : [];
-      const errored = results.filter(r => r.status === "error");
-      // Even if the callable didn't throw, individual per-foreman sends can
-      // have errored silently. Surface them with the same red treatment used
-      // for the cron's LAST RUN, otherwise the user sees "Sent 0" with no
-      // explanation and assumes the button is broken.
-      if (errored.length > 0) {
-        setTestResult({
-          ok: sent > 0,  // mixed result if at least one went through
-          msg: sent > 0
-            ? `Sent ${sent} of ${results.length} test emails to ${to}. ${errored.length} errored:`
-            : `0 sent, ${errored.length} errored:`,
-          errors: errored,
-        });
-      } else {
-        setTestResult({ ok: true, msg: `Sent ${sent} test email${sent===1?"":"s"} to ${to}.` });
-      }
-    } catch (e) {
-      console.error("Huddle test send failed:", e);
-      setTestResult({ ok: false, msg: e?.message || "Send failed — check Functions logs." });
-    } finally {
-      setTesting(false);
-    }
-  };
-
-  const inputStyle = {
-    background: C.surface, border: `1px solid ${C.border}`, borderRadius: 7,
-    color: C.text, padding: "7px 10px", fontSize: 12, fontFamily: "inherit",
-    outline: "none",
-  };
-
-  return (
-    <div style={{ padding: "0 26px 24px" }}>
-      <SettingsSection title="DAILY HUDDLE EMAIL" accent={{bg:"#F4ECE2", border:"#fed7aa", text:"#9a3412"}}>
-        <div style={{ fontSize: 11, color: C.dim, marginBottom: 16 }}>
-          Auto-sends at 6am Mon-Fri (Mountain Time). Each foreman gets their own
-          email; both bosses are CC'd on every one.
-        </div>
-
-        {/* Sender */}
-        <div style={{ marginBottom: 18 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: C.dim, letterSpacing: "0.08em", marginBottom: 6 }}>
-            SENDER ADDRESS
-          </div>
-          <HuddleInput
-            type="email"
-            value={cfg.sender}
-            onCommit={setSender}
-            placeholder="koy@homesteadelectric.net"
-            style={{ ...inputStyle, width: 320 }}
-          />
-          <div style={{ fontSize: 10, color: C.dim, marginTop: 4 }}>
-            Must be a Gmail account with an App Password set on the server.
-          </div>
-        </div>
-
-        {/* Foremen */}
-        <div style={{ marginBottom: 18 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: C.dim, letterSpacing: "0.08em", marginBottom: 6 }}>
-            FOREMEN RECEIVING THE EMAIL
-          </div>
-          {cfg.foremen.length === 0 && (
-            <div style={{ fontSize: 11, color: C.dim, marginBottom: 6, fontStyle: "italic" }}>
-              No foremen configured yet — add at least one below.
-            </div>
-          )}
-          {cfg.foremen.map((f, i) => (
-            <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6, alignItems: "center" }}>
-              <HuddleInput
-                value={f.name || ""}
-                onCommit={(val) => updateForeman(i, "name", val)}
-                placeholder="Vasa Mataafa"
-                style={{ ...inputStyle, width: 200 }}
-              />
-              <HuddleInput
-                type="email"
-                value={f.email || ""}
-                onCommit={(val) => updateForeman(i, "email", val)}
-                placeholder="vasa@homesteadelectric.net"
-                style={{ ...inputStyle, width: 280 }}
-              />
-              <button
-                onClick={() => removeForeman(i)}
-                title="Remove"
-                style={{
-                  background: "none", border: `1px solid ${C.border}`, borderRadius: 7,
-                  color: C.dim, padding: "5px 10px", cursor: "pointer", fontFamily: "inherit",
-                  fontSize: 12,
-                }}>
-                Remove
-              </button>
-            </div>
-          ))}
-          <button
-            onClick={addForeman}
-            style={{
-              fontSize: 11, fontWeight: 600, padding: "6px 12px", borderRadius: 7,
-              border: `1px dashed ${C.border}`, background: "none", color: C.text,
-              cursor: "pointer", fontFamily: "inherit", marginTop: 4,
-            }}>
-            + Add foreman
-          </button>
-          <div style={{ fontSize: 10, color: C.dim, marginTop: 6 }}>
-            Name is matched to job assignments — type it the same way it appears
-            on the Job Board (full name is fine, last name is matched flexibly).
-          </div>
-        </div>
-
-        {/* Bosses */}
-        <div style={{ marginBottom: 18 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: C.dim, letterSpacing: "0.08em", marginBottom: 6 }}>
-            BOSSES CC'D ON EVERY EMAIL
-          </div>
-          {cfg.bosses.map((b, i) => (
-            <div key={i} style={{ display: "flex", gap: 8, marginBottom: 6, alignItems: "center" }}>
-              <HuddleInput
-                type="email"
-                value={b || ""}
-                onCommit={(val) => updateBoss(i, val)}
-                placeholder="justin@homesteadelectric.net"
-                style={{ ...inputStyle, width: 320 }}
-              />
-              <button
-                onClick={() => removeBoss(i)}
-                title="Remove"
-                style={{
-                  background: "none", border: `1px solid ${C.border}`, borderRadius: 7,
-                  color: C.dim, padding: "5px 10px", cursor: "pointer", fontFamily: "inherit",
-                  fontSize: 12,
-                }}>
-                Remove
-              </button>
-            </div>
-          ))}
-          <button
-            onClick={addBoss}
-            style={{
-              fontSize: 11, fontWeight: 600, padding: "6px 12px", borderRadius: 7,
-              border: `1px dashed ${C.border}`, background: "none", color: C.text,
-              cursor: "pointer", fontFamily: "inherit", marginTop: 4,
-            }}>
-            + Add boss
-          </button>
-        </div>
-
-        {/* Test send */}
-        <div style={{ marginBottom: 16, padding: "12px 14px", background: C.surface,
-                      border: `1px dashed ${C.border}`, borderRadius: 8 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: C.dim, letterSpacing: "0.08em", marginBottom: 6 }}>
-            TEST RUN
-          </div>
-          <div style={{ fontSize: 11, color: C.dim, marginBottom: 8, lineHeight: 1.5 }}>
-            Fires the same email path the 6am cron uses, but sends every
-            foreman's email to your inbox only. Subject prefixed with [TEST];
-            no one else gets a copy.
-          </div>
-          <button onClick={sendTestEmail}
-            disabled={testing}
-            style={{
-              fontSize: 12, fontWeight: 700, padding: "8px 16px", borderRadius: 8,
-              border: "none", background: testing ? C.dim : C.accent, color: "#000",
-              cursor: testing ? "default" : "pointer", fontFamily: "inherit",
-            }}>
-            {testing ? "Sending…" : "Send test to me"}
-          </button>
-          {testResult && (
-            <div style={{ marginTop: 8 }}>
-              <div style={{
-                fontSize: 11,
-                color: testResult.ok ? C.green : C.red,
-                fontWeight: 600,
-              }}>
-                {testResult.msg}
-              </div>
-              {/* Per-foreman test-send errors. Mirrors the LAST RUN block
-                  formatting so cron + test failures look the same. */}
-              {Array.isArray(testResult.errors) && testResult.errors.length > 0 && (
-                <div style={{ marginTop: 6, display:"flex", flexDirection:"column", gap:4 }}>
-                  {testResult.errors.map((r, i) => (
-                    <div key={i} style={{
-                      fontSize: 11, padding:"6px 9px", borderRadius:6,
-                      background: "#F3E2E2", color: "#9A3030",
-                      border: `1px solid #fca5a5`, lineHeight: 1.4,
-                    }}>
-                      <span style={{ fontWeight:700 }}>✗ {r.foreman || "(unnamed)"}</span>
-                      {r.error && (
-                        <span style={{ marginLeft:6, fontFamily:"ui-monospace,monospace", fontWeight:500 }}>
-                          — {r.error}
-                        </span>
-                      )}
-                    </div>
-                  ))}
-                </div>
-              )}
-            </div>
-          )}
-        </div>
-
-        {/* Status / last run — when errors occur, show per-foreman details
-            so we can see WHY each send failed without digging into Functions
-            logs. The error message comes from the same results[] array the
-            scheduled function writes to settings/huddleEmailLog. */}
-        <div style={{ marginTop: 16, padding: "10px 14px", background: C.surface,
-                      border: `1px solid ${C.border}`, borderRadius: 8 }}>
-          <div style={{ fontSize: 10, fontWeight: 700, color: C.dim, letterSpacing: "0.08em", marginBottom: 4 }}>
-            LAST RUN
-          </div>
-          {lastLog?.lastRun ? (
-            <>
-              <div style={{ fontSize: 12, color: C.text }}>
-                {(() => {
-                  const d = lastLog.lastRun.toDate ? lastLog.lastRun.toDate() : new Date(lastLog.lastRun);
-                  return d.toLocaleString("en-US", { weekday:"short", month:"short", day:"numeric", hour:"numeric", minute:"2-digit" });
-                })()}
-                {Array.isArray(lastLog.results) && (
-                  <span style={{ color: C.dim, marginLeft: 8 }}>
-                    · {lastLog.results.filter(r => r.status === "sent").length} sent
-                    {lastLog.results.some(r => r.status === "error") && `, ${lastLog.results.filter(r=>r.status==="error").length} errored`}
-                  </span>
-                )}
-              </div>
-              {/* Per-foreman result lines. Sent rows render in green so the
-                  passing cases are obvious; error rows render in red with the
-                  raw error text from Resend (or whatever upstream) so the
-                  root cause is visible without checking Functions logs. */}
-              {Array.isArray(lastLog.results) && lastLog.results.length > 0 && (
-                <div style={{ marginTop: 8, display:"flex", flexDirection:"column", gap:4 }}>
-                  {lastLog.results.map((r, i) => {
-                    const ok = r.status === "sent";
-                    return (
-                      <div key={i} style={{
-                        fontSize: 11, padding:"6px 9px", borderRadius:6,
-                        background: ok ? "#DEEFE6" : "#F3E2E2",
-                        color:      ok ? "#2C5C40" : "#9A3030",
-                        border: `1px solid ${ok ? "#86efac" : "#fca5a5"}`,
-                        lineHeight: 1.4,
-                      }}>
-                        <span style={{ fontWeight:700 }}>
-                          {ok ? "✓" : "✗"} {r.foreman || "(unnamed)"}
-                        </span>
-                        {r.error && (
-                          <span style={{ marginLeft:6, fontFamily:"ui-monospace,monospace", fontWeight:500 }}>
-                            — {r.error}
-                          </span>
-                        )}
-                      </div>
-                    );
-                  })}
-                </div>
-              )}
-            </>
-          ) : (
-            <div style={{ fontSize: 12, color: C.dim, fontStyle: "italic" }}>
-              Hasn't run yet. The cron fires at 6am MT Mon-Fri.
-            </div>
-          )}
-        </div>
-
-        {savedToast && (
-          <div style={{ fontSize: 11, color: C.green, marginTop: 8 }}>
-            Saved.
-          </div>
-        )}
-        {saving && (
-          <div style={{ fontSize: 11, color: C.dim, marginTop: 8 }}>
-            Saving...
-          </div>
-        )}
-      </SettingsSection>
-    </div>
-  );
-}
-
-// ── Quote Walks tab ───────────────────────────────────────────────────
-// Pre-job site walk note capture. Foreman walks a quote site, takes photos
-// + notes + material observations, picks a status. Admin + other foremen
-// can see every walk in one list. Standalone from Jobs — no Convert-to-Job
-// flow in v1 (per spec).
-function QuoteWalksTab({ walks, onAdd, onUpdate, onDelete, jobs, identity, selected, setSelected }) {
-  const [search, setSearch] = useState("");
-  const [statusFilter, setStatusFilter] = useState("all");
-
-  // Sorted alphabetically by address (case-insensitive). Walks with no
-  // address bubble to the bottom so the list opens with named ones first.
-  const visible = useMemo(() => {
-    const q = search.trim().toLowerCase();
-    return (walks||[])
-      .filter(w => statusFilter === "all" ? true : (w.status||"walking") === statusFilter)
-      .filter(w => {
-        if (!q) return true;
-        const addr = (w.address||"").toLowerCase();
-        const client = (w.clientName||"").toLowerCase();
-        const who = (w.walkedBy||"").toLowerCase();
-        return addr.includes(q) || client.includes(q) || who.includes(q);
-      })
-      .sort((a,b) => {
-        const aA = (a.address||"").trim().toLowerCase();
-        const bA = (b.address||"").trim().toLowerCase();
-        if (!aA && bA) return 1;
-        if (aA && !bA) return -1;
-        return aA.localeCompare(bA);
-      });
-  }, [walks, search, statusFilter]);
-
-  // Address-collision lookup — pre-built map so we can flag walks whose
-  // address matches an existing job. Built once per render; jobs change
-  // infrequently. Case-insensitive, trimmed.
-  const jobAddressMap = useMemo(() => {
-    const m = new Map();
-    (jobs||[]).forEach(j => {
-      const a = (j.address||"").trim().toLowerCase();
-      if (a) m.set(a, j);
-    });
-    return m;
-  }, [jobs]);
-
-  if (selected) {
-    return <QuoteWalkDetail walk={selected} onChange={onUpdate} onDelete={onDelete}
-      onBack={()=>setSelected(null)} jobAddressMap={jobAddressMap}/>;
-  }
-
-  return (
-    <div style={{maxWidth:1100, margin:"0 auto", padding:"16px 14px"}}>
-      <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap"}}>
-        <h2 style={{margin:0, fontSize:20, fontWeight:800, color:C.text,
-          letterSpacing:"0.02em"}}>Quote Walks</h2>
-        <span style={{fontSize:12, color:C.dim}}>
-          {walks.length} walk{walks.length===1?"":"s"}
-        </span>
-        <button onClick={async ()=>{ const w = await onAdd(); setSelected(w); }}
-          style={{marginLeft:"auto", background:C.purple, border:"none", color:"#fff",
-            borderRadius:7, padding:"8px 14px", fontSize:13, fontWeight:700,
-            cursor:"pointer", fontFamily:"inherit", letterSpacing:"0.03em"}}>
-          + New Walk
-        </button>
-      </div>
-
-      <div style={{display:"flex", gap:8, marginBottom:12, flexWrap:"wrap"}}>
-        <input value={search} onChange={e=>setSearch(e.target.value)}
-          placeholder="Search by address, client, or walker…"
-          style={{flex:1, minWidth:200, padding:"8px 12px", fontSize:13,
-            border:`1px solid ${C.border}`, borderRadius:7, fontFamily:"inherit",
-            outline:"none", background:"#fff", color:C.text}}/>
-        <select value={statusFilter} onChange={e=>setStatusFilter(e.target.value)}
-          style={{padding:"8px 10px", fontSize:13, border:`1px solid ${C.border}`,
-            borderRadius:7, fontFamily:"inherit", background:"#fff", color:C.text,
-            cursor:"pointer"}}>
-          <option value="all">All statuses</option>
-          <option value="walking">Walking</option>
-          <option value="quote sent">Quote sent</option>
-        </select>
-      </div>
-
-      {visible.length === 0 ? (
-        <div style={{padding:"40px 20px", textAlign:"center", color:C.dim,
-          background:"#F7F8FA", border:`1px dashed ${C.border}`, borderRadius:10,
-          fontSize:13, fontStyle:"italic"}}>
-          {walks.length === 0
-            ? "No quote walks yet. Click + New Walk to start one."
-            : "No walks match the current filter."}
-        </div>
-      ) : (
-        <div style={{display:"flex", flexDirection:"column", gap:6}}>
-          {visible.map(w => {
-            const addrKey = (w.address||"").trim().toLowerCase();
-            const collidingJob = addrKey ? jobAddressMap.get(addrKey) : null;
-            const statusColor = (w.status||"walking") === "quote sent" ? C.green : C.accent;
-            return (
-              <div key={w.id} onClick={()=>setSelected(w)}
-                style={{padding:"10px 14px", background:"#fff",
-                  border:`1px solid ${C.border}`, borderRadius:9,
-                  cursor:"pointer", display:"flex", flexDirection:"column", gap:4,
-                  transition:"background 0.1s"}}
-                onMouseEnter={e=>e.currentTarget.style.background="#F7F8FA"}
-                onMouseLeave={e=>e.currentTarget.style.background="#fff"}>
-                <div style={{display:"flex", alignItems:"center", gap:10, flexWrap:"wrap"}}>
-                  <span style={{fontSize:14, fontWeight:600, color:C.text}}>
-                    {w.address || <span style={{color:C.muted, fontStyle:"italic", fontWeight:400}}>(no address yet)</span>}
-                  </span>
-                  {w.clientName && (
-                    <span style={{fontSize:12, color:C.dim}}>· {w.clientName}</span>
-                  )}
-                  <span style={{marginLeft:"auto", fontSize:10, fontWeight:700,
-                    letterSpacing:"0.05em", textTransform:"uppercase",
-                    color:statusColor, background:`${statusColor}15`,
-                    border:`1px solid ${statusColor}33`,
-                    borderRadius:99, padding:"2px 8px"}}>
-                    {w.status || "walking"}
-                  </span>
-                </div>
-                <div style={{display:"flex", alignItems:"center", gap:10, fontSize:11, color:C.dim, flexWrap:"wrap"}}>
-                  <span>{w.walkedBy || "(no walker)"}</span>
-                  <span>·</span>
-                  <span>{w.date || "(no date)"}</span>
-                  {(w.photos||[]).length > 0 && <>
-                    <span>·</span>
-                    <span>{(w.photos||[]).length} photo{(w.photos||[]).length===1?"":"s"}</span>
-                  </>}
-                  {(w.materials||[]).length > 0 && <>
-                    <span>·</span>
-                    <span>{(w.materials||[]).length} material item{(w.materials||[]).length===1?"":"s"}</span>
-                  </>}
-                  {collidingJob && (
-                    <span style={{marginLeft:"auto", fontSize:10, fontWeight:700,
-                      color:C.accent, background:"#F3E9CF",
-                      border:`1px solid #EAD9A6`, borderRadius:5, padding:"2px 6px"}}>
-                      ⚠ Job #{collidingJob.id} at this address
-                    </span>
-                  )}
-                </div>
-              </div>
-            );
-          })}
-        </div>
-      )}
-    </div>
-  );
-}
-
-// ── Quote Walk detail (single walk edit screen) ───────────────────────
-function QuoteWalkDetail({ walk, onChange, onDelete, onBack, jobAddressMap }) {
-  // Local state for the editable walk — keeps inputs responsive without
-  // round-tripping through Firestore on every keystroke. Debounced commit
-  // back to the parent via the setter pattern below.
-  const [local, setLocal] = useState(walk);
-  const commitTimer = useRef(null);
-  useEffect(() => { setLocal(walk); }, [walk?.id]);
-
-  const patch = (changes) => {
-    const next = { ...local, ...changes };
-    setLocal(next);
-    if (commitTimer.current) clearTimeout(commitTimer.current);
-    commitTimer.current = setTimeout(() => onChange(next), 600);
-  };
-  // Materials helpers
-  const addMaterial = () => patch({ materials: [...(local.materials||[]), { id: uid(), text: "" }] });
-  const updMaterial = (id, text) => patch({
-    materials: (local.materials||[]).map(m => m.id === id ? { ...m, text } : m),
-  });
-  const delMaterial = (id) => patch({
-    materials: (local.materials||[]).filter(m => m.id !== id),
-  });
-
-  // Photo upload — uses Firebase Storage, same path pattern as job photos.
-  const [uploading, setUploading] = useState(false);
-  const handlePhotoFiles = async (files) => {
-    if (!files || files.length === 0) return;
-    setUploading(true);
-    try {
-      const newPhotos = [];
-      for (const f of Array.from(files)) {
-        const path = `quoteWalks/${local.id}/${uid()}_${f.name}`;
-        const r = ref(storage, path);
-        await uploadBytes(r, f);
-        const url = await getDownloadURL(r);
-        newPhotos.push({
-          id: uid(), url, name: f.name,
-          takenAt: new Date().toISOString(),
-          uploadedBy: local.walkedBy || "",
-        });
-      }
-      const merged = [...(local.photos||[]), ...newPhotos];
-      patch({ photos: merged });
-    } catch (e) {
-      console.error("Photo upload failed:", e);
-      window.alert("Photo upload failed: " + (e?.message || "unknown error"));
-    } finally {
-      setUploading(false);
-    }
-  };
-  const removePhoto = (id) => {
-    if (!window.confirm("Remove this photo?")) return;
-    patch({ photos: (local.photos||[]).filter(p => p.id !== id) });
-  };
-
-  const collidingJob = (() => {
-    const a = (local.address||"").trim().toLowerCase();
-    if (!a) return null;
-    return jobAddressMap?.get(a) || null;
-  })();
-
-  return (
-    <div style={{maxWidth:900, margin:"0 auto", padding:"14px"}}>
-      {/* Top bar */}
-      <div style={{display:"flex", alignItems:"center", gap:10, marginBottom:14, flexWrap:"wrap"}}>
-        <button onClick={onBack}
-          style={{background:"none", border:`1px solid ${C.border}`, color:C.text,
-            borderRadius:7, padding:"6px 12px", fontSize:13, fontWeight:600,
-            cursor:"pointer", fontFamily:"inherit"}}>
-          ← Back
-        </button>
-        <h2 style={{margin:0, fontSize:18, fontWeight:700, color:C.text, flex:1, minWidth:0,
-          overflow:"hidden", textOverflow:"ellipsis", whiteSpace:"nowrap"}}>
-          {local.address || "(new walk)"}
-        </h2>
-        <button onClick={()=>{
-            if (window.confirm(`Delete this walk${local.address?` at ${local.address}`:""}? This cannot be undone.`)) {
-              onDelete(local.id);
-              onBack();
-            }
-          }}
-          style={{background:"none", border:`1px solid ${C.red}55`, color:C.red,
-            borderRadius:7, padding:"6px 12px", fontSize:12, fontWeight:600,
-            cursor:"pointer", fontFamily:"inherit"}}>
-          Delete
-        </button>
-      </div>
-
-      {/* Address collision warning */}
-      {collidingJob && (
-        <div style={{padding:"8px 12px", marginBottom:10, background:"#F3E9CF",
-          border:`1px solid #EAD9A6`, borderRadius:8, fontSize:12, color:"#6E5212"}}>
-          <b>⚠ Heads up</b> — job <b>#{collidingJob.id}</b>
-          {collidingJob.name ? ` (${collidingJob.name})` : ""} already exists at this address.
-        </div>
-      )}
-
-      {/* Top fields */}
-      <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fit, minmax(200px, 1fr))",
-        gap:10, marginBottom:14}}>
-        <Field label="Address">
-          <input value={local.address||""}
-            onChange={e=>patch({address:e.target.value})}
-            placeholder="Site address" autoFocus={!local.address}/>
-        </Field>
-        <Field label="Client name">
-          <input value={local.clientName||""}
-            onChange={e=>patch({clientName:e.target.value})}
-            placeholder="Optional"/>
-        </Field>
-        <Field label="Walked by">
-          <input value={local.walkedBy||""}
-            onChange={e=>patch({walkedBy:e.target.value})}/>
-        </Field>
-        <Field label="Date">
-          <input type="date" value={local.date||""}
-            onChange={e=>patch({date:e.target.value})}/>
-        </Field>
-        <Field label="Status">
-          <select value={local.status||"walking"}
-            onChange={e=>patch({status:e.target.value})}>
-            <option value="walking">Walking</option>
-            <option value="quote sent">Quote sent</option>
-          </select>
-        </Field>
-        {local.status === "quote sent" && (
-          <Field label="Simpro quote #">
-            <input value={local.simproQuoteNo||""}
-              onChange={e=>patch({simproQuoteNo:e.target.value})}
-              placeholder="Optional"/>
-          </Field>
-        )}
-      </div>
-
-      {/* Notes */}
-      <div style={{marginBottom:14}}>
-        <div style={{fontSize:11, color:C.dim, fontWeight:700, letterSpacing:"0.07em",
-          textTransform:"uppercase", marginBottom:5}}>Notes</div>
-        <textarea value={local.notes||""}
-          onChange={e=>patch({notes:e.target.value})}
-          placeholder="Anything the estimator should know — scope, panel condition, attic access, switching layout, special requests…"
-          rows={6}
-          style={{width:"100%", padding:"10px 12px", fontSize:14, lineHeight:1.5,
-            border:`1px solid ${C.border}`, borderRadius:7, fontFamily:"inherit",
-            outline:"none", color:C.text, background:"#fff", resize:"vertical",
-            boxSizing:"border-box"}}/>
-      </div>
-
-      {/* Materials list */}
-      <div style={{marginBottom:14}}>
-        <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:5}}>
-          <span style={{fontSize:11, color:C.dim, fontWeight:700,
-            letterSpacing:"0.07em", textTransform:"uppercase"}}>Material noted</span>
-          <button onClick={addMaterial}
-            style={{marginLeft:"auto", background:"none", border:`1px solid ${C.purple}`,
-              color:C.purple, borderRadius:5, padding:"3px 9px", fontSize:11,
-              fontWeight:700, cursor:"pointer", fontFamily:"inherit",
-              letterSpacing:"0.04em"}}>
-            + Add
-          </button>
-        </div>
-        {(local.materials||[]).length === 0 ? (
-          <div style={{padding:"10px 12px", fontSize:12, color:C.dim,
-            fontStyle:"italic", background:"#F7F8FA", border:`1px dashed ${C.border}`,
-            borderRadius:7}}>
-            Add anything you noticed the job will need.
-          </div>
-        ) : (
-          <div style={{display:"flex", flexDirection:"column", gap:5}}>
-            {(local.materials||[]).map(m => (
-              <div key={m.id} style={{display:"flex", gap:6, alignItems:"center"}}>
-                <input value={m.text||""}
-                  onChange={e=>updMaterial(m.id, e.target.value)}
-                  placeholder="e.g. 3× GFCI receptacles, replace 100A panel"
-                  style={{flex:1, padding:"6px 10px", fontSize:13,
-                    border:`1px solid ${C.border}`, borderRadius:6,
-                    fontFamily:"inherit", outline:"none", color:C.text, background:"#fff"}}/>
-                <button onClick={()=>delMaterial(m.id)}
-                  style={{background:"none", border:"none", color:C.muted,
-                    cursor:"pointer", fontSize:16, padding:"0 6px", lineHeight:1}}>×</button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-
-      {/* Photos */}
-      <div style={{marginBottom:14}}>
-        <div style={{display:"flex", alignItems:"center", gap:8, marginBottom:5}}>
-          <span style={{fontSize:11, color:C.dim, fontWeight:700,
-            letterSpacing:"0.07em", textTransform:"uppercase"}}>
-            Photos {(local.photos||[]).length > 0 && `(${(local.photos||[]).length})`}
-          </span>
-          <label style={{marginLeft:"auto", background:`${C.teal}15`, border:`1px solid ${C.teal}55`,
-            color:C.teal, borderRadius:5, padding:"4px 10px", fontSize:11, fontWeight:700,
-            cursor:uploading?"not-allowed":"pointer", fontFamily:"inherit",
-            letterSpacing:"0.04em", display:"inline-flex", alignItems:"center", gap:5,
-            opacity: uploading ? 0.5 : 1}}>
-            <Icon name="camera" size={12}/> Take Photo
-            <input type="file" accept="image/*" capture="environment"
-              disabled={uploading}
-              onChange={e=>{ handlePhotoFiles(e.target.files); e.target.value=""; }}
-              style={{display:"none"}}/>
-          </label>
-          <label style={{background:`${C.purple}15`, border:`1px solid ${C.purple}55`,
-            color:C.purple, borderRadius:5, padding:"4px 10px", fontSize:11, fontWeight:700,
-            cursor:uploading?"not-allowed":"pointer", fontFamily:"inherit",
-            letterSpacing:"0.04em", display:"inline-flex", alignItems:"center", gap:5,
-            opacity: uploading ? 0.5 : 1}}>
-            <Icon name="image" size={12}/> Upload
-            <input type="file" accept="image/*,application/pdf" multiple
-              disabled={uploading}
-              onChange={e=>{ handlePhotoFiles(e.target.files); e.target.value=""; }}
-              style={{display:"none"}}/>
-          </label>
-        </div>
-        {uploading && (
-          <div style={{padding:"6px 10px", fontSize:11, color:C.purple, fontStyle:"italic"}}>
-            Uploading…
-          </div>
-        )}
-        {(local.photos||[]).length === 0 ? (
-          <div style={{padding:"20px", fontSize:12, color:C.dim, fontStyle:"italic",
-            background:"#F7F8FA", border:`1px dashed ${C.border}`, borderRadius:7,
-            textAlign:"center"}}>
-            Tap Take Photo to capture the site.
-          </div>
-        ) : (
-          <div style={{display:"grid", gridTemplateColumns:"repeat(auto-fill, minmax(140px, 1fr))",
-            gap:8}}>
-            {(local.photos||[]).map(p => (
-              <div key={p.id} style={{position:"relative", borderRadius:7,
-                overflow:"hidden", border:`1px solid ${C.border}`, background:"#fff"}}>
-                <a href={p.url} target="_blank" rel="noopener noreferrer">
-                  <img src={p.url} alt={p.name||""}
-                    style={{width:"100%", height:130, objectFit:"cover", display:"block",
-                      cursor:"pointer"}}/>
-                </a>
-                <button onClick={()=>removePhoto(p.id)}
-                  style={{position:"absolute", top:4, right:4,
-                    background:"rgba(0,0,0,0.6)", border:"none", color:"#fff",
-                    borderRadius:99, width:24, height:24, cursor:"pointer",
-                    fontSize:14, lineHeight:1, padding:0,
-                    display:"flex", alignItems:"center", justifyContent:"center"}}>×</button>
-              </div>
-            ))}
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-// Tiny field wrapper used by QuoteWalkDetail — keeps the inputs visually
-// consistent without dragging in the full PhaseInstructions / Form styles.
-function Field({ label, children }) {
-  return (
-    <label style={{display:"flex", flexDirection:"column", gap:3}}>
-      <span style={{fontSize:10, color:C.dim, fontWeight:700,
-        letterSpacing:"0.07em", textTransform:"uppercase"}}>{label}</span>
-      <div className="qw-field" style={{display:"flex"}}>
-        {children}
-        <style>{`
-          .qw-field input, .qw-field select, .qw-field textarea {
-            width: 100%;
-            padding: 7px 10px;
-            font-size: 13px;
-            border: 1px solid ${C.border};
-            border-radius: 6px;
-            font-family: inherit;
-            outline: none;
-            color: ${C.text};
-            background: #fff;
-            box-sizing: border-box;
-          }
-          .qw-field input:focus, .qw-field select:focus, .qw-field textarea:focus {
-            border-color: ${C.purple};
-          }
-        `}</style>
-      </div>
-    </label>
   );
 }
 
@@ -47936,12 +44607,8 @@ function App() {
 
   const [jobs,     setJobs]     = useState([]);
   const [upcoming, setUpcoming] = useState([]);
-  const [manualTasks, setManualTasks] = useState([]);
   const [needs, setNeeds] = useState([]);
   // Quote walks — pre-job site walk notes (replaces Apple Notes capture).
-  // Loaded from /quoteWalks Firestore collection. Separate state from jobs
-  // because the lifecycles are independent.
-  const [quoteWalks, setQuoteWalks] = useState([]);
   const [redlineWalks, setRedlineWalks] = useState([]);   // Redline-walk tracker (COs tab sub-view)
   // Top-level suggestions subscription — feeds the Today tab's Live Activity
   // events 58/59. AppMapSharePage maintains its own separate subscription for
@@ -47951,7 +44618,6 @@ function App() {
   const [appSuggestions, setAppSuggestions] = useState([]);
   const [backupStatus, setBackupStatus] = useState(null); // null=loading, false=doc missing, else settings/backupStatus data
   const [backupBannerDismissed, setBackupBannerDismissed] = useState(false); // per-session dismiss
-  const [selectedQuoteWalk, setSelectedQuoteWalk] = useState(null);
   // Simpro inbox — pending Simpro jobs not yet imported into the app.
   // Populated by the scheduledSimproCandidateRefresh cloud function (every
   // 4h) and the on-demand Sync button. Each entry: {simproId, name, address,
@@ -48201,11 +44867,6 @@ function App() {
       else setSimproCandidates([]);
     }, err => console.error("Simpro candidates listener error:", err));
 
-    // Load manual tasks from Firestore
-    const unsubTasks = onSnapshot(collection(db,"manualTasks"),
-      (snap) => { const loaded=snap.docs.map(d=>d.data().data).filter(Boolean); setManualTasks(loaded); },
-      (err) => { console.error("Tasks snapshot error:",err); }
-    );
 
     // Load Needs Board items from Firestore. Same `data` envelope as manualTasks.
     // Standalone collection so a need can exist with no job and never touches the
@@ -48215,23 +44876,6 @@ function App() {
       (err) => { console.error("Needs snapshot error:",err); }
     );
 
-    // Load quote walks from Firestore. Same `data` envelope pattern as jobs.
-    const unsubQuoteWalks = onSnapshot(collection(db,"quoteWalks"),
-      (snap) => {
-        const loaded = snap.docs
-          .map(d => { const raw = d.data(); return raw?.data ? { ...raw.data, updated_at: raw.updated_at || "" } : null; })
-          .filter(Boolean);
-        setQuoteWalks(loaded);
-        // Keep the currently-selected walk in sync if it gets edited on
-        // another device — same pattern as the jobs sync.
-        setSelectedQuoteWalk(prev => {
-          if (!prev) return null;
-          const updated = loaded.find(w => w.id === prev.id);
-          return updated || prev;
-        });
-      },
-      (err) => { console.error("Quote walks snapshot error:", err); }
-    );
 
     // Redline walks — same top-level collection + `data` envelope as quoteWalks.
     const unsubRedlineWalks = onSnapshot(collection(db,"redlineWalks"),
@@ -48274,7 +44918,7 @@ function App() {
       setBackupStatus(snap.exists() ? snap.data() : false);
     }, ()=>{});
 
-    return () => { unsub(); unsubUpcoming(); unsubSimproCands(); unsubTasks(); unsubNeeds(); unsubQuoteWalks(); unsubRedlineWalks(); unsubSuggestions(); unsubVersion(); unsubBackupStatus(); }; // cleanup on unmount
+    return () => { unsub(); unsubUpcoming(); unsubSimproCands(); unsubNeeds(); unsubRedlineWalks(); unsubSuggestions(); unsubVersion(); unsubBackupStatus(); }; // cleanup on unmount
 
   },[]);
 
@@ -48718,13 +45362,6 @@ function App() {
   };
 
 
-  const saveManualTask = async (task) => {
-    try { await setDoc(doc(db,"manualTasks",task.id),{data:task,updated_at:new Date().toISOString()}); } catch(e){}
-  };
-  const deleteManualTask = async (id) => {
-    try { await deleteDoc(doc(db,"manualTasks",id)); } catch(e){}
-  };
-
   // Needs Board writes — same envelope as manualTasks. Optimistic local update so
   // the board reflects instantly; the onSnapshot listener reconciles from Firestore.
   const saveNeed = async (need) => {
@@ -48957,50 +45594,6 @@ function App() {
     saveJob(updated, patch);
   };
 
-  // ── Quote walks save / delete / add ────────────────────────────────
-  // Lightweight save — wraps the walk in the same `data` envelope as jobs
-  // so Firestore rules apply consistently. No saveTimers/debounce yet —
-  // walks are small and edits are infrequent enough that immediate writes
-  // are fine. Can add debounce later if needed.
-  const saveQuoteWalk = async (walk) => {
-    if (!walk?.id) return;
-    const next = { ...walk, updatedAt: new Date().toISOString() };
-    try {
-      await setDoc(doc(db, "quoteWalks", walk.id), {
-        data: next,
-        updated_at: next.updatedAt,
-      });
-    } catch (e) {
-      console.error("[HE] saveQuoteWalk failed:", e?.message);
-    }
-  };
-  // Optimistic update — patches local state immediately so the UI feels
-  // snappy, then writes to Firestore. Snapshot listener reconciles on
-  // success/failure.
-  const updateQuoteWalk = (next) => {
-    setQuoteWalks(ws => ws.map(w => w.id === next.id ? next : w));
-    setSelectedQuoteWalk(s => (s && s.id === next.id) ? next : s);
-    saveQuoteWalk(next);
-  };
-  const deleteQuoteWalk = async (id) => {
-    if (!id) return;
-    setQuoteWalks(ws => ws.filter(w => w.id !== id));
-    setSelectedQuoteWalk(s => (s && s.id === id) ? null : s);
-    try {
-      await deleteDoc(doc(db, "quoteWalks", id));
-    } catch (e) {
-      console.error("[HE] deleteQuoteWalk failed:", e?.message);
-    }
-  };
-  const addQuoteWalk = async () => {
-    const me = getIdentity && getIdentity();
-    const walk = newQuoteWalk(me?.name || "");
-    walk.walkedByUid = me?.id || "";
-    setQuoteWalks(ws => [...ws, walk]);
-    setSelectedQuoteWalk(walk);
-    await saveQuoteWalk(walk);
-    return walk;
-  };
 
   // ── Redline walks save / update / delete / add (mirror quoteWalks) ──────────
   const saveRedlineWalk = async (walk) => {
@@ -49205,7 +45798,6 @@ function App() {
     }
     setLeadLandingApplied(true);
   }, [identity, users, leadLandingApplied]);
-  const [quickAddOpen, setQuickAddOpen] = useState(false);
 
   const openForeman  = (f) => { setActiveForeman(f); setView("foreman");   setSearch(""); setStageF("All"); setFlagOnly(false); };
   const [activeBook, setActiveBook] = useState(null); // coordinator name whose whole book is open, or null
@@ -50073,7 +46665,6 @@ function App() {
             {key:"nav",label:"Nav",icon:"mapPin"},
             {key:"upcoming",label:"Upcoming",icon:"calendar"},
             ...(can(identity,"quotes.view")?[{key:"quotes",label:"Quotes",icon:"fileText"}]:[]),
-            {key:"walks",label:"Walks",icon:"clipboard"},
             ...(can(identity,"lutron.view")?[{key:"lutron",label:"Plan Changes",icon:"mapPin"}]:[]),
             {key:"tasks",label:"Tasks",icon:"check"},
             {key:"timeoff",label:"Time Off",icon:"calendar"},
@@ -50988,8 +47579,7 @@ function App() {
               const isKoy = activeForeman === "Koy";
               const _clearedTab = new Set(jobs.flatMap(j=>j.clearedTasks||[]));
               const fTasks = computeTasks(jobs)
-                .filter(t=>t.foreman===activeForeman && t.category!=="prep" && !_clearedTab.has(t.id))
-                .concat((manualTasks||[]).filter(t=>t.foreman===activeForeman));
+                .filter(t=>t.foreman===activeForeman && t.category!=="prep" && !_clearedTab.has(t.id));
               const prepTasks = computeTasks(jobs).filter(t=>t.foreman==="Koy"&&t.category==="prep"&&!_clearedTab.has(t.id));
               const taskCount = isKoy ? fTasks.length + prepTasks.length : fTasks.length;
               const fc = _foremanColors[activeForeman]||"#6E7682";
@@ -51095,18 +47685,14 @@ function App() {
                 const isKoy = activeForeman === "Koy";
                 const _clearedFTC = new Set(jobs.flatMap(j=>j.clearedTasks||[]));
                 const fTasks = computeTasks(jobs)
-                  .filter(t=>t.foreman===activeForeman && t.category!=="prep" && !_clearedFTC.has(t.id))
-                  .concat((manualTasks||[]).filter(t=>t.foreman===activeForeman));
+                  .filter(t=>t.foreman===activeForeman && t.category!=="prep" && !_clearedFTC.has(t.id));
                 const prepTasks = computeTasks(jobs).filter(t=>t.foreman==="Koy"&&t.category==="prep"&&!_clearedFTC.has(t.id));
                 return (
                   <ForemanTaskCard
                     isKoy={isKoy}
                     fTasks={fTasks}
                     prepTasks={prepTasks}
-                    jobs={jobs}
-                    manualTasks={manualTasks}
-                    onManualTasksChange={(next)=>{ next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); }); manualTasks.forEach(t=>{ if(!next.find(m=>m.id===t.id)) deleteManualTask(t.id); }); setManualTasks(next); }}
-                    onSelectJob={(job)=>setSelected(job)}
+                    jobs={jobs}                    onSelectJob={(job)=>setSelected(job)}
                     onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
                     activeForeman={activeForeman}
                     foremenList={_foremen}
@@ -51220,9 +47806,6 @@ function App() {
         : <JobDetail key={selected.id} job={selected} onUpdate={updateJob} onClose={()=>{flushJob(selected);setSelected(null);setOpenTab(null);}} foremenList={_foremen} leadsList={_leads}
             canConvertQuote={can(identity,"quotes.convert")}
             initialTab={openTab} users={users} identity={identity}
-            manualTasks={manualTasks}
-            onSaveManualTask={(task)=>{ saveManualTask(task); setManualTasks(prev=>{ const idx=(prev||[]).findIndex(t=>t.id===task.id); if(idx>=0){ const next=[...prev]; next[idx]=task; return next; } return [...(prev||[]), task]; }); }}
-            onDeleteManualTask={(id)=>{ deleteManualTask(id); setManualTasks(prev=>(prev||[]).filter(t=>t.id!==id)); }}
             jobs={jobs}
             onConvertQuote={(q)=>{
               // q already has simproNo set from the prompt
@@ -51273,82 +47856,6 @@ function App() {
               toast.success && toast.success(`Moved "${q.name||"quote"}" back to Upcoming.`);
             }}
           />)}
-
-      {/* Global quick-add "+" FAB removed 2026-04-28 — nobody used it; the
-          team always opens a job first and adds tasks/notes from there. The
-          AddTaskForm modal below is now unreachable but kept inert in case a
-          future entry point wants the same flow without rebuilding it. */}
-      {quickAddOpen && (
-        <div onClick={()=>setQuickAddOpen(false)}
-          style={{position:"fixed",inset:0,background:"rgba(0,0,0,0.55)",
-            zIndex:9100,display:"flex",alignItems:"flex-start",justifyContent:"center",
-            padding:"60px 16px",overflowY:"auto"}}>
-          <div onClick={e=>e.stopPropagation()}
-            style={{background:"var(--bg)",border:"1px solid var(--border)",borderRadius:14,
-              maxWidth:640,width:"100%",padding:18,boxShadow:"0 20px 60px rgba(0,0,0,0.4)"}}>
-            <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:6}}>
-              <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:18,letterSpacing:"0.08em",color:"#3B5BA5"}}>QUICK ADD</div>
-              <button onClick={()=>setQuickAddOpen(false)}
-                style={{background:"none",border:"1px solid var(--border)",borderRadius:7,color:"var(--dim)",fontSize:13,padding:"4px 10px",cursor:"pointer",fontFamily:"inherit"}}>✕</button>
-            </div>
-            <AddTaskForm
-              defaultForeman={(identity && identity.name) || "Koy"}
-              foremenList={_foremen}
-              jobs={jobs}
-              onCancel={()=>setQuickAddOpen(false)}
-              onAdd={(t)=>{
-                // Visit + job selected → new Return Trip on that job.
-                // Why not write to manualTasks too: the RT is the single
-                // source of truth. Double-write would drift.
-                // Why require jobId: return trips live on a job doc; no job
-                // means nowhere to attach. We fall back to a manualTask so
-                // nothing gets dropped.
-                if (t.itemType === "Visit" && t.jobId) {
-                  const target = (jobs||[]).find(j => j && j.id === t.jobId);
-                  if (target) {
-                    const newRT = {
-                      id: uid(),
-                      date: "",
-                      scope: t.title,
-                      material: t.notes || "",
-                      punch: [], photos: [],
-                      assignedTo: t.foreman || "",
-                      signedOff:false, signedOffBy:"", signedOffDate:"",
-                      needsSchedule: !t.dueDate,
-                      needsScheduleDate: "",
-                      rtScheduled: !!t.dueDate,
-                      rtStatus: t.dueDate ? "scheduled" : "needs",
-                      scheduledDate: t.dueDate || "",
-                      createdAt: new Date().toISOString(),
-                      requestedBy: t.requestedBy || "",
-                    };
-                    const nextTrips = [ ...(target.returnTrips||[]), newRT ];
-                    const updatedJob = { ...target, returnTrips: nextTrips };
-                    // Mirror the standard save pattern used elsewhere: update
-                    // local state + persist patch so we don't drop nextTrips
-                    // in a race with Firestore.
-                    setJobs(js => js.map(j => j.id === updatedJob.id ? updatedJob : j));
-                    saveJob(updatedJob, { returnTrips: nextTrips });
-                    setQuickAddOpen(false);
-                    return;
-                  }
-                }
-                const itemColor = (t.itemType && ITEM_TYPE_COLORS[t.itemType]) || "#6E7682";
-                const task = {
-                  id: uid(), title: t.title, foreman: t.foreman,
-                  notes: t.notes, dueDate: t.dueDate||"", type:"manual", category:"manual",
-                  color: itemColor, cleared:false, createdAt: new Date().toISOString(),
-                  jobId: t.jobId||"", itemType: t.itemType||"",
-                  requestedBy: t.requestedBy||"", status: "open",
-                };
-                saveManualTask(task);
-                setManualTasks(prev=>[...(prev||[]), task]);
-                setQuickAddOpen(false);
-              }}
-            />
-          </div>
-        </div>
-      )}
 
       {/* ── BOOK PAGE (all of a coordinator's foremen's jobs in one spot) ── */}
       {view==="book"&&(()=>{
@@ -51509,19 +48016,12 @@ function App() {
       )}
 
       {view==="huddle"&&can(identity,"settings.view")&&(
-        <HuddleSheet jobs={jobs} manualTasks={manualTasks} foremen={_foremen} identity={identity} users={users}/>
+        <HuddleSheet jobs={jobs} foremen={_foremen} identity={identity} users={users}/>
       )}
 
       {view==="tasks"&&can(identity,"tasks.view")&&(
         <Tasks
-          jobs={jobs}
-          manualTasks={manualTasks}
-          onManualTasksChange={(next)=>{
-            next.forEach(t=>{ if(!manualTasks.find(m=>m.id===t.id)) saveManualTask(t); });
-            manualTasks.forEach(t=>{ if(!next.find(m=>m.id===t.id)) deleteManualTask(t.id); });
-            setManualTasks(next);
-          }}
-          onSelectJob={(job)=>setSelected(job)}
+          jobs={jobs}          onSelectJob={(job)=>setSelected(job)}
           onUpdateJob={(jobId,patch)=>{ const job=jobs.find(j=>j.id===jobId); if(job) updateJob({...job,...patch},patch); }}
           foremenList={_foremen}
         />
@@ -51564,18 +48064,6 @@ function App() {
 
       {view==="timeoff"&&<TimeOffPage identity={identity} users={users}/>}
 
-      {view==="walks"&&(
-        <QuoteWalksTab
-          walks={quoteWalks}
-          jobs={jobs}
-          identity={identity}
-          selected={selectedQuoteWalk}
-          setSelected={setSelectedQuoteWalk}
-          onAdd={addQuoteWalk}
-          onUpdate={updateQuoteWalk}
-          onDelete={deleteQuoteWalk}
-        />
-      )}
 
       {view==="upcoming"&&can(identity,"pipeline.view")&&(
         <UpcomingJobs
@@ -51626,7 +48114,7 @@ function App() {
       )}
 
       {view==="today"&&can(identity,"today.view")&&(
-        <Today jobs={jobs} users={users} manualTasks={manualTasks} quoteWalks={quoteWalks} suggestions={appSuggestions} identity={identity} onSelectJob={setSelected} onUpdateJob={updateJob}/>
+        <Today jobs={jobs} users={users} suggestions={appSuggestions} identity={identity} onSelectJob={setSelected} onUpdateJob={updateJob}/>
       )}
 
       {view==="needs"&&can(identity,"board.view")&&(
@@ -51704,8 +48192,7 @@ function App() {
             jobs={jobs}
             identity={identity}
             upcoming={upcoming}
-            manualTasks={manualTasks}
-            onRestoreFromBackup={async()=>{
+              onRestoreFromBackup={async()=>{
               try {
                 const b=localStorage.getItem('hejobs_backup');
                 if(!b){toast.warn('No backup found in localStorage');return 0;}
@@ -51743,7 +48230,6 @@ function App() {
               </SettingsSection>
             </div>
           )}
-          {can(identity,"settings.view")&&<HuddleConfigPanel/>}
         </div>
       )}
 

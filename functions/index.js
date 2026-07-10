@@ -350,7 +350,7 @@ async function sendToName(name, notification) {
   await deliver(user, notification);
 }
 
-async function sendToRoles(roles, notification, excludeTokens = []) {
+async function sendToRoles(roles, notification, excludeTokens = [], prefKey = null) {
   const users = await getUsers();
   const targets = users.filter(u => roles.includes(u.title) || roles.includes(u.role));
   const sends = [];
@@ -358,9 +358,27 @@ async function sendToRoles(roles, notification, excludeTokens = []) {
     // excludeTokens means "this person already got the direct send" — skip the
     // whole user (push AND inbox) so nobody gets the same nudge twice.
     if (getTokens(u).some(t => excludeTokens.includes(t))) continue;
+    if (prefKey && !wantsNotif(u, prefKey)) continue;
     sends.push(deliver(u, notification));
   }
   await Promise.all(sends);
+}
+
+// sendToName, but honoring the recipient's Settings → Notifications toggle.
+// This is the DEFAULT for event sends (2026-07-10 honest-notifications pass):
+// every NOTIF_CATEGORIES key the app renders must gate through wantsNotif
+// somewhere on the server. Plain sendToName is reserved for Koy-personal
+// ops sends that intentionally can't be muted.
+async function sendToNameIfWanted(name, key, notification) {
+  if (!name || name === "Unassigned") return;
+  const users = await getUsers();
+  const n = name.toLowerCase().trim();
+  const user = users.find(u => {
+    const un = (u.name || "").toLowerCase();
+    return un === n || un.startsWith(n + " ") || n.startsWith(un.split(" ")[0]);
+  });
+  if (!user) return;
+  await deliverIfWanted(user, key, notification);
 }
 
 // Route a notification to the COORDINATOR who owns this job's foreman's book:
@@ -368,21 +386,20 @@ async function sendToRoles(roles, notification, excludeTokens = []) {
 async function sendToJobCoordinator(foremanName, notification) {
   if (!foremanName) return;
   const users = await getUsers();
-  const fm = users.find(u => (u.name || "").toLowerCase() === String(foremanName).toLowerCase());
-  const coordName = fm && fm.coordinator;
-  if (!coordName) return;
-  const coord = users.find(u => (u.name || "").toLowerCase() === String(coordName).toLowerCase());
+  const coord = coordUserOf(users, foremanName);
   if (!coord) return;
   await deliver(coord, notification);
 }
 
-/** Convenience — send the same notification to a name + roles (deduped), with jobId/section. */
-async function notify(name, roles, notif, excludeTokens = []) {
-  const nameTokens = name && name !== "Unassigned" ? await getTokenForName(name) : [];
-  const tasks = [];
-  if (name && name !== "Unassigned") tasks.push(sendToName(name, notif)); // deliver: inbox + tokens
-  tasks.push(sendToRoles(roles, notif, [...excludeTokens, ...nameTokens]));
-  await Promise.all(tasks);
+// sendToJobCoordinator, but honoring the coordinator's pref toggle. Replaces
+// the old admin/manager blast on most onJobUpdate branches: the person who
+// owns this foreman's book gets the nudge, everyone else reads it in the app.
+async function sendToJobCoordinatorIfWanted(foremanName, key, notification) {
+  if (!foremanName) return;
+  const users = await getUsers();
+  const coord = coordUserOf(users, foremanName);
+  if (!coord) return;
+  await deliverIfWanted(coord, key, notification);
 }
 
 async function getTokenForName(name) {
@@ -473,18 +490,19 @@ exports.onJobUpdate = functions.firestore
     const tasks = [];
 
     // ── 1. Foreman assigned / changed ─────────────────────────
+    // Honest routing (2026-07-10): assignee + their book's coordinator, both
+    // pref-gated. The admin/manager blast is gone — office reads it in-app.
     if (after.foreman && after.foreman !== before.foreman && after.foreman !== "Unassigned") {
-      const foremanTokens = await getTokenForName(after.foreman);
-      tasks.push(sendToName(after.foreman, {
+      tasks.push(sendToNameIfWanted(after.foreman, "job_assigned", {
         title: "🔨 Job Assigned to You",
         body:  `You've been assigned as foreman on ${name}`,
         jobId, section: "Job Info",
       }));
-      tasks.push(sendToRoles(["admin", "manager"], {
+      tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "job_assigned", {
         title: "🔨 Foreman Assigned",
         body:  `${after.foreman} assigned as foreman on ${name}`,
         jobId, section: "Job Info",
-      }, foremanTokens));
+      }));
     }
 
     // ── 1b. Status update changed (irregular status like "needs a lift") ──
@@ -492,39 +510,44 @@ exports.onJobUpdate = functions.firestore
     // we also push it so foreman + admins know right away. Cleared = goes
     // back to normal, which we announce lightly so people stop chasing it.
     if ((before.statusUpdate || "") !== (after.statusUpdate || "")) {
-      const foremanTokens = await getTokenForName(after.foreman);
       const cleared = !after.statusUpdate;
       const title   = cleared ? "✅ Status Cleared" : "⚠️ Status Update";
       const body    = cleared
         ? `${name} — status cleared`
         : `${name} — ${after.statusUpdate}`;
-      tasks.push(sendToName(after.foreman, {
+      tasks.push(sendToNameIfWanted(after.foreman, "status_update", {
         title, body, jobId, section: "Job Info",
       }));
-      tasks.push(sendToRoles(["admin", "manager"], {
+      tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "status_update", {
         title, body, jobId, section: "Job Info",
-      }, foremanTokens));
+      }));
     }
 
     // ── 2. Lead assigned / changed ────────────────────────────
     if (after.lead && after.lead !== before.lead && after.lead !== "Unassigned") {
-      const leadTokens = await getTokenForName(after.lead);
-      tasks.push(sendToName(after.lead, {
+      tasks.push(sendToNameIfWanted(after.lead, "job_assigned", {
         title: "📋 Job Assigned to You",
         body:  `You're the lead on ${name}`,
         jobId, section: "Job Info",
       }));
-      tasks.push(sendToRoles(["admin", "manager"], {
+      tasks.push(sendToNameIfWanted(after.foreman, "lead_assigned", {
         title: "📋 Lead Assigned",
         body:  `${after.lead} assigned as lead on ${name}`,
         jobId, section: "Job Info",
-      }, leadTokens));
+      }));
+      tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "lead_assigned", {
+        title: "📋 Lead Assigned",
+        body:  `${after.lead} assigned as lead on ${name}`,
+        jobId, section: "Job Info",
+      }));
     }
 
     // ── 3. Ready to invoice ───────────────────────────────────
+    // One of two branches that keeps the admin/manager blast (billing is an
+    // office-wide event) — but now pref-gated per user via the 4th arg.
     if (!before.readyToInvoice && after.readyToInvoice) {
       const foremanTokens = await getTokenForName(after.foreman);
-      tasks.push(sendToName(after.foreman, {
+      tasks.push(sendToNameIfWanted(after.foreman, "ready_invoice", {
         title: "💰 Ready to Invoice",
         body:  `${name} is ready to invoice`,
         jobId, section: "Job Info",
@@ -533,59 +556,57 @@ exports.onJobUpdate = functions.firestore
         title: "💰 Ready to Invoice",
         body:  `${name} is ready to invoice`,
         jobId, section: "Job Info",
-      }, foremanTokens));
+      }, foremanTokens, "ready_invoice"));
     }
 
     // ── 4. Quote converted to job ─────────────────────────────
+    // The other office-wide blast that stays — pref-gated per user.
     if (before.type === "quote" && after.type !== "quote") {
       tasks.push(sendToRoles(["admin", "manager"], {
         title: "✅ Quote Converted to Job",
         body:  `${name} is now a job — ready for billing`,
         jobId, section: "Job Info",
-      }));
+      }, [], "quote_converted"));
     }
 
     // ── 5. Job prep complete ──────────────────────────────────
     if (!allPrepDone(before) && allPrepDone(after)) {
-      const foremanTokens = await getTokenForName(after.foreman);
-      tasks.push(sendToName(after.foreman, {
+      tasks.push(sendToNameIfWanted(after.foreman, "prep_complete", {
         title: "✅ Job Prep Complete",
         body:  `Prep is done on ${name} — ready to roll`,
         jobId, section: "Job Info",
       }));
-      tasks.push(sendToRoles(["admin", "manager"], {
+      tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "prep_complete", {
         title: "✅ Job Prep Complete",
         body:  `${name} prep is complete`,
         jobId, section: "Job Info",
-      }, foremanTokens));
+      }));
     }
 
     // ── 6. QC walk needs to be scheduled ─────────────────────
     if (before.qcStatus !== "needs" && after.qcStatus === "needs") {
-      const foremanTokens = await getTokenForName(after.foreman);
-      tasks.push(sendToName(after.foreman, {
+      tasks.push(sendToNameIfWanted(after.foreman, "qc_ready", {
         title: "🔍 QC Walk Ready to Schedule",
         body:  `${name} is ready for a QC walk — please schedule it`,
         jobId, section: "QC",
       }));
-      tasks.push(sendToRoles(["admin", "manager"], {
+      tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "qc_ready", {
         title: "🔍 QC Walk Ready to Schedule",
         body:  `${name} is ready for a QC walk`,
         jobId, section: "QC",
-      }, foremanTokens));
+      }));
     }
 
     // ── 6b. QC passed (pass or fixed) ────────────────────────
     const wasPass = after.qcStatus === "pass" || after.qcStatus === "fixed";
     const wasPassBefore = before.qcStatus === "pass" || before.qcStatus === "fixed";
     if (!wasPassBefore && wasPass) {
-      const foremanTokens = await getTokenForName(after.foreman);
-      tasks.push(sendToRoles(["admin", "manager"], {
+      tasks.push(sendToNameIfWanted(after.foreman, "qc_passed", {
         title: "✅ QC Passed",
         body:  `${name} — all QC items resolved, QC is now passing`,
         jobId, section: "QC",
-      }, foremanTokens));
-      tasks.push(sendToName(after.foreman, {
+      }));
+      tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "qc_passed", {
         title: "✅ QC Passed",
         body:  `${name} — all QC items resolved, QC is now passing`,
         jobId, section: "QC",
@@ -594,12 +615,11 @@ exports.onJobUpdate = functions.firestore
 
     // ── 6c. Matterport scan complete ──────────────────────────
     if (before.matterportStatus !== "complete" && after.matterportStatus === "complete") {
-      const foremanTokens = await getTokenForName(after.foreman);
-      tasks.push(sendToRoles(["admin", "manager"], {
+      tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "matterport", {
         title: "📷 Matterport Scan Complete",
         body:  `${name} — Matterport scan is done`,
         jobId, section: "Rough",
-      }, foremanTokens));
+      }));
     }
 
     // ── 7. Change Orders ──────────────────────────────────────
@@ -608,20 +628,19 @@ exports.onJobUpdate = functions.firestore
 
     if (afterCOs.length > beforeCOs.length) {
       for (const co of afterCOs.slice(beforeCOs.length)) {
-        const foremanTokens = await getTokenForName(after.foreman);
-        tasks.push(sendToName(after.foreman, {
+        tasks.push(sendToNameIfWanted(after.foreman, "co_new", {
           title: "📝 New Change Order",
           body:  `A new change order was created on ${name}`,
           jobId, section: "Change Orders",
         }));
-        tasks.push(sendToRoles(["admin", "manager"], {
+        tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "co_new", {
           title: "📝 New Change Order",
           body:  `A new change order was created on ${name}`,
           jobId, section: "Change Orders",
-        }, foremanTokens));
-        // CO chaser — Jeromy quotes/sends COs but isn't always admin/manager,
-        // so the role push above can miss him. Nudge him directly on every new CO.
-        tasks.push(sendToName("Jeromy Cloward", {
+        }));
+        // CO chaser — Jeromy quotes/sends COs but isn't always admin/manager.
+        // Now gated on HIS co_new toggle (he was getting pushed through a mute).
+        tasks.push(sendToNameIfWanted("Jeromy Cloward", "co_new", {
           title: "📝 New CO to quote",
           body:  `New change order on ${name} — review & get it quoted/sent.`,
           jobId, section: "Change Orders",
@@ -637,42 +656,37 @@ exports.onJobUpdate = functions.firestore
       if (!prev) continue;
 
       if (prev.coStatus !== "approved" && co.coStatus === "approved") {
-        const leadTokens    = await getTokenForName(after.lead);
-        const foremanTokens = await getTokenForName(after.foreman);
         functions.logger.info("[onJobUpdate] CO approved — sending", {
-          jobId, name, coIndex: i,
-          foreman: after.foreman, foremanTokenCount: foremanTokens.length,
-          lead: after.lead, leadTokenCount: leadTokens.length,
+          jobId, name, coIndex: i, foreman: after.foreman, lead: after.lead,
         });
-        tasks.push(sendToName(after.lead, {
+        tasks.push(sendToNameIfWanted(after.lead, "co_approved", {
           title: "✅ Change Order Approved",
           body:  `Change Order #${i + 1} on ${name} was approved`,
           jobId, section: "Change Orders",
         }));
-        tasks.push(sendToName(after.foreman, {
+        tasks.push(sendToNameIfWanted(after.foreman, "co_approved", {
           title: "✅ Change Order Approved",
           body:  `Change Order #${i + 1} on ${name} was approved`,
           jobId, section: "Change Orders",
         }));
-        tasks.push(sendToRoles(["admin", "manager"], {
+        tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "co_approved", {
           title: "✅ Change Order Approved",
           body:  `Change Order #${i + 1} on ${name} was approved`,
           jobId, section: "Change Orders",
-        }, [...leadTokens, ...foremanTokens]));
+        }));
       }
 
       if (prev.coStatus !== "complete" && co.coStatus === "complete") {
-        const foremanTokens = await getTokenForName(after.foreman);
-        tasks.push(sendToName(after.foreman, {
+        tasks.push(sendToNameIfWanted(after.foreman, "co_completed", {
           title: "🔨 CO Work Completed",
           body:  `Change Order #${i + 1} work is done on ${name}`,
           jobId, section: "Change Orders",
         }));
-        tasks.push(sendToRoles(["admin", "manager"], {
+        tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "co_completed", {
           title: "🔨 CO Work Completed",
           body:  `Change Order #${i + 1} work is done on ${name}`,
           jobId, section: "Change Orders",
-        }, foremanTokens));
+        }));
       }
     }
 
@@ -687,20 +701,19 @@ exports.onJobUpdate = functions.firestore
       const prev = rt.id ? beforeRTMap[rt.id] : beforeRTs[i];
       const prevAssigned = prev?.assignedTo || "";
       if (rt.assignedTo && rt.assignedTo !== prevAssigned && rt.assignedTo !== "Unassigned") {
-        const assignedTokens = await getTokenForName(rt.assignedTo);
-        tasks.push(sendToName(rt.assignedTo, {
+        tasks.push(sendToNameIfWanted(rt.assignedTo, "rt_assigned", {
           title: "🔄 Return Trip Assigned",
           body:  `You've been assigned to a return trip on ${name}`,
           jobId, section: "Return Trips",
         }));
-        tasks.push(sendToRoles(["admin", "manager"], {
+        tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "rt_assigned", {
           title: "🔄 Return Trip Assigned",
           body:  `${rt.assignedTo} assigned to return trip on ${name}`,
           jobId, section: "Return Trips",
-        }, assignedTokens));
+        }));
       }
       if (!prev?.signedOff && rt.signedOff) {
-        tasks.push(sendToRoles(["admin", "manager"], {
+        tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "rt_signed", {
           title: "✅ Return Trip Signed Off",
           body:  `Return Trip ${i + 1} on ${name} is signed off — slot is open`,
           jobId, section: "Return Trips",
@@ -710,30 +723,28 @@ exports.onJobUpdate = functions.firestore
 
     // ── 9. Questions added ────────────────────────────────────
     if (hasNewQuestions(before.roughQuestions, after.roughQuestions)) {
-      const foremanTokens = await getTokenForName(after.foreman);
-      tasks.push(sendToName(after.foreman, {
+      tasks.push(sendToNameIfWanted(after.foreman, "job_question", {
         title: "❓ New Question on Job",
         body:  `A new rough question was added on ${name}`,
         jobId, section: "Rough",
       }));
-      tasks.push(sendToRoles(["admin", "manager"], {
+      tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "job_question", {
         title: "❓ New Question on Job",
         body:  `A new rough question was added on ${name}`,
         jobId, section: "Rough",
-      }, foremanTokens));
+      }));
     }
     if (hasNewQuestions(before.finishQuestions, after.finishQuestions)) {
-      const foremanTokens = await getTokenForName(after.foreman);
-      tasks.push(sendToName(after.foreman, {
+      tasks.push(sendToNameIfWanted(after.foreman, "job_question", {
         title: "❓ New Question on Job",
         body:  `A new finish question was added on ${name}`,
         jobId, section: "Finish",
       }));
-      tasks.push(sendToRoles(["admin", "manager"], {
+      tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "job_question", {
         title: "❓ New Question on Job",
         body:  `A new finish question was added on ${name}`,
         jobId, section: "Finish",
-      }, foremanTokens));
+      }));
     }
 
     // ── 10. Daily job update added ────────────────────────────
@@ -742,41 +753,31 @@ exports.onJobUpdate = functions.firestore
     const beforeFinishUpdates = (before.finishUpdates || []).length;
     const afterFinishUpdates  = (after.finishUpdates  || []).length;
 
+    // The foreman usually WROTE the update, so no self-echo — the book's
+    // coordinator is the one who needs to see it land.
     if (afterRoughUpdates > beforeRoughUpdates) {
-      const foremanTokens = await getTokenForName(after.foreman);
-      tasks.push(sendToName(after.foreman, {
+      tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "daily_update", {
         title: "📋 Daily Update Added",
         body:  `A daily update was added on ${name}`,
         jobId, section: "Rough",
       }));
-      tasks.push(sendToRoles(["admin", "manager"], {
-        title: "📋 Daily Update Added",
-        body:  `A daily update was added on ${name}`,
-        jobId, section: "Rough",
-      }, foremanTokens));
     } else if (afterFinishUpdates > beforeFinishUpdates) {
-      const foremanTokens = await getTokenForName(after.foreman);
-      tasks.push(sendToName(after.foreman, {
+      tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "daily_update", {
         title: "📋 Daily Update Added",
         body:  `A daily update was added on ${name}`,
         jobId, section: "Finish",
       }));
-      tasks.push(sendToRoles(["admin", "manager"], {
-        title: "📋 Daily Update Added",
-        body:  `A daily update was added on ${name}`,
-        jobId, section: "Finish",
-      }, foremanTokens));
     }
 
     // ── Milestone + inspection nudges → the job's coordinator (book-routed) ──
     if (before.roughStatus !== "complete" && after.roughStatus === "complete") {
-      tasks.push(sendToJobCoordinator(after.foreman, {
+      tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "milestone_complete", {
         title: "✅ Rough complete", body: `Rough is complete on ${name} — QC walk is due.`,
         jobId, section: "Rough",
       }));
     }
     if (before.finishStatus !== "complete" && after.finishStatus === "complete") {
-      tasks.push(sendToJobCoordinator(after.foreman, {
+      tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "milestone_complete", {
         title: "✅ Finish complete", body: `Finish is complete on ${name} — QC walk is due.`,
         jobId, section: "Finish",
       }));
@@ -785,7 +786,7 @@ exports.onJobUpdate = functions.firestore
     const _wasHold = _holdRe.test(before.roughStatus || "") || _holdRe.test(before.finishStatus || "");
     const _isHold  = _holdRe.test(after.roughStatus  || "") || _holdRe.test(after.finishStatus  || "");
     if (!_wasHold && _isHold) {
-      tasks.push(sendToJobCoordinator(after.foreman, {
+      tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "job_hold", {
         title: "⏸️ Job on hold", body: `${name} is on hold / waiting on something.`, jobId,
       }));
     }
@@ -796,10 +797,10 @@ exports.onJobUpdate = functions.firestore
     };
     if (_newFail(before.roughInspectionAttempts, after.roughInspectionAttempts) ||
         _newFail(before.finalInspectionAttempts, after.finalInspectionAttempts)) {
-      tasks.push(sendToName(after.foreman, {
+      tasks.push(sendToNameIfWanted(after.foreman, "failed_inspection", {
         title: "❌ Failed inspection", body: `An inspection failed on ${name} — needs attention.`, jobId,
       }));
-      tasks.push(sendToJobCoordinator(after.foreman, {
+      tasks.push(sendToJobCoordinatorIfWanted(after.foreman, "failed_inspection", {
         title: "❌ Failed inspection", body: `An inspection failed on ${name}.`, jobId,
       }));
     }
@@ -892,21 +893,25 @@ exports.onQuestionAnswered = functions.firestore
     if (!jobSnap.exists) return null;
     const job = jobSnap.data()?.data || {};
 
-    const leadTokens = job.lead ? await getTokenForName(job.lead) : [];
-
-    if (job.lead) {
-      await sendToName(job.lead, {
+    // Honest routing (2026-07-10): lead + foreman + the book's coordinator,
+    // all pref-gated on question_answered. Admin blast removed.
+    await Promise.all([
+      sendToNameIfWanted(job.lead, "question_answered", {
         title: "💬 Question Answered",
         body:  `A question was answered on ${job.name || "your job"}`,
         jobId, section: "Rough",
-      });
-    }
-
-    await sendToRoles(["admin", "manager"], {
-      title: "💬 Question Answered",
-      body:  `A question was answered on ${job.name || "a job"}`,
-      jobId, section: "Rough",
-    }, leadTokens);
+      }),
+      job.foreman !== job.lead ? sendToNameIfWanted(job.foreman, "question_answered", {
+        title: "💬 Question Answered",
+        body:  `A question was answered on ${job.name || "a job"}`,
+        jobId, section: "Rough",
+      }) : null,
+      sendToJobCoordinatorIfWanted(job.foreman, "question_answered", {
+        title: "💬 Question Answered",
+        body:  `A question was answered on ${job.name || "a job"}`,
+        jobId, section: "Rough",
+      }),
+    ]);
 
     return null;
   });
@@ -1028,7 +1033,7 @@ exports.dailyPOReminder = functions.pubsub
     await sendToRoles(["lead"], {
       title: "📄 PO Reminder",
       body:  "Don't forget to submit your POs for today",
-    });
+    }, [], "reminder_po");
     return null;
   });
 
@@ -1043,7 +1048,7 @@ exports.dailyUpdateReminder = functions.pubsub
     await sendToRoles(["lead"], {
       title: "📝 Daily Update",
       body:  "Time to enter your daily job update",
-    });
+    }, [], "reminder_daily");
     return null;
   });
 
@@ -1122,7 +1127,7 @@ exports.dailyCoChase = functions.pubsub
       });
     });
     if (staleCount > 0) {
-      await sendToName("Jeromy Cloward", {
+      await sendToNameIfWanted("Jeromy Cloward", "co_chase", {
         title: "📋 COs waiting",
         body:  `${staleCount} change order${staleCount !== 1 ? "s" : ""} open across ${staleJobs.size} job${staleJobs.size !== 1 ? "s" : ""} — review & send.`,
         view:  "cos",
@@ -1167,7 +1172,7 @@ exports.dailyRtChase = functions.pubsub
     const sends = [];
     Object.values(byCoord).forEach(({ coord, count }) => {
       const notif = { title: "🔁 Return trips waiting", body: `${count} unscheduled return trip${count !== 1 ? "s" : ""} in your book need scheduling.` };
-      sends.push(deliver(coord, notif));
+      sends.push(deliverIfWanted(coord, "rt_chase", notif));
     });
     await Promise.all(sends);
     functions.logger.info("[dailyRtChase] ran", { coordinators: Object.keys(byCoord).length });
@@ -1183,7 +1188,7 @@ exports.weeklySafetyReminder = functions.pubsub
   .onRun(async () => {
     await sendToRoles(["foreman"], {
       title: "🦺 Toolbox talk", body: "Run this week's safety / toolbox talk with your crew.",
-    });
+    }, [], "reminder_safety");
     return null;
   });
 
@@ -1246,7 +1251,10 @@ exports.dailyUpdateMissing = functions.pubsub
       if (parseInt(j.roughStage, 10) === 0 && !j.roughStatus) return; // not started yet — no crew on site
       const fm = j.foreman;
       if (!fm || fm === "Unassigned") return;
-      const loggedToday = (j.dailyUpdates || []).some(u => u && (_dayInTZ(u.postedAt || u.date) === today));
+      // Daily updates live in roughUpdates/finishUpdates ({date, createdAt, ...});
+      // j.dailyUpdates was a dead pre-refactor field that made this 100% false-positive.
+      const loggedToday = [...(j.roughUpdates || []), ...(j.finishUpdates || [])]
+        .some(u => u && (_dayInTZ(u.createdAt || u.date) === today));
       if (loggedToday) return;
       byForeman[fm] = (byForeman[fm] || 0) + 1;
     });
@@ -3368,6 +3376,74 @@ exports.thursdayPacket = functions.pubsub
     const complianceRows   = _buildRows(oppsByLead,   hitsByLead);
     const complianceRowsYr = _buildRows(oppsByLeadYr, hitsByLeadYr);
 
+    // ── PACKET V2 EXTRAS (2026-07-10) — TL loop, PTO, suggestions, fleet ──
+    // Replaces the dead "Last Week's Decisions" stub with data that exists.
+    // All read-only; a failure here degrades to empty sections, never kills
+    // the packet.
+    let tlRows = [], tlUnincorporated = 0, tlAwaiting = 0;
+    let ptoNext7 = [];
+    let suggOpen = 0, suggNew = 0;
+    let fleetLine = "";
+    try {
+      const [hrSnap, ptoSnap, suggSnap, devSnap] = await Promise.all([
+        db.collection("homeowner_requests").get(),
+        db.doc("settings/crewPTO").get(),
+        db.collection("suggestions").get(),
+        db.doc("settings/deviceVersions").get(),
+      ]);
+
+      // Tech Lighting loop — same predicates as techLightingWeeklyDigest:
+      // unincorporated = logged plan-change item with no ackedAt; awaiting =
+      // discussion thread whose last message is from the client.
+      const ackMap = {}, threadMap = {};
+      hrSnap.forEach(d => {
+        const data = d.data() || {}; // homeowner_requests are NOT wrapped
+        if (data.planChangeAcks)    ackMap[d.id]    = data.planChangeAcks;
+        if (data.planChangeThreads) threadMap[d.id] = data.planChangeThreads;
+      });
+      snap.docs.forEach(d => {
+        const j = d.data()?.data || {};
+        if (j.lightingSystem !== "Lutron") return;
+        if (j.panelizedLighting?.excludeFromLutronHub) return;
+        const items   = (j.panelizedLighting?.lutronRooms || []).flatMap(r => r.items || []);
+        const acks    = ackMap[d.id] || {};
+        const threads = threadMap[d.id] || {};
+        const un = items.filter(it => !acks[it.id]?.ackedAt).length;
+        const aw = [...items.map(it => it.id), "_general"].filter(id => {
+          const msgs = threads[id];
+          return msgs && msgs.length && msgs[msgs.length - 1].role === "client";
+        }).length;
+        if (un > 0 || aw > 0) tlRows.push({ jobName: j.name || d.id, un, aw });
+        tlUnincorporated += un; tlAwaiting += aw;
+      });
+
+      // PTO overlapping the next 7 days — settings/crewPTO {list:[{name,start,end,note}]}
+      const in7 = new Date(today); in7.setDate(today.getDate() + 7);
+      ptoNext7 = ((ptoSnap.exists ? ptoSnap.data().list : []) || []).filter(p => {
+        const s = parseDate(p.start), e = parseDate(p.end || p.start);
+        return s && e && s <= in7 && e >= today;
+      }).sort((a, b) => String(a.start).localeCompare(String(b.start)));
+
+      // App Map suggestions — anything not "built" is open (matches the inbox filter).
+      suggSnap.forEach(d => {
+        const st = (d.data() || {}).status || "new";
+        if (st !== "built") { suggOpen++; if (st === "new") suggNew++; }
+      });
+
+      // Fleet staleness — devices active in the last 7 days still behind the
+      // newest version any device reports.
+      const devices = devSnap.exists ? (devSnap.data().devices || {}) : {};
+      const activeDevs = Object.values(devices).filter(dv => (Date.now() - Date.parse(dv.lastSeenAt || 0)) < 7 * 86400000);
+      const vNum = v => parseInt(String(v || "").replace(/\D/g, ""), 10) || 0;
+      const newest = activeDevs.reduce((m, dv) => Math.max(m, vNum(dv.version)), 0);
+      const behind = activeDevs.filter(dv => vNum(dv.version) < newest);
+      fleetLine = activeDevs.length
+        ? `${behind.length} of ${activeDevs.length} active devices behind v${newest}${behind.length ? ` — ${behind.map(dv => dv.name || "?").join(", ")}` : ""}`
+        : "No device pings in the last 7 days.";
+    } catch (e) {
+      functions.logger.warn("thursdayPacket v2 extras failed", { error: e.message });
+    }
+
     // ── BUILD HTML ────────────────────────────────────────────
 
     const section = (title, count, body) => {
@@ -3466,8 +3542,16 @@ ${bigHeader("This Week")}
 ${section("Completed", completedThisWeek.length, list(completedThisWeek, j => `<b>${_esc(j.name)}</b>${j.foreman ? ` · ${_esc(j.foreman)}` : ""}`))}
 ${section("Slipped (scheduled but didn't start)", slippedThisWeek.length, list(slippedThisWeek, j => `<b>${_esc(j.name)}</b> · scheduled ${_fmtShortDate(j.roughScheduledDate)}`))}
 
-${bigHeader("Last Week's Decisions")}
-<div style="color:#9ca3af;font-size:12px;padding:2px 0 6px;font-style:italic">Decision tracking is on the list — nothing captured yet.</div>
+${bigHeader("Tech Lighting Loop")}
+${section("Jobs with an open loop", tlRows.length, list(tlRows, r => `<b>${_esc(r.jobName)}</b>${r.un ? ` · ${r.un} change${r.un !== 1 ? "s" : ""} not incorporated` : ""}${r.aw ? ` · ${r.aw} question${r.aw !== 1 ? "s" : ""} awaiting a crew reply` : ""}`))}
+${tlRows.length ? `<div style="color:#6b7280;font-size:11px;margin-top:4px;font-style:italic">${tlUnincorporated} unincorporated · ${tlAwaiting} awaiting reply, across all on-link Lutron jobs.</div>` : ""}
+
+${bigHeader("Crew & App")}
+${section("PTO in the next 7 days", ptoNext7.length, list(ptoNext7, p => `<b>${_esc(p.name)}</b> · ${_esc(p.start)}${p.end && p.end !== p.start ? ` → ${_esc(p.end)}` : ""}${p.note ? ` — ${_esc(p.note)}` : ""}`))}
+${section("Open App Map suggestions", suggOpen, suggOpen
+      ? `<div style="font-size:13px;color:#111;padding:2px 0 6px">${suggOpen} open${suggNew ? ` (${suggNew} new)` : ""} — triage in App Map → suggestion inbox.</div>`
+      : `<div style="color:#9ca3af;font-size:12px;padding:2px 0 6px">None.</div>`)}
+${fleetLine ? `<div style="font-size:12px;color:#374151;margin:8px 0 0"><b>Fleet:</b> ${_esc(fleetLine)}</div>` : ""}
 
 <div style="margin-top:32px;padding-top:14px;border-top:1px solid #e5e7eb;color:#9ca3af;font-size:11px">Generated ${now.toLocaleString("en-US", { timeZone: TZ, dateStyle: "medium", timeStyle: "short" })} MT · Homestead Electric app</div>
 </div>`;
@@ -3544,288 +3628,6 @@ ${bigHeader("Last Week's Decisions")}
       complianceLeadsYear: complianceRowsYr.length,
       complianceScheduleEntries: scheduleEntries.length,
     });
-
-    return null;
-  });
-
-// ─────────────────────────────────────────────────────────────
-// SCHEDULED — Daily Job Activity Report
-// Fires at midnight America/Chicago. Walks every job, emits an event for
-// every action that landed in the prior calendar day (CT), then uploads a
-// single HTML report to the same Drive folder as the Friday packet.
-// Read-only on jobs — never writes back. Errors notify Koy via FCM.
-// ─────────────────────────────────────────────────────────────
-exports.dailyJobActivityReport = functions
-  .runWith({ memory: "512MB", timeoutSeconds: 300 })
-  .pubsub.schedule("0 0 * * *")
-  .timeZone("America/Chicago")
-  .onRun(async () => {
-    // Compute "yesterday" boundaries in Central time. We fire at 00:00 CT,
-    // so the day that just ended is the report target. Subtract 1ms from
-    // the current CT clock to land in yesterday, then snap to midnight.
-    const ctNowStr = new Date().toLocaleString("en-US", { timeZone: "America/Chicago" });
-    const ctNow = new Date(ctNowStr);
-    const reportDay = new Date(ctNow.getTime() - 1000);
-    const dayStart = new Date(reportDay); dayStart.setHours(0,0,0,0);
-    const dayEnd   = new Date(reportDay); dayEnd.setHours(23,59,59,999);
-    const reportDayLocale = reportDay.toLocaleDateString("en-US");
-
-    // Defensive date parser — handles ISO strings, locale dates, Firestore
-    // Timestamps, numbers, Date instances. Returns null when unparseable so
-    // we never emit fake "now" events for items without real timestamps.
-    const parseAt = (v) => {
-      if (!v) return null;
-      if (typeof v === "object" && typeof v.toDate === "function") return v.toDate();
-      if (v instanceof Date) return v;
-      const d = new Date(v);
-      return isNaN(d) ? null : d;
-    };
-    const inDay = (d) => d && d >= dayStart && d <= dayEnd;
-    const fmtTime = (d) => d.toLocaleTimeString("en-US", { timeZone: "America/Chicago", hour: "numeric", minute: "2-digit" });
-
-    // Walk all punch items on a job. Mirrors the client's forEachPunch.
-    const forEachPunch = (job, cb) => {
-      ["roughPunch","finishPunch","qcPunch"].forEach(phaseKey => {
-        const phase = job[phaseKey]; if (!phase) return;
-        ["upper","main","basement"].forEach(floorKey => {
-          const floor = phase[floorKey] || {};
-          (floor.general  || []).forEach(i => cb(i, phaseKey, floorKey, "general"));
-          (floor.hotcheck || []).forEach(i => cb(i, phaseKey, floorKey, "hotcheck"));
-          (floor.rooms    || []).forEach(r => (r.items || []).forEach(i => cb(i, phaseKey, floorKey, r.name)));
-        });
-      });
-      (job.returnTrips || []).forEach(rt => (rt.punch || []).forEach(i => cb(i, "returnTrip", null, rt.id)));
-    };
-
-    // Recursive photo collector — anything with both url + storagePath
-    // strings is a photo. Mirrors the client's collectPhotos helper.
-    const collectPhotos = (obj, out=[]) => {
-      if (!obj || typeof obj !== "object") return out;
-      if (Array.isArray(obj)) { obj.forEach(o => collectPhotos(o, out)); return out; }
-      if (typeof obj.url === "string" && typeof obj.storagePath === "string") { out.push(obj); return out; }
-      Object.values(obj).forEach(v => collectPhotos(v, out));
-      return out;
-    };
-
-    // Load jobs
-    const snap = await db.collection("jobs").get();
-    const jobs = snap.docs
-      .map(d => { const raw = d.data(); return raw?.data ? { id: d.id, ...raw.data, _saved_by: raw.saved_by || "" } : null; })
-      .filter(Boolean);
-
-    // Collect events for the day
-    const events = []; // { at, who, jobId, jobName, type, label, detail }
-    const push = (at, who, job, type, label, detail) => {
-      const d = parseAt(at); if (!inDay(d)) return;
-      events.push({ at: d, who: who || "", jobId: job.id, jobName: job.name || job.id, type, label, detail: detail || "" });
-    };
-
-    jobs.forEach(j => {
-      // Punch closes (real timestamp via checkedAtTs, fallback to checkedAt date string)
-      forEachPunch(j, (item) => {
-        if (item?.done && (item.checkedAtTs || item.checkedAt)) {
-          const real = item.checkedAtTs ? parseAt(item.checkedAtTs) : null;
-          let when;
-          if (real) when = real;
-          else {
-            // Date-only fallback — checkedAt is en-US locale, only emit if it matches reportDayLocale
-            if (item.checkedAt !== reportDayLocale) return;
-            when = new Date(reportDay); when.setHours(12,0,0,0);
-          }
-          push(when, item.checkedBy, j, "punch closed", "Punch closed", _stripHtml(item.text).slice(0,140));
-        }
-      });
-      // Change Orders
-      (j.changeOrders || []).forEach((co, i) => {
-        const tag = `CO #${i+1}${co.quoteNumber ? ` · #${co.quoteNumber}` : ""}`;
-        if (co.createdAt)     push(co.createdAt,    co.createdBy,    j, "CO created",        `${tag} created`,     _stripHtml(co.description||"").slice(0,140));
-        if (co.coStatusDate)  push(co.coStatusDate, co.statusSetBy || co.sentBy || co.approvedBy || co.declinedBy || co.completedBy, j, `CO ${co.coStatus||"updated"}`, `${tag} ${co.coStatus||"updated"}`, "");
-        if (co.quoteAddedAt)  push(co.quoteAddedAt, co.quoteAddedBy, j, "CO quote#",         `${tag} quote # added`, "");
-      });
-      // Return Trips
-      (j.returnTrips || []).forEach((rt, i) => {
-        const tag = `RT #${i+1}`;
-        if (rt.createdAt)     push(rt.createdAt,     rt.createdBy,    j, "RT created",   `${tag} created`,    _stripHtml(rt.scope||"").slice(0,140));
-        if (rt.scheduledDate) push(rt.scheduledDate, rt.scheduledBy,  j, "RT scheduled", `${tag} scheduled`,  "");
-        if (rt.signedOff && rt.signedOffDate) push(rt.signedOffDate, rt.signedOffBy, j, "RT signed off", `${tag} signed off`, "");
-      });
-      // Inspections (rough + finish attempts)
-      (j.roughInspectionAttempts || []).forEach(a => { if (a.date) push(a.date, a.by, j, `Rough inspection ${a.result}`, `Rough inspection ${a.result}`, ""); });
-      (j.finalInspectionAttempts || []).forEach(a => { if (a.date) push(a.date, a.by, j, `Final inspection ${a.result}`, `Final inspection ${a.result}`, ""); });
-      // Photos (any with takenAt/addedAt/uploadedAt in the day)
-      collectPhotos(j).forEach(p => {
-        const t = p.takenAt || p.uploadedAt || p.addedAt;
-        if (t) push(t, p.uploadedBy || p.addedBy, j, "Photo uploaded", "Photo uploaded", p.name || "");
-      });
-      // Daily updates
-      (j.dailyUpdates || []).forEach(d => {
-        const t = d.postedAt || d.date;
-        if (t) push(t, d.author, j, "Daily update", "Daily update", _stripHtml(d.notes||"").slice(0,140));
-      });
-      // Job notes
-      (j.jobNotes || []).forEach(n => {
-        if (n.createdAt) push(n.createdAt, n.createdBy, j, "Note added", `Note added${n.phase ? ` (${n.phase})` : ""}`, _stripHtml(n.title||"").slice(0,140));
-        (n.lines || []).forEach(line => {
-          if (line.checkedAt) push(line.checkedAt, line.checkedBy, j, "Note checked", "Note item checked off", _stripHtml(n.title||"").slice(0,140));
-        });
-      });
-      // Questions
-      const walkQs = (qs, phaseLabel) => {
-        if (!qs) return;
-        ["upper","main","basement"].forEach(floor => {
-          (qs[floor] || []).forEach(q => {
-            if (q.addedAt)    push(q.addedAt,    q.addedBy,                  j, "Question posted",    `${phaseLabel} Q posted`,    _stripHtml(q.question||"").slice(0,140));
-            if (q.answeredAt) push(q.answeredAt, q.answeredBy || q.addedBy,  j, "Question answered",  `${phaseLabel} Q answered`,  _stripHtml(q.answer||"").slice(0,140));
-          });
-        });
-      };
-      walkQs(j.roughQuestions, "Rough");
-      walkQs(j.finishQuestions, "Finish");
-      // Presence
-      Object.entries(j.presence || {}).forEach(([who, lastSeen]) => {
-        push(lastSeen, who, j, "Opened job", `Opened ${j.name || j.id}`, "");
-      });
-      // Status flips (approximate: use j.statusChangedAt if present, else skip)
-      if (j.statusChangedAt) push(j.statusChangedAt, j.statusChangedBy || j._saved_by, j, "Status changed", `Status: ${j.roughStatus || j.finishStatus || "updated"}`, "");
-    });
-
-    // Sort newest first
-    events.sort((a,b) => b.at.getTime() - a.at.getTime());
-
-    // Group by person
-    const byPerson = new Map();
-    events.forEach(e => {
-      const raw = (e.who || "").trim();
-      if (!raw) return;
-      const key = raw.toLowerCase();
-      if (!byPerson.has(key)) byPerson.set(key, { name: raw, events: [], counts: {} });
-      const p = byPerson.get(key);
-      p.events.push(e);
-      p.counts[e.type] = (p.counts[e.type] || 0) + 1;
-    });
-    const people = Array.from(byPerson.values()).sort((a,b) => b.events.length - a.events.length);
-
-    // Group by job
-    const byJob = new Map();
-    events.forEach(e => {
-      if (!e.jobId) return;
-      if (!byJob.has(e.jobId)) byJob.set(e.jobId, { jobId: e.jobId, jobName: e.jobName, events: [] });
-      byJob.get(e.jobId).events.push(e);
-    });
-    const jobGroups = Array.from(byJob.values()).sort((a,b) => b.events.length - a.events.length);
-
-    // Pulse counters
-    const activeJobs = jobs.filter(j => (j.finishStatus || "") !== "complete").length;
-    const foremenOnApp = new Set(events.filter(e => e.who).map(e => e.who.trim().split(/\s+/)[0])).size;
-    const punchesClosed = events.filter(e => e.type === "punch closed").length;
-    const cosAdded      = events.filter(e => e.type === "CO created").length;
-    const photosCount   = events.filter(e => e.type === "Photo uploaded").length;
-    const failedInsp    = events.filter(e => /failed/i.test(e.type)).length;
-
-    // ── Build HTML ────────────────────────────────────────────
-    const dayLabel = reportDay.toLocaleDateString("en-US", { timeZone: "America/Chicago", weekday: "long", month: "long", day: "numeric", year: "numeric" });
-    const stat = (label, value, color) => `
-      <div style="background:#f9fafb;border-radius:8px;padding:14px 16px;display:inline-block;min-width:130px;margin:0 8px 8px 0;vertical-align:top">
-        <div style="font-size:11px;color:#6b7280;text-transform:uppercase;letter-spacing:0.06em">${_esc(label)}</div>
-        <div style="font-size:22px;font-weight:600;color:${color||"#111827"};margin-top:2px">${value}</div>
-      </div>`;
-    const personSection = people.length === 0
-      ? `<div style="color:#9ca3af;font-style:italic;padding:8px 0">No one logged any actions on this date.</div>`
-      : people.map(p => {
-          const top = Object.entries(p.counts).sort((a,b) => b[1]-a[1]).slice(0,6)
-            .map(([k,v]) => `<span style="background:#eef2ff;color:#3730a3;font-size:11px;padding:2px 8px;border-radius:99px;margin-right:4px">${v} ${_esc(k)}</span>`).join("");
-          const rows = p.events.map(e => `
-            <tr>
-              <td style="padding:3px 8px;color:#6b7280;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;vertical-align:top">${fmtTime(e.at)}</td>
-              <td style="padding:3px 8px;font-size:12px;vertical-align:top"><b>${_esc(e.label)}</b>${e.detail ? ` — ${_esc(e.detail)}` : ""}</td>
-              <td style="padding:3px 8px;font-size:12px;color:#2563eb;vertical-align:top">${_esc(e.jobName)}</td>
-            </tr>`).join("");
-          return `
-            <div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px 14px;margin-bottom:10px">
-              <div style="display:flex;align-items:baseline;gap:8px;margin-bottom:8px;border-bottom:1px solid #f3f4f6;padding-bottom:6px">
-                <div style="font-size:15px;font-weight:600">${_esc(p.name)}</div>
-                <div style="font-size:12px;color:#6b7280">${p.events.length} action${p.events.length===1?"":"s"}</div>
-              </div>
-              <div style="margin-bottom:8px">${top}</div>
-              <table style="width:100%;border-collapse:collapse"><tbody>${rows}</tbody></table>
-            </div>`;
-        }).join("");
-    const jobSection = jobGroups.length === 0
-      ? ""
-      : jobGroups.map(g => {
-          const rows = g.events.map(e => `
-            <tr>
-              <td style="padding:3px 8px;color:#6b7280;font-size:11px;font-variant-numeric:tabular-nums;white-space:nowrap;vertical-align:top">${fmtTime(e.at)}</td>
-              <td style="padding:3px 8px;font-size:12px;color:#374151;vertical-align:top">${e.who ? `<b>${_esc(e.who.split(/\s+/)[0])}</b> · ` : ""}<b>${_esc(e.label)}</b>${e.detail ? ` — ${_esc(e.detail)}` : ""}</td>
-            </tr>`).join("");
-          return `
-            <div style="border:1px solid #e5e7eb;border-radius:8px;padding:12px 14px;margin-bottom:10px">
-              <div style="font-size:14px;font-weight:600;color:#2563eb;margin-bottom:6px;border-bottom:1px solid #f3f4f6;padding-bottom:5px">${_esc(g.jobName)} · ${g.events.length}</div>
-              <table style="width:100%;border-collapse:collapse"><tbody>${rows}</tbody></table>
-            </div>`;
-        }).join("");
-
-    const html = `<!doctype html><html><body style="font-family:-apple-system,Segoe UI,Roboto,Arial,sans-serif;color:#111827;max-width:900px;margin:0 auto;padding:24px">
-<div style="margin-bottom:18px">
-  <h1 style="font-size:22px;margin:0 0 2px">Daily Job Activity — ${_esc(dayLabel)}</h1>
-  <div style="font-size:12px;color:#6b7280">${events.length} total action${events.length===1?"":"s"} across ${jobGroups.length} job${jobGroups.length===1?"":"s"} · ${people.length} people on the app</div>
-</div>
-<div style="margin-bottom:18px">
-  ${stat("Active jobs", activeJobs)}
-  ${stat("People on app", foremenOnApp)}
-  ${stat("Punches closed", punchesClosed, punchesClosed > 0 ? "#16a34a" : null)}
-  ${stat("COs created", cosAdded, cosAdded > 0 ? "#7c3aed" : null)}
-  ${stat("Photos uploaded", photosCount)}
-  ${stat("Failed inspections", failedInsp, failedInsp > 0 ? "#dc2626" : null)}
-</div>
-<h2 style="font-size:16px;font-weight:600;margin:18px 0 10px;border-bottom:1px solid #e5e7eb;padding-bottom:6px">Per-person activity</h2>
-${personSection}
-<h2 style="font-size:16px;font-weight:600;margin:18px 0 10px;border-bottom:1px solid #e5e7eb;padding-bottom:6px">Per-job activity</h2>
-${jobSection || `<div style="color:#9ca3af;font-style:italic;padding:8px 0">No job activity logged on this date.</div>`}
-<div style="margin-top:32px;padding-top:14px;border-top:1px solid #e5e7eb;color:#9ca3af;font-size:11px">Generated ${new Date().toLocaleString("en-US", { timeZone: "America/Chicago", dateStyle: "medium", timeStyle: "short" })} CT · Homestead Electric app</div>
-</body></html>`;
-
-    const docTitle = `Daily Job Activity — ${reportDay.toLocaleDateString("en-US", { timeZone: "America/Chicago", month: "short", day: "numeric", year: "numeric" })}`;
-
-    // ── Upload to Drive ───────────────────────────────────────
-    try {
-      if (!PACKET_DRIVE_FOLDER_ID || PACKET_DRIVE_FOLDER_ID === "REPLACE_WITH_FOLDER_ID") {
-        throw new Error("PACKET_DRIVE_FOLDER_ID not configured");
-      }
-      const auth = new google.auth.GoogleAuth({
-        scopes: ["https://www.googleapis.com/auth/drive.file"],
-      });
-      const drive = google.drive({ version: "v3", auth });
-      const createRes = await drive.files.create({
-        requestBody: {
-          name:     docTitle,
-          parents:  [PACKET_DRIVE_FOLDER_ID],
-          mimeType: "application/vnd.google-apps.document",
-        },
-        media: {
-          mimeType: "text/html",
-          body:     html,
-        },
-        fields: "id, webViewLink",
-        supportsAllDrives: true,
-      });
-      functions.logger.info("dailyJobActivityReport uploaded", {
-        docId: createRes.data.id,
-        link: createRes.data.webViewLink,
-        eventCount: events.length,
-        peopleCount: people.length,
-        jobCount: jobGroups.length,
-      });
-    } catch (e) {
-      functions.logger.error("dailyJobActivityReport Drive upload failed", { error: e.message });
-      // Notify Koy on failure so silent breakage gets noticed.
-      try {
-        await sendToName("Koy", {
-          title: "Daily Activity Report Failed",
-          body:  `Drive upload error: ${e.message.slice(0, 120)}`,
-        });
-      } catch {}
-    }
 
     return null;
   });
@@ -4229,13 +4031,6 @@ exports.sendTestNotification = functions.https.onCall(async (data, context) => {
     jobName,
   };
 });
-
-// ─── Daily Huddle Email — fires at 6am MT, Mon-Fri ──────────────────────
-// Implementation lives in ./huddleEmail.js. Recipients are configured at
-// settings/huddleConfig (so the foreman list can change without redeploys).
-// Setup steps and credentials are documented at the top of huddleEmail.js.
-exports.dailyHuddleEmail = require("./huddleEmail").dailyHuddleEmail;
-exports.sendTestHuddleEmail = require("./huddleEmail").sendTestHuddleEmail;
 
 
 // ─── Sync Simpro POs into a job's material orders ─────────────────────────

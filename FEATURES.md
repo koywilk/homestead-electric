@@ -4,7 +4,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-07-10 · App SW version: v320
+**Last manifest update:** 2026-07-10 · App SW version: v321
 
 ---
 
@@ -29,8 +29,8 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 - **Nav** · `shipped` · `NavView` · map view of jobs
 - **Upcoming** · `shipped` · `UpcomingJobs` · jobs in the pipeline before they're full jobs
 - **Quotes** · `shipped` · proposed jobs awaiting conversion
-- **Walks** · `shipped` · `QuoteWalksTab` · quote walks tracking
-- **Tasks** · `shipped` · `Tasks` · cross-job and manual tasks
+- **Tasks** · `shipped` · `Tasks` · auto-generated tasks only (invoice-ready, pre-job prep, unscheduled inspections) — manual-task layer removed 2026-07-10 (`manualTasks` collection was empty; Needs Board is THE manual to-do surface) · `SW v321`
+  - (Walks nav tab + Quote Walks feature removed in the 2026-07-10 ops revisit — zero docs, redline walks in the CO board replaced it · `SW v321`)
 - **Huddle** · `shipped` · `HuddleSheet` · weekly team huddle prep
 - **Subcontractors** · `shipped` · external contractor view
 - **Scoreboard** · `shipped` · `ScoreboardV2` · admin-only, behavior-driven scoring (info + quality)
@@ -57,12 +57,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Status pills with date windows
   - Finish stage cleanup + scheduled window (May 11–22) · `shipped 2026-05-17` · `SW v173`
   - InProgressModePill (rough/finish status with date picker)
-- **Up Next panel** · `shipped 2026-05-19` · `SW v178` · `UpNextPanel` · `36-rule engine`
-  - Sits between header and tabs
-  - Primary button for literal next action
-  - "▾ N more" expander
-  - Calm fallback when nothing urgent
-  - Snooze per rule (recent) · `_isSnoozed` helper + `getSnoozedUpNextRules`
+- (Up Next panel — retired 2026-06-05, engine code fully deleted in the 2026-07-10 ops revisit · `SW v321`)
 - **Phase tracking** · `shipped` · rough / finish / QC phases each with their own tab + workflow
   - Rough phase
   - Finish phase
@@ -106,11 +101,11 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Email daily update
 - **Job Notes** · `in-flight` · `JobNoteCard`, `JobNotesSection`, `JobNoteLine`
   - Phase-scoped checklist notes (rough/finish/general)
-  - Multi-select promote to: CO, RT, Punch, PO, Call
-  - Destination pickers: Punch / RT / CO / Call / PO (`JobNoteDestination*`)
+  - Multi-select promote to: CO, RT, Punch, PO (Call destination removed with the manual-capture layer · `SW v321`)
+  - Destination pickers: Punch / RT / CO / PO (`JobNoteDestination*`)
   - Sits on top of Open Items (doesn't replace it)
   - REPLACES PhaseInstructions UI slot (Option A, 7-layer data safety migration)
-- **Open Items** · `shipped` · `JobOpenItems` · unified visits/punch/purchase/calls backend
+- **Open Items** · `shipped` · `JobOpenItems` · return-trips summary + the job's general-scope Job Notes (manual visit/call/purchase capture removed in the 2026-07-10 ops revisit — return trips + Needs Board cover it · `SW v321`)
 - **Phase Instructions** · `shipped` · `PhaseInstructions` (legacy slot, being replaced by Job Notes)
 - **Materials** · `shipped`
   - Rough materials
@@ -179,10 +174,10 @@ Pages designed to be opened by people outside the company via share links (no au
 
 ## Cross-Job Tools
 
-- **Tasks** · `shipped` · `Tasks`, `TaskCard`, `AddTaskForm`
-  - Manual tasks (Firestore `manualTasks` collection)
+- **Tasks** · `shipped` · `Tasks`, `TaskCard` · auto-generated from job state (`computeTasks`)
   - Per-foreman task filtering
   - Pre-job prep tasks
+  - Due-date editing on auto tasks (`taskDueDates`)
 - **Crew Planner V2** · `in-flight` · `SimproCrewSchedule`
   - Compact rows, click-cell picker
   - Foreman filter
@@ -198,8 +193,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - "Manage their link" master list (office-only) — see/edit every job's on-link state in one spot · `SW v317`
 - **Needs board** · `shipped` · coordinator board for deadline-bound contractor call-ins (`needs` collection)
 - **Redline walks → CO tracking** · `shipped 2026-07-08` · `SW v306` · quoted walks surface in the Change Orders board
-- **Huddle Sheet** · `shipped` · `HuddleSheet`, `HuddleConfigPanel`
-- **Quote Walks** · `shipped` · `QuoteWalksTab`, `QuoteWalkDetail`
+- **Huddle Sheet** · `shipped` · `HuddleSheet` · content revisit (auto-tasks instead of dead manual tasks) · `SW v321`
 - **Job Activity (per job)** · `shipped` · `JobActivity`
 - **Job Photos (per job)** · `shipped` · `JobPhotos`
 
@@ -215,7 +209,6 @@ Pages designed to be opened by people outside the company via share links (no au
   - User management · `UserManagement`
   - Color overrides
   - Backup / restore + Force Update All Devices
-- **Huddle config** · `shipped` · `HuddleConfigPanel`
 - **Scoreboard weights editor** · `shipped` · admin only
 - **Backup-status banner** · `shipped 2026-07-09` · `SW v313` · red strip for admin/manager when the nightly Firestore backup is missing or >48h stale
 
@@ -247,6 +240,10 @@ Pages designed to be opened by people outside the company via share links (no au
   - Bumped on every deploy that changes bundle
 - **Firestore offline support** · `shipped` · `persistentLocalCache` + `persistentMultipleTabManager`
 - **Push notifications (FCM)** · `shipped` · per-foreman; `FCM_MSG.data` shape (NOT `webpush.notification.data`)
+- **Honest notification prefs** · `shipped 2026-07-10` · `SW v321` · every toggle in Settings → Notifications is enforced server-side (`sendToNameIfWanted` / `sendToJobCoordinatorIfWanted`); placebo keys removed, 7 real keys added (status_update, milestone_complete, job_hold, failed_inspection, reminder_safety, co_chase, rt_chase); admin blast on every event replaced with coordinator-routed sends
+- **Thursday Packet v2** · `shipped 2026-07-10` · `SW v321` · weekly email keeps the update-compliance section; dead "Last Week's Decisions" stub dropped; adds Tech Lighting loop status, PTO next 7 days, open App Map suggestions, fleet staleness line
+- (Daily huddle EMAIL removed 2026-07-10 — SMTP had been failing 100% and Koy killed it rather than fix it; the in-app Huddle view and the 6:30 AM huddle push to coordinators both stay · `SW v321`)
+- (Daily Job Activity report — deleted in the 2026-07-10 ops revisit; Today view + Thursday Packet cover it · `SW v321`)
 - **PWA manifest** · `shipped` · installable on iOS/Android
 - **Backup system** · `shipped`
   - localStorage `hejobs_backup` (per-device snapshot)
@@ -273,16 +270,17 @@ Pages designed to be opened by people outside the company via share links (no au
 ## Permissions Model
 
 - **Access tiers** (highest → lowest): `admin` · `manager` · `standard` (foreman) · `limited` (lead/crew)
-- **Permission feature flags** (`PERMISSIONS` map at ~L2770):
-  - `tasks.view` / `tasks.addTask` / `tasks.setDueDate`
+- **Permission feature flags** (`PERMISSIONS` map, src/App.js ~L3165 — dead keys pruned 2026-07-10 · `SW v321`):
+  - `tasks.view`
   - `schedule.view` / `schedule.edit`
   - `pipeline.view` / `pipeline.manage`
-  - `reports.view`
   - `settings.view`
   - `users.manage`
   - `job.delete` (admin only)
   - `quotes.view` / `quotes.convert`
-  - `scoreboard.view` / `scoreboard.editWeights` (both admin only currently)
+  - `scoreboard.editWeights` (admin only)
+  - `cos.view` / `worklist.view` (office)
+  - `jobprep.own` (company-hats checkbox: job prep & redlines)
   - `today.view` (admin/manager/standard) · `shipped 2026-05-21`
   - `board.view` / `board.add` (admin/manager/standard) · Needs board
   - `lutron.view` (everyone) · Plan Changes nav tab
