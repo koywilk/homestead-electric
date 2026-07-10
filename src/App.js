@@ -146,10 +146,18 @@ async function publishCcJobsIndex(jobs) {
 // time). Mirrors the other cc* publishers: anon field-ink auth, per-job hash-gate,
 // fire-and-forget. REQUIRES the field-ink `cchomeruns` rules block deployed.
 const _ccHomerunsHash = {};
-async function publishCcHomeruns(jobId, homeRuns) {
+const _ccHrTimers = {};
+// Trailing 1.5s debounce per job (2026-07-10) — home-run names are edited per
+// keystroke and this used to fire a Firestore write on every one (the hash gate
+// can't help mid-word: each keystroke IS a new hash). Mirrors publishCcQuestions.
+function publishCcHomeruns(jobId, homeRuns) {
+  if (jobId == null) return;
+  const jid = String(jobId);
+  clearTimeout(_ccHrTimers[jid]);
+  _ccHrTimers[jid] = setTimeout(() => { _publishCcHomerunsNow(jid, homeRuns).catch(() => {}); }, 1500);
+}
+async function _publishCcHomerunsNow(jid, homeRuns) {
   try {
-    if (jobId == null) return;
-    const jid = String(jobId);
     const hr = homeRuns || {};
     // Every floor's rows: fixed main/upper/basement + any extra floors' keyed arrays.
     const floorKeys = ["main", "upper", "basement", ...((hr.extraFloors || []).map(ef => ef && ef.key).filter(Boolean))];
@@ -225,7 +233,15 @@ async function publishCcChangeOrders(jobId, changeOrders) {
     // merge doesn't deep-merge arrays, so we merge by id ourselves).
     const ref = doc(fieldinkDb, "cccos", jid);
     let remote = null;
-    try { const snap = await getDoc(ref); remote = snap.exists() ? snap.data() : null; } catch {}
+    try { const snap = await getDoc(ref); remote = snap.exists() ? snap.data() : null; }
+    catch (e) {
+      // Can't READ the remote doc → can't preserve the field's per-CO `fieldink`
+      // markup blocks. ABORT this publish rather than republishing without them
+      // (a transient read failure here used to silently wipe every "drawn ✓"
+      // link on the job). Hash stays unset, so the next CO save retries.
+      console.warn("[fieldink] cccos pre-read failed — publish skipped to protect field markup links:", e?.message);
+      return;
+    }
     const fieldinkById = {};
     for (const c of (remote?.cos || [])) if (c && c.id && c.fieldink) fieldinkById[c.id] = c.fieldink;
     const cos = slim.map(c => (fieldinkById[c.id] ? { ...c, fieldink: fieldinkById[c.id] } : c));
@@ -298,16 +314,21 @@ async function _publishCcQuestionsNow(jobId, roughQuestions, finishQuestions) {
     const user = await ensureFieldinkAuth();
     if (!user) return;
     // Read-merge so the FIELD's per-question `fieldink` block survives every
-    // office republish; a field-linked question also stays 'answered' even if
-    // the office hasn't pasted the answer text yet.
+    // office republish. NOTE (2026-07-10): a pin LINK no longer forces the
+    // mirror's status to 'answered' — status always reflects the real question
+    // state (done/answer), so a question that was merely LOCATED on the plan
+    // can't read as answered on either side. Same abort-on-read-failure guard
+    // as cccos: never republish blind and wipe the field's blocks.
     const ref = doc(fieldinkDb, "ccquestions", jid);
     let remote = null;
-    try { const snap = await getDoc(ref); remote = snap.exists() ? snap.data() : null; } catch {}
+    try { const snap = await getDoc(ref); remote = snap.exists() ? snap.data() : null; }
+    catch (e) {
+      console.warn("[fieldink] ccquestions pre-read failed — publish skipped to protect field links:", e?.message);
+      return;
+    }
     const fieldinkById = {};
     for (const q of (remote?.questions || [])) if (q && q.id && q.fieldink) fieldinkById[q.id] = q.fieldink;
-    const questions = slim.map(q => (fieldinkById[q.id]
-      ? { ...q, fieldink: fieldinkById[q.id], ...(fieldinkById[q.id].linked ? { status: "answered" } : {}) }
-      : q));
+    const questions = slim.map(q => (fieldinkById[q.id] ? { ...q, fieldink: fieldinkById[q.id] } : q));
     await setDoc(ref, { questions, updatedAt: serverTimestamp(), updatedBy: "office" }, { merge: true });
     _ccQHash[jid] = hash;
     console.log(`[fieldink] published designer questions for job ${jid}: ${questions.length}`);
@@ -12038,7 +12059,7 @@ function CoQuoteNumberField({ co, onCommit }) {
   );
 }
 
-function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, roughStatus, finishStatus, jobNotes = []}) {
+function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, roughStatus, finishStatus, jobNotes = [], ccFieldink = {}}) {
 
   const [expandedCOs, setExpandedCOs] = useState({});
   const toggleCO = (id) => setExpandedCOs(v=>({...v,[id]:!v[id]}));
@@ -12211,6 +12232,15 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
                 {!isCollapsed&&o.createdBy&&<span style={{fontSize:10,color:"var(--dim)"}}>created by <b>{o.createdBy}</b>{o.createdAt?" · "+o.createdAt:""}</span>}
                 {Array.isArray(o.fromJobNotes) && o.fromJobNotes.length > 0 && (
                   <FromJobNoteBadge ref={o.fromJobNotes} jobNotes={jobNotes} size="xs"/>
+                )}
+                {/* FieldInk markup (2026-07-10): the crew drew this CO on a plan
+                    in TraceVault — jump straight to the marked-up sheet. */}
+                {ccFieldink[String(o.id)]?.shareId && (
+                  <a href={FIELDINK_VIEWER_BASE + ccFieldink[String(o.id)].shareId} target="_blank" rel="noreferrer"
+                     onClick={e=>e.stopPropagation()}
+                     style={{fontSize:9,fontWeight:700,color:'#3B5BA5',background:'#E0E8F3',border:'1px solid #3B5BA544',borderRadius:4,padding:'2px 7px',textDecoration:'none',display:'inline-flex',alignItems:'center',gap:4}}>
+                    <Icon name="mapPin" size={10} stroke={2.5}/> Marked up on plan — view
+                  </a>
                 )}
               </div>
               <div style={{display:"flex",gap:6,alignItems:"center",flexWrap:"wrap"}}>
@@ -20396,40 +20426,46 @@ function FieldInkPlansSection({ folderIds, job, onUpdate }) {
     const hasFolders = folderIds && folderIds.length > 0;
     const jobId = job?.id != null ? String(job.id) : null;
     if (!hasFolders && !jobId) { setPlans(null); return; }
-    let cancelled = false;
-    (async () => {
-      try {
-        // PRIMARY: explicit assignment — shares stamped with this job's id in
-        // FieldInk's share panel (v307+). Survives folder renames/moves.
-        // FALLBACK: the original Drive-folder-tree inference, kept so legacy
-        // shares (and unassigned ones) still show. Results union by share id.
-        const queries = [];
-        if (jobId) queries.push(getDocs(query(collection(fieldinkDb, "shares"), where("ccJobId", "==", jobId))));
-        if (hasFolders) {
-          // Firestore `in` caps at 10 values per query — chunk the folder tree.
-          const chunks = [];
-          for (let i = 0; i < folderIds.length; i += 10) chunks.push(folderIds.slice(i, i + 10));
-          for (const c of chunks) queries.push(getDocs(query(collection(fieldinkDb, "shares"), where("jobFolderId", "in", c))));
-        }
-        const results = await Promise.all(queries);
-        if (cancelled) return;
-        const byId = new Map();
-        for (const snap of results) snap.forEach(d => byId.set(d.id, { id: d.id, ...d.data() }));
-        // A share explicitly assigned to a DIFFERENT job must not show here
-        // just because it sits in this job's folder tree.
-        for (const [id, p] of [...byId]) {
-          if (p.ccJobId && jobId && String(p.ccJobId) !== jobId) byId.delete(id);
-        }
-        const live = [...byId.values()]
-          .filter(p => !p.revoked)
-          .sort((a, b) => (b.updatedAt?.toMillis?.() || b.version || 0) - (a.updatedAt?.toMillis?.() || a.version || 0));
-        setPlans(live);
-        setPlanErr("");
-      } catch (e) {
-        if (!cancelled) { setPlans([]); setPlanErr(e.message || "Could not load live plans"); }
+    // LIVE listeners (2026-07-10) — this was a one-shot getDocs, so a share
+    // published or revoked in FieldInk didn't show/hide until the job was
+    // reopened, despite the "LIVE PLANS" label. Same union + precedence rules:
+    // PRIMARY = explicit ccJobId assignment (v307+), FALLBACK = the Drive
+    // folder-tree inference for legacy/unassigned shares.
+    const unsubs = [];
+    const partials = new Map();                     // query idx → Map(id → share)
+    const recompute = () => {
+      const byId = new Map();
+      for (const m of partials.values()) for (const [id, p] of m) byId.set(id, p);
+      // A share explicitly assigned to a DIFFERENT job must not show here
+      // just because it sits in this job's folder tree.
+      for (const [id, p] of [...byId]) {
+        if (p.ccJobId && jobId && String(p.ccJobId) !== jobId) byId.delete(id);
       }
-    })();
-    return () => { cancelled = true; };
+      const live = [...byId.values()]
+        .filter(p => !p.revoked)
+        .sort((a, b) => (b.updatedAt?.toMillis?.() || b.version || 0) - (a.updatedAt?.toMillis?.() || a.version || 0));
+      setPlans(live);
+      setPlanErr("");
+    };
+    const attach = (q2, idx) => {
+      try {
+        unsubs.push(onSnapshot(q2, snap => {
+          const m = new Map();
+          snap.forEach(d => m.set(d.id, { id: d.id, ...d.data() }));
+          partials.set(idx, m);
+          recompute();
+        }, e => { setPlans(p => p || []); setPlanErr(e?.message || "Could not load live plans"); }));
+      } catch (e) { setPlans(p => p || []); setPlanErr(e?.message || "Could not load live plans"); }
+    };
+    let qi = 0;
+    if (jobId) attach(query(collection(fieldinkDb, "shares"), where("ccJobId", "==", jobId)), qi++);
+    if (hasFolders) {
+      // Firestore `in` caps at 10 values per query — chunk the folder tree.
+      const chunks = [];
+      for (let i = 0; i < folderIds.length; i += 10) chunks.push(folderIds.slice(i, i + 10));
+      for (const c of chunks) attach(query(collection(fieldinkDb, "shares"), where("jobFolderId", "in", c)), qi++);
+    }
+    return () => { for (const u2 of unsubs) { try { u2(); } catch {} } };
   }, [JSON.stringify(folderIds), job?.id]);
 
   if (((!folderIds || folderIds.length === 0) && job?.id == null) || plans === null) return null;
@@ -20473,6 +20509,25 @@ function FieldInkPlansSection({ folderIds, job, onUpdate }) {
             fontSize: 11, fontWeight: 700, padding: "6px 14px", fontFamily: "inherit" }}>
           Open
         </a>
+        {/* Crew link (2026-07-10): the ?crew= tag is what lets a viewer's
+            Question/Problem pins forward into THIS job's Questions (the
+            ccfieldnotes loop — both halves existed, but nothing ever minted
+            the tagged link). Only meaningful on job-assigned shares: FieldInk
+            forwards notes only when the share carries ccJobId. The sender
+            types their name on each note, so one shared link serves the
+            whole crew/sub. */}
+        {p.ccJobId && !isHiddenRow && (
+          <button onClick={() => {
+            const link = FIELDINK_VIEWER_BASE + p.id + "?crew=crew";
+            const ok = () => toast.success("Crew link copied — Question/Problem pins from it land in this job's Questions.");
+            try { navigator.clipboard.writeText(link).then(ok, () => window.prompt("Copy the crew link:", link)); }
+            catch { window.prompt("Copy the crew link:", link); }
+          }}
+            style={{ background: "none", border: `1px solid ${C.blue}55`, borderRadius: 7, color: C.blue,
+              cursor: "pointer", fontSize: 11, fontWeight: 700, padding: "6px 10px", fontFamily: "inherit" }}>
+            Crew link
+          </button>
+        )}
         {isHiddenRow ? (
           <button onClick={() => setHidden(hiddenIds.filter(x => x !== p.id))}
             style={{ background: "none", border: `1px solid ${C.border}`, borderRadius: 7, color: C.dim,
@@ -23125,10 +23180,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // them without waiting for the next edit. Read-only against job data.
   const [fiQLinks, setFiQLinks] = useState({});
   useEffect(() => {
-    let dead = false, unsub = null;
+    let dead = false, unsub = null, retryTimer = null;
     setFiQLinks({});
-    ensureFieldinkAuth().then(u2 => {
-      if (dead || !u2) return;
+    // Self-healing attach (2026-07-10): an auth hiccup or listener error used to
+    // leave fiQLinks {} for the whole session with zero surface — office badges
+    // just quietly missing. Now both paths retry on a timer while the job is open.
+    const attach = () => { if (dead) return; ensureFieldinkAuth().then(u2 => {
+      if (dead) return;
+      if (!u2) { retryTimer = setTimeout(attach, 20000); return; }
       try {
         unsub = onSnapshot(doc(fieldinkDb, "ccquestions", String(job.id)), snap => {
           const d = snap.exists() ? snap.data() : null;
@@ -23183,10 +23242,43 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               if (f1.changed) u({finishQuestions: f1.updated});
             }
           } catch {}
-        }, ()=>{});
+        }, (err) => {
+          console.warn("[fieldink] ccquestions listener error — retrying in 15s:", err?.message);
+          try { unsub && unsub(); } catch {}
+          if (!dead) retryTimer = setTimeout(attach, 15000);
+        });
       } catch {}
-    });
-    return () => { dead = true; try { unsub && unsub(); } catch {} };
+    }); };
+    attach();
+    return () => { dead = true; clearTimeout(retryTimer); try { unsub && unsub(); } catch {} };
+  }, [job.id]);
+
+  // ── FieldInk CO markup links (2026-07-10) ──────────────────────────────────
+  // The crew's cccos write-back ({markedUp, shareId, coLayerId} per CO) has
+  // flowed for weeks with no office-side display. Listen and hand ChangeOrders
+  // a {coId → fieldink} map so each CO row can show "Marked up on plan — view".
+  const [ccCoLinks, setCcCoLinks] = useState({});
+  useEffect(() => {
+    let dead = false, unsub = null, retryTimer = null;
+    setCcCoLinks({});
+    const attach = () => { if (dead) return; ensureFieldinkAuth().then(u2 => {
+      if (dead) return;
+      if (!u2) { retryTimer = setTimeout(attach, 20000); return; }
+      try {
+        unsub = onSnapshot(doc(fieldinkDb, "cccos", String(job.id)), snap => {
+          const d = snap.exists() ? snap.data() : null;
+          const m = {};
+          for (const c of (d?.cos || [])) if (c && c.id && c.fieldink && c.fieldink.markedUp) m[c.id] = c.fieldink;
+          setCcCoLinks(m);
+        }, (err) => {
+          console.warn("[fieldink] cccos listener error — retrying in 15s:", err?.message);
+          try { unsub && unsub(); } catch {}
+          if (!dead) retryTimer = setTimeout(attach, 15000);
+        });
+      } catch {}
+    }); };
+    attach();
+    return () => { dead = true; clearTimeout(retryTimer); try { unsub && unsub(); } catch {} };
   }, [job.id]);
 
   // ── CREW FIELD QUESTIONS → the job's Questions ────────────────────────────
@@ -23205,7 +23297,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   // before the adopt effect so adoption can SEED it with the field's own answer.
   const relayedFieldRef = useRef({});
   useEffect(() => {
-    let dead = false, unsub = null;
+    let dead = false, unsub = null, retryTimer = null;
     // Clamp a field timestamp to a Date-able ms value — a Firestore Timestamp
     // object or an out-of-range number falls back — so .toISOString() can't throw
     // and abort the whole adopt batch.
@@ -23215,8 +23307,10 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
       const ms = (Number.isFinite(n) && Math.abs(n) < 8.64e15) ? n : (Number.isFinite(a) && Math.abs(a) < 8.64e15 ? a : Date.now());
       return new Date(ms).toISOString();
     };
-    ensureFieldinkAuth().then(u2 => {
-      if (dead || !u2) return;
+    // Same self-healing attach as the fiQLinks listener above.
+    const attach = () => { if (dead) return; ensureFieldinkAuth().then(u2 => {
+      if (dead) return;
+      if (!u2) { retryTimer = setTimeout(attach, 20000); return; }
       try {
         unsub = onSnapshot(collection(fieldinkDb, "ccfieldnotes", String(job.id), "notes"), snap => {
           const notes = snap.docs.map(d => ({ ...d.data(), id: (d.data()||{}).id || d.id }));
@@ -23254,10 +23348,15 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           });
           const cur = jr?.roughQuestions || { upper: [], main: [], basement: [] };
           u({ roughQuestions: { ...cur, main: [ ...(cur.main || []), ...items ] } });
-        }, ()=>{});
+        }, (err) => {
+          console.warn("[fieldink] ccfieldnotes listener error — retrying in 15s:", err?.message);
+          try { unsub && unsub(); } catch {}
+          if (!dead) retryTimer = setTimeout(attach, 15000);
+        });
       } catch {}
-    });
-    return () => { dead = true; try { unsub && unsub(); } catch {} };
+    }); };
+    attach();
+    return () => { dead = true; clearTimeout(retryTimer); try { unsub && unsub(); } catch {} };
   }, [job.id]);
 
   // Relay an OFFICE answer on a field-sourced question back to the crew's live
@@ -23274,8 +23373,13 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           if (!nid || !q.done) continue;
           const ans = String(q.answer||'').trim();
           if (!ans || relayedFieldRef.current[nid] === ans) continue;
-          relayedFieldRef.current[nid] = ans;
-          try { answerFieldNote(job.id, nid, ans, q.answeredBy || 'Office'); } catch {}
+          // Mark relayed only AFTER the write succeeds (2026-07-10) — pre-marking
+          // meant a denied/offline write was never retried: the crew's pin never
+          // got its answer while the office believed it was delivered. A repeat
+          // send before the first resolves is harmless (merge write, same text).
+          answerFieldNote(job.id, nid, ans, q.answeredBy || 'Office')
+            .then(ok => { if (ok) relayedFieldRef.current[nid] = ans; })
+            .catch(() => {});
         }
   }, [job.roughQuestions, job.finishQuestions]);
 
@@ -25429,6 +25533,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                       u({changeOrders:updatedCOs});
                     }
                   }}
+                  ccFieldink={ccCoLinks}
                   jobName={job.name||"This Job"}
                   jobSimproNo={job.simproNo}
                   jobId={job.id}
@@ -26677,21 +26782,31 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
       })()}
 
       {/* FieldInk link (SW v282): the crew tied a plan markup to THIS question
-          in TraceVault — badge links straight to the spot on the live plan. */}
-      {fieldinkMap[q.id]?.linked && (
-        <div style={{marginLeft:22,marginTop:5}}>
-          {fieldinkMap[q.id].shareId ? (
-            <a href={FIELDINK_VIEWER_BASE + fieldinkMap[q.id].shareId} target="_blank" rel="noreferrer"
-               style={{fontSize:9,fontWeight:700,color:'#3E7D5A',background:'#DEEFE6',border:'1px solid #3E7D5A44',borderRadius:4,padding:'2px 7px',textDecoration:'none',display:'inline-flex',alignItems:'center',gap:4}}>
-              <Icon name="check" size={10} stroke={2.5}/> Answered on plan{fieldinkMap[q.id].page?` · p.${fieldinkMap[q.id].page}`:''} — view
-            </a>
-          ) : (
-            <span style={{fontSize:9,fontWeight:700,color:'#3E7D5A',background:'#DEEFE6',border:'1px solid #3E7D5A44',borderRadius:4,padding:'2px 7px',display:'inline-flex',alignItems:'center',gap:4}}>
-              <Icon name="check" size={10} stroke={2.5}/> Answered on plan{fieldinkMap[q.id].page?` · p.${fieldinkMap[q.id].page}`:''}{fieldinkMap[q.id].planName?` · ${fieldinkMap[q.id].planName}`:''}
-            </span>
-          )}
-        </div>
-      )}
+          in TraceVault — badge links straight to the spot on the live plan.
+          Honest label (2026-07-10): green "Answered on plan" only when there's a
+          real answer (field-typed, or the question is done); a bare location pin
+          reads blue "Pinned on plan" — locating a question is not answering it. */}
+      {(()=>{
+        const fi = fieldinkMap[q.id];
+        if (!fi?.linked) return null;
+        const answered = q.done || String(fi.answer||'').trim();
+        const fg = answered ? '#3E7D5A' : '#3B5BA5', bg = answered ? '#DEEFE6' : '#E0E8F3';
+        const label = (answered ? 'Answered on plan' : 'Pinned on plan') + (fi.page ? ` · p.${fi.page}` : '');
+        const st = {fontSize:9,fontWeight:700,color:fg,background:bg,border:`1px solid ${fg}44`,borderRadius:4,padding:'2px 7px',textDecoration:'none',display:'inline-flex',alignItems:'center',gap:4};
+        return (
+          <div style={{marginLeft:22,marginTop:5}}>
+            {fi.shareId ? (
+              <a href={FIELDINK_VIEWER_BASE + fi.shareId} target="_blank" rel="noreferrer" style={st}>
+                <Icon name={answered?'check':'mapPin'} size={10} stroke={2.5}/> {label} — view
+              </a>
+            ) : (
+              <span style={st}>
+                <Icon name={answered?'check':'mapPin'} size={10} stroke={2.5}/> {label}{fi.planName?` · ${fi.planName}`:''}
+              </span>
+            )}
+          </div>
+        );
+      })()}
 
       {/* Field question (crew raised it from a live plan link): jump to the spot. */}
       {q.fromFieldNote?.shareId && (
@@ -41210,7 +41325,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-10 · App SW version: v322
+**Last manifest update:** 2026-07-10 · App SW version: v323
 
 ---
 
@@ -41472,6 +41587,10 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Always-current auto-update** · 'shipped 2026-07-10' · 'SW v318' · bundle-baked version (prebuild) vs served SW version; safe self-reload (never mid-typing / with unsaved work), bottom-left update pill, loop guard, device-version pings
 - **Link Safety funnel** · 'shipped 2026-07-09' · 'SW v313' · every 'homeowner_requests' write goes through 'saveHomeownerRequest' with version snapshots (last 10 per job, 'versions' subcollection) — any clobber is a 2-minute restore
 - **Nightly Firestore backup** · 'shipped 2026-07-09 (deployed)' · 1:00 AM MT cloud function, 30-day retention in Storage 'backups/', 'runBackupNow' manual trigger, 'settings/backupStatus' stamp feeding the in-app banner
+- **FieldInk bridge hardening** · 'shipped 2026-07-10' · 'SW v323' · CO/questions publishers ABORT when their pre-read fails (a network blip used to silently wipe the crew's plan-markup links); field-note answer relay marks delivered only on success (retries otherwise); all field-ink listeners self-heal with backoff instead of dying silently; home-runs publish debounced 1.5s (was a write per keystroke). Pairs with FieldInk v486.
+- **Crew link (FieldInk)** · 'shipped 2026-07-10' · 'SW v323' · "Crew link" button on job-linked Live Plans rows — Question/Problem pins dropped from that link flow into the job's Questions (finishes the ccfieldnotes loop; both halves existed but nothing minted the '?crew=' tagged link). Senders type their name per note, so one link serves a whole crew/sub.
+- **CO plan-markup chip** · 'shipped 2026-07-10' · 'SW v323' · Change Orders rows show "Marked up on plan — view" when the crew drew that CO on a plan in FieldInk (the write-back had flowed for weeks with no office display)
+- **Honest plan-pin badge** · 'shipped 2026-07-10' · 'SW v323' · question rows distinguish blue "Pinned on plan" (located, not answered) from green "Answered on plan" — pinning no longer force-marks a question answered on either side (FieldInk v486 pairs)
 
 ---
 

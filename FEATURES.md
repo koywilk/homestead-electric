@@ -4,7 +4,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-07-10 · App SW version: v322
+**Last manifest update:** 2026-07-10 · App SW version: v323
 
 ---
 
@@ -266,6 +266,10 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Always-current auto-update** · `shipped 2026-07-10` · `SW v318` · bundle-baked version (prebuild) vs served SW version; safe self-reload (never mid-typing / with unsaved work), bottom-left update pill, loop guard, device-version pings
 - **Link Safety funnel** · `shipped 2026-07-09` · `SW v313` · every `homeowner_requests` write goes through `saveHomeownerRequest` with version snapshots (last 10 per job, `versions` subcollection) — any clobber is a 2-minute restore
 - **Nightly Firestore backup** · `shipped 2026-07-09 (deployed)` · 1:00 AM MT cloud function, 30-day retention in Storage `backups/`, `runBackupNow` manual trigger, `settings/backupStatus` stamp feeding the in-app banner
+- **FieldInk bridge hardening** · `shipped 2026-07-10` · `SW v323` · CO/questions publishers ABORT when their pre-read fails (a network blip used to silently wipe the crew's plan-markup links); field-note answer relay marks delivered only on success (retries otherwise); all field-ink listeners self-heal with backoff instead of dying silently; home-runs publish debounced 1.5s (was a write per keystroke). Pairs with FieldInk v486.
+- **Crew link (FieldInk)** · `shipped 2026-07-10` · `SW v323` · "Crew link" button on job-linked Live Plans rows — Question/Problem pins dropped from that link flow into the job's Questions (finishes the ccfieldnotes loop; both halves existed but nothing minted the `?crew=` tagged link). Senders type their name per note, so one link serves a whole crew/sub.
+- **CO plan-markup chip** · `shipped 2026-07-10` · `SW v323` · Change Orders rows show "Marked up on plan — view" when the crew drew that CO on a plan in FieldInk (the write-back had flowed for weeks with no office display)
+- **Honest plan-pin badge** · `shipped 2026-07-10` · `SW v323` · question rows distinguish blue "Pinned on plan" (located, not answered) from green "Answered on plan" — pinning no longer force-marks a question answered on either side (FieldInk v486 pairs)
 
 ---
 
