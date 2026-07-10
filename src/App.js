@@ -13637,6 +13637,32 @@ function HRAddFloor({homeRuns, onHRChange}) {
   );
 }
 
+// RESTORED 2026-07-10 (SW v320): the v319 cleanup (da3a481) deleted these two
+// as dead code, but they are LIVE — used by GeneratorLoadSection, the homeowner
+// generator share page, and ElectricalPanelSchedules' fill-from-home-runs.
+// Deleting them blank-screened every homeowner generator link
+// (ReferenceError: wireAmpsVolts is not defined). Definitions are verbatim
+// from pre-cleanup commit 7c40632.
+const WIRE_BREAKER = {
+  "14/2": {amps:15,  poles:1}, "14/3": {amps:15,  poles:2},
+  "12/2": {amps:20,  poles:1}, "12/3": {amps:20,  poles:2},
+  "10/2": {amps:30,  poles:2}, "10/3": {amps:30,  poles:2},
+  "8/2":  {amps:40,  poles:2}, "8/3":  {amps:40,  poles:2},
+  "6/2":  {amps:50,  poles:2}, "6/3":  {amps:50,  poles:2},
+  "4/2":  {amps:70,  poles:2}, "4/3":  {amps:70,  poles:2},
+  "2/2":  {amps:95,  poles:2}, "2/3":  {amps:95,  poles:2},
+  "1/0":  {amps:125, poles:2}, "2/0":  {amps:150, poles:2},
+  "3/0":  {amps:175, poles:2}, "4/0":  {amps:200, poles:2},
+};
+
+// Homeowner-facing spec label derived from a wire's breaker: "20A · 120V".
+// 1-pole => 120V, 2-pole => 240V. Blank/unknown wire => "" (caller hides it).
+const wireAmpsVolts = (wire) => {
+  const b = WIRE_BREAKER[wire];
+  if (!b) return "";
+  return `${b.amps}A · ${b.poles === 1 ? 120 : 240}V`;
+};
+
 // ── Generator Load Section ────────────────────────────────────
 function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
   // KEY FIX: local state so ★ toggle and checkboxes update instantly
@@ -18848,6 +18874,63 @@ function slotHeaderStyle(isRight) {
   };
 }
 
+
+// RESTORED 2026-07-10 (SW v320): same cleanup casualty as WIRE_BREAKER above —
+// da3a481 deleted these three with the Savant V1 chain, but the LIVE Savant V2
+// slot renderer below still calls all of them (buildSavV2SlotMap at the top of
+// SavantSlotFirstTab's render, feeder colors in the slot grid). Verbatim from
+// pre-cleanup commit 7c40632.
+const SAV_V2_FEEDER_COLORS = [
+  { name: "purple", fill: "rgba(127,119,221,0.18)", chip: "#7f77dd" },
+  { name: "teal",   fill: "rgba(29,158,117,0.18)",  chip: "#1d9e75" },
+  { name: "coral",  fill: "rgba(216,90,48,0.18)",   chip: "#d85a30" },
+  { name: "pink",   fill: "rgba(212,83,126,0.20)",  chip: "#d4537e" },
+  { name: "amber",  fill: "rgba(186,117,23,0.18)",  chip: "#ba7517" },
+  { name: "blue",   fill: "rgba(24,95,165,0.18)",   chip: "#185fa5" },
+  { name: "green",  fill: "rgba(99,153,34,0.18)",   chip: "#639922" },
+  { name: "rust",   fill: "rgba(160,45,45,0.18)",   chip: "#a32d2d" },
+];
+const savV2FeederColor = (feederId, feeders) => {
+  if (!feederId) return null;
+  const idx = feeders.findIndex(f => f.id === feederId);
+  if (idx < 0) return null;
+  return SAV_V2_FEEDER_COLORS[idx % SAV_V2_FEEDER_COLORS.length];
+};
+
+// Build a slot → cell map. Each cell tells the renderer what occupies that
+// slot: a feeder breaker (1-pole = 1 slot, 2-pole = 2 slots in same column),
+// a module half (top half = Input A at slot N, bottom half = Input B at N+2),
+// or empty.
+function buildSavV2SlotMap(v2) {
+  const map = {};
+  (v2.feeders || []).forEach(f => {
+    const slot = parseInt(f.slot, 10);
+    if (!slot || Number.isNaN(slot)) return;
+    map[slot] = { kind: "feeder", feeder: f, isCont: false };
+    if ((f.poles || 1) === 2) {
+      // 2-pole spans the same column → slot N and slot N+2
+      map[slot + 2] = { kind: "feeder", feeder: f, isCont: true };
+    }
+  });
+  (v2.modules || []).forEach(m => {
+    const slots = m.slots || [];
+    slots.forEach((s, i) => {
+      const slot = parseInt(s, 10);
+      if (!slot || Number.isNaN(slot)) return;
+      // For dual-output modules: i=0 → A, i=1 → B
+      // For single-output: i=0 → A, i=1 → cont (no separate input)
+      const isSingle = savSkuOutputs(m.sku) === 1;
+      map[slot] = {
+        kind: "module-half",
+        module: m,
+        halfIndex: i,
+        channel: i === 0 ? "A" : (isSingle ? null : "B"),
+        isCont: isSingle && i === 1,
+      };
+    });
+  });
+  return map;
+}
 
 function SavantSlotFirstTab({ job, u }) {
   const panels = listSavantPanels(job);
@@ -35841,7 +35924,10 @@ function SchedulingForecast({ jobs: _allJobs, onSelectJob, foremenList: _allFore
                                         if(phaseMode) {
                                           setCrewNeedsModal({ jobId: job.id, phase: phaseKey,
                                             date: job[dateKey]||"",
-                                            endDate: job[endKey||""]||"",
+                                            // `endKey` was never defined in this scope (ReferenceError on
+                                            // tap) — derive it like dateKey/hardKey above, matching the
+                                            // keys the crewNeedsModal consumer reads/writes.
+                                            endDate: job[phaseKey==="rough" ? "roughNeedsByEnd" : "finishNeedsByEnd"]||"",
                                             hard: !!job[hardKey] });
                                         } else {
                                           // RT pill — open job detail so RT date can be edited there
@@ -43275,7 +43361,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-10 · App SW version: v319
+**Last manifest update:** 2026-07-10 · App SW version: v320
 
 ---
 
@@ -43422,6 +43508,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Submit answers via share link
   - Lighting collab section
   - Generator page: confirm-first flow + amps/volts · 'shipped 2026-07-08' · 'SW v307'
+  - Generator page crash fix · 'shipped 2026-07-10' · 'SW v320' · restored 'WIRE_BREAKER'/'wireAmpsVolts' + Savant V2 slot helpers wrongly deleted as dead code in the v319 cleanup (blank-screened homeowner generator links); crew-board needs-date 'endKey' ReferenceError fixed
 - **Status Update inline** · 'shipped' · 'StatusUpdateInline'
 - **Bid Items Panel** · 'shipped' · pulls Simpro cost centers
 

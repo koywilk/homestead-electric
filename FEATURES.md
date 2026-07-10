@@ -4,7 +4,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-07-10 · App SW version: v319
+**Last manifest update:** 2026-07-10 · App SW version: v320
 
 ---
 
@@ -151,6 +151,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Submit answers via share link
   - Lighting collab section
   - Generator page: confirm-first flow + amps/volts · `shipped 2026-07-08` · `SW v307`
+  - Generator page crash fix · `shipped 2026-07-10` · `SW v320` · restored `WIRE_BREAKER`/`wireAmpsVolts` + Savant V2 slot helpers wrongly deleted as dead code in the v319 cleanup (blank-screened homeowner generator links); crew-board needs-date `endKey` ReferenceError fixed
 - **Status Update inline** · `shipped` · `StatusUpdateInline`
 - **Bid Items Panel** · `shipped` · pulls Simpro cost centers
 
