@@ -3210,9 +3210,10 @@ const PERMISSIONS = {
   // Office + foreman can view/add (standard = foreman); leads/crew don't see it.
   "board.view":             ["admin","manager","standard"],
   "board.add":              ["admin","manager","standard"],
-  // Lutron Additions viewer — cross-job rollup of the per-job Lutron Rooms
-  // tracker (Panelized Lighting tab). Same access as the tab itself: no tier
-  // gate on adding rooms/items in-job, so the nav tab is open to everyone too.
+  // Plan Changes viewer (nav "Plan Changes") — cross-job rollup of the per-job
+  // plan-changes tracker (Panelized Lighting tab, Lutron jobs). Same access as
+  // the tab itself: no tier gate on logging changes in-job, so the nav tab is
+  // open to everyone too. Key stays "lutron.view" — internal identifier only.
   "lutron.view":            ["admin","manager","standard","limited"],
   // Company-wide hats — NOT tier-based (all 3 coordinators share a tier, so a
   // tier gate can't single out Koy). Granted PER USER via `caps` in Settings →
@@ -14651,15 +14652,13 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
     }).catch(()=>{});
   },[jobId]);
 
-  // Debounced Firestore save
+  // Debounced Firestore save — rides the saveHomeownerRequest funnel so a
+  // version snapshot is stashed before each write (Kweller hardening Layer 4).
   const saveGenLoads = (next) => {
     setGenLoads(next);
     clearTimeout(window._genSave);
     window._genSave = setTimeout(()=>{
-      getDoc(doc(db,'homeowner_requests',jobId)).then(snap=>{
-        const ex = snap.exists()?snap.data():{};
-        setDoc(doc(db,'homeowner_requests',jobId),{...ex,genLoads:next}).catch(()=>{});
-      }).catch(()=>{});
+      saveHomeownerRequest(jobId, () => ({ genLoads: next }), 'HomeRunsTab-genLoads').catch(()=>{});
     },800);
   };
 
@@ -14668,14 +14667,15 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
     setSending(true);
     try {
       // Preserve the other features living on this shared homeowner_requests
-      // doc (lightingCollab, questionAnswers) — only reset the generator fields.
-      const ex = await getDoc(doc(db,'homeowner_requests',jobId));
-      await setDoc(doc(db,'homeowner_requests',jobId),{
-        ...(ex.exists()?ex.data():{}),
-        jobId, jobName:jobName||'', genLoads,
+      // doc (lightingCollab, questionAnswers, threads) — only reset the
+      // generator fields. The wholesale reset here is DELIBERATE (fresh send);
+      // the funnel stashes a version snapshot first, so even this reset is
+      // undoable (Kweller hardening Layer 4).
+      await saveHomeownerRequest(jobId, () => ({
+        jobName:jobName||'', genLoads,
         submitted:false, submittedAt:null, signature:'', signedDate:'', items:[],
         sentAt:new Date().toISOString(),
-      });
+      }), 'HomeRunsTab-send');
       await navigator.clipboard.writeText(hoLink);
       setCopied(true); setTimeout(()=>setCopied(false),3000);
     } catch(e){ toast.error('Failed. Check connection.'); }
@@ -14689,14 +14689,13 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
     if (!await showConfirm(msg)) return;
     setSending(true);
     try {
-      // Preserve lighting-collab / Q&A on the shared doc; reset generator fields.
-      const ex = await getDoc(doc(db,'homeowner_requests',jobId));
-      await setDoc(doc(db,'homeowner_requests',jobId),{
-        ...(ex.exists()?ex.data():{}),
-        jobId, jobName:jobName||'', genLoads,
+      // Preserve lighting-collab / Q&A / threads on the shared doc; reset
+      // generator fields (deliberate). Funnel = version snapshot first.
+      await saveHomeownerRequest(jobId, () => ({
+        jobName:jobName||'', genLoads,
         submitted:false, submittedAt:null, signature:'', signedDate:'', items:[],
         sentAt:new Date().toISOString(),
-      });
+      }), 'HomeRunsTab-resend');
       setHoResponse(null); setShowModal(false);
       await navigator.clipboard.writeText(hoLink);
       setCopied(true); setTimeout(()=>setCopied(false),3000);
@@ -15462,7 +15461,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
 // ── Panelized Lighting ────────────────────────────────────────
 
 // ── Central Loads List ────────────────────────────────────────
-function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],assignedModMap=new Map(),onAssignToModule}) {
+function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],assignedModMap=new Map(),onAssignToModule,color=C.purple}) {
   // Collapsed state per floor section. Set of floor labels that are
   // currently EXPANDED — anything not in the set is collapsed. Starts empty
   // so every section comes up collapsed by default; click the header to
@@ -15527,7 +15526,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
     <div style={{marginBottom:22}}>
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:8}}>
         <span style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em",textTransform:"uppercase"}}>
-          All Loads&nbsp;<span style={{color:`${C.purple}99`,fontWeight:400,textTransform:"none"}}>— define here, assign to keypads &amp; modules below</span>
+          All Loads&nbsp;<span style={{color:`${color}99`,fontWeight:400,textTransform:"none"}}>— define here, assign to keypads &amp; modules below</span>
         </span>
         <div style={{display:"flex",gap:6}}>
           {loads.length>0 && (() => {
@@ -15556,9 +15555,9 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
           {loads.length>0&&(
             <button onClick={selecting?exitSelect:()=>setSelecting(true)}
               style={{fontSize:11,fontWeight:700,padding:"3px 10px",borderRadius:99,cursor:"pointer",fontFamily:"inherit",
-                background:selecting?`${C.purple}18`:"none",
-                border:`1px solid ${selecting?C.purple:C.border}`,
-                color:selecting?C.purple:C.dim}}>
+                background:selecting?`${color}18`:"none",
+                border:`1px solid ${selecting?color:C.border}`,
+                color:selecting?color:C.dim}}>
               {selecting?"✕ Cancel":"Select"}
             </button>
           )}
@@ -15567,24 +15566,24 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
 
       {/* ── Action bar (visible in select mode with rows selected) ── */}
       {selecting&&selected.size>0&&(
-        <div style={{background:`${C.purple}0d`,border:`1px solid ${C.purple}33`,borderRadius:8,
+        <div style={{background:`${color}0d`,border:`1px solid ${color}33`,borderRadius:8,
           padding:"8px 10px",marginBottom:10,display:"flex",gap:8,flexWrap:"wrap",alignItems:"center"}}>
-          <span style={{fontSize:11,fontWeight:700,color:C.purple,whiteSpace:"nowrap"}}>{selected.size} selected</span>
+          <span style={{fontSize:11,fontWeight:700,color:color,whiteSpace:"nowrap"}}>{selected.size} selected</span>
           {/* Set location */}
           <input list="pl-floor-batch" value={batchLoc} onChange={e=>setBatchLoc(e.target.value)}
             onKeyDown={e=>e.key==="Enter"&&applyBatchLoc()} placeholder="Set location…"
-            style={{background:"#fff",border:`1px solid ${C.purple}44`,borderRadius:6,
+            style={{background:"#fff",border:`1px solid ${color}44`,borderRadius:6,
               padding:"4px 8px",fontSize:11,fontFamily:"inherit",outline:"none",color:C.text,width:130}}/>
           <datalist id="pl-floor-batch">{(floorOptions||[]).map(f=><option key={f} value={f}/>)}</datalist>
           <button onClick={applyBatchLoc}
-            style={{background:C.purple,color:"#fff",border:"none",borderRadius:6,
+            style={{background:color,color:"#fff",border:"none",borderRadius:6,
               padding:"4px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",whiteSpace:"nowrap"}}>
             Set Location
           </button>
           {/* Add to module */}
           {allModules.length>0&&<>
             <select value={batchMod} onChange={e=>setBatchMod(e.target.value)}
-              style={{background:"#fff",border:`1px solid ${C.purple}44`,borderRadius:6,
+              style={{background:"#fff",border:`1px solid ${color}44`,borderRadius:6,
                 padding:"4px 8px",fontSize:11,fontFamily:"inherit",outline:"none",
                 color:batchMod?C.text:C.dim,flex:1,minWidth:160}}>
               <option value="">Add to module…</option>
@@ -15595,7 +15594,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
               ))}
             </select>
             <button onClick={applyBatchMod} disabled={!batchMod}
-              style={{background:batchMod?C.purple:`${C.purple}44`,color:"#fff",border:"none",borderRadius:6,
+              style={{background:batchMod?color:`${color}44`,color:"#fff",border:"none",borderRadius:6,
                 padding:"4px 10px",fontSize:11,fontWeight:700,cursor:batchMod?"pointer":"default",
                 fontFamily:"inherit",whiteSpace:"nowrap"}}>
               Add to Module
@@ -15630,10 +15629,10 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                 {/* Total bar */}
                 <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
                   <span style={{fontSize:10,color:C.dim,fontWeight:700}}>Total</span>
-                  <span style={{fontSize:11,fontWeight:700,color:pullPct===100?C.green:C.purple}}>{pulledCount}/{namedLoads.length} — {pullPct}%</span>
+                  <span style={{fontSize:11,fontWeight:700,color:pullPct===100?C.green:color}}>{pulledCount}/{namedLoads.length} — {pullPct}%</span>
                 </div>
                 <div style={{height:5,background:C.border,borderRadius:99,overflow:"hidden",marginBottom:8}}>
-                  <div style={{height:"100%",width:`${pullPct}%`,background:pullPct===100?C.green:C.purple,borderRadius:99,transition:"width 0.4s"}}/>
+                  <div style={{height:"100%",width:`${pullPct}%`,background:pullPct===100?C.green:color,borderRadius:99,transition:"width 0.4s"}}/>
                 </div>
                 {/* Per-floor rows */}
                 {floors.length>1&&floors.map(([fl,{total,pulled:p}])=>{
@@ -15642,7 +15641,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                     <div key={fl} style={{display:"flex",alignItems:"center",gap:8,marginBottom:4}}>
                       <span style={{fontSize:10,color:C.dim,width:90,flexShrink:0,whiteSpace:"nowrap",overflow:"hidden",textOverflow:"ellipsis"}}>{fl}</span>
                       <div style={{flex:1,height:4,background:C.border,borderRadius:99,overflow:"hidden"}}>
-                        <div style={{height:"100%",width:`${pct}%`,background:pct===100?C.green:`${C.purple}99`,borderRadius:99,transition:"width 0.4s"}}/>
+                        <div style={{height:"100%",width:`${pct}%`,background:pct===100?C.green:`${color}99`,borderRadius:99,transition:"width 0.4s"}}/>
                       </div>
                       <span style={{fontSize:10,fontWeight:700,color:pct===100?C.green:C.dim,whiteSpace:"nowrap"}}>{p}/{total}</span>
                     </div>
@@ -15654,7 +15653,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
           {!mob&&(
             <div style={{display:"grid",gridTemplateColumns:COL,gap:6,marginBottom:4,paddingBottom:4,borderBottom:`1px solid ${C.border}`,alignItems:"center"}}>
               {selecting&&<input type="checkbox" checked={allSel} onChange={toggleAll}
-                style={{width:14,height:14,accentColor:C.purple,cursor:"pointer",margin:0}}/>}
+                style={{width:14,height:14,accentColor:color,cursor:"pointer",margin:0}}/>}
               {["✓","#","Load Name","Floor","Panel","Type","Watts",""].map((h,i)=>(
                 <div key={i} style={{fontSize:10,color:C.dim,fontWeight:700,letterSpacing:"0.07em",textAlign:i===0?"center":"left"}}>{h}</div>
               ))}
@@ -15678,13 +15677,13 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                       <div onClick={()=>toggleFloor(fl)}
                         style={{display:"flex",alignItems:"center",gap:8,margin:"10px 0 4px",
                           cursor:"pointer",userSelect:"none",padding:"3px 4px",borderRadius:5,
-                          background: expanded ? `${C.purple}10` : "transparent"}}>
-                        <span style={{fontSize:11,color:C.purple,flexShrink:0,
+                          background: expanded ? `${color}10` : "transparent"}}>
+                        <span style={{fontSize:11,color:color,flexShrink:0,
                           fontWeight:700,width:10,textAlign:"center"}}>
                           {expanded ? "▼" : "▶"}
                         </span>
-                        <span style={{fontSize:10,fontWeight:800,color:C.purple,letterSpacing:"0.08em",textTransform:"uppercase",whiteSpace:"nowrap"}}>{fl}</span>
-                        <div style={{flex:1,height:1,background:`${C.purple}28`}}/>
+                        <span style={{fontSize:10,fontWeight:800,color:color,letterSpacing:"0.08em",textTransform:"uppercase",whiteSpace:"nowrap"}}>{fl}</span>
+                        <div style={{flex:1,height:1,background:`${color}28`}}/>
                         <span style={{fontSize:10,color:C.dim,whiteSpace:"nowrap"}}>{groups[fl].length} load{groups[fl].length!==1?"s":""}</span>
                       </div>
                     )}
@@ -15693,12 +15692,12 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                       const assignedLabels=assignedModMap.has(l.name?.trim())?assignedModMap.get(l.name.trim()):null;
                       if(mob) return (
                         <div key={l.id} style={{marginBottom:6,borderRadius:8,padding:"8px 10px",
-                          background:l.pulled?"rgba(62,125,90,0.08)":selecting&&selected.has(l.id)?`${C.purple}0d`:C.surface,
+                          background:l.pulled?"rgba(62,125,90,0.08)":selecting&&selected.has(l.id)?`${color}0d`:C.surface,
                           border:`1px solid ${l.pulled?"#46916A44":C.border}`}}>
                           {/* Row 1: select + pulled + number + name + delete */}
                           <div style={{display:"flex",alignItems:"center",gap:6,marginBottom:6}}>
                             {selecting&&<input type="checkbox" checked={selected.has(l.id)} onChange={()=>toggleSel(l.id)}
-                              style={{width:16,height:16,accentColor:C.purple,cursor:"pointer",flexShrink:0}}/>}
+                              style={{width:16,height:16,accentColor:color,cursor:"pointer",flexShrink:0}}/>}
                             <input type="checkbox" checked={!!l.pulled} onChange={e=>upd(l.id,{pulled:e.target.checked})}
                               title="Mark as pulled"
                               style={{width:18,height:18,accentColor:C.green,cursor:"pointer",flexShrink:0}}/>
@@ -15733,8 +15732,8 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                               style={{textAlign:"center",fontSize:11,width:46,flexShrink:0}}/>
                             {assignedLabels&&(
                               <span title={assignedLabels.join(", ")}
-                                style={{fontSize:9,fontWeight:800,color:C.purple,background:`${C.purple}15`,
-                                  border:`1px solid ${C.purple}33`,borderRadius:99,padding:"2px 7px",
+                                style={{fontSize:9,fontWeight:800,color:color,background:`${color}15`,
+                                  border:`1px solid ${color}33`,borderRadius:99,padding:"2px 7px",
                                   whiteSpace:"nowrap",cursor:"default"}}>
                                 ✓ {assignedLabels[0]}
                               </span>
@@ -15745,9 +15744,9 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                       return (
                         <div key={l.id} style={{display:"grid",gridTemplateColumns:COL,gap:6,marginBottom:4,alignItems:"center",
                           borderRadius:6,padding:"2px 0",
-                          background:l.pulled?"rgba(62,125,90,0.08)":selecting&&selected.has(l.id)?`${C.purple}0d`:"transparent"}}>
+                          background:l.pulled?"rgba(62,125,90,0.08)":selecting&&selected.has(l.id)?`${color}0d`:"transparent"}}>
                           {selecting&&<input type="checkbox" checked={selected.has(l.id)} onChange={()=>toggleSel(l.id)}
-                            style={{width:14,height:14,accentColor:C.purple,cursor:"pointer",margin:0}}/>}
+                            style={{width:14,height:14,accentColor:color,cursor:"pointer",margin:0}}/>}
                           <input type="checkbox" checked={!!l.pulled} onChange={e=>upd(l.id,{pulled:e.target.checked})}
                             title="Mark as pulled"
                             style={{width:15,height:15,accentColor:C.green,cursor:"pointer",margin:"0 auto",display:"block"}}/>
@@ -15762,8 +15761,8 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
                                 flex:1}}/>
                             {assignedLabels&&(
                               <span title={assignedLabels.join(", ")}
-                                style={{fontSize:9,fontWeight:800,color:C.purple,background:`${C.purple}15`,
-                                  border:`1px solid ${C.purple}33`,borderRadius:99,padding:"2px 6px",
+                                style={{fontSize:9,fontWeight:800,color:color,background:`${color}15`,
+                                  border:`1px solid ${color}33`,borderRadius:99,padding:"2px 6px",
                                   whiteSpace:"nowrap",flexShrink:0,cursor:"default"}}>
                                 ✓ {assignedLabels[0]}
                               </span>
@@ -15795,7 +15794,7 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
         </>
       )}
       <button onClick={add}
-        style={{background:"none",border:`1px dashed ${C.purple}44`,color:`${C.purple}88`,borderRadius:7,
+        style={{background:"none",border:`1px dashed ${color}44`,color:`${color}88`,borderRadius:7,
           padding:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"100%",
           letterSpacing:"0.04em",marginTop:6}}>
         + Add Load
@@ -15804,21 +15803,35 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
   );
 }
 
-// ── Lutron Rooms — post-bid additions tracker ──────────────────────────────
-// Tracks loads/keypads/shades added to a Lutron job's package AFTER the
-// original bid + plan set were made. The outside low-voltage company designs
-// the actual system and emails Koy's team the finished plans (load schedule,
-// keypad plans, shade plans — those PDFs live in Plans & Links). This is NOT
-// that circuit engineering — it's a lightweight coordination log so Koy's
-// team can track what's changed since bid without re-reading a PDF or email
-// thread every time.
+// ── Lutron Rooms — plan-changes tracker (grew out of the additions log) ────
+// Tracks CHANGES to a Lutron job's package after the original bid + plan set
+// were made — added, moved, removed, or changed loads/keypads/shades. The
+// outside low-voltage company (Tech Lighting) designs the actual system and
+// emails Koy's team the finished plans (load schedule, keypad plans, shade
+// plans — those PDFs live in Plans & Links). This is NOT that circuit
+// engineering — it's a lightweight coordination log so Tech Lighting can
+// revise plans + quotes from a clean per-room delta list instead of
+// re-reading a PDF or email thread every time.
 //
 // Rooms are the organizing unit: create a room matching whatever label the
-// plans company put on their own plan, then log items inside it. Pure
-// addition log — no installed/status field of any kind (Koy: "this is just
-// a clean list of additions"). Caption text is fixed per spec — phase-
-// agnostic ("since bid"), not "during rough", because additions can rarely
-// still happen during finish and a phase-named caption would be wrong then.
+// plans company put on their own plan, then log changes inside it. Each item
+// carries changeType ("Added"|"Moved"|"Removed"|"Changed"). Items logged
+// before changeType existed have no such key and render as "Added" via
+// changeTypeOf() below — a render-time default, never written back, so old
+// items are never migrated. For Moved, fromLocation holds the "from";
+// `location` always means the current/"to" spot. Still no installed/status
+// field of any kind. Caption text is phase-agnostic ("since bid"), not
+// "during rough", because changes can rarely still happen during finish and
+// a phase-named caption would be wrong then.
+//
+// Closed loop: Tech Lighting marks each change "incorporated" from the
+// public ?lutronshare= page. Those acks live at homeowner_requests/{jobId}
+// .planChangeAcks — NOT on the job doc, so public pages never gain write
+// access to jobs/{id}. This section only READS acks (via JobDetail's
+// existing homeowner_requests listener); acks are only ever written from
+// the public page. Discussion threads (planChangeThreads, same doc) are
+// two-way: Tech Lighting asks from the public page, this section and the
+// cross-job view post replies via postThreadMessage below.
 //
 // Data lives at job.panelizedLighting.lutronRooms = [{id,name,items:[...]}]
 // — nested inside the existing panelizedLighting object, so it's already
@@ -15836,13 +15849,126 @@ function LoadsList({loads,onChange,floorOptions,panelOptions=[],allModules=[],as
 // in the original package" and it actually stands out on this all-purple tab.
 const LUTRON_ITEM_TYPES = ["Load","Keypad","Shade","Other"];
 const lutronTypeColor = (t) => t==="Load" ? C.blue : t==="Keypad" ? C.teal : t==="Shade" ? C.green : C.dim;
+const CHANGE_TYPES = ["Added","Moved","Removed","Changed"];
+const changeTypeColor = (t) => t==="Added" ? C.green : t==="Moved" ? C.blue : t==="Removed" ? C.red : t==="Changed" ? C.orange : C.dim;
+// Render-time default for items logged before changeType existed — never
+// written back onto the item, so legacy data is never migrated.
+const changeTypeOf = (item) => item.changeType || "Added";
+// One-line change description shared by every copy-to-email summary (per-job
+// AND cross-job) so pasted output stays identical everywhere.
+const describeChange = (item) => {
+  const ct = changeTypeOf(item);
+  return ct==="Moved" && item.fromLocation ? `Moved: ${item.fromLocation} → ${item.location}` : `${ct}: ${item.location}`;
+};
 
-function LutronRoomsSection({ job, u }) {
+// Loads/Keypads/Panel Loads section accent on the Panelized Lighting tab —
+// purple for Control4/Savant/Crestron (unchanged, matches every other section
+// on the tab), blue for Lutron so the tab isn't all-purple sitting right below
+// the orange Additions section. Scoped to Lutron only, not a global re-theme —
+// Koy only flagged this in Lutron context. Koy 2026-07-08, after the Additions
+// section shipped: "there is still purple" (in these sections, below it).
+const sysAccentColor = (job) => (job?.lightingSystem||"Control 4")==="Lutron" ? C.blue : C.purple;
+
+// ── Plan-change discussion threads (Tech Lighting ↔ Homestead) ────────────
+// homeowner_requests/{jobId}.planChangeThreads = { [itemId or "_general"]:
+//   [{id, by, role:'crew'|'client', text, photos:[{id,name,url,storagePath,type}], at}] }
+// Message shape is QAThread's native shape (see QAThread) — the SAME chat
+// component the Questions share flow uses renders these threads on every
+// surface, with file/photo attach built in (uploads to Firebase Storage at
+// jobs/{jobId}/plan-change-threads/{itemId}, the proven public-upload path
+// pattern from QuestionsSharePage). role 'client' = Tech Lighting (public
+// ?lutronshare= page), 'crew' = Homestead (internal app). The reserved
+// "_general" key is the job-level discussion not tied to one change.
+// Same publicly-writable doc as planChangeAcks (rule: jobId is string — see
+// firestore.rules /homeowner_requests). Stateless attention signal, no
+// read-tracking: a thread is "awaiting reply" when its LAST message came
+// from Tech Lighting.
+const threadAwaiting = (msgs) => !!(msgs && msgs.length && msgs[msgs.length-1].role==="client");
+// "Got a reply" (public hub badge): Homestead answered last and Tech Lighting
+// asked at least once — one of their questions actually got a response.
+const threadReplied = (msgs) => !!(msgs && msgs.length && msgs[msgs.length-1].role==="crew" && msgs.some(m=>m.role==="client"));
+
+// ── homeowner_requests write funnel + version snapshots (Layer 4, Kweller
+// hardening 2026-07-09) ─────────────────────────────────────────────────────
+// EVERY write to homeowner_requests/{id} — public share pages AND internal
+// app — goes through saveHomeownerRequest so a point-in-time copy of the doc
+// is stashed FIRST in its versions subcollection. A bad merge or overwrite
+// (any writer, any future bug) becomes a 2-minute restore instead of a loss.
+// Snapshots are fire-and-forget: if the versions rule isn't deployed yet,
+// the device is offline, or anything else fails, the REAL save still goes
+// through — the snapshot never blocks or throws (fail-open by design).
+function snapshotHomeownerRequestVersion(jobId, prevData, sourceTag) {
+  if (!prevData) return; // nothing to snapshot on a first-ever write
+  (async () => {
+    try {
+      const vref = doc(collection(db,'homeowner_requests',jobId,'versions'));
+      await setDoc(vref, { snap: sanitize(prevData), at: new Date().toISOString(), by: sourceTag||'unknown' });
+      // prune to the newest 10 — best effort, failure is harmless
+      const snaps = await getDocs(query(collection(db,'homeowner_requests',jobId,'versions'), orderBy('at','desc'), limit(30)));
+      await Promise.all(snaps.docs.slice(10).map(d => deleteDoc(d.ref).catch(()=>{})));
+    } catch(e) { /* fail-open — the real save already happened */ }
+  })();
+}
+
+// mutator(prevData) returns the fields to overlay on the existing doc.
+// jobId is always included so the firestore rule (jobId is string) passes.
+async function saveHomeownerRequest(jobId, mutator, sourceTag) {
+  const ref = doc(db,'homeowner_requests',jobId);
+  const ex = await getDoc(ref);
+  const prevData = ex.exists() ? ex.data() : null;
+  snapshotHomeownerRequestVersion(jobId, prevData, sourceTag);
+  const patch = mutator(prevData);
+  await setDoc(ref, { ...(prevData||{}), ...patch, jobId });
+  return patch;
+}
+
+// Question-thread messages (Layer 2, Kweller hardening) — discussion replies
+// on Rough/Finish questions live HERE (homeowner_requests/{jobId}
+// .questionThreads), NEVER on jobs/{id}, so no internal saveJob patch, stale
+// baseline, or future merge bug can ever wipe what a designer/GC wrote (the
+// Kweller loss). Keyed "<phase>_<floorKey>_<qid>" so even a theoretical
+// uid() collision across floors/phases can't cross-wire two questions'
+// discussions. Transaction-scoped to exactly this one key. Legacy q.thread[]
+// arrays on the job doc stay frozen/read-only and are concatenated at render
+// time — see the threadOf helpers in QAList/QASection/QuestionsSharePage.
+async function postQuestionThreadMessage(jobId, key, msg, sourceTag) {
+  let prevDoc = null;
+  await runTransaction(db, async (tx) => {
+    const ref = doc(db,'homeowner_requests',jobId);
+    const snap = await tx.get(ref);
+    prevDoc = snap.exists() ? snap.data() : null;
+    const nextMsgs = [...(((prevDoc||{}).questionThreads||{})[key]||[]), msg];
+    if (!prevDoc) tx.set(ref, { jobId, questionThreads: { [key]: nextMsgs } });
+    else tx.update(ref, { ['questionThreads.'+key]: nextMsgs });
+  });
+  snapshotHomeownerRequestVersion(jobId, prevDoc, sourceTag);
+}
+
+// Shared append-message writer for PLAN-CHANGE threads — ONE implementation
+// for all three writers (public share page ask, LutronRoomsSection reply,
+// LutronAdditionsView reply) so the merge logic stays identical everywhere.
+// Rides the saveHomeownerRequest funnel (version snapshot included). Returns
+// false on failure so callers keep the draft text for retry (no optimistic UI).
+const postThreadMessage = async (jobId, jobName, itemId, msg) => {
+  try {
+    await saveHomeownerRequest(jobId, (prev) => ({
+      jobName: jobName || ((prev&&prev.jobName) || ''),
+      planChangeThreads: {
+        ...((prev||{}).planChangeThreads||{}),
+        [itemId]: [ ...((((prev||{}).planChangeThreads||{})[itemId])||[]), msg ],
+      },
+    }), 'planChangeThread');
+    return true;
+  } catch(e) { return false; }
+};
+
+function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
   const rooms = job.panelizedLighting?.lutronRooms || [];
   const [addingRoom, setAddingRoom]       = useState(false);
   const [newRoomName, setNewRoomName]     = useState("");
   const [addingItemFor, setAddingItemFor] = useState(null); // room id, or null
-  const [newItem, setNewItem]             = useState({ itemType:"Load", location:"", notes:"" });
+  const [newItem, setNewItem]             = useState({ itemType:"Load", changeType:"Added", location:"", fromLocation:"", notes:"" });
+  const [openThreads, setOpenThreads]     = useState(() => new Set()); // item ids (or "_general") with discussion expanded
 
   const saveRooms = (next) => u({ panelizedLighting: { ...job.panelizedLighting, lutronRooms: next } });
 
@@ -15868,7 +15994,7 @@ function LutronRoomsSection({ job, u }) {
 
   const startAddItem = (roomId) => {
     setAddingItemFor(roomId);
-    setNewItem({ itemType:"Load", location:"", notes:"" });
+    setNewItem({ itemType:"Load", changeType:"Added", location:"", fromLocation:"", notes:"" });
   };
 
   const addItem = (roomId) => {
@@ -15877,7 +16003,12 @@ function LutronRoomsSection({ job, u }) {
     const item = {
       id: uid(),
       itemType: newItem.itemType || "Load",
+      changeType: newItem.changeType || "Added",
       location,
+      // fromLocation only ever exists on Moved items — omitted otherwise so
+      // item objects stay minimal (matches how notes/etc. are handled).
+      ...(newItem.changeType==="Moved" && newItem.fromLocation.trim()
+          ? { fromLocation: newItem.fromLocation.trim() } : {}),
       notes: newItem.notes.trim(),
       addedBy: getIdentity()?.name || "",
       addedAt: new Date().toISOString(),
@@ -15890,15 +16021,28 @@ function LutronRoomsSection({ job, u }) {
     saveRooms(rooms.map(r => r.id === roomId ? { ...r, items: (r.items||[]).filter(i => i.id !== itemId) } : r));
   };
 
+  const toggleThread = (itemId) => setOpenThreads(prev => {
+    const next = new Set(prev);
+    next.has(itemId) ? next.delete(itemId) : next.add(itemId);
+    return next;
+  });
+
+  // QAThread onPost — throw on failure so QAThread keeps the draft and toasts.
+  const postMsg = (itemId) => async ({ text, photos }) => {
+    const msg = { id: uid(), by: getIdentity()?.name||"", role:"crew", text, photos, at: new Date().toISOString() };
+    const ok = await postThreadMessage(job.id, job.name||"", itemId, msg);
+    if (!ok) throw new Error("send failed");
+  };
+
   const copySummary = () => {
-    const lines = [`${job.name||"This job"} — additions after original bid/plans`, ""];
+    const lines = [`${job.name||"This job"} — changes from original plan`, ""];
     let any = false;
     rooms.forEach(room => {
       if (!(room.items||[]).length) return;
       any = true;
       lines.push(room.name+":");
       room.items.forEach(item => {
-        lines.push("  - ["+item.itemType+"] "+item.location+(item.notes?" ("+item.notes+")":""));
+        lines.push("  - ["+item.itemType+"] "+describeChange(item)+(item.notes?" ("+item.notes+")":""));
       });
     });
     if (!any) lines.push("(nothing logged yet)");
@@ -15913,11 +16057,11 @@ function LutronRoomsSection({ job, u }) {
         border:`1.5px solid ${C.orange}77`,borderRadius:8,padding:"10px 12px",marginBottom:12}}>
         <Icon name="alertTriangle" size={15} color={C.orange} style={{flexShrink:0}}/>
         <span style={{fontSize:12.5,color:C.orange,fontWeight:800}}>
-          Additions after original bid/plans — not part of the original package
+          Changed since bid — not part of the original plan package
         </span>
       </div>
 
-      <SectionHead label="Additions After Original Bid/Plans" color={C.orange}
+      <SectionHead label="Changes From Original Plan" color={C.orange}
         action={
           <div style={{display:"flex",gap:8}}>
             <button onClick={copySummary}
@@ -15963,7 +16107,7 @@ function LutronRoomsSection({ job, u }) {
       {rooms.length===0 && !addingRoom && (
         <div style={{fontSize:12,color:C.dim,padding:"14px",border:`1px dashed ${C.border}`,
           borderRadius:8,textAlign:"center"}}>
-          No rooms yet. Add one to match the plan and start logging what's added.
+          No rooms yet. Add one to match the plan and start logging what's changed.
         </div>
       )}
 
@@ -15986,34 +16130,80 @@ function LutronRoomsSection({ job, u }) {
             </button>
           </div>
 
-          {(room.items||[]).map(item => (
-            <div key={item.id} style={{display:"flex",alignItems:"flex-start",gap:8,padding:"6px 0",
-              borderTop:`1px solid ${C.border}`}}>
-              <span style={{flexShrink:0,fontSize:10,fontWeight:700,color:lutronTypeColor(item.itemType),
-                background:`${lutronTypeColor(item.itemType)}18`,borderRadius:5,padding:"2px 7px"}}>
-                {item.itemType}
-              </span>
-              <div style={{flex:1,minWidth:0}}>
-                <div style={{fontSize:12,color:C.text}}>{item.location}</div>
-                {item.notes && <div style={{fontSize:11,color:C.dim,marginTop:1}}>{item.notes}</div>}
-                <div style={{fontSize:10,color:C.dim,opacity:0.7,marginTop:2}}>
-                  {timeAgo(item.addedAt)}{item.addedBy?` by ${item.addedBy}`:""}
+          {(room.items||[]).map(item => {
+            const msgs = planChangeThreads?.[item.id] || [];
+            const awaiting = threadAwaiting(msgs);
+            const threadOpen = openThreads.has(item.id);
+            return (
+            <div key={item.id} style={awaiting?{background:`${C.orange}0d`,borderRadius:6}:undefined}>
+              <div style={{display:"flex",alignItems:"flex-start",gap:8,padding:"6px 0",
+                borderTop:`1px solid ${C.border}`}}>
+                <span style={{flexShrink:0,fontSize:10,fontWeight:700,color:lutronTypeColor(item.itemType),
+                  background:`${lutronTypeColor(item.itemType)}18`,borderRadius:5,padding:"2px 7px"}}>
+                  {item.itemType}
+                </span>
+                <span style={{flexShrink:0,fontSize:10,fontWeight:700,color:changeTypeColor(changeTypeOf(item)),
+                  background:`${changeTypeColor(changeTypeOf(item))}18`,borderRadius:5,padding:"2px 7px"}}>
+                  {changeTypeOf(item)}
+                </span>
+                <div style={{flex:1,minWidth:0}}>
+                  <div style={{fontSize:12,color:C.text}}>
+                    {changeTypeOf(item)==="Moved" && item.fromLocation
+                      ? <>{item.fromLocation} <span style={{color:C.dim}}>→</span> {item.location}</>
+                      : item.location}
+                  </div>
+                  {item.notes && <div style={{fontSize:11,color:C.dim,marginTop:1}}>{item.notes}</div>}
+                  <div style={{fontSize:10,color:C.dim,opacity:0.7,marginTop:2}}>
+                    {timeAgo(item.addedAt)}{item.addedBy?` by ${item.addedBy}`:""}
+                  </div>
+                  {planChangeAcks?.[item.id]?.ackedAt && (
+                    <div style={{fontSize:10,fontWeight:700,color:C.green,marginTop:2,
+                      display:"flex",alignItems:"center",gap:3}}>
+                      <Icon name="check" size={10} stroke={2.5}/>
+                      Incorporated by plans co.{planChangeAcks[item.id].note?` — ${planChangeAcks[item.id].note}`:""}
+                    </div>
+                  )}
                 </div>
+                <button onClick={()=>deleteItem(room.id,item.id)} title="Delete item"
+                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",padding:2,flexShrink:0}}>
+                  <Icon name="x" size={12} stroke={2}/>
+                </button>
               </div>
-              <button onClick={()=>deleteItem(room.id,item.id)} title="Delete item"
-                style={{background:"none",border:"none",color:C.muted,cursor:"pointer",padding:2,flexShrink:0}}>
-                <Icon name="x" size={12} stroke={2}/>
-              </button>
+              <div style={{padding:"0 0 8px 0"}}>
+                <button onClick={()=>toggleThread(item.id)}
+                  style={{background:"none",border:"none",color:awaiting?C.orange:C.dim,fontSize:11,fontWeight:700,
+                    cursor:"pointer",fontFamily:"inherit",padding:0,display:"flex",alignItems:"center",gap:4}}>
+                  <Icon name="help" size={11} stroke={2.25}/>
+                  {msgs.length===0 ? "Ask a question" : `${msgs.length} question${msgs.length===1?"":"s"}`}
+                  {awaiting && <span style={{marginLeft:2,fontSize:9,fontWeight:700,color:C.orange,
+                    background:`${C.orange}18`,borderRadius:99,padding:"1px 7px"}}>awaiting reply</span>}
+                </button>
+                {threadOpen && (
+                  <div style={{paddingLeft:15}}>
+                    <QAThread messages={msgs} jobId={job.id} qid={item.id} color={C.blue}
+                      photoBase="plan-change-threads" onPost={postMsg(item.id)}/>
+                  </div>
+                )}
+              </div>
             </div>
-          ))}
+            );
+          })}
 
           {addingItemFor===room.id ? (
             <div style={{borderTop:(room.items||[]).length?`1px solid ${C.border}`:"none",
               paddingTop:8,marginTop:8,display:"flex",flexDirection:"column",gap:6}}>
               <Sel value={newItem.itemType} onChange={e=>setNewItem({...newItem,itemType:e.target.value})}
                 options={LUTRON_ITEM_TYPES}/>
+              <Sel value={newItem.changeType} onChange={e=>setNewItem({...newItem,changeType:e.target.value})}
+                options={CHANGE_TYPES}/>
+              {newItem.changeType==="Moved" && (
+                <input value={newItem.fromLocation} onChange={e=>setNewItem({...newItem,fromLocation:e.target.value})}
+                  placeholder="Moved from (where the plan has it)"
+                  style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
+                    padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none"}}/>
+              )}
               <input value={newItem.location} onChange={e=>setNewItem({...newItem,location:e.target.value})}
-                placeholder="Location within this room"
+                placeholder={newItem.changeType==="Moved" ? "Moved to (where it is now)" : "Location within this room"}
                 autoFocus
                 style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,
                   padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none"}}/>
@@ -16045,33 +16235,103 @@ function LutronRoomsSection({ job, u }) {
           )}
         </div>
       ))}
+
+      {/* Job-level discussion — questions about this job in general, not tied
+          to one change. Reserved "_general" thread key, same doc/field. */}
+      {(() => {
+        const msgs = planChangeThreads?._general || [];
+        const awaiting = threadAwaiting(msgs);
+        const open = openThreads.has("_general");
+        return (
+          <div style={{marginTop:10,background:awaiting?`${C.orange}0d`:C.card,
+            border:`1px solid ${C.border}`,borderRadius:10,padding:"10px 12px"}}>
+            <button onClick={()=>toggleThread("_general")}
+              style={{background:"none",border:"none",color:awaiting?C.orange:C.dim,fontSize:11,fontWeight:700,
+                cursor:"pointer",fontFamily:"inherit",padding:0,display:"flex",alignItems:"center",gap:4}}>
+              <Icon name="help" size={11} stroke={2.25}/>
+              Job discussion{msgs.length?` (${msgs.length})`:""}
+              {awaiting && <span style={{marginLeft:2,fontSize:9,fontWeight:700,color:C.orange,
+                background:`${C.orange}18`,borderRadius:99,padding:"1px 7px"}}>awaiting reply</span>}
+            </button>
+            {open && (
+              <QAThread messages={msgs} jobId={job.id} qid="_general" color={C.blue}
+                photoBase="plan-change-threads" onPost={postMsg("_general")}/>
+            )}
+          </div>
+        );
+      })()}
     </div>
   );
 }
 
 
-// ── Lutron Additions viewer — cross-job rollup ─────────────────────────────
-// Read-only surface that rolls up every job with at least one Lutron Rooms
-// item logged, grouped by job (sorted alphabetically by job name). Adding
-// still happens on the job's own Panelized Lighting tab — this is purely for
-// seeing everything at a glance and coordinating with the plans company.
-// No data model of its own: derives entirely from the jobs array already
-// held in memory client-side (same array Today/Scoreboard/etc. read), so
-// there's no new Firestore query, no new collection, and nothing here can
-// go stale or drop data on its own. Spec: LUTRON_PACKAGE_TRACKER_SPEC.md (P0-8).
-function LutronAdditionsView({ jobs, onSelectJob }) {
-  const [expanded, setExpanded] = useState(() => new Set());
-  const [copied, setCopied]     = useState(false);
+// ── Plan Changes viewer — cross-job rollup ─────────────────────────────────
+// Rolls up every Lutron job's plan-changes log (lutronRooms), grouped by job
+// (sorted alphabetically by job name). Logging still happens on the job's
+// own Panelized Lighting tab — this is purely for seeing everything at a
+// glance and coordinating with the plans company (Tech Lighting).
+// Job data derives entirely from the jobs array already held in memory
+// client-side (same array Today/Scoreboard/etc. read). This view ALSO holds
+// one live listener on the homeowner_requests collection for two fields:
+// planChangeAcks (Tech Lighting's "incorporated" marks, written only from
+// the public ?lutronshare= page — read-only here) and planChangeThreads
+// (per-item discussion; this view POSTS replies via postThreadMessage, and
+// badges jobs whose threads are awaiting a Homestead reply). Besides thread
+// replies, the only other write is the excludeFromLutronHub toggle.
+// Spec: LUTRON_PACKAGE_TRACKER_SPEC.md (P0-8).
+function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob }) {
+  const [expanded, setExpanded]   = useState(() => new Set());
+  const [copied, setCopied]       = useState(false);
+  const [showHidden, setShowHidden] = useState(false);
+  const [acksByJob, setAcksByJob] = useState({}); // {jobId: planChangeAcks map}
+  const [threadsByJob, setThreadsByJob] = useState({}); // {jobId: planChangeThreads map}
+  const [openThreads, setOpenThreads]   = useState(() => new Set()); // "jobId:itemId" (or "jobId:_general") keys
 
-  // Every job on a Lutron package — not just ones with additions logged yet.
-  // Koy tracks the whole roster of jobs coordinating with the plans company
-  // here, not just the ones that already have a change to report.
-  const lutronJobs = useMemo(() => {
+  useEffect(() => {
+    const unsub = onSnapshot(collection(db,'homeowner_requests'), snap => {
+      const acks = {}, threads = {};
+      // Only planChangeAcks + planChangeThreads are pulled out of these docs —
+      // nothing else from homeowner_requests is stored or rendered here.
+      snap.docs.forEach(d => {
+        const data = d.data();
+        if (data?.planChangeAcks) acks[d.id] = data.planChangeAcks;
+        if (data?.planChangeThreads) threads[d.id] = data.planChangeThreads;
+      });
+      setAcksByJob(acks);
+      setThreadsByJob(threads);
+    }, ()=>{});
+    return () => unsub();
+  }, []);
+
+  const toggleThread = (key) => setOpenThreads(prev => {
+    const next = new Set(prev);
+    next.has(key) ? next.delete(key) : next.add(key);
+    return next;
+  });
+
+  // QAThread onPost — throw on failure so QAThread keeps the draft and toasts.
+  const postMsg = (job, itemId) => async ({ text, photos }) => {
+    const msg = { id: uid(), by: getIdentity()?.name||"", role:"crew", text, photos, at: new Date().toISOString() };
+    const ok = await postThreadMessage(job.id, job.name||"", itemId, msg);
+    if (!ok) throw new Error("send failed");
+  };
+
+  // Every job on a Lutron package — not just ones with additions logged yet —
+  // split into visible vs. hidden. "Hidden" = Koy flagged it as not actually
+  // this LV company's job (panelizedLighting.excludeFromLutronHub — e.g. a
+  // job set to Lutron before this tracking workflow existed). Hidden jobs
+  // drop out of both this internal view's default list AND the external
+  // LightingHubPage; they're never deleted, just excluded, and restorable
+  // below. Koy (2026-07-08): "some of these jobs were set to lutron before
+  // we started using them, need a way to remove jobs that are not theres."
+  const allLutronJobs = useMemo(() => {
     return (jobs||[])
       .filter(j => (j.lightingSystem||"")==="Lutron")
       .map(j => ({ job:j, rooms:(j.panelizedLighting?.lutronRooms||[]).filter(r=>(r.items||[]).length>0) }))
       .sort((a,b) => (a.job.name||"").localeCompare(b.job.name||""));
   }, [jobs]);
+  const lutronJobs = allLutronJobs.filter(x => !x.job.panelizedLighting?.excludeFromLutronHub);
+  const hiddenJobs = allLutronJobs.filter(x => !!x.job.panelizedLighting?.excludeFromLutronHub);
 
   const jobsWithAdditions = lutronJobs.filter(x=>x.rooms.length>0).length;
 
@@ -16081,8 +16341,15 @@ function LutronAdditionsView({ jobs, onSelectJob }) {
     return next;
   });
 
+  const setExcluded = (job, excluded) => {
+    if (!onUpdateJob) return;
+    const updated = { ...job, panelizedLighting: { ...job.panelizedLighting, excludeFromLutronHub: excluded } };
+    onUpdateJob(updated, { panelizedLighting: updated.panelizedLighting });
+    toast.success(excluded ? `${job.name||"Job"} hidden from LV tracking` : `${job.name||"Job"} restored`);
+  };
+
   const copySummary = () => {
-    const lines = ["Additions after original bid/plans",""];
+    const lines = ["Changes from original plan",""];
     let any = false;
     lutronJobs.forEach(({job,rooms}) => {
       if (!rooms.length) return;
@@ -16091,7 +16358,7 @@ function LutronAdditionsView({ jobs, onSelectJob }) {
       rooms.forEach(room => {
         lines.push("  "+room.name+":");
         (room.items||[]).forEach(item => {
-          lines.push("    - ["+item.itemType+"] "+item.location+(item.notes?" ("+item.notes+")":""));
+          lines.push("    - ["+item.itemType+"] "+describeChange(item)+(item.notes?" ("+item.notes+")":""));
         });
       });
       lines.push("");
@@ -16109,10 +16376,10 @@ function LutronAdditionsView({ jobs, onSelectJob }) {
       <div style={{display:"flex",alignItems:"center",justifyContent:"space-between",marginBottom:4,flexWrap:"wrap",gap:8}}>
         <div>
           <div style={{fontFamily:"'Bebas Neue',sans-serif",fontSize:26,letterSpacing:"0.06em",color:C.text}}>
-            Additions After Original Bid/Plans
+            Changes From Original Plan
           </div>
           <div style={{fontSize:11,color:C.dim,marginTop:2}}>
-            Every Lutron job &middot; {jobsWithAdditions} with additions logged
+            Every Lutron job &middot; {jobsWithAdditions} with changes logged
           </div>
         </div>
         {lutronJobs.length>0 && (
@@ -16130,7 +16397,7 @@ function LutronAdditionsView({ jobs, onSelectJob }) {
         border:`1.5px solid ${C.orange}77`,borderRadius:8,padding:"10px 12px",margin:"10px 0 16px"}}>
         <Icon name="alertTriangle" size={15} color={C.orange} style={{flexShrink:0}}/>
         <span style={{fontSize:12.5,color:C.orange,fontWeight:800}}>
-          Not part of the original package — logged after bid, job by job.
+          Not the full package — just what's changed since bid, job by job.
         </span>
       </div>
 
@@ -16141,29 +16408,69 @@ function LutronAdditionsView({ jobs, onSelectJob }) {
         </div>
       ) : (
         <div style={{display:"flex",flexDirection:"column",gap:8}}>
-          {lutronJobs.map(({job,rooms}) => {
+          {/* Jobs with a question awaiting a Homestead reply float to the top
+              (then alphabetical) — same convention as the public hub sorting
+              unprocessed changes first. The job-level "_general" thread counts
+              toward awaiting too. */}
+          {lutronJobs.slice().sort((a,b) => {
+            const aw = (x) => {
+              const t = threadsByJob[x.job.id]||{};
+              return x.rooms.reduce((n,r)=>n+(r.items||[]).filter(i=>threadAwaiting(t[i.id])).length,0)
+                + (threadAwaiting(t._general)?1:0);
+            };
+            return (aw(b)>0)-(aw(a)>0) || (a.job.name||"").localeCompare(b.job.name||"");
+          }).map(({job,rooms}) => {
             const isOpen = expanded.has(job.id);
             const itemCount = rooms.reduce((n,r)=>n+(r.items||[]).length,0);
+            const acks = acksByJob[job.id] || {};
+            const threads = threadsByJob[job.id] || {};
+            const unprocessed = rooms.reduce((n,r)=>n+(r.items||[]).filter(i=>!acks[i.id]?.ackedAt).length,0);
+            const awaitingCount = rooms.reduce((n,r)=>n+(r.items||[]).filter(i=>threadAwaiting(threads[i.id])).length,0)
+              + (threadAwaiting(threads._general)?1:0);
             return (
               <div key={job.id} style={{background:C.card,border:`1px solid ${C.border}`,borderRadius:12,overflow:"hidden"}}>
-                <div onClick={()=>rooms.length&&toggle(job.id)}
-                  style={{display:"flex",alignItems:"center",justifyContent:"space-between",
-                    padding:"12px 14px",cursor:rooms.length?"pointer":"default"}}>
-                  <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0}}>
-                    {rooms.length>0 && <Icon name="chevronRight" size={13} color={C.dim}
-                      style={{flexShrink:0,transition:"transform 0.12s",transform:isOpen?"rotate(90deg)":"none"}}/>}
+                <div onClick={()=>toggle(job.id)}
+                  style={{display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,
+                    padding:"12px 14px",cursor:"pointer"}}>
+                  <div style={{display:"flex",alignItems:"center",gap:8,minWidth:0,flex:1,flexWrap:"wrap"}}>
+                    <Icon name="chevronRight" size={13} color={C.dim}
+                      style={{flexShrink:0,transition:"transform 0.12s",transform:isOpen?"rotate(90deg)":"none"}}/>
                     <span style={{fontSize:13,fontWeight:700,color:C.text,overflow:"hidden",
-                      textOverflow:"ellipsis",whiteSpace:"nowrap"}}>{job.name||"(unnamed job)"}</span>
-                    <span style={{fontSize:10,color:rooms.length?C.dim:C.muted,flexShrink:0}}>
-                      {rooms.length ? `${rooms.length} room${rooms.length===1?"":"s"} · ${itemCount} item${itemCount===1?"":"s"}` : "No additions logged yet"}
+                      textOverflow:"ellipsis",whiteSpace:"nowrap",maxWidth:"100%"}}>{job.name||"(unnamed job)"}</span>
+                    <span style={{fontSize:10,color:rooms.length?C.dim:C.muted}}>
+                      {rooms.length ? `${rooms.length} room${rooms.length===1?"":"s"} · ${itemCount} item${itemCount===1?"":"s"}` : "No changes logged yet"}
                     </span>
+                    {unprocessed>0 && (
+                      <span style={{flexShrink:0,fontSize:10,fontWeight:700,color:C.orange,
+                        background:`${C.orange}18`,borderRadius:99,padding:"1px 8px"}}>
+                        {unprocessed} unprocessed
+                      </span>
+                    )}
+                    {awaitingCount>0 && (
+                      <span style={{flexShrink:0,fontSize:10,fontWeight:700,color:C.orange,
+                        background:`${C.orange}18`,borderRadius:99,padding:"1px 8px",
+                        display:"inline-flex",alignItems:"center",gap:3}}>
+                        <Icon name="help" size={9} stroke={2.5}/>
+                        {awaitingCount} awaiting reply
+                      </span>
+                    )}
                   </div>
-                  <button onClick={(e)=>{e.stopPropagation(); onSelectJob&&onSelectJob(job);}}
-                    style={{background:"none",border:"none",color:C.orange,fontSize:11,fontWeight:700,
-                      cursor:"pointer",fontFamily:"inherit",flexShrink:0,display:"inline-flex",
-                      alignItems:"center",gap:4}}>
-                    Open job<Icon name="external" size={11} stroke={2.25}/>
-                  </button>
+                  <div style={{display:"flex",alignItems:"center",gap:10,flexShrink:0}}>
+                    <button onClick={(e)=>{e.stopPropagation(); onSelectJob&&onSelectJob(job);}}
+                      style={{background:"none",border:"none",color:C.orange,fontSize:11,fontWeight:700,
+                        cursor:"pointer",fontFamily:"inherit",display:"inline-flex",
+                        alignItems:"center",gap:4}}>
+                      Open job<Icon name="external" size={11} stroke={2.25}/>
+                    </button>
+                    {onUpdateJob && (
+                      <button onClick={(e)=>{e.stopPropagation(); setExcluded(job, true);}}
+                        title="Not this LV company's job — hide it from their tracking link"
+                        style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
+                          padding:2,display:"flex"}}>
+                        <Icon name="x" size={13} stroke={2}/>
+                      </button>
+                    )}
+                  </div>
                 </div>
                 {isOpen && rooms.length>0 && (
                   <div style={{borderTop:`1px solid ${C.border}`,padding:"10px 14px 12px",
@@ -16174,29 +16481,119 @@ function LutronAdditionsView({ jobs, onSelectJob }) {
                           <Icon name="mapPin" size={11} color={C.orange}/>
                           <span style={{fontSize:12,fontWeight:700,color:C.text}}>{room.name}</span>
                         </div>
-                        {(room.items||[]).map(item => (
-                          <div key={item.id} style={{display:"flex",alignItems:"flex-start",gap:8,
-                            padding:"4px 0 4px 17px"}}>
-                            <span style={{flexShrink:0,fontSize:10,fontWeight:700,color:lutronTypeColor(item.itemType),
-                              background:`${lutronTypeColor(item.itemType)}18`,borderRadius:5,padding:"2px 7px"}}>
-                              {item.itemType}
-                            </span>
-                            <div style={{flex:1,minWidth:0}}>
-                              <div style={{fontSize:12,color:C.text}}>{item.location}</div>
-                              {item.notes && <div style={{fontSize:11,color:C.dim,marginTop:1}}>{item.notes}</div>}
-                              <div style={{fontSize:10,color:C.dim,opacity:0.7,marginTop:2}}>
-                                {timeAgo(item.addedAt)}{item.addedBy?` by ${item.addedBy}`:""}
+                        {(room.items||[]).map(item => {
+                          const tKey = `${job.id}:${item.id}`;
+                          const msgs = threads[item.id] || [];
+                          const awaiting = threadAwaiting(msgs);
+                          const threadOpen = openThreads.has(tKey);
+                          return (
+                          <div key={item.id} style={awaiting?{background:`${C.orange}0d`,borderRadius:6}:undefined}>
+                            <div style={{display:"flex",alignItems:"flex-start",gap:8,
+                              padding:"4px 0 4px 17px"}}>
+                              <span style={{flexShrink:0,fontSize:10,fontWeight:700,color:lutronTypeColor(item.itemType),
+                                background:`${lutronTypeColor(item.itemType)}18`,borderRadius:5,padding:"2px 7px"}}>
+                                {item.itemType}
+                              </span>
+                              <span style={{flexShrink:0,fontSize:10,fontWeight:700,color:changeTypeColor(changeTypeOf(item)),
+                                background:`${changeTypeColor(changeTypeOf(item))}18`,borderRadius:5,padding:"2px 7px"}}>
+                                {changeTypeOf(item)}
+                              </span>
+                              <div style={{flex:1,minWidth:0}}>
+                                <div style={{fontSize:12,color:C.text}}>
+                                  {changeTypeOf(item)==="Moved" && item.fromLocation
+                                    ? <>{item.fromLocation} <span style={{color:C.dim}}>→</span> {item.location}</>
+                                    : item.location}
+                                </div>
+                                {item.notes && <div style={{fontSize:11,color:C.dim,marginTop:1}}>{item.notes}</div>}
+                                <div style={{fontSize:10,color:C.dim,opacity:0.7,marginTop:2}}>
+                                  {timeAgo(item.addedAt)}{item.addedBy?` by ${item.addedBy}`:""}
+                                </div>
+                                {acks[item.id]?.ackedAt && (
+                                  <div style={{fontSize:10,fontWeight:700,color:C.green,marginTop:2,
+                                    display:"flex",alignItems:"center",gap:3}}>
+                                    <Icon name="check" size={10} stroke={2.5}/>
+                                    Incorporated by plans co.{acks[item.id].note?` — ${acks[item.id].note}`:""}
+                                  </div>
+                                )}
                               </div>
                             </div>
+                            <div style={{padding:"0 0 6px 17px"}}>
+                              <button onClick={()=>toggleThread(tKey)}
+                                style={{background:"none",border:"none",color:awaiting?C.orange:C.dim,fontSize:11,fontWeight:700,
+                                  cursor:"pointer",fontFamily:"inherit",padding:0,display:"flex",alignItems:"center",gap:4}}>
+                                <Icon name="help" size={11} stroke={2.25}/>
+                                {msgs.length===0 ? "Ask a question" : `${msgs.length} question${msgs.length===1?"":"s"}`}
+                                {awaiting && <span style={{marginLeft:2,fontSize:9,fontWeight:700,color:C.orange,
+                                  background:`${C.orange}18`,borderRadius:99,padding:"1px 7px"}}>awaiting reply</span>}
+                              </button>
+                              {threadOpen && (
+                                <div style={{paddingLeft:15}}>
+                                  <QAThread messages={msgs} jobId={job.id} qid={item.id} color={C.blue}
+                                    photoBase="plan-change-threads" onPost={postMsg(job, item.id)}/>
+                                </div>
+                              )}
+                            </div>
                           </div>
-                        ))}
+                          );
+                        })}
                       </div>
                     ))}
                   </div>
                 )}
+                {isOpen && (() => {
+                  const gKey = `${job.id}:_general`;
+                  const gMsgs = threads._general || [];
+                  const gAwaiting = threadAwaiting(gMsgs);
+                  const gOpen = openThreads.has(gKey);
+                  return (
+                    <div style={{borderTop:`1px solid ${C.border}`,padding:"8px 14px 10px",
+                      ...(gAwaiting?{background:`${C.orange}0d`}:{})}}>
+                      <button onClick={()=>toggleThread(gKey)}
+                        style={{background:"none",border:"none",color:gAwaiting?C.orange:C.dim,fontSize:11,fontWeight:700,
+                          cursor:"pointer",fontFamily:"inherit",padding:0,display:"flex",alignItems:"center",gap:4}}>
+                        <Icon name="help" size={11} stroke={2.25}/>
+                        Job discussion{gMsgs.length?` (${gMsgs.length})`:""}
+                        {gAwaiting && <span style={{marginLeft:2,fontSize:9,fontWeight:700,color:C.orange,
+                          background:`${C.orange}18`,borderRadius:99,padding:"1px 7px"}}>awaiting reply</span>}
+                      </button>
+                      {gOpen && (
+                        <QAThread messages={gMsgs} jobId={job.id} qid="_general" color={C.blue}
+                          photoBase="plan-change-threads" onPost={postMsg(job, "_general")}/>
+                      )}
+                    </div>
+                  );
+                })()}
               </div>
             );
           })}
+        </div>
+      )}
+
+      {hiddenJobs.length>0 && (
+        <div style={{marginTop:20}}>
+          <button onClick={()=>setShowHidden(v=>!v)}
+            style={{background:"none",border:"none",color:C.dim,fontSize:11,fontWeight:700,
+              cursor:"pointer",fontFamily:"inherit",padding:0,display:"flex",alignItems:"center",gap:4}}>
+            <Icon name="chevronRight" size={11} style={{transform:showHidden?"rotate(90deg)":"none"}}/>
+            {hiddenJobs.length} hidden — not this LV company's job{hiddenJobs.length===1?"":"s"}
+          </button>
+          {showHidden && (
+            <div style={{display:"flex",flexDirection:"column",gap:6,marginTop:8}}>
+              {hiddenJobs.map(({job}) => (
+                <div key={job.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",
+                  background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px"}}>
+                  <span style={{fontSize:12,color:C.dim}}>{job.name||"(unnamed job)"}</span>
+                  {onUpdateJob && (
+                    <button onClick={()=>setExcluded(job, false)}
+                      style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,borderRadius:6,
+                        padding:"3px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                      Restore
+                    </button>
+                  )}
+                </div>
+              ))}
+            </div>
+          )}
         </div>
       )}
     </div>
@@ -16204,7 +16601,7 @@ function LutronAdditionsView({ jobs, onSelectJob }) {
 }
 
 
-function KeypadSection({loads,onChange,label,allLoads=[],confirmedProp=false,onConfirmedChange=null}) {
+function KeypadSection({loads,onChange,label,allLoads=[],confirmedProp=false,onConfirmedChange=null,color=C.purple}) {
 
   const dlId   = `kp-dl-${label.replace(/\W+/g,'-')}`;
   const upd    = (id,p) => onChange(loads.map(r=>r.id===id?{...r,...p}:r));
@@ -16241,15 +16638,15 @@ function KeypadSection({loads,onChange,label,allLoads=[],confirmedProp=false,onC
     <div style={{marginBottom:22}}>
 
       <div style={{marginBottom:6,display:"flex",alignItems:"center",gap:8}}>
-        <div style={{fontSize:12,color:C.purple,fontWeight:700,flex:1}}>{label}</div>
+        <div style={{fontSize:12,color:color,fontWeight:700,flex:1}}>{label}</div>
         {namedRows.length>0&&(
           <button onClick={()=>setConfirmed(c=>!c)}
             title={confirmed?"Switch back to edit mode":"Collapse to a compact read-only list"}
             style={{
               fontSize:10,fontWeight:700,letterSpacing:"0.05em",
-              background: confirmed ? C.purple : 'transparent',
-              color: confirmed ? '#fff' : C.purple,
-              border:`1px solid ${C.purple}`, borderRadius:99,
+              background: confirmed ? color : 'transparent',
+              color: confirmed ? '#fff' : color,
+              border:`1px solid ${color}`, borderRadius:99,
               padding:'2px 10px', cursor:'pointer', fontFamily:'inherit',
             }}>
             {confirmed ? '✓ CONFIRMED — EDIT' : 'CONFIRM'}
@@ -16262,10 +16659,10 @@ function KeypadSection({loads,onChange,label,allLoads=[],confirmedProp=false,onC
         <div style={{marginBottom:10}}>
           <div style={{display:"flex",justifyContent:"space-between",alignItems:"center",marginBottom:4}}>
             <span style={{fontSize:10,color:C.dim}}>Pull progress</span>
-            <span style={{fontSize:11,fontWeight:700,color:pct===100?C.green:C.purple}}>{pulledCount}/{namedRows.length} — {pct}%</span>
+            <span style={{fontSize:11,fontWeight:700,color:pct===100?C.green:color}}>{pulledCount}/{namedRows.length} — {pct}%</span>
           </div>
           <div style={{height:5,background:C.border,borderRadius:99,overflow:"hidden"}}>
-            <div style={{height:"100%",width:`${pct}%`,background:pct===100?C.green:C.purple,borderRadius:99,transition:"width 0.4s"}}/>
+            <div style={{height:"100%",width:`${pct}%`,background:pct===100?C.green:color,borderRadius:99,transition:"width 0.4s"}}/>
           </div>
         </div>
       )}
@@ -16340,7 +16737,7 @@ function KeypadSection({loads,onChange,label,allLoads=[],confirmedProp=false,onC
           ))}
 
           <button onClick={addRow}
-            style={{background:"none",border:`1px dashed ${C.purple}44`,color:`${C.purple}88`,borderRadius:7,
+            style={{background:"none",border:`1px dashed ${color}44`,color:`${color}88`,borderRadius:7,
               padding:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"100%",
               letterSpacing:"0.04em",marginTop:4}}>
             + Add Row
@@ -21790,6 +22187,10 @@ function PanelModulesSection({
   const sys = system||"Control 4";
   const isSav = sys==="Savant", isLut = sys==="Lutron", isCres = sys==="Crestron";
   const devLabel = isCres?"Device":"Module";
+  // Blue for Lutron, purple for Control4/Crestron (unchanged) — same reasoning
+  // as sysAccentColor() above: this tab shouldn't stay all-purple next to the
+  // orange Additions section on a Lutron job. Koy 2026-07-08.
+  const accentColor = isLut ? C.blue : C.purple;
 
   const [winW, setWinW] = useState(window.innerWidth);
   useEffect(()=>{
@@ -21921,50 +22322,50 @@ function PanelModulesSection({
         const pulled = named.filter(l=>l.pulled);
         const isConfirmed = confirmedMods.has(mod.id);
         return (
-          <div key={mod.id} style={{border:`1px solid ${C.purple}33`,borderRadius:8,marginBottom:12,overflow:"hidden"}}>
+          <div key={mod.id} style={{border:`1px solid ${accentColor}33`,borderRadius:8,marginBottom:12,overflow:"hidden"}}>
 
             {/* ── Module header ── */}
-            <div style={{background:`${C.purple}0d`,padding:"7px 10px",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",borderBottom:`1px solid ${C.purple}22`}}>
+            <div style={{background:`${accentColor}0d`,padding:"7px 10px",display:"flex",alignItems:"center",gap:8,flexWrap:"wrap",borderBottom:`1px solid ${accentColor}22`}}>
 
               {!isSav&&(
                 <>
-                  <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase",whiteSpace:"nowrap"}}>{devLabel}</span>
+                  <span style={{fontSize:10,fontWeight:700,color:accentColor,letterSpacing:"0.07em",textTransform:"uppercase",whiteSpace:"nowrap"}}>{devLabel}</span>
                   <Inp value={mod.modNum} onChange={e=>updMod(mod.id,{modNum:e.target.value})}
-                    style={{width:36,textAlign:"center",fontSize:10,fontWeight:700,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
+                    style={{width:36,textAlign:"center",fontSize:10,fontWeight:700,color:accentColor,background:"#fff",border:`1px solid ${accentColor}44`}}/>
                 </>
               )}
 
               <Sel value={mod.moduleType} onChange={e=>updMod(mod.id,{moduleType:e.target.value})} options={moduleTypes}
-                style={{fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`,width:isSav?"110px":"auto"}}/>
+                style={{fontSize:10,fontWeight:600,color:accentColor,background:"#fff",border:`1px solid ${accentColor}44`,width:isSav?"110px":"auto"}}/>
 
               {isSav&&<>
-                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>Panel</span>
+                <span style={{fontSize:10,fontWeight:700,color:accentColor,letterSpacing:"0.07em",textTransform:"uppercase"}}>Panel</span>
                 <Inp value={mod.panel||""} onChange={e=>updMod(mod.id,{panel:e.target.value})} placeholder="Panel"
-                  style={{width:64,fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
-                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>Bkr</span>
+                  style={{width:64,fontSize:10,fontWeight:600,color:accentColor,background:"#fff",border:`1px solid ${accentColor}44`}}/>
+                <span style={{fontSize:10,fontWeight:700,color:accentColor,letterSpacing:"0.07em",textTransform:"uppercase"}}>Bkr</span>
                 <Inp value={mod.breaker||""} onChange={e=>updMod(mod.id,{breaker:e.target.value})} placeholder="Bkr"
-                  style={{width:44,fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
-                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>Phase</span>
+                  style={{width:44,fontSize:10,fontWeight:600,color:accentColor,background:"#fff",border:`1px solid ${accentColor}44`}}/>
+                <span style={{fontSize:10,fontWeight:700,color:accentColor,letterSpacing:"0.07em",textTransform:"uppercase"}}>Phase</span>
                 <Sel value={mod.phase||""} onChange={e=>updMod(mod.id,{phase:e.target.value})} options={PHASE_OPTS}
-                  style={{fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`,width:52}}/>
+                  style={{fontSize:10,fontWeight:600,color:accentColor,background:"#fff",border:`1px solid ${accentColor}44`,width:52}}/>
               </>}
 
               {isLut&&<>
-                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>Bus</span>
+                <span style={{fontSize:10,fontWeight:700,color:accentColor,letterSpacing:"0.07em",textTransform:"uppercase"}}>Bus</span>
                 <Inp value={mod.bus||""} onChange={e=>updMod(mod.id,{bus:e.target.value})} placeholder="Bus"
-                  style={{width:36,textAlign:"center",fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
-                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>PDU</span>
+                  style={{width:36,textAlign:"center",fontSize:10,fontWeight:600,color:accentColor,background:"#fff",border:`1px solid ${accentColor}44`}}/>
+                <span style={{fontSize:10,fontWeight:700,color:accentColor,letterSpacing:"0.07em",textTransform:"uppercase"}}>PDU</span>
                 <Inp value={mod.pdu||""} onChange={e=>updMod(mod.id,{pdu:e.target.value})} placeholder="PDU"
-                  style={{width:64,fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
+                  style={{width:64,fontSize:10,fontWeight:600,color:accentColor,background:"#fff",border:`1px solid ${accentColor}44`}}/>
               </>}
 
               {isCres&&<>
-                <span style={{fontSize:10,fontWeight:700,color:C.purple,letterSpacing:"0.07em",textTransform:"uppercase"}}>Chain pos</span>
+                <span style={{fontSize:10,fontWeight:700,color:accentColor,letterSpacing:"0.07em",textTransform:"uppercase"}}>Chain pos</span>
                 <Inp value={mod.chainPos||""} onChange={e=>updMod(mod.id,{chainPos:e.target.value})} placeholder="Pos"
-                  style={{width:36,textAlign:"center",fontSize:10,fontWeight:600,color:C.purple,background:"#fff",border:`1px solid ${C.purple}44`}}/>
+                  style={{width:36,textAlign:"center",fontSize:10,fontWeight:600,color:accentColor,background:"#fff",border:`1px solid ${accentColor}44`}}/>
               </>}
 
-              <span style={{fontSize:10,color:`${C.purple}88`,marginLeft:"auto",whiteSpace:"nowrap"}}>
+              <span style={{fontSize:10,color:`${accentColor}88`,marginLeft:"auto",whiteSpace:"nowrap"}}>
                 {named.length}{cap?`/${cap}`:""} ch{pulled.length>0?` · ${pulled.length} pulled`:""}
               </span>
               {named.length>0&&(
@@ -21972,9 +22373,9 @@ function PanelModulesSection({
                   title={isConfirmed?"Switch back to edit mode":"Collapse to a compact read-only list"}
                   style={{
                     fontSize:9,fontWeight:700,letterSpacing:"0.05em",
-                    background: isConfirmed ? C.purple : 'transparent',
-                    color: isConfirmed ? '#fff' : C.purple,
-                    border:`1px solid ${C.purple}`, borderRadius:99,
+                    background: isConfirmed ? accentColor : 'transparent',
+                    color: isConfirmed ? '#fff' : accentColor,
+                    border:`1px solid ${accentColor}`, borderRadius:99,
                     padding:'1px 8px', cursor:'pointer', fontFamily:'inherit',
                     flexShrink:0,
                   }}>
@@ -22007,7 +22408,7 @@ function PanelModulesSection({
                       {load.ch && <span style={{fontSize:10,color:C.muted,flexShrink:0}}>Ch {load.ch}</span>}
                       {load.loadType && <span style={{fontSize:10,color:C.muted,flexShrink:0}}>{load.loadType}</span>}
                       {load.watts && <span style={{fontSize:10,color:C.muted,flexShrink:0}}>{load.watts}W</span>}
-                      {showKeypad && load.keypad && <span style={{fontSize:10,color:`${C.purple}`,fontWeight:600,flexShrink:0}}>KP {load.keypad}</span>}
+                      {showKeypad && load.keypad && <span style={{fontSize:10,color:`${accentColor}`,fontWeight:600,flexShrink:0}}>KP {load.keypad}</span>}
                       {load.pulled && <span style={{fontSize:10,fontWeight:700,color:C.green,letterSpacing:"0.04em",flexShrink:0}}>✓ PULLED</span>}
                     </div>
                   ))}
@@ -22025,7 +22426,7 @@ function PanelModulesSection({
                         const val=e.target.checked;
                         const who=getIdentity();
                         updLoad(mod.id,load.id,{pulled:val,pulledBy:val?(who?.name||""):"",pulledAt:val?new Date().toLocaleDateString("en-US"):""});
-                      }} style={{width:18,height:18,accentColor:C.purple,cursor:"pointer",margin:0,flexShrink:0}}/>
+                      }} style={{width:18,height:18,accentColor:accentColor,cursor:"pointer",margin:0,flexShrink:0}}/>
                       <span style={{fontSize:11,color:C.muted,fontWeight:700,flexShrink:0}}>#{load.num}</span>
                       <input
                         ref={el=>{ if(pendingFocusMid.current===mod.id&&li===mod.loads.length-1&&el){el.focus();pendingFocusMid.current=null;} }}
@@ -22091,7 +22492,7 @@ function PanelModulesSection({
                           const val=e.target.checked;
                           const who=getIdentity();
                           updLoad(mod.id,load.id,{pulled:val,pulledBy:val?(who?.name||""):"",pulledAt:val?new Date().toLocaleDateString("en-US"):""});
-                        }} style={{width:15,height:15,accentColor:C.purple,cursor:"pointer",margin:0}}/>
+                        }} style={{width:15,height:15,accentColor:accentColor,cursor:"pointer",margin:0}}/>
                         <span style={{fontSize:11,color:C.muted,textAlign:"center",fontWeight:700}}>{load.num}</span>
                         <input
                           ref={el=>{ if(pendingFocusMid.current===mod.id&&li===mod.loads.length-1&&el){el.focus();pendingFocusMid.current=null;} }}
@@ -22126,7 +22527,7 @@ function PanelModulesSection({
 
               {!isConfirmed && (
                 <button onClick={()=>addLoad(mod.id)}
-                  style={{background:"none",border:"none",color:C.purple,fontSize:10,fontWeight:700,fontFamily:"inherit",
+                  style={{background:"none",border:"none",color:accentColor,fontSize:10,fontWeight:700,fontFamily:"inherit",
                     cursor:"pointer",padding:"4px 2px",letterSpacing:"0.04em",opacity:0.75}}>
                   + Add Row to {devLabel} {mod.modNum||mod.moduleType}
                 </button>
@@ -22137,7 +22538,7 @@ function PanelModulesSection({
       })}
 
       <button onClick={addMod}
-        style={{background:"none",border:`1px dashed ${C.purple}44`,color:`${C.purple}88`,borderRadius:7,
+        style={{background:"none",border:`1px dashed ${accentColor}44`,color:`${accentColor}88`,borderRadius:7,
           padding:7,fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit",width:"100%",letterSpacing:"0.04em",marginTop:4}}>
         + New {devLabel}
       </button>
@@ -26930,6 +27331,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   const [convertJobNo, setConvertJobNo] = useState("");
   const [gcAnswers, setGcAnswers] = useState(null); // answers submitted by GC/homeowner via share link
   const [lvCollab, setLvCollab] = useState(null); // lighting collab data from LV company
+  const [planChangeAcks, setPlanChangeAcks] = useState(null); // Tech Lighting "incorporated" acks from ?lutronshare=
+  const [planChangeThreads, setPlanChangeThreads] = useState(null); // per-item discussion threads (Tech Lighting ↔ Homestead)
+  const [questionThreads, setQuestionThreads] = useState(null); // Q&A discussion replies (side-doc, Kweller hardening Layer 2)
 
   const [refreshing, setRefreshing] = useState(false);
 
@@ -27100,13 +27504,19 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
   }, [job.simproNo, simproCostCentersTick]);
 
 
-  // Live listener for GC question answers + LV lighting collab
+  // Live listener for GC question answers + LV lighting collab + plan-change acks
   useEffect(() => {
     const unsub = onSnapshot(doc(db,'homeowner_requests',job.id), snap => {
       if(snap.exists() && snap.data().questionAnswers) setGcAnswers(snap.data().questionAnswers);
       else setGcAnswers(null);
       if(snap.exists() && snap.data().lightingCollab) setLvCollab(snap.data().lightingCollab);
       else setLvCollab(null);
+      if(snap.exists() && snap.data().planChangeAcks) setPlanChangeAcks(snap.data().planChangeAcks);
+      else setPlanChangeAcks(null);
+      if(snap.exists() && snap.data().planChangeThreads) setPlanChangeThreads(snap.data().planChangeThreads);
+      else setPlanChangeThreads(null);
+      if(snap.exists() && snap.data().questionThreads) setQuestionThreads(snap.data().questionThreads);
+      else setQuestionThreads(null);
     }, ()=>{});
     return ()=>unsub();
   }, [job.id]);
@@ -28108,7 +28518,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
                     questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
                 }>
-                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{const qq=(job.roughQuestions?.[f]||[]).find(q=>q.id===a.id);if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m} gcNoteMap={nmap} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder="rough" fieldinkMap={fiQLinks}/>;})()}
+                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{const qq=(job.roughQuestions?.[f]||[]).find(q=>q.id===a.id);if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m} gcNoteMap={nmap} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder="rough" fieldinkMap={fiQLinks} questionThreads={questionThreads}/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
@@ -28414,7 +28824,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
                     questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
                 }>
-                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{const qq=(job.finishQuestions?.[f]||[]).find(q=>q.id===a.id);if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} gcNoteMap={nmap} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder="finish" fieldinkMap={fiQLinks}/>;})()}
+                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{const qq=(job.finishQuestions?.[f]||[]).find(q=>q.id===a.id);if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} gcNoteMap={nmap} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder="finish" fieldinkMap={fiQLinks} questionThreads={questionThreads}/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
@@ -28503,8 +28913,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 return url?(
                   <div style={{marginBottom:10,display:"flex",alignItems:"center",gap:6}}>
                     <a href={url} target="_blank" rel="noopener noreferrer"
-                      style={{fontSize:11,color:C.purple,textDecoration:"none",fontWeight:600,
-                        background:`${C.purple}10`,border:`1px solid ${C.purple}33`,
+                      style={{fontSize:11,color:sysAccentColor(job),textDecoration:"none",fontWeight:600,
+                        background:`${sysAccentColor(job)}10`,border:`1px solid ${sysAccentColor(job)}33`,
                         borderRadius:6,padding:"3px 10px",display:"inline-flex",alignItems:"center",gap:4}}>
                       {job.lightingSystem||"Control 4"} docs ↗
                     </a>
@@ -28522,6 +28932,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   // active. The others render disabled so a stray click can't
                   // silently flip the system on a confirmed job.
                   const locked = !!job.lightingSystemLocked;
+                  // Each pill uses its OWN system's accent when selected —
+                  // Lutron blue, everything else purple (unchanged).
+                  const pillColor = sys==="Lutron" ? C.blue : C.purple;
 
                   return (
 
@@ -28540,9 +28953,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                       fontFamily:"inherit",transition:"all 0.15s",
 
-                      background:sel?C.purple:`${C.purple}15`,
+                      background:sel?pillColor:`${pillColor}15`,
 
-                      border:`1px solid ${sel?C.purple:`${C.purple}33`}`,
+                      border:`1px solid ${sel?pillColor:`${pillColor}33`}`,
 
                       color:sel?"#fff":C.dim,
 
@@ -28600,7 +29013,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
               )}
 
-              <SectionHead label="Loads" color={C.purple} action={<>
+              <SectionHead label="Loads" color={sysAccentColor(job)} action={<>
                 <button title={job.panelizedLighting?.baseline ? "Re-snapshot the current loads as the new baseline" : "Snapshot the current loads as the original-plans baseline"}
                   onClick={()=>{
                     const snap = allSavantLoadsForJob(job).map(l=>({ id:l.id, name:l.name, channel:l.assignedTo?.output||"", type:l.type, watts:l.wattage, keypad:l.keypad||"", room:l.room, floor:l.floor, panel:l.assignedTo?.panelLabel||"" }));
@@ -28611,15 +29024,23 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   style={{padding:"6px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:"transparent",color:C.muted,border:`1px solid ${C.border}`,display:"inline-flex",alignItems:"center",gap:5}}>
                   <Icon name="lock" size={11} stroke={2.25}/>{job.panelizedLighting?.baseline ? "Update baseline" : "Set baseline"}
                 </button>
-                <button title="Copy a read-only link to send the Lutron / AV programmer"
-                  onClick={()=>{
-                    const link = `${window.location.origin}/?loads=${job.id}`;
-                    try { navigator.clipboard.writeText(link); } catch {}
-                    try { toast.success("Loads link copied — send it to the programmer."); } catch { window.alert("Loads link:\n"+link); }
-                  }}
-                  style={{padding:"6px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:C.purple,color:"#fff",border:"none",display:"inline-flex",alignItems:"center",gap:5}}>
-                  Share loads
-                </button>
+                {/* Hidden for Lutron — Koy 2026-07-08: "they literally have
+                    already sent us the loads list, they dont need to see it
+                    again." They designed it; re-sharing it back to them is
+                    the opposite of useful. Still shown for Control4/Savant/
+                    Crestron, where Homestead does the engineering and an AV
+                    programmer genuinely needs this list. */}
+                {(job.lightingSystem||"Control 4")!=="Lutron" && (
+                  <button title="Copy a read-only link to send the AV programmer"
+                    onClick={()=>{
+                      const link = `${window.location.origin}/?loads=${job.id}`;
+                      try { navigator.clipboard.writeText(link); } catch {}
+                      try { toast.success("Loads link copied — send it to the programmer."); } catch { window.alert("Loads link:\n"+link); }
+                    }}
+                    style={{padding:"6px 10px",borderRadius:8,fontSize:11,cursor:"pointer",fontFamily:"inherit",fontWeight:700,background:C.purple,color:"#fff",border:"none",display:"inline-flex",alignItems:"center",gap:5}}>
+                    Share loads
+                  </button>
+                )}
               </>}/>
 
               {(()=>{
@@ -28695,7 +29116,8 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     ])).filter(Boolean).sort()}
                     allModules={allModules}
                     assignedModMap={assignedModMap}
-                    onAssignToModule={onAssignToModule}/>
+                    onAssignToModule={onAssignToModule}
+                    color={sysAccentColor(job)}/>
                 );
               })()}
 
@@ -28714,7 +29136,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     Keypad loads hidden — this system doesn't use keypad-driven loads.
                   </div>
                   <button onClick={()=>u({panelizedLighting:{...job.panelizedLighting, noKeypadLoads: false}})}
-                    style={{background:"none",border:`1px solid ${C.purple}`,color:C.purple,
+                    style={{background:"none",border:`1px solid ${sysAccentColor(job)}`,color:sysAccentColor(job),
                       borderRadius:6,padding:"4px 12px",fontSize:11,fontWeight:700,
                       cursor:"pointer",fontFamily:"inherit",letterSpacing:"0.05em"}}>
                     Show keypads
@@ -28722,7 +29144,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 </div>
               )}
               {!job.panelizedLighting?.noKeypadLoads && (<>
-              <SectionHead label={`${job.lightingSystem||"Control 4"} Keypads`} color={C.purple}
+              <SectionHead label={`${job.lightingSystem||"Control 4"} Keypads`} color={sysAccentColor(job)}
                 action={
                   <button onClick={()=>u({panelizedLighting:{...job.panelizedLighting, noKeypadLoads: true}})}
                     title="Hide keypad loads section (for systems without keypads)"
@@ -28764,6 +29186,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 allLoads={al}
                 confirmedProp={!!_ck.mainKeypad}
                 onConfirmedChange={v=>_setCK('mainKeypad', v)}
+                color={sysAccentColor(job)}
                 onChange={v=>u({panelizedLighting:{...job.panelizedLighting,mainKeypad:v}})}/>
 
               <KeypadSection label="Basement Keypad Loads"
@@ -28771,6 +29194,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 allLoads={al}
                 confirmedProp={!!_ck.basementKeypad}
                 onConfirmedChange={v=>_setCK('basementKeypad', v)}
+                color={sysAccentColor(job)}
                 onChange={v=>u({panelizedLighting:{...job.panelizedLighting,basementKeypad:v}})}/>
 
               <KeypadSection label="Upper Level Keypad Loads"
@@ -28778,6 +29202,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 allLoads={al}
                 confirmedProp={!!_ck.upperKeypad}
                 onConfirmedChange={v=>_setCK('upperKeypad', v)}
+                color={sysAccentColor(job)}
                 onChange={v=>u({panelizedLighting:{...job.panelizedLighting,upperKeypad:v}})}/>
 
               {(job.panelizedLighting.extraFloors||[]).map(ef=>(
@@ -28786,6 +29211,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   allLoads={al}
                   confirmedProp={!!_ck[ef.key+"_keypad"]}
                   onConfirmedChange={v=>_setCK(ef.key+"_keypad", v)}
+                  color={sysAccentColor(job)}
                   onChange={v=>u({panelizedLighting:{...job.panelizedLighting,[ef.key+"_keypad"]:v}})}/>
               ))}
                 </>);
@@ -28794,7 +29220,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               </>);})()}
               </>)}
 
-              <SectionHead label={`${job.lightingSystem||"Control 4"} Panel Loads`} color={C.purple}/>
+              <SectionHead label={`${job.lightingSystem||"Control 4"} Panel Loads`} color={sysAccentColor(job)}/>
 
               {(()=>{
                 // Filtered allLoads for module suggestions — exclude loads already in a module
@@ -28983,7 +29409,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         value={job.plSectionLabels?.[floor]||""}
                         onChange={e=>u({plSectionLabels:{...(job.plSectionLabels||{}),[floor]:e.target.value}})}
                         placeholder={defaultLabel}
-                        style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.purple,
+                        style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:sysAccentColor(job),
                           background:"none",border:"none",outline:"none",cursor:"text",
                           textTransform:"uppercase",fontFamily:"inherit",flex:1}}/>
                       <PanelCounts mods={_mods}/>
@@ -29013,7 +29439,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         }
                       }}
                         title={`Print ${_panelLabel} schedule`}
-                        style={{background:"none",border:`1px solid ${C.border}`,color:C.purple,
+                        style={{background:"none",border:`1px solid ${C.border}`,color:sysAccentColor(job),
                           borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",
                           fontFamily:"inherit",letterSpacing:"0.05em",marginLeft:8,
                           display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}>
@@ -29095,7 +29521,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                           const newExtras=(job.panelizedLighting.extraFloors||[]).map(f=>f.key===ef.key?{...f,label:e.target.value}:f);
                           u({panelizedLighting:{...job.panelizedLighting,extraFloors:newExtras}});
                         }}
-                        style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:C.purple,
+                        style={{fontSize:11,fontWeight:700,letterSpacing:"0.08em",color:sysAccentColor(job),
                           background:"none",border:"none",outline:"none",cursor:"text",
                           textTransform:"uppercase",fontFamily:"inherit",flex:1}}/>
                       <PanelCounts mods={_mods}/>
@@ -29122,7 +29548,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         }
                       }}
                         title={`Print ${ef.label||"panel"} schedule`}
-                        style={{background:"none",border:`1px solid ${C.border}`,color:C.purple,
+                        style={{background:"none",border:`1px solid ${C.border}`,color:sysAccentColor(job),
                           borderRadius:5,padding:"3px 9px",fontSize:10,fontWeight:700,cursor:"pointer",
                           fontFamily:"inherit",letterSpacing:"0.05em",marginLeft:8,
                           display:"inline-flex",alignItems:"center",gap:4,flexShrink:0}}>
@@ -29220,7 +29646,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                         borderRadius:7,padding:"7px 10px",fontSize:12,fontFamily:"inherit",
                         outline:"none",color:C.text}}/>
                     <button onClick={addFloor}
-                      style={{background:C.purple,color:"#fff",border:"none",borderRadius:7,
+                      style={{background:sysAccentColor(job),color:"#fff",border:"none",borderRadius:7,
                         padding:"7px 14px",fontSize:12,fontWeight:700,cursor:"pointer",
                         fontFamily:"inherit",whiteSpace:"nowrap"}}>
                       + Add {newLightingFloor.trim() ? "Panel" : _nextDefault}
@@ -29230,7 +29656,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               })()}
 
               {(job.lightingSystem||"Control 4")==="Lutron" && (
-                <LutronRoomsSection job={job} u={u}/>
+                <LutronRoomsSection job={job} u={u} planChangeAcks={planChangeAcks} planChangeThreads={planChangeThreads}/>
               )}
 
               {/* LV Company Additions */}
@@ -30244,11 +30670,20 @@ function QAThread({ messages = [], onPost, jobId, qid, color = '#3B5BA5', photoB
   );
 }
 
-function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null, fieldinkMap={}, statusFilter=null, hideAdd=false, excludeIds=null}) {
+function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null, fieldinkMap={}, statusFilter=null, hideAdd=false, excludeIds=null, questionThreads=null}) {
 
   // guard: old data may be a string instead of array
 
   const questions = Array.isArray(_questions) ? _questions : [];
+
+  // Merged discussion view (Kweller hardening Layer 2): legacy q.thread[]
+  // (frozen on the job doc, read-only forever) + new side-doc messages from
+  // homeowner_requests.questionThreads. photoFolder here is always
+  // "<phase>-<floorKey>" (e.g. "rough-main"), set by QASection — reused as
+  // the thread key parts. Legacy entries all predate the cutover, so plain
+  // concatenation is already chronological.
+  const [qtPhase, qtFloor] = String(photoFolder||"").split("-");
+  const threadOf = (q) => [...(q.thread||[]), ...((questionThreads||{})[`${qtPhase}_${qtFloor}_${q.id}`]||[])];
 
   const [draft, setDraft] = useState("");
   const [editRecip, setEditRecip] = useState(null); // q.id whose recipient tag is being edited
@@ -30258,7 +30693,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
   // list stops being a wall of inputs. Answered section collapses by default.
   const [moreOpen, setMoreOpen] = useState(()=>new Set());
   const [showAnswered, setShowAnswered] = useState(false);
-  const needsReplyQ = (q) => !q.done && ( !!gcAnswerMap[q.id] || !!(gcNoteMap[q.id]||"").trim() || ((q.thread||[]).length>0 && q.thread[q.thread.length-1]?.role==='client') );
+  const needsReplyQ = (q) => { const t = threadOf(q); return !q.done && ( !!gcAnswerMap[q.id] || !!(gcNoteMap[q.id]||"").trim() || (t.length>0 && t[t.length-1]?.role==='client') ); };
 
   // Default a new question's recipient to whatever section is being filtered to,
   // so "viewing Designer → add" tags it Designer automatically.
@@ -30551,16 +30986,19 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
       {/* Two-way thread — crew ↔ the people it's shared with, with attachments.
           Visible whenever a conversation exists; starting a NEW one lives
-          behind the More toggle so untouched cards stay compact. */}
-      {jobId && ((q.thread||[]).length>0 || (!q.done && more)) && (
+          behind the More toggle so untouched cards stay compact.
+          Kweller hardening Layer 2: new replies write to homeowner_requests
+          .questionThreads (side doc — clobber-proof), NOT q.thread on the job
+          doc; the render below merges legacy + side-doc messages. */}
+      {jobId && (threadOf(q).length>0 || (!q.done && more)) && (
         <div style={{marginLeft:22,marginTop:8}}>
-          {(q.thread||[]).length>0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",color:C.dim,marginBottom:2}}>DISCUSSION</div>}
+          {threadOf(q).length>0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:"0.08em",color:C.dim,marginBottom:2}}>DISCUSSION</div>}
           <QAThread
-            messages={q.thread||[]}
+            messages={threadOf(q)}
             jobId={jobId}
             qid={q.id}
             color={color}
-            onPost={({text,photos})=>{ const who=getIdentity(); upd(q.id,{thread:[...(q.thread||[]),{id:uid(),by:who?.name||'Homestead Electric',role:'crew',text,photos,at:new Date().toISOString()}]}); }}/>
+            onPost={({text,photos})=>{ const who=getIdentity(); return postQuestionThreadMessage(jobId, `${qtPhase}_${qtFloor}_${q.id}`, {id:uid(),by:who?.name||'Homestead Electric',role:'crew',text,photos,at:new Date().toISOString()}, 'QAList-internal'); }}/>
         </div>
       )}
 
@@ -30633,13 +31071,23 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 }
 
 
-function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, filterIds=null, jobId=null, photoFolder="", fieldinkMap={}}) {
+function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, filterIds=null, jobId=null, photoFolder="", fieldinkMap={}, questionThreads=null}) {
 
   // guard: normalize questions to always be object with array values
 
   const questions = (_questions && typeof _questions === 'object' && !Array.isArray(_questions))
 
     ? _questions : {upper:[], main:[], basement:[]};
+
+  // Merged discussion for a question (Kweller hardening Layer 2): legacy
+  // q.thread (frozen on the job doc) + side-doc messages keyed
+  // "<phase>_<floorKey>_<qid>". photoFolder at THIS level is the bare phase
+  // ("rough"/"finish"). Floor resolved by scanning the three arrays when the
+  // caller doesn't have it in hand (allQs is flattened).
+  const floorOfQ = (qid) =>
+    (questions.upper||[]).some(q=>q.id===qid) ? "upper" :
+    (questions.main||[]).some(q=>q.id===qid) ? "main" : "basement";
+  const threadOf = (q, k) => [...(q.thread||[]), ...((questionThreads||{})[`${photoFolder}_${k||floorOfQ(q.id)}_${q.id}`]||[])];
 
   const allQIds = filterIds!=null ? [
     ...(questions.upper||[]), ...(questions.main||[]), ...(questions.basement||[])
@@ -30681,10 +31129,11 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
   // at a glance instead of scrolling one long mixed list. "Needs reply" =
   // open questions where the other side is waiting on US: a pending GC
   // answer, a GC ask-back note, or a thread whose last message is theirs.
-  const needsReplyQ = (q) => !q.done && ( !!gcAnswerMap[q.id] || !!(gcNoteMap[q.id]||"").trim() || ((q.thread||[]).length>0 && q.thread[q.thread.length-1]?.role==='client') );
+  // Thread state reads the MERGED view (legacy + side-doc) via threadOf.
+  const needsReplyQ = (q, k) => { const t = threadOf(q, k); return !q.done && ( !!gcAnswerMap[q.id] || !!(gcNoteMap[q.id]||"").trim() || (t.length>0 && t[t.length-1]?.role==='client') ); };
   const [statusFilter, setStatusFilter] = useState(null); // null | 'open' | 'needs' | 'answered'
   const openCount  = allQs.filter(q=>!q.done).length;
-  const needsCount = allQs.filter(needsReplyQ).length;
+  const needsCount = allQs.filter(q=>needsReplyQ(q)).length;
   const ansCount   = allQs.filter(q=>q.done).length;
 
   return (
@@ -30760,7 +31209,7 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
       {(()=>{
         if(statusFilter!=null) return null;
         const incomingByFloor = {};
-        ["upper","main","basement"].forEach(k=>{ incomingByFloor[k] = (Array.isArray(questions[k])?questions[k]:[]).filter(needsReplyQ); });
+        ["upper","main","basement"].forEach(k=>{ incomingByFloor[k] = (Array.isArray(questions[k])?questions[k]:[]).filter(q=>needsReplyQ(q,k)); });
         const nIncoming = incomingByFloor.upper.length + incomingByFloor.main.length + incomingByFloor.basement.length;
         if(!nIncoming) return null;
         return (
@@ -30789,6 +31238,7 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
                   fieldinkMap={fieldinkMap}
                   statusFilter="needs"
                   hideAdd={true}
+                  questionThreads={questionThreads}
                   photoFolder={`${photoFolder?photoFolder+"-":""}${k}`}/>
               </div>
             ))}
@@ -30820,7 +31270,8 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
             onToggleSelect={toggleSelect}
             fieldinkMap={fieldinkMap}
             statusFilter={statusFilter}
-            excludeIds={statusFilter==null ? new Set((Array.isArray(questions[k])?questions[k]:[]).filter(needsReplyQ).map(q=>q.id)) : null}
+            excludeIds={statusFilter==null ? new Set((Array.isArray(questions[k])?questions[k]:[]).filter(q=>needsReplyQ(q,k)).map(q=>q.id)) : null}
+            questionThreads={questionThreads}
             photoFolder={`${photoFolder?photoFolder+"-":""}${k}`}/>
 
         </div>
@@ -45315,16 +45766,15 @@ function HomeownerPage({ jobId }) {
         return {...it, included, confirmed:included, priority: included ? (++p) : 0};
       });
       // Merge onto the shared homeowner_requests doc so lighting-collab / Q&A
-      // data written by other share links isn't wiped.
-      const ex = await getDoc(doc(db,'homeowner_requests',jobId));
-      await setDoc(doc(db,'homeowner_requests',jobId),{
-        ...(ex.exists()?ex.data():{}),
-        jobId, jobName:job?.name||'', submitted:true,
+      // data written by other share links isn't wiped. Funnel write = version
+      // snapshot stashed first (Kweller hardening Layer 4).
+      await saveHomeownerRequest(jobId, () => ({
+        jobName:job?.name||'', submitted:true,
         submittedAt:new Date().toISOString(),
         signature:sigName.trim(), signedDate:sigDate,
         items: outItems,
         genLoads,
-      });
+      }), 'HomeownerPage-submit');
       setSubmitted(true);
     } catch(e){ toast.error('Failed to submit. Please try again.'); }
     setSubmitting(false);
@@ -45724,6 +46174,13 @@ function LightingSharePage({ jobId }) {
   const [saving,     setSaving]    = useState(false);
   const [savedAt,    setSavedAt]   = useState(null);
   const saveTimer = useRef(null);
+  // Per-mount baseline of lightingCollab (Kweller hardening Layer 3) — what
+  // THIS tab last knew the server to hold. Lets the save below three-way
+  // merge instead of replacing the whole object, so a stale LV tab can't
+  // drop rows another device added since this page loaded. Advanced to the
+  // WRITTEN (merged) value after every save — the exact lesson from the
+  // punch burst-self-wipe fix: never leave the baseline behind the write.
+  const collabBase = useRef(null);
 
   useEffect(() => {
     const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
@@ -45736,7 +46193,7 @@ function LightingSharePage({ jobId }) {
 
   useEffect(() => {
     getDoc(doc(db,'homeowner_requests',jobId)).then(snap => {
-      if(snap.exists()&&snap.data().lightingCollab) setCollab(snap.data().lightingCollab);
+      if(snap.exists()&&snap.data().lightingCollab){ setCollab(snap.data().lightingCollab); collabBase.current = snap.data().lightingCollab; }
     }).catch(()=>{});
   }, [jobId]);
 
@@ -45746,12 +46203,21 @@ function LightingSharePage({ jobId }) {
     setSaving(true);
     saveTimer.current = setTimeout(async()=>{
       try {
+        // Three-way merge each section's row array against the CURRENT server
+        // copy (rows keyed by id) so concurrent edits from another tab/device
+        // union instead of last-write-wins. Rides saveHomeownerRequest, so a
+        // version snapshot is stashed before the write (Layer 4).
         const ex = await getDoc(doc(db,'homeowner_requests',jobId));
-        await setDoc(doc(db,'homeowner_requests',jobId),{
-          ...(ex.exists()?ex.data():{}),
-          jobId, jobName:job?.name||'',
-          lightingCollab:{...next, savedAt:new Date().toISOString()},
+        const serverCollab = (ex.exists() && ex.data().lightingCollab) || {sections:{},notes:'',submittedBy:''};
+        const base = collabBase.current || {};
+        const mergedSections = {};
+        new Set([...Object.keys(next.sections||{}), ...Object.keys(serverCollab.sections||{})]).forEach(k => {
+          mergedSections[k] = _threeWayMerge(base.sections?.[k], next.sections?.[k], serverCollab.sections?.[k]);
         });
+        const merged = {...next, sections:mergedSections, savedAt:new Date().toISOString()};
+        await saveHomeownerRequest(jobId, () => ({ jobName:job?.name||'', lightingCollab:merged }), 'LightingSharePage');
+        collabBase.current = merged;
+        setCollab(merged);
         setSavedAt(new Date());
       } catch(e){}
       setSaving(false);
@@ -45981,13 +46447,38 @@ function LightingHubPage() {
   const [error, setError]       = useState(null);
 
   useEffect(() => {
-    getDocs(collection(db,'jobs')).then(snap => {
+    // homeowner_requests is fetched only for planChangeAcks (to count
+    // un-incorporated changes) and planChangeThreads (to badge answered
+    // questions) — nothing else from those docs is kept or rendered. Same
+    // open-read rules as the jobs fetch below.
+    Promise.all([getDocs(collection(db,'jobs')), getDocs(collection(db,'homeowner_requests'))]).then(([snap, hrSnap]) => {
+      const ackMap = {}, threadMap = {};
+      hrSnap.docs.forEach(d => {
+        const data = d.data();
+        if (data?.planChangeAcks) ackMap[d.id] = data.planChangeAcks;
+        if (data?.planChangeThreads) threadMap[d.id] = data.planChangeThreads;
+      });
       const all = snap.docs.map(d => {
         const raw = d.data();
         return raw?.data ? { id: d.id, ...raw.data } : null;
       }).filter(Boolean);
-      setJobsList(all.filter(j => (j.lightingSystem||'')==='Lutron')
-        .sort((a,b) => (a.name||'').localeCompare(b.name||'')));
+      // Excludes jobs Koy has flagged as not actually this LV company's work
+      // (panelizedLighting.excludeFromLutronHub — e.g. jobs set to Lutron
+      // before this workflow started). See LutronAdditionsView for the toggle.
+      // Jobs with changes Tech Lighting hasn't marked incorporated sort first
+      // (most waiting on top), so one glance shows where work is pending.
+      setJobsList(all.filter(j => (j.lightingSystem||'')==='Lutron' && !j.panelizedLighting?.excludeFromLutronHub)
+        .map(j => {
+          const items = (j.panelizedLighting?.lutronRooms||[]).flatMap(r => r.items||[]);
+          const acks = ackMap[j.id] || {};
+          const threads = threadMap[j.id] || {};
+          // _replies = their questions that got a Homestead answer (item
+          // threads + the job-level "_general" thread).
+          const _replies = items.filter(it => threadReplied(threads[it.id])).length
+            + (threadReplied(threads._general) ? 1 : 0);
+          return { ...j, _unprocessed: items.filter(it => !acks[it.id]?.ackedAt).length, _replies };
+        })
+        .sort((a,b) => (b._unprocessed>0)-(a._unprocessed>0) || (b._unprocessed-a._unprocessed) || (a.name||'').localeCompare(b.name||'')));
     }).catch(() => setError('Failed to load.'));
   }, []);
 
@@ -46000,12 +46491,12 @@ function LightingHubPage() {
         <img src="/icon-192.png" alt="Homestead Electric" onError={e=>{e.currentTarget.style.display='none';}}
           style={{width:48,height:48,borderRadius:11,flexShrink:0,background:'#fff',padding:5,boxSizing:'border-box',objectFit:'contain'}}/>
         <div style={{minWidth:0}}>
-          <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>HOMESTEAD ELECTRIC — LUTRON LIGHTING</div>
-          <div style={{fontSize:19,fontWeight:700,color:'#fff'}}>All Lutron Jobs</div>
+          <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>HOMESTEAD ELECTRIC — PLAN CHANGES</div>
+          <div style={{fontSize:19,fontWeight:700,color:'#fff'}}>Lutron Jobs</div>
         </div>
       </div>
       <div style={{fontSize:12,color:'#5E6670',marginBottom:16,lineHeight:1.6}}>
-        Every job currently on a Lutron package. Open a job to add your module assignments and circuit additions — changes save automatically.
+        Not the plans you already sent us — this shows what's changed on each job since: added, moved, removed, or changed. Open a job to review its changes, mark them incorporated, or ask a question — our team replies right on the page.
       </div>
 
       {jobsList.length===0 ? (
@@ -46013,19 +46504,223 @@ function LightingHubPage() {
       ) : (
         <div style={{display:'flex',flexDirection:'column',gap:8}}>
           {jobsList.map(job => (
-            <a key={job.id} href={`/?lighting=${job.id}`}
+            <a key={job.id} href={`/?lutronshare=${job.id}`}
               style={{display:'flex',alignItems:'center',gap:10,background:'#fff',border:'1px solid #E1E4E9',
                 borderRadius:10,padding:'12px 14px',textDecoration:'none',color:'inherit'}}>
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:14,fontWeight:700,color:'#1B1F24'}}>{job.name||'(unnamed job)'}</div>
                 {job.address&&<div style={{fontSize:12,color:'#5E6670',marginTop:1}}>{job.address}</div>}
               </div>
+              {job._unprocessed>0 && (
+                <span style={{flexShrink:0,fontSize:11,fontWeight:700,color:'#B36B24',background:'#F6EEE4',
+                  borderRadius:99,padding:'3px 10px'}}>
+                  {job._unprocessed} to review
+                </span>
+              )}
+              {job._replies>0 && (
+                <span style={{flexShrink:0,fontSize:11,fontWeight:700,color:'#3B5BA5',background:'#EAEEF6',
+                  borderRadius:99,padding:'3px 10px'}}>
+                  {job._replies} {job._replies===1?'reply':'replies'}
+                </span>
+              )}
               <span style={{fontSize:11,fontWeight:700,color:'#3B5BA5'}}>Open →</span>
             </a>
           ))}
         </div>
       )}
       <div style={{textAlign:'center',color:'#99A0AA',fontSize:11,padding:'20px 0 10px'}}>Homestead Electric · this list updates as new jobs are set to Lutron</div>
+    </div>
+  );
+}
+
+// ─── Plan Changes Share Page — public, per-job changes ONLY ───────────────
+// Route: ?lutronshare=<jobId>. Built 2026-07-08 to replace routing the hub
+// into LightingSharePage — Koy: "they literally have already sent us the
+// loads list, they dont need to see it again... they need additions made so
+// they can update their plans." Shows ONLY job.panelizedLighting.lutronRooms
+// (the plan-changes log) for this one job — nothing from Loads, Keypads, or
+// Panel Loads. Koy's team is still the only one who logs changes (on the
+// job's own Panelized Lighting tab). Tech Lighting can do TWO things here:
+// (1) mark a change "incorporated" (with an optional plan-rev note) once
+// it's reflected in their plans + quote — written to homeowner_requests/
+// {jobId}.planChangeAcks; (2) chat — ask questions with file/photo attach
+// (QAThread, the same widget the Questions share flow uses) on any change or
+// in the job-level "Job discussion", written to planChangeThreads on the
+// same doc. Homestead replies from the internal app into the same threads.
+// Both fields live on the same publicly-writable homeowner_requests doc that
+// lightingCollab/questionAnswers/genLoads already use — NEVER jobs/{id};
+// this page has no write path into the job document. Live via onSnapshot on
+// both docs, so state round-trips through the server (no optimistic UI: a
+// failed write leaves the button/draft in place).
+function LutronAdditionsSharePage({ jobId }) {
+  const [job, setJob]         = useState(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError]     = useState(null);
+  const [acks, setAcks]       = useState({}); // planChangeAcks map from homeowner_requests
+  const [drafts, setDrafts]   = useState({}); // {itemId: note text typed before "Mark incorporated"}
+  const [threads, setThreads] = useState({}); // planChangeThreads map (itemId or "_general" → messages)
+  const [tlName, setTlName]   = useState(() => { try { return localStorage.getItem('he_tl_name') || ''; } catch { return ''; } });
+  useEffect(() => { try { if (tlName.trim()) localStorage.setItem('he_tl_name', tlName.trim()); } catch {} }, [tlName]);
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,'jobs',jobId), snap => {
+      if(!snap.exists()){ setError('Not found.'); setLoading(false); return; }
+      setJob(snap.data()?.data);
+      setLoading(false);
+    }, () => { setError('Failed to load.'); setLoading(false); });
+    return () => unsub();
+  }, [jobId]);
+
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,'homeowner_requests',jobId), snap => {
+      setAcks(snap.exists() ? (snap.data().planChangeAcks || {}) : {});
+      setThreads(snap.exists() ? (snap.data().planChangeThreads || {}) : {});
+    }, ()=>{});
+    return () => unsub();
+  }, [jobId]);
+
+  // Rides the saveHomeownerRequest funnel (per-key map merge + version
+  // snapshot). Un-acking keeps the key with ackedAt:null (note preserved) —
+  // no FieldValue.delete, no undefined values.
+  const writeAck = async (itemId, entry) => {
+    try {
+      await saveHomeownerRequest(jobId, (prev) => ({
+        jobName: job?.name || ((prev&&prev.jobName) || ''),
+        planChangeAcks: { ...((prev||{}).planChangeAcks||{}), [itemId]: entry },
+      }), 'LutronAdditionsSharePage-ack');
+    } catch(e){}
+  };
+  const ackItem = async (itemId) => {
+    await writeAck(itemId, { ackedAt: new Date().toISOString(), note: (drafts[itemId]||'').trim() });
+    setDrafts(d => ({ ...d, [itemId]: '' }));
+  };
+  const unackItem = (itemId) => writeAck(itemId, { ackedAt: null, note: acks[itemId]?.note || '' });
+
+  // QAThread onPost for Tech Lighting — role 'client', name from the
+  // remembered YOUR NAME field. Throw on failure so QAThread keeps the draft.
+  const postTL = (itemId) => async ({ text, photos }) => {
+    const msg = { id: uid(), by: (tlName.trim()||'Tech Lighting'), role:'client', text, photos, at: new Date().toISOString() };
+    const ok = await postThreadMessage(jobId, job?.name||'', itemId, msg);
+    if (!ok) throw new Error('send failed');
+  };
+
+  if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6E7682'}}>Loading…</div>;
+  if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#B23A3A'}}>{error}</div>;
+
+  const rooms = (job?.panelizedLighting?.lutronRooms||[]).filter(r=>(r.items||[]).length>0);
+
+  return (
+    <div style={{maxWidth:680,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#EEF0F3',minHeight:'100vh'}}>
+      <div style={{marginBottom:10}}>
+        <a href="/?lightinghub=1" style={{fontSize:12,color:'#5E6670',textDecoration:'none',display:'inline-flex',alignItems:'center',gap:5}}>
+          <Icon name="arrowLeft" size={12}/> All jobs
+        </a>
+      </div>
+      <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:6,display:'flex',alignItems:'center',gap:14}}>
+        <img src="/icon-192.png" alt="Homestead Electric" onError={e=>{e.currentTarget.style.display='none';}}
+          style={{width:48,height:48,borderRadius:11,flexShrink:0,background:'#fff',padding:5,boxSizing:'border-box',objectFit:'contain'}}/>
+        <div style={{minWidth:0}}>
+          <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>HOMESTEAD ELECTRIC — PLAN CHANGES</div>
+          <div style={{fontSize:19,fontWeight:700,color:'#fff',marginBottom:2}}>{job?.name||'Job'}</div>
+          {job?.address&&<div style={{fontSize:12,color:'rgba(255,255,255,0.65)'}}>{job.address}</div>}
+        </div>
+      </div>
+      <div style={{fontSize:12,color:'#5E6670',margin:'10px 0 12px',lineHeight:1.6}}>
+        Not a copy of the plans you already sent us — this is what's changed since: added, moved, removed, or changed. Mark each one incorporated once it's reflected in your plans and quote. Questions? Ask right on the change (attach files if it helps) — our team replies here.
+      </div>
+
+      <div style={{background:'#fff',border:'1px solid #E1E4E9',borderRadius:10,padding:'10px 14px',
+        marginBottom:14,display:'flex',alignItems:'center',gap:10,flexWrap:'wrap'}}>
+        <span style={{fontSize:11,color:'#5E6670',fontWeight:700,flexShrink:0}}>YOUR NAME</span>
+        <input value={tlName} onChange={e=>setTlName(e.target.value)} placeholder="Tech Lighting"
+          style={{flex:'1 1 160px',minWidth:120,background:'#F7F8FA',border:'1px solid #E1E4E9',borderRadius:6,
+            color:'#1B1F24',padding:'6px 9px',fontSize:12,fontFamily:'inherit',outline:'none'}}/>
+        <span style={{fontSize:10,color:'#99A0AA'}}>shown on your questions and comments</span>
+      </div>
+
+      {rooms.length===0 ? (
+        <div style={{textAlign:'center',padding:'48px 20px',color:'#99A0AA',background:'#fff',borderRadius:12}}>
+          Nothing's changed since bid yet on this job. Check back — this page updates automatically.
+        </div>
+      ) : (
+        <div style={{display:'flex',flexDirection:'column',gap:10}}>
+          {rooms.map(room => (
+            <div key={room.id} style={{background:'#fff',border:'1px solid #E1E4E9',borderRadius:10,overflow:'hidden'}}>
+              <div style={{background:'#3B5BA5',padding:'8px 16px'}}>
+                <span style={{fontSize:11,fontWeight:700,color:'#fff',letterSpacing:'0.06em'}}>{room.name.toUpperCase()}</span>
+              </div>
+              <div style={{padding:'4px 12px'}}>
+                {room.items.map((item,i) => {
+                  const ct = changeTypeOf(item);
+                  const [ctColor, ctBg] = ct==='Added' ? ['#2E9E6B','#E6F6EE'] : ct==='Moved' ? ['#3B5BA5','#EAEEF6']
+                    : ct==='Removed' ? ['#B23A3A','#F9ECEC'] : ['#B36B24','#F6EEE4'];
+                  const ack = acks[item.id];
+                  return (
+                  <div key={item.id} style={{padding:'9px 0',
+                    borderBottom:i<room.items.length-1?'1px solid #EEF0F3':'none'}}>
+                    <div style={{display:'flex',alignItems:'flex-start',gap:10}}>
+                      <span style={{flexShrink:0,fontSize:10,fontWeight:700,color:'#3B5BA5',
+                        background:'#EAEEF6',borderRadius:5,padding:'2px 8px'}}>{item.itemType}</span>
+                      <span style={{flexShrink:0,fontSize:10,fontWeight:700,color:ctColor,
+                        background:ctBg,borderRadius:5,padding:'2px 8px'}}>{ct}</span>
+                      <div style={{flex:1,minWidth:0}}>
+                        <div style={{fontSize:13,fontWeight:600,color:'#1B1F24'}}>
+                          {ct==='Moved' && item.fromLocation
+                            ? <>{item.fromLocation} <span style={{color:'#99A0AA'}}>→</span> {item.location}</>
+                            : item.location}
+                        </div>
+                        {item.notes && <div style={{fontSize:12,color:'#5E6670',marginTop:2}}>{item.notes}</div>}
+                      </div>
+                      <span style={{fontSize:10,color:'#99A0AA',flexShrink:0,whiteSpace:'nowrap'}}>{(item.addedAt||'').slice(0,10)}</span>
+                    </div>
+                    <div style={{marginTop:7,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
+                      {ack?.ackedAt ? (
+                        <>
+                          <span style={{fontSize:10,fontWeight:800,color:'#2E9E6B',background:'#E6F6EE',
+                            borderRadius:5,padding:'3px 9px'}}>
+                            Incorporated{ack.note?` — ${ack.note}`:''}
+                          </span>
+                          <button onClick={()=>unackItem(item.id)}
+                            style={{background:'none',border:'none',color:'#8A929D',fontSize:11,
+                              cursor:'pointer',fontFamily:'inherit',padding:0}}>
+                            Undo
+                          </button>
+                        </>
+                      ) : (
+                        <>
+                          <input value={drafts[item.id]||''} onChange={e=>setDrafts({...drafts,[item.id]:e.target.value})}
+                            placeholder="Plan rev / note (optional)"
+                            style={{flex:'1 1 140px',maxWidth:200,background:'#F7F8FA',border:'1px solid #E1E4E9',
+                              borderRadius:6,color:'#1B1F24',padding:'5px 9px',fontSize:11,fontFamily:'inherit',outline:'none'}}/>
+                          <button onClick={()=>ackItem(item.id)}
+                            style={{fontSize:11,fontWeight:700,color:'#fff',background:'#3B5BA5',border:'none',
+                              borderRadius:6,padding:'6px 11px',cursor:'pointer',fontFamily:'inherit'}}>
+                            Mark incorporated
+                          </button>
+                        </>
+                      )}
+                    </div>
+                    <div style={{marginTop:8,paddingTop:2,borderTop:'1px dashed #E1E4E9'}}>
+                      <QAThread messages={threads[item.id]||[]} jobId={jobId} qid={item.id}
+                        photoBase="plan-change-threads" onPost={postTL(item.id)}/>
+                    </div>
+                  </div>
+                  );
+                })}
+              </div>
+            </div>
+          ))}
+        </div>
+      )}
+      <div style={{marginTop:14,background:'#fff',border:'1px solid #E1E4E9',borderRadius:10,padding:'12px 16px'}}>
+        <div style={{fontSize:12,fontWeight:800,color:'#1B1F24',letterSpacing:'0.02em'}}>Job discussion</div>
+        <div style={{fontSize:11,color:'#5E6670',marginTop:2}}>
+          Anything about this job that isn't tied to one change — plans, revisions, scheduling, whatever. Attach files if it helps.
+        </div>
+        <QAThread messages={threads._general||[]} jobId={jobId} qid="_general"
+          photoBase="plan-change-threads" onPost={postTL('_general')}/>
+      </div>
+      <div style={{textAlign:'center',color:'#99A0AA',fontSize:11,padding:'20px 0 10px'}}>Homestead Electric · live — updates as changes are logged</div>
     </div>
   );
 }
@@ -46871,6 +47566,23 @@ function QuestionsSharePage({ jobId }) {
     return () => unsub();
   }, [jobId]);
 
+  // Live question-thread messages (Kweller hardening Layer 2) — discussion
+  // replies live on homeowner_requests.questionThreads now, NOT on the job
+  // doc, so a crew device's save can never wipe them. Live so a Homestead
+  // reply shows up here within a second.
+  const [qThreads, setQThreads] = useState({});
+  useEffect(() => {
+    const unsub = onSnapshot(doc(db,'homeowner_requests',jobId), snap => {
+      setQThreads(snap.exists() ? (snap.data().questionThreads || {}) : {});
+    }, ()=>{});
+    return () => unsub();
+  }, [jobId]);
+  // Merged view: legacy q.thread (frozen, job doc) + new side-doc messages.
+  const threadOfShare = (q) => {
+    const floorKey = q.floor==='Upper Level'?'upper':q.floor==='Main Level'?'main':'basement';
+    return [...(q.thread||[]), ...(qThreads[`${q.phase}_${floorKey}_${q.id}`]||[])];
+  };
+
   // Pre-load any previously submitted answers
   useEffect(() => {
     getDoc(doc(db,'homeowner_requests',jobId)).then(snap => {
@@ -46942,49 +47654,43 @@ function QuestionsSharePage({ jobId }) {
         answeredAt: new Date().toISOString(),
       };
 
-      await setDoc(doc(db,'homeowner_requests',jobId), {
-        ...existingData,
-        jobId, jobName:job?.name||'', questionAnswers,
-        submittedAt: existingData.submittedAt || new Date().toISOString(),
+      // Funnel write: version snapshot stashed first (Kweller hardening L4).
+      await saveHomeownerRequest(jobId, (prev) => ({
+        jobName:job?.name||'', questionAnswers,
+        submittedAt: (prev&&prev.submittedAt) || new Date().toISOString(),
         updatedAt: new Date().toISOString(),
-      });
+      }), 'QuestionsSharePage-submit');
       try { localStorage.removeItem(draftKey); } catch(e){}
       setSubmitted(true);
     } catch(e){ toast.error('Failed to submit. Please try again.'); }
     setSubmitting(false);
   };
 
-  // Post a thread message from the recipient. Runs in a TRANSACTION and
-  // writes ONLY the one floor's question array via dot-notation — the old
-  // version setDoc'd the ENTIRE job doc from a moments-old snapshot, which
-  // is the same stale-overwrite class as the Cougar Moon punch wipe: any
-  // crew save landing between the read and the write got destroyed. Now the
-  // blast radius is one nested array, and the transactional read means we
-  // always thread onto the server's current copy of the question.
+  // Post a thread message from the recipient (Kweller hardening Layer 2).
+  // Writes to homeowner_requests.questionThreads — NEVER jobs/{id} — so no
+  // crew device's save, stale baseline, or future merge bug can wipe what
+  // the recipient wrote. (Two prior generations of this function wrote into
+  // the job doc: first a full-doc setDoc, then a transactional per-floor
+  // update — the transaction protected ITS OWN write, but the messages still
+  // LIVED on the job doc where the next stale internal save could, and on
+  // Kweller did, bulldoze them.) NOTE: q.phase must be tagged on the
+  // flattened arrays below — an earlier version keyed off q.phase without
+  // ever setting it, which silently routed every reply into finishQuestions
+  // and NO-OP'd replies to rough questions.
   const postThread = async (q, message) => {
-    await runTransaction(db, async (tx) => {
-      const jref = doc(db,'jobs',jobId);
-      const snap = await tx.get(jref);
-      if(!snap.exists()) throw new Error('Job unavailable');
-      const data = snap.data()?.data || {};
-      const field = q.phase==='rough' ? 'roughQuestions' : 'finishQuestions';
-      const floorKey = q.floor==='Upper Level'?'upper':q.floor==='Main Level'?'main':'basement';
-      const qs = data[field] || {};
-      const arr = Array.isArray(qs[floorKey]) ? qs[floorKey] : [];
-      const nextArr = arr.map(item => item.id===q.id ? {...item, thread:[...(item.thread||[]), message]} : item);
-      tx.update(jref, { ['data.'+field+'.'+floorKey]: nextArr, updated_at: new Date().toISOString() });
-    });
+    const floorKey = q.floor==='Upper Level'?'upper':q.floor==='Main Level'?'main':'basement';
+    await postQuestionThreadMessage(jobId, `${q.phase}_${floorKey}_${q.id}`, message, 'QuestionsSharePage');
   };
 
   const roughQs = (job ? [
-    ...(job.roughQuestions?.upper||[]).map(q=>({...q,floor:'Upper Level'})),
-    ...(job.roughQuestions?.main||[]).map(q=>({...q,floor:'Main Level'})),
-    ...(job.roughQuestions?.basement||[]).map(q=>({...q,floor:'Basement'})),
+    ...(job.roughQuestions?.upper||[]).map(q=>({...q,phase:'rough',floor:'Upper Level'})),
+    ...(job.roughQuestions?.main||[]).map(q=>({...q,phase:'rough',floor:'Main Level'})),
+    ...(job.roughQuestions?.basement||[]).map(q=>({...q,phase:'rough',floor:'Basement'})),
   ] : []).filter(q=>!filterIds || filterIds.has(q.id));
   const finishQs = (job ? [
-    ...(job.finishQuestions?.upper||[]).map(q=>({...q,floor:'Upper Level'})),
-    ...(job.finishQuestions?.main||[]).map(q=>({...q,floor:'Main Level'})),
-    ...(job.finishQuestions?.basement||[]).map(q=>({...q,floor:'Basement'})),
+    ...(job.finishQuestions?.upper||[]).map(q=>({...q,phase:'finish',floor:'Upper Level'})),
+    ...(job.finishQuestions?.main||[]).map(q=>({...q,phase:'finish',floor:'Main Level'})),
+    ...(job.finishQuestions?.basement||[]).map(q=>({...q,phase:'finish',floor:'Basement'})),
   ] : []).filter(q=>!filterIds || filterIds.has(q.id));
   const hasQs = roughQs.length+finishQs.length > 0;
 
@@ -47043,8 +47749,8 @@ function QuestionsSharePage({ jobId }) {
           <button type="button" onClick={()=>setNoteOpen(s=>new Set([...s,q.id]))}
             style={{marginTop:8,fontSize:11,fontWeight:600,color:'#B0892C',background:'none',border:'none',cursor:'pointer',fontFamily:'inherit',padding:0}}>+ Ask for more info instead</button>
         )}
-        {(q.thread||[]).length>0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:'0.08em',color:'#99A0AA',margin:'12px 0 0'}}>DISCUSSION WITH HOMESTEAD ELECTRIC</div>}
-        <QAThread messages={q.thread||[]} jobId={jobId} qid={q.id} color="#3B5BA5" photoBase="question-threads"
+        {threadOfShare(q).length>0 && <div style={{fontSize:9,fontWeight:800,letterSpacing:'0.08em',color:'#99A0AA',margin:'12px 0 0'}}>DISCUSSION WITH HOMESTEAD ELECTRIC</div>}
+        <QAThread messages={threadOfShare(q)} jobId={jobId} qid={q.id} color="#3B5BA5" photoBase="question-threads"
           onPost={({text,photos})=>postThread(q,{id:uid(),by:(respondentName.trim()||shareName||'Client'),role:'client',text,photos,at:new Date().toISOString()})}/>
       </div>
     );
@@ -47053,15 +47759,16 @@ function QuestionsSharePage({ jobId }) {
   // last-visit stamp; live-arriving questions also read as new because their
   // addedAt is after the previous visit too.
   const isNewQ     = (q) => !!(prevVisitAt && q.addedAt && q.addedAt > prevVisitAt);
-  const newReplyQ  = (q) => !!(prevVisitAt && (q.thread||[]).some(m=>m && m.role==='crew' && m.at && m.at > prevVisitAt));
+  const newReplyQ  = (q) => !!(prevVisitAt && threadOfShare(q).some(m=>m && m.role==='crew' && m.at && m.at > prevVisitAt));
   const newAnswerQ = (q) => !!(prevVisitAt && q.done && q.answeredAt && q.answeredAt > prevVisitAt);
   // Waiting on Homestead = they moved last and the ball is in the crew's
   // court: they asked for more info (and no crew reply has landed since), or
-  // the discussion under the question ends with THEIR message.
-  const waitingQ = (q) => !isAnsQ(q) && (
-    ((q.thread||[]).length>0 && q.thread[q.thread.length-1]?.role==='client') ||
-    (!!(notes[q.id]||'').trim() && !((q.thread||[]).length>0 && q.thread[q.thread.length-1]?.role==='crew'))
-  );
+  // the discussion under the question ends with THEIR message. Reads the
+  // MERGED thread (legacy job-doc entries + side-doc questionThreads).
+  const waitingQ = (q) => { const t = threadOfShare(q); return !isAnsQ(q) && (
+    (t.length>0 && t[t.length-1]?.role==='client') ||
+    (!!(notes[q.id]||'').trim() && !(t.length>0 && t[t.length-1]?.role==='crew'))
+  ); };
   const sortNewFirst = (arr) => [...arr].sort((a,b)=>((isNewQ(b)||newReplyQ(b))?1:0)-((isNewQ(a)||newReplyQ(a))?1:0));
   const needRough  = sortNewFirst(roughQs.filter(q=>!isAnsQ(q) && !waitingQ(q)));
   const needFinish = sortNewFirst(finishQs.filter(q=>!isAnsQ(q) && !waitingQ(q)));
@@ -51458,9 +52165,15 @@ function App() {
   if(ltParam) return <LightingSharePage jobId={ltParam}/>;
 
   // Lighting hub route — ?lightinghub=1 (one link for the LV plans company;
-  // lists every Lutron job, each linking into its own ?lighting=<id> page)
+  // lists every Lutron job, each linking into its own ?lutronshare=<id> page)
   const lhParam = new URLSearchParams(window.location.search).get("lightinghub");
   if(lhParam) return <LightingHubPage/>;
+
+  // Lutron additions-only share route — ?lutronshare=JOB_ID (read-only;
+  // additions logged since bid ONLY, not the Loads/Keypad/Panel schedule —
+  // the LV company already has that, they sent it to us)
+  const lsParam = new URLSearchParams(window.location.search).get("lutronshare");
+  if(lsParam) return <LutronAdditionsSharePage jobId={lsParam}/>;
 
   // Punch list share page routes — ?roughpunch / ?finishpunch / ?qcpunch
   const rpParam = new URLSearchParams(window.location.search).get("roughpunch");
@@ -51867,6 +52580,8 @@ function App() {
   // avoid touching that component's gating logic. Cost: one extra listener
   // on a tiny collection (~few docs). Read-allowed for everyone per rules.
   const [appSuggestions, setAppSuggestions] = useState([]);
+  const [backupStatus, setBackupStatus] = useState(null); // null=loading, false=doc missing, else settings/backupStatus data
+  const [backupBannerDismissed, setBackupBannerDismissed] = useState(false); // per-session dismiss
   const [selectedQuoteWalk, setSelectedQuoteWalk] = useState(null);
   // Simpro inbox — pending Simpro jobs not yet imported into the app.
   // Populated by the scheduledSimproCandidateRefresh cloud function (every
@@ -52181,7 +52896,16 @@ function App() {
       }
     }, ()=>{});
 
-    return () => { unsub(); unsubUpcoming(); unsubSimproCands(); unsubTasks(); unsubNeeds(); unsubQuoteWalks(); unsubRedlineWalks(); unsubSuggestions(); unsubVersion(); }; // cleanup on unmount
+    // Backup observability (Kweller hardening Layer 5) — the nightly backup
+    // function stamps settings/backupStatus on every run. If that stamp is
+    // missing or stale, the safety net is down and NOBODY would otherwise
+    // know (it sat undeployed for weeks once). Surfaces as a red banner for
+    // admin/manager. `false` (vs null) = doc confirmed missing.
+    const unsubBackupStatus = onSnapshot(doc(db,"settings","backupStatus"), (snap) => {
+      setBackupStatus(snap.exists() ? snap.data() : false);
+    }, ()=>{});
+
+    return () => { unsub(); unsubUpcoming(); unsubSimproCands(); unsubTasks(); unsubNeeds(); unsubQuoteWalks(); unsubRedlineWalks(); unsubSuggestions(); unsubVersion(); unsubBackupStatus(); }; // cleanup on unmount
 
   },[]);
 
@@ -53582,6 +54306,29 @@ function App() {
       <HEConfirmHost/>
       <HEToastHost/>
 
+      {/* Backup observability banner (Kweller hardening Layer 5). Red strip
+          for admin/manager when the nightly Firestore backup has never run or
+          hasn't stamped settings/backupStatus in 48h — a silent safety-net
+          failure cost us the Kweller designer replies once; never again.
+          backupStatus===null means still loading (no banner yet);
+          false means the doc is confirmed missing. Dismiss is per-session. */}
+      {can(identity,"settings.view") && !backupBannerDismissed && backupStatus!==null && (() => {
+        const lastRun = backupStatus && backupStatus.lastRunAt ? new Date(backupStatus.lastRunAt).getTime() : 0;
+        const staleOrMissing = !backupStatus || backupStatus.ok===false || (Date.now() - lastRun > 48*60*60*1000);
+        if (!staleOrMissing) return null;
+        return (
+          <div style={{position:"fixed",top:0,left:0,right:0,zIndex:9500,background:"#B23A3A",color:"#fff",
+            padding:"8px 16px",display:"flex",alignItems:"center",gap:10,fontSize:12,fontWeight:700}}>
+            <Icon name="alertTriangle" size={14}/>
+            <span style={{flex:1,minWidth:0}}>
+              Nightly Firestore backups {backupStatus ? "haven't run in over 48 hours" : "have never run"} — if data gets overwritten there is no snapshot to restore from. Deploy/check the backup function.
+            </span>
+            <button onClick={()=>setBackupBannerDismissed(true)}
+              style={{background:"none",border:"none",color:"#fff",cursor:"pointer",fontWeight:800,fontSize:14,fontFamily:"inherit",flexShrink:0}}>✕</button>
+          </div>
+        );
+      })()}
+
       {/* Simpro Inbox — floating button + modal. Admin-only: the badge is
           hidden for non-admin users (crew/foreman) so they don't see "3
           pending" badges they can't act on, and the modal/import handler
@@ -53833,7 +54580,7 @@ function App() {
             {key:"upcoming",label:"Upcoming",icon:"calendar"},
             ...(can(identity,"quotes.view")?[{key:"quotes",label:"Quotes",icon:"fileText"}]:[]),
             {key:"walks",label:"Walks",icon:"clipboard"},
-            ...(can(identity,"lutron.view")?[{key:"lutron",label:"Bid Additions",icon:"mapPin"}]:[]),
+            ...(can(identity,"lutron.view")?[{key:"lutron",label:"Plan Changes",icon:"mapPin"}]:[]),
             {key:"tasks",label:"Tasks",icon:"check"},
             {key:"timeoff",label:"Time Off",icon:"calendar"},
             ...(contractorUsers.length>0?[{key:"subcontractors",label:contractorUsers.length===1?contractorUsers[0].name.split(" ")[0]:"Subcontractors",icon:"hardHat"}]:[]),
@@ -55393,7 +56140,7 @@ function App() {
       )}
 
       {view==="lutron"&&can(identity,"lutron.view")&&(
-        <LutronAdditionsView jobs={jobs} onSelectJob={(job)=>openJobById(job.id,"Panelized Lighting")}/>
+        <LutronAdditionsView jobs={jobs} onSelectJob={(job)=>openJobById(job.id,"Panelized Lighting")} onUpdateJob={updateJob}/>
       )}
 
       {view==="cos"&&can(identity,"cos.view")&&(

@@ -67,6 +67,19 @@ service cloud.firestore {
       allow create: if request.resource.data.jobId is string;
       allow update: if request.resource.data.jobId is string;
       allow delete: if false;
+
+      // ── VERSION SNAPSHOTS (Kweller hardening Layer 4, 2026-07-09) ────────
+      // Point-in-time copies stashed by saveHomeownerRequest() before every
+      // write (public share pages AND internal app), so a bad merge or
+      // overwrite is a 2-minute restore instead of a loss. Same open posture
+      // as the parent doc — no auth model to gate on. Immutable once written
+      // (no update); delete allowed so the client can prune to the last 10.
+      match /versions/{versionId} {
+        allow read: if true;
+        allow create: if true;
+        allow update: if false;
+        allow delete: if true;
+      }
     }
 
     // ── QUESTION SHARES ───────────────────────────────────────────────────────
