@@ -5043,75 +5043,6 @@ exports.notifInboxPrune = functions.pubsub
     return null;
   });
 
-// ─── QC walk calendar sync ───────────────────────────────────────────────
-// Pulls QC walks scheduled on Koy's Google Calendar. The secret iCal URL is
-// stored in settings/qcCalendar (entered in-app) — NEVER in this repo, since it
-// grants read access to the calendar. Fuzzy-matches event titles to jobs and
-// writes results to settings/qcCalendarMatches for the QC tab to read.
-function _icsUnfold(t){ return String(t||"").replace(/\r\n[ \t]/g,"").replace(/\n[ \t]/g,""); }
-function _icsParse(text){
-  const out=[];
-  const blocks=_icsUnfold(text).split("BEGIN:VEVENT").slice(1);
-  for(const b of blocks){
-    const body=b.split("END:VEVENT")[0];
-    const get=(k)=>{ const m=body.match(new RegExp("(?:^|\\n)"+k+"[^:\\n]*:(.*)")); return m?m[1].trim():""; };
-    const summary=get("SUMMARY");
-    const dtRaw=get("DTSTART");
-    if(!summary) continue;
-    const dm=dtRaw.match(/(\d{4})(\d{2})(\d{2})/);
-    out.push({ summary, date: dm?`${dm[1]}-${dm[2]}-${dm[3]}`:"" });
-  }
-  return out;
-}
-function _qcNorm(s){ return String(s||"").toLowerCase().replace(/[^a-z0-9 ]/g," ").replace(/\s+/g," ").trim(); }
-function _qcMatchJob(summary, jobs){
-  const ns=_qcNorm(summary);
-  const num=(summary.match(/#?\s?(\d{3,5})\b/)||[])[1];
-  if(num){
-    const byNum=jobs.find(j=> (_qcNorm(j.name).match(/\b(\d{3,5})\b/)||[])[1]===num || String(j.simproNo||"")===num);
-    if(byNum) return byNum;
-  }
-  let best=null, bestScore=0;
-  for(const j of jobs){
-    const nj=_qcNorm(j.name); if(!nj) continue;
-    const jtok=nj.split(" ").filter(w=>w.length>=4 && !/^\d+$/.test(w));
-    if(!jtok.length) continue;
-    const hit=jtok.filter(w=>ns.includes(w)).length;
-    const score=hit/jtok.length;
-    if(hit>0 && score>bestScore){ bestScore=score; best=j; }
-  }
-  return (best && bestScore>=0.5) ? best : null;
-}
-async function _qcCalendarSync(){
-  const cfg = await db.doc("settings/qcCalendar").get();
-  const url = cfg.exists ? (cfg.data().url||"") : "";
-  if(!url) return { ok:false, error:"No calendar URL set." };
-  let text="";
-  try { const res = await fetch(url); text = await res.text(); }
-  catch(e){ return { ok:false, error:"Couldn't fetch calendar: "+e.message }; }
-  const events=_icsParse(text);
-  const jobsSnap=await db.collection("jobs").get();
-  const jobs=jobsSnap.docs.map(d=>{ const raw=d.data(); const data=(raw&&raw.data)?raw.data:{}; return { id:d.id, name:data.name||"", simproNo:data.simproNo||"" }; }).filter(j=>j.name);
-  const matches=[];
-  for(const e of events){
-    const looksQc=/\bqc\b|quality|walk/i.test(e.summary);
-    const j=_qcMatchJob(e.summary, jobs);
-    if(!looksQc && !j) continue;
-    matches.push({ title:e.summary, date:e.date, jobId:j?j.id:null, jobName:j?j.name:"" });
-  }
-  matches.sort((a,b)=>(a.date||"").localeCompare(b.date||""));
-  await db.doc("settings/qcCalendarMatches").set({ matches, updatedAt:new Date().toISOString(), eventCount:events.length, matchedCount:matches.filter(m=>m.jobId).length });
-  return { ok:true, events:events.length, kept:matches.length, matched:matches.filter(m=>m.jobId).length };
-}
-exports.syncQcCalendar = functions.pubsub.schedule("every 60 minutes").timeZone(TZ).onRun(async ()=>{
-  const r = await _qcCalendarSync();
-  functions.logger.info("[syncQcCalendar] ran", r);
-  return null;
-});
-// Manual trigger so Koy can pull immediately after setting the URL (admin-gated in UI).
-exports.runQcCalendarSync = functions.https.onCall(async () => {
-  return await _qcCalendarSync();
-});
 
 // ─────────────────────────────────────────────────────────────
 // NIGHTLY FIRESTORE BACKUP — Cougar Moon insurance (2026-07-06)
@@ -5168,6 +5099,15 @@ exports.nightlyFirestoreBackup = functions
     catch (e) {
       functions.logger.error("[nightlyFirestoreBackup] FAILED", e.message);
       try { await db.doc("settings/backupStatus").set({ lastRunAt: new Date().toISOString(), ok: false, error: e.message }); } catch(_){}
+      // Push Koy — a 1am failure is otherwise silent until someone opens the
+      // app and sees the backup banner. Scheduled runs only; runBackupNow is
+      // a human-triggered callable whose rejection surfaces in the UI that
+      // called it. sendToName/deliver swallow their own errors, so this can
+      // neither mask nor amplify the original failure — throw e still runs.
+      await sendToName("Koy", {
+        title: "⚠️ Nightly Backup Failed",
+        body:  `Firestore backup didn't complete: ${String(e.message||e).slice(0, 120)}`,
+      });
       throw e;
     }
   });
@@ -5177,4 +5117,79 @@ exports.runBackupNow = functions
   .runWith({ memory: "1GB", timeoutSeconds: 540 })
   .https.onCall(async () => {
     return await _runFirestoreBackup("manual");
+  });
+
+// ─────────────────────────────────────────────────────────────
+// TECH LIGHTING WEEKLY DIGEST — Monday 6:45am MT
+// One push to Koy summarizing every on-link Lutron job's plan-changes
+// state: how many logged room items Tech Lighting hasn't marked
+// "incorporated" (homeowner_requests/{jobId}.planChangeAcks[itemId]
+// .ackedAt) and how many discussion threads sit on a question from them
+// with no crew reply (last message role==="client"). Mirrors the exact
+// predicates LutronAdditionsView / LightingHubPage compute client-side in
+// src/App.js — a scheduled rollup, nothing new decided here. Read-only:
+// two collection reads + one push (deliver() writes only the notification
+// inbox doc, like every other Koy-targeted nudge). Clean week = no push;
+// note a read failure also produces silence (logged only — accepted).
+// ─────────────────────────────────────────────────────────────
+exports.techLightingWeeklyDigest = functions.pubsub
+  .schedule("45 6 * * 1")
+  .timeZone(TZ)
+  .onRun(async () => {
+    try {
+      const [jobsSnap, hrSnap] = await Promise.all([
+        db.collection("jobs").get(),
+        db.collection("homeowner_requests").get(),
+      ]);
+
+      // homeowner_requests docs are NOT wrapped in `.data` — unlike jobs.
+      const ackMap = {}, threadMap = {};
+      hrSnap.forEach(d => {
+        const data = d.data() || {};
+        if (data.planChangeAcks)    ackMap[d.id]    = data.planChangeAcks;
+        if (data.planChangeThreads) threadMap[d.id] = data.planChangeThreads;
+      });
+
+      let unincorporated  = 0; // items logged, not yet ackedAt
+      let awaitingReply   = 0; // threads whose last message is from the client
+      let jobsOutstanding = 0; // jobs with >=1 of either
+
+      jobsSnap.forEach(d => {
+        const j = d.data()?.data || {}; // jobs ARE wrapped
+        if (j.lightingSystem !== "Lutron") return;
+        if (j.panelizedLighting?.excludeFromLutronHub) return;
+
+        const items   = (j.panelizedLighting?.lutronRooms || []).flatMap(r => r.items || []);
+        const acks    = ackMap[d.id] || {};
+        const threads = threadMap[d.id] || {};
+
+        const jobUnincorporated = items.filter(it => !acks[it.id]?.ackedAt).length;
+
+        const threadIds = [...items.map(it => it.id), "_general"];
+        const jobAwaiting = threadIds.filter(id => {
+          const msgs = threads[id];
+          return msgs && msgs.length && msgs[msgs.length - 1].role === "client";
+        }).length;
+
+        unincorporated += jobUnincorporated;
+        awaitingReply  += jobAwaiting;
+        if (jobUnincorporated > 0 || jobAwaiting > 0) jobsOutstanding++;
+      });
+
+      if (unincorporated === 0 && awaitingReply === 0) {
+        functions.logger.info("[techLightingWeeklyDigest] clean — no push");
+        return null;
+      }
+
+      await sendToName("Koy", {
+        title: "Tech Lighting weekly",
+        body: `${unincorporated} change${unincorporated===1?"":"s"} not incorporated across ${jobsOutstanding} job${jobsOutstanding===1?"":"s"} · ${awaitingReply} question${awaitingReply===1?"":"s"} awaiting a crew reply`,
+      });
+
+      functions.logger.info("[techLightingWeeklyDigest] ran", { unincorporated, awaitingReply, jobsOutstanding });
+      return null;
+    } catch (e) {
+      functions.logger.error("[techLightingWeeklyDigest] FAILED", e.message);
+      return null;
+    }
   });
