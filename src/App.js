@@ -3215,6 +3215,12 @@ const PERMISSIONS = {
   // the tab itself: no tier gate on logging changes in-job, so the nav tab is
   // open to everyone too. Key stays "lutron.view" — internal identifier only.
   "lutron.view":            ["admin","manager","standard","limited"],
+  // Lutron hub visibility — office-only. Gates the "On Tech Lighting's link"
+  // checkbox on the Panelized Lighting tab AND the ✕ hide/Restore controls in
+  // the Plan Changes view (both write the SAME flag:
+  // panelizedLighting.excludeFromLutronHub). Koy (2026-07-09): crew could
+  // previously flip a job off Tech Lighting's link by accident.
+  "lutron.manage":          ["admin","manager"],
   // Company-wide hats — NOT tier-based (all 3 coordinators share a tier, so a
   // tier gate can't single out Koy). Granted PER USER via `caps` in Settings →
   // Team. Empty tier list = nobody gets it by tier; only an explicit grant does.
@@ -16279,7 +16285,7 @@ function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
 // badges jobs whose threads are awaiting a Homestead reply). Besides thread
 // replies, the only other write is the excludeFromLutronHub toggle.
 // Spec: LUTRON_PACKAGE_TRACKER_SPEC.md (P0-8).
-function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob }) {
+function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob, identity }) {
   const [expanded, setExpanded]   = useState(() => new Set());
   const [copied, setCopied]       = useState(false);
   const [showHidden, setShowHidden] = useState(false);
@@ -16462,7 +16468,7 @@ function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob }) {
                         alignItems:"center",gap:4}}>
                       Open job<Icon name="external" size={11} stroke={2.25}/>
                     </button>
-                    {onUpdateJob && (
+                    {onUpdateJob && can(identity,"lutron.manage") && (
                       <button onClick={(e)=>{e.stopPropagation(); setExcluded(job, true);}}
                         title="Not this LV company's job — hide it from their tracking link"
                         style={{background:"none",border:"none",color:C.muted,cursor:"pointer",
@@ -16583,7 +16589,7 @@ function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob }) {
                 <div key={job.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",
                   background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px"}}>
                   <span style={{fontSize:12,color:C.dim}}>{job.name||"(unnamed job)"}</span>
-                  {onUpdateJob && (
+                  {onUpdateJob && can(identity,"lutron.manage") && (
                     <button onClick={()=>setExcluded(job, false)}
                       style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,borderRadius:6,
                         padding:"3px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
@@ -28879,6 +28885,48 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   </span>
                 )}
               </div>
+
+              {/* On Tech Lighting's link — office-only master switch for whether
+                  this Lutron job appears on the ?lightinghub= index AND whether
+                  its ?lutronshare= page renders. Same flag as the Plan Changes
+                  view's hide/Restore (excludeFromLutronHub) — one source of
+                  truth. Unchecking requires a confirm (Koy: an accidental
+                  uncheck must not silently pull a job off the partner's link). */}
+              {(job.lightingSystem||"Control 4")==="Lutron" && (() => {
+                const hubOn = !job.panelizedLighting?.excludeFromLutronHub;
+                const canManage = can(identity,"lutron.manage");
+                const setHubOn = async (next) => {
+                  if (!next) {
+                    const ok = await showConfirm({
+                      title: "Take this job off Tech Lighting's link?",
+                      message: "They won't see this job on their hub link anymore, or be able to view its plan changes and chat. You can turn it back on any time.",
+                      danger: true,
+                      confirmLabel: "Take it off the link",
+                    });
+                    if (!ok) return;
+                  }
+                  u({panelizedLighting:{...job.panelizedLighting, excludeFromLutronHub: !next}});
+                  toast.success(next ? "Back on Tech Lighting's link" : "Removed from Tech Lighting's link");
+                };
+                return (
+                  <div style={{marginBottom:12,padding:"8px 12px",background:hubOn?C.surface:`${C.dim}15`,
+                    border:`1px solid ${hubOn?C.border:C.dim+"55"}`,borderRadius:8,
+                    display:"flex",alignItems:"center",gap:10,flexWrap:"wrap"}}>
+                    <label style={{display:"inline-flex",alignItems:"center",gap:8,
+                      cursor:canManage?"pointer":"not-allowed",fontSize:12,color:C.text,fontWeight:600,
+                      opacity:canManage?1:0.7}}>
+                      <input type="checkbox" checked={hubOn} disabled={!canManage}
+                        onChange={e=>canManage && setHubOn(e.target.checked)}
+                        style={{cursor:canManage?"pointer":"not-allowed"}}/>
+                      On Tech Lighting's link
+                    </label>
+                    <span style={{fontSize:10,color:hubOn?C.dim:C.orange,fontStyle:"italic"}}>
+                      {hubOn ? "They can see this job's plan changes and chat on their link."
+                             : "Hidden from Tech Lighting — they can't see this job."}
+                    </span>
+                  </div>
+                );
+              })()}
 
               {/* Share Collab Link */}
               <div style={{marginBottom:16,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
@@ -45799,6 +45847,7 @@ function HomeownerPage({ jobId }) {
 
   return (
     <div style={{...base,maxWidth:560,margin:'0 auto',padding:'24px 16px 80px'}}>
+      <HEToastHost/>
       {/* Header */}
       <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:16,display:'flex',alignItems:'center',gap:14}}>
         <img src="/icon-192.png" alt="Homestead Electric" onError={e=>{e.currentTarget.style.display='none';}}
@@ -46276,6 +46325,7 @@ function LightingSharePage({ jobId }) {
 
   return (
     <div style={{maxWidth:680,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:SP.bg,minHeight:'100vh'}}>
+      <HEToastHost/>
       {sys==='Lutron' && (
         <div style={{marginBottom:10}}>
           <a href="/?lightinghub=1" style={{fontSize:12,color:SP.dim,textDecoration:'none',display:'inline-flex',alignItems:'center',gap:5}}>
@@ -46445,8 +46495,9 @@ function LightingSharePage({ jobId }) {
 function LightingHubPage() {
   const [jobsList, setJobsList] = useState(null); // null = loading
   const [error, setError]       = useState(null);
+  const hiddenSince = useRef(null);
 
-  useEffect(() => {
+  const loadJobs = useCallback(() => {
     // homeowner_requests is fetched only for planChangeAcks (to count
     // un-incorporated changes) and planChangeThreads (to badge answered
     // questions) — nothing else from those docs is kept or rendered. Same
@@ -46479,14 +46530,41 @@ function LightingHubPage() {
           return { ...j, _unprocessed: items.filter(it => !acks[it.id]?.ackedAt).length, _replies };
         })
         .sort((a,b) => (b._unprocessed>0)-(a._unprocessed>0) || (b._unprocessed-a._unprocessed) || (a.name||'').localeCompare(b.name||'')));
+      setError(null);
     }).catch(() => setError('Failed to load.'));
   }, []);
 
-  if(error) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#B23A3A'}}>{error}</div>;
+  useEffect(() => { loadJobs(); }, [loadJobs]);
+
+  // Tech Lighting keeps this tab open for days — a one-shot mount fetch goes
+  // stale. Refetch when the tab comes back into view after >60s hidden, so
+  // the list is always current when he actually looks at it.
+  useEffect(() => {
+    const onVis = () => {
+      if (document.visibilityState === 'hidden') { hiddenSince.current = Date.now(); return; }
+      if (document.visibilityState === 'visible' && hiddenSince.current && Date.now() - hiddenSince.current > 60000) {
+        loadJobs();
+      }
+      hiddenSince.current = null;
+    };
+    document.addEventListener('visibilitychange', onVis);
+    return () => document.removeEventListener('visibilitychange', onVis);
+  }, [loadJobs]);
+
+  if(error) return (
+    <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',minHeight:'100vh',gap:14,color:'#B23A3A',fontFamily:'system-ui,sans-serif',background:'#EEF0F3',padding:24,textAlign:'center',boxSizing:'border-box'}}>
+      <div>Couldn't load the job list — this is usually a connection blip.</div>
+      <button onClick={()=>window.location.reload()}
+        style={{background:'#1e3a5f',color:'#fff',border:'none',borderRadius:8,padding:'10px 22px',fontSize:14,fontWeight:700,cursor:'pointer',fontFamily:'inherit'}}>
+        Try again
+      </button>
+    </div>
+  );
   if(jobsList===null) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6E7682'}}>Loading…</div>;
 
   return (
     <div style={{maxWidth:680,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#EEF0F3',minHeight:'100vh'}}>
+      <HEToastHost/>
       <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:18,display:'flex',alignItems:'center',gap:14}}>
         <img src="/icon-192.png" alt="Homestead Electric" onError={e=>{e.currentTarget.style.display='none';}}
           style={{width:48,height:48,borderRadius:11,flexShrink:0,background:'#fff',padding:5,boxSizing:'border-box',objectFit:'contain'}}/>
@@ -46581,18 +46659,21 @@ function LutronAdditionsSharePage({ jobId }) {
 
   // Rides the saveHomeownerRequest funnel (per-key map merge + version
   // snapshot). Un-acking keeps the key with ackedAt:null (note preserved) —
-  // no FieldValue.delete, no undefined values.
+  // no FieldValue.delete, no undefined values. Failures SPEAK (toast host is
+  // mounted on this public page) and return false so callers keep drafts —
+  // a silent failure here would shatter the partner's trust in the page.
   const writeAck = async (itemId, entry) => {
     try {
       await saveHomeownerRequest(jobId, (prev) => ({
         jobName: job?.name || ((prev&&prev.jobName) || ''),
         planChangeAcks: { ...((prev||{}).planChangeAcks||{}), [itemId]: entry },
       }), 'LutronAdditionsSharePage-ack');
-    } catch(e){}
+      return true;
+    } catch(e){ toast.error("Couldn't save — check your connection and try again."); return false; }
   };
   const ackItem = async (itemId) => {
-    await writeAck(itemId, { ackedAt: new Date().toISOString(), note: (drafts[itemId]||'').trim() });
-    setDrafts(d => ({ ...d, [itemId]: '' }));
+    const ok = await writeAck(itemId, { ackedAt: new Date().toISOString(), note: (drafts[itemId]||'').trim() });
+    if (ok) setDrafts(d => ({ ...d, [itemId]: '' })); // keep the typed note on failure
   };
   const unackItem = (itemId) => writeAck(itemId, { ackedAt: null, note: acks[itemId]?.note || '' });
 
@@ -46607,10 +46688,22 @@ function LutronAdditionsSharePage({ jobId }) {
   if(loading) return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#6E7682'}}>Loading…</div>;
   if(error)   return <div style={{display:'flex',alignItems:'center',justifyContent:'center',height:'100vh',color:'#B23A3A'}}>{error}</div>;
 
+  // Honor the office's "On Tech Lighting's link" switch on DIRECT links too —
+  // without this, a bookmarked ?lutronshare= URL would keep working after the
+  // job was taken off the hub, making the internal checkbox's promise a lie.
+  if(job?.panelizedLighting?.excludeFromLutronHub) return (
+    <div style={{display:'flex',flexDirection:'column',alignItems:'center',justifyContent:'center',minHeight:'100vh',gap:12,padding:32,textAlign:'center',fontFamily:'system-ui,sans-serif',color:'#5E6670',background:'#EEF0F3',boxSizing:'border-box'}}>
+      <div style={{fontSize:16,fontWeight:700,color:'#1B1F24'}}>This job isn't being shared right now</div>
+      <div style={{fontSize:13,maxWidth:340,lineHeight:1.6}}>Homestead Electric has paused sharing for this job. If you think that's a mistake, give them a call.</div>
+      <a href="/?lightinghub=1" style={{fontSize:13,fontWeight:700,color:'#3B5BA5',textDecoration:'none'}}>← Back to your job list</a>
+    </div>
+  );
+
   const rooms = (job?.panelizedLighting?.lutronRooms||[]).filter(r=>(r.items||[]).length>0);
 
   return (
     <div style={{maxWidth:680,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#EEF0F3',minHeight:'100vh'}}>
+      <HEToastHost/>
       <div style={{marginBottom:10}}>
         <a href="/?lightinghub=1" style={{fontSize:12,color:'#5E6670',textDecoration:'none',display:'inline-flex',alignItems:'center',gap:5}}>
           <Icon name="arrowLeft" size={12}/> All jobs
@@ -47321,6 +47414,7 @@ function PunchSharePage({ jobId, stage }) {
 
   return (
     <div style={{maxWidth:640,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#EEF0F3',minHeight:'100vh'}}>
+      <HEToastHost/>
       {/* Header */}
       <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:22}}>
         <div style={{fontSize:10,color:'rgba(255,255,255,0.55)',fontWeight:700,letterSpacing:'0.12em',marginBottom:4}}>
@@ -47899,6 +47993,7 @@ function QuestionsSharePage({ jobId }) {
 
   return (
     <div style={{maxWidth:640,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#EEF0F3',minHeight:'100vh'}}>
+      <HEToastHost/>
       <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:22,display:'flex',alignItems:'center',gap:14}}>
         <img src="/icon-192.png" alt="Homestead Electric" onError={e=>{e.currentTarget.style.display='none';}}
           style={{width:48,height:48,borderRadius:11,flexShrink:0,background:'#fff',padding:5,boxSizing:'border-box',objectFit:'contain'}}/>
@@ -56242,7 +56337,7 @@ function App() {
       )}
 
       {view==="lutron"&&can(identity,"lutron.view")&&(
-        <LutronAdditionsView jobs={jobs} onSelectJob={(job)=>openJobById(job.id,"Panelized Lighting")} onUpdateJob={updateJob}/>
+        <LutronAdditionsView jobs={jobs} onSelectJob={(job)=>openJobById(job.id,"Panelized Lighting")} onUpdateJob={updateJob} identity={identity}/>
       )}
 
       {view==="cos"&&can(identity,"cos.view")&&(
