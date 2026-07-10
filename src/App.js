@@ -24125,7 +24125,11 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
                     questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
                 }>
-                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{const qq=(job.roughQuestions?.[f]||[]).find(q=>q.id===a.id);if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m} gcNoteMap={nmap} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder="rough" fieldinkMap={fiQLinks} questionThreads={questionThreads} gcAnsweredBy={gcAnswers?.answeredBy||''} shareNames={new Set((job.questionShares||[]).map(s=>(s.name||'').trim().toLowerCase()).filter(Boolean))}/>;})()}
+                  {(()=>{const m={};const nmap={};const late={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{const qq=(job.roughQuestions?.[f]||[]).find(q=>q.id===a.id);const has=String(a.answer||'').trim()||(a.photos||[]).length;if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;
+                  // Late link answer: landed on a question the crew already closed
+                  // (done && !gcAnswered) — the appliedGcRef apply effect skips those
+                  // by design, so surface it on the row instead of dropping it silently.
+                  if(has&&qq?.done&&!qq.gcAnswered)late[a.id]={answer:a.answer||'',photos:a.photos||[],clarify:a.clarify||''};}));return <QASection questions={job.roughQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({roughQuestions:v})} color={C.rough} gcAnswerMap={m} gcNoteMap={nmap} lateGcMap={late} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder="rough" fieldinkMap={fiQLinks} questionThreads={questionThreads} gcAnsweredBy={gcAnswers?.answeredBy||''} shareNames={new Set((job.questionShares||[]).map(s=>(s.name||'').trim().toLowerCase()).filter(Boolean))}/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
@@ -24428,7 +24432,9 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
                     questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
                 }>
-                  {(()=>{const m={};const nmap={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{const qq=(job.finishQuestions?.[f]||[]).find(q=>q.id===a.id);if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} gcNoteMap={nmap} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder="finish" fieldinkMap={fiQLinks} questionThreads={questionThreads} gcAnsweredBy={gcAnswers?.answeredBy||''} shareNames={new Set((job.questionShares||[]).map(s=>(s.name||'').trim().toLowerCase()).filter(Boolean))}/>;})()}
+                  {(()=>{const m={};const nmap={};const late={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{const qq=(job.finishQuestions?.[f]||[]).find(q=>q.id===a.id);const has=String(a.answer||'').trim()||(a.photos||[]).length;if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;
+                  // Same late-link-answer surfacing as the rough mount above.
+                  if(has&&qq?.done&&!qq.gcAnswered)late[a.id]={answer:a.answer||'',photos:a.photos||[],clarify:a.clarify||''};}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} gcNoteMap={nmap} lateGcMap={late} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder="finish" fieldinkMap={fiQLinks} questionThreads={questionThreads} gcAnsweredBy={gcAnswers?.answeredBy||''} shareNames={new Set((job.questionShares||[]).map(s=>(s.name||'').trim().toLowerCase()).filter(Boolean))}/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
                   </div>}
                 </Section>
@@ -26323,7 +26329,7 @@ function QAThread({ messages = [], onPost, jobId, qid, color = '#3B5BA5', photoB
   );
 }
 
-function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null, fieldinkMap={}, statusFilter=null, hideAdd=false, excludeIds=null, questionThreads=null, gcAnsweredBy=''}) {
+function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, lateGcMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null, fieldinkMap={}, statusFilter=null, hideAdd=false, excludeIds=null, questionThreads=null, gcAnsweredBy=''}) {
 
   // guard: old data may be a string instead of array
 
@@ -26586,6 +26592,58 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
       )}
 
+      {/* Late link answer — arrived AFTER the crew closed this question, so the
+          apply effect deliberately skipped it (crew answers are never clobbered).
+          Surface it here with Adopt/Dismiss so it can't silently vanish. Adopt
+          APPENDS to any existing crew answer instead of replacing it; Dismiss is
+          content-keyed on q.lateGcDismissed so a NEWER late answer re-surfaces. */}
+      {q.done&&!q.gcAnswered&&(()=>{
+        const late = lateGcMap[q.id];
+        if(!late) return null;
+        const d = q.lateGcDismissed;
+        if(d && d.answer===(late.answer||'') && d.photos===(late.photos||[]).length) return null;
+        const latePhotos = (late.photos||[]).filter(p=>p&&p.url);
+        return (
+          <div style={{marginLeft:22,marginTop:6,background:"#FFF7E8",border:"1px solid #E8C97A",borderRadius:8,padding:"7px 9px"}}>
+            <div style={{fontSize:9,fontWeight:700,color:"#8A6D1F",letterSpacing:"0.04em",marginBottom:3}}>
+              LINK ANSWER CAME IN AFTER THIS WAS CLOSED{gcAnsweredBy?` — ${gcAnsweredBy}`:''}
+            </div>
+            {String(late.answer||'').trim()!==''&&<div style={{fontSize:11,fontStyle:"italic",color:"#5B5E66",lineHeight:1.5}}>{late.answer}</div>}
+            {late.clarify&&<div style={{fontSize:10,color:"#8A6D1F",marginTop:2}}>Note: {late.clarify}</div>}
+            {latePhotos.length>0&&(
+              <div style={{display:"flex",flexWrap:"wrap",gap:5,marginTop:5}}>
+                {latePhotos.map(p=>{
+                  const isImg=(p.type&&p.type.startsWith&&p.type.startsWith('image/'))||/\.(png|jpe?g|gif|webp|heic|heif|bmp)$/i.test(p.name||'');
+                  return isImg
+                    ? <img key={p.id||p.url} src={p.url} alt={p.name||'photo'} onClick={()=>window.open(p.url,'_blank')} style={{width:56,height:56,objectFit:"cover",borderRadius:6,border:"1px solid #E8C97A",cursor:"pointer",display:"block"}}/>
+                    : <a key={p.id||p.url} href={p.url} target="_blank" rel="noopener noreferrer" style={{maxWidth:140,fontSize:10,fontWeight:600,color:"#8A6D1F",background:"#FFFDF7",border:"1px solid #E8C97A",borderRadius:5,padding:"3px 7px",textDecoration:"none",overflow:"hidden",whiteSpace:"nowrap",textOverflow:"ellipsis",display:"inline-block"}}>{p.name||'file'}</a>;
+                })}
+              </div>
+            )}
+            <div style={{display:"flex",gap:8,marginTop:6}}>
+              <button onClick={()=>{
+                const lateText = String(late.answer||'').trim();
+                const mergedAnswer = q.answer
+                  ? (lateText ? `${q.answer}<div style="margin-top:4px">— From the link: ${lateText}</div>` : q.answer)
+                  : lateText;
+                const existing = q.answerPhotos||[];
+                const mergedPhotos = [...existing, ...(late.photos||[]).filter(p=>p&&p.url&&!existing.some(e=>e&&e.url===p.url))];
+                upd(q.id,{
+                  answer: mergedAnswer,
+                  answerPhotos: mergedPhotos,
+                  gcAnswered: true,
+                  answeredVia: 'link',
+                  answeredBy: gcAnsweredBy || q.answeredBy || '',
+                  answeredAt: q.answeredAt || new Date().toISOString(),
+                  ...(late.clarify ? {answerNote: q.answerNote || late.clarify} : {}),
+                });
+              }} style={{fontSize:10,fontWeight:700,color:"#fff",background:"#8A6D1F",border:"none",borderRadius:6,padding:"4px 10px",cursor:"pointer"}}>Adopt answer</button>
+              <button onClick={()=>upd(q.id,{lateGcDismissed:{answer:late.answer||'',photos:(late.photos||[]).length}})} style={{fontSize:10,fontWeight:700,color:"#8A6D1F",background:"transparent",border:"1px solid #E8C97A",borderRadius:6,padding:"4px 10px",cursor:"pointer"}}>Dismiss</button>
+            </div>
+          </div>
+        );
+      })()}
+
       {/* FieldInk link (SW v282): the crew tied a plan markup to THIS question
           in TraceVault — badge links straight to the spot on the live plan. */}
       {fieldinkMap[q.id]?.linked && (
@@ -26744,7 +26802,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 }
 
 
-function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, filterIds=null, jobId=null, photoFolder="", fieldinkMap={}, questionThreads=null, gcAnsweredBy='', shareNames=null}) {
+function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, lateGcMap={}, filterIds=null, jobId=null, photoFolder="", fieldinkMap={}, questionThreads=null, gcAnsweredBy='', shareNames=null}) {
 
   // guard: normalize questions to always be object with array values
 
@@ -26909,6 +26967,7 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
                   color={color}
                   gcAnswerMap={gcAnswerMap}
                   gcNoteMap={gcNoteMap}
+                  lateGcMap={lateGcMap}
                   filterIds={filterIds}
                   jobId={jobId}
                   recipients={recipients}
@@ -26943,6 +27002,7 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
             color={color}
             gcAnswerMap={gcAnswerMap}
             gcNoteMap={gcNoteMap}
+            lateGcMap={lateGcMap}
             filterIds={filterIds}
             jobId={jobId}
             recipients={recipients}
@@ -41118,7 +41178,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-10 · App SW version: v321
+**Last manifest update:** 2026-07-10 · App SW version: v322
 
 ---
 
@@ -41281,6 +41341,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Answers/notes/photos AUTO-SAVE as recipients type (no Submit needed); Submit stays the formal "done" that closes questions · 'shipped 2026-07-09' · 'SW v314'
   - Discussion replies live in 'homeowner_requests.questionThreads' (side doc — crew saves can never wipe them) · 'SW v313'
   - Respondent name badges (replaces hardcoded "GC") · 'SW v316'
+  - Late link answers can't silently vanish · 'shipped 2026-07-10' · 'SW v322' · an answer submitted for a question the crew already closed (done, not link-answered) shows an amber "came in after this was closed" note on the in-app row with Adopt (appends to any crew answer, merges photos, content-keyed) / Dismiss — the never-clobber-crew-answers guard stays intact
 - **Job Note share** · 'shipped' · 'JobNoteSharePage'
 - **All public pages**: error toasts render (HEToastHost mounted), failures speak instead of silently dropping input · 'SW v315'
 

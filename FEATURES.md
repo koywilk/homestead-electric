@@ -4,7 +4,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-07-10 · App SW version: v321
+**Last manifest update:** 2026-07-10 · App SW version: v322
 
 ---
 
@@ -167,6 +167,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Answers/notes/photos AUTO-SAVE as recipients type (no Submit needed); Submit stays the formal "done" that closes questions · `shipped 2026-07-09` · `SW v314`
   - Discussion replies live in `homeowner_requests.questionThreads` (side doc — crew saves can never wipe them) · `SW v313`
   - Respondent name badges (replaces hardcoded "GC") · `SW v316`
+  - Late link answers can't silently vanish · `shipped 2026-07-10` · `SW v322` · an answer submitted for a question the crew already closed (done, not link-answered) shows an amber "came in after this was closed" note on the in-app row with Adopt (appends to any crew answer, merges photos, content-keyed) / Dismiss — the never-clobber-crew-answers guard stays intact
 - **Job Note share** · `shipped` · `JobNoteSharePage`
 - **All public pages**: error toasts render (HEToastHost mounted), failures speak instead of silently dropping input · `SW v315`
 
