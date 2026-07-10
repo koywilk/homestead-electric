@@ -16288,7 +16288,7 @@ function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
 function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob, identity }) {
   const [expanded, setExpanded]   = useState(() => new Set());
   const [copied, setCopied]       = useState(false);
-  const [showHidden, setShowHidden] = useState(false);
+  const [masterOpen, setMasterOpen] = useState(false); // "Manage their link" master list
   const [acksByJob, setAcksByJob] = useState({}); // {jobId: planChangeAcks map}
   const [threadsByJob, setThreadsByJob] = useState({}); // {jobId: planChangeThreads map}
   const [openThreads, setOpenThreads]   = useState(() => new Set()); // "jobId:itemId" (or "jobId:_general") keys
@@ -16351,7 +16351,22 @@ function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob, identity }) {
     if (!onUpdateJob) return;
     const updated = { ...job, panelizedLighting: { ...job.panelizedLighting, excludeFromLutronHub: excluded } };
     onUpdateJob(updated, { panelizedLighting: updated.panelizedLighting });
-    toast.success(excluded ? `${job.name||"Job"} hidden from LV tracking` : `${job.name||"Job"} restored`);
+    toast.success(excluded ? `${job.name||"Job"} removed from Tech Lighting's link` : `${job.name||"Job"} back on Tech Lighting's link`);
+  };
+
+  // Master-list checkbox — mirrors the Panelized Lighting tab's "On Tech
+  // Lighting's link" toggle (same confirm copy, same flag, same helper).
+  const toggleOnLink = async (job, next) => {
+    if (!next) {
+      const ok = await showConfirm({
+        title: "Take this job off Tech Lighting's link?",
+        message: "They won't see this job on their hub link anymore, or be able to view its plan changes and chat. You can turn it back on any time.",
+        danger: true,
+        confirmLabel: "Take it off the link",
+      });
+      if (!ok) return;
+    }
+    setExcluded(job, !next);
   };
 
   const copySummary = () => {
@@ -16406,6 +16421,56 @@ function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob, identity }) {
           Not the full package — just what's changed since bid, job by job.
         </span>
       </div>
+
+      {/* Master list — ONE place to see and edit which jobs are on Tech
+          Lighting's hub link. Office-only (lutron.manage). Same flag, same
+          confirm, same write path as the Panelized Lighting tab checkbox;
+          absorbed the old bottom "hidden" drawer (one UI per flag). */}
+      {onUpdateJob && can(identity,"lutron.manage") && allLutronJobs.length>0 && (
+        <div style={{marginBottom:16}}>
+          <button onClick={()=>setMasterOpen(v=>!v)}
+            style={{width:"100%",display:"flex",alignItems:"center",justifyContent:"space-between",gap:8,
+              background:C.card,border:`1px solid ${C.border}`,
+              borderRadius:masterOpen?"10px 10px 0 0":10,
+              padding:"10px 14px",cursor:"pointer",fontFamily:"inherit"}}>
+            <span style={{display:"flex",alignItems:"center",gap:8,fontSize:12.5,fontWeight:700,color:C.text}}>
+              <Icon name="link" size={13} color={C.dim}/>
+              Manage their link
+            </span>
+            <span style={{display:"flex",alignItems:"center",gap:8,flexShrink:0}}>
+              <span style={{fontSize:11,color:C.dim,fontWeight:600}}>
+                {lutronJobs.length} on link &middot; {hiddenJobs.length} hidden
+              </span>
+              <Icon name="chevronRight" size={12} color={C.dim}
+                style={{transition:"transform 0.12s",transform:masterOpen?"rotate(90deg)":"none"}}/>
+            </span>
+          </button>
+          {masterOpen && (
+            <div style={{border:`1px solid ${C.border}`,borderTop:"none",borderRadius:"0 0 10px 10px",
+              padding:"2px 14px 6px",background:C.card}}>
+              {allLutronJobs.map(({job}, i) => {
+                const onLink = !job.panelizedLighting?.excludeFromLutronHub;
+                return (
+                  <label key={job.id} style={{display:"flex",alignItems:"center",gap:10,padding:"7px 0",
+                    borderBottom: i<allLutronJobs.length-1 ? `1px solid ${C.border}` : "none",
+                    cursor:"pointer",fontSize:12.5,color:onLink?C.text:C.dim}}>
+                    <input type="checkbox" checked={onLink}
+                      onChange={e=>toggleOnLink(job, e.target.checked)}
+                      style={{cursor:"pointer",flexShrink:0}}/>
+                    <span style={{flex:1,minWidth:0,overflow:"hidden",textOverflow:"ellipsis",whiteSpace:"nowrap"}}>
+                      {job.name||"(unnamed job)"}
+                    </span>
+                    {!onLink && (
+                      <span style={{flexShrink:0,fontSize:10,fontWeight:700,color:C.dim,
+                        background:C.surface,borderRadius:99,padding:"1px 8px"}}>hidden</span>
+                    )}
+                  </label>
+                );
+              })}
+            </div>
+          )}
+        </div>
+      )}
 
       {lutronJobs.length===0 ? (
         <div style={{fontSize:13,color:C.dim,padding:24,textAlign:"center",
@@ -16575,33 +16640,6 @@ function LutronAdditionsView({ jobs, onSelectJob, onUpdateJob, identity }) {
         </div>
       )}
 
-      {hiddenJobs.length>0 && (
-        <div style={{marginTop:20}}>
-          <button onClick={()=>setShowHidden(v=>!v)}
-            style={{background:"none",border:"none",color:C.dim,fontSize:11,fontWeight:700,
-              cursor:"pointer",fontFamily:"inherit",padding:0,display:"flex",alignItems:"center",gap:4}}>
-            <Icon name="chevronRight" size={11} style={{transform:showHidden?"rotate(90deg)":"none"}}/>
-            {hiddenJobs.length} hidden — not this LV company's job{hiddenJobs.length===1?"":"s"}
-          </button>
-          {showHidden && (
-            <div style={{display:"flex",flexDirection:"column",gap:6,marginTop:8}}>
-              {hiddenJobs.map(({job}) => (
-                <div key={job.id} style={{display:"flex",alignItems:"center",justifyContent:"space-between",
-                  background:C.surface,border:`1px solid ${C.border}`,borderRadius:8,padding:"8px 12px"}}>
-                  <span style={{fontSize:12,color:C.dim}}>{job.name||"(unnamed job)"}</span>
-                  {onUpdateJob && can(identity,"lutron.manage") && (
-                    <button onClick={()=>setExcluded(job, false)}
-                      style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,borderRadius:6,
-                        padding:"3px 10px",fontSize:11,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
-                      Restore
-                    </button>
-                  )}
-                </div>
-              ))}
-            </div>
-          )}
-        </div>
-      )}
     </div>
   );
 }
@@ -28943,6 +28981,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                 );
               })()}
 
+              {/* Plan Changes log — moved to the TOP of the tab (Koy 2026-07-09:
+                  "needs to be at the top so it's easily visible to the crews").
+                  Crews open this tab to log what changed in the field; making
+                  them scroll past Loads/Keypads/Panel Loads buried it. */}
+              {(job.lightingSystem||"Control 4")==="Lutron" && (
+                <LutronRoomsSection job={job} u={u} planChangeAcks={planChangeAcks} planChangeThreads={planChangeThreads}/>
+              )}
+
               {/* Share Collab Link */}
               <div style={{marginBottom:16,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
                 <button onClick={()=>{
@@ -29717,10 +29763,6 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                   </div>
                 );
               })()}
-
-              {(job.lightingSystem||"Control 4")==="Lutron" && (
-                <LutronRoomsSection job={job} u={u} planChangeAcks={planChangeAcks} planChangeThreads={planChangeThreads}/>
-              )}
 
               {/* LV Company Additions */}
               {lvCollab&&(()=>{
