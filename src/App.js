@@ -23301,12 +23301,16 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
           // forever. Compare the batch stamp; never touches a crew/phone-
           // answered question (done && !gcAnswered) even if it shares an id.
           const staleApply = q.done && q.gcAnswered && q.answeredAt !== gcAnswers.answeredAt;
-          if(hasGc && (!q.done || staleApply)) {
+          // Reopen guard (2026-07-10): a crew member explicitly unchecked this
+          // link answer (q.gcRejected) — don't re-apply the SAME content just
+          // because a new batch landed; a different link answer clears through
+          // (and wipes the rejection below).
+          if(hasGc && !gcAnswerRejected(q, gcAns) && (!q.done || staleApply)) {
             changed=true;
             return {...q,
               answer: gcAns.answer || (staleApply ? q.answer : ''),
               answerPhotos: (gcAns.photos||[]).length ? gcAns.photos : (q.answerPhotos||[]),
-              done:true, gcAnswered:true, answeredVia:'link',
+              done:true, gcAnswered:true, gcRejected:null, answeredVia:'link',
               answeredBy: gcAnswers.answeredBy || q.answeredBy || '',
               answeredAt: gcAnswers.answeredAt || new Date().toISOString(),
             };
@@ -24125,7 +24129,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
                     questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
                 }>
-                  {(()=>{const m={};const nmap={};const late={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{const qq=(job.roughQuestions?.[f]||[]).find(q=>q.id===a.id);const has=String(a.answer||'').trim()||(a.photos||[]).length;if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;
+                  {(()=>{const m={};const nmap={};const late={};['upper','main','basement'].forEach(f=>(gcAnswers?.rough?.[f]||[]).forEach(a=>{const qq=(job.roughQuestions?.[f]||[]).find(q=>q.id===a.id);const has=String(a.answer||'').trim()||(a.photos||[]).length;if(gcAnswerRejected(qq,a))return;if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;
                   // Late link answer: landed on a question the crew already closed
                   // (done && !gcAnswered) — the appliedGcRef apply effect skips those
                   // by design, so surface it on the row instead of dropping it silently.
@@ -24432,7 +24436,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
                     filter={job.questionsFilter||null} onSaveFilter={v=>u({questionsFilter:v})}
                     questionShares={job.questionShares||[]} onSaveShares={v=>u({questionShares:v})}/>
                 }>
-                  {(()=>{const m={};const nmap={};const late={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{const qq=(job.finishQuestions?.[f]||[]).find(q=>q.id===a.id);const has=String(a.answer||'').trim()||(a.photos||[]).length;if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;
+                  {(()=>{const m={};const nmap={};const late={};['upper','main','basement'].forEach(f=>(gcAnswers?.finish?.[f]||[]).forEach(a=>{const qq=(job.finishQuestions?.[f]||[]).find(q=>q.id===a.id);const has=String(a.answer||'').trim()||(a.photos||[]).length;if(gcAnswerRejected(qq,a))return;if((a.answer||(a.photos||[]).length)&&!(qq?.done))m[a.id]={answer:a.answer||'',photos:a.photos||[]};if(a.clarify&&!(qq?.done))nmap[a.id]=a.clarify;
                   // Same late-link-answer surfacing as the rough mount above.
                   if(has&&qq?.done&&!qq.gcAnswered)late[a.id]={answer:a.answer||'',photos:a.photos||[],clarify:a.clarify||''};}));return <QASection questions={job.finishQuestions||{upper:[],main:[],basement:[]}} onChange={v=>u({finishQuestions:v})} color={C.finish} gcAnswerMap={m} gcNoteMap={nmap} lateGcMap={late} filterIds={computeEffectiveSharedIds(job)} jobId={job.id} photoFolder="finish" fieldinkMap={fiQLinks} questionThreads={questionThreads} gcAnsweredBy={gcAnswers?.answeredBy||''} shareNames={new Set((job.questionShares||[]).map(s=>(s.name||'').trim().toLowerCase()).filter(Boolean))}/>;})()}
                   {gcAnswers?.answeredBy&&<div style={{fontSize:10,color:'#3E7D5A',marginTop:6,display:'flex',alignItems:'center',gap:5}}><Icon name="check" size={11} stroke={2.5}/> Answered by {gcAnswers.answeredBy} · {gcAnswers.answeredAt?new Date(gcAnswers.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}):''}
@@ -26329,6 +26333,22 @@ function QAThread({ messages = [], onPost, jobId, qid, color = '#3B5BA5', photoB
   );
 }
 
+// Content-keyed guard for reopened link answers (2026-07-10): after a crew
+// member unchecks a link-answered question, the side doc STILL holds that
+// answer — this matcher stops the same content from re-applying (apply effect)
+// or re-surfacing (pending/late cards) while letting a genuinely new link
+// answer through. `q.gcRejected` is snapshotted at reopen: the applied answer
+// text (which CONTAINS the link text even when Adopt appended it to a crew
+// answer) + the photo urls that were on the row.
+const gcAnswerRejected = (q, a) => {
+  const rej = q && q.gcRejected; if(!rej) return false;
+  const text = String((a&&a.answer)||'').trim();
+  const urls = ((a&&a.photos)||[]).map(p=>p&&p.url).filter(Boolean);
+  if(text && !String(rej.answer||'').includes(text)) return false;
+  if(!urls.every(u=>(rej.photoUrls||[]).includes(u))) return false;
+  return true;
+};
+
 function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteMap={}, lateGcMap={}, filterIds=null, jobId=null, photoFolder="", recipients=[], recipFilter=null, selectMode=false, selectedIds=null, onToggleSelect=null, fieldinkMap={}, statusFilter=null, hideAdd=false, excludeIds=null, questionThreads=null, gcAnsweredBy=''}) {
 
   // guard: old data may be a string instead of array
@@ -26434,18 +26454,29 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
                   answer: q.answer || pAnswer,
                   answerPhotos: (q.answerPhotos||[]).length ? q.answerPhotos : pPhotos,
                   gcAnswered:true,
+                  gcRejected:null,
                   answeredVia: q.answeredVia||'link',
                   answeredBy: q.answeredBy || gcAnsweredBy || who?.name || "",
                   answeredAt: q.answeredAt||new Date().toISOString(),
                 });
               } else {
-                upd(q.id,{done:true, answeredBy:q.answeredBy||who?.name||"", answeredAt:q.answeredAt||new Date().toISOString()});
+                upd(q.id,{done:true, gcRejected:null, answeredBy:q.answeredBy||who?.name||"", answeredAt:q.answeredAt||new Date().toISOString()});
               }
             } else {
-              // Re-opening — drop the who/when stamp (no longer answered) but keep
-              // the picked method + note for re-answer. GC stamp stays as history.
-              const patch={done:false};
-              if(!q.gcAnswered){ patch.answeredBy=''; patch.answeredAt=''; }
+              // Re-opening — a REAL reopen (2026-07-10): clear the who/when stamps
+              // so the row stops claiming it's answered. For link answers, also
+              // snapshot the rejected content (gcRejected) — the side doc still
+              // holds that answer, and without this the next Submit from anyone
+              // would re-apply it and close the question right back up. A
+              // genuinely DIFFERENT link answer still comes through. The answer
+              // text stays in the editor as a draft; delete it there if it was
+              // for the wrong question.
+              const patch={done:false, answeredBy:'', answeredAt:''};
+              if(q.gcAnswered){
+                patch.gcAnswered=false;
+                patch.answeredVia='';
+                patch.gcRejected={answer:String(q.answer||''), photoUrls:(q.answerPhotos||[]).map(p=>p&&p.url).filter(Boolean)};
+              }
               upd(q.id,patch);
             }
           }}
@@ -26632,6 +26663,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
                   answer: mergedAnswer,
                   answerPhotos: mergedPhotos,
                   gcAnswered: true,
+                  gcRejected: null,
                   answeredVia: 'link',
                   answeredBy: gcAnsweredBy || q.answeredBy || '',
                   answeredAt: q.answeredAt || new Date().toISOString(),
@@ -41342,6 +41374,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Discussion replies live in 'homeowner_requests.questionThreads' (side doc — crew saves can never wipe them) · 'SW v313'
   - Respondent name badges (replaces hardcoded "GC") · 'SW v316'
   - Late link answers can't silently vanish · 'shipped 2026-07-10' · 'SW v322' · an answer submitted for a question the crew already closed (done, not link-answered) shows an amber "came in after this was closed" note on the in-app row with Adopt (appends to any crew answer, merges photos, content-keyed) / Dismiss — the never-clobber-crew-answers guard stays intact
+  - Real reopen · 'shipped 2026-07-10' · 'SW v322' · unchecking an answered question now clears the who/when stamps, and for link answers snapshots the rejected content ('q.gcRejected') so the same answer can't auto re-close the question on the next Submit — a genuinely different link answer still applies (and clears the rejection)
 - **Job Note share** · 'shipped' · 'JobNoteSharePage'
 - **All public pages**: error toasts render (HEToastHost mounted), failures speak instead of silently dropping input · 'SW v315'
 

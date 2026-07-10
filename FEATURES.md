@@ -168,6 +168,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Discussion replies live in `homeowner_requests.questionThreads` (side doc — crew saves can never wipe them) · `SW v313`
   - Respondent name badges (replaces hardcoded "GC") · `SW v316`
   - Late link answers can't silently vanish · `shipped 2026-07-10` · `SW v322` · an answer submitted for a question the crew already closed (done, not link-answered) shows an amber "came in after this was closed" note on the in-app row with Adopt (appends to any crew answer, merges photos, content-keyed) / Dismiss — the never-clobber-crew-answers guard stays intact
+  - Real reopen · `shipped 2026-07-10` · `SW v322` · unchecking an answered question now clears the who/when stamps, and for link answers snapshots the rejected content (`q.gcRejected`) so the same answer can't auto re-close the question on the next Submit — a genuinely different link answer still applies (and clears the rejection)
 - **Job Note share** · `shipped` · `JobNoteSharePage`
 - **All public pages**: error toasts render (HEToastHost mounted), failures speak instead of silently dropping input · `SW v315`
 
