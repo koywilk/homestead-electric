@@ -23430,6 +23430,52 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
     if(fc) u({finishQuestions: newFinish});
   }, [gcAnswers?.answeredAt]);
 
+  // LIVE sync for LINK-OWNED answers (2026-07-10): the apply effect above only
+  // fires on a fresh Submit stamp and only ADDS — an edit, photo removal, or
+  // full retraction saved on the share link never reached the app (the photo
+  // line above deliberately keeps old photos when the batch's are empty, and
+  // an emptied entry is skipped by hasGc). This effect runs on EVERY side-doc
+  // snapshot (autosave included) and keeps questions the LINK answered
+  // (q.gcAnswered) content-true to the link:
+  //   · text + photos are taken verbatim (removals propagate),
+  //   · clearing everything UN-ANSWERS the question (reopens it, stamps off),
+  //   · crew-answered questions (done && !gcAnswered) are never touched — the
+  //     never-clobber guard stands, and a crew reopen (gcRejected) is respected
+  //     because that flips gcAnswered off.
+  // Runs AFTER the apply effect (declaration order), so it sees post-apply state.
+  useEffect(() => {
+    if (!gcAnswers) return;
+    const syncPhase = (cur, gcPhase) => {
+      let changed = false;
+      const updated = {};
+      ['upper','main','basement'].forEach(fl => {
+        updated[fl] = (cur?.[fl]||[]).map(q => {
+          if (!q?.gcAnswered || !q.done) return q;                    // link-owned + currently answered only
+          const gcAns = (gcPhase?.[fl]||[]).find(a => a.id === q.id);
+          if (!gcAns) return q;                                        // not in this link's batch — leave alone
+          const text = String(gcAns.answer||'');
+          const photos = Array.isArray(gcAns.photos) ? gcAns.photos : null;  // null = old payload without a photos field
+          if (!text.trim() && photos === null) return q;                     // legacy shape + no text: can't tell retraction from gap — leave alone
+          if (!text.trim() && !(photos||[]).length) {
+            // Everything cleared on the link → a real retraction: un-answer.
+            changed = true;
+            return {...q, answer:'', answerPhotos:[], done:false, gcAnswered:false, answeredVia:'', answeredBy:'', answeredAt:''};
+          }
+          const nextPhotos = photos === null ? (q.answerPhotos||[]) : photos;
+          if (String(q.answer||'') === text && JSON.stringify(q.answerPhotos||[]) === JSON.stringify(nextPhotos)) return q;
+          changed = true;
+          return {...q, answer: text, answerPhotos: nextPhotos};
+        });
+      });
+      return {updated, changed};
+    };
+    const jr = jobRef.current;
+    const r = syncPhase(jr?.roughQuestions, gcAnswers.rough);
+    const f = syncPhase(jr?.finishQuestions, gcAnswers.finish);
+    if (r.changed) u({roughQuestions: r.updated});
+    if (f.changed) u({finishQuestions: f.updated});
+  }, [gcAnswers]);
+
   // Auto-pass QC when all fromQC items are checked, even if the user didn't just
   // toggle one (e.g. job reopens with all items already done from a prior session).
   // Only fires when qcStatus is in a pre-pass state — never overrides a manual pass/fail/completed.
@@ -41325,7 +41371,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-10 · App SW version: v323
+**Last manifest update:** 2026-07-10 · App SW version: v324
 
 ---
 
@@ -41490,6 +41536,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Respondent name badges (replaces hardcoded "GC") · 'SW v316'
   - Late link answers can't silently vanish · 'shipped 2026-07-10' · 'SW v322' · an answer submitted for a question the crew already closed (done, not link-answered) shows an amber "came in after this was closed" note on the in-app row with Adopt (appends to any crew answer, merges photos, content-keyed) / Dismiss — the never-clobber-crew-answers guard stays intact
   - Real reopen · 'shipped 2026-07-10' · 'SW v322' · unchecking an answered question now clears the who/when stamps, and for link answers snapshots the rejected content ('q.gcRejected') so the same answer can't auto re-close the question on the next Submit — a genuinely different link answer still applies (and clears the rejection)
+  - Link edits/deletions sync live · 'shipped 2026-07-10' · 'SW v324' · a question the LINK answered ('q.gcAnswered') now stays content-true to the link on every save: text edits and photo removals propagate, and clearing everything un-answers the question in the app (reopens it, stamps off) — crew-answered questions still can't be touched from a link
 - **Job Note share** · 'shipped' · 'JobNoteSharePage'
 - **All public pages**: error toasts render (HEToastHost mounted), failures speak instead of silently dropping input · 'SW v315'
 

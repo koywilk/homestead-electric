@@ -4,7 +4,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-07-10 · App SW version: v323
+**Last manifest update:** 2026-07-10 · App SW version: v324
 
 ---
 
@@ -169,6 +169,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Respondent name badges (replaces hardcoded "GC") · `SW v316`
   - Late link answers can't silently vanish · `shipped 2026-07-10` · `SW v322` · an answer submitted for a question the crew already closed (done, not link-answered) shows an amber "came in after this was closed" note on the in-app row with Adopt (appends to any crew answer, merges photos, content-keyed) / Dismiss — the never-clobber-crew-answers guard stays intact
   - Real reopen · `shipped 2026-07-10` · `SW v322` · unchecking an answered question now clears the who/when stamps, and for link answers snapshots the rejected content (`q.gcRejected`) so the same answer can't auto re-close the question on the next Submit — a genuinely different link answer still applies (and clears the rejection)
+  - Link edits/deletions sync live · `shipped 2026-07-10` · `SW v324` · a question the LINK answered (`q.gcAnswered`) now stays content-true to the link on every save: text edits and photo removals propagate, and clearing everything un-answers the question in the app (reopens it, stamps off) — crew-answered questions still can't be touched from a link
 - **Job Note share** · `shipped` · `JobNoteSharePage`
 - **All public pages**: error toasts render (HEToastHost mounted), failures speak instead of silently dropping input · `SW v315`
 
