@@ -6,7 +6,7 @@ import { initializeFirestore, getFirestore, persistentLocalCache, persistentMult
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
 import { getAuth, signInAnonymously } from "firebase/auth";
 import { getMessaging, getToken, deleteToken, onMessage } from "firebase/messaging";
-import { getFunctions, httpsCallable } from "firebase/functions";
+import { getFunctions, httpsCallable as _rawHttpsCallable } from "firebase/functions";
 
 // ── FCM setup ─────────────────────────────────────────────────────────────────
 // VAPID key — generate in Firebase Console → Project Settings → Cloud Messaging
@@ -52,6 +52,26 @@ const db        = initializeFirestore(firebaseApp, {
 const storage   = getStorage(firebaseApp);
 const messaging = ("serviceWorker" in navigator) ? getMessaging(firebaseApp) : null;
 const functions = getFunctions(firebaseApp);
+
+// ── App-caller key (H8 hardening) ────────────────────────────────────────────
+// The main app has NO Firebase Auth (open-Firestore posture), so Cloud Function
+// callables cannot gate on context.auth. This shared key is injected into every
+// callable payload as `_appKey`; the server's requireAppKey() rejects calls that
+// don't present it. It is NOT a true secret — it ships in this public bundle, so
+// a determined attacker can read it. Its job is to block trivial drive-by abuse
+// of the financial / Simpro-write / push / AI callables (anyone who merely knows
+// the project id), NOT to be a wall. The real credential exposure (the Simpro
+// bearer token committed in functions/index.js) must be rotated + moved to a
+// bound secret separately. Longer term the right fix is Firebase App Check.
+// MUST stay byte-identical to APP_CALL_KEY in functions/index.js.
+const APP_CALL_KEY = "hs-app-9f3c1e7a2b6d4085";
+// Drop-in replacement for the SDK's httpsCallable that auto-injects _appKey into
+// the payload, so all ~25 existing call sites are covered without edits. Keeps
+// the same (functions, name, opts) -> (payload) shape.
+function httpsCallable(functionsInstance, name, opts) {
+  const raw = _rawHttpsCallable(functionsInstance, name, opts);
+  return (payload = {}) => raw({ ...(payload || {}), _appKey: APP_CALL_KEY });
+}
 
 // ── FieldInk (TraceVault) read-only link ─────────────────────────────────────
 // The crew's PDF-markup app lives in its OWN Firebase project ("field-ink").
@@ -827,30 +847,48 @@ async function registerFCMToken(userId, force=false) {
     // path can detect drift cheaply (no Firestore read) on visibilitychange.
     try { localStorage.setItem(`he_fcm_device_token_${userId}`, token); } catch {}
 
-    const snap = await getDoc(doc(db, "settings", "users"));
-    if (!snap.exists()) return "no_user_doc";
-    const rawList = snap.data().list || [];
-    const targetUser = rawList.find(u => u.id === userId);
-    if (!targetUser) {
-      console.warn("[HE] FCM registration: userId not found in users list", {
-        userId, availableIds: rawList.map(u => u.id)
-      });
-      return "user_not_in_list";
-    }
-    const list = rawList.map(u => {
-      if (u.id !== userId) return u;
-      const existing = Array.isArray(u.fcmTokens) ? u.fcmTokens
-        : u.fcmToken ? [u.fcmToken] : [];
+    // Register this device's token via a transaction that updates ONLY the
+    // `list` field. A whole-doc setDoc({list}) dropped updated_at/saved_by/
+    // device — the exact metadata saveUsers' stale-write guard keys on — so
+    // every routine token write (login + 30-min keepalive) silently disarmed
+    // the guard (remoteTs → null → guard fails open → a stale tab could then
+    // wipe the whole team list). tx.update preserves those audit fields
+    // WITHOUT bumping updated_at, so token noise never trips the guard for a
+    // real team edit; and it re-reads under lock, so a concurrent saveUsers is
+    // merged against, never clobbered. Purely additive to this user's tokens.
+    const usersRef = doc(db, "settings", "users");
+    let outcome = "ok";
+    let tokenCount = 0;
+    await runTransaction(db, async (tx) => {
+      const snap = await tx.get(usersRef);
+      if (!snap.exists()) { outcome = "no_user_doc"; return; }
+      const rawList = snap.data().list || [];
+      const targetUser = rawList.find(u => u.id === userId);
+      if (!targetUser) {
+        console.warn("[HE] FCM registration: userId not found in users list", {
+          userId, availableIds: rawList.map(u => u.id)
+        });
+        outcome = "user_not_in_list";
+        return;
+      }
+      const existing = Array.isArray(targetUser.fcmTokens) ? targetUser.fcmTokens
+        : targetUser.fcmToken ? [targetUser.fcmToken] : [];
       // Always additive — never wipe the array, even on force refresh.
       // Other devices' tokens must be preserved. Dead tokens get pruned
       // server-side on the next send attempt; worst case the array grows
       // by one stale token which the .slice(-10) cap handles.
       const merged = existing.includes(token) ? existing : [...existing, token];
-      return { ...u, fcmTokens: merged.slice(-10) };
+      const capped = merged.slice(-10);
+      tokenCount = capped.length;
+      // No-op if already present and uncapped — skip the write so a keepalive
+      // tick doesn't needlessly rewrite the doc (less contention, no churn).
+      if (existing.includes(token) && existing.length === capped.length) return;
+      const list = rawList.map(u => (u.id === userId ? { ...u, fcmTokens: capped } : u));
+      tx.update(usersRef, { list });
     });
-    await setDoc(doc(db, "settings", "users"), { list });
+    if (outcome !== "ok") return outcome;
     console.log("[HE] FCM token registered" + (force ? " (forced refresh)" : ""),
-      "→ user now has", list.find(u=>u.id===userId)?.fcmTokens?.length || 0, "token(s)");
+      "→ user now has", tokenCount, "token(s)");
     return "ok";
   } catch (e) {
     console.warn("[HE] FCM registration failed:", e.message);
@@ -6647,7 +6685,16 @@ function JobNoteDestinationPunch({ note, selectedLines, selectedLineIds, job, on
     // Clone the phase's punch tree and insert.
     const nextPunch = JSON.parse(JSON.stringify(punch || {}));
     const writeIntoFloor = (floorObj) => {
-      if (!floorObj) floorObj = {};
+      // Normalize to object shape FIRST. A legacy-array floor (every fresh job:
+      // emptyPunch() = {upper:[],main:[],basement:[]}, or an old array-of-items
+      // floor) is truthy, so the old `if (!floorObj) floorObj = {}` left it an
+      // array — then `floorObj.general = [...]` set an expando property that
+      // JSON.stringify (saveJob) and the Firestore serializer silently DROP, so
+      // promoted items were permanently lost while the note still showed
+      // "promoted" (H5). normFloor moves any bare-array items into `general`
+      // (matching how the punch tab already reads them) and guarantees the
+      // {general, rooms, hotcheck, photos} shape.
+      floorObj = normFloor(floorObj);
       if (!target.roomId) {
         floorObj.general = [ ...(floorObj.general || []), ...newItems ];
       } else {
@@ -18853,6 +18900,17 @@ function SavantSlotFirstTab({ job, u }) {
                     }, plSectionLabels: {...(job.plSectionLabels||{}), [key]: label}});
                     setActiveFloor(key);
                   } else {
+                    // Standard floor (upper/main/basement): seed a user label so
+                    // listSavantPanels() counts this floor as a real panel. Before,
+                    // the pick only navigated and wrote NOTHING, so the empty state
+                    // re-rendered "No panels yet" and the recovery effect snapped
+                    // activeFloor back — a foreman could not create a standard
+                    // Savant panel at all (H4). Preserve-biased: never overwrite an
+                    // existing custom label.
+                    const stdLabels = { main: "Main Floor", basement: "Basement", upper: "Upper Floor" };
+                    if (stdLabels[k] && !(job.plSectionLabels || {})[k]) {
+                      u({ plSectionLabels: { ...(job.plSectionLabels || {}), [k]: stdLabels[k] } });
+                    }
                     setActiveFloor(k);
                   }
                   setSheet(null);
@@ -18937,6 +18995,51 @@ function SavantSlotFirstTab({ job, u }) {
       ? { ...ia, [modKey]: nextChannel }
       : (() => { const i = {...ia}; delete i[modKey]; return i; })();
     patch({ panelizedLighting: { ...pl, savantV2: { ...sav, [floor]: { ...floorOv, inputAssignments: nextIA } } } });
+  };
+  // H6: combined slot-editor save. The slot sheet's Save used to fire
+  // handleEditOutput x4 + handleSetRoom + handleAssignFeeder in sequence, but
+  // every one re-read the frozen `job` and u() replaces panelizedLighting
+  // wholesale, so all fields but the last (feeder) were lost. This computes
+  // output fields + room + feeder against ONE base and patches exactly once.
+  const handleSaveSlot = (modKey, editChannel, roomFeederCh, fields) => {
+    const base = job?.panelizedLighting || {};
+    const flatRows = flattenModulesToRows(base.cp4Loads?.[floor] || []);
+    let matched = false;
+    const updatedRows = flatRows.map(r => {
+      if (matched) return r;
+      if (String(r.mod || "") !== String(modKey)) return r;
+      if (editChannel && (r.ch || "") !== editChannel) return r;
+      matched = true;
+      return { ...r, name: fields.name, loadType: fields.loadType, watts: fields.watts,
+        pulled: !!fields.pulled, status: fields.pulled ? "Pulled" : "" };
+    });
+    const sav = base.savantV2 || {};
+    const floorOv = sav[floor] || {};
+    const nextPl = { ...base };
+    if (matched) nextPl.cp4Loads = { ...(base.cp4Loads || {}), [floor]: updatedRows };
+    if (modKey && (roomFeederCh === "A" || roomFeederCh === "B")) {
+      const ch = roomFeederCh;
+      // Room override.
+      const orMap = floorOv.outputRooms || {};
+      const curR = orMap[modKey] || {};
+      const trimmed = (fields.room || "").trim();
+      const nextRCh = trimmed ? { ...curR, [ch]: trimmed }
+                              : (() => { const c = { ...curR }; delete c[ch]; return c; })();
+      const nextOR = (Object.keys(nextRCh).length > 0)
+        ? { ...orMap, [modKey]: nextRCh }
+        : (() => { const i = { ...orMap }; delete i[modKey]; return i; })();
+      // Feeder assignment.
+      const ia = floorOv.inputAssignments || {};
+      const curF = ia[modKey] || {};
+      const feederId = fields.feederId || null;
+      const nextFCh = feederId ? { ...curF, [ch]: feederId }
+                               : (() => { const c = { ...curF }; delete c[ch]; return c; })();
+      const nextIA = (Object.keys(nextFCh).length > 0)
+        ? { ...ia, [modKey]: nextFCh }
+        : (() => { const i = { ...ia }; delete i[modKey]; return i; })();
+      nextPl.savantV2 = { ...sav, [floor]: { ...floorOv, outputRooms: nextOR, inputAssignments: nextIA } };
+    }
+    patch({ panelizedLighting: nextPl });
   };
   const handleAddFeeder = ({ slot, amps, poles, label, phase, tandem, ampsB, labelB, phaseB }) => {
     const pl = job?.panelizedLighting || {};
@@ -19233,6 +19336,7 @@ function SavantSlotFirstTab({ job, u }) {
             handleEditOutput={handleEditOutput}
             handleSetRoom={handleSetRoom}
             handleAssignFeeder={handleAssignFeeder}
+            handleSaveSlot={handleSaveSlot}
             handleEditFeeder={handleEditFeeder}
             handleDeleteFeeder={handleDeleteFeeder}
             handleDeleteModule={handleDeleteModule}
@@ -19246,6 +19350,14 @@ function SavantSlotFirstTab({ job, u }) {
               setSheet(null);
             }}
             onPickStandardFloor={(k) => {
+              // Seed a user label so listSavantPanels() counts this standard floor
+              // as a real panel — otherwise the pick persisted nothing and the panel
+              // vanished on re-render (H4 dead flow). Preserve-biased: keep any
+              // existing custom label.
+              const stdLabels = { main: "Main Floor", basement: "Basement", upper: "Upper Floor" };
+              if (stdLabels[k] && !(job.plSectionLabels || {})[k]) {
+                u({ plSectionLabels: { ...(job.plSectionLabels || {}), [k]: stdLabels[k] } });
+              }
               setActiveFloor(k);
               setSheet(null);
             }}/>
@@ -19299,7 +19411,7 @@ function SheetField({ label, children, hint }) {
 // draft state, commits via the passed handlers on Save, and closes.
 function SavantSheetBody({ sheet, setSheet, v2, floor, panels,
   handleAddFeeder, handleAddModule, handleEditOutput, handleSetRoom,
-  handleAssignFeeder, handleEditFeeder, handleDeleteFeeder, handleDeleteModule,
+  handleAssignFeeder, handleSaveSlot, handleEditFeeder, handleDeleteFeeder, handleDeleteModule,
   onAddPanel, onPickStandardFloor }) {
 
   // ── "What goes here?" picker (tap empty slot) ──
@@ -19584,13 +19696,17 @@ function SavantSheetBody({ sheet, setSheet, v2, floor, panels,
         <SheetActions
           onCancel={()=>setSheet(null)}
           onSave={()=>{
-            const editChannel = channel || null;
-            handleEditOutput(modKey, editChannel, "name", d.name);
-            handleEditOutput(modKey, editChannel, "loadType", d.loadType);
-            handleEditOutput(modKey, editChannel, "watts", d.watts);
-            handleEditOutput(modKey, editChannel, "pulled", d.pulled);
-            handleSetRoom(modKey, feederPickerCh, d.room);
-            handleAssignFeeder(modKey, feederPickerCh, d.feederId || null);
+            // H6: one combined patch via handleSaveSlot (defined in the parent,
+            // where job/patch live). The old code called handleEditOutput x4 +
+            // handleSetRoom + handleAssignFeeder in sequence, but each re-read the
+            // FROZEN `job` prop (no mid-handler re-render) and u() replaces
+            // panelizedLighting wholesale — so every call clobbered the prior one
+            // and only the last (feeder) survived; the typed load name/type/watts/
+            // pulled AND the room were silently lost.
+            handleSaveSlot(modKey, channel || null, feederPickerCh, {
+              name: d.name, loadType: d.loadType, watts: d.watts,
+              pulled: d.pulled, room: d.room, feederId: d.feederId || null,
+            });
             setSheet(null);
           }}
           onDelete={()=>{
@@ -40359,8 +40475,8 @@ function ExternalPunchSection({ items, label, onChange, color }) {
           </div>
           <div style={{flex:1,minWidth:0}}>
             <div style={{fontSize:13,color:it.done?C.muted:C.text,
-              textDecoration:it.done?'line-through':'none',lineHeight:1.45,wordBreak:'break-word'}}
-              dangerouslySetInnerHTML={{__html:it.text}}/>
+              textDecoration:it.done?'line-through':'none',lineHeight:1.45,
+              wordBreak:'break-word',whiteSpace:'pre-wrap'}}>{it.text}</div>
 
             <div style={{fontSize:9,color:C.muted,marginTop:3,display:'flex',gap:6,flexWrap:'wrap'}}>
               <span>added by <b>{it.addedBy||label}</b>{it.addedAt?' · '+it.addedAt:''}</span>
@@ -40613,8 +40729,8 @@ function PunchSharePage({ jobId, stage }) {
                     </div>
                     <div style={{flex:1}}>
                       <span style={{fontSize:12,color:it.done?'#99A0AA':'#2E3640',
-                        textDecoration:it.done?'line-through':'none',lineHeight:1.4}}
-                        dangerouslySetInnerHTML={{__html:it.text}}/>
+                        textDecoration:it.done?'line-through':'none',lineHeight:1.4,
+                        whiteSpace:'pre-wrap',wordBreak:'break-word'}}>{it.text}</span>
                       {it.done&&<span style={{marginLeft:6,fontSize:10,color:'#6ee7b7',fontWeight:600}}> ✓ resolved</span>}
                     </div>
                   </div>

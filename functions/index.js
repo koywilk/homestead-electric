@@ -9,6 +9,27 @@ admin.initializeApp();
 const db        = admin.firestore();
 const messaging = admin.messaging();
 
+// ─── App-caller gate (H8 hardening) ──────────────────────────
+// The main app has NO Firebase Auth (open-Firestore posture), so onCall
+// callables cannot gate on context.auth — a context.auth check would reject
+// every legitimate caller. Instead every app call injects `_appKey` (see the
+// httpsCallable wrapper in src/App.js) and each sensitive callable calls
+// requireAppKey(data) first. This is NOT a true secret (it ships in the public
+// client bundle) — it blocks trivial drive-by abuse from anyone who merely
+// knows the project id, not a determined attacker who reads the bundle. The
+// real credential exposure (SIMPRO_TOKEN, below) still needs rotating + moving
+// to a bound secret; longer term the correct fix is Firebase App Check.
+// MUST stay byte-identical to APP_CALL_KEY in src/App.js.
+const APP_CALL_KEY = "hs-app-9f3c1e7a2b6d4085";
+function requireAppKey(data) {
+  if (!data || data._appKey !== APP_CALL_KEY) {
+    throw new functions.https.HttpsError(
+      "permission-denied",
+      "This function is only callable from the Homestead app."
+    );
+  }
+}
+
 // ─── Timezone for scheduled functions ────────────────────────
 const TZ = "America/Denver"; // Mountain Time
 
@@ -109,14 +130,35 @@ const STALE_TOKEN_CODES = [
 /** Remove a single bad token from every user record in settings/users. */
 async function removeStaleToken(token) {
   try {
-    const snap = await db.doc("settings/users").get();
-    if (!snap.exists) return;
-    const list = (snap.data().list || []).map(u => ({
-      ...u,
-      fcmTokens: (u.fcmTokens || []).filter(t => t !== token),
-      fcmToken:  u.fcmToken === token ? "" : (u.fcmToken || ""),
-    }));
-    await db.doc("settings/users").set({ list });
+    const ref = db.doc("settings/users");
+    await db.runTransaction(async (tx) => {
+      const snap = await tx.get(ref);
+      if (!snap.exists) return;
+      const cur = snap.data().list || [];
+      let changed = false;
+      const list = cur.map(u => {
+        const inArray   = (u.fcmTokens || []).includes(token);
+        const isPrimary = u.fcmToken === token;
+        if (!inArray && !isPrimary) return u;
+        changed = true;
+        return {
+          ...u,
+          fcmTokens: (u.fcmTokens || []).filter(t => t !== token),
+          fcmToken:  isPrimary ? "" : (u.fcmToken || ""),
+        };
+      });
+      if (!changed) return;
+      // Update ONLY `list` — never a whole-doc set({list}). A whole-doc set
+      // dropped updated_at/saved_by/device, which silently disarmed the
+      // client's saveUsers stale-write guard (remoteTs went null → guard
+      // fails open → blind team-list overwrite). tx.update leaves those audit
+      // fields untouched. The transaction also re-reads under lock, so two
+      // concurrent prunes (deliver()'s Promise.all over many dead tokens)
+      // can't clobber each other's removal, and a concurrent team-list save
+      // is merged against rather than lost. Purely additive/removal-only on
+      // the token fields — no team data touched.
+      tx.update(ref, { list });
+    });
     functions.logger.info("Removed stale FCM token", { token: token.slice(0, 20) });
   } catch (e) {
     functions.logger.warn("Failed to remove stale token", { error: e.message });
@@ -208,6 +250,7 @@ async function sendFCM(token, { title, body, jobId, section, view }) {
 // per-token success/failure. Returns a JSON report instead of swallowing
 // errors so the UI can show exactly which tokens are alive vs dead.
 exports.sendTestPush = functions.https.onCall(async (data) => {
+    requireAppKey(data);
   const { userId } = data || {};
   if (!userId) throw new functions.https.HttpsError("invalid-argument", "userId required");
   const users = await getUsers();
@@ -272,6 +315,7 @@ exports.sendTestPush = functions.https.onCall(async (data) => {
 // for an open item (question / CO / punch / RT). Respects that person's
 // `renudge` toggle. Returns a small report so the UI can toast the result.
 exports.reNudge = functions.https.onCall(async (data) => {
+    requireAppKey(data);
   const { toName, title, body, jobId, section, key } = data || {};
   if (!toName) throw new functions.https.HttpsError("invalid-argument", "toName required");
   const users = await getUsers();
@@ -298,6 +342,7 @@ exports.reNudge = functions.https.onCall(async (data) => {
 // + the requester's own coordinator. Gated by the `timeoff_requested` pref
 // (default on). Inbox write always happens; push is best-effort on top.
 exports.notifyTimeOffRequest = functions.https.onCall(async (data) => {
+    requireAppKey(data);
   const { requesterName, start, end, note, usePaid } = data || {};
   if (!requesterName) throw new functions.https.HttpsError("invalid-argument", "requesterName required");
   const users = await getUsers();
@@ -1094,6 +1139,7 @@ exports.dailyHuddleNotification = functions.pubsub
 // their own userId) so delivery + the Huddle deep-link can be verified before
 // the morning schedule matters. Read-only beyond sending a push.
 exports.sendTestHuddleNotification = functions.https.onCall(async (data) => {
+    requireAppKey(data);
   const userId = (data && data.userId) || "";
   if (!userId) return { ok: false, error: "userId required" };
   const r = await sendHuddleNotif(userId);
@@ -1347,6 +1393,7 @@ async function callClaude({ system, user, model, maxTokens }) {
 exports.draftDailyUpdate = functions
   .runWith({ secrets: ["ANTHROPIC_API_KEY"] })
   .https.onCall(async (data) => {
+    requireAppKey(data);
     const jobName = (data && data.jobName) || "this job";
     const context = (data && data.context) || "";
     const system =
@@ -1369,6 +1416,7 @@ exports.draftDailyUpdate = functions
 exports.appHelp = functions
   .runWith({ secrets: ["ANTHROPIC_API_KEY"] })
   .https.onCall(async (data) => {
+    requireAppKey(data);
     const question = String((data && data.question) || "").trim();
     const docs = String((data && data.docs) || "");
     if (!question) return { ok: false, error: "question required" };
@@ -1396,6 +1444,7 @@ exports.appHelp = functions
 exports.cleanVoiceNote = functions
   .runWith({ secrets: ["ANTHROPIC_API_KEY"] })
   .https.onCall(async (data) => {
+    requireAppKey(data);
     const transcript = String((data && data.transcript) || "").trim();
     if (!transcript) return { ok: false, error: "transcript required" };
     const system =
@@ -1484,6 +1533,7 @@ async function listDriveItems(folderId, parentFolderName, depth, driveKey) {
 exports.pushPlansToSimpro = functions
   .runWith({ timeoutSeconds: 300, memory: "512MB" })
   .https.onCall(async (data) => {
+    requireAppKey(data);
     const { simproJobNo, driveFolderId } = data || {};
     if (!simproJobNo) throw new functions.https.HttpsError("invalid-argument", "Missing simproJobNo");
     if (!driveFolderId) throw new functions.https.HttpsError("invalid-argument", "Missing driveFolderId");
@@ -1565,6 +1615,7 @@ exports.pushPlansToSimpro = functions
 
 // ─── Get Simpro Job Financials ────────────────────────────────────────────────
 exports.getSimproJobFinancials = functions.https.onCall(async (data) => {
+    requireAppKey(data);
   const { simproJobNo } = data || {};
   if (!simproJobNo) throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
 
@@ -1674,6 +1725,7 @@ exports.getSimproJobFinancials = functions.https.onCall(async (data) => {
 // Data safety: read-only. Never writes to Simpro or Firestore. Returns
 // only the fields needed for prefill plus raw blobs for forward-compat.
 exports.getSimproJobBasics = functions.https.onCall(async (data) => {
+    requireAppKey(data);
   const { simproJobNo } = data || {};
   if (!simproJobNo) {
     throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
@@ -1779,6 +1831,7 @@ exports.getSimproJobBasics = functions.https.onCall(async (data) => {
 exports.getSimproQuoteStatus = functions
   .runWith({ timeoutSeconds: 120, memory: "256MB" })
   .https.onCall(async (data) => {
+    requireAppKey(data);
     const quoteNo = String((data && data.quoteNo) || "").trim();
     if (!quoteNo) {
       throw new functions.https.HttpsError("invalid-argument", "quoteNo required");
@@ -1864,6 +1917,7 @@ exports.getSimproQuoteStatus = functions
 exports.getSimproProfitLossYTD = functions
   .runWith({ timeoutSeconds: 540, memory: "1GB" })
   .https.onCall(async (data) => {
+    requireAppKey(data);
     const { dateFrom, dateTo } = data || {};
     const fromYMD = dateFrom || `${new Date().getFullYear()}-01-01`;
     const toYMD   = dateTo   || (() => {
@@ -2125,6 +2179,7 @@ async function _pLimit(tasks, limit) {
 exports.getSimproJobCostCenters = functions
   .runWith({ timeoutSeconds: 300, memory: "512MB" })
   .https.onCall(async (data) => {
+    requireAppKey(data);
     const { simproJobNo } = data || {};
     if (!simproJobNo) throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
 
@@ -2404,6 +2459,7 @@ exports.getSimproJobCostCenters = functions
 exports.getSimproItemDetails = functions
   .runWith({ timeoutSeconds: 180, memory: "256MB" })
   .https.onCall(async (data) => {
+    requireAppKey(data);
     const { simproJobNo, items } = data || {};
     if (!simproJobNo) throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
     if (!Array.isArray(items) || items.length === 0) return { items: [] };
@@ -2490,6 +2546,7 @@ exports.getSimproItemDetails = functions
 exports.getSimproJobOrderedQty = functions
   .runWith({ timeoutSeconds: 120, memory: "256MB" })
   .https.onCall(async (data) => {
+    requireAppKey(data);
     const { simproJobNo } = data || {};
     if (!simproJobNo) {
       throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
@@ -2685,6 +2742,7 @@ exports.getSimproJobOrderedQty = functions
 
 // ─── Get Simpro Schedule ──────────────────────────────────────────────────────
 exports.getSimproSchedule = functions.https.onCall(async (data) => {
+    requireAppKey(data);
   const { dateFrom, dateTo } = data || {};
 
   const url = `${SIMPRO_BASE}/schedules/?pageSize=250`;
@@ -2716,6 +2774,7 @@ exports.getSimproSchedule = functions.https.onCall(async (data) => {
 exports.getSimproScheduleByJob = functions
   .runWith({ timeoutSeconds: 120, memory: "512MB" })
   .https.onCall(async (data) => {
+    requireAppKey(data);
     const { dateFrom, dateTo } = data || {};
 
     const all = [];
@@ -2986,7 +3045,8 @@ async function _runSimproCandidateRefresh() {
 // summary so the UI can show a toast like "2 new pending jobs".
 exports.refreshSimproCandidates = functions
   .runWith({ timeoutSeconds: 120, memory: "256MB" })
-  .https.onCall(async () => {
+  .https.onCall(async (data) => {
+    requireAppKey(data);
     try {
       const summary = await _runSimproCandidateRefresh();
       return { ok: true, ...summary };
@@ -3759,7 +3819,7 @@ exports.ensureJobDriveFolder = functions.firestore
     try {
       await change.after.ref.update({
         "data.driveFolderId": folderId,
-        updated_at: admin.firestore.FieldValue.serverTimestamp(),
+        updated_at: new Date().toISOString(), // ISO string, NOT a Timestamp: firestore.rules require `updated_at is string`, and the client baseline guard String()-compares it (H7).
       });
     } catch (e) {
       functions.logger.error("ensureJobDriveFolder failed to save folderId", {
@@ -3831,7 +3891,7 @@ exports.nightlyDriveSync = functions.pubsub
         if (matches.length === 1) {
           await j.ref.update({
             "data.driveFolderId": matches[0].id,
-            updated_at: admin.firestore.FieldValue.serverTimestamp(),
+            updated_at: new Date().toISOString(), // ISO string, NOT a Timestamp: firestore.rules require `updated_at is string`, and the client baseline guard String()-compares it (H7).
           });
           linked.push({ job: j.data.name, folder: matches[0].name });
         } else if (matches.length === 0) {
@@ -3887,6 +3947,7 @@ exports.nightlyDriveSync = functions.pubsub
 // single job's driveFolderId.
 // ─────────────────────────────────────────────────────────────
 exports.createJobDriveFolder = functions.https.onCall(async (data, context) => {
+    requireAppKey(data);
   const jobId = String((data && data.jobId) || "").trim();
   if (!jobId) {
     throw new functions.https.HttpsError("invalid-argument", "Missing jobId");
@@ -3952,7 +4013,7 @@ exports.createJobDriveFolder = functions.https.onCall(async (data, context) => {
   try {
     await ref.update({
       "data.driveFolderId": folderId,
-      updated_at: admin.firestore.FieldValue.serverTimestamp(),
+      updated_at: new Date().toISOString(), // ISO string, NOT a Timestamp: firestore.rules require `updated_at is string`, and the client baseline guard String()-compares it (H7).
     });
   } catch (e) {
     functions.logger.error("createJobDriveFolder save error", { jobId, folderId, error: e.message });
@@ -3971,6 +4032,7 @@ exports.createJobDriveFolder = functions.https.onCall(async (data, context) => {
 // to verify iOS/Android delivery end-to-end.
 // ─────────────────────────────────────────────────────────────
 exports.sendTestNotification = functions.https.onCall(async (data, context) => {
+    requireAppKey(data);
   const userId = (data && data.userId) || "";
   if (!userId) {
     throw new functions.https.HttpsError("invalid-argument", "userId is required");
@@ -4484,6 +4546,7 @@ async function _syncSimproPOsForOneJob({ simproJobNo, jobId }) {
 exports.syncSimproPOsForJob = functions
   .runWith({ timeoutSeconds: 120, memory: "256MB" })
   .https.onCall(async (data) => {
+    requireAppKey(data);
     const { simproJobNo, jobId } = data || {};
     if (!simproJobNo) {
       throw new functions.https.HttpsError("invalid-argument", "simproJobNo required");
@@ -4910,7 +4973,8 @@ exports.nightlyFirestoreBackup = functions
 // Manual trigger so Koy can run + verify a backup immediately after deploy.
 exports.runBackupNow = functions
   .runWith({ memory: "1GB", timeoutSeconds: 540 })
-  .https.onCall(async () => {
+  .https.onCall(async (data) => {
+    requireAppKey(data);
     return await _runFirestoreBackup("manual");
   });
 
