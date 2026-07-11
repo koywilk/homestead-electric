@@ -4,7 +4,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-07-10 · App SW version: v324
+**Last manifest update:** 2026-07-11 · App SW version: v325
 
 ---
 
@@ -271,6 +271,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Crew link (FieldInk)** · `shipped 2026-07-10` · `SW v323` · "Crew link" button on job-linked Live Plans rows — Question/Problem pins dropped from that link flow into the job's Questions (finishes the ccfieldnotes loop; both halves existed but nothing minted the `?crew=` tagged link). Senders type their name per note, so one link serves a whole crew/sub.
 - **CO plan-markup chip** · `shipped 2026-07-10` · `SW v323` · Change Orders rows show "Marked up on plan — view" when the crew drew that CO on a plan in FieldInk (the write-back had flowed for weeks with no office display)
 - **Honest plan-pin badge** · `shipped 2026-07-10` · `SW v323` · question rows distinguish blue "Pinned on plan" (located, not answered) from green "Answered on plan" — pinning no longer force-marks a question answered on either side (FieldInk v486 pairs)
+- **HIGH-tier bug-hunt fixes (H1–H8)** · `shipped 2026-07-11` · `SW v325` · stored-XSS escape on public punch share items (H1); `settings/users` token writes now transactional and preserve the anti-wipe guard metadata, client + server (H2/H3); standard-floor Savant panels seed a label so they persist (H4); Job-Note→Punch promote runs `normFloor` so items no longer silently drop on legacy-array floors (H5); Savant slot Save batched into one patch so name/watts/room stop clobbering each other (H6); Drive functions write `updated_at` as an ISO string so the GC "add item" write isn't rejected (H7); all 22 `https.onCall` functions gated behind an app-caller key (H8 — partial; Simpro token rotation + Firebase App Check still pending). Server half (H2/H7/H8) deploys via `firebase deploy --only functions` after the client is live.
 
 ---
 
