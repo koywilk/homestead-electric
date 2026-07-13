@@ -1103,6 +1103,126 @@ exports.onQuestionAnswered = functions.firestore
     return null;
   });
 
+// ═════════════════════════════════════════════════════════════════════════
+// UNIVERSAL PRE-IMAGE RECOVERY LEDGER (data-loss backstop, 2026-07-13)
+// ═════════════════════════════════════════════════════════════════════════
+// The hole every other safety layer left open: DELETES. `onJobUpdate` fires
+// on .onUpdate ONLY — never on delete — and the per-field jobs/versions
+// snapshots are update-only too. So a HARD delete of a job / task / need /
+// walk (all allowed `delete: if true` in firestore.rules) had NO app-layer
+// capture at all; it survived only inside PITR (7d) and the nightly backup
+// (30d). This closes that: every DELETE (and every UPDATE on the smaller
+// per-item collections, which had no server history of any kind) snapshots
+// the document's FULL prior image into a top-level `recovery_ledger` the
+// instant before it would be lost, making it a one-call restore for
+// LEDGER_TTL_DAYS.
+//
+// Why it is safe:
+//   • onWrite fires AFTER commit → it can never block, slow, or fail a
+//     client save. A ledger write failure is logged, never thrown.
+//   • It writes ONLY to `recovery_ledger`, which is NOT a protected
+//     collection → it can never re-fire itself (no loop).
+//   • It stores the whole doc verbatim → shape-agnostic, so it cannot break
+//     on a field-shape assumption the way a rules guard would.
+//   • Admin SDK bypasses rules; the firestore.rules catch-all already denies
+//     clients on `recovery_ledger`, so no rules change is needed (same
+//     posture as jobs/versions). Restores stay admin/app-only.
+//
+// It COMPLEMENTS the existing stack — the jobs tripwire, the per-field
+// jobs/versions snapshots, and the answer-wipe auto-heal all still run on
+// updates; this adds the missing delete coverage + a uniform net across
+// every user-generated collection.
+const LEDGER_TTL_DAYS = 90;
+
+// A single equality field (`key`) lets restore query by (coll,docId) with
+// NO composite index — we sort the handful of matches in memory instead.
+async function writeLedger(coll, docId, op, beforeData, afterMeta) {
+  try {
+    const expireMs = Date.now() + LEDGER_TTL_DAYS * 86400000;
+    await db.collection("recovery_ledger").add({
+      key:      `${coll}|${docId}`,
+      coll, docId, op,                     // op: "delete" | "update"
+      at:       new Date().toISOString(),
+      expireAt: admin.firestore.Timestamp.fromMillis(expireMs), // for prune + optional TTL policy
+      savedBy:  (afterMeta && (afterMeta.saved_by || afterMeta.savedBy)) || "?",
+      device:   (afterMeta && afterMeta.device) || "?",
+      before:   beforeData || null,        // full prior document, verbatim
+    });
+  } catch (e) {
+    // Never throw — a ledger failure must not affect the write that triggered it.
+    functions.logger.error("[ledger] write FAILED", { coll, docId, op, error: e.message });
+  }
+}
+
+// Factory: one onWrite trigger per protected collection. `onUpdates:true`
+// also snapshots updates (used for the small per-item collections that have
+// no other server-side history); jobs uses false because updates are already
+// covered field-by-field in jobs/versions and full-doc job snapshots on
+// every save would be large + redundant. CREATEs snapshot nothing (there is
+// nothing prior to lose).
+function makeLedgerTrigger(coll, { onUpdates }) {
+  return functions.firestore
+    .document(`${coll}/{docId}`)
+    .onWrite(async (change, context) => {
+      const docId = context.params.docId;
+      const existedBefore = change.before.exists;
+      const existsAfter   = change.after.exists;
+      if (existedBefore && !existsAfter) {
+        await writeLedger(coll, docId, "delete", change.before.data(), change.before.data());
+      } else if (existedBefore && existsAfter && onUpdates) {
+        await writeLedger(coll, docId, "update", change.before.data(), change.after.data());
+      }
+      return null;
+    });
+}
+
+// jobs: delete-only (updates already captured by jobs/versions + tripwire/heal).
+exports.ledgerJobs         = makeLedgerTrigger("jobs",               { onUpdates: false });
+// suggestions: low-value list; capture deletes only.
+exports.ledgerSuggestions  = makeLedgerTrigger("suggestions",        { onUpdates: false });
+// Small per-item collections that had ZERO server-side history — capture
+// both updates (last-write-wins overwrites) and deletes.
+exports.ledgerManualTasks  = makeLedgerTrigger("manualTasks",        { onUpdates: true });
+exports.ledgerNeeds        = makeLedgerTrigger("needs",              { onUpdates: true });
+exports.ledgerQuoteWalks   = makeLedgerTrigger("quoteWalks",         { onUpdates: true });
+exports.ledgerRedlineWalks = makeLedgerTrigger("redlineWalks",       { onUpdates: true });
+// homeowner_requests: the exact collection wiped in the Kweller incident.
+// The client saveHomeownerRequest funnel already snapshots versions, but that
+// depends on a good client calling it — this is an INDEPENDENT server-side
+// full-doc net that a stale/buggy client can't bypass. delete is disabled by
+// rules, so in practice this only ever records overwrites.
+exports.ledgerHomeowner    = makeLedgerTrigger("homeowner_requests", { onUpdates: true });
+
+// ── One-call restore: undo any delete or overwrite from the newest ledger
+// entry for a doc. Callable from the app (admin/manager UI) via the shared
+// _appKey gate. Single-field equality on `key` → no composite index needed.
+exports.restoreFromLedger = functions.https.onCall(async (data) => {
+  requireAppKey(data);
+  const coll  = data && data.coll;
+  const docId = data && data.docId;
+  if (!coll || !docId) {
+    throw new functions.https.HttpsError("invalid-argument", "coll and docId required");
+  }
+  const snap = await db.collection("recovery_ledger")
+    .where("key", "==", `${coll}|${docId}`).limit(100).get();
+  if (snap.empty) {
+    throw new functions.https.HttpsError("not-found", `No ledger entry for ${coll}/${docId}`);
+  }
+  // Newest first (sort in memory — avoids a composite index on key+at).
+  const entries = snap.docs.map(d => d.data()).sort((a, b) => (a.at < b.at ? 1 : -1));
+  const chosen = data.at
+    ? entries.find(e => e.at === data.at) || entries[0]   // optional: restore a specific version
+    : entries[0];
+  if (!chosen || !chosen.before) {
+    throw new functions.https.HttpsError("failed-precondition", "Ledger entry has no prior image to restore.");
+  }
+  await db.collection(coll).doc(docId).set(chosen.before);
+  functions.logger.info("[restoreFromLedger] restored", { coll, docId, from: chosen.at, op: chosen.op });
+  return { ok: true, restoredFrom: chosen.at, op: chosen.op, available: entries.length };
+});
+
+// ═════════════════════════════════════════════════════════════════════════
+
 // ─────────────────────────────────────────────────────────────
 // SCHEDULED — Daily 7am Mountain Time
 // ─────────────────────────────────────────────────────────────
@@ -5118,6 +5238,50 @@ exports.runBackupNow = functions
   .https.onCall(async (data) => {
     requireAppKey(data);
     return await _runFirestoreBackup("manual");
+  });
+
+// ── Recovery-ledger prune — daily 1:15am MT ──────────────────────────────
+// Deletes ledger entries past LEDGER_TTL_DAYS so `recovery_ledger` stays
+// bounded without needing a Firestore TTL policy configured in the console
+// (an `expireAt` field IS written on every entry, so a native TTL policy can
+// be layered on later for belt-and-suspenders). Stamps settings/backupStatus
+// so the same admin banner that watches the nightly backup can also confirm
+// the ledger is being maintained — observability, per the "written != running"
+// lesson from the nightly-backup-never-deployed incident.
+exports.pruneRecoveryLedger = functions
+  .runWith({ memory: "512MB", timeoutSeconds: 300 })
+  .pubsub.schedule("15 1 * * *")
+  .timeZone(TZ)
+  .onRun(async () => {
+    const now = admin.firestore.Timestamp.now();
+    let removed = 0;
+    try {
+      // Delete in batches of 400 (Firestore batch limit is 500).
+      for (let guard = 0; guard < 100; guard++) {
+        const snap = await db.collection("recovery_ledger")
+          .where("expireAt", "<", now).limit(400).get();
+        if (snap.empty) break;
+        const batch = db.batch();
+        snap.docs.forEach(d => batch.delete(d.ref));
+        await batch.commit();
+        removed += snap.size;
+        if (snap.size < 400) break;
+      }
+      await db.doc("settings/backupStatus").set({
+        ledgerPrunedAt: new Date().toISOString(),
+        ledgerPrunedCount: removed,
+        ledgerOk: true,
+      }, { merge: true });
+      functions.logger.info("[pruneRecoveryLedger] done", { removed });
+    } catch (e) {
+      functions.logger.error("[pruneRecoveryLedger] FAILED", e.message);
+      try {
+        await db.doc("settings/backupStatus").set({
+          ledgerPrunedAt: new Date().toISOString(), ledgerOk: false, ledgerError: e.message,
+        }, { merge: true });
+      } catch (_) {}
+    }
+    return null;
   });
 
 // ─────────────────────────────────────────────────────────────
