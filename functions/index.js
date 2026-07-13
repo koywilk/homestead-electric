@@ -929,11 +929,14 @@ exports.onJobUpdate = functions.firestore
       const pB = walkCount(before.roughPunch) + walkCount(before.finishPunch) + walkCount(before.qcPunch);
       const pA = walkCount(after.roughPunch)  + walkCount(after.finishPunch)  + walkCount(after.qcPunch);
       const cB = (before.changeOrders || []).length, cA = (after.changeOrders || []).length;
-      const bigDrop = (b, a, absMin) => b > 0 && (b - a) >= absMin && (b - a) >= Math.ceil(b * 0.5);
+      // Trip on a big RELATIVE drop (>= half) OR a big ABSOLUTE drop. The
+      // absolute floor was added 2026-07-13 after a 17-answer wipe (17 of 42
+      // answered = 40%) slipped under the half-only rule and never alerted.
+      const bigDrop = (b, a, absMin, absHard) => b > 0 && (b - a) >= absMin && ((b - a) >= Math.ceil(b * 0.5) || (b - a) >= absHard);
       const drops = [];
-      if (bigDrop(qB, qA, 10)) drops.push(`${qB - qA} questions gone (${qB}→${qA})`);
-      if (bigDrop(aB, aA, 5))  drops.push(`${aB - aA} answered questions gone (${aB}→${aA})`);
-      if (bigDrop(pB, pA, 12)) drops.push(`${pB - pA} punch entries gone (${pB}→${pA})`);
+      if (bigDrop(qB, qA, 10, 20)) drops.push(`${qB - qA} questions gone (${qB}→${qA})`);
+      if (bigDrop(aB, aA, 5, 8))   drops.push(`${aB - aA} answered questions gone (${aB}→${aA})`);
+      if (bigDrop(pB, pA, 12, 25)) drops.push(`${pB - pA} punch entries gone (${pB}→${pA})`);
       if (cB - cA >= 3)        drops.push(`${cB - cA} change orders gone (${cB}→${cA})`);
       if (drops.length) {
         const savedBy = change.after.data()?.saved_by || "?";
