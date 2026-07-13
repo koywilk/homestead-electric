@@ -41513,7 +41513,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-11 · App SW version: v325
+**Last manifest update:** 2026-07-13 · App SW version: v326
 
 ---
 
@@ -41781,6 +41781,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **CO plan-markup chip** · 'shipped 2026-07-10' · 'SW v323' · Change Orders rows show "Marked up on plan — view" when the crew drew that CO on a plan in FieldInk (the write-back had flowed for weeks with no office display)
 - **Honest plan-pin badge** · 'shipped 2026-07-10' · 'SW v323' · question rows distinguish blue "Pinned on plan" (located, not answered) from green "Answered on plan" — pinning no longer force-marks a question answered on either side (FieldInk v486 pairs)
 - **HIGH-tier bug-hunt fixes (H1–H8)** · 'shipped 2026-07-11' · 'SW v325' · stored-XSS escape on public punch share items (H1); 'settings/users' token writes now transactional and preserve the anti-wipe guard metadata, client + server (H2/H3); standard-floor Savant panels seed a label so they persist (H4); Job-Note→Punch promote runs 'normFloor' so items no longer silently drop on legacy-array floors (H5); Savant slot Save batched into one patch so name/watts/room stop clobbering each other (H6); Drive functions write 'updated_at' as an ISO string so the GC "add item" write isn't rejected (H7); all 22 'https.onCall' functions gated behind an app-caller key (H8 — partial; Simpro token rotation + Firebase App Check still pending). Server half (H2/H7/H8) deploys via 'firebase deploy --only functions' after the client is live.
+- **Data-loss hardening (HD1/HD2/HD5 + M1)** · 'shipped 2026-07-13' · 'SW v326' · 'saveHomeownerRequest' funnel now writes in a 'runTransaction' (re-read under lock, 'tx.update' only the patched keys) so concurrent writes to different fields on the same 'homeowner_requests' doc can't revert each other — fixes all 9 funnel callers (M1). 'LightingSharePage' three-way merge moved inside that transaction and its previously-silent save failure now surfaces (toast + "Not saved" indicator) (HD1). Server ('onJobUpdate') gains a data-loss TRIPWIRE (pushes Koy when one write wipes most of a job's questions/answers/punch/COs) and durable per-field VERSION SNAPSHOTS into 'jobs/{id}/versions' (newest 25 — surgical restore beyond PITR's 7-day window) (HD5/HD2). Database delete-protection enabled (HD3). Server half deploys via 'firebase deploy --only functions:onJobUpdate'.
 
 ---
 
