@@ -986,6 +986,65 @@ exports.onJobUpdate = functions.firestore
       }
     } catch (e) { functions.logger.warn("[onJobUpdate] version snapshot setup error (non-fatal)", e.message); }
 
+    // ── AUTO-HEAL a mass answer-wipe (2026-07-13, server-side backstop) ────
+    // The v328 client fix stops the answer-deleting retraction, but a device
+    // still on OLD code (fleet updates lazily — mobile PWAs only reload on
+    // reopen) can keep wiping until it updates. This runs on the SERVER, so it
+    // protects every question regardless of any device's version. If ONE write
+    // blanks several previously-answered questions at once (the wipe signature,
+    // never a normal edit), we restore each blanked answer from `before` and
+    // set gcAnswered:false so the offending device's own snapshot listener sees
+    // the answer is now crew-owned and its retraction stops targeting it — the
+    // heal converges in one round instead of ping-ponging. Re-reads under a
+    // transaction and restores ONLY questions still blank (never clobbers a
+    // genuine crew re-answer). No loop: the heal write turns blanks into
+    // answers, which this same scan reads as an ADD (0 blanked) → no re-heal.
+    try {
+      const flat = (qw) => { const m = {}; if (qw && typeof qw === "object") for (const arr of Object.values(qw)) { if (Array.isArray(arr)) for (const q of arr) if (q && q.id != null) m[q.id] = q; } return m; };
+      const good = {};
+      const scan = (bMap, aMap) => { for (const id of Object.keys(bMap)) {
+        const b = bMap[id], a = aMap[id];
+        if (!a) continue; // question removed — different concern (covered by version snapshots)
+        const hadAns = String(b.answer || "").trim().length > 0;
+        const nowBlank = !String(a.answer || "").trim() && !((a.answerPhotos || []).length);
+        if (hadAns && nowBlank) good[id] = { answer: b.answer, answerPhotos: Array.isArray(b.answerPhotos) ? b.answerPhotos : [], answeredBy: b.answeredBy || "", answeredVia: b.answeredVia || "", answeredAt: b.answeredAt || "" };
+      } };
+      scan(flat(before.roughQuestions), flat(after.roughQuestions));
+      scan(flat(before.finishQuestions), flat(after.finishQuestions));
+      const blankedIds = Object.keys(good);
+      if (blankedIds.length >= 4) { // mass wipe, not a normal single clear
+        const savedBy = change.after.data()?.saved_by || "?";
+        functions.logger.error("[onJobUpdate] AUTO-HEAL — mass answer-wipe detected", { jobId, name, count: blankedIds.length, savedBy });
+        tasks.push((async () => {
+          let healed = 0;
+          await db.runTransaction(async (tx) => {
+            const wrap = (await tx.get(change.after.ref)).data() || {};
+            const data = wrap.data || {};
+            const rq = JSON.parse(JSON.stringify(data.roughQuestions || {}));
+            const fq = JSON.parse(JSON.stringify(data.finishQuestions || {}));
+            const fix = (tree) => { for (const fl of Object.keys(tree)) { const arr = tree[fl]; if (!Array.isArray(arr)) continue; for (const q of arr) {
+              if (!q || !good[q.id]) continue;
+              const stillBlank = !String(q.answer || "").trim() && !((q.answerPhotos || []).length);
+              if (!stillBlank) continue; // crew re-answered since — keep theirs
+              const g = good[q.id];
+              q.answer = g.answer; q.answerPhotos = g.answerPhotos; q.done = true;
+              q.gcAnswered = false; q.gcRejected = null;
+              q.answeredBy = g.answeredBy; q.answeredVia = g.answeredVia; q.answeredAt = g.answeredAt;
+              healed++;
+            } } };
+            fix(rq); fix(fq);
+            if (healed) tx.update(change.after.ref, { "data.roughQuestions": rq, "data.finishQuestions": fq });
+          });
+          functions.logger.info("[onJobUpdate] AUTO-HEAL complete", { jobId, healed });
+          if (healed) await sendToName("Koy", {
+            title: "Auto-healed a data wipe",
+            body: `${name}: ${healed} answer(s) were blanked by a stale device (saved by ${savedBy}) and automatically restored.`,
+            jobId, section: "Job Info",
+          });
+        })().catch(e => functions.logger.warn("[onJobUpdate] auto-heal error (non-fatal)", e.message)));
+      }
+    } catch (e) { functions.logger.warn("[onJobUpdate] auto-heal setup error (non-fatal)", e.message); }
+
     await Promise.all(tasks);
     return null;
   });
