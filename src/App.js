@@ -23545,7 +23545,14 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
               answer: gcAns.answer || (staleApply ? q.answer : ''),
               answerPhotos: (gcAns.photos||[]).length ? gcAns.photos : (q.answerPhotos||[]),
               done:true, gcAnswered:true, gcRejected:null, answeredVia:'link',
-              answeredBy: gcAnswers.answeredBy || q.answeredBy || '',
+              // Per-question attribution wins over the shared batch name (2026-07-13):
+              // homeowner_requests.questionAnswers.answeredBy is ONE name for the whole
+              // link (the last person to submit), so the old `gcAnswers.answeredBy` first
+              // re-stamped EVERY answered question with the latest submitter — that's how
+              // 17 of Haley's Kweller answers got relabeled "Koy" when someone opened the
+              // link after her. Prefer the question's own answeredBy so a genuine per-
+              // question author is never overwritten by a later, different submitter.
+              answeredBy: q.answeredBy || gcAnswers.answeredBy || '',
               answeredAt: gcAnswers.answeredAt || new Date().toISOString(),
             };
           }
@@ -41513,7 +41520,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-13 · App SW version: v326
+**Last manifest update:** 2026-07-13 · App SW version: v327
 
 ---
 
@@ -41782,6 +41789,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Honest plan-pin badge** · 'shipped 2026-07-10' · 'SW v323' · question rows distinguish blue "Pinned on plan" (located, not answered) from green "Answered on plan" — pinning no longer force-marks a question answered on either side (FieldInk v486 pairs)
 - **HIGH-tier bug-hunt fixes (H1–H8)** · 'shipped 2026-07-11' · 'SW v325' · stored-XSS escape on public punch share items (H1); 'settings/users' token writes now transactional and preserve the anti-wipe guard metadata, client + server (H2/H3); standard-floor Savant panels seed a label so they persist (H4); Job-Note→Punch promote runs 'normFloor' so items no longer silently drop on legacy-array floors (H5); Savant slot Save batched into one patch so name/watts/room stop clobbering each other (H6); Drive functions write 'updated_at' as an ISO string so the GC "add item" write isn't rejected (H7); all 22 'https.onCall' functions gated behind an app-caller key (H8 — partial; Simpro token rotation + Firebase App Check still pending). Server half (H2/H7/H8) deploys via 'firebase deploy --only functions' after the client is live.
 - **Data-loss hardening (HD1/HD2/HD5 + M1)** · 'shipped 2026-07-13' · 'SW v326' · 'saveHomeownerRequest' funnel now writes in a 'runTransaction' (re-read under lock, 'tx.update' only the patched keys) so concurrent writes to different fields on the same 'homeowner_requests' doc can't revert each other — fixes all 9 funnel callers (M1). 'LightingSharePage' three-way merge moved inside that transaction and its previously-silent save failure now surfaces (toast + "Not saved" indicator) (HD1). Server ('onJobUpdate') gains a data-loss TRIPWIRE (pushes Koy when one write wipes most of a job's questions/answers/punch/COs) and durable per-field VERSION SNAPSHOTS into 'jobs/{id}/versions' (newest 25 — surgical restore beyond PITR's 7-day window) (HD5/HD2). Database delete-protection enabled (HD3). Server half deploys via 'firebase deploy --only functions:onJobUpdate'.
+- **Per-question answer attribution fix** · 'shipped 2026-07-13' · 'SW v327' · link answers carry ONE shared 'questionAnswers.answeredBy' (the last person to submit the link); the auto-apply effect used to re-stamp EVERY answered question with it, so opening a link after the designer relabeled all her answers to the opener (Kweller: 17 of Haley's answers showed "Koy"). The apply effect now prefers the question's own 'answeredBy' ('q.answeredBy || gcAnswers.answeredBy') so a real per-question author is never overwritten by a later, different submitter. Content/photos sync unchanged; the live-sync effect never touched attribution.
 
 ---
 
