@@ -15553,11 +15553,25 @@ function snapshotHomeownerRequestVersion(jobId, prevData, sourceTag) {
 // jobId is always included so the firestore rule (jobId is string) passes.
 async function saveHomeownerRequest(jobId, mutator, sourceTag) {
   const ref = doc(db,'homeowner_requests',jobId);
-  const ex = await getDoc(ref);
-  const prevData = ex.exists() ? ex.data() : null;
+  let prevData = null, patch = null;
+  // Transactional funnel (M1 hardening 2026-07-13): re-read the doc UNDER LOCK
+  // and write ONLY the patched keys. Two things fall out for free:
+  //  1. mutator runs against the LOCKED prev, so every per-key merge caller
+  //     (planChangeAcks, questionAnswers, planChangeThreads appends) becomes
+  //     atomic — no more "both read prev_0, second write reverts the first".
+  //  2. tx.update touches only the keys the mutator returned, so a concurrent
+  //     write to a DIFFERENT field (genLoads vs lightingCollab vs answers on
+  //     the same doc) is never rewritten, let alone reverted. The old
+  //     getDoc→setDoc({...prev,...patch}) rewrote the WHOLE doc and clobbered
+  //     it. Mirrors postQuestionThreadMessage, the one writer already correct.
+  await runTransaction(db, async (tx) => {
+    const ex = await tx.get(ref);
+    prevData = ex.exists() ? ex.data() : null;
+    patch = mutator(prevData);
+    if (!prevData) tx.set(ref, { ...patch, jobId });
+    else tx.update(ref, { ...patch, jobId });
+  });
   snapshotHomeownerRequestVersion(jobId, prevData, sourceTag);
-  const patch = mutator(prevData);
-  await setDoc(ref, { ...(prevData||{}), ...patch, jobId });
   return patch;
 }
 
@@ -39389,6 +39403,7 @@ function LightingSharePage({ jobId }) {
   const [collab,     setCollab]    = useState({sections:{},notes:'',submittedBy:''});
   const [saving,     setSaving]    = useState(false);
   const [savedAt,    setSavedAt]   = useState(null);
+  const [saveErr,    setSaveErr]   = useState(false); // HD1: outside-party page must SPEAK a failed save
   const saveTimer = useRef(null);
   // Per-mount baseline of lightingCollab (Kweller hardening Layer 3) — what
   // THIS tab last knew the server to hold. Lets the save below three-way
@@ -39416,26 +39431,37 @@ function LightingSharePage({ jobId }) {
   const saveCollab = (next) => {
     setCollab(next);
     clearTimeout(saveTimer.current);
-    setSaving(true);
+    setSaving(true); setSaveErr(false);
     saveTimer.current = setTimeout(async()=>{
       try {
-        // Three-way merge each section's row array against the CURRENT server
-        // copy (rows keyed by id) so concurrent edits from another tab/device
-        // union instead of last-write-wins. Rides saveHomeownerRequest, so a
-        // version snapshot is stashed before the write (Layer 4).
-        const ex = await getDoc(doc(db,'homeowner_requests',jobId));
-        const serverCollab = (ex.exists() && ex.data().lightingCollab) || {sections:{},notes:'',submittedBy:''};
+        // Three-way merge each section's row array against the server copy (rows
+        // keyed by id) so concurrent edits from another tab/device union instead
+        // of last-write-wins. M1 fix 2026-07-13: the merge now runs INSIDE the
+        // funnel's transaction and reads the LOCKED server copy via `prev` — not
+        // a separate pre-transaction getDoc — so a concurrent LV edit committed
+        // in the old read→write gap can no longer be dropped. `next` = this tab's
+        // edit, `base` = the common ancestor (collabBase), `prev.lightingCollab`
+        // = authoritative server. Version snapshot still stashed (Layer 4).
         const base = collabBase.current || {};
-        const mergedSections = {};
-        new Set([...Object.keys(next.sections||{}), ...Object.keys(serverCollab.sections||{})]).forEach(k => {
-          mergedSections[k] = _threeWayMerge(base.sections?.[k], next.sections?.[k], serverCollab.sections?.[k]);
-        });
-        const merged = {...next, sections:mergedSections, savedAt:new Date().toISOString()};
-        await saveHomeownerRequest(jobId, () => ({ jobName:job?.name||'', lightingCollab:merged }), 'LightingSharePage');
-        collabBase.current = merged;
-        setCollab(merged);
+        const res = await saveHomeownerRequest(jobId, (prev) => {
+          const serverCollab = (prev && prev.lightingCollab) || {sections:{},notes:'',submittedBy:''};
+          const mergedSections = {};
+          new Set([...Object.keys(next.sections||{}), ...Object.keys(serverCollab.sections||{})]).forEach(k => {
+            mergedSections[k] = _threeWayMerge(base.sections?.[k], next.sections?.[k], serverCollab.sections?.[k]);
+          });
+          return { jobName:job?.name||'', lightingCollab:{...next, sections:mergedSections, savedAt:new Date().toISOString()} };
+        }, 'LightingSharePage');
+        collabBase.current = res.lightingCollab;
+        setCollab(res.lightingCollab);
         setSavedAt(new Date());
-      } catch(e){}
+      } catch(e){
+        // HD1 fix 2026-07-13: never swallow a failed save on an outside-party
+        // page. The rows/notes stay on screen (state isn't reverted), but the LV
+        // collaborator MUST be told — otherwise they close the tab believing it
+        // saved. Toast + a persistent "not saved" indicator; the next edit retries.
+        setSaveErr(true);
+        toast.error("Couldn't save — check your connection; it'll retry when you edit again.");
+      }
       setSaving(false);
     },800);
   };
@@ -39512,7 +39538,7 @@ function LightingSharePage({ jobId }) {
       </div>
       <div style={{display:'flex',justifyContent:'space-between',alignItems:'center',padding:'6px 4px 14px'}}>
         <div style={{fontSize:11,color:SP.dim}}>Add your module assignments and circuit additions below. Changes save automatically.</div>
-        <div style={{fontSize:11,fontWeight:600,color:saving?SP.muted:SP.green}}>{saving?'Saving…':savedAt?`✓ Saved ${savedAt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`:''}</div>
+        <div style={{fontSize:11,fontWeight:600,color:saving?SP.muted:saveErr?'#C0392B':SP.green}}>{saving?'Saving…':saveErr?'Not saved — will retry':savedAt?`✓ Saved ${savedAt.toLocaleTimeString([],{hour:'2-digit',minute:'2-digit'})}`:''}</div>
       </div>
 
       {/* Name field */}

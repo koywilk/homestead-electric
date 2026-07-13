@@ -903,6 +903,86 @@ exports.onJobUpdate = functions.firestore
       }
     }
 
+    // ── DATA-LOSS TRIPWIRE (HD5, Kweller hardening 2026-07-13) ──────────
+    // Catch the NEXT catastrophic clobber (the Kweller questions wipe /
+    // Cougar-Moon punch wipe class) in MINUTES instead of days. A single
+    // write that erases most of a job's questions, answered questions, punch
+    // entries, or change orders is almost never a real edit — it's a stale
+    // client overwriting with an empty tree. We push Koy only when a count
+    // drops a lot AND loses at least half, so ordinary edits/deletes never
+    // trip it (validated: 1-question delete = silent; full wipe = fires).
+    // READ-ONLY: counts before-vs-after and writes NOTHING back to the job
+    // doc, so it cannot re-fire this onUpdate (no loop). Wrapped so a counting
+    // error can never break the notifications above.
+    try {
+      const walkCount = (node) => { let n = 0; (function w(x){
+        if (Array.isArray(x)) { for (const e of x) { if (e && typeof e === "object" && !Array.isArray(e)) n++; w(e); } }
+        else if (x && typeof x === "object") { for (const v of Object.values(x)) w(v); }
+      })(node); return n; };
+      const answered = (qw) => { let n = 0; if (qw && typeof qw === "object") for (const arr of Object.values(qw)) {
+        if (Array.isArray(arr)) for (const q of arr) { if (q && (q.done || (q.answer && String(q.answer).trim()) || (Array.isArray(q.thread) && q.thread.length))) n++; }
+      } return n; };
+      const qB = walkCount(before.roughQuestions) + walkCount(before.finishQuestions);
+      const qA = walkCount(after.roughQuestions)  + walkCount(after.finishQuestions);
+      const aB = answered(before.roughQuestions) + answered(before.finishQuestions);
+      const aA = answered(after.roughQuestions)  + answered(after.finishQuestions);
+      const pB = walkCount(before.roughPunch) + walkCount(before.finishPunch) + walkCount(before.qcPunch);
+      const pA = walkCount(after.roughPunch)  + walkCount(after.finishPunch)  + walkCount(after.qcPunch);
+      const cB = (before.changeOrders || []).length, cA = (after.changeOrders || []).length;
+      const bigDrop = (b, a, absMin) => b > 0 && (b - a) >= absMin && (b - a) >= Math.ceil(b * 0.5);
+      const drops = [];
+      if (bigDrop(qB, qA, 10)) drops.push(`${qB - qA} questions gone (${qB}→${qA})`);
+      if (bigDrop(aB, aA, 5))  drops.push(`${aB - aA} answered questions gone (${aB}→${aA})`);
+      if (bigDrop(pB, pA, 12)) drops.push(`${pB - pA} punch entries gone (${pB}→${pA})`);
+      if (cB - cA >= 3)        drops.push(`${cB - cA} change orders gone (${cB}→${cA})`);
+      if (drops.length) {
+        const savedBy = change.after.data()?.saved_by || "?";
+        const device  = change.after.data()?.device || "?";
+        functions.logger.error("[onJobUpdate] DATA-LOSS TRIPWIRE", { jobId, name, drops, savedBy, device });
+        tasks.push(sendToName("Koy", {
+          title: "Possible Data Loss",
+          body:  `${name}: ${drops.join("; ")}. Last saved by ${savedBy}. Recoverable via PITR for 7 days — check now.`,
+          jobId, section: "Job Info",
+        }));
+      }
+    } catch (e) { functions.logger.warn("[onJobUpdate] tripwire error (non-fatal)", e.message); }
+
+    // ── DURABLE VERSION SNAPSHOTS (HD2, Kweller hardening 2026-07-13) ──────
+    // When a high-value, loss-prone field materially changes, stash its PRIOR
+    // value in jobs/{jobId}/versions. That makes a bad merge or whole-field
+    // clobber a surgical restore even BEYOND PITR's 7-day window, and gives a
+    // durable per-field record independent of it (mirrors the version pattern
+    // homeowner_requests already has). We store ONLY the changed high-value
+    // fields' before-values (small docs), and ONLY when a field that HAD
+    // content actually changed — so the frequent notes/photos/status/daily-
+    // update saves never snapshot. Writes to a SUBcollection, which does NOT
+    // re-fire this onUpdate (no loop). Admin SDK bypasses rules, so no
+    // firestore.rules change; the catch-all keeps clients out of version
+    // history (restores stay bespoke/admin-only per RECOVERY.md). Fire-and-
+    // forget via tasks: a snapshot failure can't affect the notifications.
+    // Pruned to the newest 25 per job so storage is bounded with no TTL policy.
+    try {
+      const WATCH = ["roughQuestions","finishQuestions","roughPunch","finishPunch","qcPunch","changeOrders","designerQuestions"];
+      const prev = {};
+      for (const f of WATCH) {
+        if (before[f] !== undefined && JSON.stringify(before[f]) !== JSON.stringify(after[f])) prev[f] = before[f];
+      }
+      if (Object.keys(prev).length) {
+        tasks.push((async () => {
+          const vcol = db.collection("jobs").doc(jobId).collection("versions");
+          await vcol.add({
+            at: new Date().toISOString(),
+            savedBy: change.after.data()?.saved_by || "?",
+            device:  change.after.data()?.device || "?",
+            changed: Object.keys(prev),
+            prev,
+          });
+          const stale = await vcol.orderBy("at", "desc").offset(25).get();
+          await Promise.all(stale.docs.map(d => d.ref.delete().catch(() => {})));
+        })().catch(e => functions.logger.warn("[onJobUpdate] version snapshot error (non-fatal)", e.message)));
+      }
+    } catch (e) { functions.logger.warn("[onJobUpdate] version snapshot setup error (non-fatal)", e.message); }
+
     await Promise.all(tasks);
     return null;
   });
