@@ -40405,6 +40405,7 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
   const [selected, setSelected] = useState(new Set());
   const [shareLabel, setShareLabel] = useState("");
   const [editingId, setEditingId] = useState(null); // saved-share being edited, or null for a new one
+  const [previewId, setPreviewId] = useState(null); // saved-share id shown in the read-only preview iframe, or null
 
   const flatQs = (qs, phase) => {
     if(!qs || typeof qs !== 'object') return [];
@@ -40573,6 +40574,7 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
                           <div style={{fontSize:10,color:'#99A0AA'}}>{cnt} question{cnt!==1?'s':''} on link{picked!==cnt && <span style={{color:'#B0892C'}}> · {picked} hand-picked + {cnt-picked} auto-assigned</span>}</div>
                         </div>
                         <button onClick={()=>loadShare(s)} style={{fontSize:10.5,fontWeight:600,color:'#5E6670',background:'#fff',border:'1px solid #D7DBE1',borderRadius:6,padding:'4px 9px',cursor:'pointer',fontFamily:'inherit'}}>Edit</button>
+                        <button onClick={()=>setPreviewId(s.id)} style={{fontSize:10.5,fontWeight:600,color:'#1e3a5f',background:'#fff',border:'1px solid #C3D0E0',borderRadius:6,padding:'4px 9px',cursor:'pointer',fontFamily:'inherit'}}>Preview</button>
                         <button onClick={()=>copyLink(s.id)} style={{fontSize:10.5,fontWeight:700,color:'#fff',background:'#1e3a5f',border:'none',borderRadius:6,padding:'4px 10px',cursor:'pointer',fontFamily:'inherit'}}>Copy link</button>
                         <button onClick={()=>deleteShare(s.id)} title="Delete link" style={{fontSize:13,color:'#B23A3A',background:'none',border:'none',cursor:'pointer',padding:'0 2px'}}>✕</button>
                       </div>
@@ -40609,6 +40611,31 @@ function QuestionPicker({ roughQuestions, finishQuestions, jobId, color, filter=
                 </button>
               </div>
             </div>
+          </div>
+        </div>
+      )}
+
+      {previewId&&(
+        <div style={{position:'fixed',inset:0,background:'rgba(0,0,0,0.62)',zIndex:10000,
+          display:'flex',alignItems:'center',justifyContent:'center',padding:16}}
+          onClick={e=>{if(e.target===e.currentTarget)setPreviewId(null);}}>
+          <div style={{background:'#fff',borderRadius:14,width:'100%',maxWidth:460,height:'88vh',
+            display:'flex',flexDirection:'column',overflow:'hidden',boxShadow:'0 20px 60px rgba(0,0,0,0.35)'}}>
+            <div style={{padding:'11px 14px',borderBottom:'1px solid #E1E4E9',display:'flex',
+              alignItems:'center',justifyContent:'space-between',gap:8,flexShrink:0}}>
+              <div style={{minWidth:0}}>
+                <div style={{fontSize:13.5,fontWeight:700,color:'#111',whiteSpace:'nowrap',overflow:'hidden',textOverflow:'ellipsis'}}>
+                  Preview · {(shares.find(s=>s.id===previewId)||{}).name||'Link'}
+                </div>
+                <div style={{fontSize:10.5,color:'#99A0AA',marginTop:1}}>Exactly what your recipient sees — read-only</div>
+              </div>
+              <div style={{display:'flex',gap:6,flexShrink:0}}>
+                <button onClick={()=>copyLink(previewId)} style={{fontSize:10.5,fontWeight:700,color:'#fff',background:'#1e3a5f',border:'none',borderRadius:6,padding:'5px 11px',cursor:'pointer',fontFamily:'inherit'}}>Copy link</button>
+                <button onClick={()=>setPreviewId(null)} style={{background:'none',border:'none',fontSize:18,cursor:'pointer',color:'#99A0AA',padding:'0 4px',lineHeight:1}}>✕</button>
+              </div>
+            </div>
+            <iframe title="Share link preview" src={`${window.location.origin}/?questions=${jobId}&s=${previewId}&preview=1`}
+              style={{flex:1,width:'100%',border:'none',background:'#EEF0F3'}}/>
           </div>
         </div>
       )}
@@ -41163,6 +41190,11 @@ function QuestionsSharePage({ jobId }) {
   const [loading,        setLoading]       = useState(true);
   const [error,          setError]         = useState(null);
   const shareParam = new URLSearchParams(window.location.search).get('s') || '';
+  // Office-side read-only PREVIEW (?preview=1) — the page renders exactly as the
+  // recipient sees it, but wrapped in a disabled <fieldset> so no input/button/
+  // submit/attach can fire. Lets the office eyeball a share link in-app without
+  // copying it AND without any risk of writing as the recipient.
+  const preview = new URLSearchParams(window.location.search).get('preview') === '1';
   const draftKey = `he_qdraft_${jobId}_${shareParam||new URLSearchParams(window.location.search).get('share')||'x'}`;
   const [answers,        setAnswers]       = useState(() => { try { return JSON.parse(localStorage.getItem(draftKey)||'{}'); } catch(e) { return {}; } });
   const [notes,          setNotes]         = useState(() => { try { return JSON.parse(localStorage.getItem(draftKey+'_n')||'{}'); } catch(e) { return {}; } }); // per-question "ask for more info" notes back to the crew
@@ -41351,6 +41383,7 @@ function QuestionsSharePage({ jobId }) {
   };
 
   const handleSubmit = async () => {
+    if(preview) return; // read-only preview: never write
     if(!respondentName.trim()){ setNameErr(true); return; }
     setSubmitting(true);
     try {
@@ -41387,6 +41420,7 @@ function QuestionsSharePage({ jobId }) {
   // value forward untouched (or null if never submitted). Failure is silent
   // by design: the localStorage draft still holds everything for retry.
   const runAutoSave = async ({ansPhotosOverride}={}) => {
+    if(preview) return; // read-only preview: never write
     if(!job) return;
     if(autoSaveInFlight.current){ autoSaveQueued.current = true; return; }
     autoSaveInFlight.current = true;
@@ -41444,6 +41478,7 @@ function QuestionsSharePage({ jobId }) {
   // ever setting it, which silently routed every reply into finishQuestions
   // and NO-OP'd replies to rough questions.
   const postThread = async (q, message) => {
+    if(preview) return; // read-only preview: never write
     const floorKey = q.floor==='Upper Level'?'upper':q.floor==='Main Level'?'main':'basement';
     await postQuestionThreadMessage(jobId, `${q.phase}_${floorKey}_${q.id}`, message, 'QuestionsSharePage');
   };
@@ -41579,7 +41614,7 @@ function QuestionsSharePage({ jobId }) {
     </div>
   );
 
-  return (
+  const shareBody = (
     <div style={{maxWidth:640,margin:'0 auto',padding:'28px 16px',fontFamily:'system-ui,sans-serif',background:'#EEF0F3',minHeight:'100vh'}}>
       <HEToastHost/>
       <div style={{background:'#1e3a5f',borderRadius:14,padding:'20px 22px',marginBottom:22,display:'flex',alignItems:'center',gap:14}}>
@@ -41687,6 +41722,15 @@ function QuestionsSharePage({ jobId }) {
       )}
     </div>
   );
+  if (preview) return (
+    <div style={{minHeight:'100vh',background:'#EEF0F3'}}>
+      <div style={{position:'sticky',top:0,zIndex:10,background:'#1e3a5f',color:'#fff',padding:'9px 16px',fontSize:11.5,fontWeight:700,textAlign:'center',letterSpacing:'0.05em'}}>
+        PREVIEW · exactly what your recipient sees · read-only
+      </div>
+      <fieldset disabled style={{border:'none',margin:0,padding:0,minWidth:0}}>{shareBody}</fieldset>
+    </div>
+  );
+  return shareBody;
 }
 
 // B2 — Read-only shareable view for a single job note.
@@ -41901,7 +41945,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-15 · App SW version: v331
+**Last manifest update:** 2026-07-15 · App SW version: v332
 
 ---
 
@@ -42175,6 +42219,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Generator panel sync + live schedule** · 'in-flight' · 'SW v329' · (branch 'generator-panel-sync', NOT yet deployed) Generator Load Selection now AUTO-SYNCS from Home Runs instead of a manual import ('reconcileGenLoads' — the gen list mirrors the field's home-run truth; stale office-only loads drop, but a homeowner's *selected* non-match is kept + flagged, never a silent delete). Homeowner submit ↔ office list now reflect each other's picks ('applyHomeownerChoices' — no manual re-checking). A live circuit/space counter + a dedicated generator sub-panel schedule ('GenPanelGrid', reusing the tuned 'placeBreakers' tandem/quad engine) render as loads are toggled; the counter counts REAL placed spaces (not naive poles) so it agrees with the schedule. 14/2 & 12/2 can be flipped to 240V 2-pole 2-wire ('effectivePoles' / 'v240'), read app-wide. Default gen panel 40/80. All writes ride the existing 'saveHomeownerRequest' funnel; no new top-level fields; dry-run-verified 0 data loss / 0 decision change on real jobs.
 - **Generator: Dedicated Loads label + follow-up** · 'shipped 2026-07-14' · 'SW v330' · one-click reversible "Update Dedicated Loads" stamp puts chosen circuits' Home Run rows on panel "Dedicated Loads" ('stampDedicatedLoads', prior panel saved to 'panelBeforeGen'). Fix: the trigger button's count ('dedicatedPending') now includes rows that need the label REMOVED (load taken off the generator but still labeled from a prior stamp), not just added — otherwise an un-checked load's label got stuck with no one-click revert. Also 'getPanelOpts' de-dupes the always-present built-ins ("Meter", "Dedicated Loads") so a job that saved either into 'customPanels' no longer renders two panel cards. Office-side write to the job doc only; reversible; verified live on Kweller (take a 6/3 off → counter −1 circuit/−2 slots, label reverts, Dedicated count 46→45).
 - **Plan Changes: edit an existing change item** · 'shipped 2026-07-15' · 'SW v331' · the "Changes From Original Plan" tracker (Panelized Lighting tab) now has a **pencil / inline edit** on every logged change — before, 'changeType' (Added/Moved/Removed/Changed), item type, location, and notes could only be set at add-time, so a mislabeled item (e.g. a removal tagged "Added") was stuck. Edit reuses the add-item form pre-filled and saves via the same 'saveRooms' → 'u({panelizedLighting.lutronRooms})' job-doc path (version-snapshotted); stamps 'editedBy'/'editedAt' (nested). Reflects on Tech Lighting's read-only '?lutronshare=' link.
+- **Question share-link preview (in-app)** · 'shipped 2026-07-15' · 'SW v332' · the Share-Questions modal's SAVED LINKS list gains a **Preview** button next to Copy link — it opens the recipient's exact page in an in-app modal '<iframe>' ('/?questions={jobId}&s={shareId}&preview=1') so the office can see what a person will see without copying the URL and opening a tab. 'QuestionsSharePage' reads '?preview=1' and renders its real body inside a disabled '<fieldset>' under a "PREVIEW · read-only" banner (one guard disables every input / attach / submit). Preview is provably write-inert: 'handleSubmit', 'runAutoSave', and 'postThread' each early-return on 'preview' (belt-and-suspenders atop the existing 'userEditedRef' mount guard), so no draft/answer/thread write can fire. No data-model change; no new Firestore field; office-side view only.
 
 ---
 
