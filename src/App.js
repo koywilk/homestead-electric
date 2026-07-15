@@ -15884,6 +15884,7 @@ function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
   const [newRoomName, setNewRoomName]     = useState("");
   const [addingItemFor, setAddingItemFor] = useState(null); // room id, or null
   const [newItem, setNewItem]             = useState({ itemType:"Load", changeType:"Added", location:"", fromLocation:"", notes:"" });
+  const [editItem, setEditItem]           = useState(null); // {roomId,id,itemType,changeType,location,fromLocation,notes} while editing an existing change item
   const [openThreads, setOpenThreads]     = useState(() => new Set()); // item ids (or "_general") with discussion expanded
 
   const saveRooms = (next) => u({ panelizedLighting: { ...job.panelizedLighting, lutronRooms: next } });
@@ -15935,6 +15936,42 @@ function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
 
   const deleteItem = (roomId, itemId) => {
     saveRooms(rooms.map(r => r.id === roomId ? { ...r, items: (r.items||[]).filter(i => i.id !== itemId) } : r));
+  };
+
+  const startEditItem = (roomId, item) => setEditItem({
+    roomId, id: item.id,
+    itemType: item.itemType || "Load",
+    changeType: changeTypeOf(item),   // resolves the render-time default for legacy items
+    location: item.location || "",
+    fromLocation: item.fromLocation || "",
+    notes: item.notes || "",
+  });
+
+  const saveEditItem = () => {
+    if (!editItem) return;
+    const location = (editItem.location||"").trim();
+    if (!location) return;
+    const isMoved = editItem.changeType === "Moved";
+    saveRooms(rooms.map(r => r.id === editItem.roomId ? {
+      ...r,
+      items: (r.items||[]).map(i => {
+        if (i.id !== editItem.id) return i;
+        // strip any old fromLocation, then re-add only for Moved (keeps shape clean,
+        // avoids writing an undefined key to Firestore)
+        const { fromLocation, ...rest } = i;
+        return {
+          ...rest,
+          itemType: editItem.itemType || "Load",
+          changeType: editItem.changeType || "Added",
+          location,
+          ...(isMoved && (editItem.fromLocation||"").trim() ? { fromLocation: editItem.fromLocation.trim() } : {}),
+          notes: (editItem.notes||"").trim(),
+          editedBy: getIdentity()?.name || "",
+          editedAt: new Date().toISOString(),
+        };
+      })
+    } : r));
+    setEditItem(null);
   };
 
   const toggleThread = (itemId) => setOpenThreads(prev => {
@@ -16050,6 +16087,35 @@ function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
             const msgs = planChangeThreads?.[item.id] || [];
             const awaiting = threadAwaiting(msgs);
             const threadOpen = openThreads.has(item.id);
+            if (editItem && editItem.id === item.id) {
+              return (
+                <div key={item.id} style={{borderTop:`1px solid ${C.border}`,paddingTop:8,marginTop:8,display:"flex",flexDirection:"column",gap:6}}>
+                  <Sel value={editItem.itemType} onChange={e=>setEditItem({...editItem,itemType:e.target.value})} options={LUTRON_ITEM_TYPES}/>
+                  <Sel value={editItem.changeType} onChange={e=>setEditItem({...editItem,changeType:e.target.value})} options={CHANGE_TYPES}/>
+                  {editItem.changeType==="Moved" && (
+                    <input value={editItem.fromLocation} onChange={e=>setEditItem({...editItem,fromLocation:e.target.value})}
+                      placeholder="Moved from (where the plan has it)"
+                      style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none"}}/>
+                  )}
+                  <input value={editItem.location} onChange={e=>setEditItem({...editItem,location:e.target.value})}
+                    placeholder={editItem.changeType==="Moved" ? "Moved to (where it is now)" : "Location within this room"} autoFocus
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none"}}/>
+                  <input value={editItem.notes} onChange={e=>setEditItem({...editItem,notes:e.target.value})}
+                    placeholder="Notes (optional)" onKeyDown={e=>e.key==="Enter"&&saveEditItem()}
+                    style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:7,color:C.text,padding:"7px 10px",fontSize:12,fontFamily:"inherit",outline:"none"}}/>
+                  <div style={{display:"flex",gap:6}}>
+                    <button onClick={saveEditItem}
+                      style={{background:C.orange,color:"#fff",border:"none",borderRadius:7,padding:"6px 14px",fontSize:12,fontWeight:700,cursor:"pointer",fontFamily:"inherit"}}>
+                      Save changes
+                    </button>
+                    <button onClick={()=>setEditItem(null)}
+                      style={{background:"none",border:`1px solid ${C.border}`,color:C.dim,borderRadius:7,padding:"6px 12px",fontSize:12,cursor:"pointer",fontFamily:"inherit"}}>
+                      Cancel
+                    </button>
+                  </div>
+                </div>
+              );
+            }
             return (
             <div key={item.id} style={awaiting?{background:`${C.orange}0d`,borderRadius:6}:undefined}>
               <div style={{display:"flex",alignItems:"flex-start",gap:8,padding:"6px 0",
@@ -16080,6 +16146,10 @@ function LutronRoomsSection({ job, u, planChangeAcks, planChangeThreads }) {
                     </div>
                   )}
                 </div>
+                <button onClick={()=>startEditItem(room.id,item)} title="Edit item"
+                  style={{background:"none",border:"none",color:C.muted,cursor:"pointer",padding:2,flexShrink:0}}>
+                  <Icon name="pencil" size={12} stroke={2}/>
+                </button>
                 <button onClick={()=>deleteItem(room.id,item.id)} title="Delete item"
                   style={{background:"none",border:"none",color:C.muted,cursor:"pointer",padding:2,flexShrink:0}}>
                   <Icon name="x" size={12} stroke={2}/>
@@ -41831,7 +41901,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-14 · App SW version: v330
+**Last manifest update:** 2026-07-15 · App SW version: v331
 
 ---
 
@@ -42104,6 +42174,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Per-question answer attribution fix** · 'shipped 2026-07-13' · 'SW v327' · link answers carry ONE shared 'questionAnswers.answeredBy' (the last person to submit the link); the auto-apply effect used to re-stamp EVERY answered question with it, so opening a link after the designer relabeled all her answers to the opener (Kweller: 17 of Haley's answers showed "Koy"). The apply effect now prefers the question's own 'answeredBy' ('q.answeredBy || gcAnswers.answeredBy') so a real per-question author is never overwritten by a later, different submitter. Content/photos sync unchanged; the live-sync effect never touched attribution.
 - **Generator panel sync + live schedule** · 'in-flight' · 'SW v329' · (branch 'generator-panel-sync', NOT yet deployed) Generator Load Selection now AUTO-SYNCS from Home Runs instead of a manual import ('reconcileGenLoads' — the gen list mirrors the field's home-run truth; stale office-only loads drop, but a homeowner's *selected* non-match is kept + flagged, never a silent delete). Homeowner submit ↔ office list now reflect each other's picks ('applyHomeownerChoices' — no manual re-checking). A live circuit/space counter + a dedicated generator sub-panel schedule ('GenPanelGrid', reusing the tuned 'placeBreakers' tandem/quad engine) render as loads are toggled; the counter counts REAL placed spaces (not naive poles) so it agrees with the schedule. 14/2 & 12/2 can be flipped to 240V 2-pole 2-wire ('effectivePoles' / 'v240'), read app-wide. Default gen panel 40/80. All writes ride the existing 'saveHomeownerRequest' funnel; no new top-level fields; dry-run-verified 0 data loss / 0 decision change on real jobs.
 - **Generator: Dedicated Loads label + follow-up** · 'shipped 2026-07-14' · 'SW v330' · one-click reversible "Update Dedicated Loads" stamp puts chosen circuits' Home Run rows on panel "Dedicated Loads" ('stampDedicatedLoads', prior panel saved to 'panelBeforeGen'). Fix: the trigger button's count ('dedicatedPending') now includes rows that need the label REMOVED (load taken off the generator but still labeled from a prior stamp), not just added — otherwise an un-checked load's label got stuck with no one-click revert. Also 'getPanelOpts' de-dupes the always-present built-ins ("Meter", "Dedicated Loads") so a job that saved either into 'customPanels' no longer renders two panel cards. Office-side write to the job doc only; reversible; verified live on Kweller (take a 6/3 off → counter −1 circuit/−2 slots, label reverts, Dedicated count 46→45).
+- **Plan Changes: edit an existing change item** · 'shipped 2026-07-15' · 'SW v331' · the "Changes From Original Plan" tracker (Panelized Lighting tab) now has a **pencil / inline edit** on every logged change — before, 'changeType' (Added/Moved/Removed/Changed), item type, location, and notes could only be set at add-time, so a mislabeled item (e.g. a removal tagged "Added") was stuck. Edit reuses the add-item form pre-filled and saves via the same 'saveRooms' → 'u({panelizedLighting.lutronRooms})' job-doc path (version-snapshotted); stamps 'editedBy'/'editedAt' (nested). Reflects on Tech Lighting's read-only '?lutronshare=' link.
 
 ---
 
