@@ -13739,10 +13739,21 @@ const stampDedicatedLoads = (homeRuns, genLoads) => {
   return next;
 };
 
-// Count of chosen loads whose Home Run row isn't yet labeled Dedicated Loads.
+// Count of Home Run rows whose "Dedicated Loads" label doesn't match the current
+// generator selection — i.e. rows that need the stamp to ADD the label (chosen,
+// not yet labeled) OR REMOVE it (taken off the generator but still labeled from
+// a prior stamp). Both count, so the button appears for a removal too, not just
+// an addition — otherwise an un-checked load's label gets stuck.
 const dedicatedPending = (homeRuns, genLoads) => {
-  const rowById = {}; flattenHomeRuns(homeRuns).forEach(r => { if (r.id) rowById[r.id] = r; });
-  return (genLoads||[]).filter(l => l.included && l.hrId && rowById[l.hrId] && (rowById[l.hrId].panel||"") !== DEDICATED_PANEL).length;
+  const includedHrIds = new Set((genLoads||[]).filter(l => l.included && l.hrId).map(l => l.hrId));
+  let n = 0;
+  flattenHomeRuns(homeRuns).forEach(r => {
+    const isDed = (r.panel||"") === DEDICATED_PANEL;
+    const shouldBeDed = includedHrIds.has(r.id);
+    if (shouldBeDed && !isDed) n++;                                        // needs the Dedicated Loads label
+    else if (!shouldBeDed && isDed && r.panelBeforeGen !== undefined) n++; // was stamped, load now off -> needs revert
+  });
+  return n;
 };
 
 // ── Generator Load Section ────────────────────────────────────
@@ -13808,13 +13819,13 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange }) {
         {onHRChange && dedicatedPending(homeRuns, loads) > 0 && (
           <button onClick={async ()=>{
             const n = dedicatedPending(homeRuns, loads);
-            if (await showConfirm(`Label ${n} chosen circuit${n>1?'s':''} as "Dedicated Loads" on the Home Runs list? Each row's current panel is saved first, so this is fully reversible.`)) {
+            if (await showConfirm(`Update ${n} Home Run panel label${n>1?'s':''} to match the generator selection? Chosen circuits get "Dedicated Loads"; any taken off revert to their prior panel. Fully reversible.`)) {
               onHRChange(stampDedicatedLoads(homeRuns, loads));
-              toast.success(`Labeled ${n} circuit${n>1?'s':''} as Dedicated Loads.`);
+              toast.success(`Updated ${n} Dedicated Loads label${n>1?'s':''}.`);
             }
           }}
           style={{background:C.accent,border:'none',borderRadius:8,color:'#fff',fontSize:11,fontWeight:700,padding:'6px 12px',cursor:'pointer',fontFamily:'inherit'}}>
-            Label {dedicatedPending(homeRuns, loads)} as Dedicated Loads
+            Update Dedicated Loads ({dedicatedPending(homeRuns, loads)})
           </button>
         )}
         <button onClick={addRow}
@@ -41820,7 +41831,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-14 · App SW version: v329
+**Last manifest update:** 2026-07-14 · App SW version: v330
 
 ---
 
@@ -42091,7 +42102,8 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Data-loss hardening (HD1/HD2/HD5 + M1)** · 'shipped 2026-07-13' · 'SW v326' · 'saveHomeownerRequest' funnel now writes in a 'runTransaction' (re-read under lock, 'tx.update' only the patched keys) so concurrent writes to different fields on the same 'homeowner_requests' doc can't revert each other — fixes all 9 funnel callers (M1). 'LightingSharePage' three-way merge moved inside that transaction and its previously-silent save failure now surfaces (toast + "Not saved" indicator) (HD1). Server ('onJobUpdate') gains a data-loss TRIPWIRE (pushes Koy when one write wipes most of a job's questions/answers/punch/COs) and durable per-field VERSION SNAPSHOTS into 'jobs/{id}/versions' (newest 25 — surgical restore beyond PITR's 7-day window) (HD5/HD2). Database delete-protection enabled (HD3). Server half deploys via 'firebase deploy --only functions:onJobUpdate'.
 - **Answer-wipe fix — kill the auto-retraction** · 'shipped 2026-07-13' · 'SW v328' · the link-sync effect had a branch that auto-DELETED a question's answer text (and un-answered it) whenever the link's copy looked empty. A device with a stale/empty 'questionAnswers' un-answered 17 real designer answers at once and 'saveJob' merged the blanks onto the server (same loss class as the original Kweller wipe, different trigger). That branch is removed — the sync NEVER deletes an existing answer; text/photo edits still propagate; a genuine link retraction is now a manual crew reopen. Also: the data-loss tripwire now trips on a big ABSOLUTE drop (≥8 answers), not only ≥50%, so a 17-of-42 wipe pings Koy (the reason this one went unnoticed). Deploy server half via 'firebase deploy --only functions:onJobUpdate'.
 - **Per-question answer attribution fix** · 'shipped 2026-07-13' · 'SW v327' · link answers carry ONE shared 'questionAnswers.answeredBy' (the last person to submit the link); the auto-apply effect used to re-stamp EVERY answered question with it, so opening a link after the designer relabeled all her answers to the opener (Kweller: 17 of Haley's answers showed "Koy"). The apply effect now prefers the question's own 'answeredBy' ('q.answeredBy || gcAnswers.answeredBy') so a real per-question author is never overwritten by a later, different submitter. Content/photos sync unchanged; the live-sync effect never touched attribution.
-- **Generator panel sync + live schedule** · 'in-flight' · 'SW v329' · (branch 'generator-panel-sync', NOT yet deployed) Generator Load Selection now AUTO-SYNCS from Home Runs instead of a manual import ('reconcileGenLoads' — the gen list mirrors the field's home-run truth; stale office-only loads drop, but a homeowner's *selected* non-match is kept + flagged, never a silent delete). Homeowner submit ↔ office list now reflect each other's picks ('applyHomeownerChoices' — no manual re-checking). A live circuit/space counter + a dedicated generator sub-panel schedule ('GenPanelGrid', reusing the tuned 'placeBreakers' tandem/quad engine) render as loads are toggled; the counter counts REAL placed spaces (not naive poles) so it agrees with the schedule. 14/2 & 12/2 can be flipped to 240V 2-pole 2-wire ('effectivePoles' / 'v240'), read app-wide. Default gen panel 40/80. Item 4 (auto-stamp chosen loads to a "Dedicated Loads" panel) still pending. All writes ride the existing 'saveHomeownerRequest' funnel; no new top-level fields; dry-run-verified 0 data loss / 0 decision change on real jobs.
+- **Generator panel sync + live schedule** · 'in-flight' · 'SW v329' · (branch 'generator-panel-sync', NOT yet deployed) Generator Load Selection now AUTO-SYNCS from Home Runs instead of a manual import ('reconcileGenLoads' — the gen list mirrors the field's home-run truth; stale office-only loads drop, but a homeowner's *selected* non-match is kept + flagged, never a silent delete). Homeowner submit ↔ office list now reflect each other's picks ('applyHomeownerChoices' — no manual re-checking). A live circuit/space counter + a dedicated generator sub-panel schedule ('GenPanelGrid', reusing the tuned 'placeBreakers' tandem/quad engine) render as loads are toggled; the counter counts REAL placed spaces (not naive poles) so it agrees with the schedule. 14/2 & 12/2 can be flipped to 240V 2-pole 2-wire ('effectivePoles' / 'v240'), read app-wide. Default gen panel 40/80. All writes ride the existing 'saveHomeownerRequest' funnel; no new top-level fields; dry-run-verified 0 data loss / 0 decision change on real jobs.
+- **Generator: Dedicated Loads label + follow-up** · 'shipped 2026-07-14' · 'SW v330' · one-click reversible "Update Dedicated Loads" stamp puts chosen circuits' Home Run rows on panel "Dedicated Loads" ('stampDedicatedLoads', prior panel saved to 'panelBeforeGen'). Fix: the trigger button's count ('dedicatedPending') now includes rows that need the label REMOVED (load taken off the generator but still labeled from a prior stamp), not just added — otherwise an un-checked load's label got stuck with no one-click revert. Also 'getPanelOpts' de-dupes the always-present built-ins ("Meter", "Dedicated Loads") so a job that saved either into 'customPanels' no longer renders two panel cards. Office-side write to the job doc only; reversible; verified live on Kweller (take a 6/3 off → counter −1 circuit/−2 slots, label reverts, Dedicated count 46→45).
 
 ---
 
