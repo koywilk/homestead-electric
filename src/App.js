@@ -41226,6 +41226,7 @@ function QuestionsSharePage({ jobId }) {
   const [respondentName, setRespondentName]= useState('');
   const [nameErr,        setNameErr]       = useState(false);
   const [prevAnsweredBy, setPrevAnsweredBy]= useState('');
+  const [loadedAnsweredIds, setLoadedAnsweredIds] = useState(() => new Set()); // question ids that ALREADY had a stored answer at load — a snapshot (never grows as you type) so the "previously answered" banner can be scoped to THIS link
   // Track which questions have a committed answer (updated on textarea blur, not every keystroke)
   // so cards don't jump around while you're mid-sentence.
   const [answeredIds, setAnsweredIds] = useState(() => {
@@ -41342,6 +41343,7 @@ function QuestionsSharePage({ jobId }) {
         setNotes(prev => ({...nts, ...prev}));
         setAnsPhotos(prev => ({...phs, ...prev}));
         setAnsweredIds(prev => new Set([...prev, ...aSet]));
+        setLoadedAnsweredIds(new Set(aSet)); // snapshot of what was answered BEFORE this session — drives the per-link "previously answered" banner
       }
     }).catch(()=>{});
   }, [jobId]);
@@ -41495,6 +41497,16 @@ function QuestionsSharePage({ jobId }) {
   ] : []).filter(q=>!filterIds || filterIds.has(q.id));
   const hasQs = roughQs.length+finishQs.length > 0;
 
+  // "You previously submitted answers as X" banner — scoped to THIS link.
+  // questionAnswers.answeredBy is a SINGLE doc-level field shared by every share
+  // link (the last person to submit ANY of them), so keying the banner off it
+  // made every Kweller link claim "as Haley" — even links Haley was never sent,
+  // and even ones with zero answers. Show it only when a question ON THIS LINK
+  // actually had a prior answer, and name the link's OWN recipient (shareName),
+  // falling back to the doc-level name only for the generic all-questions link.
+  const priorName = shareName || prevAnsweredBy;
+  const showPriorBanner = !!priorName && [...roughQs, ...finishQs].some(q => loadedAnsweredIds.has(q.id));
+
   const cardStyle = {background:'#fff',border:'1px solid #E1E4E9',borderRadius:10,padding:16,marginBottom:12};
 
   // ── Cleaner organization (2026-07-06): one shared card renderer for both
@@ -41627,7 +41639,7 @@ function QuestionsSharePage({ jobId }) {
         </div>
       </div>
 
-      {prevAnsweredBy&&<div style={{background:'#F3E9CF',border:'1px solid #B0892C',borderRadius:8,padding:'10px 14px',marginBottom:16,fontSize:12,color:'#6E5212',display:'flex',alignItems:'center',gap:8}}><Icon name="pencil" size={13}/><span>You previously submitted answers as <b>{prevAnsweredBy}</b>. You can update them below and resubmit.</span></div>}
+      {showPriorBanner&&<div style={{background:'#F3E9CF',border:'1px solid #B0892C',borderRadius:8,padding:'10px 14px',marginBottom:16,fontSize:12,color:'#6E5212',display:'flex',alignItems:'center',gap:8}}><Icon name="pencil" size={13}/><span>You previously submitted answers as <b>{priorName}</b>. You can update them below and resubmit.</span></div>}
 
       {!hasQs ? (
         <div style={{textAlign:'center',padding:'48px 20px',color:'#99A0AA',background:'#fff',borderRadius:12}}>
@@ -41945,7 +41957,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-15 · App SW version: v332
+**Last manifest update:** 2026-07-15 · App SW version: v333
 
 ---
 
@@ -42219,6 +42231,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Generator panel sync + live schedule** · 'in-flight' · 'SW v329' · (branch 'generator-panel-sync', NOT yet deployed) Generator Load Selection now AUTO-SYNCS from Home Runs instead of a manual import ('reconcileGenLoads' — the gen list mirrors the field's home-run truth; stale office-only loads drop, but a homeowner's *selected* non-match is kept + flagged, never a silent delete). Homeowner submit ↔ office list now reflect each other's picks ('applyHomeownerChoices' — no manual re-checking). A live circuit/space counter + a dedicated generator sub-panel schedule ('GenPanelGrid', reusing the tuned 'placeBreakers' tandem/quad engine) render as loads are toggled; the counter counts REAL placed spaces (not naive poles) so it agrees with the schedule. 14/2 & 12/2 can be flipped to 240V 2-pole 2-wire ('effectivePoles' / 'v240'), read app-wide. Default gen panel 40/80. All writes ride the existing 'saveHomeownerRequest' funnel; no new top-level fields; dry-run-verified 0 data loss / 0 decision change on real jobs.
 - **Generator: Dedicated Loads label + follow-up** · 'shipped 2026-07-14' · 'SW v330' · one-click reversible "Update Dedicated Loads" stamp puts chosen circuits' Home Run rows on panel "Dedicated Loads" ('stampDedicatedLoads', prior panel saved to 'panelBeforeGen'). Fix: the trigger button's count ('dedicatedPending') now includes rows that need the label REMOVED (load taken off the generator but still labeled from a prior stamp), not just added — otherwise an un-checked load's label got stuck with no one-click revert. Also 'getPanelOpts' de-dupes the always-present built-ins ("Meter", "Dedicated Loads") so a job that saved either into 'customPanels' no longer renders two panel cards. Office-side write to the job doc only; reversible; verified live on Kweller (take a 6/3 off → counter −1 circuit/−2 slots, label reverts, Dedicated count 46→45).
 - **Plan Changes: edit an existing change item** · 'shipped 2026-07-15' · 'SW v331' · the "Changes From Original Plan" tracker (Panelized Lighting tab) now has a **pencil / inline edit** on every logged change — before, 'changeType' (Added/Moved/Removed/Changed), item type, location, and notes could only be set at add-time, so a mislabeled item (e.g. a removal tagged "Added") was stuck. Edit reuses the add-item form pre-filled and saves via the same 'saveRooms' → 'u({panelizedLighting.lutronRooms})' job-doc path (version-snapshotted); stamps 'editedBy'/'editedAt' (nested). Reflects on Tech Lighting's read-only '?lutronshare=' link.
+- **"Previously answered as X" banner — per-link, not global** · 'shipped 2026-07-15' · 'SW v333' · the returning-recipient banner on a question share link ('QuestionsSharePage') keyed off the doc-level 'questionAnswers.answeredBy' — a SINGLE field shared by every share link (the last person to submit ANY of them). On Kweller that made all 4 links say "You previously submitted answers as Haley," including the "Koy" link (Koy's answer, mislabeled) and the "Mark Wintzer team" link that had zero answers and was never sent to Haley. Fixed: the banner now shows only when a question ON THIS LINK actually had a prior answer (a 'loadedAnsweredIds' snapshot taken at load, intersected with this link's filtered questions), and it names the link's OWN recipient ('shareName'), falling back to the doc-level name only for the generic all-questions link. Display-only change; no write path or data-shape change.
 - **Question share-link preview (in-app)** · 'shipped 2026-07-15' · 'SW v332' · the Share-Questions modal's SAVED LINKS list gains a **Preview** button next to Copy link — it opens the recipient's exact page in an in-app modal '<iframe>' ('/?questions={jobId}&s={shareId}&preview=1') so the office can see what a person will see without copying the URL and opening a tab. 'QuestionsSharePage' reads '?preview=1' and renders its real body inside a disabled '<fieldset>' under a "PREVIEW · read-only" banner (one guard disables every input / attach / submit). Preview is provably write-inert: 'handleSubmit', 'runAutoSave', and 'postThread' each early-return on 'preview' (belt-and-suspenders atop the existing 'userEditedRef' mount guard), so no draft/answer/thread write can fire. No data-model change; no new Firestore field; office-side view only.
 
 ---
