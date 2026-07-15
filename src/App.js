@@ -13258,7 +13258,15 @@ function ReturnTrips({trips,onChange,jobName,jobSimproNo,onEmail,jobId,users=[],
 const DEFAULT_PANELS = ["Panel A","Panel B","Panel C","Panel D"];
 
 const PANEL_ORDER_BASE = {"":0,"Meter":0.5,"Dedicated Loads":999};
-const getPanelOpts = (customPanels) => ["","Meter",...(customPanels&&customPanels.length?customPanels:DEFAULT_PANELS),"Dedicated Loads"];
+const getPanelOpts = (customPanels) => {
+  // "Meter" and "Dedicated Loads" are always-present built-ins, appended here.
+  // Filter them (and blanks) out of the custom list so a job that saved either
+  // INTO customPanels doesn't get a DUPLICATE option / summary card — this is
+  // what caused two "Dedicated Loads" panels to appear after the gen-load stamp.
+  const custom = (customPanels&&customPanels.length?customPanels:DEFAULT_PANELS)
+    .filter(p => p && p !== "Meter" && p !== "Dedicated Loads");
+  return ["","Meter",...custom,"Dedicated Loads"];
+};
 const getPanelOrder = (customPanels) => {
   const opts = getPanelOpts(customPanels);
   const order = {};
@@ -13333,6 +13341,20 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
           <span style={{fontSize:9,color:r.status==="Pulled"?C.green:C.red,fontWeight:600}}>
             {r.status==="Pulled"?"✓":"!"} {r.statusBy}{r.statusAt?" · "+r.statusAt:""}
           </span>
+        </div>
+      )}
+      {/* 240V 2-wire override — only for 14/2 & 12/2 (the 1-pole /2 cables run
+          2-wire, no neutral, on a 240V-only load). Sets v240 on the row; every
+          panel + the generator page read it via effectivePoles. */}
+      {canBe240(r.wire)&&(
+        <div style={{paddingLeft:22,marginTop:3,display:"flex",alignItems:"center",gap:6}}>
+          <button onClick={()=>upd(r.id,{v240:!r.v240})}
+            title={r.v240?"240V 2-pole (2-wire, no neutral) — tap for 120V":"Run as 240V 2-pole (2-wire, no neutral)"}
+            style={{fontSize:9,fontWeight:800,letterSpacing:"0.02em",borderRadius:5,padding:"2px 7px",cursor:"pointer",
+              border:`1px solid ${r.v240?C.blue:C.border}`,background:r.v240?C.blue:"transparent",color:r.v240?"#fff":C.dim,fontFamily:"inherit"}}>
+            {r.v240?"240V":"120V"}
+          </button>
+          <span style={{fontSize:9,color:C.dim}}>{r.v240?"2-pole · 240V (2-wire)":"1-pole · 120V"}</span>
         </div>
       )}
     </div>
@@ -13569,16 +13591,162 @@ const WIRE_BREAKER = {
   "3/0":  {amps:175, poles:2}, "4/0":  {amps:200, poles:2},
 };
 
+// A 14/2 or 12/2 (the only 1-pole /2 cables) can be run as a 240V 2-pole
+// circuit when wired 2-wire — two hots + ground, no neutral, the white
+// re-identified as a hot. The per-circuit `v240` flag overrides the wire's
+// default poles for those two sizes ONLY; every other wire is unambiguous
+// (10/2+ is already 2-pole, /3 has a neutral). Amps always come from the wire
+// gauge — only poles/volts flip. WIRE_BREAKER itself is never mutated; this is
+// an override layered on top, read everywhere via effectivePoles().
+const canBe240 = (wire) => wire === "14/2" || wire === "12/2";
+const effectivePoles = (wire, v240) => {
+  const b = WIRE_BREAKER[wire];
+  if (!b) return 1;
+  return (v240 && canBe240(wire)) ? 2 : b.poles;
+};
+
 // Homeowner-facing spec label derived from a wire's breaker: "20A · 120V".
-// 1-pole => 120V, 2-pole => 240V. Blank/unknown wire => "" (caller hides it).
-const wireAmpsVolts = (wire) => {
+// 1-pole => 120V, 2-pole => 240V. Optional v240 flips a 14/2 or 12/2 to 240V
+// 2-pole (2-wire). Blank/unknown wire => "" (caller hides it).
+const wireAmpsVolts = (wire, v240) => {
   const b = WIRE_BREAKER[wire];
   if (!b) return "";
-  return `${b.amps}A · ${b.poles === 1 ? 120 : 240}V`;
+  return `${b.amps}A · ${effectivePoles(wire, v240) === 1 ? 120 : 240}V`;
+};
+
+// Flatten every home-run row across floors, keeping rows that have a name.
+// Wire is NOT required — a "Need Specs" row has a name but no wire yet and must
+// still reach the generator list (item 1). Shared by the gen sync + panel fill.
+const flattenHomeRuns = (homeRuns) => {
+  if (!homeRuns) return [];
+  return [
+    ...(homeRuns.main||[]),
+    ...(homeRuns.upper||[]),
+    ...(homeRuns.basement||[]),
+    ...((homeRuns.extraFloors||[]).flatMap(e=>homeRuns[e.key]||[])),
+  ].filter(r => r && (r.name||'').trim());
+};
+
+// Cheap signatures for change-detection so we never rewrite Firestore when a
+// reconcile produced an identical list, and so the sync effect only fires when
+// the home-run rows actually change.
+const genHomeRunsSig = (homeRuns) => JSON.stringify(
+  flattenHomeRuns(homeRuns).map(r => [r.id, r.name, r.wire, r.status, !!r.v240]));
+const genLoadsSig = (arr) => JSON.stringify((arr||[]).map(l =>
+  [l.id, l.hrId, l.name, l.wire, !!l.v240, !!l.needsSpecs, l.origin,
+   !!l.recommended, !!l.included, !!l.confirmed, l.priority, l.status, !!l.orphaned]));
+
+// Auto-sync the generator load list from Home Runs (item 2). Home Runs is the
+// FIELD'S GROUND TRUTH (built from the actual wire pulls), so the gen list is a
+// pure MIRROR of it. Existing loads that match a home-run row (by hrId, name as
+// a one-time legacy fallback) are kept in place and refreshed, preserving human
+// decisions (recommended / included / confirmed / priority / status / notes).
+// New home-run rows append OFF. A load that does NOT match any home-run row is
+// stale office data and is DROPPED — WITH ONE GUARD: if a homeowner actually
+// selected it onto their generator (included / status 'chosen'), it is never
+// silently dropped; it is kept and flagged `orphaned` so the office can verify
+// or remove it deliberately. Pure + idempotent: reconcile(reconcile(x)) === it.
+const reconcileGenLoads = (homeRuns, genLoads) => {
+  const rows = flattenHomeRuns(homeRuns);
+  const prev = Array.isArray(genLoads) ? genLoads : [];
+  const rowByHr = {};
+  rows.forEach(r => { if (r.id) rowByHr[r.id] = r; });
+  const rowByName = {};
+  rows.forEach(r => { const k = (r.name||'').trim().toLowerCase(); if (k && !(k in rowByName)) rowByName[k] = r; });
+  const matched = new Set();
+  const specsOf = (r) => r.status === 'Need Specs' || !r.wire;
+  const out = [];
+  // 1. existing gen loads, in order — refresh matches, keep-flag selected
+  //    non-matches, DROP unselected non-matches (stale office data).
+  prev.forEach(l => {
+    let r = l.hrId ? rowByHr[l.hrId] : null;
+    if (!r && !l.hrId) {
+      const cand = rowByName[(l.name||'').trim().toLowerCase()];
+      if (cand && !matched.has(cand.id)) r = cand;
+    }
+    if (r) {
+      matched.add(r.id);
+      out.push({ ...l, hrId: r.id, name: r.name, wire: r.wire||'', v240: !!r.v240, needsSpecs: specsOf(r), origin: 'homerun', orphaned: false });
+    } else if (l.included || l.status === 'chosen') {
+      // Not in Home Runs, but the homeowner put it ON the generator — never
+      // silently drop a real pick. Keep it, flagged for the office to verify/drop.
+      out.push({ ...l, orphaned: true });
+    }
+    // else: unselected + not in Home Runs -> DROP (Home Runs is the truth).
+  });
+  // 2. new HR rows -> append OFF
+  rows.forEach(r => {
+    if (matched.has(r.id)) return;
+    out.push({ id: uid(), hrId: r.id, name: r.name, wire: r.wire||'', v240: !!r.v240, needsSpecs: specsOf(r),
+      origin: 'homerun', recommended: false, included: false, confirmed: false, priority: 0, status: 'off', notes: '' });
+  });
+  return out;
+};
+
+// Circuit + slot usage for a set of on-generator loads (item 3). slotsUsed sums
+// effective poles; a no-wire needs-specs load counts as 1 provisional space so
+// the total never silently under-counts.
+const genPanelUsage = (onLoads) => {
+  let slotsUsed = 0, provisional = 0;
+  (onLoads||[]).forEach(l => {
+    if (l.needsSpecs && !l.wire) { slotsUsed += 1; provisional += 1; }
+    else slotsUsed += effectivePoles(l.wire, l.v240);
+  });
+  return { circuits: (onLoads||[]).length, slotsUsed, provisional };
+};
+
+// Overlay the homeowner's submitted choices (items) onto genLoads by id so the
+// OFFICE gen list shows exactly what they picked — checked = chosen, unchecked
+// = not. Used on load so jobs submitted BEFORE the submit-writes-back change
+// also auto-reflect the homeowner's selection (no manual re-checking). Pure.
+const applyHomeownerChoices = (genLoads, items) => {
+  if (!Array.isArray(items) || !items.length) return genLoads || [];
+  const byId = {};
+  items.forEach(it => { if (it && it.id != null) byId[it.id] = it; });
+  return (genLoads||[]).map(l => {
+    const c = byId[l.id];
+    if (!c) return l; // office added this after the homeowner opened — leave it
+    const included = !!c.included || c.status === 'chosen';
+    return { ...l, included, confirmed: !!c.confirmed || included,
+      status: c.status || l.status, priority: (c.priority != null ? c.priority : l.priority) };
+  });
+};
+
+// Stamp the chosen loads' Home Run rows with panel "Dedicated Loads" (item 4),
+// REVERSIBLY. A row whose gen load is included -> panel:"Dedicated Loads",
+// stashing its prior panel in `panelBeforeGen` (only once). A row previously
+// stamped whose load is no longer included -> restore its prior panel and clear
+// the stash. Office-side write to the job doc only (never from the homeowner).
+const DEDICATED_PANEL = "Dedicated Loads";
+const stampDedicatedLoads = (homeRuns, genLoads) => {
+  const includedHrIds = new Set((genLoads||[]).filter(l => l.included && l.hrId).map(l => l.hrId));
+  const stampRow = (r) => {
+    if (!r) return r;
+    if (includedHrIds.has(r.id)) {
+      if ((r.panel||"") === DEDICATED_PANEL) return r; // already labeled
+      return { ...r, panel: DEDICATED_PANEL, panelBeforeGen: (r.panelBeforeGen !== undefined ? r.panelBeforeGen : (r.panel||"")) };
+    }
+    // not chosen — revert only a row WE previously stamped (still on Dedicated Loads)
+    if (r.panelBeforeGen !== undefined && (r.panel||"") === DEDICATED_PANEL) {
+      const { panelBeforeGen, ...rest } = r;
+      return { ...rest, panel: panelBeforeGen };
+    }
+    return r;
+  };
+  const mapFloor = (arr) => (arr||[]).map(stampRow);
+  const next = { ...homeRuns, main: mapFloor(homeRuns.main), upper: mapFloor(homeRuns.upper), basement: mapFloor(homeRuns.basement) };
+  (homeRuns.extraFloors||[]).forEach(ef => { next[ef.key] = mapFloor(homeRuns[ef.key]); });
+  return next;
+};
+
+// Count of chosen loads whose Home Run row isn't yet labeled Dedicated Loads.
+const dedicatedPending = (homeRuns, genLoads) => {
+  const rowById = {}; flattenHomeRuns(homeRuns).forEach(r => { if (r.id) rowById[r.id] = r; });
+  return (genLoads||[]).filter(l => l.included && l.hrId && rowById[l.hrId] && (rowById[l.hrId].panel||"") !== DEDICATED_PANEL).length;
 };
 
 // ── Generator Load Section ────────────────────────────────────
-function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
+function GeneratorLoadSection({ homeRuns, genLoads, onSave, onHRChange }) {
   // KEY FIX: local state so ★ toggle and checkboxes update instantly
   const [loads, setLoads] = useState(genLoads || []);
   const [dragIdx, setDragIdx] = useState(null);
@@ -13595,27 +13763,21 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
 
   const commit = (next) => { setLoads(next); onSave(next); };
 
-  const importFromHR = () => {
-    const rows = [
-      ...(homeRuns.main||[]),
-      ...(homeRuns.upper||[]),
-      ...(homeRuns.basement||[]),
-      ...(homeRuns.extraFloors||[]).flatMap(e=>homeRuns[e.key]||[]),
-    ].filter(r=>(r.name||'').trim() && r.wire);
-    const existing = new Set(loads.map(l=>l.name));
-    const added = rows.filter(r=>!existing.has(r.name)).map(r=>({
-      id: uid(), name: r.name, wire: r.wire,
-      recommended: false, included: true,
-    }));
-    if (!added.length) { toast.info('No new named+wired loads to import.'); return; }
-    commit([...loads, ...added]);
-  };
+  // Auto-sync from Home Runs (item 2): whenever the home-run rows change,
+  // reconcile the gen list in place and persist only if it actually changed
+  // (genLoadsSig guard avoids a redundant Firestore write / render loop).
+  const hrSig = genHomeRunsSig(homeRuns);
+  useEffect(() => {
+    const next = reconcileGenLoads(homeRuns, genLoads);
+    if (genLoadsSig(next) !== genLoadsSig(genLoads)) onSave(next);
+  }, [hrSig]); // eslint-disable-line
+  const reSync = () => commit(reconcileGenLoads(homeRuns, genLoads));
 
   const toggle  = (id, key) => commit(loads.map(l=>l.id===id?{...l,[key]:!l[key]}:l));
   const updName = (id, name) => commit(loads.map(l=>l.id===id?{...l,name}:l));
   const updWire = (id, wire) => commit(loads.map(l=>l.id===id?{...l,wire}:l));
   const del     = (id) => commit(loads.filter(l=>l.id!==id));
-  const addRow  = () => commit([...loads,{id:uid(),name:'',wire:'',recommended:false,included:true}]);
+  const addRow  = () => commit([...loads,{id:uid(),name:'',wire:'',v240:false,recommended:false,included:true,origin:'manual',needsSpecs:false}]);
 
   const onDragStart = (i) => setDragIdx(i);
   const onDragOver  = (e,i) => { e.preventDefault(); setOverIdx(i); };
@@ -13625,15 +13787,36 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
     commit(next); setDragIdx(null); setOverIdx(null);
   };
 
+  // Derived (item 3): just the two raw counts — total circuits + panel slots
+  // (breaker positions; a 2-pole load = 2). Koy sizes the panel from these; no
+  // fit judgment and no in-section schedule (removed per Koy 2026-07-14).
+  const included = loads.filter(l=>l.included);
+  const usage = genPanelUsage(included);
 
   return (
     <div>
       <div style={{display:'flex',gap:8,marginBottom:12,flexWrap:'wrap',alignItems:'center'}}>
-        <button onClick={importFromHR}
-          style={{background:`${C.blue}15`,border:`1px solid ${C.blue}44`,borderRadius:8,
-            color:C.blue,fontSize:12,fontWeight:700,padding:'7px 14px',cursor:'pointer',fontFamily:'inherit',display:'inline-flex',alignItems:'center',gap:6}}>
-          <Icon name="download" size={12}/> Import from Home Runs
+        <span style={{display:'inline-flex',alignItems:'center',gap:6,fontSize:11,fontWeight:700,
+          color:C.green,background:`${C.green}12`,border:`1px solid ${C.green}55`,borderRadius:999,padding:'6px 12px'}}>
+          <span style={{width:6,height:6,borderRadius:'50%',background:C.green,display:'inline-block'}}/> Synced with Home Runs
+        </span>
+        <button onClick={reSync}
+          style={{background:'none',border:`1px solid ${C.border}`,borderRadius:8,
+            color:C.dim,fontSize:11,fontWeight:600,padding:'6px 12px',cursor:'pointer',fontFamily:'inherit'}}>
+          Re-sync now
         </button>
+        {onHRChange && dedicatedPending(homeRuns, loads) > 0 && (
+          <button onClick={async ()=>{
+            const n = dedicatedPending(homeRuns, loads);
+            if (await showConfirm(`Label ${n} chosen circuit${n>1?'s':''} as "Dedicated Loads" on the Home Runs list? Each row's current panel is saved first, so this is fully reversible.`)) {
+              onHRChange(stampDedicatedLoads(homeRuns, loads));
+              toast.success(`Labeled ${n} circuit${n>1?'s':''} as Dedicated Loads.`);
+            }
+          }}
+          style={{background:C.accent,border:'none',borderRadius:8,color:'#fff',fontSize:11,fontWeight:700,padding:'6px 12px',cursor:'pointer',fontFamily:'inherit'}}>
+            Label {dedicatedPending(homeRuns, loads)} as Dedicated Loads
+          </button>
+        )}
         <button onClick={addRow}
           style={{background:`${C.green}12`,border:`1px dashed ${C.green}55`,borderRadius:8,
             color:C.green,fontSize:12,fontWeight:600,padding:'7px 14px',cursor:'pointer',fontFamily:'inherit'}}>
@@ -13648,10 +13831,25 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
         )}
       </div>
 
+      {/* Counter (item 3): the two raw counts — circuits + panel slots. */}
+      <div style={{display:'flex',alignItems:'baseline',flexWrap:'wrap',gap:'0 4px',margin:'0 0 14px',
+        padding:'11px 14px',borderRadius:11,background:`${C.accent}0f`,border:`1px solid ${C.accent}`}}>
+        <span style={{fontSize:22,fontWeight:800,color:C.text,fontVariantNumeric:'tabular-nums'}}>{usage.circuits}</span>
+        <span style={{fontSize:12,color:C.dim,margin:'0 8px 0 4px'}}>circuits on generator</span>
+        <span style={{color:C.muted,margin:'0 8px'}}>·</span>
+        <span style={{fontSize:22,fontWeight:800,color:C.text,fontVariantNumeric:'tabular-nums'}}>{usage.slotsUsed}</span>
+        <span style={{fontSize:12,color:C.dim,margin:'0 4px'}}>panel slots (2-pole = 2)</span>
+        {usage.provisional>0 && (
+          <span style={{flexBasis:'100%',fontSize:11.5,fontWeight:600,marginTop:6,color:C.orange}}>
+            {usage.provisional} still needs specs — counted as 1 slot for now.
+          </span>
+        )}
+      </div>
+
       {loads.length===0&&(
         <div style={{textAlign:'center',padding:'24px',color:C.muted,fontSize:12,fontStyle:'italic',
           border:`1px dashed ${C.border}`,borderRadius:10,marginBottom:12}}>
-          No loads yet — import from Home Runs or add manually
+          No loads yet — add them in Home Runs (they sync here), or add one manually
         </div>
       )}
 
@@ -13692,6 +13890,15 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
               </option>
             ))}
           </select>
+          {wireAmpsVolts(load.wire, load.v240)&&(
+            <span style={{fontSize:9,color:C.dim,fontVariantNumeric:'tabular-nums',flexShrink:0,minWidth:52,textAlign:'right'}}>{wireAmpsVolts(load.wire, load.v240)}</span>
+          )}
+          {load.needsSpecs&&!load.wire&&(
+            <span title="Needs specs — no wire yet" style={{fontSize:9,fontWeight:700,color:C.orange,background:`${C.orange}18`,border:`1px solid ${C.orange}55`,borderRadius:5,padding:'1px 5px',flexShrink:0}}>specs</span>
+          )}
+          {load.orphaned&&(
+            <span title="Removed from Home Runs — keep it or drop it (✕)" style={{fontSize:9,fontWeight:700,color:C.red,background:`${C.red}12`,border:`1px solid ${C.red}55`,borderRadius:5,padding:'1px 5px',flexShrink:0}}>orphan</span>
+          )}
           {/* ★ Recommended — KEY FIX: reads from local `load` which updates immediately */}
           <button onClick={()=>toggle(load.id,'recommended')}
             title={load.recommended?'Remove recommendation':'Mark recommended'}
@@ -13722,6 +13929,239 @@ function GeneratorLoadSection({ homeRuns, genLoads, onSave }) {
 // Stored on job.electricalPanels (additive — old jobs without it default
 // to []). Click "Print" on any panel to open the print-ready popup using
 // printElectricalPanel().
+// Koy-tuned breaker placement, extracted to module level (item 4) so BOTH the
+// panel schedules (fillPanelFromHomeRuns) and the dedicated generator sub-panel
+// (buildGeneratorPanel) share ONE algorithm. Input: breakers[] each
+// { name, amps, poles, wire }. Output: { circuits, unplaced }. Sorts 2-pole
+// first / amps DESC / name, then Phase 1 (2-poles) -> Phase 2 (tandems, same-amp
+// pairs highest-amp first) -> Phase 3 (quad conversion when tandems overflow);
+// anything still unplaced -> unplaced[].
+const placeBreakers = (breakers, slotCount) => {
+  breakers = breakers.slice().sort((a,b) => {
+    if (a.poles !== b.poles) return b.poles - a.poles; // 2-pole before 1-pole
+    if (a.amps !== b.amps) return b.amps - a.amps;     // higher amps first
+    return (a.name||"").localeCompare(b.name||"");
+  });
+  const oddSlots = []; const evenSlots = [];
+  for (let i = 1; i <= slotCount; i++) (i%2 ? oddSlots : evenSlots).push(i);
+  const sides = [
+    { slots: oddSlots,  i: 0 },  // left column (1, 3, 5, ...)
+    { slots: evenSlots, i: 0 },  // right column (2, 4, 6, ...)
+  ];
+  const circuits = {};
+  const twoPoleSlots = new Set(); // slot numbers that are part of a 2-pole
+  let next2pSide = 0;
+  let next1pSide = 0;
+  const unplaced = [];
+
+  const twoPoles = breakers.filter(b => b.poles === 2);
+  const onePoles = breakers.filter(b => b.poles === 1);
+
+  // ── Phase 1: place 2-poles in A positions ──
+  for (const br of twoPoles) {
+    let placed = false;
+    for (let attempt = 0; attempt < 2 && !placed; attempt++) {
+      const s = sides[(next2pSide + attempt) % 2];
+      if (s.i + 1 < s.slots.length) {
+        const t = s.slots[s.i], bt = s.slots[s.i+1];
+        circuits[`${t}A`]  = { name: br.name, amps: String(br.amps), wire: br.wire, notes: "240V" };
+        circuits[`${bt}A`] = { name: `${br.name} (240V cont.)`, amps: String(br.amps), wire: br.wire };
+        twoPoleSlots.add(t); twoPoleSlots.add(bt);
+        s.i += 2;
+        placed = true;
+        next2pSide = (next2pSide + 1) % 2;
+      }
+    }
+    if (!placed) unplaced.push(br);
+  }
+
+  // ── Phase 2: form tandems (same-amp pairs, highest amp first), then place ──
+  const onePoleSlotsAvail = sides.reduce((n, s) => n + (s.slots.length - s.i), 0);
+  const tandemsNeeded = Math.max(0, onePoles.length - onePoleSlotsAvail);
+  const ampGroups = new Map();
+  for (const br of onePoles) {
+    if (!ampGroups.has(br.amps)) ampGroups.set(br.amps, []);
+    ampGroups.get(br.amps).push(br);
+  }
+  const ampsSorted = [...ampGroups.keys()].sort((a, b) => b - a);
+  const tandemUnits = [];
+  let formed = 0;
+  for (const amps of ampsSorted) {
+    const grp = ampGroups.get(amps);
+    while (formed < tandemsNeeded && grp.length >= 2) {
+      const a = grp.shift(), b = grp.shift();
+      tandemUnits.push({ type: "tandem", sameAmp: true, brA: a, brB: b });
+      formed++;
+    }
+    if (formed >= tandemsNeeded) break;
+  }
+  if (formed < tandemsNeeded) {
+    const leftovers = [];
+    for (const amps of ampsSorted) leftovers.push(...(ampGroups.get(amps) || []));
+    while (formed < tandemsNeeded && leftovers.length >= 2) {
+      const a = leftovers.shift(), b = leftovers.shift();
+      tandemUnits.push({ type: "tandem", sameAmp: false, brA: a, brB: b });
+      formed++;
+    }
+    for (const br of leftovers) {
+      if (!ampGroups.has(br.amps)) ampGroups.set(br.amps, []);
+      ampGroups.get(br.amps).push(br);
+    }
+  }
+  const singleUnits = [];
+  for (const amps of ampsSorted) {
+    for (const br of (ampGroups.get(amps) || [])) {
+      singleUnits.push({ type: "single", amps, br });
+    }
+  }
+  const allUnits = [...tandemUnits.map(u => ({ ...u, amps: u.brA.amps })), ...singleUnits];
+  allUnits.sort((u, v) => {
+    if (u.amps !== v.amps) return v.amps - u.amps;
+    if ((u.type === "tandem") !== (v.type === "tandem")) return u.type === "tandem" ? -1 : 1;
+    return 0;
+  });
+
+  const overflow = [];
+  for (const unit of allUnits) {
+    let placed = false;
+    for (let attempt = 0; attempt < 2 && !placed; attempt++) {
+      const s = sides[(next1pSide + attempt) % 2];
+      if (s.i < s.slots.length) {
+        const slotN = s.slots[s.i];
+        if (unit.type === "tandem") {
+          circuits[`${slotN}A`] = { name: unit.brA.name, amps: String(unit.brA.amps), wire: unit.brA.wire };
+          circuits[`${slotN}B`] = {
+            name: unit.brB.name, amps: String(unit.brB.amps), wire: unit.brB.wire,
+            notes: unit.sameAmp ? "tandem" : `tandem · SPLIT (${unit.brB.amps}A with ${unit.brA.amps}A)`,
+            ...(unit.sameAmp ? {} : { splitTandem: true }),
+          };
+        } else {
+          circuits[`${slotN}A`] = { name: unit.br.name, amps: String(unit.br.amps), wire: unit.br.wire };
+        }
+        s.i++;
+        placed = true;
+        next1pSide = (next1pSide + 1) % 2;
+      }
+    }
+    if (!placed) {
+      if (unit.type === "tandem") overflow.push(unit.brA, unit.brB);
+      else overflow.push(unit.br);
+    }
+  }
+
+  // ── Phase 3: quad conversion when tandems alone couldn't fit everything ──
+  if (overflow.length) {
+    let queue = overflow.slice();
+    const twoPoleTops = [];
+    const oddCol  = []; for (let n = 1; n <= slotCount; n+=2) oddCol.push(n);
+    const evenCol = []; for (let n = 2; n <= slotCount; n+=2) evenCol.push(n);
+    for (const col of [oddCol, evenCol]) {
+      for (let i = 0; i + 1 < col.length; i++) {
+        const top = col[i], bot = col[i+1];
+        const ta = circuits[`${top}A`], ba = circuits[`${bot}A`];
+        if (ta && ba && ta.notes === "240V" && ba.name && ba.name.includes("(240V cont.")) {
+          if (circuits[`${top}B`] || circuits[`${bot}B`]) continue;
+          twoPoleTops.push({ top, bot, topData: ta, botData: ba });
+        }
+      }
+    }
+    while (queue.length >= 2 && twoPoleTops.length) {
+      const pair = twoPoleTops.shift();
+      const br1 = queue.shift();
+      const br2 = queue.shift();
+      circuits[`${pair.top}B`] = { ...pair.topData, notes: "240V (quad inner top)" };
+      circuits[`${pair.bot}A`] = { ...pair.botData, notes: "240V cont. (quad inner)" };
+      circuits[`${pair.top}A`] = { name: br1.name, amps: String(br1.amps), wire: br1.wire, notes: "quad outer top", quadOuter: true };
+      circuits[`${pair.bot}B`] = { name: br2.name, amps: String(br2.amps), wire: br2.wire, notes: "quad outer bottom", quadOuter: true };
+    }
+    queue.forEach(b => unplaced.push(b));
+  }
+
+  return { circuits, unplaced };
+};
+
+// Build the dedicated generator sub-panel (item 4). Takes the on-generator
+// gen loads + a slot count, derives breakers via effectivePoles (so a 12/2 set
+// v240 lands as a 2-pole), and runs the shared placeBreakers engine. A no-wire
+// needs-specs load is placed as a 1-pole "(pending specs)" placeholder so the
+// schedule shows it without inventing a breaker.
+const buildGeneratorPanel = (onLoads, slotCount) => {
+  const breakers = (onLoads||[]).map(l => {
+    const prov = l.needsSpecs && !l.wire;
+    const b = WIRE_BREAKER[l.wire];
+    return {
+      name: prov ? `${(l.name||"").trim()||"circuit"} (pending specs)` : ((l.name||"").trim() || `${l.wire} circuit`),
+      amps: prov ? 0 : (b ? b.amps : 20),
+      poles: prov ? 1 : effectivePoles(l.wire, l.v240),
+      wire: l.wire || "",
+    };
+  });
+  return placeBreakers(breakers, slotCount || 30);
+};
+
+// Read-only live render of the generator sub-panel schedule (item 5) — the same
+// name | # | # | name printed-sheet layout as ElectricalPanelSchedules, two rows
+// per slot, with the same tandem (amber) / quad (purple) / split (red) coloring.
+function GenPanelGrid({ circuits, slotCount }) {
+  const count = slotCount || 30;
+  const oddCount = Math.ceil(count / 2);
+  const numStyle = { border:`1px solid ${C.border}`, width:34, textAlign:'center', fontWeight:800,
+    background:`${C.accent}10`, color:C.accent, fontSize:12 };
+  const oobStyle = { border:`1px solid ${C.border}`, background:`${C.muted}11` };
+  const cell = (key, isBottom) => {
+    const c = (circuits||{})[key];
+    const base = { border:`1px solid ${C.border}`, height:24, padding:'0 6px', fontSize:11,
+      whiteSpace:'nowrap', overflow:'hidden', textOverflow:'ellipsis', position:'relative',
+      borderTop: isBottom ? `1px dashed ${C.border}` : `1px solid ${C.border}` };
+    if (!c || !c.name) return <td style={{...base, color:C.muted}}/>;
+    const isSplit = !!c.splitTandem;
+    const isQuad = !!c.quadOuter || (c.notes||'').includes('quad inner');
+    const num = parseInt(key, 10);
+    const sibA = (circuits||{})[`${num}A`]||{}, sibB = (circuits||{})[`${num}B`]||{};
+    const sib2P = (sibA.notes||'').includes('240V') || (sibB.notes||'').includes('240V') || (sibA.name||'').includes('(240V cont.') || (sibB.name||'').includes('(240V cont.');
+    const sibQuad = sibA.quadOuter || sibB.quadOuter || (sibA.notes||'').includes('quad inner') || (sibB.notes||'').includes('quad inner');
+    const sibSplit = sibA.splitTandem || sibB.splitTandem;
+    const isTandem = !!(sibA.name && sibB.name && !sib2P && !sibQuad && !sibSplit);
+    const cont = (c.name||'').includes('(240V cont.');
+    const bg = isSplit ? '#F6EAEA' : isQuad ? '#ECE6F4' : isTandem ? '#F3E9CF' : C.bg;
+    const bd = isSplit ? '#B23A3A' : isQuad ? '#574A7A' : isTandem ? '#B0892C' : C.border;
+    const fg = cont ? C.dim : (isSplit ? '#7A2A2A' : isQuad ? '#581C87' : isTandem ? '#6E5212' : C.text);
+    const showAmp = c.amps && c.amps !== '0';
+    return (
+      <td style={{...base, background:bg, border:`${isSplit?2:1}px solid ${bd}`, color:fg,
+        fontStyle:cont?'italic':'normal', fontWeight:(isSplit||isQuad)?700:400, paddingRight:showAmp?26:6}}>
+        {c.name}
+        {showAmp && <span style={{position:'absolute',right:4,top:'50%',transform:'translateY(-50%)',fontSize:8.5,fontWeight:700,opacity:0.6}}>{c.amps}A</span>}
+      </td>
+    );
+  };
+  return (
+    <div style={{overflowX:'auto',border:`1px solid ${C.border}`,borderRadius:10}}>
+      <table style={{width:'100%',borderCollapse:'collapse',minWidth:340,tableLayout:'fixed'}}>
+        <tbody>
+          {Array.from({length:oddCount}).map((_,i)=>{
+            const odd=i*2+1, even=odd+1, evenIn=even<=count;
+            return (
+              <Fragment key={odd}>
+                <tr>
+                  {cell(`${odd}A`,false)}
+                  <td rowSpan={2} style={numStyle}>{odd}</td>
+                  <td rowSpan={2} style={numStyle}>{evenIn?even:''}</td>
+                  {evenIn?cell(`${even}A`,false):<td style={oobStyle}/>}
+                </tr>
+                <tr>
+                  {cell(`${odd}B`,true)}
+                  {evenIn?cell(`${even}B`,true):<td style={oobStyle}/>}
+                </tr>
+              </Fragment>
+            );
+          })}
+        </tbody>
+      </table>
+    </div>
+  );
+}
+
 function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddress = "", homeRuns = {} }) {
   // Fill a panel's circuits map from home runs assigned to that panel.
   // Sorting per Koy:
@@ -13752,208 +14192,11 @@ function ElectricalPanelSchedules({ panels = [], onChange, jobName = "", jobAddr
       .map(r => ({
         name: (r.name||"").trim() || `${r.wire} circuit`,
         amps: WIRE_BREAKER[r.wire].amps,
-        poles: WIRE_BREAKER[r.wire].poles,
+        poles: effectivePoles(r.wire, r.v240),
         wire: r.wire,
       }));
     if (!breakers.length) return null; // signal: nothing to fill
-    breakers.sort((a,b) => {
-      if (a.poles !== b.poles) return b.poles - a.poles; // 2-pole before 1-pole
-      if (a.amps !== b.amps) return b.amps - a.amps;     // higher amps first
-      return (a.name||"").localeCompare(b.name||"");
-    });
-
-    // Three-pass placement so we use tandems when a panel is full:
-    //   Phase 1 (A position): 2-poles alternate sides top-down (1+3, 2+4, 5+7, ...)
-    //   Phase 2 (A position): 1-poles fill remaining A slots alternating sides
-    //   Phase 3 (B / tandem): leftover 1-poles drop into tandem positions
-    //                          on slots whose A is a 1-pole. 2-pole slots are
-    //                          NEVER tandem'd (a 2-pole occupies the full
-    //                          slot pair physically).
-    //   Anything still left after Phase 3 → unplaced[] → caller toasts a
-    //                          warning with the names so Koy knows what to
-    //                          move or which panel size to bump up to.
-    const oddSlots = []; const evenSlots = [];
-    for (let i = 1; i <= slotCount; i++) (i%2 ? oddSlots : evenSlots).push(i);
-    const sides = [
-      { slots: oddSlots,  i: 0 },  // left column (1, 3, 5, ...)
-      { slots: evenSlots, i: 0 },  // right column (2, 4, 6, ...)
-    ];
-    const circuits = {};
-    const twoPoleSlots = new Set(); // slot numbers that are part of a 2-pole
-    let next2pSide = 0;
-    let next1pSide = 0;
-    const unplaced = [];
-
-    // Split breakers (already sorted: 2-pole first, amps DESC)
-    const twoPoles = breakers.filter(b => b.poles === 2);
-    const onePoles = breakers.filter(b => b.poles === 1);
-
-    // ── Phase 1: place 2-poles in A positions ──
-    for (const br of twoPoles) {
-      let placed = false;
-      for (let attempt = 0; attempt < 2 && !placed; attempt++) {
-        const s = sides[(next2pSide + attempt) % 2];
-        if (s.i + 1 < s.slots.length) {
-          const t = s.slots[s.i], bt = s.slots[s.i+1];
-          circuits[`${t}A`]  = { name: br.name, amps: String(br.amps), wire: br.wire, notes: "240V" };
-          circuits[`${bt}A`] = { name: `${br.name} (240V cont.)`, amps: String(br.amps), wire: br.wire };
-          twoPoleSlots.add(t); twoPoleSlots.add(bt);
-          s.i += 2;
-          placed = true;
-          next2pSide = (next2pSide + 1) % 2;
-        }
-      }
-      if (!placed) unplaced.push(br);
-    }
-
-    // ── Phase 2: pre-pair tandems (highest amp first), then place ──
-    // STRATEGY: figure out how many tandems are NEEDED first (= overflow
-    // beyond available 1-pole A slots). Then form exactly that many
-    // tandems, preferring same-amp pairs by HIGHEST amperage first
-    // (20A+20A pairs before 15A+15A before 15A+20A splits). Place the
-    // tandems at the top of the panel, then the remaining singles below.
-    //
-    // Why this order matters: with 21×20A + 11×15A and 8 tandems needed,
-    // the prior "place all in A first, tandem the leftovers" logic put
-    // the LOWEST-amp loads (15A) in tandem position because they were
-    // last-placed — burning split-tandem flags. Forming pairs by amps
-    // DESC up front gives 8 clean 20A+20A tandems and 0 splits, which
-    // is what Koy actually wants on the schedule.
-    const onePoleSlotsAvail = sides.reduce((n, s) => n + (s.slots.length - s.i), 0);
-    const tandemsNeeded = Math.max(0, onePoles.length - onePoleSlotsAvail);
-
-    // Group the sorted 1-poles by amps so we can pair from the top down.
-    // onePoles is already amps DESC; insertion order preserved.
-    const ampGroups = new Map();
-    for (const br of onePoles) {
-      if (!ampGroups.has(br.amps)) ampGroups.set(br.amps, []);
-      ampGroups.get(br.amps).push(br);
-    }
-    const ampsSorted = [...ampGroups.keys()].sort((a, b) => b - a); // 20, 15, ...
-
-    // Pair-formation passes:
-    //   1. Same-amp pairs (highest amp groups first) until tandemsNeeded met
-    //   2. Cross-amp pairs (split tandems) for any remaining target
-    const tandemUnits = [];
-    let formed = 0;
-    for (const amps of ampsSorted) {
-      const grp = ampGroups.get(amps);
-      while (formed < tandemsNeeded && grp.length >= 2) {
-        const a = grp.shift(), b = grp.shift();
-        tandemUnits.push({ type: "tandem", sameAmp: true, brA: a, brB: b });
-        formed++;
-      }
-      if (formed >= tandemsNeeded) break;
-    }
-    if (formed < tandemsNeeded) {
-      // Flatten remaining leftovers in amps-DESC order for split pairing
-      const leftovers = [];
-      for (const amps of ampsSorted) leftovers.push(...(ampGroups.get(amps) || []));
-      while (formed < tandemsNeeded && leftovers.length >= 2) {
-        const a = leftovers.shift(), b = leftovers.shift();
-        tandemUnits.push({ type: "tandem", sameAmp: false, brA: a, brB: b });
-        formed++;
-      }
-      // Push any still-unpaired loads back into their amp groups as singles
-      for (const br of leftovers) {
-        if (!ampGroups.has(br.amps)) ampGroups.set(br.amps, []);
-        ampGroups.get(br.amps).push(br);
-      }
-    }
-
-    // Build the full unit list: tandems + remaining singles, sorted amps DESC
-    // (with tandems winning ties so they sit at the top of the panel).
-    const singleUnits = [];
-    for (const amps of ampsSorted) {
-      for (const br of (ampGroups.get(amps) || [])) {
-        singleUnits.push({ type: "single", amps, br });
-      }
-    }
-    const allUnits = [...tandemUnits.map(u => ({ ...u, amps: u.brA.amps })), ...singleUnits];
-    allUnits.sort((u, v) => {
-      if (u.amps !== v.amps) return v.amps - u.amps;
-      // tandems before singles within the same amp tier
-      if ((u.type === "tandem") !== (v.type === "tandem")) return u.type === "tandem" ? -1 : 1;
-      return 0;
-    });
-
-    // Place units alternating sides — top of panel first.
-    const overflow = [];
-    for (const unit of allUnits) {
-      let placed = false;
-      for (let attempt = 0; attempt < 2 && !placed; attempt++) {
-        const s = sides[(next1pSide + attempt) % 2];
-        if (s.i < s.slots.length) {
-          const slotN = s.slots[s.i];
-          if (unit.type === "tandem") {
-            circuits[`${slotN}A`] = {
-              name: unit.brA.name, amps: String(unit.brA.amps), wire: unit.brA.wire,
-            };
-            circuits[`${slotN}B`] = {
-              name: unit.brB.name, amps: String(unit.brB.amps), wire: unit.brB.wire,
-              notes: unit.sameAmp
-                ? "tandem"
-                : `tandem · SPLIT (${unit.brB.amps}A with ${unit.brA.amps}A)`,
-              ...(unit.sameAmp ? {} : { splitTandem: true }),
-            };
-          } else {
-            circuits[`${slotN}A`] = {
-              name: unit.br.name, amps: String(unit.br.amps), wire: unit.br.wire,
-            };
-          }
-          s.i++;
-          placed = true;
-          next1pSide = (next1pSide + 1) % 2;
-        }
-      }
-      if (!placed) {
-        if (unit.type === "tandem") overflow.push(unit.brA, unit.brB);
-        else overflow.push(unit.br);
-      }
-    }
-
-    // ── Phase 3: quad conversion only when tandems alone couldn't fit
-    // everything (rare — happens when N1 overflow exceeds the 1-pole slot
-    // budget AND there are existing 2-poles to convert).
-    // Quad layout per slot pair (top N, bottom N+2):
-    //   N-A   = 1-pole (outer top)     ← outermost
-    //   N-B   = 2-pole top (240V)      ← inner top
-    //   N+2-A = 2-pole cont. (240V)    ← inner bottom
-    //   N+2-B = 1-pole (outer bottom)  ← outermost
-    if (overflow.length) {
-      let queue = overflow.slice();
-      const twoPoleTops = [];
-      const oddCol  = []; for (let n = 1; n <= slotCount; n+=2) oddCol.push(n);
-      const evenCol = []; for (let n = 2; n <= slotCount; n+=2) evenCol.push(n);
-      for (const col of [oddCol, evenCol]) {
-        for (let i = 0; i + 1 < col.length; i++) {
-          const top = col[i], bot = col[i+1];
-          const ta = circuits[`${top}A`], ba = circuits[`${bot}A`];
-          if (ta && ba && ta.notes === "240V" && ba.name && ba.name.includes("(240V cont.")) {
-            if (circuits[`${top}B`] || circuits[`${bot}B`]) continue;
-            twoPoleTops.push({ top, bot, topData: ta, botData: ba });
-          }
-        }
-      }
-      while (queue.length >= 2 && twoPoleTops.length) {
-        const pair = twoPoleTops.shift();
-        const br1 = queue.shift();
-        const br2 = queue.shift();
-        circuits[`${pair.top}B`] = { ...pair.topData, notes: "240V (quad inner top)" };
-        circuits[`${pair.bot}A`] = { ...pair.botData, notes: "240V cont. (quad inner)" };
-        circuits[`${pair.top}A`] = {
-          name: br1.name, amps: String(br1.amps), wire: br1.wire,
-          notes: "quad outer top", quadOuter: true,
-        };
-        circuits[`${pair.bot}B`] = {
-          name: br2.name, amps: String(br2.amps), wire: br2.wire,
-          notes: "quad outer bottom", quadOuter: true,
-        };
-      }
-      queue.forEach(b => unplaced.push(b));
-    }
-
-    return { circuits, unplaced };
+    return placeBreakers(breakers, slotCount);
   };
 
 
@@ -14285,8 +14528,15 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
   useEffect(()=>{
     getDoc(doc(db,'homeowner_requests',jobId)).then(snap=>{
       if(snap.exists()){
-        if(snap.data().genLoads) setGenLoads(snap.data().genLoads);
-        if(snap.data().submitted) setHoResponse(snap.data());
+        const d = snap.data();
+        // If the homeowner has submitted, overlay their choices onto genLoads
+        // so the office list auto-reflects what they picked (checked = chosen)
+        // — even for jobs submitted before the submit-writes-back change.
+        const gl = (d.submitted && Array.isArray(d.items))
+          ? applyHomeownerChoices(d.genLoads||[], d.items)
+          : (d.genLoads||[]);
+        if(gl.length) setGenLoads(gl);
+        if(d.submitted) setHoResponse(d);
       }
     }).catch(()=>{});
   },[jobId]);
@@ -14399,7 +14649,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           </div>
         )}
 
-        <GeneratorLoadSection homeRuns={homeRuns} genLoads={genLoads} onSave={saveGenLoads}/>
+        <GeneratorLoadSection homeRuns={homeRuns} genLoads={genLoads} onSave={saveGenLoads} onHRChange={onHRChange}/>
 
         <div style={{marginTop:14,display:'flex',gap:8,alignItems:'center',flexWrap:'wrap'}}>
           {!hoResponse?.submitted?(
@@ -14479,11 +14729,13 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
                   <div style={{flex:1}}>
                     <div style={{fontSize:13,fontWeight:500,color:'#1B1F24',display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                       {it.name||'Unnamed'}
+                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:'#B0892C',background:'#FBF3E2',
+                    borderRadius:99,padding:'1px 7px',border:'0.5px solid #E8D9B0',flexShrink:0}}>Needs specs</span>}
                       {it.recommended&&<span style={{fontSize:9,fontWeight:800,color:'#8A6A1E',
                         background:'#F3E9CF',borderRadius:99,padding:'1px 6px',border:'0.5px solid #EAD9A6'}}>★ REC</span>}
                     </div>
                     <div style={{fontSize:11,color:'#8A929D',marginTop:2}}>
-                      {wireAmpsVolts(it.wire)}
+                      {wireAmpsVolts(it.wire, it.v240)}
                     </div>
                     {it.notes&&<div style={{fontSize:11,color:'#5E6670',marginTop:2,fontStyle:'italic'}}>"{it.notes}"</div>}
                   </div>
@@ -38997,6 +39249,13 @@ function HomeownerPage({ jobId }) {
   const chosenItems  = items.filter(it=>it.status==='chosen');
   const pendingItems = items.filter(it=>it.status==='pending');
   const offItems     = items.filter(it=>it.status==='off');
+  // Counter (item 3, client): circuits + slot fill from the REAL placement so
+  // tandems/quads are reflected (matches the office panel schedule).
+  const genUse = genPanelUsage(chosenItems);
+  const genSlotBudget = 40; // dedicated gen sub-panel (default 40/80 — fits most whole-house selections)
+  const genPanelHo = buildGeneratorPanel(chosenItems, genSlotBudget);
+  const genSpacesUsed = new Set(Object.keys(genPanelHo.circuits).map(k=>parseInt(k,10))).size;
+  const genOver = genPanelHo.unplaced.length > 0;
 
   const submit = async () => {
     if(!sigName.trim()||!sigDate){ setSigErr(true); return; }
@@ -39009,6 +39268,16 @@ function HomeownerPage({ jobId }) {
         const included = it.status==='chosen';
         return {...it, included, confirmed:included, priority: included ? (++p) : 0};
       });
+      // Write the homeowner's choices BACK onto genLoads (by id) so the OFFICE
+      // gen list auto-reflects exactly what they picked — checked = chosen,
+      // unchecked = not. No manual re-checking on our side. Loads the office
+      // added after the homeowner opened (no matching item) are left as-is.
+      const choiceById = {};
+      outItems.forEach(it => { choiceById[it.id] = it; });
+      const outGenLoads = (genLoads||[]).map(l => {
+        const c = choiceById[l.id];
+        return c ? { ...l, included: !!c.included, confirmed: !!c.confirmed, status: c.status, priority: c.priority, notes: c.notes } : l;
+      });
       // Merge onto the shared homeowner_requests doc so lighting-collab / Q&A
       // data written by other share links isn't wiped. Funnel write = version
       // snapshot stashed first (Kweller hardening Layer 4).
@@ -39017,7 +39286,7 @@ function HomeownerPage({ jobId }) {
         submittedAt:new Date().toISOString(),
         signature:sigName.trim(), signedDate:sigDate,
         items: outItems,
-        genLoads,
+        genLoads: outGenLoads,
       }), 'HomeownerPage-submit');
       setSubmitted(true);
     } catch(e){ toast.error('Failed to submit. Please try again.'); }
@@ -39067,6 +39336,23 @@ function HomeownerPage({ jobId }) {
         </div>
       </div>
 
+      {/* Counter (item 3/5, client) — circuits + slot fill against the dedicated panel */}
+      {chosenItems.length>0&&(
+        <div style={{padding:'12px 14px',background:'#fff',border:'0.5px solid #E1E4E9',borderRadius:10,marginTop:8}}>
+          <div style={{display:'flex',alignItems:'baseline',gap:6,flexWrap:'wrap'}}>
+            <span style={{fontSize:20,fontWeight:700,color:genOver?'#B23A3A':'#1B1F24'}}>{genUse.circuits}</span>
+            <span style={{fontSize:12,color:'#8A929D'}}>circuits on generator</span>
+            <span style={{marginLeft:'auto',fontSize:12,color:'#8A929D'}}>{genSpacesUsed} of {genSlotBudget} spaces</span>
+          </div>
+          <div style={{height:8,borderRadius:5,background:'#EEF0F3',border:'0.5px solid #E1E4E9',marginTop:8,overflow:'hidden'}}>
+            <div style={{height:'100%',width:`${Math.min(100,Math.round(genSpacesUsed/genSlotBudget*100))}%`,background:genOver?'#B23A3A':'#2F8F5B'}}/>
+          </div>
+          {genOver
+            ? <div style={{fontSize:11,color:'#B23A3A',marginTop:6,fontWeight:600}}>That's more than a {genSlotBudget}-space panel holds — Homestead will confirm the panel size.</div>
+            : genUse.provisional>0 && <div style={{fontSize:11,color:'#B0892C',marginTop:6}}>{genUse.provisional} still needs specs — counted as 1 space for now.</div>}
+        </div>
+      )}
+
       <div style={{padding:'16px 0 0'}}>
 
         {/* ON GENERATOR — confirmed + added, organized top list with priority arrows */}
@@ -39097,10 +39383,12 @@ function HomeownerPage({ jobId }) {
               <div style={{flex:1,minWidth:0}}>
                 <div style={{fontSize:13,fontWeight:500,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                   {it.name||'Unnamed'}
+                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:'#B0892C',background:'#FBF3E2',
+                    borderRadius:99,padding:'1px 7px',border:'0.5px solid #E8D9B0',flexShrink:0}}>Needs specs</span>}
                   {it.recommended&&<span style={{fontSize:9,fontWeight:700,color:A,background:AB,
                     borderRadius:99,padding:'1px 7px',border:`0.5px solid ${ABorder}`,flexShrink:0}}>★ Recommended</span>}
                 </div>
-                {wireAmpsVolts(it.wire)&&<div style={{fontSize:11,color:'#8A929D',marginTop:3,fontWeight:600}}>{wireAmpsVolts(it.wire)}</div>}
+                {wireAmpsVolts(it.wire, it.v240)&&<div style={{fontSize:11,color:'#8A929D',marginTop:3,fontWeight:600}}>{wireAmpsVolts(it.wire, it.v240)}</div>}
               </div>
             </div>
             <div style={{marginTop:10,paddingLeft:42,display:'flex',alignItems:'center',gap:8,flexWrap:'wrap'}}>
@@ -39133,10 +39421,12 @@ function HomeownerPage({ jobId }) {
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:13,fontWeight:500,display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                       {it.name||'Unnamed'}
+                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:'#B0892C',background:'#FBF3E2',
+                    borderRadius:99,padding:'1px 7px',border:'0.5px solid #E8D9B0',flexShrink:0}}>Needs specs</span>}
                       <span style={{fontSize:9,fontWeight:700,color:A,background:AB,
                         borderRadius:99,padding:'1px 7px',border:`0.5px solid ${ABorder}`,flexShrink:0}}>★ Recommended</span>
                     </div>
-                    {wireAmpsVolts(it.wire)&&<div style={{fontSize:11,color:'#8A929D',marginTop:3,fontWeight:600}}>{wireAmpsVolts(it.wire)}</div>}
+                    {wireAmpsVolts(it.wire, it.v240)&&<div style={{fontSize:11,color:'#8A929D',marginTop:3,fontWeight:600}}>{wireAmpsVolts(it.wire, it.v240)}</div>}
                   </div>
                 </div>
                 <div style={{marginTop:10,display:'flex',gap:8,flexWrap:'wrap'}}>
@@ -39168,10 +39458,12 @@ function HomeownerPage({ jobId }) {
                   <div style={{flex:1,minWidth:0}}>
                     <div style={{fontSize:13,fontWeight:500,color:'#5E6670',display:'flex',alignItems:'center',gap:6,flexWrap:'wrap'}}>
                       {it.name||'Unnamed'}
+                  {it.needsSpecs&&!it.wire&&<span style={{fontSize:9,fontWeight:700,color:'#B0892C',background:'#FBF3E2',
+                    borderRadius:99,padding:'1px 7px',border:'0.5px solid #E8D9B0',flexShrink:0}}>Needs specs</span>}
                       {it.recommended&&<span style={{fontSize:9,fontWeight:700,color:A,background:AB,
                         borderRadius:99,padding:'1px 7px',border:`0.5px solid ${ABorder}`,flexShrink:0}}>★ Recommended</span>}
                     </div>
-                    {wireAmpsVolts(it.wire)&&<div style={{fontSize:11,color:'#8A929D',marginTop:3,fontWeight:600}}>{wireAmpsVolts(it.wire)}</div>}
+                    {wireAmpsVolts(it.wire, it.v240)&&<div style={{fontSize:11,color:'#8A929D',marginTop:3,fontWeight:600}}>{wireAmpsVolts(it.wire, it.v240)}</div>}
                   </div>
                   <button onClick={()=>setStatus(it.id,'chosen')}
                     style={{background:A,border:`0.5px solid ${A}`,borderRadius:8,
@@ -41528,7 +41820,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-13 · App SW version: v328
+**Last manifest update:** 2026-07-14 · App SW version: v329
 
 ---
 
@@ -41799,6 +42091,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Data-loss hardening (HD1/HD2/HD5 + M1)** · 'shipped 2026-07-13' · 'SW v326' · 'saveHomeownerRequest' funnel now writes in a 'runTransaction' (re-read under lock, 'tx.update' only the patched keys) so concurrent writes to different fields on the same 'homeowner_requests' doc can't revert each other — fixes all 9 funnel callers (M1). 'LightingSharePage' three-way merge moved inside that transaction and its previously-silent save failure now surfaces (toast + "Not saved" indicator) (HD1). Server ('onJobUpdate') gains a data-loss TRIPWIRE (pushes Koy when one write wipes most of a job's questions/answers/punch/COs) and durable per-field VERSION SNAPSHOTS into 'jobs/{id}/versions' (newest 25 — surgical restore beyond PITR's 7-day window) (HD5/HD2). Database delete-protection enabled (HD3). Server half deploys via 'firebase deploy --only functions:onJobUpdate'.
 - **Answer-wipe fix — kill the auto-retraction** · 'shipped 2026-07-13' · 'SW v328' · the link-sync effect had a branch that auto-DELETED a question's answer text (and un-answered it) whenever the link's copy looked empty. A device with a stale/empty 'questionAnswers' un-answered 17 real designer answers at once and 'saveJob' merged the blanks onto the server (same loss class as the original Kweller wipe, different trigger). That branch is removed — the sync NEVER deletes an existing answer; text/photo edits still propagate; a genuine link retraction is now a manual crew reopen. Also: the data-loss tripwire now trips on a big ABSOLUTE drop (≥8 answers), not only ≥50%, so a 17-of-42 wipe pings Koy (the reason this one went unnoticed). Deploy server half via 'firebase deploy --only functions:onJobUpdate'.
 - **Per-question answer attribution fix** · 'shipped 2026-07-13' · 'SW v327' · link answers carry ONE shared 'questionAnswers.answeredBy' (the last person to submit the link); the auto-apply effect used to re-stamp EVERY answered question with it, so opening a link after the designer relabeled all her answers to the opener (Kweller: 17 of Haley's answers showed "Koy"). The apply effect now prefers the question's own 'answeredBy' ('q.answeredBy || gcAnswers.answeredBy') so a real per-question author is never overwritten by a later, different submitter. Content/photos sync unchanged; the live-sync effect never touched attribution.
+- **Generator panel sync + live schedule** · 'in-flight' · 'SW v329' · (branch 'generator-panel-sync', NOT yet deployed) Generator Load Selection now AUTO-SYNCS from Home Runs instead of a manual import ('reconcileGenLoads' — the gen list mirrors the field's home-run truth; stale office-only loads drop, but a homeowner's *selected* non-match is kept + flagged, never a silent delete). Homeowner submit ↔ office list now reflect each other's picks ('applyHomeownerChoices' — no manual re-checking). A live circuit/space counter + a dedicated generator sub-panel schedule ('GenPanelGrid', reusing the tuned 'placeBreakers' tandem/quad engine) render as loads are toggled; the counter counts REAL placed spaces (not naive poles) so it agrees with the schedule. 14/2 & 12/2 can be flipped to 240V 2-pole 2-wire ('effectivePoles' / 'v240'), read app-wide. Default gen panel 40/80. Item 4 (auto-stamp chosen loads to a "Dedicated Loads" panel) still pending. All writes ride the existing 'saveHomeownerRequest' funnel; no new top-level fields; dry-run-verified 0 data loss / 0 decision change on real jobs.
 
 ---
 
