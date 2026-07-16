@@ -38186,6 +38186,287 @@ function ScoreboardV3({ jobs, users = [], identity }) {
   );
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ScoreboardV4 (2026-07-16) — margin-aware ADMIN board. Admin-only until Koy
+// approves (the whole scoreboard tab is already gated to scoreboard.editWeights).
+// MARGIN = the MEDIAN of job.simproMargin — the LIVE Simpro field that matches
+// what Koy sees — NOT settings/scoreboardJobFinancials (that P/L cache is FROZEN,
+// ~71d stale, and inflates in-progress jobs: Chapman cached 96.7% vs real 33.3%).
+// Median so one entangled temp-power / phase job (e.g. Tuhaye Temp Power -153%)
+// can't swing a person. Plus QC items/job, Clean Handoff, App Use, an admin weight
+// tool, and a live "Jobs to Watch" panel flagged against a target line.
+//   Roster: a person's jobs = jobs where they were foreman OR lead (deduped),
+//   rolled onto their CURRENT-role board. Leads board = current-lead-title only.
+//   Nobody appears on two boards. Coordinators roll up their book's foreman-jobs.
+//   Target: 15% net margin at FINISH. In-progress margins are premature
+//   projections (finish costs not incurred yet) — shown as watch context, not score.
+// Pure over jobs; the ONLY write is settings/scoreboardV4Weights (admins only).
+// ═══════════════════════════════════════════════════════════════════════════
+const SB4_DEFAULT_WEIGHTS = { margin: 45, qc: 25, handoff: 20, app: 10 };
+const SB4_MARGIN_TARGET = 15; // net-margin goal at finish
+const _sb4Num = (v) => (typeof v === "number" && isFinite(v)) ? v : null;
+// entangled/add-on jobs whose costs & revenue live on another Simpro job — their
+// standalone margin is fiction, so exclude from the score (still shown in watch).
+const _sb4Special = (name) => /phase|temp power|temp p\b|t&m|ev charger|light change|whip|\bstc\b/i.test(String(name || ""));
+const _sb4Median = (a) => { if (!a.length) return null; const s = a.slice().sort((x, y) => x - y), m = Math.floor(s.length / 2); return s.length % 2 ? s[m] : Math.round((s[m - 1] + s[m]) / 2 * 10) / 10; };
+const _sb4Stage = (j) => _sb3Completed(j) ? "final" : Number(j.finishStage) > 0 ? "finish" : (_sb3lc(j.roughStatus) === "complete" || Number(j.roughStage) >= 100) ? "rough done" : "rough";
+const sb4Agg = (js) => {
+  const marg = [], live = [];
+  let qcItems = 0, qcWalks = 0, punch = 0, openPunch = 0, updates = 0, questions = 0;
+  js.forEach(j => {
+    const m = _sb4Num(j.simproMargin), sp = _sb4Special(j.name);
+    if (m != null && !sp) marg.push(m);                                   // score: median of clean margins
+    if (m != null && !_sb3Completed(j)) live.push({ job: String(j.name || "?").trim(), m: Math.round(m * 10) / 10, stage: _sb4Stage(j), special: sp }); // watch: live jobs
+    let qcDefects = 0, qcWalk = false;
+    [j.roughPunch, j.finishPunch, j.qcPunch].forEach(pp => sbv2WalkPunch(pp, it => {
+      if (!it || it.voided) return; punch++; if (!it.done) openPunch++; if (it.fromQC) { qcWalk = true; qcDefects++; }
+    }));
+    const st = _sb3lc(j.qcStatus);
+    if (["pass", "fail", "fixed", "completed"].includes(st) || j.roughQCWalkDone === true || j.finishQCWalkDone === true) qcWalk = true;
+    if (qcWalk) { qcWalks++; qcItems += qcDefects; }
+    updates += (Array.isArray(j.roughUpdates) ? j.roughUpdates.length : 0) + (Array.isArray(j.finishUpdates) ? j.finishUpdates.length : 0);
+    questions += _sb3QCount(j.roughQuestions) + _sb3QCount(j.finishQuestions);
+  });
+  live.sort((a, b) => a.m - b.m);
+  return {
+    jobs: js.length,
+    margin: _sb4Median(marg), marginN: marg.length,
+    qc: qcWalks ? Math.round(qcItems / qcWalks * 10) / 10 : null,
+    handoff: punch > 0 ? Math.round(openPunch / punch * 1000) / 10 : null,
+    app: punch + updates + questions,
+    live: live.slice(0, 8),
+  };
+};
+const sb4Build = (jobs, board, users) => {
+  const list = Array.isArray(users) ? users : [];
+  const foremen = [], leads = [], f2c = {};
+  list.forEach(u => {
+    const t = _sb3lc(u.title || u.role), nm = String(u.name || "").trim();
+    if (t === "foreman") { foremen.push(nm); if (u.coordinator) f2c[nm] = String(u.coordinator).trim(); }
+    if (t === "lead") leads.push(nm);
+  });
+  const foremanLc = new Set(foremen.map(n => n.toLowerCase()));
+  const clean = (jobs || []).filter(j => j && !SBV2_TEST_JOB(j.name || j.jobName));
+  const jobsFor = (person) => {                              // foreman OR lead-era jobs, deduped
+    const pl = person.toLowerCase(), seen = new Set(), out = [];
+    clean.forEach(j => { if ((_sb3lc(j.foreman) === pl || _sb3lc(j.lead) === pl) && !seen.has(j.id)) { seen.add(j.id); out.push(j); } });
+    return out;
+  };
+  let rows = [];
+  if (board === "coordinators") {
+    const coords = {};
+    Object.entries(f2c).forEach(([f, c]) => { if (!c) return; (coords[c] = coords[c] || { name: c, fs: [] }).fs.push(f.toLowerCase()); });
+    rows = Object.values(coords).map(({ name, fs }) => {
+      const seen = new Set(), js = [];
+      clean.forEach(j => { if (fs.includes(_sb3lc(j.foreman)) && !seen.has(j.id)) { seen.add(j.id); js.push(j); } });
+      return { name, ...sb4Agg(js) };
+    });
+  } else if (board === "leads") {
+    rows = leads.filter(nm => !foremanLc.has(nm.toLowerCase()) && !SBV2_EXCLUDE_NAME(nm)).map(nm => ({ name: nm, ...sb4Agg(jobsFor(nm)) }));
+  } else {
+    rows = foremen.filter(nm => !SBV2_EXCLUDE_NAME(nm)).map(nm => ({ name: nm, ...sb4Agg(jobsFor(nm)) }));
+  }
+  return rows.filter(r => r.jobs >= 2);
+};
+if (typeof window !== "undefined") window.sb4Build = sb4Build;
+
+// Admin-only margin board. Reads jobs (simproMargin) + users roster; the only
+// write is the admin weights doc. No job field touched, no P/L cache dependency.
+function ScoreboardV4({ jobs, users = [], identity }) {
+  const [board, setBoard] = useState("foremen");
+  const [time, setTime] = useState("year");
+  const [weights, setWeights] = useState(SB4_DEFAULT_WEIGHTS);
+  const [showEdit, setShowEdit] = useState(false);
+  const [target, setTarget] = useState(25);
+  const canEdit = can(identity, "scoreboard.editWeights");
+
+  useEffect(() => onSnapshot(doc(db, "settings", "scoreboardV4Weights"), s => {
+    const w = s.exists() ? s.data() : null;
+    if (w && typeof w.margin === "number") setWeights({ margin: +w.margin || 0, qc: +w.qc || 0, handoff: +w.handoff || 0, app: +w.app || 0 });
+  }, () => {}), []);
+  const saveWeights = (patch) => {
+    const w = { margin: weights.margin, qc: weights.qc, handoff: weights.handoff, app: weights.app, ...patch };
+    setWeights(w);
+    if (canEdit) setDoc(doc(db, "settings", "scoreboardV4Weights"), w, { merge: true }).catch(() => {});
+  };
+
+  const windowedJobs = useMemo(() => {
+    if (time === "year") return jobs || [];
+    const days = time === "week" ? 7 : 31, since = Date.now() - days * 86400e3;
+    const recency = (j) => { let m = 0; [j.lastActivityAt, j.updated_at, j.statusUpdateAt].forEach(v => { if (!v) return; const t = (v && typeof v.toMillis === "function") ? v.toMillis() : Date.parse(v); if (!isNaN(t) && t > m) m = t; }); return m; };
+    return (jobs || []).filter(j => recency(j) >= since);
+  }, [jobs, time]);
+
+  const rows = useMemo(() => sb4Build(windowedJobs, board, users), [windowedJobs, board, users]);
+
+  const clamp = (v) => Math.max(0, Math.min(1, v));
+  const NORM = { margin: v => v == null ? null : clamp(v / 50), qc: v => v == null ? null : clamp(1 - v / 8), handoff: v => v == null ? null : clamp(1 - v / 20), app: v => v == null ? null : clamp(v / 2500) };
+  const overallOf = (r) => {
+    let s = 0, wsum = 0;
+    ["margin", "qc", "handoff", "app"].forEach(k => { const n = NORM[k](r[k]), wt = weights[k]; if (n != null && wt > 0) { s += n * wt; wsum += wt; } });
+    return wsum ? Math.round(s / wsum * 100) : 0;
+  };
+  const ranked = useMemo(() => rows.map(r => ({ ...r, _ov: overallOf(r) })).sort((a, b) => b._ov - a._ov), [rows, weights]);
+  const maxOv = ranked.length ? Math.max(1, ranked[0]._ov) : 1;
+
+  const watch = useMemo(() => {
+    const out = [], seen = new Set();
+    rows.forEach(r => (r.live || []).forEach(j => { const k = j.job + "|" + r.name; if (!seen.has(k)) { seen.add(k); out.push({ ...j, who: r.name }); } }));
+    return out.sort((a, b) => a.m - b.m);
+  }, [rows]);
+
+  const PAL = ["#3B5BA5", "#46916A", "#B06A2C", "#6A5E97", "#3E7D7A", "#C58A4C", "#3E9E74", "#5B7FC0"];
+  const colorFor = (nm) => PAL[Math.abs(String(nm).split("").reduce((a, c) => a + c.charCodeAt(0), 0)) % PAL.length];
+  const initial = (nm) => { const p = String(nm || "").trim().split(/\s+/); return p.length > 1 ? (p[0][0] + p[p.length - 1][0]) : (p[0] || "?").slice(0, 1); };
+  const marginCls = (v) => v == null ? "" : v < 0 ? "mbad" : v < SB4_MARGIN_TARGET ? "mwarn" : "mgood";
+  const boardLbl = board === "coordinators" ? "Coordinators" : board === "leads" ? "Leads" : "Foremen";
+
+  return (
+    <div className="sb4">
+      <style>{`
+        .sb4{--c-pan:#fff;--c-pan2:#F5F7F9;--c-bd:#E2E5EA;--c-ink:#171B21;--c-dim:#5C6470;--c-faint:#8A929C;--c-blue:#3B5BA5;--c-good:#3E7D5A;--c-warn:#B0892C;--c-warnbg:#F6EDCF;--c-bad:#B23A3A;--c-badbg:#F6E4E4;--c-gold:#B0892C;--c-gbg:#F6EDCF;--c-gln:#E3D097;--c-track:#E9ECF1;--c-navy:#1E2C44;font-family:inherit;color:var(--c-ink)}
+        .sb4 *{box-sizing:border-box}
+        .sb4 .top{background:linear-gradient(180deg,#1E2C44,#162134);border-radius:14px;padding:16px 18px;color:#fff;display:flex;align-items:center;gap:12px}
+        .sb4 .top .co{font-size:10px;letter-spacing:.14em;color:rgba(255,255,255,.6);font-weight:700}
+        .sb4 .top .ti{font-size:18px;font-weight:800}
+        .sb4 .top .wt{margin-left:auto;text-align:right;font-size:10px;color:rgba(255,255,255,.66);line-height:1.5;max-width:290px}
+        .sb4 .top .wt b{color:#fff}
+        .sb4 .ctr{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:14px 0 2px}
+        .sb4 .seg{display:inline-flex;background:var(--c-pan2);border:1px solid var(--c-bd);border-radius:10px;padding:3px;gap:2px}
+        .sb4 .seg button{border:0;background:transparent;color:var(--c-dim);font:inherit;font-size:12px;font-weight:700;padding:6px 12px;border-radius:7px;cursor:pointer}
+        .sb4 .seg button.on{background:var(--c-pan);color:var(--c-ink);box-shadow:0 1px 2px rgba(16,24,40,.12)}
+        .sb4 .lbl{font-size:10px;letter-spacing:.1em;font-weight:700;color:var(--c-faint);text-transform:uppercase}
+        .sb4 .editbtn{margin-left:auto;border:1px solid var(--c-gln);background:var(--c-gbg);color:var(--c-gold);font-weight:800;font-size:11px;padding:6px 12px;border-radius:8px;cursor:pointer;font-family:inherit}
+        .sb4 .wedit{margin-top:12px;background:var(--c-pan);border:1px solid var(--c-gln);border-radius:12px;padding:14px 16px}
+        .sb4 .wedit h4{margin:0 0 3px;font-size:13px}
+        .sb4 .wedit .hint{font-size:11px;color:var(--c-dim);margin-bottom:10px}
+        .sb4 .wrow{display:flex;align-items:center;gap:10px;margin:7px 0}
+        .sb4 .wrow label{flex:0 0 110px;font-size:12px;font-weight:700}
+        .sb4 .wrow.ind label{color:var(--c-faint)}
+        .sb4 .wrow input[type=range]{flex:1}
+        .sb4 .wrow .wv{width:34px;text-align:right;font-weight:800;font-size:13px}
+        .sb4 .card{background:var(--c-pan);border:1px solid var(--c-bd);border-radius:14px;box-shadow:0 1px 2px rgba(16,24,40,.05),0 10px 26px -14px rgba(16,24,40,.15);margin-top:12px;overflow:hidden}
+        .sb4 .card.gold{border-color:var(--c-gln)}
+        .sb4 .bh{display:flex;align-items:baseline;gap:8px;padding:12px 14px 8px}
+        .sb4 .bh .bt{font-size:14px;font-weight:800}.sb4 .bh .bn{margin-left:auto;font-size:10px;color:var(--c-faint);font-weight:600}
+        .sb4 .thead{display:grid;grid-template-columns:1fr 86px 56px 74px 60px 84px;gap:6px;padding:0 14px 8px;border-bottom:1px solid var(--c-bd)}
+        .sb4 .thead .c{font-size:9px;letter-spacing:.04em;text-transform:uppercase;font-weight:800;color:var(--c-faint);text-align:right}
+        .sb4 .thead .c.pl{text-align:left}.sb4 .thead .c.ov{color:var(--c-gold)}
+        .sb4 .trow{display:grid;grid-template-columns:1fr 86px 56px 74px 60px 84px;gap:6px;align-items:center;padding:9px 14px;border-top:1px solid var(--c-bd)}
+        .sb4 .trow.t1{background:linear-gradient(90deg,var(--c-gbg),transparent 60%)}
+        .sb4 .pl{display:flex;align-items:center;gap:9px;min-width:0}
+        .sb4 .rk{width:15px;text-align:center;font-size:12px;font-weight:800;color:var(--c-faint);flex:0 0 auto}.sb4 .rk.g{color:var(--c-gold)}
+        .sb4 .av{width:29px;height:29px;border-radius:8px;display:grid;place-items:center;color:#fff;font-weight:800;font-size:11px;flex:0 0 auto}
+        .sb4 .nm{font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .sb4 .jb{font-size:9.5px;color:var(--c-faint);font-weight:600;display:block}
+        .sb4 .bdg{font-size:8px;font-weight:800;letter-spacing:.04em;color:var(--c-gold);background:var(--c-gbg);border:1px solid var(--c-gln);padding:1px 4px;border-radius:5px;margin-left:5px}
+        .sb4 .cell{text-align:right;font-size:14px;font-weight:800}
+        .sb4 .cell .nn{display:block;font-size:8px;color:var(--c-faint);font-weight:700}
+        .sb4 .cell.ind{color:var(--c-faint);font-weight:700;font-size:12px}
+        .sb4 .cell.mgood{color:var(--c-good)}.sb4 .cell.mwarn{color:var(--c-warn)}.sb4 .cell.mbad{color:var(--c-bad)}
+        .sb4 .ovcell{text-align:right}
+        .sb4 .ovcell .bar{height:6px;border-radius:99px;background:var(--c-track);overflow:hidden;margin-bottom:3px}
+        .sb4 .ovcell .bar i{display:block;height:100%;background:var(--c-navy);border-radius:99px}
+        .sb4 .ovcell .v{font-size:17px;font-weight:800}
+        .sb4 .trow.t1 .ovcell .v{color:var(--c-gold)}
+        .sb4 .empty{padding:22px;text-align:center;color:var(--c-faint);font-size:13px}
+        .sb4 .watch .whead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 14px 4px}
+        .sb4 .watch .whead .bt{font-size:14px;font-weight:800}
+        .sb4 .watch .tgt{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;font-weight:700;color:var(--c-dim)}
+        .sb4 .watch .tgt input{width:110px}
+        .sb4 .watch .tgt b{color:var(--c-ink);font-size:13px;width:34px;text-align:right}
+        .sb4 .watch .whint{font-size:11px;color:var(--c-dim);padding:0 14px 8px;line-height:1.5}
+        .sb4 .wjob{display:grid;grid-template-columns:1fr 116px 54px 68px;gap:8px;align-items:center;padding:8px 14px;border-top:1px solid var(--c-bd)}
+        .sb4 .wjob .jn{font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .sb4 .wjob .who{font-size:11px;color:var(--c-dim);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+        .sb4 .wjob .mg{text-align:right;font-size:14px;font-weight:800}
+        .sb4 .wjob .st{text-align:right;font-size:9px;font-weight:700;color:var(--c-faint);text-transform:uppercase;letter-spacing:.03em}
+        .sb4 .wjob.under{background:var(--c-badbg)}.sb4 .wjob.under .mg{color:var(--c-bad)}
+        .sb4 .wjob.ok .mg{color:var(--c-good)}
+        .sb4 .wjob.linked{opacity:.5}.sb4 .wjob.linked .mg{color:var(--c-faint)}
+        .sb4 .chip{display:inline-block;font-size:8px;font-weight:800;letter-spacing:.04em;padding:1px 5px;border-radius:5px;background:var(--c-pan2);color:var(--c-faint);border:1px solid var(--c-bd);margin-left:6px;vertical-align:middle}
+        .sb4 .note{margin-top:16px;font-size:11px;color:#8A929C;text-align:center;line-height:1.6}
+        @media (max-width:640px){.sb4 .thead .c.qc,.sb4 .trow .cq,.sb4 .thead .c.ap,.sb4 .trow .ca{display:none}.sb4 .thead,.sb4 .trow{grid-template-columns:1fr 86px 74px 84px}}
+      `}</style>
+
+      <div className="top">
+        <div><div className="co">HOMESTEAD ELECTRIC</div><div className="ti">Scoreboard</div></div>
+        <div className="wt">Admin preview · margins from <b>Simpro</b> (median job)<br/>Weighted — <b>Margin {weights.margin}</b> · QC {weights.qc} · Handoff {weights.handoff} · App {weights.app}</div>
+      </div>
+
+      <div className="ctr">
+        <span className="lbl">Board</span>
+        <div className="seg">{["coordinators", "foremen", "leads"].map(b => (<button key={b} className={board === b ? "on" : ""} onClick={() => setBoard(b)}>{b === "coordinators" ? "Coordinators" : b === "leads" ? "Leads" : "Foremen"}</button>))}</div>
+        <span className="lbl">Time</span>
+        <div className="seg">{[["week", "This Week"], ["month", "This Month"], ["year", "This Year"]].map(p => (<button key={p[0]} className={time === p[0] ? "on" : ""} onClick={() => setTime(p[0])}>{p[1]}</button>))}</div>
+        {canEdit && <button className="editbtn" onClick={() => setShowEdit(v => !v)}>{showEdit ? "Done" : "Adjust weights"}</button>}
+      </div>
+
+      {canEdit && showEdit && (
+        <div className="wedit">
+          <h4>Grading weights</h4>
+          <div className="hint">Admin only. How much each stat counts toward Overall (relative — they needn't total 100). Saved for everyone.</div>
+          {[["margin", "Margin", false], ["qc", "QC", false], ["handoff", "Clean Handoff", false], ["app", "App Use", true]].map(t => (
+            <div className={"wrow" + (t[2] ? " ind" : "")} key={t[0]}>
+              <label>{t[1]}</label>
+              <input type="range" min="0" max="60" value={weights[t[0]]} onChange={e => saveWeights({ [t[0]]: +e.target.value })} />
+              <div className="wv">{weights[t[0]]}</div>
+            </div>
+          ))}
+          <div style={{ marginTop: 8 }}><button className="editbtn" style={{ marginLeft: 0 }} onClick={() => saveWeights(SB4_DEFAULT_WEIGHTS)}>Reset to 45 / 25 / 20 / 10</button></div>
+        </div>
+      )}
+
+      <div className="card gold">
+        <div className="bh"><span className="bt">Overall Standings</span><span className="bn">weighted · {boardLbl} · leader is champion</span></div>
+        <div className="thead">
+          <div className="c pl">Player</div>
+          <div className="c">Margin</div>
+          <div className="c qc">QC</div>
+          <div className="c">Handoff</div>
+          <div className="c ap">App</div>
+          <div className="c ov">Overall</div>
+        </div>
+        {ranked.length === 0 && <div className="empty">Nobody on this board has enough jobs to rank yet.</div>}
+        {ranked.map((r, i) => (
+          <div className={"trow" + (i === 0 ? " t1" : "")} key={r.name}>
+            <div className="pl"><span className={"rk" + (i === 0 ? " g" : "")}>{i + 1}</span><span className="av" style={{ background: colorFor(r.name) }}>{initial(r.name)}</span><span style={{ minWidth: 0 }}><span className="nm">{r.name}{i === 0 && <span className="bdg">CHAMPION</span>}</span><span className="jb">{r.jobs} jobs</span></span></div>
+            <div className={"cell " + marginCls(r.margin)}>{r.margin == null ? "—" : r.margin + "%"}<span className="nn">med of {r.marginN}</span></div>
+            <div className="cell cq">{r.qc == null ? "—" : r.qc}</div>
+            <div className="cell">{r.handoff == null ? "—" : r.handoff + "%"}</div>
+            <div className="cell ind ca">{r.app}</div>
+            <div className="ovcell"><div className="bar"><i style={{ width: Math.round(r._ov / maxOv * 100) + "%" }} /></div><div className="v">{r._ov}</div></div>
+          </div>
+        ))}
+      </div>
+
+      <div className="card watch">
+        <div className="whead">
+          <span className="bt">Jobs to watch</span>
+          <span className="tgt">flag under <input type="range" min="0" max="60" value={target} onChange={e => setTarget(+e.target.value)} /><b>{target}%</b></span>
+        </div>
+        <div className="whint">Live (not-yet-finished) jobs, lowest current margin first. A margin here is a <em>projection</em> that settles as the job bills out — an early warning, not a verdict. Goal is {SB4_MARGIN_TARGET}% at finish. <span className="chip">LINKED</span> = temp-power / phase / add-on job whose costs live on another Simpro job — shown, not scored.</div>
+        {watch.length === 0 && <div className="empty">No live jobs on this board.</div>}
+        {watch.map((j, i) => {
+          const cls = j.special ? "linked" : (j.m < target ? "under" : "ok");
+          return (
+            <div className={"wjob " + cls} key={j.who + "|" + j.job + "|" + i}>
+              <div className="jn">{j.job}{j.special && <span className="chip">LINKED</span>}</div>
+              <div className="who">{j.who}</div>
+              <div className="mg">{j.m}%</div>
+              <div className="st">{j.stage}</div>
+            </div>
+          );
+        })}
+      </div>
+
+      <div className="note">
+        Margin = the <b>median</b> of each person's job margins from Simpro (<code>simproMargin</code>) — median so one entangled job can't swing it. Green ≥ {SB4_MARGIN_TARGET}% (finish target), amber below, red underwater. Each person's jobs — foreman and lead-era — roll onto their current-role board. Admin-only preview; the frozen financial cache is being fixed separately.
+      </div>
+    </div>
+  );
+}
+
 function ScoreboardV2({ jobs, users = [], identity }) {
   // 2026-07-15 redesign: three externally-validated boards (First-Time Pass,
   // QC Items/Job, App Activity) + a transparent rank-sum overall. Read-only.
@@ -49468,7 +49749,7 @@ function App() {
       )}
 
       {view==="scoreboard"&&can(identity,"scoreboard.editWeights")&&(
-        <ScoreboardV3 jobs={jobs} users={users} identity={identity}/>
+        <ScoreboardV4 jobs={jobs} users={users} identity={identity}/>
       )}
 
       {view==="settings"&&can(identity,"settings.view")&&(
