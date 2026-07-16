@@ -38286,7 +38286,6 @@ function ScoreboardV4({ jobs, users = [], identity }) {
   const [time, setTime] = useState("year");
   const [weights, setWeights] = useState(SB4_DEFAULT_WEIGHTS);
   const [showEdit, setShowEdit] = useState(false);
-  const [target, setTarget] = useState(25);
   const canEdit = can(identity, "scoreboard.editWeights");
 
   useEffect(() => onSnapshot(doc(db, "settings", "scoreboardV4Weights"), s => {
@@ -38317,12 +38316,6 @@ function ScoreboardV4({ jobs, users = [], identity }) {
   };
   const ranked = useMemo(() => rows.map(r => ({ ...r, _ov: overallOf(r) })).sort((a, b) => b._ov - a._ov), [rows, weights]);
 
-  const watch = useMemo(() => {
-    const out = [], seen = new Set();
-    rows.forEach(r => (r.live || []).forEach(j => { const k = j.job + "|" + r.name; if (!seen.has(k)) { seen.add(k); out.push({ ...j, who: r.name }); } }));
-    return out.sort((a, b) => a.m - b.m);
-  }, [rows]);
-
   const PAL = ["#3B5BA5", "#46916A", "#B06A2C", "#6A5E97", "#3E7D7A", "#C58A4C", "#3E9E74", "#5B7FC0"];
   const colorFor = (nm) => PAL[Math.abs(String(nm).split("").reduce((a, c) => a + c.charCodeAt(0), 0)) % PAL.length];
   const initial = (nm) => { const p = String(nm || "").trim().split(/\s+/); return p.length > 1 ? (p[0][0] + p[p.length - 1][0]) : (p[0] || "?").slice(0, 1); };
@@ -38349,16 +38342,16 @@ function ScoreboardV4({ jobs, users = [], identity }) {
         .sb4 .wedit h4{margin:0 0 3px;font-size:14px}
         .sb4 .wedit .hint{font-size:12px;color:var(--c-dim);margin-bottom:10px}
         .sb4 .wrow{display:flex;align-items:center;gap:12px;margin:9px 0}
-        .sb4 .wrow label{flex:0 0 104px;font-size:13px;font-weight:700}
+        .sb4 .wrow label{flex:0 0 122px;font-size:13px;font-weight:700}
         .sb4 .wrow.ind label{color:var(--c-faint)}
         .sb4 .wrow input[type=range]{flex:1;min-width:0}
         .sb4 .wrow .wv{width:30px;text-align:right;font-weight:800;font-size:14px}
         .sb4 .card{background:var(--c-pan);border:1px solid var(--c-bd);border-radius:14px;box-shadow:0 1px 2px rgba(16,24,40,.05),0 10px 26px -14px rgba(16,24,40,.15);margin-top:12px;overflow:hidden}
         .sb4 .card.gold{border-color:var(--c-gln)}
-        .sb4 .bh{padding:13px 15px 6px}
+        .sb4 .bh{padding:13px 15px 8px}
         .sb4 .bh .bt{font-size:15px;font-weight:800}
-        .sb4 .bh .bn{font-size:11px;color:var(--c-faint);font-weight:600;margin-top:1px}
-        .sb4 .trow{padding:11px 15px;border-top:1px solid var(--c-bd)}
+        .sb4 .bh .bn{font-size:11.5px;color:var(--c-dim);font-weight:600;margin-top:3px;line-height:1.5}
+        .sb4 .trow{padding:12px 15px;border-top:1px solid var(--c-bd)}
         .sb4 .trow:first-of-type{border-top:0}
         .sb4 .trow.t1{background:linear-gradient(90deg,var(--c-gbg),transparent 75%)}
         .sb4 .l1{display:flex;align-items:center;gap:11px}
@@ -38373,34 +38366,19 @@ function ScoreboardV4({ jobs, users = [], identity }) {
         .sb4 .ov{flex:0 0 auto;text-align:right;padding-left:8px}
         .sb4 .ovv{font-size:24px;font-weight:800;line-height:1}
         .sb4 .trow.t1 .ovv{color:var(--c-gold)}
-        .sb4 .ovl{font-size:8px;letter-spacing:.07em;text-transform:uppercase;color:var(--c-faint);font-weight:800;margin-top:2px}
-        .sb4 .stats{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px;padding-left:47px}
-        .sb4 .stat{background:var(--c-pan2);border:1px solid var(--c-bd);border-radius:8px;padding:4px 9px;font-size:13px;font-weight:800;color:var(--c-ink);white-space:nowrap}
-        .sb4 .stat em{font-style:normal;font-size:8.5px;letter-spacing:.05em;color:var(--c-faint);font-weight:800;margin-right:5px}
-        .sb4 .stat.mgood{color:var(--c-good);border-color:var(--c-goodbd)}
-        .sb4 .stat.mwarn{color:var(--c-warn);border-color:var(--c-warnbd)}
-        .sb4 .stat.mbad{color:var(--c-bad);border-color:var(--c-badbd)}
-        .sb4 .stat.ind{color:var(--c-faint)}
+        .sb4 .ovl{font-size:8px;letter-spacing:.06em;text-transform:uppercase;color:var(--c-faint);font-weight:800;margin-top:3px}
+        .sb4 .stats{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:7px;margin-top:11px;padding-left:47px}
+        .sb4 .stat{background:var(--c-pan2);border:1px solid var(--c-bd);border-radius:9px;padding:7px 9px;min-width:0}
+        .sb4 .stat .sl{font-size:9px;letter-spacing:.03em;text-transform:uppercase;color:var(--c-faint);font-weight:800;line-height:1.3}
+        .sb4 .stat .sv{font-size:16px;font-weight:800;margin-top:3px;line-height:1}
+        .sb4 .stat .sv.mgood{color:var(--c-good)}
+        .sb4 .stat .sv.mwarn{color:var(--c-warn)}
+        .sb4 .stat .sv.mbad{color:var(--c-bad)}
+        .sb4 .stat .sv.ind{color:var(--c-dim)}
+        .sb4 .stat .sh{font-size:9px;color:var(--c-faint);font-weight:600;margin-top:3px;line-height:1.3}
         .sb4 .empty{padding:22px;text-align:center;color:var(--c-faint);font-size:14px}
-        .sb4 .watch .whead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:13px 15px 6px}
-        .sb4 .watch .bt{font-size:15px;font-weight:800}
-        .sb4 .watch .tgt{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--c-dim)}
-        .sb4 .watch .tgt input{width:100px}
-        .sb4 .watch .tgt b{color:var(--c-ink);font-size:14px;width:36px;text-align:right}
-        .sb4 .watch .whint{font-size:12px;color:var(--c-dim);padding:0 15px 9px;line-height:1.5}
-        .sb4 .wjob{display:flex;align-items:center;gap:12px;padding:10px 15px;border-top:1px solid var(--c-bd)}
-        .sb4 .winfo{flex:1;min-width:0}
-        .sb4 .jn{display:flex;align-items:center;gap:5px;min-width:0}
-        .sb4 .jntxt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13.5px;font-weight:700}
-        .sb4 .who2{font-size:11.5px;color:var(--c-dim);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
-        .sb4 .wright{flex:0 0 auto;text-align:right}
-        .sb4 .mg{font-size:16px;font-weight:800}
-        .sb4 .st{font-size:9px;text-transform:uppercase;color:var(--c-faint);font-weight:700;letter-spacing:.03em;margin-top:1px}
-        .sb4 .wjob.under{background:var(--c-badbg)}.sb4 .wjob.under .mg{color:var(--c-bad)}
-        .sb4 .wjob.ok .mg{color:var(--c-good)}
-        .sb4 .wjob.linked{opacity:.55}.sb4 .wjob.linked .mg{color:var(--c-faint)}
-        .sb4 .chip{flex:0 0 auto;font-size:8px;font-weight:800;letter-spacing:.04em;padding:1px 5px;border-radius:5px;background:var(--c-pan2);color:var(--c-faint);border:1px solid var(--c-bd)}
         .sb4 .note{margin-top:16px;font-size:11.5px;color:#8A929C;text-align:center;line-height:1.6}
+        @media (min-width:620px){.sb4 .stats{grid-template-columns:repeat(4,minmax(0,1fr))}}
       `}</style>
 
       <div className="top">
@@ -38419,8 +38397,8 @@ function ScoreboardV4({ jobs, users = [], identity }) {
       {canEdit && showEdit && (
         <div className="wedit">
           <h4>Grading weights</h4>
-          <div className="hint">Admin only. How much each stat counts toward Overall (relative — they needn't total 100). Saved for everyone.</div>
-          {[["margin", "Margin", false], ["qc", "QC", false], ["handoff", "Clean Handoff", false], ["app", "App Use", true]].map(t => (
+          <div className="hint">Admin only. How much each stat counts toward the score (relative — they needn't total 100). Saved for everyone.</div>
+          {[["margin", "Profit margin", false], ["qc", "QC items/job", false], ["handoff", "Punch left open", false], ["app", "Logged in app", true]].map(t => (
             <div className={"wrow" + (t[2] ? " ind" : "")} key={t[0]}>
               <label>{t[1]}</label>
               <input type="range" min="0" max="60" value={weights[t[0]]} onChange={e => saveWeights({ [t[0]]: +e.target.value })} />
@@ -38432,7 +38410,7 @@ function ScoreboardV4({ jobs, users = [], identity }) {
       )}
 
       <div className="card gold">
-        <div className="bh"><span className="bt">Overall Standings</span><span className="bn">weighted · {boardLbl} · leader is champion</span></div>
+        <div className="bh"><div className="bt">Overall Standings</div><div className="bn">{boardLbl} — each person's score out of 100, a weighted blend of the four stats below. Highest score is champion.</div></div>
         {ranked.length === 0 && <div className="empty">Nobody on this board has enough jobs to rank yet.</div>}
         {ranked.map((r, i) => (
           <div className={"trow" + (i === 0 ? " t1" : "")} key={r.name}>
@@ -38440,38 +38418,20 @@ function ScoreboardV4({ jobs, users = [], identity }) {
               <span className={"rk" + (i === 0 ? " g" : "")}>{i + 1}</span>
               <span className="av" style={{ background: colorFor(r.name) }}>{initial(r.name)}</span>
               <span className="who"><span className="nm"><span className="nmtxt">{r.name}</span>{i === 0 && <span className="bdg">CHAMPION</span>}</span><span className="jb">{r.jobs} jobs</span></span>
-              <span className="ov"><div className="ovv">{r._ov}</div><div className="ovl">overall</div></span>
+              <span className="ov"><div className="ovv">{r._ov}</div><div className="ovl">score</div></span>
             </div>
             <div className="stats">
-              <span className={"stat " + marginCls(r.margin)}><em>MARGIN</em>{r.margin == null ? "—" : r.margin + "%"}</span>
-              <span className="stat"><em>QC</em>{r.qc == null ? "—" : r.qc}</span>
-              <span className="stat"><em>HANDOFF</em>{r.handoff == null ? "—" : r.handoff + "%"}</span>
-              <span className="stat ind"><em>APP</em>{r.app}</span>
+              <div className="stat"><div className="sl">Profit margin</div><div className={"sv " + marginCls(r.margin)}>{r.margin == null ? "—" : r.margin + "%"}</div><div className="sh">typical job · goal {SB4_MARGIN_TARGET}%</div></div>
+              <div className="stat"><div className="sl">QC items per job</div><div className="sv">{r.qc == null ? "—" : r.qc}</div><div className="sh">fewer is better</div></div>
+              <div className="stat"><div className="sl">Punch left open</div><div className="sv">{r.handoff == null ? "—" : r.handoff + "%"}</div><div className="sh">fewer is better</div></div>
+              <div className="stat"><div className="sl">Logged in app</div><div className="sv ind">{r.app}</div><div className="sh">punch + updates + questions</div></div>
             </div>
           </div>
         ))}
       </div>
 
-      <div className="card watch">
-        <div className="whead">
-          <span className="bt">Jobs to watch</span>
-          <span className="tgt">flag under <input type="range" min="0" max="60" value={target} onChange={e => setTarget(+e.target.value)} /><b>{target}%</b></span>
-        </div>
-        <div className="whint">Live (not-yet-finished) jobs, lowest current margin first. A margin here is a <em>projection</em> that settles as the job bills out — an early warning, not a verdict. Goal is {SB4_MARGIN_TARGET}% at finish. <span className="chip">LINKED</span> = temp-power / phase / add-on job whose costs live on another Simpro job — shown, not scored.</div>
-        {watch.length === 0 && <div className="empty">No live jobs on this board.</div>}
-        {watch.map((j, i) => {
-          const cls = j.special ? "linked" : (j.m < target ? "under" : "ok");
-          return (
-            <div className={"wjob " + cls} key={j.who + "|" + j.job + "|" + i}>
-              <div className="winfo"><div className="jn"><span className="jntxt">{j.job}</span>{j.special && <span className="chip">LINKED</span>}</div><div className="who2">{j.who}</div></div>
-              <div className="wright"><div className="mg">{j.m}%</div><div className="st">{j.stage}</div></div>
-            </div>
-          );
-        })}
-      </div>
-
       <div className="note">
-        Margin = the <b>median</b> of each person's job margins from Simpro (<code>simproMargin</code>) — median so one entangled job can't swing it. Green ≥ {SB4_MARGIN_TARGET}% (finish target), amber below, red underwater. Each person's jobs — foreman and lead-era — roll onto their current-role board. Admin-only preview; the frozen financial cache is being fixed separately.
+        <b>Profit margin</b> is the <b>median</b> of that person's job margins from Simpro — median so one odd job can't swing it. Goal is {SB4_MARGIN_TARGET}% at finish: green is at/above, amber below, red underwater. Each person's jobs — foreman and lead-era — roll onto their current-role board. Admin-only preview.
       </div>
     </div>
   );
@@ -42601,7 +42561,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-16 · App SW version: v338
+**Last manifest update:** 2026-07-16 · App SW version: v339
 
 ---
 
@@ -42880,6 +42840,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Scoreboard redesign — pure competition, three boards** · 'shipped 2026-07-15' · 'SW v334' · admin-only 'ScoreboardV2' rebuilt from the ~13-signal info/quality blend into three plainly-measured, externally-validated boards with a transparent rank-sum overall (placements added up — no hidden weights). New pure scoring ('sbv3Build'/'sbv3Combined', alongside the retired 'sbv2*'): **First-Time Pass** (rough+final passed first try, STATUS-IMPLIED — a job in finish counts rough as passed, a completed job counts both, unless a fail was logged; lifts the sample from ~24 manually-logged jobs to the whole workload so small-N noise stops crowning people on 2-3 data points); **QC Items/Job** (avg fromQC defects the QC walker calls per walk, lower wins, can't be self-padded); **App Activity** (regular punch + questions logged — entering info directly raises your score, Koy 2026-07-15). Three boards — Coordinators (roll up their book's foremen via the 'coordinator' field on 'settings/users'), Foremen ('j.foreman'), Leads ('j.lead'). This Week / This Month / This Year window (by recent job activity). Read-only — computes from jobs, writes nothing, no new Firestore field. Dry-run-verified against real data ('scripts/sb-*' harnesses). Old 'sbv2*' scoring + 'ScoreboardV2Champions/Drilldown/HowItWorks' left defined but unused.
 - **Scoreboard v335 — weighted overall + admin-tunable weights** · 'shipped 2026-07-15' · 'SW v335' · iterated the v334 three-board scoreboard into the design Koy approved: a **weighted Overall standings** board on top (leader = champion; each person's four sub-scores shown inline so the weighting is transparent — no black box) over **four scored sections** — **Quality** (first-time inspection pass + QC items/job), **App Usage** (punch + updates + questions logged), **Shared Links** (question links sent), **Clean Handoff** (open punch per 100 punch items, lower wins — home runs deliberately NOT involved). New 'ScoreboardV3' component + 'sb3Build'/'sb3Agg'/'sb3JobSignals' scoring (status-implied inspection pass carried over from v334: reached finish ⇒ rough passed, completed ⇒ final passed, a logged fail overrides — full-workload sample, not just manually-logged inspections). **Weights are admin-only and persisted**: an "Adjust weights" editor gated behind 'scoreboard.editWeights' writes 'settings/scoreboardWeights' (default Quality 40 / App 25 / Shared 20 / Handoff 15); 'sb3Agg' normalizes over whatever weights are set, so they needn't total 100. Coordinators (roll up their book's foremen) / Foremen ('j.foreman', filtered to actual foreman-title users) / Leads ('j.lead'); This Week / This Month / This Year (by recent job activity). Read-only over jobs — the ONLY write is the admin weights doc; no new job field. Render swapped 'ScoreboardV2'→'ScoreboardV3'; the v334 'ScoreboardV2'/'sbv3Build'/'sbv3Combined' are now unused. Dry-run-verified: in-app 'sb3Build' is byte-identical to the verified '/tmp' compute harness that produced Koy's approved mockup numbers.
 - **Scoreboard V4 — median Simpro margin board + Jobs to Watch (admin-only)** · 'shipped 2026-07-16' · 'SW v337' · new admin-only 'ScoreboardV4' replaces V3 at the render site (tab already gated to 'scoreboard.editWeights', so only Koy sees it until approved). **Margin = the MEDIAN of the live 'job.simproMargin' field** (matches Simpro; median so one entangled job can't swing it) instead of the frozen 'scoreboardJobFinancials' cache; admin weight tool (Margin/QC/Handoff/App) writes 'settings/scoreboardV4Weights' (admin-only merge, covered by the existing generic 'settings/{docId}' rule — no rules change); live **Jobs-to-Watch** panel flags jobs against a 15%-at-finish margin target. 'sb4Build' verified byte-identical to the approved mockup numbers (13/13 rows). Read-only over jobs — no job field added, no loader change. *(Entry backfilled by the v338 ship: the v337 commit omitted its FEATURES.md entry, so the prebuild gate blocked its Vercel deploy — v337 never reached production and ships together with v338.)*
+- **Scoreboard V4 — scorecards only + plain-language stats** · 'shipped 2026-07-16' · 'SW v339' · Koy's first live look: *"these need to be easier to understand what they mean and remove the watch jobs below just have the scorecards."* **Jobs-to-Watch panel REMOVED** (with its target slider, 'watch' memo and 'target' state; 'sb4Agg' still computes 'live' for a future re-add). Each person is now one **stacked scorecard** — rank + avatar + full name + big **SCORE** (out of 100) on top, and a 2×2 (4-across on ≥620px) grid of **self-describing stats** below: *Profit margin* (typical job · goal 15%, green/amber/red vs target), *QC items per job* (fewer is better), *Punch left open* (fewer is better), *Logged in app* (punch + updates + questions) — each stat states what it measures and which direction is good, replacing the cryptic 'MARGIN / QC / HANDOFF / APP' chips. Card header now explains the score is a weighted blend; weight-tool labels match the new names. Layout carries the v338 fix (no fixed-column grid — '1fr' grids overflow on phones because '1fr'='minmax(auto,1fr)' won't shrink below a nowrap name); verified in-browser at 375px. Read-only over jobs; only write remains 'settings/scoreboardV4Weights'.
 - **"Previously answered as X" banner — per-link, not global** · 'shipped 2026-07-15' · 'SW v333' · the returning-recipient banner on a question share link ('QuestionsSharePage') keyed off the doc-level 'questionAnswers.answeredBy' — a SINGLE field shared by every share link (the last person to submit ANY of them). On Kweller that made all 4 links say "You previously submitted answers as Haley," including the "Koy" link (Koy's answer, mislabeled) and the "Mark Wintzer team" link that had zero answers and was never sent to Haley. Fixed: the banner now shows only when a question ON THIS LINK actually had a prior answer (a 'loadedAnsweredIds' snapshot taken at load, intersected with this link's filtered questions), and it names the link's OWN recipient ('shareName'), falling back to the doc-level name only for the generic all-questions link. Display-only change; no write path or data-shape change.
 - **Question share-link preview (in-app)** · 'shipped 2026-07-15' · 'SW v332' · the Share-Questions modal's SAVED LINKS list gains a **Preview** button next to Copy link — it opens the recipient's exact page in an in-app modal '<iframe>' ('/?questions={jobId}&s={shareId}&preview=1') so the office can see what a person will see without copying the URL and opening a tab. 'QuestionsSharePage' reads '?preview=1' and renders its real body inside a disabled '<fieldset>' under a "PREVIEW · read-only" banner (one guard disables every input / attach / submit). Preview is provably write-inert: 'handleSubmit', 'runAutoSave', and 'postThread' each early-return on 'preview' (belt-and-suspenders atop the existing 'userEditedRef' mount guard), so no draft/answer/thread write can fire. No data-model change; no new Firestore field; office-side view only.
 
