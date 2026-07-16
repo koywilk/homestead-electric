@@ -4,7 +4,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-07-15 · App SW version: v335
+**Last manifest update:** 2026-07-16 · App SW version: v336
 
 ---
 
@@ -242,6 +242,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Current: `v181`
   - Bumped on every deploy that changes bundle
 - **Firestore offline support** · `shipped` · `persistentLocalCache` + `persistentMultipleTabManager`
+- **Self-healing live sync + honest LIVE indicator** · `shipped 2026-07-16` · `SW v336` · the board used to go STALE after a laptop slept / WiFi dropped / an extension blocked the Firestore Listen channel: the jobs `onSnapshot` was attached once with no re-attach path and an error callback that only logged, while the header showed a hardcoded green "● LIVE" dot — so the crew stared at hours-old cached data with no cue and no recovery short of a manual reload. Now the jobs listener re-attaches with backoff on error and force-resyncs (tear-down + re-attach → fresh snapshot + resumed live updates) on three triggers: tab returns to foreground after being away, machine wakes from sleep (a wall-clock gap detector, since `navigator.onLine` stays stuck `true` through sleep), and the OS `online` event. The header dot is now wired to REAL state via `snap.metadata.fromCache` + listener health + `isOnline` — green "Live" only when truly synced, amber "Reconnecting"/"Offline" otherwise — and the offline banner also shows on stale-cache/reconnecting. READ-only change: no write path touched, merge/save safety unchanged (saves still re-read the server transactionally). Also fixed the invisible "Show archived" toggle chevron (kebab-case `chevron-right`/`chevron-down` never matched the camelCase icon registry; added `chevronDown`).
 - **Push notifications (FCM)** · `shipped` · per-foreman; `FCM_MSG.data` shape (NOT `webpush.notification.data`)
 - **Honest notification prefs** · `shipped 2026-07-10` · `SW v321` · every toggle in Settings → Notifications is enforced server-side (`sendToNameIfWanted` / `sendToJobCoordinatorIfWanted`); placebo keys removed, 7 real keys added (status_update, milestone_complete, job_hold, failed_inspection, reminder_safety, co_chase, rt_chase); admin blast on every event replaced with coordinator-routed sends
 - **Thursday Packet v2** · `shipped 2026-07-10` · `SW v321` · weekly email keeps the update-compliance section; dead "Last Week's Decisions" stub dropped; adds Tech Lighting loop status, PTO next 7 days, open App Map suggestions, fleet staleness line

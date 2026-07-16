@@ -5082,6 +5082,7 @@ const ICON_PATHS = {
   zap:          <path d="M13 2 3 14h9l-1 8 10-12h-9z"/>,
   chevronLeft:  <path d="m15 18-6-6 6-6"/>,
   chevronRight: <path d="m9 18 6-6-6-6"/>,
+  chevronDown:  <path d="m6 9 6 6 6-6"/>,
   arrowRight:   <><path d="M5 12h14"/><path d="m12 5 7 7-7 7"/></>,
   arrowLeft:    <><path d="M19 12H5"/><path d="m12 19-7-7 7-7"/></>,
   hardHat:      <><path d="M2 18a1 1 0 0 0 1 1h18a1 1 0 0 0 1-1v-2a1 1 0 0 0-1-1h-2a9 9 0 0 0-18 0H2a1 1 0 0 0-1 1v2"/><path d="M10 10V5a1 1 0 0 1 1-1h2a1 1 0 0 1 1 1v5"/></>,
@@ -9017,7 +9018,7 @@ function JobNotesSection({
               cursor:'pointer', fontFamily:'inherit',
               display:'inline-flex', alignItems:'center', gap:5,
             }}>
-            <Icon name={showArchived ? 'chevron-down' : 'chevron-right'} size={10} color={C.dim}/>
+            <Icon name={showArchived ? 'chevronDown' : 'chevronRight'} size={10} color={C.dim}/>
             <span>{showArchived ? 'Hide archived' : `Show archived (${archivedNotes.length})`}</span>
           </button>
 
@@ -42309,7 +42310,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-15 · App SW version: v335
+**Last manifest update:** 2026-07-16 · App SW version: v336
 
 ---
 
@@ -42547,6 +42548,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Current: 'v181'
   - Bumped on every deploy that changes bundle
 - **Firestore offline support** · 'shipped' · 'persistentLocalCache' + 'persistentMultipleTabManager'
+- **Self-healing live sync + honest LIVE indicator** · 'shipped 2026-07-16' · 'SW v336' · the board used to go STALE after a laptop slept / WiFi dropped / an extension blocked the Firestore Listen channel: the jobs 'onSnapshot' was attached once with no re-attach path and an error callback that only logged, while the header showed a hardcoded green "● LIVE" dot — so the crew stared at hours-old cached data with no cue and no recovery short of a manual reload. Now the jobs listener re-attaches with backoff on error and force-resyncs (tear-down + re-attach → fresh snapshot + resumed live updates) on three triggers: tab returns to foreground after being away, machine wakes from sleep (a wall-clock gap detector, since 'navigator.onLine' stays stuck 'true' through sleep), and the OS 'online' event. The header dot is now wired to REAL state via 'snap.metadata.fromCache' + listener health + 'isOnline' — green "Live" only when truly synced, amber "Reconnecting"/"Offline" otherwise — and the offline banner also shows on stale-cache/reconnecting. READ-only change: no write path touched, merge/save safety unchanged (saves still re-read the server transactionally). Also fixed the invisible "Show archived" toggle chevron (kebab-case 'chevron-right'/'chevron-down' never matched the camelCase icon registry; added 'chevronDown').
 - **Push notifications (FCM)** · 'shipped' · per-foreman; 'FCM_MSG.data' shape (NOT 'webpush.notification.data')
 - **Honest notification prefs** · 'shipped 2026-07-10' · 'SW v321' · every toggle in Settings → Notifications is enforced server-side ('sendToNameIfWanted' / 'sendToJobCoordinatorIfWanted'); placebo keys removed, 7 real keys added (status_update, milestone_complete, job_hold, failed_inspection, reminder_safety, co_chase, rt_chase); admin blast on every event replaced with coordinator-routed sends
 - **Thursday Packet v2** · 'shipped 2026-07-10' · 'SW v321' · weekly email keeps the update-compliance section; dead "Last Week's Decisions" stub dropped; adds Tech Lighting loop status, PTO next 7 days, open App Map suggestions, fleet staleness line
@@ -45449,6 +45451,10 @@ function App() {
   // until the issue is fixed (no dismiss for critical states).
   const [notifIssue, setNotifIssue] = useState(null);
   const [isOnline, setIsOnline] = useState(navigator.onLine);
+  // Real realtime-sync health for the header LIVE dot + staleness banner, driven
+  // by the jobs listener: fromCache=true ⇒ SDK is serving cached (stale) data;
+  // healthy=false ⇒ the listener hit an error and is re-attaching.
+  const [syncHealth, setSyncHealth] = useState({ fromCache:false, healthy:true, synced:false });
 
   useEffect(()=>{
     const up   = () => setIsOnline(true);
@@ -45896,9 +45902,34 @@ function App() {
     } catch(e){}
 
 
-    const unsub = onSnapshot(collection(db,"jobs"),
+    // Self-healing jobs listener (2026-07-16 stale-board fix): this was attached
+    // ONCE with empty deps and an error callback that only logged — so after a
+    // laptop sleep / WiFi drop / an extension blocking the Firestore Listen
+    // channel, the board sat on stale cached data with no recovery until a manual
+    // reload, while the header still showed a hardcoded green "LIVE" dot. Now:
+    // re-attach with backoff on error; force a fresh sync when the tab returns to
+    // the foreground, the machine wakes from sleep, or the network returns; and
+    // drive an HONEST live/stale indicator off snap.metadata.fromCache. Write/merge
+    // safety is unchanged — saves still re-read the server inside a transaction
+    // (see saveJob), so this only affects READ freshness + the badge.
+    let jobsUnsub = null, jobsRetry = null, jobsBackoff = 2000, lastTick = Date.now(), lastHidden = 0, lastResync = 0, lastSnapAt = Date.now(), wasHidden = false, synced = false;
 
-      (snap) => {
+    const handleJobsSnap = (snap) => {
+
+        lastSnapAt = Date.now(); // liveness stamp for the silent-stall watchdog
+        // Honest staleness signal (header LIVE dot + banner). fromCache=true means
+        // the SDK is serving locally-cached (possibly stale) data; a real server
+        // frame clears it and marks us synced (only then does the dot go green).
+        if (snap.metadata.fromCache) {
+          setSyncHealth(h => h.fromCache ? h : { ...h, fromCache:true });
+        } else {
+          jobsBackoff = 2000; // real server data arrived → reset re-attach backoff
+          synced = true;
+          setSyncHealth(h => (h.fromCache || !h.healthy || !h.synced) ? { ...h, fromCache:false, healthy:true, synced:true } : h);
+        }
+        // Skip the heavy reprocess on metadata-only fires (cache<->server
+        // transition, pending-write settle) — the doc DATA didn't change.
+        if (!initialLoad.current && snap.docChanges().length === 0) return;
 
         if(!snap.empty) {
 
@@ -46035,17 +46066,62 @@ function App() {
 
         initialLoad.current = false;
 
-      },
+    };
 
+    const attachJobs = () => onSnapshot(collection(db,"jobs"), { includeMetadataChanges:true },
+      handleJobsSnap,
       (err) => {
-
-        console.error('Snapshot error:',err);
-
+        console.error('[HE] jobs listener error — re-attaching:', err?.message);
         initialLoad.current = false;
-
+        setSyncHealth(h => h.healthy ? { ...h, healthy:false } : h);
+        try { jobsUnsub && jobsUnsub(); } catch(e){}
+        jobsRetry = setTimeout(() => { jobsBackoff = Math.min(jobsBackoff * 2, 30000); jobsUnsub = attachJobs(); }, jobsBackoff);
       }
-
     );
+
+    // Tear down + re-attach: yields an immediate fresh snapshot AND resumes live
+    // updates if the stream had silently died. Debounced so the focus /
+    // visibilitychange / wake / stall paths converging can't churn re-attaches
+    // (or flash the amber badge) when they fire together on return.
+    const resyncJobs = () => {
+      const now = Date.now();
+      if (now - lastResync < 8000) return;
+      lastResync = now;
+      try { jobsUnsub && jobsUnsub(); } catch(e){}
+      if (jobsRetry) { clearTimeout(jobsRetry); jobsRetry = null; }
+      jobsBackoff = 2000;
+      jobsUnsub = attachJobs();
+    };
+
+    jobsUnsub = attachJobs();
+
+    // Recover a stale board WITHOUT a manual reload. navigator.onLine is
+    // unreliable for "is Firestore reachable", so we trigger on the events that
+    // actually correlate with returning to work — but only after a REAL absence
+    // (the `wasHidden` latch), so a quick side-by-side click-back can't churn or
+    // flash the amber "Reconnecting" badge on a healthy connection.
+    const onReturn = () => {
+      if (document.visibilityState === 'hidden') { wasHidden = true; lastHidden = Date.now(); return; }
+      if (wasHidden && Date.now() - lastHidden > 15000) { wasHidden = false; resyncJobs(); }
+      else wasHidden = false;
+    };
+    const onBlur = () => { if (!wasHidden) { wasHidden = true; lastHidden = Date.now(); } }; // desktop app-switch fires no visibilitychange
+    const onNetUp = () => resyncJobs();                          // OS 'online' event
+    // Watchdog (20s): (a) sleep/suspend — a wall-clock gap means we were
+    // suspended ⇒ resync on wake (navigator.onLine stays stuck true through
+    // sleep, so events alone miss it); (b) silent stall — online + already-synced
+    // but NO snapshot in 5 min ⇒ the stream may have died with no error ⇒ resync
+    // so the board can't sit foreground-stale under a false-green dot.
+    const gapWatch = setInterval(() => {
+      const now = Date.now();
+      if (now - lastTick > 60000) resyncJobs();
+      else if (navigator.onLine && synced && now - lastSnapAt > 300000) resyncJobs();
+      lastTick = now;
+    }, 20000);
+    document.addEventListener('visibilitychange', onReturn);
+    window.addEventListener('focus', onReturn);
+    window.addEventListener('blur', onBlur);
+    window.addEventListener('online', onNetUp);
 
     // Upcoming jobs stored as a single doc — real-time listener so all users stay in sync.
     // Single doc means deletions/edits are atomic (no per-document race).
@@ -46127,7 +46203,16 @@ function App() {
       setBackupStatus(snap.exists() ? snap.data() : false);
     }, ()=>{});
 
-    return () => { unsub(); unsubUpcoming(); unsubSimproCands(); unsubNeeds(); unsubRedlineWalks(); unsubSuggestions(); unsubVersion(); unsubBackupStatus(); }; // cleanup on unmount
+    return () => {
+      try { jobsUnsub && jobsUnsub(); } catch(e){}
+      if (jobsRetry) clearTimeout(jobsRetry);
+      clearInterval(gapWatch);
+      document.removeEventListener('visibilitychange', onReturn);
+      window.removeEventListener('focus', onReturn);
+      window.removeEventListener('blur', onBlur);
+      window.removeEventListener('online', onNetUp);
+      unsubUpcoming(); unsubSimproCands(); unsubNeeds(); unsubRedlineWalks(); unsubSuggestions(); unsubVersion(); unsubBackupStatus();
+    }; // cleanup on unmount
 
   },[]);
 
@@ -47842,7 +47927,7 @@ function App() {
           </div>
           <div onClick={goHome} className="flagtext flag-stripes" title="Homestead Electric" style={{fontSize:34,letterSpacing:".04em",lineHeight:.85,whiteSpace:"nowrap",cursor:"pointer"}}>HOMESTEAD ELECTRIC</div>
           <div style={{display:"flex",alignItems:"center",gap:8,marginLeft:2}}>
-            <span style={{display:"inline-flex",alignItems:"center",gap:6,font:"700 10px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:"#5FE39C"}}><span className="cmd-live" style={{width:7,height:7,borderRadius:"50%",background:D.live,display:"inline-block"}}/>Live</span>
+            {(()=>{const _live=isOnline&&syncHealth.healthy&&syncHealth.synced&&!syncHealth.fromCache;const _c=_live?"#5FE39C":"#E3B85F";const _lbl=!isOnline?"Offline":!syncHealth.synced?"Connecting":_live?"Live":"Reconnecting";return <span title={_live?"Live — synced with the server":"Not live — showing recently-cached data; tap the banner or reload to refresh"} style={{display:"inline-flex",alignItems:"center",gap:6,font:"700 10px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:_c}}><span className="cmd-live" style={{width:7,height:7,borderRadius:"50%",background:_c,display:"inline-block"}}/>{_lbl}</span>;})()}
             <span style={{width:3,height:3,borderRadius:"50%",background:"#3A4150"}}/>
             <span style={{font:"500 11px system-ui",color:"#8A93A3"}}>{jobs.length} active jobs</span>
           </div>
@@ -48019,12 +48104,14 @@ function App() {
         </div>
       </div>
 
-      {/* Offline banner */}
-      {!isOnline && (
+      {/* Offline / stale-data banner */}
+      {(!isOnline || (syncHealth.synced && (syncHealth.fromCache || !syncHealth.healthy))) && (
         <div style={{background:'#B0892C',color:'#000',padding:'8px 16px',
           display:'flex',alignItems:'center',gap:8,fontSize:12,fontWeight:700}}>
           <Icon name="wifiOff" size={14} stroke={2.5}/>
-          <span>No connection — changes are saved locally and will sync when you're back online</span>
+          <span>{!isOnline
+            ? "No connection — changes are saved locally and will sync when you're back online"
+            : "Reconnecting — showing recently-synced data. Your changes are saved and will sync."}</span>
         </div>
       )}
 
