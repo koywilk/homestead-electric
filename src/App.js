@@ -22046,6 +22046,15 @@ const _threeWayMerge = (base, client, server) => {
   return client; // primitives / mixed types → client wins
 };
 
+// v338 scalar-conflict telemetry support (read-only observability; see
+// _mergePatchAgainstServer). _noBaselineWarned: once-per-session-per-job warn
+// when a merge runs with no baseline (union semantics). _scalarTelemetrySkip:
+// keys whose baseline shape legitimately differs from the raw server doc —
+// migrate() rewrites legacy stage labels on the baseline side only, so these
+// would false-positive on every save of an affected job.
+const _noBaselineWarned = new Set();
+const _scalarTelemetrySkip = new Set(["roughStage", "finishStage"]);
+
 // Baselines for shared settings/* docs (crewPTO, timeOffRequests, crewTeams,
 // schedule_<wk>, upcoming_jobs, …): docId → the last server data this client
 // synced from. Updated in each doc's onSnapshot listener. Read-only
@@ -38307,7 +38316,6 @@ function ScoreboardV4({ jobs, users = [], identity }) {
     return wsum ? Math.round(s / wsum * 100) : 0;
   };
   const ranked = useMemo(() => rows.map(r => ({ ...r, _ov: overallOf(r) })).sort((a, b) => b._ov - a._ov), [rows, weights]);
-  const maxOv = ranked.length ? Math.max(1, ranked[0]._ov) : 1;
 
   const watch = useMemo(() => {
     const out = [], seen = new Set();
@@ -38324,74 +38332,80 @@ function ScoreboardV4({ jobs, users = [], identity }) {
   return (
     <div className="sb4">
       <style>{`
-        .sb4{--c-pan:#fff;--c-pan2:#F5F7F9;--c-bd:#E2E5EA;--c-ink:#171B21;--c-dim:#5C6470;--c-faint:#8A929C;--c-blue:#3B5BA5;--c-good:#3E7D5A;--c-warn:#B0892C;--c-warnbg:#F6EDCF;--c-bad:#B23A3A;--c-badbg:#F6E4E4;--c-gold:#B0892C;--c-gbg:#F6EDCF;--c-gln:#E3D097;--c-track:#E9ECF1;--c-navy:#1E2C44;font-family:inherit;color:var(--c-ink)}
+        .sb4{--c-pan:#fff;--c-pan2:#F5F7F9;--c-bd:#E2E5EA;--c-ink:#171B21;--c-dim:#5C6470;--c-faint:#8A929C;--c-good:#2F7A4F;--c-goodbd:#BFE0CC;--c-warn:#916A16;--c-warnbd:#E7D49A;--c-bad:#B23A3A;--c-badbd:#EBC4C4;--c-badbg:#FBEDED;--c-gold:#916A16;--c-gbg:#F6EDCF;--c-gln:#E3D097;font-family:inherit;color:var(--c-ink)}
         .sb4 *{box-sizing:border-box}
-        .sb4 .top{background:linear-gradient(180deg,#1E2C44,#162134);border-radius:14px;padding:16px 18px;color:#fff;display:flex;align-items:center;gap:12px}
+        .sb4 .top{background:linear-gradient(180deg,#1E2C44,#162134);border-radius:14px;padding:15px 16px;color:#fff}
         .sb4 .top .co{font-size:10px;letter-spacing:.14em;color:rgba(255,255,255,.6);font-weight:700}
-        .sb4 .top .ti{font-size:18px;font-weight:800}
-        .sb4 .top .wt{margin-left:auto;text-align:right;font-size:10px;color:rgba(255,255,255,.66);line-height:1.5;max-width:290px}
+        .sb4 .top .ti{font-size:20px;font-weight:800;margin-top:1px}
+        .sb4 .top .wt{font-size:11px;color:rgba(255,255,255,.72);line-height:1.5;margin-top:8px}
         .sb4 .top .wt b{color:#fff}
-        .sb4 .ctr{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:14px 0 2px}
+        .sb4 .ctr{display:flex;gap:8px 10px;flex-wrap:wrap;align-items:center;margin:14px 0 2px}
         .sb4 .seg{display:inline-flex;background:var(--c-pan2);border:1px solid var(--c-bd);border-radius:10px;padding:3px;gap:2px}
-        .sb4 .seg button{border:0;background:transparent;color:var(--c-dim);font:inherit;font-size:12px;font-weight:700;padding:6px 12px;border-radius:7px;cursor:pointer}
+        .sb4 .seg button{border:0;background:transparent;color:var(--c-dim);font:inherit;font-size:13px;font-weight:700;padding:7px 13px;border-radius:7px;cursor:pointer}
         .sb4 .seg button.on{background:var(--c-pan);color:var(--c-ink);box-shadow:0 1px 2px rgba(16,24,40,.12)}
         .sb4 .lbl{font-size:10px;letter-spacing:.1em;font-weight:700;color:var(--c-faint);text-transform:uppercase}
-        .sb4 .editbtn{margin-left:auto;border:1px solid var(--c-gln);background:var(--c-gbg);color:var(--c-gold);font-weight:800;font-size:11px;padding:6px 12px;border-radius:8px;cursor:pointer;font-family:inherit}
+        .sb4 .editbtn{border:1px solid var(--c-gln);background:var(--c-gbg);color:var(--c-gold);font-weight:800;font-size:12px;padding:7px 13px;border-radius:8px;cursor:pointer;font-family:inherit}
         .sb4 .wedit{margin-top:12px;background:var(--c-pan);border:1px solid var(--c-gln);border-radius:12px;padding:14px 16px}
-        .sb4 .wedit h4{margin:0 0 3px;font-size:13px}
-        .sb4 .wedit .hint{font-size:11px;color:var(--c-dim);margin-bottom:10px}
-        .sb4 .wrow{display:flex;align-items:center;gap:10px;margin:7px 0}
-        .sb4 .wrow label{flex:0 0 110px;font-size:12px;font-weight:700}
+        .sb4 .wedit h4{margin:0 0 3px;font-size:14px}
+        .sb4 .wedit .hint{font-size:12px;color:var(--c-dim);margin-bottom:10px}
+        .sb4 .wrow{display:flex;align-items:center;gap:12px;margin:9px 0}
+        .sb4 .wrow label{flex:0 0 104px;font-size:13px;font-weight:700}
         .sb4 .wrow.ind label{color:var(--c-faint)}
-        .sb4 .wrow input[type=range]{flex:1}
-        .sb4 .wrow .wv{width:34px;text-align:right;font-weight:800;font-size:13px}
+        .sb4 .wrow input[type=range]{flex:1;min-width:0}
+        .sb4 .wrow .wv{width:30px;text-align:right;font-weight:800;font-size:14px}
         .sb4 .card{background:var(--c-pan);border:1px solid var(--c-bd);border-radius:14px;box-shadow:0 1px 2px rgba(16,24,40,.05),0 10px 26px -14px rgba(16,24,40,.15);margin-top:12px;overflow:hidden}
         .sb4 .card.gold{border-color:var(--c-gln)}
-        .sb4 .bh{display:flex;align-items:baseline;gap:8px;padding:12px 14px 8px}
-        .sb4 .bh .bt{font-size:14px;font-weight:800}.sb4 .bh .bn{margin-left:auto;font-size:10px;color:var(--c-faint);font-weight:600}
-        .sb4 .thead{display:grid;grid-template-columns:1fr 86px 56px 74px 60px 84px;gap:6px;padding:0 14px 8px;border-bottom:1px solid var(--c-bd)}
-        .sb4 .thead .c{font-size:9px;letter-spacing:.04em;text-transform:uppercase;font-weight:800;color:var(--c-faint);text-align:right}
-        .sb4 .thead .c.pl{text-align:left}.sb4 .thead .c.ov{color:var(--c-gold)}
-        .sb4 .trow{display:grid;grid-template-columns:1fr 86px 56px 74px 60px 84px;gap:6px;align-items:center;padding:9px 14px;border-top:1px solid var(--c-bd)}
-        .sb4 .trow.t1{background:linear-gradient(90deg,var(--c-gbg),transparent 60%)}
-        .sb4 .pl{display:flex;align-items:center;gap:9px;min-width:0}
-        .sb4 .rk{width:15px;text-align:center;font-size:12px;font-weight:800;color:var(--c-faint);flex:0 0 auto}.sb4 .rk.g{color:var(--c-gold)}
-        .sb4 .av{width:29px;height:29px;border-radius:8px;display:grid;place-items:center;color:#fff;font-weight:800;font-size:11px;flex:0 0 auto}
-        .sb4 .nm{font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .sb4 .jb{font-size:9.5px;color:var(--c-faint);font-weight:600;display:block}
-        .sb4 .bdg{font-size:8px;font-weight:800;letter-spacing:.04em;color:var(--c-gold);background:var(--c-gbg);border:1px solid var(--c-gln);padding:1px 4px;border-radius:5px;margin-left:5px}
-        .sb4 .cell{text-align:right;font-size:14px;font-weight:800}
-        .sb4 .cell .nn{display:block;font-size:8px;color:var(--c-faint);font-weight:700}
-        .sb4 .cell.ind{color:var(--c-faint);font-weight:700;font-size:12px}
-        .sb4 .cell.mgood{color:var(--c-good)}.sb4 .cell.mwarn{color:var(--c-warn)}.sb4 .cell.mbad{color:var(--c-bad)}
-        .sb4 .ovcell{text-align:right}
-        .sb4 .ovcell .bar{height:6px;border-radius:99px;background:var(--c-track);overflow:hidden;margin-bottom:3px}
-        .sb4 .ovcell .bar i{display:block;height:100%;background:var(--c-navy);border-radius:99px}
-        .sb4 .ovcell .v{font-size:17px;font-weight:800}
-        .sb4 .trow.t1 .ovcell .v{color:var(--c-gold)}
-        .sb4 .empty{padding:22px;text-align:center;color:var(--c-faint);font-size:13px}
-        .sb4 .watch .whead{display:flex;align-items:center;gap:8px;flex-wrap:wrap;padding:12px 14px 4px}
-        .sb4 .watch .whead .bt{font-size:14px;font-weight:800}
-        .sb4 .watch .tgt{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:11px;font-weight:700;color:var(--c-dim)}
-        .sb4 .watch .tgt input{width:110px}
-        .sb4 .watch .tgt b{color:var(--c-ink);font-size:13px;width:34px;text-align:right}
-        .sb4 .watch .whint{font-size:11px;color:var(--c-dim);padding:0 14px 8px;line-height:1.5}
-        .sb4 .wjob{display:grid;grid-template-columns:1fr 116px 54px 68px;gap:8px;align-items:center;padding:8px 14px;border-top:1px solid var(--c-bd)}
-        .sb4 .wjob .jn{font-size:12.5px;font-weight:700;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .sb4 .wjob .who{font-size:11px;color:var(--c-dim);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
-        .sb4 .wjob .mg{text-align:right;font-size:14px;font-weight:800}
-        .sb4 .wjob .st{text-align:right;font-size:9px;font-weight:700;color:var(--c-faint);text-transform:uppercase;letter-spacing:.03em}
+        .sb4 .bh{padding:13px 15px 6px}
+        .sb4 .bh .bt{font-size:15px;font-weight:800}
+        .sb4 .bh .bn{font-size:11px;color:var(--c-faint);font-weight:600;margin-top:1px}
+        .sb4 .trow{padding:11px 15px;border-top:1px solid var(--c-bd)}
+        .sb4 .trow:first-of-type{border-top:0}
+        .sb4 .trow.t1{background:linear-gradient(90deg,var(--c-gbg),transparent 75%)}
+        .sb4 .l1{display:flex;align-items:center;gap:11px}
+        .sb4 .rk{width:16px;text-align:center;font-size:14px;font-weight:800;color:var(--c-faint);flex:0 0 auto}
+        .sb4 .rk.g{color:var(--c-gold)}
+        .sb4 .av{width:36px;height:36px;border-radius:9px;display:grid;place-items:center;color:#fff;font-weight:800;font-size:13px;flex:0 0 auto}
+        .sb4 .who{flex:1;min-width:0}
+        .sb4 .nm{display:flex;align-items:center;gap:6px;min-width:0}
+        .sb4 .nmtxt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:15px;font-weight:700}
+        .sb4 .bdg{flex:0 0 auto;font-size:8.5px;font-weight:800;letter-spacing:.04em;color:var(--c-gold);background:var(--c-gbg);border:1px solid var(--c-gln);padding:1px 5px;border-radius:5px}
+        .sb4 .jb{font-size:11.5px;color:var(--c-faint);font-weight:600;margin-top:2px}
+        .sb4 .ov{flex:0 0 auto;text-align:right;padding-left:8px}
+        .sb4 .ovv{font-size:24px;font-weight:800;line-height:1}
+        .sb4 .trow.t1 .ovv{color:var(--c-gold)}
+        .sb4 .ovl{font-size:8px;letter-spacing:.07em;text-transform:uppercase;color:var(--c-faint);font-weight:800;margin-top:2px}
+        .sb4 .stats{display:flex;flex-wrap:wrap;gap:6px;margin-top:9px;padding-left:47px}
+        .sb4 .stat{background:var(--c-pan2);border:1px solid var(--c-bd);border-radius:8px;padding:4px 9px;font-size:13px;font-weight:800;color:var(--c-ink);white-space:nowrap}
+        .sb4 .stat em{font-style:normal;font-size:8.5px;letter-spacing:.05em;color:var(--c-faint);font-weight:800;margin-right:5px}
+        .sb4 .stat.mgood{color:var(--c-good);border-color:var(--c-goodbd)}
+        .sb4 .stat.mwarn{color:var(--c-warn);border-color:var(--c-warnbd)}
+        .sb4 .stat.mbad{color:var(--c-bad);border-color:var(--c-badbd)}
+        .sb4 .stat.ind{color:var(--c-faint)}
+        .sb4 .empty{padding:22px;text-align:center;color:var(--c-faint);font-size:14px}
+        .sb4 .watch .whead{display:flex;align-items:center;gap:10px;flex-wrap:wrap;padding:13px 15px 6px}
+        .sb4 .watch .bt{font-size:15px;font-weight:800}
+        .sb4 .watch .tgt{margin-left:auto;display:flex;align-items:center;gap:8px;font-size:12px;font-weight:700;color:var(--c-dim)}
+        .sb4 .watch .tgt input{width:100px}
+        .sb4 .watch .tgt b{color:var(--c-ink);font-size:14px;width:36px;text-align:right}
+        .sb4 .watch .whint{font-size:12px;color:var(--c-dim);padding:0 15px 9px;line-height:1.5}
+        .sb4 .wjob{display:flex;align-items:center;gap:12px;padding:10px 15px;border-top:1px solid var(--c-bd)}
+        .sb4 .winfo{flex:1;min-width:0}
+        .sb4 .jn{display:flex;align-items:center;gap:5px;min-width:0}
+        .sb4 .jntxt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis;font-size:13.5px;font-weight:700}
+        .sb4 .who2{font-size:11.5px;color:var(--c-dim);font-weight:600;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;margin-top:1px}
+        .sb4 .wright{flex:0 0 auto;text-align:right}
+        .sb4 .mg{font-size:16px;font-weight:800}
+        .sb4 .st{font-size:9px;text-transform:uppercase;color:var(--c-faint);font-weight:700;letter-spacing:.03em;margin-top:1px}
         .sb4 .wjob.under{background:var(--c-badbg)}.sb4 .wjob.under .mg{color:var(--c-bad)}
         .sb4 .wjob.ok .mg{color:var(--c-good)}
-        .sb4 .wjob.linked{opacity:.5}.sb4 .wjob.linked .mg{color:var(--c-faint)}
-        .sb4 .chip{display:inline-block;font-size:8px;font-weight:800;letter-spacing:.04em;padding:1px 5px;border-radius:5px;background:var(--c-pan2);color:var(--c-faint);border:1px solid var(--c-bd);margin-left:6px;vertical-align:middle}
-        .sb4 .note{margin-top:16px;font-size:11px;color:#8A929C;text-align:center;line-height:1.6}
-        @media (max-width:640px){.sb4 .thead .c.qc,.sb4 .trow .cq,.sb4 .thead .c.ap,.sb4 .trow .ca{display:none}.sb4 .thead,.sb4 .trow{grid-template-columns:1fr 86px 74px 84px}}
+        .sb4 .wjob.linked{opacity:.55}.sb4 .wjob.linked .mg{color:var(--c-faint)}
+        .sb4 .chip{flex:0 0 auto;font-size:8px;font-weight:800;letter-spacing:.04em;padding:1px 5px;border-radius:5px;background:var(--c-pan2);color:var(--c-faint);border:1px solid var(--c-bd)}
+        .sb4 .note{margin-top:16px;font-size:11.5px;color:#8A929C;text-align:center;line-height:1.6}
       `}</style>
 
       <div className="top">
-        <div><div className="co">HOMESTEAD ELECTRIC</div><div className="ti">Scoreboard</div></div>
-        <div className="wt">Admin preview · margins from <b>Simpro</b> (median job)<br/>Weighted — <b>Margin {weights.margin}</b> · QC {weights.qc} · Handoff {weights.handoff} · App {weights.app}</div>
+        <div className="co">HOMESTEAD ELECTRIC</div><div className="ti">Scoreboard</div>
+        <div className="wt">Admin preview · margins from <b>Simpro</b> (median job) · Weighted — <b>Margin {weights.margin}</b> · QC {weights.qc} · Handoff {weights.handoff} · App {weights.app}</div>
       </div>
 
       <div className="ctr">
@@ -38419,23 +38433,21 @@ function ScoreboardV4({ jobs, users = [], identity }) {
 
       <div className="card gold">
         <div className="bh"><span className="bt">Overall Standings</span><span className="bn">weighted · {boardLbl} · leader is champion</span></div>
-        <div className="thead">
-          <div className="c pl">Player</div>
-          <div className="c">Margin</div>
-          <div className="c qc">QC</div>
-          <div className="c">Handoff</div>
-          <div className="c ap">App</div>
-          <div className="c ov">Overall</div>
-        </div>
         {ranked.length === 0 && <div className="empty">Nobody on this board has enough jobs to rank yet.</div>}
         {ranked.map((r, i) => (
           <div className={"trow" + (i === 0 ? " t1" : "")} key={r.name}>
-            <div className="pl"><span className={"rk" + (i === 0 ? " g" : "")}>{i + 1}</span><span className="av" style={{ background: colorFor(r.name) }}>{initial(r.name)}</span><span style={{ minWidth: 0 }}><span className="nm">{r.name}{i === 0 && <span className="bdg">CHAMPION</span>}</span><span className="jb">{r.jobs} jobs</span></span></div>
-            <div className={"cell " + marginCls(r.margin)}>{r.margin == null ? "—" : r.margin + "%"}<span className="nn">med of {r.marginN}</span></div>
-            <div className="cell cq">{r.qc == null ? "—" : r.qc}</div>
-            <div className="cell">{r.handoff == null ? "—" : r.handoff + "%"}</div>
-            <div className="cell ind ca">{r.app}</div>
-            <div className="ovcell"><div className="bar"><i style={{ width: Math.round(r._ov / maxOv * 100) + "%" }} /></div><div className="v">{r._ov}</div></div>
+            <div className="l1">
+              <span className={"rk" + (i === 0 ? " g" : "")}>{i + 1}</span>
+              <span className="av" style={{ background: colorFor(r.name) }}>{initial(r.name)}</span>
+              <span className="who"><span className="nm"><span className="nmtxt">{r.name}</span>{i === 0 && <span className="bdg">CHAMPION</span>}</span><span className="jb">{r.jobs} jobs</span></span>
+              <span className="ov"><div className="ovv">{r._ov}</div><div className="ovl">overall</div></span>
+            </div>
+            <div className="stats">
+              <span className={"stat " + marginCls(r.margin)}><em>MARGIN</em>{r.margin == null ? "—" : r.margin + "%"}</span>
+              <span className="stat"><em>QC</em>{r.qc == null ? "—" : r.qc}</span>
+              <span className="stat"><em>HANDOFF</em>{r.handoff == null ? "—" : r.handoff + "%"}</span>
+              <span className="stat ind"><em>APP</em>{r.app}</span>
+            </div>
           </div>
         ))}
       </div>
@@ -38451,10 +38463,8 @@ function ScoreboardV4({ jobs, users = [], identity }) {
           const cls = j.special ? "linked" : (j.m < target ? "under" : "ok");
           return (
             <div className={"wjob " + cls} key={j.who + "|" + j.job + "|" + i}>
-              <div className="jn">{j.job}{j.special && <span className="chip">LINKED</span>}</div>
-              <div className="who">{j.who}</div>
-              <div className="mg">{j.m}%</div>
-              <div className="st">{j.stage}</div>
+              <div className="winfo"><div className="jn"><span className="jntxt">{j.job}</span>{j.special && <span className="chip">LINKED</span>}</div><div className="who2">{j.who}</div></div>
+              <div className="wright"><div className="mg">{j.m}%</div><div className="st">{j.stage}</div></div>
             </div>
           );
         })}
@@ -42591,7 +42601,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-16 · App SW version: v336
+**Last manifest update:** 2026-07-16 · App SW version: v338
 
 ---
 
@@ -42830,6 +42840,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Bumped on every deploy that changes bundle
 - **Firestore offline support** · 'shipped' · 'persistentLocalCache' + 'persistentMultipleTabManager'
 - **Self-healing live sync + honest LIVE indicator** · 'shipped 2026-07-16' · 'SW v336' · the board used to go STALE after a laptop slept / WiFi dropped / an extension blocked the Firestore Listen channel: the jobs 'onSnapshot' was attached once with no re-attach path and an error callback that only logged, while the header showed a hardcoded green "● LIVE" dot — so the crew stared at hours-old cached data with no cue and no recovery short of a manual reload. Now the jobs listener re-attaches with backoff on error and force-resyncs (tear-down + re-attach → fresh snapshot + resumed live updates) on three triggers: tab returns to foreground after being away, machine wakes from sleep (a wall-clock gap detector, since 'navigator.onLine' stays stuck 'true' through sleep), and the OS 'online' event. The header dot is now wired to REAL state via 'snap.metadata.fromCache' + listener health + 'isOnline' — green "Live" only when truly synced, amber "Reconnecting"/"Offline" otherwise — and the offline banner also shows on stale-cache/reconnecting. READ-only change: no write path touched, merge/save safety unchanged (saves still re-read the server transactionally). Also fixed the invisible "Show archived" toggle chevron (kebab-case 'chevron-right'/'chevron-down' never matched the camelCase icon registry; added 'chevronDown').
+- **Scalar-conflict + missing-baseline telemetry (read-only)** · 'shipped 2026-07-16' · 'SW v338' · adversarial verification of the two deferred merge-safety fixes concluded: (1) the **scalar last-write-wins** hole is REAL — every string/number/boolean in a save patch bypasses '_threeWayMerge' via the 'typeof' gate in '_mergePatchAgainstServer', so a stale device silently overwrites a newer concurrent scalar (worst: whole-textarea notes, compound derived-scalar bundles) — but the safe first step is OBSERVABILITY, not a behavior change; (2) the queued **empty-baseline fix must NOT be built** — "keep-both on empty base" is already the shipped union semantics ('_threeWayMerge' doc: "No baseline available → union merge, never drop"), and seeding the baseline from a 'getDoc' of server-current would make the base FRESHER than the local copy (v312 invariant violation) and re-install the client-verbatim clobber. Shipped accordingly: a '[HE] scalar overwrite:' console.warn when the server value changed since baseline AND differs from what we're writing (guards: baseline must exist; 'foreman'/'lead' compared through 'normalizeName'; 'roughStage'/'finishStage' excluded — migrate() reshapes only the baseline side; telemetry NEVER touches the written value, 'rescuedKeys', or the 'merged' flag), plus a once-per-job '[HE] merge ran with NO baseline' warn. ZERO write-path changes — v301/v302/v312/v335 invariants pass by construction. Telemetry runs 3–4 weeks to measure real field frequency before any Phase-2 scalar-merge decision.
 - **Push notifications (FCM)** · 'shipped' · per-foreman; 'FCM_MSG.data' shape (NOT 'webpush.notification.data')
 - **Honest notification prefs** · 'shipped 2026-07-10' · 'SW v321' · every toggle in Settings → Notifications is enforced server-side ('sendToNameIfWanted' / 'sendToJobCoordinatorIfWanted'); placebo keys removed, 7 real keys added (status_update, milestone_complete, job_hold, failed_inspection, reminder_safety, co_chase, rt_chase); admin blast on every event replaced with coordinator-routed sends
 - **Thursday Packet v2** · 'shipped 2026-07-10' · 'SW v321' · weekly email keeps the update-compliance section; dead "Last Week's Decisions" stub dropped; adds Tech Lighting loop status, PTO next 7 days, open App Map suggestions, fleet staleness line
@@ -42868,6 +42879,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Plan Changes: edit an existing change item** · 'shipped 2026-07-15' · 'SW v331' · the "Changes From Original Plan" tracker (Panelized Lighting tab) now has a **pencil / inline edit** on every logged change — before, 'changeType' (Added/Moved/Removed/Changed), item type, location, and notes could only be set at add-time, so a mislabeled item (e.g. a removal tagged "Added") was stuck. Edit reuses the add-item form pre-filled and saves via the same 'saveRooms' → 'u({panelizedLighting.lutronRooms})' job-doc path (version-snapshotted); stamps 'editedBy'/'editedAt' (nested). Reflects on Tech Lighting's read-only '?lutronshare=' link.
 - **Scoreboard redesign — pure competition, three boards** · 'shipped 2026-07-15' · 'SW v334' · admin-only 'ScoreboardV2' rebuilt from the ~13-signal info/quality blend into three plainly-measured, externally-validated boards with a transparent rank-sum overall (placements added up — no hidden weights). New pure scoring ('sbv3Build'/'sbv3Combined', alongside the retired 'sbv2*'): **First-Time Pass** (rough+final passed first try, STATUS-IMPLIED — a job in finish counts rough as passed, a completed job counts both, unless a fail was logged; lifts the sample from ~24 manually-logged jobs to the whole workload so small-N noise stops crowning people on 2-3 data points); **QC Items/Job** (avg fromQC defects the QC walker calls per walk, lower wins, can't be self-padded); **App Activity** (regular punch + questions logged — entering info directly raises your score, Koy 2026-07-15). Three boards — Coordinators (roll up their book's foremen via the 'coordinator' field on 'settings/users'), Foremen ('j.foreman'), Leads ('j.lead'). This Week / This Month / This Year window (by recent job activity). Read-only — computes from jobs, writes nothing, no new Firestore field. Dry-run-verified against real data ('scripts/sb-*' harnesses). Old 'sbv2*' scoring + 'ScoreboardV2Champions/Drilldown/HowItWorks' left defined but unused.
 - **Scoreboard v335 — weighted overall + admin-tunable weights** · 'shipped 2026-07-15' · 'SW v335' · iterated the v334 three-board scoreboard into the design Koy approved: a **weighted Overall standings** board on top (leader = champion; each person's four sub-scores shown inline so the weighting is transparent — no black box) over **four scored sections** — **Quality** (first-time inspection pass + QC items/job), **App Usage** (punch + updates + questions logged), **Shared Links** (question links sent), **Clean Handoff** (open punch per 100 punch items, lower wins — home runs deliberately NOT involved). New 'ScoreboardV3' component + 'sb3Build'/'sb3Agg'/'sb3JobSignals' scoring (status-implied inspection pass carried over from v334: reached finish ⇒ rough passed, completed ⇒ final passed, a logged fail overrides — full-workload sample, not just manually-logged inspections). **Weights are admin-only and persisted**: an "Adjust weights" editor gated behind 'scoreboard.editWeights' writes 'settings/scoreboardWeights' (default Quality 40 / App 25 / Shared 20 / Handoff 15); 'sb3Agg' normalizes over whatever weights are set, so they needn't total 100. Coordinators (roll up their book's foremen) / Foremen ('j.foreman', filtered to actual foreman-title users) / Leads ('j.lead'); This Week / This Month / This Year (by recent job activity). Read-only over jobs — the ONLY write is the admin weights doc; no new job field. Render swapped 'ScoreboardV2'→'ScoreboardV3'; the v334 'ScoreboardV2'/'sbv3Build'/'sbv3Combined' are now unused. Dry-run-verified: in-app 'sb3Build' is byte-identical to the verified '/tmp' compute harness that produced Koy's approved mockup numbers.
+- **Scoreboard V4 — median Simpro margin board + Jobs to Watch (admin-only)** · 'shipped 2026-07-16' · 'SW v337' · new admin-only 'ScoreboardV4' replaces V3 at the render site (tab already gated to 'scoreboard.editWeights', so only Koy sees it until approved). **Margin = the MEDIAN of the live 'job.simproMargin' field** (matches Simpro; median so one entangled job can't swing it) instead of the frozen 'scoreboardJobFinancials' cache; admin weight tool (Margin/QC/Handoff/App) writes 'settings/scoreboardV4Weights' (admin-only merge, covered by the existing generic 'settings/{docId}' rule — no rules change); live **Jobs-to-Watch** panel flags jobs against a 15%-at-finish margin target. 'sb4Build' verified byte-identical to the approved mockup numbers (13/13 rows). Read-only over jobs — no job field added, no loader change. *(Entry backfilled by the v338 ship: the v337 commit omitted its FEATURES.md entry, so the prebuild gate blocked its Vercel deploy — v337 never reached production and ships together with v338.)*
 - **"Previously answered as X" banner — per-link, not global** · 'shipped 2026-07-15' · 'SW v333' · the returning-recipient banner on a question share link ('QuestionsSharePage') keyed off the doc-level 'questionAnswers.answeredBy' — a SINGLE field shared by every share link (the last person to submit ANY of them). On Kweller that made all 4 links say "You previously submitted answers as Haley," including the "Koy" link (Koy's answer, mislabeled) and the "Mark Wintzer team" link that had zero answers and was never sent to Haley. Fixed: the banner now shows only when a question ON THIS LINK actually had a prior answer (a 'loadedAnsweredIds' snapshot taken at load, intersected with this link's filtered questions), and it names the link's OWN recipient ('shareName'), falling back to the doc-level name only for the generic all-questions link. Display-only change; no write path or data-shape change.
 - **Question share-link preview (in-app)** · 'shipped 2026-07-15' · 'SW v332' · the Share-Questions modal's SAVED LINKS list gains a **Preview** button next to Copy link — it opens the recipient's exact page in an in-app modal '<iframe>' ('/?questions={jobId}&s={shareId}&preview=1') so the office can see what a person will see without copying the URL and opening a tab. 'QuestionsSharePage' reads '?preview=1' and renders its real body inside a disabled '<fieldset>' under a "PREVIEW · read-only" banner (one guard disables every input / attach / submit). Preview is provably write-inert: 'handleSubmit', 'runAutoSave', and 'postThread' each early-return on 'preview' (belt-and-suspenders atop the existing 'userEditedRef' mount guard), so no draft/answer/thread write can fire. No data-model change; no new Firestore field; office-side view only.
 
@@ -46566,7 +46578,20 @@ function App() {
     // use, so an untouched field compares equal and the client's change applies
     // verbatim. Concurrency still works — a genuine other-device change still makes
     // server ≠ base and structural-merges (now item-vs-item on matching shapes).
-    const base = normalizeJob(serverBaselines.current[jobId] || {});
+    const rawBase = serverBaselines.current[jobId];
+    // Missing-baseline observability (v338, verification finding): with no
+    // baseline the structural merge deliberately UNIONS (never drops — see
+    // _threeWayMerge doc) and scalar telemetry below must stay silent (no
+    // ancestor ⇒ every comparison would false-positive). Warn once per job so
+    // we learn how often this rare window actually fires in the field. Do NOT
+    // "fix" it by seeding the baseline from the server's current state — that
+    // makes base fresher than the local copy (v312 invariant) and re-installs
+    // the client-verbatim clobber. Verified 2026-07-16.
+    if (!rawBase && !_noBaselineWarned.has(jobId)) {
+      _noBaselineWarned.add(jobId);
+      console.warn(`[HE] merge ran with NO baseline for ${jobName || jobId} — union semantics, scalar telemetry off`);
+    }
+    const base = normalizeJob(rawBase || {});
     const nServer = normalizeJob(serverData || {});
     const writePatch = {};
     Object.entries(cleanPatch).forEach(([k, v]) => {
@@ -46577,6 +46602,25 @@ function App() {
         if (!_jeq(out, v)) {
           console.log(`[HE] concurrent-edit merge: preserved server changes on "${k}" for ${jobName || jobId}`);
           if (rescuedKeys) rescuedKeys.push(k);
+        }
+      } else if (rawBase && sv !== undefined && !_scalarTelemetrySkip.has(k)) {
+        // SCALAR-CONFLICT TELEMETRY (v338) — read-only. Scalars still write
+        // client-verbatim (deliberate last-write-wins; see saveJob's "Scalars
+        // behave exactly as before"). But when the server value CHANGED since
+        // our baseline AND differs from what we're about to write, another
+        // device's newer scalar is being silently overwritten — log it so we
+        // learn the real field frequency before deciding on a behavior change.
+        // Guards (all load-bearing): rawBase truthy (no ancestor ⇒ no signal);
+        // never touches `out`/rescuedKeys/merged (flipping `merged` would
+        // trigger echo re-adoption off a pure-scalar save — v312 territory);
+        // foreman/lead compared through normalizeName (baselines are
+        // name-normalized by the snapshot loader, raw server docs are not).
+        const bv = base[k];
+        const _nn = (k === "foreman" || k === "lead")
+          ? (x) => (typeof x === "string" ? normalizeName(x) : x)
+          : (x) => x;
+        if (!_jeq(_nn(sv), _nn(bv)) && !_jeq(_nn(sv), _nn(v))) {
+          console.warn(`[HE] scalar overwrite: "${k}" on ${jobName || jobId} — server had ${JSON.stringify(sv)?.slice(0,80)}, writing ${JSON.stringify(v)?.slice(0,80)} (base ${JSON.stringify(bv)?.slice(0,80)})`);
         }
       }
       writePatch["data." + k] = out;
