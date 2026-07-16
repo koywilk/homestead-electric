@@ -36761,6 +36761,220 @@ if (typeof window !== "undefined") {
   window.sbv2QualityScoreForJob = sbv2QualityScoreForJob;
 }
 
+// ═══════════════════════════════════════════════════════════════════════════
+// ScoreboardV3 grading (Koy 2026-07-15) — four scored sections blended into a
+// weighted Overall: Quality (first-time inspection pass + QC items/job), App
+// Usage (punch + updates + questions), Shared Links (question links sent), and
+// Clean Handoff (open punch per 100 punch items). Inspection credit is
+// STATUS-IMPLIED: a job that reached finish counts rough as passed; a completed
+// job counts final as passed; a LOGGED fail overrides. Pure functions,
+// dry-run-verified against live data. Weights are admin-tunable and persisted
+// in settings/scoreboardWeights (default 40/25/20/15).
+// ═══════════════════════════════════════════════════════════════════════════
+const SB3_DEFAULT_WEIGHTS = { quality: 40, appUsage: 25, sharedLinks: 20, handoff: 15 };
+const _sb3lc = (v) => String(v || "").toLowerCase().trim();
+const _sb3QCount = (q) => (q && typeof q === "object") ? ((q.upper||[]).length + (q.main||[]).length + (q.basement||[]).length) : 0;
+const _sb3FirstAtt = (a) => {
+  if (!Array.isArray(a) || !a.length) return null;
+  const s = a.slice().sort((x, y) => (_sbv2YMD(x && x.date) || "").localeCompare(_sbv2YMD(y && y.date) || ""));
+  const r = _sb3lc(s[0].result);
+  return r === "pass" ? "pass" : r === "fail" ? "fail" : null;
+};
+const _sb3Completed = (j) => j.readyToInvoice === true || _sb3lc(j.finishStatus) === "complete" || Number(j.finishStage) >= 100;
+const _sb3PastRough = (j) => _sb3lc(j.roughStatus) === "complete" || Number(j.roughStage) >= 100 || _sb3Completed(j) || Number(j.finishStage) > 0 || ["inprogress","scheduled","complete","inbetween","punch"].includes(_sb3lc(j.finishStatus));
+const sb3JobSignals = (j) => {
+  const ftp = [];
+  const r = _sb3FirstAtt(j.roughInspectionAttempts); if (r) ftp.push(r === "pass"); else if (_sb3PastRough(j)) ftp.push(true);
+  const f = _sb3FirstAtt(j.finalInspectionAttempts); if (f) ftp.push(f === "pass"); else if (_sb3Completed(j)) ftp.push(true);
+  let qcDefects = 0, qcWalk = false, punch = 0, openPunch = 0;
+  [j.roughPunch, j.finishPunch, j.qcPunch].forEach(pp => sbv2WalkPunch(pp, it => {
+    if (!it || it.voided) return; punch++; if (!it.done) openPunch++; if (it.fromQC) { qcWalk = true; qcDefects++; }
+  }));
+  const st = _sb3lc(j.qcStatus);
+  if (["pass","fail","fixed","completed"].includes(st) || j.roughQCWalkDone === true || j.finishQCWalkDone === true) qcWalk = true;
+  return { ftp, qcWalk, qcDefects, punch, openPunch,
+    updates: (Array.isArray(j.roughUpdates) ? j.roughUpdates.length : 0) + (Array.isArray(j.finishUpdates) ? j.finishUpdates.length : 0),
+    questions: _sb3QCount(j.roughQuestions) + _sb3QCount(j.finishQuestions),
+    shares: Array.isArray(j.questionShares) ? j.questionShares.length : 0 };
+};
+const sb3Agg = (jobs, weights) => {
+  let ftpP=0,ftpT=0,qcItems=0,qcWalks=0,punch=0,openPunch=0,updates=0,questions=0,shares=0;
+  jobs.forEach(j => { const s = sb3JobSignals(j);
+    s.ftp.forEach(e => { ftpT++; if (e) ftpP++; });
+    if (s.qcWalk) { qcWalks++; qcItems += s.qcDefects; }
+    punch += s.punch; openPunch += s.openPunch; updates += s.updates; questions += s.questions; shares += s.shares;
+  });
+  const ftpPct = ftpT ? ftpP/ftpT : null;
+  const qcPerJob = qcWalks ? qcItems/qcWalks : null;
+  const handoff = punch > 0 ? openPunch/punch*100 : null;
+  const nFtp = ftpPct, nQc = qcPerJob == null ? null : Math.max(0, 1 - qcPerJob/6);
+  const quality = (nFtp == null && nQc == null) ? null : (((nFtp||0)+(nQc||0)) / ((nFtp==null?0:1)+(nQc==null?0:1)));
+  const appUsage = (Math.min(1,punch/300) + Math.min(1,updates/40) + Math.min(1,questions/60)) / 3;
+  const sharedLinks = Math.min(1, shares/3);
+  const nHandoff = handoff == null ? null : Math.max(0, 1 - handoff/40);
+  const w = weights || SB3_DEFAULT_WEIGHTS;
+  const dims = [[quality, w.quality],[appUsage, w.appUsage],[sharedLinks, w.sharedLinks],[nHandoff, w.handoff]].filter(d => d[0] != null && d[1] > 0);
+  const wsum = dims.reduce((s,d) => s+d[1], 0);
+  const overall = wsum ? dims.reduce((s,d) => s + d[0]*d[1], 0)/wsum : 0;
+  const R = (x) => x == null ? null : Math.round(x*100);
+  return { jobs: jobs.length, overall: Math.round(overall*100),
+    quality: R(quality), appUsage: R(appUsage), sharedLinks: R(sharedLinks), handoffScore: R(nHandoff),
+    ftpPct: ftpPct==null?null:Math.round(ftpPct*100), ftpP, ftpT, qcPerJob: qcPerJob==null?null:Math.round(qcPerJob*10)/10,
+    handoff: handoff==null?null:Math.round(handoff*10)/10, punch, updates, questions, shares };
+};
+const sb3Build = (jobs, board, users, weights) => {
+  const list = Array.isArray(users) ? users : [];
+  const f2c = {}, foremanNames = new Set();
+  list.forEach(u => {
+    const isF = _sb3lc(u.title || u.role) === "foreman";
+    if (isF) foremanNames.add(String(u.name||"").trim());
+    if (isF && u.coordinator) f2c[String(u.name||"").trim()] = u.coordinator;
+  });
+  const keyOf = (j) => board === "coordinators" ? (f2c[String(j.foreman||"").trim()] || "")
+                     : board === "leads"        ? String(j.lead||"").trim()
+                     :                            String(j.foreman||"").trim();
+  const groups = new Map();
+  (jobs || []).forEach(j => {
+    if (!j || SBV2_TEST_JOB(j.name || j.jobName)) return;
+    const key = keyOf(j);
+    if (!key || SBV2_EXCLUDE_NAME(key)) return;
+    if (board === "foremen" && foremanNames.size && !foremanNames.has(key)) return; // only actual foreman-title users on the foremen board
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(j);
+  });
+  const rows = [];
+  for (const [name, js] of groups.entries()) { if (js.length < 2) continue; rows.push({ name, ...sb3Agg(js, weights) }); }
+  rows.sort((a,b) => b.overall - a.overall);
+  return rows;
+};
+if (typeof window !== "undefined") window.sb3Build = sb3Build;
+
+// ════════════════════════════════════════════════════════════════════════
+// ScoreboardV3 scoring (2026-07-15 redesign — pure competition, three boards).
+// Replaces the info/quality blend with three plainly-measured, externally-
+// validated boards. Overall = rank-sum of the three placements (transparent,
+// no hidden weights). Pure functions; no Firestore writes, no React. Verified
+// read-only against real jobs (scripts/sb-*dryrun.js) before wiring the UI.
+//   • First-Time Pass — rough+final passed first try. STATUS-IMPLIED: a job in
+//     finish counts rough as passed; a completed job counts both — UNLESS a
+//     fail was logged (that stays a fail). Lifts the sample from ~24 manually-
+//     logged jobs to the whole workload, which is what makes it fair.
+//   • QC Items / Job — avg fromQC defects the QC walker called, per walk. Lower
+//     is cleaner. You don't call your own, so it can't be padded.
+//   • App Activity — regular punch items + questions logged. Entering info
+//     directly raises your score (Koy, 2026-07-15).
+// ════════════════════════════════════════════════════════════════════════
+const SBV3_MIN_JOBS = 2;
+
+// Rough + final inspection outcomes for a job, status-implied. [{pass, date|null}]
+const sbv3Inspections = (j) => {
+  const out = [];
+  const firstAtt = (a) => {
+    if (!Array.isArray(a) || !a.length) return null;
+    const s = a.slice().sort((x, y) => (_sbv2YMD(x && x.date) || "").localeCompare(_sbv2YMD(y && y.date) || ""));
+    const r = String(s[0].result || "").toLowerCase();
+    if (r === "pass") return { pass: true,  date: _sbv2YMD(s[0].date) || null };
+    if (r === "fail") return { pass: false, date: _sbv2YMD(s[0].date) || null };
+    return null;
+  };
+  const completed = j.readyToInvoice === true || String(j.finishStatus || "").toLowerCase() === "complete" || Number(j.finishStage) >= 100;
+  const pastRough = String(j.roughStatus || "").toLowerCase() === "complete" || Number(j.roughStage) >= 100 || completed ||
+                    Number(j.finishStage) > 0 || ["inprogress", "scheduled", "complete"].includes(String(j.finishStatus || "").toLowerCase());
+  const rough = firstAtt(j.roughInspectionAttempts);
+  if (rough) out.push(rough); else if (pastRough) out.push({ pass: true, date: null });
+  const final = firstAtt(j.finalInspectionAttempts);
+  if (final) out.push(final); else if (completed) out.push({ pass: true, date: null });
+  return out;
+};
+
+// QC walk for a job → { clean, defects } or null if no walk happened.
+const sbv3QC = (j) => {
+  let defects = 0, anyQC = false;
+  [j.roughPunch, j.finishPunch].forEach(pp => sbv2WalkPunch(pp, (it) => { if (it && !it.voided && it.fromQC) { anyQC = true; defects++; } }));
+  const st = String(j.qcStatus || "").toLowerCase();
+  const walk = anyQC || ["pass", "fail", "fixed", "completed"].includes(st) || j.roughQCWalkDone === true || j.finishQCWalkDone === true;
+  return walk ? { clean: defects === 0, defects } : null;
+};
+
+// App activity for a job: regular (non-QC) punch items + questions logged.
+const sbv3Activity = (j) => {
+  let punch = 0;
+  [j.roughPunch, j.finishPunch].forEach(pp => sbv2WalkPunch(pp, (it) => { if (it && !it.voided && !it.fromQC) punch++; }));
+  const qCount = (q) => (!q || typeof q !== "object") ? 0 : (q.upper || []).length + (q.main || []).length + (q.basement || []).length;
+  return { punch, questions: qCount(j.roughQuestions) + qCount(j.finishQuestions) };
+};
+
+// Aggregate one board: group jobs by keyFn(job) (a person's name), drop
+// excluded names + test jobs + people under SBV3_MIN_JOBS.
+const sbv3BuildBoard = (jobs, keyFn) => {
+  const groups = new Map();
+  (jobs || []).forEach(j => {
+    if (!j || SBV2_TEST_JOB(j.name || j.jobName)) return;
+    const key = (keyFn(j) || "").trim();
+    if (!key || SBV2_EXCLUDE_NAME(key)) return;
+    if (!groups.has(key)) groups.set(key, []);
+    groups.get(key).push(j);
+  });
+  const rows = [];
+  for (const [name, js] of groups.entries()) {
+    if (js.length < SBV3_MIN_JOBS) continue;
+    let ftPass = 0, ftTot = 0, qcItems = 0, qcWalks = 0, punch = 0, questions = 0;
+    const dated = [];
+    js.forEach(j => {
+      sbv3Inspections(j).forEach(e => { ftTot++; if (e.pass) ftPass++; if (e.date) dated.push(e); });
+      const qc = sbv3QC(j); if (qc) { qcWalks++; qcItems += qc.defects; }
+      const a = sbv3Activity(j); punch += a.punch; questions += a.questions;
+    });
+    dated.sort((a, b) => (a.date || "").localeCompare(b.date || ""));
+    let streak = 0; for (let i = dated.length - 1; i >= 0; i--) { if (dated[i].pass) streak++; else break; }
+    rows.push({
+      name, jobCount: js.length,
+      ftpPct: ftTot ? ftPass / ftTot : null, ftPass, ftTot, streak,
+      qcPerJob: qcWalks ? qcItems / qcWalks : null, qcItems, qcWalks,
+      activity: punch + questions, punch, questions,
+    });
+  }
+  return rows;
+};
+
+// foreman name → coordinator name, from the settings/users list.
+const sbv3ForemanCoord = (users) => {
+  const m = {};
+  (users || []).forEach(u => {
+    if (String(u.title || u.role || "").toLowerCase() === "foreman" && u.coordinator) m[(u.name || "").trim()] = u.coordinator;
+  });
+  return m;
+};
+
+// All three boards from jobs + the users roster.
+const sbv3Build = (jobs, users) => {
+  const f2c = sbv3ForemanCoord(users);
+  return {
+    coordinators: sbv3BuildBoard(jobs, j => f2c[(j.foreman || "").trim()] || ""),
+    foremen:      sbv3BuildBoard(jobs, j => j.foreman || ""),
+    leads:        sbv3BuildBoard(jobs, j => j.lead || ""),
+  };
+};
+
+// Overall standings by RANK-SUM of the three board placements (transparent).
+// Each row gets its rank on each board; sorted best-combined-first. Ties → QC
+// rank, then First-Time Pass rank. Null on a board = last place there.
+const sbv3Combined = (rows) => {
+  const rankBy = (key, dir) => {
+    const sorted = rows.slice().filter(r => r[key] != null).sort((a, b) => (a[key] - b[key]) * dir);
+    const m = {}; sorted.forEach((r, i) => { m[r.name] = i + 1; });
+    rows.forEach(r => { if (m[r.name] == null) m[r.name] = sorted.length + 1; });
+    return m;
+  };
+  const ftpRank = rankBy("ftpPct", -1), qcRank = rankBy("qcPerJob", 1), actRank = rankBy("activity", -1);
+  return rows.map(r => ({
+    ...r, ftpRank: ftpRank[r.name], qcRank: qcRank[r.name], actRank: actRank[r.name],
+    rankSum: ftpRank[r.name] + qcRank[r.name] + actRank[r.name],
+  })).sort((a, b) => a.rankSum - b.rankSum || a.qcRank - b.qcRank || a.ftpRank - b.ftpRank);
+};
+
+if (typeof window !== "undefined") { window.sbv3Build = sbv3Build; window.sbv3Combined = sbv3Combined; }
+
 // ── Today Command Center ───────────────────────────────────────────────────
 // Office + foreman-facing live dashboard. Read-only — never writes Firestore.
 // Reads `lastActivityAt` (added in commit "Add lastActivityAt timestamp on
@@ -37798,197 +38012,335 @@ function Today({ jobs: _allJobs, users=[], suggestions=[], identity, onSelectJob
   );
 }
 
-function ScoreboardV2({ jobs, users = [], identity }) {
-  // ROUND-14 CHANGE: mirror the existing Scoreboard's debug hook so console
-  // testing (window.sbv2Build(window.__sbJobs)) works from this tab too.
-  useEffect(() => {
-    if (typeof window !== "undefined") window.__sbJobs = jobs;
-  }, [jobs]);
-  const [role, setRole]     = useState("foreman");      // "foreman" | "lead"
-  const [sortBy, setSortBy] = useState("combined");     // "combined" | "info" | "quality"
-  const [windowKey, setWindowKey] = useState("all");    // "all" | "year" | "quarter" | "month"
-  const [expanded, setExpanded] = useState({});         // {name: bool}
+// ScoreboardV3 — the shipped competition board (Koy 2026-07-15). Weighted
+// Overall standings on top + four scored sections below (Quality, App Usage,
+// Shared Links, Clean Handoff). Admin-only weights editor (scoreboard.editWeights)
+// persists to settings/scoreboardWeights. Read-only over job data — writes ONLY
+// the weights doc, and only for admins. Replaces ScoreboardV2 at the render site.
+function ScoreboardV3({ jobs, users = [], identity }) {
+  const [board, setBoard]     = useState("foremen");
+  const [time, setTime]       = useState("year");
+  const [weights, setWeights] = useState(SB3_DEFAULT_WEIGHTS);
+  const [showEdit, setShowEdit] = useState(false);
+  const canEdit = can(identity, "scoreboard.editWeights");
 
-  // ROUND-21 CHANGE: compute the window once and pass through to sbv2Build.
-  const { startYMD, endYMD, label: windowLabel } = useMemo(() => sbv2WindowFor(windowKey), [windowKey]);
-  const result = useMemo(
-    () => sbv2Build(jobs, { startYMD, endYMD }),
-    [jobs, startYMD, endYMD]
-  );
-
-  const rows = useMemo(() => {
-    const list = role === "foreman" ? result.foremen : result.leads;
-    return [...list].sort((a, b) => (b[sortBy] ?? -1) - (a[sortBy] ?? -1));
-  }, [result, role, sortBy]);
-
-  // Display helpers — score 0..1 → percent string; null/undefined → "—".
-  const fmt = v => (v == null ? "—" : `${Math.round(v * 100)}`);
-  // Color ramp — index 0 (top) green, last red. Used for rank pill background.
-  const rankColor = (i, total) => {
-    if (total <= 1) return "#46916A";
-    const t = i / Math.max(1, total - 1);
-    if (t < 0.34) return "#46916A";
-    if (t < 0.67) return "#eab308";
-    return "#B23A3A";
+  useEffect(() => onSnapshot(doc(db, "settings", "scoreboardWeights"), s => {
+    const w = s.exists() ? s.data() : null;
+    if (w && typeof w.quality === "number") setWeights({ quality:+w.quality||0, appUsage:+w.appUsage||0, sharedLinks:+w.sharedLinks||0, handoff:+w.handoff||0 });
+  }, () => {}), []);
+  const saveWeights = (patch) => {
+    const w = { quality:weights.quality, appUsage:weights.appUsage, sharedLinks:weights.sharedLinks, handoff:weights.handoff, ...patch };
+    setWeights(w);
+    if (canEdit) setDoc(doc(db, "settings", "scoreboardWeights"), w, { merge: true }).catch(() => {});
   };
 
-  const ScoreBar = ({ value, color = "var(--accent, #46916A)" }) => {
-    const pct = value == null ? 0 : Math.max(0, Math.min(100, value * 100));
-    return (
-      <div style={{ display: "flex", alignItems: "center", gap: 8, minWidth: 110 }}>
-        <div style={{
-          flex: 1, height: 6, borderRadius: 3,
-          background: "var(--border, #2a2a2a)", overflow: "hidden",
-        }}>
-          <div style={{
-            width: `${pct}%`, height: "100%", background: color,
-            transition: "width 0.3s ease",
-          }} />
-        </div>
-        <div style={{ fontSize: 11, fontWeight: 700, minWidth: 26, textAlign: "right",
-                      color: value == null ? "var(--dim, #666)" : "var(--text, #ddd)" }}>
-          {fmt(value)}
-        </div>
-      </div>
-    );
-  };
+  const windowedJobs = useMemo(() => {
+    if (time === "year") return jobs || [];
+    const days = time === "week" ? 7 : 31, since = Date.now() - days * 86400e3;
+    const recency = (j) => { let m = 0; [j.lastActivityAt, j.updated_at, j.statusUpdateAt].forEach(v => { if (!v) return; const t = (v && typeof v.toMillis === "function") ? v.toMillis() : Date.parse(v); if (!isNaN(t) && t > m) m = t; }); return m; };
+    return (jobs || []).filter(j => recency(j) >= since);
+  }, [jobs, time]);
 
-  const toggleBtn = (active, label, onClick) => (
-    <button onClick={onClick} style={{
-      padding: "6px 14px", fontSize: 12, fontWeight: active ? 700 : 500,
-      fontFamily: "inherit", cursor: "pointer", border: "none", borderRadius: 6,
-      background: active ? "var(--accent, #46916A)" : "transparent",
-      color: active ? "#000" : "var(--dim, #888)",
-      transition: "all 0.15s",
-    }}>{label}</button>
-  );
+  const rows = useMemo(() => sb3Build(windowedJobs, board, users, weights), [windowedJobs, board, users, weights]);
+
+  const PAL = ["#3B5BA5","#46916A","#B06A2C","#6A5E97","#3E7D7A","#C58A4C","#3E9E74","#5B7FC0"];
+  const colorFor = (nm) => PAL[Math.abs(String(nm).split("").reduce((a,c)=>a+c.charCodeAt(0),0)) % PAL.length];
+  const initial = (nm) => { const p = String(nm||"").trim().split(/\s+/); return p.length>1 ? (p[0][0]+p[p.length-1][0]) : (p[0]||"?").slice(0,1); };
+  const overall = [...rows].sort((a,b)=>b.overall-a.overall);
+  const boardLbl = board === "coordinators" ? "Coordinators" : board === "leads" ? "Leads" : "Foremen";
+
+  const SECTIONS = [
+    { id:"quality", title:"Quality", note:"first-time inspection pass + QC items per job", bar:"",
+      sort:(a,b)=>b.quality-a.quality, num:r=>r.quality==null?"—":r.quality, unit:"", w:r=>r.quality||0,
+      sub:r=> (r.ftpPct==null?"—":r.ftpPct+"% first-time pass") + " · " + (r.qcPerJob==null?"—":r.qcPerJob+" QC/job") },
+    { id:"app", title:"App Usage", note:"punch, updates & questions logged", bar:"b",
+      sort:(a,b)=>b.appUsage-a.appUsage, num:r=>r.appUsage, unit:"", w:r=>r.appUsage,
+      sub:r=> r.punch+" punch · "+r.updates+" updates · "+r.questions+" questions" },
+    { id:"shared", title:"Shared Links", note:"question links sent to clients", bar:"go",
+      sort:(a,b)=>b.shares-a.shares||b.sharedLinks-a.sharedLinks, num:r=>r.shares, unit:" links", w:r=>r.sharedLinks,
+      sub:r=> r.shares+" question link"+(r.shares===1?"":"s")+" sent" },
+    { id:"hand", title:"Clean Handoff", note:"open punch per 100 punch items · lower wins", bar:"go",
+      sort:(a,b)=>(a.handoff==null?999:a.handoff)-(b.handoff==null?999:b.handoff), num:r=>r.handoff==null?"—":r.handoff, unit:"/100", w:r=>r.handoffScore||0,
+      sub:()=> "open punch per 100 punch items" },
+  ];
 
   return (
-    <div style={{ padding: 20, fontFamily: "inherit" }}>
-      {/* Title + explanation + collapsible scoring details */}
-      <div style={{ marginBottom: 18 }}>
-        <div style={{ fontSize: 22, fontWeight: 800, color: "var(--text, #ddd)", letterSpacing: "0.01em" }}>
-          Scoreboard
-        </div>
-        <div style={{ fontSize: 11, color: "var(--dim, #888)", marginTop: 4 }}>
-          Behavior-driven competition. Info = how much you use the app. Quality = how clean your work delivers. Combined = both.
-        </div>
-        <ScoreboardV2HowItWorks/>
+    <div className="sb3">
+      <style>{`
+        .sb3{--c-pan:#fff;--c-pan2:#F5F7F9;--c-bd:#E2E5EA;--c-ink:#171B21;--c-dim:#5C6470;--c-faint:#8A929C;--c-blue:#3B5BA5;--c-good:#3E7D5A;--c-gold:#B0892C;--c-gbg:#F6EDCF;--c-gln:#E3D097;--c-track:#E9ECF1;--c-navy:#1E2C44;font-family:inherit;color:var(--c-ink)}
+        .sb3 *{box-sizing:border-box}
+        .sb3 .top{background:linear-gradient(180deg,#1E2C44,#162134);border-radius:14px;padding:16px 18px;color:#fff;display:flex;align-items:center;gap:12px}
+        .sb3 .top .co{font-size:10px;letter-spacing:.14em;color:rgba(255,255,255,.6);font-weight:700}
+        .sb3 .top .ti{font-size:18px;font-weight:800}
+        .sb3 .top .wt{margin-left:auto;text-align:right;font-size:10px;color:rgba(255,255,255,.66);line-height:1.5;max-width:260px}
+        .sb3 .ctr{display:flex;gap:10px;flex-wrap:wrap;align-items:center;margin:14px 0 2px}
+        .sb3 .seg{display:inline-flex;background:var(--c-pan2);border:1px solid var(--c-bd);border-radius:10px;padding:3px;gap:2px}
+        .sb3 .seg button{border:0;background:transparent;color:var(--c-dim);font:inherit;font-size:12px;font-weight:700;padding:6px 12px;border-radius:7px;cursor:pointer}
+        .sb3 .seg button.on{background:var(--c-pan);color:var(--c-ink);box-shadow:0 1px 2px rgba(16,24,40,.12)}
+        .sb3 .lbl{font-size:10px;letter-spacing:.1em;font-weight:700;color:var(--c-faint);text-transform:uppercase}
+        .sb3 .editbtn{margin-left:auto;border:1px solid var(--c-gln);background:var(--c-gbg);color:var(--c-gold);font-weight:800;font-size:11px;padding:6px 12px;border-radius:8px;cursor:pointer;font-family:inherit}
+        .sb3 .wedit{margin-top:12px;background:var(--c-pan);border:1px solid var(--c-gln);border-radius:12px;padding:14px 16px}
+        .sb3 .wedit h4{margin:0 0 3px;font-size:13px}
+        .sb3 .wedit .hint{font-size:11px;color:var(--c-dim);margin-bottom:10px}
+        .sb3 .wrow{display:flex;align-items:center;gap:10px;margin:7px 0}
+        .sb3 .wrow label{flex:0 0 120px;font-size:12px;font-weight:700}
+        .sb3 .wrow input[type=range]{flex:1}
+        .sb3 .wrow .wv{width:46px;text-align:right;font-weight:800;font-size:13px}
+        .sb3 .card{background:var(--c-pan);border:1px solid var(--c-bd);border-radius:14px;box-shadow:0 1px 2px rgba(16,24,40,.05),0 10px 26px -14px rgba(16,24,40,.15);padding:6px 6px 8px;margin-top:12px}
+        .sb3 .card.gold{border-color:var(--c-gln)}
+        .sb3 .bh{display:flex;align-items:baseline;gap:8px;padding:12px 13px 8px}
+        .sb3 .bh .bt{font-size:14px;font-weight:800}.sb3 .bh .bn{margin-left:auto;font-size:10px;color:var(--c-faint);font-weight:600}
+        .sb3 .rw{border-top:1px solid var(--c-bd)}.sb3 .rw:first-child{border-top:0}
+        .sb3 .r{display:flex;align-items:center;gap:11px;padding:10px 12px}
+        .sb3 .r.t1{background:linear-gradient(90deg,var(--c-gbg),transparent 70%)}
+        .sb3 .rk{width:18px;text-align:center;font-size:12.5px;font-weight:800;color:var(--c-faint)}.sb3 .rk.g{color:var(--c-gold)}
+        .sb3 .av{width:32px;height:32px;border-radius:9px;display:grid;place-items:center;color:#fff;font-weight:800;font-size:11.5px;flex:0 0 auto}
+        .sb3 .who{min-width:0;flex:1}
+        .sb3 .who .n{font-size:13px;font-weight:700;display:flex;align-items:center;gap:6px}
+        .sb3 .bdg{font-size:8.5px;font-weight:800;letter-spacing:.04em;color:var(--c-gold);background:var(--c-gbg);border:1px solid var(--c-gln);padding:1px 5px;border-radius:5px}
+        .sb3 .who .s{font-size:10.5px;color:var(--c-faint);font-weight:600;margin-top:1px}
+        .sb3 .subs{display:flex;gap:4px}
+        .sb3 .ss{font-size:9px;font-weight:800;color:var(--c-dim);background:var(--c-pan2);border:1px solid var(--c-bd);border-radius:6px;padding:3px 6px;text-align:center;min-width:34px;line-height:1.1}
+        .sb3 .ss em{display:block;font-size:7.5px;letter-spacing:.04em;color:var(--c-faint);font-weight:700;font-style:normal}
+        @media (max-width:640px){.sb3 .subs{display:none}}
+        .sb3 .met{display:flex;align-items:center;gap:11px;flex:0 0 auto}
+        .sb3 .bar{width:74px;height:7px;border-radius:99px;background:var(--c-track);overflow:hidden}
+        .sb3 .bar i{display:block;height:100%;border-radius:99px;background:var(--c-good)}
+        .sb3 .bar.b i{background:var(--c-blue)}.sb3 .bar.go i{background:var(--c-gold)}.sb3 .bar.nv i{background:var(--c-navy)}
+        .sb3 .big{font-size:18px;font-weight:800;min-width:42px;text-align:right}.sb3 .big u{font-size:10px;color:var(--c-faint);font-style:normal;margin-left:1px}
+        .sb3 .seclbl{font-size:10px;letter-spacing:.11em;text-transform:uppercase;font-weight:800;color:var(--c-faint);margin:20px 4px 0}
+        .sb3 .empty{padding:24px;text-align:center;color:var(--c-faint);font-size:13px}
+      `}</style>
+
+      <div className="top">
+        <div><div className="co">HOMESTEAD ELECTRIC</div><div className="ti">Scoreboard</div></div>
+        <div className="wt">Weighted — <b style={{color:"#fff"}}>Quality {weights.quality}</b> · App {weights.appUsage} · Shared {weights.sharedLinks} · Handoff {weights.handoff}</div>
       </div>
 
-      {/* ROUND-23 CHANGE: Champions banner — top foreman + top lead for last
-          month / last quarter / YTD. Computed independently from the current
-          board view's window. */}
-      <ScoreboardV2Champions jobs={jobs}/>
-
-      {/* Role toggle */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 8, padding: 4,
-                    background: "var(--card, #1a1a1a)", borderRadius: 8, width: "fit-content" }}>
-        {toggleBtn(role === "foreman", "Foremen", () => setRole("foreman"))}
-        {toggleBtn(role === "lead",    "Leads",   () => setRole("lead"))}
+      <div className="ctr">
+        <span className="lbl">Board</span>
+        <div className="seg">{["coordinators","foremen","leads"].map(b=>(<button key={b} className={board===b?"on":""} onClick={()=>setBoard(b)}>{b==="coordinators"?"Coordinators":b==="leads"?"Leads":"Foremen"}</button>))}</div>
+        <span className="lbl">Time</span>
+        <div className="seg">{[["week","This Week"],["month","This Month"],["year","This Year"]].map(pair=>(<button key={pair[0]} className={time===pair[0]?"on":""} onClick={()=>setTime(pair[0])}>{pair[1]}</button>))}</div>
+        {canEdit && <button className="editbtn" onClick={()=>setShowEdit(v=>!v)}>{showEdit?"Done":"Adjust weights"}</button>}
       </div>
 
-      {/* Sort toggle */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 8, padding: 4,
-                    background: "var(--card, #1a1a1a)", borderRadius: 8, width: "fit-content" }}>
-        {toggleBtn(sortBy === "combined", "Combined",            () => setSortBy("combined"))}
-        {toggleBtn(sortBy === "info",     "Info (app usage)",    () => setSortBy("info"))}
-        {toggleBtn(sortBy === "quality",  "Quality (clean work)",() => setSortBy("quality"))}
-      </div>
-
-      {/* ROUND-21 CHANGE: time-window selector (Phase 3). Filters timestamp-
-          aware signals to the chosen period. Volume signals (punch / tasks
-          done / QC count) stay lifetime — see the explainer dropdown. */}
-      <div style={{ display: "flex", gap: 4, marginBottom: 6, padding: 4,
-                    background: "var(--card, #1a1a1a)", borderRadius: 8, width: "fit-content" }}>
-        {toggleBtn(windowKey === "all",     "All Time", () => setWindowKey("all"))}
-        {toggleBtn(windowKey === "year",    "Year",     () => setWindowKey("year"))}
-        {toggleBtn(windowKey === "quarter", "Quarter",  () => setWindowKey("quarter"))}
-        {toggleBtn(windowKey === "month",   "Month",    () => setWindowKey("month"))}
-      </div>
-      <div style={{ fontSize: 10, color: "var(--dim, #888)", marginBottom: 16, fontStyle: "italic" }}>
-        Window: {windowLabel}
-      </div>
-
-      {/* Empty state */}
-      {rows.length === 0 && (
-        <div style={{ padding: 30, textAlign: "center", color: "var(--dim, #888)", fontSize: 13 }}>
-          No {role === "foreman" ? "foremen" : "leads"} have enough data to rank yet.
+      {canEdit && showEdit && (
+        <div className="wedit">
+          <h4>Grading weights</h4>
+          <div className="hint">Admin only. Sets how much each section counts toward Overall (relative — they don't need to total 100). Saved for everyone.</div>
+          {[["quality","Quality"],["appUsage","App Usage"],["sharedLinks","Shared Links"],["handoff","Clean Handoff"]].map(pair=>(
+            <div className="wrow" key={pair[0]}>
+              <label>{pair[1]}</label>
+              <input type="range" min="0" max="60" value={weights[pair[0]]} onChange={e=>saveWeights({[pair[0]]:+e.target.value})}/>
+              <div className="wv">{weights[pair[0]]}</div>
+            </div>
+          ))}
+          <div style={{marginTop:8}}><button className="editbtn" style={{marginLeft:0}} onClick={()=>saveWeights(SB3_DEFAULT_WEIGHTS)}>Reset to 40 / 25 / 20 / 15</button></div>
         </div>
       )}
 
-      {/* Ranked rows */}
-      {rows.map((row, i) => {
-        const isExp = !!expanded[row.name];
-        const color = rankColor(i, rows.length);
-        return (
-          <div key={row.name} style={{
-            background: "var(--card, #1a1a1a)", borderRadius: 10,
-            border: "1px solid var(--border, #2a2a2a)", marginBottom: 8,
-            overflow: "hidden",
-          }}>
-            {/* Row header */}
-            <div onClick={() => setExpanded(e => ({ ...e, [row.name]: !e[row.name] }))}
-                 style={{
-                   display: "grid",
-                   gridTemplateColumns: "48px 1fr 140px 140px 90px 24px",
-                   gap: 14, alignItems: "center", padding: "12px 14px",
-                   cursor: "pointer",
-                 }}>
-              {/* Rank pill */}
-              <div style={{
-                width: 36, height: 36, borderRadius: "50%",
-                background: `${color}22`, border: `2px solid ${color}`,
-                display: "flex", alignItems: "center", justifyContent: "center",
-                fontWeight: 800, fontSize: 14, color,
-              }}>{i + 1}</div>
-
-              {/* Name + jobs count */}
-              <div>
-                <div style={{ fontSize: 14, fontWeight: 700, color: "var(--text, #ddd)" }}>
-                  {row.name}
-                </div>
-                <div style={{ fontSize: 10, color: "var(--dim, #888)", marginTop: 2 }}>
-                  {row.jobCount} job{row.jobCount === 1 ? "" : "s"}
-                </div>
-              </div>
-
-              {/* Info bar */}
-              <div>
-                <div style={{ fontSize: 9, color: "var(--dim, #888)", textTransform: "uppercase",
-                              letterSpacing: "0.06em", fontWeight: 700, marginBottom: 3 }}>Info</div>
-                <ScoreBar value={row.info} color="#3B5BA5" />
-              </div>
-
-              {/* Quality bar */}
-              <div>
-                <div style={{ fontSize: 9, color: "var(--dim, #888)", textTransform: "uppercase",
-                              letterSpacing: "0.06em", fontWeight: 700, marginBottom: 3 }}>Quality</div>
-                <ScoreBar value={row.quality} color="#6A5E97" />
-              </div>
-
-              {/* Combined */}
-              <div style={{ textAlign: "right" }}>
-                <div style={{ fontSize: 9, color: "var(--dim, #888)", textTransform: "uppercase",
-                              letterSpacing: "0.06em", fontWeight: 700, marginBottom: 3 }}>Combined</div>
-                <div style={{ fontSize: 22, fontWeight: 800, color, lineHeight: 1 }}>
-                  {fmt(row.combined)}
-                </div>
-              </div>
-
-              {/* Expand chevron */}
-              <div style={{
-                fontSize: 14, color: "var(--dim, #888)",
-                transition: "transform 0.2s",
-                transform: isExp ? "rotate(90deg)" : "rotate(0deg)",
-              }}>›</div>
+      <div className="card gold">
+        <div className="bh"><span className="bt">Overall Standings</span><span className="bn">weighted · {boardLbl} · leader is champion</span></div>
+        {overall.length===0 && <div className="empty">Nobody on this board has enough jobs to rank yet.</div>}
+        {overall.map((r,i)=>(
+          <div className="rw" key={r.name}><div className={"r"+(i===0?" t1":"")}>
+            <div className={"rk"+(i===0?" g":"")}>{i+1}</div>
+            <div className="av" style={{background:colorFor(r.name)}}>{initial(r.name)}</div>
+            <div className="who"><div className="n">{r.name}{i===0 && <span className="bdg">CHAMPION</span>}</div><div className="s">{r.jobs} jobs</div></div>
+            <div className="subs">
+              <div className="ss"><em>QUAL</em>{r.quality==null?"—":r.quality}</div>
+              <div className="ss"><em>APP</em>{r.appUsage}</div>
+              <div className="ss"><em>SHARE</em>{r.sharedLinks}</div>
+              <div className="ss"><em>HAND</em>{r.handoffScore==null?"—":r.handoffScore}</div>
             </div>
+            <div className="met"><div className="bar nv"><i style={{width:r.overall+"%"}}/></div><div className="big">{r.overall}</div></div>
+          </div></div>
+        ))}
+      </div>
 
-            {/* Drilldown */}
-            {isExp && <ScoreboardV2Drilldown row={row} />}
+      <div className="seclbl">The four scored sections</div>
+      {SECTIONS.map(sec=>{
+        const list=[...rows].sort(sec.sort);
+        return (
+          <div className="card" key={sec.id}>
+            <div className="bh"><span className="bt">{sec.title}</span><span className="bn">{sec.note}</span></div>
+            {list.length===0 && <div className="empty">No data yet.</div>}
+            {list.map((r,i)=>(
+              <div className="rw" key={r.name}><div className="r">
+                <div className={"rk"+(i===0?" g":"")}>{i+1}</div>
+                <div className="av" style={{background:colorFor(r.name)}}>{initial(r.name)}</div>
+                <div className="who"><div className="n">{r.name}{i===0 && <span className="bdg">#1</span>}</div><div className="s">{sec.sub(r)}</div></div>
+                <div className="met"><div className={"bar "+sec.bar}><i style={{width:(sec.w(r)||0)+"%"}}/></div><div className="big">{sec.num(r)}{sec.unit && <u>{sec.unit}</u>}</div></div>
+              </div></div>
+            ))}
           </div>
         );
       })}
+
+      <div style={{marginTop:16,fontSize:11,color:"#8A929C",textAlign:"center",lineHeight:1.6}}>
+        Inspection credit is status-implied (reached finish = rough passed; completed = final passed) unless a fail was logged. Weights are admin-tunable above; the formula stays frozen otherwise.
+      </div>
+    </div>
+  );
+}
+
+function ScoreboardV2({ jobs, users = [], identity }) {
+  // 2026-07-15 redesign: three externally-validated boards (First-Time Pass,
+  // QC Items/Job, App Activity) + a transparent rank-sum overall. Read-only.
+  const [board, setBoard] = useState("foremen");   // coordinators | foremen | leads
+  const [win, setWin]     = useState("year");       // week | month | year
+  useEffect(() => { if (typeof window !== "undefined") window.__sbJobs = jobs; }, [jobs]);
+
+  const P = {
+    navy:"#1E2C44", navy2:"#162134", ink:"#171B21", dim:"#5C6470", faint:"#8A929C",
+    border:"#E2E5EA", panel:"#FFFFFF", panel2:"#F5F7F9", good:"#3E7D5A", blue:"#3B5BA5",
+    gold:"#8A6B16", gold2:"#B0892C", goldBg:"#F6EDCF", goldLine:"#E3D097", track:"#E9ECF1",
+  };
+  const AVCOL = ["#3B5BA5","#B06A2C","#46916A","#6A5E97","#3E7D7A","#2F6DB0","#8A5AA0","#C58A4C"];
+  const color = (nm) => AVCOL[[...String(nm)].reduce((a,c)=>a+c.charCodeAt(0),0) % AVCOL.length];
+  const initials = (nm) => { const p=String(nm).trim().split(/\s+/); return (p.length>1?(p[0][0]+p[p.length-1][0]):p[0].slice(0,2)).toUpperCase(); };
+  const ord = (n) => { const s=["th","st","nd","rd"], v=n%100; return n+(s[(v-20)%10]||s[v]||s[0]); };
+  const boardLabel = board==="coordinators"?"Coordinators":board==="foremen"?"Foremen":"Leads";
+
+  // window jobs by best-available recency date (all-time for This Year)
+  const _ts = (v)=>{ if(!v) return NaN; let t=Date.parse(String(v)); if(!isNaN(t)) return t; const m=String(v).match(/^(\d{1,2})\/(\d{1,2})\/(\d{4})/); return m?Date.parse(`${m[3]}-${String(m[1]).padStart(2,"0")}-${String(m[2]).padStart(2,"0")}`):NaN; };
+  const recency = (j)=>{ for(const k of ["lastActivityAt","updated_at","statusUpdateAt","readyToInvoiceDate"]){ const t=_ts(j&&j[k]); if(!isNaN(t)) return t; } return NaN; };
+  const wJobs = useMemo(()=> win==="year" ? jobs : (jobs||[]).filter(j=>{ const t=recency(j); return !isNaN(t) && t >= Date.now()-(win==="week"?7:31)*864e5; }), [jobs, win]);
+  const boards = useMemo(()=> sbv3Build(wJobs, users), [wJobs, users]);
+  const rows = boards[board] || [];
+  const combined = useMemo(()=> sbv3Combined(rows), [rows]);
+
+  const METRICS = [
+    { key:"ftp", title:"First-Time Pass", note:"rough + final · first try", get:r=>r.ftpPct, dir:-1, bar:P.good,
+      fmt:r=>r.ftpPct==null?"—":Math.round(r.ftpPct*100)+"%", sub:r=>`${r.ftPass} of ${r.ftTot}${r.streak>1?"  ·  "+r.streak+" streak":""}` },
+    { key:"qc", title:"QC Items / Job", note:"defects per walk · lower wins", get:r=>r.qcPerJob, dir:1, bar:P.blue, invert:true,
+      fmt:r=>r.qcPerJob==null?"—":r.qcPerJob.toFixed(1), sub:r=>`${r.qcWalks} walk${r.qcWalks===1?"":"s"}` },
+    { key:"act", title:"App Activity", note:"the more you log, the higher you rank", get:r=>r.activity, dir:-1, bar:P.gold2,
+      fmt:r=>r.activity>=1000?(r.activity/1000).toFixed(1)+"k":String(r.activity), sub:r=>`${r.punch} punch · ${r.questions} Q` },
+  ];
+
+  const seg = (active, label, onClick, activeColor) => (
+    <button onClick={onClick} style={{ appearance:"none", border:0, font:"inherit", fontSize:12.5, fontWeight:700,
+      padding:"7px 13px", borderRadius:8, cursor:"pointer", whiteSpace:"nowrap",
+      background: active ? P.panel : "transparent", color: active ? (activeColor||P.ink) : P.dim,
+      boxShadow: active ? "0 1px 2px rgba(16,24,40,.12)" : "none" }}>{label}</button>
+  );
+  const segWrap = { display:"inline-flex", background:P.panel2, border:`1px solid ${P.border}`, borderRadius:11, padding:3, gap:2 };
+  const cardSt = { background:P.panel, border:`1px solid ${P.border}`, borderRadius:15, boxShadow:"0 1px 2px rgba(16,24,40,.05),0 12px 30px -14px rgba(16,24,40,.16)" };
+  const chip = (rank, label) => (
+    <span key={label} style={{ fontSize:10.5, fontWeight:700, borderRadius:999, padding:"2px 8px",
+      color: rank===1?P.gold:P.dim, background: rank===1?P.goldBg:P.panel2, border:`1px solid ${rank===1?P.goldLine:P.border}` }}>
+      <b style={{color: rank===1?P.gold:P.ink}}>{ord(rank)}</b> {label}</span>
+  );
+
+  return (
+    <div style={{ padding:20, fontFamily:"inherit", color:P.ink, fontVariantNumeric:"tabular-nums", maxWidth:1000, margin:"0 auto" }}>
+      {/* header */}
+      <div style={{ background:`linear-gradient(180deg,${P.navy},${P.navy2})`, borderRadius:15, padding:"18px 20px",
+        color:"#fff", display:"flex", alignItems:"center", gap:14, boxShadow:cardSt.boxShadow }}>
+        <div style={{ minWidth:0 }}>
+          <div style={{ fontSize:10.5, letterSpacing:"0.16em", color:"rgba(255,255,255,0.6)", fontWeight:700 }}>HOMESTEAD ELECTRIC</div>
+          <div style={{ fontSize:20, fontWeight:800, letterSpacing:"-0.01em" }}>Scoreboard</div>
+        </div>
+        <div style={{ marginLeft:"auto", textAlign:"right", fontSize:11, color:"rgba(255,255,255,0.62)", lineHeight:1.5 }}>
+          Frozen formula<br/><b style={{color:"#fff"}}>no weight tuning</b></div>
+      </div>
+
+      {/* controls */}
+      <div style={{ display:"flex", gap:10, flexWrap:"wrap", alignItems:"center", margin:"16px 0 4px" }}>
+        <span style={{ fontSize:10.5, letterSpacing:"0.1em", fontWeight:700, color:P.faint, textTransform:"uppercase" }}>Board</span>
+        <div style={segWrap}>
+          {seg(board==="coordinators","Coordinators",()=>setBoard("coordinators"),P.blue)}
+          {seg(board==="foremen","Foremen",()=>setBoard("foremen"),P.blue)}
+          {seg(board==="leads","Leads",()=>setBoard("leads"),P.blue)}
+        </div>
+        <span style={{ fontSize:10.5, letterSpacing:"0.1em", fontWeight:700, color:P.faint, textTransform:"uppercase" }}>When</span>
+        <div style={segWrap}>
+          {seg(win==="week","This Week",()=>setWin("week"))}
+          {seg(win==="month","This Month",()=>setWin("month"))}
+          {seg(win==="year","This Year",()=>setWin("year"))}
+        </div>
+      </div>
+
+      {/* combined standings */}
+      <div style={{ ...cardSt, marginTop:14, overflow:"hidden" }}>
+        <div style={{ display:"flex", alignItems:"center", padding:"13px 16px 11px", borderBottom:`1px solid ${P.border}` }}>
+          <span style={{ fontSize:13.5, fontWeight:800 }}>Overall &middot; {boardLabel}</span>
+          <span style={{ marginLeft:"auto", fontSize:10.5, color:P.faint, fontWeight:600 }}>best combined finish</span>
+        </div>
+        {combined.length===0 && <div style={{ padding:26, textAlign:"center", color:P.faint, fontSize:13 }}>No {boardLabel.toLowerCase()} with enough data to rank yet.</div>}
+        {combined.map((r,i)=>(
+          <div key={r.name} style={{ display:"flex", alignItems:"center", gap:12, padding:"11px 14px",
+            borderTop: i===0?"none":`1px solid ${P.border}`, background: i===0?`linear-gradient(90deg,${P.goldBg},transparent 70%)`:"transparent" }}>
+            <span style={{ width:22, textAlign:"center", fontSize:15, fontWeight:800, color: i===0?P.gold2:P.faint }}>{i+1}</span>
+            <span style={{ width:38, height:38, borderRadius:11, flex:"0 0 auto", display:"grid", placeItems:"center",
+              color:"#fff", fontWeight:800, fontSize:13, background:color(r.name) }}>{initials(r.name)}</span>
+            <span style={{ minWidth:0, flex:1 }}>
+              <span style={{ display:"block", fontSize:14, fontWeight:700, letterSpacing:"-0.01em" }}>{r.name}</span>
+              <span style={{ display:"flex", gap:5, flexWrap:"wrap", marginTop:3 }}>
+                {chip(r.ftpRank,"First-Time Pass")}{chip(r.qcRank,"QC Items/Job")}{chip(r.actRank,"App Activity")}
+              </span>
+            </span>
+          </div>
+        ))}
+      </div>
+
+      {/* three boards */}
+      <div style={{ display:"grid", gridTemplateColumns:"repeat(auto-fit,minmax(240px,1fr))", gap:12, marginTop:14 }}>
+        {METRICS.map(cfg=>{
+          const sorted = rows.slice().filter(r=>cfg.get(r)!=null).sort((a,b)=>(cfg.get(a)-cfg.get(b))*cfg.dir);
+          const vals = sorted.map(cfg.get); const mn=Math.min(...vals), mx=Math.max(...vals);
+          return (
+            <div key={cfg.key} style={{ ...cardSt, padding:"5px 5px 7px" }}>
+              <div style={{ display:"flex", alignItems:"baseline", gap:8, padding:"12px 13px 8px" }}>
+                <span style={{ fontSize:12.5, fontWeight:800 }}>{cfg.title}</span>
+                <span style={{ marginLeft:"auto", fontSize:9.5, color:P.faint, fontWeight:600, textAlign:"right", maxWidth:130 }}>{cfg.note}</span>
+              </div>
+              {sorted.map((r,i)=>{
+                const v=cfg.get(r);
+                const w = mx===mn ? 100 : cfg.invert ? Math.round((mx-v)/(mx-mn)*82+18) : Math.round((v-mn)/(mx-mn)*82+18);
+                return (
+                  <div key={r.name} style={{ borderTop: i===0?"none":`1px solid ${P.border}` }}>
+                    <div style={{ display:"flex", alignItems:"center", gap:9, padding:"9px 11px" }}>
+                      <span style={{ width:15, textAlign:"center", fontSize:12, fontWeight:800, color:i===0?P.gold2:P.faint }}>{i+1}</span>
+                      <span style={{ width:28, height:28, borderRadius:8, flex:"0 0 auto", display:"grid", placeItems:"center", color:"#fff", fontWeight:800, fontSize:11, background:color(r.name) }}>{initials(r.name)}</span>
+                      <span style={{ minWidth:0, flex:1 }}>
+                        <span style={{ display:"block", fontSize:12.5, fontWeight:700, letterSpacing:"-0.01em", whiteSpace:"nowrap", overflow:"hidden", textOverflow:"ellipsis" }}>{r.name}</span>
+                        <span style={{ display:"block", fontSize:10, color:P.faint, fontWeight:600 }}>{cfg.sub(r)}</span>
+                      </span>
+                      <span style={{ fontSize:16, fontWeight:800, letterSpacing:"-0.02em" }}>{cfg.fmt(r)}</span>
+                    </div>
+                    <div style={{ height:5, borderRadius:99, background:P.track, overflow:"hidden", margin:"0 11px 6px" }}>
+                      <div style={{ width:w+"%", height:"100%", borderRadius:99, background:cfg.bar }}/>
+                    </div>
+                  </div>
+                );
+              })}
+              {sorted.length===0 && <div style={{ padding:16, textAlign:"center", color:P.faint, fontSize:11.5 }}>No data yet</div>}
+            </div>
+          );
+        })}
+      </div>
+
+      {/* how it's scored */}
+      <details style={{ ...cardSt, marginTop:14, overflow:"hidden" }}>
+        <summary style={{ cursor:"pointer", listStyle:"none", padding:"13px 16px", fontWeight:800, fontSize:12.5 }}>How it's scored</summary>
+        <div style={{ padding:"2px 16px 15px" }}>
+          <p style={{ margin:"0 0 11px", fontSize:12, color:P.dim, maxWidth:"70ch" }}>
+            Three boards, each judged on its own. <b>Overall</b> up top is just your placements added up across the three &mdash; no hidden weights, no blended index. <b>Putting info into the app raises your score</b> &mdash; App Activity is a full third of your standing.</p>
+          <div style={{ fontSize:12, color:P.dim, lineHeight:1.7 }}>
+            <div><b style={{color:P.ink}}>First-Time Pass</b> &mdash; rough &amp; final inspections passed first try. A job in finish counts rough as passed; a completed job counts both, unless a fail was logged.</div>
+            <div><b style={{color:P.ink}}>QC Items / Job</b> &mdash; average defects the QC walker calls, per walk. Lower is cleaner; you don't call your own.</div>
+            <div><b style={{color:P.ink}}>App Activity</b> &mdash; punch items and questions you logged. The more you put in the app, the higher you rank.</div>
+          </div>
+        </div>
+      </details>
+
+      <div style={{ marginTop:14, textAlign:"center", fontSize:11, color:P.faint, lineHeight:1.6 }}>
+        This Year = full record &middot; This Week / This Month window by recent job activity.<br/>
+        First-Time Pass uses the status-implied rule; App Activity is lifetime volume. Read-only.
+      </div>
     </div>
   );
 }
@@ -41957,7 +42309,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-15 · App SW version: v333
+**Last manifest update:** 2026-07-15 · App SW version: v335
 
 ---
 
@@ -42231,6 +42583,8 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Generator panel sync + live schedule** · 'in-flight' · 'SW v329' · (branch 'generator-panel-sync', NOT yet deployed) Generator Load Selection now AUTO-SYNCS from Home Runs instead of a manual import ('reconcileGenLoads' — the gen list mirrors the field's home-run truth; stale office-only loads drop, but a homeowner's *selected* non-match is kept + flagged, never a silent delete). Homeowner submit ↔ office list now reflect each other's picks ('applyHomeownerChoices' — no manual re-checking). A live circuit/space counter + a dedicated generator sub-panel schedule ('GenPanelGrid', reusing the tuned 'placeBreakers' tandem/quad engine) render as loads are toggled; the counter counts REAL placed spaces (not naive poles) so it agrees with the schedule. 14/2 & 12/2 can be flipped to 240V 2-pole 2-wire ('effectivePoles' / 'v240'), read app-wide. Default gen panel 40/80. All writes ride the existing 'saveHomeownerRequest' funnel; no new top-level fields; dry-run-verified 0 data loss / 0 decision change on real jobs.
 - **Generator: Dedicated Loads label + follow-up** · 'shipped 2026-07-14' · 'SW v330' · one-click reversible "Update Dedicated Loads" stamp puts chosen circuits' Home Run rows on panel "Dedicated Loads" ('stampDedicatedLoads', prior panel saved to 'panelBeforeGen'). Fix: the trigger button's count ('dedicatedPending') now includes rows that need the label REMOVED (load taken off the generator but still labeled from a prior stamp), not just added — otherwise an un-checked load's label got stuck with no one-click revert. Also 'getPanelOpts' de-dupes the always-present built-ins ("Meter", "Dedicated Loads") so a job that saved either into 'customPanels' no longer renders two panel cards. Office-side write to the job doc only; reversible; verified live on Kweller (take a 6/3 off → counter −1 circuit/−2 slots, label reverts, Dedicated count 46→45).
 - **Plan Changes: edit an existing change item** · 'shipped 2026-07-15' · 'SW v331' · the "Changes From Original Plan" tracker (Panelized Lighting tab) now has a **pencil / inline edit** on every logged change — before, 'changeType' (Added/Moved/Removed/Changed), item type, location, and notes could only be set at add-time, so a mislabeled item (e.g. a removal tagged "Added") was stuck. Edit reuses the add-item form pre-filled and saves via the same 'saveRooms' → 'u({panelizedLighting.lutronRooms})' job-doc path (version-snapshotted); stamps 'editedBy'/'editedAt' (nested). Reflects on Tech Lighting's read-only '?lutronshare=' link.
+- **Scoreboard redesign — pure competition, three boards** · 'shipped 2026-07-15' · 'SW v334' · admin-only 'ScoreboardV2' rebuilt from the ~13-signal info/quality blend into three plainly-measured, externally-validated boards with a transparent rank-sum overall (placements added up — no hidden weights). New pure scoring ('sbv3Build'/'sbv3Combined', alongside the retired 'sbv2*'): **First-Time Pass** (rough+final passed first try, STATUS-IMPLIED — a job in finish counts rough as passed, a completed job counts both, unless a fail was logged; lifts the sample from ~24 manually-logged jobs to the whole workload so small-N noise stops crowning people on 2-3 data points); **QC Items/Job** (avg fromQC defects the QC walker calls per walk, lower wins, can't be self-padded); **App Activity** (regular punch + questions logged — entering info directly raises your score, Koy 2026-07-15). Three boards — Coordinators (roll up their book's foremen via the 'coordinator' field on 'settings/users'), Foremen ('j.foreman'), Leads ('j.lead'). This Week / This Month / This Year window (by recent job activity). Read-only — computes from jobs, writes nothing, no new Firestore field. Dry-run-verified against real data ('scripts/sb-*' harnesses). Old 'sbv2*' scoring + 'ScoreboardV2Champions/Drilldown/HowItWorks' left defined but unused.
+- **Scoreboard v335 — weighted overall + admin-tunable weights** · 'shipped 2026-07-15' · 'SW v335' · iterated the v334 three-board scoreboard into the design Koy approved: a **weighted Overall standings** board on top (leader = champion; each person's four sub-scores shown inline so the weighting is transparent — no black box) over **four scored sections** — **Quality** (first-time inspection pass + QC items/job), **App Usage** (punch + updates + questions logged), **Shared Links** (question links sent), **Clean Handoff** (open punch per 100 punch items, lower wins — home runs deliberately NOT involved). New 'ScoreboardV3' component + 'sb3Build'/'sb3Agg'/'sb3JobSignals' scoring (status-implied inspection pass carried over from v334: reached finish ⇒ rough passed, completed ⇒ final passed, a logged fail overrides — full-workload sample, not just manually-logged inspections). **Weights are admin-only and persisted**: an "Adjust weights" editor gated behind 'scoreboard.editWeights' writes 'settings/scoreboardWeights' (default Quality 40 / App 25 / Shared 20 / Handoff 15); 'sb3Agg' normalizes over whatever weights are set, so they needn't total 100. Coordinators (roll up their book's foremen) / Foremen ('j.foreman', filtered to actual foreman-title users) / Leads ('j.lead'); This Week / This Month / This Year (by recent job activity). Read-only over jobs — the ONLY write is the admin weights doc; no new job field. Render swapped 'ScoreboardV2'→'ScoreboardV3'; the v334 'ScoreboardV2'/'sbv3Build'/'sbv3Combined' are now unused. Dry-run-verified: in-app 'sb3Build' is byte-identical to the verified '/tmp' compute harness that produced Koy's approved mockup numbers.
 - **"Previously answered as X" banner — per-link, not global** · 'shipped 2026-07-15' · 'SW v333' · the returning-recipient banner on a question share link ('QuestionsSharePage') keyed off the doc-level 'questionAnswers.answeredBy' — a SINGLE field shared by every share link (the last person to submit ANY of them). On Kweller that made all 4 links say "You previously submitted answers as Haley," including the "Koy" link (Koy's answer, mislabeled) and the "Mark Wintzer team" link that had zero answers and was never sent to Haley. Fixed: the banner now shows only when a question ON THIS LINK actually had a prior answer (a 'loadedAnsweredIds' snapshot taken at load, intersected with this link's filtered questions), and it names the link's OWN recipient ('shareName'), falling back to the doc-level name only for the generic all-questions link. Display-only change; no write path or data-shape change.
 - **Question share-link preview (in-app)** · 'shipped 2026-07-15' · 'SW v332' · the Share-Questions modal's SAVED LINKS list gains a **Preview** button next to Copy link — it opens the recipient's exact page in an in-app modal '<iframe>' ('/?questions={jobId}&s={shareId}&preview=1') so the office can see what a person will see without copying the URL and opening a tab. 'QuestionsSharePage' reads '?preview=1' and renders its real body inside a disabled '<fieldset>' under a "PREVIEW · read-only" banner (one guard disables every input / attach / submit). Preview is provably write-inert: 'handleSubmit', 'runAutoSave', and 'postThread' each early-return on 'preview' (belt-and-suspenders atop the existing 'userEditedRef' mount guard), so no draft/answer/thread write can fire. No data-model change; no new Firestore field; office-side view only.
 
@@ -46285,12 +46639,29 @@ function App() {
       const accumulated = pendingPatches.current[job.id];
       delete pendingPatches.current[job.id];
       if(accumulated && Object.keys(accumulated).length > 0) {
-        const patch = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp()};
-        Object.entries(sanitize(accumulated)).forEach(([k,v]) => { patch["data."+k] = v; });
-        updateDoc(doc(db,"jobs",job.id), patch).catch(e => {
-          if(e?.code === 'not-found') {
-            setDoc(doc(db,"jobs",job.id), {data:sanitize(job), updated_at:patch.updated_at, lastActivityAt:serverTimestamp()}).catch(e2=>console.error('[HE] flushSaves create error:',e2?.message));
-          } else { console.error('[HE] flushSaves error:',e?.message); }
+        const meta = {updated_at:new Date().toISOString(),lastActivityAt:serverTimestamp(),tab:TAB_ID};
+        const cleanPatch = sanitize(accumulated);
+        // Transactional three-way merge -- NEVER a raw updateDoc on a structural
+        // field (data.roughPunch etc.). Firestore has no partial-array update,
+        // so a raw write wholesale-replaces the tree and silently drops items
+        // other devices added (the Kweller UFER punch loss). Read the server
+        // under a transaction and merge via _mergePatchAgainstServer (same path
+        // as saveJob/flushJob). If this cannot complete (tab unload), re-retain
+        // the patch for the reconnect/retry path instead of blind-writing.
+        runTransaction(db, async (tx) => {
+          const jref = doc(db,"jobs",job.id);
+          const snap = await tx.get(jref);
+          if(!snap.exists()) {
+            tx.set(jref, {data:sanitize(job), updated_at:meta.updated_at, lastActivityAt:serverTimestamp(), tab:TAB_ID});
+            return;
+          }
+          const serverData = snap.data()?.data || {};
+          const _fr = [];
+          const wp = _mergePatchAgainstServer(job.id, job.name, cleanPatch, serverData, _fr);
+          tx.update(jref, {...meta, merged:_fr.length > 0, ...wp});
+        }).catch(e => {
+          console.error('[HE] flushSaves merge error:',e?.message);
+          pendingPatches.current[job.id] = {...cleanPatch, ...(pendingPatches.current[job.id]||{})};
         });
       }
       // If no accumulated patches, skip — don't overwrite with potentially stale data
@@ -49010,7 +49381,7 @@ function App() {
       )}
 
       {view==="scoreboard"&&can(identity,"scoreboard.editWeights")&&(
-        <ScoreboardV2 jobs={jobs} users={users} identity={identity}/>
+        <ScoreboardV3 jobs={jobs} users={users} identity={identity}/>
       )}
 
       {view==="settings"&&can(identity,"settings.view")&&(
