@@ -9473,6 +9473,7 @@ function PunchItems({ items, onChange, filterIds=null, onAddMaterial, jobId, sch
                     {item.addedBy&&!item.done&&<span>added by {item.addedBy}</span>}
                     {item.checkedBy&&item.done&&<span style={{color:C.green}}>✓ checked by {item.checkedBy}{item.checkedAt?" · "+item.checkedAt:""}</span>}
                     {item.fromQC&&!item.voided&&<span style={{fontSize:9,fontWeight:700,background:'#F4ECE2',color:'#c2410c',borderRadius:99,padding:'1px 6px',border:'1px solid #fed7aa',lineHeight:1.6}}>QC</span>}
+                    {item.fromGC&&!item.voided&&<span title={item.addedBy||"From the general contractor"} style={{fontSize:9,fontWeight:700,background:'#EAEEF6',color:'#2E477D',borderRadius:99,padding:'1px 6px',border:'1px solid #CDD9EC',lineHeight:1.6}}>GC</span>}
                     {item.voided&&(
                       <span title={item.voidReason ? `Voided: ${item.voidReason}${item.voidedBy?` · ${item.voidedBy}`:''}${item.voidedAt?` · ${item.voidedAt}`:''}` : 'Voided from QC'}
                         style={{fontSize:9,fontWeight:700,background:'#EEF0F3',color:'#6E7682',borderRadius:99,padding:'1px 6px',border:'1px solid #CDD3DB',lineHeight:1.6}}>
@@ -26869,6 +26870,7 @@ const ANSWER_METHODS = [
   {v:'in_person', l:'In person'},
   {v:'link',      l:'Via link'},
   {v:'fieldink',  l:'From the field'},
+  {v:'gc',        l:'From contractor portal'},
   {v:'other',     l:'Other'},
 ];
 const answerMethodLabel = (v) => { const m = ANSWER_METHODS.find(x=>x.v===v); return m ? m.l : ''; };
@@ -39522,7 +39524,277 @@ function SettingsSection({ title, accent, defaultOpen = false, children }) {
   );
 }
 
-function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverrides, jobs, upcoming, onRestoreFromBackup, onRestoreFromFile, identity }) {
+// Office manager for GC portal links (Piece 3). Create/list/revoke/backfill via
+// the gcPortal* callables (client can't touch gc_links directly — see rules).
+const _gcKeyOf = (gc) => String(gc||"").trim().toLowerCase().replace(/\s+/g," ");
+
+// ── Office review inbox for two-way GC requests (Piece 4b) ───────────────────
+// Reads gc_requests via the admin callable, and APPLYING a request mutates the
+// real job through the app's merge-safe patch path (onUpdateJob) — tagged fromGC
+// so the crew sees provenance. answer → fills the question; punch → adds a crew
+// punch item; date/thread/file → informational (office acts, then marks handled).
+function GCPortalInbox({ jobs, identity, onUpdateJob }) {
+  const [reqs, setReqs]   = useState(null);   // null=loading
+  const [err, setErr]     = useState("");
+  const [busy, setBusy]   = useState("");     // request id in flight
+  const [showDone, setShowDone] = useState(false);
+
+  const refresh = () => httpsCallable(functions,"gcPortalListRequests")({ includeHandled: showDone })
+    .then(r => setReqs(r.data.requests||[]))
+    .catch(e => { setErr(e.message||"Failed to load requests"); setReqs([]); });
+  useEffect(() => { refresh(); }, [showDone]);
+
+  const handle = (id, status) => httpsCallable(functions,"gcPortalHandleRequest")({ id, status, by: identity?.name || "" });
+
+  // Apply the request's content to the real job (answer/punch), then mark it
+  // applied. Returns silently if the job is gone (still marks handled).
+  const apply = async (req) => {
+    setBusy(req.id); setErr("");
+    try {
+      const job = (jobs||[]).find(j => j.id === req.jobId);
+      const who = req.by ? (req.by + " · " + (req.gcLabel||"GC")) : ("GC — " + (req.gcLabel||""));
+      // answer/punch actually MUTATE the job; date/thread/file/rsvp are
+      // informational (office acts, "Mark handled"). For the structural types we
+      // must NOT flip the request to "applied" unless the mutation truly landed
+      // (job present + question matched) — otherwise a stale itemId or an
+      // unloaded job would silently swallow the GC's input (review finding).
+      const structural = req.type === "answer" || req.type === "punch";
+      if (structural && !job) {
+        setErr("That job isn't in your current list (archived, or still loading). Open it directly, or Dismiss."); setBusy(""); return;
+      }
+      let mutated = false;
+      if (job && req.type === "answer" && req.itemId) {
+        const zones = ["upper","main","basement"];
+        let field = null, next = null;
+        for (const f of ["roughQuestions","finishQuestions"]) {
+          const qs = job[f]; if (!qs) continue;
+          let found = false;
+          const upd = { ...qs };
+          zones.forEach(z => {
+            upd[z] = (Array.isArray(qs[z]) ? qs[z] : []).map(q => {
+              if (q && String(q.id) === String(req.itemId)) {
+                found = true;
+                return { ...q, answer: req.text, done: true, answeredVia: "gc", answeredBy: who, answeredAt: new Date().toISOString() };
+              }
+              return q;
+            });
+          });
+          if (found) { field = f; next = upd; break; }
+        }
+        if (field) { const patch = { [field]: next }; onUpdateJob({ ...job, ...patch }, patch); mutated = true; }
+      } else if (job && req.type === "punch" && req.text) {
+        const rp = job.roughPunch ? { ...job.roughPunch } : {};
+        const main = rp.main ? { ...rp.main } : { rooms: [], general: [], hotcheck: [] };
+        main.general = (Array.isArray(main.general) ? [...main.general] : []).concat({
+          id: uid(), text: req.text, done: false, fromGC: true, addedBy: who, addedAt: new Date().toISOString(),
+        });
+        rp.main = main;
+        const patch = { roughPunch: rp };
+        onUpdateJob({ ...job, ...patch }, patch); mutated = true;
+      }
+      if (structural && !mutated) {
+        setErr(req.type === "answer"
+          ? "Couldn't match that question — it may have changed since they answered. Apply it manually in the job, then Dismiss."
+          : "Nothing to apply here. Dismiss, or handle it manually in the job.");
+        setBusy(""); return;
+      }
+      await handle(req.id, "applied");
+      await refresh();
+    } catch (e) { setErr(e.message || "Apply failed"); }
+    setBusy("");
+  };
+  const dismiss = async (req) => {
+    setBusy(req.id); setErr("");
+    try { await handle(req.id, "dismissed"); await refresh(); }
+    catch (e) { setErr(e.message || "Dismiss failed"); }
+    setBusy("");
+  };
+
+  const TYPE = { answer:"Answered a question", punch:"Added an item", date:"Suggested a date", thread:"Sent a message", file:"Shared a file", rsvp:"Replied" };
+  const applyLabel = (t) => (t==="answer"||t==="punch") ? "Apply to job" : "Mark handled";
+  const B = { btn:{border:"1px solid #2E477D",background:"#2E477D",color:"#fff",borderRadius:8,padding:"6px 12px",fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"inherit"},
+    gbtn:{border:"1px solid #CDD9EC",background:"transparent",color:"#2E477D",borderRadius:8,padding:"5px 11px",fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit"} };
+  const openReqs = (reqs||[]).filter(r => showDone || r.status === "new");
+
+  return (
+    <div style={{fontFamily:"system-ui"}}>
+      <div style={{display:"flex",alignItems:"center",gap:10,marginBottom:10,flexWrap:"wrap"}}>
+        <span style={{fontWeight:700,color:"#1B1F24"}}>{reqs===null ? "Loading…" : openReqs.length ? openReqs.length+" request"+(openReqs.length!==1?"s":"") : "No open requests"}</span>
+        <label style={{fontSize:12,color:"#5E6670",display:"flex",alignItems:"center",gap:5,marginLeft:"auto",cursor:"pointer"}}>
+          <input type="checkbox" checked={showDone} onChange={e=>setShowDone(e.target.checked)}/> show handled
+        </label>
+        <button onClick={refresh} style={B.gbtn}>Refresh</button>
+      </div>
+      {err ? <div style={{color:"#8A2A2A",fontSize:12.5,marginBottom:8}}>{err}</div> : null}
+      {reqs!==null && !openReqs.length ? <div style={{color:"#8A93A3",fontSize:12.5}}>Requests from contractor portals show up here.</div> : null}
+      {openReqs.map(r => (
+        <div key={r.id} style={{background:"#fff",border:"1px solid #E1E4E9",borderRadius:10,padding:"10px 12px",marginBottom:8,opacity:r.status==="new"?1:0.6}}>
+          <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap",marginBottom:4}}>
+            <b style={{color:"#2E477D",fontSize:13}}>{r.gcLabel||"Contractor"}</b>
+            <span style={{fontSize:12,color:"#1B1F24"}}>· {TYPE[r.type]||r.type}</span>
+            <span style={{fontSize:12,color:"#5E6670"}}>on {r.jobName||r.jobId}</span>
+            {r.status!=="new" ? <span style={{fontSize:10.5,fontWeight:700,color:"#5E6670",background:"#F0F1F4",borderRadius:99,padding:"1px 8px"}}>{String(r.status).toUpperCase()}</span> : null}
+            <span style={{marginLeft:"auto",fontSize:11,color:"#8A93A3"}}>{r.by?r.by+" · ":""}{_gcAgo(r.createdAt)}</span>
+          </div>
+          {r.date ? <div style={{fontSize:13,color:"#1B1F24",marginBottom:4}}><b>Date:</b> {r.date}{r.dateKind?" ("+r.dateKind+")":""}</div> : null}
+          {r.text ? <div style={{fontSize:12.5,color:"#3A414C",background:"#F7F8FA",border:"1px solid #ECEEF1",borderRadius:8,padding:"7px 10px",marginBottom:6,whiteSpace:"pre-wrap"}}>{r.text}</div> : null}
+          {r.fileUrl ? <div style={{marginBottom:6}}><a href={r.fileUrl} target="_blank" rel="noopener noreferrer" style={{color:"#2E477D",fontWeight:700,fontSize:12.5}}>{r.fileName||"View file"} ↗</a></div> : null}
+          {r.status==="new" ? (
+            <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+              <button disabled={busy===r.id} onClick={()=>apply(r)} style={{...B.btn,opacity:busy===r.id?0.5:1}}>{busy===r.id?"…":applyLabel(r.type)}</button>
+              <button disabled={busy===r.id} onClick={()=>dismiss(r)} style={B.gbtn}>Dismiss</button>
+            </div>
+          ) : null}
+        </div>
+      ))}
+    </div>
+  );
+}
+
+function GCPortalManager({ jobs, identity }) {
+  const [links, setLinks] = useState(null);   // null=loading
+  const [err, setErr] = useState("");
+  const [busy, setBusy] = useState("");        // token or "create" while a call is in flight
+  const [gcName, setGcName] = useState("");
+  const [accent, setAccent] = useState("#3B5BA5");
+  const [excluded, setExcluded] = useState(() => new Set());
+  const [contacts, setContacts] = useState([]);
+  const [cDraft, setCDraft] = useState({ name:"", role:"", emailAddr:"", phone:"" });
+  const [created, setCreated] = useState(null); // {token, slug, jobCount}
+
+  const refresh = () => httpsCallable(functions,"gcPortalListLinks")({})
+    .then(r => setLinks(r.data.links||[]))
+    .catch(e => { setErr(e.message||"Failed to load links"); setLinks([]); });
+  useEffect(() => { refresh(); }, []);
+
+  const activeJobs = (jobs||[]).filter(j => !j.archived && !j.deleted);
+  const matched = gcName.trim() ? activeJobs.filter(j => _gcKeyOf(j.gc) === _gcKeyOf(gcName)) : [];
+  const origin = (typeof window!=="undefined" && window.location && window.location.origin) || "";
+  const urlOf = (token) => origin + "/?gcportal=" + token;
+
+  const create = async () => {
+    if(!gcName.trim() || busy) return;
+    setBusy("create"); setErr(""); setCreated(null);
+    try {
+      const jobIdsExclude = matched.filter(j => excluded.has(j.id)).map(j => j.id);
+      const r = await httpsCallable(functions,"gcPortalCreateLink")({
+        label: gcName.trim(), gc: gcName.trim(),
+        contacts, accentColor: accent, jobIdsExclude, by: identity?.name || "",
+      });
+      setCreated(r.data);
+      setGcName(""); setContacts([]); setExcluded(new Set()); setAccent("#3B5BA5");
+      await refresh();
+    } catch(e) { setErr(e.message||"Create failed"); }
+    setBusy("");
+  };
+  const call = async (name, payload, token) => {
+    setBusy(token||name); setErr("");
+    try { await httpsCallable(functions,name)(payload); await refresh(); }
+    catch(e) { setErr(e.message||"Action failed"); }
+    setBusy("");
+  };
+  const copy = (txt) => { try { navigator.clipboard.writeText(txt); } catch(e){} };
+
+  const B = { field:{border:"1px solid #CDD9EC",borderRadius:8,padding:"7px 10px",font:"13px system-ui",width:"100%",boxSizing:"border-box"},
+    btn:{border:"1px solid #2E477D",background:"#2E477D",color:"#fff",borderRadius:8,padding:"7px 13px",fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"inherit"},
+    gbtn:{border:"1px solid #CDD9EC",background:"transparent",color:"#2E477D",borderRadius:8,padding:"6px 11px",fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit"} };
+
+  return (
+    <div style={{fontSize:13,color:"#2E477D"}}>
+      {err ? <div style={{background:"#FBE9E9",border:"1px solid #E5B4B4",color:"#8A2A2A",borderRadius:8,padding:"7px 11px",marginBottom:10,fontSize:12.5}}>{err}</div> : null}
+
+      {/* create */}
+      <div style={{background:"#fff",border:"1px solid #E1E4E9",borderRadius:10,padding:12,marginBottom:14}}>
+        <div style={{fontWeight:700,marginBottom:8,color:"#1B1F24"}}>Create a contractor link</div>
+        <input value={gcName} onChange={e=>{
+          const v = e.target.value; setGcName(v);
+          // seed hidden-jobs from any existing link for this GC — exclude is
+          // GC-level (shared mirror), so a new link must inherit prior hides.
+          const exist = (links||[]).find(l=>!l.revoked && l.gcKey===_gcKeyOf(v));
+          setExcluded(new Set(exist ? (exist.jobIdsExclude||[]) : []));
+        }} placeholder="General contractor name (must match the job's GC field)" style={B.field}/>
+        {gcName.trim() ? (
+          <div style={{margin:"9px 0",fontSize:12.5,color:"#5E6670"}}>
+            {matched.length ? (
+              <Fragment>
+                <div style={{marginBottom:4}}><b>{matched.filter(j=>!excluded.has(j.id)).length}</b> of {matched.length} matching job{matched.length!==1?"s":""} will be included — uncheck any to hide:</div>
+                <div style={{maxHeight:150,overflowY:"auto",display:"flex",flexDirection:"column",gap:3}}>
+                  {matched.map(j=>(
+                    <label key={j.id} style={{display:"flex",alignItems:"center",gap:7,cursor:"pointer"}}>
+                      <input type="checkbox" checked={!excluded.has(j.id)} onChange={()=>{ const n=new Set(excluded); n.has(j.id)?n.delete(j.id):n.add(j.id); setExcluded(n); }}/>
+                      <span>{j.name}{j.address?" · "+j.address:""}</span>
+                    </label>
+                  ))}
+                </div>
+              </Fragment>
+            ) : <div style={{color:"#B0892C"}}>No jobs match "{gcName.trim()}" yet — check the spelling against the GC field on the jobs, or create the link now and jobs will appear as they're added.</div>}
+          </div>
+        ) : null}
+
+        {/* contacts */}
+        <div style={{margin:"10px 0 4px",fontWeight:600,fontSize:12.5,color:"#1B1F24"}}>Contacts (optional)</div>
+        {contacts.map((c,i)=>(
+          <div key={i} style={{display:"flex",alignItems:"center",gap:8,marginBottom:4,fontSize:12.5}}>
+            <span style={{flex:1}}><b>{c.name}</b>{c.role?" · "+c.role:""}{c.emailAddr?" · "+c.emailAddr:""}{c.phone?" · "+c.phone:""}</span>
+            <button onClick={()=>setContacts(contacts.filter((_,k)=>k!==i))} style={{...B.gbtn,padding:"2px 8px",borderColor:"#E5B4B4",color:"#8A2A2A"}}>remove</button>
+          </div>
+        ))}
+        <div style={{display:"flex",gap:6,flexWrap:"wrap",marginTop:4}}>
+          <input value={cDraft.name} onChange={e=>setCDraft({...cDraft,name:e.target.value})} placeholder="Name" style={{...B.field,width:110}}/>
+          <input value={cDraft.role} onChange={e=>setCDraft({...cDraft,role:e.target.value})} placeholder="Role" style={{...B.field,width:90}}/>
+          <input value={cDraft.emailAddr} onChange={e=>setCDraft({...cDraft,emailAddr:e.target.value})} placeholder="Email (for updates)" style={{...B.field,width:170}}/>
+          <input value={cDraft.phone} onChange={e=>setCDraft({...cDraft,phone:e.target.value})} placeholder="Phone" style={{...B.field,width:120}}/>
+          <button onClick={()=>{ if(cDraft.name.trim()){ setContacts([...contacts,{name:cDraft.name.trim(),role:cDraft.role.trim()||"Super",emailAddr:cDraft.emailAddr.trim(),phone:cDraft.phone.trim(),email:true,text:true}]); setCDraft({name:"",role:"",emailAddr:"",phone:""}); } }} style={B.gbtn}>+ Add</button>
+        </div>
+        <div style={{fontSize:11,color:"#8A93A3",marginTop:3}}>Email is where their daily 8 PM update + instant alerts go. Phone is for texts (coming soon).</div>
+
+        {/* accent */}
+        <div style={{display:"flex",alignItems:"center",gap:8,margin:"12px 0"}}>
+          <span style={{fontSize:12.5,color:"#1B1F24",fontWeight:600}}>Accent:</span>
+          {["#3B5BA5","#4A5D3A","#2E3440","#7A5C14","#6A2C2C"].map(c=>(
+            <button key={c} onClick={()=>setAccent(c)} title={c} style={{width:22,height:22,borderRadius:"50%",background:c,border:accent===c?"3px solid #1B1F24":"2px solid #CDD9EC",cursor:"pointer"}}/>
+          ))}
+        </div>
+
+        <button onClick={create} disabled={!gcName.trim()||busy==="create"} style={{...B.btn,opacity:(!gcName.trim()||busy==="create")?0.5:1}}>{busy==="create"?"Creating…":"Create portal link"}</button>
+        {created ? (
+          <div style={{marginTop:10,background:"#ECF2EE",border:"1px solid #CDE6D7",borderRadius:8,padding:"9px 11px",fontSize:12.5}}>
+            <div style={{fontWeight:700,color:"#2C5C40",marginBottom:4}}>Link created — {created.jobCount} job{created.jobCount!==1?"s":""} on it.</div>
+            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <code style={{background:"#fff",border:"1px solid #CDE6D7",borderRadius:6,padding:"3px 7px",fontSize:11.5,wordBreak:"break-all"}}>{urlOf(created.token)}</code>
+              <button onClick={()=>copy(urlOf(created.token))} style={B.gbtn}>Copy link</button>
+            </div>
+          </div>
+        ) : null}
+      </div>
+
+      {/* existing links */}
+      <div style={{fontWeight:700,marginBottom:6,color:"#1B1F24"}}>Existing links {links?"("+links.length+")":""}</div>
+      {links===null ? <div style={{color:"#8A93A3"}}>Loading…</div> : null}
+      {links && links.length===0 ? <div style={{color:"#8A93A3",fontSize:12.5}}>No portal links yet.</div> : null}
+      {(links||[]).map(l=>{
+        const count = activeJobs.filter(j=>(_gcKeyOf(j.gc)===l.gcKey || (l.jobIdsInclude||[]).includes(j.id)) && !(l.jobIdsExclude||[]).includes(j.id)).length;
+        return (
+          <div key={l.token} style={{background:"#fff",border:"1px solid #E1E4E9",borderRadius:10,padding:"10px 12px",marginBottom:8,opacity:l.revoked?0.6:1}}>
+            <div style={{display:"flex",alignItems:"center",gap:8,flexWrap:"wrap"}}>
+              <b style={{color:"#1B1F24"}}>{l.label}</b>
+              <span style={{fontSize:11.5,color:"#8A93A3"}}>{count} job{count!==1?"s":""}</span>
+              {l.revoked ? <span style={{fontSize:11,fontWeight:700,color:"#8A2A2A",background:"#FBE9E9",borderRadius:99,padding:"1px 8px"}}>REVOKED</span> : <span style={{fontSize:11,fontWeight:700,color:"#2C5C40",background:"#ECF2EE",borderRadius:99,padding:"1px 8px"}}>ACTIVE</span>}
+              <span style={{marginLeft:"auto",display:"flex",gap:6,flexWrap:"wrap"}}>
+                {!l.revoked ? <button onClick={()=>copy(urlOf(l.token))} style={B.gbtn}>Copy link</button> : null}
+                {!l.revoked ? <button disabled={busy===l.token} onClick={()=>call("gcPortalBackfill",{token:l.token},l.token)} style={B.gbtn}>{busy===l.token?"…":"Rebuild"}</button> : null}
+                <button disabled={busy===l.token} onClick={()=>call("gcPortalSetRevoked",{token:l.token,revoked:!l.revoked},l.token)} style={{...B.gbtn,borderColor:l.revoked?"#CDE6D7":"#E5B4B4",color:l.revoked?"#2C5C40":"#8A2A2A"}}>{l.revoked?"Reactivate":"Revoke"}</button>
+              </span>
+            </div>
+            {!l.revoked ? <code style={{display:"block",marginTop:6,background:"#F4F6F8",borderRadius:6,padding:"3px 7px",fontSize:11,color:"#5E6670",wordBreak:"break-all"}}>{urlOf(l.token)}</code> : null}
+          </div>
+        );
+      })}
+    </div>
+  );
+}
+
+function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverrides, jobs, upcoming, onRestoreFromBackup, onRestoreFromFile, identity, onUpdateJob }) {
   const [colors, setColors] = useState({...colorOverrides});
   const [saved,  setSaved]  = useState(false);
   const [restoring, setRestoring] = useState(false);
@@ -39655,6 +39927,18 @@ function SettingsPage({ COLOR_OPTIONS, onSave, onSaveUsers, users, colorOverride
           )}
         </div>
       </SettingsSection>
+
+      {/* GC Portal — admin only. Inbox (two-way requests) then link management. */}
+      {can(identity,"users.manage") && (
+        <SettingsSection title="CONTRACTOR PORTAL — REQUESTS" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}}>
+          <GCPortalInbox jobs={jobs} identity={identity} onUpdateJob={onUpdateJob}/>
+        </SettingsSection>
+      )}
+      {can(identity,"users.manage") && (
+        <SettingsSection title="CONTRACTOR PORTAL LINKS" accent={{bg:"#EAEEF6", border:"#CDD9EC", text:"#2E477D"}}>
+          <GCPortalManager jobs={jobs} identity={identity}/>
+        </SettingsSection>
+      )}
 
       {/* Notification Test — verify per-device that pushes deliver and deep-link works */}
       <SettingsSection title="NOTIFICATIONS" accent={{bg:"#F3E9CF", border:"#EAD9A6", text:"#6E5212"}}>
@@ -42561,7 +42845,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-16 · App SW version: v339
+**Last manifest update:** 2026-07-16 · App SW version: v340
 
 ---
 
@@ -42728,6 +43012,8 @@ Pages designed to be opened by people outside the company via share links (no au
   - Real reopen · 'shipped 2026-07-10' · 'SW v322' · unchecking an answered question now clears the who/when stamps, and for link answers snapshots the rejected content ('q.gcRejected') so the same answer can't auto re-close the question on the next Submit — a genuinely different link answer still applies (and clears the rejection)
   - Link edits/deletions sync live · 'shipped 2026-07-10' · 'SW v324' · a question the LINK answered ('q.gcAnswered') now stays content-true to the link on every save: text edits and photo removals propagate, and clearing everything un-answers the question in the app (reopens it, stamps off) — crew-answered questions still can't be touched from a link
 - **Job Note share** · 'shipped' · 'JobNoteSharePage'
+- **GC Portal (contractor mission control)** · 'shipped 2026-07-16' · 'SW v340' · 'GCPortalPage' · '?gcportal=<token>' · one live link per contractor showing ALL their jobs — rough/finish status + dates, per-recipient question tracking, return trips, Homestead's own QC-walk receipts, Matterport 3D links, CO counts — co-branded (per-link 'accentColor'), "built in-house" provenance. **Kweller-safe by construction:** the page reads ONLY 'gc_links/{token}' + 'gc_portal/{portalId}/jobs/*' (a server-published, explicit-allowlist projection — 'functions/gcPortal.js'), never 'jobs/{id}'; questions gated to *effectively shared* only. **Two-way:** GC can answer questions, suggest/confirm dates, add items, message the crew ('GCSendBox' → token-authed 'gcPortalSubmit' callable → 'gc_requests', office reviews before anything touches a job). Membership = GC-level union across the contractor's links (exclude wins, sticky across revokes); revoke ROTATES the shared 'portalId' so a revoked holder keeps nothing. 5 adversarial review passes; unit suites 'scripts/gcportal-test.js' + 'scripts/gcnotify-test.js'.
+- **GC notification engine (email v1)** · 'shipped 2026-07-16' · 'SW v340' · 'functions/gcNotify.js' · per the cadence policy (vault spec): ONE 8 PM daily digest per contractor (per-recipient super routing, only if their mirror changed — no-content night = no email) + INSTANT emails for schedule changes, inspection results, milestones (incl. "your house is hot"), Matterport-ready, return-trip scheduled. Instants ENQUEUE to 'gc_notify_queue' (5-min drain, idempotent, 5-try cap, quiet hours 9 PM–7 AM defer to morning); emails are composed from the portal projection + a closed set of safe scalars, esc()'d, portal link top + bottom. Provider key lives in function-only 'gc_config/mail' — deploys with email OFF, fails safe until configured (SendGrid HTTP via fetch, no new dependency). Texts (Twilio, 3 interrupt triggers only) = v1.5.
 - **All public pages**: error toasts render (HEToastHost mounted), failures speak instead of silently dropping input · 'SW v315'
 
 ---
@@ -42769,6 +43055,8 @@ Pages designed to be opened by people outside the company via share links (no au
   - User management · 'UserManagement'
   - Color overrides
   - Backup / restore + Force Update All Devices
+  - Contractor portal — requests inbox · 'GCPortalInbox' (admin only) · 'shipped 2026-07-16' · 'SW v340' · reviews GC-filed requests ('gc_requests' via admin callables); Apply lands an answer on the exact question ('answeredVia:"gc"', "From contractor portal" chip) or adds a punch item with a 'GC' badge — through the app's merge-safe patch path, and NEVER marks "applied" unless the mutation actually landed
+  - Contractor portal — link manager · 'GCPortalManager' (admin only) · 'shipped 2026-07-16' · 'SW v340' · create per-GC links (contacts w/ email for the notification engine, accent color, hide-jobs picker seeded from the GC's existing excludes), copy/revoke/reactivate/rebuild; job-count badge honors include+exclude
 - **Scoreboard weights editor** · 'shipped' · admin only
 - **Backup-status banner** · 'shipped 2026-07-09' · 'SW v313' · red strip for admin/manager when the nightly Firestore backup is missing or >48h stale
 
@@ -45648,6 +45936,470 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
   );
 }
 
+// ─── GC PORTAL PAGE (?gcportal=TOKEN) ─────────────────────────────────────────
+// Outside-facing per-contractor portal. READS ONLY the published mirror:
+//   gc_links/{token}  → { portalId, label, accentColor, contacts, supersByJob, revoked }
+//   gc_portal/{portalId}/jobs/{jobId} → the whitelisted projection (functions/gcPortal.js)
+// NEVER reads jobs/{id}. v1 = read-only display; the two-way write actions
+// (suggest date, answer, add punch, upload, assign super) arrive in Piece 4 via
+// the gc_requests funnel. Self-contained light palette driven by the accent.
+function GCPortalPage({ token }) {
+  const [link, setLink] = useState(undefined); // undefined=loading · null=inactive/missing · obj=live
+  const [jobs, setJobs] = useState(null);       // null=loading · []=empty
+  const [openId, setOpenId] = useState(null);   // job detail modal
+  const [superFilter, setSuperFilter] = useState(null);
+
+  useEffect(() => {
+    if(!token) { setLink(null); return; }
+    const unsub = onSnapshot(doc(db,"gc_links",token), snap => {
+      if(!snap.exists() || snap.data()?.revoked === true) { setLink(null); return; }
+      setLink(snap.data());
+    }, () => setLink(null));
+    return unsub;
+  }, [token]);
+
+  const portalId = link && link.portalId;
+  useEffect(() => {
+    if(link === undefined) return;             // link still loading
+    if(!portalId) { setJobs([]); return; }     // live link but no mirror → empty state, never stuck loading
+    const unsub = onSnapshot(collection(db,"gc_portal",portalId,"jobs"), snap => {
+      setJobs(snap.docs.map(d => d.data()).filter(Boolean));
+    }, () => setJobs([]));
+    return unsub;
+  }, [portalId, link]);
+
+  useEffect(() => {
+    if(link && link.label) { try { document.title = link.label + " · Homestead Electric"; } catch(e){} }
+  }, [link]);
+
+  const accent = (link && /^#[0-9a-fA-F]{6}$/.test(link.accentColor||"")) ? link.accentColor : "#3B5BA5";
+  const P = { board:"#F2F3F6", card:"#FFFFFF", line:"#E3E5EA", ink:"#232936", dim:"#5E6670",
+    muted:"#8A93A3", accent, urgent:"#B23A3A", deck1:"#141821", deck2:"#1B2030", live:"#34D17F" };
+
+  const wrap = (kids) => (
+    <div style={{minHeight:"100vh",background:P.board,font:"14px/1.5 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif",color:P.ink}}>
+      <div style={{maxWidth:1060,margin:"0 auto",padding:"0 16px 60px"}}>{kids}</div>
+    </div>
+  );
+
+  if(link === undefined) return wrap(<div style={{padding:"120px 0",textAlign:"center",color:P.muted}}>Loading your portal…</div>);
+  if(link === null) return wrap(
+    <div style={{padding:"120px 0",textAlign:"center"}}>
+      <div style={{fontSize:17,fontWeight:700,color:P.ink,marginBottom:8}}>This portal link is no longer active.</div>
+      <div style={{fontSize:13,color:P.dim}}>Please contact Homestead Electric for an updated link.</div>
+    </div>
+  );
+  if(jobs === null) return wrap(<div style={{padding:"120px 0",textAlign:"center",color:P.muted}}>Loading jobs…</div>);
+
+  // ── helpers ────────────────────────────────────────────────────────────────
+  const supersOf = (id) => (link.supersByJob && Array.isArray(link.supersByJob[id])) ? link.supersByJob[id] : [];
+  const isDone = (j) => {
+    const rc = j.rough && (j.rough.status==="complete" || j.rough.stage==="100%");
+    const fc = j.finish && (j.finish.status==="complete" || j.finish.stage==="100%");
+    // quick/service jobs are terminal at complete OR invoice (matches the app's
+    // own STAGE_SECTIONS "Completed" test) — otherwise an invoiced service call
+    // would sit forever in the active list.
+    if(j.quickJob) return j.quickJobStatus==="complete" || j.quickJobStatus==="invoice";
+    return rc && fc;
+  };
+  // amber action tags + neutral date tags, computed from the mirror
+  const tagsOf = (j) => {
+    const t = [];
+    const openQ = (j.questions && j.questions.byFor || []).reduce((s,g)=>s+g.openCount,0);
+    if(openQ) t.push({k:"act", text:openQ+" question"+(openQ>1?"s":"")+" waiting"});
+    (j.returnTrips||[]).forEach(rt => {
+      if(rt.needsSchedule && !rt.signedOff) t.push({k:"act", text:"Return trip: needs scheduling"});
+      else if(rt.scheduled && rt.scheduledDate && !rt.signedOff) t.push({k:"date", text:"Return trip "+rt.scheduledDate});
+    });
+    if(j.rough && j.rough.status==="complete" && j.finish && !j.finish.status && !j.quickJob)
+      t.push({k:"act", text:"Plan your finish start"});
+    if(j.matterport && j.matterport.status && j.matterport.links.length===0)
+      t.push({k:"date", text:"Matterport "+j.matterport.status});
+    return t;
+  };
+  const actionCount = (j) => tagsOf(j).filter(t=>t.k==="act").length;
+
+  const filtered = superFilter ? jobs.filter(j=>supersOf(j.id).includes(superFilter)) : jobs;
+  const actives = filtered.filter(j=>!isDone(j)).sort((a,b)=>actionCount(b)-actionCount(a));
+  const dones = filtered.filter(isDone);
+  // tiles scope to the active filter so counts always match the cards shown
+  const needTotal = filtered.reduce((s,j)=> s + actionCount(j), 0);
+  const rtNeeds = filtered.reduce((s,j)=> s + (j.returnTrips||[]).filter(rt=>rt.needsSchedule && !rt.signedOff).length, 0);
+  // header freshness from the newest mirror doc (honest LIVE indicator)
+  const newestMs = jobs.reduce((m,j)=> Math.max(m, Date.parse(j.updatedAt)||0), 0);
+  const stale = newestMs && (Date.now()-newestMs > 86400000);
+  const freshLabel = newestMs ? _gcAgo(new Date(newestMs).toISOString()) : "";
+
+  // roster of supers seen across this GC's jobs (for the filter row)
+  const rosterCounts = {};
+  jobs.forEach(j => supersOf(j.id).forEach(n => { rosterCounts[n]=(rosterCounts[n]||0)+1; }));
+
+  const tag = (t,i) => (
+    <span key={i} style={{fontSize:12,fontWeight:t.k==="act"?700:600,borderRadius:8,padding:"5px 10px",
+      border:"1px solid "+(t.k==="act"?accent+"66":P.line),
+      background:t.k==="act"?accent+"14":"transparent", color:t.k==="act"?accent:P.dim}}>{t.text}</span>
+  );
+  const bar = (label, pct, col) => (
+    <div style={{display:"flex",alignItems:"center",gap:9}}>
+      <span style={{font:"700 10px system-ui",letterSpacing:".1em",width:44,color:col}}>{label}</span>
+      <span style={{flex:1,height:7,borderRadius:99,background:"#E7E9EE",overflow:"hidden"}}>
+        <span style={{display:"block",height:"100%",width:(parseInt(pct)||0)+"%",background:P.muted,borderRadius:99}}/></span>
+      <span style={{fontSize:11.5,color:P.dim,width:38,textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{pct||"0%"}</span>
+    </div>
+  );
+
+  const card = (j) => {
+    const tg = tagsOf(j); const sup = supersOf(j.id);
+    const bits = [];
+    if(j.rough && j.rough.inspection==="pass") bits.push("Rough inspection passed");
+    if(j.finish && j.finish.inspection==="pass") bits.push("Final passed");
+    const qcFixed = j.qc ? j.qc.items.filter(q=>q.done).length : 0;
+    if(j.qc && j.qc.items.length) bits.push("Homestead QC walk: "+qcFixed+"/"+j.qc.items.length+" fixed");
+    return (
+      <div key={j.id} onClick={()=>setOpenId(j.id)} style={{background:P.card,border:"1px solid "+P.line,borderRadius:11,
+        padding:"16px 18px",display:"flex",flexDirection:"column",gap:11,cursor:"pointer"}}>
+        <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap"}}>
+          <h3 style={{fontSize:15,color:P.ink,margin:0}}>{j.name}</h3>
+          <span style={{fontSize:12,color:P.muted}}>{j.address}</span>
+          <span style={{marginLeft:"auto",fontSize:11,color:P.muted}}>updated {j.updatedAt ? _gcAgo(j.updatedAt) : ""}</span>
+        </div>
+        {(tg.length || sup.length) ? (
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {tg.map(tag)}
+            {sup.map((s,i)=><span key={"s"+i} style={{fontSize:12,fontWeight:600,borderRadius:8,padding:"5px 10px",border:"1px solid "+P.line,color:P.dim}}>Super: {s}</span>)}
+          </div>
+        ) : null}
+        {!isDone(j) && !j.quickJob ? (
+          <div style={{display:"flex",flexDirection:"column",gap:7}}>
+            {bar("ROUGH", j.rough&&j.rough.stage, accent)}
+            {bar("FINISH", j.finish&&j.finish.stage, P.muted)}
+          </div>
+        ) : null}
+        {bits.length ? <div style={{fontSize:12,color:P.muted}}>{bits.join(" · ")} — tap for details</div> : null}
+      </div>
+    );
+  };
+
+  const detail = openId ? jobs.find(j=>j.id===openId) : null;
+
+  return wrap(
+    <Fragment>
+      {/* header */}
+      <div style={{background:"linear-gradient(180deg,"+P.deck1+" 0%,"+P.deck2+" 100%)",borderRadius:"0 0 14px 14px",
+        padding:"16px 18px",display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",margin:"0 -0px"}}>
+        <div style={{width:44,height:44,background:"#fff",borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
+          <img src="/icon-192.png" alt="Homestead Electric" style={{width:40,height:40,objectFit:"contain"}} onError={e=>{e.currentTarget.style.display="none";}}/>
+        </div>
+        <span style={{color:"#5E6670",fontSize:20,fontWeight:300}}>×</span>
+        <div style={{font:"700 21px Georgia,'Times New Roman',serif",letterSpacing:".04em",color:"#EDEADF",whiteSpace:"nowrap"}}>{link.label}</div>
+        <div style={{marginLeft:"auto",textAlign:"right"}}>
+          <div style={{font:"600 10px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:"#9AA3B2"}}>Job portal · our own app</div>
+          <div style={{fontSize:11,color:"#9AA3B2"}}>
+            <span style={{display:"inline-flex",alignItems:"center",gap:5,color:stale?"#9AA3B2":"#5FE39C",fontWeight:700}}>
+              <span style={{width:7,height:7,borderRadius:"50%",background:stale?"#5E6670":P.live,display:"inline-block"}}/>{stale?"SYNCED":"LIVE"}</span>{freshLabel?" · updated "+freshLabel:""}</div>
+        </div>
+      </div>
+
+      {/* summary tiles */}
+      <div style={{display:"flex",gap:10,flexWrap:"wrap",margin:"16px 0"}}>
+        {[["Jobs with us", filtered.length, false],
+          ["Need your input", needTotal, true],
+          ["Return trips to schedule", rtNeeds, rtNeeds>0],
+          ["Completed & closed", dones.length, false]].map(([lbl,n,hot],i)=>(
+          <div key={i} style={{background:P.card,border:"1px solid "+P.line,borderRadius:10,padding:"10px 16px",minWidth:118}}>
+            <b style={{display:"block",fontSize:22,fontVariantNumeric:"tabular-nums",color: hot?accent:P.ink}}>{n}</b>
+            <span style={{fontSize:11,color:P.dim,textTransform:"uppercase",letterSpacing:".07em",fontWeight:600}}>{lbl}</span>
+          </div>
+        ))}
+      </div>
+
+      {/* super filter row */}
+      {Object.keys(rosterCounts).length ? (
+        <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:12}}>
+          {[["All jobs ("+jobs.length+")",null]].concat(Object.keys(rosterCounts).map(n=>[n+" ("+rosterCounts[n]+")",n])).map(([lbl,val],i)=>(
+            <button key={i} onClick={()=>setSuperFilter(val)} style={{border:"1px solid "+(superFilter===val?accent:P.line),
+              background:superFilter===val?accent:P.card,color:superFilter===val?"#fff":P.dim,borderRadius:99,
+              padding:"5px 13px",fontSize:12,fontWeight:600,cursor:"pointer",fontFamily:"inherit"}}>{lbl}</button>
+          ))}
+        </div>
+      ) : null}
+
+      {/* cards */}
+      {actives.length===0 && dones.length===0 ? (
+        <div style={{padding:"60px 0",textAlign:"center",color:P.muted}}>No jobs on your board yet — they'll appear here as we start them.</div>
+      ) : null}
+      <div style={{display:"grid",gridTemplateColumns:"repeat(auto-fill,minmax(310px,1fr))",gap:14}}>
+        {actives.map(card)}
+        {dones.length ? <div style={{gridColumn:"1/-1",font:"700 11px system-ui",letterSpacing:".12em",textTransform:"uppercase",color:P.muted,marginTop:4}}>Completed &amp; closed</div> : null}
+        {dones.map(card)}
+      </div>
+
+      {/* team contacts card — display; per-job assignment lives in the job
+          detail modal (GCSuperAssign → gcPortalSubmit type:"assign"). Adding/
+          editing contacts themselves stays office-side in v1. */}
+      {Array.isArray(link.contacts) && link.contacts.length ? (
+        <div style={{background:P.card,border:"1px solid "+P.line,borderRadius:11,padding:"14px 16px",marginTop:16}}>
+          <h3 style={{fontSize:12,color:P.ink,letterSpacing:".08em",textTransform:"uppercase",margin:"0 0 3px"}}>Your team on these jobs</h3>
+          <div style={{fontSize:11.5,color:P.muted,margin:"0 0 10px"}}>Each person hears from us their way — every update links straight back here.</div>
+          <div style={{display:"flex",gap:8,flexWrap:"wrap"}}>
+            {link.contacts.map((c,i)=>(
+              <div key={i} style={{border:"1px solid "+P.line,borderRadius:9,padding:"7px 12px",fontSize:12,color:P.muted}}>
+                <b style={{color:P.ink,display:"block",fontSize:13}}>{_gcTxt(c.name)}</b>{_gcTxt(c.role)}{c.phone?" · "+_gcTxt(c.phone):""}</div>
+            ))}
+          </div>
+        </div>
+      ) : null}
+
+      {/* provenance */}
+      <div style={{marginTop:18,padding:"14px 4px",borderTop:"1px solid "+P.line,fontSize:11.5,color:P.muted}}>
+        <b style={{color:P.ink}}>Built in-house at Homestead Electric.</b> This portal runs on our own custom app — not off-the-shelf software. Live from the field, updated as our crews work.
+      </div>
+
+      {detail ? <GCPortalDetail job={detail} link={link} P={P} onClose={()=>setOpenId(null)}/> : null}
+    </Fragment>
+  );
+}
+
+// small display helpers (module scope so both components share them)
+function _gcTxt(s){ return String(s==null?"":s); }
+function _gcAgo(iso){
+  const t = Date.parse(iso); if(isNaN(t)) return "";
+  const m = Math.floor((Date.now()-t)/60000);
+  if(m < 2) return "just now"; if(m < 60) return m+"m ago";
+  const h = Math.floor(m/60); if(h < 24) return h+"h ago";
+  const d = Math.floor(h/24); return d+"d ago";
+}
+
+// Read-only job detail modal for the portal (Piece 4 adds the write actions).
+// ── GC portal write controls (Piece 4a) ─────────────────────────────────────
+// Outside-facing, token-authed (no login). Every action routes through the
+// gcPortalSubmit callable; assign/contact apply live, everything else files a
+// gc_request for the office to review. These MUST be bulletproof — an outside
+// user hitting a network error can never break or blank the page, so each box
+// owns explicit null|sending|done|error state and swallows throws.
+const _gcField = (P) => ({ width:"100%", boxSizing:"border-box", border:"1px solid "+P.line, borderRadius:8, padding:"8px 10px", fontSize:13, color:P.ink, background:P.card, fontFamily:"inherit", resize:"vertical" });
+const _gcMiniBtn = (P) => ({ border:"1px solid "+P.line, background:P.card, color:P.accent, borderRadius:8, fontSize:12, fontWeight:700, padding:"5px 11px", cursor:"pointer", fontFamily:"inherit" });
+const _gcPrimaryBtn = (P) => ({ border:"none", background:P.accent, color:"#fff", borderRadius:8, fontSize:12.5, fontWeight:700, padding:"6px 14px", cursor:"pointer", fontFamily:"inherit" });
+
+function GCSendBox({ P, label, placeholder, cta, multiline = true, onSend, doneText }) {
+  const [open, setOpen]   = useState(false);
+  const [val, setVal]     = useState("");
+  const [state, setState] = useState(null); // null | "sending" | "done" | "error"
+  if (state === "done") return <div style={{ fontSize:12, color:"#2C5C40", fontWeight:700, marginTop:6 }}>{doneText || "✓ Sent to Homestead — we’ll follow up."}</div>;
+  if (!open) return <button onClick={()=>setOpen(true)} style={{ ..._gcMiniBtn(P), marginTop:6 }}>{label}</button>;
+  const send = async () => {
+    const text = val.trim();
+    if (!text) return;
+    setState("sending");
+    try { await onSend(text); setState("done"); }
+    catch (e) { setState("error"); }
+  };
+  return (
+    <div style={{ marginTop:8 }}>
+      {multiline
+        ? <textarea value={val} onChange={e=>setVal(e.target.value)} placeholder={placeholder} rows={2} style={_gcField(P)} />
+        : <input value={val} onChange={e=>setVal(e.target.value)} placeholder={placeholder} style={_gcField(P)} />}
+      <div style={{ display:"flex", gap:8, alignItems:"center", marginTop:6, flexWrap:"wrap" }}>
+        <button disabled={state==="sending"||!val.trim()} onClick={send} style={{ ..._gcPrimaryBtn(P), opacity:(state==="sending"||!val.trim())?0.5:1 }}>{state==="sending"?"Sending…":(cta||"Send")}</button>
+        <button onClick={()=>{ setOpen(false); setVal(""); setState(null); }} style={_gcMiniBtn(P)}>Cancel</button>
+        {state==="error" ? <span style={{ fontSize:11.5, color:P.urgent }}>Couldn’t send — check your connection and try again.</span> : null}
+      </div>
+    </div>
+  );
+}
+
+// Per-job super assignment (GC self-service). Toggles among the link's named
+// contacts and saves via gcPortalSubmit type:"assign" — applied to the link doc
+// immediately server-side (the GC owns their roster), and the parent's live
+// gc_links snapshot refreshes the chips. Assignment drives BOTH the portal's
+// super filter and per-super email routing, so this is the control that makes
+// "Austin only hears about Austin's jobs" real.
+function GCSuperAssign({ P, link, jobId, onAssign }) {
+  const cur = (link && link.supersByJob && Array.isArray(link.supersByJob[jobId])) ? link.supersByJob[jobId] : [];
+  const roster = ((link && Array.isArray(link.contacts)) ? link.contacts : [])
+    .map(c => String((c && c.name) || "").trim()).filter(Boolean);
+  const [editing, setEditing] = useState(false);
+  const [draft, setDraft] = useState(() => new Set(cur));
+  const [state, setState] = useState(null); // null | "saving" | "error"
+  const chip = (label, on, onClick) => (
+    <button key={label} onClick={onClick || undefined} disabled={!onClick}
+      style={{border:"1px solid "+(on?P.accent:P.line), background:on?(P.accent+"14"):P.card, color:on?P.accent:P.dim,
+        borderRadius:999, fontSize:12, fontWeight:700, padding:"5px 12px", cursor:onClick?"pointer":"default", fontFamily:"inherit"}}>{label}</button>
+  );
+  if (!editing) return (
+    <div style={{display:"flex",alignItems:"center",gap:7,flexWrap:"wrap"}}>
+      {cur.length ? cur.map(s => chip(s, true, null)) : <span style={{fontSize:12.5,color:P.muted}}>No super assigned yet.</span>}
+      <button onClick={()=>{ setDraft(new Set(cur)); setState(null); setEditing(true); }} style={_gcMiniBtn(P)}>{cur.length ? "Change" : "Assign your super"}</button>
+    </div>
+  );
+  const toggle = (n) => setDraft(d => { const nx = new Set(d); if (nx.has(n)) nx.delete(n); else nx.add(n); return nx; });
+  const save = async () => {
+    setState("saving");
+    try { await onAssign([...draft]); setEditing(false); setState(null); }
+    catch (e) { setState("error"); }
+  };
+  return (
+    <div>
+      <div style={{fontSize:12,color:P.muted,marginBottom:7}}>Tap the teammates who run this job — they'll get this job's updates. Two or more is fine.</div>
+      <div style={{display:"flex",gap:7,flexWrap:"wrap",marginBottom:9}}>
+        {roster.length ? roster.map(n => chip(n, draft.has(n), () => toggle(n)))
+          : <span style={{fontSize:12.5,color:P.muted}}>No team contacts on file yet — send us a message below and we'll add them.</span>}
+      </div>
+      <div style={{display:"flex",gap:8,alignItems:"center",flexWrap:"wrap"}}>
+        <button disabled={state==="saving"||!roster.length} onClick={save} style={{..._gcPrimaryBtn(P),opacity:(state==="saving"||!roster.length)?0.5:1}}>{state==="saving"?"Saving…":"Save"}</button>
+        <button onClick={()=>{ setEditing(false); setState(null); }} style={_gcMiniBtn(P)}>Cancel</button>
+        {state==="error" ? <span style={{fontSize:11.5,color:P.urgent}}>Couldn't save — check your connection and try again.</span> : null}
+      </div>
+    </div>
+  );
+}
+
+function GCPortalDetail({ job, link, P, onClose }) {
+  const j = job;
+  const token = link && link.token;
+  // Who's submitting — remembered per portal so the office sees a name on
+  // requests. Optional; blank is fine (the GC company label is always on file).
+  const _whoKey = "gcportal_who_" + (token || "");
+  const [who, setWho] = useState(() => { try { return localStorage.getItem(_whoKey) || ""; } catch(e){ return ""; } });
+  const setWhoP = (v) => { setWho(v); try { localStorage.setItem(_whoKey, v); } catch(e){} };
+  // Fire a gcPortalSubmit. Never throws to the caller's render — GCSendBox
+  // catches, but we also guard the token here.
+  const gcSubmit = (payload) => {
+    if (!token) return Promise.reject(new Error("no token"));
+    return httpsCallable(functions, "gcPortalSubmit")({ token, jobId: j.id, by: who, ...payload });
+  };
+  const sec = (title, kids) => (
+    <div style={{background:P.card,border:"1px solid "+P.line,borderRadius:10,padding:"11px 14px"}}>
+      <h4 style={{fontSize:11,letterSpacing:".1em",textTransform:"uppercase",color:P.muted,margin:"0 0 7px"}}>{title}</h4>
+      {kids}
+    </div>
+  );
+  const line = (kids,key) => <div key={key} style={{fontSize:12.5,color:P.dim,marginBottom:4}}>{kids}</div>;
+  const qcFixed = j.qc ? j.qc.items.filter(q=>q.done).length : 0;
+  const dates = [];
+  if(j.rough && j.rough.projectedStart) dates.push(["Rough projected", j.rough.projectedStart]);
+  if(j.rough && j.rough.scheduledEnd) dates.push(["Rough scheduled through", j.rough.scheduledEnd]);
+  if(j.finish && j.finish.projectedStart) dates.push(["Finish projected", j.finish.projectedStart]);
+  if(j.matterport && j.matterport.status) dates.push(["Matterport scan", j.matterport.status]);
+
+  return (
+    <div onClick={e=>{ if(e.target===e.currentTarget) onClose(); }} style={{position:"fixed",inset:0,zIndex:60,background:"rgba(20,24,33,.6)",
+      display:"flex",alignItems:"flex-start",justifyContent:"center",padding:"4vh 14px",overflowY:"auto"}}>
+      <div onClick={e=>e.stopPropagation()} style={{background:P.board,borderRadius:14,maxWidth:660,width:"100%",
+        boxShadow:"0 22px 60px rgba(0,0,0,.5)",padding:"20px 22px",display:"flex",flexDirection:"column",gap:12,marginBottom:"6vh"}}>
+        <div style={{display:"flex",alignItems:"baseline",gap:9,flexWrap:"wrap"}}>
+          <h3 style={{fontSize:18,color:P.ink,margin:0}}>{j.name}</h3>
+          <span style={{fontSize:12.5,color:P.muted}}>{j.address}</span>
+          <button onClick={onClose} style={{marginLeft:"auto",border:"1px solid "+P.line,background:P.card,color:P.dim,
+            borderRadius:8,fontSize:13,fontWeight:700,padding:"4px 11px",cursor:"pointer",fontFamily:"inherit"}}>✕ Close</button>
+        </div>
+
+        {/* status (parent objects guarded — always present today, but never crash if a mirror doc ever drifts) */}
+        {(() => { const R = j.rough||{}, Fn = j.finish||{}; return sec("Where it stands", (
+          <Fragment>
+            {line(<span><b style={{color:P.ink}}>Rough</b> — {R.stage||"—"} · {_gcTxt(R.status)||"not started"}{R.inspection?" · inspection "+R.inspection:""}{R.punchOpen?" · "+R.punchOpen+" punch open":""}</span>,"r")}
+            {!j.quickJob ? line(<span><b style={{color:P.ink}}>Finish</b> — {Fn.stage||"—"} · {_gcTxt(Fn.status)||"not started"}{Fn.inspection?" · inspection "+Fn.inspection:""}{Fn.punchOpen?" · "+Fn.punchOpen+" punch open":""}</span>,"f") : null}
+            {dates.map((d,i)=>line(<span>{d[0]}: <b style={{color:P.ink}}>{d[1]}</b></span>,"d"+i))}
+          </Fragment>
+        )); })()}
+
+        {/* per-job super assignment (GC self-service — drives filter + email routing) */}
+        {sec("Your team on this job", (
+          <GCSuperAssign P={P} link={link} jobId={j.id} onAssign={(supers)=>gcSubmit({ type:"assign", supers })}/>
+        ))}
+
+        {/* questions */}
+        {j.questions && (j.questions.byFor.length || j.questions.links.length) ? sec("Questions", (
+          <Fragment>
+            {line(<b style={{color:P.ink}}>{j.questions.asked} questions on this job · {j.questions.answered} answered · {j.questions.open} waiting</b>,"qsum")}
+            {j.questions.byFor.map((g,i)=>(
+              <div key={"g"+i} style={{border:"1px solid "+P.line,borderRadius:9,padding:"10px 12px",margin:"8px 0"}}>
+                <div style={{display:"flex",alignItems:"center",gap:8}}>
+                  <b style={{fontSize:13,color:P.ink}}>Waiting on {g.who}</b>
+                  <span style={{marginLeft:"auto",fontSize:11,fontWeight:700,borderRadius:99,padding:"2px 9px",border:"1px solid "+P.line,color:P.ink}}>{g.openCount} waiting</span>
+                </div>
+                {g.items.map((q,k)=>(
+                  <div key={"q"+k} style={{paddingTop:6,borderTop:"1px solid "+P.line,marginTop:6}}>
+                    <div style={{fontSize:12.5,color:P.dim}}>{q.text}</div>
+                    <GCSendBox P={P} label="Answer this" cta="Send answer" placeholder="Type your answer…"
+                      doneText="✓ Answer sent to Homestead"
+                      onSend={(text)=>gcSubmit({ type:"answer", itemId:q.id, text })}/>
+                  </div>
+                ))}
+              </div>
+            ))}
+            {j.questions.links.map((L,i)=>(
+              <div key={"L"+i} style={{fontSize:11.5,color:P.muted,marginTop:4}}>Link “{L.name}”: {L.sent} sent · {L.answered} answered · {L.waiting} waiting</div>
+            ))}
+          </Fragment>
+        )) : null}
+
+        {/* return trips */}
+        {(j.returnTrips||[]).length ? sec("Return trips", (
+          j.returnTrips.map((rt,i)=>(
+            <div key={"rt"+i} style={{marginBottom:i<j.returnTrips.length-1?10:0}}>
+              {line(<span><b style={{color:P.ink}}>{rt.signedOff?"Completed":rt.scheduled?"Scheduled"+(rt.scheduledDate?" "+rt.scheduledDate:""):rt.needsSchedule?"Needs scheduling":"Open"}</b>{rt.targetDate&&!rt.signedOff?" · target "+rt.targetDate:""}{rt.signedOff&&rt.signedOffDate?" "+rt.signedOffDate:""}</span>,"rts"+i)}
+              {rt.scope ? <div style={{fontSize:12,color:P.dim,background:"#8A93A30D",borderLeft:"3px solid "+P.line,borderRadius:"0 6px 6px 0",padding:"7px 10px"}}>{rt.scope}</div> : null}
+              {!rt.signedOff ? (
+                <GCSendBox P={P} multiline={false}
+                  label={rt.scheduled ? "Confirm or request a different date" : "Suggest a date that works"}
+                  cta="Send date" placeholder="e.g. Tue 7/22 AM, or any day next week"
+                  doneText="✓ Date sent to Homestead — we’ll confirm"
+                  onSend={(text)=>gcSubmit({ type:"date", itemId:rt.id, date:text, dateKind: rt.scheduled?"confirm":"suggest" })}/>
+              ) : null}
+            </div>
+          ))
+        )) : null}
+
+        {/* QC receipts */}
+        {j.qc && j.qc.items.length ? sec("Homestead QC walk — "+qcFixed+"/"+j.qc.items.length+" fixed", (
+          <Fragment>
+            <div style={{fontSize:11.5,color:P.muted,marginBottom:6}}>Items our own QC walker called on our work (we self-QC every job after rough &amp; finish):</div>
+            {j.qc.items.map((q,i)=><div key={"qc"+i} style={{fontSize:12,color:P.dim,marginBottom:4}}><b style={{color:P.ink}}>{q.done?"✓ ":"○ "}</b>{q.text}{q.fixedBy?" — fixed by "+q.fixedBy:""}</div>)}
+          </Fragment>
+        )) : null}
+
+        {/* change orders (count only) */}
+        {j.changeOrders && j.changeOrders.count ? sec("Change orders", line(
+          j.changeOrders.open ? j.changeOrders.open+" open change order"+(j.changeOrders.open>1?"s":"")+" — we send these by email; reply there to approve." : "All change orders resolved."
+        )) : null}
+
+        {/* documents: plans placeholder + matterport links (real hrefs) */}
+        {sec("Documents", (
+          <Fragment>
+            {j.matterport && j.matterport.links.length ? j.matterport.links.map((m,i)=>(
+              <div key={"mp"+i} style={{marginBottom:6}}>
+                <a href={m.url} target="_blank" rel="noopener noreferrer" style={{color:P.accent,fontWeight:700,fontSize:12.5,textDecoration:"none"}}>3D walkthrough — {m.label} ↗</a>
+                <span style={{fontSize:11.5,color:P.muted}}> (a 3D as-built of your walls)</span>
+              </div>
+            )) : line("Plans, cut sheets, and the 3D Matterport walkthrough appear here as they're added.")}
+          </Fragment>
+        ))}
+
+        {/* two-way: message the crew / add an item (Piece 4a) */}
+        {sec("Work with Homestead on this job", (
+          <Fragment>
+            <div style={{fontSize:11.5,color:P.muted,marginBottom:8}}>Anything you send here goes straight to our office and the crew lead on this job.</div>
+            <div style={{display:"flex",alignItems:"center",gap:8,marginBottom:6,flexWrap:"wrap"}}>
+              <span style={{fontSize:12,color:P.dim}}>Your name:</span>
+              <input value={who} onChange={e=>setWhoP(e.target.value)} placeholder="(optional) who's writing"
+                style={{...(_gcField(P)),width:"auto",flex:"1 1 180px",padding:"5px 9px",fontSize:12.5}}/>
+            </div>
+            <GCSendBox P={P} label="Send a message about this job" cta="Send message" placeholder="Question, heads-up, or note for the crew…"
+              onSend={(text)=>gcSubmit({ type:"thread", text })}/>
+            <div style={{height:6}}/>
+            <GCSendBox P={P} label="Add an item for us to address" cta="Send item" placeholder="Something you need us to come back for or fix…"
+              doneText="✓ Item sent — it’ll reach the crew after our office reviews it"
+              onSend={(text)=>gcSubmit({ type:"punch", text })}/>
+          </Fragment>
+        ))}
+
+        <div style={{fontSize:11,color:P.muted,textAlign:"center",paddingTop:2}}>Built in-house by Homestead Electric.</div>
+      </div>
+    </div>
+  );
+}
+
 function App() {
   // Homeowner page route — ?homeowner=JOB_ID
   const hoParam = new URLSearchParams(window.location.search).get("homeowner");
@@ -45695,6 +46447,11 @@ function App() {
   // App Map share page route — ?appmap=1 (no job ID, app-wide feature tree)
   const amParam = new URLSearchParams(window.location.search).get("appmap");
   if(amParam) return <AppMapSharePage/>;
+
+  // GC Portal route — ?gcportal=TOKEN (outside-facing contractor portal;
+  // reads ONLY gc_links/{token} + gc_portal/{portalId}, never jobs/{id}).
+  const gcpParam = new URLSearchParams(window.location.search).get("gcportal");
+  if(gcpParam) return <GCPortalPage token={gcpParam}/>;
 
   // ── Identity ──────────────────────────────────────────────────
   const [identity, setIdentity] = useState(()=>getIdentity());
@@ -49791,6 +50548,7 @@ function App() {
             jobs={jobs}
             identity={identity}
             upcoming={upcoming}
+            onUpdateJob={updateJob}
               onRestoreFromBackup={async()=>{
               try {
                 const b=localStorage.getItem('hejobs_backup');

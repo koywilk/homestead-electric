@@ -7,6 +7,8 @@ const admin      = require("firebase-admin");
 admin.initializeApp();
 
 const db        = admin.firestore();
+const gcPortal  = require("./gcPortal.js"); // GC portal projection wall (08-Specs/GC Portal Link Spec.md)
+const gcNotify  = require("./gcNotify.js"); // GC portal email composition (Piece 5, same spec)
 const messaging = admin.messaging();
 
 // ─── App-caller gate (H8 hardening) ──────────────────────────
@@ -985,6 +987,92 @@ exports.onJobUpdate = functions.firestore
         })().catch(e => functions.logger.warn("[onJobUpdate] version snapshot error (non-fatal)", e.message)));
       }
     } catch (e) { functions.logger.warn("[onJobUpdate] version snapshot setup error (non-fatal)", e.message); }
+
+    // ── GC PORTAL MIRROR (2026-07-16, spec: 08-Specs/GC Portal Link Spec.md) ──
+    // Outside-facing contractor portal reads a WHITELISTED per-job projection
+    // from gc_portal/{portalId}/jobs/{jobId} — never jobs/{id}. This block keeps
+    // that mirror current: on any job change whose projection differs (or whose
+    // gc reassigns), rewrite the one subdoc. Only GCs that HAVE an active
+    // gc_link get mirrored (no link → no publish). Writes go to a separate
+    // collection, so this onUpdate cannot re-trigger itself. Fire-and-forget:
+    // a mirror failure can never affect notifications or the save itself.
+    try {
+      const gcBeforeKey = gcPortal.gcKeyOf(before.gc);
+      const gcAfterKey  = gcPortal.gcKeyOf(after.gc);
+      const gcViewAfter  = gcPortal.projectJobForPortal(jobId, after);
+      const gcViewBefore = gcPortal.projectJobForPortal(jobId, before);
+      const gcChanged = gcBeforeKey !== gcAfterKey ||
+        gcPortal.hashOf(gcViewAfter || {}) !== gcPortal.hashOf(gcViewBefore || {});
+      if (gcChanged) {
+        tasks.push((async () => {
+          // Refresh one job on one portal mirror, honoring GC-level membership
+          // (exclude hides a matched job; archived/deleted drops it).
+          const seen = new Set();
+          const refreshPortal = async (m) => {
+            if (!m || !m.portalId || seen.has(m.portalId)) return;
+            seen.add(m.portalId);
+            const pref = db.collection("gc_portal").doc(m.portalId);
+            if (gcViewAfter && gcPortal.jobBelongsToLink(jobId, after, m)) {
+              await pref.collection("jobs").doc(jobId).set(gcViewAfter);
+            } else {
+              await pref.collection("jobs").doc(jobId).delete().catch(() => {});
+            }
+            await pref.set({ gcKey: m.gcKey, updatedAt: new Date().toISOString() }, { merge: true });
+          };
+          // (a) gcKey-match path — GC-level union membership (not one arbitrary
+          // link) so exclude on any active link reliably hides the job.
+          const [linkBefore, linkAfter] = await Promise.all(
+            [gcPortalGcMembership(gcBeforeKey), gcPortalGcMembership(gcAfterKey)]);
+          const pidBefore = linkBefore && linkBefore.portalId;
+          const pidAfter  = linkAfter && linkAfter.portalId;
+          if (pidBefore && pidBefore !== pidAfter) {
+            // job reassigned to a different GC. Remove it from the old mirror
+            // ONLY if it no longer belongs there — a force-include on the old
+            // GC's link (jobIdsInclude) keeps it entitled, so in that case
+            // refresh it in place instead of dropping it (review finding).
+            if (gcViewAfter && gcPortal.jobBelongsToLink(jobId, after, linkBefore)) {
+              await refreshPortal(linkBefore);   // still a member (force-included) → keep + refresh
+            } else {
+              await db.collection("gc_portal").doc(pidBefore)
+                .collection("jobs").doc(jobId).delete().catch(() => {});
+              await db.collection("gc_portal").doc(pidBefore)
+                .set({ updatedAt: new Date().toISOString() }, { merge: true });
+              seen.add(pidBefore);
+            }
+          }
+          await refreshPortal(linkAfter);
+          // (b) force-include path — any active link that lists this job in
+          // jobIdsInclude, even when the job's gc doesn't match (typo/shared
+          // custody) or is blank. Without this those jobs go stale until a
+          // manual rebuild. array-contains is single-field auto-indexed; we
+          // filter revoked in code to avoid a composite index.
+          const incLinks = await db.collection("gc_links")
+            .where("jobIdsInclude", "array-contains", jobId).get();
+          const incKeys = new Set();
+          incLinks.docs.forEach((d) => { const l = d.data(); if (l.revoked !== true && l.gcKey) incKeys.add(l.gcKey); });
+          for (const k of incKeys) {
+            await refreshPortal(await gcPortalGcMembership(k)); // eslint-disable-line no-await-in-loop
+          }
+        })().catch(e => functions.logger.warn("[gcPortal] mirror error (non-fatal)", e.message)));
+      }
+    } catch (e) { functions.logger.warn("[gcPortal] mirror setup error (non-fatal)", e.message); }
+
+    // ── GC PORTAL INSTANT NOTIFICATIONS (Piece 5) ─────────────────────────────
+    // Diff before/after for the interrupt-worthy triggers (schedule change,
+    // inspection result, milestone, matterport ready, return trip scheduled) and
+    // ENQUEUE emails to the GC's contacts. Enqueue-only so the save never waits
+    // on the mail provider and never depends on email being configured. Keyed on
+    // the job's CURRENT gc — only GCs with an active link get notified.
+    try {
+      const triggers = gcNotify.detectTriggers(before, after);
+      if (triggers.length) {
+        const gcKeyNow = gcPortal.gcKeyOf(after.gc);
+        if (gcKeyNow) {
+          tasks.push(gcEnqueueInstants(gcKeyNow, jobId, triggers)
+            .catch(e => functions.logger.warn("[gcNotify] instant enqueue error (non-fatal)", e.message)));
+        }
+      }
+    } catch (e) { functions.logger.warn("[gcNotify] instant setup error (non-fatal)", e.message); }
 
     // ── AUTO-HEAL a mass answer-wipe (2026-07-13, server-side backstop) ────
     // The v328 client fix stops the answer-deleting retraction, but a device
@@ -5357,4 +5445,537 @@ exports.techLightingWeeklyDigest = functions.pubsub
       functions.logger.error("[techLightingWeeklyDigest] FAILED", e.message);
       return null;
     }
+  });
+
+
+// ─── GC PORTAL: link management + backfill (08-Specs/GC Portal Link Spec.md) ──
+// gc_links is client-write-DENIED in firestore.rules (the token is the secret;
+// an outsider holding one must not be able to alter exposure), so the office
+// app manages links through these callables (admin SDK bypasses rules). All
+// gated by requireAppKey like the other sensitive callables.
+
+// Commit an array of {ref, op:'set'|'delete', data?} in <=450-op chunks so a GC
+// with a large number of jobs can never exceed Firestore's 500-op batch cap.
+async function gcPortalCommitChunked(ops) {
+  for (let i = 0; i < ops.length; i += 450) {
+    const batch = db.batch();
+    ops.slice(i, i + 450).forEach((o) => {
+      if (o.op === "delete") batch.delete(o.ref);
+      else batch.set(o.ref, o.data, o.merge ? { merge: true } : undefined);
+    });
+    await batch.commit();
+  }
+}
+
+// GC-LEVEL membership (Piece 3 review fix — HIGH): all active links for a GC
+// share ONE mirror (portalId), so include/exclude MUST be GC-level, not
+// per-link — otherwise a second link that doesn't repeat an exclude would
+// re-expose a job the first link hid. Compute the UNION of every active link's
+// include/exclude so membership is identical no matter which link triggers a
+// rebuild or the live publisher. Exclude still wins (jobBelongsToLink). Returns
+// null if the GC has no active link (→ no mirror).
+async function gcPortalGcMembership(gcKey) {
+  if (!gcKey) return null;
+  // ALL links for this GC (revoked included) — excludes are sticky (below).
+  const ls = await db.collection("gc_links").where("gcKey", "==", gcKey).get();
+  if (ls.empty) return null;
+  const inc = new Set(), exc = new Set();
+  let portalId = null;
+  ls.docs.forEach((d) => {
+    const l = d.data();
+    // Excludes are a STICKY GC-level privacy decision: honor them even from a
+    // REVOKED link, so revoking one link can never silently un-hide a job that
+    // a sibling link still shows on the shared mirror.
+    (Array.isArray(l.jobIdsExclude) ? l.jobIdsExclude : []).forEach((x) => exc.add(x));
+    if (l.revoked === true) return;
+    // portalId + force-includes come from ACTIVE links only.
+    if (!portalId) portalId = l.portalId;
+    (Array.isArray(l.jobIdsInclude) ? l.jobIdsInclude : []).forEach((x) => inc.add(x));
+  });
+  if (!portalId) return null; // no active link → no mirror (matches teardown)
+  return { gcKey, portalId, jobIdsInclude: [...inc], jobIdsExclude: [...exc] };
+}
+
+// Rebuild a GC's whole mirror: full jobs scan → project members → write
+// subdocs → delete stale ones. Uses GC-LEVEL union membership so the shared
+// mirror is consistent regardless of which link triggered the rebuild.
+async function gcPortalRebuildMirror(link) {
+  // Resolve GC-level membership (union across all active links); fall back to
+  // the passed link if the query somehow returns nothing (e.g. mid-create race).
+  const m = (await gcPortalGcMembership(link.gcKey)) || link;
+  const portalId = m.portalId || link.portalId;
+  const all = await db.collection("jobs").get();
+  const wanted = {};
+  all.docs.forEach((d) => {
+    const job = (d.data() || {}).data;
+    if (!job || !gcPortal.jobBelongsToLink(d.id, job, m)) return;
+    const view = gcPortal.projectJobForPortal(d.id, job);
+    if (view) wanted[d.id] = view;
+  });
+  const pref = db.collection("gc_portal").doc(portalId);
+  const existing = await pref.collection("jobs").get();
+  const ops = [];
+  existing.docs.forEach((d) => { if (!wanted[d.id]) ops.push({ ref: d.ref, op: "delete" }); });
+  Object.keys(wanted).forEach((id) => ops.push({ ref: pref.collection("jobs").doc(id), op: "set", data: wanted[id] }));
+  await gcPortalCommitChunked(ops);
+  await pref.set({ gcKey: m.gcKey || link.gcKey, updatedAt: new Date().toISOString() }, { merge: true });
+  return Object.keys(wanted).length;
+}
+
+// Shared contact normalizer (office create + GC self-service via the portal).
+// emailAddr is where the daily digest / instant alerts go; email/text are the
+// per-contact channel toggles (Piece 5). Validates the address so a typo can't
+// become a bounce loop; keeps only fields we control.
+const GC_EMAIL_RE = /^[^@\s]+@[^@\s]+\.[^@\s]+$/;
+function normalizeGcContacts(arr) {
+  const clip = (s, n) => gcPortal.stripHtml(String(s == null ? "" : s)).slice(0, n);
+  return (Array.isArray(arr) ? arr : []).slice(0, 20).map((c) => {
+    const addr = clip(c && c.emailAddr, 120).trim();
+    return {
+      name: clip(c && c.name, 60),
+      role: clip(c && c.role, 40),
+      emailAddr: GC_EMAIL_RE.test(addr) ? addr : "",
+      phone: clip(c && c.phone, 30),
+      email: !(c && c.email === false),
+      text: !(c && c.text === false),
+    };
+  });
+}
+
+exports.gcPortalCreateLink = functions.https.onCall(async (data) => {
+  requireAppKey(data);
+  const label = String(data.label || "").trim();
+  const gcRaw = String(data.gc || "").trim();
+  const gcKey = gcPortal.gcKeyOf(gcRaw);
+  if (!label || !gcKey) {
+    throw new functions.https.HttpsError("invalid-argument", "label and gc are required");
+  }
+  // one mirror per GC: reuse the portalId of any existing active link
+  const prior = await db.collection("gc_links")
+    .where("gcKey", "==", gcKey).where("revoked", "==", false).limit(1).get();
+  const portalId = prior.empty ? gcPortal.makeToken() : (prior.docs[0].data().portalId || gcPortal.makeToken());
+  const token = gcPortal.makeToken();
+  const slug = gcPortal.makeSlug(label);
+  const cleanIds = (a) => Array.isArray(a) ? a.map(String).filter(Boolean).slice(0, 500) : [];
+  const doc = {
+    token, slug, label, gc: gcRaw, gcKey, portalId,
+    contacts: normalizeGcContacts(data.contacts),
+    accentColor: typeof data.accentColor === "string" && /^#[0-9a-fA-F]{6}$/.test(data.accentColor) ? data.accentColor : "",
+    supersByJob: {},
+    jobIdsInclude: cleanIds(data.jobIdsInclude), jobIdsExclude: cleanIds(data.jobIdsExclude),
+    revoked: false,
+    createdAt: new Date().toISOString(),
+    createdBy: String(data.by || ""),
+  };
+  await db.collection("gc_links").doc(token).set(doc);
+  const jobCount = await gcPortalRebuildMirror(doc);
+  functions.logger.info("[gcPortal] link created", { gcKey, slug, jobCount });
+  return { token, slug, portalId, jobCount };
+});
+
+exports.gcPortalSetRevoked = functions.https.onCall(async (data) => {
+  requireAppKey(data);
+  const token = String(data.token || "");
+  const ref = db.collection("gc_links").doc(token);
+  const snap = await ref.get();
+  if (!snap.exists) throw new functions.https.HttpsError("not-found", "no such link");
+  const { gcKey, portalId } = snap.data();
+  const revoking = data.revoked === true;
+  await ref.update({ revoked: revoking, revokedAt: new Date().toISOString() });
+  if (revoking) {
+    // Revocation MUST cut off mirror access. The mirror is gated only by its
+    // portalId, and a revoked holder's browser already saw that portalId (it
+    // subscribed to gc_portal/{portalId}/jobs). So on ANY revoke we retire the
+    // OLD portalId — either tear the mirror down (last link) or ROTATE it to a
+    // fresh id the ex-holder never saw (siblings remain). Never leave the old
+    // mirror readable. (Review finding: teardown-only-on-last-revoke leaked.)
+    const remaining = await db.collection("gc_links")
+      .where("gcKey", "==", gcKey).where("revoked", "==", false).get();
+    const dropOldMirror = async () => {
+      if (!portalId) return;
+      const jobs = await db.collection("gc_portal").doc(portalId).collection("jobs").get();
+      await gcPortalCommitChunked(jobs.docs.map((d) => ({ ref: d.ref, op: "delete" })));
+      await db.collection("gc_portal").doc(portalId).delete().catch(() => {});
+    };
+    if (remaining.empty) {
+      await dropOldMirror();
+      functions.logger.info("[gcPortal] last link revoked — mirror deleted", { gcKey });
+    } else if (portalId) {
+      // Rotate: mint a new portalId, move every remaining active link onto it,
+      // rebuild the mirror there, then delete the old (now-orphaned) mirror the
+      // revoked holder could still read.
+      const newPortalId = gcPortal.makeToken();
+      const batch = db.batch();
+      remaining.docs.forEach((d) => batch.update(d.ref, { portalId: newPortalId }));
+      await batch.commit();
+      await gcPortalRebuildMirror({ gcKey, portalId: newPortalId });
+      await dropOldMirror();
+      functions.logger.info("[gcPortal] link revoked — mirror rotated", { gcKey, links: remaining.size });
+    }
+  } else {
+    // Un-revoke → reconcile onto the GC's CURRENT canonical mirror before
+    // rebuilding. If another active link already exists for this GC, adopt its
+    // portalId so we don't strand a divergent second mirror. Otherwise mint a
+    // FRESH portalId — NEVER reuse this link's stored portalId (review finding:
+    // after a prior rotation it points at a RETIRED mirror a revoked holder may
+    // have memorized; resurrecting it would re-grant them access).
+    let targetPortalId = gcPortal.makeToken();
+    // Any other active link works — createLink keeps them on one shared
+    // portalId; no orderBy (would force a composite index on two equalities).
+    const active = await db.collection("gc_links")
+      .where("gcKey", "==", gcKey).where("revoked", "==", false).limit(2).get();
+    const other = active.docs.find((d) => d.id !== token);
+    if (other && other.data().portalId) {
+      targetPortalId = other.data().portalId;
+    }
+    await ref.update({ portalId: targetPortalId });
+    await gcPortalRebuildMirror({ ...snap.data(), portalId: targetPortalId, revoked: false });
+  }
+  return { ok: true };
+});
+
+// Clean the mirror when a job is HARD-deleted (onJobUpdate never fires on
+// delete, so without this the subdoc would orphan). Resolves the job's GC →
+// active link → portalId and drops the subdoc. Fire-and-forget.
+exports.gcPortalOnJobDelete = functions.firestore
+  .document("jobs/{jobId}")
+  .onDelete(async (snap, ctx) => {
+    try {
+      const job = (snap.data() || {}).data;
+      const gcKey = gcPortal.gcKeyOf(job && job.gc);
+      if (!gcKey) return null;
+      const ls = await db.collection("gc_links")
+        .where("gcKey", "==", gcKey).where("revoked", "==", false).limit(1).get();
+      if (ls.empty) return null;
+      const pid = ls.docs[0].data().portalId;
+      if (pid) {
+        await db.collection("gc_portal").doc(pid).collection("jobs").doc(ctx.params.jobId).delete().catch(() => {});
+      }
+    } catch (e) {
+      functions.logger.warn("[gcPortal] job-delete cleanup error (non-fatal)", e.message);
+    }
+    return null;
+  });
+
+// Update office-managed link fields (contacts, accent, label). Explicit field
+// allowlist — never a blind merge of caller data onto the link doc.
+exports.gcPortalUpdateLink = functions.https.onCall(async (data) => {
+  requireAppKey(data);
+  const token = String(data.token || "");
+  const ref = db.collection("gc_links").doc(token);
+  const snap = await ref.get();
+  if (!snap.exists) throw new functions.https.HttpsError("not-found", "no such link");
+  const patch = {};
+  if (Array.isArray(data.contacts)) patch.contacts = data.contacts.slice(0, 20);
+  if (typeof data.accentColor === "string" && (data.accentColor === "" || /^#[0-9a-fA-F]{6}$/.test(data.accentColor))) patch.accentColor = data.accentColor;
+  if (typeof data.label === "string" && data.label.trim()) patch.label = data.label.trim();
+  if (data.supersByJob && typeof data.supersByJob === "object" && !Array.isArray(data.supersByJob)) patch.supersByJob = data.supersByJob;
+  const cleanIds = (a) => a.map(String).filter(Boolean).slice(0, 500);
+  let membershipChanged = false;
+  if (Array.isArray(data.jobIdsInclude)) { patch.jobIdsInclude = cleanIds(data.jobIdsInclude); membershipChanged = true; }
+  if (Array.isArray(data.jobIdsExclude)) { patch.jobIdsExclude = cleanIds(data.jobIdsExclude); membershipChanged = true; }
+  if (!Object.keys(patch).length) return { ok: true, noop: true };
+  patch.updatedAt = new Date().toISOString();
+  await ref.update(patch);
+  // membership change (include/exclude) → rebuild so the mirror reflects it now
+  if (membershipChanged && snap.data().revoked !== true) {
+    await gcPortalRebuildMirror({ ...snap.data(), ...patch });
+  }
+  return { ok: true };
+});
+
+exports.gcPortalBackfill = functions.https.onCall(async (data) => {
+  requireAppKey(data);
+  const token = String(data.token || "");
+  const snap = await db.collection("gc_links").doc(token).get();
+  if (!snap.exists) throw new functions.https.HttpsError("not-found", "no such link");
+  const jobCount = await gcPortalRebuildMirror(snap.data());
+  return { ok: true, jobCount };
+});
+
+// ─── GC PORTAL: two-way funnel (Piece 4) ────────────────────────────────────
+// The GC portal calls gcPortalSubmit with their link TOKEN (the capability —
+// NOT requireAppKey; the token is the auth). All GC-side writes route through
+// here so no client ever writes gc_links, gc_portal, or gc_requests directly
+// (rules deny all three). LINK self-service (assign super / contacts) applies
+// immediately to the link doc; JOB-scoped actions (date/thread/punch/answer/
+// file) file a gc_requests doc for the office to review — NEVER jobs/{id}.
+exports.gcPortalSubmit = functions.https.onCall(async (data) => {
+  const token = String(data.token || "");
+  const linkSnap = await db.collection("gc_links").doc(token).get();
+  if (!linkSnap.exists) throw new functions.https.HttpsError("permission-denied", "invalid link");
+  const link = linkSnap.data();
+  if (link.revoked === true) throw new functions.https.HttpsError("permission-denied", "link revoked");
+  const type = String(data.type || "");
+  const jobId = String(data.jobId || "");
+  const clip = (s, n) => gcPortal.stripHtml(String(s == null ? "" : s)).slice(0, n || 2000);
+
+  // LINK self-service — applied immediately (the GC owns their own team roster).
+  if (type === "assign") {
+    const supers = Array.isArray(data.supers) ? data.supers.map((s) => clip(s, 60)).filter(Boolean).slice(0, 6) : [];
+    // jobId becomes a Firestore FIELD PATH key (supersByJob.<jobId>), so verify
+    // it's a real job on THIS portal before writing — prevents arbitrary/oversized
+    // keys bloating the link doc (review finding). Doc ids are short numeric strings.
+    if (!jobId || jobId.length > 64) throw new functions.https.HttpsError("invalid-argument", "bad jobId");
+    const onPortal = await db.collection("gc_portal").doc(link.portalId).collection("jobs").doc(jobId).get();
+    if (!onPortal.exists) throw new functions.https.HttpsError("permission-denied", "job not on this portal");
+    await linkSnap.ref.update({ ["supersByJob." + jobId]: supers, updatedAt: new Date().toISOString() });
+    return { ok: true, applied: "assign" };
+  }
+  if (type === "contact") {
+    await linkSnap.ref.update({ contacts: normalizeGcContacts(data.contacts), updatedAt: new Date().toISOString() });
+    return { ok: true, applied: "contact" };
+  }
+
+  // JOB-scoped → gc_requests office queue. Verify the job is actually on THIS
+  // portal (can't file requests against jobs they can't see).
+  const ALLOWED = ["date", "thread", "punch", "answer", "file", "rsvp"];
+  if (ALLOWED.indexOf(type) === -1) throw new functions.https.HttpsError("invalid-argument", "bad type");
+  const mirrorJob = await db.collection("gc_portal").doc(link.portalId).collection("jobs").doc(jobId).get();
+  if (!mirrorJob.exists) throw new functions.https.HttpsError("permission-denied", "job not on this portal");
+  const fileUrl = (typeof data.fileUrl === "string" && /^https:\/\//.test(data.fileUrl)) ? data.fileUrl.slice(0, 500) : "";
+  const req = {
+    token, portalId: link.portalId, gcKey: link.gcKey, gcLabel: clip(link.label, 80),
+    type, jobId, jobName: clip((mirrorJob.data() || {}).name, 80),
+    by: clip(data.by, 60),
+    text: clip(data.text, 4000),
+    date: clip(data.date, 40),
+    dateKind: clip(data.dateKind, 20),   // suggest | needs-by | confirm
+    itemId: clip(data.itemId, 60),        // question id / rt id / thread anchor
+    fileName: clip(data.fileName, 200),
+    fileUrl,
+    status: "new",
+    createdAt: new Date().toISOString(),
+  };
+  const ref = await db.collection("gc_requests").add(req);
+  functions.logger.info("[gcPortal] request filed", { type, jobId, gcKey: link.gcKey });
+  // Alert the office so a contractor request never sits unseen (push — Koy has
+  // the app; the review inbox lives in Settings). Fire-and-forget, non-fatal.
+  try {
+    const verb = { date: "suggested a date", thread: "sent a message", punch: "added an item",
+      answer: "answered a question", file: "shared a file", rsvp: "replied" }[type] || "sent a request";
+    await sendToNameIfWanted("Koy", "gc_request", {
+      title: "📥 " + (req.gcLabel || "Contractor") + " — portal request",
+      body: verb + " on " + (req.jobName || "a job") + (req.by ? " (" + req.by + ")" : ""),
+    });
+  } catch (e) { functions.logger.warn("[gcPortal] office alert failed (non-fatal)", e.message); }
+  return { ok: true, requestId: ref.id, filed: type };
+});
+
+// Office: list open GC requests (admin SDK — client list denied).
+exports.gcPortalListRequests = functions.https.onCall(async (data) => {
+  requireAppKey(data);
+  const includeHandled = data.includeHandled === true;
+  let q = db.collection("gc_requests").orderBy("createdAt", "desc").limit(300);
+  const snap = await q.get();
+  const reqs = snap.docs.map((d) => ({ id: d.id, ...d.data() }))
+    .filter((r) => includeHandled || r.status === "new");
+  return { requests: reqs };
+});
+
+// Office: mark a request handled/dismissed (the actual apply-to-job happens
+// client-side via the crew app's transactional merge, tagged fromGC).
+exports.gcPortalHandleRequest = functions.https.onCall(async (data) => {
+  requireAppKey(data);
+  const id = String(data.id || "");
+  const status = ["applied", "dismissed", "new"].indexOf(String(data.status)) !== -1 ? data.status : "applied";
+  const ref = db.collection("gc_requests").doc(id);
+  if (!(await ref.get()).exists) throw new functions.https.HttpsError("not-found", "no such request");
+  await ref.update({ status, handledBy: String(data.by || ""), handledAt: new Date().toISOString() });
+  return { ok: true };
+});
+
+// Office link list. gc_links client-list is DENIED (token secrecy), so the
+// office reads via this admin-SDK callable. Returns tokens — that's fine, the
+// office app is trusted (requireAppKey); the secrecy invariant is about OUTSIDE
+// clients, not Homestead's own management UI.
+exports.gcPortalListLinks = functions.https.onCall(async (data) => {
+  requireAppKey(data);
+  const snap = await db.collection("gc_links").orderBy("createdAt", "desc").limit(300).get();
+  return { links: snap.docs.map((d) => {
+    const l = d.data();
+    return {
+      token: l.token, slug: l.slug, label: l.label, gc: l.gc, gcKey: l.gcKey, portalId: l.portalId,
+      accentColor: l.accentColor || "", contacts: Array.isArray(l.contacts) ? l.contacts : [],
+      supersByJob: (l.supersByJob && typeof l.supersByJob === "object") ? l.supersByJob : {},
+      revoked: !!l.revoked, createdAt: l.createdAt || "", createdBy: l.createdBy || "",
+    };
+  }) };
+});
+
+// ─── GC PORTAL NOTIFICATION ENGINE (Piece 5, email v1) ───────────────────────
+// Contractor-facing email: the 8 PM daily digest + INSTANT trigger alerts.
+// DESIGN NOTES:
+//  • Email send is fetch-based (SendGrid HTTP API) — no new npm dependency,
+//    mirrors the existing Anthropic fetch integration.
+//  • The provider key lives in a FUNCTION-ONLY Firestore doc gc_config/mail
+//    (rules deny all client access), NOT runWith({secrets}) — so binding never
+//    blocks the core onJobUpdate deploy, and the whole portal ships BEFORE email
+//    is configured. sendGcMail FAILS SAFE (logs + returns false) when unset.
+//  • The hot path (onJobUpdate) only ENQUEUES to gc_notify_queue; scheduled
+//    drains do the actual sending, so a job save never waits on SendGrid and
+//    never depends on email being configured.
+//  • Texts are v1.5 (Twilio + A2P 10DLC lead time). v1 = email only; the 3
+//    text-eligible triggers are already tagged in gcNotify.TEXT_ALLOWED.
+let _gcMailCfg = null, _gcMailCfgAt = 0;
+async function gcLoadMailConfig() {
+  if (_gcMailCfg && (Date.now() - _gcMailCfgAt) < 300000) return _gcMailCfg;
+  let cfg = {};
+  try { const d = await db.collection("gc_config").doc("mail").get(); cfg = d.exists ? (d.data() || {}) : {}; } catch (e) {}
+  _gcMailCfg = {
+    key: cfg.key || "",
+    from: cfg.from || "updates@homesteadelectric.net",
+    origin: String(cfg.origin || "https://app.homesteadelectric.net").replace(/\/+$/, ""),
+  };
+  _gcMailCfgAt = Date.now();
+  return _gcMailCfg;
+}
+function gcPortalUrl(origin, token) {
+  return (origin || "https://app.homesteadelectric.net") + "/?gcportal=" + encodeURIComponent(token || "");
+}
+async function sendGcMail({ to, subject, html }) {
+  const cfg = await gcLoadMailConfig();
+  if (!cfg.key) { functions.logger.info("[gcMail] gc_config/mail not set — email skipped", { to }); return false; }
+  if (!to || !GC_EMAIL_RE.test(String(to))) return false;
+  try {
+    const resp = await fetch("https://api.sendgrid.com/v3/mail/send", {
+      method: "POST",
+      headers: { Authorization: "Bearer " + cfg.key, "content-type": "application/json" },
+      body: JSON.stringify({
+        personalizations: [{ to: [{ email: String(to) }] }],
+        from: { email: cfg.from, name: "Homestead Electric" },
+        subject: String(subject || "Homestead Electric").slice(0, 200),
+        content: [{ type: "text/html", value: String(html || "") }],
+      }),
+    });
+    if (!resp.ok) { functions.logger.warn("[gcMail] send failed", { status: resp.status }); return false; }
+    return true;
+  } catch (e) { functions.logger.warn("[gcMail] send error", e.message); return false; }
+}
+function gcLocalHour() {
+  try { return (parseInt(new Date().toLocaleString("en-US", { timeZone: TZ, hour: "numeric", hour12: false }), 10) || 0) % 24; }
+  catch (e) { return 12; }
+}
+// Quiet hours 9 PM–7 AM: instants queued now get a sendAt of ~next 7 AM local.
+function gcQuietSendAtIso() {
+  const hour = gcLocalHour();
+  let until = 0;
+  if (hour >= 21) until = (24 - hour) + 7; else if (hour < 7) until = 7 - hour;
+  return new Date(Date.now() + until * 3600000).toISOString();
+}
+
+// Per-recipient digest scoping across a portal's active links: map email → the
+// job-id set they should see (null = all jobs). Assigned supers see only their
+// jobs; unassigned/office contacts see everything.
+function gcDigestRecipients(linksForPortal) {
+  const map = new Map();
+  (linksForPortal || []).forEach((l) => {
+    const contacts = Array.isArray(l.contacts) ? l.contacts : [];
+    const sbj = (l.supersByJob && typeof l.supersByJob === "object") ? l.supersByJob : {};
+    const assigned = {}; // name(lower) → Set(jobIds) assigned on this link
+    Object.keys(sbj).forEach((jid) => (Array.isArray(sbj[jid]) ? sbj[jid] : []).forEach((s) => {
+      const k = String(s || "").trim().toLowerCase(); if (k) (assigned[k] = assigned[k] || new Set()).add(jid);
+    }));
+    contacts.forEach((c) => {
+      if (!c || c.email === false) return;
+      const addr = String(c.emailAddr || "").trim().toLowerCase();
+      if (!GC_EMAIL_RE.test(addr)) return;
+      const nm = String(c.name || "").trim().toLowerCase();
+      const theirJobs = nm && assigned[nm] ? assigned[nm] : null; // null = all
+      const prev = map.get(addr);
+      if (!prev) map.set(addr, { jobIds: theirJobs ? new Set(theirJobs) : null });
+      else if (prev.jobIds === null || theirJobs === null) prev.jobIds = null;
+      else theirJobs.forEach((j) => prev.jobIds.add(j));
+    });
+  });
+  return map;
+}
+
+// Enqueue INSTANT trigger emails for a GC (deduped by recipient across links,
+// per-job routing). Enqueued (not sent) so the hot path never calls SendGrid.
+async function gcEnqueueInstants(gcKey, jobId, triggers) {
+  if (!triggers || !triggers.length || !gcKey) return;
+  const ls = await db.collection("gc_links").where("gcKey", "==", gcKey).where("revoked", "==", false).get();
+  if (ls.empty) return;
+  const recipMap = new Map(); // email → representative link (branding)
+  ls.docs.forEach((d) => {
+    const link = d.data();
+    gcNotify.emailRecipients(link, jobId).forEach((c) => {
+      const addr = String(c.emailAddr || "").trim();
+      if (GC_EMAIL_RE.test(addr) && !recipMap.has(addr)) recipMap.set(addr, link);
+    });
+  });
+  if (!recipMap.size) return;
+  const cfg = await gcLoadMailConfig();
+  const sendAt = gcNotify.inQuietHours(gcLocalHour()) ? gcQuietSendAtIso() : new Date().toISOString();
+  const ops = [];
+  triggers.forEach((trig) => {
+    const { subject, sectionsHtml } = gcNotify.instantContent(trig.type, trig.payload);
+    recipMap.forEach((link, addr) => {
+      const html = gcNotify.renderGcEmail({ gcLabel: link.label, accent: link.accentColor, title: subject, sectionsHtml, portalUrl: gcPortalUrl(cfg.origin, link.token) });
+      ops.push(db.collection("gc_notify_queue").add({ to: addr, subject, html, sendAt, tries: 0, createdAt: new Date().toISOString() }));
+    });
+  });
+  await Promise.all(ops);
+}
+
+// 8 PM daily digest — ONE per contractor, per-recipient job scoping, only if the
+// mirror changed since the last digest (no-content / nothing-changed → no email).
+exports.gcPortalDailyDigest = functions.pubsub
+  .schedule("0 20 * * *").timeZone(TZ).onRun(async () => {
+    const cfg = await gcLoadMailConfig();
+    const links = await db.collection("gc_links").where("revoked", "==", false).get();
+    const byPortal = {};
+    links.docs.forEach((d) => { const l = d.data(); if (l.portalId) (byPortal[l.portalId] = byPortal[l.portalId] || []).push(l); });
+    let sent = 0, portals = 0;
+    for (const portalId of Object.keys(byPortal)) {
+      const group = byPortal[portalId];
+      const rep = group[0];
+      const pdoc = await db.collection("gc_portal").doc(portalId).get();
+      const meta = pdoc.data() || {};
+      // change-gate: skip if nothing on this portal changed since the last digest
+      if (meta.updatedAt && meta.lastDigestAt && meta.updatedAt <= meta.lastDigestAt) continue;
+      const jobsSnap = await db.collection("gc_portal").doc(portalId).collection("jobs").get();
+      const allJobs = jobsSnap.docs.map((d) => d.data()).filter(Boolean);
+      if (!allJobs.length) continue;
+      let any = false;
+      for (const [addr, r] of gcDigestRecipients(group)) {
+        const jobs = r.jobIds === null ? allJobs : allJobs.filter((j) => r.jobIds.has(j.id));
+        const dg = gcNotify.digestSections(jobs);
+        if (!dg.hasContent) continue;
+        const html = gcNotify.renderGcEmail({ gcLabel: rep.label, accent: rep.accentColor, title: "Tonight’s update", intro: dg.summary, sectionsHtml: dg.sectionsHtml, portalUrl: gcPortalUrl(cfg.origin, rep.token) });
+        if (await sendGcMail({ to: addr, subject: (rep.label ? rep.label + " — " : "") + "your jobs tonight", html })) { sent++; any = true; }
+      }
+      if (any) { await db.collection("gc_portal").doc(portalId).set({ lastDigestAt: new Date().toISOString() }, { merge: true }); portals++; }
+    }
+    functions.logger.info("[gcPortalDailyDigest] ran", { portals, sent });
+    return null;
+  });
+
+// Drain the instant queue every 5 min (sends due items; quiet-hours items wait
+// for their ~7 AM sendAt). Drops an item after 5 failed tries so an unconfigured
+// provider can't build an infinite backlog.
+exports.gcPortalDrainQueue = functions.pubsub
+  .schedule("every 5 minutes").timeZone(TZ).onRun(async () => {
+    const nowIso = new Date().toISOString();
+    const due = await db.collection("gc_notify_queue").where("sendAt", "<=", nowIso).limit(100).get();
+    let sent = 0;
+    for (const d of due.docs) {
+      const q = d.data();
+      // Idempotency (review finding): if a prior drain sent this but its delete
+      // failed, the doc is marked sent — retry ONLY the delete, never the send.
+      if (q.sent) { await d.ref.delete().catch(() => {}); continue; }
+      const ok = await sendGcMail({ to: q.to, subject: q.subject, html: q.html });
+      if (ok) {
+        sent++;
+        try { await d.ref.delete(); }
+        catch (e) { await d.ref.update({ sent: true }).catch(() => {}); }
+      } else {
+        const tries = (q.tries || 0) + 1;
+        if (tries >= 5) await d.ref.delete().catch(() => {});
+        else await d.ref.update({ tries }).catch(() => {});
+      }
+    }
+    if (due.docs.length) functions.logger.info("[gcPortalDrainQueue] ran", { due: due.docs.length, sent });
+    return null;
   });

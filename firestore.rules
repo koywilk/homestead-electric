@@ -159,6 +159,57 @@ service cloud.firestore {
       allow delete: if true;
     }
 
+    // ── GC PORTAL (outside-facing; 08-Specs/GC Portal Link Spec.md) ──────────
+    // gc_links/{token}: the token IS the secret → direct get only, NEVER list
+    // (list would enumerate every contractor's token). Client writes DENIED —
+    // an outsider holding a token must not be able to alter exposure (gcKey,
+    // revoked, contacts). The office manages links via the gcPortal* callables
+    // (admin SDK bypasses rules).
+    match /gc_links/{token} {
+      allow get: if true;
+      allow list: if false;
+      allow write: if false;
+    }
+
+    // gc_portal/{portalId}: the WHITELISTED per-job mirror the portal page
+    // reads. portalId is unguessable (capability, like the token). Written
+    // ONLY by Cloud Functions; jobs/{id} rules are untouched by this feature.
+    match /gc_portal/{portalId} {
+      allow get: if true;
+      allow list: if false;
+      allow write: if false;
+      match /jobs/{jobId} {
+        allow get, list: if true;
+        allow write: if false;
+      }
+    }
+
+    // gc_requests/{reqId}: the GC-side funnel (dates, threads, punch, answers).
+    // FULLY function-managed (Piece 4): every write goes through the
+    // gcPortalSubmit callable, which validates the link token server-side and
+    // writes via the admin SDK. So NO client access at all — create/read/update/
+    // delete all denied. This is the strongest posture: the stored token can't
+    // be enumerated (no read), the queue can't be spammed/tampered/wiped (no
+    // client write), and the office reads via gcPortalListRequests (admin SDK).
+    match /gc_requests/{reqId} {
+      allow read, write: if false;
+    }
+
+    // gc_config/{docId}: server-only config for the notification engine — most
+    // importantly gc_config/mail holds the email PROVIDER KEY. NEVER client-
+    // readable (a leaked key = spam/abuse) or writable. Only Cloud Functions
+    // (admin SDK) touch it; Koy sets it via the console or an admin callable.
+    match /gc_config/{docId} {
+      allow read, write: if false;
+    }
+
+    // gc_notify_queue/{id}: the outbound email queue (quiet-hours instants wait
+    // here for their morning sendAt). Written and drained ONLY by Cloud Functions;
+    // the HTML bodies could contain contractor data, so no client access at all.
+    match /gc_notify_queue/{id} {
+      allow read, write: if false;
+    }
+
     // ── EVERYTHING ELSE ───────────────────────────────────────────────────────
     // Deny all access to any other collection by default.
     match /{document=**} {
