@@ -4,7 +4,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-07-16 · App SW version: v340
+**Last manifest update:** 2026-07-17 · App SW version: v341
 
 ---
 
@@ -54,6 +54,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 The biggest screen. Tabs inside Job Detail change based on job type (regular / quick / temp ped).
 
 - **Job Info** · `shipped` · basics: name, address, customer, foreman, lead, Simpro #
+  - GC Contact field · `shipped 2026-07-17` · `SW v341` · a `gcContact` field next to GC Phone (desktop + mobile Job Info) so the crew knows who they're calling — suggestion by Josh Cloward
   - Status pills with date windows
   - Finish stage cleanup + scheduled window (May 11–22) · `shipped 2026-05-17` · `SW v173`
   - InProgressModePill (rough/finish status with date picker)

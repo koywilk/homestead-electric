@@ -22796,7 +22796,7 @@ function TempPedDetail({ job: rawJob, onUpdate, onClose, foremenList }) {
             <div style={{fontSize:10,fontWeight:800,color:C.dim,letterSpacing:"0.12em",marginBottom:12}}>JOB INFO</div>
 
             <div style={{display:"grid",gridTemplateColumns:"1fr 1fr",gap:10}}>
-              {[["name","Job Name"],["address","Address"],["gc","General Contractor"],["phone","GC Phone"],["simproNo","Simpro Job #"],["lead","Lead"]].map(([k,l])=>(
+              {[["name","Job Name"],["address","Address"],["gc","General Contractor"],["gcContact","GC Contact"],["phone","GC Phone"],["simproNo","Simpro Job #"],["lead","Lead"]].map(([k,l])=>(
                 <div key={k}>
                   <div style={{fontSize:10,color:C.dim,marginBottom:3,display:"flex",alignItems:"center",justifyContent:"space-between",gap:6}}>
                     <span>{l}</span>
@@ -26484,7 +26484,7 @@ function JobDetail({job: rawJob, onUpdate, onClose, foremenList, leadsList, canC
 
                 {[["name","Job Name"],["address","Address"],["gc","General Contractor"],
 
-                  ["phone","GC Phone"],["simproNo","Simpro Job #"]].map(([k,l])=>(
+                  ["gcContact","GC Contact"],["phone","GC Phone"],["simproNo","Simpro Job #"]].map(([k,l])=>(
 
                   <div key={k}>
 
