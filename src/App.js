@@ -39574,7 +39574,13 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
     .catch(e => { setErr(e.message||"Failed to load requests"); setReqs([]); });
   useEffect(() => { refresh(); }, [showDone]);
 
-  const handle = (id, status) => httpsCallable(functions,"gcPortalHandleRequest")({ id, status, by: identity?.name || "" });
+  const handle = (req, status) => httpsCallable(functions,"gcPortalHandleRequest")({
+    id: req.id,
+    status,
+    by: identity?.name || "",
+    expectedCreatedAt: req.createdAt || "",
+    expectedRevisionCount: Number(req.revisionCount) || 0,
+  });
 
   // Apply the request's content to the real job (answer/punch), then mark it
   // applied. Returns silently if the job is gone (still marks handled).
@@ -39628,15 +39634,15 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
           : "Nothing to apply here. Dismiss, or handle it manually in the job.");
         setBusy(""); return;
       }
-      await handle(req.id, "applied");
+      await handle(req, "applied");
       await refresh();
-    } catch (e) { setErr(e.message || "Apply failed"); }
+    } catch (e) { await refresh(); setErr(e.message || "Apply failed"); }
     setBusy("");
   };
   const dismiss = async (req) => {
     setBusy(req.id); setErr("");
-    try { await handle(req.id, "dismissed"); await refresh(); }
-    catch (e) { setErr(e.message || "Dismiss failed"); }
+    try { await handle(req, "dismissed"); await refresh(); }
+    catch (e) { await refresh(); setErr(e.message || "Dismiss failed"); }
     setBusy("");
   };
 
@@ -39677,7 +39683,7 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
             {r.status!=="new" ? <span style={{fontSize:10.5,fontWeight:700,color:"#5E6670",background:"#F0F1F4",borderRadius:99,padding:"1px 8px"}}>{String(r.status).toUpperCase()}</span> : null}
             <span style={{marginLeft:"auto",fontSize:11,color:"#8A93A3"}}>{r.by?r.by+" · ":""}{_gcAgo(r.createdAt)}</span>
           </div>
-          {r.date ? <div style={{fontSize:13,color:"#1B1F24",marginBottom:4}}><b>Date:</b> {r.date}{r.dateKind?" ("+r.dateKind+")":""}</div> : null}
+          {r.date ? <div style={{fontSize:13,color:"#1B1F24",marginBottom:4}}><b>Date{r.revisionCount?" (updated)":""}:</b> {r.date}{r.dateKind?" ("+r.dateKind+")":""}</div> : null}
           {r.text ? <div style={{fontSize:12.5,color:"#3A414C",background:"#F7F8FA",border:"1px solid #ECEEF1",borderRadius:8,padding:"7px 10px",marginBottom:6,whiteSpace:"pre-wrap"}}>{r.text}</div> : null}
           {r.fileUrl ? <div style={{marginBottom:6}}><a href={r.fileUrl} target="_blank" rel="noopener noreferrer" style={{color:"#2E477D",fontWeight:700,fontSize:12.5}}>{r.fileName||"View file"} ↗</a></div> : null}
           {r.status==="new" ? (
@@ -42893,7 +42899,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-17 · App SW version: v343
+**Last manifest update:** 2026-07-17 · App SW version: v345
 
 ---
 
@@ -43065,6 +43071,8 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Job Note share** · 'shipped' · 'JobNoteSharePage'
 - **GC Portal (contractor mission control)** · 'shipped 2026-07-16' · 'SW v340' · 'GCPortalPage' · '?gcportal=<token>' · one live link per contractor showing ALL their jobs — rough/finish status + dates, per-recipient question tracking, return trips, Homestead's own QC-walk receipts, Matterport 3D links, CO counts — co-branded (per-link 'accentColor'), "built in-house" provenance. **Kweller-safe by construction:** the page reads ONLY 'gc_links/{token}' + 'gc_portal/{portalId}/jobs/*' (a server-published, explicit-allowlist projection — 'functions/gcPortal.js'), never 'jobs/{id}'; questions gated to *effectively shared* only. **Two-way:** GC can answer questions, suggest/confirm dates, add items, message the crew, and assign/change their own supers per job ('GCSuperAssign' → 'assign', applied live to the link; drives the super filter + per-super email routing) ('GCSendBox' → token-authed 'gcPortalSubmit' callable → 'gc_requests', office reviews before anything touches a job). Membership = GC-level union across the contractor's links (exclude wins, sticky across revokes); revoke ROTATES the shared 'portalId' so a revoked holder keeps nothing. 5 adversarial review passes; unit suites 'scripts/gcportal-test.js' + 'scripts/gcnotify-test.js'.
   - Co-brand header lockup per spec · 'shipped 2026-07-17' · 'SW v342' · header now renders the Homestead longhorn white-on-transparent × the GC's own logo image (Robison script creme, from the approved mockup assets, now in 'public/') instead of the app icon in a white box × a text label; 'link.logoUrl' wins, built-in 'GC_LOGOS' map is the fallback, text label only when no logo exists. Applies to every link ever created: the office link manager gains a "Their logo" URL field, and 'gcPortalCreateLink' / 'gcPortalUpdateLink' / 'gcPortalListLinks' carry a validated 'logoUrl' ('gcPortal.cleanLogoUrl' — https-only or bundled '/' path, blocks http/javascript/data/protocol-relative, unit-tested)
+  - v343 audit round (Cursor draft → Claude-approved) · 'shipped 2026-07-17' · 'SW v344' · office inbox labels date anchors (Finish start / Matterport / Return trip / Question); Matterport CTA gated by shared '_gcMpNeedsDate' (card tags + modal can't drift; terminal 'complete' excluded), counts toward Need-your-input, confirm-vs-suggest 'dateKind' when scheduled; status pills map straight from the official ROUGH/FINISH status set (waiting_date/date_confirmed/scheduled/inprogress/waiting/complete — never 'projectedStart' alone); mirror projects 'matterportStatusDate' (+2 tests); 'gcPortalSubmit' requires a date, validates the anchor against the live mirror, and dedupes open same-anchor requests ('deduped:true'); broken-logo Set resets on link/logoUrl change. Needs 'firebase deploy --only functions:gcPortalSubmit'
+  - v344 audit follow-up · 'shipped 2026-07-17' · 'SW v345' · corrected date resubmissions now revise the existing open inbox request, retain bounded revision history, and re-alert instead of returning false success with stale text; a transaction + stable server-only pointer prevents concurrent same-anchor duplicates while preserving handled-request history; the office handler rejects stale-screen actions if a date changed after review; date anchors are required and canonical live-job validation rejects removed jobs, quick-job finish starts, signed-off return trips, invalid date kinds, and stale workflow states; legacy finish 'ready' normalizes to 'waiting_date'; same-URL logos retry on reconnect/refocus; date-only Matterport values no longer shift one day in Mountain Time. Needs 'firebase deploy --only functions:gcPortalSubmit,functions:gcPortalHandleRequest'
   - Mockup-fidelity pass + audit fixes · 'shipped 2026-07-17' · 'SW v343' · cards/modal now match the approved mockup: '#simproNo' job numbers, absolute short dates ("updated 7/15", never "115d ago"), action tags carry dates ("Return trip: needs scheduling (by 7/24)", "Confirm finish date — proj Sep 1"), status pill rows ('_gcStatusPills') on cards + modal, modal-top ROUGH/FINISH bars, hot summary tiles tinted, "Return trips — need scheduling" label. NEW modal "Needs & scheduling" section: finish-start plan/confirm + Matterport date-suggest, both filing 'type:"date"' gc_requests ('itemId:"finish_start"' / '"matterport"') so the card's action tags finally land on real actions. Cursor-audit fixes: 'GC_LOGOS' keyed by 'gcKey' (canonical) with label alias, broken logo URL falls down the chain custom → bundled → text ('gcLogoBroken' Set, live-recovering), logo 'maxWidth' cap for phones
 - **GC notification engine (email v1)** · 'shipped 2026-07-16' · 'SW v340' · 'functions/gcNotify.js' · per the cadence policy (vault spec): ONE 8 PM daily digest per contractor (per-recipient super routing, only if their mirror changed — no-content night = no email) + INSTANT emails for schedule changes, inspection results, milestones (incl. "your house is hot"), Matterport-ready, return-trip scheduled. Instants ENQUEUE to 'gc_notify_queue' (5-min drain, idempotent, 5-try cap, quiet hours 9 PM–7 AM defer to morning); emails are composed from the portal projection + a closed set of safe scalars, esc()'d, portal link top + bottom. Provider key lives in function-only 'gc_config/mail' — deploys with email OFF, fails safe until configured (SendGrid HTTP via fetch, no new dependency). Texts (Twilio, 3 interrupt triggers only) = v1.5.
 - **All public pages**: error toasts render (HEToastHost mounted), failures speak instead of silently dropping input · 'SW v315'
@@ -46021,11 +46029,20 @@ function GCPortalPage({ token }) {
   const [superFilter, setSuperFilter] = useState(null);
   const [gcLogoBroken, setGcLogoBroken] = useState(() => new Set()); // URLs that failed → try the next candidate (custom URL → bundled asset → text); recovers live if the office fixes logoUrl
 
-  // Reset the broken-logo Set when the link/token or logoUrl changes so a
-  // repaired same-URL or new custom URL isn't stuck skipped for the session
-  // (v343 audit Low / sibling logo finding).
+  // Reset when the identity/URL changes, when the network returns, or when the
+  // tab becomes visible again. The latter two let a repaired same-URL asset
+  // recover without forcing the contractor to reload the whole portal.
   useEffect(() => {
     setGcLogoBroken(new Set());
+    const retry = () => {
+      if(typeof document==="undefined" || document.visibilityState==="visible") setGcLogoBroken(new Set());
+    };
+    if(typeof document!=="undefined") document.addEventListener("visibilitychange",retry);
+    if(typeof window!=="undefined") window.addEventListener("online",retry);
+    return () => {
+      if(typeof document!=="undefined") document.removeEventListener("visibilitychange",retry);
+      if(typeof window!=="undefined") window.removeEventListener("online",retry);
+    };
   }, [token, link?.logoUrl]);
 
   useEffect(() => {
@@ -46093,7 +46110,8 @@ function GCPortalPage({ token }) {
     });
     // finish is plannable when it hasn't started: no status yet, OR the app's
     // explicit "waiting_date" state (finish waiting on a start date — Rose).
-    if(j.rough && j.rough.status==="complete" && j.finish && (!j.finish.status || j.finish.status==="waiting_date") && !j.quickJob)
+    const finishStatus = _gcPortalFinishStatus(j.finish&&j.finish.status);
+    if(j.rough && j.rough.status==="complete" && j.finish && (!finishStatus || finishStatus==="waiting_date") && !j.quickJob)
       t.push({k:"act", text: j.finish.projectedStart ? "Confirm finish date — proj "+_gcMonthDay(j.finish.projectedStart) : "Plan your finish start"});
     // Matterport needs GC input when status is set, not complete, and no walkthrough
     // links yet — exclude terminal "complete" (v343 audit). Use k:"act" so it
@@ -46267,21 +46285,35 @@ function _gcAgo(iso){
 // "115d ago" — relative ages read as a dead portal on older jobs). Accepts ISO
 // or M/D/YYYY; unparseable strings pass through untouched.
 function _gcShortDate(any){
-  const t = Date.parse(any); if(isNaN(t)) return String(any||"");
+  const raw = String(any||"");
+  // Date-only values are calendar dates, not UTC instants. Date.parse would
+  // turn 2026-07-22 into the prior evening in Mountain Time and display 7/21.
+  const ymd = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(ymd){
+    const s = Number(ymd[2])+"/"+Number(ymd[3]);
+    return Number(ymd[1])===new Date().getFullYear() ? s : s+"/"+ymd[1].slice(-2);
+  }
+  const t = Date.parse(raw); if(isNaN(t)) return raw;
   const d = new Date(t);
   const s = (d.getMonth()+1)+"/"+d.getDate();
   return d.getFullYear()===new Date().getFullYear() ? s : s+"/"+String(d.getFullYear()).slice(-2);
 }
 function _gcMonthDay(any){
-  const t = Date.parse(any); if(isNaN(t)) return String(any||"");
+  const raw = String(any||"");
+  const ymd = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(ymd) return new Date(Number(ymd[1]),Number(ymd[2])-1,Number(ymd[3]))
+    .toLocaleDateString("en-US",{month:"short",day:"numeric"});
+  const t = Date.parse(raw); if(isNaN(t)) return raw;
   return new Date(t).toLocaleDateString("en-US",{month:"short",day:"numeric"});
 }
+function _gcPortalFinishStatus(status){ return status==="ready" ? "waiting_date" : (status||""); }
 // Status pill row for cards + detail modal (mockup: "✓ Rough: Complete" …).
 // Map finish (and rough) from Fn.status / R.status — never from projectedStart
 // alone (v343 audit: projectedStart incorrectly forced "Awaiting Start Date",
 // and waiting_date without a projected date showed "not started").
 function _gcStatusPills(j){
   const R=(j&&j.rough)||{}, Fn=(j&&j.finish)||{};
+  const finishStatus = _gcPortalFinishStatus(Fn.status);
   const p=[];
   const roughLabel = ({
     waiting_date:"Rough: Awaiting Start Date",
@@ -46301,7 +46333,7 @@ function _gcStatusPills(j){
       inprogress:"Finish: In Progress",
       waiting:"Finish: On Hold",
       complete:"✓ Finish: Complete",
-    })[Fn.status];
+    })[finishStatus];
     if(finishLabel) p.push(finishLabel);
     else if(R.status==="complete") p.push("Finish: not started");
     if(Fn.inspection==="pass") p.push("✓ Final inspection passed");
@@ -46439,7 +46471,7 @@ function GCPortalDetail({ job, link, P, onClose }) {
   if(j.rough && j.rough.scheduledEnd) dates.push(["Rough scheduled through", j.rough.scheduledEnd]);
   if(j.finish && j.finish.projectedStart) dates.push(["Finish projected", j.finish.projectedStart]);
   if(j.matterport && j.matterport.status) {
-    const mpWhen = j.matterport.statusDate ? " · "+j.matterport.statusDate : "";
+    const mpWhen = j.matterport.statusDate ? " · "+_gcShortDate(j.matterport.statusDate) : "";
     dates.push(["Matterport scan", j.matterport.status + mpWhen]);
   }
 
@@ -46483,7 +46515,8 @@ function GCPortalDetail({ job, link, P, onClose }) {
             sees on the request ("finish_start" / "matterport"). */}
         {(() => {
           const R = j.rough||{}, Fn = j.finish||{};
-          const finishPlanning = !j.quickJob && R.status==="complete" && (!Fn.status || Fn.status==="waiting_date");
+          const finishStatus = _gcPortalFinishStatus(Fn.status);
+          const finishPlanning = !!j.finish && !j.quickJob && R.status==="complete" && (!finishStatus || finishStatus==="waiting_date");
           const mpSuggest = _gcMpNeedsDate(j);
           if(!finishPlanning && !mpSuggest) return null;
           return sec("Needs & scheduling", (
@@ -46502,7 +46535,7 @@ function GCPortalDetail({ job, link, P, onClose }) {
               ) : null}
               {mpSuggest ? (
                 <div>
-                  {line(<span>Matterport scan: <b style={{color:P.ink}}>{_gcTxt(j.matterport.status)}</b>{j.matterport.statusDate?" · "+_gcTxt(j.matterport.statusDate):""} — a 3D as-built of your walls before drywall closes.</span>,"mp")}
+                  {line(<span>Matterport scan: <b style={{color:P.ink}}>{_gcTxt(j.matterport.status)}</b>{j.matterport.statusDate?" · "+_gcShortDate(j.matterport.statusDate):""} — a 3D as-built of your walls before drywall closes.</span>,"mp")}
                   <GCSendBox P={P} multiline={false}
                     label={j.matterport.status==="scheduled" ? "Confirm date or suggest a different one" : "Suggest a scan date"}
                     cta="Send date" placeholder="e.g. Tue 7/22, or before the 28th"

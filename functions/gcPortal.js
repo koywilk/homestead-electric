@@ -221,6 +221,58 @@ function matterportView(job) {
   };
 }
 
+// Legacy jobs can still carry finishStatus:"ready" from the pre-v343 workflow.
+// On the portal it means the same thing as the canonical waiting_date state.
+function portalFinishStatus(status) {
+  return str(status === "ready" ? "waiting_date" : status, 20);
+}
+
+// Stable server-only key for the one open date request allowed per portal job
+// anchor. The pointer document at this key serializes concurrent submissions
+// while gc_requests keeps its normal generated ids (and therefore its history).
+function dateRequestKey(portalId, jobId, itemId) {
+  const { createHash } = require("crypto");
+  return createHash("sha256")
+    .update(JSON.stringify([String(portalId || ""), String(jobId || ""), String(itemId || "")]))
+    .digest("hex");
+}
+
+// Pure validation for gcPortalSubmit's date path. Returning an error descriptor
+// keeps Firebase types out of this safety module and makes the complete server
+// predicate matrix unit-testable with plain Node.
+function validateDateRequest(req, mirror) {
+  const request = req || {};
+  const view = mirror || {};
+  const itemId = String(request.itemId || "");
+  if (!request.date) return { code: "invalid-argument", message: "date required" };
+  if (!itemId) return { code: "invalid-argument", message: "date anchor required" };
+
+  if (itemId === "finish_start") {
+    const roughOk = view.rough && view.rough.status === "complete";
+    const finishStatus = portalFinishStatus(view.finish && view.finish.status);
+    const finishOk = view.finish && (!finishStatus || finishStatus === "waiting_date");
+    if (view.quickJob || !roughOk || !finishOk) {
+      return { code: "failed-precondition", message: "finish start not open for planning" };
+    }
+    return null;
+  }
+
+  if (itemId === "matterport") {
+    const mp = view.matterport || {};
+    const links = Array.isArray(mp.links) ? mp.links : [];
+    if (!mp.status || mp.status === "complete" || links.length > 0) {
+      return { code: "failed-precondition", message: "matterport date not needed" };
+    }
+    return null;
+  }
+
+  const rts = Array.isArray(view.returnTrips) ? view.returnTrips : [];
+  const rt = rts.find((trip) => trip && String(trip.id) === itemId);
+  if (!rt) return { code: "invalid-argument", message: "unknown date anchor" };
+  if (rt.signedOff) return { code: "failed-precondition", message: "return trip closed" };
+  return null;
+}
+
 // Membership: does this job belong on this link's portal? Default is gcKey
 // match, with per-link overrides — jobIdsExclude hides a matched job (office
 // privacy control), jobIdsInclude force-adds a job that doesn't match by name
@@ -259,7 +311,7 @@ function projectJobForPortal(jobId, job) {
     },
     finish: {
       stage: str(job.finishStage, 10),
-      status: str(job.finishStatus, 20),
+      status: portalFinishStatus(job.finishStatus),
       statusDate: str(job.finishStatusDate, 30),
       projectedStart: str(job.finishProjectedStart, 30),
       scheduledEnd: str(job.finishScheduledEnd, 30),
@@ -292,6 +344,9 @@ module.exports = {
   cleanLogoUrl,
   jobBelongsToLink,
   projectJobForPortal,
+  portalFinishStatus,
+  dateRequestKey,
+  validateDateRequest,
   // exported for tests
   punchOpenCount,
   qcItemsOf,
