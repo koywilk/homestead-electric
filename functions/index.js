@@ -5474,10 +5474,11 @@ async function gcPortalCommitChunked(ops) {
 // include/exclude so membership is identical no matter which link triggers a
 // rebuild or the live publisher. Exclude still wins (jobBelongsToLink). Returns
 // null if the GC has no active link (→ no mirror).
-async function gcPortalGcMembership(gcKey) {
+async function gcPortalGcMembership(gcKey, tx) {
   if (!gcKey) return null;
   // ALL links for this GC (revoked included) — excludes are sticky (below).
-  const ls = await db.collection("gc_links").where("gcKey", "==", gcKey).get();
+  const q = db.collection("gc_links").where("gcKey", "==", gcKey);
+  const ls = tx ? await tx.get(q) : await q.get();
   if (ls.empty) return null;
   const inc = new Set(), exc = new Set();
   let portalId = null;
@@ -5765,25 +5766,12 @@ exports.gcPortalSubmit = functions.https.onCall(async (data) => {
   if (type === "date") {
     const itemId = req.itemId;
     // The public mirror authorizes what the token may see, but publishing is an
-    // asynchronous trigger. Re-read the canonical job before accepting workflow
-    // input so a just-completed scan/trip (or removed job) cannot submit against
-    // stale mirror state.
-    const [sourceSnap, membership] = await Promise.all([
-      db.collection("jobs").doc(jobId).get(),
-      gcPortalGcMembership(link.gcKey),
-    ]);
-    const sourceJob = sourceSnap.exists ? ((sourceSnap.data() || {}).data || null) : null;
-    if (!sourceJob || !membership || membership.portalId !== link.portalId ||
-        !gcPortal.jobBelongsToLink(jobId, sourceJob, membership)) {
-      throw new functions.https.HttpsError("permission-denied", "job no longer on this portal");
-    }
-    const liveMirror = gcPortal.projectJobForPortal(jobId, sourceJob);
-    const validation = gcPortal.validateDateRequest(req, liveMirror);
-    if (validation) {
-      throw new functions.https.HttpsError(validation.code, validation.message);
-    }
+    // asynchronous trigger. Read both current GC-level membership and the
+    // canonical job under the request transaction so simultaneous status or
+    // include/exclude changes cannot race validation and request creation.
 
     const requests = db.collection("gc_requests");
+    const sourceRef = db.collection("jobs").doc(jobId);
     const keyRef = db.collection("gc_request_keys")
       .doc(gcPortal.dateRequestKey(link.portalId, jobId, itemId));
     // The query adopts any open request created before pointer documents existed.
@@ -5798,7 +5786,25 @@ exports.gcPortalSubmit = functions.https.onCall(async (data) => {
       .limit(1);
 
     requestResult = await db.runTransaction(async (tx) => {
-      const keySnap = await tx.get(keyRef);
+      const [sourceSnap, liveLinkSnap, membership, keySnap] = await Promise.all([
+        tx.get(sourceRef),
+        tx.get(linkSnap.ref),
+        gcPortalGcMembership(link.gcKey, tx),
+        tx.get(keyRef),
+      ]);
+      const liveLink = liveLinkSnap.exists ? (liveLinkSnap.data() || {}) : {};
+      const sourceJob = sourceSnap.exists ? ((sourceSnap.data() || {}).data || null) : null;
+      if (!liveLinkSnap.exists || liveLink.revoked === true || liveLink.portalId !== link.portalId ||
+          !membership || membership.portalId !== link.portalId ||
+          !sourceJob || !gcPortal.jobBelongsToLink(jobId, sourceJob, membership)) {
+        throw new functions.https.HttpsError("permission-denied", "job no longer on this portal");
+      }
+      const liveMirror = gcPortal.projectJobForPortal(jobId, sourceJob);
+      const validation = gcPortal.validateDateRequest(req, liveMirror);
+      if (validation) {
+        throw new functions.https.HttpsError(validation.code, validation.message);
+      }
+
       let existing = null;
       const pointedId = keySnap.exists && String((keySnap.data() || {}).requestId || "");
       if (pointedId) {
@@ -5907,15 +5913,19 @@ exports.gcPortalHandleRequest = functions.https.onCall(async (data) => {
     const snap = await tx.get(ref);
     if (!snap.exists) throw new functions.https.HttpsError("not-found", "no such request");
     const request = snap.data() || {};
+    // A retried handle call after a lost response is already complete. Keep this
+    // before revision checks so retries remain idempotent.
+    if (request.status !== "new") return;
     // Date requests can be revised in place. Refuse to handle a newer revision
-    // than the office user actually reviewed; their refresh will surface it.
+    // than the office user actually reviewed. Date rows require both guards so
+    // cached/custom callers cannot bypass the stale-screen protection.
+    if (request.type === "date" && (!expectedCreatedAt || !hasExpectedRevision)) {
+      throw new functions.https.HttpsError("failed-precondition", "Refresh the inbox before handling this date request.");
+    }
     if ((expectedCreatedAt && String(request.createdAt || "") !== expectedCreatedAt) ||
         (hasExpectedRevision && (Number(request.revisionCount) || 0) !== expectedRevisionCount)) {
       throw new functions.https.HttpsError("failed-precondition", "Request changed — review the latest date and try again.");
     }
-    // A retried handle call after a lost response is already complete. Do not
-    // let it clear a pointer that may now belong to a newer request.
-    if (request.status !== "new") return;
     const handledAt = new Date().toISOString();
     let keyRef = null;
     let keySnap = null;

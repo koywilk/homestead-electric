@@ -46299,7 +46299,11 @@ function _gcShortDate(any){
   return d.getFullYear()===new Date().getFullYear() ? s : s+"/"+String(d.getFullYear()).slice(-2);
 }
 function _gcMonthDay(any){
-  const t = Date.parse(any); if(isNaN(t)) return String(any||"");
+  const raw = String(any||"");
+  const ymd = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(ymd) return new Date(Number(ymd[1]),Number(ymd[2])-1,Number(ymd[3]))
+    .toLocaleDateString("en-US",{month:"short",day:"numeric"});
+  const t = Date.parse(raw); if(isNaN(t)) return raw;
   return new Date(t).toLocaleDateString("en-US",{month:"short",day:"numeric"});
 }
 function _gcPortalFinishStatus(status){ return status==="ready" ? "waiting_date" : (status||""); }
