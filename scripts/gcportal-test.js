@@ -216,6 +216,14 @@ t("quick-job finish rejected", dateErr(
   { date: "Sep 1", itemId: "finish_start" },
   { ...DATE_MIRROR, quickJob: true }
 ) === "finish start not open for planning");
+t("finish rejected before rough completes", dateErr(
+  { date: "Sep 1", itemId: "finish_start" },
+  { ...DATE_MIRROR, rough: { status: "inprogress" } }
+) === "finish start not open for planning");
+t("finish rejected after work starts", dateErr(
+  { date: "Sep 1", itemId: "finish_start" },
+  { ...DATE_MIRROR, finish: { status: "inprogress" } }
+) === "finish start not open for planning");
 t("missing anchor rejected", dateErr({ date: "Sep 1", itemId: "" }) === "date anchor required");
 t("missing date rejected", dateErr({ date: "", itemId: "matterport" }) === "date required");
 t("matterport accepted while scheduled without links", validateDateRequest(

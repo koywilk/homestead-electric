@@ -39574,7 +39574,13 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
     .catch(e => { setErr(e.message||"Failed to load requests"); setReqs([]); });
   useEffect(() => { refresh(); }, [showDone]);
 
-  const handle = (id, status) => httpsCallable(functions,"gcPortalHandleRequest")({ id, status, by: identity?.name || "" });
+  const handle = (req, status) => httpsCallable(functions,"gcPortalHandleRequest")({
+    id: req.id,
+    status,
+    by: identity?.name || "",
+    expectedCreatedAt: req.createdAt || "",
+    expectedRevisionCount: Number(req.revisionCount) || 0,
+  });
 
   // Apply the request's content to the real job (answer/punch), then mark it
   // applied. Returns silently if the job is gone (still marks handled).
@@ -39628,15 +39634,15 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
           : "Nothing to apply here. Dismiss, or handle it manually in the job.");
         setBusy(""); return;
       }
-      await handle(req.id, "applied");
+      await handle(req, "applied");
       await refresh();
-    } catch (e) { setErr(e.message || "Apply failed"); }
+    } catch (e) { await refresh(); setErr(e.message || "Apply failed"); }
     setBusy("");
   };
   const dismiss = async (req) => {
     setBusy(req.id); setErr("");
-    try { await handle(req.id, "dismissed"); await refresh(); }
-    catch (e) { setErr(e.message || "Dismiss failed"); }
+    try { await handle(req, "dismissed"); await refresh(); }
+    catch (e) { await refresh(); setErr(e.message || "Dismiss failed"); }
     setBusy("");
   };
 
@@ -39677,7 +39683,7 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
             {r.status!=="new" ? <span style={{fontSize:10.5,fontWeight:700,color:"#5E6670",background:"#F0F1F4",borderRadius:99,padding:"1px 8px"}}>{String(r.status).toUpperCase()}</span> : null}
             <span style={{marginLeft:"auto",fontSize:11,color:"#8A93A3"}}>{r.by?r.by+" · ":""}{_gcAgo(r.createdAt)}</span>
           </div>
-          {r.date ? <div style={{fontSize:13,color:"#1B1F24",marginBottom:4}}><b>Date:</b> {r.date}{r.dateKind?" ("+r.dateKind+")":""}</div> : null}
+          {r.date ? <div style={{fontSize:13,color:"#1B1F24",marginBottom:4}}><b>Date{r.revisionCount?" (updated)":""}:</b> {r.date}{r.dateKind?" ("+r.dateKind+")":""}</div> : null}
           {r.text ? <div style={{fontSize:12.5,color:"#3A414C",background:"#F7F8FA",border:"1px solid #ECEEF1",borderRadius:8,padding:"7px 10px",marginBottom:6,whiteSpace:"pre-wrap"}}>{r.text}</div> : null}
           {r.fileUrl ? <div style={{marginBottom:6}}><a href={r.fileUrl} target="_blank" rel="noopener noreferrer" style={{color:"#2E477D",fontWeight:700,fontSize:12.5}}>{r.fileName||"View file"} ↗</a></div> : null}
           {r.status==="new" ? (
@@ -46279,7 +46285,15 @@ function _gcAgo(iso){
 // "115d ago" — relative ages read as a dead portal on older jobs). Accepts ISO
 // or M/D/YYYY; unparseable strings pass through untouched.
 function _gcShortDate(any){
-  const t = Date.parse(any); if(isNaN(t)) return String(any||"");
+  const raw = String(any||"");
+  // Date-only values are calendar dates, not UTC instants. Date.parse would
+  // turn 2026-07-22 into the prior evening in Mountain Time and display 7/21.
+  const ymd = raw.match(/^(\d{4})-(\d{2})-(\d{2})$/);
+  if(ymd){
+    const s = Number(ymd[2])+"/"+Number(ymd[3]);
+    return Number(ymd[1])===new Date().getFullYear() ? s : s+"/"+ymd[1].slice(-2);
+  }
+  const t = Date.parse(raw); if(isNaN(t)) return raw;
   const d = new Date(t);
   const s = (d.getMonth()+1)+"/"+d.getDate();
   return d.getFullYear()===new Date().getFullYear() ? s : s+"/"+String(d.getFullYear()).slice(-2);

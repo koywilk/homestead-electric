@@ -5764,7 +5764,21 @@ exports.gcPortalSubmit = functions.https.onCall(async (data) => {
   let requestResult = null;
   if (type === "date") {
     const itemId = req.itemId;
-    const validation = gcPortal.validateDateRequest(req, mirror);
+    // The public mirror authorizes what the token may see, but publishing is an
+    // asynchronous trigger. Re-read the canonical job before accepting workflow
+    // input so a just-completed scan/trip (or removed job) cannot submit against
+    // stale mirror state.
+    const [sourceSnap, membership] = await Promise.all([
+      db.collection("jobs").doc(jobId).get(),
+      gcPortalGcMembership(link.gcKey),
+    ]);
+    const sourceJob = sourceSnap.exists ? ((sourceSnap.data() || {}).data || null) : null;
+    if (!sourceJob || !membership || membership.portalId !== link.portalId ||
+        !gcPortal.jobBelongsToLink(jobId, sourceJob, membership)) {
+      throw new functions.https.HttpsError("permission-denied", "job no longer on this portal");
+    }
+    const liveMirror = gcPortal.projectJobForPortal(jobId, sourceJob);
+    const validation = gcPortal.validateDateRequest(req, liveMirror);
     if (validation) {
       throw new functions.https.HttpsError(validation.code, validation.message);
     }
@@ -5804,6 +5818,13 @@ exports.gcPortalSubmit = functions.https.onCall(async (data) => {
         const old = existing.data() || {};
         const revised = old.date !== req.date || old.dateKind !== req.dateKind || old.by !== req.by;
         if (revised) {
+          const revisions = (Array.isArray(old.revisions) ? old.revisions : []).slice(-9);
+          revisions.push({
+            date: old.date || "",
+            dateKind: old.dateKind || "",
+            by: old.by || "",
+            at: old.updatedAt || old.createdAt || req.createdAt,
+          });
           tx.update(existing.ref, {
             date: req.date,
             dateKind: req.dateKind,
@@ -5812,6 +5833,7 @@ exports.gcPortalSubmit = functions.https.onCall(async (data) => {
             updatedAt: req.createdAt,
             originalCreatedAt: old.originalCreatedAt || old.createdAt || req.createdAt,
             revisionCount: (Number(old.revisionCount) || 0) + 1,
+            revisions,
           });
         }
         tx.set(keyRef, {
@@ -5876,10 +5898,37 @@ exports.gcPortalListRequests = functions.https.onCall(async (data) => {
 exports.gcPortalHandleRequest = functions.https.onCall(async (data) => {
   requireAppKey(data);
   const id = String(data.id || "");
-  const status = ["applied", "dismissed", "new"].indexOf(String(data.status)) !== -1 ? data.status : "applied";
+  const status = ["applied", "dismissed"].indexOf(String(data.status)) !== -1 ? data.status : "applied";
   const ref = db.collection("gc_requests").doc(id);
-  if (!(await ref.get()).exists) throw new functions.https.HttpsError("not-found", "no such request");
-  await ref.update({ status, handledBy: String(data.by || ""), handledAt: new Date().toISOString() });
+  const expectedCreatedAt = String(data.expectedCreatedAt || "");
+  const expectedRevisionCount = Number(data.expectedRevisionCount);
+  const hasExpectedRevision = Number.isFinite(expectedRevisionCount);
+  await db.runTransaction(async (tx) => {
+    const snap = await tx.get(ref);
+    if (!snap.exists) throw new functions.https.HttpsError("not-found", "no such request");
+    const request = snap.data() || {};
+    // Date requests can be revised in place. Refuse to handle a newer revision
+    // than the office user actually reviewed; their refresh will surface it.
+    if ((expectedCreatedAt && String(request.createdAt || "") !== expectedCreatedAt) ||
+        (hasExpectedRevision && (Number(request.revisionCount) || 0) !== expectedRevisionCount)) {
+      throw new functions.https.HttpsError("failed-precondition", "Request changed — review the latest date and try again.");
+    }
+    // A retried handle call after a lost response is already complete. Do not
+    // let it clear a pointer that may now belong to a newer request.
+    if (request.status !== "new") return;
+    const handledAt = new Date().toISOString();
+    let keyRef = null;
+    let keySnap = null;
+    if (status !== "new" && request.type === "date" && request.portalId && request.jobId && request.itemId) {
+      keyRef = db.collection("gc_request_keys")
+        .doc(gcPortal.dateRequestKey(request.portalId, request.jobId, request.itemId));
+      keySnap = await tx.get(keyRef);
+    }
+    tx.update(ref, { status, handledBy: String(data.by || ""), handledAt });
+    if (keyRef && keySnap && keySnap.exists && String((keySnap.data() || {}).requestId || "") === id) {
+      tx.set(keyRef, { requestId: "", updatedAt: handledAt }, { merge: true });
+    }
+  });
   return { ok: true };
 });
 
