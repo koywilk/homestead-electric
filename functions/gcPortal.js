@@ -206,6 +206,9 @@ function returnTripsView(trips) {
 }
 
 // ── matterport: status + the walkthrough links (Koy: headline artifact) ──────
+// statusDate (matterportStatusDate) is projected so the portal can show a
+// scheduled/needs-by date when asking the GC to confirm or reschedule
+// (v343 audit — mirror previously omitted it).
 function matterportView(job) {
   const links = (Array.isArray(job.matterportLinks) && job.matterportLinks.length
     ? job.matterportLinks
@@ -213,6 +216,7 @@ function matterportView(job) {
     .filter((l) => l && typeof l.url === "string" && /^https:\/\//i.test(l.url.trim()));
   return {
     status: str(job.matterportStatus, 20),
+    statusDate: str(job.matterportStatusDate, 30),
     links: cap(links, 6).map((l) => ({ label: str(l.label, 40) || "Walkthrough", url: String(l.url).trim().slice(0, 500) })),
   };
 }
