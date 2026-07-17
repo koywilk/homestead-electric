@@ -42882,7 +42882,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-17 · App SW version: v342
+**Last manifest update:** 2026-07-17 · App SW version: v343
 
 ---
 
@@ -43054,6 +43054,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Job Note share** · 'shipped' · 'JobNoteSharePage'
 - **GC Portal (contractor mission control)** · 'shipped 2026-07-16' · 'SW v340' · 'GCPortalPage' · '?gcportal=<token>' · one live link per contractor showing ALL their jobs — rough/finish status + dates, per-recipient question tracking, return trips, Homestead's own QC-walk receipts, Matterport 3D links, CO counts — co-branded (per-link 'accentColor'), "built in-house" provenance. **Kweller-safe by construction:** the page reads ONLY 'gc_links/{token}' + 'gc_portal/{portalId}/jobs/*' (a server-published, explicit-allowlist projection — 'functions/gcPortal.js'), never 'jobs/{id}'; questions gated to *effectively shared* only. **Two-way:** GC can answer questions, suggest/confirm dates, add items, message the crew, and assign/change their own supers per job ('GCSuperAssign' → 'assign', applied live to the link; drives the super filter + per-super email routing) ('GCSendBox' → token-authed 'gcPortalSubmit' callable → 'gc_requests', office reviews before anything touches a job). Membership = GC-level union across the contractor's links (exclude wins, sticky across revokes); revoke ROTATES the shared 'portalId' so a revoked holder keeps nothing. 5 adversarial review passes; unit suites 'scripts/gcportal-test.js' + 'scripts/gcnotify-test.js'.
   - Co-brand header lockup per spec · 'shipped 2026-07-17' · 'SW v342' · header now renders the Homestead longhorn white-on-transparent × the GC's own logo image (Robison script creme, from the approved mockup assets, now in 'public/') instead of the app icon in a white box × a text label; 'link.logoUrl' wins, built-in 'GC_LOGOS' map is the fallback, text label only when no logo exists. Applies to every link ever created: the office link manager gains a "Their logo" URL field, and 'gcPortalCreateLink' / 'gcPortalUpdateLink' / 'gcPortalListLinks' carry a validated 'logoUrl' ('gcPortal.cleanLogoUrl' — https-only or bundled '/' path, blocks http/javascript/data/protocol-relative, unit-tested)
+  - Mockup-fidelity pass + audit fixes · 'shipped 2026-07-17' · 'SW v343' · cards/modal now match the approved mockup: '#simproNo' job numbers, absolute short dates ("updated 7/15", never "115d ago"), action tags carry dates ("Return trip: needs scheduling (by 7/24)", "Confirm finish date — proj Sep 1"), status pill rows ('_gcStatusPills') on cards + modal, modal-top ROUGH/FINISH bars, hot summary tiles tinted, "Return trips — need scheduling" label. NEW modal "Needs & scheduling" section: finish-start plan/confirm + Matterport date-suggest, both filing 'type:"date"' gc_requests ('itemId:"finish_start"' / '"matterport"') so the card's action tags finally land on real actions. Cursor-audit fixes: 'GC_LOGOS' keyed by 'gcKey' (canonical) with label alias, broken logo URL falls down the chain custom → bundled → text ('gcLogoBroken' Set, live-recovering), logo 'maxWidth' cap for phones
 - **GC notification engine (email v1)** · 'shipped 2026-07-16' · 'SW v340' · 'functions/gcNotify.js' · per the cadence policy (vault spec): ONE 8 PM daily digest per contractor (per-recipient super routing, only if their mirror changed — no-content night = no email) + INSTANT emails for schedule changes, inspection results, milestones (incl. "your house is hot"), Matterport-ready, return-trip scheduled. Instants ENQUEUE to 'gc_notify_queue' (5-min drain, idempotent, 5-try cap, quiet hours 9 PM–7 AM defer to morning); emails are composed from the portal projection + a closed set of safe scalars, esc()'d, portal link top + bottom. Provider key lives in function-only 'gc_config/mail' — deploys with email OFF, fails safe until configured (SendGrid HTTP via fetch, no new dependency). Texts (Twilio, 3 interrupt triggers only) = v1.5.
 - **All public pages**: error toasts render (HEToastHost mounted), failures speak instead of silently dropping input · 'SW v315'
 
@@ -45986,18 +45987,28 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
 // the gc_requests funnel. Self-contained light palette driven by the accent.
 // Header lockup (Koy 2026-07-16 mockup decision): Homestead longhorn
 // white-on-transparent × the GC's OWN logo image — never the app icon in a
-// white box, never a text label when we have their logo. link.logoUrl (on the
-// gc_links doc) wins; this map is the built-in fallback keyed on the
-// normalized label. Assets live in public/.
-const GC_LOGOS = { "robison build co": "/gc-logo-robison.png" };
-const gcLogoFor = (link) => (link && link.logoUrl) ||
-  GC_LOGOS[String((link && link.label) || "").toLowerCase().replace(/\s+/g," ").trim().replace(/[.\s]+$/,"")] || null;
+// white box, never a text label when we have their logo. Assets in public/.
+// Built-in logos are keyed by GC identity — gcKey first (canonical: survives
+// label edits and matches links created straight from the job's GC field,
+// e.g. "Robison" — audit 2026-07-17), normalized label kept as an alias.
+// link.logoUrl always wins; a broken URL falls DOWN the chain:
+// custom URL → bundled asset → text label.
+const GC_LOGOS = { "robison": "/gc-logo-robison.png", "robison build co": "/gc-logo-robison.png" };
+const _gcNorm = (s) => String(s || "").toLowerCase().replace(/\s+/g," ").trim().replace(/[.\s]+$/,"");
+const gcLogoCandidatesFor = (link) => {
+  if (!link) return [];
+  const builtin = GC_LOGOS[_gcNorm(link.gcKey)] || GC_LOGOS[_gcNorm(link.gc)] || GC_LOGOS[_gcNorm(link.label)] || null;
+  const out = [];
+  if (link.logoUrl) out.push(link.logoUrl);
+  if (builtin && builtin !== link.logoUrl) out.push(builtin);
+  return out;
+};
 function GCPortalPage({ token }) {
   const [link, setLink] = useState(undefined); // undefined=loading · null=inactive/missing · obj=live
   const [jobs, setJobs] = useState(null);       // null=loading · []=empty
   const [openId, setOpenId] = useState(null);   // job detail modal
   const [superFilter, setSuperFilter] = useState(null);
-  const [gcLogoBroke, setGcLogoBroke] = useState(""); // the URL that failed to load → text fallback; auto-recovers if the office fixes the link's logoUrl (live snapshot)
+  const [gcLogoBroken, setGcLogoBroken] = useState(() => new Set()); // URLs that failed → try the next candidate (custom URL → bundled asset → text); recovers live if the office fixes logoUrl
 
   useEffect(() => {
     if(!token) { setLink(null); return; }
@@ -46025,8 +46036,7 @@ function GCPortalPage({ token }) {
   const accent = (link && /^#[0-9a-fA-F]{6}$/.test(link.accentColor||"")) ? link.accentColor : "#3B5BA5";
   const P = { board:"#F2F3F6", card:"#FFFFFF", line:"#E3E5EA", ink:"#232936", dim:"#5E6670",
     muted:"#8A93A3", accent, urgent:"#B23A3A", deck1:"#141821", deck2:"#1B2030", live:"#34D17F" };
-  const _gcLogoUrl = gcLogoFor(link);
-  const gcLogo = (_gcLogoUrl && _gcLogoUrl !== gcLogoBroke) ? _gcLogoUrl : null;
+  const gcLogo = gcLogoCandidatesFor(link).find(u => !gcLogoBroken.has(u)) || null;
 
   const wrap = (kids) => (
     <div style={{minHeight:"100vh",background:P.board,font:"14px/1.5 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif",color:P.ink}}>
@@ -46060,11 +46070,13 @@ function GCPortalPage({ token }) {
     const openQ = (j.questions && j.questions.byFor || []).reduce((s,g)=>s+g.openCount,0);
     if(openQ) t.push({k:"act", text:openQ+" question"+(openQ>1?"s":"")+" waiting"});
     (j.returnTrips||[]).forEach(rt => {
-      if(rt.needsSchedule && !rt.signedOff) t.push({k:"act", text:"Return trip: needs scheduling"});
+      if(rt.needsSchedule && !rt.signedOff) t.push({k:"act", text:"Return trip: needs scheduling"+(rt.targetDate?" (by "+_gcShortDate(rt.targetDate)+")":"")});
       else if(rt.scheduled && rt.scheduledDate && !rt.signedOff) t.push({k:"date", text:"Return trip "+rt.scheduledDate});
     });
-    if(j.rough && j.rough.status==="complete" && j.finish && !j.finish.status && !j.quickJob)
-      t.push({k:"act", text:"Plan your finish start"});
+    // finish is plannable when it hasn't started: no status yet, OR the app's
+    // explicit "waiting_date" state (finish waiting on a start date — Rose).
+    if(j.rough && j.rough.status==="complete" && j.finish && (!j.finish.status || j.finish.status==="waiting_date") && !j.quickJob)
+      t.push({k:"act", text: j.finish.projectedStart ? "Confirm finish date — proj "+_gcMonthDay(j.finish.projectedStart) : "Plan your finish start"});
     if(j.matterport && j.matterport.status && j.matterport.links.length===0)
       t.push({k:"date", text:"Matterport "+j.matterport.status});
     return t;
@@ -46080,7 +46092,7 @@ function GCPortalPage({ token }) {
   // header freshness from the newest mirror doc (honest LIVE indicator)
   const newestMs = jobs.reduce((m,j)=> Math.max(m, Date.parse(j.updatedAt)||0), 0);
   const stale = newestMs && (Date.now()-newestMs > 86400000);
-  const freshLabel = newestMs ? _gcAgo(new Date(newestMs).toISOString()) : "";
+  const freshLabel = newestMs ? _gcShortDate(new Date(newestMs).toISOString()) : "";
 
   // roster of supers seen across this GC's jobs (for the filter row)
   const rosterCounts = {};
@@ -46111,9 +46123,9 @@ function GCPortalPage({ token }) {
       <div key={j.id} onClick={()=>setOpenId(j.id)} style={{background:P.card,border:"1px solid "+P.line,borderRadius:11,
         padding:"16px 18px",display:"flex",flexDirection:"column",gap:11,cursor:"pointer"}}>
         <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap"}}>
-          <h3 style={{fontSize:15,color:P.ink,margin:0}}>{j.name}</h3>
+          <h3 style={{fontSize:15,color:P.ink,margin:0}}>{(j.simproNo?"#"+j.simproNo+" ":"")+j.name}</h3>
           <span style={{fontSize:12,color:P.muted}}>{j.address}</span>
-          <span style={{marginLeft:"auto",fontSize:11,color:P.muted}}>updated {j.updatedAt ? _gcAgo(j.updatedAt) : ""}</span>
+          <span style={{marginLeft:"auto",fontSize:11,color:P.muted}}>updated {j.updatedAt ? _gcShortDate(j.updatedAt) : ""}</span>
         </div>
         {(tg.length || sup.length) ? (
           <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
@@ -46127,6 +46139,11 @@ function GCPortalPage({ token }) {
             {bar("FINISH", j.finish&&j.finish.stage, P.muted)}
           </div>
         ) : null}
+        {(()=>{ const pl=_gcStatusPills(j); return pl.length ? (
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {pl.map((p,i)=><span key={"p"+i} style={{fontSize:12,fontWeight:600,borderRadius:8,padding:"4px 10px",border:"1px solid "+P.line,color:P.dim}}>{p}</span>)}
+          </div>
+        ) : null; })()}
         {bits.length ? <div style={{fontSize:12,color:P.muted}}>{bits.join(" · ")} — tap for details</div> : null}
       </div>
     );
@@ -46142,7 +46159,8 @@ function GCPortalPage({ token }) {
         <img src="/hs-logo-white.png" alt="Homestead Electric" style={{height:52,width:"auto",flexShrink:0}} onError={e=>{e.currentTarget.style.display="none";}}/>
         <span style={{color:"#5E6670",fontSize:19,fontWeight:300,flexShrink:0}}>×</span>
         {gcLogo
-          ? <img src={gcLogo} alt={link.label} style={{height:38,width:"auto",flexShrink:0}} onError={()=>setGcLogoBroke(gcLogo)}/>
+          ? <img src={gcLogo} alt={link.label} style={{height:38,width:"auto",maxWidth:"min(46vw,230px)",objectFit:"contain",flexShrink:0}}
+              onError={()=>setGcLogoBroken(prev=>{ const n=new Set(prev); n.add(gcLogo); return n; })}/>
           : <div style={{font:"700 21px Georgia,'Times New Roman',serif",letterSpacing:".04em",color:"#EDEADF",whiteSpace:"nowrap"}}>{link.label}</div>}
         <div style={{marginLeft:"auto",textAlign:"right"}}>
           <div style={{font:"600 10px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:"#9AA3B2"}}>Job portal · our own app</div>
@@ -46155,10 +46173,10 @@ function GCPortalPage({ token }) {
       {/* summary tiles */}
       <div style={{display:"flex",gap:10,flexWrap:"wrap",margin:"16px 0"}}>
         {[["Jobs with us", filtered.length, false],
-          ["Need your input", needTotal, true],
-          ["Return trips to schedule", rtNeeds, rtNeeds>0],
+          ["Need your input", needTotal, needTotal>0],
+          ["Return trips — need scheduling", rtNeeds, rtNeeds>0],
           ["Completed & closed", dones.length, false]].map(([lbl,n,hot],i)=>(
-          <div key={i} style={{background:P.card,border:"1px solid "+P.line,borderRadius:10,padding:"10px 16px",minWidth:118}}>
+          <div key={i} style={{background:hot?accent+"0F":P.card,border:"1px solid "+(hot?accent+"55":P.line),borderRadius:10,padding:"10px 16px",minWidth:118}}>
             <b style={{display:"block",fontSize:22,fontVariantNumeric:"tabular-nums",color: hot?accent:P.ink}}>{n}</b>
             <span style={{fontSize:11,color:P.dim,textTransform:"uppercase",letterSpacing:".07em",fontWeight:600}}>{lbl}</span>
           </div>
@@ -46220,6 +46238,46 @@ function _gcAgo(iso){
   if(m < 2) return "just now"; if(m < 60) return m+"m ago";
   const h = Math.floor(m/60); if(h < 24) return h+"h ago";
   const d = Math.floor(h/24); return d+"d ago";
+}
+// Absolute short dates for the portal (mockup decision: "updated 7/15", never
+// "115d ago" — relative ages read as a dead portal on older jobs). Accepts ISO
+// or M/D/YYYY; unparseable strings pass through untouched.
+function _gcShortDate(any){
+  const t = Date.parse(any); if(isNaN(t)) return String(any||"");
+  const d = new Date(t);
+  const s = (d.getMonth()+1)+"/"+d.getDate();
+  return d.getFullYear()===new Date().getFullYear() ? s : s+"/"+String(d.getFullYear()).slice(-2);
+}
+function _gcMonthDay(any){
+  const t = Date.parse(any); if(isNaN(t)) return String(any||"");
+  return new Date(t).toLocaleDateString("en-US",{month:"short",day:"numeric"});
+}
+// Status pill row for cards + detail modal (mockup: "✓ Rough: Complete" …).
+function _gcStatusPills(j){
+  const R=(j&&j.rough)||{}, Fn=(j&&j.finish)||{};
+  const p=[];
+  if(R.status==="complete") p.push("✓ Rough: Complete");
+  else if(R.status==="inprogress") p.push("Rough: In Progress");
+  if(R.inspection==="pass") p.push("✓ Rough inspection: passed");
+  if(!(j&&j.quickJob)){
+    if(Fn.status==="complete") p.push("✓ Finish: Complete");
+    else if(Fn.status==="inprogress") p.push("Finish: In Progress");
+    else if(Fn.projectedStart) p.push("Finish: Awaiting Start Date");
+    else if(R.status==="complete") p.push("Finish: not started");
+    if(Fn.inspection==="pass") p.push("✓ Final inspection passed");
+  }
+  return p;
+}
+// Modal-scope progress bar (GCPortalDetail can't reach GCPortalPage's bar()).
+function _gcBar(P, label, pct, col){
+  return (
+    <div style={{display:"flex",alignItems:"center",gap:9}}>
+      <span style={{font:"700 10px system-ui",letterSpacing:".1em",width:44,color:col}}>{label}</span>
+      <span style={{flex:1,height:7,borderRadius:99,background:"#E7E9EE",overflow:"hidden"}}>
+        <span style={{display:"block",height:"100%",width:(parseInt(pct)||0)+"%",background:P.muted,borderRadius:99}}/></span>
+      <span style={{fontSize:11.5,color:P.dim,width:38,textAlign:"right",fontVariantNumeric:"tabular-nums"}}>{pct||"0%"}</span>
+    </div>
+  );
 }
 
 // Read-only job detail modal for the portal (Piece 4 adds the write actions).
@@ -46340,11 +46398,24 @@ function GCPortalDetail({ job, link, P, onClose }) {
       <div onClick={e=>e.stopPropagation()} style={{background:P.board,borderRadius:14,maxWidth:660,width:"100%",
         boxShadow:"0 22px 60px rgba(0,0,0,.5)",padding:"20px 22px",display:"flex",flexDirection:"column",gap:12,marginBottom:"6vh"}}>
         <div style={{display:"flex",alignItems:"baseline",gap:9,flexWrap:"wrap"}}>
-          <h3 style={{fontSize:18,color:P.ink,margin:0}}>{j.name}</h3>
+          <h3 style={{fontSize:18,color:P.ink,margin:0}}>{(j.simproNo?"#"+j.simproNo+" ":"")+j.name}</h3>
           <span style={{fontSize:12.5,color:P.muted}}>{j.address}</span>
           <button onClick={onClose} style={{marginLeft:"auto",border:"1px solid "+P.line,background:P.card,color:P.dim,
             borderRadius:8,fontSize:13,fontWeight:700,padding:"4px 11px",cursor:"pointer",fontFamily:"inherit"}}>✕ Close</button>
         </div>
+
+        {/* bars + status pills at the top, like the mockup's approved modal */}
+        {!j.quickJob ? (
+          <div style={{display:"flex",flexDirection:"column",gap:7}}>
+            {_gcBar(P,"ROUGH", j.rough&&j.rough.stage, P.accent)}
+            {_gcBar(P,"FINISH", j.finish&&j.finish.stage, P.muted)}
+          </div>
+        ) : null}
+        {(()=>{ const pl=_gcStatusPills(j); return pl.length ? (
+          <div style={{display:"flex",gap:6,flexWrap:"wrap"}}>
+            {pl.map((p,i)=><span key={"p"+i} style={{fontSize:12,fontWeight:600,borderRadius:8,padding:"4px 10px",border:"1px solid "+P.line,color:P.dim,background:P.card}}>{p}</span>)}
+          </div>
+        ) : null; })()}
 
         {/* status (parent objects guarded — always present today, but never crash if a mirror doc ever drifts) */}
         {(() => { const R = j.rough||{}, Fn = j.finish||{}; return sec("Where it stands", (
@@ -46354,6 +46425,42 @@ function GCPortalDetail({ job, link, P, onClose }) {
             {dates.map((d,i)=>line(<span>{d[0]}: <b style={{color:P.ink}}>{d[1]}</b></span>,"d"+i))}
           </Fragment>
         )); })()}
+
+        {/* needs & scheduling — the card's action tags land HERE (mockup section).
+            Finish-start planning + matterport date ride the same gc_requests date
+            funnel as return trips; itemId is a plain anchor string the office
+            sees on the request ("finish_start" / "matterport"). */}
+        {(() => {
+          const R = j.rough||{}, Fn = j.finish||{};
+          const finishPlanning = !j.quickJob && R.status==="complete" && (!Fn.status || Fn.status==="waiting_date");
+          const mpSuggest = j.matterport && j.matterport.status && (!j.matterport.links || !j.matterport.links.length);
+          if(!finishPlanning && !mpSuggest) return null;
+          return sec("Needs & scheduling", (
+            <Fragment>
+              {finishPlanning ? (
+                <div style={{marginBottom:mpSuggest?12:0}}>
+                  {line(Fn.projectedStart
+                    ? <span>Confirm your finish start — projected <b style={{color:P.ink}}>{_gcMonthDay(Fn.projectedStart)}</b>; confirm and we hold crew.</span>
+                    : <span><b style={{color:P.ink}}>Ready to plan your finish start</b> — rough is done{j.qc&&j.qc.items.length?", QC walked":""}.</span>,"fp")}
+                  <GCSendBox P={P} multiline={false}
+                    label={Fn.projectedStart ? "Confirm date or suggest a different one" : "Plan finish — suggest a start"}
+                    cta="Send date" placeholder="e.g. Sep 1, or any week that works"
+                    doneText="✓ Date sent to Homestead — we’ll confirm and hold crew"
+                    onSend={(text)=>gcSubmit({ type:"date", itemId:"finish_start", date:text, dateKind: Fn.projectedStart?"confirm":"suggest" })}/>
+                </div>
+              ) : null}
+              {mpSuggest ? (
+                <div>
+                  {line(<span>Matterport scan: <b style={{color:P.ink}}>{_gcTxt(j.matterport.status)}</b> — a 3D as-built of your walls before drywall closes.</span>,"mp")}
+                  <GCSendBox P={P} multiline={false} label="Suggest a different date"
+                    cta="Send date" placeholder="e.g. Tue 7/22, or before the 28th"
+                    doneText="✓ Date sent to Homestead — we’ll confirm"
+                    onSend={(text)=>gcSubmit({ type:"date", itemId:"matterport", date:text, dateKind:"suggest" })}/>
+                </div>
+              ) : null}
+            </Fragment>
+          ));
+        })()}
 
         {/* per-job super assignment (GC self-service — drives filter + email routing) */}
         {sec("Your team on this job", (
