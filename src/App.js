@@ -42846,7 +42846,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-16 · App SW version: v340
+**Last manifest update:** 2026-07-17 · App SW version: v342
 
 ---
 
@@ -42896,6 +42896,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 The biggest screen. Tabs inside Job Detail change based on job type (regular / quick / temp ped).
 
 - **Job Info** · 'shipped' · basics: name, address, customer, foreman, lead, Simpro #
+  - GC Contact field · 'shipped 2026-07-17' · 'SW v341' · a 'gcContact' field next to GC Phone (desktop + mobile Job Info) so the crew knows who they're calling — suggestion by Josh Cloward
   - Status pills with date windows
   - Finish stage cleanup + scheduled window (May 11–22) · 'shipped 2026-05-17' · 'SW v173'
   - InProgressModePill (rough/finish status with date picker)
@@ -43014,6 +43015,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Link edits/deletions sync live · 'shipped 2026-07-10' · 'SW v324' · a question the LINK answered ('q.gcAnswered') now stays content-true to the link on every save: text edits and photo removals propagate, and clearing everything un-answers the question in the app (reopens it, stamps off) — crew-answered questions still can't be touched from a link
 - **Job Note share** · 'shipped' · 'JobNoteSharePage'
 - **GC Portal (contractor mission control)** · 'shipped 2026-07-16' · 'SW v340' · 'GCPortalPage' · '?gcportal=<token>' · one live link per contractor showing ALL their jobs — rough/finish status + dates, per-recipient question tracking, return trips, Homestead's own QC-walk receipts, Matterport 3D links, CO counts — co-branded (per-link 'accentColor'), "built in-house" provenance. **Kweller-safe by construction:** the page reads ONLY 'gc_links/{token}' + 'gc_portal/{portalId}/jobs/*' (a server-published, explicit-allowlist projection — 'functions/gcPortal.js'), never 'jobs/{id}'; questions gated to *effectively shared* only. **Two-way:** GC can answer questions, suggest/confirm dates, add items, message the crew, and assign/change their own supers per job ('GCSuperAssign' → 'assign', applied live to the link; drives the super filter + per-super email routing) ('GCSendBox' → token-authed 'gcPortalSubmit' callable → 'gc_requests', office reviews before anything touches a job). Membership = GC-level union across the contractor's links (exclude wins, sticky across revokes); revoke ROTATES the shared 'portalId' so a revoked holder keeps nothing. 5 adversarial review passes; unit suites 'scripts/gcportal-test.js' + 'scripts/gcnotify-test.js'.
+  - Co-brand header lockup per spec · 'shipped 2026-07-17' · 'SW v342' · header now renders the Homestead longhorn white-on-transparent × the GC's own logo image (Robison script creme, from the approved mockup assets, now in 'public/') instead of the app icon in a white box × a text label; 'link.logoUrl' wins, built-in 'GC_LOGOS' map is the fallback, text label only when no logo exists
 - **GC notification engine (email v1)** · 'shipped 2026-07-16' · 'SW v340' · 'functions/gcNotify.js' · per the cadence policy (vault spec): ONE 8 PM daily digest per contractor (per-recipient super routing, only if their mirror changed — no-content night = no email) + INSTANT emails for schedule changes, inspection results, milestones (incl. "your house is hot"), Matterport-ready, return-trip scheduled. Instants ENQUEUE to 'gc_notify_queue' (5-min drain, idempotent, 5-try cap, quiet hours 9 PM–7 AM defer to morning); emails are composed from the portal projection + a closed set of safe scalars, esc()'d, portal link top + bottom. Provider key lives in function-only 'gc_config/mail' — deploys with email OFF, fails safe until configured (SendGrid HTTP via fetch, no new dependency). Texts (Twilio, 3 interrupt triggers only) = v1.5.
 - **All public pages**: error toasts render (HEToastHost mounted), failures speak instead of silently dropping input · 'SW v315'
 
@@ -45944,11 +45946,20 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
 // NEVER reads jobs/{id}. v1 = read-only display; the two-way write actions
 // (suggest date, answer, add punch, upload, assign super) arrive in Piece 4 via
 // the gc_requests funnel. Self-contained light palette driven by the accent.
+// Header lockup (Koy 2026-07-16 mockup decision): Homestead longhorn
+// white-on-transparent × the GC's OWN logo image — never the app icon in a
+// white box, never a text label when we have their logo. link.logoUrl (on the
+// gc_links doc) wins; this map is the built-in fallback keyed on the
+// normalized label. Assets live in public/.
+const GC_LOGOS = { "robison build co": "/gc-logo-robison.png" };
+const gcLogoFor = (link) => (link && link.logoUrl) ||
+  GC_LOGOS[String((link && link.label) || "").toLowerCase().replace(/\s+/g," ").trim().replace(/\.$/,"")] || null;
 function GCPortalPage({ token }) {
   const [link, setLink] = useState(undefined); // undefined=loading · null=inactive/missing · obj=live
   const [jobs, setJobs] = useState(null);       // null=loading · []=empty
   const [openId, setOpenId] = useState(null);   // job detail modal
   const [superFilter, setSuperFilter] = useState(null);
+  const [gcLogoBroke, setGcLogoBroke] = useState(false); // GC logo img failed → fall back to text label
 
   useEffect(() => {
     if(!token) { setLink(null); return; }
@@ -45976,6 +45987,7 @@ function GCPortalPage({ token }) {
   const accent = (link && /^#[0-9a-fA-F]{6}$/.test(link.accentColor||"")) ? link.accentColor : "#3B5BA5";
   const P = { board:"#F2F3F6", card:"#FFFFFF", line:"#E3E5EA", ink:"#232936", dim:"#5E6670",
     muted:"#8A93A3", accent, urgent:"#B23A3A", deck1:"#141821", deck2:"#1B2030", live:"#34D17F" };
+  const gcLogo = gcLogoBroke ? null : gcLogoFor(link);
 
   const wrap = (kids) => (
     <div style={{minHeight:"100vh",background:P.board,font:"14px/1.5 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif",color:P.ink}}>
@@ -46088,11 +46100,11 @@ function GCPortalPage({ token }) {
       {/* header */}
       <div style={{background:"linear-gradient(180deg,"+P.deck1+" 0%,"+P.deck2+" 100%)",borderRadius:"0 0 14px 14px",
         padding:"16px 18px",display:"flex",alignItems:"center",gap:14,flexWrap:"wrap",margin:"0 -0px"}}>
-        <div style={{width:44,height:44,background:"#fff",borderRadius:9,display:"flex",alignItems:"center",justifyContent:"center",flexShrink:0}}>
-          <img src="/icon-192.png" alt="Homestead Electric" style={{width:40,height:40,objectFit:"contain"}} onError={e=>{e.currentTarget.style.display="none";}}/>
-        </div>
-        <span style={{color:"#5E6670",fontSize:20,fontWeight:300}}>×</span>
-        <div style={{font:"700 21px Georgia,'Times New Roman',serif",letterSpacing:".04em",color:"#EDEADF",whiteSpace:"nowrap"}}>{link.label}</div>
+        <img src="/hs-logo-white.png" alt="Homestead Electric" style={{height:52,width:"auto",flexShrink:0}} onError={e=>{e.currentTarget.style.display="none";}}/>
+        <span style={{color:"#5E6670",fontSize:19,fontWeight:300,flexShrink:0}}>×</span>
+        {gcLogo
+          ? <img src={gcLogo} alt={link.label} style={{height:38,width:"auto",flexShrink:0}} onError={()=>setGcLogoBroke(true)}/>
+          : <div style={{font:"700 21px Georgia,'Times New Roman',serif",letterSpacing:".04em",color:"#EDEADF",whiteSpace:"nowrap"}}>{link.label}</div>}
         <div style={{marginLeft:"auto",textAlign:"right"}}>
           <div style={{font:"600 10px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:"#9AA3B2"}}>Job portal · our own app</div>
           <div style={{fontSize:11,color:"#9AA3B2"}}>
