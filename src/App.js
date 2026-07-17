@@ -1,6 +1,7 @@
 // BUILD_v9_FIXED
 import { useState, useEffect, useRef, useCallback, useMemo, Fragment } from "react";
 import { createPortal } from "react-dom";
+import { Analytics } from "@vercel/analytics/react";
 import { initializeApp } from "firebase/app";
 import { initializeFirestore, getFirestore, persistentLocalCache, persistentMultipleTabManager, doc, setDoc, updateDoc, deleteDoc, getDoc, collection, getDocs, onSnapshot, arrayUnion, query, where, orderBy, limit, serverTimestamp, runTransaction } from "firebase/firestore";
 import { getStorage, ref, uploadBytes, getDownloadURL, deleteObject } from "firebase/storage";
@@ -43012,7 +43013,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Real reopen · 'shipped 2026-07-10' · 'SW v322' · unchecking an answered question now clears the who/when stamps, and for link answers snapshots the rejected content ('q.gcRejected') so the same answer can't auto re-close the question on the next Submit — a genuinely different link answer still applies (and clears the rejection)
   - Link edits/deletions sync live · 'shipped 2026-07-10' · 'SW v324' · a question the LINK answered ('q.gcAnswered') now stays content-true to the link on every save: text edits and photo removals propagate, and clearing everything un-answers the question in the app (reopens it, stamps off) — crew-answered questions still can't be touched from a link
 - **Job Note share** · 'shipped' · 'JobNoteSharePage'
-- **GC Portal (contractor mission control)** · 'shipped 2026-07-16' · 'SW v340' · 'GCPortalPage' · '?gcportal=<token>' · one live link per contractor showing ALL their jobs — rough/finish status + dates, per-recipient question tracking, return trips, Homestead's own QC-walk receipts, Matterport 3D links, CO counts — co-branded (per-link 'accentColor'), "built in-house" provenance. **Kweller-safe by construction:** the page reads ONLY 'gc_links/{token}' + 'gc_portal/{portalId}/jobs/*' (a server-published, explicit-allowlist projection — 'functions/gcPortal.js'), never 'jobs/{id}'; questions gated to *effectively shared* only. **Two-way:** GC can answer questions, suggest/confirm dates, add items, message the crew ('GCSendBox' → token-authed 'gcPortalSubmit' callable → 'gc_requests', office reviews before anything touches a job). Membership = GC-level union across the contractor's links (exclude wins, sticky across revokes); revoke ROTATES the shared 'portalId' so a revoked holder keeps nothing. 5 adversarial review passes; unit suites 'scripts/gcportal-test.js' + 'scripts/gcnotify-test.js'.
+- **GC Portal (contractor mission control)** · 'shipped 2026-07-16' · 'SW v340' · 'GCPortalPage' · '?gcportal=<token>' · one live link per contractor showing ALL their jobs — rough/finish status + dates, per-recipient question tracking, return trips, Homestead's own QC-walk receipts, Matterport 3D links, CO counts — co-branded (per-link 'accentColor'), "built in-house" provenance. **Kweller-safe by construction:** the page reads ONLY 'gc_links/{token}' + 'gc_portal/{portalId}/jobs/*' (a server-published, explicit-allowlist projection — 'functions/gcPortal.js'), never 'jobs/{id}'; questions gated to *effectively shared* only. **Two-way:** GC can answer questions, suggest/confirm dates, add items, message the crew, and assign/change their own supers per job ('GCSuperAssign' → 'assign', applied live to the link; drives the super filter + per-super email routing) ('GCSendBox' → token-authed 'gcPortalSubmit' callable → 'gc_requests', office reviews before anything touches a job). Membership = GC-level union across the contractor's links (exclude wins, sticky across revokes); revoke ROTATES the shared 'portalId' so a revoked holder keeps nothing. 5 adversarial review passes; unit suites 'scripts/gcportal-test.js' + 'scripts/gcnotify-test.js'.
 - **GC notification engine (email v1)** · 'shipped 2026-07-16' · 'SW v340' · 'functions/gcNotify.js' · per the cadence policy (vault spec): ONE 8 PM daily digest per contractor (per-recipient super routing, only if their mirror changed — no-content night = no email) + INSTANT emails for schedule changes, inspection results, milestones (incl. "your house is hot"), Matterport-ready, return-trip scheduled. Instants ENQUEUE to 'gc_notify_queue' (5-min drain, idempotent, 5-try cap, quiet hours 9 PM–7 AM defer to morning); emails are composed from the portal projection + a closed set of safe scalars, esc()'d, portal link top + bottom. Provider key lives in function-only 'gc_config/mail' — deploys with email OFF, fails safe until configured (SendGrid HTTP via fetch, no new dependency). Texts (Twilio, 3 interrupt triggers only) = v1.5.
 - **All public pages**: error toasts render (HEToastHost mounted), failures speak instead of silently dropping input · 'SW v315'
 
@@ -50590,6 +50591,7 @@ function App() {
         </div>
       )}
 
+      <Analytics />
     </div>
 
   );
