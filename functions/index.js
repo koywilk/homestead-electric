@@ -5736,19 +5736,60 @@ exports.gcPortalSubmit = functions.https.onCall(async (data) => {
   const mirrorJob = await db.collection("gc_portal").doc(link.portalId).collection("jobs").doc(jobId).get();
   if (!mirrorJob.exists) throw new functions.https.HttpsError("permission-denied", "job not on this portal");
   const fileUrl = (typeof data.fileUrl === "string" && /^https:\/\//.test(data.fileUrl)) ? data.fileUrl.slice(0, 500) : "";
+  const mirror = mirrorJob.data() || {};
+  const rawDateKind = clip(data.dateKind, 20);
+  const dateKind = ["suggest", "confirm", "needs-by"].indexOf(rawDateKind) !== -1 ? rawDateKind : (rawDateKind ? "suggest" : "");
   const req = {
     token, portalId: link.portalId, gcKey: link.gcKey, gcLabel: clip(link.label, 80),
-    type, jobId, jobName: clip((mirrorJob.data() || {}).name, 80),
+    type, jobId, jobName: clip(mirror.name, 80),
     by: clip(data.by, 60),
     text: clip(data.text, 4000),
     date: clip(data.date, 40),
-    dateKind: clip(data.dateKind, 20),   // suggest | needs-by | confirm
-    itemId: clip(data.itemId, 60),        // question id / rt id / thread anchor
+    dateKind,                             // suggest | needs-by | confirm
+    itemId: clip(data.itemId, 60),        // question id / rt id / finish_start / matterport
     fileName: clip(data.fileName, 200),
     fileUrl,
     status: "new",
     createdAt: new Date().toISOString(),
   };
+  // Date requests: require a date, validate the anchor against the live mirror,
+  // and dedupe open (status:"new") same (jobId, itemId, type) so cancel/reopen
+  // on the portal can't pile the office inbox (v343 audit).
+  if (type === "date") {
+    if (!req.date) throw new functions.https.HttpsError("invalid-argument", "date required");
+    const itemId = req.itemId;
+    if (itemId === "finish_start") {
+      const roughOk = mirror.rough && mirror.rough.status === "complete";
+      const finishOk = mirror.finish && (!mirror.finish.status || mirror.finish.status === "waiting_date");
+      if (!roughOk || !finishOk) {
+        throw new functions.https.HttpsError("failed-precondition", "finish start not open for planning");
+      }
+    } else if (itemId === "matterport") {
+      const mp = mirror.matterport || {};
+      const links = Array.isArray(mp.links) ? mp.links : [];
+      if (!mp.status || mp.status === "complete" || links.length > 0) {
+        throw new functions.https.HttpsError("failed-precondition", "matterport date not needed");
+      }
+    } else if (itemId) {
+      const rts = Array.isArray(mirror.returnTrips) ? mirror.returnTrips : [];
+      if (!rts.some((rt) => rt && String(rt.id) === itemId)) {
+        throw new functions.https.HttpsError("invalid-argument", "unknown date anchor");
+      }
+    }
+    const openSnap = await db.collection("gc_requests")
+      .where("jobId", "==", jobId)
+      .where("status", "==", "new")
+      .limit(50)
+      .get();
+    const dup = openSnap.docs.find((d) => {
+      const x = d.data() || {};
+      return x.type === "date" && x.itemId === itemId && x.portalId === link.portalId;
+    });
+    if (dup) {
+      functions.logger.info("[gcPortal] date request deduped", { type, jobId, itemId, requestId: dup.id });
+      return { ok: true, requestId: dup.id, filed: type, deduped: true };
+    }
+  }
   const ref = await db.collection("gc_requests").add(req);
   functions.logger.info("[gcPortal] request filed", { type, jobId, gcKey: link.gcKey });
   // Alert the office so a contractor request never sits unseen (push — Koy has

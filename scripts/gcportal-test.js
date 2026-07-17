@@ -158,6 +158,11 @@ t("qc items = fromQC only", v.qc.items.length === 2 && v.qc.items.every((q) => q
 t("qc fixer first-name only", v.qc.items[0].fixedBy === "Gage" && v.qc.items[1].fixedBy === "Trever");
 t("matterport keeps https links only", v.matterport.links.length === 1 && v.matterport.links[0].url.startsWith("https://"), JSON.stringify(v.matterport.links));
 t("matterport label", v.matterport.links[0].label === "Rough as-built");
+t("matterport statusDate projected when present", (() => {
+  const withDate = projectJobForPortal("x", { ...FIXTURE, matterportStatus: "scheduled", matterportStatusDate: "7/22/2026", matterportLinks: [], matterportLink: "" });
+  return withDate.matterport.status === "scheduled" && withDate.matterport.statusDate === "7/22/2026" && withDate.matterport.links.length === 0;
+})());
+t("matterport statusDate empty when unset", v.matterport.statusDate === "" || v.matterport.statusDate == null, JSON.stringify(v.matterport));
 t("return trip scope stripped", v.returnTrips[0].scope.indexOf("<") === -1 && v.returnTrips[0].scope.includes("Locations from Austin"));
 t("return trip state", v.returnTrips[0].needsSchedule === true && v.returnTrips[0].targetDate === "7/31/2026");
 t("rt open items stripped", v.returnTrips[0].openItems[0] === "extend laundry outlets");

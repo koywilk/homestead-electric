@@ -39641,6 +39641,17 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
   };
 
   const TYPE = { answer:"Answered a question", punch:"Added an item", date:"Suggested a date", thread:"Sent a message", file:"Shared a file", rsvp:"Replied" };
+  // Human anchor for date/answer itemIds so finish_start vs matterport vs RT
+  // aren't indistinguishable in the office inbox (v343 audit High).
+  const anchorOf = (r) => {
+    const id = String((r && r.itemId) || "");
+    if (!id) return "";
+    if (id === "finish_start") return "Finish start";
+    if (id === "matterport") return "Matterport";
+    if (r.type === "date") return "Return trip";
+    if (r.type === "answer") return "Question";
+    return "";
+  };
   const applyLabel = (t) => (t==="answer"||t==="punch") ? "Apply to job" : "Mark handled";
   const B = { btn:{border:"1px solid #2E477D",background:"#2E477D",color:"#fff",borderRadius:8,padding:"6px 12px",fontWeight:700,fontSize:12.5,cursor:"pointer",fontFamily:"inherit"},
     gbtn:{border:"1px solid #CDD9EC",background:"transparent",color:"#2E477D",borderRadius:8,padding:"5px 11px",fontWeight:700,fontSize:12,cursor:"pointer",fontFamily:"inherit"} };
@@ -39661,7 +39672,7 @@ function GCPortalInbox({ jobs, identity, onUpdateJob }) {
         <div key={r.id} style={{background:"#fff",border:"1px solid #E1E4E9",borderRadius:10,padding:"10px 12px",marginBottom:8,opacity:r.status==="new"?1:0.6}}>
           <div style={{display:"flex",alignItems:"baseline",gap:8,flexWrap:"wrap",marginBottom:4}}>
             <b style={{color:"#2E477D",fontSize:13}}>{r.gcLabel||"Contractor"}</b>
-            <span style={{fontSize:12,color:"#1B1F24"}}>· {TYPE[r.type]||r.type}</span>
+            <span style={{fontSize:12,color:"#1B1F24"}}>· {TYPE[r.type]||r.type}{anchorOf(r)?" · "+anchorOf(r):""}</span>
             <span style={{fontSize:12,color:"#5E6670"}}>on {r.jobName||r.jobId}</span>
             {r.status!=="new" ? <span style={{fontSize:10.5,fontWeight:700,color:"#5E6670",background:"#F0F1F4",borderRadius:99,padding:"1px 8px"}}>{String(r.status).toUpperCase()}</span> : null}
             <span style={{marginLeft:"auto",fontSize:11,color:"#8A93A3"}}>{r.by?r.by+" · ":""}{_gcAgo(r.createdAt)}</span>
@@ -46010,6 +46021,13 @@ function GCPortalPage({ token }) {
   const [superFilter, setSuperFilter] = useState(null);
   const [gcLogoBroken, setGcLogoBroken] = useState(() => new Set()); // URLs that failed → try the next candidate (custom URL → bundled asset → text); recovers live if the office fixes logoUrl
 
+  // Reset the broken-logo Set when the link/token or logoUrl changes so a
+  // repaired same-URL or new custom URL isn't stuck skipped for the session
+  // (v343 audit Low / sibling logo finding).
+  useEffect(() => {
+    setGcLogoBroken(new Set());
+  }, [token, link?.logoUrl]);
+
   useEffect(() => {
     if(!token) { setLink(null); return; }
     const unsub = onSnapshot(doc(db,"gc_links",token), snap => {
@@ -46077,8 +46095,14 @@ function GCPortalPage({ token }) {
     // explicit "waiting_date" state (finish waiting on a start date — Rose).
     if(j.rough && j.rough.status==="complete" && j.finish && (!j.finish.status || j.finish.status==="waiting_date") && !j.quickJob)
       t.push({k:"act", text: j.finish.projectedStart ? "Confirm finish date — proj "+_gcMonthDay(j.finish.projectedStart) : "Plan your finish start"});
-    if(j.matterport && j.matterport.status && j.matterport.links.length===0)
-      t.push({k:"date", text:"Matterport "+j.matterport.status});
+    // Matterport needs GC input when status is set, not complete, and no walkthrough
+    // links yet — exclude terminal "complete" (v343 audit). Use k:"act" so it
+    // counts toward "Need your input" (finish-start already does).
+    if(_gcMpNeedsDate(j)) {
+      const st = j.matterport.status;
+      const when = j.matterport.statusDate ? " — "+_gcShortDate(j.matterport.statusDate) : "";
+      t.push({k:"act", text: st==="scheduled" ? "Confirm Matterport date"+when : "Schedule Matterport"+when});
+    }
     return t;
   };
   const actionCount = (j) => tagsOf(j).filter(t=>t.k==="act").length;
@@ -46253,20 +46277,44 @@ function _gcMonthDay(any){
   return new Date(t).toLocaleDateString("en-US",{month:"short",day:"numeric"});
 }
 // Status pill row for cards + detail modal (mockup: "✓ Rough: Complete" …).
+// Map finish (and rough) from Fn.status / R.status — never from projectedStart
+// alone (v343 audit: projectedStart incorrectly forced "Awaiting Start Date",
+// and waiting_date without a projected date showed "not started").
 function _gcStatusPills(j){
   const R=(j&&j.rough)||{}, Fn=(j&&j.finish)||{};
   const p=[];
-  if(R.status==="complete") p.push("✓ Rough: Complete");
-  else if(R.status==="inprogress") p.push("Rough: In Progress");
+  const roughLabel = ({
+    waiting_date:"Rough: Awaiting Start Date",
+    date_confirmed:"Rough: Start Date Set",
+    scheduled:"Rough: Scheduled",
+    inprogress:"Rough: In Progress",
+    waiting:"Rough: On Hold",
+    complete:"✓ Rough: Complete",
+  })[R.status];
+  if(roughLabel) p.push(roughLabel);
   if(R.inspection==="pass") p.push("✓ Rough inspection: passed");
   if(!(j&&j.quickJob)){
-    if(Fn.status==="complete") p.push("✓ Finish: Complete");
-    else if(Fn.status==="inprogress") p.push("Finish: In Progress");
-    else if(Fn.projectedStart) p.push("Finish: Awaiting Start Date");
+    const finishLabel = ({
+      waiting_date:"Finish: Awaiting Start Date",
+      date_confirmed:"Finish: Start Date Set",
+      scheduled:"Finish: Scheduled",
+      inprogress:"Finish: In Progress",
+      waiting:"Finish: On Hold",
+      complete:"✓ Finish: Complete",
+    })[Fn.status];
+    if(finishLabel) p.push(finishLabel);
     else if(R.status==="complete") p.push("Finish: not started");
     if(Fn.inspection==="pass") p.push("✓ Final inspection passed");
   }
   return p;
+}
+// Shared Matterport "still needs a date from the GC" predicate — card tags +
+// modal Needs & scheduling must agree (v343 audit).
+function _gcMpNeedsDate(j){
+  const mp = j && j.matterport;
+  if(!mp || !mp.status || mp.status==="complete") return false;
+  const links = Array.isArray(mp.links) ? mp.links : [];
+  return links.length === 0;
 }
 // Modal-scope progress bar (GCPortalDetail can't reach GCPortalPage's bar()).
 function _gcBar(P, label, pct, col){
@@ -46390,7 +46438,10 @@ function GCPortalDetail({ job, link, P, onClose }) {
   if(j.rough && j.rough.projectedStart) dates.push(["Rough projected", j.rough.projectedStart]);
   if(j.rough && j.rough.scheduledEnd) dates.push(["Rough scheduled through", j.rough.scheduledEnd]);
   if(j.finish && j.finish.projectedStart) dates.push(["Finish projected", j.finish.projectedStart]);
-  if(j.matterport && j.matterport.status) dates.push(["Matterport scan", j.matterport.status]);
+  if(j.matterport && j.matterport.status) {
+    const mpWhen = j.matterport.statusDate ? " · "+j.matterport.statusDate : "";
+    dates.push(["Matterport scan", j.matterport.status + mpWhen]);
+  }
 
   return (
     <div onClick={e=>{ if(e.target===e.currentTarget) onClose(); }} style={{position:"fixed",inset:0,zIndex:60,background:"rgba(20,24,33,.6)",
@@ -46433,7 +46484,7 @@ function GCPortalDetail({ job, link, P, onClose }) {
         {(() => {
           const R = j.rough||{}, Fn = j.finish||{};
           const finishPlanning = !j.quickJob && R.status==="complete" && (!Fn.status || Fn.status==="waiting_date");
-          const mpSuggest = j.matterport && j.matterport.status && (!j.matterport.links || !j.matterport.links.length);
+          const mpSuggest = _gcMpNeedsDate(j);
           if(!finishPlanning && !mpSuggest) return null;
           return sec("Needs & scheduling", (
             <Fragment>
@@ -46451,11 +46502,12 @@ function GCPortalDetail({ job, link, P, onClose }) {
               ) : null}
               {mpSuggest ? (
                 <div>
-                  {line(<span>Matterport scan: <b style={{color:P.ink}}>{_gcTxt(j.matterport.status)}</b> — a 3D as-built of your walls before drywall closes.</span>,"mp")}
-                  <GCSendBox P={P} multiline={false} label="Suggest a different date"
+                  {line(<span>Matterport scan: <b style={{color:P.ink}}>{_gcTxt(j.matterport.status)}</b>{j.matterport.statusDate?" · "+_gcTxt(j.matterport.statusDate):""} — a 3D as-built of your walls before drywall closes.</span>,"mp")}
+                  <GCSendBox P={P} multiline={false}
+                    label={j.matterport.status==="scheduled" ? "Confirm date or suggest a different one" : "Suggest a scan date"}
                     cta="Send date" placeholder="e.g. Tue 7/22, or before the 28th"
                     doneText="✓ Date sent to Homestead — we’ll confirm"
-                    onSend={(text)=>gcSubmit({ type:"date", itemId:"matterport", date:text, dateKind:"suggest" })}/>
+                    onSend={(text)=>gcSubmit({ type:"date", itemId:"matterport", date:text, dateKind: j.matterport.status==="scheduled"?"confirm":"suggest" })}/>
                 </div>
               ) : null}
             </Fragment>
