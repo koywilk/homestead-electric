@@ -76,6 +76,21 @@ function makeSlug(label) {
   return base + "-" + randomUUID().replace(/-/g, "").slice(0, 4);
 }
 
+// GC logo URL for the portal's co-brand header lockup (rendered as an <img>
+// on the outside page). https-only, matching the matterport rule, or a
+// root-relative path to a bundled asset in public/ ("/gc-logo-robison.png").
+// Anything else — http:, javascript:, data:, protocol-relative "//" — → "".
+// The https branch is an explicit charset, not \S: quotes, backticks, control
+// chars, and unicode (e.g. zero-width space) must die HERE so the stored value
+// stays safe even in a non-React sink (the email engine builds raw HTML).
+function cleanLogoUrl(v) {
+  const s = String(v || "").trim();
+  if (!s || s.length > 500) return "";
+  if (/^https:\/\/[A-Za-z0-9._~:/?#@!$&()*+,;=%-]+$/.test(s)) return s;
+  if (/^\/[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(s)) return s;
+  return "";
+}
+
 // ── punch traversal (rooms/general/hotcheck per zone) ────────────────────────
 function eachPunchItem(punch, fn) {
   if (!punch || typeof punch !== "object") return;
@@ -270,6 +285,7 @@ module.exports = {
   hashOf,
   makeToken,
   makeSlug,
+  cleanLogoUrl,
   jobBelongsToLink,
   projectJobForPortal,
   // exported for tests

@@ -2,7 +2,7 @@
 // Guards the outbound wall (functions/gcPortal.js). Exit 0 = all pass.
 "use strict";
 const {
-  gcKeyOf, stripHtml, hashOf, makeToken, makeSlug, projectJobForPortal, jobBelongsToLink,
+  gcKeyOf, stripHtml, hashOf, makeToken, makeSlug, cleanLogoUrl, projectJobForPortal, jobBelongsToLink,
 } = require("../functions/gcPortal.js");
 
 let failures = 0;
@@ -173,6 +173,20 @@ t("share with unknown id doesn't crash/count", (() => {
   return s2 && s2.sent === 2 && s2.answered === 0 && s2.waiting === 1;
 })());
 t("CO counts only, no contents", v.changeOrders.count === 2 && v.changeOrders.open === 1 && !json.includes("q-1"));
+
+console.log("logo url gate (co-brand header):");
+t("https url passes", cleanLogoUrl("https://cdn.example.com/robison.png") === "https://cdn.example.com/robison.png");
+t("bundled asset path passes", cleanLogoUrl("/gc-logo-robison.png") === "/gc-logo-robison.png");
+t("http rejected", cleanLogoUrl("http://x.com/a.png") === "");
+t("javascript: rejected", cleanLogoUrl("javascript:alert(1)") === "");
+t("data: rejected", cleanLogoUrl("data:image/png;base64,AAAA") === "");
+t("protocol-relative // rejected", cleanLogoUrl("//evil.com/a.png") === "");
+t("path traversal chars rejected", cleanLogoUrl("/a b.png") === "" && cleanLogoUrl("/<img>.png") === "");
+t("empty/null → empty", cleanLogoUrl("") === "" && cleanLogoUrl(null) === "" && cleanLogoUrl(undefined) === "");
+t("overlong rejected", cleanLogoUrl("https://x.com/" + "a".repeat(500)) === "");
+t("quote inside https rejected", cleanLogoUrl('https://x.com/"onerror="alert(1)') === "");
+t("backtick/control/zwsp rejected", cleanLogoUrl("https://x.com/`a.png") === "" && cleanLogoUrl("https://x.com/a.png") === "" && cleanLogoUrl("https://x.com/a​.png") === "");
+t("query string still passes", cleanLogoUrl("https://cdn.example.com/logo.png?v=2&w=300") === "https://cdn.example.com/logo.png?v=2&w=300");
 
 console.log("caps & robustness:");
 const big = { ...FIXTURE, returnTrips: Array.from({ length: 99 }, (_, i) => ({ id: String(i), scope: "s", punch: [] })) };

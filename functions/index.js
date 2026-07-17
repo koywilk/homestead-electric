@@ -5561,6 +5561,7 @@ exports.gcPortalCreateLink = functions.https.onCall(async (data) => {
     token, slug, label, gc: gcRaw, gcKey, portalId,
     contacts: normalizeGcContacts(data.contacts),
     accentColor: typeof data.accentColor === "string" && /^#[0-9a-fA-F]{6}$/.test(data.accentColor) ? data.accentColor : "",
+    logoUrl: gcPortal.cleanLogoUrl(data.logoUrl),
     supersByJob: {},
     jobIdsInclude: cleanIds(data.jobIdsInclude), jobIdsExclude: cleanIds(data.jobIdsExclude),
     revoked: false,
@@ -5668,6 +5669,7 @@ exports.gcPortalUpdateLink = functions.https.onCall(async (data) => {
   const patch = {};
   if (Array.isArray(data.contacts)) patch.contacts = data.contacts.slice(0, 20);
   if (typeof data.accentColor === "string" && (data.accentColor === "" || /^#[0-9a-fA-F]{6}$/.test(data.accentColor))) patch.accentColor = data.accentColor;
+  if (typeof data.logoUrl === "string") patch.logoUrl = gcPortal.cleanLogoUrl(data.logoUrl);
   if (typeof data.label === "string" && data.label.trim()) patch.label = data.label.trim();
   if (data.supersByJob && typeof data.supersByJob === "object" && !Array.isArray(data.supersByJob)) patch.supersByJob = data.supersByJob;
   const cleanIds = (a) => a.map(String).filter(Boolean).slice(0, 500);
@@ -5796,7 +5798,7 @@ exports.gcPortalListLinks = functions.https.onCall(async (data) => {
     const l = d.data();
     return {
       token: l.token, slug: l.slug, label: l.label, gc: l.gc, gcKey: l.gcKey, portalId: l.portalId,
-      accentColor: l.accentColor || "", contacts: Array.isArray(l.contacts) ? l.contacts : [],
+      accentColor: l.accentColor || "", logoUrl: l.logoUrl || "", contacts: Array.isArray(l.contacts) ? l.contacts : [],
       supersByJob: (l.supersByJob && typeof l.supersByJob === "object") ? l.supersByJob : {},
       revoked: !!l.revoked, createdAt: l.createdAt || "", createdBy: l.createdBy || "",
     };

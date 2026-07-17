@@ -12109,6 +12109,35 @@ function CoQuoteNumberField({ co, onCommit }) {
   );
 }
 
+// ── Crew on site TODAY (Crew Planner truth) ──────────────────────────────────
+// "Crew on site" means crew is scheduled on the job TODAY on the Crew Planner
+// (settings/schedule_<monday> → assignments["<jobId>_<dayIdx>"]) — never a
+// phase status. The old roughStatus/finishStatus==="inprogress" check claimed
+// crew was on site for ANY mid-phase job, so approved COs hid their
+// convert-to-Return-Trip option for weeks (Nelson, 2026-07-17). Weekend,
+// no schedule doc, or an empty cell → no crew.
+let _todaySchedule = { monday: "", cells: {}, unsub: null };
+function _crewMondayKey(d) {
+  const m = new Date(d); m.setDate(m.getDate() - ((m.getDay() + 6) % 7));
+  return `${m.getFullYear()}-${String(m.getMonth()+1).padStart(2,"0")}-${String(m.getDate()).padStart(2,"0")}`;
+}
+function _ensureTodaySchedule() {
+  const monday = _crewMondayKey(new Date());
+  if (_todaySchedule.monday === monday) return;
+  if (_todaySchedule.unsub) { try { _todaySchedule.unsub(); } catch(e) {} }
+  const unsub = onSnapshot(doc(db, "settings", "schedule_" + monday),
+    s => { _todaySchedule.cells = (s.exists() && s.data().assignments) || {}; },
+    () => {});
+  _todaySchedule = { monday, cells: {}, unsub };
+}
+function crewOnSiteToday(jobId) {
+  _ensureTodaySchedule();
+  const di = new Date().getDay() - 1;            // Mon=0 … Fri=4
+  if (di < 0 || di > 4 || !jobId) return false;  // weekend / no job id
+  const c = _todaySchedule.cells[`${jobId}_${di}`];
+  return !!(c && (c.lead || (Array.isArray(c.crew) && c.crew.length)));
+}
+
 function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, roughStatus, finishStatus, jobNotes = [], ccFieldink = {}}) {
 
   const [expandedCOs, setExpandedCOs] = useState({});
@@ -12160,7 +12189,7 @@ function ChangeOrders({orders, onChange, jobName, jobSimproNo, jobId, onEmail, r
     }
   };
 
-  const crewOnSite = roughStatus==="inprogress" || finishStatus==="inprogress";
+  const crewOnSite = crewOnSiteToday(jobId);
 
   // buildCOShareText — single source of truth for the CO copy/share layout.
   // Mirrors the in-app CO card: header, status/quote/recipient, then
@@ -28926,7 +28955,7 @@ function computeTasks(jobs) {
 
       // Approved — context-aware: crew on site → complete, no crew → convert to RT
       if(co.coStatus === "approved") {
-        const crewOnSite = rs2 === "inprogress" || fs2 === "inprogress";
+        const crewOnSite = crewOnSiteToday(job.id);
         tasks.push({
           id: job.id+"_co_"+co.id+"_approved", jobId: job.id, jobName: job.name,
           type: "auto", category: "co", foreman,
@@ -39658,6 +39687,7 @@ function GCPortalManager({ jobs, identity }) {
   const [busy, setBusy] = useState("");        // token or "create" while a call is in flight
   const [gcName, setGcName] = useState("");
   const [accent, setAccent] = useState("#3B5BA5");
+  const [logoUrl, setLogoUrl] = useState("");
   const [excluded, setExcluded] = useState(() => new Set());
   const [contacts, setContacts] = useState([]);
   const [cDraft, setCDraft] = useState({ name:"", role:"", emailAddr:"", phone:"" });
@@ -39680,10 +39710,10 @@ function GCPortalManager({ jobs, identity }) {
       const jobIdsExclude = matched.filter(j => excluded.has(j.id)).map(j => j.id);
       const r = await httpsCallable(functions,"gcPortalCreateLink")({
         label: gcName.trim(), gc: gcName.trim(),
-        contacts, accentColor: accent, jobIdsExclude, by: identity?.name || "",
+        contacts, accentColor: accent, logoUrl: logoUrl.trim(), jobIdsExclude, by: identity?.name || "",
       });
       setCreated(r.data);
-      setGcName(""); setContacts([]); setExcluded(new Set()); setAccent("#3B5BA5");
+      setGcName(""); setContacts([]); setExcluded(new Set()); setAccent("#3B5BA5"); setLogoUrl("");
       await refresh();
     } catch(e) { setErr(e.message||"Create failed"); }
     setBusy("");
@@ -39755,6 +39785,12 @@ function GCPortalManager({ jobs, identity }) {
           {["#3B5BA5","#4A5D3A","#2E3440","#7A5C14","#6A2C2C"].map(c=>(
             <button key={c} onClick={()=>setAccent(c)} title={c} style={{width:22,height:22,borderRadius:"50%",background:c,border:accent===c?"3px solid #1B1F24":"2px solid #CDD9EC",cursor:"pointer"}}/>
           ))}
+        </div>
+
+        {/* co-brand logo — renders next to the Homestead longhorn in the portal header */}
+        <div style={{display:"flex",alignItems:"center",gap:8,margin:"0 0 12px"}}>
+          <span style={{fontSize:12.5,color:"#1B1F24",fontWeight:600,whiteSpace:"nowrap"}}>Their logo:</span>
+          <input value={logoUrl} onChange={e=>setLogoUrl(e.target.value)} placeholder="https:// image URL (optional — shows next to ours in their portal header; transparent PNG works best)" style={{...B.field,flex:1}}/>
         </div>
 
         <button onClick={create} disabled={!gcName.trim()||busy==="create"} style={{...B.btn,opacity:(!gcName.trim()||busy==="create")?0.5:1}}>{busy==="create"?"Creating…":"Create portal link"}</button>
@@ -42855,6 +42891,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 - **Job Board** · 'shipped' · the home screen
   - Grouped by stage with collapsible sections
   - Search bar (job name + CO quote number)
+  - Top search · 'shipped 2026-07-17' · 'SW v342' · search bar at the very top of the board (right under the header), same predicate as the ALL JOBS filter (name/GC/address/foreman/Simpro #/quote #), renders the first 12 matching job rows inline with a Clear button
   - Foreman filter via tabs
   - Stage filter (rough/finish/QC/etc.)
   - Flag-only toggle
@@ -42917,6 +42954,7 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
 - **Change Orders** · 'shipped' · 'ChangeOrders', 'CoQuoteNumberField'
   - CO list with status pipeline (needs_sending → simpro_task → pending → approved → scheduled → completed)
   - Quote # field + searchable · 'shipped 2026-05-15' · 'SW v172'
+  - Crew-on-site = TODAY's Crew Planner · 'shipped 2026-07-17' · 'SW v342' · 'crewOnSiteToday(jobId)' reads 'settings/schedule_<monday>' assignments for today's column (weekend/empty → no crew) — replaces the roughStatus/finishStatus "inprogress" guess that hid the approved-CO convert-to-Return-Trip option on any mid-phase job (Nelson); same fix applied to the Up Next approved-CO task title
   - CO photos
   - Email CO
   - Chat CO
@@ -43015,7 +43053,7 @@ Pages designed to be opened by people outside the company via share links (no au
   - Link edits/deletions sync live · 'shipped 2026-07-10' · 'SW v324' · a question the LINK answered ('q.gcAnswered') now stays content-true to the link on every save: text edits and photo removals propagate, and clearing everything un-answers the question in the app (reopens it, stamps off) — crew-answered questions still can't be touched from a link
 - **Job Note share** · 'shipped' · 'JobNoteSharePage'
 - **GC Portal (contractor mission control)** · 'shipped 2026-07-16' · 'SW v340' · 'GCPortalPage' · '?gcportal=<token>' · one live link per contractor showing ALL their jobs — rough/finish status + dates, per-recipient question tracking, return trips, Homestead's own QC-walk receipts, Matterport 3D links, CO counts — co-branded (per-link 'accentColor'), "built in-house" provenance. **Kweller-safe by construction:** the page reads ONLY 'gc_links/{token}' + 'gc_portal/{portalId}/jobs/*' (a server-published, explicit-allowlist projection — 'functions/gcPortal.js'), never 'jobs/{id}'; questions gated to *effectively shared* only. **Two-way:** GC can answer questions, suggest/confirm dates, add items, message the crew, and assign/change their own supers per job ('GCSuperAssign' → 'assign', applied live to the link; drives the super filter + per-super email routing) ('GCSendBox' → token-authed 'gcPortalSubmit' callable → 'gc_requests', office reviews before anything touches a job). Membership = GC-level union across the contractor's links (exclude wins, sticky across revokes); revoke ROTATES the shared 'portalId' so a revoked holder keeps nothing. 5 adversarial review passes; unit suites 'scripts/gcportal-test.js' + 'scripts/gcnotify-test.js'.
-  - Co-brand header lockup per spec · 'shipped 2026-07-17' · 'SW v342' · header now renders the Homestead longhorn white-on-transparent × the GC's own logo image (Robison script creme, from the approved mockup assets, now in 'public/') instead of the app icon in a white box × a text label; 'link.logoUrl' wins, built-in 'GC_LOGOS' map is the fallback, text label only when no logo exists
+  - Co-brand header lockup per spec · 'shipped 2026-07-17' · 'SW v342' · header now renders the Homestead longhorn white-on-transparent × the GC's own logo image (Robison script creme, from the approved mockup assets, now in 'public/') instead of the app icon in a white box × a text label; 'link.logoUrl' wins, built-in 'GC_LOGOS' map is the fallback, text label only when no logo exists. Applies to every link ever created: the office link manager gains a "Their logo" URL field, and 'gcPortalCreateLink' / 'gcPortalUpdateLink' / 'gcPortalListLinks' carry a validated 'logoUrl' ('gcPortal.cleanLogoUrl' — https-only or bundled '/' path, blocks http/javascript/data/protocol-relative, unit-tested)
 - **GC notification engine (email v1)** · 'shipped 2026-07-16' · 'SW v340' · 'functions/gcNotify.js' · per the cadence policy (vault spec): ONE 8 PM daily digest per contractor (per-recipient super routing, only if their mirror changed — no-content night = no email) + INSTANT emails for schedule changes, inspection results, milestones (incl. "your house is hot"), Matterport-ready, return-trip scheduled. Instants ENQUEUE to 'gc_notify_queue' (5-min drain, idempotent, 5-try cap, quiet hours 9 PM–7 AM defer to morning); emails are composed from the portal projection + a closed set of safe scalars, esc()'d, portal link top + bottom. Provider key lives in function-only 'gc_config/mail' — deploys with email OFF, fails safe until configured (SendGrid HTTP via fetch, no new dependency). Texts (Twilio, 3 interrupt triggers only) = v1.5.
 - **All public pages**: error toasts render (HEToastHost mounted), failures speak instead of silently dropping input · 'SW v315'
 
@@ -45953,13 +45991,13 @@ function NeedsBoard({ needs = [], users = [], identity, jobs = [], onSaveNeed, o
 // normalized label. Assets live in public/.
 const GC_LOGOS = { "robison build co": "/gc-logo-robison.png" };
 const gcLogoFor = (link) => (link && link.logoUrl) ||
-  GC_LOGOS[String((link && link.label) || "").toLowerCase().replace(/\s+/g," ").trim().replace(/\.$/,"")] || null;
+  GC_LOGOS[String((link && link.label) || "").toLowerCase().replace(/\s+/g," ").trim().replace(/[.\s]+$/,"")] || null;
 function GCPortalPage({ token }) {
   const [link, setLink] = useState(undefined); // undefined=loading · null=inactive/missing · obj=live
   const [jobs, setJobs] = useState(null);       // null=loading · []=empty
   const [openId, setOpenId] = useState(null);   // job detail modal
   const [superFilter, setSuperFilter] = useState(null);
-  const [gcLogoBroke, setGcLogoBroke] = useState(false); // GC logo img failed → fall back to text label
+  const [gcLogoBroke, setGcLogoBroke] = useState(""); // the URL that failed to load → text fallback; auto-recovers if the office fixes the link's logoUrl (live snapshot)
 
   useEffect(() => {
     if(!token) { setLink(null); return; }
@@ -45987,7 +46025,8 @@ function GCPortalPage({ token }) {
   const accent = (link && /^#[0-9a-fA-F]{6}$/.test(link.accentColor||"")) ? link.accentColor : "#3B5BA5";
   const P = { board:"#F2F3F6", card:"#FFFFFF", line:"#E3E5EA", ink:"#232936", dim:"#5E6670",
     muted:"#8A93A3", accent, urgent:"#B23A3A", deck1:"#141821", deck2:"#1B2030", live:"#34D17F" };
-  const gcLogo = gcLogoBroke ? null : gcLogoFor(link);
+  const _gcLogoUrl = gcLogoFor(link);
+  const gcLogo = (_gcLogoUrl && _gcLogoUrl !== gcLogoBroke) ? _gcLogoUrl : null;
 
   const wrap = (kids) => (
     <div style={{minHeight:"100vh",background:P.board,font:"14px/1.5 system-ui,-apple-system,'Segoe UI',Roboto,sans-serif",color:P.ink}}>
@@ -46103,7 +46142,7 @@ function GCPortalPage({ token }) {
         <img src="/hs-logo-white.png" alt="Homestead Electric" style={{height:52,width:"auto",flexShrink:0}} onError={e=>{e.currentTarget.style.display="none";}}/>
         <span style={{color:"#5E6670",fontSize:19,fontWeight:300,flexShrink:0}}>×</span>
         {gcLogo
-          ? <img src={gcLogo} alt={link.label} style={{height:38,width:"auto",flexShrink:0}} onError={()=>setGcLogoBroke(true)}/>
+          ? <img src={gcLogo} alt={link.label} style={{height:38,width:"auto",flexShrink:0}} onError={()=>setGcLogoBroke(gcLogo)}/>
           : <div style={{font:"700 21px Georgia,'Times New Roman',serif",letterSpacing:".04em",color:"#EDEADF",whiteSpace:"nowrap"}}>{link.label}</div>}
         <div style={{marginLeft:"auto",textAlign:"right"}}>
           <div style={{font:"600 10px system-ui",letterSpacing:".14em",textTransform:"uppercase",color:"#9AA3B2"}}>Job portal · our own app</div>
@@ -49461,6 +49500,44 @@ function App() {
               </div>
 
             </div>
+          </div>
+
+          {/* ── TOP SEARCH — jump to any job from the very top of the board ── */}
+          <div style={{padding:"12px 24px 0",maxWidth:700,margin:"0 auto"}}>
+            <input value={search} onChange={e=>setSearch(e.target.value)} placeholder="Search jobs, GC, address, quote #…"
+              style={{background:C.surface,border:`1px solid ${C.border}`,borderRadius:9,color:C.text,
+                padding:"9px 14px",fontSize:13,fontFamily:"inherit",outline:"none",width:"100%",boxSizing:"border-box"}}/>
+            {search.trim()!=="" && (()=>{
+              // Same predicate as the ALL JOBS section below (incl. the quote-#
+              // hook) so top results always agree with the bottom list.
+              const s = search.toLowerCase();
+              const hits = jobs.filter(j=>
+                (j.name||"").toLowerCase().includes(s)||
+                (j.address||"").toLowerCase().includes(s)||
+                (j.gc||"").toLowerCase().includes(s)||
+                (j.foreman||"").toLowerCase().includes(s)||
+                (j.simproNo||"").toLowerCase().includes(s)||
+                (j.changeOrders||[]).some(co=>(co?.quoteNumber||"").toString().toLowerCase().includes(s))
+              );
+              return (
+                <div style={{marginTop:10}}>
+                  <div style={{display:"flex",alignItems:"center",gap:10,fontSize:11,color:C.dim,marginBottom:8}}>
+                    <span>{hits.length} match{hits.length!==1?"es":""}{hits.length>12?" — showing first 12":""}</span>
+                    <button onClick={()=>setSearch("")}
+                      style={{background:"none",border:`1px solid ${C.border}`,borderRadius:6,color:C.dim,
+                        padding:"2px 8px",fontSize:10,cursor:"pointer",fontFamily:"inherit"}}>Clear</button>
+                  </div>
+                  {hits.slice(0,12).map(job=>(
+                    job.quickJob
+                      ? <QuickJobCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
+                      : job.tempPed
+                      ? <TempPedCard key={job.id} job={job} onOpen={(j)=>setSelected(j)} onUpdate={(updated,patch)=>{ setJobs(js=>js.map(j=>j.id===updated.id?updated:j)); saveJob(updated,patch); }}/>
+                      : <JobRow key={job.id} job={job} fc={_foremanColors[job.foreman]||"#6E7682"} showForeman={true}/>
+                  ))}
+                  {hits.length===0 && <div style={{textAlign:"center",color:C.muted,padding:"18px 0",fontSize:12.5}}>No jobs match that search.</div>}
+                </div>
+              );
+            })()}
           </div>
 
           {/* ── SIMPRO CREW SCHEDULE ── */}
