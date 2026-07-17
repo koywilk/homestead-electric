@@ -5738,7 +5738,11 @@ exports.gcPortalSubmit = functions.https.onCall(async (data) => {
   const fileUrl = (typeof data.fileUrl === "string" && /^https:\/\//.test(data.fileUrl)) ? data.fileUrl.slice(0, 500) : "";
   const mirror = mirrorJob.data() || {};
   const rawDateKind = clip(data.dateKind, 20);
-  const dateKind = ["suggest", "confirm", "needs-by"].indexOf(rawDateKind) !== -1 ? rawDateKind : (rawDateKind ? "suggest" : "");
+  const allowedDateKinds = ["suggest", "confirm", "needs-by"];
+  if (rawDateKind && allowedDateKinds.indexOf(rawDateKind) === -1) {
+    throw new functions.https.HttpsError("invalid-argument", "bad date kind");
+  }
+  const dateKind = rawDateKind;
   const req = {
     token, portalId: link.portalId, gcKey: link.gcKey, gcLabel: clip(link.label, 80),
     type, jobId, jobName: clip(mirror.name, 80),
@@ -5753,56 +5757,107 @@ exports.gcPortalSubmit = functions.https.onCall(async (data) => {
     createdAt: new Date().toISOString(),
   };
   // Date requests: require a date, validate the anchor against the live mirror,
-  // and dedupe open (status:"new") same (jobId, itemId, type) so cancel/reopen
-  // on the portal can't pile the office inbox (v343 audit).
+  // and atomically keep one open request per portal/job/anchor. A stable pointer
+  // doc serializes concurrent submissions while generated gc_requests ids retain
+  // handled-request history. Revised dates update and re-alert instead of being
+  // acknowledged while silently preserving stale text (v344 audit).
+  let requestResult = null;
   if (type === "date") {
-    if (!req.date) throw new functions.https.HttpsError("invalid-argument", "date required");
     const itemId = req.itemId;
-    if (itemId === "finish_start") {
-      const roughOk = mirror.rough && mirror.rough.status === "complete";
-      const finishOk = mirror.finish && (!mirror.finish.status || mirror.finish.status === "waiting_date");
-      if (!roughOk || !finishOk) {
-        throw new functions.https.HttpsError("failed-precondition", "finish start not open for planning");
-      }
-    } else if (itemId === "matterport") {
-      const mp = mirror.matterport || {};
-      const links = Array.isArray(mp.links) ? mp.links : [];
-      if (!mp.status || mp.status === "complete" || links.length > 0) {
-        throw new functions.https.HttpsError("failed-precondition", "matterport date not needed");
-      }
-    } else if (itemId) {
-      const rts = Array.isArray(mirror.returnTrips) ? mirror.returnTrips : [];
-      if (!rts.some((rt) => rt && String(rt.id) === itemId)) {
-        throw new functions.https.HttpsError("invalid-argument", "unknown date anchor");
-      }
+    const validation = gcPortal.validateDateRequest(req, mirror);
+    if (validation) {
+      throw new functions.https.HttpsError(validation.code, validation.message);
     }
-    const openSnap = await db.collection("gc_requests")
+
+    const requests = db.collection("gc_requests");
+    const keyRef = db.collection("gc_request_keys")
+      .doc(gcPortal.dateRequestKey(link.portalId, jobId, itemId));
+    // The query adopts any open request created before pointer documents existed.
+    // All filters are equality filters, so Firestore can merge single-field
+    // indexes without requiring a checked-in composite index.
+    const openQuery = requests
+      .where("portalId", "==", link.portalId)
       .where("jobId", "==", jobId)
+      .where("type", "==", "date")
+      .where("itemId", "==", itemId)
       .where("status", "==", "new")
-      .limit(50)
-      .get();
-    const dup = openSnap.docs.find((d) => {
-      const x = d.data() || {};
-      return x.type === "date" && x.itemId === itemId && x.portalId === link.portalId;
+      .limit(1);
+
+    requestResult = await db.runTransaction(async (tx) => {
+      const keySnap = await tx.get(keyRef);
+      let existing = null;
+      const pointedId = keySnap.exists && String((keySnap.data() || {}).requestId || "");
+      if (pointedId) {
+        const pointed = await tx.get(requests.doc(pointedId));
+        const x = pointed.exists ? (pointed.data() || {}) : {};
+        if (pointed.exists && x.status === "new" && x.type === "date" &&
+            x.portalId === link.portalId && x.jobId === jobId && x.itemId === itemId) {
+          existing = pointed;
+        }
+      }
+      if (!existing) {
+        const openSnap = await tx.get(openQuery);
+        existing = openSnap.empty ? null : openSnap.docs[0];
+      }
+
+      if (existing) {
+        const old = existing.data() || {};
+        const revised = old.date !== req.date || old.dateKind !== req.dateKind || old.by !== req.by;
+        if (revised) {
+          tx.update(existing.ref, {
+            date: req.date,
+            dateKind: req.dateKind,
+            by: req.by,
+            createdAt: req.createdAt,
+            updatedAt: req.createdAt,
+            originalCreatedAt: old.originalCreatedAt || old.createdAt || req.createdAt,
+            revisionCount: (Number(old.revisionCount) || 0) + 1,
+          });
+        }
+        tx.set(keyRef, {
+          requestId: existing.id,
+          portalId: link.portalId,
+          jobId,
+          itemId,
+          updatedAt: req.createdAt,
+        }, { merge: true });
+        return { requestId: existing.id, deduped: true, revised };
+      }
+
+      const ref = requests.doc();
+      tx.create(ref, req);
+      tx.set(keyRef, {
+        requestId: ref.id,
+        portalId: link.portalId,
+        jobId,
+        itemId,
+        updatedAt: req.createdAt,
+      });
+      return { requestId: ref.id, deduped: false, revised: false };
     });
-    if (dup) {
-      functions.logger.info("[gcPortal] date request deduped", { type, jobId, itemId, requestId: dup.id });
-      return { ok: true, requestId: dup.id, filed: type, deduped: true };
-    }
+  } else {
+    const ref = await db.collection("gc_requests").add(req);
+    requestResult = { requestId: ref.id, deduped: false, revised: false };
   }
-  const ref = await db.collection("gc_requests").add(req);
-  functions.logger.info("[gcPortal] request filed", { type, jobId, gcKey: link.gcKey });
+  functions.logger.info("[gcPortal] request filed", {
+    type, jobId, gcKey: link.gcKey, requestId: requestResult.requestId,
+    deduped: requestResult.deduped, revised: requestResult.revised,
+  });
   // Alert the office so a contractor request never sits unseen (push — Koy has
-  // the app; the review inbox lives in Settings). Fire-and-forget, non-fatal.
-  try {
-    const verb = { date: "suggested a date", thread: "sent a message", punch: "added an item",
-      answer: "answered a question", file: "shared a file", rsvp: "replied" }[type] || "sent a request";
-    await sendToNameIfWanted("Koy", "gc_request", {
-      title: "📥 " + (req.gcLabel || "Contractor") + " — portal request",
-      body: verb + " on " + (req.jobName || "a job") + (req.by ? " (" + req.by + ")" : ""),
-    });
-  } catch (e) { functions.logger.warn("[gcPortal] office alert failed (non-fatal)", e.message); }
-  return { ok: true, requestId: ref.id, filed: type };
+  // the app; the review inbox lives in Settings). Exact duplicate retries stay
+  // quiet, while corrected dates notify again.
+  if (!requestResult.deduped || requestResult.revised) {
+    try {
+      const verb = requestResult.revised ? "updated a date" : ({ date: "suggested a date", thread: "sent a message", punch: "added an item",
+        answer: "answered a question", file: "shared a file", rsvp: "replied" }[type] || "sent a request");
+      await sendToNameIfWanted("Koy", "gc_request", {
+        title: "📥 " + (req.gcLabel || "Contractor") + " — portal request",
+        body: verb + " on " + (req.jobName || "a job") + (req.by ? " (" + req.by + ")" : ""),
+      });
+    } catch (e) { functions.logger.warn("[gcPortal] office alert failed (non-fatal)", e.message); }
+  }
+  return { ok: true, requestId: requestResult.requestId, filed: type,
+    deduped: requestResult.deduped, revised: requestResult.revised };
 });
 
 // Office: list open GC requests (admin SDK — client list denied).

@@ -3,6 +3,7 @@
 "use strict";
 const {
   gcKeyOf, stripHtml, hashOf, makeToken, makeSlug, cleanLogoUrl, projectJobForPortal, jobBelongsToLink,
+  portalFinishStatus, dateRequestKey, validateDateRequest,
 } = require("../functions/gcPortal.js");
 
 let failures = 0;
@@ -125,6 +126,8 @@ t("hash differs on change", hashOf({ a: 1 }) !== hashOf({ a: 2 }));
 t("token unguessable-ish", makeToken().length === 20 && makeToken() !== makeToken());
 const slug = makeSlug("Robison Build Co");
 t("slug shape", /^robison-build-co-[a-z0-9]{4}$/.test(slug), slug);
+t("date request key stable", dateRequestKey("p1", "j1", "matterport") === dateRequestKey("p1", "j1", "matterport"));
+t("date request key separates anchors", dateRequestKey("p1", "j1", "matterport") !== dateRequestKey("p1", "j1", "finish_start"));
 
 console.log("jobBelongsToLink (membership):");
 const L = { gcKey: "robison", jobIdsInclude: [], jobIdsExclude: [] };
@@ -163,6 +166,8 @@ t("matterport statusDate projected when present", (() => {
   return withDate.matterport.status === "scheduled" && withDate.matterport.statusDate === "7/22/2026" && withDate.matterport.links.length === 0;
 })());
 t("matterport statusDate empty when unset", v.matterport.statusDate === "" || v.matterport.statusDate == null, JSON.stringify(v.matterport));
+t("legacy finish ready normalized", projectJobForPortal("x", { ...FIXTURE, finishStatus: "ready" }).finish.status === "waiting_date");
+t("canonical finish status unchanged", portalFinishStatus("scheduled") === "scheduled");
 t("return trip scope stripped", v.returnTrips[0].scope.indexOf("<") === -1 && v.returnTrips[0].scope.includes("Locations from Austin"));
 t("return trip state", v.returnTrips[0].needsSchedule === true && v.returnTrips[0].targetDate === "7/31/2026");
 t("rt open items stripped", v.returnTrips[0].openItems[0] === "extend laundry outlets");
@@ -192,6 +197,37 @@ t("overlong rejected", cleanLogoUrl("https://x.com/" + "a".repeat(500)) === "");
 t("quote inside https rejected", cleanLogoUrl('https://x.com/"onerror="alert(1)') === "");
 t("backtick/control/zwsp rejected", cleanLogoUrl("https://x.com/`a.png") === "" && cleanLogoUrl("https://x.com/a.png") === "" && cleanLogoUrl("https://x.com/a​.png") === "");
 t("query string still passes", cleanLogoUrl("https://cdn.example.com/logo.png?v=2&w=300") === "https://cdn.example.com/logo.png?v=2&w=300");
+
+console.log("date request validation:");
+const DATE_MIRROR = {
+  quickJob: false,
+  rough: { status: "complete" },
+  finish: { status: "waiting_date" },
+  matterport: { status: "scheduled", links: [] },
+  returnTrips: [{ id: "rt-open", signedOff: false }, { id: "rt-closed", signedOff: true }],
+};
+const dateErr = (req, mirror) => (validateDateRequest(req, mirror || DATE_MIRROR) || {}).message || "";
+t("finish start accepted", validateDateRequest({ date: "Sep 1", itemId: "finish_start" }, DATE_MIRROR) === null);
+t("legacy ready finish accepted", validateDateRequest(
+  { date: "Sep 1", itemId: "finish_start" },
+  { ...DATE_MIRROR, finish: { status: "ready" } }
+) === null);
+t("quick-job finish rejected", dateErr(
+  { date: "Sep 1", itemId: "finish_start" },
+  { ...DATE_MIRROR, quickJob: true }
+) === "finish start not open for planning");
+t("missing anchor rejected", dateErr({ date: "Sep 1", itemId: "" }) === "date anchor required");
+t("missing date rejected", dateErr({ date: "", itemId: "matterport" }) === "date required");
+t("matterport accepted while scheduled without links", validateDateRequest(
+  { date: "Sep 1", itemId: "matterport" }, DATE_MIRROR
+) === null);
+t("completed matterport rejected", dateErr(
+  { date: "Sep 1", itemId: "matterport" },
+  { ...DATE_MIRROR, matterport: { status: "complete", links: [] } }
+) === "matterport date not needed");
+t("open return trip accepted", validateDateRequest({ date: "Sep 1", itemId: "rt-open" }, DATE_MIRROR) === null);
+t("signed-off return trip rejected", dateErr({ date: "Sep 1", itemId: "rt-closed" }) === "return trip closed");
+t("unknown return trip rejected", dateErr({ date: "Sep 1", itemId: "not-real" }) === "unknown date anchor");
 
 console.log("caps & robustness:");
 const big = { ...FIXTURE, returnTrips: Array.from({ length: 99 }, (_, i) => ({ id: String(i), scope: "s", punch: [] })) };

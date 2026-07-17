@@ -46021,11 +46021,20 @@ function GCPortalPage({ token }) {
   const [superFilter, setSuperFilter] = useState(null);
   const [gcLogoBroken, setGcLogoBroken] = useState(() => new Set()); // URLs that failed → try the next candidate (custom URL → bundled asset → text); recovers live if the office fixes logoUrl
 
-  // Reset the broken-logo Set when the link/token or logoUrl changes so a
-  // repaired same-URL or new custom URL isn't stuck skipped for the session
-  // (v343 audit Low / sibling logo finding).
+  // Reset when the identity/URL changes, when the network returns, or when the
+  // tab becomes visible again. The latter two let a repaired same-URL asset
+  // recover without forcing the contractor to reload the whole portal.
   useEffect(() => {
     setGcLogoBroken(new Set());
+    const retry = () => {
+      if(typeof document==="undefined" || document.visibilityState==="visible") setGcLogoBroken(new Set());
+    };
+    if(typeof document!=="undefined") document.addEventListener("visibilitychange",retry);
+    if(typeof window!=="undefined") window.addEventListener("online",retry);
+    return () => {
+      if(typeof document!=="undefined") document.removeEventListener("visibilitychange",retry);
+      if(typeof window!=="undefined") window.removeEventListener("online",retry);
+    };
   }, [token, link?.logoUrl]);
 
   useEffect(() => {
@@ -46093,7 +46102,8 @@ function GCPortalPage({ token }) {
     });
     // finish is plannable when it hasn't started: no status yet, OR the app's
     // explicit "waiting_date" state (finish waiting on a start date — Rose).
-    if(j.rough && j.rough.status==="complete" && j.finish && (!j.finish.status || j.finish.status==="waiting_date") && !j.quickJob)
+    const finishStatus = _gcPortalFinishStatus(j.finish&&j.finish.status);
+    if(j.rough && j.rough.status==="complete" && j.finish && (!finishStatus || finishStatus==="waiting_date") && !j.quickJob)
       t.push({k:"act", text: j.finish.projectedStart ? "Confirm finish date — proj "+_gcMonthDay(j.finish.projectedStart) : "Plan your finish start"});
     // Matterport needs GC input when status is set, not complete, and no walkthrough
     // links yet — exclude terminal "complete" (v343 audit). Use k:"act" so it
@@ -46276,12 +46286,14 @@ function _gcMonthDay(any){
   const t = Date.parse(any); if(isNaN(t)) return String(any||"");
   return new Date(t).toLocaleDateString("en-US",{month:"short",day:"numeric"});
 }
+function _gcPortalFinishStatus(status){ return status==="ready" ? "waiting_date" : (status||""); }
 // Status pill row for cards + detail modal (mockup: "✓ Rough: Complete" …).
 // Map finish (and rough) from Fn.status / R.status — never from projectedStart
 // alone (v343 audit: projectedStart incorrectly forced "Awaiting Start Date",
 // and waiting_date without a projected date showed "not started").
 function _gcStatusPills(j){
   const R=(j&&j.rough)||{}, Fn=(j&&j.finish)||{};
+  const finishStatus = _gcPortalFinishStatus(Fn.status);
   const p=[];
   const roughLabel = ({
     waiting_date:"Rough: Awaiting Start Date",
@@ -46301,7 +46313,7 @@ function _gcStatusPills(j){
       inprogress:"Finish: In Progress",
       waiting:"Finish: On Hold",
       complete:"✓ Finish: Complete",
-    })[Fn.status];
+    })[finishStatus];
     if(finishLabel) p.push(finishLabel);
     else if(R.status==="complete") p.push("Finish: not started");
     if(Fn.inspection==="pass") p.push("✓ Final inspection passed");
@@ -46439,7 +46451,7 @@ function GCPortalDetail({ job, link, P, onClose }) {
   if(j.rough && j.rough.scheduledEnd) dates.push(["Rough scheduled through", j.rough.scheduledEnd]);
   if(j.finish && j.finish.projectedStart) dates.push(["Finish projected", j.finish.projectedStart]);
   if(j.matterport && j.matterport.status) {
-    const mpWhen = j.matterport.statusDate ? " · "+j.matterport.statusDate : "";
+    const mpWhen = j.matterport.statusDate ? " · "+_gcShortDate(j.matterport.statusDate) : "";
     dates.push(["Matterport scan", j.matterport.status + mpWhen]);
   }
 
@@ -46483,7 +46495,8 @@ function GCPortalDetail({ job, link, P, onClose }) {
             sees on the request ("finish_start" / "matterport"). */}
         {(() => {
           const R = j.rough||{}, Fn = j.finish||{};
-          const finishPlanning = !j.quickJob && R.status==="complete" && (!Fn.status || Fn.status==="waiting_date");
+          const finishStatus = _gcPortalFinishStatus(Fn.status);
+          const finishPlanning = !!j.finish && !j.quickJob && R.status==="complete" && (!finishStatus || finishStatus==="waiting_date");
           const mpSuggest = _gcMpNeedsDate(j);
           if(!finishPlanning && !mpSuggest) return null;
           return sec("Needs & scheduling", (
@@ -46502,7 +46515,7 @@ function GCPortalDetail({ job, link, P, onClose }) {
               ) : null}
               {mpSuggest ? (
                 <div>
-                  {line(<span>Matterport scan: <b style={{color:P.ink}}>{_gcTxt(j.matterport.status)}</b>{j.matterport.statusDate?" · "+_gcTxt(j.matterport.statusDate):""} — a 3D as-built of your walls before drywall closes.</span>,"mp")}
+                  {line(<span>Matterport scan: <b style={{color:P.ink}}>{_gcTxt(j.matterport.status)}</b>{j.matterport.statusDate?" · "+_gcShortDate(j.matterport.statusDate):""} — a 3D as-built of your walls before drywall closes.</span>,"mp")}
                   <GCSendBox P={P} multiline={false}
                     label={j.matterport.status==="scheduled" ? "Confirm date or suggest a different one" : "Suggest a scan date"}
                     cta="Send date" placeholder="e.g. Tue 7/22, or before the 28th"
