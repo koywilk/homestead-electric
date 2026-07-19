@@ -4,7 +4,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** `shipped` · `in-flight` · `planned`
 
-**Last manifest update:** 2026-07-17 · App SW version: v344
+**Last manifest update:** 2026-07-17 · App SW version: v345
 
 ---
 
@@ -120,12 +120,14 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Rough questions
   - Finish questions
   - GC answer map (for sharing)
+  - New-answer visibility + sort by date answered · `shipped 2026-07-17` · `SW v345` · answered list sorts newest-`answeredAt` first (undated legacy answers sink); per-device seen stamps (`qaSeenAns_<jobId>_<phase>-<floor>` in localStorage, share-page `prevVisitAt` pattern) drive a "N NEW" pill on the ANSWERED header + the phase Answered chip, a "NEW ANSWER" badge + green border per question, and a relative time on the answered stamp; expanding the answered section marks seen (badges persist for the visit, clear next visit). Display-only — no job-doc writes
 - **Plans tab** · `shipped` · `PlansTab`
 - **Drive Files** · `shipped` · `DriveFilesSection`
   - Drive folder sync (`syncDriveFoldersToJobs()`)
   - Files upload (`FileUploadSection`)
 - **Home Runs (panels)** · `shipped` · `HomeRunsTab`, `HomeRunLevel`
   - Per-floor home runs
+  - By Panel view · `shipped 2026-07-17` · `SW v345` · `HomeRunsByPanel` + shared `HRRow`/`sortHRRows` — groups every non-blank row by panel (dropdown order), then floor (main → basement → upper → extras), then A-Z, with per-panel pulled counts; auto-default once any panel is labeled, By Panel / By Floor toggle; rows fully editable in both views, edits write back to the row's own floor array through the same sort/renumber, adding + bulk paste stay in By Floor. Stored data shape unchanged
   - Bulk paste home runs
   - Generator load section
   - Electrical panel schedules

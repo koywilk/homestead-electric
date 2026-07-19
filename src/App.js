@@ -13309,24 +13309,23 @@ const getPanelOrder = (customPanels) => {
 const WIRE_ORDER  = {"":0,"14/2":1,"14/3":2,"12/2":3,"12/3":4,"10/2":5,"10/3":6,"8/2":7,"8/3":8,"6/2":9,"6/3":10,"4/2":11,"4/3":12,"2/2":13,"2/3":14,"1/0":15,"2/0":16,"3/0":17,"4/0":18};
 
 
-function HomeRunLevel({rows,onChange,label,customPanels}) {
+// Shared row sort for one floor's home-run array: wire size descending, then
+// alphabetical by name; renumbers 1..n. Both views (floor + panel) route row
+// edits through this so stored per-floor order stays identical no matter
+// which view the edit came from.
+const sortHRRows = (arr) => [...arr].sort((a,b)=>{
+  const wd = (WIRE_ORDER[b.wire]||0)-(WIRE_ORDER[a.wire]||0);
+  if(wd!==0) return wd;
+  return (a.name||"").toLowerCase().localeCompare((b.name||"").toLowerCase());
+}).map((r,i)=>({...r,num:i+1}));
 
-  const [bulkOpen, setBulkOpen] = useState(false);
-  const panelOrder = getPanelOrder(customPanels);
-  const sortRows = (arr) => [...arr].sort((a,b)=>{
-    // Sort by wire size descending (larger wire first), then alphabetically by name
-    const wd = (WIRE_ORDER[b.wire]||0)-(WIRE_ORDER[a.wire]||0);
-    if(wd!==0) return wd;
-    return (a.name||"").toLowerCase().localeCompare((b.name||"").toLowerCase());
-  }).map((r,i)=>({...r,num:i+1}));
-
-  const upd    = (id,p) => { const updated = rows.map(r=>r.id===id?{...r,...p}:r); onChange(('wire' in p||'panel' in p) ? sortRows(updated) : updated.map((r,i)=>({...r,num:i+1}))); };
-  const addRow = () => onChange([...rows, newHRRow(rows.length+1)]);
-  const delRow = (id) => onChange(sortRows(rows.filter(r=>r.id!==id)));
-
-
-  const renderRow = (r, flatIdx) => (
-    <div key={r.id}
+// One editable home-run row — shared by HomeRunLevel (floor view) and
+// HomeRunsByPanel (panel view). upd(id, patch) / del(id) come from the owner
+// so each view routes the write back to the right floor array. addRow is
+// optional (panel view has no add — adding lives in the floor view).
+function HRRow({r, upd, del, addRow, customPanels}) {
+  return (
+    <div
       style={{marginBottom:6,paddingBottom:6,
         borderRadius:7,padding:"6px 4px",
         background:r.status==="Pulled"?"rgba(62,125,90,0.08)":r.status==="Need Specs"?"rgba(239,68,68,0.1)":"none",
@@ -13350,14 +13349,14 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
             {o||"— wire —"}
           </option>)}
         </select>
-        <button onClick={()=>delRow(r.id)}
+        <button onClick={()=>del(r.id)}
           style={{background:"none",border:"none",color:C.muted,cursor:"pointer",fontSize:13,padding:0}}>✕</button>
       </div>
       {/* Row 2: load name + status */}
       <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px",gap:4,alignItems:"center"}}>
         <span/>
         <Inp value={r.name} onChange={e=>upd(r.id,{name:e.target.value})} placeholder="Load name…"
-          onKeyDown={e=>e.key==="Enter"&&addRow()}/>
+          onKeyDown={e=>e.key==="Enter"&&addRow&&addRow()}/>
         <Sel value={r.status} onChange={e=>{
           const val=e.target.value;
           const who=getIdentity();
@@ -13391,14 +13390,24 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
       )}
     </div>
   );
+}
 
-  const colHeaders = (
-    <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px 22px",gap:4,marginBottom:4,padding:"0 2px"}}>
-      {["#","Panel","Wire",""].map((h,i)=>(
-        <div key={i} style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
-      ))}
-    </div>
-  );
+// Column headers shared by both home-run views.
+const HRColHeaders = () => (
+  <div style={{display:"grid",gridTemplateColumns:"22px 1fr 80px 22px",gap:4,marginBottom:4,padding:"0 2px"}}>
+    {["#","Panel","Wire",""].map((h,i)=>(
+      <div key={i} style={{fontSize:9,color:C.dim,fontWeight:700,letterSpacing:"0.08em"}}>{h}</div>
+    ))}
+  </div>
+);
+
+function HomeRunLevel({rows,onChange,label,customPanels}) {
+
+  const [bulkOpen, setBulkOpen] = useState(false);
+  const upd    = (id,p) => { const updated = rows.map(r=>r.id===id?{...r,...p}:r); onChange(('wire' in p||'panel' in p) ? sortHRRows(updated) : updated.map((r,i)=>({...r,num:i+1}))); };
+  const addRow = () => onChange([...rows, newHRRow(rows.length+1)]);
+  const delRow = (id) => onChange(sortHRRows(rows.filter(r=>r.id!==id)));
+  const renderRow = (r) => <HRRow key={r.id} r={r} upd={upd} del={delRow} addRow={addRow} customPanels={customPanels}/>;
 
   return (
     <div style={{marginBottom:24}}>
@@ -13406,7 +13415,7 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
         <div style={{fontSize:12,color:C.blue,fontWeight:700,letterSpacing:"0.06em"}}>{label}</div>
       </div>
 
-      {colHeaders}
+      <HRColHeaders/>
       {(()=>{
         const unpulled=rows.filter(r=>r.status!=="Pulled");
         const pulled=rows.filter(r=>r.status==="Pulled");
@@ -13440,13 +13449,87 @@ function HomeRunLevel({rows,onChange,label,customPanels}) {
           customPanels={customPanels}
           onCancel={()=>setBulkOpen(false)}
           onAdd={(newRows)=>{
-            onChange(sortRows([...rows, ...newRows.map(r=>({...r,id:uid()}))]));
+            onChange(sortHRRows([...rows, ...newRows.map(r=>({...r,id:uid()}))]));
             setBulkOpen(false);
           }}/>
       )}
     </div>
   );
 
+}
+
+
+// ── Home Runs: panel-first view ──────────────────────────────────────────
+// Groups every non-blank row by PANEL (panel-dropdown order), then floor
+// (same main → basement → upper order as the floor view), then alphabetical
+// by load name. Rows are the same editable HRRow as the floor view; edits
+// route back to the row's own floor array through sortHRRows, so the stored
+// per-floor data is identical no matter which view the edit came from.
+// Blank seeded rows (no name/wire/panel/status) only show in the floor view,
+// which is also where Add Row / Bulk paste live.
+function HomeRunsByPanel({homeRuns, onHRChange, customPanels}) {
+  const floors = [
+    ["main","Main Level"],["basement","Basement"],["upper","Upper Level"],
+    ...((homeRuns.extraFloors||[]).map(ef=>[ef.key, ef.label||ef.key])),
+  ];
+  const floorIdx = {}; floors.forEach(([k],i)=>{ floorIdx[k]=i; });
+  const hasContent = (r) => !!(r && ((r.name||"").trim()||r.wire||r.panel||r.status));
+  const flat = floors.flatMap(([k,label]) => (homeRuns[k]||[]).filter(hasContent).map(r=>({fk:k, fl:label, r})));
+
+  const panelOrder = getPanelOrder(customPanels);
+  const groups = {};
+  flat.forEach(x=>{ const p=(x.r.panel||"").trim(); (groups[p]=groups[p]||[]).push(x); });
+  // Unknown panel names (row kept a label that's no longer in the custom
+  // list) sort after the known panels but before Dedicated Loads (999).
+  const panelNames = Object.keys(groups).sort((a,b)=>{
+    const oa = panelOrder[a]!==undefined?panelOrder[a]:500, ob = panelOrder[b]!==undefined?panelOrder[b]:500;
+    return oa!==ob ? oa-ob : a.localeCompare(b);
+  });
+
+  const updIn = (fk) => (id,p) => {
+    const arr = homeRuns[fk]||[];
+    const updated = arr.map(r=>r.id===id?{...r,...p}:r);
+    onHRChange({...homeRuns, [fk]: ('wire' in p||'panel' in p) ? sortHRRows(updated) : updated.map((r,i)=>({...r,num:i+1}))});
+  };
+  const delIn = (fk) => (id) => onHRChange({...homeRuns, [fk]: sortHRRows((homeRuns[fk]||[]).filter(r=>r.id!==id))});
+
+  if(!flat.length) return <div style={{fontSize:11,color:C.muted,fontStyle:"italic",marginBottom:12}}>No loads yet — switch to the floor view to add rows.</div>;
+
+  return (
+    <div style={{marginBottom:12}}>
+      {panelNames.map(p=>{
+        const rows = [...groups[p]].sort((a,b)=>{
+          const fd = (floorIdx[a.fk]!==undefined?floorIdx[a.fk]:99)-(floorIdx[b.fk]!==undefined?floorIdx[b.fk]:99);
+          if(fd!==0) return fd;
+          return (a.r.name||"").toLowerCase().localeCompare((b.r.name||"").toLowerCase());
+        });
+        const pulled = rows.filter(x=>x.r.status==="Pulled").length;
+        let lastFk = null;
+        return (
+          <div key={p||"__nopanel"} style={{marginBottom:22}}>
+            <div style={{display:"flex",alignItems:"baseline",gap:8,marginBottom:8,borderBottom:`1px solid ${p?C.accent+"44":C.border}`,paddingBottom:4}}>
+              <span style={{fontSize:12,fontWeight:800,letterSpacing:"0.06em",color:p?C.accent:C.muted}}>
+                {p||"No Panel Assigned"}
+              </span>
+              <span style={{fontSize:10,color:pulled===rows.length?C.green:C.dim}}>
+                {pulled===rows.length?`all ${rows.length} pulled`:`${pulled} of ${rows.length} pulled`}
+              </span>
+            </div>
+            <HRColHeaders/>
+            {rows.map(x=>{
+              const showFloor = x.fk!==lastFk; lastFk = x.fk;
+              return (
+                <Fragment key={x.r.id}>
+                  {showFloor&&<div style={{fontSize:9,fontWeight:700,letterSpacing:"0.08em",color:C.blue,margin:"6px 0 4px",textTransform:"uppercase"}}>{x.fl}</div>}
+                  <HRRow r={x.r} upd={updIn(x.fk)} del={delIn(x.fk)} customPanels={customPanels}/>
+                </Fragment>
+              );
+            })}
+          </div>
+        );
+      })}
+    </div>
+  );
 }
 
 
@@ -14562,6 +14645,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
   const [sending,         setSending]         = useState(false);
   const [copied,          setCopied]          = useState(false);
   const [editingBreakers, setEditingBreakers] = useState(null); // panel name currently in edit mode
+  const [hrView,          setHrView]          = useState(null); // null = auto: panel view once any panel is labeled, floor view before that
   const [addingPO,        setAddingPO]        = useState({});  // { [panelName]: selectedSource }
   const [poConfirm,       setPoConfirm]       = useState({});  // { [panelName]: confirmMessage }
   const showPOConfirm = (p, msg) => { setPoConfirm(v=>({...v,[p]:msg})); setTimeout(()=>setPoConfirm(v=>({...v,[p]:null})),3000); };
@@ -14872,6 +14956,10 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
           // ── Inline panel breaker summary ──
           const extraRows=(homeRuns.extraFloors||[]).flatMap(ef=>homeRuns[ef.key]||[]);
           const allHRRows=[...(homeRuns.main||[]),...(homeRuns.upper||[]),...(homeRuns.basement||[]),...extraRows];
+          // View default (Koy 2026-07-17): once any panel is labeled, the list
+          // reads panel → floor → alphabetical; before that, the floor view.
+          const anyPanelLabeled = allHRRows.some(r=>r&&r.panel);
+          const hrViewEff = hrView || (anyPanelLabeled ? "panel" : "floor");
           // Meter can carry breakers, so
           // include it in the panel summary cards.
           const panels=getPanelOpts(cp).filter(p=>p!=="");
@@ -15365,6 +15453,21 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
               </div>
             )}
 
+            {/* View toggle — By Panel is the auto-default once any panel is labeled */}
+            <div style={{display:'flex',alignItems:'center',gap:6,marginBottom:14}}>
+              {[['panel','By Panel'],['floor','By Floor']].map(([v,l])=>(
+                <button key={v} type="button" onClick={()=>setHrView(v)}
+                  style={{fontSize:11,fontWeight:700,padding:'4px 12px',borderRadius:99,cursor:'pointer',fontFamily:'inherit',
+                    border:`1px solid ${hrViewEff===v?C.accent:C.border}`,background:hrViewEff===v?`${C.accent}18`:C.card,color:hrViewEff===v?C.accent:C.dim}}>
+                  {l}
+                </button>
+              ))}
+              {hrViewEff==='panel'&&<span style={{fontSize:10,color:C.muted}}>panel → floor → A-Z · add rows in By Floor</span>}
+            </div>
+
+            {hrViewEff==='panel' ? (
+              <HomeRunsByPanel homeRuns={homeRuns} onHRChange={onHRChange} customPanels={cp}/>
+            ) : (<>
             {[['main','Main Level Loads'],['basement','Basement Level Loads'],['upper','Upper Level Loads']].map(([k,l])=>(
               <HomeRunLevel key={k} label={l} rows={homeRuns[k]||[]} customPanels={cp} onChange={v=>onHRChange({...homeRuns,[k]:v})}/>
             ))}
@@ -15380,6 +15483,7 @@ function HomeRunsTab({homeRuns, panelCounts, onHRChange, onCountChange, jobId, j
               </div>
             ))}
             <HRAddFloor homeRuns={homeRuns} onHRChange={onHRChange}/>
+            </>)}
             </>
           );
         })()}
@@ -27043,6 +27147,20 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
   // list stops being a wall of inputs. Answered section collapses by default.
   const [moreOpen, setMoreOpen] = useState(()=>new Set());
   const [showAnswered, setShowAnswered] = useState(false);
+  // "New answer" tracking (Koy 2026-07-17: "really hard to tell when
+  // questions have been answered"). Per-device last-seen stamp for this
+  // job+phase+floor's answered list, same localStorage pattern as the share
+  // page's prevVisitAt. Read once at mount so badges stay up the whole
+  // visit; re-stamped only when the answered section is actually EXPANDED —
+  // answers you never laid eyes on stay flagged NEW next visit. First-ever
+  // visit writes a baseline instead of flagging years of history.
+  // Display-only: never writes the job doc.
+  const seenKey = jobId ? `qaSeenAns_${jobId}_${photoFolder}` : null;
+  const [ansSeenAt] = useState(()=>{ try { return seenKey ? localStorage.getItem(seenKey) : null; } catch { return null; } });
+  useEffect(()=>{
+    if(seenKey && !ansSeenAt){ try { localStorage.setItem(seenKey, new Date().toISOString()); } catch {} }
+  },[]);
+  const newAns = (q) => !!(ansSeenAt && q.done && q.answeredAt && String(q.answeredAt) > ansSeenAt);
   const needsReplyQ = (q) => { const t = threadOf(q); return !q.done && ( !!gcAnswerMap[q.id] || !!(gcNoteMap[q.id]||"").trim() || (t.length>0 && t[t.length-1]?.role==='client') ); };
 
   // Default a new question's recipient to whatever section is being filtered to,
@@ -27079,10 +27197,20 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
   // crew replies/answers, they fall out of the panel and reappear here.
   if(excludeIds) open = open.filter(q=>!excludeIds.has(q.id));
 
-  const answered = questions.filter(q=>q.done && matchesRecip(q));
+  // Newest-answered first (Koy 2026-07-17) — the fresh answer is the one
+  // you're hunting for; undated legacy answers sink to the bottom. Q numbers
+  // stay stable (renderQ numbers off questions.indexOf, not this order).
+  const answered = questions.filter(q=>q.done && matchesRecip(q))
+    .sort((a,b)=>String(b.answeredAt||"").localeCompare(String(a.answeredAt||"")));
+  const newAnsCount = answered.filter(newAns).length;
   const showOpenSection     = statusFilter!=='answered';
   const showAnsweredSection = statusFilter==null || statusFilter==='answered';
   const answeredExpanded    = showAnswered || statusFilter==='answered';
+  // Expanded = seen. Stamp now; badges keep showing this visit (newAns reads
+  // the mount-time ansSeenAt), and clear on the next visit.
+  useEffect(()=>{
+    if(seenKey && answeredExpanded){ try { localStorage.setItem(seenKey, new Date().toISOString()); } catch {} }
+  },[seenKey, answeredExpanded]);
 
   const renderQ  = (q,i,globalIdx) => {
     // Cards with existing note/method content stay fully expanded (they have
@@ -27091,7 +27219,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
     const more = moreOpen.has(q.id) || (!q.done && hasMoreContent);
     return (
 
-    <div key={q.id} style={{background:C.surface,border:`1px solid ${q.done?C.border:color+"33"}`,
+    <div key={q.id} style={{background:C.surface,border:`1px solid ${q.done?(newAns(q)?"#3E7D5A88":C.border):color+"33"}`,
 
       borderRadius:10,padding:12,marginBottom:10,transition:"opacity 0.2s"}}>
 
@@ -27165,6 +27293,7 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
 
             onSave={v=>upd(q.id,{question:v})}/>
 
+          {newAns(q)&&<span style={{fontSize:9,fontWeight:800,color:'#3E7D5A',background:'#DEEFE6',border:'1px solid #3E7D5A44',borderRadius:99,padding:'1px 8px',alignSelf:'flex-start',letterSpacing:'0.04em'}}>NEW ANSWER</span>}
           {q.source&&<span style={{fontSize:9,fontWeight:700,color:C.orange,background:`${C.orange}18`,border:`1px solid ${C.orange}33`,borderRadius:99,padding:'1px 7px',alignSelf:'flex-start',display:'inline-flex',alignItems:'center',gap:4}}><Icon name="mapPin" size={9}/> {q.source}</span>}
           {(q.addedBy||q.addedAt)&&<span style={{fontSize:9,color:C.dim}}>
             {q.addedBy?`added by ${q.addedBy}`:"added"}{q.addedAt?` · ${new Date(q.addedAt).toLocaleDateString('en-US',{month:'short',day:'numeric'})} (${timeAgo(q.addedAt)})`:""}
@@ -27275,24 +27404,29 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
               })}
             </div>
           )}
-          {(()=>{
-            // Paper trail: how the answer came in (link vs in person), who took
-            // it, and when. Older answers without a stamp just render nothing.
-            const via = q.answeredVia || (q.gcAnswered ? 'link' : '');
-            const methodLabel = answerMethodLabel(via);
-            const when = q.answeredAt ? new Date(q.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
-            if(!methodLabel && !q.answeredBy && !when && !q.answerNote) return null;
-            return (
-              <div style={{fontSize:9,color:C.dim,marginTop:3,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
-                {methodLabel&&<span style={{fontWeight:700,color:via==='link'?'#3E7D5A':'#3B5BA5',background:via==='link'?'#DEEFE6':'#E0E8F3',borderRadius:4,padding:'1px 5px'}}>{methodLabel}</span>}
-                {(q.answeredBy||when)&&<span>Answered{q.answeredBy?` by ${q.answeredBy}`:''}{when?` · ${when}`:''}</span>}
-                {q.answerNote&&<span style={{fontStyle:'italic'}}>· {q.answerNote}</span>}
-              </div>
-            );
-          })()}
         </div>
 
       )}
+
+      {/* Paper trail: how the answer came in (link vs in person), who took
+          it, and when. Lives OUTSIDE the answer block (2026-07-18) so a
+          question checked off with no typed answer still shows WHEN it was
+          answered — before this it rendered no date at all, which is exactly
+          the "can't tell when things got answered" complaint. Older answers
+          without any stamp still render nothing. */}
+      {q.done&&(()=>{
+        const via = q.answeredVia || (q.gcAnswered ? 'link' : '');
+        const methodLabel = answerMethodLabel(via);
+        const when = q.answeredAt ? new Date(q.answeredAt).toLocaleDateString('en-US',{month:'short',day:'numeric'}) : '';
+        if(!methodLabel && !q.answeredBy && !when && !q.answerNote) return null;
+        return (
+          <div style={{marginLeft:22,fontSize:9,color:C.dim,marginTop:3,display:'flex',alignItems:'center',gap:5,flexWrap:'wrap'}}>
+            {methodLabel&&<span style={{fontWeight:700,color:via==='link'?'#3E7D5A':'#3B5BA5',background:via==='link'?'#DEEFE6':'#E0E8F3',borderRadius:4,padding:'1px 5px'}}>{methodLabel}</span>}
+            {(q.answeredBy||when)&&<span>Answered{q.answeredBy?` by ${q.answeredBy}`:''}{when?` · ${when} (${timeAgo(q.answeredAt)})`:''}</span>}
+            {q.answerNote&&<span style={{fontStyle:'italic'}}>· {q.answerNote}</span>}
+          </div>
+        );
+      })()}
 
       {/* Late link answer — arrived AFTER the crew closed this question, so the
           apply effect deliberately skipped it (crew answers are never clobbered).
@@ -27484,7 +27618,9 @@ function QAList({questions: _questions, onChange, color, gcAnswerMap={}, gcNoteM
             style={{display:"block",width:"100%",textAlign:"left",fontSize:10,fontWeight:800,letterSpacing:"0.12em",color:C.green,
               background:"none",border:"none",borderBottom:`1px solid ${C.green}33`,padding:0,paddingBottom:4,marginBottom:8,
               cursor:statusFilter==='answered'?"default":"pointer",fontFamily:"inherit"}}>
-            ✓ ANSWERED ({answered.length}){statusFilter==='answered'?'':(answeredExpanded?' ▴':' ▾')}
+            ✓ ANSWERED ({answered.length})
+            {newAnsCount>0&&<span style={{marginLeft:8,fontSize:9,fontWeight:800,color:'#fff',background:'#3E7D5A',borderRadius:99,padding:'1px 8px',letterSpacing:'0.04em',verticalAlign:'middle'}}>{newAnsCount} NEW</span>}
+            {statusFilter==='answered'?'':(answeredExpanded?' ▴':' ▾')}
           </button>
 
           {answeredExpanded && answered.map((q,i)=>renderQ(q,i,questions.indexOf(q)))}
@@ -27579,6 +27715,19 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
   const openCount  = allQs.filter(q=>!q.done).length;
   const needsCount = allQs.filter(q=>needsReplyQ(q)).length;
   const ansCount   = allQs.filter(q=>q.done).length;
+  // Answers this device hasn't seen yet — reads the same per-floor seen
+  // stamps QAList keeps (key must build exactly like QAList's photoFolder
+  // prop below). Count only; the per-question badges live in QAList.
+  const newAnsTotal = (()=>{
+    if(!jobId) return 0;
+    let n=0;
+    ["upper","main","basement"].forEach(k=>{
+      let seen=null; try { seen=localStorage.getItem(`qaSeenAns_${jobId}_${photoFolder?photoFolder+"-":""}${k}`); } catch {}
+      if(!seen) return;
+      (Array.isArray(questions[k])?questions[k]:[]).forEach(q=>{ if(q.done&&q.answeredAt&&String(q.answeredAt)>seen) n++; });
+    });
+    return n;
+  })();
 
   return (
 
@@ -27601,7 +27750,9 @@ function QASection({questions: _questions, onChange, color, gcAnswerMap={}, gcNo
               Needs reply ({needsCount})
             </button>
           )}
-          {chip(statusFilter==='answered', `Answered (${ansCount})`, ()=>setStatusFilter('answered'), "__stAns")}
+          {chip(statusFilter==='answered',
+            <>Answered ({ansCount}){newAnsTotal>0&&<span style={{marginLeft:6,fontSize:9,fontWeight:800,color:'#fff',background:'#3E7D5A',borderRadius:99,padding:'1px 7px',verticalAlign:'middle'}}>{newAnsTotal} NEW</span>}</>,
+            ()=>setStatusFilter('answered'), "__stAns")}
         </div>
       )}
 
@@ -42893,7 +43044,7 @@ Source of truth for every feature in the app, organized by area. The in-app App 
 
 **Status legend:** 'shipped' · 'in-flight' · 'planned'
 
-**Last manifest update:** 2026-07-17 · App SW version: v343
+**Last manifest update:** 2026-07-17 · App SW version: v345
 
 ---
 
@@ -43009,12 +43160,14 @@ The biggest screen. Tabs inside Job Detail change based on job type (regular / q
   - Rough questions
   - Finish questions
   - GC answer map (for sharing)
+  - New-answer visibility + sort by date answered · 'shipped 2026-07-17' · 'SW v345' · answered list sorts newest-'answeredAt' first (undated legacy answers sink); per-device seen stamps ('qaSeenAns_<jobId>_<phase>-<floor>' in localStorage, share-page 'prevVisitAt' pattern) drive a "N NEW" pill on the ANSWERED header + the phase Answered chip, a "NEW ANSWER" badge + green border per question, and a relative time on the answered stamp; expanding the answered section marks seen (badges persist for the visit, clear next visit). Display-only — no job-doc writes
 - **Plans tab** · 'shipped' · 'PlansTab'
 - **Drive Files** · 'shipped' · 'DriveFilesSection'
   - Drive folder sync ('syncDriveFoldersToJobs()')
   - Files upload ('FileUploadSection')
 - **Home Runs (panels)** · 'shipped' · 'HomeRunsTab', 'HomeRunLevel'
   - Per-floor home runs
+  - By Panel view · 'shipped 2026-07-17' · 'SW v345' · 'HomeRunsByPanel' + shared 'HRRow'/'sortHRRows' — groups every non-blank row by panel (dropdown order), then floor (main → basement → upper → extras), then A-Z, with per-panel pulled counts; auto-default once any panel is labeled, By Panel / By Floor toggle; rows fully editable in both views, edits write back to the row's own floor array through the same sort/renumber, adding + bulk paste stay in By Floor. Stored data shape unchanged
   - Bulk paste home runs
   - Generator load section
   - Electrical panel schedules
@@ -43065,6 +43218,7 @@ Pages designed to be opened by people outside the company via share links (no au
 - **Job Note share** · 'shipped' · 'JobNoteSharePage'
 - **GC Portal (contractor mission control)** · 'shipped 2026-07-16' · 'SW v340' · 'GCPortalPage' · '?gcportal=<token>' · one live link per contractor showing ALL their jobs — rough/finish status + dates, per-recipient question tracking, return trips, Homestead's own QC-walk receipts, Matterport 3D links, CO counts — co-branded (per-link 'accentColor'), "built in-house" provenance. **Kweller-safe by construction:** the page reads ONLY 'gc_links/{token}' + 'gc_portal/{portalId}/jobs/*' (a server-published, explicit-allowlist projection — 'functions/gcPortal.js'), never 'jobs/{id}'; questions gated to *effectively shared* only. **Two-way:** GC can answer questions, suggest/confirm dates, add items, message the crew, and assign/change their own supers per job ('GCSuperAssign' → 'assign', applied live to the link; drives the super filter + per-super email routing) ('GCSendBox' → token-authed 'gcPortalSubmit' callable → 'gc_requests', office reviews before anything touches a job). Membership = GC-level union across the contractor's links (exclude wins, sticky across revokes); revoke ROTATES the shared 'portalId' so a revoked holder keeps nothing. 5 adversarial review passes; unit suites 'scripts/gcportal-test.js' + 'scripts/gcnotify-test.js'.
   - Co-brand header lockup per spec · 'shipped 2026-07-17' · 'SW v342' · header now renders the Homestead longhorn white-on-transparent × the GC's own logo image (Robison script creme, from the approved mockup assets, now in 'public/') instead of the app icon in a white box × a text label; 'link.logoUrl' wins, built-in 'GC_LOGOS' map is the fallback, text label only when no logo exists. Applies to every link ever created: the office link manager gains a "Their logo" URL field, and 'gcPortalCreateLink' / 'gcPortalUpdateLink' / 'gcPortalListLinks' carry a validated 'logoUrl' ('gcPortal.cleanLogoUrl' — https-only or bundled '/' path, blocks http/javascript/data/protocol-relative, unit-tested)
+  - v343 audit round (Cursor draft → Claude-approved) · 'shipped 2026-07-17' · 'SW v344' · office inbox labels date anchors (Finish start / Matterport / Return trip / Question); Matterport CTA gated by shared '_gcMpNeedsDate' (card tags + modal can't drift; terminal 'complete' excluded), counts toward Need-your-input, confirm-vs-suggest 'dateKind' when scheduled; status pills map straight from the official ROUGH/FINISH status set (waiting_date/date_confirmed/scheduled/inprogress/waiting/complete — never 'projectedStart' alone); mirror projects 'matterportStatusDate' (+2 tests); 'gcPortalSubmit' requires a date, validates the anchor against the live mirror, and dedupes open same-anchor requests ('deduped:true'); broken-logo Set resets on link/logoUrl change. Needs 'firebase deploy --only functions:gcPortalSubmit'
   - Mockup-fidelity pass + audit fixes · 'shipped 2026-07-17' · 'SW v343' · cards/modal now match the approved mockup: '#simproNo' job numbers, absolute short dates ("updated 7/15", never "115d ago"), action tags carry dates ("Return trip: needs scheduling (by 7/24)", "Confirm finish date — proj Sep 1"), status pill rows ('_gcStatusPills') on cards + modal, modal-top ROUGH/FINISH bars, hot summary tiles tinted, "Return trips — need scheduling" label. NEW modal "Needs & scheduling" section: finish-start plan/confirm + Matterport date-suggest, both filing 'type:"date"' gc_requests ('itemId:"finish_start"' / '"matterport"') so the card's action tags finally land on real actions. Cursor-audit fixes: 'GC_LOGOS' keyed by 'gcKey' (canonical) with label alias, broken logo URL falls down the chain custom → bundled → text ('gcLogoBroken' Set, live-recovering), logo 'maxWidth' cap for phones
 - **GC notification engine (email v1)** · 'shipped 2026-07-16' · 'SW v340' · 'functions/gcNotify.js' · per the cadence policy (vault spec): ONE 8 PM daily digest per contractor (per-recipient super routing, only if their mirror changed — no-content night = no email) + INSTANT emails for schedule changes, inspection results, milestones (incl. "your house is hot"), Matterport-ready, return-trip scheduled. Instants ENQUEUE to 'gc_notify_queue' (5-min drain, idempotent, 5-try cap, quiet hours 9 PM–7 AM defer to morning); emails are composed from the portal projection + a closed set of safe scalars, esc()'d, portal link top + bottom. Provider key lives in function-only 'gc_config/mail' — deploys with email OFF, fails safe until configured (SendGrid HTTP via fetch, no new dependency). Texts (Twilio, 3 interrupt triggers only) = v1.5.
 - **All public pages**: error toasts render (HEToastHost mounted), failures speak instead of silently dropping input · 'SW v315'
